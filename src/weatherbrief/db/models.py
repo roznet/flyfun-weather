@@ -843,16 +843,30 @@ def snapshot_insert_ignore(db, rows: list[dict], *, chunk: int = 1000) -> None:
         )
     elif dialect == "mysql":
         from sqlalchemy.dialects.mysql import insert as _ins
-        stmt = _ins(table)
+        # An explicit multi-row VALUES clause per chunk — NOT
+        # ``db.execute(stmt, rows)``. Handing execute() a list of dicts makes it
+        # an executemany, and SQLAlchemy cannot apply its insertmanyvalues
+        # batching while an ON DUPLICATE KEY UPDATE clause is present, so
+        # pymysql falls back to one round-trip PER ROW: measured 22 rows/s
+        # against 4,400 rows/s here, i.e. ~43 min versus ~13 s to write a
+        # 56k-row snapshot artifact. This path is shared by the standalone
+        # cycle's store phase and the offload importer, so both paid that cost.
+        #
         # No-op self-assign to the EXISTING row's PK (``id = id``): fires ONLY on
         # a duplicate uq_afs_key, so unrelated insert errors still raise (unlike
         # bare INSERT IGNORE). Must reference the table column, not
         # ``stmt.inserted.id`` — ``id`` is auto-increment and absent from the
         # INSERT column list, so ``new.id`` would be an unknown column.
-        stmt = stmt.on_duplicate_key_update(id=table.c.id)
+        for i in range(0, len(rows), chunk):
+            batch = _ins(table).values(rows[i : i + chunk])
+            db.execute(batch.on_duplicate_key_update(id=table.c.id))
+        return
     else:  # pragma: no cover - other dialects fall back to a plain insert
         from sqlalchemy import insert as _ins
         stmt = _ins(table)
+    # SQLite (and the generic fallback) keep executemany: writes are local, so
+    # the per-row round-trip that hurts MySQL costs nothing measurable, and a
+    # 27-column multi-row VALUES would crowd SQLITE_MAX_VARIABLE_NUMBER.
     for i in range(0, len(rows), chunk):
         db.execute(stmt, rows[i : i + chunk])
 

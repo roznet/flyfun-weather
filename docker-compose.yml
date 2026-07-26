@@ -22,6 +22,13 @@ services:
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
       - ${HOST_ECMWF_GRIB_DIR:-./data/ecmwf}:/data/ecmwf
+      # Snapshot artifacts pushed by an off-box compute node (the M4 mini's EU
+      # forecast cycle), consumed by `verify ingest-artifact`. A sibling of the
+      # data dir on the host, so it needs its own mount — without it the
+      # container cannot see the inbox at all. Read-only on purpose: the
+      # host-side ingest wrapper owns the lifecycle (stage, then delete the
+      # consumed artifact); the container only ever reads.
+      - ${HOST_SNAPSHOT_INBOX:-./data/snapshot_inbox}:/app/snapshot_inbox:ro
     group_add:
       - "2002"  # weatherdata — lets app user write sentinels to ECMWF delivery dir
     healthcheck:

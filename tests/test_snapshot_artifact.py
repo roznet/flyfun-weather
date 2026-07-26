@@ -505,6 +505,51 @@ def test_import_cycle_source_fits_column():
     assert len(IMPORT_CYCLE_SOURCE) <= col_len
 
 
+def test_mysql_write_batches_rows_into_one_statement():
+    """On MySQL the write path must emit ONE multi-row VALUES per chunk.
+
+    Passing a list of dicts to execute() makes it an executemany, and SQLAlchemy
+    cannot use its insertmanyvalues batching while an ON DUPLICATE KEY UPDATE
+    clause is present — pymysql then issues one round-trip per row, measured at
+    22 rows/s vs 4,400 (43 min vs 13 s for a 56k-row artifact). SQLite tests
+    can't see that, so this dialect-independent guard asserts the batching:
+    one execute() per chunk, and a compiled statement carrying every row.
+    """
+    from sqlalchemy.dialects import mysql as mysql_dialect
+
+    from weatherbrief.db.models import snapshot_insert_ignore
+
+    executed = []
+
+    class _FakeBind:
+        dialect = mysql_dialect.dialect()
+
+    class _FakeSession:
+        def get_bind(self):
+            return _FakeBind()
+
+        def execute(self, stmt, params=None):
+            executed.append((stmt, params))
+
+    rows = [
+        {"icao": f"LF{i:02d}", "model": "gfs", "model_init_time": GFS_INIT,
+         "forecast_hour": GFS_INIT, "temperature_2m_c": float(i)}
+        for i in range(7)
+    ]
+    snapshot_insert_ignore(_FakeSession(), rows, chunk=3)
+
+    # 7 rows at chunk=3 -> 3 statements, NOT 7.
+    assert len(executed) == 3, f"expected 3 batched statements, got {len(executed)}"
+    # Rows must ride in the statement, not as executemany parameters.
+    assert all(params is None for _, params in executed)
+
+    compiled = str(executed[0][0].compile(dialect=mysql_dialect.dialect()))
+    assert "ON DUPLICATE KEY UPDATE" in compiled.upper()
+    # A multi-row VALUES clause: 3 rows in the first chunk.
+    assert compiled.upper().count("VALUES") >= 1
+    assert len(executed[0][0]._values or executed[0][0]._multi_values[0]) == 3
+
+
 def test_missing_file_rejected(tmp_path):
     """A non-existent path errors cleanly and leaves no stray sqlite file."""
     missing = str(tmp_path / "typo.sqlite")
