@@ -241,21 +241,32 @@ def backfill_model_gust(db: Session, *, days: int = 10) -> int:
     day's un-backfilled scores, the observations they point at, and the
     snapshots that could match on ``(icao, model, model_init_time)``.
 
-    Picking the right candidate matters. ``_score_cycle`` pairs on a ±90 min
-    window and dedups on ``(icao, observation_time, model, model_init_time)``
-    — no ``forecast_hour`` — so for an hourly model that 180 min window holds
-    2-3 snapshots and whichever the query returned *first* is the one that got
-    scored. "Nearest forecast hour" is therefore a guess, and guessing wrong
-    would write a gust from a different valid time than the ``wind_speed_delta``
-    / ``ceiling_delta`` already stored on that same row.
+    Which candidate to take is currently never in doubt, but only by
+    coincidence. Snapshots are written on the synoptic buckets
+    (``VERIFICATION_HOURS_UTC`` — 06/09/12/15/18Z, so a 180 min cadence) and
+    ``_score_cycle`` pairs on a ±90 min window, which is exactly 180 min wide.
+    One snapshot per ``(icao, model, model_init_time)`` therefore falls in the
+    window — verified across the whole snapshot table: minimum gap between
+    consecutive forecast hours is 180 min, and a real 12Z cycle yields exactly
+    one candidate for all 8047 groups.
+
+    That coincidence is load-bearing and unasserted. ``_score_cycle`` orders
+    snapshots by ``(icao, model, model_init_time)`` with no ``forecast_hour``
+    tiebreak and dedups on a key that omits it too, so the *first* row returned
+    wins. Densify the snapshot cadence to hourly and several candidates land in
+    the window, the scored one becomes whatever the DB returned first, and
+    "nearest forecast hour" would be a guess that could attach a gust from a
+    different valid time than the ``wind_speed_delta`` / ``ceiling_delta``
+    already stored on that same row.
 
     So the snapshot is *identified* rather than guessed: ``wind_speed_delta_kt``
     is exactly ``snapshot.wind_speed_10m_kt - obs.wind_speed_kt``, so the
     candidate reproducing the stored delta is the one the score was written
-    from. When that is ambiguous (delta NULL, or several candidates tie) the
-    row is left NULL rather than filled from a coin flip — see
-    :func:`_pick_scored_snapshot`. Commits per day, and only ever touches rows
-    whose ``model_wind_gust_kt`` is still NULL.
+    from. Today this is a no-op (one candidate, taken directly); it earns its
+    keep only if the cadence changes. When identification is impossible (delta
+    NULL, or candidates tie on wind) the row is left NULL rather than filled
+    from a coin flip — see :func:`_pick_scored_snapshot`. Commits per day, and
+    only ever touches rows whose ``model_wind_gust_kt`` is still NULL.
     """
     now = datetime.now(timezone.utc)
     start_day = (now - timedelta(days=days)).date()
@@ -288,6 +299,12 @@ def _pick_scored_snapshot(
     ``candidates`` are ``(forecast_hour, wind_kt, gust_kt)`` for one
     ``(icao, model, model_init_time)`` key. Only those inside the ±90 min
     window ``_score_cycle`` pairs on are eligible.
+
+    On the current 180 min snapshot cadence exactly one candidate is ever
+    eligible, so this returns it directly and the rest is dormant. The
+    multi-candidate path exists for a denser cadence, where ``_score_cycle``'s
+    missing ``forecast_hour`` tiebreak would otherwise make the choice
+    arbitrary.
 
     Identification, not proximity: the stored ``wind_speed_delta_kt`` is
     ``snapshot.wind_speed_10m_kt - obs.wind_speed_kt``, so the candidate that
