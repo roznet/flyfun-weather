@@ -102,7 +102,11 @@ def _resolve_latest_pack(db: Session, user_id: str, flight_id: str):
     # leaking pack existence / refresh state for a flight the user can't see.
     flights_api._load_flight_or_404(db, flight_id, viewer_id=user_id)
 
-    refresh = packs_api.get_refresh_status(flight_id=flight_id, user_id=user_id)
+    # ``db`` must be passed explicitly: get_refresh_status is a route handler,
+    # so its Depends(get_db) default is only resolved by FastAPI.
+    refresh = packs_api.get_refresh_status(
+        flight_id=flight_id, user_id=user_id, db=db,
+    )
     if refresh.get("active"):
         return None, None, _processing(flight_id)
 

@@ -76,8 +76,9 @@ def _on_delete_user(user_id: str, db):
     """Callback for account deletion: clean up all weatherbrief-specific data."""
     from pathlib import Path
     from weatherbrief.db.models import (
-        BriefingUsageRow, DeviceTokenRow, FeedbackRow, FlightBriefingSeenRow,
-        FlightProfileRow, FlightRow, PirepRow, UserAircraftRow,
+        BriefingRefreshJobRow, BriefingUsageRow, DeviceTokenRow, FeedbackRow,
+        FlightBriefingSeenRow, FlightProfileRow, FlightRow, PirepRow,
+        UserAircraftRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
 
@@ -119,6 +120,12 @@ def _on_delete_user(user_id: str, db):
     # delete above doesn't emit per-row ORM cascades).
     db.query(FlightBriefingSeenRow).filter(
         FlightBriefingSeenRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    # Refresh job history — deliberately not FK'd to flights (the row outlives
+    # the flight so a resume can tell "deleted" from "no record"), so the
+    # FlightRow bulk delete above doesn't take it with it.
+    db.query(BriefingRefreshJobRow).filter(
+        BriefingRefreshJobRow.user_id == user_id
     ).delete(synchronize_session=False)
     db.flush()
 
@@ -172,6 +179,16 @@ async def lifespan(app: FastAPI):
         from weatherbrief.scheduler import run_scheduler_loop
 
         scheduler_task = asyncio.create_task(run_scheduler_loop(app.state))
+
+    # Reconcile refreshes that were in flight when the previous process died
+    # (issue #499). One-shot, not a loop: any non-terminal job row at boot is
+    # by definition an orphan (single uvicorn worker), and rows created after
+    # boot belong to this process.
+    refresh_resume_task = None
+    if os.environ.get("DISABLE_REFRESH_RESUME") != "1":
+        from weatherbrief.tasks.refresh_resume import run_refresh_resume
+
+        refresh_resume_task = asyncio.create_task(run_refresh_resume(app.state))
 
     retention_task = None
     if os.environ.get("DISABLE_RETENTION") != "1":
@@ -273,7 +290,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    for task in (scheduler_task, retention_task, verification_task,
+    for task in (scheduler_task, refresh_resume_task, retention_task,
+                 verification_task,
                  digest_task, metar_ingest_task, forecast_fetch_task,
                  standalone_task, ecmwf_watcher_task,
                  hewson_precompute_task, freshness_task,

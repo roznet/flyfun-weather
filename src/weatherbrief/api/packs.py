@@ -118,10 +118,29 @@ class UserQueueLimitError(Exception):
 
 
 class _RefreshRegistry:
-    """Thread-safe in-memory registry of active refreshes."""
+    """Thread-safe in-memory registry of active refreshes.
+
+    When ``durable`` is set, every state transition is mirrored into the
+    ``briefing_refresh_jobs`` table (issue #499) so a refresh killed mid-flight
+    leaves a record that boot-time reconciliation can resume. The mirror is
+    strictly best-effort — see :mod:`weatherbrief.storage.refresh_jobs`. It
+    defaults off so a bare ``_RefreshRegistry()`` (tests, ad-hoc use) stays a
+    pure in-memory object; the process-wide :data:`refresh_registry` singleton
+    is the durable one.
+    """
 
     MAX_QUEUE_DEPTH = 5
     MAX_PER_USER = 2
+
+    #: Trigger classes that bypass the queue-depth and per-user caps. The
+    #: scheduler is a system actor, and a resume is finishing work the user
+    #: already asked for — neither should be turned away by a busy queue.
+    UNCAPPED_TRIGGERS = frozenset({"scheduler", "resume"})
+
+    #: Minimum spacing between durable heartbeat writes. Progress callbacks
+    #: fire per pipeline stage; the heartbeat only needs to be fresh enough to
+    #: tell a live refresh from a dead one.
+    HEARTBEAT_MIN_INTERVAL = 15.0
 
     #: How long after the last "watch-contact" (SSE keepalive or per-flight
     #: status poll) a flight still counts as actively watched. Must exceed the
@@ -130,9 +149,16 @@ class _RefreshRegistry:
     #: before completion still notifies. Poll cadence is 3s, keepalive 15s.
     WATCH_PRESENCE_TTL = 30.0
 
-    def __init__(self) -> None:
+    def __init__(self, durable: bool = False) -> None:
         self._lock = threading.Lock()
+        self._durable = durable
         self._entries: dict[str, RefreshEntry] = {}
+        # flight_id -> briefing_refresh_jobs.id for the live refresh, and the
+        # outcome recorded for it (set by mark_outcome, consumed by unregister).
+        self._job_ids: dict[str, int] = {}
+        self._outcomes: dict[str, tuple[str, str | None]] = {}
+        # flight_id -> monotonic ts of the last durable heartbeat write.
+        self._heartbeats: dict[str, float] = {}
         # flight_id -> monotonic ts of the last UI watch-contact for that flight
         # (SSE keepalive or /packs/refresh/status poll). Drives notification
         # presence: "was the user watching THIS refresh finish?" — the same
@@ -162,19 +188,27 @@ class _RefreshRegistry:
     def try_register(
         self, flight_id: str, triggered_by: str = "user",
         user_id: str | None = None,
+        *,
+        source: str | None = None,
+        as_of_date: date | None = None,
+        attempt: int = 1,
     ) -> RefreshEntry | None:
         """Atomically register a refresh.
 
         Returns the entry on success, or None if the flight is already active.
         Raises ``QueueFullError`` when the queue depth exceeds the cap
-        (scheduler bypasses the cap).
+        (``UNCAPPED_TRIGGERS`` bypass it).
         Raises ``UserQueueLimitError`` when a user already has
         ``MAX_PER_USER`` active refreshes.
+
+        ``source``, ``as_of_date`` and ``attempt`` are recorded on the durable
+        job row only — they carry the attribution and retry count a resume
+        after a container restart needs, and don't affect in-memory behaviour.
         """
         with self._lock:
             if flight_id in self._entries:
                 return None
-            if triggered_by != "scheduler":
+            if triggered_by not in self.UNCAPPED_TRIGGERS:
                 if len(self._entries) >= self.MAX_QUEUE_DEPTH:
                     raise QueueFullError(len(self._entries))
                 if user_id is not None:
@@ -193,13 +227,35 @@ class _RefreshRegistry:
                 queued_at_mono=now_mono,
             )
             self._entries[flight_id] = entry
-            return entry
+
+        # Durable mirror outside the lock — the registry lock is polled by the
+        # GRIB warm loop and must never be held across DB I/O.
+        if self._durable:
+            from weatherbrief.storage import refresh_jobs
+
+            job_id = refresh_jobs.record_queued(
+                flight_id,
+                user_id=user_id,
+                triggered_by=triggered_by,
+                source=source,
+                as_of_date=as_of_date,
+                attempt=attempt,
+            )
+            if job_id is not None:
+                with self._lock:
+                    self._job_ids[flight_id] = job_id
+        return entry
 
     def set_refreshing(self, flight_id: str) -> None:
         with self._lock:
             if flight_id in self._entries:
                 self._entries[flight_id].status = "refreshing"
                 self._entries[flight_id].refreshing_at_mono = time.monotonic()
+            job_id = self._job_ids.get(flight_id)
+        if self._durable and job_id is not None:
+            from weatherbrief.storage import refresh_jobs
+
+            refresh_jobs.record_running(job_id)
 
     def get_timing(self, flight_id: str) -> tuple[float, float]:
         """Return (queue_wait_seconds, total_elapsed_seconds) for a flight.
@@ -224,13 +280,62 @@ class _RefreshRegistry:
             if flight_id in self._entries:
                 self._entries[flight_id].stage = stage
                 self._entries[flight_id].detail = detail
+            job_id = self._job_ids.get(flight_id)
+            due = False
+            if job_id is not None:
+                last = self._heartbeats.get(flight_id)
+                now_mono = time.monotonic()
+                due = last is None or (now_mono - last) >= self.HEARTBEAT_MIN_INTERVAL
+                if due:
+                    self._heartbeats[flight_id] = now_mono
+        if self._durable and due:
+            from weatherbrief.storage import refresh_jobs
+
+            refresh_jobs.record_heartbeat(job_id, stage)
+
+    def note_pack_path(self, flight_id: str, pack_path) -> None:
+        """Record the pack directory a live refresh is writing into.
+
+        Called from ``_prepare_refresh``, the one place every refresh path
+        creates its pack dir — so a refresh killed before it writes its row
+        still leaves a durable pointer at the orphan artifacts.
+        """
+        with self._lock:
+            job_id = self._job_ids.get(flight_id)
+        if self._durable and job_id is not None:
+            from weatherbrief.storage import refresh_jobs
+
+            refresh_jobs.record_pack_path(job_id, str(pack_path))
+
+    def mark_outcome(self, flight_id: str, status: str, error: str | None = None) -> None:
+        """Record how a refresh ended; ``unregister`` closes the row with it.
+
+        Split from ``unregister`` on purpose: callers close the registry entry
+        in a ``finally``, which is exactly what does *not* run when the process
+        is killed. An unmarked entry therefore closes as ``failed``, and an
+        entry never closed at all stays non-terminal — the orphan the resume
+        pass looks for.
+        """
+        with self._lock:
+            if flight_id in self._job_ids:
+                self._outcomes[flight_id] = (status, error)
 
     def unregister(self, flight_id: str) -> None:
         with self._lock:
             removed = self._entries.pop(flight_id, None)
             self._watched.pop(flight_id, None)
+            self._heartbeats.pop(flight_id, None)
+            job_id = self._job_ids.pop(flight_id, None)
+            outcome = self._outcomes.pop(flight_id, None)
             if removed is not None and not self._entries:
                 self._idle_since = time.monotonic()
+        if self._durable and job_id is not None:
+            from weatherbrief.storage import refresh_jobs
+
+            status, error = outcome or (
+                "failed", "refresh ended without recording an outcome",
+            )
+            refresh_jobs.record_finished(job_id, status, error)
 
     # An entry older than this no longer counts as "active" for idle_seconds:
     # real refreshes finish in ~3-5 min and even a deep queue drains well
@@ -297,7 +402,9 @@ class QueueFullError(Exception):
         super().__init__(f"Refresh queue full ({current_depth} active)")
 
 
-refresh_registry = _RefreshRegistry()
+#: The process-wide registry. Durable: every transition is mirrored into
+#: ``briefing_refresh_jobs`` so an interrupted refresh can be resumed at boot.
+refresh_registry = _RefreshRegistry(durable=True)
 
 router = APIRouter(prefix="/flights/{flight_id}/packs", tags=["packs"])
 
@@ -1121,6 +1228,9 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     fetch_ts = datetime.now(tz=timezone.utc)
     pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
     pack_path.mkdir(parents=True, exist_ok=True)
+    # Every refresh path funnels through here, so this is the one place that
+    # can tell the durable job row where its artifacts are going (issue #499).
+    refresh_registry.note_pack_path(flight_id, pack_path)
 
     # Load settings from the flight's profile (falls back to user default profile)
     autorouter_creds = None
@@ -1913,7 +2023,11 @@ async def refresh_briefing(
 
     # Duplicate / queue-depth check
     try:
-        entry = refresh_registry.try_register(flight_id, triggered_by="user", user_id=user_id)
+        entry = refresh_registry.try_register(
+            flight_id, triggered_by="user", user_id=user_id,
+            source=_normalize_source(source),
+            as_of_date=as_of_time.date() if as_of_time else None,
+        )
     except QueueFullError:
         raise HTTPException(status_code=503, detail="Server busy, too many queued refreshes")
     except UserQueueLimitError as exc:
@@ -1932,7 +2046,8 @@ async def refresh_briefing(
             is_privileged=is_privileged,
             as_of_time=as_of_time,
         )
-    except Exception:
+    except Exception as exc:
+        refresh_registry.mark_outcome(flight_id, "failed", f"refresh setup failed: {exc}")
         refresh_registry.unregister(flight_id)
         raise
 
@@ -1974,8 +2089,10 @@ async def refresh_briefing(
                 )
             finally:
                 thread_db.close()
+            refresh_registry.mark_outcome(flight_id, "succeeded")
             logger.info("Background refresh complete for %s", flight_id)
         except Exception as exc:
+            refresh_registry.mark_outcome(flight_id, "failed", str(exc))
             logger.error("Background refresh failed for %s: %s", flight_id, exc, exc_info=True)
         finally:
             refresh_registry.unregister(flight_id)
@@ -2148,7 +2265,11 @@ async def refresh_briefing_stream(
         # Duplicate / queue-depth check — return SSE error so clients
         # that already opened the stream can handle it gracefully.
         try:
-            entry = refresh_registry.try_register(flight_id, triggered_by="user", user_id=user_id)
+            entry = refresh_registry.try_register(
+                flight_id, triggered_by="user", user_id=user_id,
+                source=_normalize_source(source),
+                as_of_date=as_of_time.date() if as_of_time else None,
+            )
         except QueueFullError:
             async def busy_generator() -> AsyncGenerator[str, None]:
                 event = {"type": "error", "message": "Server busy, too many queued refreshes"}
@@ -2182,8 +2303,11 @@ async def refresh_briefing_stream(
             is_privileged=_can_force_refresh(request, db),
             as_of_time=as_of_time,
         )
-    except Exception:
+    except Exception as exc:
         if registered:
+            refresh_registry.mark_outcome(
+                flight_id, "failed", f"refresh setup failed: {exc}",
+            )
             refresh_registry.unregister(flight_id)
         raise
     finally:
@@ -2298,8 +2422,10 @@ async def refresh_briefing_stream(
                 ).model_dump(mode="json"),
                 "elapsed_seconds": total_elapsed,
             }
+            refresh_registry.mark_outcome(flight_id, "succeeded")
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
         except Exception as exc:
+            refresh_registry.mark_outcome(flight_id, "failed", str(exc))
             logger.error("Streaming refresh failed: %s", exc, exc_info=True)
             error_event = {"type": "error", "message": str(exc)}
             asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
@@ -2342,15 +2468,78 @@ async def refresh_briefing_stream(
     )
 
 
+def _interrupted_refresh_status(
+    db: Session, flight_id: str, user_id: str,
+) -> dict | None:
+    """Client-visible fallback when there's no in-memory entry (issue #499).
+
+    After a container restart the in-memory registry is empty, so a poll would
+    otherwise report ``{"active": false}`` — indistinguishable from "you never
+    asked". The durable job row still knows a refresh was in flight, so report
+    ``interrupted`` (a resume is coming) or ``abandoned`` (we gave up) instead.
+
+    Bounded by the same ``STALE_ENTRY_SECONDS`` the warm loop uses, so a leaked
+    row can never pin a flight as permanently active. Returns None when there's
+    nothing meaningful to say.
+    """
+    try:
+        from weatherbrief.storage.refresh_jobs import (
+            TERMINAL_STATUSES,
+            latest_job_for_flight,
+        )
+        from weatherbrief.tasks.refresh_resume import resume_max_attempts
+
+        job = latest_job_for_flight(db, flight_id)
+        if job is None or job.user_id != user_id:
+            return None
+
+        now = datetime.now(timezone.utc)
+        marker = job.finished_at or job.heartbeat_at or job.started_at or job.created_at
+        if marker.tzinfo is None:
+            marker = marker.replace(tzinfo=timezone.utc)
+        if (now - marker).total_seconds() > _RefreshRegistry.STALE_ENTRY_SECONDS:
+            return None
+
+        max_attempts = resume_max_attempts()
+        if job.status not in TERMINAL_STATUSES:
+            # Non-terminal with no live entry: the process that owned it died.
+            return {
+                "active": True,
+                "status": "interrupted",
+                "stage": job.stage,
+                "label": _STAGE_LABELS.get(job.stage, job.stage) if job.stage else None,
+                "detail": None,
+                "progress": _STAGE_PROGRESS.get(job.stage, 0.0) if job.stage else 0.0,
+                "triggered_by": job.triggered_by,
+                "queued_at": job.created_at.isoformat(),
+                "attempt": job.attempt,
+                "max_attempts": max_attempts,
+                "will_retry": job.attempt < max_attempts,
+            }
+        if job.status == "abandoned":
+            return {
+                "active": False,
+                "status": "abandoned",
+                "attempt": job.attempt,
+                "max_attempts": max_attempts,
+                "will_retry": False,
+                "last_error": job.last_error,
+            }
+    except Exception:
+        logger.debug("refresh-status job fallback failed", exc_info=True)
+    return None
+
+
 @router.get("/refresh/status")
 def get_refresh_status(
     flight_id: str,
     user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
 ):
     """Get the refresh status for a specific flight."""
     entry = refresh_registry.get(flight_id)
     if entry is None:
-        return {"active": False}
+        return _interrupted_refresh_status(db, flight_id, user_id) or {"active": False}
     # Polling this per-flight endpoint means the user is on THIS briefing
     # watching the refresh — record a watch-contact for notification presence.
     # (The list poll, /refresh/active, deliberately does not.)

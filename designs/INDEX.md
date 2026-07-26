@@ -191,6 +191,11 @@ Priority-aware, fault-tolerant admission layer in front of the GRIB decode proce
 Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `set_decode_priority`, `enrich_forecasts(priority=...)`, `_dispatch_decode`, `_dispatch_decode_parallel`, `decode_dead_letter_counts`
 → Full doc: grib-decode-dispatcher.md
 
+### refresh-durability
+Durable briefing-refresh tracking (`briefing_refresh_jobs`, migration 082) as a best-effort write-through mirror of the in-memory `_RefreshRegistry`, plus a one-shot boot-time pass that abandons or resumes refreshes interrupted by a container restart (OOM/deploy/crash). Single uvicorn worker ⇒ any non-terminal row at boot is an orphan; `WB_REFRESH_MAX_ATTEMPTS` (default 2) caps retries; `/refresh/status` falls back to the row so a reload reports "interrupted"/"gave up" instead of nothing.
+Key exports: `BriefingRefreshJobRow`, `record_queued`, `record_running`, `record_heartbeat`, `record_finished`, `list_orphans`, `latest_job_for_flight`, `_RefreshRegistry(durable=True)`, `mark_outcome`, `note_pack_path`, `decide_resume`, `run_refresh_resume`, `resume_max_attempts`
+→ Full doc: refresh-durability.md
+
 ### multi-user-deployment
 Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, account deletion + GDPR data export, admin hub, Resend email, deploy commands, env vars.
 → Full doc: multi-user-deployment.md
