@@ -454,6 +454,42 @@ enum FixtureBriefingData {
             "detail": "Model shows VFR but the METAR reports OVC008 in mist — the model is missing a shallow coastal stratus/fog layer."
           }
         ]
+      },
+      "route_sigmets": {
+        "corridor_nm": 50.0,
+        "fetch_time": "2099-06-30T05:52:00Z",
+        "altitude_low_ft": 0,
+        "altitude_high_ft": 13000,
+        "time_window_from": "2099-06-30T05:52:00Z",
+        "time_window_to": "2099-06-30T23:59:59Z",
+        "route_firs": ["LFMM", "LFFF"],
+        "count": 2,
+        "hazards": ["TS", "TURB"],
+        "has_severe": true,
+        "sigmets": [
+          {
+            "fir_id": "LFMM", "fir_name": "LFMM MARSEILLE", "hazard": "TS", "qualifier": "EMBD",
+            "base_ft": null, "top_ft": 37000,
+            "valid_from": "2099-06-30T05:00:00Z", "valid_to": "2099-06-30T09:00:00Z",
+            "direction": "NE", "speed_kt": 25,
+            "raw_text": "WSFR31 LFPW 300452\\nLFMM SIGMET T03 VALID 300500/300900 LFPW-\\nLFMM MARSEILLE FIR EMBD TS OBS WI N4330 E00530 - N4345 E00700 - N4300\\nE00715 - N4330 E00530 TOP FL370 MOV NE 25KT NC=",
+            "matched_firs": ["LFMM"],
+            "min_distance_nm": 4.2,
+            "enroute_distance_from_nm": 12.0, "enroute_distance_to_nm": 48.0,
+            "coords": [[5.5, 43.5], [7.0, 43.75], [7.25, 43.0], [5.5, 43.5]]
+          },
+          {
+            "fir_id": "LFMM", "fir_name": "LFMM MARSEILLE", "hazard": "TURB", "qualifier": "SEV",
+            "base_ft": 5000, "top_ft": 18000,
+            "valid_from": "2099-06-30T06:00:00Z", "valid_to": "2099-06-30T12:00:00Z",
+            "direction": null, "speed_kt": null,
+            "raw_text": "WSFR31 LFPW 300551\\nLFMM SIGMET T04 VALID 300600/301200 LFPW-\\nLFMM MARSEILLE FIR SEV TURB FCST WI N4315 E00445 - N4400 E00600 -\\nN4245 E00615 - N4315 E00445 SFC/FL180 STNR NC=",
+            "matched_firs": ["LFMM"],
+            "min_distance_nm": 0.0,
+            "enroute_distance_from_nm": 30.0, "enroute_distance_to_nm": 78.0,
+            "coords": [[4.75, 43.25], [6.0, 44.0], [6.25, 42.75], [4.75, 43.25]]
+          }
+        ]
       }
     }
     """)

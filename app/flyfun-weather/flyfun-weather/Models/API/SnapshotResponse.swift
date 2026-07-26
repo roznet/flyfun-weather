@@ -9,6 +9,9 @@ struct SnapshotResponse: Codable, Sendable {
     let departureTime: String?
     let analyses: [WaypointAnalysis]?
     let routeObservations: RouteObservations?
+    /// D-0 area hazards (SIGMETs) intersecting the route corridor — the sibling
+    /// of `routeObservations` on the same fetch/refresh seam. Nil on D-1+ packs.
+    let routeSigmets: RouteSigmets?
     /// Weather-based divert candidates (D-2 inward, `compute_alternates` pref).
     /// Present only on marginal D-0/D-1/D-2 packs; nil otherwise. Mirrors
     /// `models/alternates.py` / `designs/future/alternates.md`.
@@ -205,4 +208,145 @@ struct ObservationComparison: Codable, Sendable {
     let modelCrosswindKt: Double?
     let windAdvisoryMatch: String?
     let detail: String?
+}
+
+/// D-0 **area hazards** along the route (#493) — the sibling of
+/// `RouteObservations` on the same fetch/refresh seam, but polygon-keyed rather
+/// than airport-keyed and with no model comparison (SIGMETs are presented, not
+/// reconciled).
+///
+/// Mirrors `models/observations.py::RouteSigmets` (source of truth) and the
+/// web's `renderRouteSigmets`.
+///
+/// SYNC: `web/ts/managers/briefing-ui.ts` (`renderRouteSigmets`);
+/// `src/weatherbrief/models/observations.py` defines the shape.
+struct RouteSigmets: Codable, Sendable {
+    let corridorNm: Double?
+    let fetchTime: String?
+    /// The band the fetch filtered on: surface to cruise + 5,000 ft.
+    let altitudeLowFt: Int?
+    let altitudeHighFt: Int?
+    let timeWindowFrom: String?
+    let timeWindowTo: String?
+    /// Every FIR the route crosses — context for "no SIGMETs" as much as for hits.
+    let routeFirs: [String]?
+    let sigmets: [SigmetAlongRoute]?
+
+    // Server-computed fields (pydantic `computed_field`). Optional, and each has
+    // a local fallback below: a pack written before they existed — or any future
+    // producer that omits them — must still render rather than showing "0
+    // SIGMETs" above a populated table.
+    let count: Int?
+    let hazards: [String]?
+    let hasSevere: Bool?
+
+    var matched: [SigmetAlongRoute] { sigmets ?? [] }
+
+    var sigmetCount: Int { count ?? matched.count }
+
+    /// Sorted union of hazard types, matching the server's `hazards`.
+    var hazardTypes: [String] {
+        if let hazards, !hazards.isEmpty { return hazards }
+        return Array(Set(matched.compactMap(\.hazard))).sorted()
+    }
+
+    /// Whether any matched SIGMET is qualified SEV — the summary-bar signal, the
+    /// counterpart of `worst_metar_category` on the observations block.
+    var severe: Bool { hasSevere ?? matched.contains(where: \.isSevere) }
+}
+
+/// One SIGMET intersecting the route corridor.
+/// Mirrors `models/observations.py::SigmetAlongRoute`.
+///
+/// `coords` (the polygon outline, `(lon, lat)` vertices), the enroute span and
+/// the vertical band are deliberately retained by the server so a later map /
+/// cross-section overlay can be drawn without re-fetching — the table itself
+/// doesn't use the polygon.
+struct SigmetAlongRoute: Codable, Identifiable, Sendable {
+    let firId: String
+    let firName: String?
+    /// TURB / ICE / TS / MTW / VA …
+    let hazard: String?
+    /// SEV / EMBD / FRQ / ISOL …
+    let qualifier: String?
+    let baseFt: Int?
+    let topFt: Int?
+    let validFrom: String?
+    let validTo: String?
+    /// Movement direction, e.g. "NE". Absent when the area is stationary.
+    let direction: String?
+    let speedKt: Int?
+    let rawText: String?
+    let matchedFirs: [String]?
+    let minDistanceNm: Double?
+    let enrouteDistanceFromNm: Double?
+    let enrouteDistanceToNm: Double?
+    /// Polygon outline as `[lon, lat]` pairs — decoded from Python tuples, kept
+    /// for the future map/cross-section overlay.
+    let coords: [[Double]]?
+
+    /// Nothing in the payload is a stable id (a FIR can hold several SIGMETs at
+    /// once), so identity is the raw bulletin plus the FIR — the same pair the
+    /// server's delta uses to tell a re-issue from a new hazard.
+    var id: String { "\(firId)|\(rawText ?? "")" }
+
+    /// "SEV TURB" — the row's leading label, matching the web's header cell.
+    /// Falls back to a bare "SIGMET" when the source gave neither field.
+    var headline: String {
+        let parts = [qualifier, hazard].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? "SIGMET" : parts.joined(separator: " ")
+    }
+
+    var isSevere: Bool { qualifier?.uppercased() == "SEV" }
+
+    /// "SFC–FL380". Mirrors the web's `sigmetBand` exactly, including the "?" for
+    /// an unknown bound — an omitted base is genuinely unknown, not surface, and
+    /// rendering it as SFC would overstate what the bulletin said.
+    var levelBand: String {
+        if baseFt == nil && topFt == nil { return "—" }
+        return "\(Self.level(baseFt))–\(Self.level(topFt))"
+    }
+
+    static func level(_ ft: Int?) -> String {
+        guard let ft else { return "?" }
+        if ft <= 0 { return "SFC" }
+        // Floor to match the Python/web helper so the same SIGMET reads as the
+        // same flight level on every surface.
+        return String(format: "FL%03d", ft / 100)
+    }
+
+    /// Where the route meets the area: the along-track span if the corridor is
+    /// crossed, otherwise how far off-track the nearest edge sits.
+    var enrouteLabel: String {
+        if let from = enrouteDistanceFromNm, let to = enrouteDistanceToNm {
+            return "\(Int(from.rounded()))–\(Int(to.rounded()))nm"
+        }
+        if let min = minDistanceNm { return "\(Int(min.rounded()))nm off" }
+        return "—"
+    }
+
+    /// "NE 30kt", or nil when the bulletin reports no movement (stationary).
+    var movementLabel: String? {
+        guard let direction, !direction.isEmpty, let speedKt else { return nil }
+        return "\(direction) \(speedKt)kt"
+    }
+
+    /// "170450Z → 170600Z" in aviation DDHHMM form. Nil when neither bound
+    /// parses, so the detail sheet can drop the row instead of showing "? → ?".
+    var validityLabel: String? {
+        let from = validFrom.flatMap(Self.dayZulu)
+        let to = validTo.flatMap(Self.dayZulu)
+        if from == nil && to == nil { return nil }
+        return "\(from ?? "?") → \(to ?? "?")"
+    }
+
+    /// "170450Z" (DDHHMMZ) from an ISO timestamp, always in UTC.
+    static func dayZulu(_ iso: String) -> String? {
+        guard let date = Date.parseISO8601(iso) else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let c = cal.dateComponents([.day, .hour, .minute], from: date)
+        guard let d = c.day, let h = c.hour, let m = c.minute else { return nil }
+        return String(format: "%02d%02d%02dZ", d, h, m)
+    }
 }
