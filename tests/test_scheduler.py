@@ -822,3 +822,71 @@ class TestPrecacheLoopYielding:
         calls, purges = self._run_loop([done])
         assert len(calls) == 1  # second tick skips the already-warmed run
         assert purges == ["gfs"]
+
+
+# ---------------------------------------------------------------------------
+# Compute offload: artifact-first forecast cycle
+# ---------------------------------------------------------------------------
+
+
+class TestTryIngestSnapshotArtifact:
+    """The forecast loop prefers an off-box artifact over computing locally."""
+
+    def test_no_inbox_returns_immediately(self, tmp_path, monkeypatch):
+        """Deployments without compute offload must not wait at all.
+
+        The wait window is 50 minutes; if an unconfigured inbox blocked for it,
+        every non-offload deployment would have its forecast cycle delayed.
+        """
+        import asyncio
+
+        from weatherbrief.scheduler import _try_ingest_snapshot_artifact
+
+        monkeypatch.setenv("SNAPSHOT_INBOX_DIR", str(tmp_path / "absent"))
+
+        slept: list[float] = []
+
+        async def fake_sleep(secs):
+            slept.append(secs)
+
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            assert asyncio.run(_try_ingest_snapshot_artifact()) is False
+        assert slept == [], "must not sleep when no inbox is configured"
+
+    def test_empty_inbox_falls_back_after_the_deadline(self, tmp_path, monkeypatch):
+        """An inbox that never receives an artifact ends in a local cycle."""
+        import asyncio
+
+        from weatherbrief import scheduler as sched
+
+        monkeypatch.setenv("SNAPSHOT_INBOX_DIR", str(tmp_path))
+
+        # Collapse the poll interval; drive the deadline off a fake clock.
+        clock = {"t": 0.0}
+        monkeypatch.setattr(sched.time, "monotonic", lambda: clock["t"])
+
+        async def fake_sleep(secs):
+            clock["t"] += secs
+
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            assert asyncio.run(sched._try_ingest_snapshot_artifact()) is False
+        # Gave up only after the full window, not on the first empty look.
+        assert clock["t"] >= sched._ARTIFACT_WAIT_MAX_SECONDS
+
+    def test_ingests_and_skips_local_cycle(self, tmp_path, monkeypatch):
+        """A qualifying artifact is ingested and the caller skips computing."""
+        import asyncio
+
+        from weatherbrief import scheduler as sched
+
+        monkeypatch.setenv("SNAPSHOT_INBOX_DIR", str(tmp_path))
+        (tmp_path / "eu-x.sqlite").write_bytes(b"stub")
+
+        monkeypatch.setattr(
+            sched, "_ingest_artifact_blocking", lambda path: (56329, 0),
+        )
+        monkeypatch.setattr(
+            "weatherbrief.tasks.snapshot_artifact.find_ingestable_artifact",
+            lambda inbox, min_init, skip=None: str(tmp_path / "eu-x.sqlite"),
+        )
+        assert asyncio.run(sched._try_ingest_snapshot_artifact()) is True

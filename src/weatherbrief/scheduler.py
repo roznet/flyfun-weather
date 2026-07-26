@@ -101,6 +101,18 @@ _FORECAST_FETCH_FRESHNESS_SOURCES: list[tuple[str, str]] = [
     ("gfs:openmeteo", "gfs"),
     ("icon:openmeteo", "icon"),
 ]
+# Compute offload: if a node has delivered this cycle's snapshots, ingest those
+# and skip the local cycle entirely. Directory is where the node's artifacts are
+# mounted; absent or empty means offload is not in use and the loop goes
+# straight to computing locally (no wait, so non-offload deploys are unaffected).
+_SNAPSHOT_INBOX_DIR_DEFAULT = "/app/snapshot_inbox"
+# Wait this long past the fetch hour before giving up and computing locally. The
+# EU node starts at HH:15 and takes 10-13 min, so its artifact lands ~HH:27 —
+# generous on purpose. A needless fallback costs a ~70 min local cycle, while
+# waiting longer costs only slightly staler map data, so the asymmetry favours
+# patience.
+_ARTIFACT_WAIT_MAX_SECONDS = 3000  # 50 min past the hour
+_ARTIFACT_POLL_INTERVAL_SECONDS = 60
 # Hewson precompute fires once per init cycle. 06Z and 18Z pick up the 00Z /
 # 12Z inits after ~6 h — Open-Meteo has all 3 models published by then, and
 # we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
@@ -879,17 +891,144 @@ async def run_forecast_fetch_loop(app_state) -> None:
                 "Forecast fetch: sleeping %ds until next fetch hour", sleep_secs,
             )
             await asyncio.sleep(sleep_secs)
-            await asyncio.sleep(_FORECAST_FETCH_HOUR_OFFSET_SECONDS)
-            await _wait_for_marker_freshness(_FORECAST_FETCH_FRESHNESS_WAIT_MAX_SECONDS)
-            await _run_standalone_cycle_supervised(
-                app_state,
-                fetch_forecasts=True,
-                score_observations=False,
-            )
+            hour_start = time.monotonic()
+            # Compute offload first: if a node delivers this cycle's artifact,
+            # ingesting it replaces the local cycle entirely. Polls from the top
+            # of the hour, so the node's HH:15 start has the whole window to
+            # land. A no-op (returns immediately) when no inbox is mounted.
+            if not await _try_ingest_snapshot_artifact():
+                # Sleep only the REMAINDER of the offset. Waiting for an artifact
+                # has usually already consumed it, and the offset exists solely to
+                # let the publishers land by HH:15 — sleeping a further 15 min at
+                # HH:50 would just delay the fallback for nothing.
+                remaining = _FORECAST_FETCH_HOUR_OFFSET_SECONDS - (
+                    time.monotonic() - hour_start
+                )
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                await _wait_for_marker_freshness(
+                    _FORECAST_FETCH_FRESHNESS_WAIT_MAX_SECONDS
+                )
+                await _run_standalone_cycle_supervised(
+                    app_state,
+                    fetch_forecasts=True,
+                    score_observations=False,
+                )
             await asyncio.sleep(60)  # advance past the current hour
         except Exception:
             logger.error("Forecast fetch cycle failed", exc_info=True)
             await asyncio.sleep(900)
+
+
+def _expected_cycle_init(now: datetime | None = None) -> datetime:
+    """The model init this fetch cycle should be delivering (00Z or 12Z, today).
+
+    Floors to the last 12-hourly synoptic boundary, so the 07Z cycle expects 00Z
+    and the 19Z cycle expects 12Z. Yesterday's leftover artifact therefore fails
+    the comparison and cannot be mistaken for this cycle's work.
+    """
+    now = now or datetime.now(timezone.utc)
+    return now.replace(
+        hour=(now.hour // 12) * 12, minute=0, second=0, microsecond=0, tzinfo=None,
+    )
+
+
+def _ingest_artifact_blocking(path: str) -> tuple[int, int]:
+    """Import an artifact and rebuild the serving cache. Runs off the event loop.
+
+    Returns (rows_inserted, rows_skipped). `ingest-artifact` upserts snapshots and
+    writes the cycle row but does NOT refresh the forecast-map cache, so the map
+    would keep serving the previous cycle without the rebuild.
+    """
+    from weatherbrief.tasks.snapshot_artifact import import_snapshots
+
+    db = SessionLocal()
+    try:
+        result = import_snapshots(db, path)
+    finally:
+        db.close()
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if airports_db:
+        from weatherbrief.tasks.cache_builder import rebuild_all
+
+        db = SessionLocal()
+        try:
+            rebuild_all(db, airports_db)
+        finally:
+            db.close()
+    else:
+        logger.warning(
+            "Artifact ingested but AIRPORTS_DB is unset — forecast map cache "
+            "not rebuilt; the map will serve the previous cycle"
+        )
+    return result.rows_inserted, result.rows_skipped
+
+
+async def _try_ingest_snapshot_artifact() -> bool:
+    """Wait for an off-box node's artifact for this cycle and ingest it.
+
+    Returns True when snapshots were ingested (so the caller skips the local
+    cycle), False to fall back to computing locally. Returns False *immediately*
+    when no inbox is configured, so deployments without compute offload keep
+    their existing timing.
+    """
+    from weatherbrief.tasks.snapshot_artifact import (
+        ArtifactValidationError,
+        find_ingestable_artifact,
+    )
+
+    inbox = os.environ.get("SNAPSHOT_INBOX_DIR", _SNAPSHOT_INBOX_DIR_DEFAULT).strip()
+    if not inbox or not os.path.isdir(inbox):
+        return False
+
+    min_init = _expected_cycle_init()
+    deadline = time.monotonic() + _ARTIFACT_WAIT_MAX_SECONDS
+    # A corrupt drop must not be retried forever, nor block a good artifact that
+    # arrives later in the same window.
+    rejected: set[str] = set()
+    logger.info(
+        "Snapshot inbox %s: waiting up to %d min for an artifact with init >= %s",
+        inbox, _ARTIFACT_WAIT_MAX_SECONDS // 60, min_init,
+    )
+
+    while True:
+        path = await asyncio.to_thread(
+            find_ingestable_artifact, inbox, min_init, skip=rejected,
+        )
+        if path:
+            try:
+                inserted, skipped = await asyncio.to_thread(
+                    _ingest_artifact_blocking, path,
+                )
+                logger.info(
+                    "Ingested off-box snapshots from %s (inserted=%d skipped=%d) "
+                    "— skipping the local forecast cycle",
+                    os.path.basename(path), inserted, skipped,
+                )
+                return True
+            except ArtifactValidationError:
+                logger.warning(
+                    "Rejected artifact %s; will keep waiting for another",
+                    os.path.basename(path), exc_info=True,
+                )
+                rejected.add(path)
+                continue
+            except Exception:
+                logger.error(
+                    "Artifact ingest failed for %s — falling back to the local "
+                    "cycle", os.path.basename(path), exc_info=True,
+                )
+                return False
+
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "No artifact with init >= %s after %d min — running the local "
+                "forecast cycle as fallback", min_init,
+                _ARTIFACT_WAIT_MAX_SECONDS // 60,
+            )
+            return False
+        await asyncio.sleep(_ARTIFACT_POLL_INTERVAL_SECONDS)
 
 
 async def _wait_for_marker_freshness(max_wait_seconds: float) -> None:

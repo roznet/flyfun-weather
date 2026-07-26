@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, event, select
@@ -503,6 +503,93 @@ def test_import_cycle_source_fits_column():
     """
     col_len = VerificationCycleRow.__table__.c.source.type.length
     assert len(IMPORT_CYCLE_SOURCE) <= col_len
+
+
+def _write_artifact(tmp_path, name, init):
+    """Emit a one-row artifact at ``name`` whose only model init is ``init``."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", init, 12)])
+    path = str(tmp_path / name)
+    export_snapshots(src, path, generated_at=NOW)
+    return path
+
+
+def test_expected_cycle_init_floors_to_synoptic_boundary():
+    """07Z expects today's 00Z, 19Z expects today's 12Z."""
+    from weatherbrief.scheduler import _expected_cycle_init
+
+    morning = _expected_cycle_init(datetime(2026, 4, 5, 7, 3, tzinfo=timezone.utc))
+    evening = _expected_cycle_init(datetime(2026, 4, 5, 19, 47, tzinfo=timezone.utc))
+    assert morning == datetime(2026, 4, 5, 0, 0)
+    assert evening == datetime(2026, 4, 5, 12, 0)
+    # Naive, so it compares directly against artifact inits.
+    assert morning.tzinfo is None
+
+
+def test_find_ingestable_artifact_picks_freshest_and_rejects_stale(tmp_path):
+    """Only an artifact reaching this cycle's init qualifies; newest wins."""
+    from weatherbrief.tasks.snapshot_artifact import find_ingestable_artifact
+
+    yesterday = GFS_INIT - timedelta(days=1)
+    _write_artifact(tmp_path, "eu-old.sqlite", yesterday)
+    fresh = _write_artifact(tmp_path, "eu-new.sqlite", GFS_INIT)
+
+    # Yesterday's leftover must not satisfy today's 00Z cycle.
+    assert find_ingestable_artifact(str(tmp_path), GFS_INIT.replace(tzinfo=None)) == fresh
+    # With a cutoff nothing reaches, we fall back.
+    future = (GFS_INIT + timedelta(days=1)).replace(tzinfo=None)
+    assert find_ingestable_artifact(str(tmp_path), future) is None
+    # Missing inbox is a clean None, not an exception.
+    assert find_ingestable_artifact(str(tmp_path / "nope"), GFS_INIT.replace(tzinfo=None)) is None
+
+
+def test_find_ingestable_artifact_ignores_partial_and_foreign_files(tmp_path):
+    """In-flight rsync temp files and unrelated files are never picked up.
+
+    rsync writes to a hidden `.name.XXXXXX` and renames on completion, so
+    excluding dotfiles is what makes a mid-transfer read impossible.
+    """
+    from weatherbrief.tasks.snapshot_artifact import find_ingestable_artifact
+
+    good = _write_artifact(tmp_path, "eu-good.sqlite", GFS_INIT)
+    # A half-written artifact under rsync's temp name.
+    (tmp_path / ".eu-inflight.sqlite.AbCdEf").write_bytes(b"SQLite format 3\x00trunc")
+    # Right shape, wrong prefix.
+    (tmp_path / "notes.sqlite").write_bytes(b"not a database")
+    # Right prefix, unreadable — must be skipped, not raised on.
+    (tmp_path / "eu-corrupt.sqlite").write_bytes(b"garbage")
+
+    assert find_ingestable_artifact(str(tmp_path), GFS_INIT.replace(tzinfo=None)) == good
+
+
+def test_find_ingestable_artifact_honours_skip_set(tmp_path):
+    """A rejected artifact is not retried, so one bad drop can't wedge the cycle."""
+    from weatherbrief.tasks.snapshot_artifact import find_ingestable_artifact
+
+    only = _write_artifact(tmp_path, "eu-only.sqlite", GFS_INIT)
+    min_init = GFS_INIT.replace(tzinfo=None)
+    assert find_ingestable_artifact(str(tmp_path), min_init) == only
+    assert find_ingestable_artifact(str(tmp_path), min_init, skip={only}) is None
+
+
+def test_artifact_max_init_uses_newest_model(tmp_path):
+    """Freshness is the newest init present, not agreement across models.
+
+    The 19Z EU artifact carries ecmwf/icon at 12Z but gfs still at 06Z, so
+    requiring every model to reach the cycle init would reject it.
+    """
+    from weatherbrief.tasks.snapshot_artifact import artifact_max_init
+
+    Src = _make_db()
+    src = Src()
+    _seed(src, [
+        _snap("LFPG", "gfs", ECMWF_INIT, 12),   # older init
+        _snap("LFPG", "ecmwf", GFS_INIT, 12),   # newer init
+    ])
+    path = str(tmp_path / "eu-mixed.sqlite")
+    export_snapshots(src, path, latest_per_model=False, generated_at=NOW)
+    assert artifact_max_init(read_manifest(path)) == GFS_INIT.replace(tzinfo=None)
 
 
 def test_mysql_write_batches_rows_into_one_statement():

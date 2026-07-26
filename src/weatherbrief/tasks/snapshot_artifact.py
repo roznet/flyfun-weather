@@ -305,6 +305,71 @@ def read_manifest(path: str) -> ArtifactManifest:
         conn.close()
 
 
+def artifact_max_init(manifest: ArtifactManifest) -> datetime | None:
+    """Freshest model init time an artifact carries, or None if it carries none.
+
+    A cycle's artifact does not reach the same init for every model — the 19Z EU
+    artifact typically holds ecmwf/icon at 12Z but gfs still at 06Z, because
+    Open-Meteo publishes GFS later. So freshness is judged on the *newest* init
+    present, not on every model agreeing.
+    """
+    inits: list[datetime] = []
+    for values in manifest.models.values():
+        for iso in values:
+            try:
+                inits.append(_parse_dt(iso))
+            except ValueError:
+                continue
+    if not inits:
+        return None
+    return max(i.replace(tzinfo=None) if i.tzinfo else i for i in inits)
+
+
+def find_ingestable_artifact(
+    inbox: str,
+    min_init: datetime,
+    *,
+    skip: set[str] | None = None,
+) -> str | None:
+    """Newest artifact in ``inbox`` whose freshest init is at or after ``min_init``.
+
+    Returns its path, or None when nothing qualifies. Used by the serving box to
+    decide whether an off-box compute node has already delivered this cycle's
+    work, so the local cycle can be skipped.
+
+    Only ``eu-*.sqlite`` / ``us-*.sqlite`` are considered. That glob deliberately
+    excludes dotfiles: rsync writes into a hidden temp name and renames on
+    completion, so a partially transferred artifact never matches. A file that is
+    unreadable or has no manifest is skipped rather than raising — a torn or
+    corrupt drop must not take the scheduler down, and the caller falls back to
+    computing locally.
+    """
+    if not os.path.isdir(inbox):
+        return None
+    skip = skip or set()
+    min_naive = min_init.replace(tzinfo=None) if min_init.tzinfo else min_init
+
+    best: tuple[datetime, str] | None = None
+    for name in sorted(os.listdir(inbox)):
+        if name.startswith(".") or not name.endswith(".sqlite"):
+            continue
+        if not (name.startswith("eu-") or name.startswith("us-")):
+            continue
+        path = os.path.join(inbox, name)
+        if path in skip or not os.path.isfile(path):
+            continue
+        try:
+            manifest = read_manifest(path)
+        except ArtifactValidationError:
+            continue
+        newest = artifact_max_init(manifest)
+        if newest is None or newest < min_naive:
+            continue
+        if best is None or newest > best[0]:
+            best = (newest, path)
+    return best[1] if best else None
+
+
 def _read_rows(path: str, columns: list[str]) -> list[dict]:
     conn = sqlite3.connect(path)
     try:
