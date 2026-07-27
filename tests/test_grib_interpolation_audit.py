@@ -31,6 +31,7 @@ from weatherbrief.models.analysis import (
     NWP_CLOUD_DIAG_AVERAGED_SCALARS,
     NWP_CLOUD_DIAG_INSTANT_SCALARS,
     NWP_CLOUD_DIAG_LAYER_FIELDS,
+    NWP_CLOUD_DIAG_META_FIELDS,
     NWP_CLOUD_DIAG_RATE_SCALARS,
     NWP_CLOUD_DIAG_SCALARS,
 )
@@ -390,7 +391,13 @@ class TestDiagnosticsFieldInventory:
     apart, each silently dropping fields the other carried (#485)."""
 
     def test_inventory_partitions_every_model_field(self):
-        covered = set(NWP_CLOUD_DIAG_LAYER_FIELDS) | set(NWP_CLOUD_DIAG_SCALARS)
+        # Meta/capability markers (#457) are classified too: both axes carry
+        # them through unchanged rather than lerping.
+        covered = (
+            set(NWP_CLOUD_DIAG_LAYER_FIELDS)
+            | set(NWP_CLOUD_DIAG_SCALARS)
+            | set(NWP_CLOUD_DIAG_META_FIELDS)
+        )
         assert covered == set(NWPCloudDiagnostics.model_fields), (
             "a field was added to NWPCloudDiagnostics without classifying it "
             "for interpolation"

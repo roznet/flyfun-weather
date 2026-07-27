@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import logging
 import math
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -54,11 +54,7 @@ from weatherbrief.fetch.grib.gfs_idx import (
     plan_byte_ranges,
     plan_cloud_diag_byte_ranges,
 )
-from weatherbrief.fetch.grib.grib_fetch import (
-    MAX_DOWNLOAD_WORKERS,
-    _fetch_one_byte_range,
-    _fetch_one_cloud_diag_range,
-)
+from weatherbrief.fetch.grib.grib_fetch import MAX_DOWNLOAD_WORKERS
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +75,16 @@ HRRR_HORIZON_SHORT_H = 18
 # omega conversion). CIMIXR is HRRR's name for ice mixing ratio (the CLMR/CLWMR
 # style naming quirk the decode map also handles). Bonus species (RWMR, SNMR,
 # GRLE) are deliberately not fetched — no consumer yet.
+#
+# Cloud liquid water: the live bucket's .idx uses ``CLMR`` (verified
+# 2026-07-26 12z: 40 CLMR entries, zero CLWMR — see the committed
+# tests/fixtures/hrrr_idx_excerpt.txt), but NCO's inventory page documents
+# the field as ``CLWMR``, so BOTH spellings are planned defensively; the
+# decode map already accepts either. Whichever the product publishes is
+# fetched, a rename upstream cannot silently drop the condensate field
+# (PR #508 review).
 HRRR_SOUNDING_VARIABLES = frozenset(
-    {"TMP", "DPT", "RH", "UGRD", "VGRD", "VVEL", "HGT", "CLMR", "CIMIXR"}
+    {"TMP", "DPT", "RH", "UGRD", "VGRD", "VVEL", "HGT", "CLMR", "CLWMR", "CIMIXR"}
 )
 
 # Skip 50–125 hPa: above the GA envelope and above the 150 hPa top the
@@ -355,33 +359,28 @@ def compute_hrrr_flight_window_hours(
 ) -> list[int]:
     """Compute HRRR forecast hours covering a flight window.
 
-    Same shape as the GFS helper, but HRRR output is hourly across the whole
-    horizon so no temporal-grid snapping is needed — just the covering set
-    of integer forecast hours, clamped to the cycle's horizon.
+    HRRR output is hourly across the whole horizon, so the covering set is
+    simply the CONTIGUOUS inclusive range ``floor(departure) .. ceil(end)``
+    in hours-from-init, clamped to ``[0, horizon]``.
+
+    Deliberately NOT the sample-and-round shape the GFS/ICON helpers use:
+    ``round()`` is ties-to-even, so a :30 departure collapses consecutive
+    half-hour offsets onto the same even hour and silently drops every other
+    forecast hour (PR #508 review) — degrading the headline hourly-3km
+    benefit to 2-hourly for one of the most common GA departure slots. A
+    contiguous range cannot skip an in-window native hour by construction.
     """
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
     horizon_h = hrrr_run_horizon_hours(init_hour)
-    dep_dt = departure_time
+    end_dt = departure_time + timedelta(hours=max(flight_duration_hours, 0.0))
 
-    extra = 1 if dep_dt.minute > 0 else 0
-    n_hours = max(1, math.ceil(flight_duration_hours) + 1 + extra)
-    fhours: set[int] = set()
-    for h in range(n_hours):
-        utc = dep_dt + timedelta(hours=h)
-        delta = (utc - init_dt).total_seconds() / 3600
-        delta = max(0.0, min(delta, float(horizon_h)))
-        fhours.add(round(delta))
-
-    # Include the floor hour so non-round departure times get coverage.
-    if dep_dt.minute > 0:
-        floor_utc = dep_dt.replace(minute=0, second=0, microsecond=0)
-        floor_delta = (floor_utc - init_dt).total_seconds() / 3600
-        if floor_delta >= 0:
-            fhours.add(min(int(floor_delta), horizon_h))
-
-    return sorted(fhours)
+    first = math.floor((departure_time - init_dt).total_seconds() / 3600)
+    last = math.ceil((end_dt - init_dt).total_seconds() / 3600)
+    first = max(0, min(first, horizon_h))
+    last = max(first, min(last, horizon_h))
+    return list(range(first, last + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -418,67 +417,135 @@ def plan_hrrr_sounding_byte_ranges(idx_text: str) -> list[ByteRange]:
 
 
 def plan_hrrr_cloud_diag_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
-    """Byte ranges for the cloud-diagnostics + CAPE/CIN set (~10 MB/fhour)."""
-    return plan_cloud_diag_byte_ranges(idx_text, pairs=_HRRR_CLOUD_DIAG_PAIRS)
+    """Byte ranges for the cloud-diagnostics + CAPE/CIN set (~10 MB/fhour).
 
-
-def fetch_hrrr_byte_ranges(
-    init_date: str,
-    init_hour: int,
-    forecast_hour: int,
-    ranges: list[ByteRange],
-    session: requests.Session | None = None,
-) -> bytes:
-    """Download sounding byte ranges from an HRRR wrfprs file in parallel.
-
-    Same reassembly semantics as the GFS fetcher: messages are concatenated
-    in byte-offset order into a single valid GRIB2 stream.
+    ``prefer_averaged=set()`` states explicitly that HRRR has no averaged
+    forms — leaving the GFS default (which prefers averaged LCDC/MCDC/HCDC)
+    would quietly start selecting an averaged message if NCEP ever added
+    one, and averaged data must never enter this all-instantaneous path.
     """
-    if not ranges:
-        return b""
-    sess = session or requests.Session()
-    url = hrrr_grib2_url(init_date, init_hour, forecast_hour)
-
-    results: list[tuple[int, bytes | None]] = []
-    with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
-        futures = {
-            pool.submit(_fetch_one_byte_range, url, br, sess): br
-            for br in ranges
-        }
-        for future in as_completed(futures):
-            results.append(future.result())
-
-    out = bytearray()
-    for _offset, data in sorted(results, key=lambda r: r[0]):
-        if data is not None:
-            out.extend(data)
-    return bytes(out)
+    return plan_cloud_diag_byte_ranges(
+        idx_text, pairs=_HRRR_CLOUD_DIAG_PAIRS, prefer_averaged=set(),
+    )
 
 
-def fetch_hrrr_cloud_diag_ranges(
+# Streamed download: ranges are coalesced, then fetched in offset-ordered
+# batches of this many HTTP requests. Peak in-flight memory is one batch of
+# chunks (~2 MB per coalesced chunk), not the whole ~190 MB forecast hour —
+# the accumulate-everything pattern inherited from the (30× smaller) GFS
+# payload held ~3 copies transiently (PR #508 review).
+_DOWNLOAD_BATCH_REQUESTS = 16
+
+
+def coalesce_ranges(
+    ranges: "list[ByteRange] | list[CloudDiagByteRange]",
+) -> list[tuple[int, int | None]]:
+    """Merge byte-adjacent planned ranges into single HTTP requests.
+
+    Messages for the variables we plan are frequently adjacent in the wrfprs
+    file (e.g. CLMR directly followed by CIMIXR at each level), so merging
+    ranges whose start is exactly the previous end + 1 cuts the request
+    count substantially at zero extra bytes — deliberately NOT bridging
+    gaps, which would download unplanned messages. A range with ``end=None``
+    (last message, runs to EOF) terminates its merged run.
+    """
+    spans = sorted((r.start, r.end) for r in ranges)
+    out: list[tuple[int, int | None]] = []
+    for start, end in spans:
+        if out and out[-1][1] is not None and start == out[-1][1] + 1:
+            out[-1] = (out[-1][0], end)
+        else:
+            out.append((start, end))
+    return out
+
+
+def _fetch_span(
+    url: str,
+    span: tuple[int, int | None],
+    session: requests.Session,
+) -> bytes | None:
+    """Download one coalesced byte span. None on failure (messages skipped)."""
+    start, end = span
+    range_header = f"bytes={start}-{'' if end is None else end}"
+    try:
+        resp = session.get(
+            url, headers={"Range": range_header}, timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code not in (200, 206):
+            logger.warning(
+                "Failed to fetch HRRR range %s: HTTP %d", range_header,
+                resp.status_code,
+            )
+            return None
+        return resp.content
+    except requests.RequestException:
+        logger.warning("Request failed for HRRR range %s", range_header, exc_info=True)
+        return None
+
+
+def iter_hrrr_range_chunks(
+    url: str,
+    spans: list[tuple[int, int | None]],
+    session: requests.Session,
+):
+    """Yield coalesced spans' bytes in offset order, batch-parallel.
+
+    Each batch of ``_DOWNLOAD_BATCH_REQUESTS`` spans downloads concurrently;
+    chunks are yielded in offset order so the consumer can stream them
+    straight into the concatenated-GRIB2 cache file. Failed spans are
+    skipped (their messages are simply absent from the stream, matching the
+    per-range failure semantics of the GFS fetcher).
+    """
+    for i in range(0, len(spans), _DOWNLOAD_BATCH_REQUESTS):
+        batch = spans[i:i + _DOWNLOAD_BATCH_REQUESTS]
+        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+            futures = [pool.submit(_fetch_span, url, span, session) for span in batch]
+            for future in futures:  # submission (= offset) order, not completion
+                data = future.result()
+                if data is not None:
+                    yield data
+
+
+def fetch_hrrr_ranges_to_cache(
     init_date: str,
     init_hour: int,
     forecast_hour: int,
-    ranges: list[CloudDiagByteRange],
+    ranges: "list[ByteRange] | list[CloudDiagByteRange]",
+    run_dir,
+    filename: str,
     session: requests.Session | None = None,
-) -> bytes:
-    """Download cloud diagnostic byte ranges from an HRRR wrfprs file."""
+    label: str = "sounding",
+) -> bool:
+    """Download planned ranges for one forecast hour, streamed to the cache.
+
+    Coalesces adjacent ranges, downloads in offset-ordered batches, and
+    writes incrementally via :func:`put_cached_from_chunks` — the full
+    payload never lives in memory. Logs the instrumentation the production
+    cost question needs: planned messages, actual HTTP requests after
+    coalescing, and bytes written.
+
+    Returns True when a non-empty cache entry was committed.
+    """
+    from weatherbrief.fetch.grib.cache import put_cached_from_chunks
+
     if not ranges:
-        return b""
+        return False
     sess = session or requests.Session()
     url = hrrr_grib2_url(init_date, init_hour, forecast_hour)
+    spans = coalesce_ranges(ranges)
 
-    results: list[tuple[int, bytes | None]] = []
-    with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
-        futures = {
-            pool.submit(_fetch_one_cloud_diag_range, url, br, sess): br
-            for br in ranges
-        }
-        for future in as_completed(futures):
-            results.append(future.result())
-
-    out = bytearray()
-    for _offset, data in sorted(results, key=lambda r: r[0]):
-        if data is not None:
-            out.extend(data)
-    return bytes(out)
+    path = put_cached_from_chunks(
+        run_dir, filename, iter_hrrr_range_chunks(url, spans, sess),
+    )
+    if path is None:
+        logger.warning(
+            "HRRR %s f%02d: all %d requests failed, nothing cached",
+            label, forecast_hour, len(spans),
+        )
+        return False
+    size = path.stat().st_size
+    logger.info(
+        "Downloaded HRRR %s f%02d: %d messages in %d requests, %.1f MB",
+        label, forecast_hour, len(ranges), len(spans), size / 1e6,
+    )
+    return True

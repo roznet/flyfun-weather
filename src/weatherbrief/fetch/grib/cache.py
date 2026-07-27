@@ -71,6 +71,12 @@ DEFAULT_CACHE_FLOOR_RUNS = 2
 
 _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     "icon-d2": 45.0,
+    # HRRR (#457): ~190 MB per cached forecast hour → ~1 GB per run for a
+    # typical flight window. The 6h TTL is the primary bound (~2 concurrent
+    # runs per flight); the cap backstops many concurrent US flights each
+    # pulling a different hourly run. Enforced from the daily retention pass
+    # (HRRR is not precached, so there is no warm-loop enforcement site).
+    "hrrr": 8.0,
 }
 
 
@@ -228,6 +234,54 @@ def put_cached(
             pass
         raise
     logger.debug("Cached: %s (%d bytes)", path, len(data))
+    return path
+
+
+def put_cached_from_chunks(
+    run_dir: Path,
+    filename: str,
+    chunks,
+) -> Path | None:
+    """Store GRIB2 data streamed as an iterable of byte chunks, atomically.
+
+    Same tmpfile + ``os.replace`` + fsync + ``POSIX_FADV_DONTNEED`` contract
+    as :func:`put_cached`, but consumes ``chunks`` incrementally so the
+    caller never holds the whole payload in memory — a full HRRR forecast
+    hour is ~190 MB, and the accumulate-then-write pattern held ~3× that
+    transiently (PR #508 review). Yields from ``chunks`` may perform I/O
+    (parallel range downloads); an exception from the iterator unlinks the
+    tempfile and propagates.
+
+    Returns the cached path, or ``None`` (nothing written, no cache entry)
+    when the iterator produced no bytes — so a total download failure
+    cannot commit an empty file that later reads as a valid cache hit.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / filename
+    fd, tmp = tempfile.mkstemp(prefix=f".{filename}.", suffix=".tmp", dir=run_dir)
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            for chunk in chunks:
+                if chunk:
+                    f.write(chunk)
+                    total += len(chunk)
+            if total:
+                f.flush()
+                os.fsync(f.fileno())
+                if hasattr(os, "posix_fadvise"):  # absent on macOS dev machines
+                    os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        if not total:
+            os.unlink(tmp)
+            return None
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    logger.debug("Cached (streamed): %s (%d bytes)", path, total)
     return path
 
 

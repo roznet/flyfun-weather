@@ -231,17 +231,30 @@ def _lerp_diagnostics(
     route points share a valid time, so every scalar interpolates the same way.
     """
     from weatherbrief.models import NWPCloudDiagnostics as Cls
-    from weatherbrief.models.analysis import NWP_CLOUD_DIAG_SCALARS
+    from weatherbrief.models.analysis import (
+        NWP_CLOUD_DIAG_META_FIELDS,
+        NWP_CLOUD_DIAG_SCALARS,
+    )
 
     scalars = {
         name: _lerp_optional(getattr(a, name), getattr(b, name), frac)
         for name in NWP_CLOUD_DIAG_SCALARS
+    }
+    # Meta/capability markers are constant per (model, point) — carried
+    # through, never lerped (a boolean through _lerp_optional would come
+    # back as a float). Nearest-available wins when one side lacks it.
+    meta = {
+        name: (
+            getattr(a, name) if getattr(a, name) is not None else getattr(b, name)
+        )
+        for name in NWP_CLOUD_DIAG_META_FIELDS
     }
     return Cls(
         low=_lerp_layer(a.low, b.low, frac),
         mid=_lerp_layer(a.mid, b.mid, frac),
         high=_lerp_layer(a.high, b.high, frac),
         **scalars,
+        **meta,
     )
 
 
