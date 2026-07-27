@@ -125,6 +125,34 @@ class TestRollupDayBasics:
         assert len(gfs) == 1
         assert gfs[0].n == 2
 
+    def test_every_source_is_rolled_up(self, db_session):
+        """The indexability predicate must not narrow the result set.
+
+        `_build_rollup_select` names `source` in the WHERE purely so
+        ix_verif_scores_source_time is usable. The list comes from the data
+        itself, so an unanticipated source still has to appear — hardcoding
+        it would drop rows silently.
+        """
+        when = _utc(2026, 4, 5, 12, 0)
+        oid = _make_obs(db_session, "LFPG", when)
+        for source in ("standalone_full", "flight", "some_future_source"):
+            db_session.add(_score(oid, "LFPG", when, source=source))
+        db_session.flush()
+
+        rollup_day(db_session, date(2026, 4, 5))
+        rows = db_session.execute(select(VerificationDailyStatsRow)).scalars().all()
+        assert {r.source for r in rows} == {
+            "standalone_full", "flight", "some_future_source",
+        }
+        assert sum(r.n for r in rows) == 3
+
+    def test_rollup_of_an_empty_score_table_is_a_noop(self, db_session):
+        """No sources at all must not emit a degenerate ``IN ()``."""
+        assert rollup_day(db_session, date(2026, 4, 5)) == 0
+        assert db_session.execute(
+            select(VerificationDailyStatsRow)
+        ).scalars().all() == []
+
     def test_only_obs_in_target_date(self, db_session):
         oid_pre = _make_obs(db_session, "LFPG", _utc(2026, 4, 4, 23, 30))
         oid_in = _make_obs(db_session, "LFPG", _utc(2026, 4, 5, 12, 0))

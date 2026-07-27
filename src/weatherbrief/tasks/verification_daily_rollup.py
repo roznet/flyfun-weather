@@ -86,8 +86,35 @@ def _sum_when(condition):
     return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
 
 
-def _build_rollup_select(day_start: datetime, day_end: datetime, day: date_t):
-    """Build the SELECT ... GROUP BY query producing one row per group."""
+def known_sources(db: Session) -> list[str]:
+    """Every ``source`` value present in ``verification_scores``.
+
+    Cheap despite the table size: ``ix_verif_scores_source_time`` leads with
+    ``source``, so MySQL answers this with a loose index scan ("Using index
+    for group-by") — 0-1 ms against 8.4M rows on production. Read fresh per
+    rollup rather than hardcoded so a new source can never be silently
+    dropped from the aggregate.
+    """
+    return sorted(
+        db.execute(select(VerificationScoreRow.source).distinct()).scalars().all()
+    )
+
+
+def _build_rollup_select(
+    day_start: datetime, day_end: datetime, day: date_t, sources: list[str],
+):
+    """Build the SELECT ... GROUP BY query producing one row per group.
+
+    ``sources`` is redundant with the data — it lists every source already
+    present — but it is what makes the query indexable. Filtering on
+    ``observation_time`` alone matches no index prefix (nothing on
+    ``verification_scores`` leads with it), so the day's ~36K rows were found
+    by a full scan of all 8.4M: ``type=ALL, rows=8,223,266``, 4.5 s warm and
+    35 s cold, run 2-3x per light cycle. Naming ``source`` in the WHERE turns
+    the existing ``ix_verif_scores_source_time`` (source, observation_time)
+    into a range seek — ``type=range, rows=60,396``, 0.18 s warm — for the
+    same result set.
+    """
     cat_obs = _cat_index_expr(VerificationScoreRow.obs_flight_category)
     cat_mod = _cat_index_expr(VerificationScoreRow.model_flight_category)
     cat_diff = cat_mod - cat_obs
@@ -163,6 +190,7 @@ def _build_rollup_select(day_start: datetime, day_end: datetime, day: date_t):
             VerificationScoreRow.observation_id == VerificationObservationRow.id,
         )
         .where(
+            VerificationScoreRow.source.in_(sources),
             VerificationScoreRow.observation_time >= day_start,
             VerificationScoreRow.observation_time < day_end,
         )
@@ -191,7 +219,13 @@ def rollup_day(db: Session, day: date_t) -> int:
         )
     )
 
-    src = _build_rollup_select(day_start, day_end, day)
+    sources = known_sources(db)
+    if not sources:
+        # No scores at all — the delete above is the whole job. Returning here
+        # also keeps a degenerate ``IN ()`` out of the INSERT-SELECT.
+        return 0
+
+    src = _build_rollup_select(day_start, day_end, day, sources)
     target_cols = [c.name for c in src.selected_columns]
     stmt = insert(VerificationDailyStatsRow).from_select(target_cols, src)
     result = db.execute(stmt)
