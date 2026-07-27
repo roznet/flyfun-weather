@@ -774,10 +774,17 @@ def assess_convective_nwp(
     cin = indices.cin_surface_jkg
     modifiers = _severity_modifiers(indices, cape)
 
-    # Fallback: no native convective scheme output (and no native cloud content
-    # at all). Score on CAPE, as the DD track does, but mark it distinctly so
-    # the now-circular DD-vs-NWP comparison is skipped downstream.
-    if not _has_native_cloud_content(nwp_diagnostics):
+    # Fallback: no native convective scheme output — either no native cloud
+    # content at all, or the diag explicitly declares its source exposes no
+    # convective-realization channel (``convective_scheme_absent``, #457:
+    # HRRR is convection-allowing with no parameterized scheme output
+    # ingested, so its generic band covers must NOT read as "scheme present
+    # but quiet" — that graded a CAPE-2000 column NONE). Score on CAPE, as
+    # the DD track does, but mark it distinctly so the now-circular
+    # DD-vs-NWP comparison is skipped downstream.
+    if nwp_diagnostics.convective_scheme_absent or not _has_native_cloud_content(
+        nwp_diagnostics
+    ):
         risk = _nwp_cape_fallback_risk(cape)
         if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
             risk = _down_one(risk)

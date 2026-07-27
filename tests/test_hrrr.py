@@ -9,6 +9,7 @@ other hourly cycles) — as a FULL sounding replacement, not the GFS patch.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -222,12 +223,43 @@ class TestHrrrWindowHours:
         # 15:15 + 2h → needs 15..18z = f03..f06.
         assert fh == [3, 4, 5, 6]
 
+    def test_half_hour_departure_keeps_every_hour(self):
+        # Regression (PR #508 review): the sample-and-round shape used
+        # ties-to-even rounding, so a :30 departure collapsed consecutive
+        # half-hour offsets onto even hours and dropped f05 → [3, 4, 6].
+        fh = compute_hrrr_flight_window_hours(
+            "20260726", 12, _utc(2026, 7, 26, 15, 30), 2.0,
+        )
+        assert fh == [3, 4, 5, 6]
+
+    @pytest.mark.parametrize("minute,duration", [
+        (0, 0.5), (30, 0.5), (0, 2.0), (30, 2.5), (45, 3.25), (59, 6.0),
+    ])
+    def test_always_contiguous_and_covering(self, minute, duration):
+        dep = _utc(2026, 7, 26, 15, minute)
+        fh = compute_hrrr_flight_window_hours("20260726", 12, dep, duration)
+        init = _utc(2026, 7, 26, 12)
+        # Contiguous, ordered, unique...
+        assert fh == list(range(fh[0], fh[-1] + 1))
+        # ...bracketing the window (first anchor at/before departure, last
+        # at/after the end) and no wider than the minimal covering range.
+        dep_h = (dep - init).total_seconds() / 3600
+        end_h = dep_h + duration
+        assert fh[0] <= dep_h < fh[0] + 1
+        assert fh[-1] - 1 < end_h <= fh[-1]
+
+    def test_sub_hour_flight(self):
+        fh = compute_hrrr_flight_window_hours(
+            "20260726", 12, _utc(2026, 7, 26, 15), 0.5,
+        )
+        assert fh == [3, 4]
+
     def test_clamped_to_horizon(self):
         # 06z extended run, flight at +47..49h clamps at f48.
         fh = compute_hrrr_flight_window_hours(
             "20260726", 6, _utc(2026, 7, 28, 5), 2.0,
         )
-        assert fh[-1] == 48
+        assert fh == [47, 48]
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +335,119 @@ class TestHrrrIdxPlanning:
         assert ("CAPE", "255-0 mb above ground") not in got
         assert ("PRES", "cloud base") not in got
         assert ("HGT", "cloud top") not in got
+
+
+# ---------------------------------------------------------------------------
+# Idx planning against a committed REAL inventory excerpt (PR #508 review)
+# ---------------------------------------------------------------------------
+
+_REAL_IDX_EXCERPT = (
+    Path(__file__).parent / "fixtures" / "hrrr_idx_excerpt.txt"
+).read_text()
+
+
+class TestHrrrIdxPlanningRealInventory:
+    """The planner against verbatim lines from the live bucket's .idx.
+
+    Synthetic fixtures can only validate the implementation's own
+    assumptions; these lines are the product's actual names, levels and
+    message adjacency (hrrr.20260726 t12z f06)."""
+
+    def test_condensate_fields_not_silently_omitted(self):
+        ranges = plan_hrrr_sounding_byte_ranges(_REAL_IDX_EXCERPT)
+        got = {(r.variable, r.level_hpa) for r in ranges}
+        # The live product spells cloud liquid water CLMR (and ice CIMIXR);
+        # both must reach the plan at every fetched level.
+        for lev in (500, 700):
+            assert ("CLMR", lev) in got
+            assert ("CIMIXR", lev) in got
+            for var in ("TMP", "DPT", "RH", "UGRD", "VGRD", "VVEL", "HGT"):
+                assert (var, lev) in got
+
+    def test_unwanted_neighbours_and_fractional_level_excluded(self):
+        ranges = plan_hrrr_sounding_byte_ranges(_REAL_IDX_EXCERPT)
+        vars_planned = {r.variable for r in ranges}
+        for distractor in ("SPFH", "ABSV", "RWMR", "SNMR", "GRLE", "REFC"):
+            assert distractor not in vars_planned
+        assert all(r.level_hpa in (500, 700) for r in ranges)
+
+    def test_diag_plan_matches_real_level_strings(self):
+        ranges = plan_hrrr_cloud_diag_byte_ranges(_REAL_IDX_EXCERPT)
+        got = {(r.variable, r.level_str) for r in ranges}
+        assert ("LCDC", "low cloud layer") in got
+        assert ("HGT", "cloud ceiling") in got
+        assert ("HGT", "cloud base") in got
+        assert ("CAPE", "90-0 mb above ground") in got
+        assert ("CIN", "90-0 mb above ground") in got
+        assert ("CAPE", "surface") not in got
+
+    def test_adjacent_messages_coalesce(self):
+        from weatherbrief.fetch.grib.hrrr_fetch import coalesce_ranges
+
+        ranges = plan_hrrr_sounding_byte_ranges(_REAL_IDX_EXCERPT)
+        spans = coalesce_ranges(ranges)
+        # CLMR is directly followed by CIMIXR in the real file, so the two
+        # must land in one span; overall the plan shrinks meaningfully.
+        assert len(spans) < len(ranges)
+        cimixr_500 = next(
+            r for r in ranges if r.variable == "CIMIXR" and r.level_hpa == 500
+        )
+        assert all(s[0] != cimixr_500.start for s in spans), (
+            "CIMIXR should have merged into CLMR's span, not started its own"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Range coalescing + streamed cache write (PR #508 review)
+# ---------------------------------------------------------------------------
+
+
+class TestCoalesceAndStreaming:
+    def test_coalesce_merges_only_adjacent(self):
+        from weatherbrief.fetch.grib.gfs_idx import ByteRange
+        from weatherbrief.fetch.grib.hrrr_fetch import coalesce_ranges
+
+        ranges = [
+            ByteRange("A", 500, 0, 99),
+            ByteRange("B", 500, 100, 199),     # adjacent → merges with A
+            ByteRange("C", 500, 300, 399),     # gap → new span
+            ByteRange("D", 500, 400, None),    # adjacent, open-ended tail
+        ]
+        assert coalesce_ranges(ranges) == [(0, 199), (300, None)]
+
+    def test_coalesce_open_ended_terminates_run(self):
+        from weatherbrief.fetch.grib.gfs_idx import ByteRange
+        from weatherbrief.fetch.grib.hrrr_fetch import coalesce_ranges
+
+        ranges = [ByteRange("A", 500, 0, None), ByteRange("B", 500, 100, 199)]
+        # The open-ended span can't know its end — nothing merges into it.
+        assert coalesce_ranges(ranges) == [(0, None), (100, 199)]
+
+    def test_put_cached_from_chunks_streams_and_commits(self, tmp_path):
+        from weatherbrief.fetch.grib.cache import put_cached_from_chunks
+
+        path = put_cached_from_chunks(
+            tmp_path, "f003_X.grib2", iter([b"abc", b"", b"def"]),
+        )
+        assert path is not None
+        assert path.read_bytes() == b"abcdef"
+
+    def test_put_cached_from_chunks_empty_commits_nothing(self, tmp_path):
+        from weatherbrief.fetch.grib.cache import put_cached_from_chunks
+
+        assert put_cached_from_chunks(tmp_path, "f003_X.grib2", iter([])) is None
+        assert list(tmp_path.iterdir()) == []
+
+    def test_put_cached_from_chunks_iterator_error_leaves_no_file(self, tmp_path):
+        from weatherbrief.fetch.grib.cache import put_cached_from_chunks
+
+        def _chunks():
+            yield b"abc"
+            raise RuntimeError("download died")
+
+        with pytest.raises(RuntimeError):
+            put_cached_from_chunks(tmp_path, "f003_X.grib2", _chunks())
+        assert list(tmp_path.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +644,9 @@ class TestBuildHrrrCloudDiagnostics:
         assert diag.ml_cape_jkg == 1200.0
         assert diag.ml_cin_jkg == -85.0  # already negative — passed through
         assert diag.convective_cover_pct is None  # no HRRR convective fields
+        # HRRR ingests no convective-realization channel — the marker routes
+        # the NWP convective method to its CAPE fallback (PR #508 review).
+        assert diag.convective_scheme_absent is True
 
     def test_cin_positive_noise_floored_to_zero(self):
         from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
@@ -507,10 +655,110 @@ class TestBuildHrrrCloudDiagnostics:
         assert diag is not None
         assert diag.ml_cin_jkg == 0.0
 
+    def test_cin_implausible_positive_is_unknown_not_no_cap(self):
+        # If the provider ever flips to positive-magnitude CIN (the
+        # ECMWF/ICON convention), flooring +400 to 0 would turn a strong cap
+        # into "no inhibition" — the unsafe direction. Unknown instead.
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        diag = build_hrrr_cloud_diagnostics(
+            {"ml_cin_jkg": 400.0, "total_cover_pct": 10.0},
+        )
+        assert diag is not None
+        assert diag.ml_cin_jkg is None
+
     def test_empty_returns_none(self):
         from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
 
         assert build_hrrr_cloud_diagnostics({}) is None
+
+
+# ---------------------------------------------------------------------------
+# Convective method: no realization channel → CAPE fallback (PR #508 review)
+# ---------------------------------------------------------------------------
+
+
+class TestHrrrConvectiveSchemeAbsent:
+    def test_high_cape_hrrr_column_is_not_graded_quiet(self):
+        """A CAPE-2000 HRRR column must not read NONE just because generic
+        band covers are present: HRRR is convection-allowing and no
+        realization channel (cover/base/top/precip) is ingested, so the NWP
+        method must use its CAPE fallback, not the native quiet-scheme path."""
+        from weatherbrief.analysis.sounding.convective import assess_convective_nwp
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+        from weatherbrief.models import ConvectiveRisk, ThermodynamicIndices
+
+        diag = build_hrrr_cloud_diagnostics({
+            "total_cover_pct": 40.0,
+            "low_cover_pct": 30.0,
+            "ml_cape_jkg": 2000.0,
+            "ml_cin_jkg": -20.0,
+        })
+        indices = ThermodynamicIndices(
+            cape_surface_jkg=2000.0, cin_surface_jkg=-20.0,
+        )
+        result = assess_convective_nwp(indices, diag)
+        assert result is not None
+        assert result.method == "nwp_cape_fallback"
+        assert result.risk_level != ConvectiveRisk.NONE
+
+    def test_gfs_style_quiet_scheme_still_reads_none(self):
+        """Control: a native model whose scheme IS present but quiet (GFS
+        emits convective cover 0% when quiet) keeps its honest NONE."""
+        from weatherbrief.analysis.sounding.convective import assess_convective_nwp
+        from weatherbrief.models import (
+            ConvectiveRisk,
+            NWPCloudDiagnostics,
+            ThermodynamicIndices,
+        )
+
+        diag = NWPCloudDiagnostics(
+            total_cover_pct=40.0, convective_cover_pct=0.0,
+        )
+        indices = ThermodynamicIndices(
+            cape_surface_jkg=2000.0, cin_surface_jkg=-20.0,
+        )
+        result = assess_convective_nwp(indices, diag)
+        assert result is not None
+        assert result.method == "nwp"
+        assert result.risk_level == ConvectiveRisk.NONE
+
+
+# ---------------------------------------------------------------------------
+# Meta-field carriage through both interpolation axes
+# ---------------------------------------------------------------------------
+
+
+class TestSchemeAbsentCarriedThroughInterpolation:
+    def _diag(self):
+        from weatherbrief.models import NWPCloudDiagnostics
+
+        return NWPCloudDiagnostics(
+            total_cover_pct=40.0, convective_scheme_absent=True,
+        )
+
+    def test_meta_excluded_from_scalar_inventories(self):
+        from weatherbrief.models.analysis import (
+            NWP_CLOUD_DIAG_INSTANT_SCALARS,
+            NWP_CLOUD_DIAG_SCALARS,
+        )
+
+        assert "convective_scheme_absent" not in NWP_CLOUD_DIAG_INSTANT_SCALARS
+        assert "convective_scheme_absent" not in NWP_CLOUD_DIAG_SCALARS
+
+    def test_time_axis_gap_hour_keeps_flag(self):
+        from weatherbrief.fetch.grib.fill import _interp_diag_at
+
+        out = _interp_diag_at(
+            self._diag(), self._diag(), mid_frac=0.5, step_frac=0.5,
+        )
+        assert out.convective_scheme_absent is True
+
+    def test_spatial_axis_keeps_flag(self):
+        from weatherbrief.analysis.spatial_interpolation import _lerp_diagnostics
+
+        out = _lerp_diagnostics(self._diag(), self._diag(), 0.5)
+        assert out.convective_scheme_absent is True
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +852,66 @@ class TestGfsSlotHrrrGate:
             )
         assert (ts, source) == (None, None)
         gfs_finder.assert_called_once()
+
+
+class TestEnrichOneHrrrHourAtomicity:
+    """An hour is HRRR-or-untouched (PR #508 review)."""
+
+    def _call(self, tmp_path, decoded_points, diag_raw=None):
+        import weatherbrief.fetch.grib as grib_mod
+
+        route = [_rp(42.3656, -71.0096), _rp(39.1754, -76.6683, 320)]
+
+        def _fake_dispatch(fn_name, *args):
+            if fn_name == "decode_hrrr_pressure":
+                return decoded_points
+            return diag_raw or [{} for _ in route]
+
+        with patch.object(grib_mod, "is_cached", return_value=True), patch.object(
+            grib_mod, "_dispatch_decode", side_effect=_fake_dispatch,
+        ), patch.object(
+            grib_mod, "_replace_pressure_levels_from_grib", return_value=2,
+        ) as replace, patch.object(
+            grib_mod, "_apply_cloud_diagnostics_to_sections",
+        ) as apply_diag:
+            merged = grib_mod._enrich_one_hrrr_hour(
+                [], [], route, "20260726", 12, 3,
+                run_dir=tmp_path, session=None,
+            )
+        return merged, replace, apply_diag
+
+    def test_partial_point_coverage_skips_hour_whole(self, tmp_path):
+        # One covered point + one empty dict = a spatially mixed decode
+        # (gate/grid drift) — the hour must be skipped without ANY mutation.
+        merged, replace, apply_diag = self._call(
+            tmp_path, [{500: {"raw_temperature_k": 270.0}}, {}],
+        )
+        assert merged == 0
+        replace.assert_not_called()
+        apply_diag.assert_not_called()
+
+    def test_diagnostics_only_applied_after_sounding_merges(self, tmp_path):
+        # All-points decode → sounding merges → diagnostics ride along.
+        merged, replace, apply_diag = self._call(
+            tmp_path,
+            [{500: {"raw_temperature_k": 270.0}}, {500: {"raw_temperature_k": 271.0}}],
+            diag_raw=[{"total_cover_pct": 10.0}, {"total_cover_pct": 20.0}],
+        )
+        assert merged == 1
+        replace.assert_called_once()
+        apply_diag.assert_called_once()
+
+    def test_empty_sounding_decode_never_applies_diagnostics(self, tmp_path):
+        # Sounding decode yields nothing (corrupt cached blob) while the
+        # diag blob is healthy: without the coupling, HRRR's instantaneous
+        # diagnostics would survive into the plain-GFS fallback.
+        merged, replace, apply_diag = self._call(
+            tmp_path, [{}, {}],
+            diag_raw=[{"total_cover_pct": 10.0}, {"total_cover_pct": 20.0}],
+        )
+        assert merged == 0
+        replace.assert_not_called()
+        apply_diag.assert_not_called()
 
 
 class TestHrrrFillSemantics:

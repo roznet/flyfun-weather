@@ -2802,9 +2802,23 @@ def _try_enrich_gfs_from_hrrr(
         logger.warning("HRRR run discovery failed; using GFS", exc_info=True)
         return None
     if run_info is None:
-        logger.info(
-            "Route in HRRR domain but no run covers the flight window; using GFS",
-        )
+        # The run-finder returns None both when the window is past every
+        # cycle's horizon and when a run should exist but the probe failed —
+        # classify deterministically so an S3 outage doesn't masquerade as
+        # the expected out-of-range skip (PR #508 review).
+        from weatherbrief.fetch.grib.hrrr_fetch import hrrr_window_out_of_range
+
+        if hrrr_window_out_of_range(
+            departure_time, flight_duration_hours, as_of_time,
+        ):
+            logger.info(
+                "Flight window beyond HRRR horizon; using GFS",
+            )
+        else:
+            logger.warning(
+                "Route in HRRR domain and window within horizon, but no "
+                "published run found (probe failure?); using GFS",
+            )
         return None
 
     try:
@@ -2814,8 +2828,9 @@ def _try_enrich_gfs_from_hrrr(
             run_info=run_info, session=session,
         )
     except Exception:
-        # Only reachable when NOTHING was merged (per-fhour errors are
-        # contained inside the loop), so falling back to GFS is clean.
+        # Only reachable from the pre-loop setup (window computation, cache
+        # dir) — the per-hour loop contains its own failures AND is wrapped
+        # as a whole, so nothing can escape after sections were mutated.
         logger.warning("HRRR enrichment failed; falling back to GFS", exc_info=True)
         return None
 
@@ -2845,15 +2860,26 @@ def _enrich_gfs_from_hrrr(
     would multiply peak worker RSS for little wall-clock gain against the
     download-dominated total. Per-fhour failures are contained — a bad hour
     is skipped and the time-axis fill covers it.
+
+    Mixed-state guarantees (PR #508 review):
+
+    - An hour is HRRR-or-untouched: cloud diagnostics are applied ONLY after
+      that hour's sounding replacement succeeded, so a sounding-decode
+      failure with a healthy diag blob can never leave HRRR's instantaneous
+      diagnostics under a later plain-GFS fallback (where ``gfs_init`` and
+      the RH/condensate gate would run over them).
+    - Spatially all-or-nothing: an hour whose decode covers only SOME route
+      points is skipped whole. Inside the domain gate this shouldn't happen;
+      it guards the gate's pinned grid constants drifting from the real grid
+      (which would otherwise pass the gate and then silently produce
+      HRRR-at-some-points, Open-Meteo-at-others).
+    - The success accounting increments the moment a sounding merge lands,
+      and the whole loop is exception-contained — so once anything was
+      merged, this returns the HRRR timestamp (partial success keeps HRRR,
+      #456 rule) rather than falling through to a mixed GFS fallback.
     """
-    from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
     from weatherbrief.fetch.grib.hrrr_fetch import (
         compute_hrrr_flight_window_hours,
-        fetch_hrrr_byte_ranges,
-        fetch_hrrr_cloud_diag_ranges,
-        fetch_hrrr_idx,
-        plan_hrrr_cloud_diag_byte_ranges,
-        plan_hrrr_sounding_byte_ranges,
     )
 
     init_date, init_hour = run_info
@@ -2864,90 +2890,29 @@ def _enrich_gfs_from_hrrr(
     purge_old_runs(data_dir, model="hrrr")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="hrrr")
 
-    point_lats = [rp.lat for rp in route_points]
-    point_lons = [rp.lon for rp in route_points]
-
+    # Everything past this point may mutate the sections, so it is wrapped
+    # whole: an exception can only reach the caller's plain-GFS fallback
+    # from the (mutation-free) setup above.
     enriched_hours = 0
-    for fhour in forecast_hours:
-        try:
-            sounding_ck = cache_key(fhour, "HRRR_SOUNDING")
-            diag_ck = cache_key(fhour, "HRRR_CLOUD_DIAG")
-
-            idx_text: str | None = None
-            if not is_cached(run_dir, sounding_ck) or not is_cached(run_dir, diag_ck):
-                with _grib_time("hrrr_idx_fetch"):
-                    idx_text = fetch_hrrr_idx(
-                        init_date, init_hour, fhour, session=session,
-                    )
-
-            if not is_cached(run_dir, sounding_ck):
-                ranges = plan_hrrr_sounding_byte_ranges(idx_text or "")
-                if not ranges:
-                    logger.warning("No HRRR sounding messages in .idx for f%02d", fhour)
-                    continue
-                with _grib_time("hrrr_sounding_download"):
-                    grib_bytes = fetch_hrrr_byte_ranges(
-                        init_date, init_hour, fhour, ranges, session=session,
-                    )
-                if not grib_bytes:
-                    continue
-                put_cached(run_dir, sounding_ck, grib_bytes)
-                logger.info(
-                    "Downloaded HRRR sounding f%02d: %d ranges, %.1f MB",
-                    fhour, len(ranges), len(grib_bytes) / 1e6,
-                )
-                del grib_bytes
-
-            if not is_cached(run_dir, diag_ck):
-                diag_ranges = plan_hrrr_cloud_diag_byte_ranges(idx_text or "")
-                if diag_ranges:
-                    with _grib_time("hrrr_cloud_diag_download"):
-                        diag_bytes = fetch_hrrr_cloud_diag_ranges(
-                            init_date, init_hour, fhour, diag_ranges, session=session,
-                        )
-                    if diag_bytes:
-                        put_cached(run_dir, diag_ck, diag_bytes)
-                    del diag_bytes
-
-            valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
-
-            with _grib_time("hrrr_pressure_decode"):
-                decoded_points = _dispatch_decode(
-                    "decode_hrrr_pressure",
-                    str(run_dir / sounding_ck), point_lats, point_lons,
-                )
-            replaced = 0
-            if decoded_points and any(decoded_points):
-                replaced = _replace_pressure_levels_from_grib(
+    try:
+        for fhour in forecast_hours:
+            try:
+                enriched_hours += _enrich_one_hrrr_hour(
                     gfs_sections, all_forecasts, route_points,
-                    decoded_points, valid_utc=valid_utc,
-                    model_source=ModelSource.GFS,
+                    init_date, init_hour, fhour,
+                    run_dir=run_dir, session=session,
                 )
-            del decoded_points
-
-            if is_cached(run_dir, diag_ck):
-                with _grib_time("hrrr_cloud_diag_decode"):
-                    diag_raw = _dispatch_decode(
-                        "decode_hrrr_cloud_diag",
-                        str(run_dir / diag_ck), point_lats, point_lons,
-                    )
-                if diag_raw:
-                    diagnostics = [
-                        build_hrrr_cloud_diagnostics(raw) for raw in diag_raw
-                    ]
-                    _apply_cloud_diagnostics_to_sections(
-                        gfs_sections, all_forecasts, route_points,
-                        diagnostics, "gfs", valid_utc=valid_utc,
-                    )
-                    del diagnostics
-                del diag_raw
-
-            if replaced > 0:
-                enriched_hours += 1
-        except Exception:
-            logger.warning("HRRR enrichment failed for f%02d", fhour, exc_info=True)
-        finally:
-            _grib_gc()
+            except Exception:
+                logger.warning(
+                    "HRRR enrichment failed for f%02d", fhour, exc_info=True,
+                )
+            finally:
+                _grib_gc()
+    except Exception:
+        # Nothing inside the loop should get here (each hour contains its
+        # own failures) — belt-and-suspenders so a surprise can never fall
+        # through to the caller's GFS fallback after hours were merged.
+        logger.warning("HRRR enrichment loop aborted", exc_info=True)
 
     if enriched_hours > 0:
         logger.info(
@@ -2959,6 +2924,124 @@ def _enrich_gfs_from_hrrr(
 
     logger.warning("HRRR produced no enrichment; falling back to GFS")
     return None
+
+
+def _enrich_one_hrrr_hour(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    *,
+    run_dir: Path,
+    session: requests.Session,
+) -> int:
+    """Fetch, decode and merge ONE HRRR forecast hour. Returns 1 on success.
+
+    The hour is HRRR-or-untouched: the sounding must decode for EVERY route
+    point and merge before the (subordinate) cloud diagnostics are applied.
+    Returning 0 means the sections were not mutated for this hour.
+    """
+    from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+    from weatherbrief.fetch.grib.hrrr_fetch import (
+        fetch_hrrr_idx,
+        fetch_hrrr_ranges_to_cache,
+        plan_hrrr_cloud_diag_byte_ranges,
+        plan_hrrr_sounding_byte_ranges,
+    )
+
+    sounding_ck = cache_key(fhour, "HRRR_SOUNDING")
+    diag_ck = cache_key(fhour, "HRRR_CLOUD_DIAG")
+    point_lats = [rp.lat for rp in route_points]
+    point_lons = [rp.lon for rp in route_points]
+
+    idx_text: str | None = None
+    if not is_cached(run_dir, sounding_ck) or not is_cached(run_dir, diag_ck):
+        with _grib_time("hrrr_idx_fetch"):
+            idx_text = fetch_hrrr_idx(init_date, init_hour, fhour, session=session)
+
+    if not is_cached(run_dir, sounding_ck):
+        ranges = plan_hrrr_sounding_byte_ranges(idx_text or "")
+        if not ranges:
+            logger.warning("No HRRR sounding messages in .idx for f%02d", fhour)
+            return 0
+        with _grib_time("hrrr_sounding_download"):
+            ok = fetch_hrrr_ranges_to_cache(
+                init_date, init_hour, fhour, ranges, run_dir, sounding_ck,
+                session=session, label="sounding",
+            )
+        if not ok:
+            return 0
+
+    if not is_cached(run_dir, diag_ck):
+        diag_ranges = plan_hrrr_cloud_diag_byte_ranges(idx_text or "")
+        if diag_ranges:
+            with _grib_time("hrrr_cloud_diag_download"):
+                fetch_hrrr_ranges_to_cache(
+                    init_date, init_hour, fhour, diag_ranges, run_dir, diag_ck,
+                    session=session, label="cloud diag",
+                )
+
+    valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+
+    with _grib_time("hrrr_pressure_decode"):
+        decoded_points = _dispatch_decode(
+            "decode_hrrr_pressure",
+            str(run_dir / sounding_ck), point_lats, point_lons,
+        )
+    # Spatially all-or-nothing: a point with an empty dict means the grid
+    # didn't cover it. The domain gate should make that impossible; if the
+    # pinned gate constants ever drift from the real grid, skipping the hour
+    # here keeps the slot from going HRRR-at-some-points (PR #508 review).
+    if not decoded_points or not all(decoded_points):
+        covered = sum(1 for d in decoded_points or [] if d)
+        logger.warning(
+            "HRRR f%02d sounding covered %d/%d route points — skipping hour "
+            "(gate/grid mismatch?)",
+            fhour, covered, len(route_points),
+        )
+        del decoded_points
+        return 0
+
+    replaced = _replace_pressure_levels_from_grib(
+        gfs_sections, all_forecasts, route_points,
+        decoded_points, valid_utc=valid_utc,
+        model_source=ModelSource.GFS,
+    )
+    del decoded_points
+    if replaced == 0:
+        # No hourly entries matched this valid time — nothing was written,
+        # and the diagnostics must not go in alone.
+        return 0
+
+    # Sounding is in — the hour is committed to HRRR; diagnostics ride along.
+    # Their failures are contained here so this function returns 1 whenever
+    # the sounding merged: a raise past this point would make the caller
+    # under-count merged hours and could trigger the GFS fallback on top of
+    # already-replaced HRRR soundings.
+    try:
+        if is_cached(run_dir, diag_ck):
+            with _grib_time("hrrr_cloud_diag_decode"):
+                diag_raw = _dispatch_decode(
+                    "decode_hrrr_cloud_diag",
+                    str(run_dir / diag_ck), point_lats, point_lons,
+                )
+            if diag_raw:
+                diagnostics = [build_hrrr_cloud_diagnostics(raw) for raw in diag_raw]
+                _apply_cloud_diagnostics_to_sections(
+                    gfs_sections, all_forecasts, route_points,
+                    diagnostics, "gfs", valid_utc=valid_utc,
+                )
+                del diagnostics
+            del diag_raw
+    except Exception:
+        logger.warning(
+            "HRRR f%02d cloud diagnostics failed (sounding kept)", fhour,
+            exc_info=True,
+        )
+
+    return 1
 
 
 def _fetch_clwmr_icmr_for_fhour(

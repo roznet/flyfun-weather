@@ -1,0 +1,68 @@
+# Real HRRR .idx excerpt (sanitized subset) — hrrr.t12z.wrfprsf06.grib2,
+# hrrr.20260726, noaa-hrrr-bdp-pds. Committed so the byte-range planner is
+# tested against the PRODUCT'S actual variable names and message adjacency
+# (PR #508 review): note CLMR (not CLWMR), CIMIXR (not ICMR), the fractional
+# 1013.2 mb near-surface level, unwanted neighbours (SPFH/ABSV/RWMR...), and
+# the instantaneous-only diagnostics. Lines are verbatim; non-idx lines like
+# this header are ignored by the parser.
+253:110642016:d=2026072612:HGT:500 mb:6 hour fcst:
+254:111340249:d=2026072612:TMP:500 mb:6 hour fcst:
+255:111900094:d=2026072612:RH:500 mb:6 hour fcst:
+256:112669577:d=2026072612:DPT:500 mb:6 hour fcst:
+257:113664463:d=2026072612:SPFH:500 mb:6 hour fcst:
+258:115259825:d=2026072612:VVEL:500 mb:6 hour fcst:
+259:115895179:d=2026072612:UGRD:500 mb:6 hour fcst:
+260:116476761:d=2026072612:VGRD:500 mb:6 hour fcst:
+261:117063618:d=2026072612:ABSV:500 mb:6 hour fcst:
+262:117558328:d=2026072612:CLMR:500 mb:6 hour fcst:
+263:117613706:d=2026072612:CIMIXR:500 mb:6 hour fcst:
+264:117637026:d=2026072612:RWMR:500 mb:6 hour fcst:
+265:117654825:d=2026072612:SNMR:500 mb:6 hour fcst:
+266:117736265:d=2026072612:GRLE:500 mb:6 hour fcst:
+365:167702783:d=2026072612:HGT:700 mb:6 hour fcst:
+366:168391009:d=2026072612:TMP:700 mb:6 hour fcst:
+367:168951612:d=2026072612:RH:700 mb:6 hour fcst:
+368:169753584:d=2026072612:DPT:700 mb:6 hour fcst:
+369:170804711:d=2026072612:SPFH:700 mb:6 hour fcst:
+370:172094405:d=2026072612:VVEL:700 mb:6 hour fcst:
+371:172777116:d=2026072612:UGRD:700 mb:6 hour fcst:
+372:173374588:d=2026072612:VGRD:700 mb:6 hour fcst:
+373:173968593:d=2026072612:ABSV:700 mb:6 hour fcst:
+374:174495336:d=2026072612:CLMR:700 mb:6 hour fcst:
+375:174596553:d=2026072612:CIMIXR:700 mb:6 hour fcst:
+376:174603738:d=2026072612:RWMR:700 mb:6 hour fcst:
+377:174634060:d=2026072612:SNMR:700 mb:6 hour fcst:
+378:174662002:d=2026072612:GRLE:700 mb:6 hour fcst:
+546:265624758:d=2026072612:HGT:1013.2 mb:6 hour fcst:
+547:266467332:d=2026072612:TMP:1013.2 mb:6 hour fcst:
+548:267091815:d=2026072612:RH:1013.2 mb:6 hour fcst:
+549:267916768:d=2026072612:DPT:1013.2 mb:6 hour fcst:
+550:269063005:d=2026072612:SPFH:1013.2 mb:6 hour fcst:
+551:270774929:d=2026072612:VVEL:1013.2 mb:6 hour fcst:
+552:271273751:d=2026072612:UGRD:1013.2 mb:6 hour fcst:
+553:271905971:d=2026072612:VGRD:1013.2 mb:6 hour fcst:
+554:272522033:d=2026072612:ABSV:1013.2 mb:6 hour fcst:
+555:273062270:d=2026072612:CLMR:1013.2 mb:6 hour fcst:
+556:273079429:d=2026072612:CIMIXR:1013.2 mb:6 hour fcst:
+557:273143146:d=2026072612:RWMR:1013.2 mb:6 hour fcst:
+558:273184206:d=2026072612:SNMR:1013.2 mb:6 hour fcst:
+559:273247923:d=2026072612:GRLE:1013.2 mb:6 hour fcst:
+578:301225966:d=2026072612:REFC:entire atmosphere:6 hour fcst:
+649:350989024:d=2026072612:CAPE:surface:6 hour fcst:
+650:352035675:d=2026072612:CIN:surface:6 hour fcst:
+654:355943086:d=2026072612:LCDC:low cloud layer:6 hour fcst:
+655:356850312:d=2026072612:MCDC:middle cloud layer:6 hour fcst:
+656:357254292:d=2026072612:HCDC:high cloud layer:6 hour fcst:
+657:357732003:d=2026072612:TCDC:entire atmosphere:6 hour fcst:
+658:358682216:d=2026072612:HGT:cloud ceiling:6 hour fcst:
+659:360007309:d=2026072612:HGT:cloud base:6 hour fcst:
+660:362320052:d=2026072612:PRES:cloud base:6 hour fcst:
+661:363501511:d=2026072612:PRES:cloud top:6 hour fcst:
+662:364132018:d=2026072612:HGT:cloud top:6 hour fcst:
+689:405241786:d=2026072612:CAPE:180-0 mb above ground:6 hour fcst:
+690:406247155:d=2026072612:CIN:180-0 mb above ground:6 hour fcst:
+693:413349215:d=2026072612:CAPE:90-0 mb above ground:6 hour fcst:
+694:414278001:d=2026072612:CIN:90-0 mb above ground:6 hour fcst:
+695:415324178:d=2026072612:CAPE:255-0 mb above ground:6 hour fcst:
+696:416383940:d=2026072612:CIN:255-0 mb above ground:6 hour fcst:
+699:420705534:d=2026072612:CAPE:0-3000 m above ground:6 hour fcst:

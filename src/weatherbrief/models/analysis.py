@@ -222,6 +222,18 @@ class NWPCloudDiagnostics(BaseModel):
     ceiling_ft: Optional[float] = None
     freezing_level_ft: Optional[float] = None
 
+    # Capability marker, not a physical scalar (#457, PR #508 review): True
+    # when the SOURCE MODEL exposes no convective-realization channel in this
+    # diag at all — no convective cover/base/top, no convective precip. HRRR
+    # is convection-allowing (no parameterized scheme; realization lives in
+    # reflectivity/echo-top products we don't ingest yet), so its generic
+    # band covers must not read as "native scheme present but quiet": the
+    # NWP convective method routes to the CAPE fallback instead of a false
+    # NONE. Unset (None) for GFS/ECMWF/ICON, whose behaviour is unchanged.
+    # Listed in NWP_CLOUD_DIAG_META_FIELDS so interpolation carries it
+    # through unchanged rather than lerping a boolean.
+    convective_scheme_absent: Optional[bool] = None
+
 
 # --- Interpolation inventory for NWPCloudDiagnostics (issue #485) -----------
 #
@@ -263,12 +275,22 @@ On the SPATIAL axis the distinction does not exist — neighbouring route points
 share a valid time, so rates interpolate like anything else.
 """
 
+NWP_CLOUD_DIAG_META_FIELDS: tuple[str, ...] = ("convective_scheme_absent",)
+"""Capability/provenance markers — NOT physical scalars.
+
+Constant per (model, point) for a whole enrichment run, so both interpolation
+axes carry them through unchanged (persistence) instead of lerping — a
+boolean pushed through ``_lerp`` would come back as a float and lose its
+None-vs-set distinction.
+"""
+
 NWP_CLOUD_DIAG_INSTANT_SCALARS: tuple[str, ...] = tuple(
     name
     for name in NWPCloudDiagnostics.model_fields
     if name not in NWP_CLOUD_DIAG_LAYER_FIELDS
     and name not in NWP_CLOUD_DIAG_AVERAGED_SCALARS
     and name not in NWP_CLOUD_DIAG_RATE_SCALARS
+    and name not in NWP_CLOUD_DIAG_META_FIELDS
 )
 """Every remaining scalar, treated as instantaneous.
 

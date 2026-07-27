@@ -651,10 +651,12 @@ def _instant_and_rate_fields(
     """The step-time-anchored half: instantaneous scalars plus windowed rates.
 
     Rates take the NEXT anchor's value outright (covering-interval hold); see
-    ``NWP_CLOUD_DIAG_RATE_SCALARS``.
+    ``NWP_CLOUD_DIAG_RATE_SCALARS``. Meta/capability markers are constant per
+    (model, point) and persist from the previous anchor — never lerped.
     """
     from weatherbrief.models.analysis import (
         NWP_CLOUD_DIAG_INSTANT_SCALARS,
+        NWP_CLOUD_DIAG_META_FIELDS,
         NWP_CLOUD_DIAG_RATE_SCALARS,
     )
 
@@ -664,6 +666,9 @@ def _instant_and_rate_fields(
     }
     fields.update({
         name: getattr(next_diag, name) for name in NWP_CLOUD_DIAG_RATE_SCALARS
+    })
+    fields.update({
+        name: getattr(prev_diag, name) for name in NWP_CLOUD_DIAG_META_FIELDS
     })
     return fields
 

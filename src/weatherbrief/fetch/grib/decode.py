@@ -2374,6 +2374,12 @@ def decode_hrrr_cloud_diag_per_point(
             ds.close()
 
 
+# HRRR CIN above this is not packing noise: the verified convention is
+# negative J/kg, so a clearly positive value means the provider flipped to
+# magnitude convention and the number is unusable as-is (→ None, unknown).
+_HRRR_CIN_POSITIVE_NOISE_JKG = 5.0
+
+
 def build_hrrr_cloud_diagnostics(
     raw: dict[str, float],
 ) -> "NWPCloudDiagnostics | None":
@@ -2385,11 +2391,24 @@ def build_hrrr_cloud_diagnostics(
     Heights are HGT gpm and convert like the GFS ceiling (gpm → ft, same
     datum treatment as the GFS slot this replaces).
 
-    CAPE/CIN are the 90-0 mb mixed-layer pair. HRRR CIN is already NEGATIVE
-    J/kg (verified live 2026-07-26: range −745…0), matching the app's
-    internal convention — unlike ECMWF/ICON magnitudes, it must NOT go
-    through ``_normalize_model_cin``'s negation. Residual positives (packing
-    noise) are floored to 0.
+    CAPE/CIN are the 90-0 mb mixed-layer pair — the delivered HRRR
+    90-hPa-layer product, comparable in intent (not algorithm) to ECMWF's
+    lowest-100-hPa ``mlcape100``. HRRR CIN is already NEGATIVE J/kg
+    (verified live 2026-07-26: range −745…0), matching the app's internal
+    convention — unlike ECMWF/ICON magnitudes, it must NOT go through
+    ``_normalize_model_cin``'s negation. Small residual positives (packing
+    noise) are floored to 0; a LARGE positive would mean the sign
+    convention changed upstream, and flooring it would turn a strong cap
+    into "no inhibition" — it is dropped to None (unknown) instead
+    (PR #508 review).
+
+    ``convective_scheme_absent=True``: HRRR runs no parameterized deep
+    convection and none of its explicit-realization products (REFC, echo
+    tops, LTNG) are ingested yet, so this diag carries NO convective
+    channel. Without the marker, ``assess_convective_nwp`` would read the
+    generic band covers as "native scheme present but quiet" and grade a
+    CAPE-2000 column NONE (PR #508 review); with it, the NWP method uses
+    its CAPE fallback.
     """
     from weatherbrief.models.analysis import (
         NWPCloudDiagnostics,
@@ -2413,7 +2432,14 @@ def build_hrrr_cloud_diagnostics(
     total_cover = raw.get("total_cover_pct")
     ml_cape = _opt_float(raw, "ml_cape_jkg")
     ml_cin_raw = raw.get("ml_cin_jkg")
-    ml_cin = min(0.0, float(ml_cin_raw)) if ml_cin_raw is not None else None
+    if ml_cin_raw is None:
+        ml_cin = None
+    elif float(ml_cin_raw) > _HRRR_CIN_POSITIVE_NOISE_JKG:
+        # Implausible under the verified negative convention — most likely a
+        # provider-side flip to positive magnitudes. Unknown, never "no cap".
+        ml_cin = None
+    else:
+        ml_cin = min(0.0, float(ml_cin_raw))
 
     has_any = any(
         v is not None
@@ -2433,6 +2459,7 @@ def build_hrrr_cloud_diagnostics(
         ceiling_ft=ceiling_ft,
         ml_cape_jkg=ml_cape,
         ml_cin_jkg=ml_cin,
+        convective_scheme_absent=True,
     )
 
 
