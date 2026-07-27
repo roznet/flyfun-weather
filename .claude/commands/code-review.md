@@ -13,6 +13,22 @@ Otherwise:
 
 ---
 
+## Non-negotiable: post before you finish
+
+This command usually runs headless in CI, where there is no follow-up turn. **A review
+that is not posted did not happen.** So:
+
+- Never end your turn with review work outstanding. "I'll compile the findings once the
+  agents report back" is a failed run — the session ends there and the subagents are killed.
+- If you delegate to subagents, pass `run_in_background: false` so you block on their
+  reports and can synthesise them in the same turn. Never fan out into background agents.
+- Large diffs are not a reason to defer. Shard the work yourself: `git diff` a subset of
+  paths at a time, use `/tmp` for scratch files, and keep the findings in your own context.
+- Your final action is `gh pr comment` (or, for a non-PR target, printing the review).
+  Do that before you say anything terminal.
+
+---
+
 ## Context loading
 
 Before starting the review, read the following:

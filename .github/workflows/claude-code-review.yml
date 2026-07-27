@@ -60,7 +60,13 @@ jobs:
                   "Bash(grep:*)",
                   "Bash(head:*)",
                   "Bash(tail:*)",
+                  "Bash(mkdir:*)",
+                  "Bash(python3:*)",
+                  "Bash(awk:*)",
+                  "Bash(sed:*)",
+                  "Bash(wc:*)",
                   "Read",
+                  "Write",
                   "Glob",
                   "Grep"
                 ]
