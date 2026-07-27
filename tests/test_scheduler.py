@@ -942,3 +942,79 @@ class TestTryIngestSnapshotArtifact:
             lambda inbox, min_init, skip=None: str(tmp_path / "eu-x.sqlite"),
         )
         assert asyncio.run(sched._try_ingest_snapshot_artifact()) is True
+
+
+class TestIngestHealthcheck:
+    """The ingest deadman closes the 'node green, droplet broken' blind spot."""
+
+    def _run(self, monkeypatch, url, fn):
+        """Call fn() with INGEST_HEALTHCHECK_URL set to url; capture posts."""
+        import asyncio
+
+        from weatherbrief import scheduler as sched
+
+        if url is None:
+            monkeypatch.delenv("INGEST_HEALTHCHECK_URL", raising=False)
+        else:
+            monkeypatch.setenv("INGEST_HEALTHCHECK_URL", url)
+
+        posts = []
+
+        class _FakeHttpx:
+            @staticmethod
+            def post(u, **kw):
+                posts.append((u, kw.get("content", "")))
+
+        monkeypatch.setitem(__import__("sys").modules, "httpx", _FakeHttpx)
+        asyncio.run(fn(sched))
+        return posts
+
+    def test_unset_url_pings_nothing(self, monkeypatch):
+        """No config = no pings, so non-offload deployments are untouched."""
+        posts = self._run(
+            monkeypatch, None,
+            lambda s: s._ping_ingest_healthcheck(detail="x"),
+        )
+        assert posts == []
+
+    def test_success_pings_base_url(self, monkeypatch):
+        posts = self._run(
+            monkeypatch, "https://hc-ping.com/k/ingest",
+            lambda s: s._ping_ingest_healthcheck(detail="ingested eu-x.sqlite"),
+        )
+        assert len(posts) == 1
+        url, body = posts[0]
+        assert url == "https://hc-ping.com/k/ingest"
+        assert "ingested eu-x.sqlite" in body
+
+    def test_fallback_pings_fail_endpoint(self, monkeypatch):
+        """Falling back is a definite event — alert now, not after the grace."""
+        posts = self._run(
+            monkeypatch, "https://hc-ping.com/k/ingest",
+            lambda s: s._ping_ingest_healthcheck("/fail", "no artifact"),
+        )
+        assert posts[0][0] == "https://hc-ping.com/k/ingest/fail"
+
+    def test_trailing_slash_does_not_double_up(self, monkeypatch):
+        posts = self._run(
+            monkeypatch, "https://hc-ping.com/k/ingest/",
+            lambda s: s._ping_ingest_healthcheck("/fail"),
+        )
+        assert posts[0][0] == "https://hc-ping.com/k/ingest/fail"
+
+    def test_ping_failure_never_propagates(self, monkeypatch):
+        """Monitoring must never be able to break the cycle it monitors."""
+        import asyncio
+
+        from weatherbrief import scheduler as sched
+
+        monkeypatch.setenv("INGEST_HEALTHCHECK_URL", "https://hc-ping.com/k/i")
+
+        class _Boom:
+            @staticmethod
+            def post(*a, **k):
+                raise RuntimeError("network down")
+
+        monkeypatch.setitem(__import__("sys").modules, "httpx", _Boom)
+        # Must return normally, not raise.
+        asyncio.run(sched._ping_ingest_healthcheck())

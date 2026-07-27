@@ -1006,6 +1006,33 @@ def _ingest_artifact_blocking(path: str) -> tuple[int, int]:
     return result.rows_inserted, result.rows_skipped
 
 
+async def _ping_ingest_healthcheck(suffix: str = "", detail: str = "") -> None:
+    """Ping the ingest deadman, if one is configured. Never raises.
+
+    The node's own deadman only proves it computed and pushed. It says nothing
+    about whether the serving box ingested, so this closes the case where the
+    node is green while the droplet silently falls back every cycle — the exact
+    shape of a week-long outage that no monitor caught.
+
+    Unset ``INGEST_HEALTHCHECK_URL`` means no pings at all, so dev and
+    non-offload deployments are unaffected. A monitoring call must never be able
+    to break the thing it monitors, hence the blanket except.
+    """
+    url = os.environ.get("INGEST_HEALTHCHECK_URL", "").strip()
+    if not url:
+        return
+    try:
+        import httpx
+
+        await asyncio.to_thread(
+            httpx.post, url.rstrip("/") + suffix, content=detail[:10_000],
+            timeout=15,
+        )
+    except Exception:  # noqa: BLE001 — monitoring must never break the cycle
+        # Never log the URL itself: it carries the ping key.
+        logger.warning("Ingest healthcheck ping failed (non-fatal)", exc_info=True)
+
+
 async def _try_ingest_snapshot_artifact() -> bool:
     """Wait for an off-box node's artifact for this cycle and ingest it.
 
@@ -1047,6 +1074,10 @@ async def _try_ingest_snapshot_artifact() -> bool:
                     "— skipping the local forecast cycle",
                     os.path.basename(path), inserted, skipped,
                 )
+                await _ping_ingest_healthcheck(
+                    detail=f"ingested {os.path.basename(path)} "
+                           f"inserted={inserted} skipped={skipped}",
+                )
                 return True
             except ArtifactValidationError:
                 logger.warning(
@@ -1060,6 +1091,9 @@ async def _try_ingest_snapshot_artifact() -> bool:
                     "Artifact ingest failed for %s — falling back to the local "
                     "cycle", os.path.basename(path), exc_info=True,
                 )
+                await _ping_ingest_healthcheck(
+                    "/fail", f"ingest failed for {os.path.basename(path)}",
+                )
                 return False
 
         if time.monotonic() >= deadline:
@@ -1067,6 +1101,14 @@ async def _try_ingest_snapshot_artifact() -> bool:
                 "No artifact with init >= %s after %d min — running the local "
                 "forecast cycle as fallback", min_init,
                 _ARTIFACT_WAIT_MAX_SECONDS // 60,
+            )
+            # /fail rather than letting the period lapse: falling back is a
+            # definite event, so alert now instead of waiting out the grace
+            # window. This is also what would surface a node whose schedule has
+            # drifted off the ingest window (e.g. at a DST change) — it pushes
+            # fine and pings its own deadman green, so nothing else would catch it.
+            await _ping_ingest_healthcheck(
+                "/fail", f"no artifact with init >= {min_init} — computing locally",
             )
             return False
         await asyncio.sleep(_ARTIFACT_POLL_INTERVAL_SECONDS)
