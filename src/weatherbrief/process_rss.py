@@ -145,6 +145,7 @@ def log_memory(
     warn_step_mib: int = 500,
     task_peak_rss_mb: int | None = None,
     task_peak_cgroup_mb: int | None = None,
+    task_peak_samples: int | None = None,
 ) -> None:
     """Log memory state at a task boundary.
 
@@ -156,10 +157,14 @@ def log_memory(
     - ``cgroup=<current> of <max>`` with an ``anon``/``file``/``slab``/``swap``
       breakdown — the whole container, split into the part that has to fit and
       the part the kernel can reclaim.
-    - ``this task peaked at`` — a windowed maximum the caller measured over
-      the task. When present this is the ONLY field in the line that describes
-      this task rather than a point-in-time or since-boot reading. Callers get
-      it from :class:`weatherbrief.process_memory_sampler.MemorySampler`.
+    - ``this task peaked at … over N samples`` — a windowed maximum the caller
+      measured over the task. When present this is the ONLY field in the line
+      that describes this task rather than a point-in-time or since-boot
+      reading. Callers get it from
+      :class:`weatherbrief.process_memory_sampler.MemorySampler`, and the
+      sample count comes along because a windowed peak is only worth as much
+      as the window's resolution: two samples over a nine-minute refresh
+      deserve much less trust than three hundred.
     - ``cgroup peak since container start`` — ``memory.peak``, a high-water
       mark nothing resets. Spelled out at length because the old
       ``cgroup=current/peak`` form read as a per-task peak, and a since-boot
@@ -196,6 +201,14 @@ def log_memory(
         if breakdown:
             suffix.append(f" ({' '.join(breakdown)})")
 
+        if cgroup.get("peak") is not None:
+            suffix.append(
+                f"; cgroup peak since container start={cgroup['peak']} MB"
+            )
+
+    # Deliberately outside the `if cgroup:` block above: the caller measured
+    # these itself, so they are reportable whether or not we are in a
+    # container (the parent-RSS half works fine on a bare host).
     task_peaks = [
         f"{name}={value}"
         for name, value in (
@@ -204,10 +217,11 @@ def log_memory(
         if value is not None
     ]
     if task_peaks:
-        suffix.append(f"; this task peaked at {' '.join(task_peaks)} MB")
-
-    if cgroup.get("peak") is not None:
-        suffix.append(f"; cgroup peak since container start={cgroup['peak']} MB")
+        samples = (
+            f" over {task_peak_samples} samples"
+            if task_peak_samples is not None else ""
+        )
+        suffix.append(f"; this task peaked at {' '.join(task_peaks)} MB{samples}")
 
     logger.info(
         "Memory after %s: rss=%d hwm=%d swap=%d MB%s",

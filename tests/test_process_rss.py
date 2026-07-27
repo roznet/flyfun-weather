@@ -155,8 +155,32 @@ class TestCgroupFields:
         msg = self._log(caplog, task_peak_rss_mb=2200, task_peak_cgroup_mb=5900)
         assert "this task peaked at rss=2200 cgroup=5900 MB" in msg
 
+    def test_sample_count_qualifies_the_window(self, caplog):
+        """A windowed peak is worth what its resolution is worth."""
+        msg = self._log(
+            caplog, task_peak_rss_mb=2200, task_peak_cgroup_mb=5900,
+            task_peak_samples=271,
+        )
+        assert "this task peaked at rss=2200 cgroup=5900 MB over 271 samples" in msg
+
     def test_task_peak_omitted_when_not_measured(self, caplog):
         assert "this task peaked at" not in self._log(caplog)
+
+    def test_task_peak_survives_without_a_cgroup(self, caplog):
+        """The caller measured it, so containerisation is irrelevant to it.
+
+        The parent-RSS half works on a bare host; scoping this to the cgroup
+        block would silently drop it there.
+        """
+        with _patch_status(_status_blob(rss_kib=1024 * 1024, hwm_kib=2048 * 1024)):
+            with caplog.at_level(logging.INFO, logger="test_logmem"):
+                process_rss.log_memory(
+                    "briefing refresh", logging.getLogger("test_logmem"),
+                    task_peak_rss_mb=1100, task_peak_samples=12,
+                )
+        msg = "\n".join(r.getMessage() for r in caplog.records)
+        assert "this task peaked at rss=1100 MB over 12 samples" in msg
+        assert "cgroup" not in msg
 
     def test_zero_is_reported_not_dropped(self, caplog):
         """A measured 0 is data; only an unmeasured None is absent."""
@@ -168,12 +192,13 @@ class TestCgroupFields:
             with caplog.at_level(logging.INFO, logger="test_logmem"):
                 process_rss.log_memory(
                     "standalone", logging.getLogger("test_logmem"),
-                    task_peak_cgroup_mb=0,
+                    task_peak_cgroup_mb=0, task_peak_samples=0,
                 )
         msg = "\n".join(r.getMessage() for r in caplog.records)
         assert "swap=0" in msg
         assert "slab=0" in msg
         assert "this task peaked at cgroup=0 MB" in msg
+        assert "over 0 samples" in msg
 
 
 class TestWarnEscalation:
