@@ -55,17 +55,11 @@ from weatherbrief.process_rss import log_memory as _log_memory
 _MEMORY_SAMPLE_SECONDS = 2.0
 
 
-def _peak_rss_mb() -> float | None:
-    """Process-lifetime peak RSS in MB (resource.ru_maxrss, unit-normalized).
-
-    ru_maxrss is in KB on Linux, bytes on macOS.
-    """
-    try:
-        import resource
-        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    except (ImportError, OSError):
-        return None
-    return rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
+# `_peak_rss_mb` (ru_maxrss) lived here to feed the Memory curve's
+# `peak=… (+… this request)` clause. Both are gone: a process-lifetime
+# monotonic mark cannot describe one request, and the sampler now measures the
+# window properly. `scenario/measure.py` keeps its own copy for a different
+# purpose (a one-shot lifetime figure in a report, where that IS the question).
 
 DEFAULT_MODELS = [ModelSource(k) for k, v in MODEL_ENDPOINTS.items() if v.default]
 
@@ -287,6 +281,7 @@ def execute_briefing(
             "briefing refresh", logger,
             task_peak_rss_mb=peaks.peak_rss_mb,
             task_peak_cgroup_mb=peaks.peak_cgroup_mb,
+            task_peak_samples=peaks.samples,
         )
 
 
@@ -342,7 +337,6 @@ def _execute_briefing_stages(
 
     # Memory curve checkpoints — appended through the pipeline, dumped at end.
     rss_curve: list[tuple[str, float]] = []
-    peak_at_start = _peak_rss_mb()
     rss_pipeline_start = _current_rss_mb()
     if rss_pipeline_start is not None:
         rss_curve.append(("start", rss_pipeline_start))
@@ -917,16 +911,20 @@ def _execute_briefing_stages(
     if rss_end is not None:
         rss_curve.append(("end", rss_end))
     if rss_curve:
+        # The curve is a SHAPE across stages, not a peak. It used to also carry
+        # `peak=X (+Y this request)` from ru_maxrss — a process-lifetime,
+        # monotonic, parent-only high-water mark. That figure now sat next to
+        # the sampler's windowed `this task peaked at …`, two numbers built by
+        # different methods, free to disagree, and looking like answers to the
+        # same question — the very confusion #506 exists to remove. Dropped
+        # rather than flagged: leak detection is already handled better by
+        # log_memory's WARN escalation, which keeps a baseline ACROSS requests
+        # instead of diffing an all-time mark within one (PR #507 review).
         curve_str = " ".join(f"{label}={int(v)}" for label, v in rss_curve)
-        peak_end = _peak_rss_mb()
-        peak_delta_str = ""
-        if peak_end is not None and peak_at_start is not None:
-            peak_delta = peak_end - peak_at_start
-            peak_delta_str = f" peak={int(peak_end)} (+{int(peak_delta)} this request)"
         request_growth = rss_end - rss_curve[0][1] if rss_end is not None else 0
         logger.info(
-            "Memory curve: %s MB; request_growth=%+d MB%s",
-            curve_str, int(request_growth), peak_delta_str,
+            "Memory curve: %s MB; request_growth=%+d MB",
+            curve_str, int(request_growth),
         )
 
     if stage_timings:

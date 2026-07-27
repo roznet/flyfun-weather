@@ -251,6 +251,9 @@ class TestExecuteBriefingMemoryWindow:
         ) == "result"
         assert "task_peak_rss_mb" in captured
         assert "task_peak_cgroup_mb" in captured
+        assert captured["task_peak_samples"] >= 1, (
+            "start() samples synchronously, so a window always has >=1 point"
+        )
 
     def test_memory_is_logged_even_when_the_pipeline_raises(self, monkeypatch):
         """A refresh that died is exactly the one whose peak is worth having."""

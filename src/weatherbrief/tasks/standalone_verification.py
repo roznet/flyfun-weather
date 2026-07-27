@@ -1721,14 +1721,17 @@ def run_standalone_cycle(
         db.commit()
 
         _rss_log(f"end ({cycle_type})")
-        if peaks.peak_rss_mb is not None or peaks.peak_cgroup_mb is not None:
-            logger.info(
-                "Standalone cycle peaks: rss=%sMB cgroup=%sMB samples=%d",
-                peaks.peak_rss_mb if peaks.peak_rss_mb is not None else "n/a",
-                peaks.peak_cgroup_mb if peaks.peak_cgroup_mb is not None else "n/a",
-                peaks.samples,
-            )
-        log_memory(f"standalone {cycle_type}", logger)
+        # The sampled peaks ride the boundary line rather than a bespoke log of
+        # their own. This cycle had the windowed figures all along, yet its
+        # boundary line still ended in the bare since-container-start peak —
+        # the exact ambiguity #506 removes, left standing at the one call site
+        # that could already have avoided it (PR #507 review).
+        log_memory(
+            f"standalone {cycle_type}", logger,
+            task_peak_rss_mb=peaks.peak_rss_mb,
+            task_peak_cgroup_mb=peaks.peak_cgroup_mb,
+            task_peak_samples=peaks.samples,
+        )
 
         # Anomaly check runs after commit so the current cycle's row exists
         # in the table — keeps the baseline query consistent across cycles.

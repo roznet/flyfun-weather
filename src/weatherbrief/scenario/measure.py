@@ -216,7 +216,12 @@ def expand_leg_slots(trips: list[Trip], now: datetime, horizon_hours: float) -> 
 def _peak_rss_mb() -> float:
     """Process-lifetime peak RSS in MB (resource.ru_maxrss, unit-normalized).
 
-    ru_maxrss is in KB on Linux, bytes on macOS. Mirrors pipeline._peak_rss_mb.
+    ru_maxrss is in KB on Linux, bytes on macOS.
+
+    Local to the scenario harness. The pipeline carried a twin of this until
+    #506, where it fed a per-request "peak" — something a monotonic lifetime
+    mark cannot describe. Here the lifetime figure IS the question: one
+    high-water for the whole measurement run. So it stays.
     """
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
