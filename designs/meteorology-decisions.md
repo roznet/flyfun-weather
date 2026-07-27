@@ -326,33 +326,60 @@ interpolates toward the next anchor's 0 % rather than holding f132's 100 %.
 > mean labelled at the window's END, a lag of half the window width that
 > sawtooths through each 6-hour cycle (0.5 h at f001/f007, 3.0 h at
 > f006/f012). Since #481 the averaged half — low/mid/high plus
-> `NWP_CLOUD_DIAG_AVERAGED_SCALARS` — is resampled from the midpoint knots
-> at **every** hour, native steps included. Two consequences worth stating:
+> `NWP_CLOUD_DIAG_AVERAGED_SCALARS` — is resampled onto the hour grid at
+> **every** hour, native steps included.
+>
+> **The knots are DISJOINT windows, not the published nested ones.** This is
+> the part that is easy to get wrong, and the first cut of #481 did. Within a
+> cycle the published windows share a start (`0-4`, `0-5`, `0-6`), so
+> consecutive means are not independent samples and their midpoints are not
+> evenly spaced: f001…f006 sit at 0.5–3.0 h, then the reset jumps the next
+> knot to 6.5 h. Hours 4, 5 and 6 fall in that 3.5 h hole. Interpolating them
+> across it ignores the very windows that cover them and drags them toward
+> the *next* cycle's first value — which does not merely blur the field, it
+> can invert it. With a deck arriving at the reset (published `0 %` for
+> f001–f006, `100 %` from f007) it reported 28.6 / 57.1 / 85.7 % at
+> f004/f005/f006 with an invented base: three hours of phantom overcast,
+> where a published mean of 0 % over 0–6 h *proves* the cover is 0 across
+> that whole span. Differencing the nested means first —
+>
+> ```
+> mean(0-5)·5 and mean(0-6)·6  →  mean over (5, 6]  at midpoint 5.5
+> ```
+>
+> recovers one disjoint window per anchor, evenly spaced at 0.5, 1.5, 2.5 …
+> with no hole (`_deaveraged_anchor_knots`). It also sharpens the fix #481 is
+> after: the published `mean(0-6)` lags its label by 3 h, the de-averaged
+> `mean(5,6]` by 0.5 h. An anchor that is the **first of its cycle** has no
+> earlier window to subtract and is left alone at `f - width/2` — f001/f007,
+> and f123/f129 past f120 where the cadence turns 3-hourly.
+>
+> Three consequences worth stating:
 >
 > - The reported value at a native step is no longer any single published
 >   NCEP number. That is the unavoidable price of A's own premise: a
 >   time-mean cannot simultaneously be correct in value and correct in time.
->   The **last** anchor is the exception — with no upper knot the resample
->   clamps to it, so it keeps exactly what NCEP filed.
-> - The averaged bracket is now located in midpoint space independently of
->   the step bracket. With uneven window widths the two disagree (a gap hour
->   at f122 sits between the f123 and f126 midpoints, not between f120's and
->   f123's), which the shared-bracket version could not express.
+> - Only **cover** is differenced. Layer geometry is carried from the
+>   published anchor unchanged: `base_ft`/`top_ft` have no de-averaged form,
+>   and per B they are never numerically interpolated anyway — `_interp_layer`
+>   holds them from the higher-cover endpoint, now the higher *disjoint*
+>   cover, which is the more meaningful of the two. So the
+>   `_PREFER_AVERAGED_PAIRS` coupling is preserved, not broken; the earlier
+>   worry that de-averaging would sever it mistook "cover and geometry come
+>   from the same published step" (still true) for "cover is used raw".
+> - Differencing amplifies the inputs' packing noise (at f006 the value is
+>   `6·m6 − 5·m5`, ~11× a one-sided rounding error), so knots are clamped to
+>   [0, 100]. A knot whose inputs are incomplete on either step is `None`,
+>   and the anchor falls back to what NCEP published rather than inventing a
+>   value.
 >
 > Instantaneous and rate fields are untouched at native steps — they are
 > published *at* the step and remain exactly as decoded.
 >
-> **Rejected: de-averaging the nested windows.** Within a 6-hour cycle the
-> windows share a start (`0-1`, `0-2`, … `0-6`), so
-> `mean(n-1, n] = n·A_n − (n−1)·A_{n−1}` recovers exact disjoint hourly
-> means — strictly better timing than interpolating between midpoints. It
-> was rejected because the paired PRES/TMP geometry has no de-averaged form,
-> so cover and geometry would stop sharing one statistical process — the
-> coupling this whole section is built on (`_PREFER_AVERAGED_PAIRS`) — and
-> because differencing two nested means amplifies noise into out-of-range
-> covers needing clamping. Revisit only together with the "re-derive cover
-> from RH + condensate" end-state below, which removes the averaged form
-> entirely.
+> **Still not done: re-deriving cover from RH + condensate.** De-averaging
+> fixes the *timing* of the averaged form; it does not remove the averaged
+> form. The end-state below (diagnose cover from instantaneous pressure-level
+> RH + condensate) remains the clean answer and is unaffected by this change.
 
 **B. Geometry hold-over with sub-5% drop.** `base_ft`, `top_ft`, and
 `top_temp_c` are not numerically interpolatable — interpolating altitudes
