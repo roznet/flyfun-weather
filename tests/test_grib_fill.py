@@ -595,19 +595,28 @@ class TestGfsMidpointInterp:
         assert hf[1].nwp_cloud_diagnostics is not hf[0].nwp_cloud_diagnostics
 
     def test_pre_f120_mixed_window_clamp(self):
-        """f001 (1h window, midpoint at f000:30) → f003 (3h window, midpoint
-        at f001:30). The midpoint span is 1 h, but step span is 2 h. A gap
-        hour at f002 sits past the next midpoint (mid_frac > 1.0 → clamped),
-        so it inherits the next anchor's cover state. Catches a regression
-        where short-haul flights in the first few forecast hours mis-handle
-        the cadence transition.
+        """f001 (window 0-1) → f003 (window 0-3), gap hour at f002.
+
+        The two published windows are NESTED, so f003's knot is the mean over
+        (1, 3] — ``(40·3 − 80·1)/2 = 20 %`` — centred at f002. f002 therefore
+        sits ON the last knot: nothing above it to interpolate toward, so it
+        clamps wholesale onto that knot, taking the cover AND the geometry of
+        the step the cover came from. Catches a regression where short-haul
+        flights in the first few forecast hours mis-handle the cadence
+        transition.
+
+        The covers are chosen to be physically REALIZABLE as nested means:
+        mean(0-1)=80 forces mean(0-3) into [26.7, 93.3], since the two
+        remaining hours can only contribute 0-100 % each. The earlier form of
+        this test used 80 → 10, which implies hours 1-3 averaged −25 % cover
+        and cannot arise from real GRIB.
         """
         gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
         diag_f001 = NWPCloudDiagnostics(
             mid=NWPCloudLayerDiag(cover_pct=80.0, base_ft=10000, top_ft=18000),
         )
         diag_f003 = NWPCloudDiagnostics(
-            mid=NWPCloudLayerDiag(cover_pct=10.0, base_ft=11000, top_ft=19000),
+            mid=NWPCloudLayerDiag(cover_pct=40.0, base_ft=11000, top_ft=19000),
         )
         hourly = [
             _make_hourly(gfs_init + timedelta(hours=1), diag=diag_f001),
@@ -617,13 +626,7 @@ class TestGfsMidpointInterp:
         cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
         propagate_all([cs], [], gfs_init=gfs_init)
         mid_f002 = cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid
-        # f002 sits past the LAST midpoint (f001:30), so there is no upper
-        # knot to interpolate toward. It clamps wholesale onto f003 — cover
-        # AND that cover's own geometry. (Before #481 the clamp took f003's
-        # cover but f001's geometry, because the "higher-cover endpoint" rule
-        # still saw two endpoints; a deck's altitude and its coverage now
-        # always come from the same published step.)
-        assert mid_f002.cover_pct == pytest.approx(10.0)
+        assert mid_f002.cover_pct == pytest.approx(20.0)
         assert mid_f002.base_ft == 11000
         assert mid_f002.top_ft == 19000
 
@@ -655,22 +658,129 @@ class TestGfsNativeStepRelabelling:
         return _make_cs_with_hourly_model([hourly], ModelSource.GFS)
 
     def test_hourly_anchors_are_realigned(self):
-        """f004..f007 hourly. Midpoints: f004→2.0, f005→2.5, f006→3.0,
-        f007→6.5. f006's published mean covers 0-6z and is centred at 3.0, so
-        the value reported AT f006 must come from the 3.0→6.5 span, i.e.
-        (6-3)/(6.5-3) = 0.857 of the way to f007's value."""
+        """f004..f007 hourly, covers 100/100/100/20.
+
+        The windows are nested (0-4, 0-5, 0-6) then reset (6-7), so the
+        DISJOINT knots are ``[0,4]@2.0``, ``(4,5]@4.5``, ``(5,6]@5.5`` and
+        ``[6,7]@6.5``, carrying 100/100/100/20.
+
+        f004 and f005 must stay at 100: three nested means of 100 % ending at
+        4, 5 and 6 pin the instantaneous cover at 100 % across the whole
+        0-6 h span (a mean of 100 cannot be reached with any hour below it).
+        f006 is the discontinuity — it sits halfway between the (5,6] and
+        [6,7] knots, so it splits them: 60 %.
+        """
         gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
         cs = self._hourly_anchors(
             gfs_init, {4: 100.0, 5: 100.0, 6: 100.0, 7: 20.0},
         )
         propagate_all([cs], [], gfs_init=gfs_init)
+        covers = [
+            h.nwp_cloud_diagnostics.mid.cover_pct
+            for h in cs.point_forecasts[0].hourly
+        ]
+        assert covers == pytest.approx([100.0, 100.0, 60.0, 20.0], abs=0.1)
+
+    def test_reset_boundary_does_not_pull_cloud_backwards(self):
+        """#481 regression guard: a deck arriving at the cycle reset must not
+        appear BEFORE it exists.
+
+        Covers are 0 % for f001..f006 (windows 0-1 … 0-6) then 100 % from
+        f007. A published mean of 0 % over 0-6 h proves the cover is 0
+        throughout that span — cover cannot go negative to compensate. So
+        f004/f005 must report 0 % and carry no geometry.
+
+        Anchoring the NESTED means at their own midpoints put f001..f006's
+        knots at 0.5-3.0 h and the next cycle's first knot at 6.5 h, leaving
+        hours 4, 5 and 6 to be interpolated across that 3.5 h hole — which
+        reported 28.6 / 57.1 / 85.7 % with an invented base, three hours of
+        phantom overcast. De-averaging removes the hole.
+        """
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        covers = {f: 0.0 for f in range(1, 7)}
+        covers.update({f: 100.0 for f in range(7, 13)})
+        cs = self._hourly_anchors(gfs_init, covers)
+        propagate_all([cs], [], gfs_init=gfs_init)
         hourly = cs.point_forecasts[0].hourly
-        f006 = hourly[2].nwp_cloud_diagnostics.mid
-        assert f006.cover_pct == pytest.approx(
-            100 + (20 - 100) * (3.0 / 3.5), abs=0.1
+        for i in range(0, 5):  # f001..f005
+            band = hourly[i].nwp_cloud_diagnostics.mid
+            assert band.cover_pct in (None, 0.0), f"f{i + 1:03d} invented cloud"
+            assert band.base_ft is None, f"f{i + 1:03d} invented geometry"
+        # f006 is the discontinuity itself and splits the two knots.
+        assert hourly[5].nwp_cloud_diagnostics.mid.cover_pct == pytest.approx(50.0)
+        assert hourly[6].nwp_cloud_diagnostics.mid.cover_pct == pytest.approx(100.0)
+
+    def test_mid_cycle_transition_is_recovered(self):
+        """A change strictly INSIDE a cycle is recoverable from the nested
+        means, and de-averaging recovers it.
+
+        Overcast that clears at t=4 publishes mean(0-4)=100, mean(0-5)=80,
+        mean(0-6)=66.7. Differencing gives (4,5] = 0 % and (5,6] = 0 %, so
+        f005/f006 correctly read clear. Reading the published nested means at
+        face value instead reports 80 % and 66.7 % — a deck held ~2 h past
+        its own forecast clearance.
+
+        f003 is still fully inside the overcast (100 %); f004 is the
+        transition instant itself and splits its two knots (50 %).
+        """
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        cs = self._hourly_anchors(
+            gfs_init,
+            {1: 100.0, 2: 100.0, 3: 100.0, 4: 100.0, 5: 80.0, 6: 200.0 / 3.0},
         )
-        # f007 is the last anchor: no upper knot → published value stands.
-        assert hourly[3].nwp_cloud_diagnostics.mid.cover_pct == 20.0
+        propagate_all([cs], [], gfs_init=gfs_init)
+        hourly = cs.point_forecasts[0].hourly
+        assert hourly[2].nwp_cloud_diagnostics.mid.cover_pct == pytest.approx(
+            100.0, abs=0.1
+        )
+        assert hourly[3].nwp_cloud_diagnostics.mid.cover_pct == pytest.approx(
+            50.0, abs=0.1
+        )
+        for i in (4, 5):  # f005, f006 — cleared, so the band drops out
+            band = hourly[i].nwp_cloud_diagnostics.mid
+            assert band.cover_pct in (None, 0.0)
+            assert band.base_ft is None
+
+    def test_deaveraged_value_is_clamped_to_range(self):
+        """Differencing amplifies packing noise, so the result is clamped.
+
+        mean(0-1)=80 with mean(0-3)=10 is not physically realizable (it
+        implies −25 % over hours 1-3). The knot clamps to 0 rather than
+        emitting a negative cover into the analysis stage.
+        """
+        from weatherbrief.fetch.grib.fill import _deaverage_diag
+
+        prev = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=80.0))
+        cur = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=10.0))
+        assert _deaverage_diag(prev, cur, 1, 3).mid.cover_pct == 0.0
+
+        prev = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=0.0))
+        cur = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=90.0))
+        assert _deaverage_diag(prev, cur, 1, 3).mid.cover_pct == 100.0
+
+    def test_deaveraging_preserves_published_geometry(self):
+        """Cover is differenced; base/top are not — they have no de-averaged
+        form and are carried from the published anchor."""
+        from weatherbrief.fetch.grib.fill import _deaverage_diag
+
+        prev = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=50.0, base_ft=3000, top_ft=9000),
+        )
+        cur = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=60.0, base_ft=4000, top_ft=11000),
+        )
+        out = _deaverage_diag(prev, cur, 1, 2)
+        assert out.mid.cover_pct == pytest.approx(70.0)  # 60*2 - 50*1
+        assert (out.mid.base_ft, out.mid.top_ft) == (4000, 11000)
+
+    def test_missing_neighbour_falls_back_to_published(self):
+        """A decode gap on the previous step makes the difference undefined;
+        the anchor keeps what NCEP published rather than inventing a value."""
+        from weatherbrief.fetch.grib.fill import _deaverage_diag
+
+        prev = NWPCloudDiagnostics(mid=NWPCloudLayerDiag())
+        cur = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=60.0))
+        assert _deaverage_diag(prev, cur, 1, 2).mid.cover_pct is None
 
     def test_steady_state_is_unchanged(self):
         """Negative control: when neighbouring windows agree, re-labelling

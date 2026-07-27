@@ -228,9 +228,9 @@ def _interp_gfs_diag_hourly(
     provenance (#480). Past f120 the 3-hourly cadence makes the widths
     alternate 3 / 6.
 
-    The averaged value describes its **window midpoint**, ``f - width/2``,
-    not the step hour it is filed under. Every averaged field is therefore
-    resampled onto the hour grid from midpoint-anchored knots.
+    An averaged value describes its **window midpoint**, not the step hour it
+    is filed under. Every averaged field is therefore resampled onto the hour
+    grid from midpoint-anchored knots.
 
     **This applies to native anchor hours too (#481).** The original
     implementation only touched *gap* hours, so it was a no-op wherever GFS
@@ -239,10 +239,24 @@ def _interp_gfs_diag_hourly(
     the window's END, a lag of half the window: 0.5 h at f001/f007, 3.0 h at
     f006/f012, sawtoothing through each 6-hour cycle.
 
+    **The knots come from DISJOINT windows, not the published nested ones.**
+    Consecutive published windows in a cycle share a start (0-4, 0-5, 0-6),
+    so their midpoints are not independent samples: they bunch into the first
+    half of the cycle (0.5 … 3.0 h) and leave a 3.5 h hole before the next
+    cycle's first midpoint at 6.5 h. Hours 4, 5 and 6 fall in that hole, and
+    interpolating them across it ignores the very windows that cover them —
+    it drags them toward the NEXT cycle's first value and can manufacture
+    cloud the model explicitly denies. Differencing the nested means first::
+
+        mean(0-5)·5 and mean(0-6)·6  →  mean over (5, 6]  at midpoint 5.5
+
+    recovers one disjoint window per anchor, evenly spaced at 0.5, 1.5, 2.5 …
+    with no hole. See ``_deaveraged_anchor_knots``.
+
     Algorithm per route point:
 
     1. Identify "anchor" hours (those with ``nwp_cloud_diagnostics`` set) and
-       place each one's averaged fields at its window midpoint.
+       place each one's averaged fields at its DISJOINT window's midpoint.
     2. For every hour from the first to the last anchor, resample the
        AVERAGED fields (low/mid/high layers and
        ``NWP_CLOUD_DIAG_AVERAGED_SCALARS``) linearly between the two
@@ -257,9 +271,10 @@ def _interp_gfs_diag_hourly(
        step-time-anchored. At a native step that means its own published
        value survives untouched; only gap hours interpolate them.
     5. Beyond the last midpoint there is no upper knot, so the averaged
-       fields clamp to the last anchor's published value rather than
-       extrapolate. This always covers the final anchor hour itself, which
-       therefore keeps the number NCEP published.
+       fields clamp to the last knot's value rather than extrapolate. This
+       always covers the final anchor hour itself, which therefore reports
+       its own disjoint-window mean (or, where the window could not be
+       de-averaged, exactly the number NCEP published).
     6. Hours after the last anchor are forward-filled; hours before the first
        anchor are left as-is (no data to extrapolate from).
     """
@@ -276,10 +291,11 @@ def _interp_gfs_diag_hourly(
 
     anchor_diags = [sorted_hours[i].nwp_cloud_diagnostics for i in anchor_indices]
     anchor_times = [sorted_hours[i].time for i in anchor_indices]
-    midpoints = [
-        t - timedelta(hours=_gfs_window_length_hours(_gfs_fhour(gfs_init, t)) / 2.0)
-        for t in anchor_times
-    ]
+    # Averaged fields are read off the DE-AVERAGED knots; the instantaneous
+    # and rate halves keep reading the published anchors.
+    midpoints, averaged_diags = _deaveraged_anchor_knots(
+        anchor_times, anchor_diags, gfs_init,
+    )
     anchor_pos = {idx: k for k, idx in enumerate(anchor_indices)}
 
     filled = 0
@@ -293,11 +309,18 @@ def _interp_gfs_diag_hourly(
         if k_self is not None:
             # Native step: only the averaged fields move. Its instantaneous
             # and rate fields are published AT this hour and stay as decoded.
-            if kb is None and ka == k_self:
-                continue  # clamped to itself — nothing to re-label
+            if (
+                kb is None
+                and ka == k_self
+                and averaged_diags[k_self] is anchor_diags[k_self]
+            ):
+                # Clamped to its own knot, and that knot IS its published
+                # value (the window could not be de-averaged) — nothing to
+                # re-label, so don't run it through the drop threshold.
+                continue
             averaged = _resamplable_averaged_fields(
-                anchor_diags[ka],
-                anchor_diags[kb] if kb is not None else anchor_diags[ka],
+                averaged_diags[ka],
+                averaged_diags[kb] if kb is not None else averaged_diags[ka],
                 mid_frac,
             )
             if not averaged:
@@ -319,8 +342,8 @@ def _interp_gfs_diag_hourly(
         step_frac = max(0.0, min(1.0, step_frac))
 
         fields = _averaged_fields(
-            anchor_diags[ka],
-            anchor_diags[kb] if kb is not None else anchor_diags[ka],
+            averaged_diags[ka],
+            averaged_diags[kb] if kb is not None else averaged_diags[ka],
             mid_frac,
         )
         fields.update(
@@ -341,6 +364,121 @@ def _interp_gfs_diag_hourly(
             filled += 1
 
     return filled
+
+
+def _deaveraged_anchor_knots(
+    anchor_times: list[datetime],
+    anchor_diags: list[NWPCloudDiagnostics],
+    gfs_init: datetime,
+) -> tuple[list[datetime], list[NWPCloudDiagnostics]]:
+    """Recover one DISJOINT averaging window per anchor, with its midpoint.
+
+    NCEP's averaging windows within a 6-hour cycle are NESTED — they all
+    start at the cycle reset and grow (0-4, 0-5, 0-6). Consecutive published
+    means are therefore not independent samples of a time series, and placing
+    them at their own midpoints leaves a hole: the midpoints of f001..f006
+    span only 0.5-3.0 h, then jump to 6.5 h at f007. Hours 4, 5 and 6 land in
+    that hole and get interpolated across it, which throws away the windows
+    that actually cover them.
+
+    Differencing consecutive nested means recovers the mean over the interval
+    BETWEEN them, which is disjoint and correctly centred::
+
+        mean(s, f)·(f-s) - mean(s, p)·(p-s)
+        ───────────────────────────────────  = mean over (p, f],  midpoint (p+f)/2
+                      f - p
+
+    Applied across a cycle this yields knots at 0.5, 1.5, 2.5 … — evenly
+    spaced, one per anchor, no hole. It also sharpens the fix #481 is after:
+    the published mean(0-6) lags its label by 3 h, while the de-averaged
+    mean over (5, 6] lags by only 0.5 h.
+
+    An anchor is left alone (its published window is already disjoint from
+    everything before it) when it is the first of its cycle — the usual case
+    at f001/f007, and at f123/f129 past f120 where the cadence turns 3-hourly.
+    Those knots keep their ``f - width/2`` midpoint and the caller can detect
+    them by identity against ``anchor_diags``.
+
+    Only the averaged half is differenced. Layer GEOMETRY is carried over
+    from the published anchor unchanged: base/top have no de-averaged form,
+    and they are never numerically interpolated anyway (``_interp_layer``
+    holds them from the higher-cover endpoint — now the higher DISJOINT
+    cover, which is the more meaningful of the two).
+
+    Returns ``(midpoints, diags)`` parallel to ``anchor_times``.
+    """
+    fhours = [_gfs_fhour(gfs_init, t) for t in anchor_times]
+    widths = [_gfs_window_length_hours(f) for f in fhours]
+    starts = [f - w for f, w in zip(fhours, widths)]
+
+    midpoints: list[datetime] = []
+    diags: list[NWPCloudDiagnostics] = []
+    for k, t in enumerate(anchor_times):
+        prev = k - 1
+        nested = (
+            widths[k] > 0
+            and prev >= 0
+            and starts[prev] == starts[k]
+            and 0 < widths[prev] < widths[k]
+        )
+        if not nested:
+            midpoints.append(t - timedelta(hours=widths[k] / 2.0))
+            diags.append(anchor_diags[k])
+            continue
+        midpoints.append(anchor_times[prev] + (t - anchor_times[prev]) / 2)
+        diags.append(
+            _deaverage_diag(
+                anchor_diags[prev], anchor_diags[k], widths[prev], widths[k],
+            )
+        )
+    return midpoints, diags
+
+
+def _deaverage_diag(
+    prev_diag: NWPCloudDiagnostics,
+    diag: NWPCloudDiagnostics,
+    prev_width: int,
+    width: int,
+) -> NWPCloudDiagnostics:
+    """Difference two nested window means into the mean over the gap.
+
+    Only the averaged fields (band covers plus
+    ``NWP_CLOUD_DIAG_AVERAGED_SCALARS``) are differenced; everything else on
+    ``diag`` is carried through untouched, geometry included.
+
+    A field is None when either input is None — a decode gap on one step must
+    not fabricate a value on the next. Consumers already treat that as "no
+    resampled value available" and fall back to what was published.
+
+    Results are clamped to [0, 100]. Differencing amplifies the packing noise
+    of the inputs (at f006 the value is ``6·m6 - 5·m5``, so ~11x a one-sided
+    rounding error), which can push an otherwise-saturated band a hair
+    outside the range.
+    """
+    from weatherbrief.models.analysis import (
+        NWP_CLOUD_DIAG_AVERAGED_SCALARS,
+        NWP_CLOUD_DIAG_LAYER_FIELDS,
+    )
+
+    span = width - prev_width
+
+    def _diff(prev_val: float | None, val: float | None) -> float | None:
+        if prev_val is None or val is None:
+            return None
+        return max(0.0, min(100.0, (val * width - prev_val * prev_width) / span))
+
+    update: dict[str, object] = {}
+    for name in NWP_CLOUD_DIAG_LAYER_FIELDS:
+        layer = getattr(diag, name)
+        update[name] = layer.model_copy(
+            update={
+                "cover_pct": _diff(getattr(prev_diag, name).cover_pct,
+                                   layer.cover_pct),
+            }
+        )
+    for name in NWP_CLOUD_DIAG_AVERAGED_SCALARS:
+        update[name] = _diff(getattr(prev_diag, name), getattr(diag, name))
+    return diag.model_copy(update=update)
 
 
 def _midpoint_bracket(
