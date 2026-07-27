@@ -245,23 +245,45 @@ For each node:
    ```
    If a cycle is running, skip the node and say so — it can be updated next deploy or by hand. Never kill a cycle to deploy.
 
-2. **Fast-forward only**, so a node with local edits fails loudly instead of silently merging:
+2. **⚠️ Migrations: a node pulled past one HARD-FAILS every cycle.** Do this check BEFORE the
+   pull — it is a gate on step 3, not a follow-up to it:
+   ```bash
+   git diff --name-only <nodeSHA>..<LOCAL_SHA> -- alembic/versions/
+   ```
+   **If this is non-empty, do NOT pull the node until the schema change is applied by hand.**
+
+   This is not a graceful degradation. It happened on 2026-07-26: the EU node was pulled past
+   migration 081 (which adds `airport_forecast_snapshots.region`), and every cycle then died with
+   `sqlite3.OperationalError: table airport_forecast_snapshots has no column named region`. The
+   node produced no artifact at all until the column was added manually.
+
+   Why a pull cannot fix it: nodes run `ENVIRONMENT=development`, so their SQLite is built by
+   `create_all`, which creates missing *tables* but **never ALTERs an existing one**. So new code
+   arrives writing a column that the table does not have. And `alembic upgrade head` is not the
+   answer either — these DBs have no `alembic_version` row, so alembic would try to replay every
+   migration against tables that already exist.
+
+   The fix is a human decision, and both options are cheap because **a node's DB is disposable**
+   (recomputed every cycle, pruned at 10 days; the artifacts are the real output):
+   - hand-write the equivalent `ALTER TABLE` (metadata-only for an additive column with a
+     default — it took 0.012s on a 352 MB table), or
+   - delete the node's scratch DB and let the next cycle rebuild it with the current schema.
+
+   Report the migration, apply the fix, *then* pull. Never report a node as updated when a
+   migration between the two SHAs went unapplied.
+
+3. **Fast-forward only** (once step 2 is clear), so a node with local edits fails loudly instead
+   of silently merging:
    ```bash
    ssh <node.ssh> "cd <node.repo> && git checkout <node.branch> && git pull --ff-only"
    ```
 
-3. **Reinstall dependencies only if they changed** between the node's old SHA and the new one:
+4. **Reinstall dependencies only if they changed** between the node's old SHA and the new one:
    ```bash
    git diff --name-only <nodeSHA>..<LOCAL_SHA> -- pyproject.toml
    # if non-empty:
    ssh <node.ssh> "cd <node.repo> && ./<node.venv>/bin/pip install -q -e '.[dev]'"
    ```
-
-4. **Flag migrations — never run them on a node.** Nodes run `ENVIRONMENT=development`, so their SQLite is built by `create_all` and has no `alembic_version` table; `alembic upgrade head` would try to replay every migration against tables that already exist. `create_all` also never ALTERs an existing table, so a new column does **not** appear from a `git pull` alone.
-   ```bash
-   git diff --name-only <nodeSHA>..<LOCAL_SHA> -- alembic/versions/
-   ```
-   If non-empty, report the migrations and stop there. Applying them is a human decision: usually either a single hand-written `ALTER TABLE`, or deleting the node's scratch DB and letting the next cycle rebuild it (node DBs are disposable — they are recomputed every cycle and pruned at 10 days; the artifacts are the real output).
 
 5. **Report per node**: SHA before → after, deps reinstalled yes/no, migrations needing attention, or the reason it was skipped.
 
