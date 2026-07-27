@@ -20,12 +20,12 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD US / DWD Europe), SRTM elevation, model freshness, and GRIB2 enrichment (GFS + ICON-EU + ECMWF IFS) with two-phase sequential decode for memory safety.
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD US / DWD Europe), SRTM elevation, model freshness, and GRIB2 enrichment (GFS/HRRR + ICON-EU/D2 + ECMWF IFS) with two-phase sequential decode for memory safety.
 Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `get_elevation_profile`, `enrich_forecasts`
 → Full doc: fetch.md
 
 ### weather-engine-specs
-GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), ICON-EU DWD (QC/QI/cloud cover/ceiling), ECMWF IFS ECPDS (clwc/ciwc/cc/surface diagnostics), data source registry with bucket paths, variable reference tables, implementation gotchas, future extensions.
+GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), HRRR S3 (CONUS full-sounding replacement of the gfs slot, Lambert grid), ICON-EU DWD (QC/QI/cloud cover/ceiling), ECMWF IFS ECPDS (clwc/ciwc/cc/surface diagnostics), data source registry with bucket paths, variable reference tables, implementation gotchas, future extensions.
 → Full doc: weather-engine-specs.md
 
 ### freshness-markers

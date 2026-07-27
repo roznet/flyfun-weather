@@ -42,6 +42,9 @@ dependencies = [
     # "unknown parameter" errors on pressure-level messages.
     "eccodes>=2.45",
     "xarray>=2024.1",
+    # Was transitive via MetPy; the HRRR Lambert-grid decode + domain gate
+    # (#457) depend on it directly, so pin it explicitly.
+    "pyproj>=3.4",
     "timezonefinder>=6.2",
 ]
 

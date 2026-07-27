@@ -632,7 +632,7 @@ class TestD2TotalFailureFallback:
         with patch.object(grib_mod, "_prepare_icon_eu", side_effect=_fake_prepare), \
                 patch.object(grib_mod, "_prefetch_icon_eu_data"), \
                 patch.object(grib_mod, "_decode_and_merge_icon_eu", side_effect=_fake_decode), \
-                patch.object(grib_mod, "_enrich_gfs", return_value=None), \
+                patch.object(grib_mod, "_enrich_gfs", return_value=(None, None)), \
                 patch.object(grib_mod, "_enrich_ecmwf", return_value=None):
             init_times, skips, sources = grib_mod.enrich_forecasts(
                 [cs], [], route_points, dep,

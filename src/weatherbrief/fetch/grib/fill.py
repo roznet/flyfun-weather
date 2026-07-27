@@ -30,7 +30,10 @@ Interpolation policy:
     step-anchored (instantaneous in pgrb2).
   - **Non-GFS cloud diagnostics**: forward-fill (persistence) — ICON-EU and
     ECMWF publish instantaneous cloud cover, and base/top interpolation
-    between dissimilar geometries would produce phantom layers.
+    between dissimilar geometries would produce phantom layers. When the gfs
+    slot is sourced from HRRR (#457, all fields instantaneous), the caller
+    passes ``gfs_init=None`` so GFS sections deliberately take this path too
+    — none of the averaged-window machinery may run on HRRR data.
   - **GFS CLW/ICMR overlays** (CLW/ICMR added onto OM pressure_levels without
     list replacement): linear interp between native step times when
     ``gfs_init`` provided; forward-fill otherwise.

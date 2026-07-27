@@ -155,6 +155,7 @@ def test_all_expected_sources_registered():
     expected = {
         "ecmwf:direct",
         "gfs:noaa",
+        "hrrr:noaa",
         "icon_eu:dwd",
         "icon_d2:dwd",
         "gfs:openmeteo",

@@ -35,6 +35,10 @@ MODEL_TTL_SECONDS: dict[str, int] = {
     "gfs": 24 * 3600,       # no precache, small footprint (~0.5 GB/run)
     "icon-eu": 12 * 3600,   # precached each main run; previous run is fallback
     "icon-d2": 6 * 3600,    # 8 runs/day (every 3h); keep current + prior run
+    # HRRR (#457): hourly cycles and ~200 MB per cached forecast hour, so a
+    # stale run is superseded fast and heavy — short TTL keeps at most a few
+    # runs (~1 GB each for a typical flight window) on disk. Not precached.
+    "hrrr": 6 * 3600,
 }
 
 # Fallback TTL for models without an explicit entry. Currently unreachable
