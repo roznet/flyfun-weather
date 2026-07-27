@@ -123,6 +123,33 @@ def _check_gfs_noaa(model: str) -> Observation | None:
     )
 
 
+def _check_hrrr_noaa(model: str) -> Observation | None:
+    """Return latest EXTENDED-cycle HRRR run with a published .idx (#457).
+
+    Only 00/06/12/18z cycles are considered, matching the registry entry:
+    the marker must not advance on every hourly cycle or short-lead US packs
+    would read stale (and auto-refresh) every hour. ``published_at`` comes
+    from the probe's ``Last-Modified`` header, same as GFS.
+    """
+    from weatherbrief.fetch.grib.hrrr_fetch import (
+        find_latest_hrrr_run_with_response,
+    )
+    now = datetime.now(timezone.utc)
+    result = find_latest_hrrr_run_with_response(
+        target_time=now, cover_until=now, extended_cycles_only=True,
+    )
+    if result is None:
+        return None
+    init_date, init_hour, resp = result
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    return Observation(
+        init=init,
+        published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+    )
+
+
 def _check_icon_eu_dwd(model: str) -> Observation | None:
     """Return latest ICON-EU run whose level-74 P file responds 200 on HEAD.
 
@@ -234,6 +261,7 @@ def _check_om_meta(model: str) -> Observation | None:
 _DISPATCH = {
     "ecmwf_direct": _check_ecmwf_direct,
     "gfs_noaa": _check_gfs_noaa,
+    "hrrr_noaa": _check_hrrr_noaa,
     "icon_eu_dwd": _check_icon_eu_dwd,
     "icon_d2_dwd": _check_icon_d2_dwd,
     "om_meta": _check_om_meta,

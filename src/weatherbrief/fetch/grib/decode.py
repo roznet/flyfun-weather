@@ -67,6 +67,32 @@ _ICON_FULL_VAR_MAP = {
     "w": "raw_w_m_s",  # Physical vertical velocity (m/s, upward positive)
 }
 
+# Extended variable map for the HRRR full sounding replacement (#457).
+# Everything is direct: DPT (no Magnus derivation), HGT (no hypsometric
+# fallback), VVEL already in Pa/s (no omega conversion).
+#
+# ``unknown`` → ice mixing ratio: HRRR names its pressure-level ice field
+# CIMIXR (an NCEP-local parameter), which eccodes has no shortName for —
+# cfgrib decodes it as ``unknown`` (verified against the live bucket,
+# 2026-07-26 12z). Mapping ``unknown`` is safe ONLY because this map is used
+# exclusively on our own byte-ranged downloads, where CIMIXR is the single
+# planned variable without an eccodes mapping. The icmr/cimixr aliases keep
+# the map working if a future eccodes release learns the parameter.
+_HRRR_FULL_VAR_MAP = {
+    "clmr": "cloud_liquid_water_kg_kg",
+    "clwmr": "cloud_liquid_water_kg_kg",
+    "unknown": "ice_mixing_ratio_kg_kg",  # CIMIXR — see note above
+    "icmr": "ice_mixing_ratio_kg_kg",
+    "cimixr": "ice_mixing_ratio_kg_kg",
+    "t": "raw_temperature_k",
+    "dpt": "raw_dewpoint_k",
+    "r": "raw_relative_humidity_pct",
+    "u": "raw_u_wind_m_s",
+    "v": "raw_v_wind_m_s",
+    "w": "vertical_velocity_pa_s",
+    "gh": "geopotential_height_m",
+}
+
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
 # cfgrib uses avg_ prefix for time-averaged stepType variables.
 # Field names use a flat namespace for build_cloud_diagnostics().
@@ -192,6 +218,24 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
 _ECMWF_FRAC_TO_PCT = {"cc"}
 
+# HRRR single-message diagnostic mapping (#457): (shortName, typeOfLevel) →
+# internal raw field name, all instantaneous (HRRR publishes no averaged
+# forms). Same keying style as the GFS map, but a separate table: HRRR has no
+# per-band base/top/temp geometry — only ceiling + overall cloud base — so
+# its NWPCloudDiagnostics shape is closer to ECMWF's than GFS's. Covers are
+# already %, heights gpm. CAPE/CIN decode under pressureFromGroundLayer;
+# only the 90-0 mb mixed-layer pair is fetched, so the key is unambiguous.
+_HRRR_CLOUD_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
+    ("lcc", "lowCloudLayer"): "low_cover_pct",
+    ("mcc", "middleCloudLayer"): "mid_cover_pct",
+    ("hcc", "highCloudLayer"): "high_cover_pct",
+    ("tcc", "atmosphere"): "total_cover_pct",
+    ("gh", "cloudCeiling"): "ceiling_gpm",
+    ("gh", "cloudBase"): "cloud_base_gpm",
+    ("cape", "pressureFromGroundLayer"): "ml_cape_jkg",
+    ("cin", "pressureFromGroundLayer"): "ml_cin_jkg",
+}
+
 
 def _frac_grid_indices(
     coord_arr: "np.ndarray",
@@ -297,6 +341,177 @@ def _bilinear_grid_weights(
     )
 
 
+# ---------------------------------------------------------------------------
+# Lambert-projected grids (HRRR, #457)
+# ---------------------------------------------------------------------------
+
+# GRIB2 shapeOfTheEarth=6 sphere used by NCEP Lambert products (HRRR). cfgrib
+# does not expose the radius as an attribute, so it is pinned here.
+_GRIB_SPHERE_RADIUS_M = 6371229.0
+
+_LAMBERT_REQUIRED_ATTRS = (
+    "GRIB_LaDInDegrees",
+    "GRIB_LoVInDegrees",
+    "GRIB_Latin1InDegrees",
+    "GRIB_Latin2InDegrees",
+    "GRIB_latitudeOfFirstGridPointInDegrees",
+    "GRIB_longitudeOfFirstGridPointInDegrees",
+    "GRIB_DxInMetres",
+    "GRIB_DyInMetres",
+)
+
+
+def _lambert_attrs(attrs: dict) -> dict | None:
+    """Return the Lambert grid attributes if ``attrs`` describes one, else None."""
+    if attrs.get("GRIB_gridType") != "lambert":
+        return None
+    if any(attrs.get(k) is None for k in _LAMBERT_REQUIRED_ATTRS):
+        return None
+    return attrs
+
+
+def _lambert_proj_from_attrs(attrs: dict):
+    """Build the pyproj Lambert conformal projection a GRIB message declares.
+
+    pyproj is already a dependency (same math in ``fetch/chart_cache.py`` /
+    ``fetch/metoffice_calibrate.py``); imported at call time so the decode
+    module stays importable without it.
+    """
+    import pyproj
+
+    return pyproj.Proj(
+        proj="lcc",
+        lat_1=attrs["GRIB_Latin1InDegrees"],
+        lat_2=attrs["GRIB_Latin2InDegrees"],
+        lat_0=attrs["GRIB_LaDInDegrees"],
+        lon_0=attrs["GRIB_LoVInDegrees"],
+        R=_GRIB_SPHERE_RADIUS_M,
+    )
+
+
+def _lambert_fractional_indices(
+    attrs: dict,
+    latitudes,
+    longitudes,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Map target lat/lon to fractional (row=y, col=x) indices on a Lambert grid.
+
+    The grid is REGULAR in Lambert-projected space (fixed Dx/Dy metre
+    spacing), so bilinear interpolation is exact on the projected axes:
+    project the targets, difference against the projected first grid point,
+    divide by the spacing. Scanning direction attributes flip the sign where
+    a product scans negatively (HRRR scans +x/+y).
+    """
+    import numpy as np
+
+    proj = _lambert_proj_from_attrs(attrs)
+    x0, y0 = proj(
+        attrs["GRIB_longitudeOfFirstGridPointInDegrees"],
+        attrs["GRIB_latitudeOfFirstGridPointInDegrees"],
+    )
+    xs, ys = proj(
+        np.asarray(longitudes, dtype=np.float64),
+        np.asarray(latitudes, dtype=np.float64),
+    )
+    dx = float(attrs["GRIB_DxInMetres"])
+    dy = float(attrs["GRIB_DyInMetres"])
+    if attrs.get("GRIB_iScansNegatively"):
+        dx = -dx
+    if not attrs.get("GRIB_jScansPositively", 1):
+        dy = -dy
+    return (np.asarray(ys) - y0) / dy, (np.asarray(xs) - x0) / dx
+
+
+def _lambert_grid_weights(
+    ds,
+    targets_lat: "np.ndarray",
+    targets_lon: "np.ndarray",
+) -> "tuple[_GridWeights, str, str] | None":
+    """Bilinear weights for a Lambert-projected dataset (y, x) grid.
+
+    Returns ``(weights, row_dim, col_dim)`` sharing the :class:`_GridWeights`
+    contract with :func:`_bilinear_grid_weights` so the shared gather loop
+    works unchanged, or None when the dataset isn't a usable Lambert grid.
+    Targets outside the grid are dropped from ``inb_idx`` — the same
+    out-of-bounds semantics as the lat/lon path.
+    """
+    import numpy as np
+
+    attrs = None
+    for _name, xr_var in ds.data_vars.items():
+        attrs = _lambert_attrs(xr_var.attrs)
+        if attrs is not None:
+            break
+    if attrs is None:
+        return None
+    row_dim = next((d for d in ds.dims if str(d) == "y"), None)
+    col_dim = next((d for d in ds.dims if str(d) == "x"), None)
+    if row_dim is None or col_dim is None:
+        return None
+    H = int(ds.sizes[row_dim])
+    W = int(ds.sizes[col_dim])
+    if H < 2 or W < 2:
+        return None
+
+    frac_i, frac_j = _lambert_fractional_indices(attrs, targets_lat, targets_lon)
+    in_bounds = (
+        (frac_i >= 0.0) & (frac_i <= H - 1) & (frac_j >= 0.0) & (frac_j <= W - 1)
+    )
+    inb_idx = np.flatnonzero(in_bounds)
+    fi = frac_i[in_bounds]
+    fj = frac_j[in_bounds]
+    i0 = np.clip(np.floor(fi).astype(np.intp), 0, H - 2)
+    j0 = np.clip(np.floor(fj).astype(np.intp), 0, W - 2)
+    ai = fi - i0
+    aj = fj - j0
+    return (
+        _GridWeights(
+            i0, j0, i0 + 1, j0 + 1,
+            (1.0 - ai) * (1.0 - aj), (1.0 - ai) * aj, ai * (1.0 - aj), ai * aj,
+            inb_idx,
+        ),
+        str(row_dim),
+        str(col_dim),
+    )
+
+
+def _lambert_wind_rotation(
+    attrs: dict,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[tuple[float, float]]:
+    """Per-point unit vector of TRUE NORTH in grid (x, y) coordinates.
+
+    HRRR winds are grid-relative (``GRIB_uvRelativeToGrid=1``): U/V follow
+    the Lambert grid axes, which diverge from true east/north away from the
+    central meridian (up to ~±15–20° across CONUS). The rotation is derived
+    numerically from the projection itself — project each point and a point
+    slightly north of it; the normalized difference IS grid-space north —
+    so it cannot drift from whatever projection the decode used.
+
+    Earth-relative components from grid-relative ``(u_g, v_g)`` with
+    north vector ``(nx, ny)``::
+
+        u_e = u_g * ny - v_g * nx
+        v_e = u_g * nx + v_g * ny
+    """
+    import math as _math
+
+    proj = _lambert_proj_from_attrs(attrs)
+    out: list[tuple[float, float]] = []
+    for lat, lon in zip(latitudes, longitudes):
+        lat2 = min(lat + 0.01, 89.99)
+        x1, y1 = proj(lon, lat)
+        x2, y2 = proj(lon, lat2)
+        dx, dy = x2 - x1, y2 - y1
+        norm = _math.hypot(dx, dy)
+        if norm <= 0:
+            out.append((0.0, 1.0))
+        else:
+            out.append((dx / norm, dy / norm))
+    return out
+
+
 def _decode_pressure_vars_from_datasets(
     datasets: list,
     latitudes: list[float],
@@ -348,18 +563,26 @@ def _decode_pressure_vars_from_datasets(
             elif "lon" in dim_lower:
                 lon_dim = dim
         if lat_dim is None or lon_dim is None:
-            continue
+            # No 1-D lat/lon dimension coords: a projected grid (HRRR is
+            # Lambert with (y, x) dims in projected metres and 2-D lat/lon
+            # auxiliary arrays, #457). The grid is REGULAR in projected
+            # space, so project the targets and reuse the same vectorised
+            # bilinear gather on the (y, x) axes.
+            lam = _lambert_grid_weights(ds, targets_lat, targets_lon)
+            if lam is None:
+                continue
+            bw, lat_dim, lon_dim = lam
+        else:
+            try:
+                lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
+                lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
+            except Exception:
+                logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
+                continue
 
-        try:
-            lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
-            lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
-        except Exception:
-            logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
-            continue
-
-        # Bilinear corner indices + weights — computed once per dataset and
-        # reused for every variable in that dataset.
-        bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
+            # Bilinear corner indices + weights — computed once per dataset and
+            # reused for every variable in that dataset.
+            bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
         if bw is None or bw.inb_idx.size == 0:
             continue
         i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
@@ -595,7 +818,29 @@ def _interpolate_per_point(
                 lon_dim = dim
 
         if lat_dim is None or lon_dim is None:
-            return [None] * n
+            # Projected (Lambert) grid — interpolate on the (y, x) axes via
+            # projected fractional indices (#457). cfgrib's y/x dimension
+            # coords are integer indices, so the fractional indices ARE the
+            # interpolation coordinates.
+            attrs = _lambert_attrs(data_array.attrs)
+            y_dim = next((d for d in data_array.dims if str(d) == "y"), None)
+            x_dim = next((d for d in data_array.dims if str(d) == "x"), None)
+            if attrs is None or y_dim is None or x_dim is None:
+                return [None] * n
+            frac_y, frac_x = _lambert_fractional_indices(
+                attrs, latitudes, longitudes,
+            )
+            interpolated = data_array.interp(
+                {
+                    y_dim: xr.DataArray(frac_y, dims="points"),
+                    x_dim: xr.DataArray(frac_x, dims="points"),
+                },
+                method="linear",
+            )
+            return [
+                float(v) if not np.isnan(v) else None
+                for v in interpolated.values
+            ]
 
         data_array = _close_cyclic_longitude(data_array, lon_dim, longitudes)
 
@@ -2007,6 +2252,190 @@ def decode_ecmwf_pressure_per_point(
             ds.close()
 
 
+def decode_hrrr_pressure_per_point(
+    file_path: Path,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[int, dict[str, float]]]:
+    """Decode HRRR pressure-level GRIB and interpolate per route point (#457).
+
+    The full-sounding replacement input for the gfs slot: T, DPT, RH, U/V,
+    VVEL (already Pa/s), HGT, CLMR and CIMIXR on the 25-hPa-spaced levels.
+    Interpolation runs on the Lambert-projected (y, x) axes via the shared
+    projected-grid branch of ``_decode_pressure_vars_from_datasets``.
+
+    HRRR winds are GRID-relative (``GRIB_uvRelativeToGrid=1``): the decoded
+    U/V are rotated to earth-relative here, before ``_convert_raw_sounding``
+    derives speed/direction. No longitude normalization is needed — the
+    projection accepts either longitude convention.
+
+    Returns:
+        Per-point data: ``[{pressure_hpa: {field: value, …}, …}, …]`` —
+        empty dicts for points the grid doesn't cover.
+    """
+    import cfgrib
+
+    n_points = len(latitudes)
+    try:
+        datasets = cfgrib.open_datasets(
+            str(file_path), backend_kwargs={"indexpath": ""},
+        )
+    except Exception:
+        logger.warning("cfgrib failed to open HRRR file %s", file_path, exc_info=True)
+        return [{} for _ in range(n_points)]
+
+    try:
+        results, _covered = _decode_pressure_vars_from_datasets(
+            datasets, latitudes, longitudes,
+            var_map=_HRRR_FULL_VAR_MAP,
+        )
+
+        # Grid→earth wind rotation. The flag and projection are read from the
+        # file's own u-variable so a future earth-relative product (RRFS?)
+        # passes through untouched.
+        rot_attrs: dict | None = None
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                if str(var_name).lower() in ("u", "v") and xr_var.attrs.get(
+                    "GRIB_uvRelativeToGrid"
+                ):
+                    rot_attrs = _lambert_attrs(xr_var.attrs)
+                    break
+            if rot_attrs is not None:
+                break
+        if rot_attrs is not None:
+            north = _lambert_wind_rotation(rot_attrs, latitudes, longitudes)
+            for point_data, (nx, ny) in zip(results, north):
+                for level_fields in point_data.values():
+                    u = level_fields.get("raw_u_wind_m_s")
+                    v = level_fields.get("raw_v_wind_m_s")
+                    if u is None or v is None:
+                        continue
+                    level_fields["raw_u_wind_m_s"] = u * ny - v * nx
+                    level_fields["raw_v_wind_m_s"] = u * nx + v * ny
+
+        return results
+    except Exception:
+        logger.warning(
+            "Failed to decode HRRR pressure data from %s", file_path, exc_info=True,
+        )
+        return [{} for _ in range(n_points)]
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+def decode_hrrr_cloud_diag_per_point(
+    file_path: Path,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Decode HRRR cloud diagnostic + CAPE/CIN messages per route point (#457).
+
+    Single-message scalar fields identified by (shortName, typeOfLevel) via
+    ``_HRRR_CLOUD_DIAG_FIELD_MAP``. No-cloud cells are bitmap-masked (NaN) in
+    HRRR — no 9999-style sentinel — so a cloud-free point simply yields no
+    value, which downstream reads as "no ceiling / no cloud base".
+    """
+    import cfgrib
+
+    n_points = len(latitudes)
+    try:
+        datasets = cfgrib.open_datasets(
+            str(file_path), backend_kwargs={"indexpath": ""},
+        )
+    except Exception:
+        logger.warning(
+            "cfgrib failed to open HRRR cloud diag %s", file_path, exc_info=True,
+        )
+        return [{} for _ in range(n_points)]
+
+    try:
+        results: list[dict[str, float]] = [{} for _ in range(n_points)]
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                field_name = _HRRR_CLOUD_DIAG_FIELD_MAP.get(
+                    (str(var_name), xr_var.attrs.get("GRIB_typeOfLevel", ""))
+                )
+                if field_name is None:
+                    continue
+                values = _interpolate_per_point(xr_var, latitudes, longitudes)
+                for i, val in enumerate(values):
+                    if val is not None and field_name not in results[i]:
+                        results[i][field_name] = val
+        return results
+    except Exception:
+        logger.warning(
+            "Failed to decode HRRR cloud diag from %s", file_path, exc_info=True,
+        )
+        return [{} for _ in range(n_points)]
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+def build_hrrr_cloud_diagnostics(
+    raw: dict[str, float],
+) -> "NWPCloudDiagnostics | None":
+    """Convert raw HRRR diagnostic values into NWPCloudDiagnostics (#457).
+
+    HRRR's shape is closer to ECMWF's than GFS's: per-band covers WITHOUT
+    per-band base/top/temp geometry, plus ceiling and one overall cloud base
+    (mapped onto ``low.base_ft``, matching the ECMWF ``cbh`` treatment).
+    Heights are HGT gpm and convert like the GFS ceiling (gpm → ft, same
+    datum treatment as the GFS slot this replaces).
+
+    CAPE/CIN are the 90-0 mb mixed-layer pair. HRRR CIN is already NEGATIVE
+    J/kg (verified live 2026-07-26: range −745…0), matching the app's
+    internal convention — unlike ECMWF/ICON magnitudes, it must NOT go
+    through ``_normalize_model_cin``'s negation. Residual positives (packing
+    noise) are floored to 0.
+    """
+    from weatherbrief.models.analysis import (
+        NWPCloudDiagnostics,
+        NWPCloudLayerDiag,
+    )
+
+    if not raw:
+        return None
+
+    def _gpm_to_ft(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None:
+            return None
+        return round(val * _M_TO_FT)
+
+    ceiling_ft = _gpm_to_ft("ceiling_gpm")
+    cloud_base_ft = _gpm_to_ft("cloud_base_gpm")
+    low_cover = raw.get("low_cover_pct")
+    mid_cover = raw.get("mid_cover_pct")
+    high_cover = raw.get("high_cover_pct")
+    total_cover = raw.get("total_cover_pct")
+    ml_cape = _opt_float(raw, "ml_cape_jkg")
+    ml_cin_raw = raw.get("ml_cin_jkg")
+    ml_cin = min(0.0, float(ml_cin_raw)) if ml_cin_raw is not None else None
+
+    has_any = any(
+        v is not None
+        for v in (
+            ceiling_ft, cloud_base_ft, low_cover, mid_cover, high_cover,
+            total_cover, ml_cape, ml_cin,
+        )
+    )
+    if not has_any:
+        return None
+
+    return NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=low_cover, base_ft=cloud_base_ft),
+        mid=NWPCloudLayerDiag(cover_pct=mid_cover),
+        high=NWPCloudLayerDiag(cover_pct=high_cover),
+        total_cover_pct=total_cover,
+        ceiling_ft=ceiling_ft,
+        ml_cape_jkg=ml_cape,
+        ml_cin_jkg=ml_cin,
+    )
+
+
 _G = 9.80665  # gravitational acceleration (m/s²)
 _KT_PER_MS = 1.94384  # knots per m/s
 _RD_DRY_AIR = 287.05  # specific gas constant for dry air, J/(kg·K)
@@ -2053,8 +2482,12 @@ def _convert_raw_sounding(
     if rh is not None:
         out["relative_humidity_pct"] = rh
 
-    # Dewpoint from T + RH (Magnus formula)
-    if out.get("temperature_c") is not None and out.get("relative_humidity_pct") is not None:
+    # Dewpoint: prefer the model's own delivered value (HRRR DPT, #457);
+    # otherwise derive from T + RH (Magnus formula).
+    d_k = raw.get("raw_dewpoint_k")
+    if d_k is not None:
+        out["dewpoint_c"] = d_k - 273.15
+    elif out.get("temperature_c") is not None and out.get("relative_humidity_pct") is not None:
         t_c = out["temperature_c"]
         rh_val = max(out["relative_humidity_pct"], 0.1)  # avoid log(0)
         a, b = 17.67, 243.5

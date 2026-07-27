@@ -45,6 +45,7 @@ eval_candidates.json
 
 # ECMWF sample GRIB files (large binary, not for git)
 tests/data/ecmwf_samples/
+tests/data/hrrr_samples/
 
 # Codex, primary is .claude, codex generates these from claude setup
 AGENTS.md

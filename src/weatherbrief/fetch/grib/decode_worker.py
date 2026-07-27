@@ -195,6 +195,27 @@ def decode_gfs_cloud_diag(
         return decode_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def decode_hrrr_pressure(
+    file_path: str,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[int, dict[str, float]]]:
+    """Read HRRR sounding bytes from cache and decode per-point (#457)."""
+    with _log_decode("decode_hrrr_pressure", file_path):
+        from weatherbrief.fetch.grib.decode import decode_hrrr_pressure_per_point
+        return decode_hrrr_pressure_per_point(Path(file_path), latitudes, longitudes)
+
+
+def decode_hrrr_cloud_diag(
+    file_path: str,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    with _log_decode("decode_hrrr_cloud_diag", file_path):
+        from weatherbrief.fetch.grib.decode import decode_hrrr_cloud_diag_per_point
+        return decode_hrrr_cloud_diag_per_point(Path(file_path), latitudes, longitudes)
+
+
 def decode_icon_chunked(
     var_paths: dict[str, list[str]],
     latitudes: list[float],

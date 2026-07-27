@@ -168,6 +168,16 @@ _ECMWF_HORIZON: dict[int, timedelta] = {
 _GFS_NOAA_OFFSET = timedelta(hours=5)
 _GFS_NOAA_HORIZON = timedelta(hours=384)
 
+# HRRR (#457): full wrfprs file set completes ~45–60 min after init
+# (HRRR_PUBLISH_DELAY_HOURS = 1.25 in hrrr_fetch.py). Only the EXTENDED
+# cycles (00/06/12/18z, 48h horizon) are tracked here even though HRRR runs
+# hourly: enrichment picks the freshest covering run opportunistically, but
+# tracking every hourly cycle would flag short-lead US packs stale every
+# hour and churn auto-refresh. The 6-hourly extended cadence matches how
+# much a re-brief actually changes the picture.
+_HRRR_OFFSET = timedelta(hours=1, minutes=15)
+_HRRR_HORIZON = timedelta(hours=48)
+
 # ICON-EU: ICON_EU_PUBLISH_DELAY_HOURS = 3; main cycles {0,6,12,18} reach
 # 120h, intermediate {3,9,15,21} reach 78h.  See icon_eu_fetch.py:31-40.
 _ICON_EU_OFFSET = timedelta(hours=3)
@@ -248,6 +258,30 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "liquid water, ice mixing ratio and cloud diagnostics (ceiling, "
             "low/mid/high covers, convective base/top) onto the 28-level "
             "Open-Meteo GFS sounding. 16-day horizon."
+        ),
+    ),
+    "hrrr:noaa": SourceConfig(
+        key="hrrr:noaa",
+        cycles=(0, 6, 12, 18),
+        delivery_offset=_HRRR_OFFSET,
+        horizon=_HRRR_HORIZON,
+        readiness_check="hrrr_noaa",
+        model_label="HRRR",
+        provider_label="NOAA",
+        provider_url="https://rapidrefresh.noaa.gov/hrrr/",
+        role="primary-sounding",
+        resolution="3 km",
+        coverage="CONUS (Lambert grid)",
+        pressure_levels=35,
+        description=(
+            "Direct GRIB2 from NOAA S3 (noaa-hrrr-bdp-pds). 3 km convection-"
+            "allowing, radar-assimilating model — full sounding replacement "
+            "(T, Td, RH, wind, VVEL, HGT, CLMR/CIMIXR on 25-hPa levels) plus "
+            "instantaneous cloud diagnostics and mixed-layer CAPE/CIN. Serves "
+            "the gfs slot in place of GFS when the whole route fits CONUS and "
+            "the flight window is within the run's horizon; otherwise plain "
+            "GFS. Runs hourly, but only 00/06/12/18Z extend to 48h (others "
+            "18h) — freshness tracks the extended cycles."
         ),
     ),
     "icon_eu:dwd": SourceConfig(

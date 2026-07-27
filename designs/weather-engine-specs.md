@@ -11,25 +11,30 @@ Open-Meteo provides a convenient API but lacks key variables (cloud liquid water
 
 The enrichment strategy differs by model:
 - **GFS:** Open-Meteo is primary (28 levels); GRIB **patches** cloud microphysics + diagnostics onto existing levels
+- **GFS slot on CONUS routes (#457):** when the whole route fits the HRRR domain and the window is within the run's horizon, the slot is sourced from **HRRR** as a **full sounding replacement** (ICON/ECMWF pattern) — badged `GFS (HRRR)`
 - **ECMWF/ICON:** GRIB **replaces the entire pressure-level sounding** with higher-resolution data; Open-Meteo provides surface fields only
 
 ## Field Attribution Matrix
 
 ### Raw NWP Fields (`PressureLevelData`) — Source by Model
 
-| Field | GFS | ECMWF | ICON |
-|-------|-----|-------|------|
-| **pressure_hpa** | Open-Meteo (28 lvls) | GRIB (25 lvls) | GRIB (interpolated from 40 model lvls) |
-| **temperature_c** | Open-Meteo | GRIB (`t`, K→°C) | GRIB (`t`, K→°C) |
-| **relative_humidity_pct** | Open-Meteo | GRIB (`r`) | GRIB (derived from `qv`+T+P) |
-| **dewpoint_c** | Open-Meteo | GRIB (derived from T+RH) | GRIB (derived from T+RH) |
-| **wind_speed_kt** | Open-Meteo | GRIB (`u`,`v` → speed) | GRIB (`u`,`v` → speed) |
-| **wind_direction_deg** | Open-Meteo | GRIB (`u`,`v` → dir) | GRIB (`u`,`v` → dir) |
-| **geopotential_height_m** | Open-Meteo | GRIB (`z` ÷ 9.80665) | **None** — not on ICON model levels |
-| **vertical_velocity_pa_s** | Open-Meteo | GRIB (`w`) | GRIB (`w`, m/s → omega via −ρ·g·w) |
-| **cloud_liquid_water_kg_kg** | GRIB (`CLMR` patch) | GRIB (`clwc`) | GRIB (`qc`) |
-| **ice_mixing_ratio_kg_kg** | GRIB (`ICMR` patch) | GRIB (`ciwc`) | GRIB (`qi`) |
-| **cloud_area_fraction_pct** | — | GRIB (`cc`, 0–1→%) | GRIB (`clc`, already %) |
+The GFS column has two states: plain GFS (Open-Meteo base + patch) and the
+HRRR-upgraded slot on qualifying CONUS routes (#457), where the whole
+sounding is GRIB like ECMWF/ICON.
+
+| Field | GFS | GFS slot from HRRR (#457) | ECMWF | ICON |
+|-------|-----|---------------------------|-------|------|
+| **pressure_hpa** | Open-Meteo (28 lvls) | GRIB (35 lvls, 150–1000 hPa @ 25) | GRIB (25 lvls) | GRIB (interpolated from 40 model lvls) |
+| **temperature_c** | Open-Meteo | GRIB (`TMP`, K→°C) | GRIB (`t`, K→°C) | GRIB (`t`, K→°C) |
+| **relative_humidity_pct** | Open-Meteo | GRIB (`RH`) | GRIB (`r`) | GRIB (derived from `qv`+T+P) |
+| **dewpoint_c** | Open-Meteo | GRIB (`DPT`, **direct**) | GRIB (derived from T+RH) | GRIB (derived from T+RH) |
+| **wind_speed_kt** | Open-Meteo | GRIB (`UGRD`,`VGRD` grid→earth rotated) | GRIB (`u`,`v` → speed) | GRIB (`u`,`v` → speed) |
+| **wind_direction_deg** | Open-Meteo | GRIB (same, rotated) | GRIB (`u`,`v` → dir) | GRIB (`u`,`v` → dir) |
+| **geopotential_height_m** | Open-Meteo | GRIB (`HGT`, **direct**) | GRIB (`z` ÷ 9.80665) | **None** — not on ICON model levels |
+| **vertical_velocity_pa_s** | Open-Meteo | GRIB (`VVEL`, already Pa/s) | GRIB (`w`) | GRIB (`w`, m/s → omega via −ρ·g·w) |
+| **cloud_liquid_water_kg_kg** | GRIB (`CLMR` patch) | GRIB (`CLMR`) | GRIB (`clwc`) | GRIB (`qc`) |
+| **ice_mixing_ratio_kg_kg** | GRIB (`ICMR` patch) | GRIB (`CIMIXR`) | GRIB (`ciwc`) | GRIB (`qi`) |
+| **cloud_area_fraction_pct** | — | — (no 3D cloud fraction in HRRR) | GRIB (`cc`, 0–1→%) | GRIB (`clc`, already %) |
 
 ### Derived Level Fields (`DerivedLevel`) — Computed in Sounding Analysis
 
@@ -55,16 +60,19 @@ All models share the same computation pipeline; inputs vary by what the raw data
 
 ### Surface Cloud Diagnostics (`NWPCloudDiagnostics`) — Source by Model
 
-| Field | GFS | ECMWF | ICON |
-|-------|-----|-------|------|
-| **ceiling_ft** | GRIB (GH) | GRIB (`ceil`, m→ft) | GRIB (`ceiling`, m→ft) |
-| **low.cover_pct** | GRIB (LCDC) | GRIB (`lcc`) | GRIB (`clcl`) |
-| **mid.cover_pct** | GRIB (MCDC) | GRIB (`mcc`) | GRIB (`clcm`) |
-| **high.cover_pct** | GRIB (HCDC) | GRIB (`hcc`) | GRIB (`clch`) |
-| **total_cover_pct** | GRIB (TCDC) | GRIB (`tcc`) | GRIB (`clct`) |
-| **convective base/top** | GRIB | Top only (`hcct`); base = LCL proxy | GRIB (`hbas_con`, `htop_con`) |
-| **freezing_level_ft** | — | GRIB (`deg0l`) → overwrites `hourly.freezing_level_m` | — |
-| **boundary_cover_pct** | GRIB | — | — |
+| Field | GFS | GFS slot from HRRR (#457) | ECMWF | ICON |
+|-------|-----|---------------------------|-------|------|
+| **ceiling_ft** | GRIB (GH) | GRIB (HGT@cloud ceiling, gpm→ft) | GRIB (`ceil`, m→ft) | GRIB (`ceiling`, m→ft) |
+| **low.cover_pct** | GRIB (LCDC, averaged) | GRIB (LCDC, instant) | GRIB (`lcc`) | GRIB (`clcl`) |
+| **low.base_ft** | GRIB (avg PRES) | GRIB (HGT@cloud base — the OVERALL base, ECMWF-`cbh`-style) | GRIB (`cbh`) | — |
+| **low/mid/high base/top/temp geometry** | GRIB (averaged PRES/TMP) | — (not published by HRRR) | — | — |
+| **mid.cover_pct** | GRIB (MCDC) | GRIB (MCDC) | GRIB (`mcc`) | GRIB (`clcm`) |
+| **high.cover_pct** | GRIB (HCDC) | GRIB (HCDC) | GRIB (`hcc`) | GRIB (`clch`) |
+| **total_cover_pct** | GRIB (TCDC) | GRIB (TCDC) | GRIB (`tcc`) | GRIB (`clct`) |
+| **convective base/top** | GRIB | — | Top only (`hcct`); base = LCL proxy | GRIB (`hbas_con`, `htop_con`) |
+| **ml_cape/ml_cin (J/kg)** | — | GRIB (CAPE/CIN 90-0 mb; CIN already negative) | GRIB (`mlcape100`/`mlcin100`) | GRIB (`cape_ml`/`cin_ml`) |
+| **freezing_level_ft** | — | — | GRIB (`deg0l`) → overwrites `hourly.freezing_level_m` | — |
+| **boundary_cover_pct** | GRIB | — | — | — |
 
 ### Known Gaps
 
@@ -85,6 +93,19 @@ Via `fetch/grib/` (gfs_idx.py, grib_fetch.py, decode.py):
 - Two separate fetch paths: `plan_byte_ranges()` for CLWMR/ICMR, `plan_cloud_diag_byte_ranges()` for cloud diagnostics
 - Bilinear spatial interpolation to route points via cfgrib + xarray
 - Disk cache with 24h TTL at `data/.cache/grib/gfs/{date}_{cycle}z/` (per-model TTL in `cache.py` → `MODEL_TTL_SECONDS`; ICON-EU gets 12h since it's precached each run)
+
+### HRRR GRIB2 enrichment (the `gfs` slot on CONUS routes, #457)
+Via `fetch/grib/` (hrrr_fetch.py, decode.py):
+- **Full sounding replacement** — TMP, DPT (direct, no Magnus), RH, UGRD/VGRD (grid-relative → earth-relative rotation), VVEL (already Pa/s), HGT (direct, no hypsometric fallback), CLMR, CIMIXR on 35 integer levels (150–1000 hPa at 25 hPa spacing; the 50–125 hPa top and the fractional `1013.2 mb` near-surface extra are skipped). **Replaces the entire `pressure_levels` list** via the ECMWF replacement flow (`_replace_pressure_levels_from_grib`), unlike plain GFS's patch.
+- **Cloud diagnostics** — all instantaneous: LCDC/MCDC/HCDC/TCDC covers, HGT@cloud-ceiling, HGT@cloud-base (the overall base → `low.base_ft`, ECMWF-`cbh`-style — HRRR has NO per-band base/top/temp geometry), CAPE/CIN at 90-0 mb → `ml_cape_jkg`/`ml_cin_jkg`. HRRR CIN is already negative (internal convention) — it must NOT go through `_normalize_model_cin`.
+- Source: `noaa-hrrr-bdp-pds.s3.amazonaws.com` (public, no auth) — same `.idx` byte-range infra as GFS (note **2-digit** forecast hour: `wrfprsf{FF}`). Everything lives in the single `wrfprs` file per fhour; sounding set ≈ 190 MB/fhour, diagnostics ≈ 10 MB/fhour.
+- **Gating (all-or-nothing, same product rule as ICON-D2):** every route point inside the HRRR CONUS grid AND `flight_window_end ≤ run_init + horizon`. The grid is **Lambert-projected** — "inside CONUS" is not a lat/lon rectangle — so the gate transforms route points to grid x/y with the same pyproj projection the decoder uses and checks grid bounds. On any gate failure, or if HRRR enrichment merges nothing, the slot falls back to plain GFS whole (a *partial* HRRR success keeps HRRR and lets fill cover gaps — never half-and-half).
+- **Cycles/horizon:** hourly cycles, but only 00/06/12/18z extend to 48h; the rest stop at 18h. Run selection prefers the freshest cycle whose horizon covers the window; the publication probe HEADs the .idx of the *last needed* forecast hour (HRRR publishes fhours progressively). Full file set ~45–60 min after init.
+- **Fill semantics:** all HRRR fields are instantaneous, so the GFS averaged-window machinery (window-midpoint interp, `apply_gfs_rh_condensate_gate`, `_PREFER_AVERAGED_PAIRS`) is **disabled** when HRRR sourced the slot (`gfs_init=None` into `propagate_all`); diagnostics forward-fill, the replaced sounding rides the model-agnostic pressure-level linear interp. With hourly output the gaps are minimal anyway.
+- Disk cache at `data/.cache/grib/hrrr/{date}_{cycle}z/` (6h TTL — hourly cycles supersede fast). Not precached.
+- Pack metadata records `model_sources["gfs"]` = `gfs:noaa` or `hrrr:noaa`; the freshness bar badges **`GFS (HRRR)`** — HRRR (WRF-ARW regional) is a genuinely different model from GFS (FV3 global), so the upgrade is visible, and day-over-day assessment jumps at the horizon boundary are expected.
+- Freshness source `hrrr:noaa` tracks **extended cycles only** (00/06/12/18z): tracking all 24 hourly cycles would flag short-lead US packs stale (and auto-refresh them) every hour.
+- Out of scope: HRRR-Alaska, sub-hourly output, HRRR ensemble; RRFS migration is designed to be a bucket/path + grid-constants swap inside `hrrr_fetch.py`.
 
 ### ECMWF IFS GRIB2 enrichment
 Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
@@ -123,6 +144,15 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Availability:** ~4.5h after init time
 - **Currently fetching:** CLMR, ICMR at all pressure levels; cloud diagnostics (LCC/MCC/HCC/TCC covers, PRES bases/tops, TMP cloud-top temps, GH ceiling)
 - **Available but not yet used:** TMP, HGT, UGRD, VGRD, VVEL, RH (could replace Open-Meteo entirely)
+
+### A.2 NOAA HRRR (High-Resolution Rapid Refresh) — IMPLEMENTED (#457)
+- **Bucket:** `s3://noaa-hrrr-bdp-pds/`
+- **Path:** `hrrr.{YYYYMMDD}/conus/hrrr.t{HH}z.wrfprsf{FF}.grib2` — `HH` hourly 00–23, `FF` **2-digit** forecast hour. `.idx` format identical to GFS.
+- **Resolution:** 3 km, **Lambert conformal grid** (1799×1059, tangent 38.5°N, LoV 262.5°E, first point 21.138123°N/237.280472°E, sphere R=6371229 m) — NOT a regular lat/lon grid. Decode interpolates on the projected (y, x) axes via pyproj (grid is regular in projected space, so bilinear stays exact and vectorized); the domain gate uses the same projection.
+- **Horizon:** 48h on 00/06/12/18z, 18h on all other hourly cycles. Full file set published ~45–60 min after init.
+- **Currently fetching:** full sounding (TMP, DPT, RH, UGRD, VGRD, VVEL, HGT, CLMR, CIMIXR — note **CIMIXR**, HRRR's name for ice mixing ratio, not ICMR; eccodes has no shortName for it and decodes it as `unknown`) at 150–1000 hPa; LCDC/MCDC/HCDC/TCDC, HGT@cloud-ceiling/cloud-base, CAPE/CIN@90-0 mb.
+- **Available but not fetched:** RWMR/SNMR/GRLE species, HGT/PRES@cloud-top (no `NWPCloudDiagnostics` home), surface/180-0/255-0 mb CAPE (would collide with the 90-0 pair in cfgrib's `pressureFromGroundLayer` key), VIS, GUST, REFC, LTNG (candidate convective corroborators; would need new surface-field plumbing — future work).
+- **Winds are grid-relative** (`uvRelativeToGrid=1`) — rotated to earth-relative at decode (up to ~±15–20° across CONUS).
 
 ### B. ECMWF IFS (Commercial via ECPDS) — IMPLEMENTED (full sounding)
 - **Delivery:** ECPDS push to local directory (`ECMWF_GRIB_DIR`, default `/data/ecmwf`). Read-only Docker volume mount.
@@ -283,7 +313,7 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 | Axis | Strategy | Module | Applies to |
 |------|----------|--------|------------|
 | **Time — GFS averaged fields** | Window-midpoint linear interp between native steps; layer geometry held from higher-cover endpoint; sub-5 % covers dropped; followed by RH/condensate gate that drops bands where pressure-level RH and condensate disagree with averaged cover. Requires `gfs_init`. See [meteorology-decisions §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate). | `fetch/grib/fill.py` | GFS low/mid/high cloud cover + geometry |
-| **Time — everything else** | Forward-fill for ICON-EU / ECMWF cloud diagnostics and the GFS fallback path (no `gfs_init`); step-time linear interp for GFS CLW/ICMR overlay; linear interp for ECMWF surface scalars and ECMWF / ICON-EU pressure-level soundings (dewpoint derived from interpolated T+RH via Magnus). | `fetch/grib/fill.py` | Cloud diagnostics (non-GFS bands), CLW, ICMR, ECMWF surface, sounding rebuild |
+| **Time — everything else** | Forward-fill for ICON-EU / ECMWF cloud diagnostics, the GFS fallback path (no `gfs_init`), and the HRRR-sourced gfs slot (all-instantaneous, so `gfs_init=None` is passed deliberately, #457); step-time linear interp for GFS CLW/ICMR overlay; linear interp for ECMWF surface scalars and replaced pressure-level soundings (ECMWF / ICON / HRRR — dewpoint derived from interpolated T+RH via Magnus). | `fetch/grib/fill.py` | Cloud diagnostics (non-GFS bands), CLW, ICMR, ECMWF surface, sounding rebuild |
 | **Spatial** | Linear interpolation between neighboring route points (max 100 nm gap, both neighbors required) | `analysis/spatial_interpolation.py` | Cloud diagnostics, CLW, ICMR |
 | **Vertical** | Linear interpolation in pressure-space between native GRIB pressure levels | `analysis/sounding/__init__.py` | CLW, ICMR only |
 
@@ -333,6 +363,15 @@ Requires 2D wind fields (not just point values), so needs raw GRIB2 grid, not in
 - **Longitude convention** — GFS uses 0–360°; route points use -180–180°. Normalize with `lon % 360`.
 - **S3 availability delay** — GFS data appears ~4.5h after init time. `find_latest_run()` checks backward from newest cycle.
 - **Pressure coordinate names** — cfgrib may use `isobaricInhPa`, `level`, or `pressure` depending on the GRIB2 message structure. Check all three.
+
+### HRRR
+- **Lambert grid** — cfgrib decodes with dims `(y, x)` (integer-index coords) and 2-D lat/lon auxiliary arrays; there are no 1-D lat/lon dimension coords. The shared decode helpers branch on this: build the projection from the message's own GRIB attributes, transform targets with pyproj, interpolate on the (y, x) axes. Do NOT scipy-`griddata` the 2-D lat/lon arrays.
+- **CIMIXR decodes as `unknown`** — NCEP-local parameter with no eccodes shortName. The HRRR var map maps `unknown` → ice mixing ratio, which is safe only because the decoder runs exclusively on our own byte-ranged downloads.
+- **Grid-relative winds** — `uvRelativeToGrid=1`; rotate U/V to earth-relative before deriving speed/direction (the rotation is derived numerically from the projection, so it can't drift from the interpolation math).
+- **`1013.2 mb` level** — HRRR carries one fractional near-surface level; the integer-hPa idx regex drops it (PressureLevelData is integral; the surface anchor comes from surface fields).
+- **All fields instantaneous** — never run the GFS averaged-window machinery on HRRR data.
+- **CIN sign** — HRRR CIN is already negative J/kg (verified −745…0); do not renegate via `_normalize_model_cin`.
+- **Progressive publication** — a cycle's forecast hours appear over the delivery window; probe the last-needed fhour's .idx, not f00.
 
 ### ICON-EU
 - **Model levels, not pressure levels** — QC/QI are on model levels (35–74). The P variable provides per-gridpoint pressure at each level. Must interpolate vertically using log-pressure.
