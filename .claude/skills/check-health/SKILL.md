@@ -207,11 +207,11 @@ Three upstreams are routinely flaky; learn the steady-state rates so you only fl
 
 ## 9. Storage & retention
 
-`/mnt/flyfun_data` is the canonical disk gauge (149 GB volume). Steady-state usage is **75–82 %** — see §L9 for the composition breakdown. Only flag when:
-- Sustained **>85 %** (real warn — within ~20 GB of full)
-- Sustained **>90 %** (issue — briefings will start failing soon)
+`/mnt/flyfun_data` is the canonical disk gauge (**199 GB volume** — resized up from 149 GB; don't cite the old number). Steady-state usage is **~68–78 %**, re-baselined 2026-07-27 at 71 % (134 GB used, 56 GB free) — see §L9 for the composition breakdown. Only flag when:
+- Sustained **>85 %** (real warn — ~169 GB, within ~30 GB of full)
+- Sustained **>90 %** (issue — ~179 GB, briefings will start failing soon)
 
-The 75–82 % band oscillates by design as ICON-EU runs cycle through. A 4 pp jump in 12 h is normal cache churn, not a leak.
+The band oscillates by design as **ICON-EU** (12 h TTL) and **ICON-D2** (6 h TTL, 8 runs/day) runs cycle through. A 4 pp jump in 12 h is normal cache churn, not a leak.
 
 ### 9a. Disk composition (one-liner sweep)
 
@@ -221,7 +221,7 @@ ssh brice@161.35.35.15 "du -sh /mnt/flyfun_data/* 2>/dev/null | sort -h && \
   echo --- && du -sh /mnt/flyfun_data/weather/data/.cache/grib/*/ 2>/dev/null"
 ```
 
-Note the `.??*` glob — the `.cache` dir is **dotfile-hidden** and a plain `du -sh /mnt/flyfun_data/weather/data/*` will silently miss the 40+ GB GRIB cache that lives there.
+Note the `.??*` glob — the `.cache` dir is **dotfile-hidden** and a plain `du -sh /mnt/flyfun_data/weather/data/*` will silently miss the ~70 GB of GRIB cache that lives there (ICON-D2 + ICON-EU + GFS).
 
 Compare against the expected bands in §L9. **Flag the line item that's out of band**, not just total usage.
 
@@ -239,13 +239,15 @@ Pack retention: `RETENTION_T1_DAYS=30` (strip heavy artifacts), `RETENTION_T2_AC
 - Total size + flight count to gauge per-flight average (~100 MB / flight is normal).
 - `dirs_older_than_30d` should be growing modestly; if it grows without `packs/` total shrinking, T1 stripping isn't recovering bytes (or there's nothing heavy left to strip).
 
-**Headroom math:** subtract fixed components from 149 GB to get the pack/mysql budget:
-- Caches (ICON-EU + GFS + ECMWF + SRTM): ~60 GB steady-state
-- MySQL (current): ~12 GB
-- Other (mysql siblings, sandboxes, logs): ~1 GB
-- → **Pack budget before 85 % warn: ~55 GB**, before 90 % issue: **~65 GB**
+**Headroom math:** subtract fixed components from the **199 GB** volume to get the pack/mysql budget (2026-07-27 observation):
+- Caches (ICON-D2 33 + ICON-EU 30 + GFS 4.8 + ECMWF 13 + SRTM 4.4): **~85 GB** steady-state
+- MySQL (data + binlogs): ~12 GB
+- Other (sandboxes, forms, logs): ~1 GB
+- → **Pack budget before 85 % warn (169 GB): ~71 GB**, before 90 % issue (179 GB): **~81 GB**
 
-So at today's 26 GB / 248 flight-dirs, we're at ~50 % of the warn budget. If pack growth is e.g. 5 GB / month, we have ~6 months before disk becomes the forcing function for a retention policy change.
+So at today's 37 GB / 504 flight-dirs (~73 MB/flight — T1 stripping is recovering bytes, the old ~100 MB/flight figure has come down), we're at ~52 % of the warn budget.
+
+**Worst-case caveat:** that math assumes caches at their *observed* 85 GB. Their *ceiling* is much higher — ICON-D2 is capped at 45 GiB (~48 GB) and ICON-EU can reach 50 GB, which would put caches near 130 GB and shrink the pack budget to ~25 GB. If both caches sit high simultaneously, disk gets tight much faster than the steady-state number suggests. Check the per-cache lines before trusting the headroom figure.
 
 ### 9c. MySQL size + binlog growth
 
@@ -325,22 +327,27 @@ Lines like `GET /joomla/.env`, `error_log.php`, `wp-login.php`, `.git/`, `xmlrpc
 On this droplet the binary is `docker compose` (two words). Don't try `docker-compose`.
 
 ### §L9 — Disk composition (steady-state vs growing)
-`/mnt/flyfun_data` is 149 GB and lives in two categories — **rotating** (bounded by TTL) and **growing** (bounded only by retention / nothing):
+`/mnt/flyfun_data` is **199 GB** (resized up from 149 GB) and lives in two categories — **rotating** (bounded by TTL) and **growing** (bounded only by retention / nothing):
 
 | Component | Path | Type | Expected band | Notes |
 |---|---|---|---|---|
-| ICON-EU GRIB cache | `.cache/grib/icon-eu/` | rotating | **30–50 GB** | 12 h TTL × ~4 runs/window × ~10 GB/run. Logs `Purged N old icon-eu GRIB cache dirs` only when N>0. |
-| GFS GRIB cache | `.cache/grib/gfs/` | rotating | **1–5 GB** | 24 h TTL × ~5 runs × ~0.5–1 GB/run. |
-| ECMWF deliveries | `/mnt/flyfun_data/ecmwf/data` | rotating | **15–25 GB** | 36 h TTL via `purge_old_ecmwf_deliveries`. |
-| SRTM terrain | `.cache/srtm/` | constant | **~4 GB** | Never aged. |
-| Pack store | `packs/` | growing | **see headroom math §9b** | Monotonic until T1 strip (30 d) and T2 delete (90/180 d) kick in. |
+| **ICON-D2 GRIB cache** | `.cache/grib/icon-d2/` | rotating | **30–45 GB** (obs. 33 GB) | **6 h TTL, 8 runs/day** (every 3 h). Hard disk cap **45 GiB** (`_DEFAULT_CACHE_CAP_GIB`, issue #475), oldest-init-first eviction with a 2-run floor so current+prior are never evicted. Override via `WB_GRIB_CACHE_CAP_GB_ICON_D2`. Mind units: the cap is binary GiB, `du` reports decimal GB. Largest single component on the volume — check it first when disk moves. |
+| ICON-EU GRIB cache | `.cache/grib/icon-eu/` | rotating | **30–50 GB** (obs. 30 GB) | 12 h TTL × ~4 runs/window × ~10 GB/run. Uncapped. Logs `Purged N old icon-eu GRIB cache dirs` only when N>0. |
+| GFS GRIB cache | `.cache/grib/gfs/` | rotating | **1–5 GB** (obs. 4.8 GB) | 24 h TTL × ~5 runs × ~0.5–1 GB/run. Uncapped (cheap). |
+| ECMWF deliveries | `/mnt/flyfun_data/ecmwf/data` | rotating | **13–25 GB** (obs. 13 GB) | 36 h TTL via `purge_old_ecmwf_deliveries`. |
+| SRTM terrain | `.cache/srtm/` | constant | **~4.4 GB** | Never aged. |
+| Pack store | `packs/` | growing | **see headroom math §9b** (obs. 37 GB / 504 dirs) | Monotonic until T1 strip (30 d) and T2 delete (90/180 d) kick in. |
 | MySQL data | `mysql/<db>/*.ibd` | growing | **4–6 GB (weatherbrief DB, 2026-07 baseline)** | Dominated by `verification_scores` (~2.7 GB); grows with verification cycle output. |
 | MySQL binlogs | `mysql/binlog.0000XX` | rotating | **~10 GB (~10 files × 1.1 GB, ~30 d span)** | Auto-purged at `binlog_expire_logs_seconds`. |
 | Sandboxes / forms / logs | misc | constant | **<1 GB combined** | Ignore unless growing. |
 
-**Apply this to §9:** the skill's job is to flag the *individual component* that's out of band, not the total. A total of 79 % isn't a warn if every component is in its expected band — it's just the sum of healthy rotating caches plus the slowly-growing pack store. The total only becomes a warn when a component breaks out (e.g. binlogs span >40 d, or `packs/` > headroom budget).
+**Apply this to §9:** the skill's job is to flag the *individual component* that's out of band, not the total. A total of 71 % isn't a warn if every component is in its expected band — it's just the sum of healthy rotating caches plus the slowly-growing pack store. The total only becomes a warn when a component breaks out (e.g. binlogs span >40 d, or `packs/` > headroom budget).
 
-Historical note: 2026-05-19 disk investigation found `/mnt/flyfun_data` at 79 % with the breakdown above all in-band. The "growth" was just ICON-EU cycling 00z→12z runs.
+**The two GRIB caches together are the swing factor.** ICON-D2 (≤45 GiB capped) + ICON-EU (uncapped, up to ~50 GB) can jointly range from ~60 GB to ~98 GB. That ~38 GB swing is larger than the entire pack store, so a total-usage jump is far more likely to be cache phase than real growth. Always break the total down before concluding anything.
+
+Historical notes:
+- 2026-05-19: `/mnt/flyfun_data` at 79 % of the then-149 GB volume, all components in-band. The "growth" was just ICON-EU cycling 00z→12z runs.
+- 2026-07-27: re-baselined after the volume resize to 199 GB and the arrival of the ICON-D2 cache. 134 GB used (71 %), every component in band.
 
 ```
 verdict: ok            ← or `warn` / `issue`
@@ -354,8 +361,8 @@ standalone: last cycle <time> ago, T min, peak_rss <N> MB            (ok|warn)
 grib pool:  K resets in window                                       (ok|note)
 rss:        no new HWM steps   (or "+N MB step at <ts>")             (ok|note)
 upstream:   M Open-Meteo 502s, K AvWx, L DWD                         (ok|note)
-disk total: /mnt/flyfun_data X% (band 75–82% steady-state)           (ok|warn)
-caches:     icon-eu N GB, gfs N GB, ecmwf N GB                       (ok|warn if out-of-band)
+disk total: /mnt/flyfun_data X% of 199 GB (band ~68–78%)             (ok|warn)
+caches:     icon-d2 N GB, icon-eu N GB, gfs N GB, ecmwf N GB         (ok|warn if out-of-band)
 growing:    packs N GB / F flights, mysql data N GB, binlogs N GB    (ok|note|warn)
 retention:  Retention applied (last <time>); GRIB purge alive        (ok|warn if missing)
 
