@@ -37,3 +37,8 @@ Pilot capability context:
   this is GREEN. AMBER applies when conditions are legal but
   demanding. RED only when conditions exceed equipment capability
   or minimums.
+
+The grading vocabulary above ("no-go", "not acceptable", "required",
+"legal") exists to help you choose the assessment COLOUR. It is not
+vocabulary for the pilot-facing prose — there, describe conditions, not
+permissions.

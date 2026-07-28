@@ -28,6 +28,7 @@ import pytest
 from weatherbrief.digest.guardrails import (
     Violation,
     check_cloud_group_format,
+    check_regulatory_claim,
     check_convective_vfr_consistency,
     check_coordinate_leak,
     check_fabricated_sources,
@@ -296,6 +297,36 @@ def _cloud_digest(reason: str) -> dict[str, str]:
         "trend": "ok",
         "watch_items": "ok",
     }
+
+
+def test_regulatory_claim_flags_legal_verdict():
+    """Verbatim regression from the 2026-07-26 EGKB->EGHN 07:01 briefing."""
+    digest = _cloud_digest(
+        "Departure EGKB is RED/LIFR with observed ceilings around 1,400 ft and a "
+        "TAF TEMPO IFR period, making VFR departure impossible and IFR departure "
+        "the only legal option."
+    )
+    violations = check_regulatory_claim(digest)
+
+    assert violations and all(v.check == "regulatory_claim" for v in violations)
+    assert any("legal" in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        # The corrected phrasing: sharper about the weather, silent on permission.
+        "Ceilings around 1,400 ft with a TEMPO IFR period — below VFR minima for "
+        "departure, so this would be an IMC departure.",
+        "An instrument approach and a usable alternate become the limiting factors.",
+        "100% IMC along the full 64 nm at 1,500 ft; EGVO reported OVC009.",
+        "Conditions are demanding but manageable with close monitoring.",
+    ],
+)
+def test_regulatory_claim_accepts_condition_language(reason):
+    """The check must not punish decisive meteorological statements — softening
+    those is the failure mode this rule is meant to avoid, not cause."""
+    assert not check_regulatory_claim(_cloud_digest(reason))
 
 
 def test_cloud_group_format_flags_spliced_range():

@@ -28,3 +28,8 @@ Pilot capability context:
   IMC conditions as significant concerns. If VFR is not possible,
   the assessment should be AMBER at minimum. Only assign GREEN when
   conditions are clearly benign under the planned flight rules.
+
+The grading vocabulary above ("no-go", "not acceptable", "required",
+"legal") exists to help you choose the assessment COLOUR. It is not
+vocabulary for the pilot-facing prose — there, describe conditions, not
+permissions.

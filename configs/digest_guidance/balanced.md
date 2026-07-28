@@ -31,3 +31,8 @@ Pilot capability context:
   set of rules. If VFR is not possible but IFR is viable, the
   assessment can still be GREEN or AMBER — clearly state that IFR is
   required. If neither VFR nor IFR is feasible, that is RED.
+
+The grading vocabulary above ("no-go", "not acceptable", "required",
+"legal") exists to help you choose the assessment COLOUR. It is not
+vocabulary for the pilot-facing prose — there, describe conditions, not
+permissions.

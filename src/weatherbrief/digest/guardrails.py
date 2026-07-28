@@ -95,6 +95,26 @@ _CLOUD_GROUP_SPLICE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Regulatory/legal claims. The briefing describes weather; whether a flight is
+# permitted depends on the pilot's ratings and currency, the aircraft's
+# equipage, approach availability and the applicable rule set — none of which
+# are in the context. Deliberately narrow: "must" and a bare "required" have
+# too many legitimate uses ("ceilings must be monitored") and a noisy check
+# gets ignored. Validated at 0 false positives over 335 recorded digests; the
+# 2 matches were both genuine ("IFR is technically legal but...", "conditions
+# are legal and manageable"). Non-English stems included because the digest is
+# localised (en/fr/de/es).
+_REGULATORY_CLAIM_RE = re.compile(
+    r"\b(?:il)?legal(?:ly|es|mente)?\b"
+    r"|\b(?:un)?lawful(?:ly)?\b"
+    r"|\bl[ée]gal(?:e|ement)?\b|\bill[ée]gal(?:e)?\b"
+    r"|\bgesetzlich\b|\brechtlich\b|\bzul[aä]ssig\b"
+    r"|\brequired by (?:law|regulation)"
+    r"|\bthe only (?:legal|lawful) \w+"
+    r"|\bthe only option\b",
+    re.IGNORECASE,
+)
+
 # Convective character — the route-advisory line prompt_builder emits, e.g.
 #   "[AMBER] Convective Character: Isolated cells — circumnavigable VFR ..."
 # The status encodes avoidability: AMBER ⇒ isolated/scattered (circumnavigable);
@@ -325,6 +345,32 @@ def check_number_traceability(
     return violations
 
 
+def check_regulatory_claim(digest: Mapping[str, object] | object) -> list[Violation]:
+    """Flag legal/regulatory verdicts — the briefing's lane is weather only.
+
+    Reported on the 2026-07-26 EGKB→EGHN 07:01 briefing, which said "making VFR
+    departure impossible and IFR departure the only legal option". That asserts
+    a rule-set conclusion the context cannot support, and it was substantively
+    wrong: delaying (which the same digest recommended) and not flying were
+    both available. The fix is to drop the verdict, not to soften the
+    meteorology — see the "meteorological lane" rule in ``briefer_v2.md``.
+    """
+    out = _as_dict(digest)
+    violations: list[Violation] = []
+    for field in TEXT_FIELDS:
+        value = str(out.get(field, "") or "")
+        for m in _REGULATORY_CLAIM_RE.finditer(value):
+            violations.append(
+                Violation(
+                    "regulatory_claim",
+                    field,
+                    f"{m.group(0)!r} states a regulatory conclusion "
+                    "(describe the conditions; the pilot decides what is permitted)",
+                )
+            )
+    return violations
+
+
 def check_cloud_group_format(digest: Mapping[str, object] | object) -> list[Violation]:
     """Flag METAR cloud groups written as though the code were a plain number.
 
@@ -481,5 +527,6 @@ def run_guardrails(
     violations.extend(check_fabricated_sources(digest, context))
     violations.extend(check_number_traceability(digest, context))
     violations.extend(check_cloud_group_format(digest))
+    violations.extend(check_regulatory_claim(digest))
     violations.extend(check_convective_vfr_consistency(digest, context))
     return violations
