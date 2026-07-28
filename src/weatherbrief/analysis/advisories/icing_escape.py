@@ -9,6 +9,7 @@ from weatherbrief.analysis.advisories._helpers import (
     build_cost_model,
     driving_method_id,
     format_extent,
+    hazardous_icing_zones,
     icing_zones_in_altitude_range,
     max_terrain_near_point,
     pct_above_threshold,
@@ -288,8 +289,11 @@ class IcingEscapeEvaluator:
 
                 # Icing above cruise + buffer is deliberately GREEN on the
                 # ribbon too ("not relevant to your flight here" reads as clear).
+                # ``hazardous_icing_zones`` first: an Ogimet zone at risk NONE is
+                # "assessed, no icing", and grading it as a hit is what made this
+                # advisory claim icing the cross-section could not draw.
                 relevant_zones = icing_zones_in_altitude_range(
-                    sounding.icing_zones,
+                    hazardous_icing_zones(sounding.icing_zones),
                     0,
                     ctx.cruise_altitude_ft + icing_altitude_buffer_ft,
                 )
