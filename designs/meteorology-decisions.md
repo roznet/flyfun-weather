@@ -2827,16 +2827,39 @@ the 3D-fraction and GRIB-band paths.
 Runs of contiguous levels at or above the threshold become layers, with edges
 placed by the same midpoint convention the DD and 3D-fraction builders already
 use. The *coverage* is not derived from condensate magnitude — each layer takes
-the ICAO band percentage HRRR published for the band its midpoint falls in.
-Both halves stay model-native and neither is fabricated from the other: the
-microphysics says *where* the deck is, the band cover says *how much*.
+the band percentage for the ICAO band its midpoint falls in, **preferring the
+diagnostic band cover** (`nwp_cloud_diagnostics.low/mid/high.cover_pct` —
+HRRR's own 3 km value) and falling back to the bulk
+`cloud_cover_low/mid/high_pct` only when the diagnostic band is absent. The
+bulk fields are deliberately-preserved *Open-Meteo* values
+(`_apply_cloud_diagnostics` never overwrites them), so without that preference
+the amount half was silently sourced from the coarser global blend the HRRR
+upgrade exists to move away from — the same preference `_build_grib_layers`
+already applies for GFS (PR #508 review rounds 3–4). Both halves then stay
+model-native: the microphysics says *where* the deck is, the band cover says
+*how much*.
 
-**Threshold: total condensate ≥ 1×10⁻⁵ kg/kg (0.01 g/kg).** Not invented for
-this change — it is exactly SFIP's lowest non-zero liquid-water bin
-(`sfip.py`: `clw_g_kg <= 0.01` scores no icing potential). The floor therefore
-reads as "a level the icing scheme itself would treat as having no meaningful
-water is not a cloud deck". Liquid and ice are summed, so ice-only cirrus and
-mixed-phase decks both register.
+**Known cover maps honestly; only unknown cover defaults.** A published band
+percentage below the FEW threshold — including an explicit 0 % — maps to
+**FEW**, never to the unknown-cover BKN default and never to a dropped layer:
+the condensate at the interpolated route point is direct evidence of cloud
+*here*, while the band percentage is areal extent, so a known-small extent
+reads as the sparsest reportable category with the honest percentage recorded
+alongside. (The first implementation's `x or BKN` routed known sub-FEW values
+into the unknown default — PR #508 review round 4.) Only a layer with NO
+published band cover takes BKN, with `mean_cloud_cover_pct=None` keeping the
+guess out of anything numeric.
+
+**Threshold: total condensate ≥ 1×10⁻⁵ kg/kg (0.01 g/kg).** The standard
+cloud/no-cloud mask threshold in WRF-family post-processing (the model family
+HRRR belongs to): below it, condensate is numerical residue of the
+microphysics scheme, not a deck. Relative to SFIP it sits at the *bottom* of
+the lowest liquid-water ramp (`membership_clw` rises 0→0.3 over 0–0.01 g/kg)
+— i.e. any level whose liquid alone clears the threshold already carries the
+full first membership step. It is **not** SFIP's zero point: membership at
+0.01 g/kg is 0.3, and the first version of this note claimed otherwise by
+misreading the ramp (PR #508 review round 3). Liquid and ice are summed, so
+ice-only cirrus and mixed-phase decks both register.
 
 **Ordered last, deliberately.** GFS carries both band geometry *and*
 condensate. Placing the condensate source after the GRIB-band path means GFS

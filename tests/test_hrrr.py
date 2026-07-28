@@ -872,24 +872,55 @@ class TestHrrrSlotAtomicity:
                 "raw_temperature_k": 270.0, "raw_u_wind_m_s": 5.0,
                 "raw_v_wind_m_s": 2.0, "geopotential_height_m": 5500.0,
                 "raw_relative_humidity_pct": 60.0,
+                # Liquid AND ice both required per level; a decoded ZERO is a
+                # real value and must pass (PR #508 review round 4).
                 "cloud_liquid_water_kg_kg": 1e-4,
+                "ice_mixing_ratio_kg_kg": 0.0,
             },
         }
 
     def _stage(self, tmp_path, decoded_points, diag_raw=None):
+        """Run _stage_one_hrrr_hour fully hermetically.
+
+        The corrupt-cache path deletes the cached artifact and RE-FETCHES —
+        so the idx fetch and the range download must be mocked too, or a
+        rejected first decode falls through to live NOAA S3 (a real ~190 MB
+        download on a networked runner, a DNS failure elsewhere — PR #508
+        review round 4). ``decoded_points`` may be a list (every decode
+        returns it) or a list of lists (successive decode results, for
+        exercising the retry).
+        """
         import weatherbrief.fetch.grib as grib_mod
+
+        decode_results = (
+            list(decoded_points)
+            if decoded_points and isinstance(decoded_points[0], list)
+            else [decoded_points]
+        )
+        calls = {"decode": 0}
 
         def _fake_dispatch(fn_name, *args):
             if fn_name == "decode_hrrr_pressure":
-                return decoded_points
+                result = decode_results[min(calls["decode"], len(decode_results) - 1)]
+                calls["decode"] += 1
+                return result
             return diag_raw or [{} for _ in self.ROUTE]
 
         with patch.object(grib_mod, "is_cached", return_value=True), patch.object(
             grib_mod, "_dispatch_decode", side_effect=_fake_dispatch,
-        ):
-            return grib_mod._stage_one_hrrr_hour(
+        ), patch(
+            "weatherbrief.fetch.grib.hrrr_fetch.fetch_hrrr_idx",
+            return_value=_REAL_IDX_EXCERPT,
+        ), patch(
+            "weatherbrief.fetch.grib.hrrr_fetch.fetch_hrrr_ranges_to_cache",
+            return_value=True,
+        ) as fetch_ranges:
+            result = grib_mod._stage_one_hrrr_hour(
                 self.ROUTE, "20260726", 12, 3, run_dir=tmp_path, session=None,
             )
+        self._last_fetch_ranges = fetch_ranges
+        self._last_decode_calls = calls["decode"]
+        return result
 
     def test_complete_hour_stages(self, tmp_path):
         fhour, _valid, decoded, diags = self._stage(
@@ -922,6 +953,46 @@ class TestHrrrSlotAtomicity:
         del no_v[500]["raw_v_wind_m_s"]
         with pytest.raises(HrrrIncompleteArtifact, match="VGRD|raw_v_wind_m_s"):
             self._stage(tmp_path, [no_v, self._good_column()])
+
+    def test_liquid_only_column_is_rejected(self, tmp_path):
+        """A missing ice field is a truncated artifact, not 'no ice' —
+        losing it reshapes the condensate envelope (PR #508 review round 4)."""
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        liquid_only = self._good_column()
+        del liquid_only[500]["ice_mixing_ratio_kg_kg"]
+        with pytest.raises(HrrrIncompleteArtifact, match="ice_mixing_ratio"):
+            self._stage(tmp_path, [liquid_only, self._good_column()])
+
+    def test_ice_only_column_is_rejected(self, tmp_path):
+        """A missing liquid field can silently suppress SFIP icing."""
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        ice_only = self._good_column()
+        del ice_only[500]["cloud_liquid_water_kg_kg"]
+        with pytest.raises(HrrrIncompleteArtifact, match="cloud_liquid_water"):
+            self._stage(tmp_path, [ice_only, self._good_column()])
+
+    def test_zero_valued_microphysics_is_complete(self, tmp_path):
+        """Real zeros (clear level) must pass — missing != zero."""
+        clear = self._good_column()
+        clear[500]["cloud_liquid_water_kg_kg"] = 0.0
+        clear[500]["ice_mixing_ratio_kg_kg"] = 0.0
+        fhour, _v, decoded, _d = self._stage(tmp_path, [clear, self._good_column()])
+        assert fhour == 3 and len(decoded) == 2
+
+    def test_corrupt_cache_refetches_once_then_succeeds(self, tmp_path):
+        """The retry path is exercised hermetically: bad cached decode →
+        unlink + re-download (mocked) → good second decode stages the hour."""
+        bad = {500: {"geopotential_height_m": 5500.0}}
+        good = self._good_column()
+        fhour, _v, decoded, _d = self._stage(
+            tmp_path,
+            [[bad, bad], [good, good]],  # first decode bad, second good
+        )
+        assert fhour == 3 and len(decoded) == 2
+        assert self._last_decode_calls == 2
+        self._last_fetch_ranges.assert_called_once()  # the re-download
 
     def test_diagnostic_failure_keeps_the_sounding(self, tmp_path):
         """Diagnostics are subordinate: their failure costs cover, not the hour."""
@@ -1021,6 +1092,100 @@ class TestHrrrSlotCommitContract:
         ts, replace, _diag = self._enrich(tmp_path, _last_fails)
         assert ts is None
         replace.assert_not_called()
+
+    def test_mixed_replace_results_commit_without_lone_diagnostics(self, tmp_path):
+        """An hour whose valid time matches no forecast entry (edge of the
+        grid) is skipped WITHOUT its diagnostics landing alone, while the
+        matched hours commit normally (PR #508 review round 3)."""
+        import weatherbrief.fetch.grib as grib_mod
+
+        def _ok_with_diag(_rp, _d, _h, fhour, **_k):
+            return (fhour, _utc(2026, 7, 26, 12 + fhour), [{500: {}}], [object()])
+
+        with patch.object(
+            grib_mod, "purge_old_runs",
+        ), patch.object(
+            grib_mod, "_stage_one_hrrr_hour", side_effect=_ok_with_diag,
+        ), patch.object(
+            grib_mod, "_replace_pressure_levels_from_grib",
+            side_effect=[1, 0, 1, 1],
+        ) as replace, patch.object(
+            grib_mod, "_apply_cloud_diagnostics_to_sections",
+        ) as apply_diag:
+            ts = grib_mod._enrich_gfs_from_hrrr(
+                [], [], self.ROUTE, _utc(2026, 7, 26, 15),
+                data_dir=tmp_path, flight_duration_hours=3.0,
+                run_info=("20260726", 12), session=None,
+            )
+        assert ts is not None
+        assert replace.call_count == 4
+        # Diagnostics only for the 3 hours whose sounding actually merged.
+        assert apply_diag.call_count == 3
+
+
+class TestPinnedRunDirs:
+    """Cross-caller purge protection (PR #508 review round 4).
+
+    A per-call protect argument shielded only the CALLER'S run; during an
+    extended-cycle transition, briefing B (fresh run) could purge briefing
+    A's expired-but-in-use run mid-decode. The pin registry makes A's read
+    visible to B's purge."""
+
+    def _run(self, root, model, name, age_ok=True):
+        d = root / ".cache" / "grib" / model / name
+        d.mkdir(parents=True)
+        (d / "f003_X.grib2").write_bytes(b"x" * 100)
+        return d
+
+    def test_concurrent_pin_survives_other_callers_ttl_purge(self, tmp_path):
+        from weatherbrief.fetch.grib.cache import pin_run_dir, purge_old_runs
+
+        # Two runs, both far beyond the TTL by init-time aging.
+        old_a = self._run(tmp_path, "hrrr", "20260720_06z")
+        old_b = self._run(tmp_path, "hrrr", "20260720_12z")
+        with pin_run_dir(old_a):  # briefing A still decoding old_a
+            removed = purge_old_runs(tmp_path, model="hrrr")  # briefing B purges
+        assert old_a.exists(), "pinned run must survive another caller's purge"
+        assert not old_b.exists()
+        assert removed == 1
+        # Unpinned afterwards, the next purge may collect it.
+        assert purge_old_runs(tmp_path, model="hrrr") == 1
+        assert not old_a.exists()
+
+    def test_pin_is_reference_counted(self, tmp_path):
+        from weatherbrief.fetch.grib.cache import pin_run_dir, purge_old_runs
+
+        old = self._run(tmp_path, "hrrr", "20260720_06z")
+        with pin_run_dir(old):
+            with pin_run_dir(old):
+                pass  # inner release must not unpin the outer reader
+            assert purge_old_runs(tmp_path, model="hrrr") == 0
+            assert old.exists()
+
+    def test_size_cap_skips_pinned_but_counts_its_bytes(self, tmp_path, caplog):
+        import logging
+
+        from weatherbrief.fetch.grib.cache import pin_run_dir, purge_old_runs
+
+        # Three fresh runs (within TTL) of 100 bytes each; cap at 50 bytes
+        # with floor 0. The oldest is pinned: the evictor must skip it, evict
+        # the other two — and because the pinned run's 100 bytes still count
+        # toward the total, it must LOUDLY report the cap as not met rather
+        # than declaring victory over an omitted directory (PR #508 round 4).
+        now = _utc(2026, 7, 26, 18)
+        oldest = self._run(tmp_path, "hrrr", "20260726_10z")
+        mid = self._run(tmp_path, "hrrr", "20260726_12z")
+        newest = self._run(tmp_path, "hrrr", "20260726_14z")
+        with pin_run_dir(oldest), caplog.at_level(logging.WARNING):
+            purge_old_runs(
+                tmp_path, model="hrrr", enforce_cap=True,
+                cap_bytes=50, floor_runs=0, now=now,
+            )
+        assert oldest.exists(), "pinned run must never be a size-cap victim"
+        assert not mid.exists() and not newest.exists()
+        assert any(
+            "cap NOT met" in r.getMessage() for r in caplog.records
+        ), "pinned bytes must count toward the enforced total"
 
 
 class TestHrrrFillSemantics:

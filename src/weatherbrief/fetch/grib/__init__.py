@@ -43,6 +43,7 @@ from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
     cache_key,  # route-independent: keyed by (fhour, variable) only
     is_cached,
+    pin_run_dir,
     purge_old_runs,
     put_cached,
 )
@@ -2893,12 +2894,35 @@ def _enrich_gfs_from_hrrr(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
 
-    # Resolve the run dir BEFORE purging and hand it over as protected: this
-    # runs on the hot path alongside other briefings, and a concurrent caller
-    # pinned to a different (older) run must not have its directory deleted
-    # mid-decode. (PR #508 review)
+    # Pin THIS caller's run for the whole stage+commit span, then purge. The
+    # pin registry — not a per-call protect argument — is what closes the
+    # cross-caller race: during an extended-cycle transition, briefing A can
+    # still be decoding the previous run while briefing B (here) selects the
+    # fresh successor and purges; A's pin keeps A's directory alive through
+    # B's purge, and vice versa. (PR #508 review round 4)
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="hrrr")
-    purge_old_runs(data_dir, model="hrrr", protect=run_dir)
+    with pin_run_dir(run_dir):
+        return _enrich_gfs_from_hrrr_pinned(
+            gfs_sections, all_forecasts, route_points,
+            init_date, init_hour, forecast_hours,
+            data_dir=data_dir, run_dir=run_dir, session=session,
+        )
+
+
+def _enrich_gfs_from_hrrr_pinned(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    *,
+    data_dir: Path,
+    run_dir: Path,
+    session: requests.Session,
+) -> int | None:
+    """Body of :func:`_enrich_gfs_from_hrrr`, run with ``run_dir`` pinned."""
+    purge_old_runs(data_dir, model="hrrr")
 
     # ---- Phase 1: STAGE. Fetch, decode and validate every requested hour
     # without touching the sections. Nothing here can mutate the pack, so any

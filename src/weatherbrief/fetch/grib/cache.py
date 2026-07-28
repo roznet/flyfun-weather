@@ -22,11 +22,65 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Active-run pins (PR #508 review round 4)
+#
+# Purging runs on the hot path, concurrently with other briefings. A per-call
+# ``protect=`` argument could only shield the CALLER'S own run: during an
+# extended-cycle transition, briefing A can still be decoding the previous run
+# while briefing B selects the newly-published successor — B protects its own
+# run and would purge A's now-expired directory out from under A's decode.
+# The registry makes "someone is reading this" visible ACROSS callers: every
+# reader pins its run for the duration, and both eviction rules (TTL and size
+# cap) skip every pinned directory, whoever pinned it.
+#
+# In-process is sufficient: all purge/enrichment/scheduler/warm callers live
+# in the single uvicorn worker (see refresh-durability — single-worker is a
+# standing assumption there too). Reference-counted so two briefings pinning
+# the same run release it correctly.
+# ---------------------------------------------------------------------------
+
+_PIN_LOCK = threading.Lock()
+_PINNED_RUN_DIRS: dict[str, int] = {}
+
+
+@contextmanager
+def pin_run_dir(run_dir: Path):
+    """Mark ``run_dir`` as actively in use for the duration of the block.
+
+    While pinned, :func:`purge_old_runs` will not TTL-evict it and
+    :func:`_enforce_size_cap` will not select it as a victim — regardless of
+    which caller runs the purge. Pin BEFORE the first cache read and hold
+    through the last decode; age-based eviction cannot otherwise see that a
+    concurrent briefing (an ``as_of_time`` backtest, or a flight served by an
+    older extended cycle) still depends on the directory.
+    """
+    key = str(Path(run_dir).resolve())
+    with _PIN_LOCK:
+        _PINNED_RUN_DIRS[key] = _PINNED_RUN_DIRS.get(key, 0) + 1
+    try:
+        yield run_dir
+    finally:
+        with _PIN_LOCK:
+            n = _PINNED_RUN_DIRS.get(key, 0) - 1
+            if n <= 0:
+                _PINNED_RUN_DIRS.pop(key, None)
+            else:
+                _PINNED_RUN_DIRS[key] = n
+
+
+def _pinned_run_dirs() -> set[str]:
+    """Snapshot of currently pinned run-dir paths (resolved)."""
+    with _PIN_LOCK:
+        return set(_PINNED_RUN_DIRS)
 
 # Per-model TTL overrides. The model is recovered from the cache layout —
 # ``run_dir.parent.name`` is the model key (see :func:`cache_dir_for_run`).
@@ -362,31 +416,35 @@ def _enforce_size_cap(
     cap_bytes: int,
     floor_runs: int,
     now_ts: float,
-    protected: Path | None = None,
 ) -> int:
     """Evict oldest-init run dirs until the model total is under ``cap_bytes``.
 
     Whole run dirs only (never individual files: per-level re-download trades
     scarce bandwidth for disk — the wrong direction). Never drops below
     ``floor_runs`` so the current run and its prior-run fallback survive.
-    ``protected`` (the caller's in-use run) is never a victim — the floor is a
-    count, so it cannot on its own keep a specific directory alive.
+    Pinned directories (:func:`pin_run_dir` — some briefing is actively
+    reading them) are never victims, but their bytes DO count toward the
+    model total: excluding them would report "cap enforced" while disk sits
+    over the cap (PR #508 review round 4).
     Returns the number of directories evicted.
     """
-    run_dirs = [
-        d for d in cache_root.iterdir()
-        if d.is_dir() and (protected is None or d.resolve() != protected)
-    ]
-    # Oldest init first; unparseable names sort by mtime.
-    run_dirs.sort(key=lambda d: _run_age_seconds(d, now_ts), reverse=True)
-
-    sizes = {d: _dir_size_bytes(d) for d in run_dirs}
+    all_dirs = [d for d in cache_root.iterdir() if d.is_dir()]
+    pinned = _pinned_run_dirs()
+    sizes = {d: _dir_size_bytes(d) for d in all_dirs}
     total = sum(sizes.values())
+
+    # Oldest init first; unparseable names sort by mtime.
+    victims = [d for d in all_dirs if str(d.resolve()) not in pinned]
+    victims.sort(key=lambda d: _run_age_seconds(d, now_ts), reverse=True)
 
     removed = 0
     idx = 0
-    while total > cap_bytes and (len(run_dirs) - removed) > floor_runs:
-        victim = run_dirs[idx]
+    while (
+        total > cap_bytes
+        and (len(all_dirs) - removed) > floor_runs
+        and idx < len(victims)
+    ):
+        victim = victims[idx]
         reclaimed = sizes[victim]
         shutil.rmtree(victim, ignore_errors=True)
         total -= reclaimed
@@ -402,18 +460,19 @@ def _enforce_size_cap(
         )
 
     if total > cap_bytes:
-        # Floor won: the retained runs alone exceed the cap. Disk is NOT bounded
-        # in this state, so say so loudly rather than returning a clean count
-        # that reads as "cap enforced". Means the per-run size has grown (more
-        # flights, or more forecast hours per flight) and the cap or floor needs
-        # a look — the alternative, evicting below the floor, would drop the
-        # prior-run fallback a briefing depends on.
+        # Floor or pins won: the retained runs (pinned included — their bytes
+        # count) still exceed the cap. Disk is NOT bounded in this state, so
+        # say so loudly rather than returning a clean count that reads as
+        # "cap enforced". Means the per-run size has grown, or active readers
+        # are pinning more than the cap allows — the alternative, evicting a
+        # pinned or floor-protected run, would delete data a briefing is
+        # actively reading.
         logger.warning(
             "GRIB cache cap NOT met for %s: %.1f MiB over cap %.1f MiB with "
             "only %d run(s) left (floor %d). Disk is unbounded until the cap "
             "or floor is retuned.",
             model, total / (1024 * 1024), cap_bytes / (1024 * 1024),
-            len(run_dirs) - removed, floor_runs,
+            len(all_dirs) - removed, floor_runs,
         )
     return removed
 
@@ -426,7 +485,6 @@ def purge_old_runs(
     floor_runs: int = DEFAULT_CACHE_FLOOR_RUNS,
     now: datetime | None = None,
     enforce_cap: bool = False,
-    protect: Path | None = None,
 ) -> int:
     """Purge cache directories for ``model`` — by TTL, and optionally by cap.
 
@@ -444,13 +502,13 @@ def purge_old_runs(
        per-briefing ``_prepare_icon_eu``/GFS enrichment path leaves it off; the
        TTL rule (plus init-time aging) already bounds those to ~2 runs.
 
-    Args:
-        protect: A run directory the caller is about to use. It is exempt from
-            BOTH rules. Purging runs on the hot path, concurrently with other
-            briefings, so a caller pinned to an older run (an ``as_of_time``
-            backtest, or a flight past the short-cycle horizon) could otherwise
-            have the directory deleted out from under its own decode.
-            Age-based eviction cannot see "someone is reading this".
+    Directories pinned via :func:`pin_run_dir` are exempt from BOTH rules,
+    whoever pinned them. Purging runs on the hot path, concurrently with
+    other briefings: during an extended-cycle transition, briefing A can
+    still be decoding the previous run while briefing B selects the fresh
+    successor — a per-call "protect my run" argument shields only B's run,
+    so the exemption must come from a shared registry of active readers
+    (PR #508 review round 4).
 
     Returns the total number of directories removed.
     """
@@ -461,12 +519,12 @@ def purge_old_runs(
     ttl = MODEL_TTL_SECONDS.get(model, CACHE_TTL_SECONDS)
     now_ts = time.time() if now is None else now.timestamp()
     removed = 0
-    protected = protect.resolve() if protect is not None else None
+    pinned = _pinned_run_dirs()
 
     for run_dir in cache_root.iterdir():
         if not run_dir.is_dir():
             continue
-        if protected is not None and run_dir.resolve() == protected:
+        if str(run_dir.resolve()) in pinned:
             continue
         if _run_age_seconds(run_dir, now_ts) > ttl:
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -479,7 +537,6 @@ def purge_old_runs(
         if cap_bytes is not None:
             removed += _enforce_size_cap(
                 cache_root, model, cap_bytes, floor_runs, now_ts,
-                protected=protected,
             )
 
     return removed
