@@ -32,6 +32,11 @@ ADVISORY_SITUATION: dict[str, str] = {
     "airport_wind": "wind",
     "flight_category": "low_category",
     "vfr_feasibility": "vfr_marginal",
+    # Folds into the existing "ifr_marginal" cell rather than opening a new one:
+    # it only grades at an IFR/LIFR destination, and a new vocab entry would
+    # change the coverage-matrix denominator every corpus fixture is scored
+    # against (parent #252 / #254).
+    "approach_feasibility": "ifr_marginal",
     "ifr_feasibility": "ifr_marginal",
 }
 

@@ -263,17 +263,36 @@ non-precision minimum. Merging the two axes made the evaluator announce "wind
 favours RWY 20; approaches serve 02, **20**" — naming the served, wind-favoured
 runway as if it were unserved (caught in review on #511).
 
-**One discriminator drives both the grade and the copy** (`_Softening`, whose
-value doubles as the message-key suffix — `minima_{circling,uncertain,blocked}`
-× `misaligned_{…}`). Choosing them from different tests is a bug generator, and
-it produced two: an AMBER earned by an *unrelated* unresolved approach kept the
-hard "the ceiling will not support circling" claim, and — worse, in the branch
-review didn't flag — the misalignment case advised "plan for circling" at a
-ceiling the same call had just decided was below the circling minimum. Softening
-for uncertainty is correct, but it has to name that reason in its own words
-rather than borrow the circling advice. Note the fix is *not* to grade off
-`circling_supported` alone: that would harden genuine uncertainty into RED,
-which is precisely what rule 2 forbids.
+**The fallback verdict is a CROSS PRODUCT, and is built as one.** Four review
+rounds on #511 each found a different cell of it rendering the wrong sentence,
+because the cells were written out by hand. Two independent axes:
+
+| `_Blocker` — what stops the arrival | `_Softening` — why it is not RED |
+|---|---|
+| `MINIMA` — a wind-acceptable end blocked only by its own approach's minima | `CIRCLING` — ceiling **and** visibility support circling |
+| `MISALIGNED` — every approach-served end is out on wind | `UNRESOLVED` — an approach we could not match to a runway |
+| `NO_STRAIGHT_IN` — no straight-in published at all (circling-only, or unresolvable) | `NO_WIND_DATA` — no wind components for the served end(s) |
+| | `NONE` — nothing softens it (the only RED) |
+
+`_fallback_detail` composes `"{blocked_<blocker>} — {soften_<softening>}"`, so
+every cell has correct text by construction and a new blocker or reason costs
+**one** string rather than a row or column. The bugs this replaced: an AMBER
+earned by an unrelated unresolved approach kept the hard "will not support
+circling" claim; the misalignment branch advised "plan for circling" at a
+ceiling the same call had just ruled out; `NO_WIND_DATA` borrowed the
+`UNRESOLVED` copy and sent the pilot checking plates for an alignment ambiguity
+that did not exist; and a circling-only field rendered "approaches serve **-**".
+A test asserts every cell resolves in all four locales and that no non-circling
+reason recommends circling.
+
+Two rules the axes encode. **Softening is never dropped to fix copy:** grading
+off `circling_supported` alone would harden genuine uncertainty into RED, which
+is exactly what rule 2 forbids — an unresolved approach may serve the
+wind-favoured end with lower minima. And **circling needs visibility, not just a
+ceiling** (`circling_visibility_m`, default 1500 m): a generous or absent
+ceiling in fog that clears the straight-in floor but not the circling one used
+to soften a genuine "no way in" into AMBER *and recommend circling*. Absent
+values stay permissive on both terms, so a data gap never hardens a grade.
 
 **Circling is flagged, never graded.** `nav.db` carries no circling minima, and
 "circling not authorised" / night / category restrictions are not in the data at
@@ -298,9 +317,19 @@ feasibility for *alternates*, an approach-aware "best usable runway" alongside
 
 No highlights are emitted — like every airport advisory this is point-in-space,
 not route geometry (see the "Not emitting" list under Highlights). Web/iOS/MCP/
-digest pick it up from the catalog with no per-advisory registration; it is added
-to `ADVISORY_PRIORITY` (`web/ts/helpers/advisory-order.ts`) so it sorts beside
-the feasibility composites rather than at the bottom of its band.
+digest pick the advisory itself up from the catalog with no per-advisory
+registration, but **three id→category tables are hand-maintained and do need an
+entry** (all three list both feasibility composites, so a new one is easy to
+miss): `ADVISORY_PRIORITY` (`web/ts/helpers/advisory-order.ts`) so it sorts
+beside them rather than at the bottom of its band; `ADVISORY_TAG_MAP`
+(`debriefs/taxonomy.py`, mirrored in `web/ts/components/debrief-taxonomy.ts` —
+iOS reads it from the served catalog) → `IMC`, so a RED/AMBER verdict can be
+graded against the pilot's debrief outcome; and `ADVISORY_SITUATION`
+(`eval_workbench/situations.py`) → the existing `ifr_marginal` cell, so it
+contributes to eval-corpus situation coverage. `ifr_marginal` rather than a new
+`SITUATION_VOCAB` entry: this only grades at an IFR/LIFR destination, and a new
+vocab cell changes the coverage-matrix denominator every fixture is scored
+against.
 
 ## Mitigations (advice only — #328/#330)
 

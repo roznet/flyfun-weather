@@ -102,6 +102,10 @@ ADVISORY_TAG_MAP: dict[str, ConditionTag] = {
     "cloud_top": ConditionTag.IMC,
     "vfr_feasibility": ConditionTag.IMC,
     "ifr_feasibility": ConditionTag.IMC,
+    # Only bites at an IFR/LIFR destination (VFR is always green, MVFR caps at
+    # amber on IAP presence), so the pilot-facing outcome to grade it against is
+    # the IMC one, even though a tailwind can be what tips it.
+    "approach_feasibility": ConditionTag.IMC,
     "flight_category": ConditionTag.IMC,
     "turbulence": ConditionTag.TURB,
     "mountain_wind": ConditionTag.TURB,
