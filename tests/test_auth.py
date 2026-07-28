@@ -44,11 +44,62 @@ def auth_db():
     engine.dispose()
 
 
+def _stub_oauth_discovery(monkeypatch):
+    """Pre-seed OpenID discovery so the login routes never hit the network.
+
+    authlib resolves ``server_metadata_url`` lazily on the first
+    ``authorize_redirect``, gated on ``_loaded_at`` not already being in
+    ``server_metadata`` (``base_client/async_app.py``). Every test builds a
+    fresh app, so that cache is always cold and ``/auth/login/google`` would
+    otherwise make a live HTTPS request to Google's discovery document on
+    every single run — which makes a network blip look like a test failure
+    (the route 500s and the redirect assertion fails).
+
+    Seeding ``_loaded_at`` short-circuits the fetch at that gate. What the
+    test is actually for — the provider is registered, the route is wired,
+    and it redirects to the provider — is unaffected; only "is Google
+    reachable right now" stops being asserted, which was never the intent.
+
+    Patched on ``auth.router`` rather than ``auth.config`` because the router
+    does ``from ...config import create_oauth`` at import time and calls it
+    while BUILDING the router, keeping the registry in a closure — there is
+    no app attribute to reach afterwards.
+    """
+    import time
+
+    from flyfun_common.auth.config import create_oauth as _real_create_oauth
+
+    authorize_endpoints = {
+        "google": "https://accounts.google.com/o/oauth2/v2/auth",
+        "apple": "https://appleid.apple.com/auth/authorize",
+    }
+
+    def _seeded_oauth():
+        oauth = _real_create_oauth()
+        for provider, authorize_url in authorize_endpoints.items():
+            # None when the provider's client-id env var is unset, so it is
+            # not registered — nothing to seed.
+            client = getattr(oauth, provider, None)
+            if client is None:
+                continue
+            client.server_metadata.update({
+                "_loaded_at": time.time(),
+                "issuer": authorize_url.split("/", 3)[0] + "//" + authorize_url.split("/")[2],
+                "authorization_endpoint": authorize_url,
+            })
+        return oauth
+
+    monkeypatch.setattr(
+        "flyfun_common.auth.router.create_oauth", _seeded_oauth,
+    )
+
+
 def _make_client(auth_db, tmp_path, monkeypatch, user_id: str | None = None):
     """Create a test client, optionally injecting a specific user."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET", TEST_SECRET)
+    _stub_oauth_discovery(monkeypatch)
 
     app = create_app()
 
