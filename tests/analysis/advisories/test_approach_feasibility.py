@@ -350,6 +350,43 @@ class TestFullLogic:
         assert result.aggregate_status == AdvisoryStatus.AMBER
         assert "RWY 20" in result.aggregate_detail
 
+    def test_uncertainty_softening_never_borrows_the_circling_advice(self):
+        """An AMBER earned by uncertainty must say so, not claim circling.
+
+        Softening for an unresolved approach is correct (design rule 2), but
+        the grade and the copy have to come from the same test. When they were
+        chosen separately, the misalignment branch advised "plan for circling"
+        at a 600 ft ceiling — below the 1000 ft the same call had just decided
+        circling needs — and the minima branch paired an AMBER badge with the
+        hard "will not support circling" claim.
+        """
+        unresolved = RunwayApproach(name="MIPS: RNP (LNAV) ARINC CODING", approach_type="RNP")
+
+        misaligned = ApproachFeasibilityEvaluator.evaluate(
+            _ctx(
+                _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=600),
+                _approaches(_ILS_02, unresolved),
+            ),
+            {**_defaults(), "tailwind_limit_kt": 5},
+        )
+        assert misaligned.aggregate_status == AdvisoryStatus.AMBER
+        assert "circling" not in misaligned.aggregate_detail
+        assert "could not be matched" in misaligned.aggregate_detail
+
+        minima = ApproachFeasibilityEvaluator.evaluate(
+            _ctx(
+                _conditions(
+                    FlightCategory.IFR, [_RWY_02_TAILWIND, _RWY_20_HEADWIND],
+                    ceiling_ft=250, visibility_m=4000,
+                ),
+                _approaches(_ILS_02, _VOR_20, unresolved),
+            ),
+            _defaults(),
+        )
+        assert minima.aggregate_status == AdvisoryStatus.AMBER
+        assert "will not support circling" not in minima.aggregate_detail
+        assert "could not be matched" in minima.aggregate_detail
+
     def test_all_ends_out_on_wind_still_reads_as_misalignment(self):
         """The genuine misalignment case must keep its own copy."""
         ctx = _ctx(
@@ -428,8 +465,40 @@ class TestCatalog:
         assert audiences["circling_ceiling_ft"] == "advanced"
 
     @pytest.mark.parametrize("key", ["tailwind_limit_kt", "crosswind_limit_kt", "circling_ceiling_ft"])
-    def test_params_are_honoured_on_recalc(self, key):
-        """Every declared param must actually reach the grading code."""
+    def test_param_defaults_sit_inside_their_declared_bounds(self, key):
+        """Bounds sanity only — the wiring is covered by the test below."""
         entry = ApproachFeasibilityEvaluator.catalog_entry()
         param = next(p for p in entry.parameters if p.key == key)
         assert param.min <= param.default <= param.max
+
+    def test_every_declared_param_actually_reaches_the_grading_code(self):
+        """A param declared in the catalog but dropped in ``_grade_full`` would
+        be silently inert on the settings page. Each one is moved across the
+        threshold it controls and must change the verdict."""
+        # tailwind_limit_kt: an 8 kt tailwind on the only served end.
+        tail = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=1500),
+            _approaches(_ILS_02),
+        )
+        assert _grade(tail, tailwind_limit_kt=10) == AdvisoryStatus.AMBER  # within
+        assert _grade(tail, tailwind_limit_kt=5) == AdvisoryStatus.AMBER   # out → circling
+        assert "circling" in ApproachFeasibilityEvaluator.evaluate(
+            tail, {**_defaults(), "tailwind_limit_kt": 5},
+        ).aggregate_detail
+
+        # crosswind_limit_kt: 10 kt crosswind on a headwind runway.
+        gusty = _runway_wind("20", 200.0, headwind=8.0, crosswind=10.0)
+        cross = _ctx(
+            _conditions(FlightCategory.IFR, [gusty], ceiling_ft=900),
+            _approaches(_ILS_20),
+        )
+        assert _grade(cross, crosswind_limit_kt=20) == AdvisoryStatus.GREEN
+        assert _grade(cross, crosswind_limit_kt=5) == AdvisoryStatus.AMBER
+
+        # circling_ceiling_ft: 600 ft ceiling with the only approach misaligned.
+        circ = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=600),
+            _approaches(_ILS_02),
+        )
+        assert _grade(circ, tailwind_limit_kt=5, circling_ceiling_ft=1000) == AdvisoryStatus.RED
+        assert _grade(circ, tailwind_limit_kt=5, circling_ceiling_ft=500) == AdvisoryStatus.AMBER

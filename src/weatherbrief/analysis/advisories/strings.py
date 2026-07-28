@@ -757,7 +757,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "{kt}kt Rückenwind auf dieser Bahn",
         "es": "{kt}kt de viento en cola en esa pista",
     },
-    "approach_feasibility.circling": {
+    "approach_feasibility.misaligned_circling": {
         "en": "Wind favours RWY {wind_runway}; approaches serve {served} — plan for circling",
         "fr": "Le vent favorise la RWY {wind_runway} ; les approches desservent {served} — prévoir une MVL",
         "de": "Wind begünstigt RWY {wind_runway}; Anflüge bedienen {served} — Platzrunde einplanen",
@@ -768,6 +768,46 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fr": "La RWY {runway} est bonne au vent, mais la prévision est sous les minima {approach} typiques (~{dh}ft) — prévoir une MVL",
         "de": "RWY {runway} ist windseitig frei, aber die Vorhersage liegt unter typischen {approach}-Minima (~{dh}ft) — Platzrunde einplanen",
         "es": "La RWY {runway} está bien de viento, pero el pronóstico está por debajo de los mínimos {approach} típicos (~{dh}ft) — prever circling",
+    },
+    "approach_feasibility.minima_uncertain": {
+        "en": (
+            "RWY {runway} is clear on wind, but the forecast is below typical "
+            "{approach} minima (~{dh}ft) — and an approach here could not be "
+            "matched to a runway, so check the plates"
+        ),
+        "fr": (
+            "La RWY {runway} est bonne au vent, mais la prévision est sous les minima "
+            "{approach} typiques (~{dh}ft) — et une approche ici n'a pu être rattachée "
+            "à une piste, vérifier les cartes"
+        ),
+        "de": (
+            "RWY {runway} ist windseitig frei, aber die Vorhersage liegt unter typischen "
+            "{approach}-Minima (~{dh}ft) — und ein Anflug hier konnte keiner Bahn "
+            "zugeordnet werden, Karten prüfen"
+        ),
+        "es": (
+            "La RWY {runway} está bien de viento, pero el pronóstico está por debajo de los "
+            "mínimos {approach} típicos (~{dh}ft) — y una aproximación aquí no pudo "
+            "asociarse a una pista, revisar las cartas"
+        ),
+    },
+    "approach_feasibility.misaligned_uncertain": {
+        "en": (
+            "Wind favours RWY {wind_runway}; approaches serve {served}, and an "
+            "approach here could not be matched to a runway — check the plates"
+        ),
+        "fr": (
+            "Le vent favorise la RWY {wind_runway} ; les approches desservent {served}, "
+            "et une approche ici n'a pu être rattachée à une piste — vérifier les cartes"
+        ),
+        "de": (
+            "Wind begünstigt RWY {wind_runway}; Anflüge bedienen {served}, und ein "
+            "Anflug hier konnte keiner Bahn zugeordnet werden — Karten prüfen"
+        ),
+        "es": (
+            "El viento favorece la RWY {wind_runway}; las aproximaciones sirven {served}, "
+            "y una aproximación aquí no pudo asociarse a una pista — revisar las cartas"
+        ),
     },
     "approach_feasibility.minima_blocked": {
         "en": (
@@ -787,7 +827,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "mínimos {approach} típicos (~{dh}ft), y el techo no permite circling"
         ),
     },
-    "approach_feasibility.misaligned": {
+    "approach_feasibility.misaligned_blocked": {
         "en": (
             "Wind favours RWY {wind_runway}; approaches serve {served}, "
             "and ceiling {ceiling}ft will not support circling"

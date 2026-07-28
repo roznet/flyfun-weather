@@ -45,6 +45,7 @@ beside it. Advisories run at pipeline step 3 and METAR/TAF are fetched at step
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.registry import register
@@ -85,6 +86,30 @@ class _EndPlan:
     def tailwind_kt(self) -> float:
         """Positive when the wind pushes from behind on this end."""
         return -self.wind.headwind_kt
+
+
+class _Softening(str, Enum):
+    """Why (or whether) a no-usable-straight-in verdict softens off RED.
+
+    The value doubles as the message-key suffix, so the grade and the copy
+    cannot be chosen from different tests — the bug this enum replaces.
+    """
+
+    #: The ceiling supports circling — a real option, so say "plan for circling".
+    CIRCLING = "circling"
+    #: We could not resolve an approach's alignment, or the wind model did not
+    #: cover a served end. Genuine uncertainty (design rule 2), so it softens —
+    #: but the copy must name THAT reason, never borrow the circling advice.
+    UNCERTAIN = "uncertain"
+    #: Nothing softens it.
+    NONE = "blocked"
+
+    @property
+    def status(self) -> AdvisoryStatus:
+        return (
+            AdvisoryStatus.RED if self is _Softening.NONE
+            else AdvisoryStatus.AMBER
+        )
 
 
 @dataclass(frozen=True)
@@ -291,7 +316,19 @@ def _grade_full(
     )
     wind_unresolved = bool(approaches.served_runway_ids) and not graded
     circling_supported = ceiling is None or ceiling >= circling_ceiling
-    soften = circling_supported or alignment_unresolved or wind_unresolved
+    # ONE discriminator drives both the grade and the copy. They were split
+    # before — status off `circling_supported or <uncertainty>`, copy off
+    # `circling_supported` alone — which let an unrelated unresolved approach
+    # soften the grade to AMBER while the text still made the hard claim, and
+    # (worse) let the misalignment branch advise "plan for circling" at a
+    # ceiling that will not support it. Softening for uncertainty is correct,
+    # but it has to say so in its own words rather than borrow the circling copy.
+    if circling_supported:
+        softening = _Softening.CIRCLING
+    elif alignment_unresolved or wind_unresolved:
+        softening = _Softening.UNCERTAIN
+    else:
+        softening = _Softening.NONE
 
     # Two different failures land here and they are NOT the same story. If an
     # end the wind is happy with exists and is blocked only by its own
@@ -307,18 +344,11 @@ def _grade_full(
     ]
     if minima_blocked:
         closest = min(minima_blocked, key=lambda g: g.plan.proxy.dh_lo)
-        key = (
-            "approach_feasibility.minima_circling" if circling_supported
-            else "approach_feasibility.minima_blocked"
-        )
-        return (
-            AdvisoryStatus.AMBER if soften else AdvisoryStatus.RED,
-            adv_t(
-                key, loc,
-                runway=closest.plan.wind.runway_id,
-                approach=_approach_label(closest.plan.approach),
-                dh=int(closest.plan.proxy.dh_lo),
-            ),
+        return softening.status, adv_t(
+            f"approach_feasibility.minima_{softening.value}", loc,
+            runway=closest.plan.wind.runway_id,
+            approach=_approach_label(closest.plan.approach),
+            dh=int(closest.plan.proxy.dh_lo),
         )
 
     # Every approach-served end is out on wind (or there is nothing straight-in
@@ -326,14 +356,8 @@ def _grade_full(
     wind_best = cond.best_runway.runway_id if cond.best_runway else None
     served = ", ".join(sorted(approaches.served_runway_ids)) or "-"
 
-    if soften:
-        return AdvisoryStatus.AMBER, adv_t(
-            "approach_feasibility.circling", loc,
-            served=served, wind_runway=wind_best or "-",
-        )
-
-    return AdvisoryStatus.RED, adv_t(
-        "approach_feasibility.misaligned", loc,
+    return softening.status, adv_t(
+        f"approach_feasibility.misaligned_{softening.value}", loc,
         served=served, wind_runway=wind_best or "-",
         ceiling=int(ceiling) if ceiling is not None else 0,
     )
