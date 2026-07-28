@@ -281,7 +281,14 @@ estimates; planning guidance only.
 - User-entered Field-16 alternate list.
 - Real plate minima from a procedures DB (would replace the proxy ranges and
   shrink Marginal toward exact Yes/No).
-- Route advisory evaluator (GREEN/AMBER/RED), isolated-aerodrome fuel rules.
+- Isolated-aerodrome fuel rules.
+- ~~Route advisory evaluator (GREEN/AMBER/RED)~~ — shipped as a *different*
+  question: `approach_feasibility` (#509, see [advisories.md](./advisories.md))
+  consumes `APPROACH_CLASS_PROXY` / `proxy_for_approach` to ask "can I get in, on
+  a runway I can also land on?", not "is a filed alternate required?". It shares
+  this module's DH estimates deliberately — one minima table, no drift — and
+  inherits the asymmetric-uncertainty rule that keeps a soft claim from reading
+  as a hard one: estimate uncertainty may push it to AMBER, never to RED.
 
 ## References
 

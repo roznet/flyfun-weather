@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
@@ -11,7 +12,7 @@ from euro_aip.storage.database_storage import DatabaseStorage
 from timezonefinder import TimezoneFinder
 
 from weatherbrief.fetch.route_walk import walk_route
-from weatherbrief.models import RunwayEnd, Waypoint
+from weatherbrief.models import AirportApproaches, RunwayApproach, RunwayEnd, Waypoint
 
 if TYPE_CHECKING:
     from euro_aip.briefing.models.route import Route
@@ -274,6 +275,137 @@ def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[Runwa
                 ends.append(RunwayEnd(id=rwy.he_ident, heading_deg=rwy.he_heading_degT))
 
         result[icao] = ends
+
+    return result
+
+
+# ICAO names a circling-only approach with a single trailing letter ("RNP A",
+# "NDB C", "LOC A") instead of a runway number. X/Y/Z are excluded: those are
+# straight-in *variant* designators ("ILS Z RWY 09"), not circling. A name
+# carrying any digit is a runway-numbered procedure, so it is never circling —
+# that guard is what keeps parser artifacts like
+# "MIPS: RNP (LNAV) ARINC CODING" (issue #509: 223 of 262 ident-less rows) from
+# being mislabelled as circling.
+_CIRCLING_SUFFIX_RE = re.compile(r"(?:^|[\s/-])([A-W])$")
+
+
+def _is_circling_name(name: str | None) -> bool:
+    """True when a procedure name reads as an ICAO circling-only approach."""
+    if not name:
+        return False
+    text = name.strip().upper()
+    if any(ch.isdigit() for ch in text):
+        return False
+    return bool(_CIRCLING_SUFFIX_RE.search(text))
+
+
+# A runway identifier is a 1-2 digit number with an optional L/C/R parallel
+# designator. Matching that shape (rather than sifting digits and letters out of
+# the whole string) is what keeps a decorated ident like "RWY 09R" from
+# normalizing to nonsense.
+_RUNWAY_IDENT_RE = re.compile(r"(?<!\d)(\d{1,2})\s*([LCR])?(?![\dA-Z])")
+
+
+def _normalize_runway_ident(ident: str | None) -> str | None:
+    """Canonicalize a runway identifier for joining procedures to runway ends.
+
+    Drops zero padding on the numeric part ("02" -> "2") and any surrounding
+    decoration ("RWY 09R" -> "9R"), so a procedure's runway reference joins a
+    runway end whichever way either side spelled it. Returns ``None`` when the
+    string holds no runway number at all.
+    """
+    if not ident:
+        return None
+    match = _RUNWAY_IDENT_RE.search(ident.upper())
+    if match is None:
+        return None
+    return f"{int(match.group(1))}{match.group(2) or ''}"
+
+
+def get_runway_approaches(
+    icao_codes: list[str], db_path: str,
+) -> dict[str, AirportApproaches]:
+    """Get published instrument approaches per airport, joined to runway ends.
+
+    Mirrors :func:`get_runway_ends`, which supplies the wind side of the same
+    question ("which runway does the wind favour?"). This supplies the
+    infrastructure side ("which runway can I actually shoot an approach to?"),
+    consumed by the ``approach_feasibility`` advisory (issue #509).
+
+    Each :class:`RunwayApproach` resolves into exactly one of three states:
+
+    * ``runway_id`` set — a straight-in approach to that runway END. Only set
+      when the procedure's runway identifier joins a live (non-closed) runway
+      end that has a true heading, so the evaluator can always pair it with the
+      wind components for that end.
+    * ``circling=True`` — an ICAO letter-suffixed circling-only procedure.
+    * neither — an approach whose alignment could not be resolved. Deliberately
+      NOT collapsed into "circling": the consumer treats unresolved alignment as
+      uncertainty (which may only soften a grade), never as a hard misalignment.
+
+    Args:
+        icao_codes: ICAO codes to look up.
+        db_path: Path to the euro_aip SQLite database.
+
+    Returns:
+        Dict mapping ICAO code to :class:`AirportApproaches`. An unknown ICAO
+        yields an empty entry with ``has_procedure_data=False``.
+    """
+    model = _load_airport_model(db_path)
+
+    result: dict[str, AirportApproaches] = {}
+    for icao in icao_codes:
+        airport = model.airports.get(icao)
+        if airport is None:
+            result[icao] = AirportApproaches(icao=icao, has_procedure_data=False)
+            continue
+
+        # Live runway ends with a true heading — the only ends the wind side can
+        # grade, so an approach that joins nothing else is left unresolved.
+        live_ends: dict[str, str] = {}
+        for rwy in getattr(airport, "runways", None) or []:
+            if getattr(rwy, "closed", False):
+                continue
+            for ident, heading in (
+                (rwy.le_ident, rwy.le_heading_degT),
+                (rwy.he_ident, rwy.he_heading_degT),
+            ):
+                key = _normalize_runway_ident(ident)
+                if key is not None and heading is not None:
+                    live_ends[key] = ident.strip().upper()
+
+        try:
+            procedures = list(airport.procedures_query.approaches().all())
+            has_procedure_data = bool(getattr(airport, "procedures", None))
+        except Exception:  # noqa: BLE001 - a bad procedure row must not fail a briefing
+            logger.debug("Approach lookup failed for %s", icao, exc_info=True)
+            result[icao] = AirportApproaches(icao=icao, has_procedure_data=False)
+            continue
+
+        approaches: list[RunwayApproach] = []
+        for proc in procedures:
+            name = str(getattr(proc, "name", "") or "")
+            raw_ident = None
+            try:
+                raw_ident = proc.get_full_runway_ident()
+            except Exception:  # noqa: BLE001 - fall back to the plain column
+                raw_ident = getattr(proc, "runway_ident", None)
+            key = _normalize_runway_ident(raw_ident)
+            runway_id = live_ends.get(key) if key else None
+            approaches.append(RunwayApproach(
+                name=name,
+                approach_type=getattr(proc, "approach_type", None),
+                runway_id=runway_id,
+                circling=runway_id is None and _is_circling_name(
+                    getattr(proc, "raw_name", None) or name,
+                ),
+            ))
+
+        result[icao] = AirportApproaches(
+            icao=icao,
+            has_procedure_data=has_procedure_data,
+            approaches=approaches,
+        )
 
     return result
 

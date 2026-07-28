@@ -46,6 +46,52 @@ class RunwayEnd(BaseModel):
     heading_deg: float  # true heading
 
 
+class RunwayApproach(BaseModel):
+    """One published instrument approach procedure at an airport.
+
+    Sourced from ``nav.db`` ``procedures`` rows (see
+    ``weatherbrief.airports.get_runway_approaches``). ``runway_id`` is the
+    runway END the procedure serves — the join key against
+    :class:`RunwayEnd` / :class:`RunwayWind` — and is ``None`` when the
+    procedure is not runway-aligned (a circling-only procedure, or a row whose
+    runway could not be resolved).
+    """
+
+    name: str  # raw procedure name, e.g. "RWY02 ILS" / "RNP A"
+    approach_type: str | None = None  # "ILS", "RNP", "VOR"… (None = unknown class)
+    runway_id: str | None = None  # runway end served, e.g. "02" — None = not aligned
+    circling: bool = False  # ICAO letter-suffixed circling procedure ("RNP A")
+
+
+class AirportApproaches(BaseModel):
+    """The published approach picture at one airport.
+
+    ``has_procedure_data`` distinguishes "we have procedure rows for this
+    airport, and none of them is an approach" from "this airport has no
+    procedure rows at all". Both mean *no instrument approach* to the grade map
+    (issue #509 decided against a third state), but the detail text says which.
+    """
+
+    icao: str
+    has_procedure_data: bool = False
+    approaches: list[RunwayApproach] = Field(default_factory=list)
+
+    @property
+    def has_iap(self) -> bool:
+        """True when at least one instrument approach is published."""
+        return bool(self.approaches)
+
+    def for_runway(self, runway_id: str) -> list[RunwayApproach]:
+        """Approaches serving a specific runway end (straight-in only)."""
+        key = runway_id.strip().upper()
+        return [a for a in self.approaches if a.runway_id == key]
+
+    @property
+    def served_runway_ids(self) -> set[str]:
+        """Runway ends with at least one straight-in approach."""
+        return {a.runway_id for a in self.approaches if a.runway_id}
+
+
 class RunwayWind(BaseModel):
     """Wind components relative to a runway."""
 

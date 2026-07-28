@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 21 hazard evaluators (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 22 hazard evaluators (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -14,6 +14,7 @@ RouteContext (immutable)
   ├── cross_sections: list[RouteCrossSection]  (per-model forecast grids)
   ├── elevation: ElevationProfile | None
   ├── airport_conditions: AirportConditions | None  (dep + arr weather)
+  ├── arrival_approaches: AirportApproaches | None  (destination IAPs, #509)
   ├── sun: RouteSunAnalysis | None  ├── route_fronts: RouteFrontsManifest | None
   ├── cruise_speed_ias_kt, flight_duration_hours  (headwind trip-time inputs)
   ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, locale
@@ -38,6 +39,7 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register LLWSEvaluator
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
   ├── @register IFRFeasibilityEvaluator
+  ├── @register ApproachFeasibilityEvaluator  # arrival: approach vs wind vs ceiling
   ├── @register FrontsEvaluator            # fronts (experimental, gated on artifact)
   └── @register SunEvaluator               # sun (glare + night-proximity + seating note)
       ↓
@@ -85,7 +87,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 21 Evaluators
+## The 22 Evaluators
 
 ### Icing
 
@@ -140,6 +142,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 |-----------|----------|-------|----------------|
 | `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage), climb-out/descent corridor decks (BKN/OVC fully below cruise within `terminal_corridor_nm` of either end — OVC→RED, BKN→AMBER, see meteorology-decisions §10), and en-route precipitation (shared `classify_enroute_precip`, capped at AMBER in the composite). Worst of sub-assessments wins | `cloud_clearance_ft`, `imc_pct_amber`, `imc_pct_red`, `terminal_corridor_nm` (5) |
 | `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `icing_zones_in_altitude_range()` helper over `[0, cruise + icing_altitude_buffer_ft]`, aligned with FIKI advisory), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
+| `ApproachFeasibilityEvaluator` | flight_rules | **The arrival question no other evaluator owns (#509):** *can I get in, on a runway I can also land on?* Joins the destination's ceiling, the runway the wind favours, and which runways actually have a published approach — a joint function of ceiling **and** wind **and** infrastructure. See the dedicated section below | `tailwind_limit_kt` (10), `crosswind_limit_kt` (20), `circling_ceiling_ft` (1000) |
 
 ### Sun
 
@@ -148,6 +151,115 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | `SunEvaluator` | sun | Informational, never go/no-go. Thin classifier over the precomputed `RouteSunAnalysis` on `ctx.sun` (built by `analysis/sun.py:compute_route_sun`). Model-independent → single `per_model=["all"]` like `ModelAgreementEvaluator`. AMBER when a low sun sits roughly down the wind-best runway on takeoff/landing (glare, recomputed from stored geometry so params honour recalc), and — for day-VFR profiles — when the leg ends near/after sunset or starts near/before sunrise (gated by `warn_near_sunset`; glare AMBER always applies). Detail text always carries the sun-side seating note. UNAVAILABLE (per-model) on old packs / when `ctx.sun is None` | `glare_azimuth_deg` (30), `glare_elev_max_deg` (15), `warn_near_sunset` (true), `sunset_margin_min` (30) |
 
 **Sun pipeline (issue #227):** the heavy/airport-independent parts (night intervals + sun-side summary) are computed once in `tasks/analyze.py` and stored on `RouteAnalysesManifest.sun` (served to the client for cross-section night shading). The advise stage recomputes the full `RouteSunAnalysis` — adding dep/arr glare from the wind-best runway (shared `select_best_runway` helper in `airport_conditions.py`) — onto `RouteContext.sun`, where `run_advisories_from_pack` also rebuilds it so recalculation works. Solar math lives in the `euro_aip` solar primitive (`euro_aip/utils/solar.py`, astral-backed); azimuths and runway headings are both **true** degrees, so glare needs no magnetic conversion.
+
+## Approach feasibility — the arrival intersection (#509)
+
+`enrich_wind` (`analysis/airport_consensus.py`) picks the best runway with
+**zero approach awareness** — `min(crosswind_kt, -headwind_kt)` across all ends.
+So the briefing could say *"destination IFR, ceiling 600 ft, best runway 24"* at
+a field where 24 has no approach and the ILS serves 06. `flight_category` grades
+ceiling/vis, `airport_wind` grades wind, `ifr_feasibility` composites
+airport+icing+convective — **no evaluator owned the intersection**. This one
+does, with its own semantic, its own params and its own detail payload.
+`enrich_wind`'s `best_runway` semantics are deliberately unchanged: the pure-wind
+answer is the correct one for VFR arrivals and for the forecast map.
+
+**Data plumbing.** `airports.py::get_runway_approaches(icaos, db_path)` mirrors
+`get_runway_ends` — the wind side of the same question — and returns
+`AirportApproaches` per ICAO (`models/airport_conditions.py`, sibling of
+`RunwayEnd`). Each `RunwayApproach` resolves into exactly one of **three**
+states, and keeping them apart is the point:
+
+| State | Means |
+|-------|-------|
+| `runway_id` set | straight-in to that runway END; only set when the procedure's ident joins a **live** (non-closed) end that has a true heading, so it can always be paired with that end's wind components |
+| `circling=True` | ICAO letter-suffixed circling-only procedure (`RNP A`, `NDB C`) |
+| neither | alignment unresolved — treated as *uncertainty*, never as hard misalignment |
+
+Circling detection keys on the single trailing letter, excluding X/Y/Z (those are
+straight-in *variant* designators) and any name carrying a digit. That digit
+guard is what matters: of the 262 ident-less rows in `nav.db`, only **39** are
+real circling procedures — a naive "no runway ident ⇒ circling" rule would be
+wrong ~85% of the time (`MIPS: RNP (LNAV) ARINC CODING` and friends).
+
+**Wiring — two points, both required.** `RouteContext.arrival_approaches`
+follows the `route_fronts` / `sun` precedent: `None` ⇒ UNAVAILABLE, so old packs
+degrade cleanly. Both the briefing run and the recalculate/preview re-run build
+it (`tasks/advise.py::_collect_arrival_approaches`), and the API recalc/preview/
+alt endpoints now hand `airports_db_path` down — the recalc path has no resolved
+`RouteConfig`, so `_arrival_icao` falls back to the recomputed airport
+conditions' arrival ICAO. Miss either point and the advisory silently degrades
+to a grey card on recalculate.
+
+**Grade map.** The destination's flight category selects which logic applies —
+the alignment/circling/tailwind reasoning only earns its keep once the pilot can
+no longer be expected to complete the arrival visually.
+
+| Category | Logic |
+|----------|-------|
+| **VFR** | GREEN, always. Visually reachable; approach infrastructure is irrelevant (GREEN not UNAVAILABLE — a benign assessment is a real assessment) |
+| **MVFR** | IAP presence only, capped at AMBER. Any approach → GREEN; none → AMBER. **Never RED.** Alignment/circling/tailwind are not applied: with a 1000–3000 ft ceiling the landing can be completed visually, so a misaligned approach is not a penalty |
+| **IFR / LIFR** | Full logic. GREEN = straight-in to an end whose wind is within limits and a ceiling clear of the estimated minima band. AMBER = a compromise (circling required, ceiling *inside* the band, or a tailwind still within limits). RED = a hard fact only |
+
+**UNAVAILABLE** is reserved for "the evaluator could not run" — `arrival_approaches`
+absent (old pack / no nav.db) or no per-model airport condition. It is *not* used
+for an airport with no approaches: **zero procedure rows is treated as "no
+instrument approach available", full stop.** There is deliberately no third state
+distinguishing "genuinely has none" from "never ingested". Per-country coverage
+in `nav.db` is cleanly bimodal (40–100% or exactly 0.0%), and every 0% country is
+outside the current European scope, so the rule cannot misfire today.
+**Caveat for the US-expansion work:** in a 0%-coverage country this would grade
+every IFR destination RED. Revisit before enabling coverage there.
+
+**Two rules keep it honest.**
+
+1. **One minima table.** Decision heights come from
+   `analysis/alternate_requirement.py::APPROACH_CLASS_PROXY` via
+   `proxy_for_approach` — the same estimates the alternate-requirement card
+   shows. A second table answering the same question on the same page is a drift
+   bug waiting to happen.
+2. **Asymmetric uncertainty.** Those DHs are *estimates*, which is exactly why
+   `alternate_requirement` reports Likely/Marginal/Unlikely instead of a traffic
+   light. Emitting GREEN/AMBER/RED from the same data makes a soft claim look
+   hard, so: **estimate uncertainty may push toward AMBER, never toward RED.**
+   RED needs a hard fact — no IAP at all, a ceiling/visibility below even the
+   *best case* (`min(dh_lo)` / `min(vis_lo)`), or an approach-served end with an
+   out-of-limits tailwind *and* a ceiling that will not support circling. A
+   forecast *inside* the band (`[dh_lo, dh_hi]`, `[vis_lo, vis_hi]`) is AMBER —
+   the AMBER middle is exactly the width of our uncertainty about the published
+   minima. Neither an approach of unresolved alignment nor a served end the wind
+   model did not cover can drive RED: both are our gap, not a fact about the
+   arrival. An absent ceiling means "no BKN/OVC layer" (clears everything); an
+   absent visibility means the model does not publish one (ECMWF visibility is
+   GRIB-only) and the axis is skipped, matching `flight_category`, which also
+   does not read an absent visibility as a poor one.
+
+**Circling is flagged, never graded.** `nav.db` carries no circling minima, and
+"circling not authorised" / night / category restrictions are not in the data at
+all. `circling_ceiling_ft` (default 1000) only decides whether a misaligned
+arrival softens to AMBER — it is never a circling verdict.
+
+**Alignment is brittle**, so the grade is computed **per model** and the
+registry's majority aggregation absorbs the disagreement (wind direction can
+spread 180° across models at D-3, and alignment is discrete). Near the wind
+boundary the verdict degrades to AMBER rather than flipping GREEN↔RED: crossing
+the tailwind limit only removes the straight-in option; RED additionally needs
+the ceiling to fail circling.
+
+**Known gap (deliberate).** At D-0 this should prefer the TAF over the NWP
+consensus so the card cannot contradict the alternates card beside it. Advisories
+run at pipeline step 3 and METAR/TAF are fetched at step 3.5, so `RouteContext`
+has no observation to read; the NWP consensus in `airport_conditions.arrival` is
+what is graded today. Also deferred (from #509): per-candidate approach
+feasibility for *alternates*, an approach-aware "best usable runway" alongside
+`best_runway` in `enrich_wind`, and #510's user-declared unpublished approaches
+(cloud-break procedures) damping the "no IAP → RED" case at UK GA bases.
+
+No highlights are emitted — like every airport advisory this is point-in-space,
+not route geometry (see the "Not emitting" list under Highlights). Web/iOS/MCP/
+digest pick it up from the catalog with no per-advisory registration; it is added
+to `ADVISORY_PRIORITY` (`web/ts/helpers/advisory-order.ts`) so it sorts beside
+the feasibility composites rather than at the bottom of its band.
 
 ## Mitigations (advice only — #328/#330)
 
