@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 
 from weatherbrief.analysis.sounding.icing_common import (
+    MIN_ZONE_HALF_THICKNESS_FT,
     group_icing_levels,
     is_in_cloud_layer,
     nwp_cloud_cover_at_altitude,
@@ -403,6 +404,20 @@ def _build_sfip_zone(
     base = levels_in_zone[0]
     top = levels_in_zone[-1]
 
+    base_ft = round(base.altitude_ft)
+    top_ft = round(top.altitude_ft)
+
+    # Expand thin zones (single pressure level) to minimum thickness — the same
+    # treatment ``icing._build_zone_simple`` gives Ogimet zones. A zone spanning
+    # one level would otherwise carry base_ft == top_ft, and a zero-height band
+    # is invisible: the cross-section fills its polygon and nothing appears, so a
+    # genuine MODERATE/SEVERE SFIP signal renders as blank sky. Single-level
+    # zones are the common case, not the edge case, at ECMWF/GFS level spacing.
+    if top_ft - base_ft < MIN_ZONE_HALF_THICKNESS_FT * 2:
+        mid_ft = (base_ft + top_ft) / 2
+        base_ft = round(mid_ft - MIN_ZONE_HALF_THICKNESS_FT)
+        top_ft = round(mid_ft + MIN_ZONE_HALF_THICKNESS_FT)
+
     # Worst risk in zone
     risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
     worst_risk = max(risks, key=lambda r: risk_order.index(r))
@@ -421,8 +436,8 @@ def _build_sfip_zone(
     variant = levels_in_zone[0].sfip_variant or "full"
 
     return SfipZone(
-        base_ft=round(base.altitude_ft),  # type: ignore[arg-type]
-        top_ft=round(top.altitude_ft),  # type: ignore[arg-type]
+        base_ft=base_ft,
+        top_ft=top_ft,
         base_pressure_hpa=base.pressure_hpa,
         top_pressure_hpa=top.pressure_hpa,
         risk=worst_risk,

@@ -595,3 +595,48 @@ def test_mixed_full_proxy_clw_zero_clear_air():
     zones = assess_sfip_zones(levels)
     # CLW=0 means full variant but gated → no zones despite perfect T/RH
     assert len(zones) == 0
+
+
+# ── Single-level zone thickness ──────────────────────────────────────
+
+
+def test_single_level_zone_has_minimum_thickness():
+    """A zone spanning one pressure level is expanded, not left zero-height.
+
+    ``_build_sfip_zone`` used to take base/top straight from the group's first
+    and last level, so a single-level group produced ``base_ft == top_ft``. The
+    cross-section fills a band polygon with no minimum-height guard, so those
+    zones rendered as nothing — a MODERATE/SEVERE SFIP signal drawn as blank
+    sky. Ogimet's ``_build_zone_simple`` has always expanded them; this pins the
+    same behaviour for SFIP.
+    """
+    # Only the 700 hPa level is in cloud and cold enough to score — its
+    # neighbours are gated out, so the zone spans exactly one level.
+    levels = [
+        _level(800, 6500, 4.0, 3.0, 90.0, 1.0, clw=0.0),
+        _level(700, 10000, -6.0, -6.5, 96.0, 0.5, clw=0.20),
+        _level(600, 13500, -30.0, -31.0, 60.0, 1.0, clw=0.0),
+    ]
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(9000, 11000)])
+    assert len(zones) == 1
+    zone = zones[0]
+    assert zone.top_ft > zone.base_ft, "single-level zone must not be zero-height"
+    assert zone.top_ft - zone.base_ft == 1000
+    # Expanded symmetrically about the level it came from.
+    assert (zone.base_ft + zone.top_ft) / 2 == pytest.approx(10000)
+    # Pressure bounds still describe the level itself, as Ogimet does.
+    assert zone.base_pressure_hpa == 700
+    assert zone.top_pressure_hpa == 700
+
+
+def test_multi_level_zone_keeps_its_own_bounds():
+    """A zone already thicker than the minimum is left alone."""
+    levels = [
+        _level(850, 5000, -3.0, -4.0, 92.0, 1.0, clw=0.08),
+        _level(800, 6500, -6.0, -7.0, 95.0, 1.0, clw=0.15),
+        _level(750, 8000, -9.0, -10.0, 96.0, 1.0, clw=0.20),
+    ]
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(4000, 9000)])
+    assert len(zones) == 1
+    assert zones[0].base_ft == 5000
+    assert zones[0].top_ft == 8000
