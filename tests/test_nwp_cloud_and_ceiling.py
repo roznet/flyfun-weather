@@ -370,6 +370,92 @@ class TestCondensateCloudEnvelope:
         ])
         assert layers == []
 
+    def test_amount_prefers_native_diag_over_openmeteo_bulk(self):
+        """The bulk cloud_cover_*_pct are deliberately-preserved OPEN-METEO
+        values; the amount half must come from HRRR's own diagnostic band
+        cover when present (PR #508 review rounds 3/4)."""
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.models.analysis import CloudCoverage
+
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(925, 760, 3e-4, 0.0),
+            self._lv(850, 1460, 0.0, 0.0),
+        ]
+        # HRRR says 90 % low cover; Open-Meteo bulk says 10 %.
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, 10.0, 0.0, 0.0, nwp_cloud_diagnostics=self._hrrr_diag(),
+        )
+        assert len(layers) == 1
+        assert layers[0].mean_cloud_cover_pct == 90.0
+        assert layers[0].coverage == CloudCoverage.OVC
+
+    def test_bulk_used_only_when_diag_band_absent(self):
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        diag = build_hrrr_cloud_diagnostics({"ceiling_gpm": 300.0})  # no covers
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(925, 760, 3e-4, 0.0),
+            self._lv(850, 1460, 0.0, 0.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, 60.0, 0.0, 0.0, nwp_cloud_diagnostics=diag,
+        )
+        assert layers[0].mean_cloud_cover_pct == 60.0
+
+    @pytest.mark.parametrize("pct,expected_coverage", [
+        (0.0, "few"),    # known clear-ish extent — never BKN, never dropped
+        (10.0, "few"),   # known sub-FEW — the round-4 repro (was BKN)
+        (12.5, "few"),   # band boundary
+        (30.0, "sct"),
+        (50.0, "bkn"),
+        (90.0, "ovc"),
+    ])
+    def test_known_band_cover_maps_honestly(self, pct, expected_coverage):
+        """A KNOWN published cover must never route through the unknown-cover
+        BKN default: condensate proves the deck exists at this point, the
+        published percentage states its extent (PR #508 review round 4)."""
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        diag = build_hrrr_cloud_diagnostics({
+            "low_cover_pct": pct, "mid_cover_pct": 0.0, "high_cover_pct": 0.0,
+        })
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(925, 760, 3e-4, 0.0),
+            self._lv(850, 1460, 0.0, 0.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, None, None, None, nwp_cloud_diagnostics=diag,
+        )
+        assert len(layers) == 1
+        assert layers[0].coverage.value == expected_coverage
+        assert layers[0].mean_cloud_cover_pct == pct
+
+    def test_unknown_cover_stays_bkn_with_no_percentage(self):
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.models.analysis import CloudCoverage
+
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(925, 760, 3e-4, 0.0),
+            self._lv(850, 1460, 0.0, 0.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(levels, None, None, None)
+        assert layers[0].coverage == CloudCoverage.BKN
+        assert layers[0].mean_cloud_cover_pct is None
+
     def test_gfs_still_uses_its_band_geometry(self):
         """GFS carries BOTH band geometry and condensate — the condensate
         source must not displace its existing envelope."""

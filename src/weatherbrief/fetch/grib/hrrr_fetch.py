@@ -457,18 +457,27 @@ class HrrrIncompleteArtifact(RuntimeError):
 # fails still kills the artifact.
 _HRRR_MANDATORY_LEVEL_VARIABLES = ("TMP", "UGRD", "VGRD", "HGT")
 _HRRR_HUMIDITY_VARIABLES = ("RH", "DPT")
-# At least one microphysics field per level — the reason HRRR is worth
-# fetching at all. CLMR is the operational name, CLWMR the documented one.
-_HRRR_MICROPHYSICS_VARIABLES = ("CLMR", "CLWMR", "CIMIXR")
+# Microphysics per level — the reason HRRR is worth fetching at all. Liquid
+# and ice are INDEPENDENT requirements (PR #508 review round 4): losing the
+# liquid field can suppress SFIP icing while losing ice reshapes the
+# condensate envelope, and "field missing" is not "valid zero" — HRRR
+# publishes real 0.0 values on clear levels (verified on the live sample:
+# zero NaN-masking, ~98 % zeros), so requiring both never rejects a clear
+# column. CLMR is the operational liquid name, CLWMR the documented one.
+_HRRR_LIQUID_VARIABLES = ("CLMR", "CLWMR")
+_HRRR_ICE_VARIABLES = ("CIMIXR",)
 
 
 # Raw decoded field names (``_HRRR_FULL_VAR_MAP`` values) that must be present
 # on every level of a decoded column. Mirrors the plan check above, one stage
 # later: the plan proves the messages were OFFERED, this proves they DECODED.
 _HRRR_REQUIRED_DECODED = ("raw_temperature_k", "raw_u_wind_m_s",
-                          "raw_v_wind_m_s", "geopotential_height_m")
+                          "raw_v_wind_m_s", "geopotential_height_m",
+                          # Liquid AND ice independently — a one-sided column
+                          # is a truncated artifact, not a dry forecast
+                          # (decoded zeros are real values and pass).
+                          "cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg")
 _HRRR_REQUIRED_DECODED_HUMIDITY = ("raw_dewpoint_k", "raw_relative_humidity_pct")
-_HRRR_REQUIRED_DECODED_MICRO = ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg")
 
 
 def hrrr_column_incomplete_reason(
@@ -490,8 +499,6 @@ def hrrr_column_incomplete_reason(
         missing = [k for k in _HRRR_REQUIRED_DECODED if fields.get(k) is None]
         if all(fields.get(k) is None for k in _HRRR_REQUIRED_DECODED_HUMIDITY):
             missing.append("dewpoint|rh")
-        if all(fields.get(k) is None for k in _HRRR_REQUIRED_DECODED_MICRO):
-            missing.append("clw|icmr")
         if missing:
             return f"{level}hPa missing {'+'.join(missing)}"
     return None
@@ -517,8 +524,10 @@ def validate_hrrr_sounding_plan(ranges: "list[ByteRange]") -> None:
         missing = [v for v in _HRRR_MANDATORY_LEVEL_VARIABLES if v not in present]
         if not any(v in present for v in _HRRR_HUMIDITY_VARIABLES):
             missing.append("RH|DPT")
-        if not any(v in present for v in _HRRR_MICROPHYSICS_VARIABLES):
-            missing.append("CLMR|CLWMR|CIMIXR")
+        if not any(v in present for v in _HRRR_LIQUID_VARIABLES):
+            missing.append("CLMR|CLWMR")
+        if not any(v in present for v in _HRRR_ICE_VARIABLES):
+            missing.append("CIMIXR")
         if missing:
             deficient.append(f"{level}hPa missing {'+'.join(missing)}")
     if deficient:
