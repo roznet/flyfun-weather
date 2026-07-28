@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -1604,7 +1605,17 @@ async def _run_standalone_cycle_supervised(
     )
     # stdout/stderr inherited — the child's log lines flow straight to the
     # container's log stream alongside the parent's.
-    proc = await asyncio.create_subprocess_exec(*cmd, env=env)
+    #
+    # start_new_session puts the child in its own process group (#451) so we
+    # can signal the whole tree. Without it, killing the child leaves its
+    # sounding/decode pool workers — 275 MB–1 GB of anon memory apiece —
+    # running in the same cgroup, reparented and unowned. That matters most on
+    # the path we actually see in prod: the cgroup OOM killer SIGKILLs the
+    # child (11 times in the 9 days to 2026-07-27), the supervisor observes
+    # only a returncode, and the orphans it never hears about make the *next*
+    # cycle likelier to die the same way.
+    proc = await asyncio.create_subprocess_exec(*cmd, env=env, start_new_session=True)
+    pgid = _child_pgid(proc)
 
     error_message: str | None = None
     try:
@@ -1618,7 +1629,7 @@ async def _run_standalone_cycle_supervised(
         )
         logger.error(error_message)
         try:
-            await _terminate_subprocess(proc)
+            await _terminate_subprocess(proc, pgid)
         except asyncio.CancelledError:
             # Cancelled (app shutdown) while waiting out the SIGTERM grace
             # period. A sibling `except CancelledError` would not catch this
@@ -1626,6 +1637,10 @@ async def _run_standalone_cycle_supervised(
             # just re-open the race — escalate synchronously and re-raise.
             if proc.returncode is None:
                 proc.kill()
+            _killpg(
+                pgid, signal.SIGKILL,
+                f"app shutdown during {cycle_type} timeout kill",
+            )
             raise
         returncode = proc.returncode
     except asyncio.CancelledError:
@@ -1634,10 +1649,24 @@ async def _run_standalone_cycle_supervised(
         # second cancellation; the child exits on SIGTERM unreaped (the OS /
         # container teardown collects it), and the cycle is idempotent
         # end-to-end (UPSERT/dup-check) so the next fire re-does the
-        # truncated work.
+        # truncated work. The group SIGTERM covers the pool workers, which
+        # the child's own teardown would otherwise have to outlive.
         if proc.returncode is None:
             proc.terminate()
+        _killpg(pgid, signal.SIGTERM, f"app shutdown during {cycle_type} cycle")
         raise
+
+    # The child is gone (clean exit, crash, OOM kill, or the timeout kill
+    # above). Anything still alive in its group is by definition an orphaned
+    # descendant of a process that no longer exists, so SIGKILL is the whole
+    # cleanup. On the happy path the child's own
+    # `shutdown_decode_pool(force=True)` (#450) already cleared them and this
+    # signals nothing.
+    _killpg(
+        pgid, signal.SIGKILL,
+        f"orphaned pool workers outlived the {cycle_type} cycle child "
+        f"(rc={returncode})",
+    )
 
     if returncode == 0:
         return
@@ -1650,15 +1679,75 @@ async def _run_standalone_cycle_supervised(
     _ensure_failed_cycle_recorded(cycle_type, launched_at, t_start, error_message)
 
 
-async def _terminate_subprocess(proc: asyncio.subprocess.Process) -> None:
-    """Terminate a child, escalating to SIGKILL after a 30 s grace period."""
+def _child_pgid(proc: asyncio.subprocess.Process) -> int | None:
+    """The child's process-group id, or None if it is already gone.
+
+    Launched with ``start_new_session=True`` the child leads its own group, so
+    this is just its pid — but read it from the OS rather than assuming, so a
+    caller that drops ``start_new_session`` can't silently turn a group kill
+    into a kill of whatever group the parent happens to be in.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:  # already reaped, or no permission — nothing to signal
+        return None
+    if pgid == os.getpgrp():
+        # Not a new session after all — signalling this group would hit the
+        # supervisor itself. Refuse rather than shoot the web app.
+        logger.warning(
+            "Standalone child %d shares the supervisor's process group %d — "
+            "skipping group cleanup",
+            proc.pid, pgid,
+        )
+        return None
+    return pgid
+
+
+def _killpg(pgid: int | None, sig: int, reason: str) -> None:
+    """Signal every survivor in the child's process group. Never raises.
+
+    ``ProcessLookupError`` — the normal case after a clean cycle — means the
+    group is already empty, i.e. nothing was orphaned. Only a signal that
+    actually lands gets logged, so silence here means a clean cycle.
+
+    Safe against pid reuse: Linux keeps a ``struct pid`` allocated for as long
+    as any process uses it as its pgrp, so the number cannot be handed to a new
+    process while the orphans we are aiming at are still alive. Once they exit
+    the group is empty and the call is a no-op.
+    """
+    if pgid is None:
+        return
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return  # group empty — nothing to clean up
+    except OSError as exc:
+        logger.warning("Could not signal process group %d (%s): %s", pgid, reason, exc)
+        return
+    logger.warning(
+        "Sent %s to process group %d (%s)", signal.Signals(sig).name, pgid, reason,
+    )
+
+
+async def _terminate_subprocess(
+    proc: asyncio.subprocess.Process, pgid: int | None = None,
+) -> None:
+    """Terminate a child, escalating to SIGKILL after a 30 s grace period.
+
+    The grace-period SIGTERM goes to the whole group when we know it: a pool
+    worker that gets SIGTERM at the same time as its parent can exit tidily,
+    whereas one that only learns of the death when its parent vanishes will sit
+    in ``call_queue.get()`` (or a native cfgrib call) indefinitely.
+    """
     if proc.returncode is not None:
         return
     proc.terminate()
+    _killpg(pgid, signal.SIGTERM, "standalone cycle timeout: terminating the tree")
     try:
         await asyncio.wait_for(proc.wait(), timeout=30)
     except asyncio.TimeoutError:
         proc.kill()
+        _killpg(pgid, signal.SIGKILL, "standalone cycle timeout: grace period expired")
         await proc.wait()
 
 

@@ -107,12 +107,14 @@ class PoolHarness:
         self.workers = workers
         self.pool = FakePool(workers)
         self.teardown_waits: list[bool] = []
+        self.teardown_forces: list[bool] = []
 
     def factory(self):  # -> FakePool
         return self.pool
 
-    def teardown(self, *, wait: bool = True) -> None:
+    def teardown(self, *, wait: bool = True, force: bool = False) -> None:
         self.teardown_waits.append(wait)
+        self.teardown_forces.append(force)
         self.pool.shutdown(wait=False)
         self.pool = FakePool(self.workers)
 
@@ -280,8 +282,10 @@ def test_crash_reschedules_interrupted_and_keeps_completed(make_dispatcher, monk
     assert sib_fut.result(5.0) == "sib"
     # Completed-before-fault work is untouched.
     assert done_fut.result(0) == "r1"
-    # The fault tore the pool down (crash -> wait=True).
+    # The fault tore the pool down (crash -> wait=True, and no force: the
+    # workers are already dead, so joining is fast and nothing needs killing).
     assert harness.teardown_waits and harness.teardown_waits[-1] is True
+    assert harness.teardown_forces and harness.teardown_forces[-1] is False
     assert attempts["n"] == 2, "flaky job should have been rescheduled exactly once"
 
 
@@ -295,7 +299,7 @@ def test_timeout_victim_dead_lettered_collateral_rescheduled(make_dispatcher, mo
     healthy job that was in-flight is rescheduled and succeeds."""
     monkeypatch.setenv("GRIB_DECODE_BACKOFF_BASE_S", "0")
     before = decode_dead_letter_counts().get("decode_hung", 0)
-    d, registry, _ = make_dispatcher(workers=2, timeout_s=0.3)
+    d, registry, harness = make_dispatcher(workers=2, timeout_s=0.3)
 
     def _hang(_v):
         time.sleep(2.0)  # finite (no thread leak) but well past the 0.3s deadline
@@ -332,6 +336,12 @@ def test_timeout_victim_dead_lettered_collateral_rescheduled(make_dispatcher, mo
     assert blocker_fut.result(5.0) == "blocker-ok"
     assert blk["n"] == 2, "healthy collateral should have been rescheduled once"
     assert decode_dead_letter_counts().get("decode_hung", 0) == before + 1
+    # Timeout recovery must not merely abandon the wedged worker (#451): a
+    # worker stuck in cfgrib/ECCODES never returns, and its RSS would sit in
+    # the cgroup until the next deploy. wait=False keeps recovery unblocked,
+    # force=True is what actually ends the process.
+    assert harness.teardown_waits[-1] is False
+    assert harness.teardown_forces[-1] is True
 
 
 # ---------------------------------------------------------------------------

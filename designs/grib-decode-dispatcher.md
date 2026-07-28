@@ -87,7 +87,8 @@ under lock: if draining/closed: return               # already handled
             if victim and victim not in inflight: return   # it finished in the gap — no hang, no teardown
             draining=True; snapshot=list(inflight.values()); inflight.clear()
 if TIMEOUT: _diag_snapshot_workers(pool, ...)        # reuse existing hang-diag
-pool_teardown(wait = reason != TIMEOUT)              # reuse shutdown_decode_pool
+pool_teardown(wait = reason != TIMEOUT,              # reuse shutdown_decode_pool
+              force = reason == TIMEOUT)             # TERM→KILL the wedged worker (#451)
 for h in snapshot:
     if closed:                      _dead_letter(h, "dispatcher_shutdown")  # drain() began mid-recovery
     elif h is victim:               _dead_letter(h, "decode_hung")        # don't retry — re-running re-hangs
@@ -103,6 +104,7 @@ Properties:
 - **The pending heap is the durable structure** — teardown never touches it, so after rebuild a waiting INTERACTIVE job jumps ahead of the rest of a BACKGROUND batch.
 - **Interrupted jobs are transparently rescheduled** by creating a new pool future for the same caller future. Strictly better than before, where an interrupted briefing degraded to Open-Meteo / a standalone step went empty.
 - **Timeout victim is dead-lettered, not retried** — breaks the infinite-teardown loop a corrupt GRIB would cause.
+- **The wedged worker is killed, not abandoned** (`force=True`, #451). `wait=False` alone leaves it running with its cfgrib/xarray/MetPy RSS charged to a cgroup that already sits near its limit (#490), until the next deploy. The hang diagnostics run first, the victim is dead-lettered anyway, and collateral is rescheduled — so nothing is lost by killing. The legacy FIFO bypass stays non-forcing: it has no rescheduling, so there a kill would lose the decode outright. Note this path has not fired in production since the dispatcher shipped (32 days of journal to 2026-07-27, zero faults) — it is insurance, not a fix for an active leak.
 - **Crash collateral backs off with jitter; timeout collateral retries immediately** (fresh pool, those jobs were healthy).
 - **Dead-letter, don't silently drop**: `_dead_letter` sets the caller-future exception (`DecodeDispatchError`) **and** emits a structured WARNING + per-reason counter (`decode_dead_letter_counts()`). Existing call sites already degrade on a decode exception, so they degrade exactly as before — just far less often.
 - **`RETRY_CAP`** bounds the crash case where stdlib can't attribute the culprit. **Retry budget** is a sliding-window cap on retry *rate* process-wide (per Google SRE: per-item caps alone allow retry amplification); when tripped, interrupted jobs are dead-lettered for the window so an OOM storm can't thrash.

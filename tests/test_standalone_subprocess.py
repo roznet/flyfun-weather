@@ -11,6 +11,9 @@ failure recording for children that die without writing their own cycle row
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,9 +33,10 @@ from weatherbrief.scheduler import (
 class FakeProc:
     """Stand-in for asyncio.subprocess.Process."""
 
-    def __init__(self, returncode: int = 0, hang: bool = False):
+    def __init__(self, returncode: int = 0, hang: bool = False, pid: int = 4242):
         self.returncode = None
         self._rc = returncode
+        self.pid = pid
         self.terminated = False
         self.killed = False
         self._done = asyncio.Event()
@@ -60,15 +64,31 @@ def _app_state(db_path: str = "/tmp/airports.db"):
 
 
 def _patch_exec(monkeypatch, proc: FakeProc) -> dict:
-    """Patch asyncio.create_subprocess_exec, capturing cmd and env."""
-    captured: dict = {}
+    """Patch create_subprocess_exec + the process-group syscalls.
+
+    ``captured`` collects the launch (cmd/env/kwargs) and every ``killpg`` the
+    supervisor issues as ``(pgid, signal)`` pairs. ``os.getpgid`` is stubbed to
+    a group distinct from the test runner's own, so a real ``killpg`` would
+    never reach the test process even if one leaked through.
+    """
+    captured: dict = {"killpg": []}
 
     async def fake_exec(*cmd, env=None, **kwargs):
         captured["cmd"] = list(cmd)
         captured["env"] = env
+        captured["kwargs"] = kwargs
         return proc
 
+    def fake_getpgid(pid: int) -> int:
+        captured["getpgid_pid"] = pid
+        return pid  # start_new_session ⇒ the child leads its own group
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        captured["killpg"].append((pgid, sig))
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(scheduler.os, "getpgid", fake_getpgid)
+    monkeypatch.setattr(scheduler.os, "killpg", fake_killpg)
     return captured
 
 
@@ -212,7 +232,7 @@ async def test_timeout_kills_child_and_records_failure(monkeypatch):
     monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
     monkeypatch.setattr(scheduler, "_STANDALONE_SUBPROCESS_TIMEOUT_S", 0.05)
     proc = FakeProc(hang=True)
-    _patch_exec(monkeypatch, proc)
+    captured = _patch_exec(monkeypatch, proc)
 
     with patch.object(scheduler, "_ensure_failed_cycle_recorded") as rec:
         await _run_standalone_cycle_supervised(
@@ -222,6 +242,11 @@ async def test_timeout_kills_child_and_records_failure(monkeypatch):
     assert proc.terminated
     rec.assert_called_once()
     assert "exceeded" in rec.call_args[0][3]
+    # The tree, not just the child: SIGTERM alongside the child's terminate(),
+    # then the post-exit SIGKILL sweep for anything that ignored it.
+    assert captured["killpg"] == [
+        (proc.pid, signal.SIGTERM), (proc.pid, signal.SIGKILL),
+    ]
 
 
 @pytest.mark.asyncio
@@ -229,7 +254,7 @@ async def test_cancellation_terminates_child(monkeypatch):
     """App shutdown mid-cycle must signal the child and propagate the cancel."""
     monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
     proc = FakeProc(hang=True)
-    _patch_exec(monkeypatch, proc)
+    captured = _patch_exec(monkeypatch, proc)
 
     task = asyncio.ensure_future(_run_standalone_cycle_supervised(
         _app_state(), fetch_forecasts=True, score_observations=False,
@@ -239,6 +264,9 @@ async def test_cancellation_terminates_child(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert proc.terminated
+    # Graceful shutdown: the group gets SIGTERM so pool workers can exit
+    # tidily. No SIGKILL sweep — the container teardown collects the tree.
+    assert captured["killpg"] == [(proc.pid, signal.SIGTERM)]
 
 
 @pytest.mark.asyncio
@@ -267,6 +295,177 @@ async def test_cancellation_during_timeout_grace_kills_child(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert proc.killed
+
+
+# ---------------------------------------------------------------------------
+# Process-group cleanup (issue #451)
+#
+# The child owns a bounded pool of sounding/decode workers. Those workers
+# survive their parent's death — verified below against real processes — so a
+# child that is SIGKILLed (the cgroup OOM killer does this on prod, 11 times in
+# the 9 days to 2026-07-27) strands them in the same cgroup holding hundreds of
+# MB apiece, making the *next* cycle likelier to die the same way.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_child_launched_in_its_own_session(monkeypatch):
+    """Without start_new_session there is no group to signal but the
+    supervisor's own — the safety check in _child_pgid then disables cleanup."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    captured = _patch_exec(monkeypatch, FakeProc(returncode=0))
+
+    await _run_standalone_cycle_supervised(
+        _app_state(), fetch_forecasts=True, score_observations=False,
+    )
+
+    assert captured["kwargs"].get("start_new_session") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returncode", [0, 1, -9])
+async def test_any_exit_sweeps_the_process_group(monkeypatch, returncode):
+    """Clean exit, crash and OOM kill all leave the same possible orphans."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    proc = FakeProc(returncode=returncode)
+    captured = _patch_exec(monkeypatch, proc)
+
+    with patch.object(scheduler, "_ensure_failed_cycle_recorded"):
+        await _run_standalone_cycle_supervised(
+            _app_state(), fetch_forecasts=True, score_observations=False,
+        )
+
+    assert captured["killpg"] == [(proc.pid, signal.SIGKILL)]
+
+
+@pytest.mark.asyncio
+async def test_group_cleanup_skipped_when_child_shares_our_group(monkeypatch):
+    """A child in the supervisor's own group must never be group-signalled —
+    that would kill the web app. Refuse and log instead."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    proc = FakeProc(returncode=-9)
+    captured = _patch_exec(monkeypatch, proc)
+    monkeypatch.setattr(scheduler.os, "getpgid", lambda pid: os.getpgrp())
+
+    with patch.object(scheduler, "_ensure_failed_cycle_recorded") as rec:
+        await _run_standalone_cycle_supervised(
+            _app_state(), fetch_forecasts=True, score_observations=False,
+        )
+
+    assert captured["killpg"] == []
+    rec.assert_called_once()  # the failure is still recorded
+
+
+@pytest.mark.asyncio
+async def test_group_cleanup_tolerates_a_vanished_group(monkeypatch):
+    """The common case: nothing was orphaned, so the group is already empty.
+    ProcessLookupError must not break the cycle's failure accounting."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    captured = _patch_exec(monkeypatch, FakeProc(returncode=-9))
+
+    def empty_group(pgid, sig):
+        raise ProcessLookupError(3, "No such process")
+
+    monkeypatch.setattr(scheduler.os, "killpg", empty_group)
+
+    with patch.object(scheduler, "_ensure_failed_cycle_recorded") as rec:
+        await _run_standalone_cycle_supervised(
+            _app_state(), fetch_forecasts=True, score_observations=False,
+        )
+
+    assert captured["killpg"] == []  # our recorder never ran; no crash either
+    rec.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_getpgid_failure_disables_cleanup(monkeypatch):
+    """Child already reaped between spawn and getpgid: no pgid, no signals."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    captured = _patch_exec(monkeypatch, FakeProc(returncode=0))
+
+    def gone(pid):
+        raise ProcessLookupError(3, "No such process")
+
+    monkeypatch.setattr(scheduler.os, "getpgid", gone)
+
+    await _run_standalone_cycle_supervised(
+        _app_state(), fetch_forecasts=True, score_observations=False,
+    )
+
+    assert captured["killpg"] == []
+
+
+@pytest.mark.slow
+def test_pool_workers_survive_a_killed_parent_and_killpg_reaps_them(tmp_path):
+    """The premise, against real processes.
+
+    Spawns a child that owns a ProcessPoolExecutor (one worker busy in a call,
+    one idle on the queue), SIGKILLs it as the OOM killer would, and asserts
+    both workers are still alive — then that a group SIGKILL is what actually
+    ends them. If CPython ever starts reaping workers on parent death, this
+    test fails and issue #451's premise is gone.
+    """
+    import subprocess
+    import time
+
+    child_src = tmp_path / "pool_child.py"
+    child_src.write_text(
+        "import multiprocessing as mp, time\n"
+        "from concurrent.futures import ProcessPoolExecutor\n"
+        "def busy(n):\n"
+        "    t = time.monotonic()\n"
+        "    while time.monotonic() - t < n:\n"
+        "        pass\n"
+        "    return n\n"
+        "if __name__ == '__main__':\n"
+        "    ex = ProcessPoolExecutor(max_workers=2, mp_context=mp.get_context('spawn'))\n"
+        "    ex.submit(busy, 120)\n"
+        "    ex.submit(busy, 0.1)\n"
+        "    time.sleep(4)\n"
+        "    print(' '.join(str(p) for p in ex._processes), flush=True)\n"
+        "    time.sleep(120)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, str(child_src)], stdout=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    workers: list[int] = []
+    try:
+        workers = [int(p) for p in proc.stdout.readline().split()]
+        assert len(workers) == 2
+        pgid = os.getpgid(proc.pid)
+
+        os.kill(proc.pid, signal.SIGKILL)  # what the cgroup OOM killer does
+        proc.wait()
+
+        time.sleep(1.0)
+        alive = [w for w in workers if _pid_alive(w)]
+        assert alive == workers, (
+            "premise broken: pool workers no longer outlive a SIGKILLed parent"
+        )
+
+        scheduler._killpg(pgid, signal.SIGKILL, "test")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and any(_pid_alive(w) for w in workers):
+            time.sleep(0.1)
+        assert not [w for w in workers if _pid_alive(w)], "group kill left survivors"
+    finally:
+        proc.stdout.close()
+        for pid in (proc.pid, *workers):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # exists, not ours
+        return True
+    return True
 
 
 # ---------------------------------------------------------------------------

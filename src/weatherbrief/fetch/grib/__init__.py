@@ -269,10 +269,11 @@ _DECODE_WORKER_REGISTRY: dict[int, multiprocessing.Process] = {}
 # Every worker Process ever observed in this interpreter — unlike
 # _DECODE_WORKER_REGISTRY it is NEVER cleared on pool rebuild. This is what
 # lets a force teardown (#448 PR B) reach workers orphaned by an earlier pool
-# replacement: dispatcher timeout recovery abandons a wedged worker and lazily
-# builds a new pool, so the current pool's ``_processes`` no longer knows the
-# orphan. Bounded by workers-per-pool × pool rebuilds in one process lifetime
-# (a handful per day in the web app; 1–2 pools in a cycle child).
+# replacement. Timeout recovery now forces (#451), so a wedged worker no longer
+# becomes an orphan in the first place — but a teardown that raced a rebuild,
+# or any future non-forcing caller, still leaves handles only this registry
+# knows about. Bounded by workers-per-pool × pool rebuilds in one process
+# lifetime (a handful per day in the web app; 1–2 pools in a cycle child).
 _ALL_DECODE_WORKERS: dict[int, multiprocessing.Process] = {}
 
 
@@ -1125,9 +1126,10 @@ def shutdown_decode_pool(
 
     ``wait=False`` is for the hung-worker recovery path: a worker stuck
     in cfgrib/ECCODES will never return, so ``shutdown(wait=True)``
-    would block forever. Trade-off: the orphaned worker process is left
-    behind and reaped when the parent eventually exits — bounded leak
-    (at most ``max_workers`` orphans per pool reset).
+    would block forever. On its own it merely *abandons* the worker, which
+    keeps its RSS until the process exits — pair it with ``force=True``
+    (every production caller now does) unless you specifically want the
+    worker left running.
 
     ``drain_dispatcher=True`` is the **app-shutdown** path: it also drains
     the :class:`PriorityDecodeDispatcher` so any caller blocked on a pending
@@ -1143,9 +1145,12 @@ def shutdown_decode_pool(
     worker: at interpreter exit, concurrent.futures' atexit hook joins the
     executor management thread, which never finishes while a worker lives in
     native code — hanging the process. Used by the disposable standalone
-    child's exit path, where any surviving worker is useless by definition.
-    The web app's fault-recovery path deliberately does NOT force (see the
-    bounded-leak trade-off above; revisiting that is tracked separately).
+    child's exit path, where any surviving worker is useless by definition,
+    and (since #451) by the web app's dispatcher timeout recovery: the wedged
+    worker is identified as the victim and dead-lettered, collateral jobs are
+    rescheduled onto the rebuilt pool, and decode jobs are idempotent by
+    invariant — so nothing is lost by killing, while an abandoned worker's
+    RSS would sit in the cgroup until the next deploy.
     """
     if drain_dispatcher:
         _drain_dispatcher_for_shutdown()
@@ -1638,10 +1643,16 @@ class PriorityDecodeDispatcher:
                     logger.warning("dispatcher: hang-diag snapshot failed", exc_info=True)
 
             # Tear the pool down. TIMEOUT: workers are alive-but-stuck, wait=False
-            # so recovery doesn't block on them. CRASH: workers are dead, wait=True
-            # joins fast and avoids orphan accumulation.
+            # so recovery doesn't block on them, plus force=True so the wedged
+            # worker is actually KILLed rather than abandoned — an abandoned
+            # worker keeps its cfgrib/xarray/MetPy RSS in a cgroup that (per
+            # #490) already sits near its limit, and the hang diagnostics above
+            # have already been collected off the live pool. Collateral jobs are
+            # rescheduled below and decode jobs are idempotent by invariant, so
+            # killing is safe. CRASH: workers are dead, wait=True joins fast.
+            timed_out = reason == _FAULT_TIMEOUT
             try:
-                self._pool_teardown(wait=(reason != _FAULT_TIMEOUT))
+                self._pool_teardown(wait=not timed_out, force=timed_out)
             except Exception:  # pragma: no cover — never leave draining stuck True
                 logger.warning("dispatcher: pool teardown failed", exc_info=True)
 
@@ -1958,6 +1969,10 @@ def _dispatch_decode_legacy(worker_fn_name: str, *args) -> Any:
             timeout, worker_fn_name,
         )
         _diag_snapshot_workers(pool, hang_context=f"single:{worker_fn_name}")
+        # Deliberately non-forcing, unlike the dispatcher's recovery (#451):
+        # this rollback path has no rescheduling, so a killed worker's decode
+        # is simply lost. Abandoning is the conservative choice for a kill
+        # switch that is off in production.
         shutdown_decode_pool(wait=False)
         raise
 
