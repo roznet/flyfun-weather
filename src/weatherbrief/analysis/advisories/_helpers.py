@@ -384,13 +384,29 @@ def hazardous_icing_zones(zones: list[IcingZone]) -> list[IcingZone]:
     point into an icing hit, and the cross-section — which filters ``none`` out
     of every icing layer — then draws nothing where the advisory claims icing.
 
-    ``sld_risk`` survives a NONE risk: supercooled large droplets are a hazard in
-    their own right regardless of the index. That is the same predicate
-    ``icing_escape._icing_cell_cost`` has always applied to price its cost field
-    (``risk == NONE and not sld_risk`` → skip); this helper shares it with the
-    grading paths, which had drifted from it.
+    ``sld_risk`` survives a NONE risk — but note that today this branch cannot
+    fire. NOTHING populates :attr:`IcingZone.sld_risk`: ``icing._build_zone_simple``
+    (the only builder behind the Ogimet-DD/NWP and IENG zones) never passes it,
+    and the SFIP→IcingZone conversion in ``tasks/advise._resolve_analyses`` has
+    nothing to pass — :class:`SfipZone` has no such field. The real SLD detector
+    output lives in a separate ``sounding.sld_zones`` list that no advisory
+    evaluator reads. So the clause is a *forward contract*, not an observed path,
+    and this helper is behaviourally ``risk != NONE`` on real data.
+
+    It is kept deliberately rather than simplified away. Supercooled large
+    droplets are a hazard in their own right regardless of the index, so if
+    ``sld_risk`` is ever wired up, the safe default must already be "survives the
+    filter" — dropping the clause would make SLD-bearing NONE-risk zones start
+    disappearing silently. It also keeps this predicate identical to
+    ``icing_escape._icing_cell_cost``'s (``risk == NONE and not sld_risk`` →
+    skip), which carries the same dormant clause for the same reason; the grading
+    paths had drifted from that predicate and this helper reunites them.
+
+    The predicate itself lives on :attr:`IcingZone.is_hazardous` so non-advisory
+    consumers (the digest text and LLM prompt) can apply it without importing
+    from this private module.
     """
-    return [z for z in zones if z.risk != IcingRisk.NONE or z.sld_risk]
+    return [z for z in zones if z.is_hazardous]
 
 
 def icing_zones_in_altitude_range(

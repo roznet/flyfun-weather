@@ -90,9 +90,15 @@ def test_hazardous_filter_keeps_real_icing():
         assert len(hazardous_icing_zones([_zone(risk)])) == 1
 
 
-def test_hazardous_filter_keeps_sld_despite_none_risk():
-    """SLD is a hazard regardless of the index — the same carve-out the escape
-    cost model has always made (``risk == NONE and not sld_risk`` → skip)."""
+def test_hazardous_filter_keeps_sld_despite_none_risk_contract_only():
+    """CONTRACT, NOT A LIVE PATH: nothing populates ``IcingZone.sld_risk`` today.
+
+    No zone builder passes ``sld_risk`` (``icing._build_zone_simple`` doesn't, and
+    :class:`SfipZone` has no such field to convert from), so this zone is
+    hand-constructed and cannot arise from the pipeline. The test pins the
+    intended behaviour for if/when SLD is wired in — it is deliberately NOT
+    evidence that SLD-bearing zones survive on real data.
+    """
     assert len(hazardous_icing_zones([_zone(IcingRisk.NONE, sld=True)])) == 1
 
 
@@ -134,8 +140,12 @@ def test_none_risk_points_do_not_inflate_the_affected_extent():
     assert result.per_model[0].affected_points == 5
 
 
-def test_sld_at_none_risk_still_flags():
-    """A NONE-risk zone carrying SLD is a hazard and must survive the filter."""
+def test_sld_at_none_risk_still_flags_contract_only():
+    """CONTRACT, NOT A LIVE PATH — see the note on the filter test above.
+
+    ``sld_risk`` is never set by any zone builder, so this cannot occur in
+    production. Pins the intended grade for if/when SLD is wired in.
+    """
     ctx = _ctx([_sounding([_zone(IcingRisk.NONE, sld=True)]) for _ in range(10)])
     result = IcingEscapeEvaluator.evaluate(ctx, _defaults(IcingEscapeEvaluator))
     assert result.aggregate_status != AdvisoryStatus.GREEN

@@ -794,6 +794,23 @@ class IcingZone(BaseModel):
     mean_icing_index: Optional[float] = None  # Mean Ogimet icing index for the zone
     mean_rh_pct: Optional[float] = None  # Mean RH of levels in the zone
 
+    @property
+    def is_hazardous(self) -> bool:
+        """True when this zone represents icing a pilot would actually meet.
+
+        A zone's *existence* is not a hazard predicate. The Ogimet methods emit a
+        zone wherever cloud sits in the icing temperature band and stamp it with
+        the computed index, so ``risk == NONE`` means "assessed here, index below
+        the LIGHT threshold" — the method reporting *no icing*. Consumers that
+        tested ``if zone`` / ``if zones`` instead of this graded assessed-but-clean
+        points as icing hits.
+
+        ``sld_risk`` is a dormant forward contract, not a live path — nothing
+        populates it today. See ``advisories._helpers.hazardous_icing_zones`` for
+        why it is kept rather than simplified away.
+        """
+        return self.risk != IcingRisk.NONE or self.sld_risk
+
 
 class SfipZone(BaseModel):
     """SFIP icing zone — separate from Ogimet IcingZone for comparison."""
