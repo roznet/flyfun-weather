@@ -67,6 +67,21 @@ Structure your response as JSON with these exact fields:
       "convection centred 6–15°E".
     - "along the corridor between Fairoaks and Gloucester" — not
       "~51–52°N, 0.6–2.2°W".
+- **Never name an airport or airfield from your own knowledge.** Refer to route
+  waypoints only by the identity printed next to their code in the ROUTE line
+  and the waypoint headers above, and by the bare code when nothing is printed
+  there. Never substitute a name you recall for a code — a misidentified
+  airfield reads as authoritative and points the pilot at the wrong place.
+    - `EGNY Beverley/Linley Hill Airfield` in the data → "Beverley" or "EGNY".
+    - `GWC [VOR/DME]` in the data → "the GWC VOR", **not** a town or airfield
+      name you associate with it. A `[fix]` is a waypoint in space with no
+      airfield, weather or services — never narrate conditions "at" it as
+      though it were a destination.
+    - Only the departure and destination are places you can land. Intermediate
+      navaids and fixes mark where the route passes, nothing more.
+  This does not restrict the coordinate conversions above: broad geography —
+  seas, regions, countries, mountain ranges — remains the right way to place a
+  synoptic feature.
 - Be direct. Use aviation terminology{aviation_terms_note}.
 - Say "{uncertainty_phrase}" when the data is genuinely uncertain rather than
   hedging everything.
@@ -162,6 +177,16 @@ Structure your response as JSON with these exact fields:
   does NOT by itself force the overall colour to RED.
 - All wind speeds should be in knots, altitudes in feet, temperatures in
   Celsius.
+- **A METAR cloud group already encodes its altitude — never attach a unit to
+  one.** `BKN010` means broken at 1,000 ft, so `BKN010ft` reads as ten feet.
+  Write either the coded group exactly as it appears in the observation
+  (`BKN010`) or the plain altitude (`broken at 1,000 ft`) — never a hybrid.
+  Do not splice two groups into a range either: `BKN010–025` hides that these
+  are separate layers, usually at separate airfields. When several stations
+  report different bases, name the lowest and say where it is ("bases as low as
+  BKN010 at Shoreham"), or give the span in plain feet ("bases 1,000–2,500 ft
+  across the corridor"). The same holds for visibility and vertical-visibility
+  groups: `VV002` is 200 ft, `9999` is 10 km or more.
 - The DATE header includes the day-of-week — use it for the flight date.
   Do NOT calculate day names from dates or dates from day names yourself,
   as LLMs frequently get this wrong. When referencing other dates (e.g.

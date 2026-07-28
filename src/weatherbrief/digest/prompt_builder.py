@@ -48,6 +48,22 @@ def _fmt_coords(lat: float, lon: float) -> str:
     return f"{abs(lat):.1f}{ns}, {abs(lon):.1f}{ew}"
 
 
+def _route_header_label(wp) -> str:
+    """One entry in the ROUTE line: code, identity, then coordinates.
+
+    "EGTF Fairoaks Airport (51.3N, 0.5W)" / "GWC [VOR/DME] (50.9N, 0.8W)".
+    """
+    parts = [wp.icao]
+    if wp.airport_name:
+        parts.append(wp.airport_name)
+    elif wp.kind_label:
+        parts.append(f"[{wp.kind_label}]")
+    label = " ".join(parts)
+    if wp.lat is None:
+        return label
+    return f"{label} ({_fmt_coords(wp.lat, wp.lon)})"
+
+
 def build_digest_context(
     snapshot: ForecastSnapshot,
     target_time: datetime,
@@ -83,9 +99,13 @@ def build_digest_context(
     sections: list[str] = []
 
     # --- Header ---
+    # Identify each point as precisely as the data allows: full airport name
+    # where we have one, chart abbreviation for navaids/fixes, bare code
+    # otherwise. Without this the LLM sees only a code and invents a name to
+    # satisfy the "no raw coordinates" rule below (it once called EGNY
+    # "Sandtoft", a different airfield 30 nm away).
     waypoints_str = " -> ".join(
-        f"{wp.icao} ({_fmt_coords(wp.lat, wp.lon)})" if wp.lat is not None else wp.icao
-        for wp in snapshot.route.waypoints
+        _route_header_label(wp) for wp in snapshot.route.waypoints
     )
     days_label = f"D-{snapshot.days_out}" if snapshot.days_out > 0 else "D-0 (today)"
     capability = "VFR only" if flight_rules == "vfr_only" else "VFR + IFR"
@@ -135,7 +155,7 @@ def build_digest_context(
     quant_lines: list[str] = ["=== QUANTITATIVE DATA ==="]
     for wp in snapshot.route.waypoints:
         coord_str = f" [{_fmt_coords(wp.lat, wp.lon)}]" if wp.lat is not None else ""
-        quant_lines.append(f"\n--- {wp.icao} ({wp.name}){coord_str} ---")
+        quant_lines.append(f"\n--- {wp.label}{coord_str} ---")
 
         wp_forecasts = [f for f in snapshot.forecasts if f.waypoint.icao == wp.icao]
         for wf in wp_forecasts:
@@ -359,7 +379,7 @@ def _build_coarse_quant(snapshot: ForecastSnapshot, target_time: datetime) -> st
     ]
     for wp in snapshot.route.waypoints:
         coord_str = f" [{_fmt_coords(wp.lat, wp.lon)}]" if wp.lat is not None else ""
-        lines.append(f"\n--- {wp.icao} ({wp.name}){coord_str} ---")
+        lines.append(f"\n--- {wp.label}{coord_str} ---")
 
         for wf in [f for f in snapshot.forecasts if f.waypoint.icao == wp.icao]:
             hourly = wf.at_time(target_time)

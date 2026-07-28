@@ -123,6 +123,53 @@ def test_build_context_basic(sample_snapshot):
     assert "QUANTITATIVE DATA" in context
 
 
+def test_build_context_names_airports_and_tags_navaids(sample_snapshot):
+    """The ROUTE line and waypoint headers carry each point's real identity.
+
+    The LLM is told to convert coordinates to place names; if the context gives
+    it only a bare code it fills the gap from memory (it once called EGNY
+    "Sandtoft", a different airfield 30 nm away). Airports therefore ship their
+    full name, and navaids/fixes ship a chart tag so an en-route point is never
+    narrated as a destination."""
+    route = sample_snapshot.route
+    route.waypoints = [
+        Waypoint(icao="EGTF", name="Fairoaks Airport", lat=51.3481, lon=-0.5589),
+        Waypoint(icao="GWC", name="GWC", lat=50.8553, lon=-0.7567, kind="VORDME"),
+        Waypoint(icao="SITET", name="SITET", lat=50.1, lon=0.0, kind="5LNC"),
+        Waypoint(icao="LFMD", name="Cannes Mandelieu Airport", lat=43.542, lon=6.953),
+    ]
+
+    context = build_digest_context(sample_snapshot, datetime(2026, 2, 17, 9, 0, 0))
+    route_line = context.splitlines()[0]
+
+    assert route_line == (
+        "ROUTE: EGTF Fairoaks Airport (51.3N, 0.6W) -> GWC [VOR/DME] (50.9N, 0.8W) "
+        "-> SITET [fix] (50.1N, 0.0E) -> LFMD Cannes Mandelieu Airport (43.5N, 7.0E)"
+    )
+    assert "--- EGTF (Fairoaks Airport) [51.3N, 0.6W] ---" in context
+    assert "--- GWC [VOR/DME] [50.9N, 0.8W] ---" in context
+    # Never the old redundant "GWC (GWC)" shape, which read as a name.
+    assert "GWC (GWC)" not in context
+
+
+def test_build_context_unnamed_waypoint_shows_bare_code(sample_snapshot):
+    """A waypoint we know nothing about renders as the bare code — no
+    parenthetical echo of the code that could be mistaken for a name."""
+    route = sample_snapshot.route
+    route.waypoints = [
+        Waypoint(icao="EGTK", name="EGTK", lat=51.8361, lon=-1.32),
+        Waypoint(icao="LSGS", name="Sion", lat=46.2192, lon=7.3267),
+    ]
+
+    context = build_digest_context(sample_snapshot, datetime(2026, 2, 17, 9, 0, 0))
+
+    assert context.splitlines()[0] == (
+        "ROUTE: EGTK (51.8N, 1.3W) -> LSGS Sion (46.2N, 7.3E)"
+    )
+    assert "--- EGTK [51.8N, 1.3W] ---" in context
+    assert "EGTK (EGTK)" not in context
+
+
 def test_build_context_with_text_forecasts(sample_snapshot):
     """Text forecasts section included when provided."""
     target_time = datetime(2026, 2, 17, 9, 0, 0)

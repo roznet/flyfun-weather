@@ -75,6 +75,26 @@ _FIGURE_FL_RE = re.compile(r"\bFL\s*(\d{2,3})\b", re.IGNORECASE)
 # Any run of digits, for building the set of numbers present in the context.
 _NUMBER_RE = re.compile(r"\d[\d,]*")
 
+# METAR cloud/vertical-visibility groups are *coded* altitudes: BKN010 means
+# broken at 1,000 ft. Two ways the output can mangle that into something a
+# pilot misreads as tens of feet:
+#   "BKN010ft"     — a unit welded onto the coded form
+#   "BKN010–025ft" — two groups spliced into a range (usually two stations)
+# Number traceability cannot catch either: 10 and 25 both appear in the raw
+# METARs in context, so the figures trace fine and only the *form* is wrong.
+# "BKN010 to BKN025" and plain "1,000 ft" are both correct and must pass.
+_CLOUD_GROUP = r"(?:FEW|SCT|BKN|OVC|VV)\d{3}"
+# Same groups, capturing the coded hundreds-of-feet so number traceability can
+# credit the decoded altitude (BKN025 in context ⇒ 2,500 ft in the output).
+_CLOUD_GROUP_DECODE_RE = re.compile(r"\b(?:FEW|SCT|BKN|OVC|VV)(\d{3})\b", re.IGNORECASE)
+_CLOUD_GROUP_UNIT_RE = re.compile(rf"\b{_CLOUD_GROUP}\s*(?:ft|feet)\b", re.IGNORECASE)
+_CLOUD_GROUP_SPLICE_RE = re.compile(
+    # (?!\d) not \b — in "BKN010-025ft" there is no word boundary between the
+    # final digit and the unit, so \b would silently never match.
+    rf"\b{_CLOUD_GROUP}\s*[-–—]\s*(?!(?:FEW|SCT|BKN|OVC|VV))\d{{3}}(?!\d)\s*(?:ft|feet)?",
+    re.IGNORECASE,
+)
+
 # Convective character — the route-advisory line prompt_builder emits, e.g.
 #   "[AMBER] Convective Character: Isolated cells — circumnavigable VFR ..."
 # The status encodes avoidability: AMBER ⇒ isolated/scattered (circumnavigable);
@@ -186,6 +206,12 @@ def _numbers_in(text: str) -> set[int]:
             out.add(int(m.group(0).replace(",", "")))
         except ValueError:
             continue
+    # A METAR cloud group in the context IS its altitude in feet: BKN025 states
+    # 2,500 ft just as surely as the digits "2500" would. The prompt asks for
+    # exactly that conversion, so credit both forms or the converted value
+    # reads as an invented number.
+    for m in _CLOUD_GROUP_DECODE_RE.finditer(text):
+        out.add(int(m.group(1)) * 100)
     return out
 
 
@@ -296,6 +322,41 @@ def check_number_traceability(
                         f"figure {shown} not found in context (possible invented number)",
                     )
                 )
+    return violations
+
+
+def check_cloud_group_format(digest: Mapping[str, object] | object) -> list[Violation]:
+    """Flag METAR cloud groups written as though the code were a plain number.
+
+    ``BKN010`` already carries its altitude (1,000 ft). Welding a unit on
+    ("BKN010ft") or splicing two groups into a range ("BKN010–025ft") reads as
+    tens of feet — the confusion a pilot reported on the 2026-07-26 EGKB→EGHN
+    briefing, where the assessment said "MVFR cloud bases (BKN010–025ft)" for
+    two different airfields. Correct forms — the bare group, "BKN010 to
+    BKN025", and plain "1,000 ft" — all pass.
+    """
+    out = _as_dict(digest)
+    violations: list[Violation] = []
+    for field in TEXT_FIELDS:
+        value = str(out.get(field, "") or "")
+        for m in _CLOUD_GROUP_SPLICE_RE.finditer(value):
+            violations.append(
+                Violation(
+                    "cloud_group_format",
+                    field,
+                    f"{m.group(0)!r} splices two cloud groups into a range "
+                    "(name the lowest layer, or give the span in plain feet)",
+                )
+            )
+        for m in _CLOUD_GROUP_UNIT_RE.finditer(value):
+            violations.append(
+                Violation(
+                    "cloud_group_format",
+                    field,
+                    f"{m.group(0)!r} attaches a unit to a coded cloud group "
+                    "(BKN010 already means 1,000 ft)",
+                )
+            )
     return violations
 
 
@@ -419,5 +480,6 @@ def run_guardrails(
     violations.extend(check_coordinate_leak(digest))
     violations.extend(check_fabricated_sources(digest, context))
     violations.extend(check_number_traceability(digest, context))
+    violations.extend(check_cloud_group_format(digest))
     violations.extend(check_convective_vfr_consistency(digest, context))
     return violations

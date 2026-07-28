@@ -85,5 +85,10 @@ Structure your response as JSON with these exact fields:
   appears in the data, do not reference DWD, NWS, or any text forecast. Convert
   any lat/lon coordinates to plain geographic references a pilot would recognise
   ("Atlantic low northwest of Ireland", not "~55°N, 12°W").
+- **Never name an airport or airfield from your own knowledge.** Use only the
+  identity printed next to each code in the ROUTE line and waypoint headers, or
+  the bare code when nothing is printed. A `[VOR/DME]` or `[fix]` is an en-route
+  point, not a place to land. Broad geography (seas, regions, countries) is
+  still the right way to place a synoptic feature.
 - The DATE header includes the day-of-week — use it. Do NOT calculate day names
   from dates yourself.

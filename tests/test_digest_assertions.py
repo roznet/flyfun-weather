@@ -27,6 +27,7 @@ import pytest
 
 from weatherbrief.digest.guardrails import (
     Violation,
+    check_cloud_group_format,
     check_convective_vfr_consistency,
     check_coordinate_leak,
     check_fabricated_sources,
@@ -284,6 +285,73 @@ def test_number_traceability_flags_invented_figure():
     # 3800 traces, 12000 does not.
     assert [v for v in violations if "12000" in v.message]
     assert not [v for v in violations if "3800" in v.message]
+
+
+def _cloud_digest(reason: str) -> dict[str, str]:
+    return {
+        "assessment": "AMBER",
+        "assessment_reason": reason,
+        "synoptic": "Westerly flow across southern England.",
+        "specific_concerns": "none",
+        "trend": "ok",
+        "watch_items": "ok",
+    }
+
+
+def test_cloud_group_format_flags_spliced_range():
+    """Verbatim regression from the 2026-07-26 EGKB->EGHN briefing: two
+    stations' cloud groups spliced into "BKN010-025ft", which reads as a range
+    of tens of feet rather than 1,000 ft and 2,500 ft at separate airfields."""
+    digest = _cloud_digest(
+        "Three nearby METARs show MVFR cloud bases (BKN010–025ft) that the "
+        "models did not capture."
+    )
+    violations = check_cloud_group_format(digest)
+
+    assert [v for v in violations if v.field == "assessment_reason"]
+    assert all(v.check == "cloud_group_format" for v in violations)
+
+    # Number traceability cannot see this — both figures appear in the raw
+    # METARs, so only the *form* is wrong. That's why this check exists.
+    context = "METAR EGKA 260920Z 22015KT 9999 BKN010 21/19\nMETAR EGWU BKN025"
+    assert not check_number_traceability(digest, context)
+
+
+def test_number_traceability_credits_decoded_cloud_group():
+    """The prompt asks for BKN025 -> "2,500 ft"; traceability must accept the
+    decoded altitude. Regression from replaying the 2026-07-26 EGKB->EGHN pack,
+    where a correct conversion was flagged as an invented number."""
+    digest = _cloud_digest("Bases around 2,500-2,900 ft at the northern stations.")
+    context = "METAR EGWU 260920Z 9999 BKN025 23/15\nMETAR EGMC 260920Z FEW022 BKN029"
+
+    assert not check_number_traceability(digest, context)
+
+    # The decode is not a blanket amnesty — an unrelated figure still trips.
+    invented = _cloud_digest("Bases around 7,400 ft at the northern stations.")
+    assert check_number_traceability(invented, context)
+
+
+def test_cloud_group_format_flags_unit_suffix():
+    violations = check_cloud_group_format(_cloud_digest("Ceiling at BKN010ft."))
+    assert len(violations) == 1
+    assert "BKN010ft" in violations[0].message
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "Bases as low as BKN010 at Shoreham, BKN025 further north.",
+        "Bases run BKN010 to BKN025 across the corridor.",
+        "Bases BKN010–BKN025 across the corridor.",
+        "A broken ceiling at 1,000 ft, lifting to 2,500 ft.",
+        "Cloud bases 1000-2500ft across the corridor.",
+        "Tops near FL043 with a SCT layer beneath.",
+    ],
+)
+def test_cloud_group_format_accepts_correct_forms(reason):
+    """The coded group alone, group-to-group ranges, and plain feet are all
+    correct — the check must not police legitimate phrasing."""
+    assert not check_cloud_group_format(_cloud_digest(reason))
 
 
 def test_structure_flags_bad_assessment_and_missing_field():

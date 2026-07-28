@@ -45,7 +45,7 @@ def format_digest(
 
     # Per-waypoint forecast summary
     for wp in snapshot.route.waypoints:
-        lines.append(f"--- {wp.icao} ({wp.name}) ---")
+        lines.append(f"--- {wp.label} ---")
 
         wp_forecasts = [f for f in snapshot.forecasts if f.waypoint.icao == wp.icao]
         if not wp_forecasts:

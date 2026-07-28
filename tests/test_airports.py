@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airport_mocks import mock_airport, mock_model
+from airport_mocks import mock_airport, mock_model, mock_waypoint_record
 from weatherbrief.airports import (
     RejectedWaypoint,
     is_known_waypoint,
@@ -32,6 +32,93 @@ def test_resolve_waypoints(mock_load):
     assert result[0].lat == 51.8361
     assert result[1].icao == "LSGS"
     assert result[1].lon == 7.3267
+    # Airports carry their full name so downstream consumers (digest prompt,
+    # briefing UI) never have to guess one from the code.
+    assert result[0].name == "Oxford Kidlington"
+    assert result[0].airport_name == "Oxford Kidlington"
+    assert result[0].kind is None
+    assert result[0].label == "EGTK (Oxford Kidlington)"
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_navaid_gets_kind_not_a_name(mock_load):
+    """Navaids and fixes have no plain-language name in euro_aip, so they keep
+    the code as their name and carry ``kind`` instead. Nothing may invent an
+    airfield name for them (the failure that produced "Sandtoft" for EGNY)."""
+    airports = {
+        "EGTK": mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
+        "LSGS": mock_airport("LSGS", "Sion", 46.2192, 7.3267),
+    }
+    waypoints = {
+        "GWC": mock_waypoint_record("GWC", "VORDME", 50.8553, -0.7567),
+        "SITET": mock_waypoint_record("SITET", "5LNC", 50.1, 0.0),
+    }
+    mock_load.return_value = mock_model(airports, waypoints)
+
+    gwc = MagicMock(latitude=50.8553, longitude=-0.7567)
+    sitet = MagicMock(latitude=50.1, longitude=0.0)
+    fake_route = MagicMock()
+    fake_route.departure_coords = (51.8361, -1.32)
+    fake_route.destination_coords = (46.2192, 7.3267)
+    fake_route.waypoints = ["GWC", "SITET"]
+    fake_route.waypoint_coords = [gwc, sitet]
+    fake_route.rejected_waypoints = []
+
+    with patch(
+        "euro_aip.models.route_resolver.RouteResolver.resolve",
+        return_value=fake_route,
+    ):
+        result, rejected = resolve_waypoints(
+            ["EGTK", "GWC", "SITET", "LSGS"], "/fake/db.sqlite"
+        )
+
+    assert rejected == []
+    assert [wp.icao for wp in result] == ["EGTK", "GWC", "SITET", "LSGS"]
+
+    vor = result[1]
+    assert vor.name == "GWC"
+    assert vor.airport_name is None  # no name to show — never fabricate one
+    assert vor.kind == "VORDME"
+    assert vor.label == "GWC [VOR/DME]"
+
+    fix = result[2]
+    assert fix.airport_name is None
+    assert fix.kind == "5LNC"
+    assert fix.label == "SITET [fix]"
+
+    # Endpoints are unaffected by the navaid path.
+    assert result[0].label == "EGTK (Oxford Kidlington)"
+    assert result[3].label == "LSGS (Sion)"
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_unknown_kind_falls_back_to_code(mock_load):
+    """A waypoint in neither collection degrades to the bare code — no name,
+    no kind, no guess."""
+    airports = {
+        "EGTK": mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
+        "LSGS": mock_airport("LSGS", "Sion", 46.2192, 7.3267),
+    }
+    mock_load.return_value = mock_model(airports)
+
+    mystery = MagicMock(latitude=49.0, longitude=3.0)
+    fake_route = MagicMock()
+    fake_route.departure_coords = (51.8361, -1.32)
+    fake_route.destination_coords = (46.2192, 7.3267)
+    fake_route.waypoints = ["ZAPPO"]
+    fake_route.waypoint_coords = [mystery]
+    fake_route.rejected_waypoints = []
+
+    with patch(
+        "euro_aip.models.route_resolver.RouteResolver.resolve",
+        return_value=fake_route,
+    ):
+        result, _ = resolve_waypoints(["EGTK", "ZAPPO", "LSGS"], "/fake/db.sqlite")
+
+    assert result[1].name == "ZAPPO"
+    assert result[1].airport_name is None
+    assert result[1].kind is None
+    assert result[1].label == "ZAPPO"
 
 
 @patch("weatherbrief.airports._load_airport_model")

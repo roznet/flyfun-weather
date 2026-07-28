@@ -13,13 +13,64 @@ from weatherbrief.models.alternates import RouteAlternates
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 
 
+# euro_aip ``point_type`` values → the abbreviation a pilot reads on a chart.
+# Anything unmapped falls through to the raw value rather than being dropped.
+_KIND_LABELS: dict[str, str] = {
+    "5LNC": "fix",
+    "VOR": "VOR",
+    "VORDME": "VOR/DME",
+    "VORTAC": "VORTAC",
+    "NDB": "NDB",
+    "NDBDME": "NDB/DME",
+    "DME": "DME",
+    "TACAN": "TACAN",
+}
+
+
 class Waypoint(BaseModel):
-    """An aviation waypoint with coordinates."""
+    """An aviation waypoint with coordinates.
+
+    ``name`` is the full airport name for airports (e.g. "Fairoaks Airport")
+    and falls back to the code itself for navaids and five-letter fixes —
+    euro_aip has no plain-language name for those, the identifier *is* the
+    name. Use :attr:`airport_name` to tell the two cases apart rather than
+    comparing to ``icao`` at each call site.
+    """
 
     icao: str
     name: str
     lat: float
     lon: float
+    # euro_aip ``point_type`` ("VORDME", "5LNC", ...); None for airports and
+    # for waypoints resolved before this field existed.
+    kind: str | None = None
+
+    @property
+    def airport_name(self) -> str | None:
+        """The full airport name, or None when we only know the code."""
+        if self.name and self.name.upper() != self.icao.upper():
+            return self.name
+        return None
+
+    @property
+    def kind_label(self) -> str | None:
+        """Chart abbreviation for a navaid/fix ("VOR/DME", "fix"), else None."""
+        if not self.kind:
+            return None
+        return _KIND_LABELS.get(self.kind, self.kind)
+
+    @property
+    def label(self) -> str:
+        """Code plus whatever identity we actually know, for section headers.
+
+        "EGTF (Fairoaks Airport)" / "GWC [VOR/DME]" / "ABCDE" — never a name
+        invented to fill the gap.
+        """
+        if self.airport_name:
+            return f"{self.icao} ({self.airport_name})"
+        if self.kind_label:
+            return f"{self.icao} [{self.kind_label}]"
+        return self.icao
 
 
 def bearing_between_coords(lat1_deg: float, lon1_deg: float, lat2_deg: float, lon2_deg: float) -> float:

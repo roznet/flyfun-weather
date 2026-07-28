@@ -19,6 +19,21 @@ def mock_airport(icao: str, name: str, lat: float, lon: float):
     return airport
 
 
+def mock_waypoint_record(ident: str, point_type: str, lat: float, lon: float):
+    """Create a mock navaid/fix matching the euro_aip Waypoint interface.
+
+    Note ``name`` IS the identifier — euro_aip carries no plain-language name
+    for navaids and fixes, only a ``point_type``. That is why resolution gives
+    them ``name == icao`` and a ``kind``, never an invented airfield name.
+    """
+    waypoint = MagicMock()
+    waypoint.name = ident
+    waypoint.point_type = point_type
+    waypoint.latitude_deg = lat
+    waypoint.longitude_deg = lon
+    return waypoint
+
+
 class MockAirportsCollection:
     """Minimal mock for the airports collection used by RouteResolver."""
 

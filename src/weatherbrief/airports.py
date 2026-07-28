@@ -200,6 +200,10 @@ def resolve_waypoints(
         all_points.append((name, coord))
     all_points.append((codes[-1], route.destination_coords))
 
+    # Same model instance resolve_route just used — _load_airport_model is
+    # lru_cached, so this is a dict lookup, not a second DB load.
+    model = _load_airport_model(db_path)
+
     waypoints: list[Waypoint] = []
     for name, coord in all_points:
         if hasattr(coord, "latitude"):
@@ -208,11 +212,37 @@ def resolve_waypoints(
         else:
             # Tuple (from departure_coords / destination_coords)
             lat, lon = coord
+        code = name.upper()
         waypoints.append(
-            Waypoint(icao=name.upper(), name=name.upper(), lat=lat, lon=lon)
+            Waypoint(icao=code, lat=lat, lon=lon, **_identify(code, model))
         )
 
     return waypoints, rejected
+
+
+def _identify(code: str, model) -> dict[str, str | None]:
+    """Resolve a waypoint code to its full name (airports) or kind (navaids).
+
+    Only airports carry a plain-language name; euro_aip's waypoint records use
+    the identifier as their ``name`` ("GWC", "SITET"), so for those we return
+    the code unchanged plus the ``point_type`` that says what it is. Callers
+    must never fill the gap with a remembered name — see the airfield-naming
+    rule in ``configs/weather_digest/prompts/briefer_v2.md``.
+    """
+    airport = model.airports.get(code)
+    airport_name = getattr(airport, "name", None) if airport is not None else None
+    if airport_name:
+        return {"name": str(airport_name), "kind": None}
+
+    kind = None
+    try:
+        waypoint = model.get_waypoint(code)
+    except Exception:  # noqa: BLE001 - identity is cosmetic, never fail a route on it
+        logger.debug("Waypoint lookup failed for %s", code, exc_info=True)
+    else:
+        kind = getattr(waypoint, "point_type", None) if waypoint is not None else None
+
+    return {"name": code, "kind": str(kind) if kind else None}
 
 
 def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[RunwayEnd]]:
