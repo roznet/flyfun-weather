@@ -111,10 +111,92 @@ def pack_content_hash(pack_dir: Path) -> str:
     return hashlib.sha1(data).hexdigest()[:12]
 
 
-def corpus_id_for(route: str, target_date: str, days_out: int, fetch_date: str) -> str:
-    """Stable, anonymized corpus id (same shape as the eval fixture id)."""
+def corpus_id_for(
+    route: str, target_date: str, days_out: int, fetch_date: str, *, suffix: str = ""
+) -> str:
+    """Stable, anonymized corpus id (same shape as the eval fixture id).
+
+    ``suffix`` disambiguates two *different* briefings that share the same
+    (route, target, days-out, fetch day) — see :func:`disambiguated_corpus_id`.
+    """
     route_slug = route.replace(" -> ", "_").replace(" ", "").lower()
-    return f"{route_slug}_{target_date}_d{days_out}_{fetch_date}"
+    base = f"{route_slug}_{target_date}_d{days_out}_{fetch_date}"
+    return f"{base}_{suffix}" if suffix else base
+
+
+def pack_fetch_datetime(snapshot) -> datetime | None:
+    """The pack's real (sub-day) fetch time, from the earliest forecast fetch.
+
+    ``snapshot.fetch_date`` is day-precision; the per-forecast ``fetched_at``
+    carries the actual briefing time, which is what distinguishes an 07:01 run
+    from an 09:38 run of the same flight on the same day.
+    """
+    stamps = [
+        f.fetched_at for f in getattr(snapshot, "forecasts", [])
+        if getattr(f, "fetched_at", None) is not None
+    ]
+    return min(stamps) if stamps else None
+
+
+def disambiguated_corpus_id(meta: CorpusMeta, area: str) -> str:
+    """``meta.corpus_id``, or a time-suffixed variant if it's already taken.
+
+    One corpus entry per (route, target, days-out, fetch *day*) is deliberate:
+    re-pulling the same scenario rebuilds ``corpus_meta.json`` while preserving
+    any ``label.json``. But that key silently collided for two *different*
+    briefings of one flight on one day — e.g. an 07:01 LIFR-departure briefing
+    and the 09:38 re-brief of the same flight, which graded RED and AMBER
+    respectively. The second ingest overwrote the first and still reported it as
+    "new", losing a labelled pack with no warning.
+
+    So: same pack (identical content hash) keeps the bare id and overwrites
+    itself as before; a genuinely different briefing gets ``_t<HHMM>``. The
+    incumbent keeps the bare id — existing ids, committed corpus dirs and their
+    labels stay valid, which a global switch to sub-day precision would break.
+
+    Ids are checked across BOTH areas, not just the target one: ``find_pack``
+    searches staging before corpus, so a staging pack sharing an id with an
+    already-promoted pack would silently shadow it in the workbench.
+    """
+    holder = _id_holder(meta.corpus_id)
+    if holder is None or not meta.source or holder[1] in ("", meta.source):
+        return meta.corpus_id  # free, unreadable, or the same scenario again
+
+    stamp = _parse_iso(meta.fetch_timestamp)
+    suffixes = [f"t{stamp:%H%M}", f"t{stamp:%H%M%S}"] if stamp else []
+    suffixes.append(f"t{meta.source.split(':')[-1][:6]}")
+    for suffix in suffixes:
+        candidate = f"{meta.corpus_id}_{suffix}"
+        other = _id_holder(candidate)
+        if other is None or other[1] in ("", meta.source):
+            return candidate
+    raise ValueError(
+        f"cannot place pack {meta.source} — {meta.corpus_id} and every "
+        f"disambiguated id are held by different packs"
+    )
+
+
+def _id_holder(corpus_id: str) -> tuple[str, str] | None:
+    """``(area, source)`` of whichever area holds ``corpus_id``, or None.
+
+    Staging is searched first, matching ``find_pack``'s precedence.
+    """
+    for area in ("staging", "corpus"):
+        meta_path = pack_path(corpus_id, area) / CORPUS_META_FILE
+        if not meta_path.exists():
+            continue
+        try:
+            return area, json.loads(meta_path.read_text()).get("source", "")
+        except (OSError, json.JSONDecodeError):
+            return area, ""
+    return None
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def build_corpus_meta(pack_dir: Path, *, notes: str = "") -> CorpusMeta | None:
@@ -177,9 +259,15 @@ def build_corpus_meta(pack_dir: Path, *, notes: str = "") -> CorpusMeta | None:
         (advisories.flight_ceiling_ft if advisories and advisories.flight_ceiling_ft else None)
         or 18000
     )
-    # Corpus is keyed by corpus_id; the resolver ignores ts for disambiguation,
-    # so a date-precision fetch_timestamp is sufficient identity for the view.
-    fetch_timestamp = f"{snapshot.fetch_date}T00:00:00+00:00"
+    # Record the pack's real fetch time, not midnight: the resolver ignores it
+    # for identity, but it is what tells two same-day briefings of one flight
+    # apart (see disambiguated_corpus_id). Falls back to midnight when the
+    # forecasts carry no fetched_at.
+    fetched_at = pack_fetch_datetime(snapshot)
+    fetch_timestamp = (
+        fetched_at.isoformat() if fetched_at
+        else f"{snapshot.fetch_date}T00:00:00+00:00"
+    )
 
     return CorpusMeta(
         corpus_id=corpus_id,
@@ -246,6 +334,29 @@ def ingest_pack(
     meta = build_corpus_meta(pack_dir, notes=notes)
     if meta is None:
         return None
+    # Already promoted (or already staged) elsewhere? Re-ingesting would create a
+    # second copy that shadows the labelled one, since find_pack spans both areas.
+    held = _id_holder(meta.corpus_id)
+    if held and held[0] != area and held[1] == meta.source and meta.source:
+        logger.info(
+            "pack %s already present in %s — skipping re-ingest into %s",
+            meta.corpus_id, held[0], area,
+        )
+        return CorpusPack(
+            corpus_id=meta.corpus_id,
+            meta=meta,
+            label=load_label(meta.corpus_id, held[0]),
+            area=held[0],
+        )
+
+    # Never clobber a different briefing that happens to share the natural key.
+    placed_id = disambiguated_corpus_id(meta, area)
+    if placed_id != meta.corpus_id:
+        logger.info(
+            "corpus id %s is held by a different pack; storing this one as %s",
+            meta.corpus_id, placed_id,
+        )
+        meta = meta.model_copy(update={"corpus_id": placed_id})
     dest = pack_path(meta.corpus_id, area)
     if copy:
         _copy_artifacts(pack_dir, dest)
