@@ -29,6 +29,7 @@ const BAND_ORDER: AdvisoryBand[] =
 export const ADVISORY_PRIORITY: string[] = [
   'ifr_feasibility',
   'vfr_feasibility',
+  'approach_feasibility',  // Can you get in, on a runway you can land on?
   'flight_category',     // Airport Weather
   'airport_wind',
   'cloud_top',

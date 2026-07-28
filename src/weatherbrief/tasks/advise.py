@@ -19,6 +19,7 @@ from weatherbrief.models import (
     AdvisoryChip,
     AdvisoryStatus,
     AdvisorySummary,
+    AirportApproaches,
     AirportConditions,
     AltitudeTableResult,
     ElevationProfile,
@@ -307,6 +308,40 @@ def _compute_airport_conditions(
         return None
 
 
+def _arrival_icao(
+    route: RouteConfig | None,
+    airport_conds: AirportConditions | None,
+) -> str | None:
+    """Destination ICAO from the route, falling back to the airport conditions."""
+    if route is not None:
+        return route.destination.icao
+    if airport_conds is not None:
+        return airport_conds.arrival.icao
+    return None
+
+
+def _collect_arrival_approaches(
+    arr_icao: str | None,
+    airports_db_path: str | None,
+) -> AirportApproaches | None:
+    """Published approaches at the destination, for ``approach_feasibility`` (#509).
+
+    Deliberately keyed on the ICAO rather than a ``RouteConfig`` so the recalc
+    path (which has airport conditions but often no resolved route) can call it
+    with exactly the same code. Returns ``None`` when the lookup could not run at
+    all — the evaluator then reports UNAVAILABLE rather than "no approach".
+    """
+    if not arr_icao or not airports_db_path:
+        return None
+    try:
+        from weatherbrief.airports import get_runway_approaches
+
+        return get_runway_approaches([arr_icao], airports_db_path).get(arr_icao)
+    except Exception:
+        logger.warning("Arrival approach lookup failed for %s", arr_icao, exc_info=True)
+        return None
+
+
 def _compute_route_sun(
     rp_analyses: list[RoutePointAnalysis],
     airport_conds: AirportConditions | None,
@@ -393,6 +428,9 @@ def run_advisories(
             locale=locale,
             route_fronts=route_fronts,
             sun=_compute_route_sun(rp_analyses, airport_conds),
+            arrival_approaches=_collect_arrival_approaches(
+                route.destination.icao, airports_db_path,
+            ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=route.flight_duration_hours,
         )
@@ -563,6 +601,13 @@ def run_advisories_from_pack(
             locale=locale,
             route_fronts=route_fronts,
             sun=route_sun,
+            # Recalc has no resolved route on the API path, so the destination
+            # comes from the (re)computed airport conditions — the same ICAO the
+            # advisory grades against, which is what keeps this wiring point from
+            # silently dropping the advisory on recalculate (#509).
+            arrival_approaches=_collect_arrival_approaches(
+                _arrival_icao(route, airport_conds), airports_db_path,
+            ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=flight_duration_hours,
         )
@@ -950,6 +995,9 @@ def run_alt_from_pack(
             airport_conditions=airport_conds,
             locale=locale,
             route_fronts=route_fronts,
+            arrival_approaches=_collect_arrival_approaches(
+                _arrival_icao(route, airport_conds), airports_db_path,
+            ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=route.flight_duration_hours,
         )

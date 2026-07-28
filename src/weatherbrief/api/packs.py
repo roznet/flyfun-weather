@@ -3202,6 +3202,8 @@ def compute_alt_advisories(
         user_params=user_params,
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
+        # Destination approach data for approach_feasibility (#509).
+        airports_db_path=db_path,
         icing_method=icing_method,
         cloud_source=cloud_source,
         convective_method=convective_method,
@@ -3471,6 +3473,11 @@ def recalculate_advisories(
         user_params=user_params,
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
+        # Destination approach data for approach_feasibility (#509). The recalc
+        # path has no resolved RouteConfig, so the evaluator's arrival ICAO comes
+        # from the recomputed airport conditions — but the nav.db path still has
+        # to be handed down, or the advisory silently degrades on recalculate.
+        airports_db_path=getattr(request.app.state, "db_path", ""),
         icing_method=icing_method,
         cloud_source=cloud_source,
         convective_method=convective_method,
@@ -3604,6 +3611,10 @@ def preview_advisories(
         user_params=user_params,
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
+        # Destination approach data for approach_feasibility (#509) — the
+        # evaluator degrades to UNAVAILABLE without it, so the preview would
+        # otherwise show a grey card the real briefing grades.
+        airports_db_path=getattr(request.app.state, "db_path", ""),
         icing_method=icing_method,
         cloud_source=cloud_source,
         convective_method=convective_method,

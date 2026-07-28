@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AirportApproaches,
     AirportConditions,
     ElevationProfile,
     RouteAdvisoryResult,
@@ -59,6 +60,14 @@ class RouteContext:
     # Precomputed solar analysis (issue #227): night intervals + sun-side note +
     # dep/arr glare. Read by SunEvaluator. None on old packs / when unavailable.
     sun: RouteSunAnalysis | None = None
+    # Published instrument approaches at the DESTINATION (issue #509), joined to
+    # runway ends so the evaluator can pair each approach with the wind on the
+    # end it serves. Read by ApproachFeasibilityEvaluator. ``None`` means the
+    # collection step could not run (old pack, no nav.db) — the evaluator then
+    # returns UNAVAILABLE, the ``route_fronts`` / ``sun`` precedent. It is NOT
+    # the "airport has no approach" signal: that is a present object with an
+    # empty ``approaches`` list.
+    arrival_approaches: AirportApproaches | None = None
 
 
 @runtime_checkable

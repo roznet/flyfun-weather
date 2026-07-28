@@ -127,10 +127,12 @@ from weatherbrief.models.fronts import (  # noqa: F401
 )
 from weatherbrief.models.airport_conditions import (  # noqa: F401
     FLIGHT_CATEGORY_COLORS,
+    AirportApproaches,
     AirportConditions,
     AirportConditionsSummary,
     AirportModelCondition,
     FlightCategory,
+    RunwayApproach,
     RunwayEnd,
     RunwayWind,
 )

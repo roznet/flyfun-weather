@@ -692,6 +692,96 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Vientos débiles en altura — impacto insignificante",
     },
 
+    # --- approach_feasibility (#509) ---
+    # Phrasing stays in the "directs attention" register — it names the
+    # geometry ("wind favours 24, the ILS serves 06") and never issues a
+    # usability verdict. Runway designators and approach classes are aviation
+    # abbreviations and stay untranslated.
+    "approach_feasibility.vfr": {
+        "en": "VFR — reachable visually, approach not a factor",
+        "fr": "VFR — accessible à vue, l'approche n'est pas un facteur",
+        "de": "VFR — visuell erreichbar, Anflug nicht entscheidend",
+        "es": "VFR — alcanzable visualmente, la aproximación no es un factor",
+    },
+    "approach_feasibility.mvfr_ok": {
+        "en": "{count} published approach(es) — landing can still be completed visually",
+        "fr": "{count} approche(s) publiée(s) — l'atterrissage reste réalisable à vue",
+        "de": "{count} veröffentlichte Anflüge — Landung noch visuell möglich",
+        "es": "{count} aproximación(es) publicada(s) — el aterrizaje aún puede completarse visualmente",
+    },
+    "approach_feasibility.mvfr_no_iap": {
+        "en": "No published instrument approach — arrival depends on staying visual",
+        "fr": "Aucune approche aux instruments publiée — l'arrivée dépend du maintien du vol à vue",
+        "de": "Kein veröffentlichter Instrumentenanflug — Ankunft hängt vom Sichtflug ab",
+        "es": "Sin aproximación instrumental publicada — la llegada depende de mantener el vuelo visual",
+    },
+    "approach_feasibility.no_iap": {
+        "en": "No published instrument approach at {icao}",
+        "fr": "Aucune approche aux instruments publiée à {icao}",
+        "de": "Kein veröffentlichter Instrumentenanflug in {icao}",
+        "es": "Sin aproximación instrumental publicada en {icao}",
+    },
+    "approach_feasibility.no_procedure_data": {
+        "en": "No approach procedure data for {icao}",
+        "fr": "Aucune donnée de procédure d'approche pour {icao}",
+        "de": "Keine Anflugverfahrensdaten für {icao}",
+        "es": "Sin datos de procedimientos de aproximación para {icao}",
+    },
+    "approach_feasibility.below_minima": {
+        "en": "Ceiling {ceiling}ft is below the best-case decision height (~{dh}ft) for any approach here",
+        "fr": "Plafond {ceiling}ft sous la hauteur de décision la plus favorable (~{dh}ft) de toute approche ici",
+        "de": "Untergrenze {ceiling}ft unter der günstigsten Entscheidungshöhe (~{dh}ft) jedes Anflugs hier",
+        "es": "Techo {ceiling}ft por debajo de la altura de decisión más favorable (~{dh}ft) de cualquier aproximación aquí",
+    },
+    "approach_feasibility.below_vis_minima": {
+        "en": "Visibility {vis}m is below the best-case minimum (~{min_vis}m) for any approach here",
+        "fr": "Visibilité {vis}m sous le minimum le plus favorable (~{min_vis}m) de toute approche ici",
+        "de": "Sicht {vis}m unter dem günstigsten Minimum (~{min_vis}m) jedes Anflugs hier",
+        "es": "Visibilidad {vis}m por debajo del mínimo más favorable (~{min_vis}m) de cualquier aproximación aquí",
+    },
+    "approach_feasibility.straight_in": {
+        "en": "{approach} serves RWY {runway} — {wind}",
+        "fr": "{approach} dessert la RWY {runway} — {wind}",
+        "de": "{approach} bedient RWY {runway} — {wind}",
+        "es": "{approach} sirve la RWY {runway} — {wind}",
+    },
+    "approach_feasibility.headwind": {
+        "en": "{kt}kt headwind on that runway",
+        "fr": "{kt}kt de vent de face sur cette piste",
+        "de": "{kt}kt Gegenwind auf dieser Bahn",
+        "es": "{kt}kt de viento en contra en esa pista",
+    },
+    "approach_feasibility.tailwind": {
+        "en": "{kt}kt tailwind on that runway",
+        "fr": "{kt}kt de vent arrière sur cette piste",
+        "de": "{kt}kt Rückenwind auf dieser Bahn",
+        "es": "{kt}kt de viento en cola en esa pista",
+    },
+    "approach_feasibility.circling": {
+        "en": "Wind favours RWY {wind_runway}; approaches serve {served} — plan for circling",
+        "fr": "Le vent favorise la RWY {wind_runway} ; les approches desservent {served} — prévoir une MVL",
+        "de": "Wind begünstigt RWY {wind_runway}; Anflüge bedienen {served} — Platzrunde einplanen",
+        "es": "El viento favorece la RWY {wind_runway}; las aproximaciones sirven {served} — prever circling",
+    },
+    "approach_feasibility.misaligned": {
+        "en": (
+            "Wind favours RWY {wind_runway}; approaches serve {served}, "
+            "and ceiling {ceiling}ft will not support circling"
+        ),
+        "fr": (
+            "Le vent favorise la RWY {wind_runway} ; les approches desservent {served}, "
+            "et le plafond {ceiling}ft ne permet pas la MVL"
+        ),
+        "de": (
+            "Wind begünstigt RWY {wind_runway}; Anflüge bedienen {served}, "
+            "und Untergrenze {ceiling}ft trägt keine Platzrunde"
+        ),
+        "es": (
+            "El viento favorece la RWY {wind_runway}; las aproximaciones sirven {served}, "
+            "y el techo {ceiling}ft no permite circling"
+        ),
+    },
+
     # --- shared airport labels ---
     "airport.dep": {
         "en": "Dep",

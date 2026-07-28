@@ -54,7 +54,7 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### advisories
-Route advisory system: 21 deterministic evaluators across 11 categories (icing incl. freezing precipitation, cloud, precipitation/en-route visibility, turbulence incl. wave-corroborated mountain wind, convective incl. convective-character, winds-aloft trip impact, airport conditions incl. density altitude, LLWS and terminal convective, feasibility, model-quality, fronts, sun) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
+Route advisory system: 22 deterministic evaluators across 11 categories (icing incl. freezing precipitation, cloud, precipitation/en-route visibility, turbulence incl. wave-corroborated mountain wind, convective incl. convective-character, winds-aloft trip impact, airport conditions incl. density altitude, LLWS and terminal convective, feasibility incl. approach feasibility, model-quality, fronts, sun) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 
