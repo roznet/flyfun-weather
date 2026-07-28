@@ -594,15 +594,32 @@ def build_nwp_cloud_layers_from_condensate(
         return None
 
     # Effective per-band covers: native diagnostic band first, bulk fallback.
-    def _band(diag_layer, bulk: float | None) -> float | None:
-        if diag_layer.cover_pct is not None:
-            return diag_layer.cover_pct
-        return bulk
-
+    # Amount and membership must describe the SAME vertical slice. The two
+    # available cover sources use different band definitions — the diagnostic
+    # covers are NCEP pressure bands (sfc–642/642–350/350–top hPa), the bulk
+    # Open-Meteo covers are ICAO-style altitude bands — so they must never
+    # mix within one carving: a per-band bulk fallback under pressure carving
+    # assigned an ICAO-slab percentage to a pressure-carved segment, the same
+    # mismatched-slice bug in the partial-diagnostics case that rounds 4–5
+    # fixed for the full case (PR #508 round 6). Rules:
+    #   - any diagnostic band cover present → pressure carving, diagnostic
+    #     amounts only; a band whose own diagnostic is missing degrades to
+    #     the honest unknown-extent path (BKN, pct None), never to a bulk
+    #     value defined over a different slab;
+    #   - no diagnostic band cover at all → ICAO carving with bulk amounts,
+    #     a self-consistent pairing.
+    diag_covers: tuple[float | None, float | None, float | None] | None = None
     if nwp_cloud_diagnostics is not None:
-        low_eff = _band(nwp_cloud_diagnostics.low, nwp_cloud_low_pct)
-        mid_eff = _band(nwp_cloud_diagnostics.mid, nwp_cloud_mid_pct)
-        high_eff = _band(nwp_cloud_diagnostics.high, nwp_cloud_high_pct)
+        diag_covers = (
+            nwp_cloud_diagnostics.low.cover_pct,
+            nwp_cloud_diagnostics.mid.cover_pct,
+            nwp_cloud_diagnostics.high.cover_pct,
+        )
+    use_pressure_bands = diag_covers is not None and any(
+        c is not None for c in diag_covers
+    )
+    if use_pressure_bands:
+        low_eff, mid_eff, high_eff = diag_covers
     else:
         low_eff, mid_eff, high_eff = (
             nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
@@ -644,8 +661,6 @@ def build_nwp_cloud_layers_from_condensate(
     # native overcast low deck into FEW (PR #508 review round 5). The bulk
     # Open-Meteo fallback keeps ICAO-style altitude bands — its own product
     # semantics.
-    use_pressure_bands = nwp_cloud_diagnostics is not None
-
     def _level_band(lv: PressureLevelData) -> int:
         if use_pressure_bands:
             if lv.pressure_hpa > _NCEP_LOW_BAND_FLOOR_HPA:
