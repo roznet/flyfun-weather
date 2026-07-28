@@ -269,8 +269,15 @@ struct FlightListView: View {
             case .forecastMap:
                 // iPad detail pane (regular width). On compact the map opens as a
                 // fullScreenCover instead — see `openForecastMap`.
+                //
+                // The map owns its sidebar toggle. Every other detail (the briefing)
+                // has a navigation bar, so the split view puts the system toggle
+                // there for free; the map is deliberately chrome-less, so collapsing
+                // the sidebar over it used to strand the user on the map with no way
+                // back to the list.
                 if let repo = appState.repository {
-                    ForecastMapView(repository: repo, deepLink: mapDeepLink)
+                    ForecastMapView(repository: repo, deepLink: mapDeepLink,
+                                    onToggleSidebar: toggleSidebar)
                         .id(mapOpenToken)
                 }
             case nil:
@@ -594,6 +601,17 @@ struct FlightListView: View {
         } else {
             showMapCover = false
             selection = .forecastMap
+        }
+    }
+
+    /// Show/hide the split view's sidebar, for details that draw no navigation bar
+    /// of their own (the forecast map). `.automatic` means "system's choice", which
+    /// on a wide iPad is a visible sidebar — so it toggles to `.detailOnly`; every
+    /// other state comes back to `.all`. That keeps the button an escape hatch: from
+    /// the collapsed state it always restores the list.
+    private func toggleSidebar() {
+        withAnimation {
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
         }
     }
 

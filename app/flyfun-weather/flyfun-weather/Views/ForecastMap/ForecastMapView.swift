@@ -21,14 +21,31 @@ struct ForecastMapView: View {
     @State private var unavailableModel: String?
     /// nil on the iPad detail pane; set on the iPhone cover so it can dismiss.
     private let onClose: (() -> Void)?
+    /// Set on the iPad detail pane so the map can show/hide the split view's
+    /// sidebar. The map draws no navigation bar — it's a full-bleed `ZStack` with
+    /// its own floating chrome — so the system sidebar toggle, which lives in the
+    /// detail column's nav bar, has nowhere to appear. Without this the user could
+    /// collapse the sidebar over the map and be stranded there with no way back to
+    /// the flight list.
+    private let onToggleSidebar: (() -> Void)?
 
-    init(repository: any BriefingRepository, deepLink: MapDeepLink? = nil, onClose: (() -> Void)? = nil) {
+    init(repository: any BriefingRepository,
+         deepLink: MapDeepLink? = nil,
+         onClose: (() -> Void)? = nil,
+         onToggleSidebar: (() -> Void)? = nil) {
         _viewModel = State(initialValue: ForecastMapViewModel(repository: repository, deepLink: deepLink))
         self.onClose = onClose
+        self.onToggleSidebar = onToggleSidebar
     }
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var catalog: ForecastMapCatalog? { appState.helpCatalog.mapsCatalog }
+
+    /// Whether the top bar's leading slot is occupied — drives the trailing
+    /// spacer that keeps the title optically centred.
+    private var hasLeadingControl: Bool {
+        isCompact ? onClose != nil : onToggleSidebar != nil
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -81,6 +98,8 @@ struct ForecastMapView: View {
     private var topControls: some View {
         VStack(spacing: Theme.spacingS) {
             HStack(alignment: .top) {
+                // Leading slot: dismiss on the iPhone cover, sidebar toggle on the
+                // iPad detail pane — the map's only route back to the flight list.
                 if isCompact, let onClose {
                     Button { onClose() } label: {
                         Image(systemName: "xmark")
@@ -89,6 +108,16 @@ struct ForecastMapView: View {
                             .background(.ultraThinMaterial, in: Circle())
                     }
                     .accessibilityLabel("Close map")
+                    .accessibilityIdentifier("mapCloseButton")
+                } else if !isCompact, let onToggleSidebar {
+                    Button { onToggleSidebar() } label: {
+                        Image(systemName: "sidebar.leading")
+                            .font(.headline)
+                            .padding(8)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Toggle Sidebar")
+                    .accessibilityIdentifier("mapSidebarToggle")
                 }
                 Spacer()
                 VStack(spacing: 2) {
@@ -96,8 +125,8 @@ struct ForecastMapView: View {
                     Text(navSubtitle).font(.caption).foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
-                // Balance the leading close button so the title stays centred.
-                if isCompact, onClose != nil { Color.clear.frame(width: 36, height: 36) }
+                // Balance the leading control so the title stays centred.
+                if hasLeadingControl { Color.clear.frame(width: 36, height: 36) }
             }
             HStack(spacing: Theme.spacingS) {
                 dayCapsule
