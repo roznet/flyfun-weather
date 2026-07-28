@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _M_TO_FT = 3.28084
 
+# Fixed ICAO cloud-band boundaries (ft). Defined here, in the cloud module,
+# and imported by `advisories.py` so the two cannot drift — they were separate
+# literals until the condensate envelope needed the same split (PR #508
+# review). `icing_common.nwp_cloud_cover_at_altitude` still inlines 6500/20000
+# and is a candidate for the same treatment.
+_CLOUD_LOW_CEILING_FT = 6500
+_CLOUD_MID_CEILING_FT = 20000
+
 # Dewpoint depression threshold for "in cloud" (degrees C)
 IN_CLOUD_DD_THRESHOLD = 3.0
 
@@ -504,6 +512,145 @@ def build_nwp_cloud_layers_from_fraction(
     return layers
 
 
+# Total condensate (liquid + ice) at or above which a pressure level counts as
+# cloudy, kg/kg. 1e-5 kg/kg == 0.01 g/kg, which is exactly SFIP's lowest
+# non-zero liquid-water bin (`sfip.py`: `clw_g_kg <= 0.01` scores no icing
+# potential) — so the floor is "a level the icing scheme would already treat as
+# having no meaningful water is not a cloud deck". Chosen to match existing
+# repo precedent rather than invented; see meteorology-decisions §23.
+_CONDENSATE_CLOUDY_KG_KG = 1e-5
+
+
+def build_nwp_cloud_layers_from_condensate(
+    pressure_levels: list[PressureLevelData],
+    nwp_cloud_low_pct: float | None = None,
+    nwp_cloud_mid_pct: float | None = None,
+    nwp_cloud_high_pct: float | None = None,
+) -> list[EnhancedCloudLayer] | None:
+    """Build cloud layers from per-level condensate (HRRR CLMR + CIMIXR).
+
+    The third native source, for models that ship 3D microphysics but no 3D
+    cloud fraction and no per-band base/top — HRRR's exact shape (#457, PR
+    #508 review). Without it HRRR had NO native cloud envelope at all:
+    ``build_nwp_cloud_layers`` returned None, which marked the default
+    ``ogimet_nwp`` icing method unavailable, gated native SFIP off, and left
+    the headline 3 km microphysics unreachable by the advisory that most
+    needs it.
+
+    **Geometry from condensate, coverage from the model's own bands.** Runs of
+    contiguous levels at or above ``_CONDENSATE_CLOUDY_KG_KG`` become layers;
+    edges use the same midpoint convention as the DD and 3D-fraction builders.
+    The *amount* is not invented from the condensate — each layer takes the
+    ICAO band cover the model published for the band its midpoint falls in.
+    Both halves stay model-native, and neither is fabricated from the other.
+
+    Returns:
+        ``None`` when NO level carries either condensate field — the model
+        has no envelope here and callers must read that as "no data", never
+        "clear sky". ``[]`` when condensate is present but every level is
+        below threshold: a genuine clear-column forecast.
+    """
+    if not pressure_levels:
+        return None
+    has_any = any(
+        lv.cloud_liquid_water_kg_kg is not None or lv.ice_mixing_ratio_kg_kg is not None
+        for lv in pressure_levels
+    )
+    if not has_any:
+        return None
+
+    # Surface → TOA: descending pressure.
+    levels = sorted(pressure_levels, key=lambda lv: lv.pressure_hpa, reverse=True)
+
+    def _condensate(lv: PressureLevelData) -> float | None:
+        """Total condensate, or None when this level reported neither field.
+
+        A level reporting one field and not the other is treated as that one
+        plus zero — a model that writes CLMR but no ice at a warm level is
+        saying "no ice", not "unknown ice".
+        """
+        clw, ice = lv.cloud_liquid_water_kg_kg, lv.ice_mixing_ratio_kg_kg
+        if clw is None and ice is None:
+            return None
+        return (clw or 0.0) + (ice or 0.0)
+
+    cloudy: list[bool] = []
+    for lv in levels:
+        total = _condensate(lv)
+        # A level with no condensate reading, or no height to place it at,
+        # breaks the run: it cannot be asserted cloudy, and joining across it
+        # would invent a deck through a gap nothing measured.
+        cloudy.append(
+            total is not None
+            and total >= _CONDENSATE_CLOUDY_KG_KG
+            and lv.geopotential_height_m is not None
+        )
+
+    layers: list[EnhancedCloudLayer] = []
+    n = len(levels)
+    i = 0
+    while i < n:
+        if not cloudy[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and cloudy[j + 1]:
+            j += 1
+
+        below = _midpoint_edge(levels[i], levels[i - 1] if i > 0 else None)
+        above = _midpoint_edge(levels[j], levels[j + 1] if j + 1 < n else None)
+        if below is None or above is None:
+            i = j + 1
+            continue
+        base_ft, base_p = below
+        top_ft, top_p = above
+        if top_ft <= base_ft:
+            i = j + 1
+            continue
+
+        mid_ft = (base_ft + top_ft) / 2.0
+        band_pct = _icao_band_cover(
+            mid_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+        )
+        # No published band cover for this altitude — the deck is real
+        # (condensate says so) but its extent is unstated. BKN is the
+        # neutral middle of the scale; recording the cover as None keeps
+        # the guess out of anything that reads a percentage.
+        coverage = (
+            _nwp_pct_to_coverage(band_pct) if band_pct is not None else None
+        ) or CloudCoverage.BKN
+
+        temps = [lv.temperature_c for lv in levels[i:j + 1] if lv.temperature_c is not None]
+        layers.append(EnhancedCloudLayer(
+            base_ft=round(base_ft),
+            top_ft=round(top_ft),
+            base_pressure_hpa=round(base_p),
+            top_pressure_hpa=round(top_p),
+            thickness_ft=round(top_ft - base_ft),
+            mean_temperature_c=(round(sum(temps) / len(temps), 1) if temps else None),
+            coverage=coverage,
+            mean_cloud_cover_pct=(round(band_pct, 1) if band_pct is not None else None),
+            source="nwp_condensate",
+        ))
+        i = j + 1
+
+    return layers
+
+
+def _icao_band_cover(
+    altitude_ft: float,
+    low_pct: float | None,
+    mid_pct: float | None,
+    high_pct: float | None,
+) -> float | None:
+    """Published band cover for the fixed ICAO band containing ``altitude_ft``."""
+    if altitude_ft < _CLOUD_LOW_CEILING_FT:
+        return low_pct
+    if altitude_ft < _CLOUD_MID_CEILING_FT:
+        return mid_pct
+    return high_pct
+
+
 def build_nwp_cloud_layers(
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None,
     nwp_cloud_low_pct: float | None = None,
@@ -514,15 +661,24 @@ def build_nwp_cloud_layers(
 ) -> list[EnhancedCloudLayer] | None:
     """Build cloud layers from native NWP sources only.
 
-    Two sources, tried in order of richness:
+    Three sources, tried in order of richness:
       1. **Per-level 3D cloud fraction** (ECMWF ``cc`` / ICON ``clc``)
          → ``source="nwp_3d"`` — real deck base/top from the model's own
          cloud scheme.
       2. **GRIB diagnostics** with base/top boundaries (GFS) → ``source="grib"``
+      3. **Per-level condensate** (HRRR ``CLMR`` + ``CIMIXR``)
+         → ``source="nwp_condensate"`` — geometry from the microphysics,
+         amount from the model's published ICAO band covers.
 
-    Returns ``None`` when neither source is available — the model has no
-    native NWP cloud envelope. Callers must treat this as "no NWP layer
-    data," not "model says clear sky."
+    Source 3 is last because it is the only one that has to combine two
+    signals to describe a deck. It is placed AFTER the GRIB-band path
+    specifically so GFS — which carries both band geometry and condensate —
+    keeps its existing envelope unchanged; it is reached only by a model with
+    3D microphysics and no usable band geometry, which today means HRRR.
+
+    Returns ``None`` when no source is available — the model has no native
+    NWP cloud envelope. Callers must treat this as "no NWP layer data," not
+    "model says clear sky."
 
     Returns an empty list when a native source is available but no level
     exceeded the threshold (genuine clear-sky forecast).
@@ -538,9 +694,18 @@ def build_nwp_cloud_layers(
         if layers_3d is not None:
             return layers_3d
 
-    return _build_grib_layers(
+    grib_layers = _build_grib_layers(
         nwp_cloud_diagnostics, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
     )
+    if grib_layers is not None:
+        return grib_layers
+
+    if pressure_levels:
+        return build_nwp_cloud_layers_from_condensate(
+            pressure_levels,
+            nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+        )
+    return None
 
 
 def _build_grib_layers(

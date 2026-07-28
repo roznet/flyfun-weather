@@ -2602,6 +2602,8 @@ field already says MSL.
   `_explicit_freezing_level_ft` docstring now states the datum invariant
   instead of asserting any datum is usable.
 
+---
+
 ## 22. One convective grade, consumed everywhere — `ifr_feasibility` stops re-deriving it
 
 **Date:** 2026-07-30
@@ -2787,3 +2789,96 @@ that promise, not addressed here.
   parametrized across dd_trigger / NWP-cell / HIGH / tops-below-cruise / quiet,
   plus the EMBEDDED escalation and the bands that must not escalate.
 - `tests/test_convective.py` — the three zero-realized classifier cases.
+
+---
+
+## 23. HRRR's native cloud envelope comes from condensate, not from bulk cover
+
+**Date:** 2026-07-28
+**Status:** Implemented (PR #508 second review)
+**Context:** HRRR (#457) replaces the `gfs` slot's whole sounding on CONUS
+routes. Its diagnostic shape is closer to ECMWF's than GFS's: per-band
+low/mid/high cover, one overall cloud base, a ceiling — and **no per-band
+tops**, **no 3D cloud fraction**. `build_nwp_cloud_layers` recognises a native
+envelope only from per-level cloud fraction (ECMWF `cc` / ICON `clc`) or from
+diagnostic bands carrying both `base_ft` and `top_ft` (GFS). HRRR satisfied
+neither, so it returned `None` — "this model has no native cloud envelope".
+
+That is the strictest possible answer, and it propagated:
+
+- the default `ogimet_nwp` icing method returns `[]` when its cloud gate is
+  empty (deliberately — it refuses to invent icing from bulk percentages);
+- native SFIP is gated by the same envelope;
+- NWP cloud grading fell back to DD.
+
+So the headline reason to fetch HRRR at all — 3 km convection-allowing
+microphysics, `CLMR` + `CIMIXR` on every pressure level — could not reach the
+advisory that most needs it. Verified before the fix: an 850 hPa level with
+3×10⁻⁴ kg/kg liquid and 5×10⁻⁵ kg/kg ice under an 80 % low-cover diagnostic
+produced `nwp_cloud_layers = None`, `icing_ogimet_nwp_zones = []`,
+`sfip_zones = []`.
+
+### The decision
+
+A third native source, `build_nwp_cloud_layers_from_condensate`, tried after
+the 3D-fraction and GRIB-band paths.
+
+**Geometry from the condensate profile; amount from the model's own bands.**
+Runs of contiguous levels at or above the threshold become layers, with edges
+placed by the same midpoint convention the DD and 3D-fraction builders already
+use. The *coverage* is not derived from condensate magnitude — each layer takes
+the ICAO band percentage HRRR published for the band its midpoint falls in.
+Both halves stay model-native and neither is fabricated from the other: the
+microphysics says *where* the deck is, the band cover says *how much*.
+
+**Threshold: total condensate ≥ 1×10⁻⁵ kg/kg (0.01 g/kg).** Not invented for
+this change — it is exactly SFIP's lowest non-zero liquid-water bin
+(`sfip.py`: `clw_g_kg <= 0.01` scores no icing potential). The floor therefore
+reads as "a level the icing scheme itself would treat as having no meaningful
+water is not a cloud deck". Liquid and ice are summed, so ice-only cirrus and
+mixed-phase decks both register.
+
+**Ordered last, deliberately.** GFS carries both band geometry *and*
+condensate. Placing the condensate source after the GRIB-band path means GFS
+keeps its existing envelope byte-for-byte; only a model with 3D microphysics
+and no usable band geometry reaches it, which today means HRRR alone.
+
+### Missing vs zero vs clear
+
+Three distinct answers, and conflating them is how a cloud method silently
+becomes a clear-sky method:
+
+| condition | result | meaning |
+|---|---|---|
+| no level carries either condensate field | `None` | no data — callers must not read "clear" |
+| condensate present, all below threshold | `[]` | genuine clear-column forecast |
+| condensate present, a run above threshold | layers | a deck |
+
+A level reporting one field and not the other is read as that one plus zero (a
+model writing `CLMR` and no ice at a warm level is saying "no ice", not
+"unknown"). A level with condensate but **no geopotential height** breaks the
+run rather than joining it — there is nowhere to place it, and bridging the
+gap would invent a deck through unmeasured air.
+
+### Related: band cover without geometry no longer reads as 0 %
+
+`advisories._nwp_cloud_cover_at` keyed its "use the diagnosed boundaries"
+branch on *cover* being present rather than *geometry*. Any model publishing
+band covers without base/top entered the branch, matched no layer, and fell
+through to `return 0.0` — a confident "no cloud" over an overcast column. The
+branch is now gated on geometry, matching what
+`icing_common.nwp_cloud_cover_at_altitude` already did via its `any_diag` flag.
+
+**This was never HRRR-specific.** ECMWF publishes `lcc`/`mcc`/`hcc` with no
+per-band boundaries and hit the identical path on `main`. The test that
+covered it, `test_icon_with_cloud_cover_uses_icao_bands`, asserted `0.0` while
+its own name said the opposite — the defect was pinned as if it were the
+design.
+
+### Files changed
+
+- `analysis/sounding/clouds.py` — `build_nwp_cloud_layers_from_condensate`,
+  `_icao_band_cover`, `_CONDENSATE_CLOUDY_KG_KG`; the ICAO band constants move
+  here as the single definition.
+- `analysis/sounding/advisories.py` — geometry-gated branch; imports the band
+  constants rather than redeclaring them.

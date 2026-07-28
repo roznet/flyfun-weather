@@ -36,9 +36,16 @@ MODEL_TTL_SECONDS: dict[str, int] = {
     "icon-eu": 12 * 3600,   # precached each main run; previous run is fallback
     "icon-d2": 6 * 3600,    # 8 runs/day (every 3h); keep current + prior run
     # HRRR (#457): hourly cycles and ~200 MB per cached forecast hour, so a
-    # stale run is superseded fast and heavy — short TTL keeps at most a few
-    # runs (~1 GB each for a typical flight window) on disk. Not precached.
-    "hrrr": 6 * 3600,
+    # stale run is superseded fast and heavy. But the TTL cannot be set from
+    # the HOURLY cadence, because only the 00/06/12/18z cycles reach 48 h —
+    # every other cycle stops at 18 h, so a flight past that horizon is served
+    # by an EXTENDED run whose successor is 6 h away (PR #508 review). At the
+    # old 6 h the 12z run was purged at 18z, exactly while the 18z run was
+    # still inside its 1.25 h publication delay or had an incomplete
+    # last-needed hour: a guaranteed re-download of ~1 GB during every
+    # extended-cycle transition. 9 h covers the 6 h gap plus the publication
+    # delay with margin, keeping at most one superseded extended run.
+    "hrrr": 9 * 3600,
 }
 
 # Fallback TTL for models without an explicit entry. Currently unreachable
@@ -72,7 +79,7 @@ DEFAULT_CACHE_FLOOR_RUNS = 2
 _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     "icon-d2": 45.0,
     # HRRR (#457): ~190 MB per cached forecast hour → ~1 GB per run for a
-    # typical flight window. The 6h TTL is the primary bound (~2 concurrent
+    # typical flight window. The 9h TTL is the primary bound (~2 concurrent
     # runs per flight); the cap backstops many concurrent US flights each
     # pulling a different hourly run. Enforced from the daily retention pass
     # (HRRR is not precached, so there is no warm-loop enforcement site).
@@ -355,15 +362,21 @@ def _enforce_size_cap(
     cap_bytes: int,
     floor_runs: int,
     now_ts: float,
+    protected: Path | None = None,
 ) -> int:
     """Evict oldest-init run dirs until the model total is under ``cap_bytes``.
 
     Whole run dirs only (never individual files: per-level re-download trades
     scarce bandwidth for disk — the wrong direction). Never drops below
     ``floor_runs`` so the current run and its prior-run fallback survive.
+    ``protected`` (the caller's in-use run) is never a victim — the floor is a
+    count, so it cannot on its own keep a specific directory alive.
     Returns the number of directories evicted.
     """
-    run_dirs = [d for d in cache_root.iterdir() if d.is_dir()]
+    run_dirs = [
+        d for d in cache_root.iterdir()
+        if d.is_dir() and (protected is None or d.resolve() != protected)
+    ]
     # Oldest init first; unparseable names sort by mtime.
     run_dirs.sort(key=lambda d: _run_age_seconds(d, now_ts), reverse=True)
 
@@ -413,6 +426,7 @@ def purge_old_runs(
     floor_runs: int = DEFAULT_CACHE_FLOOR_RUNS,
     now: datetime | None = None,
     enforce_cap: bool = False,
+    protect: Path | None = None,
 ) -> int:
     """Purge cache directories for ``model`` — by TTL, and optionally by cap.
 
@@ -430,6 +444,14 @@ def purge_old_runs(
        per-briefing ``_prepare_icon_eu``/GFS enrichment path leaves it off; the
        TTL rule (plus init-time aging) already bounds those to ~2 runs.
 
+    Args:
+        protect: A run directory the caller is about to use. It is exempt from
+            BOTH rules. Purging runs on the hot path, concurrently with other
+            briefings, so a caller pinned to an older run (an ``as_of_time``
+            backtest, or a flight past the short-cycle horizon) could otherwise
+            have the directory deleted out from under its own decode.
+            Age-based eviction cannot see "someone is reading this".
+
     Returns the total number of directories removed.
     """
     cache_root = data_dir / ".cache" / "grib" / model
@@ -439,9 +461,12 @@ def purge_old_runs(
     ttl = MODEL_TTL_SECONDS.get(model, CACHE_TTL_SECONDS)
     now_ts = time.time() if now is None else now.timestamp()
     removed = 0
+    protected = protect.resolve() if protect is not None else None
 
     for run_dir in cache_root.iterdir():
         if not run_dir.is_dir():
+            continue
+        if protected is not None and run_dir.resolve() == protected:
             continue
         if _run_age_seconds(run_dir, now_ts) > ttl:
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -454,6 +479,7 @@ def purge_old_runs(
         if cap_bytes is not None:
             removed += _enforce_size_cap(
                 cache_root, model, cap_bytes, floor_runs, now_ts,
+                protected=protected,
             )
 
     return removed

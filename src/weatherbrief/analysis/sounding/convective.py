@@ -785,6 +785,23 @@ def assess_convective_nwp(
     if nwp_diagnostics.convective_scheme_absent or not _has_native_cloud_content(
         nwp_diagnostics
     ):
+        # Prefer the model's OWN mixed-layer parcel pair where it delivers one
+        # (HRRR's 90-0 mb MLCAPE/MLCIN — PR #508 review). This path exists
+        # because the source has no convective-realization channel, but that
+        # does NOT mean it has no parcel diagnostic: grading HRRR on
+        # MetPy-derived CAPE made the "NWP" track a relabelled copy of the DD
+        # track and, when MetPy could not solve the profile at all, scored a
+        # delivered 2500 J/kg column NONE. Each of CAPE and CIN falls back
+        # independently to the sounding-derived value, so a source that
+        # publishes only one still contributes it.
+        native_cape = nwp_diagnostics.ml_cape_jkg
+        native_cin = nwp_diagnostics.ml_cin_jkg
+        if native_cape is not None or native_cin is not None:
+            cape = native_cape if native_cape is not None else cape
+            cin = native_cin if native_cin is not None else cin
+            # Modifiers were computed above against the sounding CAPE; recompute
+            # so they describe whichever value actually grades this assessment.
+            modifiers = _severity_modifiers(indices, cape)
         risk = _nwp_cape_fallback_risk(cape)
         if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
             risk = _down_one(risk)

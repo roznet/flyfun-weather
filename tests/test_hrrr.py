@@ -854,64 +854,173 @@ class TestGfsSlotHrrrGate:
         gfs_finder.assert_called_once()
 
 
-class TestEnrichOneHrrrHourAtomicity:
-    """An hour is HRRR-or-untouched (PR #508 review)."""
+class TestHrrrSlotAtomicity:
+    """The gfs slot is HRRR-or-untouched, at SLOT level (PR #508 review 2).
 
-    def _call(self, tmp_path, decoded_points, diag_raw=None):
+    Per-hour atomicity was never enough: `enriched_hours > 0` flipped
+    provenance to HRRR as soon as one hour merged, while the pressure-level
+    fill only rebuilds gap hours strictly BETWEEN two anchors — so a partial
+    window left GFS sounding hours under an "HRRR" badge.
+    """
+
+    ROUTE = [_rp(42.3656, -71.0096), _rp(39.1754, -76.6683, 320)]
+
+    @staticmethod
+    def _good_column():
+        return {
+            500: {
+                "raw_temperature_k": 270.0, "raw_u_wind_m_s": 5.0,
+                "raw_v_wind_m_s": 2.0, "geopotential_height_m": 5500.0,
+                "raw_relative_humidity_pct": 60.0,
+                "cloud_liquid_water_kg_kg": 1e-4,
+            },
+        }
+
+    def _stage(self, tmp_path, decoded_points, diag_raw=None):
         import weatherbrief.fetch.grib as grib_mod
-
-        route = [_rp(42.3656, -71.0096), _rp(39.1754, -76.6683, 320)]
 
         def _fake_dispatch(fn_name, *args):
             if fn_name == "decode_hrrr_pressure":
                 return decoded_points
-            return diag_raw or [{} for _ in route]
+            return diag_raw or [{} for _ in self.ROUTE]
 
         with patch.object(grib_mod, "is_cached", return_value=True), patch.object(
             grib_mod, "_dispatch_decode", side_effect=_fake_dispatch,
+        ):
+            return grib_mod._stage_one_hrrr_hour(
+                self.ROUTE, "20260726", 12, 3, run_dir=tmp_path, session=None,
+            )
+
+    def test_complete_hour_stages(self, tmp_path):
+        fhour, _valid, decoded, diags = self._stage(
+            tmp_path, [self._good_column(), self._good_column()],
+            diag_raw=[{"total_cover_pct": 10.0}, {"total_cover_pct": 20.0}],
+        )
+        assert fhour == 3
+        assert len(decoded) == 2
+        assert diags is not None and len(diags) == 2
+
+    def test_partial_point_coverage_fails_the_hour(self, tmp_path):
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        with pytest.raises(HrrrIncompleteArtifact, match="route points"):
+            self._stage(tmp_path, [self._good_column(), {}])
+
+    def test_height_only_column_is_rejected(self, tmp_path):
+        """A truncated artifact decodes to heights with no T/wind — those
+        levels would otherwise REPLACE a complete GFS sounding."""
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        height_only = {500: {"geopotential_height_m": 5500.0}}
+        with pytest.raises(HrrrIncompleteArtifact, match="500hPa missing"):
+            self._stage(tmp_path, [self._good_column(), height_only])
+
+    def test_wind_incomplete_column_is_rejected(self, tmp_path):
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        no_v = self._good_column()
+        del no_v[500]["raw_v_wind_m_s"]
+        with pytest.raises(HrrrIncompleteArtifact, match="VGRD|raw_v_wind_m_s"):
+            self._stage(tmp_path, [no_v, self._good_column()])
+
+    def test_diagnostic_failure_keeps_the_sounding(self, tmp_path):
+        """Diagnostics are subordinate: their failure costs cover, not the hour."""
+        import weatherbrief.fetch.grib as grib_mod
+
+        def _fake_dispatch(fn_name, *args):
+            if fn_name == "decode_hrrr_pressure":
+                return [self._good_column(), self._good_column()]
+            raise RuntimeError("diag blob corrupt")
+
+        with patch.object(grib_mod, "is_cached", return_value=True), patch.object(
+            grib_mod, "_dispatch_decode", side_effect=_fake_dispatch,
+        ):
+            _f, _v, decoded, diags = grib_mod._stage_one_hrrr_hour(
+                self.ROUTE, "20260726", 12, 3, run_dir=tmp_path, session=None,
+            )
+        assert len(decoded) == 2
+        assert diags is None
+
+
+class TestHrrrSlotCommitContract:
+    """A failed hour leaves the GFS pack completely untouched."""
+
+    ROUTE = [_rp(42.3656, -71.0096)]
+
+    def _enrich(self, tmp_path, stage_side_effect):
+        import weatherbrief.fetch.grib as grib_mod
+
+        with patch.object(
+            grib_mod, "purge_old_runs",
         ), patch.object(
-            grib_mod, "_replace_pressure_levels_from_grib", return_value=2,
+            grib_mod, "_stage_one_hrrr_hour", side_effect=stage_side_effect,
+        ), patch.object(
+            grib_mod, "_replace_pressure_levels_from_grib", return_value=1,
         ) as replace, patch.object(
             grib_mod, "_apply_cloud_diagnostics_to_sections",
         ) as apply_diag:
-            merged = grib_mod._enrich_one_hrrr_hour(
-                [], [], route, "20260726", 12, 3,
-                run_dir=tmp_path, session=None,
+            ts = grib_mod._enrich_gfs_from_hrrr(
+                [], [], self.ROUTE, _utc(2026, 7, 26, 15),
+                data_dir=tmp_path, flight_duration_hours=3.0,
+                run_info=("20260726", 12), session=None,
             )
-        return merged, replace, apply_diag
+        return ts, replace, apply_diag
 
-    def test_partial_point_coverage_skips_hour_whole(self, tmp_path):
-        # One covered point + one empty dict = a spatially mixed decode
-        # (gate/grid drift) — the hour must be skipped without ANY mutation.
-        merged, replace, apply_diag = self._call(
-            tmp_path, [{500: {"raw_temperature_k": 270.0}}, {}],
+    @staticmethod
+    def _ok(fhour, *_a, **_k):
+        return (fhour, _utc(2026, 7, 26, 12 + fhour), [{500: {}}], None)
+
+    def test_all_hours_ok_commits(self, tmp_path):
+        ts, replace, _diag = self._enrich(
+            tmp_path, lambda _rp, _d, _h, fhour, **kw: self._ok(fhour),
         )
-        assert merged == 0
+        assert ts is not None
+        assert replace.call_count >= 1
+
+    def test_first_hour_failure_leaves_pack_untouched(self, tmp_path):
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        def _boom(*_a, **_k):
+            raise HrrrIncompleteArtifact("f03 sounding: 500hPa missing TMP")
+
+        ts, replace, apply_diag = self._enrich(tmp_path, _boom)
+        assert ts is None
         replace.assert_not_called()
         apply_diag.assert_not_called()
 
-    def test_diagnostics_only_applied_after_sounding_merges(self, tmp_path):
-        # All-points decode → sounding merges → diagnostics ride along.
-        merged, replace, apply_diag = self._call(
-            tmp_path,
-            [{500: {"raw_temperature_k": 270.0}}, {500: {"raw_temperature_k": 271.0}}],
-            diag_raw=[{"total_cover_pct": 10.0}, {"total_cover_pct": 20.0}],
-        )
-        assert merged == 1
-        replace.assert_called_once()
-        apply_diag.assert_called_once()
+    def test_middle_hour_failure_leaves_pack_untouched(self, tmp_path):
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
 
-    def test_empty_sounding_decode_never_applies_diagnostics(self, tmp_path):
-        # Sounding decode yields nothing (corrupt cached blob) while the
-        # diag blob is healthy: without the coupling, HRRR's instantaneous
-        # diagnostics would survive into the plain-GFS fallback.
-        merged, replace, apply_diag = self._call(
-            tmp_path, [{}, {}],
-            diag_raw=[{"total_cover_pct": 10.0}, {"total_cover_pct": 20.0}],
-        )
-        assert merged == 0
+        seen: list[int] = []
+
+        def _second_fails(_rp, _d, _h, fhour, **_k):
+            seen.append(fhour)
+            if len(seen) == 2:
+                raise HrrrIncompleteArtifact("truncated")
+            return self._ok(fhour)
+
+        ts, replace, apply_diag = self._enrich(tmp_path, _second_fails)
+        assert ts is None
+        # The decisive assertion: hour 1 staged fine, but because a LATER
+        # hour failed nothing was ever written.
+        assert len(seen) >= 2
         replace.assert_not_called()
         apply_diag.assert_not_called()
+
+    def test_last_hour_failure_leaves_pack_untouched(self, tmp_path):
+        from weatherbrief.fetch.grib.hrrr_fetch import HrrrIncompleteArtifact
+
+        calls: list[int] = []
+
+        def _last_fails(_rp, _d, _h, fhour, **_k):
+            calls.append(fhour)
+            if fhour == max(calls) and len(calls) >= 4:
+                raise HrrrIncompleteArtifact("truncated")
+            return self._ok(fhour)
+
+        ts, replace, _diag = self._enrich(tmp_path, _last_fails)
+        assert ts is None
+        replace.assert_not_called()
 
 
 class TestHrrrFillSemantics:
@@ -967,7 +1076,12 @@ class TestHrrrFillSemantics:
 def test_hrrr_cache_ttl_registered():
     from weatherbrief.fetch.grib.cache import MODEL_TTL_SECONDS
 
-    assert MODEL_TTL_SECONDS["hrrr"] == 6 * 3600
+    # 9 h, not the hourly cadence: only 00/06/12/18z reach 48 h, so an
+    # EXTENDED run must outlive the 6 h gap to its successor plus HRRR's
+    # 1.25 h publication delay (PR #508 review 2).
+    assert MODEL_TTL_SECONDS["hrrr"] == 9 * 3600
+    from weatherbrief.fetch.grib.hrrr_fetch import HRRR_PUBLISH_DELAY_HOURS
+    assert MODEL_TTL_SECONDS["hrrr"] > (6 + HRRR_PUBLISH_DELAY_HOURS) * 3600
 
 
 def test_hrrr_source_registry_entry():
@@ -995,3 +1109,77 @@ def test_hrrr_tracked_by_marker_store():
     from weatherbrief.fetch.freshness.sources import all_tracked_sources
 
     assert ("hrrr:noaa", "hrrr") in all_tracked_sources()
+
+
+class TestHrrrNativeConvectiveParcel:
+    """HRRR's delivered ML CAPE/CIN must grade its own NWP track (#508 rev 2).
+
+    The `convective_scheme_absent` path exists because HRRR exposes no
+    convective-realization channel — but it DOES deliver a 90-0 mb parcel
+    pair. Grading on MetPy-derived CAPE instead made the "NWP" track a
+    relabelled copy of the DD track, and returned NONE for a delivered
+    2500 J/kg column whenever MetPy could not solve the profile.
+    """
+
+    @staticmethod
+    def _diag(**kw):
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        raw = {"low_cover_pct": 80.0, "mid_cover_pct": 20.0,
+               "high_cover_pct": 0.0, "ceiling_gpm": 900.0,
+               "cloud_base_gpm": 800.0}
+        raw.update(kw)
+        return build_hrrr_cloud_diagnostics(raw)
+
+    @staticmethod
+    def _assess(indices, diag):
+        from weatherbrief.analysis.sounding.convective import assess_convective_nwp
+
+        return assess_convective_nwp(indices, diag)
+
+    def test_native_cape_grades_without_metpy(self):
+        from weatherbrief.models.analysis import ConvectiveRisk, ThermodynamicIndices
+
+        out = self._assess(
+            ThermodynamicIndices(), self._diag(ml_cape_jkg=2500.0, ml_cin_jkg=-10.0),
+        )
+        assert out.risk_level != ConvectiveRisk.NONE
+        assert out.cape_jkg == 2500.0
+        assert out.cin_jkg == -10.0
+
+    def test_strong_native_cin_suppresses(self):
+        from weatherbrief.models.analysis import ThermodynamicIndices
+
+        weak_cap = self._assess(
+            ThermodynamicIndices(), self._diag(ml_cape_jkg=2500.0, ml_cin_jkg=-10.0),
+        )
+        strong_cap = self._assess(
+            ThermodynamicIndices(), self._diag(ml_cape_jkg=2500.0, ml_cin_jkg=-300.0),
+        )
+        assert strong_cap.risk_level.value != weak_cap.risk_level.value
+
+    def test_missing_native_cape_falls_back_to_sounding(self):
+        from weatherbrief.models.analysis import ThermodynamicIndices
+
+        out = self._assess(
+            ThermodynamicIndices(cape_surface_jkg=1800.0), self._diag(ml_cin_jkg=-10.0),
+        )
+        assert out.cape_jkg == 1800.0
+        assert out.cin_jkg == -10.0
+
+    def test_missing_native_cin_falls_back_to_sounding(self):
+        from weatherbrief.models.analysis import ThermodynamicIndices
+
+        out = self._assess(
+            ThermodynamicIndices(cin_surface_jkg=-250.0), self._diag(ml_cape_jkg=2500.0),
+        )
+        assert out.cape_jkg == 2500.0
+        assert out.cin_jkg == -250.0
+
+    def test_no_native_pair_is_unchanged(self):
+        """A diag with neither native field keeps the pure sounding fallback."""
+        from weatherbrief.models.analysis import ThermodynamicIndices
+
+        out = self._assess(ThermodynamicIndices(cape_surface_jkg=1800.0), self._diag())
+        assert out.cape_jkg == 1800.0
+        assert out.method == "nwp_cape_fallback"

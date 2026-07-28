@@ -437,6 +437,97 @@ def plan_hrrr_cloud_diag_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
 _DOWNLOAD_BATCH_REQUESTS = 16
 
 
+class HrrrIncompleteArtifact(RuntimeError):
+    """A mandatory part of an HRRR artifact is missing.
+
+    Raised by the plan validator and the streaming downloader. The HRRR
+    sounding is all-or-nothing by construction: it replaces the entire
+    pressure column rather than patching fields onto one, so a partially
+    downloaded artifact is not a degraded sounding but a corrupt one — and a
+    committed one is served from cache for hours. (PR #508 review)
+    """
+
+
+# Fields every retained pressure level must carry for the sounding artifact to
+# count as complete. RH and DPT are alternatives (HRRR ships both; the decoder
+# prefers DPT and derives from RH otherwise), so they are validated as a pair.
+# VVEL is deliberately absent: it is genuinely optional for the analyses that
+# consume this column, and that is a policy, not an accident of a failed
+# request — the download-side check above guarantees a planned VVEL span that
+# fails still kills the artifact.
+_HRRR_MANDATORY_LEVEL_VARIABLES = ("TMP", "UGRD", "VGRD", "HGT")
+_HRRR_HUMIDITY_VARIABLES = ("RH", "DPT")
+# At least one microphysics field per level — the reason HRRR is worth
+# fetching at all. CLMR is the operational name, CLWMR the documented one.
+_HRRR_MICROPHYSICS_VARIABLES = ("CLMR", "CLWMR", "CIMIXR")
+
+
+# Raw decoded field names (``_HRRR_FULL_VAR_MAP`` values) that must be present
+# on every level of a decoded column. Mirrors the plan check above, one stage
+# later: the plan proves the messages were OFFERED, this proves they DECODED.
+_HRRR_REQUIRED_DECODED = ("raw_temperature_k", "raw_u_wind_m_s",
+                          "raw_v_wind_m_s", "geopotential_height_m")
+_HRRR_REQUIRED_DECODED_HUMIDITY = ("raw_dewpoint_k", "raw_relative_humidity_pct")
+_HRRR_REQUIRED_DECODED_MICRO = ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg")
+
+
+def hrrr_column_incomplete_reason(
+    point_data: "dict[int, dict[str, float]]",
+) -> str | None:
+    """Why this decoded column is unusable, or None if it is complete.
+
+    ``all(decoded_points)`` only proved each point's dict is non-empty. A
+    truncated artifact decodes to a column that is *structurally* fine —
+    levels present, heights present — but with ``temperature_c=None`` and
+    ``wind_speed_kt=None`` on every level, because
+    ``build_pressure_levels_from_grib`` emits whatever converted cleanly.
+    Those levels would then REPLACE a complete GFS/Open-Meteo sounding.
+    (PR #508 review)
+    """
+    if not point_data:
+        return "no levels decoded"
+    for level, fields in sorted(point_data.items(), reverse=True):
+        missing = [k for k in _HRRR_REQUIRED_DECODED if fields.get(k) is None]
+        if all(fields.get(k) is None for k in _HRRR_REQUIRED_DECODED_HUMIDITY):
+            missing.append("dewpoint|rh")
+        if all(fields.get(k) is None for k in _HRRR_REQUIRED_DECODED_MICRO):
+            missing.append("clw|icmr")
+        if missing:
+            return f"{level}hPa missing {'+'.join(missing)}"
+    return None
+
+
+def validate_hrrr_sounding_plan(ranges: "list[ByteRange]") -> None:
+    """Raise :class:`HrrrIncompleteArtifact` if the planned set is deficient.
+
+    Checked BEFORE spending ~190 MB of downloads: if the ``.idx`` does not
+    offer every mandatory variable at every level it offers at all, the
+    resulting artifact could never pass column validation, so the hour should
+    fail now rather than after the transfer.
+    """
+    if not ranges:
+        raise HrrrIncompleteArtifact("no HRRR sounding messages in the .idx")
+
+    by_level: dict[int, set[str]] = {}
+    for r in ranges:
+        by_level.setdefault(r.level_hpa, set()).add(r.variable.upper())
+
+    deficient: list[str] = []
+    for level, present in sorted(by_level.items(), reverse=True):
+        missing = [v for v in _HRRR_MANDATORY_LEVEL_VARIABLES if v not in present]
+        if not any(v in present for v in _HRRR_HUMIDITY_VARIABLES):
+            missing.append("RH|DPT")
+        if not any(v in present for v in _HRRR_MICROPHYSICS_VARIABLES):
+            missing.append("CLMR|CLWMR|CIMIXR")
+        if missing:
+            deficient.append(f"{level}hPa missing {'+'.join(missing)}")
+    if deficient:
+        raise HrrrIncompleteArtifact(
+            "HRRR sounding plan incomplete: " + "; ".join(deficient[:5])
+            + (f" (+{len(deficient) - 5} more levels)" if len(deficient) > 5 else "")
+        )
+
+
 def coalesce_ranges(
     ranges: "list[ByteRange] | list[CloudDiagByteRange]",
 ) -> list[tuple[int, int | None]]:
@@ -492,18 +583,29 @@ def iter_hrrr_range_chunks(
 
     Each batch of ``_DOWNLOAD_BATCH_REQUESTS`` spans downloads concurrently;
     chunks are yielded in offset order so the consumer can stream them
-    straight into the concatenated-GRIB2 cache file. Failed spans are
-    skipped (their messages are simply absent from the stream, matching the
-    per-range failure semantics of the GFS fetcher).
+    straight into the concatenated-GRIB2 cache file.
+
+    **A failed span raises** :class:`HrrrIncompleteArtifact` (PR #508 review).
+    The GFS fetcher's skip-the-range semantics are safe there because GFS
+    enrichment PATCHES fields onto an existing sounding — a missing message
+    leaves the Open-Meteo value in place. HRRR REPLACES the whole column, and
+    ``put_cached_from_chunks`` commits whenever any bytes arrived, so a
+    skipped span produced a truncated file that then served as a valid cache
+    hit for the full-sounding key for hours. ``put_cached_from_chunks``
+    unlinks its tempfile when the iterator raises, so nothing is committed.
     """
     for i in range(0, len(spans), _DOWNLOAD_BATCH_REQUESTS):
         batch = spans[i:i + _DOWNLOAD_BATCH_REQUESTS]
         with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
             futures = [pool.submit(_fetch_span, url, span, session) for span in batch]
-            for future in futures:  # submission (= offset) order, not completion
+            for span, future in zip(batch, futures):  # offset order, not completion
                 data = future.result()
-                if data is not None:
-                    yield data
+                if data is None:
+                    raise HrrrIncompleteArtifact(
+                        f"byte range {span} failed; refusing to commit a "
+                        f"partial HRRR artifact from {url}"
+                    )
+                yield data
 
 
 def fetch_hrrr_ranges_to_cache(
