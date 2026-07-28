@@ -2850,16 +2850,36 @@ into the unknown default — PR #508 review round 4.) Only a layer with NO
 published band cover takes BKN, with `mean_cloud_cover_pct=None` keeping the
 guess out of anything numeric.
 
-**Threshold: total condensate ≥ 1×10⁻⁵ kg/kg (0.01 g/kg).** The standard
-cloud/no-cloud mask threshold in WRF-family post-processing (the model family
-HRRR belongs to): below it, condensate is numerical residue of the
-microphysics scheme, not a deck. Relative to SFIP it sits at the *bottom* of
-the lowest liquid-water ramp (`membership_clw` rises 0→0.3 over 0–0.01 g/kg)
-— i.e. any level whose liquid alone clears the threshold already carries the
-full first membership step. It is **not** SFIP's zero point: membership at
-0.01 g/kg is 0.3, and the first version of this note claimed otherwise by
-misreading the ramp (PR #508 review round 3). Liquid and ice are summed, so
+**Threshold: total condensate ≥ 1×10⁻⁷ kg/kg — HRRR's own cloud-base
+detection threshold, calibrated against the product's measured packing.**
+NOAA's Diag-vars Tech Memo defines HRRR's explicit cloud-base/ceiling
+detection as combined cloud water + ice > 1e-7 g/g, so the envelope uses the
+model's own convention rather than an invented one (an earlier 1e-5 value
+was mis-justified twice — first as "SFIP's zero point", which misread the
+`membership_clw` ramp (0→0.3 over 0–0.01 g/kg — round 3), then as "the
+WRF-family mask convention", which NOAA's documented 1e-7/1e-6 diagnostic
+thresholds contradict (round 5)). The decisive evidence is the live
+product's packing, measured on hrrr.20260726 t12z f06 across full-CONUS
+500+700 hPa fields: **liquid (CLMR) is GRIB-quantized in 1e-5 steps** — the
+smallest nonzero value the product can represent is 1e-5, so for liquid
+every threshold ≤ 1e-5 behaves identically — while **ice (CIMIXR) packs to
+a 1e-9 quantum with 98.9 % of nonzero values below 1e-5** (median 1e-7):
+the 1e-5 threshold silently erased genuine thin cirrus, and the actual
+numerical-residue cluster sits at 1e-9–5e-9, two decades below 1e-7. So
+1e-7 leaves liquid decks bit-identical, recovers real ice decks, and still
+excludes the measured residue floor. Liquid and ice are summed, so
 ice-only cirrus and mixed-phase decks both register.
+
+**Band membership follows NCEP's product definitions, not ICAO altitudes.**
+HRRR's LCDC/MCDC/HCDC are defined by PRESSURE — surface–642 hPa,
+642–350 hPa, 350 hPa–top (rapidrefresh.noaa.gov/RAP_var_diagnosis.html) —
+so when the amount comes from those diagnostics, a deck's band is selected
+by pressure, and a condensate run crossing 642 or 350 hPa is SPLIT so each
+segment takes its own band's cover. The first wiring selected by the ICAO
+6,500/20,000 ft bands, which read MCDC for an ~8,000 ft column NCEP files
+under LCDC — turning a native overcast low deck into FEW (PR #508 round 5).
+The bulk Open-Meteo fallback keeps ICAO-style altitude bands, its own
+product semantics.
 
 **Ordered last, deliberately.** GFS carries both band geometry *and*
 condensate. Placing the condensate source after the GRIB-band path means GFS

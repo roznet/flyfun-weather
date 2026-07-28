@@ -91,6 +91,26 @@ class TestHrrrDomain:
         # though it is not a lat/lon rectangle — the projection is the truth.
         assert route_in_hrrr_domain([_rp(43.68, -79.63)]) is True
 
+    @pytest.mark.parametrize("fx,fy,inside", [
+        # 1e-6 cells (~3 mm) inside each corner: far above the projection
+        # roundtrip + longitude-wrap error budget (~1e-9 cells observed),
+        # far below any physical significance — pins the inclusive bounds
+        # and catches an off-by-one (Nx vs Nx-1) or swapped-axis regression
+        # deterministically (PR #508 round 5). Exact-corner inputs are NOT
+        # testable through lat/lon: independently computed longitudes differ
+        # from the grid constants by float-wrap epsilons that straddle the
+        # boundary either way.
+        (1e-6, 1e-6, True),                    # first grid point corner
+        (1798.0 - 1e-6, 1058.0 - 1e-6, True),  # last grid point corner
+        (-0.5, 500.0, False),      # half a cell west of the grid
+        (1798.5, 500.0, False),    # half a cell east of the grid
+        (900.0, -0.5, False),      # south of the grid
+        (900.0, 1058.5, False),    # north of the grid
+    ])
+    def test_grid_edges(self, fx, fy, inside):
+        lat, lon = _latlon_at_frac(fx, fy)
+        assert route_in_hrrr_domain([_rp(lat, lon)]) is inside
+
 
 # ---------------------------------------------------------------------------
 # Horizons + run selection across 18h/48h cycles
@@ -1122,6 +1142,98 @@ class TestHrrrSlotCommitContract:
         # Diagnostics only for the 3 hours whose sounding actually merged.
         assert apply_diag.call_count == 3
 
+    def _real_gfs_pack(self):
+        """A minimal real GFS cross-section so rollback can be asserted on
+        actual object state, not mocks."""
+        from weatherbrief.models import (
+            ModelSource,
+            RouteCrossSection,
+            Waypoint,
+            WaypointForecast,
+        )
+        from weatherbrief.models.analysis import HourlyForecast, PressureLevelData
+
+        hourly = HourlyForecast(
+            time=_utc(2026, 7, 26, 15),
+            pressure_levels=[PressureLevelData(pressure_hpa=500)],
+        )
+        wf = WaypointForecast(
+            waypoint=Waypoint(icao="KBOS", name="Boston", lat=42.36, lon=-71.0),
+            model=ModelSource.GFS,
+            fetched_at=_utc(2026, 7, 26),
+            hourly=[hourly],
+        )
+        cs = RouteCrossSection(
+            model=ModelSource.GFS, route_points=[],
+            fetched_at=_utc(2026, 7, 26), point_forecasts=[wf],
+        )
+        return cs, hourly
+
+    def _enrich_with_pack(self, tmp_path, cs, replace_side_effect,
+                          diag_side_effect=None):
+        import weatherbrief.fetch.grib as grib_mod
+
+        def _ok(_rp, _d, _h, fhour, **_k):
+            return (fhour, _utc(2026, 7, 26, 12 + fhour), [{500: {}}], [object()])
+
+        with patch.object(
+            grib_mod, "purge_old_runs",
+        ), patch.object(
+            grib_mod, "_stage_one_hrrr_hour", side_effect=_ok,
+        ), patch.object(
+            grib_mod, "_replace_pressure_levels_from_grib",
+            side_effect=replace_side_effect,
+        ), patch.object(
+            grib_mod, "_apply_cloud_diagnostics_to_sections",
+            side_effect=diag_side_effect,
+        ):
+            return grib_mod._enrich_gfs_from_hrrr(
+                [cs], [], self.ROUTE, _utc(2026, 7, 26, 15),
+                data_dir=tmp_path, flight_duration_hours=1.0,
+                run_info=("20260726", 12), session=None,
+            )
+
+    def test_commit_replace_failure_rolls_back_earlier_mutations(self, tmp_path):
+        """A raise partway through the COMMIT loop must not leave earlier
+        HRRR-replaced hours under the plain-GFS fallback (PR #508 round 5:
+        the exact mixed-provenance failure, relocated to commit)."""
+        from weatherbrief.models.analysis import PressureLevelData
+
+        cs, hourly = self._real_gfs_pack()
+        orig_levels = hourly.pressure_levels
+        calls = {"n": 0}
+
+        def _mutate_then_raise(sections, _af, _rp, _dec, valid_utc=None,
+                               model_source=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("commit died mid-loop")
+            hourly.pressure_levels = [PressureLevelData(pressure_hpa=111)]
+            return 1
+
+        ts = self._enrich_with_pack(tmp_path, cs, _mutate_then_raise)
+        assert ts is None  # clean GFS fallback
+        assert hourly.pressure_levels is orig_levels, (
+            "rollback must restore the exact pre-commit reference"
+        )
+
+    def test_commit_diag_failure_rolls_back_too(self, tmp_path):
+        from weatherbrief.models.analysis import PressureLevelData
+
+        cs, hourly = self._real_gfs_pack()
+        orig_levels = hourly.pressure_levels
+
+        def _mutate(sections, _af, _rp, _dec, valid_utc=None, model_source=None):
+            hourly.pressure_levels = [PressureLevelData(pressure_hpa=111)]
+            return 1
+
+        ts = self._enrich_with_pack(
+            tmp_path, cs, _mutate,
+            diag_side_effect=RuntimeError("diag apply died"),
+        )
+        assert ts is None
+        assert hourly.pressure_levels is orig_levels
+
 
 class TestPinnedRunDirs:
     """Cross-caller purge protection (PR #508 review round 4).
@@ -1151,6 +1263,32 @@ class TestPinnedRunDirs:
         # Unpinned afterwards, the next purge may collect it.
         assert purge_old_runs(tmp_path, model="hrrr") == 1
         assert not old_a.exists()
+
+    def test_pin_acquired_after_snapshot_still_protects(self, tmp_path, monkeypatch):
+        """The purge's pin snapshot races with concurrent pin_run_dir calls;
+        membership is re-checked under the lock at DELETION time, so a pin
+        landing mid-purge (simulated inside the age check, i.e. after the
+        snapshot but before rmtree) must still protect the directory
+        (PR #508 round 5)."""
+        import weatherbrief.fetch.grib.cache as cache_mod
+
+        old = self._run(tmp_path, "hrrr", "20260720_06z")
+        real_age = cache_mod._run_age_seconds
+        state: dict = {}
+
+        def _age_then_pin(run_dir, now_ts):
+            if "cm" not in state:  # a reader pins between snapshot and delete
+                state["cm"] = cache_mod.pin_run_dir(run_dir)
+                state["cm"].__enter__()
+            return real_age(run_dir, now_ts)
+
+        monkeypatch.setattr(cache_mod, "_run_age_seconds", _age_then_pin)
+        try:
+            removed = cache_mod.purge_old_runs(tmp_path, model="hrrr")
+        finally:
+            state["cm"].__exit__(None, None, None)
+        assert removed == 0
+        assert old.exists(), "a pin landing mid-purge must still protect"
 
     def test_pin_is_reference_counted(self, tmp_path):
         from weatherbrief.fetch.grib.cache import pin_run_dir, purge_old_runs
@@ -1236,6 +1374,27 @@ class TestHrrrFillSemantics:
 # ---------------------------------------------------------------------------
 # Cache TTL + freshness registry wiring
 # ---------------------------------------------------------------------------
+
+
+def test_condensate_layers_classified_native_everywhere():
+    """The native-source set is shared, not hand-listed per consumer — the
+    provenance badge and the DD-vs-NWP agreement advisory each missed one
+    native source once (PR #508 rounds 3 and 5)."""
+    import inspect
+
+    from weatherbrief.models.analysis import NATIVE_NWP_CLOUD_SOURCES
+
+    assert "nwp_condensate" in NATIVE_NWP_CLOUD_SOURCES
+    assert "nwp_3d" in NATIVE_NWP_CLOUD_SOURCES
+    assert "grib" in NATIVE_NWP_CLOUD_SOURCES
+
+    from weatherbrief.analysis.advisories import dd_nwp_agreement
+    from weatherbrief.tasks import advise
+
+    for mod in (dd_nwp_agreement, advise):
+        assert "NATIVE_NWP_CLOUD_SOURCES" in inspect.getsource(mod), (
+            f"{mod.__name__} must classify nativeness via the shared set"
+        )
 
 
 def test_hrrr_cache_ttl_registered():

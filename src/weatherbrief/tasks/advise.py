@@ -117,17 +117,20 @@ def _resolve_analyses(
             if swap_cloud:
                 if cloud_source == "nwp" and sounding.nwp_cloud_layers is not None:
                     updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
-                    # Determine effective method from layer source tags. All
-                    # three envelope builders are model-NATIVE — "grib" (GFS
-                    # band geometry), "nwp_3d" (ECMWF/ICON 3D cloud
-                    # fraction), "nwp_condensate" (HRRR microphysics, #457) —
-                    # and badge plainly as "nwp". "nwp_synthesized" is
-                    # reserved for genuinely synthesized/heuristic layers;
-                    # the old classifier keyed on "grib" alone and mislabeled
-                    # the other two native sources (PR #508 review).
+                    # Determine effective method from layer source tags. The
+                    # shared NATIVE_NWP_CLOUD_SOURCES set classifies all
+                    # three native envelope builders (GFS band geometry,
+                    # ECMWF/ICON 3D fraction, HRRR condensate #457) as plain
+                    # "nwp"; "nwp_synthesized" is reserved for genuinely
+                    # synthesized/heuristic layers. The old classifier keyed
+                    # on "grib" alone and mislabeled the other two native
+                    # sources in pilot-facing provenance (PR #508 review).
+                    from weatherbrief.models.analysis import (
+                        NATIVE_NWP_CLOUD_SOURCES,
+                    )
+
                     sources = {cl.source for cl in sounding.nwp_cloud_layers}
-                    native = {"grib", "nwp_3d", "nwp_condensate"}
-                    if not sources or sources <= native:
+                    if not sources or sources <= NATIVE_NWP_CLOUD_SOURCES:
                         updates["cloud_method_effective"] = "nwp"
                     else:
                         updates["cloud_method_effective"] = "nwp_synthesized"

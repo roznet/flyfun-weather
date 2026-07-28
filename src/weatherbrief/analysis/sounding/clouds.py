@@ -512,18 +512,32 @@ def build_nwp_cloud_layers_from_fraction(
     return layers
 
 
-# Total condensate (liquid + ice) at or above which a pressure level counts as
-# cloudy, kg/kg. 1e-5 kg/kg == 0.01 g/kg is the standard cloud/no-cloud mask
-# threshold in NWP post-processing (WRF-family cloud masks — the model family
-# HRRR belongs to — conventionally mask cloud at ~1e-5 kg/kg total
-# condensate); below it, values are numerical residue of the microphysics
-# scheme, not a deck. It sits at the BOTTOM of SFIP's lowest liquid-water
-# ramp (`sfip.py` `membership_clw`: 0→0.3 over 0–0.01 g/kg), so any level
-# whose liquid alone clears the threshold already carries the full first
-# membership step — it is NOT SFIP's zero point (membership at 0.01 g/kg is
-# 0.3, not 0; the earlier claim misread the ramp — PR #508 review round 3).
-# See meteorology-decisions §23.
-_CONDENSATE_CLOUDY_KG_KG = 1e-5
+# Total condensate (liquid + ice) at or above which a pressure level counts
+# as cloudy, kg/kg. 1×10⁻⁷ kg/kg is HRRR's OWN documented threshold for
+# explicit cloud-base/ceiling detection (combined cloud water + ice > 1e-7
+# g/g — NOAA Diag-vars Tech Memo, rapidrefresh.noaa.gov; PR #508 round 5),
+# and it is calibrated against the live product's packing (measured on
+# hrrr.20260726 t12z f06, 500+700 hPa, full CONUS):
+#
+#   - LIQUID (CLMR) is GRIB-quantized in 1e-5 steps — the smallest nonzero
+#     value the product can represent IS 1e-5, so for liquid any threshold
+#     ≤ 1e-5 is equivalent and nothing thinner can be dropped.
+#   - ICE (CIMIXR) packs much finer: 98.9 % of nonzero ice values sit BELOW
+#     1e-5 (median 1e-7) — the previous 1e-5 threshold made genuine thin
+#     cirrus read as a clear column. The true numerical-residue cluster
+#     sits at 1e-9–5e-9 (the packing quantum), two decades below 1e-7.
+#
+# So 1e-7 keeps liquid behaviour identical, recovers real ice decks, and
+# still excludes the measured residue floor. See meteorology-decisions §23.
+_CONDENSATE_CLOUDY_KG_KG = 1e-7
+
+# NCEP low/middle/high cloud-fraction band boundaries (pressure, hPa):
+# LCDC surface–642 hPa, MCDC 642–350 hPa, HCDC 350 hPa–top
+# (rapidrefresh.noaa.gov/RAP_var_diagnosis.html). These — not the ICAO
+# 6,500/20,000 ft bands — are the vertical definitions of the HRRR
+# diagnostic covers the condensate builder consumes (PR #508 round 5).
+_NCEP_LOW_BAND_FLOOR_HPA = 642.0
+_NCEP_MID_BAND_FLOOR_HPA = 350.0
 
 
 def build_nwp_cloud_layers_from_condensate(
@@ -556,6 +570,13 @@ def build_nwp_cloud_layers_from_condensate(
     diagnostic is what keeps the amount half genuinely model-native
     (PR #508 review round 3/4) — the same preference ``_build_grib_layers``
     already applies for GFS.
+
+    **Band membership follows the product's own vertical definitions.** When
+    diagnostics are supplied, a level belongs to the band NCEP defines by
+    PRESSURE (LCDC surface–642 hPa, MCDC 642–350 hPa, HCDC above), and a
+    condensate run crossing a boundary is split so each segment takes its
+    own band's cover; the bulk fallback keeps ICAO-style altitude bands
+    (PR #508 review round 5).
 
     Returns:
         ``None`` when NO level carries either condensate field — the model
@@ -614,6 +635,33 @@ def build_nwp_cloud_layers_from_condensate(
             and lv.geopotential_height_m is not None
         )
 
+    # Band membership. When the amount comes from the model's own diagnostic
+    # bands (HRRR), membership must use the PRODUCT'S vertical definitions —
+    # NCEP defines LCDC/MCDC/HCDC by pressure (surface–642 hPa, 642–350 hPa,
+    # 350 hPa–top; rapidrefresh.noaa.gov/RAP_var_diagnosis.html), not the
+    # ICAO 6,500/20,000 ft bands. Selecting an ~8,000 ft deck's cover with
+    # the ICAO rule read MCDC for a column NCEP files under LCDC, turning a
+    # native overcast low deck into FEW (PR #508 review round 5). The bulk
+    # Open-Meteo fallback keeps ICAO-style altitude bands — its own product
+    # semantics.
+    use_pressure_bands = nwp_cloud_diagnostics is not None
+
+    def _level_band(lv: PressureLevelData) -> int:
+        if use_pressure_bands:
+            if lv.pressure_hpa > _NCEP_LOW_BAND_FLOOR_HPA:
+                return 0
+            if lv.pressure_hpa > _NCEP_MID_BAND_FLOOR_HPA:
+                return 1
+            return 2
+        alt_ft = (lv.geopotential_height_m or 0.0) * _M_TO_FT
+        if alt_ft < _CLOUD_LOW_CEILING_FT:
+            return 0
+        if alt_ft < _CLOUD_MID_CEILING_FT:
+            return 1
+        return 2
+
+    band_eff = (low_eff, mid_eff, high_eff)
+
     layers: list[EnhancedCloudLayer] = []
     n = len(levels)
     i = 0
@@ -625,67 +673,69 @@ def build_nwp_cloud_layers_from_condensate(
         while j + 1 < n and cloudy[j + 1]:
             j += 1
 
-        below = _midpoint_edge(levels[i], levels[i - 1] if i > 0 else None)
-        above = _midpoint_edge(levels[j], levels[j + 1] if j + 1 < n else None)
-        if below is None or above is None:
-            i = j + 1
-            continue
-        base_ft, base_p = below
-        top_ft, top_p = above
-        if top_ft <= base_ft:
-            i = j + 1
-            continue
+        # A condensate run crossing a band boundary is SPLIT so each segment
+        # takes its own band's native cover — one midpoint band for a deep
+        # deck would grade the whole column with the wrong product (PR #508
+        # round 5). Segment boundaries use the same midpoint convention as
+        # the deck edges.
+        a = i
+        while a <= j:
+            b = a
+            band = _level_band(levels[a])
+            while b + 1 <= j and _level_band(levels[b + 1]) == band:
+                b += 1
 
-        mid_ft = (base_ft + top_ft) / 2.0
-        band_pct = _icao_band_cover(mid_ft, low_eff, mid_eff, high_eff)
-        if band_pct is None:
-            # No published band cover for this altitude — the deck is real
-            # (condensate says so) but its extent is unstated. BKN is the
-            # neutral middle of the scale; recording the cover as None keeps
-            # the guess out of anything that reads a percentage.
-            coverage = CloudCoverage.BKN
-        else:
-            # A KNOWN band cover must never route through the unknown
-            # default: `x or BKN` turned a published sub-FEW value —
-            # including an explicit 0 % — into BKN (PR #508 review round 4).
-            # Sub-FEW maps to FEW, not to "no deck": the condensate at this
-            # interpolated point is direct evidence of cloud HERE, while the
-            # band percentage is areal extent — a known-small extent reads
-            # as the sparsest reportable category, with the honest small
-            # percentage recorded alongside. (Dropping the layer would
-            # contradict the microphysics; BKN would contradict the model's
-            # own published extent.)
-            coverage = _nwp_pct_to_coverage(band_pct) or CloudCoverage.FEW
+            below = _midpoint_edge(levels[a], levels[a - 1] if a > 0 else None)
+            above = _midpoint_edge(levels[b], levels[b + 1] if b + 1 < n else None)
+            if below is None or above is None:
+                a = b + 1
+                continue
+            base_ft, base_p = below
+            top_ft, top_p = above
+            if top_ft <= base_ft:
+                a = b + 1
+                continue
 
-        temps = [lv.temperature_c for lv in levels[i:j + 1] if lv.temperature_c is not None]
-        layers.append(EnhancedCloudLayer(
-            base_ft=round(base_ft),
-            top_ft=round(top_ft),
-            base_pressure_hpa=round(base_p),
-            top_pressure_hpa=round(top_p),
-            thickness_ft=round(top_ft - base_ft),
-            mean_temperature_c=(round(sum(temps) / len(temps), 1) if temps else None),
-            coverage=coverage,
-            mean_cloud_cover_pct=(round(band_pct, 1) if band_pct is not None else None),
-            source="nwp_condensate",
-        ))
+            band_pct = band_eff[band]
+            if band_pct is None:
+                # No published band cover for this segment — the deck is real
+                # (condensate says so) but its extent is unstated. BKN is the
+                # neutral middle of the scale; recording the cover as None
+                # keeps the guess out of anything that reads a percentage.
+                coverage = CloudCoverage.BKN
+            else:
+                # A KNOWN band cover must never route through the unknown
+                # default: `x or BKN` turned a published sub-FEW value —
+                # including an explicit 0 % — into BKN (PR #508 review round
+                # 4). Sub-FEW maps to FEW, not to "no deck": the condensate
+                # at this interpolated point is direct evidence of cloud
+                # HERE, while the band percentage is areal extent — a
+                # known-small extent reads as the sparsest reportable
+                # category, with the honest small percentage recorded
+                # alongside. (Dropping the layer would contradict the
+                # microphysics; BKN would contradict the model's own
+                # published extent.)
+                coverage = _nwp_pct_to_coverage(band_pct) or CloudCoverage.FEW
+
+            temps = [
+                lv.temperature_c for lv in levels[a:b + 1]
+                if lv.temperature_c is not None
+            ]
+            layers.append(EnhancedCloudLayer(
+                base_ft=round(base_ft),
+                top_ft=round(top_ft),
+                base_pressure_hpa=round(base_p),
+                top_pressure_hpa=round(top_p),
+                thickness_ft=round(top_ft - base_ft),
+                mean_temperature_c=(round(sum(temps) / len(temps), 1) if temps else None),
+                coverage=coverage,
+                mean_cloud_cover_pct=(round(band_pct, 1) if band_pct is not None else None),
+                source="nwp_condensate",
+            ))
+            a = b + 1
         i = j + 1
 
     return layers
-
-
-def _icao_band_cover(
-    altitude_ft: float,
-    low_pct: float | None,
-    mid_pct: float | None,
-    high_pct: float | None,
-) -> float | None:
-    """Published band cover for the fixed ICAO band containing ``altitude_ft``."""
-    if altitude_ft < _CLOUD_LOW_CEILING_FT:
-        return low_pct
-    if altitude_ft < _CLOUD_MID_CEILING_FT:
-        return mid_pct
-    return high_pct
 
 
 def build_nwp_cloud_layers(

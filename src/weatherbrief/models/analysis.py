@@ -530,6 +530,32 @@ class HourlyForecast(BaseModel):
         if diag.freezing_level_ft is not None:
             self.freezing_level_m = diag.freezing_level_ft / 3.28084
 
+    def nwp_state_snapshot(self) -> tuple:
+        """References to every field a staged GRIB commit writes (#508 r5).
+
+        Taken BEFORE a commit loop mutates this hour so a mid-loop failure
+        can restore the exact prior state via :meth:`restore_nwp_state` —
+        the replacement paths swap whole references, so the snapshot needs
+        no copying. Covers ``pressure_levels`` (sounding replacement),
+        ``nwp_cloud_diagnostics`` and its ``freezing_level_m`` mirror
+        (diagnostics application).
+        """
+        return (
+            self.pressure_levels,
+            self.nwp_cloud_diagnostics,
+            self.freezing_level_m,
+        )
+
+    def restore_nwp_state(self, snap: tuple) -> None:
+        """Exact rollback of :meth:`nwp_state_snapshot`.
+
+        Lives on the model (with :meth:`attach_nwp_diagnostics`) because the
+        diagnostics/mirror pair must stay consistent and direct assignment of
+        ``nwp_cloud_diagnostics`` is banned outside this module — restoring a
+        snapshot restores BOTH halves, so the mirror invariant holds.
+        """
+        self.pressure_levels, self.nwp_cloud_diagnostics, self.freezing_level_m = snap
+
 
 class WaypointForecast(BaseModel):
     """Complete forecast for one waypoint from one model."""
@@ -782,10 +808,28 @@ class EnhancedCloudLayer(BaseModel):
     mean_cloud_cover_pct: Optional[float] = None  # Mean cloud fraction for nwp_3d, band cover_pct for grib
     theoretical_max_top_ft: Optional[float] = None  # EL (convective) or −20°C (stratiform)
     # How this layer was derived:
-    #   "dd"          — dewpoint depression sounding analysis (default)
-    #   "grib"        — GRIB2 model diagnostics with explicit base/top
-    #   "synthesized" — Open-Meteo cloud %, narrowed by DD envelope + inversions
+    #   "dd"             — dewpoint depression sounding analysis (default)
+    #   "grib"           — GRIB2 model diagnostics with explicit base/top (GFS)
+    #   "nwp_3d"         — per-level 3D cloud fraction (ECMWF cc / ICON clc)
+    #   "nwp_condensate" — per-level CLMR+CIMIXR microphysics (HRRR, #457)
+    #   "synthesized"    — Open-Meteo cloud %, narrowed by DD envelope + inversions
+    # "grib"/"nwp_3d"/"nwp_condensate" are MODEL-NATIVE — the single source
+    # of truth for that classification is NATIVE_NWP_CLOUD_SOURCES below;
+    # consumers must use it rather than hand-listing sources (two consumers
+    # each missed a source once doing that — PR #508 rounds 3 and 5).
     source: str = "dd"
+
+
+# EnhancedCloudLayer.source values that are MODEL-NATIVE (independent of the
+# DD envelope): GFS band geometry, ECMWF/ICON 3D cloud fraction, HRRR
+# condensate microphysics. Consumers that branch on nativeness — the
+# cloud-method provenance badge (tasks/advise.py) and the DD-vs-NWP
+# agreement advisory (advisories/dd_nwp_agreement.py) — must use this set;
+# each previously kept its own hand-written list and each missed a native
+# source once (PR #508 rounds 3 and 5).
+NATIVE_NWP_CLOUD_SOURCES: frozenset[str] = frozenset(
+    {"grib", "nwp_3d", "nwp_condensate"}
+)
 
 
 class InversionLayer(BaseModel):

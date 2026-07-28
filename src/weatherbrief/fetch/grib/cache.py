@@ -82,6 +82,29 @@ def _pinned_run_dirs() -> set[str]:
     with _PIN_LOCK:
         return set(_PINNED_RUN_DIRS)
 
+
+def _rmtree_unless_pinned(run_dir: Path) -> bool:
+    """Delete ``run_dir`` unless it is pinned AT DELETION TIME.
+
+    A snapshot taken at the top of a purge pass races with concurrent pins:
+    a reader can pin between the snapshot and the ``rmtree`` (PR #508 round
+    5). Re-checking membership under the lock immediately before deleting
+    closes that window down to "pin acquired after this check" — and a pin
+    that late is safe by construction: pinning precedes the pinner's FIRST
+    cache read, so a directory deleted in that residual sliver behaves like
+    an ordinary cold cache (the reads miss and the artifact is re-fetched;
+    the corrupt-cache retry covers a partially-removed file). What the
+    re-check protects is the dangerous case: a reader pinned BEFORE the
+    deletion decision, possibly mid-decode.
+
+    Returns True when the directory was deleted.
+    """
+    with _PIN_LOCK:
+        if str(run_dir.resolve()) in _PINNED_RUN_DIRS:
+            return False
+        shutil.rmtree(run_dir, ignore_errors=True)
+    return True
+
 # Per-model TTL overrides. The model is recovered from the cache layout —
 # ``run_dir.parent.name`` is the model key (see :func:`cache_dir_for_run`).
 # Models not listed here fall back to :data:`CACHE_TTL_SECONDS`.
@@ -446,10 +469,14 @@ def _enforce_size_cap(
     ):
         victim = victims[idx]
         reclaimed = sizes[victim]
-        shutil.rmtree(victim, ignore_errors=True)
+        idx += 1
+        # Membership re-checked under the pin lock at deletion time — the
+        # sizing walk above leaves a wide window for a reader to pin
+        # (PR #508 round 5).
+        if not _rmtree_unless_pinned(victim):
+            continue
         total -= reclaimed
         removed += 1
-        idx += 1
         logger.info(
             "GRIB cache cap: evicted %s run %s (%.1f MiB reclaimed, "
             "model total now %.1f MiB / cap %.1f MiB)",
@@ -527,9 +554,12 @@ def purge_old_runs(
         if str(run_dir.resolve()) in pinned:
             continue
         if _run_age_seconds(run_dir, now_ts) > ttl:
-            shutil.rmtree(run_dir, ignore_errors=True)
-            removed += 1
-            logger.debug("Purged old cache: %s", run_dir)
+            # Pin membership is re-checked under the lock at deletion time —
+            # the snapshot above races with concurrent pin_run_dir calls
+            # (PR #508 round 5).
+            if _rmtree_unless_pinned(run_dir):
+                removed += 1
+                logger.debug("Purged old cache: %s", run_dir)
 
     if enforce_cap:
         if cap_bytes is None:

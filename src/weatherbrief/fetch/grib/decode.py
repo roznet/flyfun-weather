@@ -2294,15 +2294,37 @@ def decode_hrrr_pressure_per_point(
         # file's own u-variable so a future earth-relative product (RRFS?)
         # passes through untouched.
         rot_attrs: dict | None = None
+        uv_attrs: dict | None = None
         for ds in datasets:
             for var_name, xr_var in ds.data_vars.items():
-                if str(var_name).lower() in ("u", "v") and xr_var.attrs.get(
-                    "GRIB_uvRelativeToGrid"
-                ):
-                    rot_attrs = _lambert_attrs(xr_var.attrs)
+                if str(var_name).lower() in ("u", "v"):
+                    uv_attrs = xr_var.attrs
+                    if uv_attrs.get("GRIB_uvRelativeToGrid"):
+                        rot_attrs = _lambert_attrs(uv_attrs)
                     break
-            if rot_attrs is not None:
+            if uv_attrs is not None:
                 break
+        # Silence is only acceptable when the message EXPLICITLY declares
+        # earth-relative winds (uvRelativeToGrid == 0). A missing flag, or a
+        # grid-relative flag with unusable Lambert attrs, means winds may
+        # carry a latent ±15–20° direction bias — say so loudly rather than
+        # skipping rotation with no diagnostic signal (PR #508 round 5).
+        if uv_attrs is not None and rot_attrs is None:
+            flag = uv_attrs.get("GRIB_uvRelativeToGrid")
+            if flag is None:
+                logger.warning(
+                    "HRRR %s: GRIB_uvRelativeToGrid missing on the wind "
+                    "messages — cannot verify wind orientation; leaving "
+                    "winds unrotated (possible ±15–20° direction bias)",
+                    file_path,
+                )
+            elif flag:
+                logger.warning(
+                    "HRRR %s: winds are grid-relative but the Lambert "
+                    "projection attrs needed for rotation are missing — "
+                    "leaving winds unrotated (±15–20° direction bias)",
+                    file_path,
+                )
         if rot_attrs is not None:
             north = _lambert_wind_rotation(rot_attrs, latitudes, longitudes)
             for point_data, (nx, ny) in zip(results, north):
