@@ -342,8 +342,27 @@ class TestCondensateCloudEnvelope:
         assert self._layers([self._lv(1000, 110), self._lv(925, 760)]) is None
 
     def test_background_noise_does_not_make_a_deck(self):
+        # The measured CIMIXR packing-residue cluster sits at 1e-9–5e-9 —
+        # two decades below the 1e-7 threshold (HRRR's own cloud-base
+        # detection threshold, NOAA Tech Memo; PR #508 round 5).
         layers = self._layers([
-            self._lv(1000, 110, 1e-7, 0.0), self._lv(925, 760, 2e-7, 0.0),
+            self._lv(1000, 110, 0.0, 1e-9), self._lv(925, 760, 0.0, 5e-9),
+        ])
+        assert layers == []
+
+    def test_thin_cirrus_at_hrrr_threshold_is_a_deck(self):
+        """98.9 % of real HRRR nonzero ice sits below the old 1e-5 threshold
+        (median 1e-7) — thin genuine cirrus must not read as clear."""
+        layers = self._layers([
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(400, 7180, 0.0, 1e-7, -35.0),
+            self._lv(300, 9160, 0.0, 0.0),
+        ])
+        assert len(layers) == 1
+
+    def test_just_below_threshold_is_clear(self):
+        layers = self._layers([
+            self._lv(1000, 110, 0.0, 0.0), self._lv(400, 7180, 0.0, 9e-8),
         ])
         assert layers == []
 
@@ -455,6 +474,67 @@ class TestCondensateCloudEnvelope:
         layers = build_nwp_cloud_layers_from_condensate(levels, None, None, None)
         assert layers[0].coverage == CloudCoverage.BKN
         assert layers[0].mean_cloud_cover_pct is None
+
+    def test_low_deck_above_6500ft_takes_lcdc_not_mcdc(self):
+        """Round-5 repro: a deck at ~3,600–11,800 ft with LCDC 90 / MCDC 0.
+
+        NCEP defines LCDC by PRESSURE (surface–642 hPa ≈ up to ~12,000 ft),
+        not by the ICAO 6,500 ft band — the ICAO-altitude selector read MCDC
+        (0 %) for a column NCEP files under LCDC and graded a native overcast
+        low deck FEW."""
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+        from weatherbrief.models.analysis import CloudCoverage
+
+        diag = build_hrrr_cloud_diagnostics({
+            "low_cover_pct": 90.0, "mid_cover_pct": 0.0, "high_cover_pct": 0.0,
+        })
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(900, 1000, 3e-4, 0.0, -2.0),   # ~3,300 ft
+            self._lv(800, 2000, 3e-4, 0.0, -8.0),   # ~6,600 ft — above ICAO low
+            self._lv(700, 3100, 2e-4, 3e-5, -14.0),  # ~10,200 ft — still > 642 hPa
+            self._lv(500, 5570, 0.0, 0.0, -30.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, None, None, None, nwp_cloud_diagnostics=diag,
+        )
+        assert len(layers) == 1
+        assert layers[0].mean_cloud_cover_pct == 90.0
+        assert layers[0].coverage == CloudCoverage.OVC
+
+    def test_deck_crossing_642hpa_splits_per_band(self):
+        """A condensate run crossing the NCEP LCDC/MCDC boundary is split so
+        each segment takes its own band's native cover — one midpoint band
+        would grade the whole column with the wrong product."""
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+        from weatherbrief.models.analysis import CloudCoverage
+
+        diag = build_hrrr_cloud_diagnostics({
+            "low_cover_pct": 90.0, "mid_cover_pct": 20.0, "high_cover_pct": 0.0,
+        })
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(700, 3100, 3e-4, 0.0, -10.0),   # > 642 hPa → LCDC
+            self._lv(600, 4400, 2e-4, 3e-5, -18.0),  # < 642 hPa → MCDC
+            self._lv(500, 5570, 0.0, 0.0, -30.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, None, None, None, nwp_cloud_diagnostics=diag,
+        )
+        assert len(layers) == 2
+        low, mid = layers
+        assert low.mean_cloud_cover_pct == 90.0
+        assert low.coverage == CloudCoverage.OVC
+        assert mid.mean_cloud_cover_pct == 20.0
+        assert mid.coverage == CloudCoverage.FEW
+        # Segments abut at the midpoint between the boundary-adjacent levels.
+        assert low.top_ft == mid.base_ft
 
     def test_gfs_still_uses_its_band_geometry(self):
         """GFS carries BOTH band geometry and condensate — the condensate

@@ -2829,9 +2829,11 @@ def _try_enrich_gfs_from_hrrr(
             run_info=run_info, session=session,
         )
     except Exception:
-        # Only reachable from the pre-loop setup (window computation, cache
-        # dir) — the per-hour loop contains its own failures AND is wrapped
-        # as a whole, so nothing can escape after sections were mutated.
+        # Structurally reachable only with the sections un-mutated: the STAGE
+        # phase never touches them, and the COMMIT phase catches its own
+        # failures and rolls the pack back before returning None (#508 r5) —
+        # so this handler only ever sees pre-mutation setup errors, and the
+        # plain-GFS fallback below is always clean.
         logger.warning("HRRR enrichment failed; falling back to GFS", exc_info=True)
         return None
 
@@ -2965,27 +2967,50 @@ def _enrich_gfs_from_hrrr_pinned(
         return None
 
     # ---- Phase 2: COMMIT. Every hour validated, so the mutations below are
-    # the only ones that will happen and they cover the whole window.
+    # expected to succeed — but "expected" is not a guarantee, and a raise
+    # partway through this loop would leave some hours HRRR-replaced while
+    # the caller's blanket handler fell back to plain GFS over them, badged
+    # gfs:noaa: the exact mixed-provenance failure staging exists to prevent,
+    # just relocated (PR #508 round 5). So the loop is bracketed by an exact
+    # rollback journal: a snapshot of every field the commit writes, for
+    # every hourly in the gfs slot — whole-reference swaps, so the journal
+    # holds references, not copies. On any failure the pack is restored
+    # byte-for-byte and the clean GFS fallback proceeds.
+    journal = [
+        (h, h.nwp_state_snapshot())
+        for h in _iter_gfs_slot_hourlies(gfs_sections, all_forecasts)
+    ]
     merged_hours = 0
-    for fhour, valid_utc, decoded_points, diagnostics in staged:
-        replaced = _replace_pressure_levels_from_grib(
-            gfs_sections, all_forecasts, route_points,
-            decoded_points, valid_utc=valid_utc,
-            model_source=ModelSource.GFS,
-        )
-        if replaced == 0:
-            # No hourly entry carries this valid time. Not a data failure —
-            # the window builder can legitimately offer an hour outside the
-            # forecast grid — but the diagnostics must not land alone.
-            continue
-        merged_hours += 1
-        if diagnostics is not None:
-            _apply_cloud_diagnostics_to_sections(
+    try:
+        for fhour, valid_utc, decoded_points, diagnostics in staged:
+            replaced = _replace_pressure_levels_from_grib(
                 gfs_sections, all_forecasts, route_points,
-                diagnostics, "gfs", valid_utc=valid_utc,
+                decoded_points, valid_utc=valid_utc,
+                model_source=ModelSource.GFS,
             )
-    staged.clear()
-    _grib_gc()
+            if replaced == 0:
+                # No hourly entry carries this valid time. Not a data failure —
+                # the window builder can legitimately offer an hour outside the
+                # forecast grid — but the diagnostics must not land alone.
+                continue
+            merged_hours += 1
+            if diagnostics is not None:
+                _apply_cloud_diagnostics_to_sections(
+                    gfs_sections, all_forecasts, route_points,
+                    diagnostics, "gfs", valid_utc=valid_utc,
+                )
+    except Exception:
+        for h, snap in journal:
+            h.restore_nwp_state(snap)
+        logger.warning(
+            "HRRR commit failed after %d merged hour(s); rolled back %d "
+            "hourlies and falling back to GFS", merged_hours, len(journal),
+            exc_info=True,
+        )
+        return None
+    finally:
+        staged.clear()
+        _grib_gc()
 
     if merged_hours == 0:
         logger.warning(
@@ -3000,6 +3025,19 @@ def _enrich_gfs_from_hrrr_pinned(
         merged_hours, len(forecast_hours), init_date, init_hour,
     )
     return _run_info_to_timestamp(init_date, init_hour)
+
+
+def _iter_gfs_slot_hourlies(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+):
+    """Every HourlyForecast the HRRR commit could touch — the rollback scope."""
+    for cs in gfs_sections:
+        for wf in cs.point_forecasts:
+            yield from wf.hourly
+    for wf in all_forecasts:
+        if wf.model == ModelSource.GFS:
+            yield from wf.hourly
 
 
 def _stage_one_hrrr_hour(

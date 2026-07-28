@@ -27,6 +27,7 @@ from weatherbrief.models import (
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
+from weatherbrief.models.analysis import NATIVE_NWP_CLOUD_SOURCES
 
 
 def _cloud_overlap_fraction(
@@ -191,11 +192,13 @@ class DDvsNWPAgreementEvaluator:
                 nwp_clouds = sounding.nwp_cloud_layers or []
                 # Only compare when NWP layers are genuinely model-native.
                 # source="synthesized" is derived from the DD envelope →
-                # comparison would be circular. "nwp_3d" (ECMWF cc / ICON clc)
-                # and "grib" (GFS LCDC/MCDC/HCDC bulk bands) are both
-                # independent of DD.
+                # comparison would be circular. The native set comes from the
+                # shared NATIVE_NWP_CLOUD_SOURCES constant — this module's
+                # own hand-written list missed the HRRR "nwp_condensate"
+                # source, silently skipping the comparison whenever HRRR
+                # served the slot (PR #508 round 5).
                 nwp_native = [cl for cl in nwp_clouds
-                              if cl.source in ("nwp_3d", "grib")]
+                              if cl.source in NATIVE_NWP_CLOUD_SOURCES]
                 has_native_nwp = len(nwp_native) > 0 or (
                     nwp_clouds == [] and sounding.nwp_cloud_diagnostics is not None
                 )
