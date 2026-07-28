@@ -2854,29 +2854,35 @@ def _enrich_gfs_from_hrrr(
     rotation, VVEL already Pa/s, HGT direct), and instantaneous cloud
     diagnostics + mixed-layer CAPE/CIN are attached per hour.
 
-    Forecast hours run sequentially (download → pool decode → merge → gc),
+    Forecast hours run sequentially (download → pool decode → validate → gc),
     mirroring ``_enrich_clwmr_icmr``: one HRRR fhour decode transiently holds
     ~2× a full-CONUS field per variable, so fanning hours out in parallel
     would multiply peak worker RSS for little wall-clock gain against the
-    download-dominated total. Per-fhour failures are contained — a bad hour
-    is skipped and the time-axis fill covers it.
+    download-dominated total.
 
-    Mixed-state guarantees (PR #508 review):
+    **Staged commit — the slot is all-or-nothing (PR #508 review 2).** Every
+    requested hour is fetched, decoded and validated BEFORE anything is
+    written; a single unusable hour returns None and the caller keeps plain
+    GFS. Three guarantees follow:
 
-    - An hour is HRRR-or-untouched: cloud diagnostics are applied ONLY after
-      that hour's sounding replacement succeeded, so a sounding-decode
-      failure with a healthy diag blob can never leave HRRR's instantaneous
-      diagnostics under a later plain-GFS fallback (where ``gfs_init`` and
-      the RH/condensate gate would run over them).
-    - Spatially all-or-nothing: an hour whose decode covers only SOME route
-      points is skipped whole. Inside the domain gate this shouldn't happen;
-      it guards the gate's pinned grid constants drifting from the real grid
-      (which would otherwise pass the gate and then silently produce
-      HRRR-at-some-points, Open-Meteo-at-others).
-    - The success accounting increments the moment a sounding merge lands,
-      and the whole loop is exception-contained — so once anything was
-      merged, this returns the HRRR timestamp (partial success keeps HRRR,
-      #456 rule) rather than falling through to a mixed GFS fallback.
+    - *Slot-level, not hour-level.* Partial success used to keep HRRR
+      provenance (the #456 rule, inherited from ICON-D2), but the
+      pressure-level fill only rebuilds gap hours strictly BETWEEN two
+      anchors — hours outside the merged span kept their GFS sounding, and
+      ``_fill_clw_hourly`` could forward-fill HRRR condensate onto a GFS
+      level. The pack was badged "GFS (HRRR)" over a mixed column. HRRR is a
+      genuinely different model (WRF-ARW vs FV3), so the ICON-D2 precedent
+      does not carry.
+    - *Spatially all-or-nothing.* An hour whose decode covers only SOME route
+      points fails the slot. Inside the domain gate this shouldn't happen; it
+      guards the gate's pinned grid constants drifting from the real grid.
+    - *Structurally complete.* Every level of every column must carry
+      temperature, wind, height, humidity and microphysics — a truncated
+      artifact decodes to heights-and-nothing-else, and those levels would
+      otherwise replace a complete GFS sounding and stay cached.
+
+    Cloud diagnostics remain subordinate throughout: they are optional, so a
+    diagnostics failure costs cover/CAPE for that hour, never the slot.
     """
     from weatherbrief.fetch.grib.hrrr_fetch import (
         compute_hrrr_flight_window_hours,
@@ -2887,48 +2893,92 @@ def _enrich_gfs_from_hrrr(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
 
-    purge_old_runs(data_dir, model="hrrr")
+    # Resolve the run dir BEFORE purging and hand it over as protected: this
+    # runs on the hot path alongside other briefings, and a concurrent caller
+    # pinned to a different (older) run must not have its directory deleted
+    # mid-decode. (PR #508 review)
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="hrrr")
+    purge_old_runs(data_dir, model="hrrr", protect=run_dir)
 
-    # Everything past this point may mutate the sections, so it is wrapped
-    # whole: an exception can only reach the caller's plain-GFS fallback
-    # from the (mutation-free) setup above.
-    enriched_hours = 0
+    # ---- Phase 1: STAGE. Fetch, decode and validate every requested hour
+    # without touching the sections. Nothing here can mutate the pack, so any
+    # failure is a clean fall-through to plain GFS. (PR #508 review)
+    #
+    # Slot-level all-or-nothing is the contract this PR advertises, and it
+    # cannot be enforced hour-by-hour: `enriched_hours > 0` flipped provenance
+    # to HRRR as soon as ONE hour merged, while the pressure-level fill only
+    # rebuilds gap hours strictly BETWEEN two anchors — so hours outside the
+    # merged span kept their GFS sounding and `_fill_clw_hourly` could even
+    # forward-fill HRRR condensate onto a GFS level. The pack was then badged
+    # "GFS (HRRR)" over a genuinely mixed column.
+    #
+    # Staging is cheap: what is retained per hour is the decoded PER-POINT
+    # pressure column (~40 levels x ~10 floats x n_points, well under a MB),
+    # not the ~190 MB GRIB, which is decoded and released one hour at a time.
+    staged: list[tuple[int, datetime, list, list | None]] = []
     try:
         for fhour in forecast_hours:
-            try:
-                enriched_hours += _enrich_one_hrrr_hour(
-                    gfs_sections, all_forecasts, route_points,
-                    init_date, init_hour, fhour,
+            staged.append(
+                _stage_one_hrrr_hour(
+                    route_points, init_date, init_hour, fhour,
                     run_dir=run_dir, session=session,
                 )
-            except Exception:
-                logger.warning(
-                    "HRRR enrichment failed for f%02d", fhour, exc_info=True,
-                )
-            finally:
-                _grib_gc()
-    except Exception:
-        # Nothing inside the loop should get here (each hour contains its
-        # own failures) — belt-and-suspenders so a surprise can never fall
-        # through to the caller's GFS fallback after hours were merged.
-        logger.warning("HRRR enrichment loop aborted", exc_info=True)
-
-    if enriched_hours > 0:
-        logger.info(
-            "HRRR full sounding replacement applied to gfs slot "
-            "(%d/%d hours, run %s %02dz)",
-            enriched_hours, len(forecast_hours), init_date, init_hour,
+            )
+            _grib_gc()
+    except Exception as exc:
+        logger.warning(
+            "HRRR hour f%s unusable (%s); falling back to GFS for the whole "
+            "slot — a partial HRRR window would be badged as a full one",
+            forecast_hours[len(staged)] if len(staged) < len(forecast_hours) else "?",
+            exc,
         )
-        return _run_info_to_timestamp(init_date, init_hour)
+        return None
+    finally:
+        _grib_gc()
 
-    logger.warning("HRRR produced no enrichment; falling back to GFS")
-    return None
+    if not staged:
+        logger.warning("HRRR produced no enrichment; falling back to GFS")
+        return None
+
+    # ---- Phase 2: COMMIT. Every hour validated, so the mutations below are
+    # the only ones that will happen and they cover the whole window.
+    merged_hours = 0
+    for fhour, valid_utc, decoded_points, diagnostics in staged:
+        replaced = _replace_pressure_levels_from_grib(
+            gfs_sections, all_forecasts, route_points,
+            decoded_points, valid_utc=valid_utc,
+            model_source=ModelSource.GFS,
+        )
+        if replaced == 0:
+            # No hourly entry carries this valid time. Not a data failure —
+            # the window builder can legitimately offer an hour outside the
+            # forecast grid — but the diagnostics must not land alone.
+            continue
+        merged_hours += 1
+        if diagnostics is not None:
+            _apply_cloud_diagnostics_to_sections(
+                gfs_sections, all_forecasts, route_points,
+                diagnostics, "gfs", valid_utc=valid_utc,
+            )
+    staged.clear()
+    _grib_gc()
+
+    if merged_hours == 0:
+        logger.warning(
+            "HRRR staged %d hour(s) but none matched a forecast hour; "
+            "falling back to GFS", len(forecast_hours),
+        )
+        return None
+
+    logger.info(
+        "HRRR full sounding replacement applied to gfs slot "
+        "(%d/%d hours, run %s %02dz)",
+        merged_hours, len(forecast_hours), init_date, init_hour,
+    )
+    return _run_info_to_timestamp(init_date, init_hour)
 
 
-def _enrich_one_hrrr_hour(
-    gfs_sections: list[RouteCrossSection],
-    all_forecasts: list[WaypointForecast],
+def _stage_one_hrrr_hour(
     route_points: list[RoutePoint],
     init_date: str,
     init_hour: int,
@@ -2936,91 +2986,113 @@ def _enrich_one_hrrr_hour(
     *,
     run_dir: Path,
     session: requests.Session,
-) -> int:
-    """Fetch, decode and merge ONE HRRR forecast hour. Returns 1 on success.
+) -> tuple[int, datetime, list, list | None]:
+    """Fetch, decode and VALIDATE one HRRR hour. Mutates nothing.
 
-    The hour is HRRR-or-untouched: the sounding must decode for EVERY route
-    point and merge before the (subordinate) cloud diagnostics are applied.
-    Returning 0 means the sections were not mutated for this hour.
+    Returns ``(fhour, valid_utc, decoded_points, diagnostics_or_None)`` for
+    the caller to commit once every hour has passed, or raises
+    :class:`HrrrIncompleteArtifact` (or any decode error) to fail the slot.
+
+    Validation is three-stage, each catching what the next cannot:
+
+    1. **Plan** — the ``.idx`` must offer every mandatory variable on every
+       level it offers at all, checked before ~190 MB is transferred.
+    2. **Download** — any failed byte range aborts the artifact rather than
+       committing a truncated file that would then serve as a cache hit.
+    3. **Decoded column** — every route point must yield a complete column.
+       ``all(decoded_points)`` only proved the dicts were non-empty; a
+       truncated artifact decodes to levels with heights and nothing else,
+       and those would replace a complete GFS sounding.
+
+    A cached artifact that fails (3) is deleted and re-fetched once: it is
+    almost certainly a partial file committed before this validation existed,
+    and it would otherwise poison every briefing for the TTL.
+
+    The cloud diagnostics stay SUBORDINATE — they are optional, so their
+    failure returns None for that slot rather than failing the hour.
     """
     from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
     from weatherbrief.fetch.grib.hrrr_fetch import (
+        HrrrIncompleteArtifact,
         fetch_hrrr_idx,
         fetch_hrrr_ranges_to_cache,
+        hrrr_column_incomplete_reason,
         plan_hrrr_cloud_diag_byte_ranges,
         plan_hrrr_sounding_byte_ranges,
+        validate_hrrr_sounding_plan,
     )
 
     sounding_ck = cache_key(fhour, "HRRR_SOUNDING")
     diag_ck = cache_key(fhour, "HRRR_CLOUD_DIAG")
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
+    valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
 
-    idx_text: str | None = None
-    if not is_cached(run_dir, sounding_ck) or not is_cached(run_dir, diag_ck):
-        with _grib_time("hrrr_idx_fetch"):
-            idx_text = fetch_hrrr_idx(init_date, init_hour, fhour, session=session)
+    # The .idx is fetched at most once per hour and shared by both artifacts
+    # (the sounding may be cached while the diagnostics are not, or vice
+    # versa, and the re-fetch path below reuses it a third time).
+    idx_cache: list[str | None] = []
 
-    if not is_cached(run_dir, sounding_ck):
-        ranges = plan_hrrr_sounding_byte_ranges(idx_text or "")
-        if not ranges:
-            logger.warning("No HRRR sounding messages in .idx for f%02d", fhour)
-            return 0
+    def _idx() -> str:
+        if not idx_cache:
+            idx_cache.append(
+                fetch_hrrr_idx(init_date, init_hour, fhour, session=session)
+            )
+        return idx_cache[0] or ""
+
+    def _download_sounding() -> None:
+        ranges = plan_hrrr_sounding_byte_ranges(_idx())
+        validate_hrrr_sounding_plan(ranges)
         with _grib_time("hrrr_sounding_download"):
             ok = fetch_hrrr_ranges_to_cache(
                 init_date, init_hour, fhour, ranges, run_dir, sounding_ck,
                 session=session, label="sounding",
             )
         if not ok:
-            return 0
+            raise HrrrIncompleteArtifact(
+                f"HRRR sounding f{fhour:02d} did not commit a cache entry"
+            )
 
-    if not is_cached(run_dir, diag_ck):
-        diag_ranges = plan_hrrr_cloud_diag_byte_ranges(idx_text or "")
-        if diag_ranges:
-            with _grib_time("hrrr_cloud_diag_download"):
-                fetch_hrrr_ranges_to_cache(
-                    init_date, init_hour, fhour, diag_ranges, run_dir, diag_ck,
-                    session=session, label="cloud diag",
-                )
+    if not is_cached(run_dir, sounding_ck):
+        _download_sounding()
 
-    valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+    def _decode_sounding() -> list:
+        with _grib_time("hrrr_pressure_decode"):
+            return _dispatch_decode(
+                "decode_hrrr_pressure",
+                str(run_dir / sounding_ck), point_lats, point_lons,
+            )
 
-    with _grib_time("hrrr_pressure_decode"):
-        decoded_points = _dispatch_decode(
-            "decode_hrrr_pressure",
-            str(run_dir / sounding_ck), point_lats, point_lons,
-        )
-    # Spatially all-or-nothing: a point with an empty dict means the grid
-    # didn't cover it. The domain gate should make that impossible; if the
-    # pinned gate constants ever drift from the real grid, skipping the hour
-    # here keeps the slot from going HRRR-at-some-points (PR #508 review).
-    if not decoded_points or not all(decoded_points):
-        covered = sum(1 for d in decoded_points or [] if d)
+    decoded_points = _decode_sounding()
+    reason = _hrrr_decode_reason(decoded_points, route_points)
+    if reason is not None:
+        # Distrust the cached file before distrusting the domain gate: a
+        # pre-validation partial artifact looks exactly like this.
         logger.warning(
-            "HRRR f%02d sounding covered %d/%d route points — skipping hour "
-            "(gate/grid mismatch?)",
-            fhour, covered, len(route_points),
+            "HRRR f%02d cached sounding rejected (%s); re-fetching once",
+            fhour, reason,
         )
         del decoded_points
-        return 0
+        (run_dir / sounding_ck).unlink(missing_ok=True)
+        _download_sounding()
+        decoded_points = _decode_sounding()
+        reason = _hrrr_decode_reason(decoded_points, route_points)
+        if reason is not None:
+            del decoded_points
+            raise HrrrIncompleteArtifact(f"f{fhour:02d} sounding: {reason}")
 
-    replaced = _replace_pressure_levels_from_grib(
-        gfs_sections, all_forecasts, route_points,
-        decoded_points, valid_utc=valid_utc,
-        model_source=ModelSource.GFS,
-    )
-    del decoded_points
-    if replaced == 0:
-        # No hourly entries matched this valid time — nothing was written,
-        # and the diagnostics must not go in alone.
-        return 0
-
-    # Sounding is in — the hour is committed to HRRR; diagnostics ride along.
-    # Their failures are contained here so this function returns 1 whenever
-    # the sounding merged: a raise past this point would make the caller
-    # under-count merged hours and could trigger the GFS fallback on top of
-    # already-replaced HRRR soundings.
+    # Diagnostics are optional — a failure here costs cover/CAPE, not the
+    # sounding, so it must not fail the slot.
+    diagnostics: list | None = None
     try:
+        if not is_cached(run_dir, diag_ck):
+            diag_ranges = plan_hrrr_cloud_diag_byte_ranges(_idx())
+            if diag_ranges:
+                with _grib_time("hrrr_cloud_diag_download"):
+                    fetch_hrrr_ranges_to_cache(
+                        init_date, init_hour, fhour, diag_ranges, run_dir,
+                        diag_ck, session=session, label="cloud diag",
+                    )
         if is_cached(run_dir, diag_ck):
             with _grib_time("hrrr_cloud_diag_decode"):
                 diag_raw = _dispatch_decode(
@@ -3029,19 +3101,40 @@ def _enrich_one_hrrr_hour(
                 )
             if diag_raw:
                 diagnostics = [build_hrrr_cloud_diagnostics(raw) for raw in diag_raw]
-                _apply_cloud_diagnostics_to_sections(
-                    gfs_sections, all_forecasts, route_points,
-                    diagnostics, "gfs", valid_utc=valid_utc,
-                )
-                del diagnostics
             del diag_raw
     except Exception:
         logger.warning(
-            "HRRR f%02d cloud diagnostics failed (sounding kept)", fhour,
+            "HRRR f%02d cloud diagnostics unavailable (sounding kept)", fhour,
             exc_info=True,
         )
+        diagnostics = None
 
-    return 1
+    return fhour, valid_utc, decoded_points, diagnostics
+
+
+def _hrrr_decode_reason(
+    decoded_points: list | None,
+    route_points: list[RoutePoint],
+) -> str | None:
+    """Why a decoded HRRR hour is unusable, or None if every column is good.
+
+    Spatially all-or-nothing: an empty dict means the grid didn't cover that
+    point, which the domain gate should make impossible — but if the pinned
+    gate constants ever drift from the real grid, failing here keeps the slot
+    from going HRRR-at-some-points.
+    """
+    from weatherbrief.fetch.grib.hrrr_fetch import hrrr_column_incomplete_reason
+
+    if not decoded_points:
+        return "decode returned nothing"
+    if len(decoded_points) < len(route_points) or not all(decoded_points):
+        covered = sum(1 for d in decoded_points if d)
+        return f"covered {covered}/{len(route_points)} route points"
+    for i, point_data in enumerate(decoded_points):
+        why = hrrr_column_incomplete_reason(point_data)
+        if why is not None:
+            return f"point {i}: {why}"
+    return None
 
 
 def _fetch_clwmr_icmr_for_fhour(

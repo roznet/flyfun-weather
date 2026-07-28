@@ -25,8 +25,12 @@ _ICING_MARGIN_FT = 500
 _TERRAIN_CLEARANCE_FT = 1000
 
 # ICAO cloud level boundaries (feet AGL)
-_CLOUD_LOW_CEILING_FT = 6500
-_CLOUD_MID_CEILING_FT = 20000
+# Single definition lives in `clouds.py` (the cloud module) — re-exported
+# here so existing references keep working. (PR #508 review)
+from weatherbrief.analysis.sounding.clouds import (  # noqa: E402
+    _CLOUD_LOW_CEILING_FT,
+    _CLOUD_MID_CEILING_FT,
+)
 
 
 def compute_altitude_advisories(
@@ -296,20 +300,33 @@ def _nwp_cloud_cover_at(
 ) -> float | None:
     """Return the NWP cloud cover % for the band containing the altitude.
 
-    When GFS cloud diagnostics are available, uses actual cloud base/top
-    boundaries to determine if the altitude falls within a cloud layer.
-    Falls back to fixed ICAO bands (SFC–6500ft, 6500–20000ft, 20000ft+)
-    when diagnostics are unavailable (e.g. ECMWF or Open-Meteo only).
+    When the diagnostics carry real cloud base/top boundaries, uses them to
+    decide whether the altitude falls inside a diagnosed layer. Falls back to
+    fixed ICAO bands (SFC–6500ft, 6500–20000ft, 20000ft+) otherwise.
+
+    **The geometry branch is gated on GEOMETRY, not on cover** (PR #508
+    review). Band covers without base/top are common — ECMWF publishes
+    lcc/mcc/hcc with no per-band boundaries, and so does HRRR — and keying
+    the branch on "some band reports a cover" sent those models down the
+    geometry path, where no layer could ever match and every altitude fell
+    through to ``return 0.0``. That reported a confident 0 % over an
+    overcast column. This mirrors the gate ``icing_common
+    .nwp_cloud_cover_at_altitude`` already applies (its ``any_diag`` flag).
     """
     diag = analysis.nwp_cloud_diagnostics
     if diag is not None:
-        # Check if diagnostics include layer cover percentages (GFS has them,
-        # ICON-EU may only have ceiling/convective heights without cover data).
-        has_layer_cover = any(
-            layer.cover_pct is not None
+        # Only trust the geometry branch when at least one band actually has
+        # both bounds. Cover alone is not enough to answer "is this altitude
+        # inside the deck?" — the ICAO fallback is the honest answer there.
+        has_layer_geometry = any(
+            layer.base_ft is not None and layer.top_ft is not None
             for layer in (diag.low, diag.mid, diag.high)
         )
-        if has_layer_cover:
+        has_convective_geometry = (
+            diag.convective_base_ft is not None
+            and diag.convective_top_ft is not None
+        )
+        if has_layer_geometry or has_convective_geometry:
             # Full diagnostics (GFS): use actual cloud boundaries per layer
             for layer in (diag.low, diag.mid, diag.high):
                 if (layer.cover_pct is not None and layer.cover_pct > 0
@@ -324,7 +341,7 @@ def _nwp_cloud_cover_at(
                 return diag.convective_cover_pct
             # Altitude doesn't fall within any diagnosed cloud layer
             return 0.0
-        # Partial diagnostics (ICON-EU): no cover data — fall through to ICAO bands
+        # No usable geometry (ECMWF, HRRR, partial ICON-EU) — ICAO bands.
 
     # Fallback to ICAO bands with Open-Meteo cloud cover
     if analysis.cloud_cover_low_pct is None:
