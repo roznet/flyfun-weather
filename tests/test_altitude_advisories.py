@@ -139,3 +139,71 @@ def test_descend_fallback_to_icing_zone_base():
     )
     descend = _descend(adv)
     assert descend.altitude_ft == 3500  # icing base 4000 − 500
+
+
+# ── risk=NONE zones are not icing ────────────────────────────────────
+
+
+def _climb(advisories):
+    return next(
+        (a for a in advisories.advisories if a.advisory_type == "climb_above_icing"),
+        None,
+    )
+
+
+def _none_risk_sounding() -> SoundingAnalysis:
+    """A sounding whose only zone is Ogimet's "assessed here, no icing" marker.
+
+    Ogimet emits a zone wherever cloud sits in the icing temperature band and
+    stamps it with the computed index, so risk=NONE is the method reporting no
+    icing — not a hazard. Geometry is deliberately identical to `_sounding()`'s
+    so only the risk differs.
+    """
+    return SoundingAnalysis(
+        indices=ThermodynamicIndices(freezing_level_ft=9000),
+        icing_zones=[IcingZone(
+            base_ft=4000, top_ft=10000,
+            risk=IcingRisk.NONE, icing_type=IcingType.CLEAR,
+            mean_icing_index=0.8,
+        )],
+        cloud_layers=[EnhancedCloudLayer(
+            base_ft=3000, top_ft=12000, coverage=CloudCoverage.OVC,
+        )],
+        precipitation=PrecipitationAssessment(),
+    )
+
+
+def test_no_escape_advisories_for_none_risk_zones():
+    """Zones that exist but carry risk=NONE must not produce escape advice.
+
+    On the briefing that surfaced this, 10 of 30 route points carried zones that
+    were entirely risk=NONE and each emitted a descend/climb escape for icing the
+    method itself said was absent.
+    """
+    adv = compute_altitude_advisories({"gfs": _none_risk_sounding()}, 8000, 18000)
+    assert _descend(adv) is None
+    assert _climb(adv) is None
+
+
+def test_none_risk_model_does_not_drag_the_aggregate():
+    """A NONE-risk model must be ignored, not treated as a no-escape model.
+
+    Aggregation is min() across models for the descent, and a model reported as
+    "has icing but no escape" contributes None — which would wrongly mark the
+    advisory infeasible. It must simply not participate.
+    """
+    adv = compute_altitude_advisories({
+        "gfs": _sounding(),                # real MODERATE icing, escape 8500
+        "ecmwf": _none_risk_sounding(),    # assessed, clean
+    }, 8000, 18000)
+    descend = _descend(adv)
+    assert descend is not None
+    assert descend.altitude_ft == 8500
+    assert descend.per_model_ft["ecmwf"] is None
+    assert descend.feasible is True
+
+
+def test_real_icing_still_produces_escape_advisories():
+    """No over-correction — the same geometry at MODERATE still advises."""
+    adv = compute_altitude_advisories({"gfs": _sounding()}, 8000, 18000)
+    assert _descend(adv) is not None

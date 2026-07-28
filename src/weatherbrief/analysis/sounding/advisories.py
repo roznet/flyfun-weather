@@ -519,7 +519,10 @@ def _cruise_icing_status(
 
     for analysis in soundings.values():
         for zone in analysis.icing_zones:
-            if zone.base_ft <= cruise_altitude_ft <= zone.top_ft:
+            # ``is_hazardous``: a risk-NONE zone spanning cruise means the method
+            # assessed cruise and found no icing — reporting "cruise in icing"
+            # there is exactly the existence-vs-hazard confusion this guards.
+            if zone.is_hazardous and zone.base_ft <= cruise_altitude_ft <= zone.top_ft:
                 cruise_in_icing = True
                 if _ICING_ORDER.index(zone.risk) > _ICING_ORDER.index(worst_risk):
                     worst_risk = zone.risk
@@ -549,8 +552,10 @@ def _descend_below_icing(
       than ``_TERRAIN_CLEARANCE_FT`` above it, the advisory is kept (the
       meteorological altitude is still true) but marked ``feasible=False``.
     """
+    # Only hazardous zones: an Ogimet zone at risk NONE is "assessed, no icing",
+    # so counting it would advertise a descent escape from icing that isn't there.
     has_icing = any(
-        len(sa.icing_zones) > 0 for sa in soundings.values()
+        any(z.is_hazardous for z in sa.icing_zones) for sa in soundings.values()
     )
     if not has_icing:
         return None
@@ -559,7 +564,8 @@ def _descend_below_icing(
     fzra_models: list[str] = []
 
     for model_key, analysis in soundings.items():
-        if not analysis.icing_zones:
+        icing_zones = [z for z in analysis.icing_zones if z.is_hazardous]
+        if not icing_zones:
             per_model_ft[model_key] = None
             continue
 
@@ -581,7 +587,7 @@ def _descend_below_icing(
         lowest_cloud_base: float | None = None
         for cl in analysis.cloud_layers:
             # Check if this cloud overlaps any icing zone
-            for zone in analysis.icing_zones:
+            for zone in icing_zones:
                 if cl.base_ft < zone.top_ft and cl.top_ft > zone.base_ft:
                     if lowest_cloud_base is None or cl.base_ft < lowest_cloud_base:
                         lowest_cloud_base = cl.base_ft
@@ -599,7 +605,7 @@ def _descend_below_icing(
             escape = max(candidates) - _ICING_MARGIN_FT
         else:
             # Fallback: lowest icing zone base
-            escape = min(z.base_ft for z in analysis.icing_zones) - _ICING_MARGIN_FT
+            escape = min(z.base_ft for z in icing_zones) - _ICING_MARGIN_FT
 
         per_model_ft[model_key] = max(escape, 0)
 
@@ -661,8 +667,10 @@ def _climb_above_icing(
     Per model: max(highest_icing_zone_top, highest_cloud_top_in_icing_temps) + margin.
     Aggregate: max() across models. Feasible if <= flight_ceiling_ft.
     """
+    # Hazardous zones only — see the sibling descend-below advisory. A risk-NONE
+    # zone would otherwise set a climb-above-icing altitude for absent icing.
     has_icing = any(
-        len(sa.icing_zones) > 0 for sa in soundings.values()
+        any(z.is_hazardous for z in sa.icing_zones) for sa in soundings.values()
     )
     if not has_icing:
         return None
@@ -670,16 +678,17 @@ def _climb_above_icing(
     per_model_ft: dict[str, float | None] = {}
 
     for model_key, analysis in soundings.items():
-        if not analysis.icing_zones:
+        icing_zones = [z for z in analysis.icing_zones if z.is_hazardous]
+        if not icing_zones:
             per_model_ft[model_key] = None
             continue
 
-        highest_icing_top = max(z.top_ft for z in analysis.icing_zones)
+        highest_icing_top = max(z.top_ft for z in icing_zones)
 
         # Highest cloud top that overlaps icing
         highest_cloud_in_icing: float = 0
         for cl in analysis.cloud_layers:
-            for zone in analysis.icing_zones:
+            for zone in icing_zones:
                 if cl.base_ft < zone.top_ft and cl.top_ft > zone.base_ft:
                     highest_cloud_in_icing = max(highest_cloud_in_icing, cl.top_ft)
                     break
