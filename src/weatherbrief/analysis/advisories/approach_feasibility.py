@@ -79,7 +79,7 @@ class _EndPlan:
 
     approach: RunwayApproach
     wind: RunwayWind
-    proxy: ApproachProxy | None
+    proxy: ApproachProxy
 
     @property
     def tailwind_kt(self) -> float:
@@ -87,22 +87,27 @@ class _EndPlan:
         return -self.wind.headwind_kt
 
 
-def _best_case_minima(
-    approaches: list[RunwayApproach],
-) -> tuple[float, float] | None:
+def _proxy(approach: RunwayApproach) -> ApproachProxy:
+    """Estimated minima for one approach — never ``None`` for a present IAP.
+
+    ``proxy_for_approach`` only returns ``None`` for ``has_iap=False``, and the
+    caller has already established that this approach exists; an unknown or
+    unmapped ``approach_type`` degrades to the most-demanding non-precision
+    range rather than to nothing.
+    """
+    proxy = proxy_for_approach(approach.approach_type, has_iap=True)
+    assert proxy is not None  # noqa: S101 - narrows the type; see docstring
+    return proxy
+
+
+def _best_case_minima(approaches: list[RunwayApproach]) -> tuple[float, float]:
     """Lowest plausible (decision height ft, visibility m) across the approaches.
 
     The *best case* deliberately: a forecast below this is below every plate the
     field could hold, which is the only ceiling/visibility fact hard enough to
-    justify RED (design rule 2). Returns ``None`` when no approach has a proxy.
+    justify RED (design rule 2). Callers must pass a non-empty list.
     """
-    proxies = [
-        p for p in (
-            proxy_for_approach(a.approach_type, has_iap=True) for a in approaches
-        ) if p is not None
-    ]
-    if not proxies:
-        return None
+    proxies = [_proxy(a) for a in approaches]
     return min(p.dh_lo for p in proxies), min(p.vis_lo for p in proxies)
 
 
@@ -131,7 +136,7 @@ def _straight_in_plans(
         plans.append(_EndPlan(
             approach=approach,
             wind=wind,
-            proxy=proxy_for_approach(approach.approach_type, has_iap=True),
+            proxy=_proxy(approach),
         ))
     return plans
 
@@ -172,7 +177,7 @@ def _band_status(value: float | None, lo: float, hi: float) -> AdvisoryStatus:
 
 
 def _minima_status(
-    cond: AirportModelCondition, proxy: ApproachProxy | None,
+    cond: AirportModelCondition, proxy: ApproachProxy,
 ) -> AdvisoryStatus:
     """Grade ceiling AND visibility against one approach's estimated minima.
 
@@ -182,8 +187,6 @@ def _minima_status(
     matching ``flight_category``, which also does not read an absent visibility
     as a poor one.
     """
-    if proxy is None:
-        return AdvisoryStatus.AMBER
     return AdvisoryStatus.worst([
         _band_status(cond.ceiling_ft, proxy.dh_lo, proxy.dh_hi),
         _band_status(cond.visibility_m, proxy.vis_lo, proxy.vis_hi),
@@ -223,19 +226,17 @@ def _grade_full(
     # Hard forecast fact — below every plate the field could hold. Checked before
     # the wind so a genuinely un-shootable approach reads as such regardless of
     # which runway the wind favours.
-    best_case = _best_case_minima(approaches.approaches)
-    if best_case is not None:
-        best_dh, best_vis = best_case
-        if ceiling is not None and ceiling < best_dh:
-            return AdvisoryStatus.RED, adv_t(
-                "approach_feasibility.below_minima", loc,
-                ceiling=int(ceiling), dh=int(best_dh),
-            )
-        if cond.visibility_m is not None and cond.visibility_m < best_vis:
-            return AdvisoryStatus.RED, adv_t(
-                "approach_feasibility.below_vis_minima", loc,
-                vis=int(cond.visibility_m), min_vis=int(best_vis),
-            )
+    best_dh, best_vis = _best_case_minima(approaches.approaches)
+    if ceiling is not None and ceiling < best_dh:
+        return AdvisoryStatus.RED, adv_t(
+            "approach_feasibility.below_minima", loc,
+            ceiling=int(ceiling), dh=int(best_dh),
+        )
+    if cond.visibility_m is not None and cond.visibility_m < best_vis:
+        return AdvisoryStatus.RED, adv_t(
+            "approach_feasibility.below_vis_minima", loc,
+            vis=int(cond.visibility_m), min_vis=int(best_vis),
+        )
 
     # Straight-in candidates, best arrival first.
     plans = _straight_in_plans(cond, approaches)
@@ -392,9 +393,16 @@ class ApproachFeasibilityEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         loc = ctx.locale
 
-        # The collection step could not run (old pack / no nav.db). Absent data
-        # is not a clear approach — say so, per the route_fronts/sun precedent.
-        if ctx.arrival_approaches is None or ctx.airport_conditions is None:
+        # The collection step could not run (old pack / no nav.db), or it ran
+        # and could not determine the approach picture (unknown ICAO, procedure
+        # query raised). Absent data is not a clear approach — and, just as
+        # importantly, it is not a *missing* approach either: grading it would
+        # turn a data gap into the grade map's most severe input.
+        if (
+            ctx.arrival_approaches is None
+            or ctx.arrival_approaches.lookup_failed
+            or ctx.airport_conditions is None
+        ):
             return RouteAdvisoryResult.from_per_model(ADVISORY_ID, [], params)
 
         approaches = ctx.arrival_approaches

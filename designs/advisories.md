@@ -176,6 +176,9 @@ states, and keeping them apart is the point:
 | `circling=True` | ICAO letter-suffixed circling-only procedure (`RNP A`, `NDB C`) |
 | neither | alignment unresolved — treated as *uncertainty*, never as hard misalignment |
 
+The container adds a fourth, airport-level state: `lookup_failed` (see
+UNAVAILABLE below).
+
 Circling detection keys on the single trailing letter, excluding X/Y/Z (those are
 straight-in *variant* designators) and any name carrying a digit. That digit
 guard is what matters: of the 262 ident-less rows in `nav.db`, only **39** are
@@ -201,15 +204,26 @@ no longer be expected to complete the arrival visually.
 | **MVFR** | IAP presence only, capped at AMBER. Any approach → GREEN; none → AMBER. **Never RED.** Alignment/circling/tailwind are not applied: with a 1000–3000 ft ceiling the landing can be completed visually, so a misaligned approach is not a penalty |
 | **IFR / LIFR** | Full logic. GREEN = straight-in to an end whose wind is within limits and a ceiling clear of the estimated minima band. AMBER = a compromise (circling required, ceiling *inside* the band, or a tailwind still within limits). RED = a hard fact only |
 
-**UNAVAILABLE** is reserved for "the evaluator could not run" — `arrival_approaches`
-absent (old pack / no nav.db) or no per-model airport condition. It is *not* used
-for an airport with no approaches: **zero procedure rows is treated as "no
-instrument approach available", full stop.** There is deliberately no third state
-distinguishing "genuinely has none" from "never ingested". Per-country coverage
-in `nav.db` is cleanly bimodal (40–100% or exactly 0.0%), and every 0% country is
-outside the current European scope, so the rule cannot misfire today.
-**Caveat for the US-expansion work:** in a 0%-coverage country this would grade
-every IFR destination RED. Revisit before enabling coverage there.
+**UNAVAILABLE** is reserved for "the evaluator could not run": `arrival_approaches`
+absent (old pack / no nav.db), no per-model airport condition, or
+`AirportApproaches.lookup_failed` — the ICAO was unknown to `nav.db`, or the
+procedure query raised. It is *not* used for an airport with no approaches:
+**zero procedure rows is treated as "no instrument approach available", full
+stop.** There is deliberately no third state distinguishing "genuinely has none"
+from "never ingested". Per-country coverage in `nav.db` is cleanly bimodal
+(40–100% or exactly 0.0%), and every 0% country is outside the current European
+scope, so the rule cannot misfire today. **Caveat for the US-expansion work:** in
+a 0%-coverage country this would grade every IFR destination RED. Revisit before
+enabling coverage there.
+
+`lookup_failed` exists because "this field has no instrument approach" is the
+**most severe input the grade map takes** (RED at IFR/LIFR), and it arrives as
+the same empty approach list a parse failure would produce. Only the flag tells
+them apart, so every path in `get_runway_approaches` that fails to *determine*
+the picture sets it rather than returning an empty list — a data problem must not
+be able to manufacture a RED. (The outer failure — the whole lookup raising —
+already degrades to `arrival_approaches=None` in
+`tasks/advise.py::_collect_arrival_approaches`; this closes the inner one.)
 
 **Two rules keep it honest.**
 

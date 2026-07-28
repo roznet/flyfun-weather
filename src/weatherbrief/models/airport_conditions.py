@@ -66,25 +66,28 @@ class RunwayApproach(BaseModel):
 class AirportApproaches(BaseModel):
     """The published approach picture at one airport.
 
-    ``has_procedure_data`` distinguishes "we have procedure rows for this
-    airport, and none of them is an approach" from "this airport has no
-    procedure rows at all". Both mean *no instrument approach* to the grade map
-    (issue #509 decided against a third state), but the detail text says which.
+    Three states, and keeping the last one apart is what stops a data gap from
+    reading as a confident verdict:
+
+    * approaches present — the normal case.
+    * ``has_procedure_data`` tells the two *genuine* absences apart: "we have
+      procedure rows and none is an approach" vs "no procedure rows at all".
+      Both mean *no instrument approach* to the grade map (issue #509 decided
+      against a third state there), but the detail text says which.
+    * ``lookup_failed`` — we could not determine the picture (unknown ICAO, or
+      the procedure query raised). NOT an absence of approaches: a consumer must
+      report this as "could not assess", never grade on it.
     """
 
     icao: str
     has_procedure_data: bool = False
+    lookup_failed: bool = False
     approaches: list[RunwayApproach] = Field(default_factory=list)
 
     @property
     def has_iap(self) -> bool:
         """True when at least one instrument approach is published."""
         return bool(self.approaches)
-
-    def for_runway(self, runway_id: str) -> list[RunwayApproach]:
-        """Approaches serving a specific runway end (straight-in only)."""
-        key = runway_id.strip().upper()
-        return [a for a in self.approaches if a.runway_id == key]
 
     @property
     def served_runway_ids(self) -> set[str]:

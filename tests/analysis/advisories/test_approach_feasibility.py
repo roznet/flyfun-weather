@@ -143,6 +143,22 @@ class TestUnavailable:
         )
         assert _grade(ctx) == AdvisoryStatus.RED
 
+    def test_failed_lookup_is_unavailable_not_a_red_no_approach(self):
+        """A data gap must never impersonate the grade map's most severe input.
+
+        ``lookup_failed`` and "no approaches" both arrive as an empty approach
+        list; only the flag tells them apart, and grading the gap would
+        manufacture a RED out of a parse failure.
+        """
+        failed = AirportApproaches(icao="EGKA", lookup_failed=True)
+        ctx = _ctx(_conditions(FlightCategory.IFR, [_RWY_02, _RWY_20]), failed)
+        assert _grade(ctx) == AdvisoryStatus.UNAVAILABLE
+
+    def test_failed_lookup_is_unavailable_even_at_mvfr(self):
+        failed = AirportApproaches(icao="EGKA", lookup_failed=True)
+        ctx = _ctx(_conditions(FlightCategory.MVFR, [_RWY_24]), failed)
+        assert _grade(ctx) == AdvisoryStatus.UNAVAILABLE
+
 
 class TestCategoryGating:
     def test_vfr_is_always_green(self):

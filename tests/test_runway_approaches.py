@@ -98,7 +98,7 @@ class TestGetRunwayApproaches:
         assert result.has_procedure_data is True
         assert result.has_iap is True
         assert result.served_runway_ids == {"02"}
-        assert result.for_runway("02")[0].approach_type == "ILS"
+        assert result.approaches[0].approach_type == "ILS"
 
     def test_zero_padding_does_not_break_the_join(self):
         airports = {"EGKA": _airport(
@@ -165,4 +165,39 @@ class TestGetRunwayApproaches:
         )}
         result = _lookup(airports, ["EGKA"])["EGKA"]
         assert result.served_runway_ids == {"02", "20"}
-        assert result.for_runway("24") == []
+        assert "24" not in result.served_runway_ids
+
+
+class TestFailureNeverImpersonatesAbsence:
+    """A data gap must not become "this field has no instrument approach".
+
+    That string is the grade map's most severe input (RED at IFR/LIFR), so
+    every path that fails to determine the picture sets ``lookup_failed``
+    instead of returning an empty approach list.
+    """
+
+    def test_unknown_icao_is_a_failed_lookup_not_an_absence(self):
+        result = _lookup({}, ["ZZZZ"])["ZZZZ"]
+        assert result.lookup_failed is True
+        assert result.has_procedure_data is False
+        assert result.approaches == []
+
+    def test_raising_procedure_query_is_a_failed_lookup(self):
+        class _Exploding(Airport):
+            @property
+            def procedures_query(self):
+                raise ValueError("malformed procedure row")
+
+        airport = _Exploding(ident="EGKA")
+        airport.runways = [_runway("02", "20")]
+        airport.procedures = []
+        result = _lookup({"EGKA": airport}, ["EGKA"])["EGKA"]
+        assert result.lookup_failed is True
+        assert result.approaches == []
+
+    def test_a_genuine_absence_is_not_a_failed_lookup(self):
+        """EGTF Fairoaks really has no approach — that IS a fact to grade on."""
+        airports = {"EGTF": _airport("EGTF", [_runway("06", "24")], [])}
+        result = _lookup(airports, ["EGTF"])["EGTF"]
+        assert result.lookup_failed is False
+        assert result.has_iap is False
