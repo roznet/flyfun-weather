@@ -343,13 +343,19 @@ def get_runway_approaches(
       NOT collapsed into "circling": the consumer treats unresolved alignment as
       uncertainty (which may only soften a grade), never as a hard misalignment.
 
+    The same principle governs failure: an unknown ICAO or a procedure query
+    that raises yields ``lookup_failed=True``, never an empty approach list. An
+    empty list is a *fact* ("this field has no instrument approach") that the
+    grade map treats as the most severe input there is, so a data gap must not
+    be able to impersonate one.
+
     Args:
         icao_codes: ICAO codes to look up.
         db_path: Path to the euro_aip SQLite database.
 
     Returns:
-        Dict mapping ICAO code to :class:`AirportApproaches`. An unknown ICAO
-        yields an empty entry with ``has_procedure_data=False``.
+        Dict mapping ICAO code to :class:`AirportApproaches`, one entry per
+        requested code.
     """
     model = _load_airport_model(db_path)
 
@@ -357,7 +363,7 @@ def get_runway_approaches(
     for icao in icao_codes:
         airport = model.airports.get(icao)
         if airport is None:
-            result[icao] = AirportApproaches(icao=icao, has_procedure_data=False)
+            result[icao] = AirportApproaches(icao=icao, lookup_failed=True)
             continue
 
         # Live runway ends with a true heading — the only ends the wind side can
@@ -378,8 +384,12 @@ def get_runway_approaches(
             procedures = list(airport.procedures_query.approaches().all())
             has_procedure_data = bool(getattr(airport, "procedures", None))
         except Exception:  # noqa: BLE001 - a bad procedure row must not fail a briefing
+            # ``lookup_failed``, NOT an empty approach list: a malformed row is
+            # our gap, and "no approach at all" is the single most severe input
+            # the grade map takes. Degrading a parse failure into that fact
+            # would manufacture a RED out of a data problem.
             logger.debug("Approach lookup failed for %s", icao, exc_info=True)
-            result[icao] = AirportApproaches(icao=icao, has_procedure_data=False)
+            result[icao] = AirportApproaches(icao=icao, lookup_failed=True)
             continue
 
         approaches: list[RunwayApproach] = []
