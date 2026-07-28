@@ -26,9 +26,20 @@ from pathlib import Path
 
 from weatherbrief.models import AdvisoryAggregation, RouteAdvisoriesManifest
 
-# Advisories whose re-run needs the DB-backed airport-conditions recompute we
-# intentionally skip here; flagged so a diff consumer can discount them.
-_AIRPORT_CONDITION_ADVISORIES = {"airport_conditions", "density_altitude", "llws"}
+# Advisories whose re-run needs a DB-backed recompute we intentionally skip
+# here; flagged so a diff consumer can discount them.
+#
+# ``approach_feasibility`` (#509) belongs here for a second reason: it also
+# needs ``airports_db_path`` (nav.db procedures), which this module never passes
+# to ``run_advisories_from_pack``, so its re-run is always UNAVAILABLE.
+#
+# NB ``airport_conditions`` matches no registered advisory id — the airport
+# category is flight_category / airport_wind / density_altitude / llws — so the
+# first two are currently unflagged. Pre-existing, left alone here rather than
+# silently changing diff output for advisories this change does not touch.
+_AIRPORT_CONDITION_ADVISORIES = {
+    "airport_conditions", "density_altitude", "llws", "approach_feasibility",
+}
 
 
 def load_saved_manifest(pack_dir: Path) -> RouteAdvisoriesManifest | None:

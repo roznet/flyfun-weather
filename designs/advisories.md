@@ -297,7 +297,14 @@ values stay permissive on both terms, so a data gap never hardens a grade.
 **Circling is flagged, never graded.** `nav.db` carries no circling minima, and
 "circling not authorised" / night / category restrictions are not in the data at
 all. `circling_ceiling_ft` (default 1000) only decides whether a misaligned
-arrival softens to AMBER — it is never a circling verdict.
+arrival softens to AMBER — it is never a circling verdict. The same rule governs
+the airport-wide best-case gate: **circling-only procedures are excluded from
+`_best_case_minima`**, because `APPROACH_CLASS_PROXY` holds *straight-in* minima
+and real circling minima are categorically higher for the same class — blending
+a circling ILS in would claim a 200 ft best case the field does not offer, an
+optimistic assumption sitting inside a RED gate. A field whose every approach is
+circling-only has no straight-in minimum to test against, so the gate is skipped
+and the fallback speaks.
 
 **Alignment is brittle**, so the grade is computed **per model** and the
 registry's majority aggregation absorbs the disagreement (wind direction can
