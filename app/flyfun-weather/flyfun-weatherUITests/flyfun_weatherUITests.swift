@@ -366,6 +366,101 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
+    /// Journey 8 (#494) — the departure/arrival condition cards keep every cell on
+    /// one line. On iPad the two cards used to sit in a size-class `HStack` that
+    /// squeezed them until SwiftUI compressed the `Text` views to one character per
+    /// line ("200@8kt" drawn vertically, "VFR" as "V"/"FR", "Departure" hyphenated).
+    ///
+    /// Asserting on geometry rather than existence is the point: the elements were
+    /// always *present* while the bug was live — only their frames were wrong.
+    @MainActor
+    func testAirportConditionsCardsStayOnOneLine() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+
+        let pill = app.buttons["Conditions"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Conditions spy pill should be present")
+        pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        // Both fixture cards render.
+        XCTAssertTrue(app.staticTexts["LFMD"].firstMatch.waitForExistence(timeout: 10),
+                      "departure card should render")
+        XCTAssertTrue(app.staticTexts["LFML"].firstMatch.exists, "arrival card should render")
+
+        // A caption line is ~15pt tall; two lines ~30. Per-character wrapping of an
+        // 11-character wind blew this out past 150. 34 leaves room for larger
+        // default type on iPad without admitting a second line.
+        let maxSingleLine: CGFloat = 34
+
+        // The arrival wind is the worst case — gusting, so the longest string.
+        let wind = firstElement(in: app, labelled: "300@12G18kt")
+        XCTAssertTrue(wind.waitForExistence(timeout: 10), "arrival wind cell should render")
+        XCTAssertLessThan(wind.frame.height, maxSingleLine,
+                          "wind cell wrapped to multiple lines — the row is being compressed (#494)")
+
+        // The category badge and the section label were the other two victims.
+        let badge = app.staticTexts["VFR"].firstMatch
+        XCTAssertTrue(badge.exists, "category badge should render")
+        XCTAssertLessThan(badge.frame.height, maxSingleLine,
+                          "category badge wrapped — it should never break mid-word (#494)")
+
+        let label = app.staticTexts["Departure"].firstMatch
+        XCTAssertTrue(label.exists, "section label should render")
+        XCTAssertLessThan(label.frame.height, maxSingleLine,
+                          "section label wrapped/hyphenated — it should keep its intrinsic width (#494)")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "AirportConditions"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// Journey 9 — the iPad forecast map carries its own sidebar toggle. The map
+    /// draws no navigation bar, so the split view's system toggle has nowhere to
+    /// live; without this control, collapsing the sidebar over the map stranded the
+    /// user there with no route back to the flight list.
+    @MainActor
+    func testForecastMapOffersSidebarToggleOnPad() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad,
+                          "compact width opens the map as a cover with a close button instead")
+
+        let app = launchMockApp()
+        revealFlightList(app)
+
+        app.buttons["forecastMapButton"].tap()
+
+        let toggle = app.buttons["mapSidebarToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15),
+                      "the iPad map should offer a sidebar toggle")
+
+        // Collapse the sidebar — the state the user got stranded in.
+        toggle.tap()
+        XCTAssertFalse(app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 3),
+                       "the flight list should be hidden after collapsing the sidebar")
+
+        let collapsed = XCTAttachment(screenshot: app.screenshot())
+        collapsed.name = "ForecastMap-SidebarCollapsed"
+        collapsed.lifetime = .keepAlways
+        add(collapsed)
+
+        // …and the same control brings it back. This is the whole bug.
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5),
+                      "the toggle must survive collapsing — it is the only way back")
+        toggle.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 10),
+                      "tapping the toggle again should restore the flight list")
+    }
+
+    /// First element with an exact accessibility label, regardless of element type.
+    /// SwiftUI renders a `Label(_:systemImage:)` as different element types across
+    /// idioms, so matching on the label text is more durable than on `.staticTexts`.
+    @MainActor
+    private func firstElement(in app: XCUIApplication, labelled label: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", label))
+            .firstMatch
+    }
+
     @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
