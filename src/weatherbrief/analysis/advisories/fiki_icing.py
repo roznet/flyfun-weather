@@ -13,6 +13,7 @@ from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
     driving_method_id,
+    hazardous_icing_zones,
     icing_zones_in_altitude_range,
     min_icing_clearance,
     summarize_evidence,
@@ -222,7 +223,9 @@ class FIKIIcingEvaluator:
                     continue
                 total += 1
 
-                zones = sounding.icing_zones
+                # Ogimet zones at risk NONE mean "assessed, no icing" — they must
+                # not add to the transit thickness a FIKI grade is built from.
+                zones = hazardous_icing_zones(sounding.icing_zones)
                 t, sev, sld = _transit_icing(zones, cruise_alt)
 
                 # --- departure / arrival transit icing ---

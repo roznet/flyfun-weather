@@ -15,6 +15,7 @@ from weatherbrief.analysis.advisories._helpers import (
     build_ribbon,
     driving_method_id,
     format_extent,
+    hazardous_icing_zones,
     min_icing_clearance,
     ribbon_peak,
     worst_severity,
@@ -180,10 +181,14 @@ def _check_enroute_hazards(
         icing_available = sounding.active_icing_available
         if icing_available:
             icing_total += 1
+        # Only zones the pilot would actually meet: an Ogimet zone at risk NONE
+        # is the method reporting "assessed, no icing", and counting it made this
+        # composite flag — and go RED on — icing that does not exist.
+        icing_zones = hazardous_icing_zones(sounding.icing_zones)
         has_icing = (
             icing_available
-            and bool(sounding.icing_zones)
-            and min_icing_clearance(sounding.icing_zones, cruise_altitude_ft)
+            and bool(icing_zones)
+            and min_icing_clearance(icing_zones, cruise_altitude_ft)
             < icing_altitude_buffer_ft
         )
         has_convective = False
@@ -206,7 +211,7 @@ def _check_enroute_hazards(
             icing_count += 1
             # The triggering zones: those within the buffer of cruise.
             band = [
-                z for z in sounding.icing_zones
+                z for z in icing_zones
                 if z.base_ft < cruise_altitude_ft + icing_altitude_buffer_ft
                 and z.top_ft > cruise_altitude_ft - icing_altitude_buffer_ft
             ]

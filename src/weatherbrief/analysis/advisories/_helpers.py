@@ -13,6 +13,7 @@ from weatherbrief.models import (
     ElevationProfile,
     HighlightRegion,
     HighlightSeverity,
+    IcingRisk,
     IcingZone,
     MitigationProfile,
     MitigationSegment,
@@ -370,12 +371,38 @@ def ribbon_peak(segments: list[RibbonSegment]) -> float | None:
     return None
 
 
+def hazardous_icing_zones(zones: list[IcingZone]) -> list[IcingZone]:
+    """Return only the zones that represent icing a pilot would meet.
+
+    Zone *existence* is not a hazard predicate. The Ogimet methods emit a zone
+    wherever cloud sits in the icing temperature band and stamp it with the
+    computed index, so ``risk == NONE`` there means "assessed here, index below
+    the LIGHT threshold" — the method's way of saying *no icing*, not a hazard.
+    (SFIP is the opposite: it only ever emits zones at LIGHT or worse, which is
+    why grading on bare existence looked correct for as long as DD/SFIP were the
+    only sources.) Grading on existence turns every assessed-but-clean Ogimet
+    point into an icing hit, and the cross-section — which filters ``none`` out
+    of every icing layer — then draws nothing where the advisory claims icing.
+
+    ``sld_risk`` survives a NONE risk: supercooled large droplets are a hazard in
+    their own right regardless of the index. That is the same predicate
+    ``icing_escape._icing_cell_cost`` has always applied to price its cost field
+    (``risk == NONE and not sld_risk`` → skip); this helper shares it with the
+    grading paths, which had drifted from it.
+    """
+    return [z for z in zones if z.risk != IcingRisk.NONE or z.sld_risk]
+
+
 def icing_zones_in_altitude_range(
     zones: list[IcingZone],
     floor_ft: float,
     ceiling_ft: float,
 ) -> list[IcingZone]:
-    """Return icing zones that overlap the altitude range [floor_ft, ceiling_ft]."""
+    """Return icing zones that overlap the altitude range [floor_ft, ceiling_ft].
+
+    Altitude-only: pass the zones through :func:`hazardous_icing_zones` first
+    when the result drives a grade.
+    """
     return [z for z in zones if z.top_ft > floor_ft and z.base_ft < ceiling_ft]
 
 
