@@ -2827,10 +2827,15 @@ the 3D-fraction and GRIB-band paths.
 Runs of contiguous levels at or above the threshold become layers, with edges
 placed by the same midpoint convention the DD and 3D-fraction builders already
 use. The *coverage* is not derived from condensate magnitude — each layer takes
-the band percentage for the ICAO band its midpoint falls in, **preferring the
-diagnostic band cover** (`nwp_cloud_diagnostics.low/mid/high.cover_pct` —
-HRRR's own 3 km value) and falling back to the bulk
-`cloud_cover_low/mid/high_pct` only when the diagnostic band is absent. The
+its band's percentage, **preferring the diagnostic band cover**
+(`nwp_cloud_diagnostics.low/mid/high.cover_pct` — HRRR's own 3 km value).
+The bulk `cloud_cover_low/mid/high_pct` triple is used only when **no
+diagnostic band cover exists at all** — never mixed per-band: in
+diagnostic mode segments are carved on NCEP's pressure boundaries, and the
+bulk numbers are measured over the ICAO altitude slabs, so pairing a
+pressure-defined slice with a slab-defined percentage grades one vertical
+extent with another's number (PR #508 round 6). A single missing diagnostic
+band instead degrades to the unknown-cover BKN default below. The
 bulk fields are deliberately-preserved *Open-Meteo* values
 (`_apply_cloud_diagnostics` never overwrites them), so without that preference
 the amount half was silently sourced from the coarser global blend the HRRR

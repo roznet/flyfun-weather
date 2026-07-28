@@ -428,6 +428,44 @@ class TestCondensateCloudEnvelope:
         )
         assert layers[0].mean_cloud_cover_pct == 60.0
 
+    def test_partial_diag_missing_band_is_unknown_not_bulk(self):
+        """One missing diagnostic band must NOT borrow the Open-Meteo bulk pct.
+
+        In pressure-band mode segments are carved on NCEP's 642/350 hPa
+        boundaries, but the bulk percentages are measured over the ICAO
+        altitude slabs — pairing them grades a pressure-defined slice with a
+        differently-bounded number (PR #508 review round 6). A band HRRR
+        didn't publish degrades to unknown-extent BKN instead.
+        """
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+        from weatherbrief.models.analysis import CloudCoverage
+
+        diag = build_hrrr_cloud_diagnostics({
+            "low_cover_pct": 90.0, "high_cover_pct": 0.0,  # mid band absent
+        })
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(925, 760, 3e-4, 0.0),   # low deck: 925 hPa > 642 hPa
+            self._lv(850, 1460, 0.0, 0.0),
+            self._lv(700, 3010, 0.0, 0.0),
+            self._lv(600, 4200, 2e-4, 0.0),  # mid deck: 642 ≥ 600 > 350 hPa
+            self._lv(500, 5570, 0.0, 0.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, 90.0, 10.0, 0.0, nwp_cloud_diagnostics=diag,
+        )
+        assert len(layers) == 2
+        low, mid = layers
+        # The published low band still applies natively.
+        assert low.coverage == CloudCoverage.OVC
+        assert low.mean_cloud_cover_pct == 90.0
+        # The unpublished mid band: real deck, unstated extent — never 10 %.
+        assert mid.coverage == CloudCoverage.BKN
+        assert mid.mean_cloud_cover_pct is None
+
     @pytest.mark.parametrize("pct,expected_coverage", [
         (0.0, "few"),    # known clear-ish extent — never BKN, never dropped
         (10.0, "few"),   # known sub-FEW — the round-4 repro (was BKN)
