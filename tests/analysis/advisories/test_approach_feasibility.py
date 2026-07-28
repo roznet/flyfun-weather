@@ -14,7 +14,10 @@ import pytest
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.approach_feasibility import (
     ApproachFeasibilityEvaluator,
+    _Blocker,
+    _Softening,
 )
+from weatherbrief.analysis.advisories.strings import _STRINGS
 from weatherbrief.models import AdvisoryStatus
 from weatherbrief.units import M_PER_SM
 from weatherbrief.models.airport_conditions import (
@@ -338,17 +341,27 @@ class TestFullLogic:
         assert "serve" not in detail
 
     def test_minima_blocked_softens_to_amber_with_circling_room(self):
-        """Same shape, but a ceiling that supports circling — visibility blocks 20."""
+        """Same shape, but circling is on the table, so it softens to AMBER.
+
+        The circling assumption is lowered rather than the ceiling raised: the
+        minima block needs a ceiling *below* 20's 400 ft best case, so no
+        ceiling can both block the straight-in and clear a 1000 ft circling
+        assumption. A pilot with a lower personal circling minimum is exactly
+        the case the param exists for.
+        """
         ctx = _ctx(
             _conditions(
                 FlightCategory.IFR, [_RWY_02_TAILWIND, _RWY_20_HEADWIND],
-                ceiling_ft=1200, visibility_m=1000,
+                ceiling_ft=250, visibility_m=4000,
             ),
             _approaches(_ILS_02, _VOR_20),
         )
-        result = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults())
+        result = ApproachFeasibilityEvaluator.evaluate(
+            ctx, {**_defaults(), "circling_ceiling_ft": 200},
+        )
         assert result.aggregate_status == AdvisoryStatus.AMBER
         assert "RWY 20" in result.aggregate_detail
+        assert "plan for circling" in result.aggregate_detail
 
     def test_uncertainty_softening_never_borrows_the_circling_advice(self):
         """An AMBER earned by uncertainty must say so, not claim circling.
@@ -453,6 +466,120 @@ class TestPerModel:
         result = ApproachFeasibilityEvaluator.evaluate(_ctx(conds, _approaches(_ILS_20)), _defaults())
         statuses = {m.model: m.status for m in result.per_model}
         assert statuses[MODELS[1]] == AdvisoryStatus.UNAVAILABLE
+
+
+class TestFallbackCopyIsComplete:
+    """The no-usable-straight-in verdict is a cross product, so test it as one.
+
+    Three review rounds on #511 each found a different cell of (what blocks the
+    arrival x why it is not RED) rendering the wrong sentence, because the cells
+    were written out by hand. The copy is now composed from the two axes; these
+    tests pin that every cell resolves to real text and that each softening
+    reason says its own thing.
+    """
+
+    def test_every_cell_resolves_to_real_text(self):
+        """No cell may fall through to a raw key (``adv_t``'s silent fallback)."""
+        for blocker in _Blocker:
+            for softening in _Softening:
+                for key in (
+                    f"approach_feasibility.blocked_{blocker.value}",
+                    f"approach_feasibility.soften_{softening.value}",
+                ):
+                    assert key in _STRINGS, f"missing string: {key}"
+                    assert set(_STRINGS[key]) >= {"en", "fr", "de", "es"}
+
+    def test_softening_reasons_do_not_share_wording(self):
+        """Each reason must be distinguishable — the #511 round-3/4 bug class."""
+        english = {
+            s: _STRINGS[f"approach_feasibility.soften_{s.value}"]["en"]
+            for s in _Softening
+        }
+        assert len(set(english.values())) == len(_Softening)
+        # Only the circling cell may recommend circling.
+        for softening, text in english.items():
+            if softening is not _Softening.CIRCLING:
+                assert "plan for circling" not in text
+
+    def test_only_the_unsoftened_cell_is_red(self):
+        assert _Softening.NONE.status == AdvisoryStatus.RED
+        for softening in _Softening:
+            if softening is not _Softening.NONE:
+                assert softening.status == AdvisoryStatus.AMBER
+
+
+class TestCirclingNeedsVisibilityNotJustCeiling:
+    def test_fog_above_the_straight_in_floor_does_not_soften_to_circling(self):
+        """Circling needs visual reference to the runway.
+
+        A generous (or absent) ceiling with visibility that clears the
+        straight-in floor but not the circling one used to soften a genuine
+        "no way in" into AMBER *and recommend circling* — in fog.
+        """
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.IFR, [_RWY_02, _RWY_24],
+                ceiling_ft=None, visibility_m=900,
+            ),
+            _approaches(_ILS_02),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(
+            ctx, {**_defaults(), "tailwind_limit_kt": 5},
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert "circling" not in result.aggregate_detail.replace(
+            "will not support circling", "",
+        )
+
+    def test_good_visibility_still_allows_the_circling_softening(self):
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.IFR, [_RWY_02, _RWY_24],
+                ceiling_ft=1500, visibility_m=4000,
+            ),
+            _approaches(_ILS_02),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(
+            ctx, {**_defaults(), "tailwind_limit_kt": 5},
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert "plan for circling" in result.aggregate_detail
+
+    def test_absent_visibility_never_hardens_the_grade(self):
+        """A model that publishes no visibility must not cost the pilot a grade."""
+        conds = _conditions(
+            FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=1500,
+        )
+        for c in conds.arrival.conditions:
+            c.visibility_m = None
+        result = ApproachFeasibilityEvaluator.evaluate(
+            _ctx(conds, _approaches(_ILS_02)),
+            {**_defaults(), "tailwind_limit_kt": 5},
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+
+
+class TestNoStraightInIsItsOwnStory:
+    def test_circling_only_field_does_not_render_an_empty_served_list(self):
+        """"approaches serve -" — a plausible shape at small European fields."""
+        circling = RunwayApproach(name="RNP A", approach_type="RNP", circling=True)
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=1500),
+            _approaches(circling),
+        )
+        detail = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults()).aggregate_detail
+        assert "serve -" not in detail
+        assert "No straight-in approach is published" in detail
+
+    def test_missing_wind_components_say_so_rather_than_blame_alignment(self):
+        """The served end IS matched; the gap is wind data. Say which."""
+        conds = _conditions(FlightCategory.IFR, [], ceiling_ft=600)
+        result = ApproachFeasibilityEvaluator.evaluate(
+            _ctx(conds, _approaches(_ILS_20)), _defaults(),
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert "no wind components" in result.aggregate_detail
+        assert "could not be matched to a runway" not in result.aggregate_detail
 
 
 class TestCatalog:

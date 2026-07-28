@@ -88,21 +88,34 @@ class _EndPlan:
         return -self.wind.headwind_kt
 
 
+class _Blocker(str, Enum):
+    """WHAT stops the arrival, once no straight-in candidate is usable."""
+
+    #: An end the wind is happy with exists, blocked only by its own approach's
+    #: minima. Not misalignment at all — naming it as such was the #511 bug.
+    MINIMA = "minima"
+    #: Every approach-served end is out on wind. The genuine misalignment case.
+    MISALIGNED = "misaligned"
+    #: No straight-in approach is published here at all — circling-only
+    #: procedures, or approaches whose runway could not be resolved. Distinct
+    #: from MISALIGNED, which names the served ends; this one has none to name,
+    #: and rendering it through the misaligned copy produced "approaches serve -".
+    NO_STRAIGHT_IN = "no_straight_in"
+
+
 class _Softening(str, Enum):
-    """Why (or whether) a no-usable-straight-in verdict softens off RED.
+    """WHY (or whether) that blocker softens off RED."""
 
-    The value doubles as the message-key suffix, so the grade and the copy
-    cannot be chosen from different tests — the bug this enum replaces.
-    """
-
-    #: The ceiling supports circling — a real option, so say "plan for circling".
+    #: Ceiling AND visibility support circling — a real option.
     CIRCLING = "circling"
-    #: We could not resolve an approach's alignment, or the wind model did not
-    #: cover a served end. Genuine uncertainty (design rule 2), so it softens —
-    #: but the copy must name THAT reason, never borrow the circling advice.
-    UNCERTAIN = "uncertain"
+    #: An approach we could not match to a runway; it may serve the very end the
+    #: wind favours. Genuine uncertainty (design rule 2), so it softens.
+    UNRESOLVED = "unresolved"
+    #: The wind model produced no components for the served end(s). Also our
+    #: gap, and a DIFFERENT gap — it must not borrow the unresolved copy.
+    NO_WIND_DATA = "no_wind_data"
     #: Nothing softens it.
-    NONE = "blocked"
+    NONE = "none"
 
     @property
     def status(self) -> AdvisoryStatus:
@@ -110,6 +123,24 @@ class _Softening(str, Enum):
             AdvisoryStatus.RED if self is _Softening.NONE
             else AdvisoryStatus.AMBER
         )
+
+
+def _fallback_detail(
+    blocker: _Blocker, softening: _Softening, loc: str | None, **fields: object,
+) -> str:
+    """Compose the no-usable-straight-in copy from its two independent axes.
+
+    The verdict here is a cross product — WHAT blocks the arrival x WHY it is
+    not RED — and three review rounds on #511 each found a different cell of it
+    rendering the wrong sentence, because the copy was picked by hand per
+    branch. Composing the two halves means every cell has correct text by
+    construction: a new blocker or a new softening reason adds ONE string, not a
+    row or column of them, and none can silently fall back to another cell's
+    wording.
+    """
+    cause = adv_t(f"approach_feasibility.blocked_{blocker.value}", loc, **fields)
+    clause = adv_t(f"approach_feasibility.soften_{softening.value}", loc)
+    return f"{cause} — {clause}"
 
 
 @dataclass(frozen=True)
@@ -257,6 +288,7 @@ def _grade_full(
     tailwind_limit = float(params.get("tailwind_limit_kt", 10))
     crosswind_limit = float(params.get("crosswind_limit_kt", 20))
     circling_ceiling = float(params.get("circling_ceiling_ft", 1000))
+    circling_vis = float(params.get("circling_visibility_m", 1500))
 
     if not approaches.has_iap:
         key = (
@@ -306,60 +338,65 @@ def _grade_full(
             wind=_wind_note(best.plan, loc),
         )
 
-    # No usable straight-in. Neither an approach we could not align, nor a
-    # straight-in end the wind model did not cover, may drive RED (design
-    # rule 2) — both are our uncertainty, not a fact about the arrival. Ceiling
-    # decides whether circling is even on the table, but we never compute a
-    # circling verdict (design rule 3), only whether to soften to AMBER.
+    # ---- No usable straight-in. Resolve WHAT blocks it and WHY it isn't RED,
+    # then compose the copy from both. Neither an approach we could not align
+    # nor a served end the wind model did not cover may drive RED (design
+    # rule 2) — those are our gaps, not facts about the arrival.
     alignment_unresolved = any(
         not a.runway_id and not a.circling for a in approaches.approaches
     )
     wind_unresolved = bool(approaches.served_runway_ids) and not graded
-    circling_supported = ceiling is None or ceiling >= circling_ceiling
-    # ONE discriminator drives both the grade and the copy. They were split
-    # before — status off `circling_supported or <uncertainty>`, copy off
-    # `circling_supported` alone — which let an unrelated unresolved approach
-    # soften the grade to AMBER while the text still made the hard claim, and
-    # (worse) let the misalignment branch advise "plan for circling" at a
-    # ceiling that will not support it. Softening for uncertainty is correct,
-    # but it has to say so in its own words rather than borrow the circling copy.
+
+    # Circling needs BOTH a ceiling and the visibility to see the runway from
+    # the circuit. A ceiling-only test softened a genuine "no way in" to
+    # "plan for circling" in fog sitting above the straight-in visibility floor.
+    # Absent values stay permissive, so a gap never hardens a grade.
+    circling_supported = (
+        (ceiling is None or ceiling >= circling_ceiling)
+        and (cond.visibility_m is None or cond.visibility_m >= circling_vis)
+    )
+
     if circling_supported:
         softening = _Softening.CIRCLING
-    elif alignment_unresolved or wind_unresolved:
-        softening = _Softening.UNCERTAIN
+    elif alignment_unresolved:
+        softening = _Softening.UNRESOLVED
+    elif wind_unresolved:
+        softening = _Softening.NO_WIND_DATA
     else:
         softening = _Softening.NONE
 
-    # Two different failures land here and they are NOT the same story. If an
-    # end the wind is happy with exists and is blocked only by its own
-    # approach's minima, there is no misalignment at all — saying "wind favours
-    # 20, approaches serve 02, 20 — plan for circling" would name the served,
-    # wind-favoured runway as if it were unserved. This is rule 2 applied per
-    # approach rather than airport-wide: the forecast is below the best case for
-    # *that* end's approach, even though a lower-minima approach exists on an
-    # end the wind has ruled out.
+    # An end the wind is happy with, blocked only by its own approach's minima,
+    # is not misalignment: this is rule 2 applied per approach rather than
+    # airport-wide (the airport-wide gate uses min(dh_lo) over ALL approaches,
+    # so a lower-minima approach on a wind-blocked end can carry the ceiling
+    # past it while the wind-favoured end's own minimum is not met).
     minima_blocked = [
         g for g in graded
         if g.wind != AdvisoryStatus.RED and g.minima == AdvisoryStatus.RED
     ]
+    wind_best = cond.best_runway.runway_id if cond.best_runway else "-"
+
     if minima_blocked:
         closest = min(minima_blocked, key=lambda g: g.plan.proxy.dh_lo)
-        return softening.status, adv_t(
-            f"approach_feasibility.minima_{softening.value}", loc,
+        return softening.status, _fallback_detail(
+            _Blocker.MINIMA, softening, loc,
             runway=closest.plan.wind.runway_id,
             approach=_approach_label(closest.plan.approach),
             dh=int(closest.plan.proxy.dh_lo),
         )
 
-    # Every approach-served end is out on wind (or there is nothing straight-in
-    # to grade) — the genuine misalignment case.
-    wind_best = cond.best_runway.runway_id if cond.best_runway else None
-    served = ", ".join(sorted(approaches.served_runway_ids)) or "-"
+    if not approaches.served_runway_ids:
+        # Nothing straight-in to name — circling-only procedures, or approaches
+        # whose runway would not resolve. Routing this through the misaligned
+        # copy rendered "approaches serve -".
+        return softening.status, _fallback_detail(
+            _Blocker.NO_STRAIGHT_IN, softening, loc, wind_runway=wind_best,
+        )
 
-    return softening.status, adv_t(
-        f"approach_feasibility.misaligned_{softening.value}", loc,
-        served=served, wind_runway=wind_best or "-",
-        ceiling=int(ceiling) if ceiling is not None else 0,
+    return softening.status, _fallback_detail(
+        _Blocker.MISALIGNED, softening, loc,
+        served=", ".join(sorted(approaches.served_runway_ids)),
+        wind_runway=wind_best,
     )
 
 
@@ -455,6 +492,17 @@ class ApproachFeasibilityEvaluator:
                     ),
                     type="altitude", unit="ft",
                     default=1000, min=500, max=2500, step=100,
+                ),
+                AdvisoryParameterDef(
+                    key="circling_visibility_m",
+                    label="Circling visibility",
+                    description=(
+                        "Assumed visibility needed to circle. Circling needs "
+                        "visual reference to the runway, so a generous ceiling "
+                        "in fog is not a way in"
+                    ),
+                    type="number", unit="m",
+                    default=1500, min=800, max=5000, step=100,
                 ),
             ],
         )
