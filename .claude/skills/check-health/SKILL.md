@@ -61,7 +61,16 @@ Read:
 - All containers `(healthy)`. `weatherbrief` and `weatherbrief-mcp` are the two we own; the rest are siblings.
 - `weatherbrief` MEM USAGE / LIMIT — cgroup limit is **6 GiB** (raised from 4 GiB; do not cite the older "3 GiB" / "4 GiB" numbers from memory). Sustained >4.5 GiB warrants a note.
 - `shared-mysql` at **~1.2–1.6 GiB is expected and healthy** since 2026-07-18: `innodb_buffer_pool_size` was raised 128 MB → 1 GiB (flyfun-weather#448). Don't flag the jump from the old ~330 MiB baseline. Do flag if it reads ~330 MiB again — that means the container restarted *without* the compose-file setting (run `docker compose up -d` in `~/digitalocean/shared-infra`, or re-apply `SET GLOBAL innodb_buffer_pool_size`).
-- Host **Swap used** — anything more than a few hundred MB swap in use is a warn. The droplet has 4 GiB swap; production sometimes parks 1–2 GiB of mmap-backed cfgrib pages there under memory pressure (see lesson §L2 before reflexively flagging).
+  - **A low RSS here does not prove the setting was lost.** `docker stats` shows resident memory only, so a buffer pool that got **swapped out** reads low while the config is still correct. Observed 2026-07-28: RSS 542 MiB — below the expected band — but `innodb_buffer_pool_size` was still `1073741824` and `mysqld` held 2.3 GiB in swap. Confirm before concluding:
+    ```bash
+    ssh brice@161.35.35.15 "docker exec shared-mysql mysql -uroot -p\$(grep -h MYSQL_ROOT_PASSWORD ~/digitalocean/shared-infra/.env | cut -d= -f2) -e \"SHOW VARIABLES LIKE 'innodb_buffer_pool_size'\""
+    ```
+    Config right + RSS low + swap high = paged-out pool. Not a config regression, but DB reads are hitting disk; a `docker compose restart shared-mysql` in a quiet window faults it back in.
+- Host **Swap used** — the droplet has **8 GiB** swap (not the 4 GiB this doc claimed until 2026-07-28). Anything more than a few hundred MB is nominally a warn, but read *who holds it* before flagging: production sometimes parks 1–2 GiB of mmap-backed cfgrib pages there under memory pressure (see lesson §L2). Attribute it before judging:
+  ```bash
+  ssh brice@161.35.35.15 "for f in /proc/*/status; do awk '/^Name:/{n=\$2}/^VmSwap:/{if(\$2>50000) print \$2\" kB  \"n}' \$f 2>/dev/null; done | sort -rn | head -12"
+  ```
+  On a long-uptime box (87 days at the 2026-07-28 observation) cold pages accumulate without indicating live pressure — check `free -h` **available** and current load before calling it. Observed 2026-07-28: 3.9 GiB total swap, **2.3 GiB of it `mysqld`**, with available at 3.9 GiB and load 0.53 → note, not issue.
 - Host **free Mem** — single-digit MB free is fine if buff/cache is large; what matters is `available`.
 - `uptime` load triplet — same interpretation as the DO metrics, just current.
 
@@ -142,7 +151,26 @@ ssh brice@161.35.35.15 "docker logs --since <window> weatherbrief 2>&1 \
 
 ## 6. Standalone verification cycle
 
-Schedule: **light** (score-only) cycles at 06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC; **forecast** (heavy fetch) cycles at **07:15 / 19:15 UTC**; **METAR ingest** every 30 min. Grep the latest cycle's footprint:
+Schedule: **light** (score-only) cycles at 06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC; **METAR ingest** every 30 min; and at **07:15 / 19:15 UTC** the heavy forecast work — which **no longer runs on the droplet** (see below).
+
+> **⚠️ The droplet does not run the heavy forecast cycle any more.** It is produced off-box by the `mac-mini-m4` compute node (`deploy/compute-nodes.json`), which emits a SQLite artifact into `/mnt/flyfun_data/weather/snapshot_inbox/` and the droplet **imports** it. Verified 2026-07-28: the last local `standalone_forecast` cycle was **2026-07-26 07:15** (~45 min), while `standalone_imported` runs twice daily and takes **~72 s**. The node's runner script still carries a stale "VALIDATION PHASE: prod does NOT ingest yet" comment — ignore it, ingest is live.
+>
+> Ground truth is the DB, not the logs (the import is quiet in `docker logs`):
+> ```bash
+> ssh brice@161.35.35.15 "docker exec weatherbrief python -c \"
+> from weatherbrief.db import get_engine
+> from sqlalchemy import text
+> with get_engine().connect() as c:
+>     for r in c.execute(text('''SELECT source, COUNT(*), MAX(started_at), AVG(duration_ms)/1000
+>         FROM verification_cycles WHERE started_at > UTC_TIMESTAMP() - INTERVAL 3 DAY
+>         GROUP BY source ORDER BY 2 DESC''')): print(r)
+> \""
+> ```
+> Expect `standalone_imported` ~2/day at ~60–90 s. **If `standalone_imported` goes stale, the node stopped delivering** — check it is reachable and that its cycle ran (`~/flyfun-data/logs/`). The local `standalone_forecast` path still exists as a fallback but is a **cold path**: it has not executed since 2026-07-26, and the droplet sets `STANDALONE_ANALYSIS_WORKERS=0`, so if it ever does run it falls back to inline single-core (~68 min, the pre-PR-B figure) rather than the ~25–35 min band below. Treat the bands below as applying to the **node's** cycle.
+>
+> Note the inbox is **append-only in practice** — artifacts are not deleted after import (10 files × ~14 MB on 2026-07-28). Harmless at that rate, but it is not self-pruning.
+
+Grep the latest cycle's footprint:
 
 ```bash
 ssh brice@161.35.35.15 "docker logs --since 24h weatherbrief 2>&1 \
@@ -151,7 +179,7 @@ ssh brice@161.35.35.15 "docker logs --since 24h weatherbrief 2>&1 \
 
 The cycle has **three flavours**, each with its own `Standalone <type> cycle:` summary line. Don't conflate them:
 - **light** — scoring + rollup + stats/leaderboard cache rebuild (no model fetch, no forecast-map rebuild). Runs at the five light hours.
-- **forecast** — heavy model fetch (gfs / icon / ecmwf — no UKMO in standalone), then forecast-map cache rebuild ONLY (rollup + stats/leaderboard are skipped since #448: the cycle creates no scores). Runs at 07:15 / 19:15.
+- **forecast** — heavy model fetch (gfs / icon / ecmwf — no UKMO in standalone), then forecast-map cache rebuild ONLY (rollup + stats/leaderboard are skipped since #448: the cycle creates no scores). Runs at 07:15 / 19:15 **on the compute node**, not the droplet — the droplet sees the result as a `standalone_imported` cycle (~72 s). A local `standalone_forecast` line appearing on the droplet means the fallback fired: worth investigating why the artifact didn't arrive.
 - **metar_ingest** — observation pull, every 30 min, cheap.
 
 Read:
@@ -207,7 +235,7 @@ Three upstreams are routinely flaky; learn the steady-state rates so you only fl
 
 ## 9. Storage & retention
 
-`/mnt/flyfun_data` is the canonical disk gauge (**199 GB volume** — resized up from 149 GB; don't cite the old number). Steady-state usage is **~68–78 %**, re-baselined 2026-07-27 at 71 % (134 GB used, 56 GB free) — see §L9 for the composition breakdown. Only flag when:
+`/mnt/flyfun_data` is the canonical disk gauge (**199 GB volume** — resized up from 149 GB; don't cite the old number). Steady-state usage is **~62–78 %**, re-baselined 2026-07-28 at **66 % (124 GB used, 67 GB free)** — down from 71 %/134 GB the day before, which is ordinary ICON cache churn, not a leak. See §L9 for the composition breakdown. Only flag when:
 - Sustained **>85 %** (real warn — ~169 GB, within ~30 GB of full)
 - Sustained **>90 %** (issue — ~179 GB, briefings will start failing soon)
 
@@ -320,8 +348,10 @@ The 4 vCPU / 7.8 GB droplet was upgraded based on a miscalculation; downgrade re
 ### §L6 — Scan traffic is noise
 Lines like `GET /joomla/.env`, `error_log.php`, `wp-login.php`, `.git/`, `xmlrpc` are random attack scans hitting the front door. Filter them out of any "errors" count; mention only if the rate is unusually high (e.g. ratelimit something).
 
-### §L7 — Forecast cycle hours overlap with user peak
-06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC are the **light** cycle hours (short since #448); the **heavy forecast** cycles run 07:15 / 19:15 UTC and hold one core for the better part of an hour (pre-PR-B). Load spikes and slower briefings *during* these windows are expected. A briefing taking 2× normal at 07:40 UTC is not the same problem as one taking 2× at 02:00 UTC.
+### §L7 — Cycle hours overlap with user peak
+06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC are the **light** cycle hours (short since #448). Load spikes and slower briefings *during* these windows are expected — a briefing taking 2× normal at 09:20 UTC is not the same problem as one taking 2× at 02:00 UTC.
+
+**Superseded 2026-07-28:** this lesson used to say the heavy forecast cycle holds a droplet core for the better part of an hour at 07:15 / 19:15. That work moved off-box (see §6) — the droplet now only *imports* the node's artifact (~72 s), so those two hours are no longer a load excuse on the droplet. Load above the 4-vCPU line outside a light-cycle hour is most often concurrent user briefings; check §4b timings before assuming a cycle. Observed 2026-07-28: load 1m peak 5.02 in a window with no cycle at all and 7 briefings in flight.
 
 ### §L8 — `docker compose` v2, not `docker-compose`
 On this droplet the binary is `docker compose` (two words). Don't try `docker-compose`.
@@ -348,6 +378,7 @@ On this droplet the binary is `docker compose` (two words). Don't try `docker-co
 Historical notes:
 - 2026-05-19: `/mnt/flyfun_data` at 79 % of the then-149 GB volume, all components in-band. The "growth" was just ICON-EU cycling 00z→12z runs.
 - 2026-07-27: re-baselined after the volume resize to 199 GB and the arrival of the ICON-D2 cache. 134 GB used (71 %), every component in band.
+- 2026-07-28: 124 GB used (66 %) — 10 GB *lower* than the day before, purely ICON cache phase. Confirms the swing described above and is the reason the band's floor was widened from 68 % to 62 %. A drop is as unremarkable as a rise; neither is a signal on its own.
 
 ```
 verdict: ok            ← or `warn` / `issue`
@@ -361,7 +392,7 @@ standalone: last cycle <time> ago, T min, peak_rss <N> MB            (ok|warn)
 grib pool:  K resets in window                                       (ok|note)
 rss:        no new HWM steps   (or "+N MB step at <ts>")             (ok|note)
 upstream:   M Open-Meteo 502s, K AvWx, L DWD                         (ok|note)
-disk total: /mnt/flyfun_data X% of 199 GB (band ~68–78%)             (ok|warn)
+disk total: /mnt/flyfun_data X% of 199 GB (band ~62–78%)             (ok|warn)
 caches:     icon-d2 N GB, icon-eu N GB, gfs N GB, ecmwf N GB         (ok|warn if out-of-band)
 growing:    packs N GB / F flights, mysql data N GB, binlogs N GB    (ok|note|warn)
 retention:  Retention applied (last <time>); GRIB purge alive        (ok|warn if missing)
