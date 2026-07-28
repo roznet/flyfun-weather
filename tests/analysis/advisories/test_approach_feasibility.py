@@ -125,6 +125,14 @@ _RWY_24 = _runway_wind("24", 240.0, headwind=15.0, crosswind=0.0)  # wind-best
 _ILS_02 = RunwayApproach(name="RWY02 ILS", approach_type="ILS", runway_id="02")
 _ILS_20 = RunwayApproach(name="RWY20 ILS", approach_type="ILS", runway_id="20")
 
+# Two served ends whose approaches sit in DIFFERENT estimated-minima bands —
+# ILS best case 200 ft vs non-precision best case 400 ft. The airport-wide gate
+# uses the lower of the two, so a ceiling between them passes it while still
+# being below one end's own minimum.
+_VOR_20 = RunwayApproach(name="RWY20 VOR", approach_type="VOR", runway_id="20")
+_RWY_02_TAILWIND = _runway_wind("02", 20.0, headwind=-15.0, crosswind=3.0)
+_RWY_20_HEADWIND = _runway_wind("20", 200.0, headwind=15.0, crosswind=3.0)
+
 
 class TestUnavailable:
     def test_no_approach_data_is_unavailable_not_green(self):
@@ -302,6 +310,57 @@ class TestFullLogic:
             _approaches(_ILS_20),
         )
         assert _grade(ctx) == AdvisoryStatus.AMBER
+
+    def test_minima_blocked_served_end_is_not_reported_as_misaligned(self):
+        """Two served ends with *different* minima bands — the #511 review case.
+
+        02 has an ILS (best case 200 ft) but an out-of-limits tailwind; 20 is
+        the wind-favoured end and has only a VOR (best case 400 ft). A 250 ft
+        ceiling clears the airport-wide gate (min 200 ft, from 02's ILS) but is
+        below 20's own best case, so every straight-in candidate grades RED —
+        for two entirely different reasons. The old code fell through to the
+        misalignment copy and announced "wind favours RWY 20; approaches serve
+        02, 20", naming the served, wind-favoured runway as if it were unserved.
+        """
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.IFR, [_RWY_02_TAILWIND, _RWY_20_HEADWIND],
+                ceiling_ft=250, visibility_m=4000,
+            ),
+            _approaches(_ILS_02, _VOR_20),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults())
+        detail = result.aggregate_detail
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert "RWY 20" in detail and "VOR" in detail
+        # The misalignment story must not be told: there is no misalignment.
+        assert "favours" not in detail
+        assert "serve" not in detail
+
+    def test_minima_blocked_softens_to_amber_with_circling_room(self):
+        """Same shape, but a ceiling that supports circling — visibility blocks 20."""
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.IFR, [_RWY_02_TAILWIND, _RWY_20_HEADWIND],
+                ceiling_ft=1200, visibility_m=1000,
+            ),
+            _approaches(_ILS_02, _VOR_20),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults())
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert "RWY 20" in result.aggregate_detail
+
+    def test_all_ends_out_on_wind_still_reads_as_misalignment(self):
+        """The genuine misalignment case must keep its own copy."""
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=600),
+            _approaches(_ILS_02),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(
+            ctx, {**_defaults(), "tailwind_limit_kt": 5},
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert "24" in result.aggregate_detail  # wind-favoured, unserved
 
     def test_best_usable_end_wins_over_a_worse_served_end(self):
         """Two served ends: the grade comes from the better arrival, not the worse."""

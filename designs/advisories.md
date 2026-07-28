@@ -237,8 +237,10 @@ already degrades to `arrival_approaches=None` in
    light. Emitting GREEN/AMBER/RED from the same data makes a soft claim look
    hard, so: **estimate uncertainty may push toward AMBER, never toward RED.**
    RED needs a hard fact — no IAP at all, a ceiling/visibility below even the
-   *best case* (`min(dh_lo)` / `min(vis_lo)`), or an approach-served end with an
-   out-of-limits tailwind *and* a ceiling that will not support circling. A
+   *best case* (`min(dh_lo)` / `min(vis_lo)`), an approach-served end with an
+   out-of-limits tailwind *and* a ceiling that will not support circling, or the
+   same best-case test applied **per approach** to an end the wind is happy with
+   (below). A
    forecast *inside* the band (`[dh_lo, dh_hi]`, `[vis_lo, vis_hi]`) is AMBER —
    the AMBER middle is exactly the width of our uncertainty about the published
    minima. Neither an approach of unresolved alignment nor a served end the wind
@@ -247,6 +249,19 @@ already degrades to `arrival_approaches=None` in
    absent visibility means the model does not publish one (ECMWF visibility is
    GRIB-only) and the axis is skipped, matching `flight_category`, which also
    does not read an absent visibility as a poor one.
+
+**Two failures reach the "no usable straight-in" fallback, and they are not the
+same story.** Either every approach-served end is out on wind (genuine
+misalignment — "wind favours 24; approaches serve 02"), or an end the wind is
+*happy* with is blocked only by its own approach's minima. The second is not
+misalignment at all, so it gets its own copy naming the runway and its approach
+class. This is why `_GradedPlan` keeps the wind and minima verdicts apart
+instead of merging them: the airport-wide best-case gate uses `min(dh_lo)` over
+*all* approaches, so a ceiling can clear it (via, say, an ILS on the
+wind-unusable end) and still sit below the wind-favoured end's own
+non-precision minimum. Merging the two axes made the evaluator announce "wind
+favours RWY 20; approaches serve 02, **20**" — naming the served, wind-favoured
+runway as if it were unserved (caught in review on #511).
 
 **Circling is flagged, never graded.** `nav.db` carries no circling minima, and
 "circling not authorised" / night / category restrictions are not in the data at

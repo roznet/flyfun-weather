@@ -87,6 +87,25 @@ class _EndPlan:
         return -self.wind.headwind_kt
 
 
+@dataclass(frozen=True)
+class _GradedPlan:
+    """One candidate arrival with its two failure axes kept separate.
+
+    ``status`` is the verdict for this candidate, but ``wind`` and ``minima``
+    survive alongside it because "no usable straight-in" has two very different
+    causes — the wind ruled the end out, or the end's own approach minima did —
+    and they need different copy.
+    """
+
+    wind: AdvisoryStatus
+    minima: AdvisoryStatus
+    plan: _EndPlan
+
+    @property
+    def status(self) -> AdvisoryStatus:
+        return AdvisoryStatus.worst([self.wind, self.minima])
+
+
 def _proxy(approach: RunwayApproach) -> ApproachProxy:
     """Estimated minima for one approach — never ``None`` for a present IAP.
 
@@ -238,49 +257,76 @@ def _grade_full(
             vis=int(cond.visibility_m), min_vis=int(best_vis),
         )
 
-    # Straight-in candidates, best arrival first.
-    plans = _straight_in_plans(cond, approaches)
+    # Straight-in candidates, best arrival first. Wind and minima are kept
+    # apart, not just merged into one verdict: when no candidate is usable, WHY
+    # it is unusable decides which story the pilot gets (see the fallback).
     graded = sorted(
         (
-            (
-                AdvisoryStatus.worst([
-                    _plan_wind_status(p, tailwind_limit, crosswind_limit),
-                    _minima_status(cond, p.proxy),
-                ]),
-                p,
+            _GradedPlan(
+                wind=_plan_wind_status(p, tailwind_limit, crosswind_limit),
+                minima=_minima_status(cond, p.proxy),
+                plan=p,
             )
-            for p in plans
+            for p in _straight_in_plans(cond, approaches)
         ),
-        key=lambda pair: (_rank(pair[0]), pair[1].tailwind_kt, pair[1].wind.crosswind_kt),
+        key=lambda g: (_rank(g.status), g.plan.tailwind_kt, g.plan.wind.crosswind_kt),
     )
 
     best = graded[0] if graded else None
-    if best is not None and best[0] != AdvisoryStatus.RED:
-        status, plan = best
-        return status, adv_t(
+    if best is not None and best.status != AdvisoryStatus.RED:
+        return best.status, adv_t(
             "approach_feasibility.straight_in", loc,
-            approach=_approach_label(plan.approach),
-            runway=plan.wind.runway_id,
-            wind=_wind_note(plan, loc),
+            approach=_approach_label(best.plan.approach),
+            runway=best.plan.wind.runway_id,
+            wind=_wind_note(best.plan, loc),
         )
 
-    # No usable straight-in: either every aligned end is out on wind, or the
-    # only approaches are circling-only / of unresolved alignment. Ceiling
-    # decides whether circling is even on the table — but we never compute a
+    # No usable straight-in. Neither an approach we could not align, nor a
+    # straight-in end the wind model did not cover, may drive RED (design
+    # rule 2) — both are our uncertainty, not a fact about the arrival. Ceiling
+    # decides whether circling is even on the table, but we never compute a
     # circling verdict (design rule 3), only whether to soften to AMBER.
-    wind_best = cond.best_runway.runway_id if cond.best_runway else None
-    served = ", ".join(sorted(approaches.served_runway_ids)) or "-"
-
-    # Neither an approach we could not align, nor a straight-in end the wind
-    # model did not cover, may drive RED (design rule 2) — both are our
-    # uncertainty, not a fact about the arrival.
     alignment_unresolved = any(
         not a.runway_id and not a.circling for a in approaches.approaches
     )
-    wind_unresolved = bool(approaches.served_runway_ids) and not plans
+    wind_unresolved = bool(approaches.served_runway_ids) and not graded
     circling_supported = ceiling is None or ceiling >= circling_ceiling
+    soften = circling_supported or alignment_unresolved or wind_unresolved
 
-    if circling_supported or alignment_unresolved or wind_unresolved:
+    # Two different failures land here and they are NOT the same story. If an
+    # end the wind is happy with exists and is blocked only by its own
+    # approach's minima, there is no misalignment at all — saying "wind favours
+    # 20, approaches serve 02, 20 — plan for circling" would name the served,
+    # wind-favoured runway as if it were unserved. This is rule 2 applied per
+    # approach rather than airport-wide: the forecast is below the best case for
+    # *that* end's approach, even though a lower-minima approach exists on an
+    # end the wind has ruled out.
+    minima_blocked = [
+        g for g in graded
+        if g.wind != AdvisoryStatus.RED and g.minima == AdvisoryStatus.RED
+    ]
+    if minima_blocked:
+        closest = min(minima_blocked, key=lambda g: g.plan.proxy.dh_lo)
+        key = (
+            "approach_feasibility.minima_circling" if circling_supported
+            else "approach_feasibility.minima_blocked"
+        )
+        return (
+            AdvisoryStatus.AMBER if soften else AdvisoryStatus.RED,
+            adv_t(
+                key, loc,
+                runway=closest.plan.wind.runway_id,
+                approach=_approach_label(closest.plan.approach),
+                dh=int(closest.plan.proxy.dh_lo),
+            ),
+        )
+
+    # Every approach-served end is out on wind (or there is nothing straight-in
+    # to grade) — the genuine misalignment case.
+    wind_best = cond.best_runway.runway_id if cond.best_runway else None
+    served = ", ".join(sorted(approaches.served_runway_ids)) or "-"
+
+    if soften:
         return AdvisoryStatus.AMBER, adv_t(
             "approach_feasibility.circling", loc,
             served=served, wind_runway=wind_best or "-",

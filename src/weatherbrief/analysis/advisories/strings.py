@@ -763,6 +763,30 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Wind begünstigt RWY {wind_runway}; Anflüge bedienen {served} — Platzrunde einplanen",
         "es": "El viento favorece la RWY {wind_runway}; las aproximaciones sirven {served} — prever circling",
     },
+    "approach_feasibility.minima_circling": {
+        "en": "RWY {runway} is clear on wind, but the forecast is below typical {approach} minima (~{dh}ft) — plan for circling",
+        "fr": "La RWY {runway} est bonne au vent, mais la prévision est sous les minima {approach} typiques (~{dh}ft) — prévoir une MVL",
+        "de": "RWY {runway} ist windseitig frei, aber die Vorhersage liegt unter typischen {approach}-Minima (~{dh}ft) — Platzrunde einplanen",
+        "es": "La RWY {runway} está bien de viento, pero el pronóstico está por debajo de los mínimos {approach} típicos (~{dh}ft) — prever circling",
+    },
+    "approach_feasibility.minima_blocked": {
+        "en": (
+            "RWY {runway} is clear on wind, but the forecast is below typical "
+            "{approach} minima (~{dh}ft), and the ceiling will not support circling"
+        ),
+        "fr": (
+            "La RWY {runway} est bonne au vent, mais la prévision est sous les minima "
+            "{approach} typiques (~{dh}ft), et le plafond ne permet pas la MVL"
+        ),
+        "de": (
+            "RWY {runway} ist windseitig frei, aber die Vorhersage liegt unter typischen "
+            "{approach}-Minima (~{dh}ft), und die Untergrenze trägt keine Platzrunde"
+        ),
+        "es": (
+            "La RWY {runway} está bien de viento, pero el pronóstico está por debajo de los "
+            "mínimos {approach} típicos (~{dh}ft), y el techo no permite circling"
+        ),
+    },
     "approach_feasibility.misaligned": {
         "en": (
             "Wind favours RWY {wind_runway}; approaches serve {served}, "
