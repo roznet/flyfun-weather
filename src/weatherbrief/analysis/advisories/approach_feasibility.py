@@ -175,14 +175,30 @@ def _proxy(approach: RunwayApproach) -> ApproachProxy:
     return proxy
 
 
-def _best_case_minima(approaches: list[RunwayApproach]) -> tuple[float, float]:
+def _best_case_minima(
+    approaches: list[RunwayApproach],
+) -> tuple[float, float] | None:
     """Lowest plausible (decision height ft, visibility m) across the approaches.
 
     The *best case* deliberately: a forecast below this is below every plate the
     field could hold, which is the only ceiling/visibility fact hard enough to
-    justify RED (design rule 2). Callers must pass a non-empty list.
+    justify RED (design rule 2).
+
+    **Circling-only procedures are excluded.** ``APPROACH_CLASS_PROXY`` holds
+    *straight-in* minima, and real circling minima are categorically higher for
+    the same approach class — so folding a circling ILS in would claim a 200 ft
+    best case the field does not offer, an optimistic assumption sitting inside
+    a RED gate. That is also design rule 3: we have no circling minima, so we
+    flag circling rather than grading it.
+
+    Returns ``None`` when every published approach is circling-only, i.e. there
+    is no straight-in minimum to test the forecast against — the caller skips
+    the gate and lets the fallback speak. (This ``None`` is live, not defensive:
+    a circling-only field is the #509 EGKA-class shape.)
     """
-    proxies = [_proxy(a) for a in approaches]
+    proxies = [_proxy(a) for a in approaches if not a.circling]
+    if not proxies:
+        return None
     return min(p.dh_lo for p in proxies), min(p.vis_lo for p in proxies)
 
 
@@ -302,17 +318,19 @@ def _grade_full(
     # Hard forecast fact — below every plate the field could hold. Checked before
     # the wind so a genuinely un-shootable approach reads as such regardless of
     # which runway the wind favours.
-    best_dh, best_vis = _best_case_minima(approaches.approaches)
-    if ceiling is not None and ceiling < best_dh:
-        return AdvisoryStatus.RED, adv_t(
-            "approach_feasibility.below_minima", loc,
-            ceiling=int(ceiling), dh=int(best_dh),
-        )
-    if cond.visibility_m is not None and cond.visibility_m < best_vis:
-        return AdvisoryStatus.RED, adv_t(
-            "approach_feasibility.below_vis_minima", loc,
-            vis=int(cond.visibility_m), min_vis=int(best_vis),
-        )
+    best_case = _best_case_minima(approaches.approaches)
+    if best_case is not None:
+        best_dh, best_vis = best_case
+        if ceiling is not None and ceiling < best_dh:
+            return AdvisoryStatus.RED, adv_t(
+                "approach_feasibility.below_minima", loc,
+                ceiling=int(ceiling), dh=int(best_dh),
+            )
+        if cond.visibility_m is not None and cond.visibility_m < best_vis:
+            return AdvisoryStatus.RED, adv_t(
+                "approach_feasibility.below_vis_minima", loc,
+                vis=int(cond.visibility_m), min_vis=int(best_vis),
+            )
 
     # Straight-in candidates, best arrival first. Wind and minima are kept
     # apart, not just merged into one verdict: when no candidate is usable, WHY

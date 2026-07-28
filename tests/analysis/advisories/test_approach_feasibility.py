@@ -559,6 +559,45 @@ class TestCirclingNeedsVisibilityNotJustCeiling:
         assert result.aggregate_status == AdvisoryStatus.AMBER
 
 
+class TestCirclingMinimaAreNotStraightInMinima:
+    """A circling procedure must not lend its class's straight-in minima.
+
+    ``APPROACH_CLASS_PROXY`` holds straight-in minima; real circling minima are
+    categorically higher for the same class. Folding a circling ILS into the
+    airport-wide best-case gate would claim a 200 ft best case the field does
+    not offer — design rule 3 (flag circling, don't grade it) applied to the gate.
+    """
+
+    def test_a_circling_ils_does_not_lower_the_best_case_gate(self):
+        """Only a VOR is straight-in here, so 300 ft is below the real best case."""
+        circling_ils = RunwayApproach(name="ILS A", approach_type="ILS", circling=True)
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.LIFR, [_RWY_20_HEADWIND],
+                ceiling_ft=300, visibility_m=4000,
+            ),
+            _approaches(circling_ils, _VOR_20),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults())
+        assert result.aggregate_status == AdvisoryStatus.RED
+        # The gate fired on the VOR's 400 ft, not the circling ILS's 200 ft.
+        assert "400" in result.aggregate_detail
+
+    def test_a_circling_only_field_skips_the_gate_rather_than_inventing_one(self):
+        """No straight-in minimum exists to test against — let the fallback speak."""
+        circling = RunwayApproach(name="RNP A", approach_type="RNP", circling=True)
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.IFR, [_RWY_02, _RWY_24],
+                ceiling_ft=1500, visibility_m=4000,
+            ),
+            _approaches(circling),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults())
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert "No straight-in approach is published" in result.aggregate_detail
+
+
 class TestNoStraightInIsItsOwnStory:
     def test_circling_only_field_does_not_render_an_empty_served_list(self):
         """"approaches serve -" — a plausible shape at small European fields."""
