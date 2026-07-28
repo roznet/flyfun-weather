@@ -263,6 +263,18 @@ non-precision minimum. Merging the two axes made the evaluator announce "wind
 favours RWY 20; approaches serve 02, **20**" — naming the served, wind-favoured
 runway as if it were unserved (caught in review on #511).
 
+**One discriminator drives both the grade and the copy** (`_Softening`, whose
+value doubles as the message-key suffix — `minima_{circling,uncertain,blocked}`
+× `misaligned_{…}`). Choosing them from different tests is a bug generator, and
+it produced two: an AMBER earned by an *unrelated* unresolved approach kept the
+hard "the ceiling will not support circling" claim, and — worse, in the branch
+review didn't flag — the misalignment case advised "plan for circling" at a
+ceiling the same call had just decided was below the circling minimum. Softening
+for uncertainty is correct, but it has to name that reason in its own words
+rather than borrow the circling advice. Note the fix is *not* to grade off
+`circling_supported` alone: that would harden genuine uncertainty into RED,
+which is precisely what rule 2 forbids.
+
 **Circling is flagged, never graded.** `nav.db` carries no circling minima, and
 "circling not authorised" / night / category restrictions are not in the data at
 all. `circling_ceiling_ft` (default 1000) only decides whether a misaligned
