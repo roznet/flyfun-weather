@@ -254,9 +254,11 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
             for mod in conv.severe_modifiers:
                 lines.append(f"    ! {mod}")
 
-        # Icing zones
-        if sa.icing_zones:
-            for zone in sa.icing_zones:
+        # Icing zones — only the hazardous ones. An Ogimet zone at risk NONE means
+        # "assessed here, no icing", so listing it reads as an icing report.
+        icing_zones = [z for z in sa.icing_zones if z.is_hazardous]
+        if icing_zones:
+            for zone in icing_zones:
                 sld_str = " SLD!" if zone.sld_risk else ""
                 lines.append(
                     f"  Icing [{model}]: {zone.risk.value} {zone.icing_type.value} "
@@ -316,7 +318,7 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
                     else f"  Cloud [{model}]: {cl.coverage.value.upper()} "
                     f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft"
                 )
-        elif not sa.icing_zones:
+        elif not icing_zones:
             lines.append(f"  [{model}]: Clear, no icing")
 
     return lines

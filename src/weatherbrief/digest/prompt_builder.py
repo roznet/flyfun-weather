@@ -609,7 +609,10 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
         if xc is not None:
             lines.append(f"    → cross-check: {xc.note}")
 
-        for zone in sa.icing_zones:
+        # Assessed-but-clean Ogimet zones (risk NONE) are not icing — feeding them
+        # in as "Icing zone" lines invites the model to narrate icing that the
+        # cross-section deliberately draws nothing for.
+        for zone in (z for z in sa.icing_zones if z.is_hazardous):
             sld = " SLD!" if zone.sld_risk else ""
             lines.append(
                 f"  Icing zone [{model}]: {zone.risk.value} {zone.icing_type.value} "
