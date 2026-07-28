@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -525,6 +526,20 @@ def _analyze_one(
 # ---------------------------------------------------------------------------
 
 
+def _finite_or_none(v: float | None) -> float | None:
+    """NaN/±Inf → ``None``; finite values unchanged.
+
+    The compute layer signals "not computable" with NaN (see ``_airmass_delta``
+    and the margins in ``apply_gate_config``). Pydantic writes NaN as JSON
+    ``null``, so anything non-finite must be projected onto an Optional field or
+    the artifact cannot be re-validated on load — which previously aborted the
+    whole advisory stage for the pack.
+    """
+    if v is None or not math.isfinite(v):
+        return None
+    return float(v)
+
+
 def _to_analysis_model(a: RouteFrontAnalysis) -> RouteFrontAnalysisModel:
     return RouteFrontAnalysisModel(
         model=a.model,
@@ -555,10 +570,11 @@ def _to_analysis_model(a: RouteFrontAnalysis) -> RouteFrontAnalysisModel:
             FrontDecisionModel(
                 lat=d.candidate.lat, lon=d.candidate.lon,
                 distance_km=d.candidate.distance_km, gradient=d.candidate.gradient,
-                delta_theta_e=d.candidate.delta_theta_e,
+                delta_theta_e=_finite_or_none(d.candidate.delta_theta_e),
                 advection=d.candidate.advection,
                 accepted=d.accepted, rejected_by=d.rejected_by,
-                kind=d.kind, intensity=d.intensity, margins=d.margins,
+                kind=d.kind, intensity=d.intensity,
+                margins={k: _finite_or_none(v) for k, v in d.margins.items()},
             )
             for d in a.decisions
         ],

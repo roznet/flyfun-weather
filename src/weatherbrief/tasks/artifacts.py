@@ -221,13 +221,24 @@ def save_front_artifacts(
 def load_route_fronts(
     pack_dir: Path, *, filename: str = "route_fronts.json",
 ) -> "RouteFrontsManifest | None":
-    """Load a front-detection manifest, returning *None* if missing."""
+    """Load a front-detection manifest, returning *None* if missing or unreadable.
+
+    An unloadable artifact degrades to "no fronts" (same as the pref being off)
+    rather than raising. The caller in ``run_advisories`` loads this *inside* the
+    try block that wraps the whole advisory stage, so a raise here silently cost
+    the pack all 16 advisories — a broken experimental overlay must never take
+    down icing, convective and the rest with it. Matches ``load_altitude_table``.
+    """
     from weatherbrief.models import RouteFrontsManifest
 
     fr_path = pack_dir / filename
     if not fr_path.exists():
         return None
-    return RouteFrontsManifest.model_validate_json(fr_path.read_text())
+    try:
+        return RouteFrontsManifest.model_validate_json(fr_path.read_text())
+    except Exception:
+        logger.warning("Failed to load %s from %s", filename, pack_dir, exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------

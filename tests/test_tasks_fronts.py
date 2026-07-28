@@ -591,6 +591,78 @@ class TestRunFronts:
         assert not (pack_dir / "route_fronts.json").exists()
 
 
+class TestNonFiniteDecisionRoundTrip:
+    """A rejected candidate with a NaN Δθe must not brick the artifact.
+
+    ``_airmass_delta`` returns NaN when θe is non-finite at a window edge, and
+    the delta_theta_e / anomaly margins are NaN whenever their gate could not be
+    evaluated. Pydantic writes NaN as JSON ``null``, so before the fix the
+    artifact serialized fine but failed to *re-validate* on load — and because
+    ``run_advisories`` loads it inside the try wrapping the whole advisory
+    stage, that cost the pack all 16 advisories, not just the front one.
+    """
+
+    @staticmethod
+    def _analysis_with_nan_decision():
+        from weatherbrief.frontal.route_sampling import (
+            FrontCandidate,
+            FrontDecision,
+            RouteFrontAnalysis,
+        )
+
+        candidate = FrontCandidate(
+            lat=47.9, lon=1.04, distance_km=414.3,
+            gradient=2.94, neg_laplacian=-1.2, advection=-0.2,
+            tfp_before=0.5, tfp_after=-0.3,
+            delta_theta_e=float("nan"),   # θe non-finite at the window edge
+            airmass_window_km=100.0,
+        )
+        return RouteFrontAnalysis(
+            model="icon", hour=6.0, crossings=[], nearest=None, level_hPa=700,
+            decisions=[FrontDecision(
+                candidate=candidate, accepted=False, rejected_by="gradient",
+                margins={
+                    "gradient": -3.06,
+                    "delta_theta_e": float("nan"),
+                    "anomaly": float("nan"),
+                },
+                kind="quasi-stationary", intensity="significant",
+            )],
+        )
+
+    def test_nan_projects_to_none_and_survives_save_load(self, tmp_path):
+        from weatherbrief.models import RouteFrontsManifest
+        from weatherbrief.tasks.artifacts import save_front_artifacts
+        from weatherbrief.tasks.fronts import _to_analysis_model
+
+        projected = _to_analysis_model(self._analysis_with_nan_decision())
+        decision = projected.decisions[0]
+        assert decision.delta_theta_e is None
+        assert decision.margins["delta_theta_e"] is None
+        assert decision.margins["anomaly"] is None
+        assert decision.margins["gradient"] == pytest.approx(-3.06)
+
+        pack_dir = tmp_path / "pack"
+        pack_dir.mkdir()
+        save_front_artifacts(pack_dir, RouteFrontsManifest(
+            generated_at=_INIT_DT, primary_level_hPa=700,
+            models=["icon"], levels=[700], per_model={"icon": [projected]},
+        ))
+
+        loaded = load_route_fronts(pack_dir)
+        assert loaded is not None, "artifact must re-validate after a NaN decision"
+        assert loaded.per_model["icon"][0].decisions[0].delta_theta_e is None
+
+    def test_unreadable_artifact_degrades_to_no_fronts(self, tmp_path):
+        # Defence in depth: any future unloadable artifact (schema drift, a
+        # truncated write) degrades to "no fronts" instead of raising into the
+        # advisory stage. Pre-fix packs on disk with a `null` Δθe land here.
+        pack_dir = tmp_path / "pack"
+        pack_dir.mkdir()
+        (pack_dir / "route_fronts.json").write_text('{"not": "a manifest"}')
+        assert load_route_fronts(pack_dir) is None
+
+
 class TestSnapshotForWindow:
     """Valid-time snapshot selection (#201) — pick the init that brackets the
     flight window, not merely the newest."""

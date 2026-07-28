@@ -94,19 +94,30 @@ class FrontProximityModel(BaseModel):
 
 
 class FrontDecisionModel(BaseModel):
-    """One candidate's verdict — the rejection trace for calibration/debugging."""
+    """One candidate's verdict — the rejection trace for calibration/debugging.
+
+    ``delta_theta_e`` and the ``margins`` values are **optional** because the
+    compute layer uses NaN as its "not computable" sentinel: ``_airmass_delta``
+    returns NaN when θe is non-finite at a window edge, and the delta_theta_e /
+    anomaly margins are NaN whenever their gate could not be evaluated. A
+    *rejected* candidate legitimately carries those NaNs (that is often the very
+    reason it was rejected), and Pydantic serializes NaN to JSON ``null`` — so a
+    required ``float`` here made the artifact fail to re-validate on load, which
+    took out every advisory for the pack (not just the front one). ``None`` is
+    the honest wire representation; the compute-layer dataclasses keep NaN.
+    """
 
     lat: float
     lon: float
     distance_km: float
     gradient: float
-    delta_theta_e: float
+    delta_theta_e: float | None = None
     advection: float
     accepted: bool
     rejected_by: str | None = None     # "gradient"|"anomaly"|"terrain"|"delta_theta_e"|None
     kind: str
     intensity: str
-    margins: dict[str, float] = Field(default_factory=dict)
+    margins: dict[str, float | None] = Field(default_factory=dict)
 
 
 class RouteFrontAnalysisModel(BaseModel):
