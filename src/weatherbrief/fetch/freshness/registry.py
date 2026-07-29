@@ -9,8 +9,11 @@ Each ``SourceConfig`` is keyed by ``"{model}:{source}"`` (e.g. ``"ecmwf:direct"`
 ``"gfs:openmeteo"``).  Cycles are UTC hours of day; ``delivery_offset`` is the
 expected wallclock lag from cycle init to data readiness.
 
-``run_horizon`` may differ per cycle (e.g. ECMWF 00/12 reach 168h; 06/18 are
-medium-only at ~90h; ICON-EU main cycles 120h vs intermediate 78h).
+``run_horizon`` may differ per cycle (e.g. ECMWF 00/12 reach 168h; the short
+cut-off 06/18 cycles reach 144h; ICON-EU main cycles 120h vs intermediate 78h).
+Note that a cycle's *horizon* is not where its hourly step cadence ends — for
+ECMWF that is init+90h, after which the manifest thins to 3-hourly and then
+6-hourly, all still within the same run.
 """
 
 from __future__ import annotations

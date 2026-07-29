@@ -187,7 +187,7 @@ def test_each_source_has_sane_offsets(key):
 
 class TestMaxHorizon:
     def test_ecmwf_direct_is_full_168h(self):
-        # 00/12Z reach 168h; 06/18Z only 90h — the max is 168h.
+        # 00/12Z reach 168h; the short cut-off 06/18Z reach 144h — max is 168h.
         assert max_horizon("ecmwf:direct") == timedelta(hours=168)
 
     def test_uniform_horizon_source(self):
@@ -199,7 +199,7 @@ class TestNextFullHorizonRun:
 
     def test_excludes_medium_cycles_picks_next_00z(self):
         # A 06:00 slot: the imminent full-horizon run is 00Z (delivers 06:40),
-        # NOT the 06Z medium cycle (90h, delivers 12:40).
+        # NOT the 06Z short cut-off cycle (144h, delivers 12:40).
         init, delivery = next_full_horizon_run("ecmwf:direct", _utc(2026, 3, 1, 6))
         assert init == _utc(2026, 3, 1, 0)
         assert delivery == _utc(2026, 3, 1, 6, 40)

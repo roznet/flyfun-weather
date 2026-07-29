@@ -138,7 +138,7 @@ The help-page table and the freshness popover both render from the same registry
       "pressure_levels": 25,
       "description": "...",
       "cycles": [0, 6, 12, 18],
-      "horizon_hours": {"0": 168.0, "6": 90.0, "12": 168.0, "18": 90.0},
+      "horizon_hours": {"0": 168.0, "6": 144.0, "12": 168.0, "18": 144.0},
       "delivery_offset_hours": {"0": 6.67, ...},
       "latest_init": "2026-05-11T06:00:00+00:00",     // null if marker unset
       "published_at": "2026-05-11T12:38:00+00:00",     // null for direct GRIB
