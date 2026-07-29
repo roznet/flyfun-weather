@@ -147,15 +147,15 @@ class TestDynamicFields:
             assert e.horizon_end > e.latest_init
 
     def test_horizon_end_uses_per_cycle_horizon(self, bootstrapped_store):
-        """ECMWF 00/12Z cycles reach 168h; 06/18Z reach 90h.  The catalog
+        """ECMWF 00/12Z cycles reach 168h; 06/18Z reach 144h.  The catalog
         must apply the correct per-cycle horizon to the observed init."""
         entries = {e.key: e for e in catalog.build(store=bootstrapped_store)}
         ecmwf = entries["ecmwf:direct"]
         delta = ecmwf.horizon_end - ecmwf.latest_init
         # Bootstrap picks the most-recent at-or-before-now cycle whose
         # delivery is due; for fixed_now=12:00, ECMWF latest delivered is
-        # 06Z (next due at 18:40Z) — a 90h cycle.
-        assert delta.total_seconds() / 3600 in (90, 168)
+        # 06Z (next due at 18:40Z) — a short cut-off, 144h cycle.
+        assert delta.total_seconds() / 3600 in (144, 168)
 
     def test_marker_data_end_overrides_config_horizon(self):
         """When the provider reports an actual data_end_time shorter than

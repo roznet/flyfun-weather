@@ -48,7 +48,7 @@ _PREFLIGHT_LEAD_HOURS = 2
 # already guarantees a final refresh near departure).
 #
 # "Big" run = ECMWF full-horizon 00/12Z delivery (168h, landing ~06:40/18:40
-# UTC). The 06/18Z cycles reach only 90h, so waiting for them far out would
+# UTC). The 06/18Z cycles reach only 144h, so waiting for them far out would
 # give a *shorter* horizon — they are excluded by next_full_horizon_run().
 # ECMWF covers Europe + US and is the horizon-extending primary for both, so it
 # is used region-agnostically; region-aware multi-model selection (ICON-EU /

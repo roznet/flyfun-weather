@@ -78,8 +78,12 @@ class TestRunHorizon:
     def test_ecmwf_direct_00z_is_168h(self):
         assert run_horizon("ecmwf:direct", _utc(2026, 5, 3, 0)) == timedelta(hours=168)
 
-    def test_ecmwf_direct_06z_is_medium_only_90h(self):
-        assert run_horizon("ecmwf:direct", _utc(2026, 5, 3, 6)) == timedelta(hours=90)
+    def test_ecmwf_direct_06z_is_medium_only_144h(self):
+        # 06/18z are the short cut-off cycles and stop short of the 168h that
+        # 00/12z reach — but they do run to 144h, per the delivery manifest and
+        # the files on disk.  Not 90h: that is where the hourly step cadence
+        # ends, which is a different fact.
+        assert run_horizon("ecmwf:direct", _utc(2026, 5, 3, 6)) == timedelta(hours=144)
 
     def test_icon_eu_main_120h(self):
         for h in (0, 6, 12, 18):
