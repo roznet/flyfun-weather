@@ -525,6 +525,7 @@ def confirm_candidate(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    declared_approach_icaos: list[str] | None = None,
 ):
     """Multi-model check of one provisional candidate — the honesty-ladder top.
 
@@ -615,6 +616,7 @@ def confirm_candidate(
             convective_method=convective_method,
             locale=locale,
             cruise_speed_ias_kt=cruise_speed_ias_kt,
+            declared_approach_icaos=declared_approach_icaos,
             cross_sections=cross_sections,
             persist=False,
             detect_fronts=False,
@@ -794,6 +796,7 @@ def run_time_scan(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    declared_approach_icaos: list[str] | None = None,
 ) -> TimeWindowScan | None:
     """Grade the flight's Flexibility scenarios against the saved pack.
 
@@ -856,6 +859,7 @@ def run_time_scan(
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=cruise_speed_ias_kt,
+        declared_approach_icaos=declared_approach_icaos,
         cross_sections=cross_sections,
     )
 

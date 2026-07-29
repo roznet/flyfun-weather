@@ -880,6 +880,17 @@ function populateAccountForm(prefs: PreferencesResponse): void {
     deferToggle.checked = prefs.defer_email_for_model_update ?? false;
   }
 
+  // Declared unpublished approaches (#510) — rendered from the server's
+  // canonical list, so what the field shows after a save is exactly what was
+  // stored, not what the user happened to type.
+  const declaredInput = document.getElementById(
+    'input-declared-approaches',
+  ) as HTMLInputElement | null;
+  if (declaredInput) {
+    declaredInput.value = (prefs.declared_approach_icaos ?? []).join(' ');
+  }
+  clearDeclaredApproachError();
+
   renderNotificationSettings(prefs);
 }
 
@@ -1686,6 +1697,9 @@ async function handleSave(): Promise<void> {
     // Save account-level preferences (locale + optional services + autorouter creds in dev mode)
     const synopticEnabled = (document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement)?.checked ?? false;
     const deferModelUpdate = (document.getElementById('toggle-defer-model-update') as HTMLInputElement)?.checked ?? false;
+    const declaredInput = document.getElementById(
+      'input-declared-approaches',
+    ) as HTMLInputElement | null;
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
       units_region: selectedUnitsRegion,
@@ -1693,6 +1707,11 @@ async function handleSave(): Promise<void> {
       synoptic_forecast_map_enabled: synopticEnabled,
       defer_email_for_model_update: deferModelUpdate,
     };
+    // Sent verbatim — the server splits, uppercases, dedupes and validates
+    // against nav.db, and rejects the whole write if a code is unknown (#510).
+    if (declaredInput) {
+      accountUpdate.declared_approach_icaos = declaredInput.value;
+    }
 
     // Briefing notifications (issue #371). The 3-stop folds into scope +
     // change-only; channels persist as-is (the invariant is enforced live in
@@ -1720,8 +1739,14 @@ async function handleSave(): Promise<void> {
       if (arPassword) accountUpdate.autorouter_password = arPassword;
     }
 
+    clearDeclaredApproachError();
     const result = await savePreferences(accountUpdate);
     setUnitsPreference(result.units_region);
+    // Re-render from the canonical stored list, so the field shows what was
+    // actually saved rather than the user's spacing and casing.
+    if (declaredInput) {
+      declaredInput.value = (result.declared_approach_icaos ?? []).join(' ');
+    }
     updateAutorouterStatus(result.has_autorouter_creds, autorouterMode);
     if (autorouterMode === 'password') {
       const arPwdInput = document.getElementById('input-ar-password') as HTMLInputElement;
@@ -1738,8 +1763,42 @@ async function handleSave(): Promise<void> {
 
     showStatus(t('settings.saved'));
   } catch (err) {
+    // An unknown airport code is a fixable typo in one field, not a generic
+    // save failure — name it at the field so the user can see which code was
+    // rejected. #510 requires it never be silently dropped, and a message that
+    // only says "save failed" would be exactly that in effect.
+    const codes = unknownAirportCodes(err);
+    if (codes.length) {
+      showDeclaredApproachError(
+        t('settings.declaredApproaches.unknown', { codes: codes.join(', ') }),
+      );
+    }
     showStatus(t('settings.failedSave', { error: String(err) }), true);
   }
+}
+
+/** The unknown ICAO codes named by a rejected preferences save, if any. */
+function unknownAirportCodes(err: unknown): string[] {
+  const detail = (err as { detail?: unknown })?.detail;
+  if (!detail || typeof detail !== 'object') return [];
+  const d = detail as { error?: unknown; codes?: unknown };
+  if (d.error !== 'unknown_airports' || !Array.isArray(d.codes)) return [];
+  return d.codes.map(String);
+}
+
+function showDeclaredApproachError(message: string): void {
+  const el = document.getElementById('declared-approaches-error');
+  if (!el) return;
+  el.textContent = message;
+  el.style.display = '';
+  el.classList.add('field-error');
+}
+
+function clearDeclaredApproachError(): void {
+  const el = document.getElementById('declared-approaches-error');
+  if (!el) return;
+  el.textContent = '';
+  el.style.display = 'none';
 }
 
 // --- Autorouter status ---

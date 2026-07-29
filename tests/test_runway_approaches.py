@@ -57,9 +57,9 @@ class _FakeModel:
         self.airports = _FakeCollection(airports)
 
 
-def _lookup(airports: dict[str, Airport], icaos: list[str]):
+def _lookup(airports: dict[str, Airport], icaos: list[str], declared=None):
     with patch("weatherbrief.airports._load_airport_model", return_value=_FakeModel(airports)):
-        return get_runway_approaches(icaos, "nav.db")
+        return get_runway_approaches(icaos, "nav.db", declared)
 
 
 class TestNormalizeRunwayIdent:
@@ -200,4 +200,73 @@ class TestFailureNeverImpersonatesAbsence:
         airports = {"EGTF": _airport("EGTF", [_runway("06", "24")], [])}
         result = _lookup(airports, ["EGTF"])["EGTF"]
         assert result.lookup_failed is False
+        assert result.has_iap is False
+
+
+class TestDeclaredUnpublishedApproaches:
+    """Injection of the pilot's declared unpublished approaches (issue #510).
+
+    Resolving the declaration in the collection step is what keeps the
+    evaluator pure — it sees one approach list and only has to recognise the
+    source. These pin that the injected entry can never confer credit it has no
+    basis for.
+    """
+
+    def test_declared_icao_gets_a_synthetic_approach(self):
+        """EGTF Fairoaks: zero procedure rows, but the pilot flies a cloud break."""
+        airports = {"EGTF": _airport("EGTF", [_runway("06", "24")], [])}
+        result = _lookup(airports, ["EGTF"], ["EGTF"])["EGTF"]
+        assert result.has_iap is True
+        assert result.has_declared_approach is True
+        assert result.has_published_iap is False
+        assert result.published == []
+
+    def test_undeclared_icao_is_untouched(self):
+        airports = {"EGTF": _airport("EGTF", [_runway("06", "24")], [])}
+        result = _lookup(airports, ["EGTF"], ["EGSX"])["EGTF"]
+        assert result.has_iap is False
+        assert result.has_declared_approach is False
+
+    def test_declaration_carries_no_alignment_and_no_class(self):
+        """The type is fixed and the runway absent BY CONSTRUCTION.
+
+        Letting a user declare "ILS" would hand them a 200 ft decision height on
+        a procedure with no plate; a runway would earn straight-in alignment
+        credit against the wind. Neither is available to declare, so neither can
+        be claimed.
+        """
+        airports = {"EGTF": _airport("EGTF", [_runway("06", "24")], [])}
+        declared = _lookup(airports, ["EGTF"], ["EGTF"])["EGTF"].approaches[0]
+        assert declared.runway_id is None
+        assert declared.approach_type is None
+        assert declared.is_declared is True
+
+    def test_declaration_does_not_add_a_served_runway(self):
+        """``served_runway_ids`` drives the alignment copy — it must stay published."""
+        airports = {
+            "EGKA": _airport(
+                "EGKA", [_runway("02", "20")],
+                [_approach("RWY02 ILS", "ILS", "02")],
+            ),
+        }
+        result = _lookup(airports, ["EGKA"], ["EGKA"])["EGKA"]
+        assert result.served_runway_ids == {"02"}
+        assert result.has_declared_approach is True
+        assert [a.name for a in result.published] == ["RWY02 ILS"]
+
+    def test_matching_is_case_and_whitespace_insensitive(self):
+        airports = {"EGTF": _airport("EGTF", [_runway("06", "24")], [])}
+        result = _lookup(airports, ["EGTF"], [" egtf ", ""])["EGTF"]
+        assert result.has_declared_approach is True
+
+    def test_declaration_never_overrides_a_failed_lookup(self):
+        """``lookup_failed`` means "we could not determine the picture".
+
+        A declaration does not determine it either — and turning that state
+        into a gradeable one would let a data gap produce a verdict, which is
+        the failure mode ``lookup_failed`` exists to prevent.
+        """
+        result = _lookup({}, ["EGTF"], ["EGTF"])["EGTF"]
+        assert result.lookup_failed is True
+        assert result.has_declared_approach is False
         assert result.has_iap is False

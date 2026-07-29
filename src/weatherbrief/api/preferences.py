@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import date
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from flyfun_common import fx
@@ -105,6 +106,14 @@ class PreferencesResponse(BaseModel):
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
     donations_enabled: bool = False  # global: Stripe configured (gates the donate UI)
+    # Airports where the pilot has an unpublished/self-briefed approach — a
+    # cloud break procedure or a private GNSS approach (#510). A fact about the
+    # pilot and the airport, entered once and applied everywhere, which is why
+    # it lives here rather than in a flight profile's advisory params. Consumed
+    # ONLY by the approach_feasibility advisory: it must never reach the
+    # alternate-minima calculations, where a personal assertion would turn into
+    # a regulatory claim.
+    declared_approach_icaos: list[str] = Field(default_factory=list)
 
 
 class PreferencesUpdate(BaseModel):
@@ -128,12 +137,60 @@ class PreferencesUpdate(BaseModel):
     notify_scope: NotifyScope | None = None
     notify_change_only: bool | None = None
     notify_decay_notice: bool | None = None  # only meaningful as false, to dismiss
+    # Accepts the raw free-form text the settings field holds ("EGTF, EGSX
+    # EGLK") as well as a JSON array, and canonicalizes either on the way in —
+    # normalization lives here rather than in the web client so every writer
+    # (a direct PUT, a future iOS screen) stores the same shape.
+    declared_approach_icaos: list[str] | str | None = None
+
+    @field_validator("declared_approach_icaos")
+    @classmethod
+    def _normalize_declared(cls, v: list[str] | str | None) -> list[str] | None:
+        """Split on commas/whitespace, uppercase, trim, dedupe, keep order."""
+        return None if v is None else _normalize_icao_list(v)
 
     @field_validator("display_currency")
     @classmethod
     def _normalize_display_currency(cls, v: str | None) -> str | None:
         """Normalize to "auto" or a 3-letter code so the contract is explicit."""
         return None if v is None else _normalize_currency(v)
+
+
+def _normalize_icao_list(value: list[str] | str) -> list[str]:
+    """Canonicalize free-form ICAO input to an uppercase, deduped list.
+
+    Accepts either the raw text of the settings field or an already-split list
+    whose elements may themselves hold separators, so a client that does its own
+    (partial) splitting cannot produce a different stored shape than one that
+    posts the text verbatim. Input order is preserved — the user's list is
+    theirs to order.
+    """
+    raw = value if isinstance(value, str) else " ".join(v for v in value if v)
+    seen: dict[str, None] = {}
+    for token in re.split(r"[\s,;]+", raw.upper()):
+        if token:
+            seen.setdefault(token, None)
+    return list(seen)
+
+
+def _parse_declared_approaches(raw: str) -> list[str]:
+    """Extract the declared unpublished-approach airports from ``app_prefs_json``.
+
+    Re-normalizes on read as well as on write: the key is small enough to have
+    been hand-edited in the DB, and a stored ``"egtf"`` that reads back
+    lowercase would silently match no airport in the collection step, which is
+    the exact failure mode #510 exists to prevent.
+    """
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return []
+    stored = data.get("declared_approach_icaos")
+    if not stored:
+        return []
+    if not isinstance(stored, (list, str)):
+        return []
+    return _normalize_icao_list(stored)
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -269,6 +326,7 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
         pirep_can_view=prefs_data.get("pirep_can_view", False),
         pirep_can_publish=prefs_data.get("pirep_can_publish", False),
         donations_enabled=stripe_configured(),
+        declared_approach_icaos=_parse_declared_approaches(row.app_prefs_json),
         **toggles,
     )
 
@@ -287,6 +345,7 @@ def get_preferences(
 @router.put("", response_model=PreferencesResponse)
 def update_preferences(
     body: PreferencesUpdate,
+    request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -369,6 +428,30 @@ def update_preferences(
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
 
+    if body.declared_approach_icaos is not None:
+        # Validate before storing, and reject the whole write rather than
+        # dropping the bad codes: a typo'd EGFT that vanished on save would
+        # leave the pilot believing their home field is declared when it is not
+        # — silently reinstating the very false REDs the declaration removes
+        # (#510). An empty list is a legitimate write (clearing the list), and
+        # skips straight through.
+        from weatherbrief.airports import unknown_icaos
+
+        db_path = getattr(request.app.state, "db_path", "") or ""
+        bad = unknown_icaos(body.declared_approach_icaos, db_path)
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "unknown_airports",
+                    "codes": bad,
+                    "message": (
+                        "Not recognised as airport codes: " + ", ".join(bad)
+                    ),
+                },
+            )
+        data["declared_approach_icaos"] = body.declared_approach_icaos
+
     row.app_prefs_json = json.dumps(data)
 
     if is_dev_mode() and body.autorouter_username and body.autorouter_password:
@@ -435,6 +518,26 @@ def load_user_locale(db: Session, user_id: str) -> str | None:
         return locale if locale and locale != "en" else None
     except json.JSONDecodeError:
         return None
+
+
+def load_declared_approaches(db: Session, user_id: str) -> list[str]:
+    """Airports where this user declared an unpublished approach (#510).
+
+    The single read path for the briefing pipeline, mirroring
+    :func:`load_user_locale` — another account-level preference the advisory
+    stack consumes. Returns ``[]`` for a user with no row or no declaration, so
+    every caller can pass the result straight through without a None check.
+
+    Consumers must be limited to ``approach_feasibility``. This list is a
+    personal operational assertion and carries no regulatory weight: a
+    self-briefed approach cannot make a field qualify as a filed alternate under
+    EASA NCO.OP.143, nor relieve the NCO.OP.140 trigger, so it must never reach
+    ``alternate_requirement`` or the alternates candidate gate.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if not row or not row.app_prefs_json:
+        return []
+    return _parse_declared_approaches(row.app_prefs_json)
 
 
 def load_units_region(db: Session, user_id: str) -> str:

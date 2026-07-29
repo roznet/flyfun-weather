@@ -715,6 +715,35 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Kein veröffentlichter Instrumentenanflug — Ankunft hängt vom Sichtflug ab",
         "es": "Sin aproximación instrumental publicada — la llegada depende de mantener el vuelo visual",
     },
+    # --- user-declared unpublished approaches (#510) ---
+    # Every one of these names the basis in the line itself: the grade is being
+    # softened on the pilot's own assertion, and #510 guardrail 2 makes saying
+    # so mandatory — a shared briefing renders the owner's baked-in grades, so
+    # this sentence is the only thing that travels with it.
+    "approach_feasibility.mvfr_declared": {
+        "en": "Your declared unpublished approach at {icao} — landing can still be completed visually",
+        "fr": "Votre approche non publiée déclarée à {icao} — l'atterrissage reste réalisable à vue",
+        "de": "Ihr angegebener nicht veröffentlichter Anflug in {icao} — Landung noch visuell möglich",
+        "es": "Su aproximación no publicada declarada en {icao} — el aterrizaje aún puede completarse visualmente",
+    },
+    "approach_feasibility.declared_only": {
+        "en": "No published instrument approach — graded against your declared unpublished approach at {icao}, which has no published minima, so check your own",
+        "fr": "Aucune approche aux instruments publiée — évalué d'après votre approche non publiée déclarée à {icao}, sans minima publiés : vérifiez les vôtres",
+        "de": "Kein veröffentlichter Instrumentenanflug — bewertet anhand Ihres angegebenen nicht veröffentlichten Anflugs in {icao}, der keine veröffentlichten Minima hat; prüfen Sie Ihre eigenen",
+        "es": "Sin aproximación instrumental publicada — evaluado con su aproximación no publicada declarada en {icao}, que no tiene mínimos publicados: verifique los suyos",
+    },
+    "approach_feasibility.declared_lifr": {
+        "en": "No published instrument approach — your declared unpublished approach at {icao} cannot be credited at LIFR, as it has no published minima to fly to",
+        "fr": "Aucune approche aux instruments publiée — votre approche non publiée déclarée à {icao} ne peut être créditée en LIFR, faute de minima publiés",
+        "de": "Kein veröffentlichter Instrumentenanflug — Ihr angegebener nicht veröffentlichter Anflug in {icao} kann bei LIFR nicht angerechnet werden, da keine veröffentlichten Minima vorliegen",
+        "es": "Sin aproximación instrumental publicada — su aproximación no publicada declarada en {icao} no puede acreditarse en LIFR, al no tener mínimos publicados",
+    },
+    "approach_feasibility.soften_declared": {
+        "en": "you declared an unpublished approach here, so check your own minima",
+        "fr": "vous avez déclaré une approche non publiée ici, vérifiez vos propres minima",
+        "de": "Sie haben hier einen nicht veröffentlichten Anflug angegeben, prüfen Sie Ihre eigenen Minima",
+        "es": "usted declaró una aproximación no publicada aquí, verifique sus propios mínimos",
+    },
     "approach_feasibility.no_iap": {
         "en": "No published instrument approach at {icao}",
         "fr": "Aucune approche aux instruments publiée à {icao}",

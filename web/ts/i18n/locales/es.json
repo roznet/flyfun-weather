@@ -855,5 +855,11 @@
   "flights.form.profileInfoTitle": "Perfil",
   "flights.form.profileInfoBody": "Un perfil es lo que pretendes hacer con la aeronave — tu altitud de crucero, tus límites meteorológicos personales y qué avisos importan para este tipo de vuelo. Mantén varios — un perfil de gira IFR, uno local VFR, uno de entrenamiento más estricto — y cambia entre ellos según el vuelo. Crea y edita perfiles en Configuración.",
   "flights.form.profileInfoEditThis": "Editar este perfil",
-  "flights.form.profileInfoEditAny": "Gestionar perfiles"
+  "flights.form.profileInfoEditAny": "Gestionar perfiles",
+  "settings.declaredApproaches.title": "Aproximaciones no publicadas",
+  "settings.declaredApproaches.hint": "Aeródromos donde dispone de una aproximación no publicada en el AIP — un procedimiento de rotura de nubes (cloud break) o una aproximación GNSS privada. Es una declaración operativa personal sobre sus propios procedimientos, no un procedimiento publicado.",
+  "settings.declaredApproaches.label": "Aeródromos (OACI)",
+  "settings.declaredApproaches.fieldHint": "Separe los códigos con espacios o comas.",
+  "settings.declaredApproaches.scope": "Solo lo usa el aviso de Viabilidad de la aproximación: en un destino sin aproximación instrumental publicada, una llegada IFR pasa a ámbar en lugar de rojo — nunca verde, y nunca en LIFR, donde no hay mínimos publicados. Nunca afecta al cálculo de mínimos de alternativo ni a si un aeródromo puede declararse como alternativo.",
+  "settings.declaredApproaches.unknown": "No se reconocen como códigos de aeródromo: {codes}. No se guardó nada — revise la ortografía."
 }

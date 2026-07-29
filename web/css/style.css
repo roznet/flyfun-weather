@@ -2642,6 +2642,13 @@ label {
   font-size: 0.9rem;
 }
 
+/* Inline, per-field validation message. Sits under the input it belongs to,
+   unlike .status-error, which is the form-wide banner. */
+.field-error {
+  color: var(--red);
+  font-weight: 500;
+}
+
 /* --- Settings utility classes --- */
 .settings-actions { gap: 0.75rem; margin-bottom: 1rem; align-items: center; }
 .section-hint { margin-bottom: 0.75rem; }

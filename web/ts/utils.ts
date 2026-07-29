@@ -467,13 +467,28 @@ export async function apiFetch<T>(
       throw new Error(`API 403: ${detail403 || body403}`);
     }
     const body = await resp.text();
-    let detail: string;
+    let parsed: unknown;
     try {
-      detail = JSON.parse(body).detail || body;
+      parsed = JSON.parse(body).detail ?? body;
     } catch {
-      detail = body;
+      parsed = body;
     }
-    throw new Error(`API ${resp.status}: ${detail}`);
+    // A structured detail ({error, codes, message}) used to stringify as
+    // "[object Object]" here, hiding the only useful part. Prefer its `message`
+    // for display, and hand the whole object to the caller on `.detail` so a
+    // form can act on the specific field it names (e.g. the unknown ICAOs in
+    // the declared-approach list) rather than re-parsing prose.
+    const isObj = typeof parsed === 'object' && parsed !== null;
+    const message = isObj
+      ? String((parsed as { message?: unknown }).message ?? body)
+      : String(parsed || body);
+    const err = new Error(`API ${resp.status}: ${message}`) as Error & {
+      status?: number;
+      detail?: unknown;
+    };
+    err.status = resp.status;
+    err.detail = parsed;
+    throw err;
   }
   onResponse?.(resp);
   if (resp.status === 204) return undefined as T;

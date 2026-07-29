@@ -102,6 +102,11 @@ class BriefingOptions:
     profile_id: int | None = None  # flight profile ID for digest tracking
     profile_name: str | None = None  # flight profile name for digest tracking
     guidance_key: str | None = None  # digest guidance preset (conservative/balanced/tolerant)
+    # Airports where the user declared an unpublished/self-briefed approach
+    # (#510). Read only by ``approach_feasibility`` — never by the alternates
+    # or alternate-requirement stages, where a personal declaration would be
+    # making a regulatory claim.
+    declared_approach_icaos: list[str] | None = None
 
 
 @dataclass
@@ -442,6 +447,7 @@ def _execute_briefing_stages(
             cloud_source=options.cloud_source,
             convective_method=options.convective_method,
             locale=options.locale,
+            declared_approach_icaos=options.declared_approach_icaos,
             # Precompute the altitude table now, while cross-sections are still
             # in memory (cleared just below). Feeds the digest's ALTITUDE OPTIONS
             # block and the client-side lever; default 2000ft step (#259).
@@ -500,6 +506,7 @@ def _execute_briefing_stages(
                 convective_method=options.convective_method,
                 locale=options.locale,
                 cruise_speed_ias_kt=options.cruise_speed_ias_kt,
+                declared_approach_icaos=options.declared_approach_icaos,
             )
         except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)

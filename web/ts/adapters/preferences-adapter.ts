@@ -65,6 +65,10 @@ export interface PreferencesResponse {
   pirep_can_view: boolean;
   pirep_can_publish: boolean;
   donations_enabled: boolean; // global: Stripe configured (gates the donate link)
+  // Airports where the pilot declared an unpublished/self-briefed approach
+  // (#510). Always canonical (uppercase, deduped) — the server normalizes on
+  // write, so the field can be rendered by joining without further cleanup.
+  declared_approach_icaos: string[];
 }
 
 export interface PreferencesUpdate {
@@ -86,6 +90,10 @@ export interface PreferencesUpdate {
   notify_scope?: 'auto' | 'all' | 'off';
   notify_change_only?: boolean;
   notify_decay_notice?: boolean; // only meaningful as false, to dismiss the notice
+  // Sent as the raw text of the settings field; the server splits on
+  // commas/whitespace, uppercases and dedupes. Deliberately not normalized here
+  // — one normalizer, server-side, so every client stores the same shape.
+  declared_approach_icaos?: string;
 }
 
 /**

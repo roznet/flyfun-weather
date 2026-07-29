@@ -151,6 +151,29 @@
         </div>
 
         <div class="section">
+          <h3 data-i18n="settings.declaredApproaches.title">Unpublished Approaches</h3>
+          <p class="muted section-hint" data-i18n="settings.declaredApproaches.hint">
+            Airports where you have an approach available to you that is not published in the AIP —
+            a cloud break procedure or a private/unpublished GNSS approach. This is a personal
+            operational declaration about your own currency and procedures, not a published procedure.
+          </p>
+          <div class="form-row">
+            <div class="form-group grow">
+              <label for="input-declared-approaches" data-i18n="settings.declaredApproaches.label">Airports (ICAO)</label>
+              <input type="text" id="input-declared-approaches" placeholder="EGTF, EGSX EGLK" autocomplete="off" autocapitalize="characters" spellcheck="false">
+              <span class="field-hint" data-i18n="settings.declaredApproaches.fieldHint">Separate codes with spaces or commas.</span>
+            </div>
+          </div>
+          <p class="field-hint" id="declared-approaches-error" style="display:none;"></p>
+          <p class="muted section-hint" data-i18n="settings.declaredApproaches.scope">
+            Used only by the Approach Feasibility advisory: at a destination with no published
+            instrument approach, an IFR arrival reads amber rather than red — never green, and never
+            in LIFR, where there are no published minima to fly to. It never affects
+            alternate-minima calculations or whether a field qualifies as a filed alternate.
+          </p>
+        </div>
+
+        <div class="section">
           <h3>Optional Services</h3>
           <p class="muted section-hint">Enable additional features. These are experimental or still being calibrated and are off by default.</p>
           <div class="form-row model-checkboxes">

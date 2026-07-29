@@ -136,7 +136,7 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
             (
                 enabled_ids, enabled_map, user_params, aggregation, adv_models,
                 icing_method, cloud_source, convective_method, recompute_conds,
-                locale, _afd,
+                locale, _afd, declared_approaches,
             ) = _load_advisory_profile(
                 db, flight, flight.user_id, None, pack_dir, db_path=db_path,
             )
@@ -156,6 +156,7 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
                 cloud_source=cloud_source,
                 convective_method=convective_method,
                 locale=locale,
+                declared_approach_icaos=declared_approaches,
             )
             if scan is None:
                 _write_status(pack_dir, "skipped", flight.flexibility, reason="no_data")
@@ -272,7 +273,7 @@ def _run_confirm_job(
             (
                 enabled_ids, enabled_map, user_params, aggregation, adv_models,
                 icing_method, cloud_source, convective_method, recompute_conds,
-                locale, _afd,
+                locale, _afd, declared_approaches,
             ) = _load_advisory_profile(
                 db, flight, flight.user_id, None, pack_dir, db_path=db_path,
             )
@@ -291,6 +292,7 @@ def _run_confirm_job(
                 cloud_source=cloud_source,
                 convective_method=convective_method,
                 locale=locale,
+                declared_approach_icaos=declared_approaches,
             )
 
             # Re-load before mutating — the artifact may have moved while the

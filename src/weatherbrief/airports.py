@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
@@ -13,6 +14,7 @@ from timezonefinder import TimezoneFinder
 
 from weatherbrief.fetch.route_walk import walk_route
 from weatherbrief.models import AirportApproaches, RunwayApproach, RunwayEnd, Waypoint
+from weatherbrief.models.airport_conditions import SOURCE_USER_DECLARED
 
 if TYPE_CHECKING:
     from euro_aip.briefing.models.route import Route
@@ -322,8 +324,53 @@ def _normalize_runway_ident(ident: str | None) -> str | None:
     return f"{int(match.group(1))}{match.group(2) or ''}"
 
 
+def unknown_icaos(icao_codes: Iterable[str], db_path: str) -> list[str]:
+    """Which of these ICAO codes ``nav.db`` does not know, in input order.
+
+    Used to validate the user's declared-approach list on save (#510): a
+    typo'd ``EGFT`` must be reported back rather than stored, because a
+    declaration that silently matches no airport is indistinguishable from no
+    declaration at all — and the pilot would go on believing their home field
+    is covered.
+
+    Returns an empty list when the model cannot be loaded at all: a missing or
+    unreadable ``AIRPORTS_DB`` is a server-configuration gap, and rejecting the
+    user's input over it would be blaming them for it.
+    """
+    codes = [c.strip().upper() for c in icao_codes if c and c.strip()]
+    if not codes:
+        return []
+    try:
+        model = _load_airport_model(db_path)
+    except Exception:  # noqa: BLE001 - see docstring: don't punish the user
+        logger.warning("Airport model unavailable; skipping ICAO validation", exc_info=True)
+        return []
+    return [c for c in codes if model.airports.get(c) is None]
+
+
+def _declared_approach() -> RunwayApproach:
+    """The synthetic entry standing for a pilot-declared unpublished approach.
+
+    Every field that could confer credit is left empty on purpose:
+    ``approach_type`` stays ``None`` so no minima class can be inferred from it,
+    and ``runway_id`` stays ``None`` so it can never be paired with a runway
+    end's wind. The declaration says an approach *exists*, and nothing more —
+    the type is fixed rather than user-selectable precisely so a pilot cannot
+    declare "ILS" and be handed a 200 ft decision height on a procedure that has
+    no plate (#510).
+    """
+    return RunwayApproach(
+        name="Declared unpublished approach",
+        approach_type=None,
+        runway_id=None,
+        circling=False,
+        source=SOURCE_USER_DECLARED,
+    )
+
+
 def get_runway_approaches(
     icao_codes: list[str], db_path: str,
+    declared_icaos: Iterable[str] | None = None,
 ) -> dict[str, AirportApproaches]:
     """Get published instrument approaches per airport, joined to runway ends.
 
@@ -349,14 +396,31 @@ def get_runway_approaches(
     grade map treats as the most severe input there is, so a data gap must not
     be able to impersonate one.
 
+    ``declared_icaos`` (issue #510) carries the airports where the *pilot* has
+    told us they have an unpublished/self-briefed approach — a cloud break
+    procedure or a private GNSS approach. Resolving it here rather than as an
+    evaluator parameter keeps the evaluator pure: it sees one approach list and
+    only has to recognise the ``user_declared`` source. The injected entry has
+    no runway and no approach class **by construction**, so it can never earn
+    alignment credit or lend an estimated decision height.
+
+    A declaration is deliberately injected even when the lookup found published
+    procedures — the two facts are independent, and grading simply prefers the
+    published ones. It is NOT injected over ``lookup_failed``: that state means
+    "we could not determine the picture", and a declaration does not determine
+    it either.
+
     Args:
         icao_codes: ICAO codes to look up.
         db_path: Path to the euro_aip SQLite database.
+        declared_icaos: Airports where the user declared an unpublished
+            approach. Matched case-insensitively.
 
     Returns:
         Dict mapping ICAO code to :class:`AirportApproaches`, one entry per
         requested code.
     """
+    declared = {c.strip().upper() for c in (declared_icaos or []) if c and c.strip()}
     model = _load_airport_model(db_path)
 
     result: dict[str, AirportApproaches] = {}
@@ -410,6 +474,9 @@ def get_runway_approaches(
                     getattr(proc, "raw_name", None) or name,
                 ),
             ))
+
+        if icao.strip().upper() in declared:
+            approaches.append(_declared_approach())
 
         result[icao] = AirportApproaches(
             icao=icao,
