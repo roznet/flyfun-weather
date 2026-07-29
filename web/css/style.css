@@ -5303,6 +5303,478 @@ label {
   font-weight: normal;
 }
 
+/* --- Data Sources: Table | Timeline switch --- */
+
+.ds-view-toggle {
+  display: flex;
+  gap: 0;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.ds-view-toggle .btn-toggle {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.ds-view-toggle .btn-toggle:first-child { border-radius: 4px 0 0 4px; }
+.ds-view-toggle .btn-toggle:last-child { border-radius: 0 4px 4px 0; }
+.ds-view-toggle .btn-toggle:not(:last-child) { border-right: 0; }
+
+.ds-view-toggle .btn-toggle.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.ds-view-toggle .btn-toggle:hover:not(.active) {
+  background: var(--bg);
+}
+
+/* --- Data Sources timeline ---------------------------------------------
+ * Role hues are a categorical set: distinguishable from each other under
+ * normal vision and under protan/deutan/tritan simulation, against both the
+ * light and dark surfaces. They are NOT interchangeable with the status
+ * colours below — lateness has its own reserved colour so a late primary
+ * source never reads as a different role. */
+
+:root {
+  --ds-tl-role-1: #2360d4;
+  --ds-tl-role-2: #b26a00;
+  --ds-tl-role-3: #00897d;
+  --ds-tl-role-4: #8a45c8;
+  --ds-tl-night: rgba(35, 96, 212, 0.07);
+  --ds-tl-plan: rgba(26, 26, 46, 0.09);
+  --ds-tl-grid: rgba(26, 26, 46, 0.10);
+  --ds-tl-grid-strong: rgba(26, 26, 46, 0.22);
+}
+
+[data-theme="dark"] {
+  --ds-tl-role-1: #5b8ae8;
+  --ds-tl-role-2: #c08421;
+  --ds-tl-role-3: #0ba394;
+  --ds-tl-role-4: #a06ede;
+  --ds-tl-night: rgba(91, 138, 232, 0.10);
+  --ds-tl-plan: rgba(228, 228, 232, 0.10);
+  --ds-tl-grid: rgba(228, 228, 232, 0.10);
+  --ds-tl-grid-strong: rgba(228, 228, 232, 0.24);
+}
+
+.ds-tl-scroll {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-top: 0.5rem;
+}
+
+.ds-tl-track {
+  position: relative;
+  min-width: 1080px;
+}
+
+.ds-tl-row {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  border-top: 1px solid var(--border);
+}
+
+.ds-tl-row:first-child { border-top: 0; }
+
+/* A heavier rule opens each model family, matching how the table groups. */
+.ds-tl-row.ds-tl-group { border-top-width: 2px; }
+
+.ds-tl-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 0.3rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.ds-tl-label b {
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-tl-label i {
+  font-style: normal;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-tl-plot {
+  position: relative;
+  min-height: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-tl-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ds-tl-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--ds-tl-grid);
+}
+
+.ds-tl-guide.synoptic { background: var(--ds-tl-grid-strong); }
+
+.ds-tl-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--primary);
+  opacity: 0.75;
+}
+
+/* Ruler */
+
+.ds-tl-ruler .ds-tl-plot { min-height: 34px; }
+
+.ds-tl-tick {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 4px;
+  background: var(--ds-tl-grid-strong);
+}
+
+.ds-tl-tick.synoptic { height: 9px; }
+
+.ds-tl-hour {
+  position: absolute;
+  bottom: 10px;
+  transform: translateX(-50%);
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ds-tl-hour.synoptic {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ds-tl-hour.edge-start { transform: translateX(1px); }
+.ds-tl-hour.edge-end { transform: translateX(-100%); }
+
+.ds-tl-daymark {
+  position: absolute;
+  top: 1px;
+  transform: translateX(2px);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ds-tl-nowchip {
+  position: absolute;
+  top: 1px;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--primary);
+  background: var(--surface);
+  padding: 0 3px;
+  white-space: nowrap;
+}
+
+/* Clock rows */
+
+.ds-tl-clock .ds-tl-plot { min-height: 26px; }
+
+.ds-tl-band {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+}
+
+.ds-tl-band.night { background: var(--ds-tl-night); }
+
+.ds-tl-band.plan {
+  background: var(--ds-tl-plan);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
+.ds-tl-bandcap {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: calc(100% - 8px);
+}
+
+.ds-tl-localhour {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+}
+
+/* Source rows */
+
+.ds-tl-source .ds-tl-plot { min-height: 38px; }
+
+/* Two lanes. Consecutive runs alternate between them because a delivery
+ * offset longer than the cycle interval makes successive runs overlap; on a
+ * single line they fuse into one continuous band. */
+.ds-tl-source .ds-tl-plot {
+  --ds-tl-lane-a: 38%;
+  --ds-tl-lane-b: 68%;
+}
+
+.ds-tl-run {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 7px;
+  border-radius: 1px 3px 3px 1px;
+  background: var(--ds-tl-hue);
+  opacity: 0.4;
+}
+
+.ds-tl-run.lane-a,
+.ds-tl-expected.lane-a,
+.ds-tl-actual.lane-a,
+.ds-tl-drift.lane-a { top: var(--ds-tl-lane-a); }
+
+.ds-tl-run.lane-b,
+.ds-tl-expected.lane-b,
+.ds-tl-actual.lane-b,
+.ds-tl-drift.lane-b { top: var(--ds-tl-lane-b); }
+
+/* Cycles that stop short of the source's longest horizon read as a thinner
+ * bar, so an alternating full/short rhythm (ECMWF 00/12 vs 06/18) is visible
+ * without reading a single number. */
+.ds-tl-run.short {
+  height: 3px;
+  opacity: 0.6;
+}
+
+.ds-tl-run.future {
+  opacity: 0.18;
+  border: 1px dashed var(--ds-tl-hue);
+  background: transparent;
+}
+
+.ds-tl-run:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Spans both lanes so a run's start is findable even when its bar is in the
+ * far lane. */
+.ds-tl-init {
+  position: absolute;
+  top: 30%;
+  bottom: 14%;
+  transform: translateX(-50%);
+  width: 2px;
+  background: var(--ds-tl-hue);
+  border-radius: 1px;
+  opacity: 0.85;
+}
+
+.ds-tl-init.future { opacity: 0.3; }
+
+.ds-tl-expected {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--ds-tl-hue);
+  background: var(--surface);
+  box-sizing: border-box;
+}
+
+.ds-tl-expected.future { opacity: 0.45; }
+
+.ds-tl-actual {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ds-tl-hue);
+  border: 2px solid var(--surface);
+  box-sizing: content-box;
+}
+
+.ds-tl-actual.late { background: var(--amber); }
+
+/* The gap between expectation and reality, drawn as a length. */
+.ds-tl-drift {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  background: var(--ds-tl-hue);
+  opacity: 0.75;
+}
+
+.ds-tl-drift.late { background: var(--amber); }
+
+.ds-tl-delta {
+  position: absolute;
+  top: 1px;
+  transform: translateX(-50%);
+  z-index: 2;
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--surface);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.ds-tl-delta.late {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+/* Tooltip */
+
+.ds-tl-tip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.4rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.ds-tl-tip.visible { opacity: 1; }
+
+.ds-tl-tip s {
+  display: block;
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 0.15rem;
+}
+
+.ds-tl-tip em { color: var(--text-muted); font-style: normal; }
+
+/* Legend */
+
+.ds-tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.1rem;
+  margin-top: 0.6rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.ds-tl-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ds-tl-sw {
+  display: inline-block;
+  width: 18px;
+  height: 7px;
+  border-radius: 1px 3px 3px 1px;
+  opacity: 0.5;
+  flex: none;
+}
+
+.ds-tl-sw.ds-tl-sw-expected {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--text-muted);
+  background: var(--surface);
+  box-sizing: border-box;
+  opacity: 1;
+}
+
+.ds-tl-sw.ds-tl-sw-actual {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 1;
+}
+
+.ds-tl-sw.ds-tl-sw-late {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--amber);
+  opacity: 1;
+}
+
+.ds-tl-sw.ds-tl-sw-short {
+  height: 4px;
+  background: var(--text-muted);
+}
+
+.ds-tl-sw.ds-tl-sw-plan {
+  background: var(--ds-tl-plan);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-tl-tip { transition: none; }
+}
+
 /* --- Route Map Visualization --- */
 
 .viz-layout-wrapper {

@@ -26,7 +26,11 @@ export type DataSourcesTableMode = 'summary' | 'full';
 let cached: DataSourcesResponse | null = null;
 let inflight: Promise<DataSourcesResponse> | null = null;
 
-async function loadCatalog(): Promise<DataSourcesResponse> {
+/** Fetch the catalog once per page load.
+ *
+ * Exported so the timeline view shares this cache: toggling between table and
+ * timeline is a re-render, never a second request. */
+export async function loadCatalog(): Promise<DataSourcesResponse> {
   if (cached) return cached;
   if (inflight) return inflight;
   inflight = fetchDataSources().then((resp) => {

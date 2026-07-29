@@ -7,6 +7,7 @@ import { renderUserInfo, checkMessagesBadge, escapeHtml } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { mountDataSourcesTable } from './data-sources-table';
+import { mountDataSourcesView } from './data-sources-view';
 import { initInfoPopup } from './components/info-popup';
 import { buildDemoTourUrl } from './tour/demo-config';
 import { track, EVENTS } from './analytics/track';
@@ -257,7 +258,9 @@ function switchTab(tab: string, source: TabSource = 'tab'): void {
   if (tab === 'data-sources' && !fullDataSourcesLoaded) {
     fullDataSourcesLoaded = true;
     const host = document.getElementById('data-sources-full-host');
-    if (host) mountDataSourcesTable(host as HTMLElement, 'full');
+    // Table | Timeline switch, defaulting to the timeline. The compact table
+    // in the guide tab stays a plain table — it's a teaser, not a workspace.
+    if (host) void mountDataSourcesView(host as HTMLElement);
   }
 }
 
