@@ -46,7 +46,13 @@ export async function loadCatalog(): Promise<DataSourcesResponse> {
 
 // --- Grouping & ordering --------------------------------------------------
 
-function groupByModel(sources: DataSourceEntry[]): Map<string, DataSourceEntry[]> {
+/** Group source entries by model, ordering each model's variants by role.
+ *
+ * Exported because the catalog order is *not* grouped — `SOURCE_REGISTRY`
+ * interleaves variants (`gfs:noaa` … `gfs:openmeteo` with unrelated models
+ * between), so any view that renders per-model boundaries has to re-group
+ * first. Both the table and the timeline use this one. */
+export function groupByModel(sources: DataSourceEntry[]): Map<string, DataSourceEntry[]> {
   const groups = new Map<string, DataSourceEntry[]>();
   for (const s of sources) {
     const list = groups.get(s.model) || [];
@@ -67,7 +73,9 @@ function groupByModel(sources: DataSourceEntry[]): Map<string, DataSourceEntry[]
 
 const MODEL_ORDER = ['ecmwf', 'icon_eu', 'icon', 'gfs', 'ukmo', 'meteofrance'];
 
-function orderedModelKeys(groups: Map<string, DataSourceEntry[]>): string[] {
+/** Model family display order. Exported alongside {@link groupByModel} so the
+ *  timeline and the table present families in the same sequence. */
+export function orderedModelKeys(groups: Map<string, DataSourceEntry[]>): string[] {
   const keys = Array.from(groups.keys());
   return keys.sort((a, b) => {
     const ia = MODEL_ORDER.indexOf(a);

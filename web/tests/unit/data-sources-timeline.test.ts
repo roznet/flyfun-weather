@@ -12,6 +12,8 @@ import {
   runsInWindow,
   localHour,
   zoneOffsetHours,
+  planRows,
+  alignUp,
 } from '../../ts/data-sources-timeline';
 import type { DataSourceEntry } from '../../ts/adapters/data-sources-adapter';
 
@@ -131,6 +133,100 @@ describe('runsInWindow', () => {
     expect(runs.length).toBeGreaterThanOrEqual(12);
     expect(runs.filter((r) => r.short).length).toBeGreaterThan(0);
     expect(runs.filter((r) => !r.short).length).toBeGreaterThan(0);
+  });
+});
+
+describe('planRows', () => {
+  /** The real catalog order: a model's variants are NOT contiguous. */
+  function catalogOrder(): DataSourceEntry[] {
+    const spec: Array<[string, string, string]> = [
+      ['ecmwf:direct', 'ecmwf', 'primary-sounding'],
+      ['gfs:noaa', 'gfs', 'cloud-enrichment'],
+      ['icon_eu:dwd', 'icon_eu', 'primary-sounding'],
+      ['icon_d2:dwd', 'icon_d2', 'primary-sounding'],
+      ['gfs:openmeteo', 'gfs', 'primary'],
+      ['ecmwf:openmeteo', 'ecmwf', 'surface-base'],
+      ['icon:openmeteo', 'icon', 'primary'],
+      ['meteofrance:openmeteo', 'meteofrance', 'primary'],
+      ['ukmo:openmeteo', 'ukmo', 'primary'],
+      ['gem:openmeteo', 'gem', 'primary'],
+    ];
+    return spec.map(([key, model, role]) => entry({ key, model, role }));
+  }
+
+  it('puts every variant of a model together', () => {
+    const rows = planRows(catalogOrder());
+    const models = rows.map((r) => r.entry.model);
+    // Each model must occupy one contiguous span — no model may reappear
+    // after a different model has intervened.
+    const firstSeen = new Map<string, number>();
+    models.forEach((m, i) => { if (!firstSeen.has(m)) firstSeen.set(m, i); });
+    for (const [m, start] of firstSeen) {
+      const count = models.filter((x) => x === m).length;
+      expect(models.slice(start, start + count).every((x) => x === m)).toBe(true);
+    }
+  });
+
+  it('marks exactly one first-of-model row per model', () => {
+    const rows = planRows(catalogOrder());
+    const firsts = rows.filter((r) => r.isFirstOfModel).map((r) => r.entry.model);
+    expect(firsts).toHaveLength(new Set(rows.map((r) => r.entry.model)).size);
+    expect(new Set(firsts).size).toBe(firsts.length);
+  });
+
+  it('flags the group boundary on the first variant, not a later one', () => {
+    // The shipped bug: gfs:openmeteo sat at index 4 under ICON-D2 with a thin
+    // border, so the heavy rule opened the wrong family.
+    const rows = planRows(catalogOrder());
+    const gfs = rows.filter((r) => r.entry.model === 'gfs');
+    expect(gfs).toHaveLength(2);
+    expect(gfs[0].isFirstOfModel).toBe(true);
+    expect(gfs[1].isFirstOfModel).toBe(false);
+    // ...and they are adjacent in the final order.
+    const idx = rows.findIndex((r) => r.entry.key === gfs[0].entry.key);
+    expect(rows[idx + 1].entry.model).toBe('gfs');
+  });
+
+  it('keeps every source — grouping must not drop rows', () => {
+    const sources = catalogOrder();
+    const rows = planRows(sources);
+    expect(rows).toHaveLength(sources.length);
+    expect(new Set(rows.map((r) => r.entry.key)))
+      .toEqual(new Set(sources.map((s) => s.key)));
+  });
+
+  it('orders a model\'s variants by role, primary sounding first', () => {
+    const rows = planRows(catalogOrder());
+    const ecmwf = rows.filter((r) => r.entry.model === 'ecmwf');
+    expect(ecmwf.map((r) => r.entry.role)).toEqual([
+      'primary-sounding', 'surface-base',
+    ]);
+  });
+});
+
+describe('alignUp', () => {
+  const H = 3_600_000;
+
+  it('lands the 3-hourly grid on absolute boundaries whatever hour it is', () => {
+    // The shipped bug: the grid stepped 3h from the window start, which is the
+    // current hour — so it only coincided with the ruler's labelled hours when
+    // that hour was already a multiple of 3, and the 00/06/12/18Z emphasis
+    // disappeared for the other two loads in three.
+    for (const hour of [12, 13, 14, 23]) {
+      const t0 = Date.UTC(2026, 6, 29, hour) - 24 * H;
+      const start = alignUp(t0, 3 * H);
+      expect(new Date(start).getUTCHours() % 3).toBe(0);
+      expect(start).toBeGreaterThanOrEqual(t0);
+      expect(start - t0).toBeLessThan(3 * H);
+      // A synoptic line must appear within the first four grid steps.
+      const hours = [0, 1, 2, 3].map((k) => new Date(start + k * 3 * H).getUTCHours());
+      expect(hours.some((h) => h % 6 === 0)).toBe(true);
+    }
+  });
+
+  it('is a no-op on a value already aligned', () => {
+    const aligned = Date.UTC(2026, 6, 29, 12);
+    expect(alignUp(aligned, 3 * H)).toBe(aligned);
   });
 });
 
