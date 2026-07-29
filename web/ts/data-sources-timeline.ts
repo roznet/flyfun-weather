@@ -30,6 +30,7 @@
  */
 
 import type { DataSourceEntry } from './adapters/data-sources-adapter';
+import { groupByModel, orderedModelKeys } from './data-sources-table';
 import { escapeHtml } from './utils';
 import { t } from './i18n/i18n';
 
@@ -208,6 +209,46 @@ export function runsInWindow(entry: DataSourceEntry, t0: number, t1: number): Ru
   return runs;
 }
 
+// --- Row planning ---------------------------------------------------------
+
+export interface PlannedRow {
+  entry: DataSourceEntry;
+  /** First variant of its model family — carries the heavier group rule. */
+  isFirstOfModel: boolean;
+}
+
+/** Order the rows and mark family boundaries.
+ *
+ * The catalog arrives in `SOURCE_REGISTRY` order, which interleaves a model's
+ * variants with unrelated models (`gfs:noaa` at index 1, `gfs:openmeteo` at
+ * index 4, two ICON rows between). Rendering that order directly puts
+ * GFS-openmeteo under ICON-D2 and makes the "first of model" rule mark the
+ * wrong boundaries, so re-group through the same helpers the table uses.
+ *
+ * Exported for tests: the bug this prevents is invisible to the schedule maths
+ * and only shows up on screen for models that have more than one variant.
+ */
+export function planRows(sources: DataSourceEntry[]): PlannedRow[] {
+  const groups = groupByModel(sources);
+  const rows: PlannedRow[] = [];
+  for (const model of orderedModelKeys(groups)) {
+    const variants = groups.get(model) ?? [];
+    variants.forEach((entry, idx) => {
+      rows.push({ entry, isFirstOfModel: idx === 0 });
+    });
+  }
+  return rows;
+}
+
+/** Round `ms` up to the next absolute multiple of `stepMs`.
+ *
+ * Needed because the window start is anchored to the current hour, which is
+ * not phase-aligned to the 3/6-hourly grid the ruler labels. Exported for
+ * tests. */
+export function alignUp(ms: number, stepMs: number): number {
+  return Math.ceil(ms / stepMs) * stepMs;
+}
+
 // --- DOM helpers ----------------------------------------------------------
 
 function div(cls: string, parent?: HTMLElement): HTMLDivElement {
@@ -260,7 +301,12 @@ function addRow(
 /** Hour gridlines + the now line, drawn behind every row's marks. */
 function addBackdrop(plot: HTMLElement, scale: Scale, now: number): void {
   const bg = div('ds-tl-bg', plot);
-  const start = Math.ceil(scale.t0 / HOUR_MS) * HOUR_MS;
+  // Anchor to an absolute 3-hourly boundary, not to the window start. The
+  // window begins at the current hour, so stepping 3h from there only lands on
+  // the ruler's labelled hours when that hour happens to be a multiple of 3 —
+  // one load in three — and the synoptic (00/06/12/18Z) emphasis vanishes
+  // entirely in the other two.
+  const start = alignUp(scale.t0, 3 * HOUR_MS);
   for (let ms = start; ms <= scale.t1; ms += 3 * HOUR_MS) {
     const isSynoptic = new Date(ms).getUTCHours() % 6 === 0;
     const line = div(`ds-tl-guide${isSynoptic ? ' synoptic' : ''}`, bg);
@@ -327,7 +373,11 @@ function renderClock(
 
   let runStart = start;
   let runKind = kindAt(start);
-  const flush = (end: number) => {
+  const flush = (rawEnd: number) => {
+    // The scan runs one hour past the window so a band still open at t1 gets
+    // flushed; clamp here so that overshoot can't put the band's right edge
+    // past 100% of the plot.
+    const end = Math.min(rawEnd, scale.t1);
     if (runKind && end > runStart) {
       const band = div(`ds-tl-band ${runKind}`, plot);
       place(band, scale.pct(runStart), scale.pct(end) - scale.pct(runStart));
@@ -350,7 +400,9 @@ function renderClock(
   flush(scale.t1);
 
   // Local hour readout every three hours, aligned to the UTC ruler ticks.
-  const tickStart = Math.ceil(scale.t0 / HOUR_MS) * HOUR_MS;
+  // Same absolute 3-hourly anchor as the ruler and the gridlines, so all three
+  // readouts line up in the same columns whatever hour the page loads at.
+  const tickStart = alignUp(scale.t0, 3 * HOUR_MS);
   for (let ms = tickStart; ms <= scale.t1; ms += 3 * HOUR_MS) {
     const lbl = div('ds-tl-localhour', plot);
     lbl.textContent = String(localHour(ms, zone)).padStart(2, '0');
@@ -552,11 +604,8 @@ export function mountDataSourcesTimeline(
     }
   }
 
-  const seenModels = new Set<string>();
-  for (const entry of sources) {
-    const isFirst = !seenModels.has(entry.model);
-    seenModels.add(entry.model);
-    renderSource(track, scale, now, entry, isFirst, tip);
+  for (const row of planRows(sources)) {
+    renderSource(track, scale, now, row.entry, row.isFirstOfModel, tip);
   }
 
   renderLegend(host);
