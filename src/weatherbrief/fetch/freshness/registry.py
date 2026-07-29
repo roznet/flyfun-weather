@@ -143,13 +143,22 @@ class SourceConfig:
 # ECMWF: empirically +6h27m–6h37m across 14 days; +6h40m gives 3min margin
 # and works for both long (00/12 = 168h) and medium-only (06/18) cycles.
 _ECMWF_OFFSET = timedelta(hours=6, minutes=40)
-# 168h on 00/12 (with the long-tail step set), ~90h medium-only on 06/18
-# (3-hourly phase ends init+6h27m, no 168h step delivered).
+# Horizon per cycle, read off the delivery manifest (``delivery_config.json``
+# keyed by cycle hour): 00/12z carry the long tail to 168h, 06/18z stop at
+# 144h.  Verified against the files actually on disk — the 2026-07-28 06z run
+# delivers a 144h step.
+#
+# This used to say 90h for 06/18z, reasoning from where the *hourly* step
+# cadence ends (init+90h, after which the manifest goes 3-hourly).  That is a
+# cadence boundary, not a horizon: it under-reported 06/18z coverage by 54h,
+# so anything gating on ``horizon_for(6)`` fell back to another model 2¼ days
+# early.  Cadence and horizon are separate facts; don't re-derive one from the
+# other.
 _ECMWF_HORIZON: dict[int, timedelta] = {
     0: timedelta(hours=168),
-    6: timedelta(hours=90),
+    6: timedelta(hours=144),
     12: timedelta(hours=168),
-    18: timedelta(hours=90),
+    18: timedelta(hours=144),
 }
 
 # GFS: PUBLISH_DELAY_HOURS = 5 in grib_fetch.py; horizon 384h (16 days).
@@ -214,8 +223,8 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "Direct GRIB delivery from ECMWF via ECPDS. Provides the full "
             "25-level upper-air sounding (t, r, u, v, w, gh, cc, clwc, ciwc) "
             "plus cloud diagnostics over Europe + US. 00/12Z cycles reach "
-            "168h; 06/18Z reach 90h. Beyond this horizon we fall back to "
-            "ecmwf:openmeteo."
+            "168h; the short cut-off 06/18Z cycles reach 144h. Beyond this "
+            "horizon we fall back to ecmwf:openmeteo."
         ),
     ),
     "gfs:noaa": SourceConfig(
@@ -461,7 +470,7 @@ def max_horizon(source: str) -> timedelta:
     """Largest forecast horizon any cycle of ``source`` ever reaches.
 
     For sources with a per-cycle horizon dict (e.g. ECMWF 00/12 = 168h vs
-    06/18 = 90h) this is the maximum; for uniform-horizon sources it is that
+    06/18 = 144h) this is the maximum; for uniform-horizon sources it is that
     single value.
     """
     cfg = SOURCE_REGISTRY[source]
@@ -474,7 +483,7 @@ def next_full_horizon_run(source: str, after: datetime) -> tuple[datetime, datet
     A "full-horizon" run is one whose forecast horizon equals
     :func:`max_horizon` for the source — i.e. it extends the forecast as far
     as the source ever does.  For ECMWF the 00/12Z cycles reach 168h while the
-    06/18Z cycles reach only 90h, so only 00/12Z qualify; for uniform-horizon
+    06/18Z cycles reach only 144h, so only 00/12Z qualify; for uniform-horizon
     sources every cycle qualifies.
 
     The returned run is the one with the earliest *expected delivery wallclock*
