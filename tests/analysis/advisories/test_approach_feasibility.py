@@ -21,6 +21,7 @@ from weatherbrief.analysis.advisories.strings import _STRINGS
 from weatherbrief.models import AdvisoryStatus
 from weatherbrief.units import M_PER_SM
 from weatherbrief.models.airport_conditions import (
+    SOURCE_USER_DECLARED,
     AirportApproaches,
     AirportConditions,
     AirportConditionsSummary,
@@ -668,3 +669,230 @@ class TestCatalog:
         )
         assert _grade(circ, tailwind_limit_kt=5, circling_ceiling_ft=1000) == AdvisoryStatus.RED
         assert _grade(circ, tailwind_limit_kt=5, circling_ceiling_ft=500) == AdvisoryStatus.AMBER
+
+
+# ---------------------------------------------------------------------------
+# User-declared unpublished approaches (issue #510)
+# ---------------------------------------------------------------------------
+
+_DECLARED = RunwayApproach(
+    name="Declared unpublished approach", source=SOURCE_USER_DECLARED,
+)
+# A circling-only published procedure, for the "declaration alongside published
+# procedures" cases.
+_RNP_A = RunwayApproach(name="RNP A", approach_type="RNP", circling=True)
+
+
+def _detail(ctx: RouteContext, **overrides) -> str:
+    params = {**_defaults(), **overrides}
+    return ApproachFeasibilityEvaluator.evaluate(ctx, params).aggregate_detail
+
+
+class TestDeclaredApproachGradeMap:
+    """The #510 table: VFR green, MVFR green, IFR amber, LIFR red.
+
+    Note this does NOT fall out of #509's pre-existing rules, contrary to the
+    issue's framing — the no-straight-in fallback only softens off RED when the
+    weather supports circling (1000 ft / 1500 m), and an IFR ceiling is
+    500–1000 ft by definition. Hence the dedicated branch, and hence these
+    tests: they pin the row the issue specified, not the row the old rule gives.
+    """
+
+    def test_ifr_declared_is_amber_not_red(self):
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        assert _grade(ctx) == AdvisoryStatus.AMBER
+
+    def test_ifr_declared_amber_holds_below_circling_minima(self):
+        """The case the declaration exists for — and the one the old rule missed.
+
+        A 600 ft IFR ceiling supports no circling, so the pre-#510 fallback
+        would have graded this RED: exactly the EGTF-class false red that made
+        the advisory worth ignoring for a UK home-field pilot.
+        """
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=600, icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        assert _grade(ctx) == AdvisoryStatus.AMBER
+
+    def test_lifr_declared_stays_red(self):
+        """The hard cap: no published procedure means no published minima."""
+        ctx = _ctx(
+            _conditions(FlightCategory.LIFR, [_RWY_02, _RWY_24], icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        assert _grade(ctx) == AdvisoryStatus.RED
+
+    def test_mvfr_declared_is_green(self):
+        ctx = _ctx(
+            _conditions(FlightCategory.MVFR, [_RWY_02, _RWY_24], icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        assert _grade(ctx) == AdvisoryStatus.GREEN
+
+    def test_vfr_declared_is_green(self):
+        ctx = _ctx(
+            _conditions(FlightCategory.VFR, [_RWY_02, _RWY_24], icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        assert _grade(ctx) == AdvisoryStatus.GREEN
+
+    def test_undeclared_field_is_unchanged(self):
+        """The #509 baseline the declaration is measured against."""
+        bare = _approaches(has_procedure_data=False, icao="EGTF")
+        assert _grade(_ctx(_conditions(FlightCategory.IFR, [_RWY_02], icao="EGTF"), bare)) \
+            == AdvisoryStatus.RED
+        assert _grade(_ctx(_conditions(FlightCategory.MVFR, [_RWY_02], icao="EGTF"), bare)) \
+            == AdvisoryStatus.AMBER
+
+    def test_declared_can_never_earn_green_at_ifr(self):
+        """Circling-equivalent: no straight-in alignment credit, ever.
+
+        Even with the wind dead on the nose of every runway and a ceiling well
+        clear of any plausible minima, a declaration tops out at amber.
+        """
+        ctx = _ctx(
+            _conditions(
+                FlightCategory.IFR,
+                [_runway_wind("20", 200.0, headwind=15.0, crosswind=0.0)],
+                ceiling_ft=3000, icao="EGTF",
+            ),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        assert _grade(ctx) == AdvisoryStatus.AMBER
+
+
+class TestDeclaredApproachHonesty:
+    """A declaration may soften the infrastructure penalty, and nothing else."""
+
+    def test_detail_always_names_the_basis(self):
+        """#510 guardrail 2: the grade is softened on the pilot's own assertion.
+
+        A shared briefing renders the owner's baked-in grades, so this sentence
+        is the only thing that travels with it — the viewer has no other way to
+        know the amber rests on a declaration.
+        """
+        for category in (FlightCategory.MVFR, FlightCategory.IFR, FlightCategory.LIFR):
+            detail = _detail(_ctx(
+                _conditions(category, [_RWY_02, _RWY_24], icao="EGTF"),
+                _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+            ))
+            assert "declared" in detail.lower(), (category, detail)
+            assert "EGTF" in detail
+
+    def test_declared_is_never_called_published(self):
+        """The MVFR copy counts *published* approaches; a declaration is not one.
+
+        Asserted against the count phrasing rather than the word "published" —
+        the declared copy legitimately contains it, inside "unpublished".
+        """
+        declared = _detail(_ctx(
+            _conditions(FlightCategory.MVFR, [_RWY_02], icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        ))
+        published = _detail(_ctx(
+            _conditions(FlightCategory.MVFR, [_RWY_02]),
+            _approaches(_ILS_02),
+        ))
+        assert "approach(es)" in published  # the counted copy exists…
+        assert "approach(es)" not in declared  # …and a declaration never gets it
+        assert "unpublished" in declared
+
+    def test_declared_lends_no_minima(self):
+        """The best-case gate reads published plates only.
+
+        A declared field has no plate, so there is no decision height to test a
+        ceiling against — the airport-wide RED gate must not fire on one, and
+        must not borrow ILS minima from thin air either.
+        """
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=550, icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        )
+        detail = _detail(ctx)
+        assert _grade(ctx) == AdvisoryStatus.AMBER
+        assert "decision height" not in detail
+
+    def test_declared_does_not_read_as_unresolved_alignment(self):
+        """It has no runway_id and is not circling — the UNRESOLVED shape.
+
+        Reading it as "an approach we could not match to a runway" would blame
+        our data for what is actually the pilot's declaration, and hand them the
+        wrong instruction ("check the plates" for a procedure with no plate).
+        """
+        detail = _detail(_ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], icao="EGTF"),
+            _approaches(_DECLARED, has_procedure_data=False, icao="EGTF"),
+        ))
+        assert "could not be matched" not in detail
+
+    def test_declared_never_softens_below_the_weather(self):
+        """#510 guardrail 3, at a field that DOES have a published approach.
+
+        A ceiling below the best-case decision height is a hard weather fact
+        about a real plate. The declaration removes the infrastructure penalty
+        only, so this stays RED.
+        """
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_20], ceiling_ft=100),
+            _approaches(_ILS_02, _ILS_20, _DECLARED),
+        )
+        assert _grade(ctx) == AdvisoryStatus.RED
+
+    def test_declaration_softens_a_misaligned_published_field(self):
+        """Published approaches all out on wind, plus a declaration → amber.
+
+        The declaration says the published picture is not the whole picture,
+        which is the same reason the other softenings exist.
+        """
+        args = (
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=600),
+            _ILS_02,
+        )
+        without = _ctx(args[0], _approaches(args[1]))
+        with_decl = _ctx(args[0], _approaches(args[1], _DECLARED))
+        assert _grade(without, tailwind_limit_kt=5) == AdvisoryStatus.RED
+        assert _grade(with_decl, tailwind_limit_kt=5) == AdvisoryStatus.AMBER
+
+    def test_declaration_is_not_credited_at_lifr_on_a_published_field(self):
+        """The hard cap applies to the softening too, not just the bare field."""
+        conds = _conditions(FlightCategory.LIFR, [_RWY_02, _RWY_24], ceiling_ft=400)
+        assert _grade(
+            _ctx(conds, _approaches(_ILS_02, _DECLARED)), tailwind_limit_kt=5,
+        ) == AdvisoryStatus.RED
+
+    def test_circling_outranks_the_declaration(self):
+        """When the weather genuinely supports circling, say so — it is the
+        more actionable line, and it holds regardless of any declaration."""
+        detail = _detail(_ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=1500),
+            _approaches(_ILS_02, _DECLARED),
+        ), tailwind_limit_kt=5)
+        assert "circling" in detail
+
+    def test_circling_only_published_plus_declaration(self):
+        """A circling-only field (the EGKA shape) with a declaration.
+
+        Neither lends a straight-in minimum, so the verdict must come from the
+        declaration rather than falling through to RED.
+        """
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_24], ceiling_ft=600),
+            _approaches(_RNP_A, _DECLARED),
+        )
+        assert _grade(ctx) == AdvisoryStatus.AMBER
+
+    def test_declared_softening_resolves_in_all_locales(self):
+        """Every cell of the blocker x softening product must have real copy."""
+        assert f"approach_feasibility.soften_{_Softening.DECLARED.value}" in _STRINGS
+        for key in (
+            f"approach_feasibility.soften_{_Softening.DECLARED.value}",
+            "approach_feasibility.declared_only",
+            "approach_feasibility.declared_lifr",
+            "approach_feasibility.mvfr_declared",
+        ):
+            for lang in ("en", "fr", "de", "es"):
+                assert _STRINGS[key].get(lang), (key, lang)

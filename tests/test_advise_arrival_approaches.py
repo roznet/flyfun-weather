@@ -58,14 +58,32 @@ class TestCollectArrivalApproaches:
         )
         seen: dict = {}
 
-        def _fake(icaos, db_path):
+        def _fake(icaos, db_path, declared=None):
             seen["icaos"] = icaos
             seen["db_path"] = db_path
+            seen["declared"] = declared
             return {"EGKA": expected}
 
         monkeypatch.setattr("weatherbrief.airports.get_runway_approaches", _fake)
         assert advise._collect_arrival_approaches("EGKA", "nav.db") is expected
-        assert seen == {"icaos": ["EGKA"], "db_path": "nav.db"}
+        assert seen == {"icaos": ["EGKA"], "db_path": "nav.db", "declared": None}
+
+    def test_passes_the_declared_list_through(self, monkeypatch):
+        """The #510 declarations must reach the collection step from every path.
+
+        Pinned because the helper swallows every exception to protect the
+        briefing: a signature drift here would surface as a silently absent
+        advisory, not as an error.
+        """
+        seen: dict = {}
+
+        def _fake(icaos, db_path, declared=None):
+            seen["declared"] = declared
+            return {"EGTF": AirportApproaches(icao="EGTF")}
+
+        monkeypatch.setattr("weatherbrief.airports.get_runway_approaches", _fake)
+        advise._collect_arrival_approaches("EGTF", "nav.db", ["EGTF", "EGSX"])
+        assert seen["declared"] == ["EGTF", "EGSX"]
 
     @pytest.mark.parametrize("icao,db_path", [(None, "nav.db"), ("EGKA", None), ("EGKA", "")])
     def test_missing_inputs_degrade_to_none(self, icao, db_path):

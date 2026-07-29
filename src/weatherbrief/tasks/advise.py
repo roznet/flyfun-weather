@@ -323,6 +323,7 @@ def _arrival_icao(
 def _collect_arrival_approaches(
     arr_icao: str | None,
     airports_db_path: str | None,
+    declared_approach_icaos: list[str] | None = None,
 ) -> AirportApproaches | None:
     """Published approaches at the destination, for ``approach_feasibility`` (#509).
 
@@ -330,13 +331,21 @@ def _collect_arrival_approaches(
     path (which has airport conditions but often no resolved route) can call it
     with exactly the same code. Returns ``None`` when the lookup could not run at
     all — the evaluator then reports UNAVAILABLE rather than "no approach".
+
+    ``declared_approach_icaos`` carries the user's unpublished-approach
+    declarations (#510). Every caller of this helper must supply it: the
+    briefing, the recalculate/preview re-run, the alt-departure re-run and the
+    timing scan all render the same advisory, so one that omits it would grade
+    a declared field RED beside a briefing that grades it AMBER.
     """
     if not arr_icao or not airports_db_path:
         return None
     try:
         from weatherbrief.airports import get_runway_approaches
 
-        return get_runway_approaches([arr_icao], airports_db_path).get(arr_icao)
+        return get_runway_approaches(
+            [arr_icao], airports_db_path, declared_approach_icaos,
+        ).get(arr_icao)
     except Exception:
         logger.warning("Arrival approach lookup failed for %s", arr_icao, exc_info=True)
         return None
@@ -383,6 +392,7 @@ def run_advisories(
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
     altitude_table_step_ft: int | None = None,
+    declared_approach_icaos: list[str] | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -429,7 +439,7 @@ def run_advisories(
             route_fronts=route_fronts,
             sun=_compute_route_sun(rp_analyses, airport_conds),
             arrival_approaches=_collect_arrival_approaches(
-                route.destination.icao, airports_db_path,
+                route.destination.icao, airports_db_path, declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=route.flight_duration_hours,
@@ -521,6 +531,7 @@ def run_advisories_from_pack(
     cruise_speed_ias_kt: float | None = None,
     flight_duration_hours: float = 0.0,
     persist: bool = True,
+    declared_approach_icaos: list[str] | None = None,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
@@ -607,6 +618,7 @@ def run_advisories_from_pack(
             # silently dropping the advisory on recalculate (#509).
             arrival_approaches=_collect_arrival_approaches(
                 _arrival_icao(route, airport_conds), airports_db_path,
+                declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=flight_duration_hours,
@@ -890,6 +902,7 @@ def run_alt_from_pack(
     cross_sections: list[RouteCrossSection] | None = None,
     persist: bool = True,
     detect_fronts: bool = True,
+    declared_approach_icaos: list[str] | None = None,
 ) -> AdvisoryResult:
     """Re-run analysis + advisories at an alt departure time using existing pack data.
 
@@ -997,6 +1010,7 @@ def run_alt_from_pack(
             route_fronts=route_fronts,
             arrival_approaches=_collect_arrival_approaches(
                 _arrival_icao(route, airport_conds), airports_db_path,
+                declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=route.flight_duration_hours,

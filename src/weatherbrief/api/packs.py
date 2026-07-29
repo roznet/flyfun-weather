@@ -1256,9 +1256,11 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     units_region = "auto"
     profile_name_for_digest = None
     profile_settings: dict = {}
+    declared_approach_icaos: list[str] = []
     if db is not None:
         from weatherbrief.api.preferences import (
             load_autorouter_token,
+            load_declared_approaches,
             load_units_region,
             load_user_locale,
         )
@@ -1267,6 +1269,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         autorouter_creds = load_autorouter_token(db, user_id)
         locale = load_user_locale(db, user_id)
         units_region = load_units_region(db, user_id)
+        declared_approach_icaos = load_declared_approaches(db, user_id)
         profile_ctx = load_profile_context(db, flight.profile_id, user_id)
         profile_settings = profile_ctx.settings
         profile_name_for_digest = profile_ctx.name
@@ -1328,6 +1331,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         autorouter_token=autorouter_creds,
         user_id=user_id,
         airports_db_path=db_path,
+        declared_approach_icaos=declared_approach_icaos,
         icing_severity_enhance=do_icing_enhance,
         auto_front_detection=auto_front_detection,
         compute_alternates=compute_alternates,
@@ -3189,7 +3193,7 @@ def compute_alt_advisories(
     route = _build_route_config(flight, db_path)
 
     # Load advisory profile
-    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, _auto_front_detection = \
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, _auto_front_detection, declared_approaches = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_alt_from_pack(
@@ -3204,6 +3208,7 @@ def compute_alt_advisories(
         airport_conditions_recompute=recompute_conds,
         # Destination approach data for approach_feasibility (#509).
         airports_db_path=db_path,
+        declared_approach_icaos=declared_approaches,
         icing_method=icing_method,
         cloud_source=cloud_source,
         convective_method=convective_method,
@@ -3344,7 +3349,14 @@ def _load_advisory_profile(
     Shared by recalculate_advisories and altitude_table endpoints.
     Returns (enabled_ids, enabled_map, user_params, aggregation, adv_models,
     icing_method, cloud_source, convective_method, recompute_conds_callback,
-    locale, auto_front_detection).
+    locale, auto_front_detection, declared_approach_icaos).
+
+    Note the last two are *account*-level, not profile-level: ``locale`` and the
+    declared unpublished approaches (#510) are facts about the pilot, not about
+    a flight profile. They ride here because this is the one place every
+    advisory re-run path — recalculate, settings preview, alt departure and the
+    background timing scan — resolves its inputs, and an advisory that reads
+    them has to be fed by all four or it contradicts the briefing beside it.
 
     ``enabled_map`` is the raw ``{id: bool}`` map (``None`` when the profile has
     no advisory customization). It is threaded through to the front advisory so
@@ -3363,7 +3375,7 @@ def _load_advisory_profile(
     ``load_profile_settings`` silently degrades an unowned id to empty settings.
     """
     from weatherbrief.analysis.advisories import resolve_enabled_ids
-    from weatherbrief.api.preferences import load_user_locale
+    from weatherbrief.api.preferences import load_declared_approaches, load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
 
@@ -3386,6 +3398,7 @@ def _load_advisory_profile(
     if request is not None:
         db_path = getattr(request.app.state, "db_path", "") or db_path
     locale = load_user_locale(db, user_id)
+    declared_approach_icaos = load_declared_approaches(db, user_id)
 
     def recompute_conds(rp_analyses, cross_sections, advisory_model_names):
         from types import SimpleNamespace
@@ -3396,7 +3409,7 @@ def _load_advisory_profile(
             db_path=db_path, models=advisory_model_names,
         )
 
-    return enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection
+    return enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection, declared_approach_icaos
 
 
 class RecalculateAdvisoriesResponse(BaseModel):
@@ -3433,7 +3446,7 @@ def recalculate_advisories(
     # (Mirror of compute_alt_advisories, which is also owner-gated.)
     flight, pack_dir = _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id)
 
-    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection = \
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection, declared_approaches = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     # Experimental front detection (#196): keep route_fronts.json in sync with
@@ -3478,6 +3491,9 @@ def recalculate_advisories(
         # from the recomputed airport conditions — but the nav.db path still has
         # to be handed down, or the advisory silently degrades on recalculate.
         airports_db_path=getattr(request.app.state, "db_path", ""),
+        # ... and the same for the user's declared unpublished approaches
+        # (#510), or a declared field reverts to RED on every recalculate.
+        declared_approach_icaos=declared_approaches,
         icing_method=icing_method,
         cloud_source=cloud_source,
         convective_method=convective_method,
@@ -3578,7 +3594,7 @@ def preview_advisories(
 
     (_saved_enabled_ids, saved_enabled_map, saved_params, saved_agg, saved_models,
      saved_icing, saved_cloud, saved_convective, recompute_conds, locale,
-     _auto_front) = _load_advisory_profile(
+     _auto_front, declared_approaches) = _load_advisory_profile(
         db, flight, user_id, request, pack_dir, profile_id=body.profile_id,
     )
 
@@ -3615,6 +3631,7 @@ def preview_advisories(
         # evaluator degrades to UNAVAILABLE without it, so the preview would
         # otherwise show a grey card the real briefing grades.
         airports_db_path=getattr(request.app.state, "db_path", ""),
+        declared_approach_icaos=declared_approaches,
         icing_method=icing_method,
         cloud_source=cloud_source,
         convective_method=convective_method,
@@ -3848,7 +3865,10 @@ def altitude_table(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
 
-    enabled_ids, _enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, _auto_front_detection = \
+    # ``_declared_approaches`` unused on purpose: the altitude table sweeps only
+    # the altitude-dependent advisories, and approach_feasibility is not one —
+    # it grades a fixed point in space, the destination.
+    enabled_ids, _enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, _auto_front_detection, _declared_approaches = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     result = run_altitude_table_from_pack(

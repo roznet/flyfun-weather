@@ -247,3 +247,94 @@ class TestProfilesRouteOrdering:
         resp = client.get("/api/user/profiles/digest-guidance-presets")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
+
+
+class TestDeclaredApproaches:
+    """User-declared unpublished approaches (issue #510).
+
+    Storage is a plain ``app_prefs_json`` key rather than an advisory param
+    because it is a fact about the pilot and the airport ("I'm current on the
+    Fairoaks cloud break"), not about a flight profile — entered once, applied
+    everywhere.
+    """
+
+    def test_default_is_empty(self, client):
+        assert client.get("/api/user/preferences").json()["declared_approach_icaos"] == []
+
+    def test_free_form_text_is_canonicalized(self, client):
+        """The field is free-form; the canonical shape is the server's job.
+
+        Normalizing here rather than in the web client means every writer — a
+        direct PUT, a future iOS screen — stores the same thing.
+        """
+        resp = client.put(
+            "/api/user/preferences",
+            json={"declared_approach_icaos": " egtf, EGSX  egtf;eglk "},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["declared_approach_icaos"] == ["EGTF", "EGSX", "EGLK"]
+        # …and survives the round trip
+        assert client.get("/api/user/preferences").json()["declared_approach_icaos"] == [
+            "EGTF", "EGSX", "EGLK",
+        ]
+
+    def test_accepts_a_json_array_too(self, client):
+        resp = client.put(
+            "/api/user/preferences", json={"declared_approach_icaos": ["egtf", "EGSX"]},
+        )
+        assert resp.json()["declared_approach_icaos"] == ["EGTF", "EGSX"]
+
+    def test_can_be_cleared(self, client):
+        client.put("/api/user/preferences", json={"declared_approach_icaos": "EGTF"})
+        resp = client.put("/api/user/preferences", json={"declared_approach_icaos": ""})
+        assert resp.status_code == 200
+        assert resp.json()["declared_approach_icaos"] == []
+
+    def test_preserves_sibling_keys(self, client):
+        """The merge-preserving write — a declaration must not drop settings."""
+        client.put("/api/user/preferences", json={"units_region": "us"})
+        client.put("/api/user/preferences", json={"declared_approach_icaos": "EGTF"})
+        data = client.get("/api/user/preferences").json()
+        assert data["units_region"] == "us"
+        assert data["declared_approach_icaos"] == ["EGTF"]
+
+    def test_unknown_code_is_rejected_and_nothing_is_stored(self, client, monkeypatch):
+        """A typo'd EGFT must come back, never be silently dropped.
+
+        Dropping it would leave the pilot believing their home field is
+        declared when it is not — silently reinstating the very false REDs the
+        declaration removes.
+        """
+        client.put("/api/user/preferences", json={"declared_approach_icaos": "EGTF"})
+        monkeypatch.setattr(
+            "weatherbrief.airports.unknown_icaos", lambda codes, db_path: ["EGFT"],
+        )
+        resp = client.put(
+            "/api/user/preferences", json={"declared_approach_icaos": "EGTF EGFT"},
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "unknown_airports"
+        assert detail["codes"] == ["EGFT"]
+        assert "EGFT" in detail["message"]
+        # The whole write is rejected — the previous list is untouched.
+        assert client.get("/api/user/preferences").json()["declared_approach_icaos"] == ["EGTF"]
+
+    def test_validation_is_skipped_when_the_airport_db_is_unavailable(self):
+        """A missing AIRPORTS_DB is a server-config gap, not the user's typo."""
+        from weatherbrief.airports import unknown_icaos
+
+        assert unknown_icaos(["EGTF"], "/nonexistent/nav.db") == []
+        assert unknown_icaos([], "") == []
+
+    def test_load_helper_reads_the_stored_list(self, client, app_db):
+        """The single read path used by every advisory entry point."""
+        from weatherbrief.api.preferences import load_declared_approaches
+
+        client.put("/api/user/preferences", json={"declared_approach_icaos": "egtf EGSX"})
+        session = app_db()
+        try:
+            assert load_declared_approaches(session, DEV_USER_ID) == ["EGTF", "EGSX"]
+            assert load_declared_approaches(session, "nobody") == []
+        finally:
+            session.close()

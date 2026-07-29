@@ -35,6 +35,27 @@ expected to complete the arrival visually:
   AMBER). Never RED.
 * **IFR / LIFR** -> the full logic below.
 
+**Declared unpublished approaches (#510).** A pilot can declare that they have
+an unpublished/self-briefed approach at a field — a cloud break procedure or a
+private GNSS approach — which is common in the UK, where a field with zero AIP
+rows (EGTF Fairoaks and friends) is routinely arrived at IFR. Without this,
+every IFR arrival at such a home field grades RED, which is enough noise to make
+the advisory worth ignoring. A declaration is treated as *"an approach exists,
+alignment unknown"*: it is RNP-equivalent and circling-equivalent, so it can
+never earn GREEN at IFR, and it is **never credited at LIFR** — with no
+published procedure there are no published minima, so no decision height can be
+claimed at all. It only ever removes the *infrastructure* penalty: ceiling,
+visibility, wind and crosswind grading are untouched, and the airport-wide
+best-case minima gate still reads published plates only.
+
+Note that this AMBER does **not** fall out of the pre-existing rules, contrary
+to the framing in #510. The no-straight-in fallback only softens off RED when
+the weather supports circling (``circling_ceiling_ft`` / ``circling_visibility_m``,
+1000 ft / 1500 m by default) — but an IFR ceiling is 500–1000 ft *by
+definition*, so a declared field at 700 ft would still have graded RED, leaving
+exactly the false REDs the declaration exists to damp. Hence the explicit
+``_Softening.DECLARED`` and the no-published branch in ``_grade_full``.
+
 Known gap (deliberate, #509 design constraint 4): at D-0 this should prefer the
 TAF over the NWP consensus so the card cannot contradict the alternates card
 beside it. Advisories run at pipeline step 3 and METAR/TAF are fetched at step
@@ -114,6 +135,11 @@ class _Softening(str, Enum):
     #: The wind model produced no components for the served end(s). Also our
     #: gap, and a DIFFERENT gap — it must not borrow the unresolved copy.
     NO_WIND_DATA = "no_wind_data"
+    #: The pilot declared an unpublished/self-briefed approach here (#510). Not
+    #: a gap in our data at all — an operational fact we were told — but it
+    #: softens for the same reason the others do: it means the published picture
+    #: is not the whole picture. Never available at LIFR (see ``_grade_full``).
+    DECLARED = "declared"
     #: Nothing softens it.
     NONE = "none"
 
@@ -209,16 +235,20 @@ def _wind_for_end(cond: AirportModelCondition, runway_id: str) -> RunwayWind | N
 
 
 def _straight_in_plans(
-    cond: AirportModelCondition, approaches: AirportApproaches,
+    cond: AirportModelCondition, approaches: list[RunwayApproach],
 ) -> list[_EndPlan]:
     """Every straight-in approach whose served end also has wind components.
 
     An approach whose end the wind model does not cover is dropped rather than
     assumed benign — it simply cannot be graded, and the remaining plans (or the
     absence of any) carry the verdict.
+
+    Takes the *published* list rather than the container: a declared approach
+    carries no runway and would be dropped anyway, but passing it in at all
+    would invite a future caller to grade one.
     """
     plans: list[_EndPlan] = []
-    for approach in approaches.approaches:
+    for approach in approaches:
         if not approach.runway_id:
             continue
         wind = _wind_for_end(cond, approach.runway_id)
@@ -306,7 +336,36 @@ def _grade_full(
     circling_ceiling = float(params.get("circling_ceiling_ft", 1000))
     circling_vis = float(params.get("circling_visibility_m", 1500))
 
-    if not approaches.has_iap:
+    # A declaration is credited at IFR but never at LIFR (#510 hard cap): with no
+    # published procedure there are no published minima, so no decision height
+    # can be claimed at all — and LIFR is where a claimed DH would matter most.
+    # This is the one place the cap is applied, and it gates BOTH the
+    # no-published branch below and the DECLARED softening further down.
+    declared_credited = (
+        approaches.has_declared_approach
+        and cond.flight_category != FlightCategory.LIFR
+    )
+
+    # Everything past this point reasons about minima, alignment or approach
+    # class, so it reads ``published`` — never ``approaches``. A declaration has
+    # no plate and no runway; letting it into these lists would hand a personal
+    # assertion an estimated decision height (and, since it carries neither a
+    # runway nor the circling flag, would silently read as UNRESOLVED alignment).
+    published = approaches.published
+
+    if not published:
+        if approaches.has_declared_approach:
+            # The #510 case: a UK field with a cloud break procedure and zero
+            # AIP rows. Circling-equivalent, so it can never earn GREEN — but at
+            # IFR it is a real consideration rather than a stopper, which is the
+            # whole point of the declaration.
+            if not declared_credited:
+                return AdvisoryStatus.RED, adv_t(
+                    "approach_feasibility.declared_lifr", loc, icao=approaches.icao,
+                )
+            return AdvisoryStatus.AMBER, adv_t(
+                "approach_feasibility.declared_only", loc, icao=approaches.icao,
+            )
         key = (
             "approach_feasibility.no_iap" if approaches.has_procedure_data
             else "approach_feasibility.no_procedure_data"
@@ -318,7 +377,7 @@ def _grade_full(
     # Hard forecast fact — below every plate the field could hold. Checked before
     # the wind so a genuinely un-shootable approach reads as such regardless of
     # which runway the wind favours.
-    best_case = _best_case_minima(approaches.approaches)
+    best_case = _best_case_minima(published)
     if best_case is not None:
         best_dh, best_vis = best_case
         if ceiling is not None and ceiling < best_dh:
@@ -342,7 +401,7 @@ def _grade_full(
                 minima=_minima_status(cond, p.proxy),
                 plan=p,
             )
-            for p in _straight_in_plans(cond, approaches)
+            for p in _straight_in_plans(cond, published)
         ),
         key=lambda g: (_rank(g.status), g.plan.tailwind_kt, g.plan.wind.crosswind_kt),
     )
@@ -361,7 +420,7 @@ def _grade_full(
     # nor a served end the wind model did not cover may drive RED (design
     # rule 2) — those are our gaps, not facts about the arrival.
     alignment_unresolved = any(
-        not a.runway_id and not a.circling for a in approaches.approaches
+        not a.runway_id and not a.circling for a in published
     )
     wind_unresolved = bool(approaches.served_runway_ids) and not graded
 
@@ -374,8 +433,13 @@ def _grade_full(
         and (cond.visibility_m is None or cond.visibility_m >= circling_vis)
     )
 
+    # Circling outranks the declaration: when the weather genuinely supports
+    # circling, "plan for circling" is the more actionable line, and it holds
+    # whether or not the pilot declared anything.
     if circling_supported:
         softening = _Softening.CIRCLING
+    elif declared_credited:
+        softening = _Softening.DECLARED
     elif alignment_unresolved:
         softening = _Softening.UNRESOLVED
     elif wind_unresolved:
@@ -434,10 +498,20 @@ def _wind_note(plan: _EndPlan, loc: str | None) -> str:
 def _grade_mvfr(
     approaches: AirportApproaches, loc: str | None,
 ) -> tuple[AdvisoryStatus, str]:
-    """MVFR: IAP presence only, capped at AMBER. Never RED."""
-    if approaches.has_iap:
+    """MVFR: IAP presence only, capped at AMBER. Never RED.
+
+    A declaration counts as presence here — that is the #510 MVFR row (AMBER ->
+    GREEN) — but it gets its own copy: calling one "published" would be the same
+    false claim in the sentence that the grade map refuses to make in the grade.
+    """
+    published = approaches.published
+    if published:
         return AdvisoryStatus.GREEN, adv_t(
-            "approach_feasibility.mvfr_ok", loc, count=len(approaches.approaches),
+            "approach_feasibility.mvfr_ok", loc, count=len(published),
+        )
+    if approaches.has_declared_approach:
+        return AdvisoryStatus.GREEN, adv_t(
+            "approach_feasibility.mvfr_declared", loc, icao=approaches.icao,
         )
     return AdvisoryStatus.AMBER, adv_t("approach_feasibility.mvfr_no_iap", loc)
 
@@ -469,7 +543,12 @@ class ApproachFeasibilityEvaluator:
                 "approach-served runway with an out-of-limits tailwind and no "
                 "ceiling for circling. Decision heights are estimates shared "
                 "with the alternate-requirement card, so uncertainty can only "
-                "soften a grade, never harden it."
+                "soften a grade, never harden it. If you have declared an "
+                "unpublished approach at the destination in your account "
+                "settings, a field with no published procedure is graded amber "
+                "rather than red at IFR — never green, and never credited at "
+                "LIFR, where there are no published minima to fly to. A "
+                "declaration never affects alternate-minima calculations."
             ),
             category="flight_rules",
             timing_class="cheap",

@@ -318,9 +318,9 @@ consensus so the card cannot contradict the alternates card beside it. Advisorie
 run at pipeline step 3 and METAR/TAF are fetched at step 3.5, so `RouteContext`
 has no observation to read; the NWP consensus in `airport_conditions.arrival` is
 what is graded today. Also deferred (from #509): per-candidate approach
-feasibility for *alternates*, an approach-aware "best usable runway" alongside
-`best_runway` in `enrich_wind`, and #510's user-declared unpublished approaches
-(cloud-break procedures) damping the "no IAP → RED" case at UK GA bases.
+feasibility for *alternates*, and an approach-aware "best usable runway"
+alongside `best_runway` in `enrich_wind`. #510's user-declared unpublished
+approaches shipped — see the next section.
 
 No highlights are emitted — like every airport advisory this is point-in-space,
 not route geometry (see the "Not emitting" list under Highlights). Web/iOS/MCP/
@@ -337,6 +337,106 @@ contributes to eval-corpus situation coverage. `ifr_marginal` rather than a new
 `SITUATION_VOCAB` entry: this only grades at an IFR/LIFR destination, and a new
 vocab cell changes the coverage-matrix denominator every fixture is scored
 against.
+
+### User-declared unpublished approaches (#510)
+
+`approach_feasibility` grades a field with no published procedure as **RED** at
+IFR/LIFR. That is the right default, and it over-fires in the UK, where a field
+can have no AIP-published procedure while pilots routinely fly a self-briefed
+**cloud break procedure** or a private/unpublished GNSS approach. `EGTF`
+(Fairoaks) has **zero** rows in `procedures`, so for a pilot based there *every*
+IFR arrival at their home field graded RED — enough noise to make the advisory
+worth ignoring, which is worse than not having it. This is **not a data gap**:
+#509 established these absences are genuine. The published data is right and the
+operational reality differs.
+
+**Storage is a user preference, not an advisory param.** `app_prefs_json →
+declared_approach_icaos`, read by `api/preferences.py::load_declared_approaches`
+(the sibling of `load_user_locale`). It is a fact about the pilot and the
+airport ("I'm current on the Fairoaks cloud break"), entered once and applied
+everywhere — not a per-profile judgment. It could not have been an
+`AdvisoryParameterDef` anyway: `default` is typed `float`, and all 83 params in
+use are numeric.
+
+**Resolution happens in the collection step**, not the evaluator:
+`get_runway_approaches(icaos, db_path, declared_icaos)` injects a synthetic
+`RunwayApproach(source="user_declared")`. Every field that could confer credit
+is empty **by construction** — `approach_type` is `None` so no minima class can
+be inferred, `runway_id` is `None` so it can never be paired with a runway end's
+wind. The type is fixed rather than user-selectable precisely so a pilot cannot
+declare "ILS" and be handed a 200 ft decision height on a procedure that has no
+plate. It is *not* injected over `lookup_failed`: that state means "we could not
+determine the picture", and a declaration does not determine it either.
+
+`AirportApproaches.published` is the split that keeps this honest — **everything
+reasoning about minima, alignment or approach class reads it**, never
+`approaches`. Miss that and the declaration (no runway, not circling) silently
+reads as UNRESOLVED alignment, and the best-case minima gate starts testing
+ceilings against a plate that does not exist.
+
+| Destination | Undeclared | Declared |
+|---|---|---|
+| VFR | GREEN | GREEN |
+| MVFR | AMBER (no IAP) | **GREEN** (own copy — never called "published") |
+| IFR | RED (no IAP) | **AMBER** |
+| LIFR | RED | **RED** — hard cap |
+
+**The IFR amber does *not* fall out of the existing rules**, contrary to the
+framing in #510, and this is the one place the issue's stated mechanism was
+wrong. The no-straight-in fallback only softens off RED when the weather
+supports circling (`circling_ceiling_ft` / `circling_visibility_m`, 1000 ft /
+1500 m) — but an IFR ceiling is 500–1000 ft *by definition*, so a declared EGTF
+at 700 ft would still have graded RED, leaving exactly the false REDs the
+declaration exists to damp. Hence an explicit `_Softening.DECLARED` and a
+dedicated no-published branch in `_grade_full`. The issue's **table** is
+implemented as specified; only its rationale is corrected here.
+
+**LIFR stays RED as an explicit cap.** With no published procedure there are no
+published minima, so no DH can be claimed at all — the estimated-band logic must
+not be applied to a procedure that does not exist. The cap gates both the bare
+declared field and the `DECLARED` softening on a published field.
+
+Three rules bound what a declaration can do:
+
+1. **Circling outranks it.** When the weather genuinely supports circling,
+   "plan for circling" is the more actionable line and holds regardless.
+2. **It never softens below the weather** (#510 guardrail 3). A ceiling below
+   the best-case DH of a *real* plate stays RED; the declaration removes the
+   *infrastructure* penalty only. Ceiling, visibility, wind and crosswind
+   grading are untouched.
+3. **The basis is always visible** (guardrail 2). Every declared verdict names
+   it — *"graded against your declared unpublished approach at EGTF, which has
+   no published minima, so check your own"*. **Shared briefings are explicitly
+   not handled, by decision:** a pack stores its computed manifest, so `/s/{code}`
+   renders the owner's baked-in grades. We do **not** re-grade per viewer — that
+   sentence is the only thing that travels with the share.
+
+**Containment is the main hazard, and it is structural.** A self-briefed
+approach cannot make a field qualify as a filed alternate under EASA NCO.OP.143
+nor relieve the NCO.OP.140 trigger, so it must never reach
+`alternate_requirement` or the alternates candidate gate. It cannot today:
+`tasks/alternates.py` answers "does this field qualify?" from its own
+`ap.procedures_query.approaches()` and never calls `get_runway_approaches`, the
+only function that knows about declarations. `tests/test_declared_approach_guardrails.py`
+pins that — including an enumeration of every module referencing
+`has_declared_approach`, so a new consumer has to be a deliberate act rather
+than an accident.
+
+**Wiring — four paths, all required.** `BriefingOptions.declared_approach_icaos`
+covers the briefing run; `api/packs.py::_load_advisory_profile` returns it as a
+12th element, feeding recalculate, the settings preview, the alt-departure re-run
+**and** `tasks/time_scan_runner`. The time-scan is easy to miss and matters: it
+grades the planned departure through the same path and asserts shift=0
+reproduces the briefing, so omitting it would make the scan contradict the card
+beside it. Validation on save is `airports.py::unknown_icaos` against `nav.db`,
+and an unknown code **rejects the whole write** with a 400 naming the codes —
+dropping it silently would leave the pilot believing their home field is
+declared when it is not.
+
+Out of scope, deliberately: declaring approach type, minima or runway alignment;
+per-runway declarations (circling-equivalent confers no alignment credit either
+way); sharing the list between users; viewer-scoped re-grading of shared
+briefings.
 
 ## Mitigations (advice only — #328/#330)
 

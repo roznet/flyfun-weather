@@ -39,6 +39,13 @@ class FlightCategory(str, Enum):
         return FLIGHT_CATEGORY_COLORS[self.value]
 
 
+# Provenance of a :class:`RunwayApproach`. Kept as constants rather than an Enum
+# so the value serializes as a plain string in the pack manifest, matching every
+# other string field in this module.
+SOURCE_PUBLISHED = "published"
+SOURCE_USER_DECLARED = "user_declared"
+
+
 class RunwayEnd(BaseModel):
     """One end of a runway."""
 
@@ -47,20 +54,33 @@ class RunwayEnd(BaseModel):
 
 
 class RunwayApproach(BaseModel):
-    """One published instrument approach procedure at an airport.
+    """One instrument approach available at an airport.
 
-    Sourced from ``nav.db`` ``procedures`` rows (see
+    Normally sourced from ``nav.db`` ``procedures`` rows (see
     ``weatherbrief.airports.get_runway_approaches``). ``runway_id`` is the
     runway END the procedure serves — the join key against
     :class:`RunwayEnd` / :class:`RunwayWind` — and is ``None`` when the
     procedure is not runway-aligned (a circling-only procedure, or a row whose
     runway could not be resolved).
+
+    ``source`` separates a *published* procedure from a pilot's declaration that
+    they have an unpublished/self-briefed approach at the field (a cloud break
+    procedure — issue #510). The two must never be confused: a declaration is a
+    personal operational assertion with no plate and therefore no minima, so it
+    can soften the infrastructure penalty and nothing else. It carries no
+    alignment (``runway_id`` is always ``None``) and no approach class.
     """
 
     name: str  # raw procedure name, e.g. "RWY02 ILS" / "RNP A"
     approach_type: str | None = None  # "ILS", "RNP", "VOR"… (None = unknown class)
     runway_id: str | None = None  # runway end served, e.g. "02" — None = not aligned
     circling: bool = False  # ICAO letter-suffixed circling procedure ("RNP A")
+    source: str = SOURCE_PUBLISHED  # "published" | "user_declared" (#510)
+
+    @property
+    def is_declared(self) -> bool:
+        """True for a pilot-declared unpublished approach, not a published one."""
+        return self.source == SOURCE_USER_DECLARED
 
 
 class AirportApproaches(BaseModel):
@@ -77,6 +97,11 @@ class AirportApproaches(BaseModel):
     * ``lookup_failed`` — we could not determine the picture (unknown ICAO, or
       the procedure query raised). NOT an absence of approaches: a consumer must
       report this as "could not assess", never grade on it.
+
+    A pilot's declaration of an unpublished approach (#510) rides in the same
+    list with ``source="user_declared"``, so ``has_iap`` covers both — but
+    ``published`` is what any minima or alignment reasoning must read, because a
+    declaration has neither a plate nor a runway.
     """
 
     icao: str
@@ -86,8 +111,28 @@ class AirportApproaches(BaseModel):
 
     @property
     def has_iap(self) -> bool:
-        """True when at least one instrument approach is published."""
+        """True when any approach is available — published or declared."""
         return bool(self.approaches)
+
+    @property
+    def published(self) -> list[RunwayApproach]:
+        """Only the published procedures.
+
+        Everything that reasons about minima, alignment or approach class must
+        start here: a declared approach has no plate, so folding it in would let
+        a personal assertion carry an estimated decision height.
+        """
+        return [a for a in self.approaches if not a.is_declared]
+
+    @property
+    def has_published_iap(self) -> bool:
+        """True when at least one *published* instrument approach exists."""
+        return bool(self.published)
+
+    @property
+    def has_declared_approach(self) -> bool:
+        """True when the pilot declared an unpublished approach here (#510)."""
+        return any(a.is_declared for a in self.approaches)
 
     @property
     def served_runway_ids(self) -> set[str]:
