@@ -103,7 +103,7 @@ Output a single block with:
 
 Example:
 ```
-Worktree ready at /Users/brice/Developer/public/flyfun-weather/issue-65
+Worktree ready at <parent>/flyfun-weather/issue-65
   Branch:    issue-65 (forked from main)
   Venv:      ./venv (Python 3.13.x)
   Editable:  weatherbrief → /.../issue-65/src/weatherbrief ✓

@@ -15,9 +15,17 @@ Pull the latest complete ECMWF run from `weather.flyfun.aero` into the local `EC
 
 ## Constants
 
-- Prod host: `brice@161.35.35.15`
-- Prod ECMWF dir: `/mnt/flyfun_data/ecmwf/data`
-- Local destination: value of `ECMWF_GRIB_DIR` in `.env`. If not set / commented out, default to `/Users/brice/tmp/ecmwf/data` and remind the user to uncomment the line in `.env` so the backend picks it up.
+Nothing here is hardcoded, so the recipe works for a fork or a second deployment. Resolve
+`<user>@<server>` and `<project-dir>` per `designs/references/deployment-paths.md`, then:
+
+| Placeholder | Resolve from |
+|---|---|
+| `<server-ecmwf-dir>` | **`HOST_ECMWF_GRIB_DIR`** in the server's `.env` — `ssh <user>@<server> "grep '^HOST_ECMWF_GRIB_DIR=' <project-dir>/.env \| cut -d= -f2"` |
+| `$DEST` | Local destination — `ECMWF_GRIB_DIR` in this checkout's `.env` (see step 1) |
+
+> Mind the two variable names: the **server** side is `HOST_ECMWF_GRIB_DIR`, the **local** side
+> is `ECMWF_GRIB_DIR`. This recipe touches both ends, so grepping the wrong one on the wrong
+> host silently resolves to nothing (or to the local path) and the rsync source comes out empty.
 
 ## Steps
 
@@ -26,7 +34,7 @@ Pull the latest complete ECMWF run from `weather.flyfun.aero` into the local `EC
 ```bash
 DEST=$(grep -E '^ECMWF_GRIB_DIR=' .env | cut -d= -f2-)
 if [ -z "$DEST" ]; then
-  DEST=/Users/brice/tmp/ecmwf/data
+  DEST=~/tmp/ecmwf/data
   echo "note: ECMWF_GRIB_DIR is not set in .env — using default $DEST"
   echo "      uncomment 'ECMWF_GRIB_DIR=$DEST' in .env so the app picks it up"
 fi
@@ -38,7 +46,7 @@ mkdir -p "$DEST"
 If `--run` was provided, use it. Otherwise, list complete sentinels on prod and take the latest:
 
 ```bash
-ssh brice@161.35.35.15 "cd /mnt/flyfun_data/ecmwf/data && ls -1 .ready_*z 2>/dev/null | sort | tail -1"
+ssh <user>@<server> "cd <server-ecmwf-dir> && ls -1 .ready_*z 2>/dev/null | sort | tail -1"
 ```
 
 The sentinel filename is `.ready_YYYYMMDD_HHz` (no `.partial` suffix — partial runs are skipped). Strip the `.ready_` prefix to get the run tag (e.g. `20260426_00z`), then convert to the GRIB filename run timestamp:
@@ -71,7 +79,7 @@ rsync -av --stats ${DRY_RUN:+-n} \
   --include=".ready_${TAG}" \
   --include="delivery_config.json" \
   --exclude='*' \
-  brice@161.35.35.15:/mnt/flyfun_data/ecmwf/data/ \
+  <user>@<server>:<server-ecmwf-dir>/ \
   "$DEST/"
 ```
 
@@ -79,7 +87,7 @@ Notes on the rsync flags:
 - macOS ships rsync 2.6.x — do **not** use `--info=progress2` (unsupported). Use `--stats` and let it print per-file lines.
 - `delivery_config.json` is included so `ecmwf_watcher` can re-validate locally.
 - The trailing `/` on both source and dest is required for include/exclude semantics.
-- **`--exclude='*.idx'` must stay first** (rsync takes the first matching rule, and the `brg_*` include would otherwise pull the indexes too). cfgrib's `.idx` is a pickle that stores the **absolute path** it was built against, and cfgrib only accepts an index whose path matches the GRIB it is opening. Prod's indexes name `/mnt/flyfun_data/...`, so locally every one is rejected ("Ignoring index file … incompatible with GRIB file") — and since cfgrib writes indexes with an *exclusive* create, the stale file is never replaced. Result: every decode full-scans the GRIB forever. Measured on the airport-profile panel: **~30–40 s per request with prod indexes present, ~3 s without.** If a sync predating this exclude left indexes behind, delete them: `rm "$DEST"/*.idx`.
+- **`--exclude='*.idx'` must stay first** (rsync takes the first matching rule, and the `brg_*` include would otherwise pull the indexes too). cfgrib's `.idx` is a pickle that stores the **absolute path** it was built against, and cfgrib only accepts an index whose path matches the GRIB it is opening. Prod's indexes name the server's data path, so locally every one is rejected ("Ignoring index file … incompatible with GRIB file") — and since cfgrib writes indexes with an *exclusive* create, the stale file is never replaced. Result: every decode full-scans the GRIB forever. Measured on the airport-profile panel: **~30–40 s per request with prod indexes present, ~3 s without.** If a sync predating this exclude left indexes behind, delete them: `rm "$DEST"/*.idx`.
 
 ### 5. Verify
 
@@ -131,7 +139,7 @@ done
 Present the list to the user and **pause for explicit confirmation** (do not delete anything yet). For example:
 
 ```
-Stale ECMWF runs in /Users/brice/tmp/ecmwf/data:
+Stale ECMWF runs in ~/tmp/ecmwf/data:
   20260509_00z — 30h old, 232 files, 2.0G
   20260508_12z — 42h old, 232 files, 2.0G
 Delete these (sentinels + matching brg_*_fc_<run>_* files)? [y/N]
@@ -171,5 +179,5 @@ For an existing pack, look in fetch_meta.json for an 'ECMWF GRIB enrichment appl
 - **Pattern anchoring**: `brg_*_<RUN_TS>_*` matches both the init time and the valid time positions. Always include `_fc_` before the run timestamp to anchor correctly.
 - **`.partial` sentinels**: written when ECPDS delivery times out. The skill ignores them by default — partial runs should not be promoted to dev unless the user passes `--run` explicitly with a `.partial` tag.
 - **Disk usage**: step 6 offers to clean runs whose sentinel is >24h old, but only with explicit user confirmation and never the run just synced. Orphan grib files (no matching `.ready_*` sentinel) are reported but not auto-deleted — clean them by hand if needed.
-- **Network**: ~9 MB/s observed in initial test — droplet uplink, not local — so 2 GB takes ~4 min. If it's noticeably slower, check `ssh brice@161.35.35.15 'iftop'` or just wait.
+- **Network**: ~9 MB/s observed in initial test — droplet uplink, not local — so 2 GB takes ~4 min. If it's noticeably slower, check `ssh <user>@<server> 'iftop'` or just wait.
 - **rsync exit 24**: "some files vanished" — happens when the watcher deletes a file mid-transfer. Not fatal for our purposes as long as the run files all came through; verify with the file-count check in step 5.

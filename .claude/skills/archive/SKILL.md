@@ -1,6 +1,16 @@
+---
+name: archive
+description: Build a signed Xcode archive of the iOS app ready for App Store upload — bumps the version, runs the iPhone + iPad test suites and release pre-flight checks, archives, tags, and drafts release notes. Invoke with an optional bump type (build / patch / minor / major).
+disable-model-invocation: true
+---
+
 # Archive for App Store
 
 Build an Xcode archive ready for App Store upload (iOS only).
+
+Background for every gate below — why both idioms run, the privacy-declaration rationale, the
+tagging convention, release-note style, and how reviewer sign-in works — is in
+`designs/references/ios-release.md` (§A1–§A5). Read the section a step points you at.
 
 ## Arguments
 
@@ -36,37 +46,16 @@ Verify that the Release/production build will NOT use localhost. Check `app/flyf
 
 ### 2b — App tests (unit + UI), iPhone **and** iPad
 
-Run the Xcode test suite on **both** an iPhone and an iPad simulator. This is a
-universal app (`TARGETED_DEVICE_FAMILY = "1,2,7"` — iPhone + iPad + visionOS),
-and the flight-list/add-flight flows the UI tests walk cross a real idiom fork:
-`FlightListView` is a `NavigationSplitView` that collapses to the list on iPhone
-(compact) but to the detail pane behind a "Show Sidebar" toggle on iPad portrait
-(regular). Other surfaces branch on `horizontalSizeClass` too (`RouteMapView`
-dual metrics, `BriefingContainerView`, `SkewTDetailView`, `AirportConditionsView`).
-So "iPhone passes" does **not** imply "iPad passes" — and the UI test's
-iPad-portrait branch in `revealFlightList()` (the "Show Sidebar" tap) is *only*
-exercised when the suite actually runs on an iPad. iPhone-only leaves that path
-untested and free to rot.
+Run the Xcode test suite on **both** an iPhone and an iPad simulator. Both testable targets
+(`flyfun-weatherTests`, `flyfun-weatherUITests`) run together — never skip the UI target to
+save time, and a failure on either idiom is a release blocker.
 
-The `flyfun-weather` scheme's Test action includes **both** testable targets,
-neither skipped, so each run executes them together:
-- `flyfun-weatherTests` — unit tests
-- `flyfun-weatherUITests` — **UI tests** (e.g. `testFlightListRendersSeededFlights`,
-  `testAddFlightValidationAndCreate`)
+**Why both idioms, and why concrete device names: §A1.** In short — a real
+`NavigationSplitView` fork means an iPhone pass does not imply an iPad pass, and
+`generic/platform=iOS Simulator` builds the tests without running them.
 
-The UI tests are an important part of this preflight check — they exercise the
-real app launch + flight-list/add-flight flows, which is exactly what we ship.
-Do not skip or disable the UI test target to make the build go faster; if a UI
-test fails on **either** idiom, treat it as a release blocker like any other
-test. UI tests are slower and more sensitive to simulator state than unit tests,
-so use a generous timeout (see below) and, if they flake on simulator boot,
-retry once before concluding there's a real failure.
-
-Use concrete device names (not `generic/platform=iOS Simulator`, which can
-build-for-testing but won't actually *run* the UI tests). The iPad pass uses
-portrait, the idiom where the split-view fork lives. Pick a model the machine
-has installed — list with `xcrun simctl list devices available` and substitute
-the closest current iPhone / iPad if these exact names aren't present.
+Pick models the machine actually has (`xcrun simctl list devices available`) and substitute
+the closest current iPhone / iPad if these names aren't present.
 
 **iPhone pass:**
 ```bash
@@ -88,13 +77,9 @@ xcodebuild test \
   2>&1 | tail -30
 ```
 
-If tests fail on either idiom, stop and show the failures, noting which device
-the failure was on. Because each run boots a simulator and drives the app, and
-this now runs twice, use a timeout of 600000ms (10 min) **per pass**.
-
-> Note: running both idioms is the standard for the archive preflight (infrequent,
-> ships universal). For the day-to-day dev inner loop, an iPhone-only run is an
-> acceptable fast gate — but the archive must run both.
+If tests fail on either idiom, stop and show the failures, noting which device the failure
+was on. Each pass boots a simulator and drives the app, so use a timeout of 600000ms (10 min)
+**per pass**. On a simulator-boot flake, retry once before calling it a real failure.
 
 ### 2c — Backend tests
 
@@ -121,23 +106,24 @@ Search for common debug patterns that shouldn't ship:
 
 ### 2g — Info.plist privacy descriptions
 
-Verify required keys are present in `app/flyfun-weather/flyfun-weather/SupportingFiles/Info.plist`:
-- `NSLocationWhenInUseUsageDescription` (for flight tracking)
-- `ITSAppUsesNonExemptEncryption` set to `false` (declares HTTPS-only usage so App Store Connect doesn't demand annual export compliance docs)
+Required in `app/flyfun-weather/flyfun-weather/SupportingFiles/Info.plist`:
+`NSLocationWhenInUseUsageDescription`, and `ITSAppUsesNonExemptEncryption` set to `false`.
 
-Verify `PrivacyInfo.xcprivacy` exists at `app/flyfun-weather/flyfun-weather/PrivacyInfo.xcprivacy` and declares at minimum the data types the web privacy page (`web/privacy.html`) claims are collected:
-- `NSPrivacyCollectedDataTypeEmailAddress`
-- `NSPrivacyCollectedDataTypeName`
-- `NSPrivacyCollectedDataTypeUserID`
-- `NSPrivacyCollectedDataTypePreciseLocation` (must be `Linked=true` — PIREPs upload location tied to the user on the server)
-- `NSPrivacyCollectedDataTypeOtherUserContent` (flight routes, waypoints, PIREP notes, feedback)
-- `NSPrivacyCollectedDataTypeProductInteraction` (API call counts, LLM token usage)
+Required in `app/flyfun-weather/flyfun-weather/PrivacyInfo.xcprivacy` — at minimum the types
+the web privacy page (`web/privacy.html`) claims are collected:
+`EmailAddress`, `Name`, `UserID`, `PreciseLocation` (**must be `Linked=true`**),
+`OtherUserContent`, `ProductInteraction` (each prefixed `NSPrivacyCollectedDataType`).
 
-If any required key/declaration is missing, stop and warn. Divergence between `PrivacyInfo.xcprivacy` and `web/privacy.html` is a common reviewer nit, so they must stay in sync.
+If any is missing, stop and warn. **These two files must stay in sync — divergence is a common
+App Review nit.** What each declaration covers and why: §A2.
 
 ### 2h — Local package overrides
 
-Check `app/flyfun-weather/flyfun-weather.xcodeproj/project.pbxproj` for absolute local package paths (e.g. `/Users/brice/Developer/public/rzskewt`). These break builds on other machines and must be reverted to remote SPM references before archiving. **Stop and warn the user** if found.
+Check `app/flyfun-weather/flyfun-weather.xcodeproj/project.pbxproj` for absolute local package paths — anything under `/Users/` pointing at a sibling checkout (e.g. a local `rzskewt`). These break builds on other machines and must be reverted to remote SPM references before archiving. **Stop and warn the user** if found:
+
+```bash
+grep -n '/Users/' app/flyfun-weather/flyfun-weather.xcodeproj/project.pbxproj || echo "no local package overrides"
+```
 
 Report all checks as a checklist to the user before proceeding.
 
@@ -202,13 +188,9 @@ Do NOT push unless the user asks.
 
 ### Tagging convention
 
-Tags track the **marketing version** only. The pattern is `ios/{marketing_version}`:
-- Example: `ios/1.0`, `ios/1.1`
-
-**Key rules:**
-- Tags correspond to `MARKETING_VERSION`, never to `CURRENT_PROJECT_VERSION` (build number)
-- Build-only bumps (`/archive build`) do NOT create a new tag — they move the existing tag for that version
-- Only patch/minor/major bumps create a genuinely new tag
+Tags track the **marketing version** only: `ios/{marketing_version}` (e.g. `ios/1.0`). A
+build-only bump *moves* the existing tag rather than creating one; only patch/minor/major
+bumps create a new tag. Full convention and why the force-push is intentional: §A3.
 
 **When the tag already exists** (build-only bump):
 ```bash
@@ -234,12 +216,8 @@ Generate a user-facing "What's New" summary from commits between the previous ve
 git log {previous_tag}..HEAD --oneline
 ```
 
-Write concise, user-facing release notes:
-- Group related changes into bullet points
-- Use plain language (no commit hashes, no technical jargon)
-- Focus on features and fixes the user cares about
-- Skip internal changes (tests, CI, refactoring, version bumps, doc syncs)
-- Keep it to 5-8 bullet points max
+Write concise, user-facing release notes — grouped bullets, plain language, no internal
+changes, 5–8 bullets max. Full style guide: §A4.
 
 Show the release notes to the user for review before pushing tags.
 
@@ -274,20 +252,6 @@ Then give the user the printed `flyfunweather://auth?token=…` line to paste in
 **App Store Connect → App Review Information → Notes** (alongside the "tap this
 link on the device / simulator to sign in" instruction).
 
-**Background so you can explain it if asked:**
-- The reviewer signs in through the app's `flyfunweather://auth?token=<jwt>`
-  deep link. The JWT is self-contained — auth verifies the signature only, it
-  does **not** hit the DB — so the token can be minted from a dev checkout as
-  long as it's signed with the production `JWT_SECRET` (the dev `.env`
-  `JWT_SECRET` *is* the prod secret).
-- The token is bound to a dedicated **"Sign in with Apple" test account**
-  (private-relay email). The account already exists in the prod DB; the script
-  only issues a session token for it, it does not create the user.
-- The standard `flyfun_common.auth.create_token` helper only issues **7-day**
-  tokens — too short for a review cycle — which is why this dedicated script
-  exists with a configurable (default 60-day) expiry.
-- **Nothing sensitive is committed.** The script reads everything from `.env`
-  (gitignored): `JWT_SECRET` (the only real secret) plus the reviewer identity
-  `REVIEWER_USER_ID` / `REVIEWER_EMAIL` / `REVIEWER_NAME`. If a fresh checkout
-  is missing these, the script exits with a message naming the missing var —
-  re-add them to `.env` (they are not in the repo by design).
+How the token works, why a dedicated script exists, and what it reads from `.env`: **§A5** —
+read it before explaining any of this to the user. If the script errors, it names the missing
+`.env` variable; those are absent from the repo by design.

@@ -12,10 +12,10 @@ never in prod.
 
 ## Model (read first)
 
-- **Two areas**, both under the separate **eval-set git repo** `~/Developer/public/flyfun-weather-evalset`:
+- **Two areas**, both under the separate **eval-set git repo** (a sibling checkout, path from `EVAL_CORPUS_DIR`):
   - `corpus/` — committed, curated. `EVAL_CORPUS_DIR` points HERE.
   - `staging/` — gitignored scratch where new briefings land; triage/label, then **promote** to corpus.
-  - `.env` (dev) has `EVAL_CORPUS_DIR=.../flyfun-weather-evalset/corpus` + `WEATHERBRIEF_EVAL_WORKBENCH=1`. Staging derives as the `staging` sibling (or `EVAL_STAGING_DIR`).
+  - `.env` (dev) has `EVAL_CORPUS_DIR=<evalset-repo>/corpus` + `WEATHERBRIEF_EVAL_WORKBENCH=1`. Staging derives as the `staging` sibling (or `EVAL_STAGING_DIR`).
 - **Pack shape (Option B):** the committed master is `cross_section.json.gz` (gzip ~17×; read transparently). The **derived tier is gitignored + regenerated**: `route_analyses.json`, `elevation_profile.json`, `route_points.json`, `sounding_profiles.json.gz`, `skewt/`, plain `cross_section.json`.
 - **`cross_section.json` is the irreplaceable RAW master** — it holds the per-interpolated-point soundings (~5× more points than `forecasts.json`, which is waypoints-only). It CANNOT be regenerated from forecasts, and a past forecast can't be re-fetched. `route_analyses.json` IS regenerable from it (`run_analysis`, ~3.5s/pack).
 - **`full_fidelity`** = `route_analyses.json` present (cross-section view + rerun work). Else "label-only" (judge from advisories+digest only).
@@ -27,7 +27,7 @@ source venv/bin/activate   # always, from main/
 
 ## Recipe: pull complete packs from prod
 
-Local `data/packs` is often a partial sync (no heavy files); **prod keeps full packs**. Prod: `ssh brice@161.35.35.15`, data at `/mnt/flyfun_data/weather/data/packs`.
+Local `data/packs` is often a partial sync (no heavy files); **prod keeps full packs**. Prod: `ssh <user>@<server>`; packs live at `<HOST_DATA_DIR>/packs`. Resolve both per `designs/references/deployment-paths.md` (anchor the grep with `^HOST_` — a bare `DATA_DIR` is the container path).
 
 ```bash
 # Complete packs older than N days (prod keeps these past T1 only for DEBRIEFED flights):
@@ -49,7 +49,7 @@ python scripts/pull_debrief_data.py          # ssh-dumps prod debriefs, attaches
 Sets `corpus_meta.debriefed`/`debrief_decision`/`debrief_graded` (graded = has reasons or outcomes).
 Dump prod debriefs manually (engine raw SQL — SessionLocal needs binding):
 ```bash
-ssh brice@161.35.35.15 'cd flyfun-weather && docker compose exec -T weatherbrief python -c "
+ssh <user>@<server> 'cd <project-dir> && docker compose exec -T weatherbrief python -c "
 import json; from flyfun_common.db import get_engine; from sqlalchemy import text
 print(json.dumps([dict(r) for r in get_engine().connect().execute(text(\"SELECT * FROM flight_debriefs\")).mappings()]))"'
 ```

@@ -34,8 +34,14 @@ The workflow has no filesystem access, so build the doc list here:
    - **plans** — under `designs/plans/`.
    - **future** — under `designs/future/`.
    - **archive** — under `designs/archive/`.
-   - **orphan** — not in INDEX, not linked anywhere, not under plans/future/archive. (Note:
-     today every top-level non-INDEX doc is a sub-doc — orphans should be rare; flag loudly.)
+   - **references** — under `designs/references/`. Operational reference data extracted from
+     `.claude/skills/*/SKILL.md` (thresholds, incident background, data-model tables). These
+     are deliberately **not** in INDEX.md — they're runbook support, not module architecture.
+     Their "parent" is the skill that cites them, so check that citation still resolves rather
+     than looking for a linking design doc.
+   - **orphan** — not in INDEX, not linked anywhere, not under plans/future/archive/references.
+     (Note: today every top-level non-INDEX doc is a sub-doc — orphans should be rare; flag
+     loudly.)
 4. `log`/print the bucket counts so the user sees the scope before the fan-out.
 
 ## Step 2 — Run the resumable workflow

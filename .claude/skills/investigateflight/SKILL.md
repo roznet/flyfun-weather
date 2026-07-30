@@ -5,109 +5,68 @@ description: Investigate a flight briefing — load its data, reproduce advisori
 
 # Investigate Flight
 
-Debug and understand how weather data, advisories, cross-section layers, and metrics are computed for a specific flight.
+Debug and understand how weather data, advisories, cross-section layers, and metrics are
+computed for a specific flight.
+
+**Read `designs/references/briefing-pack-data-model.md` alongside this.** It carries the pack
+layout, the 13-evaluator catalog, the analysis result structure, the API surface, and — most
+importantly — the field-name traps and the one destructive default that can silently overwrite
+the pack you're investigating. This file holds the recipes; that one holds the facts.
 
 ## Step 1 — Extract the flight ID from the URL
 
-The user provides a URL. Extract `{flight_id}` and optionally `{timestamp}`:
-
-| URL pattern | Example |
-|-------------|---------|
-| `localhost:8000/briefing.html?flight={flight_id}` | `localhost:8000/briefing.html?flight=egtf_lflx_lfmd-2026-02-27-1a52` |
-| `weather.flyfun.aero/briefing.html?flight={flight_id}` | same pattern on prod |
-
-The **flight ID** format is: `{safe_route_name}-{target_date}-{params_hash}`
-- `safe_route_name`: lowercased waypoints joined by `_` (e.g., `egtf_lflx_lfmd`)
-- `target_date`: `YYYY-MM-DD`
-- `params_hash`: 4-char hex hash of `{time, alt, ceil, dur}` — see `src/weatherbrief/api/flights.py:168-178`
+The user provides a briefing URL of the form `.../briefing.html?flight={flight_id}` (localhost
+or production). Extract `{flight_id}`, and `{timestamp}` if present. The ID format is
+documented in the reference.
 
 ## Step 2 — Get the pack data onto local disk
 
 The primary investigation method is **disk + Python** — loading artifacts directly and calling
-individual functions. The API is only useful for quick final-result checks; it can't expose
-intermediate computations needed for real debugging.
+individual functions. The API is only useful for quick final-result checks; it can't expose the
+intermediate computations that real debugging needs.
 
-### Local flight (URL was localhost)
-
-Data is already on disk. Find the pack directory:
+**Local flight** — data is already on disk:
 
 ```bash
-# List packs for this flight
-ls data/packs/*/{flight_id}/
+ls {DATA_DIR}/packs/*/{flight_id}/
 ```
 
-If the dev server is running, you can also use the API to find the latest timestamp:
+If the dev server is running, the API can find the latest timestamp:
+
 ```bash
 curl -s http://localhost:8000/api/flights/{flight_id}/packs/latest | python -m json.tool
 ```
 
-### Production flight (URL was weather.flyfun.aero)
+**Production flight** — rsync the pack to a local scratch directory and work locally. Resolve
+`<user>@<server>` and `<project-dir>` per `designs/references/deployment-paths.md`.
 
-Rsync the pack data from prod to a local `debug/` directory, then work locally.
-Use the SSH user/host from the deploy skill or CLAUDE.md config.
-
-**Important:** On the server, pack data does NOT live under the project directory.
-First, find the actual data path by checking the remote `.env`:
-
-```bash
-# Get the host data directory from the server's .env
-ssh {user}@{server} "grep HOST_DATA_DIR flyfun-weather/.env"
-# This returns something like: HOST_DATA_DIR=/mnt/flyfun_data/weather/data
-```
-
-Then use that path (`{HOST_DATA_DIR}`) to find and rsync the pack:
+Pack data does **not** live under the project directory on the server, so find the real path
+first. Anchor the grep with `^HOST_` — a bare `DATA_DIR` match returns the *container* path
+(`/app/data`), which is not usable over plain ssh:
 
 ```bash
-# Find the pack directory on the server (user_id varies — use wildcard)
-ssh {user}@{server} "ls {HOST_DATA_DIR}/packs/*/{flight_id}/"
-
-# Rsync to local for offline analysis
-rsync -avz {user}@{server}:{HOST_DATA_DIR}/packs/\*/{flight_id}/ \
-  data/packs/debug/{flight_id}/
+ssh <user>@<server> "grep '^HOST_DATA_DIR=' <project-dir>/.env | cut -d= -f2"
 ```
 
-On the server, data lives at `{HOST_DATA_DIR}/packs/{user_id}/{flight_id}/{timestamp}/`.
+Then use that value (`{HOST_DATA_DIR}`) — the `user_id` segment varies, so wildcard it:
 
-## Step 3 — Locate the pack directory on disk
+```bash
+ssh <user>@<server> "ls {HOST_DATA_DIR}/packs/*/{flight_id}/"
 
-Locally, pack data is stored at:
+rsync -avz <user>@<server>:{HOST_DATA_DIR}/packs/\*/{flight_id}/ \
+  {DATA_DIR}/packs/debug/{flight_id}/
 ```
-data/packs/{user_id}/{flight_id}/{timestamp}/
-```
 
-The timestamp directory name uses safe characters: colons → dashes, `+` → `p`.
-Example: `2026-02-25T13-23-00.013596p00-00`
+## Step 3 — Load data in Python
 
-### Pack contents
-
-| File | Contents |
-|------|----------|
-| `briefing.json` | Route + analyses + observations + metadata (no raw forecasts) |
-| `forecasts.json` | Route + metadata + raw forecasts only (large file) |
-| `cross_section.json` | `RouteCrossSection[]` — interpolated vertical slices for visualization |
-| `route_analyses.json` | `RouteAnalysesManifest` — sounding analysis per waypoint & route point |
-| `elevation_profile.json` | `ElevationProfile` — SRTM terrain along route |
-| `route_advisories.json` | `RouteAdvisoriesManifest` — all 13 advisory evaluator results |
-| `route_points.json` | `RoutePoint[]` — interpolated waypoints with lat/lon/distance |
-| `fetch_meta.json` | Metadata: fetched_at, models_fetched |
-| `gramet.pdf` | GRAMET cross-section image (Autorouter) |
-| `skewt/*.png` | Skew-T diagrams per waypoint/model |
-| `digest.md` / `digest.json` | LLM-generated weather digest |
-
-> **Legacy note**: Old packs may have a single `snapshot.json` instead of the split files. The `load_briefing()` / `load_forecasts()` helpers handle fallback automatically.
-
-## Step 4 — Load and inspect data in Python
-
-Activate the venv first (check for `venv/` or `../main/venv/`).
+Activate the worktree's venv first. Pack layout and file contents: see the reference.
 
 ```python
 from pathlib import Path
 import json
 
-# Set the pack directory
-pack_dir = Path("data/packs/{user_id}/{flight_id}/{timestamp}")
+pack_dir = Path("{DATA_DIR}/packs/{user_id}/{flight_id}/{timestamp}")
 
-# --- Load artifacts using project helpers ---
 from weatherbrief.tasks.artifacts import (
     load_route_analyses,
     load_cross_sections,
@@ -116,43 +75,34 @@ from weatherbrief.tasks.artifacts import (
     load_forecasts,
 )
 
-manifest = load_route_analyses(pack_dir)
+manifest      = load_route_analyses(pack_dir)
 cross_sections = load_cross_sections(pack_dir)
-elevation = load_elevation_profile(pack_dir)
+elevation     = load_elevation_profile(pack_dir)
 
-# --- Load briefing data (route + analyses + observations) ---
-briefing_data = load_briefing(pack_dir)  # dict, auto-falls back to snapshot.json
+briefing_data = load_briefing(pack_dir)    # route + analyses + observations
+forecasts_data = load_forecasts(pack_dir)  # large — only when needed
 
-# --- Load raw forecasts (large — only when needed) ---
-forecasts_data = load_forecasts(pack_dir)  # dict, auto-falls back to snapshot.json
-
-# --- Parse into typed model ---
 from weatherbrief.models import ForecastSnapshot
 snapshot = ForecastSnapshot.model_validate(forecasts_data)
 
-# --- Load advisories (raw JSON — no typed model for the manifest envelope) ---
-import json
+# Advisories have no typed model for the manifest envelope — read the JSON.
 advisories_data = json.loads((pack_dir / "route_advisories.json").read_text())
-# Top-level keys: advisories (list), catalog, route_name, cruise_altitude_ft,
-#                 flight_ceiling_ft, total_distance_nm, models, aggregation, airport_conditions
-# Each advisory in advisories_data["advisories"] has keys:
-#   advisory_id, aggregate_status, aggregate_detail, per_model, parameters_used
 ```
 
-## Step 5 — Reproduce and debug specific computations
+Both `load_briefing` and `load_forecasts` fall back to legacy `snapshot.json` automatically.
 
-### A. Recompute analysis (without re-fetching weather data)
+## Step 4 — Reproduce specific computations
 
-Re-runs sounding analysis from saved cross-sections and route points. Useful when you've
-changed analysis logic (cloud layers, icing, vertical motion, etc.) and want to verify
-against an existing briefing.
+### A. Recompute analysis (without re-fetching weather)
+
+Re-runs sounding analysis from saved cross-sections and route points. Use when you've changed
+analysis logic and want to verify against an existing briefing.
 
 ```python
 from datetime import datetime, timezone
 from weatherbrief.tasks.analyze import run_analysis_from_pack
 from weatherbrief.models import RouteConfig
 
-# Load route from briefing data
 route = RouteConfig.model_validate(briefing_data["route"])
 
 result = run_analysis_from_pack(
@@ -161,12 +111,10 @@ result = run_analysis_from_pack(
     departure_time=datetime(2026, 2, 27, 9, tzinfo=timezone.utc),
     icing_severity_enhance=True,
 )
-# result.waypoint_analyses — per-waypoint sounding analyses
-# result.route_analyses — per-route-point analyses (used by advisories)
-# result.route_analyses_manifest — RouteAnalysesManifest
+# result.waypoint_analyses / .route_analyses / .route_analyses_manifest
 ```
 
-### B. Recompute advisories (without re-fetching weather data)
+### B. Recompute advisories (without re-fetching weather)
 
 ```python
 from weatherbrief.tasks.advise import run_advisories_from_pack
@@ -175,34 +123,25 @@ from weatherbrief.analysis.advisories.registry import AdvisoryAggregation
 result = run_advisories_from_pack(
     pack_dir=pack_dir,
     flight_ceiling_ft=18000,
-    advisory_models=["gfs", "ecmwf"],       # optional: subset of models
-    enabled_ids={"icing_escape", "convective"},  # optional: specific evaluators
-    user_params={"icing_escape": {"threshold_ft": 4000}},  # optional: tuned params
+    advisory_models=["gfs", "ecmwf"],             # optional: subset of models
+    enabled_ids={"icing_escape", "convective"},   # optional: specific evaluators
+    user_params={"icing_escape": {"threshold_ft": 4000}},
     aggregation=AdvisoryAggregation.WORST,
-    persist=False,   # ALWAYS when investigating — see warning below
+    persist=False,   # ALWAYS when investigating
 )
 # result.manifest is the RouteAdvisoriesManifest
 ```
 
-> ⚠️ **`persist=False` is not optional here.** The default is `persist=True`, which
-> **overwrites `route_advisories.json` in the pack you are investigating** — and when
-> combined with `enabled_ids` it writes back a manifest containing *only* those
-> evaluators, silently discarding the rest of the saved results. The default is correct
-> for its production caller (the API recalculate endpoint, where the pack is *meant* to
-> track the user's current advisory selection), but it is wrong for every debugging use.
-> `eval_workbench/rerun.py` passes `persist=False` for the same reason: a "what changed"
-> comparison must never clobber the baseline it is comparing against.
->
-> The same applies to any investigation helper that takes a `pack_dir` — check whether it
-> writes before you run it on a real pack. Prefer copying the pack to `data/packs/debug/`
-> first if you are unsure.
+> ⚠️ **`persist=False` is not optional.** The default overwrites `route_advisories.json` in the
+> pack you are investigating, and with `enabled_ids` it discards every evaluator you didn't
+> name. See "Destructive default" in the reference — it applies to any helper taking a
+> `pack_dir`.
 
-### C. Inspect sounding analysis at a specific point
+### C. Inspect sounding analysis at a point
 
 ```python
 manifest = load_route_analyses(pack_dir)
 
-# Pick a route point (by index or waypoint name)
 for rpa in manifest.analyses:
     name = rpa.waypoint_icao or rpa.waypoint_name or f"pt{rpa.point_index}"
     print(f"Point {rpa.point_index}: {name}")
@@ -212,7 +151,6 @@ for rpa in manifest.analyses:
         print(f"    Icing zones:  {[(i.base_ft, i.top_ft, i.risk) for i in sounding.icing_zones]}")
         if sounding.vertical_motion:
             vm = sounding.vertical_motion
-            # CAT layer fields: base_ft, top_ft, risk (CATRiskLevel), richardson_number
             print(f"    CAT: {[(c.base_ft, c.top_ft, c.risk, c.richardson_number) for c in vm.cat_risk_layers]}")
         if sounding.indices:
             print(f"    Freezing lvl: {sounding.indices.freezing_level_ft}")
@@ -225,7 +163,7 @@ from weatherbrief.analysis.sounding.advisories import compute_altitude_advisorie
 
 for rpa in manifest.analyses:
     name = rpa.waypoint_icao or rpa.waypoint_name or f"pt{rpa.point_index}"
-    for model, sounding in rpa.sounding.items():  # note: .sounding not .soundings
+    for model, sounding in rpa.sounding.items():
         alt_adv = compute_altitude_advisories(
             sounding=sounding,
             cruise_altitude_ft=manifest.cruise_altitude_ft,
@@ -233,97 +171,46 @@ for rpa in manifest.analyses:
         print(f"{name} / {model}: {alt_adv}")
 ```
 
-### E. Inspect cross-section data for a layer
+### E. Inspect cross-section data
 
 ```python
-cross_sections = load_cross_sections(pack_dir)
-
-for cs in cross_sections:
+for cs in load_cross_sections(pack_dir):
     print(f"Model: {cs.model}, points: {len(cs.points)}")
-    # Each point has pressure levels with weather data
-    for pt in cs.points[:2]:  # first 2 points
+    for pt in cs.points[:2]:
         print(f"  lat={pt.lat:.2f} lon={pt.lon:.2f} dist={pt.distance_km:.1f}km")
-        for lvl in pt.levels[:3]:  # first 3 levels
+        for lvl in pt.levels[:3]:
             print(f"    {lvl.pressure_hpa}hPa: T={lvl.temperature_c}C RH={lvl.relative_humidity}%"
                   f" wind={lvl.wind_speed_kts}kt cloud={lvl.cloud_cover}")
 ```
 
-### F. Inspect raw forecast data for a specific waypoint/model/level
+### F. Re-run the pipeline on a single point's forecast
+
+When a metric looks wrong at a specific route point (icing, clouds, SFIP, precip, vertical
+motion), the pattern is always: **get the `HourlyForecast` → call `analyze_sounding()` →
+inspect the result**. That re-runs the full pipeline (thermodynamics → clouds → inversions →
+icing → SFIP → precip → vertical motion) and exposes every intermediate.
 
 ```python
-# Load forecasts (large file — only when you need raw data)
-forecasts_data = load_forecasts(pack_dir)
-snapshot = ForecastSnapshot.model_validate(forecasts_data)
+snapshot = ForecastSnapshot.model_validate(load_forecasts(pack_dir))
 
-# snapshot.forecasts is a list[WaypointForecast]
-# WaypointForecast fields: waypoint, model (ModelSource enum), fetched_at, hourly
-# HourlyForecast fields: time, pressure_levels (list[PressureLevelData]), plus surface obs
-# PressureLevelData fields: pressure_hpa, temperature_c, relative_humidity_pct, dewpoint_c,
-#   wind_speed_kt (NOT _kts), wind_direction_deg, geopotential_height_m,
-#   vertical_velocity_pa_s, cloud_liquid_water_kg_kg, ice_mixing_ratio_kg_kg,
-#   cloud_area_fraction_pct, clw_interpolated
-for fc in snapshot.forecasts:
-    wp = fc.waypoint
-    wp_name = wp.icao if hasattr(wp, 'icao') else str(wp)
-    print(f"Waypoint: {wp_name}, Model: {fc.model.value}, hours: {len(fc.hourly)}")
-    for h in fc.hourly[:1]:
-        print(f"  {len(h.pressure_levels)} pressure levels")
-```
-
-### G. Re-run analysis pipeline on a single point's forecast
-
-When a metric looks wrong at a specific route point (icing, clouds, SFIP, precip,
-vertical motion, etc.), the pattern is always: **get the `HourlyForecast` → call
-`analyze_sounding()` → inspect the result**. This re-runs the full pipeline
-(thermodynamics → clouds → inversions → icing → SFIP → precip → vertical motion)
-and gives you all intermediate results.
-
-```python
-# 1. Load forecasts and get the HourlyForecast for the point of interest
-forecasts_data = load_forecasts(pack_dir)
-snapshot = ForecastSnapshot.model_validate(forecasts_data)
-
-# snapshot.forecasts is a flat list of WaypointForecast (one per waypoint×model)
-# Filter by waypoint and model:
+# .forecasts is a flat list of WaypointForecast (one per waypoint × model)
 fc = next(f for f in snapshot.forecasts
           if f.waypoint.icao == "EGTF" and f.model.value == "gfs")
-hourly = fc.hourly[0]  # first forecast hour
+hourly = fc.hourly[0]
 
-# 2. Re-run the full sounding analysis pipeline
 from weatherbrief.analysis.sounding import analyze_sounding
 result = analyze_sounding(hourly.pressure_levels, hourly, icing_severity_enhance=True)
-
-# 3. Inspect whichever part is relevant:
-#    result.cloud_layers         — EnhancedCloudLayer list
-#    result.icing_zones          — IcingZone list (Ogimet index)
-#    result.sfip_zones           — SFIPZone list (fuzzy-logic)
-#    result.inversion_layers     — InversionLayer list
-#    result.precipitation        — PrecipitationAssessment
-#    result.vertical_motion      — VerticalMotionAssessment (CAT layers)
-#    result.convective           — ConvectiveAssessment
-#    result.indices              — ThermodynamicIndices (CAPE, freezing level, etc.)
-#    result.derived_levels       — per-level DerivedLevel with all computed fields
-#    result.nwp_cloud_diagnostics — NWPCloudDiagnostics (GFS per-layer base/top)
 ```
 
-The `HourlyForecast` (`hourly`) also carries the NWP inputs that feed the pipeline:
-- `hourly.pressure_levels` — raw `PressureLevelData` list (the input)
-- `hourly.nwp_cloud_diagnostics` — `NWPCloudDiagnostics` with `.low`/`.mid`/`.high`
-  layers, each having `cover_pct`, `base_ft`, `top_ft`, `top_temp_c`
-- `hourly.cloud_cover_low_pct` / `_mid_pct` / `_high_pct` — bulk NWP cloud %
+The reference lists every attribute on `result`, the NWP inputs `hourly` carries, and the
+sub-modules to call for deeper tracing.
 
-For deeper tracing, call individual sub-modules directly (they're all in
-`weatherbrief.analysis.sounding.*`: `clouds`, `icing`, `sfip`, `precipitation`,
-`vertical_motion`, `inversions`). Check each module's main function signature —
-they take `derived_levels` + relevant context from `hourly`.
-
-## Step 6 — Run a single advisory evaluator in isolation
+## Step 5 — Run a single advisory evaluator in isolation
 
 ```python
 from weatherbrief.analysis.advisories.registry import get_evaluator
 from weatherbrief.analysis.advisories import RouteContext
 
-# Build context from loaded data
 context = RouteContext(
     route_analyses=manifest,
     cross_sections=cross_sections,
@@ -336,60 +223,20 @@ result = evaluator.evaluate(context, model="gfs", params={"threshold_ft": 4000})
 print(f"Severity: {result.severity}, message: {result.message}")
 ```
 
-## Step 7 — Compare with GRAMET cross-section
+Evaluator IDs and categories: see the reference.
 
-The pack includes `gramet.pdf` — the Autorouter GRAMET cross-section image (same GFS data).
-Use this for a broad visual sanity check of our computed cloud, icing, and convection bands.
+## Step 6 — Compare with the GRAMET
 
-### Verify GFS reference times match (MANDATORY first step)
+The pack includes `gramet.pdf` — Autorouter's cross-section from the same GFS data, useful as
+a broad visual sanity check of our cloud, icing and convection bands.
 
-The GRAMET and our analysis must use the **same GFS model run** for any comparison to be valid.
-Three times must be consistent:
+**First verify the GFS reference times match.** The GRAMET's "GFS RefTime" (bottom of the PDF),
+`model_init_times.gfs` and `grib_init_times.gfs` must all agree, or the comparison manufactures
+false discrepancies. The reference explains the check and what each colour on the PDF means.
 
-1. **GRAMET GFS RefTime** — printed at the bottom of the GRAMET PDF (e.g., "GFS RefTime 2026-02-27 18:00Z")
-2. **Our Open-Meteo GFS init time** — `model_init_times.gfs` in the pack metadata (unix timestamp)
-3. **Our GRIB GFS init time** — `grib_init_times.gfs` in the pack metadata (unix timestamp, if GRIB was fetched)
-
-```python
-from datetime import datetime, timezone
-
-# Get init times from the API (if server running) or DB
-# API: curl -s http://localhost:8000/api/flights/{flight_id}/packs/latest
-# Fields: model_init_times.gfs, grib_init_times.gfs (unix timestamps)
-
-om_gfs_init = 1772193600   # from model_init_times.gfs
-grib_gfs_init = 1772193600  # from grib_init_times.gfs (may be absent)
-
-print("Open-Meteo GFS init:", datetime.fromtimestamp(om_gfs_init, tz=timezone.utc))
-print("GRIB GFS init:     ", datetime.fromtimestamp(grib_gfs_init, tz=timezone.utc))
-# Compare with GRAMET's "GFS RefTime" from the PDF bottom line
-```
-
-**If any of the three times differ, STOP — the comparison is not valid.** Different GFS runs
-produce different forecasts, so mismatched runs would lead to misleading false negatives
-(real discrepancies that aren't bugs). Note this to the user and skip the comparison.
-
-### Read the GRAMET
-
-Use the `Read` tool on `{pack_dir}/gramet.pdf` (with `pages: "1"`). The PDF renders as
-a visual cross-section showing:
-- **White cloud masses** — cloud coverage by altitude along route
-- **Cyan/turquoise dashed contours** — icing zones
-- **Brown dashed isotherms** — temperature lines (0°C, -10°C, -20°C, etc.)
-- **Magenta horizontal line** — freezing level
-- **Grey/brown terrain profile** — along the bottom
-- **Wind barbs** — at regular grid points
-- **Waypoint labels** — along the x-axis with distance (nm) and time (UTC)
-
-Note approximate FL/altitude positions from the y-axis (left side shows FL, right shows hPa).
-
-### Extract our computed data
+Read the PDF with the `Read` tool (`pages: "1"`), then extract our side:
 
 ```python
-from pathlib import Path
-from weatherbrief.tasks.artifacts import load_route_analyses
-
-pack_dir = Path("data/packs/{user_id}/{flight_id}/{timestamp}")
 manifest = load_route_analyses(pack_dir)
 
 last_dist = -40
@@ -404,109 +251,31 @@ for rpa in manifest.analyses:
     last_dist = dist_nm
 
     print(f"=== {name} @ {dist_nm:.0f} nm ===")
-
     for model, s in rpa.sounding.items():
         if model != "gfs":
             continue
-        clouds = [(c.base_ft, c.top_ft) for c in s.cloud_layers]
+        print(f"  Clouds: {[(c.base_ft, c.top_ft) for c in s.cloud_layers]}")
         icing = [(i.base_ft, i.top_ft, i.risk, i.icing_type) for i in s.icing_zones]
-        conv = s.convective
-        nwp = s.nwp_cloud_diagnostics
-
-        print(f"  Clouds: {clouds}")
         if icing:
             print(f"  Icing:  {icing}")
-        if conv and "NONE" not in str(conv.risk_level):
-            print(f"  Conv: risk={conv.risk_level}")
-        if nwp:
-            for ln in ['low', 'mid', 'high']:
-                layer = getattr(nwp, ln, None)
+        if s.convective and "NONE" not in str(s.convective.risk_level):
+            print(f"  Conv: risk={s.convective.risk_level}")
+        if s.nwp_cloud_diagnostics:
+            for ln in ("low", "mid", "high"):
+                layer = getattr(s.nwp_cloud_diagnostics, ln, None)
                 if layer and layer.cover_pct and layer.cover_pct > 5:
-                    base_fl = round(layer.base_ft / 100)
-                    top_fl = round(layer.top_ft / 100)
-                    print(f"  NWP-{ln}: {layer.cover_pct:.0f}% FL{base_fl}-FL{top_fl}")
+                    print(f"  NWP-{ln}: {layer.cover_pct:.0f}% "
+                          f"FL{round(layer.base_ft/100)}-FL{round(layer.top_ft/100)}")
         if s.indices and s.indices.freezing_level_ft:
             fz = s.indices.freezing_level_ft
             print(f"  Fz lvl: FL{round(fz/100)} ({fz:.0f} ft)")
     print()
 ```
 
-### Compare
-
-Produce a side-by-side comparison table covering these areas:
-
-| Area | GRAMET (visual) | Our analysis |
-|------|----------------|--------------|
-| **Freezing level** | Read from magenta line / 0°C isotherm | `indices.freezing_level_ft` |
-| **Cloud layers** | White masses — note approximate FL bands at key distances | `cloud_layers` base/top + `nwp_cloud_diagnostics` low/mid/high |
-| **Icing** | Cyan contour positions | `icing_zones` base/top/risk |
-| **Convection** | CB symbols or convective markers | `convective.risk_level` |
-
-Precision expectation: both use the same GFS data, so broad patterns should match.
-Differences of ~500-1000ft in altitude or ~20nm along route are normal given visual
-reading precision. Flag significant discrepancies (e.g., our analysis misses a cloud
-layer the GRAMET clearly shows, or icing zones at very different altitudes).
-
-## Appendix — API endpoints (quick checks only)
-
-For quick inspection when the server is running. Not needed for the main debugging workflow above.
-Pattern: `/api/flights/{flight_id}/packs/{timestamp}/{resource}` (use `latest` for most recent pack).
-
-| Suffix | Returns |
-|--------|---------|
-| `/snapshot` | Raw forecast JSON |
-| `/route-analyses` | RouteAnalysesManifest |
-| `/advisories` | RouteAdvisoriesManifest |
-| `/advisories/recalculate` (POST) | Re-evaluate with custom params |
-| `/elevation` | ElevationProfile |
-| `/skewt/{icao}/{model}` | Skew-T PNG |
-| `/digest/json` | Structured LLM digest |
-
-## Available advisory evaluators (13 total)
-
-| ID | Category | Description |
-|----|----------|-------------|
-| `fiki_icing` | Icing | FIKI-capable layer thickness |
-| `icing_escape` | Icing | Escape viability (non-FIKI) |
-| `cloud_top` | Icing | Cloud top vs ceiling |
-| `turbulence` | Turbulence | CAT + vertical motion |
-| `mountain_wind` | Turbulence | Orographic/rotor risk |
-| `ifr_feasibility` | Feasibility | Composite IFR go/no-go |
-| `vfr_feasibility` | Feasibility | Composite VFR go/no-go |
-| `airport_wind` | Airport | Crosswind + gust |
-| `flight_category` | Airport | Ceiling/visibility |
-| `convective` | Convective | Convective risk along route |
-| `vmc_cruise` | Convective | Cloud coverage at cruise |
-| `freezing_level` | Other | Freezing level vs terrain |
-| `model_agreement` | Other | Cross-model divergence |
-
-## Common pitfalls (field names & nullability)
-
-The first one below silently destroys data rather than erroring — the rest cause
-runtime errors:
-
-- **`run_advisories_from_pack` writes to the pack unless you pass `persist=False`** (see
-  step 5B). With `enabled_ids` it replaces the saved manifest with only those evaluators.
-  Investigation must never mutate the artifact it is investigating.
-- **`AdvisoryResult` is not the manifest** — use `result.manifest.advisories`, not
-  `result.advisories`.
-
-These are the mistakes most likely to cause runtime errors during investigation:
-
-- **`PressureLevelData.wind_speed_kt`** — NOT `wind_speed_kts` (no trailing 's')
-- **`PressureLevelData.vertical_velocity_pa_s`** — NOT `omega_pa_s`
-- **`HourlyForecast.pressure_levels`** — NOT `levels`
-- **`ForecastSnapshot.forecasts`** — flat `list[WaypointForecast]`, NOT `.waypoints[i].forecasts[model]`. Each `WaypointForecast` has `.waypoint`, `.model` (enum, use `.value` for string), `.hourly`
-- **`RouteAnalysesManifest`** has no `flight_ceiling_ft` field (only `cruise_altitude_ft`)
-- **Advisory JSON** — `route_advisories.json` top-level is a dict with `advisories` (list), each item keyed by `advisory_id` (NOT `evaluator_id`)
-- **Many numeric fields can be `None`** — always guard before formatting: `f"{val:.1f}" if val is not None else "N/A"`. Common None fields: `max_w_fpm`, `max_omega_pa_s`, `richardson_number`, `bv_freq_squared_per_s2`, `w_fpm`, `omega_pa_s` on DerivedLevel
-- **`model` on WaypointForecast is an enum** (`ModelSource`) — use `.value` for string comparison (e.g., `fc.model.value == "gfs"`)
-- **`rpa.sounding`** (not `.soundings`) — dict mapping model name (str) to SoundingAnalysis
+Then produce a side-by-side comparison table using the areas and tolerances in the reference.
 
 ## Tips
 
-- Use `python -m json.tool` or `jq` to pretty-print API responses
-- The `forecasts.json` file can be very large (10+ MB) — use `jq` to extract specific parts
-- For frontend visualization debugging, the cross-section renderer is at `web/ts/visualization/cross-section/renderer.ts` and layer definitions at `web/ts/visualization/cross-section/layers.ts`
-- The data extraction pipeline (JSON → canvas) is in `web/ts/visualization/data-extract.ts`
-- Route map rendering (colored segments) is in `web/ts/visualization/route-map/renderer.ts`
+- `python -m json.tool` or `jq` to pretty-print API responses.
+- `forecasts.json` can be 10+ MB — use `jq` to extract specific parts rather than loading it.
+- Frontend rendering entry points are listed at the end of the reference.
