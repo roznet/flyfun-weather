@@ -209,20 +209,42 @@ def evaluate_all(
     user_params = user_params or {}
     results: list[RouteAdvisoryResult] = []
 
-    # Publish the whole override map on the context so a composite evaluator can
-    # grade a sub-axis with the *owning* advisory's parameters rather than its
-    # own duplicate thresholds (meteorology-decisions §22). ``RouteContext`` is
+    entries = {aid: cls.catalog_entry() for aid, cls in _EVALUATORS.items()}
+
+    def _is_enabled(adv_id: str) -> bool:
+        """Enabled set when given, else the advisory's own default_enabled."""
+        if enabled_ids is not None:
+            return adv_id in enabled_ids
+        entry = entries.get(adv_id)
+        return entry is not None and entry.default_enabled
+
+    # Publish the override map on the context so a composite evaluator can grade
+    # a sub-axis with the *owning* advisory's parameters rather than its own
+    # duplicate thresholds (meteorology-decisions §22). ``RouteContext`` is
     # frozen, so this is a copy — one per evaluate_all call, not per advisory.
-    ctx = replace(ctx, advisory_params=user_params)
+    #
+    # Only the params of advisories actually IN PLAY are published (§22 review).
+    # A profile can carry saved params for a *disabled* advisory: ``enabled`` and
+    # ``params`` are independent maps in the profile (`_load_advisory_profile`
+    # reads `adv_config["enabled"]` and `adv_config["params"]` separately, and
+    # the #405 sparsify sweep never touches `enabled`). The settings page renders
+    # a disabled advisory's inputs greyed out (`renderParamInput`'s `disabled`
+    # attribute) — every affordance tells the pilot those values are inert. If
+    # they silently governed a composite's grade anyway, we would have rebuilt
+    # the exact divergence §22 exists to remove, only now between *what the pilot
+    # sees* and *what the pilot configured*. Filtering here is also what makes
+    # the resolve_* helpers' "disabled ⇒ catalog defaults" contract true rather
+    # than aspirational.
+    ctx = replace(ctx, advisory_params={
+        aid: p for aid, p in user_params.items() if _is_enabled(aid)
+    })
 
     for adv_id, evaluator_cls in _EVALUATORS.items():
-        entry = evaluator_cls.catalog_entry()
+        entry = entries[adv_id]
 
-        # Filter by enabled set or default_enabled
-        if enabled_ids is not None:
-            if adv_id not in enabled_ids:
-                continue
-        elif not entry.default_enabled:
+        # Filter by enabled set or default_enabled — same rule as the publish
+        # filter above, deliberately shared so the two cannot drift.
+        if not _is_enabled(adv_id):
             continue
 
         # Merge user params with defaults

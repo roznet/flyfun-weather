@@ -335,3 +335,70 @@ def test_embedded_escalation_is_named_in_the_detail():
     )
     detail = next(m for m in res.per_model if m.model == "gfs").detail
     assert "embedded in cloud" in detail
+
+
+# ---------------------------------------------------------------------------
+# Params of a DISABLED advisory must not govern a composite (§22 review).
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_convective_params_do_not_reach_the_composite():
+    """A profile can hold params for an advisory the pilot switched off.
+
+    ``enabled`` and ``params`` are independent maps in the profile, and the
+    settings page renders a disabled advisory's inputs greyed out — so those
+    values read as inert to the pilot. If ``evaluate_all`` published them anyway,
+    IFR Feasibility would be silently graded against thresholds the UI says have
+    no effect: the §22 divergence rebuilt between what the pilot sees and what
+    the pilot configured.
+
+    Here ``min_risk: 4`` (HIGH) would green out a route of MODERATE cells. With
+    `convective` DISABLED that tuning must be ignored and the catalog defaults
+    apply, so IFR still grades the convection.
+    """
+    from weatherbrief.analysis.advisories import evaluate_all
+
+    ctx = _ctx([_nwp_cell(ConvectiveRisk.MODERATE)] * 6)
+    user_params = {"convective": {**CONVECTIVE_PARAM_DEFAULTS, "min_risk": 4}}
+
+    # convective enabled → its tuning applies to both cards.
+    on = evaluate_all(
+        ctx, enabled_ids={"convective", "ifr_feasibility"}, user_params=user_params,
+    )
+    ifr_on = next(r for r in on if r.advisory_id == "ifr_feasibility")
+    assert ifr_on.per_model[0].status == AdvisoryStatus.GREEN
+
+    # convective disabled → the stale tuning is NOT published; defaults grade it.
+    off = evaluate_all(
+        ctx, enabled_ids={"ifr_feasibility"}, user_params=user_params,
+    )
+    ifr_off = next(r for r in off if r.advisory_id == "ifr_feasibility")
+    assert ifr_off.per_model[0].status == AdvisoryStatus.RED
+
+
+def test_enabled_advisory_params_still_reach_the_composite():
+    """The filter must not throw the baby out: enabled ⇒ tuning still applies.
+
+    4 MODERATE cells in 6 points = 67 % coverage. Under the default 50 % red
+    threshold that is RED; raising the threshold to 95 % drops it to AMBER. Both
+    cards must move together — which also proves the tuned value (not the
+    catalog default) reached the composite.
+    """
+    from weatherbrief.analysis.advisories import evaluate_all
+
+    soundings = [_nwp_cell(ConvectiveRisk.MODERATE)] * 4 + [_quiet()] * 2
+    ids = {"convective", "ifr_feasibility"}
+
+    baseline = evaluate_all(_ctx(soundings), enabled_ids=ids, user_params={})
+    assert next(
+        r for r in baseline if r.advisory_id == "convective"
+    ).per_model[0].status == AdvisoryStatus.RED
+
+    tuned = evaluate_all(
+        _ctx(soundings), enabled_ids=ids,
+        user_params={"convective": {**CONVECTIVE_PARAM_DEFAULTS, "affected_pct_red": 95}},
+    )
+    conv = next(r for r in tuned if r.advisory_id == "convective")
+    ifr = next(r for r in tuned if r.advisory_id == "ifr_feasibility")
+    assert conv.per_model[0].status == AdvisoryStatus.AMBER
+    assert ifr.per_model[0].status == AdvisoryStatus.AMBER
