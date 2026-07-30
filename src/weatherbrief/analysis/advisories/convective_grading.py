@@ -26,7 +26,7 @@ module returns the numbers and the colour, never a rendered sentence.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
@@ -98,10 +98,6 @@ class ConvectiveModelGrade:
     region_cells: list[tuple[float, FlaggedCell | None]]
     peak_dist_nm: float | None
     cross_check: str | None
-    # point_index → graded risk, for the points that survived every filter.
-    # Lets a sibling evaluator (convective_character) classify over exactly the
-    # set of cells this grading recognised, instead of re-reading the raw track.
-    graded_risk_by_point: dict[int, ConvectiveRisk] = field(default_factory=dict)
 
 
 def resolve_convective_params(ctx: RouteContext) -> dict[str, float]:
@@ -198,7 +194,6 @@ def grade_convective_model(
     max_precip_mm_h: float | None = None
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
     region_cells: list[tuple[float, FlaggedCell | None]] = []
-    graded_risk_by_point: dict[int, ConvectiveRisk] = {}
     # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
     peak_key: tuple[int, float] | None = None
     peak_dist: float | None = None
@@ -307,7 +302,6 @@ def grade_convective_model(
             affected_mod += 1
         if risk_idx > RISK_ORDER.index(worst_risk):
             worst_risk = graded_risk
-        graded_risk_by_point[rpa.point_index] = graded_risk
 
         is_high = graded_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
         if is_high:
@@ -447,5 +441,4 @@ def grade_convective_model(
         cross_check=_peak_cross_check(
             status, peak_has_both, peak_nwp_risk, peak_dd_risk
         ),
-        graded_risk_by_point=graded_risk_by_point,
     )

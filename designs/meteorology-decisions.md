@@ -2667,6 +2667,19 @@ overrides and the catalog defaults apply — a composite that depends on convect
 must still grade it, and inheriting "disabled" as "no convection" would be the
 #391 false-GREEN.
 
+**`evaluate_all` publishes only the params of advisories actually in play**, and
+that filter is what makes the "disabled ⇒ catalog defaults" contract true rather
+than aspirational. A profile can carry saved params for a disabled advisory:
+`enabled` and `params` are independent maps (`_load_advisory_profile` reads
+`adv_config["enabled"]` and `adv_config["params"]` separately, and the #405
+sparsify sweep never touches `enabled`). The settings page renders a disabled
+advisory's inputs greyed out (`renderParamInput`'s `disabled` attribute), so
+every affordance tells the pilot those values are inert — letting them govern a
+composite's grade anyway would rebuild the exact divergence this decision
+removes, only now between *what the pilot sees* and *what the pilot configured*.
+The publish filter and the evaluate loop share one `_is_enabled` helper so they
+cannot drift.
+
 **The one permitted deviation is abstention.** The composite's #391 coverage
 guard may turn a would-be-GREEN convective axis into UNAVAILABLE on thin
 en-route sounding coverage. UNAVAILABLE contributes nothing to `worst`, so the
@@ -2752,7 +2765,7 @@ that promise, not addressed here.
 - `src/weatherbrief/analysis/advisories/convective_grading.py` — **new**;
   `grade_convective_model`, `resolve_convective_params`,
   `CONVECTIVE_PARAM_DEFAULTS`, `ConvectiveModelGrade`. Holds the §18 grading
-  verbatim. `graded_risk_by_point` is exposed for the pending character work.
+  verbatim.
 - `src/weatherbrief/analysis/advisories/convective.py` — now a thin wrapper:
   locale wording + cross-model aggregate only.
 - `src/weatherbrief/analysis/advisories/ifr_feasibility.py` — convective axis
@@ -2761,7 +2774,8 @@ that promise, not addressed here.
 - `src/weatherbrief/analysis/advisories/__init__.py` — `RouteContext
   .advisory_params`.
 - `src/weatherbrief/analysis/advisories/registry.py` — `evaluate_all` publishes
-  the override map via `dataclasses.replace`.
+  the override map via `dataclasses.replace`, filtered to enabled advisories by
+  the shared `_is_enabled` helper.
 - `src/weatherbrief/analysis/advisories/convective_character.py` —
   `CHARACTER_PARAM_DEFAULTS`, `resolve_character_params`,
   `build_character_points`, `classify_route_character` (extracted from the
