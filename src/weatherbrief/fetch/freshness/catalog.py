@@ -56,7 +56,7 @@ class SourceCatalogEntry:
     published_at: datetime | None
     next_expected: datetime | None
     horizon_end: datetime | None
-    marker_health: str  # "ok" | "suspect" | "unknown"
+    marker_health: str  # "ok" | "suspect" | "unobserved" | "unknown"
 
 
 def _per_cycle_hours(
@@ -74,13 +74,25 @@ def _per_cycle_hours(
 
 
 def _marker_health(marker: Marker | None, loop_interval_s: float) -> str:
-    """Return ``"ok" | "suspect" | "unknown"`` for the marker."""
+    """Return ``"ok" | "suspect" | "unobserved" | "unknown"`` for the marker.
+
+    ``"unobserved"`` separates "the loop is running and has confirmed this
+    source" from "the loop is running and has never once reached it" — which
+    :attr:`Marker.is_stale` cannot distinguish, because it measures time
+    since the last *check attempt* and the loop bumps that on every tick.
+    Without it a source whose dynamic check has always failed reports
+    ``"ok"`` while serving nothing but registry guesses: ``gem:openmeteo``
+    did exactly that in production, showing a 36 h-stale ``latest_init`` and
+    a null ``published_at`` under a green dot.
+    """
     from datetime import timedelta
 
     if marker is None:
         return "unknown"
     if marker.is_stale(timedelta(seconds=loop_interval_s)):
         return "suspect"
+    if marker.last_probe_at is None:
+        return "unobserved"
     return "ok"
 
 

@@ -40,7 +40,18 @@ class Marker:
         model: Logical model name, e.g. ``"ecmwf"``.
         init: Latest observed init time (aware UTC).
         next_expected: Wallclock time at which the next run is expected.
-        last_check: When the dynamic check last ran (None until first check).
+        last_check: When the loop last touched this marker — bumped on every
+            tick, including the no-I/O "not yet due" path.  A heartbeat, not
+            evidence that we ever reached the provider.
+        last_probe_at: When a dynamic check last *succeeded* for this source
+            (i.e. ``check_source`` returned an Observation).  ``None`` means
+            every value on this marker still comes from the registry
+            bootstrap — nothing has been confirmed against the provider.
+            Two consumers: the catalog reports ``marker_health="unobserved"``
+            rather than the misleading ``"ok"``, and the freshness loop uses
+            the pre-advance value as ``last_absent_at`` in the delivery log —
+            the last time we looked and did *not* see the run that just
+            landed, which brackets its arrival from below.
         slip_count: Number of consecutive slip retries since last advance.
         published_at: Provider-reported wallclock when the run became
             available (only Open-Meteo exposes this via ``meta.json``'s
@@ -56,6 +67,7 @@ class Marker:
     init: datetime
     next_expected: datetime
     last_check: datetime | None = None
+    last_probe_at: datetime | None = None
     slip_count: int = 0
     published_at: datetime | None = None
     # Latest hourly timestamp the provider is actually serving for this
@@ -188,6 +200,11 @@ class MarkerStore:
           expected delivery and reset slip.
         - Else: just update ``last_check`` (early/null check).
 
+        Every branch stamps ``last_probe_at``: reaching this method at all
+        means ``check_source`` came back with an Observation, whatever it
+        said.  (:meth:`mark_check` deliberately does *not* — a check that
+        failed is not evidence about the provider.)
+
         State transitions go through a single atomic ``dict.__setitem__`` of
         a new ``Marker`` instance (with a copied observations deque).  The
         ``asyncio.Lock`` only serialises coroutines — :meth:`get_sync` is
@@ -210,6 +227,7 @@ class MarkerStore:
                     source=source, model=model,
                     init=observed_init, next_expected=next_exp,
                     last_check=now,
+                    last_probe_at=now,
                     published_at=published_at,
                     data_end=data_end,
                     observations=new_observations,
@@ -228,6 +246,7 @@ class MarkerStore:
                     next_expected=registry.next_run_after(source, observed_init),
                     slip_count=0,
                     last_check=now,
+                    last_probe_at=now,
                     published_at=published_at,
                     data_end=data_end,
                     observations=new_observations,
@@ -303,6 +322,7 @@ class MarkerStore:
                 next_expected=new_next_expected,
                 slip_count=new_slip_count,
                 last_check=now,
+                last_probe_at=now,
                 published_at=new_published_at,
                 data_end=new_data_end,
             )

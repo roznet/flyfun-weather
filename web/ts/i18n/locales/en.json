@@ -193,6 +193,7 @@
   "dataSources.role.primary": "primary",
   "dataSources.health.ok": "Marker fresh",
   "dataSources.health.suspect": "Heartbeat suspect — last check is stale",
+  "dataSources.health.unobserved": "Never confirmed — schedule shown is the configured expectation, not an observation",
   "dataSources.health.unknown": "Marker not yet populated",
   "dataSources.view.label": "Data sources view",
   "dataSources.view.timeline": "Timeline",

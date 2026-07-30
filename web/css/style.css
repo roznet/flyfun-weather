@@ -5280,6 +5280,13 @@ label {
 .data-source-health-ok { background: var(--green); }
 .data-source-health-suspect { background: var(--amber); }
 .data-source-health-unknown { background: var(--text-muted); opacity: 0.5; }
+/* Hollow: the loop is alive but has never confirmed this source, so every
+   value in the row is a registry guess. Distinct from the filled amber of a
+   stale heartbeat — nothing is late here, there is simply nothing behind it. */
+.data-source-health-unobserved {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--amber);
+}
 
 .data-sources-footer {
   margin-top: 0.4rem;

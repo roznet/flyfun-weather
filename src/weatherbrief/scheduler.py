@@ -20,6 +20,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1532,9 +1533,19 @@ async def _run_freshness_check_once() -> None:
       event loop) until the loop got around to checking them.
     - Otherwise, run the dynamic ``check_source`` (offloaded to a thread)
       and either advance the marker or record a slip.
+
+    An advance is also the moment we learn when a run actually landed, so it
+    is where the durable ``model_delivery_log`` row is written (issue #515).
+    The scheduler owns that write rather than ``MarkerStore.update``: the
+    marker modules are deliberately I/O-free, and everything the row needs is
+    already in hand here — the pre-update marker snapshot (for
+    ``last_absent_at``), the registry expectation, and the instrument the
+    dispatch used.
     """
     from weatherbrief.fetch.freshness.markers import get_store
+    from weatherbrief.fetch.freshness.registry import expected_delivery_for_init
     from weatherbrief.fetch.freshness.sources import all_tracked_sources, check_source
+    from weatherbrief.storage.model_delivery import record_delivery
 
     store = get_store()
     now = datetime.now(timezone.utc)
@@ -1549,11 +1560,32 @@ async def _run_freshness_check_once() -> None:
         if observed is None:
             await store.mark_check(source, model, now=now)
             continue
+        # Snapshot before ``update`` overwrites it: the last probe that came
+        # back *without* this run is the lower bound on when it arrived.
+        last_absent_at = marker.last_probe_at
+        advanced = observed.init > marker.init
         await store.update(
             source, model, observed.init, now=now,
             published_at=observed.published_at,
             data_end=observed.data_end,
         )
+        if advanced:
+            # Expectation is frozen here, at observation time — recomputing it
+            # later against recalibrated constants would erase the drift this
+            # table exists to measure.
+            await asyncio.to_thread(
+                partial(
+                    record_delivery,
+                    source=source,
+                    model=model,
+                    cycle_init=observed.init,
+                    expected_at=expected_delivery_for_init(source, observed.init),
+                    published_at=observed.published_at,
+                    detected_at=now,
+                    last_absent_at=last_absent_at,
+                    observed_via=observed.observed_via,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
