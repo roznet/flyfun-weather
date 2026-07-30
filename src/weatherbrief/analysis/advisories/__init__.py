@@ -68,6 +68,16 @@ class RouteContext:
     # the "airport has no approach" signal: that is a present object with an
     # empty ``approaches`` list.
     arrival_approaches: AirportApproaches | None = None
+    # Every advisory's user parameter overrides, keyed by advisory id — threaded
+    # in by ``evaluate_all`` so a *composite* evaluator can grade a sub-axis with
+    # the owning advisory's tuning instead of duplicating its thresholds. Today
+    # only ``ifr_feasibility`` reads it (for ``convective``); the alternative was
+    # a second copy of the convective formula, which is exactly how the two
+    # drifted apart in the first place (meteorology-decisions §22). Empty when an
+    # evaluator is invoked outside ``evaluate_all`` — consumers must resolve
+    # through a helper that falls back to catalog defaults (see
+    # ``convective_grading.resolve_convective_params``).
+    advisory_params: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @runtime_checkable

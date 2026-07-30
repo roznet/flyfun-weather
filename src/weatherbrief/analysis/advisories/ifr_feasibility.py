@@ -20,6 +20,15 @@ from weatherbrief.analysis.advisories._helpers import (
     ribbon_peak,
     worst_severity,
 )
+from weatherbrief.analysis.advisories.convective_character import (
+    classify_route_character,
+    resolve_character_params,
+)
+from weatherbrief.analysis.advisories.convective_grading import (
+    ConvectiveModelGrade,
+    grade_convective_model,
+    resolve_convective_params,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -27,23 +36,12 @@ from weatherbrief.models import (
     AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
-    ConvectiveRisk,
+    ConvectiveCharacter,
     HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import FlightCategory
-
-# Convective risk levels ordered by severity
-_CONVECTIVE_SEVERITY = [
-    ConvectiveRisk.NONE,
-    ConvectiveRisk.MARGINAL,
-    ConvectiveRisk.LOW,
-    ConvectiveRisk.MODERATE,
-    ConvectiveRisk.HIGH,
-    ConvectiveRisk.EXTREME,
-]
-_CONVECTIVE_SEVERITY_INDEX = {r: i for i, r in enumerate(_CONVECTIVE_SEVERITY)}
 
 # Default icing-exposure thresholds (route % with icing near cruise altitude).
 # Single source of truth shared by catalog_entry() parameter defaults and the
@@ -125,54 +123,63 @@ def _check_airport_ifr(
 def _check_enroute_hazards(
     ctx: RouteContext,
     model: str,
-    convective_min_risk_idx: int,
+    conv_grade: ConvectiveModelGrade,
     cruise_altitude_ft: float,
     icing_altitude_buffer_ft: float,
 ) -> tuple[
-    int, int, int, int, int, ConvectiveRisk,
+    int, int, int, int,
     list[tuple[float, HighlightSeverity]],
     list[tuple[float, FlaggedCell | None]],
-    list[tuple[float, FlaggedCell | None]],
 ]:
-    """Check en-route icing and convective hazards in a single pass.
+    """Check en-route icing, and merge it with the already-graded convection.
 
-    Uses the same clearance-based icing check as the FIKI advisory:
-    a point counts as "icing affected" only when an icing zone is within
+    Icing is assessed here (it is this composite's own axis, with its own
+    altitude buffer). Convection is **not** re-derived: ``conv_grade`` comes from
+    the shared ``grade_convective_model`` — the identical call the ``convective``
+    advisory grades with — so the two advisories cannot disagree about the same
+    sounding (meteorology-decisions §22). This function only merges the two axes
+    into the composite's ribbon and counts.
+
+    Uses the same clearance-based icing check as the FIKI advisory: a point
+    counts as "icing affected" only when an icing zone is within
     *icing_altitude_buffer_ft* of cruise altitude.
 
-    Returns (total, icing_total, affected, icing_count, conv_count,
-    worst_conv_risk, ribbon_points, icing_cells, conv_cells).
-    - total: points with a sounding (convective denominator)
-    - icing_total: points where the active icing method could run (icing
+    Returns (icing_total, affected, icing_count, conv_count, ribbon_points,
+    icing_cells).
+    - icing_total: points where the active icing method could run (the icing
       denominator) — a point on Ogimet-NWP with no native cloud envelope cannot
       assess icing and is excluded so absent icing is not graded clear (#391)
     - affected: number of unique points with icing OR convective risk
     - icing_count / conv_count: individual counts for detail messages
-    - ribbon_points / icing_cells / conv_cells: per-point highlight geometry
-      (#375) — the ribbon is the worst of the two axes at each x (icing amber,
-      convective amber or red for HIGH/EXTREME); the two cell lists carry the
-      ``icing_band`` and ``tower``/``tower_unresolved`` cutouts (multi-kind, so
-      one list each).
+    - ribbon_points: per-point worst of the two axes (#375). The convective
+      cutouts come straight off ``conv_grade.region_cells``, which is
+      index-aligned with ``ctx.analyses``, so the geometry the composite draws is
+      literally the geometry the convective advisory draws.
     """
-    total = 0
     icing_total = 0
     affected = 0
     icing_count = 0
     conv_count = 0
-    worst_conv_risk = ConvectiveRisk.NONE
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
     icing_cells: list[tuple[float, FlaggedCell | None]] = []
-    conv_cells: list[tuple[float, FlaggedCell | None]] = []
 
-    for rpa in ctx.analyses:
+    for idx, rpa in enumerate(ctx.analyses):
         dist = rpa.distance_from_origin_nm or 0.0
+        # Index-aligned with the grade (both walk ctx.analyses in order and
+        # always append exactly one entry per point).
+        conv_cell = conv_grade.region_cells[idx][1]
+        conv_sev = (
+            conv_cell.severity if conv_cell is not None else HighlightSeverity.GREEN
+        )
+        has_convective = conv_cell is not None
+        if has_convective:
+            conv_count += 1
+
         sounding = rpa.sounding.get(model)
         if sounding is None:
             ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
             icing_cells.append((dist, None))
-            conv_cells.append((dist, None))
             continue
-        total += 1
 
         # The active icing method may be unable to run here (Ogimet-NWP with no
         # native cloud envelope): then its empty icing_zones is absent data, not
@@ -191,21 +198,6 @@ def _check_enroute_hazards(
             and min_icing_clearance(icing_zones, cruise_altitude_ft)
             < icing_altitude_buffer_ft
         )
-        has_convective = False
-        conv_sev = HighlightSeverity.GREEN
-
-        conv = sounding.convective
-        if conv is not None:
-            risk_idx = _CONVECTIVE_SEVERITY_INDEX.get(conv.risk_level, 0)
-            if risk_idx >= convective_min_risk_idx:
-                has_convective = True
-                if risk_idx > _CONVECTIVE_SEVERITY_INDEX.get(worst_conv_risk, 0):
-                    worst_conv_risk = conv.risk_level
-                conv_sev = (
-                    HighlightSeverity.RED
-                    if conv.risk_level in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
-                    else HighlightSeverity.AMBER
-                )
 
         if has_icing:
             icing_count += 1
@@ -221,40 +213,15 @@ def _check_enroute_hazards(
                 base_ft=int(min(z.base_ft for z in band)) if band else None,
                 top_ft=int(max(z.top_ft for z in band)) if band else None,
                 metric_id="icing",
-                # Icing is the axis this composite *badges* (see primary_method_id
-                # below): it is the only one gated against the grade. The
-                # convective cells carry their own method too — a region's
-                # provenance is about that region, not about which axis won.
+                # Icing is the axis this composite *badges* (see
+                # primary_method_id below): it is the only one gated against the
+                # grade. The convective cells carry their own method too — a
+                # region's provenance is about that region, not about which axis
+                # won.
                 method_id=sounding.icing_method_effective,
             )))
         else:
             icing_cells.append((dist, None))
-
-        if has_convective:
-            conv_count += 1
-            # Same geometry conventions as the convective emitter (#373): a
-            # bounded tower only when BOTH base and top resolve, else a
-            # full-column ghost.
-            if conv.base_ft is not None and conv.top_ft is not None:
-                conv_cells.append((dist, FlaggedCell(
-                    kind="tower",
-                    severity=conv_sev,
-                    base_ft=int(conv.base_ft),
-                    top_ft=int(conv.top_ft),
-                    metric_id="convective_risk",
-                    method_id=sounding.convective_method_effective,
-                )))
-            else:
-                conv_cells.append((dist, FlaggedCell(
-                    kind="tower_unresolved",
-                    severity=conv_sev,
-                    base_ft=None,
-                    top_ft=None,
-                    metric_id="convective_risk",
-                    method_id=sounding.convective_method_effective,
-                )))
-        else:
-            conv_cells.append((dist, None))
 
         if has_icing or has_convective:
             affected += 1
@@ -267,10 +234,7 @@ def _check_enroute_hazards(
             icing_sev = HighlightSeverity.GREEN
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
-    return (
-        total, icing_total, affected, icing_count, conv_count, worst_conv_risk,
-        ribbon_points, icing_cells, conv_cells,
-    )
+    return (icing_total, affected, icing_count, conv_count, ribbon_points, icing_cells)
 
 
 @register
@@ -294,8 +258,9 @@ class IFRFeasibilityEvaluator:
                 "conditions (LIFR triggers amber, below-minimums triggers red), "
                 "en-route icing exposure percentage, and convective activity. "
                 "IFR or better at airports is GREEN. Icing exceeding the "
-                "threshold percentage or significant convective activity "
-                "triggers RED."
+                "threshold percentage triggers RED. The convective axis is the "
+                "Convective Activity advisory's own grade — tune it there; this "
+                "composite never grades convection differently."
             ),
             category="flight_rules",
             timing_class="scan",
@@ -361,30 +326,6 @@ class IFRFeasibilityEvaluator:
                     max=5000,
                     step=500,
                 ),
-                AdvisoryParameterDef(
-                    key="convective_min_risk",
-                    label="Convective min",
-                    description=(
-                        "Minimum convective risk to flag "
-                        "(2=LOW, 3=MODERATE, 4=HIGH)"
-                    ),
-                    type="number",
-                    default=3,
-                    min=1,
-                    max=5,
-                    step=1,
-                ),
-                AdvisoryParameterDef(
-                    key="convective_pct_red",
-                    label="Convective % (red)",
-                    description="Route percentage with convective activity for red",
-                    type="percent",
-                    unit="%",
-                    default=10,
-                    min=5,
-                    max=50,
-                    step=5,
-                ),
             ],
         )
 
@@ -395,8 +336,14 @@ class IFRFeasibilityEvaluator:
         icing_pct_amber = params.get("icing_pct_amber", _ICING_PCT_AMBER_DEFAULT)
         icing_pct_red = params.get("icing_pct_red", _ICING_PCT_RED_DEFAULT)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
-        convective_min_risk = int(params.get("convective_min_risk", 3))
-        convective_pct_red = params.get("convective_pct_red", 10)
+        # The convective axis is graded by the Convective Activity advisory's
+        # own parameters, not by a second set here (§22). Resolved once per
+        # evaluation: the user's overrides for ``convective`` if it is enabled,
+        # catalog defaults otherwise.
+        conv_params = resolve_convective_params(ctx)
+        # Character is read (not re-derived) for the EMBEDDED escalation below,
+        # through the character advisory's own parameters — same §22 rule.
+        char_params = resolve_character_params(ctx)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -408,13 +355,19 @@ class IFRFeasibilityEvaluator:
                 )
             )
 
-            # 2. En-route hazards (single pass — no double-counting), including
-            # the per-point highlight geometry (#375).
+            # 2. Convection — the SAME call the convective advisory grades with,
+            # so this composite's convective axis is that advisory's per-model
+            # status by construction rather than by coincidence (§22).
+            conv_grade = grade_convective_model(ctx, model, conv_params)
+            total = conv_grade.total
+
+            # 3. En-route icing, merged with the graded convection into the
+            # composite's per-point highlight geometry (#375).
             (
-                total, icing_total, affected, icing_count, conv_count, worst_conv_risk,
-                ribbon_points, icing_cells, conv_cells,
+                icing_total, affected, icing_count, conv_count,
+                ribbon_points, icing_cells,
             ) = _check_enroute_hazards(
-                ctx, model, convective_min_risk,
+                ctx, model, conv_grade,
                 ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
             )
 
@@ -431,7 +384,7 @@ class IFRFeasibilityEvaluator:
                 ))
                 continue
 
-            # 3. Determine icing status
+            # 4. Determine icing status
             icing_status = AdvisoryStatus.GREEN
             icing_detail = ""
             if total > 0 and icing_total == 0:
@@ -458,32 +411,59 @@ class IFRFeasibilityEvaluator:
             if icing_status == AdvisoryStatus.GREEN and below_coverage(icing_total, len(ctx.analyses)):
                 icing_status = AdvisoryStatus.UNAVAILABLE
 
-            # 4. Determine convective status
-            conv_status = AdvisoryStatus.GREEN
+            # 5. Convective status — taken verbatim from the shared grade. No
+            # thresholds, no floor and no altitude filter of its own: whatever
+            # the Convective Activity advisory says for this model is what this
+            # composite's convective axis says (§22).
+            conv_status = conv_grade.status
+
+            # EMBEDDED escalation (§22) — the ONE place this composite is
+            # allowed to exceed the convective advisory, and only on information
+            # that advisory does not measure. ISOLATED/SCATTERED say
+            # "circumnavigable with see-and-avoid": a VFR statement that does not
+            # transfer to IMC, so it must not move an IFR grade. WIDESPREAD /
+            # ORGANIZED are realized-coverage bands, and the convective advisory
+            # already reds on MODERATE+ coverage — escalating on those would
+            # price the same measurement twice. EMBEDDED is orthogonal: it is
+            # about the stratiform deck *hiding* the cells, and cells you cannot
+            # see, in cloud, without radar, are strictly worse under IFR than
+            # VFR. One step only, AMBER→RED; a GREEN convective axis has no cells
+            # reaching cruise for a deck to hide, so it stays GREEN.
+            embedded = (
+                classify_route_character(ctx, model, char_params)
+                is ConvectiveCharacter.EMBEDDED
+            )
+            escalated = embedded and conv_status == AdvisoryStatus.AMBER
+            if escalated:
+                conv_status = AdvisoryStatus.RED
+
             conv_detail = ""
-            if total > 0 and conv_count > 0:
-                conv_pct = 100.0 * conv_count / total
-                # HIGH/EXTREME at any point is always red
-                if worst_conv_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
-                    conv_status = AdvisoryStatus.RED
-                elif conv_pct >= convective_pct_red:
-                    conv_status = AdvisoryStatus.RED
-                else:
-                    conv_status = AdvisoryStatus.AMBER
+            if conv_status not in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE):
+                # Mirror the convective card's headline shape (MODERATE+ extent +
+                # named peak) so the two read as one statement rather than two
+                # measurements of the same thing. When the escalation fired, name
+                # it — otherwise the IFR card shows a red the convective card
+                # does not, with nothing saying why.
                 conv_detail = adv_t(
-                    "ifr.conv_over", loc,
-                    risk=worst_conv_risk.value.upper(),
-                    extent=format_extent(conv_count, total, ctx.total_distance_nm),
+                    "ifr.conv_embedded" if escalated else "ifr.conv_over", loc,
+                    risk=conv_grade.worst_risk.value.upper(),
+                    extent=format_extent(
+                        conv_grade.affected_mod or conv_count,
+                        total,
+                        ctx.total_distance_nm,
+                    ),
                 )
 
             # Coverage tolerance (#391): a no-convection verdict from soundings at
             # too small a share of the route is UNAVAILABLE, not clear — the same
             # guard the icing axis above already has (contributes nothing to
-            # `worst` rather than a false GREEN). Flagged convective verdicts stand.
+            # `worst` rather than a false GREEN). This ABSTAINS, it never grades
+            # worse than the convective advisory, so §22's consistency invariant
+            # still holds. Flagged convective verdicts stand.
             if conv_status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
                 conv_status = AdvisoryStatus.UNAVAILABLE
 
-            # 5. Combine all factors
+            # 6. Combine all factors
             status = _worst_status(airport_status, icing_status, conv_status)
 
             detail_parts = []
@@ -520,7 +500,7 @@ class IFRFeasibilityEvaluator:
                     ribbon=ribbon,
                     regions=(
                         icing_regions
-                        + build_regions(conv_cells, ctx.total_distance_nm)
+                        + build_regions(conv_grade.region_cells, ctx.total_distance_nm)
                     ),
                     peak_dist_nm=ribbon_peak(ribbon),
                 )

@@ -1235,8 +1235,8 @@ _IFR_DEFAULTS = {
     "min_arr_ceiling_ft": 400,
     "icing_pct_amber": 15,
     "icing_pct_red": 30,
-    "convective_min_risk": 3,
-    "convective_pct_red": 10,
+    # No convective keys: §22 retired them. The convective axis is graded by the
+    # convective advisory's parameters, resolved off ``ctx.advisory_params``.
 }
 
 
@@ -1369,7 +1369,14 @@ class TestIFRFeasibility:
         entry = IFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "ifr_feasibility"
         assert entry.category == "flight_rules"
-        assert len(entry.parameters) == 7
+        # 5, not 7: `convective_min_risk` and `convective_pct_red` were retired
+        # in §22 — the convective axis is now graded by the convective
+        # advisory's own parameters, so a second set here could only let the two
+        # diverge again.
+        assert len(entry.parameters) == 5
+        assert not {"convective_min_risk", "convective_pct_red"} & {
+            p.key for p in entry.parameters
+        }
 
     def test_tunable_icing_threshold(self, ifr_heavy_icing_context: RouteContext):
         """With higher icing threshold, 100% icing should still be RED."""

@@ -65,6 +65,39 @@ _CHAR_STATUS: dict[ConvectiveCharacter, AdvisoryStatus] = {
 # cells hide in (rather than just the cell's own cumulus).
 _EMBED_DECK_COVER_PCT = 60.0
 
+# Default below-base clearance buffer (#298): mirror of the severity-side overfly
+# filter (`top_clearance_ft`, default 2000). A buffer this far *under* the cell
+# bases, in VMC, is what makes isolated/scattered cells circumnavigable VFR.
+CHAR_BASE_CLEARANCE_FT = 2000.0
+
+# The advisory id whose parameters govern character classification, and the
+# single source of truth for their defaults. A consumer (ifr_feasibility) grades
+# with the *owning* advisory's tuning rather than a duplicate set — the §22 rule
+# that stopped the convective colour from being computed two different ways.
+CHARACTER_ADVISORY_ID = "convective_character"
+
+CHARACTER_PARAM_DEFAULTS: dict[str, float] = {
+    "min_risk": 3,
+    "showers_mm": 0.1,
+    "isolated_max_pct": 15,
+    "scattered_max_pct": 40,
+    "organized_shear_kt": 35,
+    "base_clearance_ft": CHAR_BASE_CLEARANCE_FT,
+}
+
+
+def resolve_character_params(ctx: RouteContext) -> dict[str, float]:
+    """The character advisory's *effective* parameters for this evaluation.
+
+    Mirrors ``convective_grading.resolve_convective_params``: overrides off
+    ``ctx.advisory_params`` layered over the catalog defaults, so a consumer
+    never grades character with its own thresholds. Catalog defaults apply when
+    the advisory is disabled — a composite that reads character must still be
+    able to read it.
+    """
+    overrides = ctx.advisory_params.get(CHARACTER_ADVISORY_ID, {})
+    return {**CHARACTER_PARAM_DEFAULTS, **overrides}
+
 
 def _point_embedded(sounding: SoundingAnalysis, cruise_ft: float) -> bool:
     """True when a convective point sits under a stratiform deck (can't see cells).
@@ -113,12 +146,6 @@ def _native_or_metpy(sounding: SoundingAnalysis) -> tuple[float | None, float | 
     k = idx.nwp_k_index if idx.nwp_k_index is not None else idx.k_index
     tt = idx.nwp_total_totals if idx.nwp_total_totals is not None else idx.total_totals
     return k, tt
-
-
-# Default below-base clearance buffer (#298): mirror of the severity-side overfly
-# filter (`top_clearance_ft`, default 2000). A buffer this far *under* the cell
-# bases, in VMC, is what makes isolated/scattered cells circumnavigable VFR.
-CHAR_BASE_CLEARANCE_FT = 2000.0
 
 
 def _vmc_below_base(
@@ -221,6 +248,148 @@ def _format_below_base(res: _BelowBase, loc: str) -> str | None:
     )
 
 
+def build_character_points(
+    ctx: RouteContext, model: str, params: dict[str, float]
+) -> tuple[list[ConvCharPoint], float | None, bool]:
+    """Build one model's character points — extracted so consumers can reuse it.
+
+    Returns ``(points, shear_max, synoptic_ascent)``: everything
+    ``classify_convective_character`` needs. ``ConvectiveCharacterEvaluator``
+    calls it for its own grade; ``ifr_feasibility`` reaches it through
+    ``classify_route_character`` below (§22).
+    """
+    min_risk_idx = int(params.get("min_risk", CHARACTER_PARAM_DEFAULTS["min_risk"]))
+    showers_mm = params.get("showers_mm", CHARACTER_PARAM_DEFAULTS["showers_mm"])
+    cruise_ft = ctx.cruise_altitude_ft
+
+    points: list[ConvCharPoint] = []
+    shear_max: float | None = None
+    synoptic_ascent = False
+
+    for rpa in ctx.analyses:
+        sounding = rpa.sounding.get(model)
+        if sounding is None:
+            continue
+
+        conv = sounding.convective
+        is_conv = (
+            conv is not None
+            and _RISK_ORDER.index(conv.risk_level) >= min_risk_idx
+        )
+
+        realized = False
+        embedded = False
+        base_ft: float | None = None
+        top_ft: float | None = None
+        vmc_below = True
+        if is_conv:
+            # Prefer the model's own GRIB-native convective precip (`cp`)
+            # over Open-Meteo `showers`: Open-Meteo does not populate
+            # `showers` for ECMWF IFS (it is structurally 0.0), so the
+            # native field is the only realized-firing precip signal for
+            # ECMWF over marine / elevated convection. A native value of
+            # 0.0 is a real "not firing" reading and is used as-is; only
+            # absent native diagnostics (non-GRIB models — AROME/UKMO/MF)
+            # fall back to the Open-Meteo `showers` cross-section field.
+            diag = sounding.nwp_cloud_diagnostics
+            native_cp = (
+                diag.convective_precip_mm_h if diag is not None else None
+            )
+            if native_cp is not None:
+                # `native_cp` is mm/h; `showers_mm` (the threshold) and
+                # showers_at_point() are mm-over-step. These are equal
+                # only because the cross-section is interpolated to
+                # 1-hour steps (see showers_at_point()'s `at_time()`
+                # lookup against hourly point_forecasts), so a 1 mm/h
+                # rate == 1 mm over the step. If that step ever stops
+                # being 1 hour, or `showers_mm` is recalibrated, revisit
+                # this mm/h-vs-mm equivalence.
+                showers = native_cp
+            else:
+                showers = showers_at_point(
+                    ctx.cross_sections, model, rpa.point_index, rpa.forecast_hour
+                )
+            nwp = sounding.convective_nwp
+            cover = nwp.cover_pct if nwp is not None else None
+            base_ft = nwp.base_ft if nwp is not None else None
+            top_ft = nwp.top_ft if nwp is not None else None
+            has_geom = base_ft is not None and top_ft is not None
+            # Explicit-convection mode (#462): a fired ICON-D2 cell is
+            # realized by construction (the decision table only fires
+            # on a simulated echo), but its precip/cover/geometry
+            # channels are structurally None — without this branch a
+            # firing D2 cell would read "not realized".
+            explicit_fired = (
+                nwp is not None
+                and nwp.method == "nwp_explicit"
+                and _RISK_ORDER.index(nwp.risk_level)
+                >= _RISK_ORDER.index(ConvectiveRisk.MODERATE)
+            )
+            realized = (
+                (showers is not None and showers >= showers_mm)
+                or (cover is not None and cover >= CHAR_COVER_REALIZED_PCT)
+                or has_geom
+                or explicit_fired
+            )
+            embedded = _point_embedded(sounding, cruise_ft)
+            # Below-base avoidability geometry (#298): is the layer from
+            # cruise up to the cell base genuinely VMC (no BKN/OVC deck to
+            # descend into)? Computed here where the sounding is in scope.
+            vmc_below = _vmc_below_base(sounding, cruise_ft, base_ft)
+            if conv is not None and conv.bulk_shear_0_6km_kt is not None:
+                shear_max = max(shear_max or 0.0, conv.bulk_shear_0_6km_kt)
+            vm = sounding.vertical_motion
+            if vm is not None and vm.classification == VerticalMotionClass.SYNOPTIC_ASCENT:
+                synoptic_ascent = True
+
+        k, tt = _native_or_metpy(sounding)
+        points.append(
+            ConvCharPoint(
+                is_convective=is_conv,
+                realized=realized,
+                embedded=embedded,
+                k_index=k,
+                total_totals=tt,
+                convective_base_ft=base_ft,
+                convective_top_ft=top_ft,
+                vmc_below_base=vmc_below,
+            )
+        )
+
+    return points, shear_max, synoptic_ascent
+
+
+def classify_route_character(
+    ctx: RouteContext, model: str, params: dict[str, float]
+) -> ConvectiveCharacter | None:
+    """One model's convective character, or ``None`` when it has no soundings.
+
+    The single entry point for any consumer that needs the character band
+    without the advisory's wording — today ``ifr_feasibility``, which escalates
+    its convective axis one step on EMBEDDED (§22). Callers pass
+    ``resolve_character_params(ctx)`` so the band they read is the band this
+    advisory would show.
+    """
+    points, shear_max, synoptic_ascent = build_character_points(ctx, model, params)
+    if not points:
+        return None
+    return classify_convective_character(
+        points,
+        shear_kt=shear_max,
+        front_present=_front_present(ctx, model),
+        synoptic_ascent=synoptic_ascent,
+        isolated_max_pct=params.get(
+            "isolated_max_pct", CHARACTER_PARAM_DEFAULTS["isolated_max_pct"]
+        ),
+        scattered_max_pct=params.get(
+            "scattered_max_pct", CHARACTER_PARAM_DEFAULTS["scattered_max_pct"]
+        ),
+        organized_shear_kt=params.get(
+            "organized_shear_kt", CHARACTER_PARAM_DEFAULTS["organized_shear_kt"]
+        ),
+    )
+
+
 @register
 class ConvectiveCharacterEvaluator:
     """Grades the VFR-avoidability character of route convection, per model."""
@@ -248,7 +417,7 @@ class ConvectiveCharacterEvaluator:
                     label="Min risk level",
                     description="Minimum severity that counts as a cell (3=MODERATE, 4=HIGH)",
                     type="number",
-                    default=3,
+                    default=CHARACTER_PARAM_DEFAULTS["min_risk"],
                     min=2,
                     max=4,
                     step=1,
@@ -259,7 +428,7 @@ class ConvectiveCharacterEvaluator:
                     description="Convective precip (mm) at a point to count it as a realized cell",
                     type="number",
                     unit="mm",
-                    default=0.1,
+                    default=CHARACTER_PARAM_DEFAULTS["showers_mm"],
                     min=0,
                     max=2,
                     step=0.1,
@@ -270,7 +439,7 @@ class ConvectiveCharacterEvaluator:
                     description="Realized coverage at/below this is isolated",
                     type="percent",
                     unit="%",
-                    default=15,
+                    default=CHARACTER_PARAM_DEFAULTS["isolated_max_pct"],
                     min=5,
                     max=40,
                     step=5,
@@ -281,7 +450,7 @@ class ConvectiveCharacterEvaluator:
                     description="Realized coverage at/below this is scattered; above is widespread",
                     type="percent",
                     unit="%",
-                    default=40,
+                    default=CHARACTER_PARAM_DEFAULTS["scattered_max_pct"],
                     min=20,
                     max=80,
                     step=5,
@@ -292,7 +461,7 @@ class ConvectiveCharacterEvaluator:
                     description="0-6km shear at/above which widespread convection is organized",
                     type="number",
                     unit="kt",
-                    default=35,
+                    default=CHARACTER_PARAM_DEFAULTS["organized_shear_kt"],
                     min=20,
                     max=60,
                     step=5,
@@ -303,7 +472,7 @@ class ConvectiveCharacterEvaluator:
                     description="VMC buffer below convective bases for see-and-avoid (mirrors the overfly clearance)",
                     type="number",
                     unit="ft",
-                    default=2000,
+                    default=CHARACTER_PARAM_DEFAULTS["base_clearance_ft"],
                     min=0,
                     max=5000,
                     step=500,
@@ -313,111 +482,31 @@ class ConvectiveCharacterEvaluator:
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        min_risk_idx = int(params.get("min_risk", 3))
-        showers_mm = params.get("showers_mm", 0.1)
-        isolated_max_pct = params.get("isolated_max_pct", 15)
-        scattered_max_pct = params.get("scattered_max_pct", 40)
-        organized_shear_kt = params.get("organized_shear_kt", 35)
-        base_clearance_ft = params.get("base_clearance_ft", CHAR_BASE_CLEARANCE_FT)
+        # min_risk / showers_mm are consumed inside build_character_points; the
+        # band thresholds are applied at classification below.
+        isolated_max_pct = params.get(
+            "isolated_max_pct", CHARACTER_PARAM_DEFAULTS["isolated_max_pct"]
+        )
+        scattered_max_pct = params.get(
+            "scattered_max_pct", CHARACTER_PARAM_DEFAULTS["scattered_max_pct"]
+        )
+        organized_shear_kt = params.get(
+            "organized_shear_kt", CHARACTER_PARAM_DEFAULTS["organized_shear_kt"]
+        )
+        base_clearance_ft = params.get(
+            "base_clearance_ft", CHARACTER_PARAM_DEFAULTS["base_clearance_ft"]
+        )
         cruise_ft = ctx.cruise_altitude_ft
         loc = ctx.locale
 
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            points: list[ConvCharPoint] = []
-            shear_max: float | None = None
-            synoptic_ascent = False
-
-            for rpa in ctx.analyses:
-                sounding = rpa.sounding.get(model)
-                if sounding is None:
-                    continue
-
-                conv = sounding.convective
-                is_conv = (
-                    conv is not None
-                    and _RISK_ORDER.index(conv.risk_level) >= min_risk_idx
-                )
-
-                realized = False
-                embedded = False
-                base_ft: float | None = None
-                top_ft: float | None = None
-                vmc_below = True
-                if is_conv:
-                    # Prefer the model's own GRIB-native convective precip (`cp`)
-                    # over Open-Meteo `showers`: Open-Meteo does not populate
-                    # `showers` for ECMWF IFS (it is structurally 0.0), so the
-                    # native field is the only realized-firing precip signal for
-                    # ECMWF over marine / elevated convection. A native value of
-                    # 0.0 is a real "not firing" reading and is used as-is; only
-                    # absent native diagnostics (non-GRIB models — AROME/UKMO/MF)
-                    # fall back to the Open-Meteo `showers` cross-section field.
-                    diag = sounding.nwp_cloud_diagnostics
-                    native_cp = (
-                        diag.convective_precip_mm_h if diag is not None else None
-                    )
-                    if native_cp is not None:
-                        # `native_cp` is mm/h; `showers_mm` (the threshold) and
-                        # showers_at_point() are mm-over-step. These are equal
-                        # only because the cross-section is interpolated to
-                        # 1-hour steps (see showers_at_point()'s `at_time()`
-                        # lookup against hourly point_forecasts), so a 1 mm/h
-                        # rate == 1 mm over the step. If that step ever stops
-                        # being 1 hour, or `showers_mm` is recalibrated, revisit
-                        # this mm/h-vs-mm equivalence.
-                        showers = native_cp
-                    else:
-                        showers = showers_at_point(
-                            ctx.cross_sections, model, rpa.point_index, rpa.forecast_hour
-                        )
-                    nwp = sounding.convective_nwp
-                    cover = nwp.cover_pct if nwp is not None else None
-                    base_ft = nwp.base_ft if nwp is not None else None
-                    top_ft = nwp.top_ft if nwp is not None else None
-                    has_geom = base_ft is not None and top_ft is not None
-                    # Explicit-convection mode (#462): a fired ICON-D2 cell is
-                    # realized by construction (the decision table only fires
-                    # on a simulated echo), but its precip/cover/geometry
-                    # channels are structurally None — without this branch a
-                    # firing D2 cell would read "not realized".
-                    explicit_fired = (
-                        nwp is not None
-                        and nwp.method == "nwp_explicit"
-                        and _RISK_ORDER.index(nwp.risk_level)
-                        >= _RISK_ORDER.index(ConvectiveRisk.MODERATE)
-                    )
-                    realized = (
-                        (showers is not None and showers >= showers_mm)
-                        or (cover is not None and cover >= CHAR_COVER_REALIZED_PCT)
-                        or has_geom
-                        or explicit_fired
-                    )
-                    embedded = _point_embedded(sounding, cruise_ft)
-                    # Below-base avoidability geometry (#298): is the layer from
-                    # cruise up to the cell base genuinely VMC (no BKN/OVC deck to
-                    # descend into)? Computed here where the sounding is in scope.
-                    vmc_below = _vmc_below_base(sounding, cruise_ft, base_ft)
-                    if conv is not None and conv.bulk_shear_0_6km_kt is not None:
-                        shear_max = max(shear_max or 0.0, conv.bulk_shear_0_6km_kt)
-                    vm = sounding.vertical_motion
-                    if vm is not None and vm.classification == VerticalMotionClass.SYNOPTIC_ASCENT:
-                        synoptic_ascent = True
-
-                k, tt = _native_or_metpy(sounding)
-                points.append(
-                    ConvCharPoint(
-                        is_convective=is_conv,
-                        realized=realized,
-                        embedded=embedded,
-                        k_index=k,
-                        total_totals=tt,
-                        convective_base_ft=base_ft,
-                        convective_top_ft=top_ft,
-                        vmc_below_base=vmc_below,
-                    )
-                )
+            # Same builder the composites reach through classify_route_character
+            # (§22) — the band this card shows is the band they act on.
+            points, shear_max, synoptic_ascent = build_character_points(
+                ctx, model, params
+            )
 
             if not points:
                 per_model.append(
