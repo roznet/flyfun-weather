@@ -1391,3 +1391,78 @@ class EdrCalibrationAccumulatorRow(Base):
     )
 
 
+
+
+class ModelDeliveryLogRow(Base):
+    """One observed model-run delivery, as measured by the freshness loop (issue #515).
+
+    The registry's ``delivery_offset`` constants are the *expected* side of
+    "did this run land on time"; this table is the *realised* side. Before it,
+    the only durable record was ``MarkerStore``'s in-memory deque of
+    ``(cycle_init, arrival_wallclock)`` pairs — lost on restart, and measuring
+    our detection time rather than the provider's publish time.
+
+    Write-only in v1: the scheduler appends a row each time a marker advances.
+    Nothing reads it yet. Derived quantities are deliberately *not* stored —
+    ``drift = published_at − expected_at``, ``poll_lag = detected_at −
+    published_at`` and ``cycle_hour = HOUR(cycle_init)`` all follow from the
+    columns below.
+
+    Two columns exist for reasons that are easy to undo by accident:
+
+    * ``expected_at`` is the registry's prediction **as it was at observation
+      time**, stored rather than recomputed. The whole point of the table is to
+      recalibrate those constants; deriving expectation at read time would
+      collapse every historical drift to ~0 the moment we did.
+    * ``published_at`` is kept distinct from ``detected_at``. Conflating them
+      is the bug this table exists to fix: our poll interval quantises
+      detection, so folding it into drift buries the provider's real lateness
+      under our own polling lag — and makes early arrival unobservable.
+
+    Missed runs are **not** stored. If a provider skips a cycle the marker
+    never advances and no row appears; find the hole by joining against the
+    expected cycle grid. Store facts about observations, derive facts about
+    the schedule.
+    """
+
+    __tablename__ = "model_delivery_log"
+    __table_args__ = (
+        # One row per observed run. The loop can re-observe the same init
+        # (restart, re-check) — the write path relies on this to stay
+        # idempotent rather than accumulating duplicates.
+        UniqueConstraint("source", "cycle_init", name="uq_model_delivery_source_cycle"),
+        # Calibration reads are "the last N weeks", optionally per source.
+        Index("ix_model_delivery_cycle_init", "cycle_init"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Registry key, e.g. "ecmwf:direct" — matches SOURCE_REGISTRY.
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Logical model, e.g. "ecmwf". Denormalised from the key prefix so
+    # "all GFS deliveries" is a plain WHERE, not a string split.
+    model: Mapped[str] = mapped_column(String(20), nullable=False)
+    # The run being measured (aware UTC).
+    cycle_init: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Registry prediction for this run, frozen at observation time.
+    expected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Provider-reported publish wallclock — the actual measurement. Null when
+    # the instrument didn't yield one (missing Last-Modified, OM availability
+    # time of 0); the row is still worth keeping for its detection bracket.
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # When our loop noticed. Quantised by the freshness poll interval.
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Last dynamic check that did NOT yet see this run. Brackets the truth as
+    # ``(last_absent_at, published_at]`` when published_at is null, and acts as
+    # a consistency check when it isn't (published_at < last_absent_at means
+    # the provider's timestamp contradicts what we observed).
+    last_absent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Which instrument produced published_at: "sentinel_mtime" |
+    # "http_last_modified" | "om_meta". These are not equivalent — a sentinel
+    # mtime is when *our* watcher finished writing, an OM availability time is
+    # the provider's own record, an HTTP Last-Modified is the origin file's.
+    # Different systematic biases; pooling them silently would be wrong.
+    observed_via: Mapped[str] = mapped_column(String(24), nullable=False)

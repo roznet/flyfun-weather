@@ -39,11 +39,40 @@ class Observation(NamedTuple):
     config horizon (e.g. ARPEGE advertises 6 days but a given run may
     deliver only ~4 days).  Direct GRIB sources return ``None`` and the
     catalog falls back to ``init + cfg.horizon``.
+
+    ``observed_via`` names the *instrument* that produced ``published_at``.
+    The three are not interchangeable measurements of the same thing — see
+    the module constants below — so the delivery log records which one was
+    used rather than pooling them.  Each dispatch declares its own, so a
+    new source can't silently inherit the wrong one.
     """
 
     init: datetime
     published_at: datetime | None = None
     data_end: datetime | None = None
+    observed_via: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Observation instruments
+# ---------------------------------------------------------------------------
+#
+# Each names a different clock, with a different systematic bias against the
+# provider's true publish moment.  Recorded per-observation in
+# ``model_delivery_log.observed_via`` so a calibration query can keep them
+# apart instead of averaging across incomparable measurements.
+
+#: mtime of the ECMWF readiness sentinel — when *our* watcher finished writing
+#: after rsync delivery.  Local arrival, biased late by the transfer.
+VIA_SENTINEL_MTIME = "sentinel_mtime"
+
+#: ``Last-Modified`` of the origin file on the provider's server (NOAA S3,
+#: DWD opendata).  The file's own timestamp, not a publish announcement.
+VIA_HTTP_LAST_MODIFIED = "http_last_modified"
+
+#: Open-Meteo ``meta.json``'s ``last_run_availability_time`` — the provider's
+#: own record of when it finished ingesting the run.
+VIA_OM_META = "om_meta"
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +94,7 @@ def _check_ecmwf_direct(model: str) -> Observation | None:
     if result is None:
         return None
     init, mtime = result
-    return Observation(init=init, published_at=mtime)
+    return Observation(init=init, published_at=mtime, observed_via=VIA_SENTINEL_MTIME)
 
 
 def _check_gfs_noaa(model: str) -> Observation | None:
@@ -90,6 +119,7 @@ def _check_gfs_noaa(model: str) -> Observation | None:
     return Observation(
         init=init,
         published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+        observed_via=VIA_HTTP_LAST_MODIFIED,
     )
 
 
@@ -119,6 +149,7 @@ def _check_icon_eu_dwd(model: str) -> Observation | None:
     return Observation(
         init=init,
         published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+        observed_via=VIA_HTTP_LAST_MODIFIED,
     )
 
 
@@ -147,6 +178,7 @@ def _check_icon_d2_dwd(model: str) -> Observation | None:
     return Observation(
         init=init,
         published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+        observed_via=VIA_HTTP_LAST_MODIFIED,
     )
 
 
@@ -195,6 +227,7 @@ def _check_om_meta(model: str) -> Observation | None:
         init=datetime.fromtimestamp(m.last_init_time, tz=timezone.utc),
         published_at=published_at,
         data_end=data_end,
+        observed_via=VIA_OM_META,
     )
 
 
@@ -229,13 +262,24 @@ def check_source(source: str, model: str) -> Observation | None:
         )
         return None
     try:
-        return fn(model)
+        observation = fn(model)
     except Exception:
         logger.warning(
             "check_source: dynamic check failed for %s/%s",
             source, model, exc_info=True,
         )
         return None
+    if observation is not None and not observation.observed_via:
+        # A new dispatch that forgot to declare its instrument. Harmless to
+        # the freshness decision, but it would land unlabelled rows in the
+        # delivery log — where the whole point is not to pool measurements
+        # taken with different clocks. Loud, not fatal.
+        logger.warning(
+            "check_source: %s/%s returned an Observation with no observed_via — "
+            "set one of the VIA_* constants in its dispatch",
+            source, model,
+        )
+    return observation
 
 
 # ---------------------------------------------------------------------------
