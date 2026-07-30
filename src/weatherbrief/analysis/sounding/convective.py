@@ -1504,13 +1504,31 @@ def classify_convective_character(
     if not conv:
         return ConvectiveCharacter.NONE
 
+    realized = sum(1 for p in conv if p.realized)
+
+    # 0. Nothing realized anywhere → there is no *character* to describe (§22).
+    # Without this, zero realized cells fell into the coverage band below
+    # (realized_pct = 0 <= isolated_max_pct) and classified ISOLATED → AMBER,
+    # rendering "Isolated cells — circumnavigable VFR with see-and-avoid, expect
+    # possible diversions (0nm/600nm (0%))" — a colour and a promise of cells
+    # over an extent of nothing. Seen on UKMO/MétéoFrance (no model-native
+    # convective scheme, so no precip/cover/geometry realizes) sitting beside a
+    # RED "peak HIGH" from the severity advisory on the same model.
+    #
+    # This is deliberately checked BEFORE the embedded test: "cells hidden under
+    # a deck" presupposes cells: with nothing realizing, EMBEDDED would assert
+    # hidden convection that no signal supports. Severity still owns the colour
+    # for a loaded-but-unrealized air mass — the convective advisory grades it
+    # (dd_trigger AMBER, §18); character simply has nothing to add.
+    if realized == 0:
+        return ConvectiveCharacter.NONE
+
     # 1. Embedded — cells you cannot see to avoid because a deck hides them.
     embedded = sum(1 for p in conv if p.embedded)
     if 100.0 * embedded / len(conv) >= embed_pct:
         return ConvectiveCharacter.EMBEDDED
 
     # 2. Realized-coverage band (% of all route points with realized convection).
-    realized = sum(1 for p in conv if p.realized)
     realized_pct = 100.0 * realized / total
     if realized_pct <= isolated_max_pct:
         band = ConvectiveCharacter.ISOLATED

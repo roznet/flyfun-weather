@@ -543,6 +543,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "{risk} Konvektion über {extent}",
         "es": "Convectivo {risk} sobre {extent}",
     },
+    # Character EMBEDDED escalated the convective axis (§22): the deck hides the
+    # cells, so the see-and-avoid that makes them tolerable VFR is unavailable.
+    "ifr.conv_embedded": {
+        "en": "{risk} convective over {extent} — embedded in cloud, no visual avoidance",
+        "fr": "Convectif {risk} sur {extent} — noyé dans les nuages, pas d'évitement à vue",
+        "de": "{risk} Konvektion über {extent} — eingebettet in Bewölkung, keine Sichtumfliegung",
+        "es": "Convectivo {risk} sobre {extent} — embebido en nubes, sin evitación visual",
+    },
     "ifr.acceptable": {
         "en": "IFR conditions acceptable throughout",
         "fr": "Conditions IFR acceptables sur tout le trajet",

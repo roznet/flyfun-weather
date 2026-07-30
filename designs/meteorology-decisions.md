@@ -2601,3 +2601,175 @@ field already says MSL.
 - `src/weatherbrief/analysis/sounding/convective.py` —
   `_explicit_freezing_level_ft` docstring now states the datum invariant
   instead of asserting any datum is usable.
+
+## 22. One convective grade, consumed everywhere — `ifr_feasibility` stops re-deriving it
+
+**Date:** 2026-07-30
+**Status:** Implemented — convective axis *and* character coupling.
+**Context:** Reported from the briefing for
+`egtf_…_lfmd-2026-08-01` (D-2, b460): the pilot saw **IFR Feasibility RED** —
+"HIGH convective over 95nm/600nm (16%)" — sitting directly beside **Convective
+Activity AMBER** — "MODERATE+ over 18–24% across models, peak MODERATE" — on the
+same route, the same soundings, the same run.
+
+### The problem
+
+§18 (#442) reworked the *convective advisory* to grade NWP-native with a
+DD-trigger AMBER cap. It never touched the other consumers of the convective
+track. `ifr_feasibility` kept a second, older derivation of "how bad is the
+convection?":
+
+| | `convective` (after §18) | `ifr_feasibility` (before this decision) |
+|---|---|---|
+| risk floor | `min_risk` 2 (LOW) | `convective_min_risk` 3 (MODERATE) |
+| DD-trigger amber (§18) | yes | **no** — read the raw active track |
+| tops-below-cruise filter | `top_clearance_ft` 2000 | **none** (despite `altitude_dependent=True`) |
+| → RED | NWP HIGH, or MOD+ ≥ 50 % | HIGH anywhere, or ≥ **10 %** |
+
+Two independent formulas over one dataset diverge in **both** directions, and on
+this flight they did:
+
+| model | `convective` | `ifr_feasibility` | why |
+|---|---|---|---|
+| ECMWF | AMBER (MOD+ 17 %) | **GREEN** | dd_trigger amber invisible to IFR |
+| GFS | AMBER (MOD+ 24 %) | **GREEN** | ditto |
+| ICON | AMBER (MOD+ 19 %) | AMBER (2 %) | IFR saw only the genuinely-NWP-MODERATE point |
+| UKMO | RED (peak HIGH) | RED | no NWP scheme → both fall back to thermo |
+| MétéoFrance | RED (peak HIGH) | RED | ditto |
+
+Aggregation is MAJORITY with **ties broken to worst**, so the divergence
+*inverted the headline*: convective read amber 3 / red 2 → **AMBER**, while IFR
+read green 2 / amber 1 / red 2 → a 2–2 tie → **RED**. The briefing's LLM then
+faithfully reproduced the contradiction, narrating a "RED IFR Feasibility
+advisory driven by HIGH convective exposure" two paragraphs after stating that
+the models' "own convective schemes continue to show zero convective
+precipitation, consistent with the cap currently suppressing initiation" — i.e.
+the loaded-gun false-alarm RED that §18 exists to prevent, re-entering through a
+composite that had not been told.
+
+### The decision
+
+> **The convective colour is computed once and consumed, never recomputed.**
+> `analysis/advisories/convective_grading.py::grade_convective_model` is the
+> single formula. `ConvectiveEvaluator` wraps it with locale wording and the
+> cross-model aggregate; `IFRFeasibilityEvaluator` takes its **status verbatim**
+> as its convective axis. The composite has no convective floor, no convective
+> coverage threshold and no altitude filter of its own — those parameters
+> (`convective_min_risk`, `convective_pct_red`) are **retired**.
+
+Tuning follows the same rule: the composite resolves the *convective advisory's*
+parameters via `resolve_convective_params(ctx)`, reading
+`ctx.advisory_params["convective"]` (published on the frozen `RouteContext` by
+`evaluate_all`) over `CONVECTIVE_PARAM_DEFAULTS`. A pilot who raises
+`affected_pct_red` moves the colour on both cards with one edit; previously it
+moved neither. When the convective advisory is **disabled** there are no
+overrides and the catalog defaults apply — a composite that depends on convection
+must still grade it, and inheriting "disabled" as "no convection" would be the
+#391 false-GREEN.
+
+**The one permitted deviation is abstention.** The composite's #391 coverage
+guard may turn a would-be-GREEN convective axis into UNAVAILABLE on thin
+en-route sounding coverage. UNAVAILABLE contributes nothing to `worst`, so the
+composite abstains rather than grading convection *differently* — the invariant
+("IFR's convective axis never disagrees with the convective advisory") holds.
+
+### Reasoning
+
+1. **Consistency by construction, not by calibration.** Porting §18's rules into
+   the composite would have re-synchronised two copies that would drift again on
+   the next change — which is precisely what happened between §14 and §18. One
+   function has no drift surface.
+2. **Colour should mean what it says** (§18 reasoning 1). If RED on the IFR card
+   means something different from RED on the convective card, neither means
+   anything.
+3. **The threshold asymmetry had no defence.** Nobody chose 10 %-vs-50 %; the two
+   numbers were written at different times for the same quantity.
+4. **The missing altitude filter was a plain bug.** `ifr_feasibility` declares
+   `altitude_dependent=True` and applies an altitude buffer to *icing*, then
+   graded convection topping out below cruise as a hazard at cruise.
+
+### Character couples in through EMBEDDED only
+
+`convective_character` grades *VFR avoidability*, so most of it does not transfer
+to an IFR composite. The coupling is deliberately narrow:
+
+> **Character EMBEDDED escalates the IFR convective axis one step (AMBER → RED),
+> and nothing else does.**
+
+- **ISOLATED / SCATTERED do not move an IFR grade.** They mean "circumnavigable
+  with see-and-avoid" — a statement about flying VMC between cells. Under IFR you
+  are not avoiding visually, so the band says nothing about the IFR mission.
+- **WIDESPREAD / ORGANIZED do not either.** Both are *realized-coverage* bands
+  (> 40 %, plus forcing for ORGANIZED), and the convective advisory already reds
+  on MODERATE+ coverage ≥ 50 %. Escalating on them would price one measurement —
+  how much of the route has convection — twice, in two evaluators, with two
+  different thresholds. That is the §22 failure mode in miniature.
+- **EMBEDDED is the exception because it is orthogonal.** It is not a fact about
+  the convection at all; it is a fact about the *stratiform deck hiding it*
+  (`_point_embedded`: a BKN/OVC layer based below cruise, corroborated by bulk
+  low/mid cover). The convective advisory never measures that. And it is the one
+  band genuinely worse under IFR than VFR: cells you cannot see, in cloud,
+  without onboard radar, are the classic non-radar GA killer.
+- **One step, from AMBER only.** A GREEN convective axis has no cells reaching
+  cruise for a deck to hide, so it stays GREEN — the escalation sharpens an
+  existing concern, it never invents one. The escalated red names itself in the
+  detail (`ifr.conv_embedded`, "embedded in cloud, no visual avoidance") so a red
+  the convective card does not show is never unexplained.
+
+Character is *read*, not re-derived: `classify_route_character(ctx, model,
+resolve_character_params(ctx))` runs the same builder + classifier the character
+card uses, with that advisory's own parameters — the §22 rule applied a second
+time.
+
+### Prerequisite fixed: the zero-realized ISOLATED bucket
+
+`classify_convective_character` returned ISOLATED (→ AMBER) whenever *any* point
+was `is_convective`, because `realized_pct = 0` falls into the
+`<= isolated_max_pct` bucket. A model with zero realized cells therefore rendered
+"Isolated cells — circumnavigable VFR with see-and-avoid, expect possible
+diversions **(0nm/600nm (0%))**" — a colour and a promise of avoidable cells over
+an extent of nothing. Observed on UKMO and MétéoFrance on the b460 pack (neither
+has a model-native convective scheme, so no precip / cover / geometry ever
+realizes), sitting beside a RED "peak HIGH" from the severity advisory on the
+same model.
+
+**Zero realized cells now returns NONE (→ GREEN)**, checked *before* the EMBEDDED
+test: "cells hidden under a deck" presupposes cells, so a deck over
+loaded-but-quiet air must not assert hidden convection no signal supports.
+Severity still owns the colour for that air mass — the convective advisory grades
+it `dd_trigger` AMBER (§18); character simply has nothing to add. This was a
+prerequisite for the coupling above: character could not be trusted to move a
+grade while it graded AMBER on nothing.
+
+**Related open item (independent of character):** a model with no convective
+scheme at all (UKMO, MétéoFrance) falls back to thermo and *can* therefore
+produce a RED off DD alone — which is what drove both reds on this flight. §18
+says RED comes only from the NWP track; the scheme-less fallback is a gap in
+that promise, not addressed here.
+
+### Code
+
+- `src/weatherbrief/analysis/advisories/convective_grading.py` — **new**;
+  `grade_convective_model`, `resolve_convective_params`,
+  `CONVECTIVE_PARAM_DEFAULTS`, `ConvectiveModelGrade`. Holds the §18 grading
+  verbatim. `graded_risk_by_point` is exposed for the pending character work.
+- `src/weatherbrief/analysis/advisories/convective.py` — now a thin wrapper:
+  locale wording + cross-model aggregate only.
+- `src/weatherbrief/analysis/advisories/ifr_feasibility.py` — convective axis
+  reads `conv_grade.status`; `_check_enroute_hazards` assesses icing and merges
+  the grade's ribbon/regions; the two convective parameters are gone.
+- `src/weatherbrief/analysis/advisories/__init__.py` — `RouteContext
+  .advisory_params`.
+- `src/weatherbrief/analysis/advisories/registry.py` — `evaluate_all` publishes
+  the override map via `dataclasses.replace`.
+- `src/weatherbrief/analysis/advisories/convective_character.py` —
+  `CHARACTER_PARAM_DEFAULTS`, `resolve_character_params`,
+  `build_character_points`, `classify_route_character` (extracted from the
+  evaluator's per-model loop so the composite reads the same band).
+- `src/weatherbrief/analysis/sounding/convective.py` —
+  `classify_convective_character` returns NONE when nothing is realized.
+- `src/weatherbrief/analysis/advisories/strings.py` — `ifr.conv_embedded`.
+- `tests/analysis/advisories/test_convective_consistency.py` — the invariant,
+  parametrized across dd_trigger / NWP-cell / HIGH / tops-below-cruise / quiet,
+  plus the EMBEDDED escalation and the bands that must not escalate.
+- `tests/test_convective.py` — the three zero-realized classifier cases.

@@ -1559,6 +1559,36 @@ def test_character_widespread():
     assert classify_convective_character(pts) is ConvectiveCharacter.WIDESPREAD
 
 
+def test_character_none_when_nothing_realized():
+    """§22: convective points but zero realized cells → NONE (GREEN), not ISOLATED.
+
+    Before, realized_pct = 0 fell into the `<= isolated_max_pct` bucket and the
+    advisory rendered "Isolated cells — circumnavigable VFR with see-and-avoid,
+    expect possible diversions (0nm/600nm (0%))" — a promise of avoidable cells
+    over an extent of nothing. Severity still owns the colour for a loaded but
+    unrealized air mass; character has nothing to add.
+    """
+    pts = _pts(20, conv=8, realized=0)
+    assert classify_convective_character(pts) is ConvectiveCharacter.NONE
+
+
+def test_character_not_embedded_when_nothing_realized():
+    """"Cells hidden under a deck" presupposes cells.
+
+    The zero-realized short-circuit is deliberately checked BEFORE the embedded
+    test, so a deck over thermodynamically-loaded-but-quiet air cannot assert
+    hidden convection that no signal supports.
+    """
+    pts = _pts(20, conv=8, realized=0, embedded=8)
+    assert classify_convective_character(pts) is ConvectiveCharacter.NONE
+
+
+def test_character_numerosity_cannot_resurrect_unrealized_air():
+    """The K/TT nudge must not manufacture a band out of zero realized cells."""
+    pts = _pts(20, conv=8, realized=0, k=45, tt=60)
+    assert classify_convective_character(pts) is ConvectiveCharacter.NONE
+
+
 def test_character_embedded_takes_priority():
     # Even with few realized cells, a majority embedded → embedded.
     pts = _pts(20, conv=4, realized=2, embedded=3)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from weatherbrief.analysis.advisories.strings import adv_t
@@ -207,6 +208,12 @@ def evaluate_all(
     _ensure_loaded()
     user_params = user_params or {}
     results: list[RouteAdvisoryResult] = []
+
+    # Publish the whole override map on the context so a composite evaluator can
+    # grade a sub-axis with the *owning* advisory's parameters rather than its
+    # own duplicate thresholds (meteorology-decisions §22). ``RouteContext`` is
+    # frozen, so this is a copy — one per evaluate_all call, not per advisory.
+    ctx = replace(ctx, advisory_params=user_params)
 
     for adv_id, evaluator_cls in _EVALUATORS.items():
         entry = evaluator_cls.catalog_entry()
