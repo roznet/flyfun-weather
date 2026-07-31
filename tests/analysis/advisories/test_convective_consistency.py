@@ -402,3 +402,20 @@ def test_enabled_advisory_params_still_reach_the_composite():
     ifr = next(r for r in tuned if r.advisory_id == "ifr_feasibility")
     assert conv.per_model[0].status == AdvisoryStatus.AMBER
     assert ifr.per_model[0].status == AdvisoryStatus.AMBER
+
+
+@pytest.mark.parametrize("name", sorted(_SCENARIOS))
+def test_affected_equals_flagged_cell_count(name: str):
+    """``grade.affected`` IS the flagged-cell count — pinned, because IFR relies on it.
+
+    ``_check_enroute_hazards`` used to re-walk ``region_cells`` to count the
+    convective points for its detail extent; it now reads ``grade.affected``
+    directly. That is correct only because ``grade_convective_model`` appends a
+    ``FlaggedCell`` for exactly the points it increments ``affected`` on, in the
+    same block after every filter. If the two ever diverged, the IFR card's
+    convective extent would silently misreport.
+    """
+    ctx = _ctx(_SCENARIOS[name])
+    grade = grade_convective_model(ctx, "gfs", resolve_convective_params(ctx))
+    cells = sum(1 for _, cell in grade.region_cells if cell is not None)
+    assert cells == grade.affected

@@ -144,13 +144,17 @@ def _check_enroute_hazards(
     counts as "icing affected" only when an icing zone is within
     *icing_altitude_buffer_ft* of cruise altitude.
 
-    Returns (icing_total, affected, icing_count, conv_count, ribbon_points,
-    icing_cells).
+    Returns (icing_total, affected, icing_count, ribbon_points, icing_cells).
     - icing_total: points where the active icing method could run (the icing
       denominator) — a point on Ogimet-NWP with no native cloud envelope cannot
       assess icing and is excluded so absent icing is not graded clear (#391)
     - affected: number of unique points with icing OR convective risk
-    - icing_count / conv_count: individual counts for detail messages
+    - icing_count: icing-affected points, for the detail message. There is no
+      convective counterpart: ``conv_grade.affected`` is that count by
+      construction — ``grade_convective_model`` appends a ``FlaggedCell`` for
+      exactly the points it increments ``affected`` on, in the same block after
+      every filter — so re-counting the cells here would be a second walk over
+      a number the grade already carries.
     - ribbon_points: per-point worst of the two axes (#375). The convective
       cutouts come straight off ``conv_grade.region_cells``, which is
       index-aligned with ``ctx.analyses``, so the geometry the composite draws is
@@ -159,7 +163,6 @@ def _check_enroute_hazards(
     icing_total = 0
     affected = 0
     icing_count = 0
-    conv_count = 0
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
     icing_cells: list[tuple[float, FlaggedCell | None]] = []
 
@@ -172,8 +175,6 @@ def _check_enroute_hazards(
             conv_cell.severity if conv_cell is not None else HighlightSeverity.GREEN
         )
         has_convective = conv_cell is not None
-        if has_convective:
-            conv_count += 1
 
         sounding = rpa.sounding.get(model)
         if sounding is None:
@@ -234,7 +235,7 @@ def _check_enroute_hazards(
             icing_sev = HighlightSeverity.GREEN
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
-    return (icing_total, affected, icing_count, conv_count, ribbon_points, icing_cells)
+    return (icing_total, affected, icing_count, ribbon_points, icing_cells)
 
 
 @register
@@ -364,7 +365,7 @@ class IFRFeasibilityEvaluator:
             # 3. En-route icing, merged with the graded convection into the
             # composite's per-point highlight geometry (#375).
             (
-                icing_total, affected, icing_count, conv_count,
+                icing_total, affected, icing_count,
                 ribbon_points, icing_cells,
             ) = _check_enroute_hazards(
                 ctx, model, conv_grade,
@@ -448,7 +449,7 @@ class IFRFeasibilityEvaluator:
                     "ifr.conv_embedded" if escalated else "ifr.conv_over", loc,
                     risk=conv_grade.worst_risk.value.upper(),
                     extent=format_extent(
-                        conv_grade.affected_mod or conv_count,
+                        conv_grade.affected_mod or conv_grade.affected,
                         total,
                         ctx.total_distance_nm,
                     ),
