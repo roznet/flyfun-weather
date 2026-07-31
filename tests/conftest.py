@@ -18,6 +18,22 @@ def _clean_env_leaks(monkeypatch):
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_procedure_coverage_cache():
+    """Clear the per-process procedure-coverage memo between tests.
+
+    It is keyed on ``db_path`` and virtually every test passes the same
+    ``"nav.db"`` string while patching a DIFFERENT fake model behind it, so a
+    stale entry would silently decide another test's coverage question and make
+    outcomes depend on file ordering.
+    """
+    from weatherbrief.airports import _procedure_coverage_countries
+
+    _procedure_coverage_countries.cache_clear()
+    yield
+    _procedure_coverage_countries.cache_clear()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _drain_module_executors_at_session_end():
     """Drain module-level executors at session end so background threads

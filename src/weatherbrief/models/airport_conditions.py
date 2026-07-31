@@ -94,9 +94,22 @@ class AirportApproaches(BaseModel):
       procedure rows and none is an approach" vs "no procedure rows at all".
       Both mean *no instrument approach* to the grade map (issue #509 decided
       against a third state there), but the detail text says which.
-    * ``lookup_failed`` — we could not determine the picture (unknown ICAO, or
-      the procedure query raised). NOT an absence of approaches: a consumer must
-      report this as "could not assess", never grade on it.
+    * ``lookup_failed`` — we could not determine the picture (unknown ICAO, the
+      procedure query raised, or the source dataset does not survey this
+      airport's country at all — see ``coverage_gap``). NOT an absence of
+      approaches: a consumer must report this as "could not assess", never
+      grade on it.
+
+    The distinction above assumes the source dataset surveys instrument
+    procedures everywhere it lists airports. That held while ``nav.db`` was
+    euro_aip's European coverage, where zero procedure rows genuinely meant
+    "no published approach" — the fact EGTF Fairoaks and #510 are built on.
+    It stopped holding when the DB gained ~3,600 US airports with runways and
+    no procedures at all: there, zero rows means "unsurveyed", and reading it
+    as "no IAP" hands the grade map its single most severe input on the
+    strength of missing data. ``coverage_gap`` is that case, and it resolves to
+    ``lookup_failed`` rather than to a fourth grade state, because "we could
+    not determine the picture" is exactly what it means.
 
     A pilot's declaration of an unpublished approach (#510) rides in the same
     list with ``source="user_declared"``, so ``has_iap`` covers both — but
@@ -107,6 +120,12 @@ class AirportApproaches(BaseModel):
     icao: str
     has_procedure_data: bool = False
     lookup_failed: bool = False
+    # Diagnostic sub-reason for ``lookup_failed``: set when the failure is a
+    # dataset coverage gap (no procedure survey for this country) rather than a
+    # per-airport problem. Consumers grade on ``lookup_failed``; this only
+    # explains WHY, so a coverage gap is distinguishable from a parse failure
+    # in logs and admin views.
+    coverage_gap: bool = False
     approaches: list[RunwayApproach] = Field(default_factory=list)
 
     @property

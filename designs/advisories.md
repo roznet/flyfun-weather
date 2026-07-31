@@ -350,8 +350,58 @@ can have no AIP-published procedure while pilots routinely fly a self-briefed
 (Fairoaks) has **zero** rows in `procedures`, so for a pilot based there *every*
 IFR arrival at their home field graded RED — enough noise to make the advisory
 worth ignoring, which is worse than not having it. This is **not a data gap**:
-#509 established these absences are genuine. The published data is right and the
+#509 established these absences are genuine *within a surveyed country* (see
+the coverage gate below). The published data is right and the
 operational reality differs.
+
+### The procedure-coverage gate — "no rows" needs a surveyed country
+
+The #509/#510 reasoning above rests on a premise: that the source dataset
+surveys instrument procedures everywhere it lists airports. That held while
+`nav.db` was euro_aip's European build, and it is what makes the EGTF case a
+genuine "no published approach" rather than ignorance.
+
+It stopped holding when the DB gained **~3,600 US airports with runways and no
+procedures at all**. There, zero rows means *unsurveyed*, and grading it as "no
+IAP" hands the grade map its single most severe input on the strength of
+missing data — observed on the first US routes briefed (#457 HRRR testing):
+every US arrival graded Approach Feasibility RED, and on KCLE→KORD that
+fabricated RED was driving the whole briefing headline.
+
+The discriminator is **per-country coverage, derived from the data — never
+geography**. A country counts as surveyed when any of its airports carries
+procedure rows (`airports.py::_procedure_coverage_countries`, built on
+euro_aip's own `with_procedures()` query, memoized per process):
+
+| Rows at this airport | Country surveyed | Result |
+|---|---|---|
+| some | — | approaches exist → grade normally |
+| none | **yes** | genuinely no IAP → grade (EGTF, #510 preserved) |
+| none | **no** | `lookup_failed=True, coverage_gap=True` → abstain |
+
+Per-airport emptiness proves nothing on its own — euro_aip holds procedures for
+128 of 430 French airports and the other 302 genuinely have none — which is why
+the gate is country-scoped. Deriving it from the data (rather than a Europe
+allow-list) means the day US procedures are ingested, those airports start
+grading with **no code change**.
+
+The gate lives in the collection step, not the evaluator, because
+`approach_feasibility` is not the only reader: `tasks/alternates.py`
+(`has_instrument_approach`), `tasks/alternate_requirement.py` (destination
+minima class) and `tasks/map_queries.py` all consume the same `has_iap`, and
+would otherwise keep reading "no data" as "no approach" — which for the
+alternates card would silently disqualify every US alternate. It resolves to
+the existing `lookup_failed` state rather than a fourth grade state, since "we
+could not determine the picture" is exactly what a coverage gap means, and
+every consumer already honours it. `coverage_gap` is a diagnostic sub-reason
+only, so a gap stays distinguishable from a parse failure in logs.
+
+The question really belongs to euro_aip, which already carries an
+`airac_country_coverage` table (`country_iso`, `source`, `airports_count`) that
+would answer it authoritatively. That table ships **empty** today (0 rows in the
+2026-07-28 `nav.db`), so the derived scan is the only signal actually available;
+once it is populated, this should become a read of that table rather than a
+pass over the airport collection.
 
 **Storage is a user preference, not an advisory param.** `app_prefs_json →
 declared_approach_icaos`, read by `api/preferences.py::load_declared_approaches`

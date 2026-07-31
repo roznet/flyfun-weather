@@ -54,6 +54,45 @@ def _load_airport_model(db_path: str):
     return storage.load_model()
 
 
+@lru_cache(maxsize=1)
+def _procedure_coverage_countries(db_path: str) -> frozenset[str]:
+    """ISO country codes the source dataset actually surveys for procedures.
+
+    A country counts as surveyed when ANY of its airports carries procedure
+    rows. That is the honest granularity: euro_aip holds procedures for 128 of
+    430 French airports, and the other 302 genuinely have no published
+    approach — so per-airport emptiness proves nothing, while a country with
+    zero procedures across every one of its airports is a coverage gap rather
+    than a nation of VFR-only fields.
+
+    Derived from the data, never hard-coded to a region: the day US (or
+    Canadian, or Australian) procedures are ingested, those countries start
+    grading with no code change here. Computed once per process off the
+    already-cached model, so it costs one pass over ~8.5k airports.
+
+    Built on euro_aip's own ``with_procedures()`` query rather than a hand
+    -rolled scan. The whole question really belongs to euro_aip, which already
+    carries an ``airac_country_coverage`` table (``country_iso``, ``source``,
+    ``airports_count``) that would answer it authoritatively — but that table
+    ships **empty** in the current build (0 rows as of the 2026-07-28 nav.db),
+    so deriving from the procedure rows is the only signal actually available.
+    Once euro_aip populates it, this should become a read of that table (or a
+    ``covers_procedures()`` API on the model) instead of a scan.
+    """
+    model = _load_airport_model(db_path)
+    covered = frozenset(
+        country
+        for country in (
+            getattr(a, "iso_country", None) for a in model.airports.with_procedures()
+        )
+        if country
+    )
+    logger.info(
+        "Procedure coverage: %d countries surveyed in %s", len(covered), db_path,
+    )
+    return covered
+
+
 def get_timezone(lat: float, lon: float) -> str | None:
     """Return the IANA timezone name for a lat/lon, or None if unknown."""
     return _timezone_finder().timezone_at(lat=lat, lng=lon)
@@ -454,6 +493,18 @@ def get_runway_approaches(
             # would manufacture a RED out of a data problem.
             logger.debug("Approach lookup failed for %s", icao, exc_info=True)
             result[icao] = AirportApproaches(icao=icao, lookup_failed=True)
+            continue
+
+        # No procedure rows here AND none anywhere in this country: the dataset
+        # does not survey it, so we cannot claim "no instrument approach" — the
+        # grade map's most severe input — on the strength of a coverage gap.
+        # A surveyed country with no rows at this field is the opposite case
+        # and still falls through to grade (EGTF Fairoaks, #510).
+        if not has_procedure_data and getattr(airport, "iso_country", None) \
+                not in _procedure_coverage_countries(db_path):
+            result[icao] = AirportApproaches(
+                icao=icao, lookup_failed=True, coverage_gap=True,
+            )
             continue
 
         approaches: list[RunwayApproach] = []

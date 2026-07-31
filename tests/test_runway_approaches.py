@@ -18,14 +18,19 @@ from euro_aip.models.runway import Runway
 from weatherbrief.airports import (
     _is_circling_name,
     _normalize_runway_ident,
+    _procedure_coverage_countries,
     get_runway_approaches,
 )
 
 
-def _airport(ident: str, runways: list[Runway], procedures: list[Procedure]) -> Airport:
+def _airport(
+    ident: str, runways: list[Runway], procedures: list[Procedure],
+    iso_country: str = "GB",
+) -> Airport:
     airport = Airport(ident=ident)
     airport.runways = runways
     airport.procedures = procedures
+    airport.iso_country = iso_country
     return airport
 
 
@@ -51,6 +56,10 @@ class _FakeCollection:
     def get(self, icao):
         return self._airports.get(icao)
 
+    def with_procedures(self):
+        """Mirrors euro_aip's AirportCollection.with_procedures()."""
+        return [a for a in self._airports.values() if getattr(a, "procedures", None)]
+
 
 class _FakeModel:
     def __init__(self, airports: dict[str, Airport]):
@@ -58,8 +67,27 @@ class _FakeModel:
 
 
 def _lookup(airports: dict[str, Airport], icaos: list[str], declared=None):
-    with patch("weatherbrief.airports._load_airport_model", return_value=_FakeModel(airports)):
+    """Look up approaches with the dataset-coverage gate pinned OPEN.
+
+    These tests exercise the approach/runway join, not dataset coverage, and a
+    one-airport fake world has no other field to establish that its country is
+    surveyed. Pinning every present country as covered keeps the gate a no-op
+    here; :class:`TestProcedureCoverageGate` exercises the real thing.
+    """
+    covered = frozenset(
+        c for c in (getattr(a, "iso_country", None) for a in airports.values()) if c
+    )
+    _procedure_coverage_countries.cache_clear()
+    with patch("weatherbrief.airports._load_airport_model", return_value=_FakeModel(airports)), \
+            patch("weatherbrief.airports._procedure_coverage_countries", return_value=covered):
         return get_runway_approaches(icaos, "nav.db", declared)
+
+
+def _lookup_real_coverage(airports: dict[str, Airport], icaos: list[str]):
+    """Look up approaches with the real coverage computation in play."""
+    _procedure_coverage_countries.cache_clear()
+    with patch("weatherbrief.airports._load_airport_model", return_value=_FakeModel(airports)):
+        return get_runway_approaches(icaos, "nav.db")
 
 
 class TestNormalizeRunwayIdent:
@@ -269,4 +297,100 @@ class TestDeclaredUnpublishedApproaches:
         result = _lookup({}, ["EGTF"], ["EGTF"])["EGTF"]
         assert result.lookup_failed is True
         assert result.has_declared_approach is False
+        assert result.has_iap is False
+
+
+class TestProcedureCoverageGate:
+    """Zero procedure rows means two different things depending on coverage.
+
+    While ``nav.db`` was euro_aip's European-only build, "no procedure rows at
+    this airport" genuinely meant "no published approach" — the fact EGTF
+    Fairoaks and the #510 declared-approach feature are built on. Once the DB
+    gained ~3,600 US airports with runways and no procedures at all, the same
+    emptiness came to mean "unsurveyed" there, and grading it as "no IAP" hands
+    the grade map its most severe input on missing data (observed: every US
+    arrival graded Approach Feasibility RED).
+
+    The discriminator is per-COUNTRY coverage, never geography: a country is
+    surveyed when any of its airports carries procedures. Per-airport emptiness
+    proves nothing — euro_aip holds procedures for 128 of 430 French airports
+    and the rest genuinely have none.
+    """
+
+    def _world(self):
+        """A surveyed country (GB, one field with an IAP) plus an unsurveyed one."""
+        return {
+            # GB is surveyed: EGKK carries a procedure.
+            "EGKK": _airport("EGKK", [_runway("08", "26")],
+                             [_approach("RWY08 ILS", "ILS", "08")], iso_country="GB"),
+            # ...so EGTF's own emptiness is a real "no published approach".
+            "EGTF": _airport("EGTF", [_runway("06", "24")], [], iso_country="GB"),
+            # US has runways everywhere and procedures nowhere: a coverage gap.
+            "KORD": _airport("KORD", [_runway("10L", "28R")], [], iso_country="US"),
+        }
+
+    def test_unsurveyed_country_cannot_assert_no_approach(self):
+        """The regression: a US field must abstain, not grade."""
+        result = _lookup_real_coverage(self._world(), ["KORD"])["KORD"]
+        assert result.lookup_failed is True
+        assert result.coverage_gap is True
+        assert result.has_iap is False
+
+    def test_surveyed_country_still_grades_an_empty_field(self):
+        """EGTF must keep grading — #510 exists precisely for this case.
+
+        This is the half a blanket "disable outside Europe" switch would get
+        right by accident and a per-airport emptiness check would get wrong.
+        """
+        result = _lookup_real_coverage(self._world(), ["EGTF"])["EGTF"]
+        assert result.lookup_failed is False
+        assert result.coverage_gap is False
+        assert result.has_iap is False
+        assert result.has_procedure_data is False
+
+    def test_airport_with_approaches_is_untouched(self):
+        result = _lookup_real_coverage(self._world(), ["EGKK"])["EGKK"]
+        assert result.lookup_failed is False
+        assert result.coverage_gap is False
+        assert [a.name for a in result.published] == ["RWY08 ILS"]
+
+    def test_coverage_is_derived_from_data_not_hardcoded(self):
+        """Ingesting US procedures must switch the US on with no code change."""
+        world = self._world()
+        _procedure_coverage_countries.cache_clear()
+        with patch("weatherbrief.airports._load_airport_model",
+                   return_value=_FakeModel(world)):
+            assert _procedure_coverage_countries("nav.db") == frozenset({"GB"})
+
+        # Now one US field gains a published approach.
+        world["KJFK"] = _airport("KJFK", [_runway("04L", "22R")],
+                                 [_approach("RWY04L ILS", "ILS", "04L")],
+                                 iso_country="US")
+        _procedure_coverage_countries.cache_clear()
+        with patch("weatherbrief.airports._load_airport_model",
+                   return_value=_FakeModel(world)):
+            assert _procedure_coverage_countries("nav.db") == frozenset({"GB", "US"})
+
+        # ...and KORD stops abstaining, with no change to this module.
+        result = _lookup_real_coverage(world, ["KORD"])["KORD"]
+        assert result.lookup_failed is False
+        assert result.coverage_gap is False
+
+    def test_procedure_rows_that_are_not_approaches_still_grade(self):
+        """``has_procedure_data`` and the coverage gate are different questions.
+
+        A field with departure/arrival procedures but no approach has real
+        data saying "no IAP here" — that must not be mistaken for a gap.
+        """
+        world = self._world()
+        world["EGSX"] = _airport(
+            "EGSX", [_runway("04", "22")],
+            [Procedure(name="SID FOO", procedure_type="departure",
+                       approach_type=None, runway_ident="04")],
+            iso_country="GB",
+        )
+        result = _lookup_real_coverage(world, ["EGSX"])["EGSX"]
+        assert result.lookup_failed is False
+        assert result.coverage_gap is False
+        assert result.has_procedure_data is True
         assert result.has_iap is False

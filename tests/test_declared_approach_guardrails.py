@@ -90,6 +90,7 @@ def test_declaration_does_not_survive_into_the_published_view(monkeypatch):
     """
     class _Airport:
         ident = "EGTF"
+        iso_country = "GB"
         runways: list = []
         procedures: list = []
 
@@ -102,11 +103,21 @@ def test_declaration_does_not_survive_into_the_published_view(monkeypatch):
                         return []
                 return _Empty()
 
+    class _CoveredGbField:
+        """Establishes that GB is surveyed, so EGTF's own empty procedure list
+        reads as "no published approach" (the #510 premise) rather than as a
+        dataset coverage gap."""
+        iso_country = "GB"
+
     class _Model:
         class airports:
             @staticmethod
             def get(icao):
                 return _Airport() if icao == "EGTF" else None
+
+            @staticmethod
+            def with_procedures():
+                return [_CoveredGbField()]
 
     monkeypatch.setattr(
         "weatherbrief.airports._load_airport_model", lambda _p: _Model(),
