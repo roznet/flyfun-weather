@@ -9,6 +9,11 @@ variables/levels we need via HTTP Range requests.
 Example:
     1:0:d=2023102700:CLWMR:1000 mb:6 hour fcst:
     2:45892:d=2023102700:CLWMR:975 mb:6 hour fcst:
+
+The parsers are parametrized on their variable sets so the HRRR fetcher (#457)
+can reuse them: HRRR .idx files share the exact same format but need different
+variables, and HRRR sounding levels are matched via the "mb" wildcard instead
+of enumerated level strings.
 """
 
 from __future__ import annotations
@@ -119,11 +124,16 @@ def _find_next_offset(all_offsets: list[int], start: int) -> int | None:
     return None
 
 
-def parse_idx(text: str) -> list[IdxEntry]:
+def parse_idx(text: str, variables: set[str] | None = None) -> list[IdxEntry]:
     """Parse a GFS .idx file into structured entries.
 
-    Only returns entries for variables in GRIB_VARIABLES at pressure levels.
+    Only returns entries for the wanted variables at pressure levels.
+
+    Args:
+        text: Raw .idx file content.
+        variables: Variable-name override; defaults to GRIB_VARIABLES.
     """
+    wanted = GRIB_VARIABLES if variables is None else variables
     entries: list[IdxEntry] = []
     for line in text.strip().splitlines():
         parts = line.strip().split(":")
@@ -133,7 +143,7 @@ def parse_idx(text: str) -> list[IdxEntry]:
             parts[0], parts[1], parts[2], parts[3], parts[4], parts[5],
         )
 
-        if var not in GRIB_VARIABLES:
+        if var not in wanted:
             continue
 
         level_match = _LEVEL_RE.match(level_str)
@@ -170,16 +180,44 @@ _PREFER_AVERAGED_PAIRS: set[tuple[str, str]] = {
 }
 
 
-def parse_cloud_diag_idx(text: str) -> list[CloudDiagIdxEntry]:
+def _pair_matches(var: str, level_str: str, pairs: set[tuple[str, str]]) -> bool:
+    """Match an idx (variable, level) against a pair set.
+
+    The level token ``"mb"`` acts as a wildcard for any pressure level
+    ("NNN mb") — HRRR sounding fields exist at 40 pressure levels, and
+    enumerating every level string would drown the variable sets in noise.
+    """
+    if (var, level_str) in pairs:
+        return True
+    return (var, "mb") in pairs and _LEVEL_RE.match(level_str) is not None
+
+
+def parse_cloud_diag_idx(
+    text: str,
+    pairs: set[tuple[str, str]] | None = None,
+    prefer_averaged: set[tuple[str, str]] | None = None,
+) -> list[CloudDiagIdxEntry]:
     """Parse a GFS .idx file for cloud diagnostic entries.
 
-    Returns entries matching CLOUD_DIAG_VARIABLES at their accepted levels.
-    For each (variable, level) that has both an instantaneous ("N hour fcst")
-    and an averaged ("0-N hour ave fcst") form, selection is per-field:
+    Returns entries matching the wanted (variable, level) pairs. For each
+    (variable, level) that has both an instantaneous ("N hour fcst") and an
+    averaged ("0-N hour ave fcst") form, selection is per-field:
     low/mid/high cover (``_PREFER_AVERAGED_PAIRS``) keep the AVERAGED entry to
     match their averaged-only geometry; all other fields keep the
     instantaneous entry. (#441 finding #5)
+
+    Args:
+        text: Raw .idx file content.
+        pairs: (variable, level_str) override; defaults to _CLOUD_DIAG_PAIRS.
+            The level token "mb" matches any pressure level (see
+            _pair_matches).
+        prefer_averaged: pairs that keep the averaged form; defaults to
+            _PREFER_AVERAGED_PAIRS.
     """
+    if pairs is None:
+        pairs = _CLOUD_DIAG_PAIRS
+    if prefer_averaged is None:
+        prefer_averaged = _PREFER_AVERAGED_PAIRS
     all_entries: list[CloudDiagIdxEntry] = []
     for line in text.strip().splitlines():
         parts = line.strip().split(":")
@@ -189,7 +227,7 @@ def parse_cloud_diag_idx(text: str) -> list[CloudDiagIdxEntry]:
             parts[0], parts[1], parts[2], parts[3], parts[4], parts[5],
         )
 
-        if (var, level_str) not in _CLOUD_DIAG_PAIRS:
+        if not _pair_matches(var, level_str, pairs):
             continue
 
         try:
@@ -219,7 +257,7 @@ def parse_cloud_diag_idx(text: str) -> list[CloudDiagIdxEntry]:
     for e in all_entries:
         key = (e.variable, e.level_str)
         is_avg = "ave" in e.forecast_step
-        if key in _PREFER_AVERAGED_PAIRS:
+        if key in prefer_averaged:
             # Keep averaged; drop the instant form when an averaged one exists.
             if not is_avg and key in avg_keys:
                 continue
@@ -235,6 +273,7 @@ def parse_cloud_diag_idx(text: str) -> list[CloudDiagIdxEntry]:
 def plan_byte_ranges(
     idx_text: str,
     target_levels: list[int] | None = None,
+    variables: set[str] | None = None,
 ) -> list[ByteRange]:
     """Parse .idx and compute byte ranges for CLWMR/ICMR downloads.
 
@@ -244,6 +283,7 @@ def plan_byte_ranges(
     Args:
         idx_text: Raw .idx file content.
         target_levels: If set, only include these pressure levels.
+        variables: Variable-name override; defaults to GRIB_VARIABLES.
 
     Returns:
         List of ByteRange objects for HTTP Range requests.
@@ -251,7 +291,7 @@ def plan_byte_ranges(
     all_offsets = _collect_all_offsets(idx_text)
 
     # Get our target entries
-    entries = parse_idx(idx_text)
+    entries = parse_idx(idx_text, variables=variables)
     if target_levels is not None:
         level_set = set(target_levels)
         entries = [e for e in entries if e.level_hpa in level_set]
@@ -269,17 +309,26 @@ def plan_byte_ranges(
     return ranges
 
 
-def plan_cloud_diag_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
+def plan_cloud_diag_byte_ranges(
+    idx_text: str,
+    pairs: set[tuple[str, str]] | None = None,
+    prefer_averaged: set[tuple[str, str]] | None = None,
+) -> list[CloudDiagByteRange]:
     """Parse .idx and compute byte ranges for cloud diagnostic downloads.
 
     Args:
         idx_text: Raw .idx file content.
+        pairs: (variable, level_str) override; defaults to _CLOUD_DIAG_PAIRS.
+        prefer_averaged: pairs that keep the averaged form; defaults to
+            _PREFER_AVERAGED_PAIRS.
 
     Returns:
         List of CloudDiagByteRange objects for HTTP Range requests.
     """
     all_offsets = _collect_all_offsets(idx_text)
-    entries = parse_cloud_diag_idx(idx_text)
+    entries = parse_cloud_diag_idx(
+        idx_text, pairs=pairs, prefer_averaged=prefer_averaged,
+    )
 
     ranges: list[CloudDiagByteRange] = []
     for entry in entries:
@@ -292,3 +341,65 @@ def plan_cloud_diag_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
         ))
 
     return ranges
+
+
+# --- HRRR variable sets (#457) ---
+#
+# HRRR .idx files use the same line format as GFS, so the parametrized parsers
+# above handle them unchanged; only the wanted variables differ. Level strings
+# are idx-verbatim (checked against a real wrfprs message, 2026-07-31).
+
+# Sounding (pressure-level) set — 40 levels, 25 hPa spacing, plus surface PRES.
+HRRR_SOUNDING_VARIABLES: dict[str, set[str]] = {
+    "TMP": {"mb"}, "DPT": {"mb"}, "RH": {"mb"},
+    "UGRD": {"mb"}, "VGRD": {"mb"}, "VVEL": {"mb"},
+    "HGT": {"mb"}, "CLMR": {"mb"}, "CIMIXR": {"mb"},
+    "PRES": {"surface"},
+}
+
+# Diagnostics set (~15 MB/fhour).
+HRRR_DIAG_VARIABLES: dict[str, set[str]] = {
+    "LCDC": {"low cloud layer"},
+    "MCDC": {"middle cloud layer"},
+    "HCDC": {"high cloud layer"},
+    "TCDC": {"entire atmosphere"},
+    "HGT": {"cloud ceiling", "cloud base"},
+    "CAPE": {"surface", "180-0 mb above ground"},
+    "CIN": {"surface", "180-0 mb above ground"},
+    "VIS": {"surface"},
+    "GUST": {"surface"},
+}
+
+
+def _hrrr_pairs(variables: dict[str, set[str]]) -> set[tuple[str, str]]:
+    """Flatten a variable→levels dict into (variable, level_str) pairs."""
+    return {(var, lev) for var, levels in variables.items() for lev in levels}
+
+
+def plan_hrrr_sounding_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
+    """Byte ranges for the HRRR sounding set (pressure levels + surface PRES).
+
+    Uses the cloud-diag-style planner because HRRR pressure levels are
+    level-strings like "925 mb" (matched via the "mb" wildcard) — they are
+    parsed to hPa ints downstream by message decode, so the raw level strings
+    are kept here for decode to group by. Instantaneous fields only: HRRR
+    publishes no averaged forms for these, and prefer-instant is the safe
+    default if one ever appears.
+    """
+    return plan_cloud_diag_byte_ranges(
+        idx_text, pairs=_hrrr_pairs(HRRR_SOUNDING_VARIABLES),
+        prefer_averaged=set(),
+    )
+
+
+def plan_hrrr_diag_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
+    """Byte ranges for the HRRR diagnostics set (~15 MB/fhour).
+
+    Same cloud-diag-style planning as the sounding set, with HRRR's own
+    diag variables (which add "cloud base" HGT and drop GFS's cloud-layer
+    PRES/TMP geometry fields).
+    """
+    return plan_cloud_diag_byte_ranges(
+        idx_text, pairs=_hrrr_pairs(HRRR_DIAG_VARIABLES),
+        prefer_averaged=set(),
+    )
