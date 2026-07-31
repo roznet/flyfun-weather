@@ -1507,3 +1507,63 @@ class TestHrrrNativeConvectiveParcel:
         out = self._assess(ThermodynamicIndices(cape_surface_jkg=1800.0), self._diag())
         assert out.cape_jkg == 1800.0
         assert out.method == "nwp_cape_fallback"
+
+
+# ---------------------------------------------------------------------------
+# WB_HRRR_ENABLED kill switch
+# ---------------------------------------------------------------------------
+
+
+class TestHrrrKillSwitch:
+    """``WB_HRRR_ENABLED=false`` forces the plain-GFS path.
+
+    Two jobs: measuring the HRRR-vs-plain-GFS difference A/B on one route
+    (how the #457 upgrade was validated), and routing around an S3-side
+    problem without a deploy. Pinned because an env flag that silently stops
+    being read is indistinguishable from a working one until it is needed.
+    """
+
+    def _call(self):
+        from weatherbrief.fetch.grib import _try_enrich_gfs_from_hrrr
+
+        return _try_enrich_gfs_from_hrrr(
+            [], [], [_rp(42.3656, -71.0096), _rp(39.1754, -76.6683, 320)],
+            _utc(2026, 8, 1, 12),
+            data_dir=Path("/nonexistent"), flight_duration_hours=1.0,
+            as_of_time=None, session=None,
+        )
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "FALSE", " false "])
+    def test_disabled_short_circuits_before_any_hrrr_work(self, monkeypatch, value):
+        """Returns None WITHOUT consulting the domain gate.
+
+        Asserting on the domain call rather than the return value is what makes
+        this a kill-switch test: a route this far inside CONUS would otherwise
+        pass the gate, so a None from a mis-parsed flag would look identical.
+        """
+        monkeypatch.setenv("WB_HRRR_ENABLED", value)
+        with patch(
+            "weatherbrief.fetch.grib.hrrr_fetch.route_in_hrrr_domain",
+        ) as domain:
+            assert self._call() is None
+        domain.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "TRUE"])
+    def test_enabled_values_reach_the_domain_gate(self, monkeypatch, value):
+        monkeypatch.setenv("WB_HRRR_ENABLED", value)
+        with patch(
+            "weatherbrief.fetch.grib.hrrr_fetch.route_in_hrrr_domain",
+            return_value=False,
+        ) as domain:
+            assert self._call() is None
+        domain.assert_called_once()
+
+    def test_default_is_enabled(self, monkeypatch):
+        """Absent env var must behave as on — HRRR is the shipped default."""
+        monkeypatch.delenv("WB_HRRR_ENABLED", raising=False)
+        with patch(
+            "weatherbrief.fetch.grib.hrrr_fetch.route_in_hrrr_domain",
+            return_value=False,
+        ) as domain:
+            assert self._call() is None
+        domain.assert_called_once()

@@ -2785,6 +2785,17 @@ def _try_enrich_gfs_from_hrrr(
         route_in_hrrr_domain,
     )
 
+    # Kill switch (``WB_HRRR_ENABLED=false``) — forces the plain-GFS path for a
+    # route that would otherwise qualify. Same shape as
+    # WB_GRIB_PRECACHE_ENABLED. Exists so the HRRR-vs-plain-GFS difference can
+    # be measured A/B on one route, and so an S3-side problem can be routed
+    # around without a deploy. Read per call, not cached at import.
+    if os.environ.get("WB_HRRR_ENABLED", "true").strip().lower() not in (
+        "1", "true", "yes",
+    ):
+        logger.info("HRRR disabled via WB_HRRR_ENABLED; using GFS")
+        return None
+
     try:
         if not route_in_hrrr_domain(route_points):
             return None
