@@ -3061,3 +3061,141 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         out["nwp_total_totals"] = totalx
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# HRRR diagnostics builders (#457)
+# ---------------------------------------------------------------------------
+
+
+def build_hrrr_cloud_diagnostics(
+    raw: dict[str, float],
+) -> "NWPCloudDiagnostics | None":
+    """Convert raw HRRR wrfprs diagnostics into NWPCloudDiagnostics.
+
+    Input ``raw`` is one per-point dict from :func:`decode_hrrr_diag_per_point`
+    (native HRRR units: covers already 0–100 %, heights in meters, stability
+    indices in J/kg). The output takes the ECMWF shape — low/mid/high covers,
+    total cover, ceiling, mixed-layer CAPE/CIN, and the decoded cloud base
+    mirrored onto ``low.base_ft`` — because that is what downstream consumers
+    (interpolation axes, advisories) already understand.
+
+    HRRR runs NO convective parameterization (it is convection-allowing at
+    3 km), so there are no convective-base/top, convective-cover, or
+    convective-precip fields to fill — those stay None.
+
+    **CIN sign convention (#457, measured 2026-07-31).** Unlike ECMWF
+    ``mlcin100`` and ICON ``CIN_ML``, which deliver a NON-NEGATIVE magnitude,
+    HRRR CIN is delivered ALREADY NEGATIVE-or-zero in J/kg — i.e. exactly the
+    app's internal convention (more negative = stronger cap). Verified on the
+    real 00z f00 wrfprs file by byte-range fetching the CIN messages from
+    ``noaa-hrrr-bdp-pds`` (1,905,141 cells each, no missing-value bitmap):
+    ``CIN:surface`` min −804 / max 0, ``CIN:180-0 mb above ground``
+    min −776 / max 0, zero positive cells in either. CIN therefore passes
+    through UNCHANGED, and ``_normalize_model_cin`` is deliberately NOT used:
+    it would floor every genuine negative cap to 0, erasing the signal (#441
+    finding #2 in reverse). A missing/absent key stays None — None ≠ 0.
+
+    Unit conversions applied:
+    - meters → feet (× 3.28084), negative heights dropped as decode artifacts
+      (sibling precedent: :func:`build_icon_cloud_diagnostics`)
+
+    Returns None if the raw dict is empty or no cloud-diagnostic field is
+    populated (surface-only extras do not count).
+    """
+    from weatherbrief.models.analysis import (
+        NWPCloudDiagnostics,
+        NWPCloudLayerDiag,
+    )
+
+    if not raw:
+        return None
+
+    def _m_to_ft(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None or val < 0:
+            return None
+        return round(val * _M_TO_FT)
+
+    def _pct(key: str) -> float | None:
+        return raw.get(key)
+
+    ceiling_ft = _m_to_ft("ceiling_m")
+    cloud_base_ft = _m_to_ft("cloud_base_m")
+    low_cover = _pct("low_cover_pct")
+    mid_cover = _pct("mid_cover_pct")
+    high_cover = _pct("high_cover_pct")
+    total_cover = _pct("total_cover_pct")
+    ml_cape = _opt_float(raw, "ml_cape_jkg")
+    # Already in the internal negative convention — see the docstring for the
+    # live measurement behind the passthrough. (#457)
+    ml_cin = _opt_float(raw, "ml_cin_jkg")
+
+    has_any = (
+        ceiling_ft is not None
+        or cloud_base_ft is not None
+        or low_cover is not None
+        or mid_cover is not None
+        or high_cover is not None
+        or total_cover is not None
+        or ml_cape is not None
+        or ml_cin is not None
+    )
+    if not has_any:
+        return None
+
+    return NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=low_cover, base_ft=cloud_base_ft),
+        mid=NWPCloudLayerDiag(cover_pct=mid_cover),
+        high=NWPCloudLayerDiag(cover_pct=high_cover),
+        total_cover_pct=total_cover,
+        ceiling_ft=ceiling_ft,
+        ml_cape_jkg=ml_cape,
+        ml_cin_jkg=ml_cin,
+    )
+
+
+def build_hrrr_surface_extras(raw: dict[str, float]) -> dict[str, float | None]:
+    """Map HRRR wrfprs diagnostics into the standalone-snapshot extras schema.
+
+    Input ``raw`` is the same per-point dict as
+    :func:`build_hrrr_cloud_diagnostics` consumes. Output keys match the
+    snapshot/extras columns the merge flow fills for other models; an empty
+    raw dict yields the all-None skeleton (sibling precedent:
+    :func:`build_ecmwf_surface_snapshot`).
+
+    Unit conversions:
+    - m/s gust → kt (× 1.94384)
+
+    CAPE/CIN use the SURFACE parcels (not the 180-0 mb mixed layer the cloud
+    diagnostics carry), matching how ECMWF fills ``cape_jkg`` from its own
+    surface-based index. CIN keeps the delivered sign — already the internal
+    negative convention, see :func:`build_hrrr_cloud_diagnostics`. (#457)
+    """
+    out: dict[str, float | None] = {
+        "visibility_m": None,
+        "wind_gusts_10m_kt": None,
+        "cape_jkg": None,
+        "convective_inhibition_jkg": None,
+    }
+
+    if not raw:
+        return out
+
+    vis = raw.get("visibility_m")
+    if vis is not None:
+        out["visibility_m"] = vis
+
+    gust = raw.get("gust_ms")
+    if gust is not None:
+        out["wind_gusts_10m_kt"] = gust * _KT_PER_MS
+
+    cape = raw.get("sfc_cape_jkg")
+    if cape is not None:
+        out["cape_jkg"] = cape
+
+    cin = raw.get("sfc_cin_jkg")
+    if cin is not None:
+        out["convective_inhibition_jkg"] = cin
+
+    return out

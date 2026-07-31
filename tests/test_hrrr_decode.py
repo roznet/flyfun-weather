@@ -31,6 +31,8 @@ from weatherbrief.fetch.grib.decode import (
     _HRRR_PRESSURE_VAR_MAP,
     _lcc_project_points,
     _rotate_grid_wind_to_earth,
+    build_hrrr_cloud_diagnostics,
+    build_hrrr_surface_extras,
     build_pressure_levels_from_grib,
     decode_hrrr_diag_per_point,
     decode_hrrr_pressure_per_point,
@@ -472,3 +474,116 @@ def test_decode_worker_hrrr_entries(tmp_path, sounding_bytes, diag_bytes):
     diag_path.write_bytes(diag_bytes)
     diags = decode_worker.decode_hrrr_diag(str(diag_path), [lat_in], [lon_in])
     assert diags[0]["gust_ms"] == pytest.approx(12.0, rel=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# build_hrrr_cloud_diagnostics / build_hrrr_surface_extras
+# ---------------------------------------------------------------------------
+#
+# CIN sign convention: measured on the real 00z f00 wrfprs file
+# (2026-07-31, byte-range fetch of the CIN:surface and CIN:180-0mb
+# messages from noaa-hrrr-bdp-pds) — HRRR CIN is delivered ALREADY
+# NEGATIVE-or-zero in J/kg (surface min −804 / max 0 over 1.9M cells;
+# 180-0mb min −776 / max 0). That is exactly the app's internal
+# convention, so the builder passes CIN through unchanged.
+
+_HRRR_RAW_FULL: dict[str, float] = {
+    "low_cover_pct": 55.0,
+    "mid_cover_pct": 33.0,
+    "high_cover_pct": 22.0,
+    "total_cover_pct": 80.0,
+    "ceiling_m": 1500.0,
+    "cloud_base_m": 900.0,
+    "ml_cape_jkg": 900.0,
+    "ml_cin_jkg": -25.0,
+    "sfc_cape_jkg": 1500.0,
+    "sfc_cin_jkg": -50.0,
+    "visibility_m": 8000.0,
+    "gust_ms": 12.0,
+}
+
+
+def test_build_hrrr_cloud_diagnostics_full_mapping():
+    diag = build_hrrr_cloud_diagnostics(dict(_HRRR_RAW_FULL))
+
+    assert diag is not None
+    # Covers are already 0–100 % → straight passthrough.
+    assert diag.low.cover_pct == 55.0
+    assert diag.mid.cover_pct == 33.0
+    assert diag.high.cover_pct == 22.0
+    assert diag.total_cover_pct == 80.0
+    # Heights convert m → ft.
+    assert diag.ceiling_ft == round(1500.0 * 3.28084)
+    assert diag.low.base_ft == round(900.0 * 3.28084)
+    # Stability indices from the 180-0 mb (mixed-layer) entries.
+    assert diag.ml_cape_jkg == 900.0
+    assert diag.ml_cin_jkg == -25.0
+    # HRRR has no convective scheme — those fields stay unset.
+    assert diag.convective_cover_pct is None
+    assert diag.convective_base_ft is None
+    assert diag.convective_top_ft is None
+    assert diag.convective_precip_mm_h is None
+    # Mid/high layers carry no per-band geometry in the ECMWF shape.
+    assert diag.mid.base_ft is None
+    assert diag.high.base_ft is None
+
+
+def test_build_hrrr_cloud_diagnostics_cin_negative_passthrough():
+    """HRRR CIN arrives already negative — no negation, no _normalize_model_cin."""
+    diag = build_hrrr_cloud_diagnostics({"ml_cin_jkg": -412.0})
+    assert diag is not None
+    assert diag.ml_cin_jkg == -412.0
+
+
+def test_build_hrrr_cloud_diagnostics_zero_is_data():
+    """None ≠ 0: a zero CIN/cover is a real value, not a missing one."""
+    diag = build_hrrr_cloud_diagnostics({"ml_cin_jkg": 0.0, "total_cover_pct": 0.0})
+    assert diag is not None
+    assert diag.ml_cin_jkg == 0.0
+    assert diag.total_cover_pct == 0.0
+
+
+def test_build_hrrr_cloud_diagnostics_missing_fields_stay_none():
+    diag = build_hrrr_cloud_diagnostics({"low_cover_pct": 40.0})
+    assert diag is not None
+    assert diag.low.cover_pct == 40.0
+    assert diag.ceiling_ft is None
+    assert diag.low.base_ft is None
+    assert diag.ml_cape_jkg is None
+    assert diag.ml_cin_jkg is None
+    assert diag.total_cover_pct is None
+
+
+def test_build_hrrr_cloud_diagnostics_negative_height_dropped():
+    """A cloud below ground is a decode artifact (sibling precedent: ICON)."""
+    diag = build_hrrr_cloud_diagnostics({"ceiling_m": -5.0, "low_cover_pct": 10.0})
+    assert diag is not None
+    assert diag.ceiling_ft is None
+
+
+def test_build_hrrr_cloud_diagnostics_empty_or_surface_only_returns_none():
+    assert build_hrrr_cloud_diagnostics({}) is None
+    # Surface-only keys are not cloud diagnostics → no partial model.
+    assert build_hrrr_cloud_diagnostics(
+        {"visibility_m": 8000.0, "gust_ms": 12.0, "sfc_cape_jkg": 1500.0}
+    ) is None
+
+
+def test_build_hrrr_surface_extras_full_mapping():
+    extras = build_hrrr_surface_extras(dict(_HRRR_RAW_FULL))
+
+    assert extras["visibility_m"] == 8000.0
+    assert extras["wind_gusts_10m_kt"] == pytest.approx(12.0 * 1.94384)
+    assert extras["cape_jkg"] == 1500.0
+    # Same sign convention as ml_cin: already negative → passthrough.
+    assert extras["convective_inhibition_jkg"] == -50.0
+
+
+def test_build_hrrr_surface_extras_empty_raw_all_none():
+    extras = build_hrrr_surface_extras({})
+    assert extras == {
+        "visibility_m": None,
+        "wind_gusts_10m_kt": None,
+        "cape_jkg": None,
+        "convective_inhibition_jkg": None,
+    }
