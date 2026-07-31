@@ -192,6 +192,61 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
 _ECMWF_FRAC_TO_PCT = {"cc"}
 
+# HRRR wrfprs sounding variables (#457): cfgrib var name → raw field.
+# HRRR delivers dewpoint (DPT), omega (VVEL, already Pa/s) and geopotential
+# height (HGT, gpm) DIRECTLY — no Magnus / −ρgw / hypsometric derivations.
+# UGRD/VGRD are grid-relative (uvRelativeToGrid=1) and rotated to
+# earth-relative after sampling (see decode_hrrr_pressure_per_point).
+#
+# Verified against a real wrfprs message (2026-07-31 18z f01):
+# - CLMR (0/1/22) decodes as cfgrib var "clwmr".
+# - CIMIXR (0/1/82) is an NCEP-local parameter eccodes 2.48 does not know —
+#   it decodes as var name "unknown" (paramId 0). The "unknown" alias is
+#   safe here because the sounding blob is byte-range-planned from
+#   HRRR_SOUNDING_VARIABLES, so CIMIXR is the only unknown-named parameter
+#   that can appear in it.
+_HRRR_PRESSURE_VAR_MAP = {
+    "t": "raw_temperature_k",
+    "dpt": "raw_dewpoint_k",          # direct dewpoint — no Magnus derivation
+    "r": "raw_relative_humidity_pct",
+    "u": "raw_u_wind_m_s",            # grid-relative — rotated at decode
+    "v": "raw_v_wind_m_s",
+    "w": "raw_omega_pa_s",            # VVEL, already Pa/s — no −ρgw conversion
+    "gh": "raw_geopotential_height_gpm",
+    "clwmr": "cloud_liquid_water_kg_kg",   # cfgrib decodes CLMR as "clwmr" (verified)
+    "clmr": "cloud_liquid_water_kg_kg",
+    "cimixr": "ice_mixing_ratio_kg_kg",    # HRRR's ice name (verified in idx)
+    "unknown": "ice_mixing_ratio_kg_kg",   # CIMIXR decodes as "unknown" (verified)
+    "pres": "surface_pressure_pa",         # surface level only
+    "sp": "surface_pressure_pa",
+}
+
+# Level key for HRRR surface PRES in decode_hrrr_pressure_per_point results.
+# 0 hPa can never collide with a real isobaric level (HRRR tops out at 50 hPa),
+# and build_pressure_levels_from_grib drops the entry: its only field,
+# surface_pressure_pa, is not converted by _convert_raw_sounding, so the level
+# converts to an empty dict and is skipped. The enrichment flow reads the
+# surface pressure straight from the raw point dict, like
+# _fill_ecmwf_orography does for the ECMWF surface decode.
+_HRRR_SURFACE_PRESSURE_KEY = 0
+
+# HRRR diagnostics (#457): (cfgrib var name, GRIB_typeOfLevel) → raw field.
+# Level/typeOfLevel strings verified against real wrfprs messages.
+_HRRR_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
+    ("lcc", "lowCloudLayer"): "low_cover_pct",
+    ("mcc", "middleCloudLayer"): "mid_cover_pct",
+    ("hcc", "highCloudLayer"): "high_cover_pct",
+    ("tcc", "atmosphere"): "total_cover_pct",
+    ("gh", "cloudCeiling"): "ceiling_m",
+    ("gh", "cloudBase"): "cloud_base_m",
+    ("cape", "pressureFromGroundLayer"): "ml_cape_jkg",   # 180-0 mb above ground
+    ("cin", "pressureFromGroundLayer"): "ml_cin_jkg",
+    ("cape", "surface"): "sfc_cape_jkg",
+    ("cin", "surface"): "sfc_cin_jkg",
+    ("vis", "surface"): "visibility_m",
+    ("gust", "surface"): "gust_ms",
+}
+
 
 def _frac_grid_indices(
     coord_arr: "np.ndarray",
@@ -297,6 +352,129 @@ def _bilinear_grid_weights(
     )
 
 
+def _rotate_grid_wind_to_earth(u, v, lons_deg, lov_deg=262.5, cone_const=None):
+    """Grid-relative → earth-relative for a Lambert conformal grid.
+
+    θ = (λ − LoV) · k per point (k = sin(φc) = sin 38.5° when Latin1 == Latin2,
+    which HRRR satisfies). Rotation is linear, so it commutes with the
+    bilinear gather — applied per route point after sampling.
+
+    Sign convention (verified against pyproj finite differences of the actual
+    projection, test_rotation_matches_pyproj_projection_geometry): with
+    x = ρ·sin θ, y = ρ0 − ρ·cos θ, WEST of LoV (θ < 0) the grid x-axis points
+    NORTH of east — i.e. the grid→earth map is a rotation by −θ::
+
+        u_e = u·cos θ + v·sin θ
+        v_e = −u·sin θ + v·cos θ
+
+    (The naïve "+sin/+cos" form sometimes quoted is the inverse, earth→grid,
+    rotation.)
+    """
+    import numpy as np
+    k = cone_const if cone_const is not None else math.sin(math.radians(38.5))
+    dl = np.deg2rad((np.asarray(lons_deg, dtype=np.float64) - lov_deg + 180.0) % 360.0 - 180.0)
+    a = dl * k
+    ca, sa = np.cos(a), np.sin(a)
+    u = np.asarray(u, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    return u * ca + v * sa, -u * sa + v * ca
+
+
+# Lambert grid definition attrs (#457). cfgrib puts these GRIB_* keys on each
+# data var's attrs (NOT on the dataset attrs, which only carry
+# edition/centre/subCentre). Key names verified on a real wrfprs message.
+_LAMBERT_GRID_ATTR_KEYS = {
+    "lad": "GRIB_LaDInDegrees",
+    "lov": "GRIB_LoVInDegrees",
+    "latin1": "GRIB_Latin1InDegrees",
+    "latin2": "GRIB_Latin2InDegrees",
+    "dx": "GRIB_DxInMetres",
+    "dy": "GRIB_DyInMetres",
+    "lat0": "GRIB_latitudeOfFirstGridPointInDegrees",
+    "lon0": "GRIB_longitudeOfFirstGridPointInDegrees",
+}
+
+
+def _lambert_grid_attrs(ds) -> dict[str, float]:
+    """Lambert grid attributes of a cfgrib dataset ({} when not projected)."""
+    attrs: dict[str, float] = {}
+    for xr_var in ds.data_vars.values():
+        for name, key in _LAMBERT_GRID_ATTR_KEYS.items():
+            if name not in attrs and key in xr_var.attrs:
+                try:
+                    attrs[name] = float(xr_var.attrs[key])
+                except (TypeError, ValueError):
+                    pass
+        if len(attrs) == len(_LAMBERT_GRID_ATTR_KEYS):
+            break
+    return attrs
+
+
+def _lcc_project_points(
+    grid_attrs: dict[str, float] | None,
+    lats,
+    lons,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Project lat/lon targets onto a Lambert grid's x/y axes (metres).
+
+    Projection parameters come from ``grid_attrs`` (keys ``lad``/``lov``/
+    ``latin1``/``latin2`` as read from the GRIB message); any missing key
+    falls back to the verified HRRR CONUS projection
+    (``hrrr_fetch.hrrr_projection``).
+    """
+    import numpy as np
+
+    attrs = grid_attrs or {}
+    if all(k in attrs for k in ("lad", "lov", "latin1", "latin2")):
+        import pyproj
+        proj = pyproj.Proj(
+            proj="lcc",
+            lat_0=attrs["lad"],
+            lon_0=attrs["lov"],
+            lat_1=attrs["latin1"],
+            lat_2=attrs["latin2"],
+            a=6371229.0,
+            b=6371229.0,
+        )
+    else:
+        from weatherbrief.fetch.grib.hrrr_fetch import hrrr_projection
+        proj = hrrr_projection()
+    xs, ys = proj(
+        np.asarray(lons, dtype=np.float64),
+        np.asarray(lats, dtype=np.float64),
+    )
+    return np.asarray(xs, dtype=np.float64), np.asarray(ys, dtype=np.float64)
+
+
+def _lambert_dataset_axes(ds) -> "tuple[np.ndarray, np.ndarray, dict[str, float]] | None":
+    """(y_axis, x_axis, grid_attrs) for a cfgrib Lambert dataset, else None.
+
+    A dataset is "projected" when it lacks 1-D lat/lon dims but has ``y``/``x``
+    dims (cfgrib's names for lambert). cfgrib does NOT build 1-D axis
+    coordinates for such datasets (lat/lon arrive as 2-D auxiliary coords), so
+    the axes are rebuilt from the grid definition: the first grid point
+    projected, then +Dx/+Dy per cell (jScansPositively=1 → y ascends with row
+    index; verified against cfgrib's 2-D lat/lon to ~20 m ≪ 3 km spacing).
+    Missing grid attrs fall back to the verified HRRR CONUS constants.
+    """
+    import numpy as np
+
+    if "y" not in ds.sizes or "x" not in ds.sizes:
+        return None
+    from weatherbrief.fetch.grib.hrrr_fetch import HRRR_GRID
+    grid_attrs = _lambert_grid_attrs(ds)
+    lat0 = grid_attrs.get("lat0", HRRR_GRID.lat0)
+    lon0 = grid_attrs.get("lon0", HRRR_GRID.lon0)
+    dx = grid_attrs.get("dx", HRRR_GRID.dx)
+    dy = grid_attrs.get("dy", HRRR_GRID.dy)
+    xs0, ys0 = _lcc_project_points(grid_attrs, [lat0], [lon0])
+    return (
+        ys0[0] + np.arange(ds.sizes["y"], dtype=np.float64) * dy,
+        xs0[0] + np.arange(ds.sizes["x"], dtype=np.float64) * dx,
+        grid_attrs,
+    )
+
+
 def _decode_pressure_vars_from_datasets(
     datasets: list,
     latitudes: list[float],
@@ -312,6 +490,11 @@ def _decode_pressure_vars_from_datasets(
     dataset and the full ``(level, lat, lon)`` array is gathered with
     numpy advanced indexing. The xarray ``.sel`` + ``.interp`` loop it
     replaced was GIL-bound, blocking concurrent decode threads.
+
+    Datasets without 1-D lat/lon dims take the projected-grid branch (#457):
+    a cfgrib Lambert dataset has ``y``/``x`` dims with 2-D lat/lon auxiliary
+    coords, so the targets are projected onto the grid's metre axes and the
+    same gather runs on ``(y, x)``.
 
     Args:
         datasets: cfgrib-opened xarray Datasets.
@@ -348,18 +531,31 @@ def _decode_pressure_vars_from_datasets(
             elif "lon" in dim_lower:
                 lon_dim = dim
         if lat_dim is None or lon_dim is None:
-            continue
-
-        try:
-            lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
-            lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
-        except Exception:
-            logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
-            continue
+            # Projected-grid branch (#457): cfgrib exposes Lambert grids as
+            # (y, x) dims with 2-D lat/lon auxiliary coords. Rebuild the
+            # projected axes and project the targets onto them — the gather
+            # below is then identical to the lat/lon path.
+            projected = _lambert_dataset_axes(ds)
+            if projected is None:
+                continue
+            lat_dim, lon_dim = "y", "x"
+            lat_arr, lon_arr, grid_attrs = projected
+            proj_xs, proj_ys = _lcc_project_points(
+                grid_attrs, targets_lat, targets_lon,
+            )
+            tgt_lat, tgt_lon = proj_ys, proj_xs
+        else:
+            try:
+                lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
+                lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
+            except Exception:
+                logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
+                continue
+            tgt_lat, tgt_lon = targets_lat, targets_lon
 
         # Bilinear corner indices + weights — computed once per dataset and
         # reused for every variable in that dataset.
-        bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
+        bw = _bilinear_grid_weights(lat_arr, lon_arr, tgt_lat, tgt_lon)
         if bw is None or bw.inb_idx.size == 0:
             continue
         i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
@@ -386,7 +582,14 @@ def _decode_pressure_vars_from_datasets(
             if pressure_coord is None:
                 level = xr_var.attrs.get("level")
                 if level is None:
-                    continue
+                    # HRRR surface PRES (#457): cfgrib exposes surface-type
+                    # levels as scalar coords, so var attrs carry no "level".
+                    # Only surface pressure is wanted here — key it at the
+                    # documented sentinel 0 (never a real hPa level; the
+                    # sounding builder drops it downstream).
+                    if field_name != "surface_pressure_pa":
+                        continue
+                    level = _HRRR_SURFACE_PRESSURE_KEY
                 expected_ndim = 2
             else:
                 expected_ndim = 3
@@ -511,6 +714,183 @@ def decode_grib_per_point(
         logger.warning("cfgrib failed to decode GRIB2 data", exc_info=True)
         return [{} for _ in latitudes]
     finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def decode_hrrr_pressure_per_point(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
+    """Decode HRRR wrfprs sounding bytes (Lambert grid) per route point.
+
+    Fields per ``_HRRR_PRESSURE_VAR_MAP`` (raw units: K, %, m/s, Pa/s, gpm,
+    kg/kg). UGRD/VGRD are grid-relative in the file (uvRelativeToGrid=1) and
+    rotated to earth-relative AFTER sampling — the rotation is linear, so it
+    commutes with the bilinear gather.
+
+    Surface PRES keys at the documented sentinel ``_HRRR_SURFACE_PRESSURE_KEY``
+    (0) as ``surface_pressure_pa`` — never a real hPa level; the sounding
+    builder drops that entry (see the constant's comment) and the enrichment
+    flow reads it straight from the raw point dict.
+
+    Returns:
+        Tuple of (per-point {pressure_hpa: {field: value}}, coverage mask).
+        Empty dicts / all-False mask on decode failure.
+    """
+    import cfgrib
+
+    n_points = len(latitudes)
+    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+    covered: list[bool] = [False] * n_points
+    if not grib_bytes:
+        return results, covered
+
+    # Write to temp file for cfgrib
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
+    except Exception:
+        logger.warning("cfgrib failed to open HRRR sounding GRIB2", exc_info=True)
+        tmp_path.unlink(missing_ok=True)
+        return results, covered
+
+    try:
+        # No longitude normalization: targets are projected onto the grid's
+        # metre axes (pyproj handles both conventions), and the rotation
+        # formula normalizes (λ − LoV) internally.
+        results, covered = _decode_pressure_vars_from_datasets(
+            datasets, latitudes, longitudes, var_map=_HRRR_PRESSURE_VAR_MAP,
+        )
+
+        # LoV for the wind rotation, from the first projected dataset.
+        lov_deg = 262.5
+        for ds in datasets:
+            projected = _lambert_dataset_axes(ds)
+            if projected is not None:
+                lov_deg = projected[2].get("lov", lov_deg)
+                break
+
+        for pt_idx, lon in enumerate(longitudes):
+            if not covered[pt_idx]:
+                continue
+            for fields in results[pt_idx].values():
+                u = fields.get("raw_u_wind_m_s")
+                v = fields.get("raw_v_wind_m_s")
+                if u is None or v is None:
+                    continue
+                u_e, v_e = _rotate_grid_wind_to_earth(
+                    [u], [v], [lon], lov_deg=lov_deg,
+                )
+                fields["raw_u_wind_m_s"] = float(u_e[0])
+                fields["raw_v_wind_m_s"] = float(v_e[0])
+
+        return results, covered
+    except Exception:
+        logger.warning("cfgrib failed to decode HRRR sounding GRIB2", exc_info=True)
+        return [{} for _ in range(n_points)], [False] * n_points
+    finally:
+        for ds in datasets:
+            ds.close()
+        tmp_path.unlink(missing_ok=True)
+
+
+def decode_hrrr_diag_per_point(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Decode HRRR wrfprs diagnostics bytes (Lambert grid) per route point.
+
+    Scalar (level-less) variables keyed by (cfgrib var name, GRIB_typeOfLevel)
+    in ``_HRRR_DIAG_FIELD_MAP``; raw values in native units (%, m, J/kg, m/s).
+    Key names match the Task-3 diagnostics builder contract.
+
+    Returns:
+        List of flat dicts (one per point); empty dicts on decode failure.
+    """
+    import cfgrib
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    if not grib_bytes:
+        return results
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
+    except Exception:
+        logger.warning("cfgrib failed to open HRRR diagnostics GRIB2", exc_info=True)
+        tmp_path.unlink(missing_ok=True)
+        return results
+
+    try:
+        targets_lat = np.asarray(latitudes, dtype=np.float64)
+        targets_lon = np.asarray(longitudes, dtype=np.float64)
+
+        for ds in datasets:
+            projected = _lambert_dataset_axes(ds)
+            if projected is None:
+                continue
+            y_axis, x_axis, grid_attrs = projected
+            proj_xs, proj_ys = _lcc_project_points(
+                grid_attrs, targets_lat, targets_lon,
+            )
+            bw = _bilinear_grid_weights(y_axis, x_axis, proj_ys, proj_xs)
+            if bw is None or bw.inb_idx.size == 0:
+                continue
+            i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
+            w00, w01, w10, w11 = bw.w00, bw.w01, bw.w10, bw.w11
+            inb_idx = bw.inb_idx
+
+            for var_name, xr_var in ds.data_vars.items():
+                field_name = _HRRR_DIAG_FIELD_MAP.get(
+                    (str(var_name).lower(), xr_var.attrs.get("GRIB_typeOfLevel", "")),
+                )
+                if field_name is None or xr_var.ndim != 2:
+                    continue
+                var_dims = list(xr_var.dims)
+                if var_dims.count("y") != 1 or var_dims.count("x") != 1:
+                    continue
+                values = np.asarray(xr_var.values, dtype=np.float64)
+                if var_dims != ["y", "x"]:
+                    values = np.transpose(
+                        values, (var_dims.index("y"), var_dims.index("x")),
+                    )
+                interp = (
+                    w00 * values[i0, j0]
+                    + w01 * values[i0, j1]
+                    + w10 * values[i1, j0]
+                    + w11 * values[i1, j1]
+                )
+                for k, pt_idx in enumerate(inb_idx):
+                    v = interp[k]
+                    if np.isnan(v):
+                        continue
+                    # First match wins (same semantics as the GFS diag path).
+                    if field_name not in results[pt_idx]:
+                        results[pt_idx][field_name] = float(v)
+
+        return results
+    except Exception:
+        logger.warning("cfgrib failed to decode HRRR diagnostics GRIB2", exc_info=True)
+        return [{} for _ in range(n_points)]
+    finally:
+        for ds in datasets:
+            ds.close()
         tmp_path.unlink(missing_ok=True)
 
 
