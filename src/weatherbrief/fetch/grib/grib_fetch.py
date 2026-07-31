@@ -231,10 +231,17 @@ def fetch_idx(
     init_hour: int,
     forecast_hour: int,
     session: requests.Session | None = None,
+    *,
+    url_builder=gfs_idx_url,
 ) -> str:
-    """Download a GFS .idx file."""
+    """Download a .idx file.
+
+    ``url_builder`` selects the model's URL layout — GFS by default; the HRRR
+    flow (#457) passes ``hrrr_fetch.hrrr_idx_url`` (flat conus/ layout,
+    2-digit fhours) and reuses this same flow.
+    """
     sess = session or requests.Session()
-    url = gfs_idx_url(init_date, init_hour, forecast_hour)
+    url = url_builder(init_date, init_hour, forecast_hour)
     logger.debug("Fetching .idx: %s", url)
     resp = sess.get(url, timeout=_REQUEST_TIMEOUT)
     resp.raise_for_status()
@@ -273,8 +280,10 @@ def fetch_byte_ranges(
     forecast_hour: int,
     ranges: list[ByteRange],
     session: requests.Session | None = None,
+    *,
+    url_builder=gfs_grib2_url,
 ) -> bytes:
-    """Download specific byte ranges from a GFS GRIB2 file in parallel.
+    """Download specific byte ranges from a GRIB2 file in parallel.
 
     Each ByteRange specifies a GRIB2 message. The messages are downloaded
     concurrently via HTTP Range requests and concatenated into a single
@@ -286,6 +295,8 @@ def fetch_byte_ranges(
         forecast_hour: Forecast hour.
         ranges: Byte ranges to download.
         session: Optional requests session.
+        url_builder: URL layout selector — GFS by default; HRRR (#457) passes
+            ``hrrr_fetch.hrrr_grib2_url``.
 
     Returns:
         Concatenated GRIB2 bytes.
@@ -294,7 +305,7 @@ def fetch_byte_ranges(
         return b""
 
     sess = session or requests.Session()
-    url = gfs_grib2_url(init_date, init_hour, forecast_hour)
+    url = url_builder(init_date, init_hour, forecast_hour)
 
     # Download all ranges in parallel
     results: list[tuple[int, bytes | None]] = []
@@ -347,16 +358,20 @@ def fetch_cloud_diag_ranges(
     forecast_hour: int,
     ranges: list[CloudDiagByteRange],
     session: requests.Session | None = None,
+    *,
+    url_builder=gfs_grib2_url,
 ) -> bytes:
-    """Download cloud diagnostic byte ranges from a GFS GRIB2 file in parallel.
+    """Download cloud diagnostic byte ranges from a GRIB2 file in parallel.
 
     Same logic as fetch_byte_ranges() but for CloudDiagByteRange type.
+    ``url_builder`` selects the model's URL layout (GFS default; HRRR passes
+    ``hrrr_fetch.hrrr_grib2_url``, #457).
     """
     if not ranges:
         return b""
 
     sess = session or requests.Session()
-    url = gfs_grib2_url(init_date, init_hour, forecast_hour)
+    url = url_builder(init_date, init_hour, forecast_hour)
 
     results: list[tuple[int, bytes | None]] = []
     with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:

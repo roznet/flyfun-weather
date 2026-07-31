@@ -123,6 +123,45 @@ def _check_gfs_noaa(model: str) -> Observation | None:
     )
 
 
+def _check_hrrr_noaa(model: str) -> Observation | None:
+    """Return latest HRRR run covering ``now``, with the f00 idx Last-Modified.
+
+    Same shape as :func:`_check_gfs_noaa`. The run-finder probes the
+    LAST-NEEDED fhour's idx (HRRR publishes progressively); for the marker,
+    ``cover_until=now`` makes any published run qualify — the freshness check
+    applies horizon-awareness later (the icon_d2_dwd idiom). A follow-up HEAD
+    on the found run's f00 idx reads NOAA's server-side Last-Modified, the
+    same published_at instrument the GFS check uses.
+    """
+    import requests
+
+    from weatherbrief.fetch.grib.hrrr_fetch import (
+        find_latest_hrrr_run,
+        hrrr_idx_url,
+    )
+    now = datetime.now(timezone.utc)
+    sess = requests.Session()
+    result = find_latest_hrrr_run(target_time=now, cover_until=now, session=sess)
+    if result is None:
+        return None
+    init_date, init_hour = result
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    published_at = None
+    try:
+        resp = sess.head(hrrr_idx_url(init_date, init_hour, 0), timeout=10)
+        if resp.status_code == 200:
+            published_at = _parse_last_modified(resp.headers.get("Last-Modified"))
+    except requests.RequestException:
+        pass
+    return Observation(
+        init=init,
+        published_at=published_at,
+        observed_via=VIA_HTTP_LAST_MODIFIED,
+    )
+
+
 def _check_icon_eu_dwd(model: str) -> Observation | None:
     """Return latest ICON-EU run whose level-74 P file responds 200 on HEAD.
 
@@ -234,6 +273,7 @@ def _check_om_meta(model: str) -> Observation | None:
 _DISPATCH = {
     "ecmwf_direct": _check_ecmwf_direct,
     "gfs_noaa": _check_gfs_noaa,
+    "hrrr_noaa": _check_hrrr_noaa,
     "icon_eu_dwd": _check_icon_eu_dwd,
     "icon_d2_dwd": _check_icon_d2_dwd,
     "om_meta": _check_om_meta,

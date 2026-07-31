@@ -242,6 +242,23 @@ export function modelLabel(model: string): string {
   return _catalog.find(m => m.key === model)?.name ?? model.toUpperCase();
 }
 
+/** Variant badges for pack-model slots served by a higher-resolution source,
+ *  keyed by the freshness source key recorded in the pack's model_sources:
+ *  the icon slot may be ICON-D2 (issue #456), the gfs slot HRRR (#457).
+ *  modelLabel() keys off the model name alone and can't tell the variants
+ *  apart, so the source key adds the tag. */
+const MODEL_SOURCE_BADGES: Record<string, string> = {
+  'icon_d2:dwd': '(D2)',
+  'hrrr:noaa': '(HRRR)',
+};
+
+/** modelLabel() plus a variant badge when the slot was served by a
+ *  higher-resolution source — e.g. `ICON (D2)`, `GFS (HRRR)`. */
+export function modelSlotLabel(model: string, source: string): string {
+  const badge = MODEL_SOURCE_BADGES[source];
+  return badge ? `${modelLabel(model)} ${badge}` : modelLabel(model);
+}
+
 // --- Windy URL builder ---
 
 /** Models that have a dedicated Windy view. Others fall back to ECMWF (default). */

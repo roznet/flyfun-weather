@@ -48,7 +48,7 @@ import { compareAdvisories } from '../helpers/alt-departure-compare';
 import { formatHeading, formatWind } from '../units';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, modelSlotLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
 import { showRoutePopup } from '../components/route-interpret';
 
@@ -464,12 +464,11 @@ function buildBasisFromSources(
     const primary = rows.find(r => r.role === 'primary') || rows[0];
     const base = rows.find(r => r !== primary);
     // The icon slot can be sourced from ICON-D2 (2.2km) instead of ICON-EU on
-    // short central-European routes (issue #456). modelLabel() keys off the
-    // model name ("icon") and can't tell them apart, so tag the D2 variant
-    // explicitly from the primary source key.
-    const label = primary.source === 'icon_d2:dwd'
-      ? `${modelLabel(model)} (D2)`
-      : modelLabel(model);
+    // short central-European routes (issue #456), and the gfs slot from HRRR
+    // on CONUS routes (#457). modelLabel() keys off the model name ("icon" /
+    // "gfs") and can't tell the variants apart, so modelSlotLabel() tags the
+    // variant from the primary source key.
+    const label = modelSlotLabel(model, primary.source);
     // Drop the provider tag when it's already a token in the model label
     // (e.g. "DWD ICON 12Z DWD" → "DWD ICON 12Z", "ECMWF IFS 12Z ECMWF" →
     // "ECMWF IFS 12Z").  Avoids visible duplication for ICON/ECMWF where
@@ -519,11 +518,10 @@ function renderSourcesPopupContent(sources: ModelSourceDetail[]): string {
   for (const [model, modelRows] of byModel) {
     const primary = modelRows.find(r => r.role === 'primary') || modelRows[0];
     const ordered = [primary, ...modelRows.filter(r => r !== primary)];
-    // Match the summary line's D2 tagging (#456): the icon slot may be served
-    // by ICON-D2, and the popover must show the same distinction.
-    const label = primary.source === 'icon_d2:dwd'
-      ? `${modelLabel(model)} (D2)`
-      : modelLabel(model);
+    // Match the summary line's variant tagging: the icon slot may be served
+    // by ICON-D2 (#456), the gfs slot by HRRR (#457) — the popover must show
+    // the same distinction.
+    const label = modelSlotLabel(model, primary.source);
     ordered.forEach((r, idx) => {
       const modelCell = idx === 0
         ? `<td class="freshness-popup-model">${escapeHtml(label)}</td>`

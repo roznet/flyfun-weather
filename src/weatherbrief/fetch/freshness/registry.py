@@ -168,6 +168,14 @@ _ECMWF_HORIZON: dict[int, timedelta] = {
 _GFS_NOAA_OFFSET = timedelta(hours=5)
 _GFS_NOAA_HORIZON = timedelta(hours=384)
 
+# HRRR: HRRR_PUBLISH_DELAY_HOURS = 1.0 in hrrr_fetch.py. Cycles run hourly,
+# but only 00/06/12/18z reach 48h — the rest stop at 18h — so the registry
+# tracks the extended cycles only (a marker on the short cycles would slip
+# whenever the flight window passes 18h). Serves the gfs slot on CONUS routes
+# (issue #457).
+_HRRR_NOAA_OFFSET = timedelta(hours=1)
+_HRRR_NOAA_HORIZON = timedelta(hours=48)
+
 # ICON-EU: ICON_EU_PUBLISH_DELAY_HOURS = 3; main cycles {0,6,12,18} reach
 # 120h, intermediate {3,9,15,21} reach 78h.  See icon_eu_fetch.py:31-40.
 _ICON_EU_OFFSET = timedelta(hours=3)
@@ -248,6 +256,28 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "liquid water, ice mixing ratio and cloud diagnostics (ceiling, "
             "low/mid/high covers, convective base/top) onto the 28-level "
             "Open-Meteo GFS sounding. 16-day horizon."
+        ),
+    ),
+    "hrrr:noaa": SourceConfig(
+        key="hrrr:noaa",
+        cycles=(0, 6, 12, 18),
+        delivery_offset=_HRRR_NOAA_OFFSET,
+        horizon=_HRRR_NOAA_HORIZON,
+        readiness_check="hrrr_noaa",
+        model_label="HRRR",
+        provider_label="NOAA",
+        provider_url="https://rapidrefresh.noaa.gov/hrrr/",
+        role="primary-sounding",
+        resolution="3 km",
+        coverage="CONUS (Lambert grid, 1799×1059)",
+        pressure_levels=40,
+        description=(
+            "Direct GRIB2 from NOAA S3 (noaa-hrrr-bdp-pds). 3 km, "
+            "convection-allowing, radar-assimilating; 40 pressure levels. "
+            "Serves the gfs slot in place of GFS when the whole route fits "
+            "the CONUS domain and the flight window is within 48h; otherwise "
+            "gfs:noaa. Cycles run hourly — the registry tracks the 00/06/12/18Z "
+            "extended ones (48h); the rest reach only 18h."
         ),
     ),
     "icon_eu:dwd": SourceConfig(

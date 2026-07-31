@@ -403,3 +403,18 @@ def plan_hrrr_diag_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
         idx_text, pairs=_hrrr_pairs(HRRR_DIAG_VARIABLES),
         prefer_averaged=set(),
     )
+
+
+def plan_hrrr_clmr_byte_ranges(idx_text: str) -> list[CloudDiagByteRange]:
+    """Byte ranges for HRRR CLMR + CIMIXR only (the commit-1 patch set, #457).
+
+    The full sounding set (~190 MB/fhour) belongs to the Task-5 replacement
+    path; the patch enrichment only merges cloud liquid water and ice mixing
+    ratio onto the existing Open-Meteo pressure levels, so only those two
+    variables are worth the bandwidth.
+    """
+    return plan_cloud_diag_byte_ranges(
+        idx_text,
+        pairs=_hrrr_pairs({"CLMR": {"mb"}, "CIMIXR": {"mb"}}),
+        prefer_averaged=set(),
+    )
