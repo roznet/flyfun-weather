@@ -46,7 +46,12 @@ export interface DataSourceEntry {
   next_expected: string | null;
   /** End of the current run's forecast horizon (ISO UTC) or null. */
   horizon_end: string | null;
-  /** `"ok" | "suspect" | "unknown"`. */
+  /** `"ok" | "suspect" | "unobserved" | "unknown"`.
+   *
+   * `"unobserved"` means the loop is running but has never successfully
+   * reached this source, so the schedule shown is the configured expectation
+   * rather than anything measured — distinct from `"ok"`, which requires a
+   * confirmed probe. */
   marker_health: string;
 }
 

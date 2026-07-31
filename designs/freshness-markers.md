@@ -177,10 +177,10 @@ The help-page table and the freshness popover both render from the same registry
       "horizon_hours": {"0": 168.0, "6": 144.0, "12": 168.0, "18": 144.0},
       "delivery_offset_hours": {"0": 6.67, ...},
       "latest_init": "2026-05-11T06:00:00+00:00",     // null if marker unset
-      "published_at": "2026-05-11T12:38:00+00:00",     // null for direct GRIB
+      "published_at": "2026-05-11T12:38:00+00:00",     // null until first observed
       "next_expected": "2026-05-11T18:40:00+00:00",
       "horizon_end": "2026-05-15T00:00:00+00:00",
-      "marker_health": "ok"   // "ok" | "suspect" | "unknown"
+      "marker_health": "ok"   // "ok" | "suspect" | "unobserved" | "unknown"
     },
     ...
   ],
