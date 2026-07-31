@@ -2894,12 +2894,22 @@ def _enrich_hrrr_replace(
     # Diag pass (commit 1): cloud diagnostics + gap-fill surface extras onto
     # the same hourlies. Coupled to the replacement so the forward-fill in
     # fill.py can use ``nwp_cloud_diagnostics is not None`` as the
-    # GRIB-anchor detector — the ECMWF surface-write invariant.
-    _enrich_hrrr_diagnostics(
-        gfs_sections, all_forecasts, route_points,
-        init_date, init_hour, forecast_hours,
-        run_dir, idx_by_fhour, point_lats, point_lons, session,
-    )
+    # GRIB-anchor detector — the ECMWF surface-write invariant. Best-effort:
+    # a diag crash must NOT reach the gate's catch-all, which would fall back
+    # to plain GFS on top of the already-replaced HRRR columns — a half-HRRR
+    # pack mis-attributed ``gfs:noaa``. Missing diag stays missing (None).
+    try:
+        _enrich_hrrr_diagnostics(
+            gfs_sections, all_forecasts, route_points,
+            init_date, init_hour, forecast_hours,
+            run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+    except Exception:
+        logger.warning(
+            "HRRR diagnostics failed; keeping the sounding replacement "
+            "without diag extras",
+            exc_info=True,
+        )
     return _run_info_to_timestamp(init_date, init_hour)
 
 

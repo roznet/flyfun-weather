@@ -558,6 +558,66 @@ class TestHrrrReplacementFallback:
         assert calls == ["hrrr", "gfs"]  # GFS run-finder called after the crash
 
 
+class TestDiagCrashKeepsHrrrSounding:
+    """Review fix (#457): a diag-pass crash AFTER the sounding replacement
+    landed must not trigger the gate's catch-all → plain-GFS fallback (that
+    produced a half-HRRR pack mis-attributed ``gfs:noaa``). The replacement
+    stands, the pack stays ``hrrr:noaa``, and only the diag fields stay
+    missing (house None semantics — missing ≠ quiet)."""
+
+    def test_diag_crash_after_replacement_keeps_hrrr_sounding(
+        self, monkeypatch, tmp_path, sounding_bytes,
+    ):
+        """Unit level: ``_enrich_hrrr_diagnostics`` raising must neither
+        propagate nor void the replacement — the run timestamp is still
+        returned and the replaced levels stand."""
+        lat, lon = _target_latlon(_FJ, _FI)
+        cs, wf = _gfs_cross_section([15, 16, 17])
+        _patch_replace_flow(monkeypatch, sounding_bytes)
+
+        def _boom(*a, **kw):
+            raise RuntimeError("diag decode dead-letter")
+
+        monkeypatch.setattr(grib_mod, "_enrich_hrrr_diagnostics", _boom)
+
+        ts = _run_replace(cs, [_rp(lat, lon)], tmp_path)  # must not raise
+
+        assert ts == HRRR_TS
+        for h in wf.hourly:
+            # Sounding replacement intact…
+            assert [pl.pressure_hpa for pl in h.pressure_levels] == [850, 500]
+            # …only the diag extras are missing.
+            assert h.nwp_cloud_diagnostics is None
+            assert h.visibility_m is None
+
+    def test_diag_crash_gate_keeps_hrrr_source_no_gfs_fallback(
+        self, monkeypatch, tmp_path, sounding_bytes,
+    ):
+        """Gate level: the GFS run-finder is NOT invoked and the gate still
+        returns the HRRR source key when the diag pass crashes."""
+        lat, lon = _target_latlon(_FJ, _FI)
+        cs, wf = _gfs_cross_section([15, 16, 17])
+        calls = _patch_gate_common(monkeypatch)
+        _patch_replace_flow(monkeypatch, sounding_bytes)
+        monkeypatch.setattr(grib_mod, "route_in_hrrr_domain", lambda rps: True)
+
+        def _boom(*a, **kw):
+            raise RuntimeError("diag decode dead-letter")
+
+        monkeypatch.setattr(grib_mod, "_enrich_hrrr_diagnostics", _boom)
+
+        ts, source_key = grib_mod._enrich_gfs_inner(  # must not raise
+            [cs], [], [_rp(lat, lon)], DEP,
+            data_dir=tmp_path, flight_duration_hours=2.0,
+        )
+
+        assert (ts, source_key) == (HRRR_TS, "hrrr:noaa")
+        assert calls == ["hrrr"]  # plain-GFS run-finder never called
+        for h in wf.hourly:
+            assert [pl.pressure_hpa for pl in h.pressure_levels] == [850, 500]
+            assert h.nwp_cloud_diagnostics is None
+
+
 # ---------------------------------------------------------------------------
 # fill.py: gap-hour sounding interpolation between HRRR anchors
 # ---------------------------------------------------------------------------
