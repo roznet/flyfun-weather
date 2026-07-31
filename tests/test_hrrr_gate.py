@@ -254,6 +254,27 @@ class TestHrrrTotalFailureFallback:
         assert (ts, source_key) == (GFS_TS, "gfs:noaa")
         assert calls == ["hrrr", "gfs"]
 
+    def test_unexpected_hrrr_crash_falls_back_to_gfs(self, monkeypatch, tmp_path):
+        """Catch-all: an unexpected exception anywhere on the HRRR patch path
+        (e.g. a decode dead-letter or a build_hrrr_* crash surfacing via
+        clmr_future.result()) must degrade to plain GFS — never a failed
+        briefing. Mirrors the GFS path swallowing worker crashes."""
+        cs, _wf = _gfs_cross_section([15, 16, 17])
+        calls = _patch_common(monkeypatch)
+        monkeypatch.setattr(grib_mod, "route_in_hrrr_domain", lambda rps: True)
+
+        def _boom(*a, **kw):
+            raise RuntimeError("decode worker dead-letter")
+
+        monkeypatch.setattr(grib_mod, "_enrich_hrrr_patch", _boom)
+
+        ts, source_key = _run_enrich_gfs_inner(  # must not raise
+            cs, [_rp(*CONUS_POINT)], tmp_path, monkeypatch,
+        )
+
+        assert (ts, source_key) == (GFS_TS, "gfs:noaa")
+        assert calls == ["hrrr", "gfs"]  # GFS run-finder called after the crash
+
 
 class TestGfsSlotSourceWiring:
     """enrich_forecasts-level wiring: grib_sources + gfs_init_dt gating."""

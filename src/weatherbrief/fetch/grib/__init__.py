@@ -2708,9 +2708,9 @@ def _enrich_gfs_inner(
     # HRRR gate (#457): source the gfs slot from HRRR when the kill switch is
     # off, every route point fits the CONUS Lambert grid, and a run covers the
     # whole flight window. All-or-nothing: a TOTAL HRRR failure (no idx at
-    # all / zero decoded hours) logs and falls through to the plain-GFS path
-    # below — never a half-HRRR pack. WB_HRRR_ENABLED=0 is the ops escape
-    # hatch.
+    # all / zero decoded hours) or an unexpected crash on the patch path logs
+    # and falls through to the plain-GFS path below — never a half-HRRR pack,
+    # never a failed briefing. WB_HRRR_ENABLED=0 is the ops escape hatch.
     if os.environ.get("WB_HRRR_ENABLED", "1") != "0" and route_in_hrrr_domain(
         route_points
     ):
@@ -2721,19 +2721,30 @@ def _enrich_gfs_inner(
             session=session,
         )
         if hrrr_run is not None:
-            hrrr_ts = _enrich_hrrr_patch(
-                gfs_sections, all_forecasts, route_points,
-                hrrr_run[0], hrrr_run[1], departure_time,
-                data_dir=data_dir,
-                flight_duration_hours=flight_duration_hours,
-                session=session,
-            )
-            if hrrr_ts is not None:
-                logger.info("gfs slot sourced from HRRR run %s %02dz", *hrrr_run)
-                return hrrr_ts, "hrrr:noaa"
-            logger.warning(
-                "HRRR enrichment produced nothing; falling back to plain GFS",
-            )
+            try:
+                hrrr_ts = _enrich_hrrr_patch(
+                    gfs_sections, all_forecasts, route_points,
+                    hrrr_run[0], hrrr_run[1], departure_time,
+                    data_dir=data_dir,
+                    flight_duration_hours=flight_duration_hours,
+                    session=session,
+                )
+            except Exception:
+                # Catch-all: an unexpected crash on the HRRR patch path (e.g.
+                # a decode dead-letter surfacing via clmr_future.result())
+                # degrades to plain GFS, mirroring the GFS path swallowing
+                # worker crashes — never a failed briefing.
+                logger.warning(
+                    "HRRR enrichment crashed; falling back to plain GFS",
+                    exc_info=True,
+                )
+            else:
+                if hrrr_ts is not None:
+                    logger.info("gfs slot sourced from HRRR run %s %02dz", *hrrr_run)
+                    return hrrr_ts, "hrrr:noaa"
+                logger.warning(
+                    "HRRR enrichment produced nothing; falling back to plain GFS",
+                )
 
     with _grib_time("gfs_find_run"):
         run_info = find_latest_run(departure_time, session=session, as_of_time=as_of_time)
