@@ -49,8 +49,8 @@ from weatherbrief.fetch.grib.cache import (
 from weatherbrief.fetch.grib.gfs_idx import (
     plan_byte_ranges,
     plan_cloud_diag_byte_ranges,
-    plan_hrrr_clmr_byte_ranges,
     plan_hrrr_diag_byte_ranges,
+    plan_hrrr_sounding_byte_ranges,
 )
 from weatherbrief.fetch.grib.grib_fetch import (
     fetch_byte_ranges,
@@ -2708,9 +2708,10 @@ def _enrich_gfs_inner(
     # HRRR gate (#457): source the gfs slot from HRRR when the kill switch is
     # off, every route point fits the CONUS Lambert grid, and a run covers the
     # whole flight window. All-or-nothing: a TOTAL HRRR failure (no idx at
-    # all / zero decoded hours) or an unexpected crash on the patch path logs
-    # and falls through to the plain-GFS path below — never a half-HRRR pack,
-    # never a failed briefing. WB_HRRR_ENABLED=0 is the ops escape hatch.
+    # all / zero replaced hours) or an unexpected crash on the replacement
+    # path logs and falls through to the plain-GFS path below — never a
+    # half-HRRR pack, never a failed briefing. WB_HRRR_ENABLED=0 is the ops
+    # escape hatch.
     if os.environ.get("WB_HRRR_ENABLED", "1") != "0" and route_in_hrrr_domain(
         route_points
     ):
@@ -2722,7 +2723,7 @@ def _enrich_gfs_inner(
         )
         if hrrr_run is not None:
             try:
-                hrrr_ts = _enrich_hrrr_patch(
+                hrrr_ts = _enrich_hrrr_replace(
                     gfs_sections, all_forecasts, route_points,
                     hrrr_run[0], hrrr_run[1], departure_time,
                     data_dir=data_dir,
@@ -2730,8 +2731,8 @@ def _enrich_gfs_inner(
                     session=session,
                 )
             except Exception:
-                # Catch-all: an unexpected crash on the HRRR patch path (e.g.
-                # a decode dead-letter surfacing via clmr_future.result())
+                # Catch-all: an unexpected crash on the HRRR replacement path
+                # (e.g. a decode dead-letter surfacing via _dispatch_decode)
                 # degrades to plain GFS, mirroring the GFS path swallowing
                 # worker crashes — never a failed briefing.
                 logger.warning(
@@ -2800,16 +2801,20 @@ def _enrich_gfs_inner(
 
 
 # ---------------------------------------------------------------------------
-# HRRR patch enrichment (#457, commit 1)
+# HRRR full sounding replacement (#457, commit 2)
 #
-# Patch-style: CLMR/CIMIXR onto the existing Open-Meteo pressure levels plus
-# the HRRR diagnostics set onto nwp_cloud_diagnostics, mirroring the plain-GFS
-# patch shape. Task 5 swaps this to a full sounding replacement (the ECMWF
-# pattern); the gate, fallback, caching and source attribution stay.
+# ECMWF-shaped: per fhour, the 40-level sounding set (TMP/DPT/RH/UGRD/VGRD/
+# VVEL/HGT/CLMR/CIMIXR at 25-hPa levels + surface PRES) is byte-range
+# fetched, decoded per route point on the Lambert grid, and REPLACES the
+# hourly's Open-Meteo pressure levels — cloud water rides the rebuilt
+# column, so no separate CLMR/CIMIXR patch pass exists. The diag pass then
+# applies HRRR cloud diagnostics + gap-fill surface extras onto the same
+# hourlies. Total failure (no idx at all / zero hours replaced) returns
+# None so the gate falls through to plain GFS — never a half-HRRR pack.
 # ---------------------------------------------------------------------------
 
 
-def _enrich_hrrr_patch(
+def _enrich_hrrr_replace(
     gfs_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
     route_points: list[RoutePoint],
@@ -2821,13 +2826,16 @@ def _enrich_hrrr_patch(
     flight_duration_hours: float = 0.0,
     session: requests.Session,
 ) -> int | None:
-    """Run the HRRR patch path for one covering run.
+    """Run the HRRR full sounding replacement for one covering run.
 
-    Returns the run init Unix timestamp when at least one field landed on the
-    forecasts; ``None`` on TOTAL failure (no idx at all / zero decoded hours)
-    so the caller falls through to plain GFS — never a half-HRRR pack.
-    Per-fhour failures only leave that hour un-enriched, mirroring the GFS
-    per-fhour tolerance.
+    Returns the run init Unix timestamp when at least one hourly's pressure
+    levels were replaced; ``None`` on TOTAL failure (no idx at all / zero
+    hours replaced) so the caller falls through to plain GFS — never a
+    half-HRRR pack. The diag pass only runs once the replacement has landed,
+    so a fallen-back pack carries nothing HRRR-specific. Per-fhour failures
+    only leave that hour on Open-Meteo levels, mirroring the GFS per-fhour
+    tolerance; the fill pass later interpolates those gap hours between the
+    bracketing HRRR anchors (the level-count heuristic in fill.py).
     """
     forecast_hours = hrrr_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
@@ -2839,7 +2847,7 @@ def _enrich_hrrr_patch(
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
 
-    # Fetch .idx text (shared by both HRRR enrichment paths)
+    # Fetch .idx text (shared by the sounding and diagnostics paths)
     with _grib_time("hrrr_idx_fetch"):
         idx_by_fhour: dict[int, str] = {}
         for fhour in forecast_hours:
@@ -2857,31 +2865,45 @@ def _enrich_hrrr_patch(
         logger.warning("No HRRR .idx files retrieved for enrichment")
         return None
 
-    # Same parallelism idiom as the GFS path: the two sub-paths write to
-    # different fields (CLMR/CIMIXR on PressureLevelData vs
-    # nwp_cloud_diagnostics + surface extras on HourlyForecast).
-    with _grib_time("hrrr_workers"):
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            clmr_future = _submit_with_context(
-                pool, _enrich_hrrr_clmr_cimixr,
-                gfs_sections, all_forecasts, route_points,
-                init_date, init_hour, forecast_hours,
-                run_dir, idx_by_fhour, point_lats, point_lons, session,
-            )
-            diag_future = _submit_with_context(
-                pool, _enrich_hrrr_diagnostics,
-                gfs_sections, all_forecasts, route_points,
-                init_date, init_hour, forecast_hours,
-                run_dir, idx_by_fhour, point_lats, point_lons, session,
-            )
-            enriched = clmr_future.result() + diag_future.result()
+    total_replaced = 0
+    for fhour in forecast_hours:
+        decoded_points = _fetch_hrrr_sounding_for_fhour(
+            init_date, init_hour, fhour,
+            run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+        if not decoded_points:
+            continue
 
-    if enriched == 0:
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        total_replaced += _replace_pressure_levels_from_grib(
+            gfs_sections, all_forecasts, route_points, decoded_points,
+            valid_utc=valid_utc, model_source=ModelSource.GFS,
+        )
+        del decoded_points
+        _grib_gc()
+
+    if total_replaced == 0:
+        logger.warning("No HRRR sounding data retrieved for enrichment")
         return None
+
+    logger.info(
+        "HRRR enrichment: %d hourly entries replaced with the GRIB sounding",
+        total_replaced,
+    )
+
+    # Diag pass (commit 1): cloud diagnostics + gap-fill surface extras onto
+    # the same hourlies. Coupled to the replacement so the forward-fill in
+    # fill.py can use ``nwp_cloud_diagnostics is not None`` as the
+    # GRIB-anchor detector — the ECMWF surface-write invariant.
+    _enrich_hrrr_diagnostics(
+        gfs_sections, all_forecasts, route_points,
+        init_date, init_hour, forecast_hours,
+        run_dir, idx_by_fhour, point_lats, point_lons, session,
+    )
     return _run_info_to_timestamp(init_date, init_hour)
 
 
-def _fetch_hrrr_clmr_for_fhour(
+def _fetch_hrrr_sounding_for_fhour(
     init_date: str,
     init_hour: int,
     fhour: int,
@@ -2891,20 +2913,20 @@ def _fetch_hrrr_clmr_for_fhour(
     point_lons: list[float],
     session: requests.Session,
 ) -> list[dict[int, dict[str, float]]] | None:
-    """Fetch, cache, decode HRRR CLMR/CIMIXR for a single forecast hour."""
-    ck = cache_key(fhour, "HRRR_CLMR")
+    """Fetch, cache, decode the HRRR sounding set for one forecast hour."""
+    ck = cache_key(fhour, "HRRR_SND")
     if not is_cached(run_dir, ck):
         idx_text = idx_by_fhour.get(fhour)
         if idx_text is None:
             return None
         try:
-            ranges = plan_hrrr_clmr_byte_ranges(idx_text)
+            ranges = plan_hrrr_sounding_byte_ranges(idx_text)
             if not ranges:
                 logger.warning(
-                    "No CLMR/CIMIXR found in HRRR .idx for f%03d", fhour,
+                    "No sounding variables found in HRRR .idx for f%03d", fhour,
                 )
                 return None
-            with _grib_time("hrrr_clmr_download"):
+            with _grib_time("hrrr_snd_download"):
                 grib_bytes = fetch_cloud_diag_ranges(
                     init_date, init_hour, fhour, ranges,
                     session=session, url_builder=hrrr_grib2_url,
@@ -2913,17 +2935,17 @@ def _fetch_hrrr_clmr_for_fhour(
                 return None
             put_cached(run_dir, ck, grib_bytes)
             logger.info(
-                "Downloaded HRRR CLMR/CIMIXR f%03d: %d ranges, %.1f KB",
-                fhour, len(ranges), len(grib_bytes) / 1024,
+                "Downloaded HRRR sounding f%03d: %d ranges, %.1f MB",
+                fhour, len(ranges), len(grib_bytes) / (1024 * 1024),
             )
         except Exception:
             logger.warning(
-                "Failed to fetch HRRR CLMR/CIMIXR f%03d", fhour, exc_info=True,
+                "Failed to fetch HRRR sounding f%03d", fhour, exc_info=True,
             )
             return None
 
     cache_path = run_dir / ck
-    with _grib_time("hrrr_clmr_decode"):
+    with _grib_time("hrrr_snd_decode"):
         decoded_points, covered = _dispatch_decode(
             "decode_hrrr_pressure", str(cache_path), point_lats, point_lons,
         )
@@ -2933,47 +2955,6 @@ def _fetch_hrrr_clmr_for_fhour(
         if not cov:
             decoded_points[i] = {}
     return decoded_points
-
-
-def _enrich_hrrr_clmr_cimixr(
-    gfs_sections: list[RouteCrossSection],
-    all_forecasts: list[WaypointForecast],
-    route_points: list[RoutePoint],
-    init_date: str,
-    init_hour: int,
-    forecast_hours: list[int],
-    run_dir: Path,
-    idx_by_fhour: dict[int, str],
-    point_lats: list[float],
-    point_lons: list[float],
-    session: requests.Session,
-) -> int:
-    """Patch HRRR CLMR/CIMIXR onto the gfs slot's pressure levels."""
-    total_enriched = 0
-    for fhour in forecast_hours:
-        decoded_points = _fetch_hrrr_clmr_for_fhour(
-            init_date, init_hour, fhour,
-            run_dir, idx_by_fhour, point_lats, point_lons, session,
-        )
-        if not decoded_points:
-            continue
-
-        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
-        total_enriched += _merge_cloud_water_into_sections(
-            gfs_sections, all_forecasts, route_points, decoded_points, "gfs",
-            valid_utc=valid_utc,
-        )
-        del decoded_points
-        _grib_gc()
-
-    if total_enriched:
-        logger.info(
-            "HRRR enrichment: %d pressure levels patched with cloud water",
-            total_enriched,
-        )
-    else:
-        logger.warning("No HRRR CLMR/CIMIXR data retrieved for enrichment")
-    return total_enriched
 
 
 def _fetch_hrrr_diag_for_fhour(

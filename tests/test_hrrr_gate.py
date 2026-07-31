@@ -80,7 +80,7 @@ _HRRR_DIAG_RAW = {
     "sfc_cape_jkg": 500.0,
     "sfc_cin_jkg": -25.0,
 }
-_HRRR_CLMR_POINTS = (
+_HRRR_SND_POINTS = (
     [{850: {"cloud_liquid_water_kg_kg": 0.001, "ice_mixing_ratio_kg_kg": 0.0002}}],
     [True],
 )
@@ -90,7 +90,7 @@ def _fake_hrrr_dispatch(worker_name, path, lats, lons, **kw):
     if worker_name == "decode_hrrr_diag":
         return [dict(_HRRR_DIAG_RAW)]
     if worker_name == "decode_hrrr_pressure":
-        return ([dict(d) for d in _HRRR_CLMR_POINTS[0]], list(_HRRR_CLMR_POINTS[1]))
+        return ([dict(d) for d in _HRRR_SND_POINTS[0]], list(_HRRR_SND_POINTS[1]))
     raise AssertionError(f"unexpected decode worker {worker_name}")
 
 
@@ -255,9 +255,9 @@ class TestHrrrTotalFailureFallback:
         assert calls == ["hrrr", "gfs"]
 
     def test_unexpected_hrrr_crash_falls_back_to_gfs(self, monkeypatch, tmp_path):
-        """Catch-all: an unexpected exception anywhere on the HRRR patch path
-        (e.g. a decode dead-letter or a build_hrrr_* crash surfacing via
-        clmr_future.result()) must degrade to plain GFS — never a failed
+        """Catch-all: an unexpected exception anywhere on the HRRR
+        replacement path (e.g. a decode dead-letter surfacing via
+        _dispatch_decode) must degrade to plain GFS — never a failed
         briefing. Mirrors the GFS path swallowing worker crashes."""
         cs, _wf = _gfs_cross_section([15, 16, 17])
         calls = _patch_common(monkeypatch)
@@ -266,7 +266,7 @@ class TestHrrrTotalFailureFallback:
         def _boom(*a, **kw):
             raise RuntimeError("decode worker dead-letter")
 
-        monkeypatch.setattr(grib_mod, "_enrich_hrrr_patch", _boom)
+        monkeypatch.setattr(grib_mod, "_enrich_hrrr_replace", _boom)
 
         ts, source_key = _run_enrich_gfs_inner(  # must not raise
             cs, [_rp(*CONUS_POINT)], tmp_path, monkeypatch,

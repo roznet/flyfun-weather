@@ -2398,7 +2398,10 @@ def _convert_raw_sounding(
 ) -> dict[str, float]:
     """Convert raw GRIB sounding fields to PressureLevelData units.
 
-    Input keys use raw_ prefix from _ECMWF_FULL_VAR_MAP.
+    Input keys use raw_ prefix from _ECMWF_FULL_VAR_MAP (ECMWF/ICON) or
+    _HRRR_PRESSURE_VAR_MAP (#457) — HRRR delivers dewpoint (DPT),
+    geopotential height (HGT, gpm) and omega (VVEL, Pa/s) directly, so
+    those skip the Magnus / hypsometric / −ρgw derivations.
     Output keys match PressureLevelData field names.
     """
     import math
@@ -2433,8 +2436,12 @@ def _convert_raw_sounding(
     if rh is not None:
         out["relative_humidity_pct"] = rh
 
-    # Dewpoint from T + RH (Magnus formula)
-    if out.get("temperature_c") is not None and out.get("relative_humidity_pct") is not None:
+    # Dewpoint: prefer the model-delivered direct dewpoint (HRRR DPT, #457);
+    # otherwise derive from T + RH (Magnus formula).
+    dpt_k = raw.get("raw_dewpoint_k")
+    if dpt_k is not None:
+        out["dewpoint_c"] = dpt_k - 273.15
+    elif out.get("temperature_c") is not None and out.get("relative_humidity_pct") is not None:
         t_c = out["temperature_c"]
         rh_val = max(out["relative_humidity_pct"], 0.1)  # avoid log(0)
         a, b = 17.67, 243.5
@@ -2448,9 +2455,13 @@ def _convert_raw_sounding(
     if gh_m is not None:
         out["geopotential_height_m"] = gh_m
     else:
-        z = raw.get("raw_geopotential_m2_s2")
-        if z is not None:
-            out["geopotential_height_m"] = z / _G
+        gh_gpm = raw.get("raw_geopotential_height_gpm")  # HRRR HGT (#457)
+        if gh_gpm is not None:
+            out["geopotential_height_m"] = gh_gpm
+        else:
+            z = raw.get("raw_geopotential_m2_s2")
+            if z is not None:
+                out["geopotential_height_m"] = z / _G
 
     # Wind u, v → speed (kt) and direction (deg)
     u = raw.get("raw_u_wind_m_s")
@@ -2463,12 +2474,17 @@ def _convert_raw_sounding(
         else:
             out["wind_direction_deg"] = 0.0
 
-    # Physical vertical velocity (m/s, ICON) → omega (Pa/s)
-    # omega = -ρ·g·w, where ρ = P/(Rd·T_k)
-    w_ms = raw.get("raw_w_m_s")
-    if w_ms is not None and t_k is not None:
-        rho = (pressure_hpa * 100.0) / (_RD_DRY_AIR * t_k)
-        out["vertical_velocity_pa_s"] = -rho * _G * w_ms
+    # Vertical velocity: prefer the model-delivered omega (HRRR VVEL, already
+    # Pa/s, #457); otherwise convert physical w (m/s, ICON) via −ρg·w, where
+    # ρ = P/(Rd·T_k).
+    omega = raw.get("raw_omega_pa_s")
+    if omega is not None:
+        out["vertical_velocity_pa_s"] = omega
+    else:
+        w_ms = raw.get("raw_w_m_s")
+        if w_ms is not None and t_k is not None:
+            rho = (pressure_hpa * 100.0) / (_RD_DRY_AIR * t_k)
+            out["vertical_velocity_pa_s"] = -rho * _G * w_ms
 
     return out
 
