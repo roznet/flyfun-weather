@@ -608,8 +608,21 @@ def build_nwp_cloud_layers_from_condensate(
     #     value defined over a different slab;
     #   - no diagnostic band cover at all → ICAO carving with bulk amounts,
     #     a self-consistent pairing.
+    #
+    # The diagnostic branch additionally requires the amounts to actually BE
+    # NCEP-defined (``band_definition == "ncep"``, set by GFS/HRRR decode).
+    # Routing into this builder is by data shape — 3D fraction absent and no
+    # GRIB band geometry — which today means HRRR, but ECMWF (`lcc`/`mcc`/
+    # `hcc`) and ICON (`clcl`/`clcm`/`clch`) publish band covers too, over a
+    # much lower split (~800/400 hPa). Should their 3D fraction ever fail to
+    # decode while condensate survives, they would land here and have the NCEP
+    # 642/350 hPa rule applied to amounts computed under a different one — the
+    # same mismatched-slice bug rounds 4–6 fixed twice for HRRR. Unmarked
+    # products fall back to the self-consistent ICAO/bulk pairing instead.
     diag_covers: tuple[float | None, float | None, float | None] | None = None
-    if nwp_cloud_diagnostics is not None:
+    if nwp_cloud_diagnostics is not None and (
+        nwp_cloud_diagnostics.band_definition == "ncep"
+    ):
         diag_covers = (
             nwp_cloud_diagnostics.low.cover_pct,
             nwp_cloud_diagnostics.mid.cover_pct,

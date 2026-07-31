@@ -2886,6 +2886,21 @@ under LCDC — turning a native overcast low deck into FEW (PR #508 round 5).
 The bulk Open-Meteo fallback keeps ICAO-style altitude bands, its own
 product semantics.
 
+**The NCEP rule is gated on provenance, not inferred from shape**
+(#508 follow-up). Routing into this builder is by data shape — 3D fraction
+absent, no GRIB band geometry — and *that* is what makes it HRRR-only today.
+But band covers themselves are not HRRR-specific: ECMWF publishes
+`lcc`/`mcc`/`hcc` and ICON `clcl`/`clcm`/`clch`, both split far lower
+(~800/400 hPa) and neither interchangeable with NCEP's 642/350 hPa. Should
+either model's 3D fraction ever fail to decode while its condensate survived,
+it would land here and have the NCEP rule applied to amounts computed under a
+different one — the same mismatched-slice bug this section already records
+being fixed twice. So `NWPCloudDiagnostics.band_definition` (`"ncep"`, set at
+decode by GFS and HRRR) is now a precondition for pressure carving; an
+unmarked product falls back to the self-consistent ICAO-carving/bulk-amount
+pairing. Unreachable on today's data paths — a guard against the routing
+premise silently changing, not a live fix.
+
 **Ordered last, deliberately.** GFS carries both band geometry *and*
 condensate. Placing the condensate source after the GRIB-band path means GFS
 keeps its existing envelope byte-for-byte; only a model with 3D microphysics

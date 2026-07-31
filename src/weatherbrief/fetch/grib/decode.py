@@ -1518,6 +1518,7 @@ def build_cloud_diagnostics(
         total_cover_pct=_pct("total_cover_pct"),
         boundary_cover_pct=_pct("boundary_cover_pct"),
         ceiling_ft=_gpm_to_ft("ceiling_gpm"),
+        band_definition="ncep",
     )
 
     return diag
@@ -2482,6 +2483,7 @@ def build_hrrr_cloud_diagnostics(
         ml_cape_jkg=ml_cape,
         ml_cin_jkg=ml_cin,
         convective_scheme_absent=True,
+        band_definition="ncep",
     )
 
 

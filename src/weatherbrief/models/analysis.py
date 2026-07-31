@@ -234,6 +234,20 @@ class NWPCloudDiagnostics(BaseModel):
     # through unchanged rather than lerping a boolean.
     convective_scheme_absent: Optional[bool] = None
 
+    # Provenance marker, not a physical scalar (#508 follow-up): names the
+    # VERTICAL DEFINITION behind ``low``/``mid``/``high``, so a consumer that
+    # has to place a deck in a band knows which rule the amounts were computed
+    # under. ``"ncep"`` = LCDC/MCDC/HCDC pressure bands (surface–642 hPa,
+    # 642–350 hPa, 350 hPa–top) — GFS and HRRR. Left None for ECMWF (`lcc`/
+    # `mcc`/`hcc`) and ICON (`clcl`/`clcm`/`clch`), whose products split much
+    # lower (~800/400 hPa) and are NOT interchangeable with the NCEP rule.
+    # Consumed by ``build_nwp_cloud_layers_from_condensate``, which may only
+    # carve on pressure bands when it knows the amounts are NCEP-defined;
+    # anything else falls back to the self-consistent ICAO-carving/bulk-amount
+    # pairing. Listed in NWP_CLOUD_DIAG_META_FIELDS so interpolation carries
+    # it through unchanged rather than lerping a string.
+    band_definition: Optional[str] = None
+
 
 # --- Interpolation inventory for NWPCloudDiagnostics (issue #485) -----------
 #
@@ -275,7 +289,10 @@ On the SPATIAL axis the distinction does not exist — neighbouring route points
 share a valid time, so rates interpolate like anything else.
 """
 
-NWP_CLOUD_DIAG_META_FIELDS: tuple[str, ...] = ("convective_scheme_absent",)
+NWP_CLOUD_DIAG_META_FIELDS: tuple[str, ...] = (
+    "convective_scheme_absent",
+    "band_definition",
+)
 """Capability/provenance markers — NOT physical scalars.
 
 Constant per (model, point) for a whole enrichment run, so both interpolation

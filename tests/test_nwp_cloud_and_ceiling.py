@@ -574,6 +574,66 @@ class TestCondensateCloudEnvelope:
         # Segments abut at the midpoint between the boundary-adjacent levels.
         assert low.top_ft == mid.base_ft
 
+    def test_non_ncep_band_covers_do_not_get_the_ncep_pressure_rule(self):
+        """A non-NCEP product landing here must NOT have its band covers read
+        under the NCEP 642/350 hPa rule.
+
+        Routing into the condensate builder is by data shape (no 3D fraction,
+        no GRIB band geometry), which today means HRRR — but ECMWF (`lcc`/
+        `mcc`/`hcc`) and ICON (`clcl`/`clcm`/`clch`) publish band covers too,
+        over a much lower split (~800/400 hPa). If their 3D fraction ever
+        failed to decode while condensate survived, applying NCEP's boundaries
+        to their amounts would file a deck under the wrong band — the same
+        mismatched-slice bug rounds 4–6 fixed twice for HRRR.
+
+        Same levels as the LCDC repro above: the deck spans ~3,300–10,200 ft,
+        so it is ONE NCEP low-band deck (all levels > 642 hPa) but crosses the
+        ICAO 6,500 ft boundary. An unmarked diag must take the ICAO carving
+        with bulk amounts — a self-consistent pairing — not the NCEP rule."""
+        from weatherbrief.analysis.sounding.clouds import (
+            build_nwp_cloud_layers_from_condensate,
+        )
+        from weatherbrief.models.analysis import (
+            NWPCloudDiagnostics, NWPCloudLayerDiag,
+        )
+
+        # ECMWF/ICON shape: band covers present, band_definition unset.
+        diag = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=90.0),
+            mid=NWPCloudLayerDiag(cover_pct=0.0),
+            high=NWPCloudLayerDiag(cover_pct=0.0),
+        )
+        assert diag.band_definition is None
+        levels = [
+            self._lv(1000, 110, 0.0, 0.0),
+            self._lv(900, 1000, 3e-4, 0.0, -2.0),   # ~3,300 ft — ICAO low
+            self._lv(800, 2000, 3e-4, 0.0, -8.0),   # ~6,600 ft — ICAO mid
+            self._lv(700, 3100, 2e-4, 3e-5, -14.0),  # ~10,200 ft — ICAO mid
+            self._lv(500, 5570, 0.0, 0.0, -30.0),
+        ]
+        layers = build_nwp_cloud_layers_from_condensate(
+            levels, 20.0, 70.0, 0.0, nwp_cloud_diagnostics=diag,
+        )
+        # ICAO carving splits at 6,500 ft; the NCEP rule would have produced
+        # a single low-band deck covering the whole run.
+        assert len(layers) == 2
+        low, mid = layers
+        # Amounts come from the bulk ICAO triple, never the unmarked
+        # diagnostic covers (90/0) that are defined over a different slab.
+        assert low.mean_cloud_cover_pct == 20.0
+        assert mid.mean_cloud_cover_pct == 70.0
+
+    def test_hrrr_diag_is_marked_ncep(self):
+        """The marker the guard above keys on is actually set by HRRR decode
+        — otherwise the guard would silently disable pressure carving for the
+        one product it exists to serve."""
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        diag = build_hrrr_cloud_diagnostics({
+            "low_cover_pct": 90.0, "mid_cover_pct": 0.0, "high_cover_pct": 0.0,
+        })
+        assert diag.band_definition == "ncep"
+
     def test_gfs_still_uses_its_band_geometry(self):
         """GFS carries BOTH band geometry and condensate — the condensate
         source must not displace its existing envelope."""
