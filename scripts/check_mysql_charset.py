@@ -15,7 +15,8 @@ Usage:
     python scripts/check_mysql_charset.py --url mysql+pymysql://user:pass@host/db
 
 Exit codes: 0 = all tables InnoDB + utf8mb4-family (or not a MySQL URL),
-1 = violations found, 2 = no URL given.
+1 = violations found, 2 = no/invalid URL, 3 = cannot connect,
+4 = zero tables found (no current database or empty schema).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import os
 import sys
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ArgumentError, OperationalError
 
 _TABLES_SQL = """
 SELECT TABLE_NAME, ENGINE, TABLE_COLLATION, TABLE_ROWS
@@ -60,39 +62,56 @@ def main() -> int:
         print("error: no database URL — pass --url or set DATABASE_URL", file=sys.stderr)
         return 2
 
-    engine = create_engine(args.url)
+    try:
+        engine = create_engine(args.url)
+    except ArgumentError as exc:
+        print(f"error: invalid database URL: {str(exc).splitlines()[0]}", file=sys.stderr)
+        return 2
+
     if engine.dialect.name != "mysql":
         print(f"not MySQL (dialect: {engine.dialect.name}) — nothing to check")
         return 0
 
-    with engine.connect() as conn:
-        rows = conn.execute(text(_TABLES_SQL)).all()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(_TABLES_SQL)).all()
 
-        print(f"{'TABLE_NAME':<40} {'ENGINE':<10} {'TABLE_COLLATION':<24} ~ROWS")
-        bad: list[str] = []
-        for name, eng, collation, approx_rows in rows:
-            print(f"{name:<40} {eng or '-':<10} {collation or '-':<24} {approx_rows}")
-            if eng != "InnoDB" or not (collation or "").startswith("utf8mb4"):
-                bad.append(name)
+            if not rows:
+                print(
+                    "error: zero tables found — the URL names no current database "
+                    "or the schema is empty; check --url/$DATABASE_URL",
+                    file=sys.stderr,
+                )
+                return 4
 
-        if bad:
-            print(f"\nFAIL: {len(bad)} table(s) not InnoDB/utf8mb4: {', '.join(bad)}")
-            rc = 1
-        else:
-            print(f"\nOK: {len(rows)} table(s), all InnoDB with utf8mb4-family collation")
-            rc = 0
+            print(f"{'TABLE_NAME':<40} {'ENGINE':<10} {'TABLE_COLLATION':<24} ~ROWS")
+            bad: list[str] = []
+            for name, eng, collation, approx_rows in rows:
+                print(f"{name:<40} {eng or '-':<10} {collation or '-':<24} {approx_rows}")
+                if eng != "InnoDB" or not (collation or "").startswith("utf8mb4"):
+                    bad.append(name)
 
-        try:
-            unused = conn.execute(text(_UNUSED_INDEXES_SQL)).all()
-        except Exception as exc:
-            print(f"\nunused-index check skipped ({type(exc).__name__}: {exc})")
-        else:
-            if unused:
-                print("\npossibly unused indexes (verify with uptime):")
-                for table_name, index_name in unused:
-                    print(f"  {table_name} / {index_name}")
+            if bad:
+                print(f"\nFAIL: {len(bad)} table(s) not InnoDB/utf8mb4: {', '.join(bad)}")
+                rc = 1
             else:
-                print("\nno unused indexes reported by sys.schema_unused_indexes")
+                print(f"\nOK: {len(rows)} table(s), all InnoDB with utf8mb4-family collation")
+                rc = 0
+
+            try:
+                unused = conn.execute(text(_UNUSED_INDEXES_SQL)).all()
+            except Exception as exc:
+                print(f"\nunused-index check skipped ({type(exc).__name__}: {exc})")
+            else:
+                if unused:
+                    print("\npossibly unused indexes (verify with uptime):")
+                    for table_name, index_name in unused:
+                        print(f"  {table_name} / {index_name}")
+                else:
+                    print("\nno unused indexes reported by sys.schema_unused_indexes")
+    except OperationalError as exc:
+        print(f"error: cannot connect to database: {str(exc).splitlines()[0]}", file=sys.stderr)
+        return 3
 
     return rc
 
