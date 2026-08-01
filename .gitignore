@@ -11,6 +11,11 @@ venv/
 # Runtime data (snapshots)
 /data
 
+# The nav DB always lives at data/nav.db. A root-level one is an accident:
+# any code handed a relative "nav.db" path makes euro_aip's DatabaseStorage
+# create an empty DB here, and the real file is 35 MB.
+/nav.db
+
 # Local profiling artifacts (scripts/profile_refresh.py output)
 /profiles
 
