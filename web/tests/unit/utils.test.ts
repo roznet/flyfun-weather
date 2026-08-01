@@ -6,6 +6,7 @@ import {
   isFlightPast, flightTitle, flightRouteCompact,
   buildWindyUrl, errorToMessage, flightShareUrl,
   initBookingConfig, maxBookingLeadDays,
+  initModelCatalog, modelSlotLabel,
 } from '../../ts/utils';
 
 describe('escapeHtml', () => {
@@ -242,5 +243,45 @@ describe('maxBookingLeadDays', () => {
     expect(maxBookingLeadDays()).toBe(200);
     // Restore the default so test ordering can't leak the override.
     initBookingConfig({ max_booking_lead_days: 180, forecast_horizon_days: 9 });
+  });
+});
+
+describe('modelSlotLabel', () => {
+  // A slot can be served by a higher-resolution variant of the same family:
+  // the icon slot by ICON-D2 (#456), the gfs slot by HRRR (#457). The badge
+  // is the ONLY thing telling a pilot the sounding came from a different
+  // model, so it has to survive refactors of the freshness bar.
+  beforeAll(() => {
+    initModelCatalog([
+      { key: 'gfs', name: 'GFS', default: true },
+      { key: 'icon', name: 'ICON', default: true },
+    ]);
+  });
+  afterAll(() => initModelCatalog([]));
+
+  it('badges the gfs slot when HRRR served it', () => {
+    expect(modelSlotLabel('gfs', 'hrrr:noaa')).toBe('GFS (HRRR)');
+  });
+
+  it('badges the icon slot when ICON-D2 served it', () => {
+    expect(modelSlotLabel('icon', 'icon_d2:dwd')).toBe('ICON (D2)');
+  });
+
+  it('leaves the plain label when the slot ran on its default model', () => {
+    expect(modelSlotLabel('gfs', 'gfs:noaa')).toBe('GFS');
+    expect(modelSlotLabel('icon', 'icon_eu:dwd')).toBe('ICON');
+  });
+
+  it('is not an error for an unknown, missing or empty source key', () => {
+    // A pack from a future source, or one predating source tracking, must
+    // still render — unbadged, which is the honest answer.
+    expect(modelSlotLabel('gfs', 'rrfs:noaa')).toBe('GFS');
+    expect(modelSlotLabel('gfs')).toBe('GFS');
+    expect(modelSlotLabel('gfs', null)).toBe('GFS');
+    expect(modelSlotLabel('gfs', '')).toBe('GFS');
+  });
+
+  it('falls back to modelLabel semantics for a model outside the catalog', () => {
+    expect(modelSlotLabel('arome', 'hrrr:noaa')).toBe('AROME (HRRR)');
   });
 });

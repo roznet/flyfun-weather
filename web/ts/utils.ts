@@ -242,6 +242,28 @@ export function modelLabel(model: string): string {
   return _catalog.find(m => m.key === model)?.name ?? model.toUpperCase();
 }
 
+/** In-place-upgrade badges, keyed by the freshness source key the pack records
+ *  in `model_sources`. A model SLOT can be served by a higher-resolution
+ *  variant of the same family — the icon slot by ICON-D2 (2.2 km) on short
+ *  central-European routes (#456), the gfs slot by HRRR (3 km) on CONUS routes
+ *  inside the HRRR horizon (#457). `modelLabel()` keys off the model name
+ *  alone and cannot tell the variants apart, so the source key supplies the
+ *  tag. A table rather than a conditional chain: the next variant is one row.
+ */
+const MODEL_SLOT_BADGES: Record<string, string> = {
+  'icon_d2:dwd': 'D2',
+  'hrrr:noaa': 'HRRR',
+};
+
+/** `modelLabel()` plus a variant badge when the slot was served by a
+ *  higher-resolution source — e.g. `ICON (D2)`, `GFS (HRRR)`. An unknown or
+ *  missing source key is not an error: it just means the slot ran on its
+ *  default model, so the plain label is correct. */
+export function modelSlotLabel(model: string, source?: string | null): string {
+  const badge = source ? MODEL_SLOT_BADGES[source] : undefined;
+  return badge ? `${modelLabel(model)} (${badge})` : modelLabel(model);
+}
+
 // --- Windy URL builder ---
 
 /** Models that have a dedicated Windy view. Others fall back to ECMWF (default). */
