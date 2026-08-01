@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db import current_user_id, SessionLocal
 
 from weatherbrief.api.deps import airports_db as _airports_db, data_dir as _data_dir
 
@@ -551,7 +551,6 @@ async def get_airport_profile(
     window_h: int = Query(default=_DEFAULT_WINDOW_H, ge=0, le=12),
     enrich: bool = Query(default=True, description="Run local-GRIB enrichment phase"),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
     data_dir: Path = Depends(_data_dir),
 ):
@@ -586,10 +585,18 @@ async def get_airport_profile(
 
     hours = _build_hours(start_dt, window_h)
 
-    # Snapshot surface from cache before opening the long-lived stream so
-    # any DB error surfaces as a normal HTTP error (cleaner UX than an
-    # SSE error mid-stream).
-    surface = _surface_from_cache(db, icao, model, hours)
+    # Manage our own DB session — FastAPI's Depends(get_db) cleanup runs
+    # only after the StreamingResponse finishes, so a dependency-held
+    # session would pin a pooled connection for the stream's whole life
+    # (same pattern as packs.refresh_briefing_stream).
+    db = SessionLocal()
+    try:
+        # Snapshot surface from cache before opening the long-lived stream so
+        # any DB error surfaces as a normal HTTP error (cleaner UX than an
+        # SSE error mid-stream).
+        surface = _surface_from_cache(db, icao, model, hours)
+    finally:
+        db.close()
 
     # Acquire the per-user / global concurrency slot before opening the
     # stream. Released in the generator's finally block. Done synchronously

@@ -371,3 +371,195 @@ class TestGribRunDedup:
             ["a:enter", "a:exit", "b:enter", "b:exit"],
             ["b:enter", "b:exit", "a:enter", "a:exit"],
         )
+
+
+# ---------------------------------------------------------------------------
+# Session lifetime: the SSE stream must not pin a pooled connection.
+#
+# The endpoint manages its own ``SessionLocal()`` and closes it BEFORE the
+# StreamingResponse is constructed — the same pattern as
+# ``packs.refresh_briefing_stream``. FastAPI's ``Depends(get_db)`` cleanup
+# would only run after the stream finishes, pinning 1 of the pooled
+# connections for the stream's whole life (pool exhaustion → 500s once the
+# limiter's 20 concurrent streams exceed the pool). Tests below pin:
+#   (a) close() happens before the response object exists,
+#   (b) the stream generator never touches the session (structural +
+#       behavioral — the spy raises on any use beyond the pre-stream read),
+#   (c) the endpoint's response shape is unchanged.
+# ---------------------------------------------------------------------------
+
+
+class _SpySession:
+    """Stands in for a real SQLAlchemy Session.
+
+    Supports exactly the pre-stream read path
+    (``execute(...).scalars().all()`` → no rows) plus ``close()``. Any other
+    attribute access — which could only come from the stream generator
+    misusing the session — raises, as does any use after ``close()``.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.closed = True
+        self.close_calls += 1
+
+    def execute(self, *_args, **_kwargs):
+        if self.closed:
+            raise AssertionError("session used after close()")
+        return self
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return []
+
+    def __getattr__(self, name):
+        raise AssertionError(
+            f"unexpected session attribute {name!r} touched — "
+            "the airport-profile stream must not use the session"
+        )
+
+
+async def _call_profile_endpoint(ap, **overrides):
+    """Invoke get_airport_profile directly, bypassing FastAPI DI."""
+    kwargs = {
+        "icao": "EGLL",
+        "model": "ecmwf",
+        "start_hour": "2026-05-07T12:00:00Z",
+        "window_h": 0,
+        "enrich": False,
+        "_user_id": "session-spy-user",
+        "airports_db": "/unused",
+        "data_dir": Path("/tmp"),
+    }
+    kwargs.update(overrides)
+    return await ap.get_airport_profile(**kwargs)
+
+
+def _patch_pre_stream(monkeypatch, ap, session):
+    """Mock the session factory and everything upstream of the stream."""
+    monkeypatch.setattr(ap, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        ap, "_resolve_airport_coords", lambda *_a: (51.4775, -0.4614, 83.0),
+    )
+
+
+class TestSessionLifetime:
+    @pytest.mark.asyncio
+    async def test_session_closed_before_streaming_response_created(self, monkeypatch):
+        """(a) The response object must only ever exist after close()."""
+        from weatherbrief.api import airport_profile as ap
+
+        session = _SpySession()
+        _patch_pre_stream(monkeypatch, ap, session)
+
+        closed_at_construction = []
+        real_response_cls = ap.StreamingResponse
+
+        def _checked_response(*args, **kwargs):
+            closed_at_construction.append(session.closed)
+            return real_response_cls(*args, **kwargs)
+
+        monkeypatch.setattr(ap, "StreamingResponse", _checked_response)
+
+        response = await _call_profile_endpoint(ap)
+
+        assert closed_at_construction == [True], (
+            "StreamingResponse was constructed before db.close() — the "
+            "stream would pin a pooled connection for its whole life"
+        )
+        assert session.close_calls == 1
+        assert isinstance(response, real_response_cls)
+
+    def test_event_generator_does_not_capture_db(self):
+        """(b, structural) No nested function of the endpoint — the SSE
+        generator and its helpers — may close over ``db``. If any did,
+        ``db`` would be promoted to a cell variable of the endpoint and
+        appear in the nested code's co_freevars. The dependency itself must
+        also be gone from the signature."""
+        import inspect
+
+        from weatherbrief.api import airport_profile as ap
+
+        assert "db" not in inspect.signature(ap.get_airport_profile).parameters, (
+            "get_airport_profile still takes db=Depends(get_db) — FastAPI's "
+            "yield-dependency cleanup closes it only after the stream ends"
+        )
+
+        def _walk(code):
+            yield code
+            for const in code.co_consts:
+                if hasattr(const, "co_consts"):
+                    yield from _walk(const)
+
+        endpoint_code = ap.get_airport_profile.__code__
+        assert "db" not in endpoint_code.co_cellvars, (
+            "`db` is captured by a nested function — the SSE generator must "
+            "only see plain data, never the session"
+        )
+        for code in _walk(endpoint_code):
+            assert "db" not in code.co_freevars, (
+                f"nested function {code.co_name!r} closes over `db`"
+            )
+
+    @pytest.mark.asyncio
+    async def test_stream_runs_without_session_and_shape_unchanged(self, monkeypatch):
+        """(b, behavioral) + (c) Drain the whole stream against the spy
+        session: any generator-side session use raises inside the spy, and
+        the event sequence / payload shape must match the pre-change
+        contract (levels fetch failed path, enrichment off)."""
+        from weatherbrief.api import airport_profile as ap
+
+        session = _SpySession()
+        _patch_pre_stream(monkeypatch, ap, session)
+        # Stream internals: pressure-level fetch "fails" (None → levels
+        # error event), enrichment off, derived runs for real on wf=None.
+        monkeypatch.setattr(ap, "_fetch_pressure_levels", lambda *_a: None)
+
+        limiter_before = ap._limiter.snapshot()["global"]
+        response = await _call_profile_endpoint(ap)
+        assert session.closed
+
+        assert response.media_type == "text/event-stream"
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers["x-accel-buffering"] == "no"
+
+        parsed = []
+        async for chunk in response.body_iterator:
+            event_line, data_line = chunk.splitlines()[:2]
+            parsed.append((
+                event_line.removeprefix("event: "),
+                json.loads(data_line.removeprefix("data: ")),
+            ))
+
+        assert [event for event, _ in parsed] == [
+            "meta", "surface",
+            "progress", "levels",
+            "progress", "derived",
+            "complete",
+        ]
+        payloads = {event: data for event, data in parsed}
+
+        meta = payloads["meta"]
+        assert meta["type"] == "meta"
+        assert meta["icao"] == "EGLL"
+        assert meta["lat"] == 51.4775
+        assert meta["lon"] == -0.4614
+        assert meta["elevation_ft"] == 83.0
+        assert meta["model"] == "ecmwf"
+        assert len(meta["hours"]) == 1  # window_h=0 → single hour
+
+        assert payloads["surface"] == {"type": "surface", "hours": []}
+        assert payloads["levels"] == {
+            "type": "levels", "hours": [], "error": "fetch_failed",
+        }
+        assert payloads["derived"] == {"type": "derived", "points": []}
+        stages = [d["stage"] for e, d in parsed if e == "progress"]
+        assert stages == ["fetch_forecasts", "sounding_analysis"]
+
+        # Draining the stream released the limiter slot (generator finally).
+        assert ap._limiter.snapshot()["global"] == limiter_before
