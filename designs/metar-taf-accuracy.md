@@ -557,6 +557,17 @@ def compute_verification_score(
     )
 ```
 
+**Ceiling datum.** Every ceiling that meets a METAR ceiling in a delta is first
+converted to **AGL**, because the METAR side always is. `model_ceiling` gets
+this from `reconcile_ceiling(..., field_elevation_ft=…, model=…)`; the extra
+`cloud_base_delta_ft` on the standalone path converts `cloud_base_ft` with the
+same `to_agl_ceiling` + `_nwp_ceiling_is_agl` helpers before differencing.
+`lcl_delta_ft` is the exception that looks like a bug: `lcl_ft` is the Espy
+surface approximation, a height above the *station*, so it is already AGL and
+must not have field elevation subtracted. Field elevations come from
+`get_airport_elevations`; when the lookup fails, scoring degrades to the legacy
+datum-naive deltas rather than failing the cycle. (#441 finding #3)
+
 ### TAF → METAR Comparison
 
 TAF fields are already parsed and stored in `verification_observations`. The TAF-derived flight category uses the same `classify_flight_category()` as advisories.

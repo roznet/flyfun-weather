@@ -371,3 +371,78 @@ class TestGribRunDedup:
             ["a:enter", "a:exit", "b:enter", "b:exit"],
             ["b:enter", "b:exit", "a:enter", "a:exit"],
         )
+
+
+class TestSurfaceCeilingDatum:
+    """``_surface_from_cache`` emits ceilings on the AGL datum. (#441 #3)
+
+    The chart plots this series against AGL METAR ceilings, and every other
+    ceiling surface (map, alternates, advisories) already converts — this was
+    the last datum-naive read.
+    """
+
+    @staticmethod
+    def _insert(db_session, **overrides):
+        from weatherbrief.db.models import AirportForecastSnapshotRow
+
+        hour = datetime(2026, 5, 7, 12, 0, tzinfo=timezone.utc)
+        defaults = dict(
+            icao="LSGS", region="eu", model="gfs",
+            model_init_time=datetime(2026, 5, 7, 6, 0, tzinfo=timezone.utc),
+            forecast_hour=hour,
+            fetched_at=hour,
+            nwp_ceiling_ft=4000.0,
+            sounding_ceiling_ft=5000.0,
+        )
+        defaults.update(overrides)
+        db_session.add(AirportForecastSnapshotRow(**defaults))
+        db_session.flush()
+        return hour
+
+    def test_msl_model_ceiling_converted_to_agl(self, db_session):
+        from weatherbrief.api.airport_profile import _surface_from_cache
+
+        hour = self._insert(db_session, model="gfs")
+        rows = _surface_from_cache(
+            db_session, "LSGS", "gfs", [hour], field_elevation_ft=1500.0,
+        )
+        assert rows[0]["ceiling_ft"] == pytest.approx(2500.0)  # 4000 MSL - 1500
+
+    def test_ecmwf_ceiling_already_agl_passes_through(self, db_session):
+        from weatherbrief.api.airport_profile import _surface_from_cache
+
+        hour = self._insert(db_session, model="ecmwf")
+        rows = _surface_from_cache(
+            db_session, "LSGS", "ecmwf", [hour], field_elevation_ft=1500.0,
+        )
+        assert rows[0]["ceiling_ft"] == pytest.approx(4000.0)
+
+    def test_sounding_fallback_is_always_msl(self, db_session):
+        """The sounding ceiling is geopotential-height MSL for every model —
+        including ECMWF, whose *NWP* ceiling is AGL."""
+        from weatherbrief.api.airport_profile import _surface_from_cache
+
+        hour = self._insert(db_session, model="ecmwf", nwp_ceiling_ft=None)
+        rows = _surface_from_cache(
+            db_session, "LSGS", "ecmwf", [hour], field_elevation_ft=1500.0,
+        )
+        assert rows[0]["ceiling_ft"] == pytest.approx(3500.0)  # 5000 MSL - 1500
+
+    def test_zero_nwp_ceiling_does_not_fall_through_to_sounding(self, db_session):
+        """A literal 0 ft ceiling (ground-level fog) is a real value, not a
+        missing one — the None-check must survive the AGL conversion."""
+        from weatherbrief.api.airport_profile import _surface_from_cache
+
+        hour = self._insert(db_session, model="gfs", nwp_ceiling_ft=0.0)
+        rows = _surface_from_cache(
+            db_session, "LSGS", "gfs", [hour], field_elevation_ft=1500.0,
+        )
+        # 0 MSL clamps to 0 AGL; it must NOT become 5000-1500 from the sounding.
+        assert rows[0]["ceiling_ft"] == pytest.approx(0.0)
+
+    def test_without_elevation_stays_datum_naive(self, db_session):
+        from weatherbrief.api.airport_profile import _surface_from_cache
+
+        hour = self._insert(db_session, model="gfs")
+        rows = _surface_from_cache(db_session, "LSGS", "gfs", [hour])
+        assert rows[0]["ceiling_ft"] == pytest.approx(4000.0)

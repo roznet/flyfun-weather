@@ -422,8 +422,42 @@ class TestScoreCycle:
         _score_cycle(NOW, [], "/fake/db", db_session)
 
         row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        # No elevation available (the fake db path fails the lookup) — legacy
+        # datum-naive deltas.
         assert row.cloud_base_delta_ft == pytest.approx(-200.0)  # 2800 - 3000
         assert row.lcl_delta_ft == pytest.approx(-1000.0)  # 2000 - 3000
+
+    @patch("weatherbrief.airports.get_airport_elevations", return_value={"LFPG": 1500.0})
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_cloud_base_delta_converts_msl_model_to_agl(self, mock_rwy, mock_elev, db_session):
+        """GFS cloud_base_ft is MSL; the METAR ceiling is AGL. (#441 #3)"""
+        _insert_snapshot(db_session, model="gfs", cloud_base_ft=2800.0, lcl_ft=2000.0)
+        _insert_observation(db_session, ceiling_ft=3000)
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        # 2800 MSL - 1500 field = 1300 AGL, against a 3000 AGL METAR ceiling.
+        assert row.cloud_base_delta_ft == pytest.approx(-1700.0)
+        # lcl_ft is the Espy surface approximation — already AGL, so the field
+        # elevation must NOT be subtracted a second time.
+        assert row.lcl_delta_ft == pytest.approx(-1000.0)
+
+    @patch("weatherbrief.airports.get_airport_elevations", return_value={"LFPG": 1500.0})
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_cloud_base_delta_leaves_ecmwf_agl_alone(self, mock_rwy, mock_elev, db_session):
+        """ECMWF cloud base is already AGL — it passes through unconverted."""
+        _insert_snapshot(
+            db_session, model="ecmwf", model_init_time=GFS_INIT,
+            cloud_base_ft=2800.0, lcl_ft=2000.0,
+        )
+        _insert_observation(db_session, ceiling_ft=3000)
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        assert row.cloud_base_delta_ft == pytest.approx(-200.0)  # 2800 - 3000
+        assert row.lcl_delta_ft == pytest.approx(-1000.0)
 
     @patch("weatherbrief.airports.get_runway_ends", return_value={})
     def test_multiple_models_scored_independently(self, mock_rwy, db_session):
