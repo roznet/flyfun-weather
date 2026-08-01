@@ -15,17 +15,39 @@ export interface RouteGraphMetric {
   readonly renderType: RenderType;
   /** Primary color for the line/bar. */
   readonly color: string;
-  /** Extract the numeric value from a VizPoint. Returns null if unavailable. */
+  /**
+   * Extract the numeric value from a VizPoint. Returns null — and *only* null —
+   * when the value is genuinely unavailable. A known value that happens to sit
+   * off the top of the axis is not null; see `aboveScale`.
+   */
   getValue(point: VizPoint): number | null;
   /** Optional: format value for tooltip. Defaults to rounding to 1 decimal. */
   formatValue?: (v: number) => string;
   /** Optional: fixed Y-axis range [min, max]. Auto-scaled from data if omitted. */
   suggestedRange?: [number, number];
+  /**
+   * Treat values above `suggestedRange`'s max as a distinct *above-scale* state
+   * instead of data: the axis is pinned to the range exactly (no padding, no
+   * expansion, so the top tick *is* the cap) and such points render as a capped
+   * marker on the top edge rather than a gap. Requires `suggestedRange`.
+   *
+   * This is a presentation state, not a claim about the weather — the value is
+   * known and is never clipped or rewritten, it just doesn't fit the axis.
+   */
+  aboveScale?: boolean;
   /** Draw a reference line at y=0 (useful for head/tailwind). */
   showZeroLine?: boolean;
   /** Labels drawn above/below the zero line: [aboveLabel, belowLabel]. */
   zeroLineLabels?: [string, string];
 }
+
+/**
+ * Display cap for the ceiling metrics, in ft AGL. Ceilings above this are of no
+ * practical interest to plot point-by-point, so the axis stops here and higher
+ * ceilings render as above-scale. Purely a display bound — it does not change
+ * any meteorological value or threshold.
+ */
+const CEILING_AGL_CAP_FT = 5000;
 
 /**
  * Metric registry — add new metrics here. They automatically appear in dropdowns
@@ -150,12 +172,17 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     unit: 'ft AGL',
     renderType: 'line',
     color: '#8b5cf6',
+    // A ceiling well above the route is the best possible news, so it must not
+    // return null — that is reserved for "no sounding", and the two used to be
+    // indistinguishable (gap in the line, tooltip "N/A"). Above the cap is an
+    // above-scale state instead; see `aboveScale`.
     getValue: (p) => {
       if (p.soundingCeilingFt == null) return null;
-      const agl = Math.max(0, p.soundingCeilingFt - p.terrainElevationFt);
-      return agl > 5000 ? null : agl;
+      return Math.max(0, p.soundingCeilingFt - p.terrainElevationFt);
     },
     formatValue: (v) => `${Math.round(v).toLocaleString()} ft AGL`,
+    suggestedRange: [0, CEILING_AGL_CAP_FT],
+    aboveScale: true,
   },
   {
     id: 'ceiling-nwp',
@@ -164,12 +191,59 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     color: '#d946ef',
     getValue: (p) => {
       if (p.nwpCloudDiag?.ceilingFt == null) return null;
-      const agl = Math.max(0, p.nwpCloudDiag.ceilingFt - p.terrainElevationFt);
-      return agl > 5000 ? null : agl;
+      return Math.max(0, p.nwpCloudDiag.ceilingFt - p.terrainElevationFt);
     },
     formatValue: (v) => `${Math.round(v).toLocaleString()} ft AGL`,
+    suggestedRange: [0, CEILING_AGL_CAP_FT],
+    aboveScale: true,
   },
 ];
+
+/**
+ * A metric's value at one route point, in three states rather than two.
+ *
+ * `unavailable` means we have no value. `above-scale` means we have one and it
+ * is off the top of the axis — the distinction the chart previously collapsed,
+ * rendering "ceiling is excellent" identically to "no data".
+ */
+export type MetricSample =
+  | { readonly kind: 'value'; readonly value: number }
+  | { readonly kind: 'above-scale'; readonly value: number }
+  | { readonly kind: 'unavailable' };
+
+const UNAVAILABLE_SAMPLE: MetricSample = { kind: 'unavailable' };
+
+/**
+ * Classify a metric's value at a point. The single place the three states are
+ * derived — renderer, axes and tooltip all read this rather than re-deriving
+ * the cap, so they cannot drift apart.
+ */
+export function sampleMetric(metric: RouteGraphMetric, point: VizPoint): MetricSample {
+  const v = metric.getValue(point);
+  if (v === null) return UNAVAILABLE_SAMPLE;
+  if (metric.aboveScale && metric.suggestedRange && v > metric.suggestedRange[1]) {
+    return { kind: 'above-scale', value: v };
+  }
+  return { kind: 'value', value: v };
+}
+
+/**
+ * Tooltip text for a sample, unit-aware via the metric's own `formatValue`.
+ * Above-scale reads "> <cap>"; only a genuinely absent value reads "N/A".
+ */
+export function formatSample(metric: RouteGraphMetric, sample: MetricSample): string {
+  const fmt = (v: number): string => (metric.formatValue ? metric.formatValue(v) : v.toFixed(1));
+  switch (sample.kind) {
+    case 'value':
+      return fmt(sample.value);
+    case 'above-scale':
+      // Formatted from the cap, not the value: we are reporting the axis limit
+      // we can show, not disclosing a number we declined to plot.
+      return `> ${fmt(metric.suggestedRange![1])}`;
+    case 'unavailable':
+      return 'N/A';
+  }
+}
 
 /** Sentinel value for "no metric selected" (used for the optional right Y-axis). */
 export const METRIC_NONE = 'none';

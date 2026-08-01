@@ -1,7 +1,7 @@
 /** Route graph canvas renderer — 2D chart below the cross-section. */
 
 import type { PlotArea, VizRouteData, VizPoint } from '../types';
-import type { RouteGraphMetric } from './metrics';
+import { sampleMetric, type RouteGraphMetric } from './metrics';
 import type { YAxisScale } from './axes';
 import { computeYScale, drawLeftYAxis, drawRightYAxis, drawXGrid, drawZeroLine, drawBorder } from './axes';
 import { monotoneCubicTangents } from '../cross-section/layers/base';
@@ -111,10 +111,10 @@ export class RouteGraphRenderer {
 
     // Compute scales and render metrics
     const leftScale = this.leftMetric
-      ? computeYScale(this.data.points.map((p) => this.leftMetric!.getValue(p)), this.leftMetric, plotArea)
+      ? computeYScale(this.data.points.map((p) => sampleMetric(this.leftMetric!, p)), this.leftMetric, plotArea)
       : null;
     const rightScale = this.rightMetric
-      ? computeYScale(this.data.points.map((p) => this.rightMetric!.getValue(p)), this.rightMetric, plotArea)
+      ? computeYScale(this.data.points.map((p) => sampleMetric(this.rightMetric!, p)), this.rightMetric, plotArea)
       : null;
 
     // Clip to plot area for data rendering
@@ -214,7 +214,7 @@ export class RouteGraphRenderer {
     if (metric.renderType === 'bar') {
       this.renderBars(ctx, metric, scale, distanceToX, plotArea, points);
     } else {
-      this.renderLine(ctx, metric, scale, distanceToX, points);
+      this.renderLine(ctx, metric, scale, distanceToX, plotArea, points);
     }
   }
 
@@ -223,10 +223,12 @@ export class RouteGraphRenderer {
     metric: RouteGraphMetric,
     scale: YAxisScale,
     distanceToX: (d: number) => number,
+    plotArea: PlotArea,
     points: readonly VizPoint[],
   ): void {
-    const values = points.map((p) => metric.getValue(p));
+    const samples = points.map((p) => sampleMetric(metric, p));
     const allDots: Array<{ x: number; y: number }> = [];
+    const aboveScaleXs: number[] = [];
 
     ctx.strokeStyle = metric.color;
     ctx.lineWidth = 2;
@@ -240,8 +242,13 @@ export class RouteGraphRenderer {
     let curYs: number[] = [];
 
     for (let i = 0; i < points.length; i++) {
-      const v = values[i];
-      if (v === null) {
+      const s = samples[i];
+      if (s.kind !== 'value') {
+        // Both non-value states break the spline — there is no honest Y for
+        // either — but only one of them leaves the reader with nothing: an
+        // above-scale point gets its own marker below, so the break in the
+        // line reads as "off the top", not as "no data".
+        if (s.kind === 'above-scale') aboveScaleXs.push(distanceToX(points[i].distanceNm));
         if (curXs.length > 0) {
           segments.push({ xs: curXs, ys: curYs });
           curXs = [];
@@ -250,7 +257,7 @@ export class RouteGraphRenderer {
         continue;
       }
       const x = distanceToX(points[i].distanceNm);
-      const y = scale.valueToY(v);
+      const y = scale.valueToY(s.value);
       curXs.push(x);
       curYs.push(y);
       allDots.push({ x, y });
@@ -284,6 +291,18 @@ export class RouteGraphRenderer {
       ctx.arc(x, y, 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // Above-scale markers: upward chevrons riding the top edge. The value is
+    // known and is not drawn at any Y that would imply a reading — the marker
+    // says "higher than the top tick" and the tooltip gives the bound.
+    for (const x of aboveScaleXs) {
+      ctx.beginPath();
+      ctx.moveTo(x, plotArea.top + 1);
+      ctx.lineTo(x - 4, plotArea.top + 7);
+      ctx.lineTo(x + 4, plotArea.top + 7);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   private renderBars(
@@ -300,11 +319,13 @@ export class RouteGraphRenderer {
     ctx.globalAlpha = 0.6;
 
     for (let i = 0; i < points.length; i++) {
-      const v = metric.getValue(points[i]);
-      if (v === null || v === 0) continue;
+      // No bar metric declares `aboveScale` today; if one ever does it needs its
+      // own affordance (a clipped bar head), so skip rather than invent one.
+      const s = sampleMetric(metric, points[i]);
+      if (s.kind !== 'value' || s.value === 0) continue;
 
       const x = distanceToX(points[i].distanceNm);
-      const y = scale.valueToY(v);
+      const y = scale.valueToY(s.value);
 
       // Bar width: half distance to neighbors
       const prevDist = i > 0 ? points[i - 1].distanceNm : points[i].distanceNm;

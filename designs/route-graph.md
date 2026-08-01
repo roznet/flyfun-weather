@@ -48,6 +48,8 @@ interface RouteGraphMetric {
   formatValue?: (v: number) => string;
   /** Optional: suggested Y-axis range [min, max]. Auto-scaled if omitted. */
   suggestedRange?: [number, number];
+  /** Optional: values above suggestedRange's max are above-scale, not data. Requires suggestedRange. */
+  aboveScale?: boolean;
   /** Optional: zero-line — draw a reference line at y=0 (useful for headwind). */
   showZeroLine?: boolean;
   /** Optional: labels drawn above/below the zero line, e.g. ["Headwind ↑", "Tailwind ↓"]. */
@@ -74,11 +76,29 @@ interface RouteGraphMetric {
 
 **ISA deviation** plots cruise-level temperature minus the ISA standard at that level — the zero line is "on-ISA", above = warmer (degraded density altitude / climb / TAS). It is derived in `data-extract.ts` from a separate `VizPoint.temperatureCruiseC` (cruise-level temperature, kept distinct from the surface `temperatureC`), so the surface and cruise temperatures stay independent.
 
-**Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion and cap display at 5000ft AGL.
+**Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion, and both pin their axis to 0–5000 ft AGL — a ceiling higher than that renders as **above-scale** (see below), not as a missing value.
 
 **CIN** is convention-negative (it inhibits convection), so its bars hang *below* the zero line as the "cap" beside CAPE's upward bars; it sets `showZeroLine` so the reference line is drawn at the top of the `[-300, 0]` range.
 
 **QNH is region-aware** (the only such metric). It carries canonical hPa on `VizPoint.qnhHpa` and converts at the display edge via `units.ts` (`qnhDisplayValue` / `qnhUnitLabel`): Europe shows **QNH in hPa**, the US shows **Altimeter in inHg**. Both the `unit` field (a getter) and the name (`getMetricLabel`, key `graph.altimeter` vs `graph.qnh`) switch on `getUnitsRegion()`, so the axis label, ticks, tooltip, and dropdown all agree. The model-comparison table keeps it as canonical-hPa "QNH" (advanced tier, hidden by default).
+
+### Three value states: value / above-scale / unavailable (#384)
+
+`getValue` returns `number | null`, where **null means genuinely unavailable and nothing else**. A metric that also has a display ceiling declares `suggestedRange` plus `aboveScale: true`, and `sampleMetric(metric, point)` classifies each point into a `MetricSample`:
+
+| State | Meaning | Axis | Line | Tooltip |
+|---|---|---|---|---|
+| `value` | plottable | drives auto-fit | drawn | formatted value |
+| `above-scale` | known, off the top | ignored | breaks, plus a top-edge chevron | `> 5,000 ft AGL` |
+| `unavailable` | no data | ignored | breaks | `N/A` |
+
+`sampleMetric` is the single place the cap is applied — `renderer.ts`, `axes.ts` and `interaction.ts` all consume samples rather than re-deriving it, so the three surfaces cannot drift.
+
+Before #384 the ceiling getters returned `null` for both "above 5000 ft AGL" and "no sounding". That made the best possible news — a ceiling far above the route — render exactly like absent data: a gap in the line and a tooltip reading `N/A`. It also degenerated the axis, since the ceiling metrics declared no `suggestedRange`: on a day where every point was above cap, `computeYScale` auto-fit an empty array and drew a **0–1 ft AGL axis with no line on it**. This is the mirror of #391/#392 ("absent data must never read as GREEN") — there, *unknown* looked like *fine*; here, *fine* looked like *unknown*. Both erode what a gap means.
+
+`aboveScale` metrics get their `suggestedRange` used **verbatim** — no 10% padding, no nice-rounding, no expanding to fit — so the top tick *is* the cap and a marker riding the top edge unambiguously reads "higher than that number". This is a presentation state only: the value is never clipped or rewritten, and no meteorological reclassification happens in the browser.
+
+Only line metrics support it today. A bar metric declaring `aboveScale` would need its own affordance (a clipped bar head); `renderBars` skips non-`value` samples rather than inventing one.
 
 ### Future Metrics (no code changes to renderer needed)
 
