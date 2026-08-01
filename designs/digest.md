@@ -115,8 +115,10 @@ result = run_digest(snapshot, target_time, config,
                     route_advisories=, previous_digest=)
 result["digest"]            # → WeatherDigest (Pydantic model)
 result["digest_text"]       # → formatted markdown string
-result["llm_input_tokens"]  # → token usage (or None)
+result["llm_input_tokens"]  # → token usage (or None); INCLUDES cached tokens
 result["llm_output_tokens"]
+result["llm_cache_read_tokens"]   # → prompt-cache split, subsets of
+result["llm_cache_write_tokens"]  #   llm_input_tokens — never add them to it
 result["dwd_translated"]    # → translated DWD blocks (attached post-graph)
 result["digest_trace_id"]   # → controlled LangSmith root run id (str UUID)
 result["diagnostic"]        # → typed Diagnostic if the LLM call failed, else None
@@ -233,7 +235,15 @@ The `WEATHERBRIEF_GUIDANCE_DIR` env var can override the guidance directory to a
 
 - **LangGraph over plain function** — provides structured state management, easy node-level testing, and future extensibility (e.g., parallel text fetch + quant assembly)
 - **Structured output via `with_structured_output()`** — Pydantic model enforced by the LLM provider, no manual JSON parsing
-- **Config files, not code** — switching providers (Anthropic <-> OpenAI) is a JSON change
+- **Config files, not code** — switching providers (Anthropic <-> OpenAI) is a JSON change.
+  `_system_content()` is gated on the resolved provider for exactly this reason: it attaches
+  an Anthropic-only `cache_control` breakpoint, which must not reach `ChatOpenAI`.
+- **Prompt caching on the system block** — the tool schema plus system prompt (~4.7k tokens,
+  ~40% of a request) are identical across digests sharing a (locale, guidance) pair, and
+  Anthropic renders `tools` → `system` → `messages`, so one breakpoint covers both. 1-hour
+  TTL, chosen against measured inter-digest gaps; skipped for long-range, whose Haiku 4.5
+  prompt is below that model's 4096-token cacheable minimum. See
+  `designs/cost-attribution-design.md` for how the read/write split is priced.
 - **Versioned prompts** — `briefer_v1.md` allows prompt iteration without code changes
 
 ## Gotchas

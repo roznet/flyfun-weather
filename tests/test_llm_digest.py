@@ -202,3 +202,113 @@ def test_weather_digest_model():
             trend="test",
             watch_items="test",
         )
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching: breakpoint placement and usage extraction
+# ---------------------------------------------------------------------------
+
+
+class TestSystemContentCacheBreakpoint:
+    """``_system_content`` decides where (and whether) to cache.
+
+    ``cache_control`` is Anthropic-only wire format. ``langchain-openai``
+    currently drops the unknown key instead of erroring, so a regression here
+    would not fail loudly — it would quietly ship a provider-specific field
+    down the documented Anthropic<->OpenAI swap path.
+    """
+
+    def _cfg(self, provider="anthropic", model="claude-sonnet-4-6"):
+        from weatherbrief.digest.llm_config import LLMConfig
+        return LLMConfig(provider=provider, model=model)
+
+    def test_anthropic_short_range_gets_a_breakpoint(self):
+        from weatherbrief.digest.llm_digest import _system_content
+        out = _system_content("PROMPT", self._cfg(), longrange=False)
+        assert isinstance(out, list)
+        assert out[0]["text"] == "PROMPT"
+        assert out[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_openai_provider_gets_a_plain_string(self):
+        from weatherbrief.digest.llm_digest import _system_content
+        out = _system_content("PROMPT", self._cfg("openai", "gpt-4o"), longrange=False)
+        assert out == "PROMPT"
+
+    def test_longrange_gets_a_plain_string(self):
+        """Haiku 4.5's 4096-token minimum is above the long-range prompt."""
+        from weatherbrief.digest.llm_digest import _system_content
+        out = _system_content("PROMPT", self._cfg(model="claude-haiku-4-5"), longrange=True)
+        assert out == "PROMPT"
+
+    def test_shipped_openai_config_never_gets_a_breakpoint(self):
+        """Guards the real config, not just a synthetic one."""
+        from weatherbrief.digest.llm_config import load_digest_config
+        from weatherbrief.digest.llm_digest import _system_content
+        cfg = load_digest_config("openai")
+        assert _system_content("PROMPT", cfg.llm, longrange=False) == "PROMPT"
+
+
+class TestCacheUsageExtraction:
+    """The cache split must survive the langchain usage_metadata mapping.
+
+    This is the half of the caching change that fails *silently*: if the
+    ``cache_read`` / ``cache_creation`` keys are renamed upstream, the ``or 0``
+    fallback reports zero cached tokens forever, the ledger reverts to
+    full-price billing, and nothing raises. costs.py is well covered; this
+    mapping was not.
+    """
+
+    def _run(self, usage_metadata):
+        from unittest.mock import MagicMock, patch
+        from weatherbrief.digest.llm_config import DigestConfig
+        from weatherbrief.digest.llm_digest import briefer_node
+
+        raw = MagicMock()
+        raw.usage_metadata = usage_metadata
+        structured = MagicMock()
+        structured.invoke.return_value = {
+            "raw": raw, "parsed": MagicMock(), "parsing_error": None,
+        }
+        llm = MagicMock()
+        llm.with_structured_output.return_value = structured
+        with patch("weatherbrief.digest.llm_digest.create_llm", return_value=llm):
+            return briefer_node({
+                "config": DigestConfig(), "context": "ctx", "longrange": False,
+            })
+
+    def test_cache_split_is_extracted(self):
+        out = self._run({
+            "input_tokens": 11478,
+            "output_tokens": 1170,
+            "input_token_details": {"cache_read": 4661, "cache_creation": 0},
+        })
+        assert out["llm_input_tokens"] == 11478
+        assert out["llm_cache_read_tokens"] == 4661
+        assert out["llm_cache_write_tokens"] == 0
+
+    def test_cache_write_is_extracted(self):
+        out = self._run({
+            "input_tokens": 11478,
+            "output_tokens": 1170,
+            "input_token_details": {"cache_read": 0, "cache_creation": 4661},
+        })
+        assert out["llm_cache_write_tokens"] == 4661
+
+    def test_cache_tokens_are_a_subset_of_input_tokens(self):
+        """The invariant compute_cost relies on: never add these together.
+
+        langchain-anthropic folds cached tokens *into* ``input_tokens``. If that
+        ever changed, compute_cost's subtraction would be wrong — so pin it.
+        """
+        out = self._run({
+            "input_tokens": 11478,
+            "output_tokens": 1170,
+            "input_token_details": {"cache_read": 4661, "cache_creation": 0},
+        })
+        assert out["llm_cache_read_tokens"] + out["llm_cache_write_tokens"] <= out["llm_input_tokens"]
+
+    def test_missing_details_degrade_to_zero_not_none(self):
+        """A provider without cache reporting must not write NULL columns."""
+        out = self._run({"input_tokens": 900, "output_tokens": 100})
+        assert out["llm_cache_read_tokens"] == 0
+        assert out["llm_cache_write_tokens"] == 0

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 from weatherbrief.digest.exceptions import classify_llm_exception
-from weatherbrief.digest.llm_config import DigestConfig, create_llm
+from weatherbrief.digest.llm_config import DigestConfig, LLMConfig, create_llm
 from weatherbrief.digest.outlook import OUTLOOK_ICONS, OUTLOOK_LABELS
 from weatherbrief.digest.prompt_builder import build_digest_context
 from weatherbrief.fetch.freshness.registry import (
@@ -132,7 +132,9 @@ def build_confidence_note(snapshot: ForecastSnapshot, target_time: datetime) -> 
 # --- Graph node ---
 
 
-def _system_content(system_prompt: str, longrange: bool) -> str | list[dict]:
+def _system_content(
+    system_prompt: str, llm_config: LLMConfig, longrange: bool
+) -> str | list[dict]:
     """System message content, with a prompt-cache breakpoint where it pays.
 
     Anthropic renders ``tools`` → ``system`` → ``messages``, so a breakpoint on
@@ -146,11 +148,21 @@ def _system_content(system_prompt: str, longrange: bool) -> str | list[dict]:
     measured gaps between consecutive digests sharing a prompt clear the bar
     far more comfortably at an hour (~84%) than at five minutes (~34%).
 
-    Long-range digests are skipped: they run on Haiku 4.5, whose minimum
-    cacheable prefix is 4096 tokens — well above that prompt's ~1.5k — so a
-    breakpoint there caches nothing and silently costs nothing either.
+    Two cases fall back to a plain string:
+
+    * **Non-Anthropic providers.** ``cache_control`` is Anthropic-only wire
+      format, and ``configs/weather_digest/openai.json`` points this same
+      non-longrange block at ``gpt-4o``.  ``langchain-openai`` currently drops
+      the unknown key rather than erroring, so the provider swap documented in
+      ``designs/digest.md`` still works — but it works by accident, and stricter
+      content-block validation upstream would turn that into a hard failure at
+      exactly the moment you'd be reaching for the fallback.  Gate on the
+      resolved provider rather than relying on the silent drop.
+    * **Long-range digests**, which run on Haiku 4.5.  Its minimum cacheable
+      prefix is 4096 tokens, well above that prompt's ~1.5k, so a breakpoint
+      there caches nothing and silently costs nothing either.
     """
-    if longrange:
+    if llm_config.provider != "anthropic" or longrange:
         return system_prompt
     return [{
         "type": "text",
@@ -164,6 +176,7 @@ def briefer_node(state: DigestState) -> dict:
     config: DigestConfig = state["config"]
     longrange = state.get("longrange", False)
     try:
+        llm_config = config.longrange if longrange else config.llm
         llm = create_llm(config, longrange=longrange)
         schema = LongRangeDigest if longrange else WeatherDigest
         structured_llm = llm.with_structured_output(schema, include_raw=True)
@@ -175,7 +188,10 @@ def briefer_node(state: DigestState) -> dict:
         )
 
         raw_result = structured_llm.invoke([
-            {"role": "system", "content": _system_content(system_prompt, longrange)},
+            {
+                "role": "system",
+                "content": _system_content(system_prompt, llm_config, longrange),
+            },
             {"role": "user", "content": state["context"]},
         ])
 

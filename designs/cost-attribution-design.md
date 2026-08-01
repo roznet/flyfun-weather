@@ -117,7 +117,17 @@ version) — adding a cost dimension means adding a field to the `CostConfig` da
 no migration. The serialized `CostConfig` keys: `token_cost_per_1k_input`,
 `token_cost_per_1k_output`, `droplet_monthly_usd`, `misc_monthly_usd`,
 `subscriptions_monthly_usd`, `subscription_details` (dict, itemized),
-`disk_cost_per_gb_monthly`, `estimated_monthly_briefings`, `margin_percent`.
+`disk_cost_per_gb_monthly`, `estimated_monthly_briefings`, `margin_percent`,
+`cache_write_multiplier`, `cache_read_multiplier`.
+
+The two cache multipliers scale `token_cost_per_1k_input` for Anthropic prompt
+caching: a cache write bills at 2x on the 1-hour TTL the digest uses (1.25x on
+the 5-minute tier), a cache read at 0.1x. They are **not** independent of the
+TTL chosen in `digest/llm_digest.py:_system_content` — change one without the
+other and every digest is mis-priced. Note the admin cost-config form in
+`web/ts/admin-cost-view.ts` enumerates its fields explicitly and does not yet
+render these two, though `update_cost_config` already accepts them (it derives
+its allowed keys from the `CostConfig` dataclass).
 
 Versioned: updating creates a new row, deactivates the previous. History queryable.
 `subscriptions_monthly_usd` is kept in sync server-side as the sum of
