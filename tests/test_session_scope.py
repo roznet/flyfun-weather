@@ -116,7 +116,7 @@ class TestAutoRefreshOne:
         with (
             patch.object(scheduler, "SessionLocal", spy),
             patch.object(flights_mod, "_row_to_flight", return_value=self._flight()),
-            patch.object(flights_mod, "list_packs", return_value=[]),
+            patch.object(flights_mod, "latest_pack", return_value=None),
             patch.object(packs_mod, "refresh_registry", registry),
             patch.object(
                 packs_mod, "_prepare_refresh",

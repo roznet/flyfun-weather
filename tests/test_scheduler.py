@@ -504,11 +504,11 @@ class TestAutoRefreshGate:
     @patch("weatherbrief.pipeline.execute_briefing")
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
-    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights.latest_pack")
     @patch("weatherbrief.storage.flights._row_to_flight")
     @patch("weatherbrief.scheduler.SessionLocal")
     def test_skips_when_gate_not_full(
-        self, mock_session, mock_row_to_flight, mock_list,
+        self, mock_session, mock_row_to_flight, mock_latest,
         mock_status, mock_decide, mock_exec, mock_prepare,
     ):
         from unittest.mock import MagicMock
@@ -521,10 +521,10 @@ class TestAutoRefreshGate:
         mock_row_to_flight.return_value = SimpleNamespace(
             departure_time=datetime.now(timezone.utc) + timedelta(hours=3),
         )
-        mock_list.return_value = [BriefingPackMeta(
+        mock_latest.return_value = BriefingPackMeta(
             flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
             days_out=0, artifact_path="/tmp/pack",
-        )]
+        )
         mock_status.return_value = DataStatus(fresh=True)
         # Realtime is button-only; the scheduler must skip it.
         mock_decide.return_value = RefreshDecision(
@@ -541,11 +541,11 @@ class TestAutoRefreshGate:
     @patch("weatherbrief.pipeline.execute_briefing")
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
-    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights.latest_pack")
     @patch("weatherbrief.storage.flights._row_to_flight")
     @patch("weatherbrief.scheduler.SessionLocal")
     def test_runs_pipeline_when_full(
-        self, mock_session, mock_row_to_flight, mock_list,
+        self, mock_session, mock_row_to_flight, mock_latest,
         mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
     ):
         from unittest.mock import MagicMock
@@ -558,10 +558,10 @@ class TestAutoRefreshGate:
         mock_row_to_flight.return_value = SimpleNamespace(
             departure_time=datetime.now(timezone.utc) + timedelta(days=2),
         )
-        mock_list.return_value = [BriefingPackMeta(
+        mock_latest.return_value = BriefingPackMeta(
             flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
             days_out=2, artifact_path="/tmp/pack",
-        )]
+        )
         mock_status.return_value = DataStatus(fresh=False)
         mock_decide.return_value = RefreshDecision(
             mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=2,
@@ -580,11 +580,11 @@ class TestAutoRefreshGate:
     @patch("weatherbrief.pipeline.execute_briefing")
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
-    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights.latest_pack")
     @patch("weatherbrief.storage.flights._row_to_flight")
     @patch("weatherbrief.scheduler.SessionLocal")
     def test_pipeline_progress_reaches_the_registry(
-        self, mock_session, mock_row_to_flight, mock_list,
+        self, mock_session, mock_row_to_flight, mock_latest,
         mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
     ):
         """Stages must reach the registry even with no SSE stream attached.
@@ -605,10 +605,10 @@ class TestAutoRefreshGate:
         mock_row_to_flight.return_value = SimpleNamespace(
             departure_time=datetime.now(timezone.utc) + timedelta(days=2),
         )
-        mock_list.return_value = [BriefingPackMeta(
+        mock_latest.return_value = BriefingPackMeta(
             flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
             days_out=2, artifact_path="/tmp/pack",
-        )]
+        )
         mock_status.return_value = DataStatus(fresh=False)
         mock_decide.return_value = RefreshDecision(
             mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=2,

@@ -445,7 +445,7 @@ def _auto_refresh_one(
         _notify_refresh_complete, _prepare_refresh,
         decide_refresh, refresh_registry,
     )
-    from weatherbrief.storage.flights import _row_to_flight, list_packs
+    from weatherbrief.storage.flights import _row_to_flight, latest_pack
 
     db = SessionLocal()
     try:
@@ -458,10 +458,9 @@ def _auto_refresh_one(
         # Tiered refresh gate: the scheduler applies the same
         # full/none policy as the manual button but never the realtime
         # fallback — live METAR/TAF is the verification loop's job.
-        packs = list_packs(db, flight_id)
-        if packs:
-            latest = packs[0]
-            status = _build_data_status(latest, flight)
+        pack = latest_pack(db, flight_id)
+        if pack is not None:
+            status = _build_data_status(pack, flight)
             decision = decide_refresh(status, _days_out_now(flight))
             if decision.mode != "full":
                 logger.info(

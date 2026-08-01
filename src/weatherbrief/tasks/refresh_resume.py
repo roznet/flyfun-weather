@@ -103,7 +103,7 @@ def decide_resume(
         decide_refresh,
         pending_coverage_date,
     )
-    from weatherbrief.storage.flights import _row_to_flight, list_packs
+    from weatherbrief.storage.flights import _row_to_flight, latest_pack
 
     limit = resume_max_attempts() if max_attempts is None else max_attempts
 
@@ -139,9 +139,9 @@ def decide_resume(
     # The refresh gate is a free correctness check: if a full run is no longer
     # warranted — the scheduler already re-briefed this flight, or no model has
     # moved since — there is nothing to resume.
-    packs = list_packs(db, job.flight_id)
-    if packs:
-        status = _build_data_status(packs[0], flight)
+    pack = latest_pack(db, job.flight_id)
+    if pack is not None:
+        status = _build_data_status(pack, flight)
         decision = decide_refresh(status, _days_out_now(flight, now))
         if decision.mode != "full":
             return ResumeDecision(

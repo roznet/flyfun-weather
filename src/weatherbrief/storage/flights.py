@@ -362,7 +362,15 @@ def parse_advisory_summary(raw: str | None) -> AdvisorySummary | None:
         return None
 
 
-def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
+def _row_to_meta(row: BriefingPackRow, *, resolve_artifact: bool = True) -> BriefingPackMeta:
+    """Map a pack row to its meta.
+
+    ``resolve_artifact=False`` returns ``artifact_path`` as stored, skipping
+    ``_resolve_artifact_path``'s filesystem stats — for hot read paths that
+    never touch pack files (see ``latest_pack``). The raw value equals the
+    resolved one unless the stored path is missing under the current CWD but
+    re-roots under the current DATA_DIR (worktree edge case).
+    """
     return BriefingPackMeta(
         id=row.id,
         flight_id=row.flight_id,
@@ -378,7 +386,11 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         outlook=row.outlook,
         outlook_reason=row.outlook_reason,
         digest_trace_id=row.digest_trace_id,
-        artifact_path=_resolve_artifact_path(row.artifact_path),
+        artifact_path=(
+            _resolve_artifact_path(row.artifact_path)
+            if resolve_artifact
+            else row.artifact_path
+        ),
         model_init_times=json.loads(row.model_init_times_json) if row.model_init_times_json else {},
         grib_init_times=json.loads(row.grib_init_times_json) if row.grib_init_times_json else {},
         model_sources=json.loads(row.model_sources_json) if row.model_sources_json else {},
@@ -750,6 +762,50 @@ def list_packs(session: Session, flight_id: str) -> list[BriefingPackMeta]:
                 "Pack integrity check failed: flight=%s id=%d", flight_id, row.id,
             )
     return [_row_to_meta(r) for r in rows]
+
+
+def latest_pack(session: Session, flight_id: str) -> BriefingPackMeta | None:
+    """Return the newest pack for a flight, or None when it has none.
+
+    Fast path for the hot refresh gates (scheduler auto-refresh, resume
+    reconciliation), which only ever read ``packs[0]``: one ``LIMIT 1``
+    query instead of loading, HMAC-verifying and JSON-parsing the flight's
+    entire pack history on every scheduler cycle.
+
+    Deliberately skips two per-row checks ``list_packs`` performs:
+
+    - **Integrity HMAC** — the gates consume status/freshness fields (model
+      init times, model sources), not integrity verdicts, and a tampered
+      row would still be caught by the full check wherever pack contents
+      are actually served (``list_packs`` / ``load_pack_meta``).
+    - **Artifact-path resolution** — ``_resolve_artifact_path`` stats the
+      filesystem, which the gates never need; ``artifact_path`` here is the
+      raw stored value (equal to the resolved one outside the worktree
+      re-root edge case — see ``_row_to_meta``).
+
+    Ordered by fetch_timestamp DESC with an id DESC tiebreak; the tiebreak
+    is unreachable in practice (uq_briefing_packs_flight_ts forbids
+    duplicate (flight_id, fetch_timestamp) rows) but keeps the ordering
+    total, so the result always matches ``list_packs(...)[0]``.
+    """
+    from weatherbrief.eval_workbench.config import eval_workbench_enabled, is_eval_flight_id
+
+    if eval_workbench_enabled() and is_eval_flight_id(flight_id):
+        from weatherbrief.eval_workbench.resolver import resolve_eval_pack_list
+
+        packs = resolve_eval_pack_list(flight_id)
+        return packs[0] if packs else None
+
+    stmt = (
+        select(BriefingPackRow)
+        .where(BriefingPackRow.flight_id == flight_id)
+        .order_by(BriefingPackRow.fetch_timestamp.desc(), BriefingPackRow.id.desc())
+        .limit(1)
+    )
+    row = session.execute(stmt).scalar_one_or_none()
+    if row is None:
+        return None
+    return _row_to_meta(row, resolve_artifact=False)
 
 
 # --- FlightProfile CRUD ---

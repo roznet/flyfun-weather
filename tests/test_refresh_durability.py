@@ -258,7 +258,7 @@ class TestDecideResume:
         """Default: the flight has no packs, so the gate never runs."""
         from weatherbrief.storage import flights as flights_mod
 
-        monkeypatch.setattr(flights_mod, "list_packs", lambda db, fid: [])
+        monkeypatch.setattr(flights_mod, "latest_pack", lambda db, fid: None)
 
     def test_resumes_a_fresh_interruption(self, app_db):
         s = app_db()
@@ -364,7 +364,7 @@ class TestDecideResume:
         from weatherbrief.api import packs as packs_mod
         from weatherbrief.storage import flights as flights_mod
 
-        monkeypatch.setattr(flights_mod, "list_packs", lambda db, fid: ["pack"])
+        monkeypatch.setattr(flights_mod, "latest_pack", lambda db, fid: "pack")
         monkeypatch.setattr(packs_mod, "_build_data_status", lambda pack, flight: "status")
         monkeypatch.setattr(
             packs_mod, "decide_refresh",
@@ -382,7 +382,7 @@ class TestReconcileOne:
     def _no_packs(self, monkeypatch):
         from weatherbrief.storage import flights as flights_mod
 
-        monkeypatch.setattr(flights_mod, "list_packs", lambda db, fid: [])
+        monkeypatch.setattr(flights_mod, "latest_pack", lambda db, fid: None)
 
     @pytest.fixture
     def ran(self, monkeypatch):

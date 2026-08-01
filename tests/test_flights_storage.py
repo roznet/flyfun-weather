@@ -10,6 +10,7 @@ from flyfun_common.db import DEV_USER_ID
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.storage.flights import (
     delete_flight,
+    latest_pack,
     list_flights,
     list_packs,
     load_flight,
@@ -229,6 +230,137 @@ class TestBriefingPacks:
         # No provisional row inserted — update should report not-found.
         assert update_pack_meta(db_session, sample_pack_meta) is False
         assert list_packs(db_session, sample_flight.id) == []
+
+
+# --- latest_pack fast path ---
+
+
+class TestLatestPack:
+    def test_returns_none_when_no_packs(self, db_session, dev_user, sample_flight):
+        save_flight(db_session, sample_flight, dev_user)
+        assert latest_pack(db_session, sample_flight.id) is None
+
+    def test_returns_newest_by_fetch_timestamp(
+        self, db_session, dev_user, sample_flight, sample_pack_meta,
+    ):
+        save_flight(db_session, sample_flight, dev_user)
+        # Seed out of order so the result can't be an insertion-order accident.
+        oldest = BriefingPackMeta(
+            flight_id=sample_flight.id,
+            fetch_timestamp=datetime(2026, 2, 17, 8, 0, 0, tzinfo=timezone.utc),
+            days_out=4,
+            assessment="RED",
+        )
+        older = BriefingPackMeta(
+            flight_id=sample_flight.id,
+            fetch_timestamp=datetime(2026, 2, 18, 8, 0, 0, tzinfo=timezone.utc),
+            days_out=3,
+            assessment="AMBER",
+        )
+        save_pack_meta(db_session, older)
+        save_pack_meta(db_session, sample_pack_meta)  # 2026-02-19 18:00 — newest
+        save_pack_meta(db_session, oldest)
+
+        latest = latest_pack(db_session, sample_flight.id)
+        assert latest is not None
+        assert latest.fetch_timestamp == sample_pack_meta.fetch_timestamp
+        assert latest.assessment == "GREEN"
+        assert latest.days_out == 2
+
+    def test_order_by_carries_id_tiebreak(
+        self, db_session, dev_user, sample_flight, sample_pack_meta,
+    ):
+        """The query orders by fetch_timestamp DESC with an id DESC tiebreak.
+
+        A real same-timestamp tie can't be seeded — uq_briefing_packs_flight_ts
+        forbids duplicate (flight_id, fetch_timestamp) rows — so assert the
+        emitted SQL directly (one statement, with LIMIT).
+        """
+        from sqlalchemy import event
+
+        save_flight(db_session, sample_flight, dev_user)
+        save_pack_meta(db_session, sample_pack_meta)
+
+        statements: list[str] = []
+        engine = db_session.get_bind()
+
+        def _capture(_conn, _cursor, statement, _params, _context, _many):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _capture)
+        try:
+            latest_pack(db_session, sample_flight.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", _capture)
+
+        pack_selects = [s for s in statements if "FROM briefing_packs" in s]
+        assert len(pack_selects) == 1
+        normalized = " ".join(pack_selects[0].split())
+        assert "ORDER BY briefing_packs.fetch_timestamp DESC, briefing_packs.id DESC" in normalized
+        assert "LIMIT" in normalized
+
+    def test_skips_hmac_verify_and_artifact_stat(
+        self, db_session, dev_user, sample_flight, sample_pack_meta, monkeypatch,
+    ):
+        """The fast path never verifies HMACs nor stats the filesystem.
+
+        ``_resolve_artifact_path`` is the only filesystem touch in the
+        row→meta mapping (its Path.exists checks), so spying on it proves
+        the stat is skipped; ``_verify_pack_hmac`` covers the HMAC.
+        """
+        from weatherbrief.storage import flights as flights_mod
+
+        save_flight(db_session, sample_flight, dev_user)
+        save_pack_meta(db_session, sample_pack_meta)
+
+        verify_calls: list = []
+        resolve_calls: list = []
+        monkeypatch.setattr(
+            flights_mod, "_verify_pack_hmac",
+            lambda row: verify_calls.append(row) or True,
+        )
+        monkeypatch.setattr(
+            flights_mod, "_resolve_artifact_path",
+            lambda raw: resolve_calls.append(raw) or raw,
+        )
+
+        latest = latest_pack(db_session, sample_flight.id)
+        assert latest is not None
+        assert verify_calls == []
+        assert resolve_calls == []
+
+    def test_matches_list_packs_head(
+        self, db_session, dev_user, sample_flight, sample_pack_meta,
+    ):
+        """Meta is populated identically to ``list_packs()[0]``.
+
+        artifact_path has no "packs" component and doesn't exist on disk, so
+        ``_resolve_artifact_path`` returns it unchanged — raw == resolved and
+        the two paths must agree field-for-field.
+        """
+        save_flight(db_session, sample_flight, dev_user)
+        seeded = sample_pack_meta.model_copy(update={
+            "artifact_path": "artifacts/nonexistent-pack",
+            "model_init_times": {"ecmwf": 1771430400},
+            "grib_init_times": {"ecmwf": 1771430400},
+            "model_sources": {"ecmwf": "ecmwf:direct"},
+        })
+        save_pack_meta(db_session, seeded)
+        older = BriefingPackMeta(
+            flight_id=sample_flight.id,
+            fetch_timestamp=datetime(2026, 2, 18, 8, 0, 0, tzinfo=timezone.utc),
+            days_out=3,
+            assessment="AMBER",
+        )
+        save_pack_meta(db_session, older)
+
+        reference = list_packs(db_session, sample_flight.id)[0]
+        latest = latest_pack(db_session, sample_flight.id)
+        assert latest is not None
+        assert latest == reference
+        assert latest.artifact_path == "artifacts/nonexistent-pack"
+        assert latest.model_init_times == {"ecmwf": 1771430400}
+        assert latest.model_sources == {"ecmwf": "ecmwf:direct"}
 
 
 # --- Model tests ---
