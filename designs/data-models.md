@@ -372,6 +372,45 @@ See [advisories.md](./advisories.md) for the evaluator framework.
 - `at_time()` returns closest hour by absolute time difference — no interpolation
 - Pint units must not leak beyond `analysis/sounding/` subpackage — causes Pydantic serialization issues
 
+## FK Policy (DB schema)
+
+Audited 2026-08-01 (mysql-review branch, all 84 migrations): the schema is a deliberately mixed no-FK landscape. Every FK-shaped column below is a plain indexed column at the database level; the groups record *why*, so future migrations don't "fix" the intentional ones or keep ignoring the oversights. The mysql-review PR ships this policy plus `scripts/check_mysql_charset.py` — it does not add FKs (product decision per table).
+
+### Intentional no-FK — rows must survive deletion
+
+| Column | Rationale |
+|--------|-----------|
+| `cost_ledger.user_id` | Migration 020 explicitly dropped 019's CASCADE FK: ledger rows are retained for audit/reporting after account deletion. |
+| `donation_ledger.user_id` | Nullable, no FK by design (067): anonymous donors allowed; attributed donations must survive deletion of the donor's user row. |
+| `briefing_refresh_jobs.flight_id` | 082: the row must outlive the flight so boot-time reconciliation can distinguish "flight was deleted, don't resume" from "no record at all". (`user_id` does CASCADE.) |
+| `analytics_*` (all FK-shaped columns) | Snapshot semantics (054): dims capture flight/briefing state at event time, rollups are kept forever after retention deletes the raw events. FKs would make retention ordering cascade-dependent. |
+
+### Survive-deletion candidates — keep as-is pending product call
+
+Audit judgment: these have the same shape as the intentional set (history that arguably should outlive its parent), but no migration docstring records the decision. Left untouched; needs a product call, not a drive-by FK.
+
+| Column | Open question |
+|--------|---------------|
+| `feedback.flight_id` | `user_id` CASCADEs but `flight_id` doesn't (008/023): should triage history survive flight deletion? Current no-FK says yes, undocumented. |
+| `briefing_usage.flight_id` | Usage accounting per flight (002): deleting a flight leaves rows pointing at a dead id — fine for billing-style accounting, but unrecorded. |
+| `api_usage_log.user_id` / `flight_id` | Both nullable, no FK (042): pipeline-level API-call accounting. Account deletion leaves the dead `user_id` — same retention question as `cost_ledger`, opposite (undocumented) treatment. |
+
+### Oversight set — recommend FK or app-side cascade (future issue)
+
+Added in 041 (OAuth 2.1 for MCP) without FKs, and the account-deletion path never cleans them: `flyfun_common/auth/router.py` `delete_account` sweeps `UserPreferencesRow`, `ApiTokenRow`, `UserRow` (plus the app's `on_delete_user` callback) — it does not touch the oauth tables. Deleting a user today orphans their authorization codes and refresh tokens.
+
+| Column | Recommendation |
+|--------|----------------|
+| `oauth_authorization_codes.client_id` / `user_id` | FK with CASCADE (codes are short-lived, zero retention value) or extend the auth sweep. |
+| `oauth_refresh_tokens.client_id` / `user_id` | FK with CASCADE — a deleted user's refresh tokens must die with them; security issue, not just hygiene. |
+| `api_tokens.oauth_client_id` | FK → `oauth_clients` ON DELETE SET NULL, or an app-side revoke sweep on client deletion (tokens are already swept per-user, never per-client). |
+
+### Migration conventions
+
+- **Charset**: new tables declare `mysql_charset="utf8mb4"` explicitly. No table in the 84-migration history declares charset/collation/engine, so everything inherits server defaults while the code assumes utf8mb4 (the 191-char index caps exist for it). Existing prod tables are NOT rebuilt by the mysql-review PR — that needs prod verification plus a maintenance window; `scripts/check_mysql_charset.py` (exit 1 if any table is not InnoDB/utf8mb4-family) is the pre/post check.
+- **Index add/drop**: existence-guarded (`_index_exists`, see 085) so revisions run on MySQL and SQLite and are safe to re-run.
+- **Dedupe migrations**: keep the newest row (`MAX(id)`) per duplicate key and log per-table delete counts (see 085's `briefing_packs` dedupe).
+
 ## References
 
 - Waypoint resolution / route building: `airports.py` (`resolve_waypoints()`)
