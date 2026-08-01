@@ -192,7 +192,6 @@ class FlightSubscriptionRow(Base):
     __tablename__ = "flight_subscriptions"
     __table_args__ = (
         UniqueConstraint("flight_id", "user_id", name="uq_flight_subs_flight_user"),
-        Index("ix_flight_subs_flight", "flight_id"),
         Index("ix_flight_subs_user", "user_id"),
     )
 
@@ -291,6 +290,12 @@ class BriefingPackRow(Base):
 
 class BriefingUsageRow(Base):
     __tablename__ = "briefing_usage"
+    # Range scans/retention by timestamp (migration 085, spec Tier-1 item 4);
+    # named here rather than via ``index=True`` so dev's create_all and the
+    # migration agree on the name.
+    __table_args__ = (
+        Index("ix_briefing_usage_timestamp", "timestamp"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(
@@ -537,7 +542,6 @@ class FlightBriefingSeenRow(Base):
     __tablename__ = "flight_briefing_seen"
     __table_args__ = (
         UniqueConstraint("user_id", "flight_id", name="uq_flight_seen_user_flight"),
-        Index("ix_flight_seen_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -588,7 +592,6 @@ class VerificationObservationRow(Base):
     __tablename__ = "verification_observations"
     __table_args__ = (
         UniqueConstraint("icao", "observation_time", name="uq_verif_obs_icao_time"),
-        Index("ix_verif_obs_icao", "icao"),
         Index("ix_verif_obs_time", "observation_time"),
     )
 
@@ -640,9 +643,11 @@ class VerificationScoreRow(Base):
         ),
         Index("ix_verif_scores_obs", "observation_id"),
         Index("ix_verif_scores_model", "model", "days_out"),
-        Index("ix_verif_scores_icao", "icao"),
         Index("ix_verif_scores_lead", "lead_hours"),
         Index("ix_verif_scores_source_model_days", "source", "model", "days_out"),
+        # Range scans + retention DELETEs by observation_time (migration 085,
+        # spec Tier-1 item 4).
+        Index("ix_verif_scores_obs_time", "observation_time"),
         # Created by migration 038; load-bearing since #448 — the activity
         # COUNT(DISTINCT) queries FORCE INDEX it by name (hard SQL error on
         # MySQL if dropped), so the model must declare it. See
@@ -723,7 +728,9 @@ class TafVerificationScoreRow(Base):
             name="uq_taf_verif_key",
         ),
         Index("ix_taf_verif_obs", "observation_id"),
-        Index("ix_taf_verif_icao", "icao"),
+        # Retention DELETEs by observation_time (migration 085, spec Tier-1
+        # item 4).
+        Index("ix_taf_verif_obs_time", "observation_time"),
         # TAF pseudo-model stats are aggregated at query time from this table
         # (no rollup — key shape differs); without a (source, observation_time)
         # index every digest/dashboard TAF aggregate was a full scan (#448).
@@ -784,7 +791,6 @@ class FlightVerificationMapRow(Base):
             "flight_id", "icao", "observation_id",
             name="uq_fvm_flight_icao_obs",
         ),
-        Index("ix_fvm_flight", "flight_id"),
         Index("ix_fvm_icao", "icao"),
     )
 
@@ -820,14 +826,10 @@ class AirportForecastSnapshotRow(Base):
         Index("ix_afs_icao_hour", "icao", "forecast_hour"),
         Index("ix_afs_fetched", "fetched_at"),
         Index("ix_afs_model_init", "model", "model_init_time"),
-        # Forecast-hour-leading, for the map's "which hours/models exist per
-        # day" scan. Without it that DISTINCT has no usable index and reads the
-        # whole table on every map page load (#415).
-        Index("ix_afs_hour_model", "forecast_hour", "model"),
-        # Region-leading variant: once the map serving query filters by region
-        # (EU/US seam), this covers "which hours/models exist per day, in this
-        # region" as an index-only scan. Added alongside ix_afs_hour_model;
-        # the latter is dropped in a follow-up once serving is region-aware.
+        # Region-leading, for the map's "which hours/models exist per day, in
+        # this region" scan as an index-only scan (EU/US seam). Its
+        # forecast_hour-leading predecessor ix_afs_hour_model was dropped by
+        # migration 085 as redundant (081's documented follow-up).
         Index("ix_afs_region_hour_model", "region", "forecast_hour", "model"),
     )
 
@@ -979,7 +981,6 @@ class VerificationMonthlyStatsRow(Base):
             "month", "source", "model", "days_out", "icao",
             name="uq_vms_key",
         ),
-        Index("ix_vms_month", "month"),
         Index("ix_vms_model_days", "model", "days_out"),
         Index("ix_vms_icao", "icao"),
     )
@@ -1062,7 +1063,6 @@ class VerificationDailyStatsRow(Base):
         UniqueConstraint(
             "date", "source", "model", "days_out", "icao", name="uq_vds_key",
         ),
-        Index("ix_vds_date_model", "date", "source", "model", "days_out"),
         Index("ix_vds_icao_model", "icao", "source", "model", "days_out"),
         # The bias-leaderboard query filters (source, model, days_out) as
         # constants with a date *range*. The date-leading index only works for
@@ -1158,7 +1158,6 @@ class AirportMonthlySummaryRow(Base):
     __tablename__ = "airport_monthly_summary"
     __table_args__ = (
         UniqueConstraint("month", "icao", name="uq_ams_key"),
-        Index("ix_ams_month", "month"),
         Index("ix_ams_icao", "icao"),
     )
 
@@ -1241,7 +1240,6 @@ class AirportDailySummaryRow(Base):
     __tablename__ = "airport_daily_summary"
     __table_args__ = (
         UniqueConstraint("date", "icao", name="uq_ads_key"),
-        Index("ix_ads_date", "date"),
         Index("ix_ads_icao", "icao"),
     )
 

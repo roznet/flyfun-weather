@@ -106,7 +106,6 @@ class AnalyticsEventDailyRow(Base):
     __tablename__ = "analytics_event_daily"
     __table_args__ = (
         PrimaryKeyConstraint("day", "event", name="pk_aed_day_event"),
-        Index("ix_aed_day", "day"),
     )
 
     day: Mapped[date_t] = mapped_column(Date, nullable=False)
@@ -120,7 +119,6 @@ class AnalyticsBriefingFeatureDailyRow(Base):
     __tablename__ = "analytics_briefing_feature_daily"
     __table_args__ = (
         PrimaryKeyConstraint("day", "feature", name="pk_abfd_day_feature"),
-        Index("ix_abfd_day", "day"),
     )
 
     day: Mapped[date_t] = mapped_column(Date, nullable=False)
@@ -150,7 +148,6 @@ class AnalyticsXsectionConfigDailyRow(Base):
     __tablename__ = "analytics_xsection_config_daily"
     __table_args__ = (
         PrimaryKeyConstraint("day", "dimension", "value", name="pk_axcd_day_dim_val"),
-        Index("ix_axcd_day", "day"),
     )
 
     day: Mapped[date_t] = mapped_column(Date, nullable=False)
