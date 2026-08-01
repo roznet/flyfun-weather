@@ -452,6 +452,11 @@ def apply_repairs(
 ) -> dict:
     """Write corrected times, resolving natural-key collisions by deletion.
 
+    ``delete_scores`` governs *repaired* rows only.  A row removed as a
+    natural-key duplicate cannot survive the unique constraint, so its scores
+    go with it via ``ondelete="CASCADE"`` whether the flag is set or not — they
+    are not counted in ``scores_deleted``.
+
     Does not commit — the caller owns the transaction boundary.
     """
     stats = defaultdict(int)
@@ -506,7 +511,10 @@ def main() -> int:
     parser.add_argument(
         "--delete-scores", action="store_true",
         help="also delete verification_scores / taf_verification_scores rows for "
-             "repaired observations so they are recomputed (requires --apply)",
+             "repaired observations so they are recomputed (requires --apply). "
+             "Note this affects *repaired* rows only: a row deleted as a "
+             "natural-key duplicate always loses its scores via ondelete=CASCADE, "
+             "with or without this flag.",
     )
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
     parser.add_argument(

@@ -167,6 +167,48 @@ class TestApplyRepairs:
         assert [r.id for r in remaining] == [good.id]
         assert db_session.get(VerificationObservationRow, bad_id) is None
 
+    def test_duplicate_deletion_cascades_its_scores(self, db_session):
+        """Scores on a collision-deleted row go with it, via ondelete=CASCADE.
+
+        This holds regardless of --delete-scores: the row itself cannot
+        survive the unique constraint, so its scores cannot either. Pins the
+        FK config the repair relies on.
+        """
+        _add_obs(db_session, "LIPS", CORRECT, COLLECTED, RAW)
+        bad = _add_obs(db_session, "LIPS", CORRUPT, COLLECTED, RAW)
+        db_session.add(
+            VerificationScoreRow(
+                observation_id=bad.id,
+                icao="LIPS",
+                observation_time=CORRUPT.replace(tzinfo=None),
+                model="icon",
+                model_init_time=COLLECTED.replace(tzinfo=None),
+                lead_hours=1,
+                days_out=0,
+                source="standalone",
+            )
+        )
+        db_session.add(
+            TafVerificationScoreRow(
+                observation_id=bad.id,
+                icao="LIPS",
+                observation_time=CORRUPT.replace(tzinfo=None),
+                taf_issue_time=CORRUPT.replace(tzinfo=None),
+                lead_hours=1,
+                source="standalone",
+            )
+        )
+        db_session.flush()
+        findings = find_corrupt(db_session, batch=1000, sleep=0)
+
+        # delete_scores=False — the cascade must still take them.
+        stats = apply_repairs(db_session, findings, delete_scores=False)
+
+        assert stats.get("deleted_duplicate") == 1
+        assert stats.get("scores_deleted", 0) == 0
+        assert db_session.query(VerificationScoreRow).count() == 0
+        assert db_session.query(TafVerificationScoreRow).count() == 0
+
     def test_leaves_scores_alone_by_default(self, db_session):
         row = _add_obs(db_session, "LIPS", CORRUPT, COLLECTED, RAW)
         db_session.add(
