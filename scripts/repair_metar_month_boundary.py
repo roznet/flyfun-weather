@@ -376,6 +376,7 @@ def main() -> int:
 
         repairable = [f for f in findings if f["new"] is not None]
         skipped = [f for f in findings if f["new"] is None]
+        score_count = 0
 
         print()
         print(f"suspect rows            : {len(findings)}")
@@ -404,7 +405,6 @@ def main() -> int:
             print(f"affected (icao, date) pairs needing rollup rebuild: {len(dates)}")
 
             obs_ids = [f["id"] for f in repairable]
-            score_count = 0
             for i in range(0, len(obs_ids), 500):
                 score_count += session.execute(
                     select(func.count()).select_from(VerificationScoreRow).where(
@@ -436,12 +436,18 @@ def main() -> int:
         session.commit()
         print()
         print("applied:", stats)
-        if not args.delete_scores:
+        if score_count and not args.delete_scores:
             print(
-                "NOTE: dependent verification_scores were left in place and are "
-                "now scored against the wrong time. Re-run scoring for the "
-                "affected dates, or re-run with --delete-scores."
+                f"NOTE: {score_count} dependent verification_scores rows were "
+                "left in place and are now scored against the wrong time. "
+                "Re-run scoring for the affected dates, or re-run with "
+                "--delete-scores."
             )
+        print(
+            "NOTE: airport_daily_summary / airport_monthly_summary bucket "
+            "observations directly and must be rebuilt for the affected dates "
+            "(tasks.airport_summary.rollup_day / rollup_month)."
+        )
         return 0
 
 
