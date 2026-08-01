@@ -1703,10 +1703,11 @@ def _persist_pack_provisional(
     The LLM digest hasn't run yet — ``has_digest=False`` and the assessment
     comes from advisories. ``_persist_pack_finalize`` will update this row
     once the digest completes (or update with ``has_digest=False`` if it
-    fails). The row is inserted unconditionally; if a row with the same
-    ``(flight_id, fetch_timestamp)`` already exists (which shouldn't happen
-    in practice — each refresh allocates a fresh timestamp), the SQL layer
-    will surface the conflict.
+    fails). If a row with the same ``(flight_id, fetch_timestamp)`` already
+    exists (shouldn't happen in practice — each refresh allocates a fresh
+    timestamp — but a concurrent refresh can race us), ``save_pack_meta``
+    turns the conflicting insert into an update of the existing row rather
+    than failing.
     """
     meta = _build_pack_meta(
         flight_id, flight, fetch_ts, pack_path, result,

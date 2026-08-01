@@ -215,6 +215,14 @@ class FlightSubscriptionRow(Base):
 
 class BriefingPackRow(Base):
     __tablename__ = "briefing_packs"
+    # One row per (flight, fetch): mirrors migration 085's
+    # uq_briefing_packs_flight_ts so dev create_all agrees with prod, and
+    # makes the save_pack_meta race guard trigger under SQLite tests too.
+    __table_args__ = (
+        UniqueConstraint(
+            "flight_id", "fetch_timestamp", name="uq_briefing_packs_flight_ts"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     flight_id: Mapped[str] = mapped_column(

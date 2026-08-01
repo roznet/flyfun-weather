@@ -578,7 +578,11 @@ def _seed_stats(session_factory, *, recent_usage=3, old_usage=0, packs=0,
     for i in range(packs):
         s.add(BriefingPackRow(
             flight_id="flt-1",
-            fetch_timestamp=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            # Distinct per-row timestamps: uq_briefing_packs_flight_ts
+            # forbids duplicate (flight_id, fetch_timestamp) pairs.
+            fetch_timestamp=(
+                datetime(2026, 6, 1, tzinfo=timezone.utc) - timedelta(hours=i)
+            ),
             days_out=i,
         ))
     # Tokens ride on the first row only, so the word count stays predictable

@@ -648,11 +648,23 @@ def bulk_delete_flights(
 
 
 def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
-    """Insert briefing pack metadata with integrity HMAC."""
+    """Insert briefing pack metadata with integrity HMAC.
+
+    Race-safe against the (flight_id, fetch_timestamp) unique constraint:
+    a concurrent refresh inserting the same pack first flips this save to an
+    update of the existing row instead of poisoning the request transaction.
+    The SAVEPOINT (begin_nested) contains the IntegrityError so any earlier
+    work on this session survives — same pattern as ``subscribe_flight``.
+    """
     row = _meta_to_row(meta)
     row.integrity_hmac = _compute_pack_hmac(row)
-    session.add(row)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        if not update_pack_meta(session, meta):
+            raise
 
 
 def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
