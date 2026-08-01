@@ -71,13 +71,6 @@ def _has_precip(weather: list[str]) -> bool:
     return any(w in _PRECIP_PHENOMENA for w in weather)
 
 
-def _ensure_utc(dt: datetime) -> datetime:
-    """Ensure a datetime is timezone-aware UTC (SQLite may return naive)."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
 # ---------------------------------------------------------------------------
 # Nearest route point matching
 # ---------------------------------------------------------------------------
@@ -167,8 +160,8 @@ def _score_model_vs_metar(
     if hourly is None:
         return None
 
-    obs_time = _ensure_utc(obs_row.observation_time)
-    init_time = _ensure_utc(model_init_time)
+    obs_time = obs_row.observation_time
+    init_time = model_init_time
     lead_hours = int((obs_time - init_time).total_seconds() / 3600)
 
     # Ceiling — same as advisory pipeline, converted to AGL so the comparison
@@ -293,8 +286,8 @@ def _score_taf_vs_metar(
     if obs_row.taf_issue_time is None or obs_row.taf_flight_category is None:
         return None
 
-    obs_time = _ensure_utc(obs_row.observation_time)
-    taf_time = _ensure_utc(obs_row.taf_issue_time)
+    obs_time = obs_row.observation_time
+    taf_time = obs_row.taf_issue_time
     lead_hours = int((obs_time - taf_time).total_seconds() / 3600)
 
     obs_adv, _, _, _ = compute_wind_advisory(
@@ -535,8 +528,8 @@ def score_flight(
                     sounding = rpa.sounding.get(model_name)
 
                 # Compute days_out from model init time, not pack
-                obs_time = _ensure_utc(obs_row.observation_time)
-                days_out = (obs_time.date() - _ensure_utc(init_dt).date()).days
+                obs_time = obs_row.observation_time
+                days_out = (obs_time.date() - init_dt.date()).days
 
                 score_row = _score_model_vs_metar(
                     obs_row=obs_row,

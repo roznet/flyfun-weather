@@ -3,17 +3,33 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class VerificationObservation(BaseModel):
-    """METAR/TAF ground truth for one airport at one time."""
+    """METAR/TAF ground truth for one airport at one time.
+
+    Datetimes are normalised to aware UTC at construction: the euro_aip
+    METAR/TAF parser's awareness is not guaranteed, and the DB columns these
+    feed are ``TZDateTime`` (issue #520), which rejects naive writes.
+    """
 
     icao: str
     observation_time: datetime
     collected_at: datetime
+
+    @field_validator(
+        "observation_time", "collected_at", "taf_issue_time", mode="after",
+    )
+    @classmethod
+    def _aware_utc(cls, v: datetime | None) -> datetime | None:
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc)
 
     # METAR fields
     metar_raw: str | None = None

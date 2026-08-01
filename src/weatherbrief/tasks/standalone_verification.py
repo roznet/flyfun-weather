@@ -533,7 +533,7 @@ def _fetch_forecasts_for_model(
                     "icao": airport.icao,
                     "model": model,
                     "model_init_time": init_time,
-                    "forecast_hour": hourly.time if hourly.time.tzinfo else hourly.time.replace(tzinfo=timezone.utc),
+                    "forecast_hour": hourly.time,
                     "temperature_2m_c": hourly.temperature_2m_c,
                     "dewpoint_2m_c": hourly.dewpoint_2m_c,
                     "visibility_m": hourly.visibility_m,
@@ -1323,9 +1323,6 @@ def _score_cycle(
         return 0
 
     # Build lookup: icao → observation (closest to cycle_time)
-    def _ensure_utc(dt: datetime) -> datetime:
-        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
-
     obs_by_icao: dict[str, VerificationObservationRow] = {}
     for obs in obs_rows:
         icao = obs.icao
@@ -1333,8 +1330,8 @@ def _score_cycle(
             obs_by_icao[icao] = obs
         else:
             # Keep the one closest to cycle_time
-            existing_delta = abs((_ensure_utc(obs_by_icao[icao].observation_time) - cycle_time).total_seconds())
-            new_delta = abs((_ensure_utc(obs.observation_time) - cycle_time).total_seconds())
+            existing_delta = abs((obs_by_icao[icao].observation_time - cycle_time).total_seconds())
+            new_delta = abs((obs.observation_time - cycle_time).total_seconds())
             if new_delta < existing_delta:
                 obs_by_icao[icao] = obs
 
@@ -1350,9 +1347,6 @@ def _score_cycle(
         elev_map = {}
 
     # Bulk-fetch existing score keys to avoid per-row duplicate checks
-    def _strip_tz(dt: datetime) -> datetime:
-        return dt.replace(tzinfo=None) if dt and dt.tzinfo else dt
-
     existing_score_keys: set[tuple] = set()
     score_key_rows = db.execute(
         select(
@@ -1366,7 +1360,7 @@ def _score_cycle(
         )
     ).all()
     for r in score_key_rows:
-        existing_score_keys.add((r[0], _strip_tz(r[1]), r[2], _strip_tz(r[3])))
+        existing_score_keys.add((r[0], r[1], r[2], r[3]))
 
     existing_taf_keys: set[tuple] = set()
     taf_key_rows = db.execute(
@@ -1380,7 +1374,7 @@ def _score_cycle(
         )
     ).all()
     for r in taf_key_rows:
-        existing_taf_keys.add((r[0], _strip_tz(r[1]), _strip_tz(r[2])))
+        existing_taf_keys.add((r[0], r[1], r[2]))
 
     scores_created = 0
 
@@ -1390,16 +1384,11 @@ def _score_cycle(
             continue
 
         # Compute days_out
-        snap_init = snap.model_init_time
-        if snap_init.tzinfo is None:
-            snap_init = snap_init.replace(tzinfo=timezone.utc)
-        fh = snap.forecast_hour
-        if fh.tzinfo is None:
-            fh = fh.replace(tzinfo=timezone.utc)
-        days_out = (fh.date() - snap_init.date()).days
+        days_out = (snap.forecast_hour.date() - snap.model_init_time.date()).days
 
-        # Check duplicate via in-memory set (strip tz for SQLite compat)
-        score_key = (snap.icao, _strip_tz(obs.observation_time), snap.model, _strip_tz(snap.model_init_time))
+        # Check duplicate via in-memory set — both sides are TZDateTime reads,
+        # so they are uniformly aware UTC and compare directly.
+        score_key = (snap.icao, obs.observation_time, snap.model, snap.model_init_time)
         if score_key in existing_score_keys:
             continue
 
@@ -1438,7 +1427,7 @@ def _score_cycle(
         if obs.taf_issue_time is None:
             continue
 
-        taf_key = (obs.icao, _strip_tz(obs.observation_time), _strip_tz(obs.taf_issue_time))
+        taf_key = (obs.icao, obs.observation_time, obs.taf_issue_time)
         if taf_key in existing_taf_keys:
             continue
 

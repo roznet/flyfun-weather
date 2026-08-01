@@ -25,7 +25,31 @@ Packs created before the aware-UTC migration store naive ISO strings (e.g. `"202
 - **SQLite**: text like `2026-02-21 09:00:00` (no timezone suffix)
 - **MySQL**: `DATETIME(6)` with microsecond precision (migration 015)
 
-The storage layer uses `_ensure_utc()` to promote naive datetimes back to aware UTC on read. `load_pack_meta()` strips tzinfo before querying to match the naive stored format. `_get_pack_dir()` reads `artifact_path` from the DB rather than reconstructing from timestamp — avoids precision mismatches.
+For columns still on `DateTime(timezone=True)`, the storage layer uses `_ensure_utc()` to promote naive datetimes back to aware UTC on read. `load_pack_meta()` strips tzinfo before querying to match the naive stored format. `_get_pack_dir()` reads `artifact_path` from the DB rather than reconstructing from timestamp — avoids precision mismatches.
+
+### `TZDateTime` — the replacement for per-call-site fixups (#520)
+
+`DateTime(timezone=True)` is a **no-op on MySQL**: SQLAlchemy's dialect emits a plain `DATETIME`, which stores no offset, so what a read hands back depends on the driver. Compensating at each call site produced 66 `replace(tzinfo=…)` / `astimezone(…)` fixups that had settled on *contradictory* conventions — some normalising to naive, some to aware — a latent bug wherever a value crossed between them.
+
+`weatherbrief.db.types.TZDateTime` centralises it:
+
+| Direction | Behaviour |
+|-----------|-----------|
+| bind (write **and** query param) | aware → converted to UTC, stored naive. **Naive raises `ValueError`.** |
+| result | always `tzinfo=timezone.utc`, every dialect |
+
+Rejecting naive writes is deliberate: it turns "which convention does this module use?" into an immediate local error instead of a wrong number downstream. The stored representation is unchanged (naive UTC), so **switching a column needs no migration** — but every writer of that column must then pass aware datetimes.
+
+`TZDateTime(fsp=6)` renders MySQL `DATETIME(6)`; plain `TZDateTime()` renders the same DDL as before. Use the `fsp=6` variant for any datetime that is a natural key, uniqueness component, or equality predicate — plain `DATETIME` truncates to whole seconds on MySQL while SQLite keeps microseconds, which is invisible to the test suite and caused the migration-015 bug.
+
+**Adopted so far:** `model_delivery_log` (all 5 columns), `verification_observations`, `verification_scores`, `taf_verification_scores`, `airport_forecast_snapshots`, `verification_cache`. Adoption is incremental; the remaining tables still carry their local fixups.
+
+Two things to know when adopting a table:
+
+- **Convert co-read tables together.** A `min()`/comparison that mixes a converted column with a non-converted one raises `TypeError`. `verification_cache` was pulled in for exactly this reason — `cache_builder` compares its `source_max_time` against `func.max()` of a converted column (aggregates keep the column's type, so they come back aware too).
+- **Serialised output gains `+00:00`.** Anything `.isoformat()`ing a read value changes string shape, so a baked cache needs its version bumped (`FORECAST_MAP_CACHE_VERSION` went to `v3`), and snapshot artifacts written by older code parse naive — `snapshot_artifact._parse_dt` stamps UTC so in-flight artifacts stay importable.
+
+`_compute_pack_hmac` / `_compute_pack_hmac_legacy` (`storage/flights.py`) hash the timestamp's **string form**, so `briefing_packs` is deliberately *not* converted: changing what that column returns changes the HMAC input against live prod rows.
 
 ## Spatial Mapping
 

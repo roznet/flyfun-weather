@@ -143,10 +143,22 @@ def _iso(value):
 
 
 def _parse_dt(value):
-    """Inverse of :func:`_iso` for the datetime columns."""
+    """Inverse of :func:`_iso` for the datetime columns.
+
+    Artifact datetimes are UTC by invariant, but their *written* form changed
+    with issue #520: an artifact exported before the source columns became
+    ``TZDateTime`` carries no offset, one exported after carries ``+00:00``.
+    Stamping UTC on the naive case keeps in-flight legacy artifacts importable
+    — the target columns now reject naive binds, and the check-then-insert in
+    ``import_snapshots`` would otherwise raise a bare ``ValueError`` past the
+    scheduler's ``ArtifactValidationError`` fallback.
+    """
     if value is None:
         return None
-    return datetime.fromisoformat(value)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 _DATETIME_COLUMNS = frozenset({"model_init_time", "forecast_hour", "fetched_at"})

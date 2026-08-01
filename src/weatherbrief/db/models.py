@@ -13,6 +13,8 @@ from sqlalchemy import BigInteger, Boolean, Date, DateTime, Double, Float, Forei
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from weatherbrief.db.types import TZDateTime
+
 # Re-export shared models so existing imports from weatherbrief.db.models still work
 from flyfun_common.db.models import (  # noqa: F401
     Base,
@@ -587,10 +589,10 @@ class VerificationObservationRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
     observation_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     collected_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        TZDateTime(), nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
@@ -611,7 +613,7 @@ class VerificationObservationRow(Base):
     taf_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     taf_applicable: Mapped[str | None] = mapped_column(Text, nullable=True)
     taf_issue_time: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        TZDateTime(), nullable=True
     )
     taf_flight_category: Mapped[str | None] = mapped_column(String(4), nullable=True)
     taf_ceiling_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -652,11 +654,11 @@ class VerificationScoreRow(Base):
     )
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
     observation_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     model: Mapped[str] = mapped_column(String(20), nullable=False)
     model_init_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     lead_hours: Mapped[int] = mapped_column(Integer, nullable=False)
     days_out: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -728,10 +730,10 @@ class TafVerificationScoreRow(Base):
     )
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
     observation_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     taf_issue_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     lead_hours: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="flight")
@@ -833,13 +835,13 @@ class AirportForecastSnapshotRow(Base):
     )
     model: Mapped[str] = mapped_column(String(20), nullable=False)
     model_init_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     forecast_hour: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        TZDateTime(), nullable=False
     )
     fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        TZDateTime(), nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
@@ -882,17 +884,26 @@ def snapshot_natural_key(
 ) -> tuple:
     """Canonical natural key for `airport_forecast_snapshots` (`uq_afs_key`).
 
-    Strips tzinfo so tz-aware and SQLite's naive datetimes compare equal. Single
-    source of truth for dedup, shared by the standalone cycle's inserter and the
-    artifact importer so their idempotency logic can't drift apart.
+    Normalises to naive UTC — the same shape `TZDateTime` binds — so an
+    in-memory value and one read back from the DB compare equal regardless of
+    tzinfo. Single source of truth for dedup, shared by the standalone cycle's
+    inserter and the artifact importer so their idempotency logic can't drift
+    apart.
+
+    Converts rather than strips: a non-UTC aware value keyed on its local wall
+    time would miss its own stored row (which `TZDateTime` wrote in UTC) and be
+    re-inserted every cycle, silently absorbed by the insert-or-ignore path.
     """
-    init_naive = (
-        model_init_time.replace(tzinfo=None) if model_init_time.tzinfo else model_init_time
-    )
-    fhour_naive = (
-        forecast_hour.replace(tzinfo=None) if forecast_hour.tzinfo else forecast_hour
-    )
+    init_naive = _naive_utc(model_init_time)
+    fhour_naive = _naive_utc(forecast_hour)
     return (icao, model, init_naive, fhour_naive)
+
+
+def _naive_utc(value: datetime) -> datetime:
+    """UTC-normalised naive form, matching `TZDateTime.process_bind_param`."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def snapshot_insert_ignore(db, rows: list[dict], *, chunk: int = 1000) -> None:
@@ -1290,9 +1301,9 @@ class VerificationCacheRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     cache_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
     source_max_time: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        TZDateTime(), nullable=True,
     )
     data_json: Mapped[str] = mapped_column(
         Text().with_variant(MEDIUMTEXT, "mysql"), nullable=False,
@@ -1442,23 +1453,23 @@ class ModelDeliveryLogRow(Base):
     # "all GFS deliveries" is a plain WHERE, not a string split.
     model: Mapped[str] = mapped_column(String(20), nullable=False)
     # The run being measured (aware UTC).
-    cycle_init: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cycle_init: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
     # Registry prediction for this run, frozen at observation time.
-    expected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expected_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
     # Provider-reported publish wallclock — the actual measurement. Null when
     # the instrument didn't yield one (missing Last-Modified, OM availability
     # time of 0); the row is still worth keeping for its detection bracket.
     published_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        TZDateTime(), nullable=True
     )
     # When our loop noticed. Quantised by the freshness poll interval.
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
     # Last dynamic check that did NOT yet see this run. Brackets the truth as
     # ``(last_absent_at, published_at]`` when published_at is null, and acts as
     # a consistency check when it isn't (published_at < last_absent_at means
     # the provider's timestamp contradicts what we observed).
     last_absent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        TZDateTime(), nullable=True
     )
     # Which instrument produced published_at: "sentinel_mtime" |
     # "http_last_modified" | "om_meta". These are not equivalent — a sentinel

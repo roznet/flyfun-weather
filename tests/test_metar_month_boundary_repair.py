@@ -74,8 +74,8 @@ class TestIngestionGuard:
 def _add_obs(session, icao, obs_time, collected_at, raw):
     row = VerificationObservationRow(
         icao=icao,
-        observation_time=obs_time.replace(tzinfo=None),
-        collected_at=collected_at.replace(tzinfo=None),
+        observation_time=obs_time,
+        collected_at=collected_at,
         metar_raw=raw,
     )
     session.add(row)
@@ -151,7 +151,7 @@ class TestApplyRepairs:
 
         assert stats["repaired"] == 1
         db_session.refresh(row)
-        assert row.observation_time == CORRECT.replace(tzinfo=None)
+        assert row.observation_time == CORRECT
 
     def test_deletes_duplicate_when_correct_row_already_exists(self, db_session):
         good = _add_obs(db_session, "LIPS", CORRECT, COLLECTED, RAW)
@@ -180,9 +180,9 @@ class TestApplyRepairs:
             VerificationScoreRow(
                 observation_id=bad.id,
                 icao="LIPS",
-                observation_time=CORRUPT.replace(tzinfo=None),
+                observation_time=CORRUPT,
                 model="icon",
-                model_init_time=COLLECTED.replace(tzinfo=None),
+                model_init_time=COLLECTED,
                 lead_hours=1,
                 days_out=0,
                 source="standalone",
@@ -192,8 +192,8 @@ class TestApplyRepairs:
             TafVerificationScoreRow(
                 observation_id=bad.id,
                 icao="LIPS",
-                observation_time=CORRUPT.replace(tzinfo=None),
-                taf_issue_time=CORRUPT.replace(tzinfo=None),
+                observation_time=CORRUPT,
+                taf_issue_time=CORRUPT,
                 lead_hours=1,
                 source="standalone",
             )
@@ -215,9 +215,9 @@ class TestApplyRepairs:
             VerificationScoreRow(
                 observation_id=row.id,
                 icao="LIPS",
-                observation_time=CORRUPT.replace(tzinfo=None),
+                observation_time=CORRUPT,
                 model="icon",
-                model_init_time=COLLECTED.replace(tzinfo=None),
+                model_init_time=COLLECTED,
                 lead_hours=1,
                 days_out=0,
                 source="standalone",
@@ -237,9 +237,9 @@ class TestApplyRepairs:
             VerificationScoreRow(
                 observation_id=row.id,
                 icao="LIPS",
-                observation_time=CORRUPT.replace(tzinfo=None),
+                observation_time=CORRUPT,
                 model="icon",
-                model_init_time=COLLECTED.replace(tzinfo=None),
+                model_init_time=COLLECTED,
                 lead_hours=1,
                 days_out=0,
                 source="standalone",
@@ -273,11 +273,11 @@ TAF_COLLECTED = datetime(2026, 7, 1, 0, 0, 1, tzinfo=timezone.utc)
 def _add_obs_with_taf(session, icao, obs_time, collected_at, issue_time):
     row = VerificationObservationRow(
         icao=icao,
-        observation_time=obs_time.replace(tzinfo=None),
-        collected_at=collected_at.replace(tzinfo=None),
+        observation_time=obs_time,
+        collected_at=collected_at,
         metar_raw="METAR LIPS 302255Z 00000KT CAVOK 28/22 Q1013",
         taf_raw=TAF_RAW,
-        taf_issue_time=issue_time.replace(tzinfo=None) if issue_time else None,
+        taf_issue_time=issue_time if issue_time else None,
     )
     session.add(row)
     session.flush()
@@ -329,7 +329,7 @@ class TestTafRepair:
 
         assert stats["taf_repaired"] == 1
         db_session.refresh(row)
-        assert row.taf_issue_time == TAF_CORRECT.replace(tzinfo=None)
+        assert row.taf_issue_time == TAF_CORRECT
 
     def test_deletes_taf_scores_when_requested(self, db_session):
         obs_time = TAF_COLLECTED - timedelta(minutes=65)
@@ -338,8 +338,8 @@ class TestTafRepair:
             TafVerificationScoreRow(
                 observation_id=row.id,
                 icao="LIPS",
-                observation_time=obs_time.replace(tzinfo=None),
-                taf_issue_time=TAF_CORRUPT.replace(tzinfo=None),
+                observation_time=obs_time,
+                taf_issue_time=TAF_CORRUPT,
                 lead_hours=1,
                 source="standalone",
             )

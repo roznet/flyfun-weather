@@ -100,8 +100,6 @@ def completed_months(db: Session) -> list[datetime]:
         return []
 
     min_time: datetime = min(candidates)
-    if min_time.tzinfo is None:
-        min_time = min_time.replace(tzinfo=timezone.utc)
 
     # Already rolled up months
     existing = set(

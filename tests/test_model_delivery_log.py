@@ -62,18 +62,6 @@ def _rows(session_factory) -> list[ModelDeliveryLogRow]:
         s.close()
 
 
-def _naive(dt: datetime) -> datetime:
-    """Drop tzinfo to compare against a value read back from the DB.
-
-    Both SQLite (dev) and MySQL (prod) hand back naive datetimes regardless
-    of ``DateTime(timezone=True)``; the codebase convention is that a reader
-    re-attaches UTC (see ``storage/flights.py``). Asserting against naive
-    values here keeps these tests honest about what is actually stored
-    rather than pretending the round-trip preserves the offset.
-    """
-    return dt.replace(tzinfo=None)
-
-
 # ---------------------------------------------------------------------------
 # Storage layer
 # ---------------------------------------------------------------------------
@@ -120,7 +108,7 @@ class TestRecordDelivery:
             )
         rows = _rows(delivery_db)
         assert len(rows) == 1
-        assert rows[0].detected_at == _naive(_utc(2026, 7, 30, 13, 50))
+        assert rows[0].detected_at == _utc(2026, 7, 30, 13, 50)
 
     def test_same_cycle_from_a_different_source_is_a_separate_row(self, delivery_db):
         """Uniqueness is per (source, cycle_init) — every model publishes an
@@ -155,7 +143,7 @@ class TestRecordDelivery:
         )
         row = _rows(delivery_db)[0]
         assert row.published_at is None
-        assert row.last_absent_at == _naive(_utc(2026, 7, 30, 7, 0))
+        assert row.last_absent_at == _utc(2026, 7, 30, 7, 0)
 
     def test_db_failure_never_escapes(self, monkeypatch):
         """Telemetry must not be able to fail a freshness tick."""
@@ -250,17 +238,15 @@ async def test_advance_writes_a_delivery_row(loop_env, delivery_db):
     row = rows[0]
     assert row.source == SOURCE
     assert row.model == MODEL
-    assert row.cycle_init == _naive(new_init)
-    assert row.published_at == _naive(published)
-    assert row.detected_at == _naive(env.now)
+    assert row.cycle_init == new_init
+    assert row.published_at == published
+    assert row.detected_at == env.now
     assert row.observed_via == VIA_HTTP_LAST_MODIFIED
     # Expectation is the registry's, frozen at observation time.
-    assert row.expected_at == _naive(
-        registry.expected_delivery_for_init(SOURCE, new_init)
-    )
+    assert row.expected_at == registry.expected_delivery_for_init(SOURCE, new_init)
     # The lower bound is the earlier probe that didn't see this run — not the
     # heartbeat, which the loop bumps on every tick.
-    assert row.last_absent_at == _naive(before.next_expected)
+    assert row.last_absent_at == before.next_expected
 
 
 @pytest.mark.asyncio

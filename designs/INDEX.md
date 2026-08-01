@@ -34,8 +34,8 @@ Key exports: `SOURCE_REGISTRY`, `MarkerStore`, `get_store`, `check_source`, `run
 → Full doc: freshness-markers.md
 
 ### time-alignment
-Time and spatial alignment in the data pipeline: aware-UTC datetime convention, per-hour GRIB enrichment across flight windows, spatial index consistency, hour-matching merge logic, old pack backward compatibility.
-Key exports: `compute_flight_window_hours`, `compute_icon_eu_flight_window_hours`, `_forecast_hour_to_utc`, `_merge_cloud_water_into_sections`
+Time and spatial alignment in the data pipeline: aware-UTC datetime convention, the `TZDateTime` column type that centralises it (aware-UTC in Python, naive-UTC in the DB, naive writes rejected — read before adding a datetime column), per-hour GRIB enrichment across flight windows, spatial index consistency, hour-matching merge logic, old pack backward compatibility.
+Key exports: `TZDateTime`, `compute_flight_window_hours`, `compute_icon_eu_flight_window_hours`, `_forecast_hour_to_utc`, `_merge_cloud_water_into_sections`
 → Full doc: time-alignment-audit.md
 
 ## Analysis & meteorology
