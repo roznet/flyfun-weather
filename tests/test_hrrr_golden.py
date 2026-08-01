@@ -12,14 +12,23 @@ Covered end-to-end on real data:
 
 - The sample's Lambert grid definition matches HRRR_GRID — the constants the
   decode fallback and the domain gate rely on.
+- Projection anchor (#457 review): the decode-built grid axes, inverted
+  through an INDEPENDENT pyproj construction (message GRIB_* attrs + the
+  published HRRR spherical radius, both written out in this file), reproduce
+  the message's own 2-D latitude/longitude coordinate arrays — written by
+  eccodes from the GRIB grid definition, not by our projection code. Without
+  this anchor every other oracle shares the decode projection helpers, so a
+  wrong formula (earth radius, LoV handling, axis order) would keep decode
+  and oracle self-consistent and invisible.
 - Projected-grid bilinear interpolation: TMP 850 mb at KDEN lands within
   0.5 K of the nearest grid cell read straight from the message (nearest
   cell computed via the same projection), and an off-grid point is reported
   uncovered.
 - Wind rotation: at KDEN (>= 5° of longitude from LoV 262.5°) the decoded
   earth-relative UGRD/VGRD differ from the raw grid-relative vector and
-  match the ``_rotate_grid_wind_to_earth`` closed form applied to the raw
-  bilinear sample.
+  match the α closed form WRITTEN OUT in this file (#457 review — importing
+  ``_rotate_grid_wind_to_earth`` to compute expectations would make a sign
+  flip or wrong α formula in the implementation invisible).
 - Diagnostics: ceiling/covers decode without error (clear-sky cells are
   missing, not crashes) and REFC obeys HRRR's −10 dBZ no-echo floor (or NaN
   quiet cells) without crashing.
@@ -39,7 +48,6 @@ from weatherbrief.fetch.grib.decode import (
     _lambert_dataset_axes,
     _lambert_grid_attrs,
     _lcc_project_points,
-    _rotate_grid_wind_to_earth,
     build_hrrr_cloud_diagnostics,
     decode_hrrr_diag_per_point,
     decode_hrrr_pressure_per_point,
@@ -79,6 +87,12 @@ OFF_GRID_LAT, OFF_GRID_LON = 20.0, -60.0
 # ---------------------------------------------------------------------------
 # Helpers — read values straight from a message via the same projection the
 # decode path uses (_lambert_dataset_axes + _lcc_project_points).
+#
+# The two helpers below (_message_grid_attrs / _message_lambert_proj) are the
+# exception on purpose (#457 review): they rebuild the projection from the
+# message's own GRIB_* attrs WITHOUT the decode module, so TestProjectionAnchor
+# can check the decode projection against independent ground truth instead of
+# against itself.
 # ---------------------------------------------------------------------------
 
 
@@ -96,6 +110,52 @@ def _isobaric_dataset(datasets: list):
 def _level_index(ds, level_hpa: int) -> int:
     levels = np.asarray(ds.coords["isobaricInhPa"].values)
     return int(np.flatnonzero(levels == level_hpa)[0])
+
+
+# GRIB2 Lambert projection keys, written out here rather than imported from
+# decode._LAMBERT_GRID_ATTR_KEYS — that mapping is part of the code under test.
+_MESSAGE_PROJ_ATTR_KEYS = (
+    "GRIB_LaDInDegrees",
+    "GRIB_LoVInDegrees",
+    "GRIB_Latin1InDegrees",
+    "GRIB_Latin2InDegrees",
+)
+
+# Published NCEP HRRR earth shape (GRIB2 template 3.30, shape-of-earth code 6):
+# spherical, 6371229 m. eccodes uses the same definition to compute the
+# message's 2-D lat/lon arrays, so the anchor test below validates this
+# constant against real data on every run.
+_HRRR_EARTH_RADIUS_M = 6371229.0
+
+
+def _message_grid_attrs(ds) -> dict[str, float]:
+    """Projection attrs read STRAIGHT from a data var's GRIB_* attrs."""
+    for var in ds.data_vars.values():
+        if all(k in var.attrs for k in _MESSAGE_PROJ_ATTR_KEYS):
+            return {k: float(var.attrs[k]) for k in _MESSAGE_PROJ_ATTR_KEYS}
+    raise AssertionError("no data var carries the GRIB Lambert projection attrs")
+
+
+def _message_lambert_proj(ds):
+    """pyproj construction independent of the decode module and HRRR_GRID.
+
+    Parameters come from the message itself (_message_grid_attrs) plus the
+    published HRRR spherical radius. If the decode-side projection helper has
+    a wrong formula (earth radius, LoV handling, axis order), this anchor
+    diverges from it and TestProjectionAnchor fails.
+    """
+    import pyproj
+
+    attrs = _message_grid_attrs(ds)
+    return pyproj.Proj(
+        proj="lcc",
+        lat_0=attrs["GRIB_LaDInDegrees"],
+        lon_0=attrs["GRIB_LoVInDegrees"],
+        lat_1=attrs["GRIB_Latin1InDegrees"],
+        lat_2=attrs["GRIB_Latin2InDegrees"],
+        a=_HRRR_EARTH_RADIUS_M,
+        b=_HRRR_EARTH_RADIUS_M,
+    )
 
 
 def _frac_indices_at(ds, lat: float, lon: float) -> tuple[float, float, bool]:
@@ -149,6 +209,108 @@ class TestGridDefinition:
             assert attrs["lov"] == pytest.approx(HRRR_GRID.lov, abs=1e-6)
             assert attrs["latin1"] == pytest.approx(HRRR_GRID.latin1, abs=1e-6)
             assert attrs["latin2"] == pytest.approx(HRRR_GRID.latin2, abs=1e-6)
+        finally:
+            for ds in datasets:
+                ds.close()
+
+
+# ---------------------------------------------------------------------------
+# Projection anchor (#457 review): independent ground truth for the projection
+# ---------------------------------------------------------------------------
+
+
+@skip_no_samples
+class TestProjectionAnchor:
+    """The decode projection must agree with ground truth it did NOT compute.
+
+    Every other oracle in this file locates grid cells via the decode module's
+    own projection helpers, so a wrong projection formula (earth radius, LoV
+    handling, axis order) would keep decode and oracle self-consistent and the
+    suite green. The anchors here break that circularity:
+
+    - The message's own 2-D latitude/longitude coordinate arrays — computed
+      by eccodes from the GRIB grid definition, independent of our pyproj
+      construction — must match the inverse projection of the decode-built
+      grid axes.
+    - A pyproj forward of KDEN's published lat/lon, built in THIS file from
+      the message attrs, must land on the same fractional grid indices the
+      decode helpers produce.
+    """
+
+    # On the 2026-07-31 sample the axes agree with the message lat/lon to
+    # ~1e-8 m (float round-off; eccodes and pyproj evaluate the same
+    # spherical Lambert formulas). 1 m leaves enormous headroom for a
+    # re-downloaded sample, while a +1 km earth-radius error moves the NE
+    # corner by ~980 m and even the KDEN cell by ~430 m (verified by
+    # mutation): any real formula error is caught many times over.
+    _TOL_M = 1.0
+
+    def test_inverse_projected_axes_match_message_latlon(self):
+        datasets = _open_sample(SOUNDING_FILE)
+        try:
+            ds = _isobaric_dataset(datasets)
+            proj = _message_lambert_proj(ds)
+            projected = _lambert_dataset_axes(ds)
+            assert projected is not None, "sample dataset is not a projected (y, x) grid"
+            y_axis, x_axis, _ = projected
+            lat2d = np.asarray(ds["latitude"].values, dtype=np.float64)
+            lon2d = np.asarray(ds["longitude"].values, dtype=np.float64)
+            ny, nx = lat2d.shape
+            # Spread across the grid: SW origin, far NE corner (largest lever
+            # arm against a scale error), centre, two quadrants, and KDEN's
+            # nearest cell.
+            cells = [
+                (0, 0),
+                (ny - 1, nx - 1),
+                (ny // 2, nx // 2),
+                (ny // 4, 3 * nx // 4),
+                (3 * ny // 4, nx // 4),
+                (587, 695),  # KDEN's nearest cell on the 00z sample
+            ]
+            for j, i in cells:
+                lon_inv, lat_inv = proj(
+                    float(x_axis[i]), float(y_axis[j]), inverse=True,
+                )
+                dlon = ((lon_inv - lon2d[j, i] + 180.0) % 360.0) - 180.0
+                dlat = lat_inv - lat2d[j, i]
+                err_m = math.hypot(
+                    math.radians(dlat),
+                    math.radians(dlon) * math.cos(math.radians(lat2d[j, i])),
+                ) * _HRRR_EARTH_RADIUS_M
+                assert err_m < self._TOL_M, (
+                    f"cell (j={j}, i={i}): axis inverts to {err_m:.3f} m from "
+                    f"the message's own lat/lon"
+                )
+        finally:
+            for ds in datasets:
+                ds.close()
+
+    def test_kden_forward_projection_matches_helper_fractional_indices(self):
+        datasets = _open_sample(SOUNDING_FILE)
+        try:
+            ds = _isobaric_dataset(datasets)
+            proj = _message_lambert_proj(ds)
+            projected = _lambert_dataset_axes(ds)
+            assert projected is not None
+            y_axis, x_axis, _ = projected
+
+            # Decode path: helpers all the way down.
+            frac_j_h, frac_i_h, in_bounds = _frac_indices_at(ds, KDEN_LAT, KDEN_LON)
+            assert in_bounds
+
+            # This file's independent forward of KDEN's published lat/lon,
+            # indexed on the same axes.
+            x_k, y_k = proj(KDEN_LON, KDEN_LAT)
+            frac_j, ok_j = _frac_grid_indices(y_axis, [y_k])
+            frac_i, ok_i = _frac_grid_indices(x_axis, [x_k])
+            assert bool(ok_j[0] and ok_i[0])
+
+            # Actual agreement is ~1e-9 cells (same pyproj, same parameters);
+            # 0.01 cells = 30 m — far inside the review's ~0.5-cell bar, while
+            # a +1 km earth-radius error splits the two constructions by
+            # ~0.042 cells here and swapped args land whole degrees off.
+            assert abs(frac_j_h - frac_j[0]) < 0.01
+            assert abs(frac_i_h - frac_i[0]) < 0.01
         finally:
             for ds in datasets:
                 ds.close()
@@ -224,21 +386,44 @@ class TestWindRotation:
             v_raw, _ = _bilinear_and_nearest(
                 np.asarray(ds["v"].values, dtype=np.float64)[li], frac_j, frac_i,
             )
+            # LoV / Latin read STRAIGHT from the message (not via the decode
+            # module's attr mapping), for the expectation below.
+            msg_attrs = _message_grid_attrs(ds)
         finally:
             for ds in datasets:
                 ds.close()
 
-        exp_u, exp_v = _rotate_grid_wind_to_earth(
-            [u_raw], [v_raw], [KDEN_LON], lov_deg=HRRR_GRID.lov,
-        )
+        # Expected earth-relative vector: the α closed form written out HERE
+        # (#457 review). Computing expectations with the decode module's
+        # _rotate_grid_wind_to_earth would make the oracle circular — a sign
+        # flip or wrong α formula there would change decode and expectation
+        # together and stay invisible. The form below is the CORRECT
+        # direction, independently verified against pyproj finite differences
+        # of the actual projection (test_hrrr_decode.py
+        # ::test_rotation_matches_pyproj_projection_geometry):
+        #
+        #   α = (λ − LoV) · sin(38.5°), normalised to ±180°
+        #       (cone constant k = sin φc with Latin1 == Latin2 == 38.5°,
+        #        which the message satisfies)
+        #   u_e = u·cos α + v·sin α
+        #   v_e = −u·sin α + v·cos α
+        assert msg_attrs["GRIB_Latin1InDegrees"] == pytest.approx(38.5, abs=1e-6)
+        assert msg_attrs["GRIB_Latin2InDegrees"] == pytest.approx(38.5, abs=1e-6)
+        cone_const = math.sin(math.radians(38.5))
+        dlon_deg = (
+            (KDEN_LON - msg_attrs["GRIB_LoVInDegrees"] + 180.0) % 360.0
+        ) - 180.0
+        alpha = math.radians(dlon_deg) * cone_const
+        exp_u = u_raw * math.cos(alpha) + v_raw * math.sin(alpha)
+        exp_v = -u_raw * math.sin(alpha) + v_raw * math.cos(alpha)
 
         # The earth-relative result differs from the raw grid-relative vector…
         assert math.hypot(
             decoded["raw_u_wind_m_s"] - u_raw, decoded["raw_v_wind_m_s"] - v_raw,
         ) > 1e-3
-        # …and matches the closed-form rotation of that raw vector.
-        assert decoded["raw_u_wind_m_s"] == pytest.approx(exp_u[0], abs=1e-6)
-        assert decoded["raw_v_wind_m_s"] == pytest.approx(exp_v[0], abs=1e-6)
+        # …and matches the independently written closed-form rotation.
+        assert decoded["raw_u_wind_m_s"] == pytest.approx(exp_u, abs=1e-6)
+        assert decoded["raw_v_wind_m_s"] == pytest.approx(exp_v, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
