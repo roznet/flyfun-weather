@@ -275,7 +275,7 @@ def fetch_observations_batch(
 
             obs = VerificationObservation(
                 icao=raw.icao,
-                observation_time=metar.observation_time,
+                observation_time=_as_utc(metar.observation_time),
                 collected_at=now,
                 metar_raw=metar.raw_text,
                 ceiling_ft=metar.ceiling_ft,
@@ -311,7 +311,16 @@ def fetch_observations_batch(
             if taf is not None:
                 obs.taf_raw = taf.raw_text
                 if taf.observation_time is not None:
-                    obs.taf_issue_time = taf.observation_time
+                    # `_as_utc` here is load-bearing, not belt-and-braces: this
+                    # is an *assignment*, and Pydantic only runs field
+                    # validators on assignment under
+                    # `validate_assignment=True`, which this model does not set
+                    # — so `VerificationObservation._aware_utc` covers the
+                    # constructor path only. A naive value would otherwise reach
+                    # the `TZDateTime` column and raise `StatementError`, which
+                    # the flush below catches only as `IntegrityError`, taking
+                    # down the whole batch rather than this one row.
+                    obs.taf_issue_time = _as_utc(taf.observation_time)
 
                 applicable = WeatherAnalyzer.find_applicable_taf(
                     taf, metar.observation_time,

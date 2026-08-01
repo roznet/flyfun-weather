@@ -40,13 +40,16 @@ For columns still on `DateTime(timezone=True)`, the storage layer uses `_ensure_
 
 Rejecting naive writes is deliberate: it turns "which convention does this module use?" into an immediate local error instead of a wrong number downstream. The stored representation is unchanged (naive UTC), so **switching a column needs no migration** — but every writer of that column must then pass aware datetimes.
 
-`TZDateTime(fsp=6)` renders MySQL `DATETIME(6)`; plain `TZDateTime()` renders the same DDL as before. Use the `fsp=6` variant for any datetime that is a natural key, uniqueness component, or equality predicate — plain `DATETIME` truncates to whole seconds on MySQL while SQLite keeps microseconds, which is invisible to the test suite and caused the migration-015 bug.
+`TZDateTime(fsp=6)` renders MySQL `DATETIME(6)`; plain `TZDateTime()` renders the same DDL as `DateTime(timezone=True)`, which is what makes conversion migration-free.
+
+Use `fsp=6` on a **new** natural-key / uniqueness / equality-predicate column unless its values are known to be coarse — plain `DATETIME` truncates to whole seconds on MySQL while SQLite keeps microseconds, which is invisible to the test suite and caused the migration-015 bug. On an **existing** column, `fsp` is a DDL change needing its own migration, so it is separate from adopting the type: the columns converted here stay on plain `TZDateTime()` even inside `UniqueConstraint`s, because they hold METAR observation times and NWP cycle times (whole minutes and hours).
 
 **Adopted so far:** `model_delivery_log` (all 5 columns), `verification_observations`, `verification_scores`, `taf_verification_scores`, `airport_forecast_snapshots`, `verification_cache`. Adoption is incremental; the remaining tables still carry their local fixups.
 
 Two things to know when adopting a table:
 
 - **Convert co-read tables together.** A `min()`/comparison that mixes a converted column with a non-converted one raises `TypeError`. `verification_cache` was pulled in for exactly this reason — `cache_builder` compares its `source_max_time` against `func.max()` of a converted column (aggregates keep the column's type, so they come back aware too).
+- **Pydantic normalisation covers construction, not assignment.** `VerificationObservation` normalises its datetimes with a field validator, but Pydantic only runs validators on attribute assignment under `validate_assignment=True`. `tasks/verification.py` sets `taf_issue_time` *after* construction, so it normalises with `_as_utc` at that site; without it a naive parser value reaches the column and raises `StatementError`, which the surrounding flush catches only as `IntegrityError` — failing the whole ingest batch rather than one row.
 - **Serialised output gains `+00:00`.** Anything `.isoformat()`ing a read value changes string shape, so a baked cache needs its version bumped (`FORECAST_MAP_CACHE_VERSION` went to `v3`), and snapshot artifacts written by older code parse naive — `snapshot_artifact._parse_dt` stamps UTC so in-flight artifacts stay importable.
 
 `_compute_pack_hmac` / `_compute_pack_hmac_legacy` (`storage/flights.py`) hash the timestamp's **string form**, so `briefing_packs` is deliberately *not* converted: changing what that column returns changes the HMAC input against live prod rows.

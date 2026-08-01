@@ -11,9 +11,18 @@ from pydantic import BaseModel, Field, field_validator
 class VerificationObservation(BaseModel):
     """METAR/TAF ground truth for one airport at one time.
 
-    Datetimes are normalised to aware UTC at construction: the euro_aip
+    Datetimes are normalised to aware UTC **at construction**: the euro_aip
     METAR/TAF parser's awareness is not guaranteed, and the DB columns these
     feed are ``TZDateTime`` (issue #520), which rejects naive writes.
+
+    This covers the constructor only. Pydantic runs field validators on
+    attribute *assignment* just when ``validate_assignment=True``, which this
+    model deliberately does not set — turning it on would validate every
+    post-construction assignment, including the ``int | None`` TAF fields that
+    are currently stored as the parser hands them over, converting a latent
+    type sloppiness into a live ingestion crash. So a caller assigning a
+    datetime after construction must normalise it itself; see
+    ``tasks/verification.py`` where ``taf_issue_time`` is set.
     """
 
     icao: str
