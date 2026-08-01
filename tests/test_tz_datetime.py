@@ -160,6 +160,66 @@ class TestSnapshotDedupPath:
         )
 
 
+class TestObservationNormalisation:
+    """A naive parser time must never reach a TZDateTime column.
+
+    `VerificationObservation` normalises via a field validator, but Pydantic
+    runs validators on *assignment* only under `validate_assignment=True`,
+    which the model does not set. `taf_issue_time` is assigned after
+    construction in `tasks/verification.py`, so it is the one field the
+    validator does not cover — and a naive value there raises `StatementError`
+    at flush, which `store_observations` catches only as `IntegrityError`,
+    failing the entire batch rather than one row.
+    """
+
+    def test_constructor_normalises_naive_datetimes(self):
+        from weatherbrief.models.verification import VerificationObservation
+
+        naive = datetime(2026, 7, 1, 12, 0)
+        obs = VerificationObservation(
+            icao="EGTK", observation_time=naive, collected_at=naive,
+        )
+        assert obs.observation_time.tzinfo == timezone.utc
+        assert obs.collected_at.tzinfo == timezone.utc
+
+    def test_assignment_does_not_normalise(self):
+        """Pins the trap the ingest path has to work around."""
+        from weatherbrief.models.verification import VerificationObservation
+
+        naive = datetime(2026, 7, 1, 12, 0)
+        obs = VerificationObservation(
+            icao="EGTK", observation_time=naive, collected_at=naive,
+        )
+        obs.taf_issue_time = naive
+        assert obs.taf_issue_time.tzinfo is None, (
+            "if this starts passing, validate_assignment was enabled — the "
+            "_as_utc call at the taf_issue_time assignment site can then go"
+        )
+
+    def test_ingest_stores_a_naive_parser_taf_time(self, db_session):
+        """End-to-end: the assignment site must normalise before the flush."""
+        from weatherbrief.db.models import VerificationObservationRow
+        from weatherbrief.tasks.verification import _as_utc
+
+        naive_issue = datetime(2026, 7, 1, 11, 0)
+        row = VerificationObservationRow(
+            icao="EGTK",
+            observation_time=datetime(2026, 7, 1, 12, tzinfo=timezone.utc),
+            collected_at=datetime(2026, 7, 1, 12, 5, tzinfo=timezone.utc),
+            taf_issue_time=_as_utc(naive_issue),
+        )
+        db_session.add(row)
+        db_session.flush()
+        db_session.expire_all()
+
+        stored = db_session.execute(
+            select(VerificationObservationRow)
+        ).scalars().one()
+        assert stored.taf_issue_time == datetime(
+            2026, 7, 1, 11, tzinfo=timezone.utc,
+        )
+
+
 class TestDdl:
     def test_default_ddl_is_plain_datetime_on_mysql(self):
         from sqlalchemy.dialects import mysql

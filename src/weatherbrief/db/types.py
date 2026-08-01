@@ -38,12 +38,22 @@ class TZDateTime(TypeDecorator):
     ``DateTime(timezone=True)``, so switching a column over needs no
     migration.
 
-    ``fsp`` (fractional-second precision) is opt-in: plain ``TZDateTime()``
-    renders the same DDL as before so adopted columns don't drift from prod
-    schema, while ``TZDateTime(fsp=6)`` renders MySQL ``DATETIME(6)`` — use it
-    for any new column that serves as a natural key, uniqueness component, or
-    equality predicate (plain DATETIME truncates to whole seconds on MySQL
-    while SQLite keeps microseconds; that skew caused the migration-015 bug).
+    ``fsp`` (fractional-second precision) is opt-in. Plain ``TZDateTime()``
+    renders the same DDL as ``DateTime(timezone=True)``, which is exactly what
+    lets an existing column be converted without a migration; ``fsp=6`` renders
+    MySQL ``DATETIME(6)``.
+
+    Reach for ``fsp=6`` on a **new** column that serves as a natural key,
+    uniqueness component, or equality predicate, unless its values are known to
+    be coarse — plain DATETIME truncates to whole seconds on MySQL while SQLite
+    keeps microseconds, and that dialect skew caused the migration-015 bug.
+
+    Converting an **existing** column is different: adding ``fsp`` there is a
+    DDL change and needs its own migration, so it is a deliberate act rather
+    than part of adopting this type. The columns converted in #520 are on plain
+    ``TZDateTime()`` even where they participate in a ``UniqueConstraint``,
+    because they hold METAR observation times and NWP cycle times — whole
+    minutes and whole hours, with no sub-second component to truncate.
     """
 
     impl = DateTime
@@ -77,8 +87,3 @@ class TZDateTime(TypeDecorator):
             # than blindly re-stamp so a non-UTC offset can't be mislabelled.
             return value.astimezone(timezone.utc)
         return value.replace(tzinfo=timezone.utc)
-
-
-def utc_now() -> datetime:
-    """Aware-UTC now, for ``default=utc_now`` on TZDateTime columns."""
-    return datetime.now(timezone.utc)
