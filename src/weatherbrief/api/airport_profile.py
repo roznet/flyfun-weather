@@ -268,13 +268,23 @@ def _surface_from_cache(
     icao: str,
     model: str,
     hours: list[datetime],
+    field_elevation_ft: float | None = None,
 ) -> list[dict[str, Any]]:
     """Read surface fields from airport_forecast_snapshots for each hour.
 
     Picks the most recent snapshot per (icao, model, forecast_hour). Hours
     with no data simply don't appear in the result; the frontend treats
     those as gaps.
+
+    ``ceiling_ft`` is emitted on the AGL datum when ``field_elevation_ft`` is
+    given, matching every other ceiling surface (map, alternates, advisories)
+    and the AGL METAR ceilings the chart plots alongside it. Without an
+    elevation the legacy datum-naive value is returned. (#441 #3)
     """
+    from weatherbrief.analysis.airport_conditions import (
+        _nwp_ceiling_is_agl,
+        to_agl_ceiling,
+    )
     from weatherbrief.db.models import AirportForecastSnapshotRow
 
     if not hours:
@@ -305,11 +315,26 @@ def _surface_from_cache(
         if fh not in by_hour:
             by_hour[fh] = r
 
+    # The NWP ceiling follows the model's datum (AGL for ECMWF, MSL otherwise);
+    # the sounding ceiling is geopotential-height MSL for every model.
+    nwp_is_agl = _nwp_ceiling_is_agl(model)
+
     result: list[dict[str, Any]] = []
     for h in hours:
         row = by_hour.get(h)
         if row is None:
             continue
+        # Explicit None-check rather than `or` — a NWP ceiling of 0 (literal
+        # ground-level fog: rare but valid for severe LIFR) would silently
+        # fall through to the sounding ceiling otherwise.
+        if row.nwp_ceiling_ft is not None:
+            ceiling_ft = to_agl_ceiling(
+                row.nwp_ceiling_ft, field_elevation_ft, source_is_agl=nwp_is_agl,
+            )
+        else:
+            ceiling_ft = to_agl_ceiling(
+                row.sounding_ceiling_ft, field_elevation_ft, source_is_agl=False,
+            )
         result.append({
             "time": _iso_utc(h),
             "temperature_2m_c": row.temperature_2m_c,
@@ -323,13 +348,7 @@ def _surface_from_cache(
             "cape_jkg": row.cape_jkg,
             "cloud_cover_pct": row.cloud_cover_pct,
             "cloud_cover_low_pct": row.cloud_cover_low_pct,
-            # Explicit None-check rather than `or` — a NWP ceiling of 0
-            # (literal ground-level fog: rare but valid for severe LIFR)
-            # would silently fall through to the sounding ceiling otherwise.
-            "ceiling_ft": (
-                row.nwp_ceiling_ft if row.nwp_ceiling_ft is not None
-                else row.sounding_ceiling_ft
-            ),
+            "ceiling_ft": ceiling_ft,
             "freezing_level_ft": row.freezing_level_ft,
         })
     return result
@@ -589,7 +608,7 @@ async def get_airport_profile(
     # Snapshot surface from cache before opening the long-lived stream so
     # any DB error surfaces as a normal HTTP error (cleaner UX than an
     # SSE error mid-stream).
-    surface = _surface_from_cache(db, icao, model, hours)
+    surface = _surface_from_cache(db, icao, model, hours, field_elevation_ft=elevation_ft)
 
     # Acquire the per-user / global concurrency slot before opening the
     # stream. Released in the generator's finally block. Done synchronously

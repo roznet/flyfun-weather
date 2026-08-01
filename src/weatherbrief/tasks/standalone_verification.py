@@ -1292,6 +1292,10 @@ def _score_cycle(
     Returns number of scores created.
     """
     from weatherbrief.airports import get_airport_elevations, get_runway_ends
+    from weatherbrief.analysis.airport_conditions import (
+        _nwp_ceiling_is_agl,
+        to_agl_ceiling,
+    )
     from weatherbrief.tasks.scoring import _score_model_vs_metar, _score_taf_vs_metar
 
     # Fetch all snapshots that predict within ±90 min of cycle_time
@@ -1423,12 +1427,23 @@ def _score_cycle(
         )
 
         if score_row is not None:
-            # Add cloud_base and LCL deltas
+            # Add cloud_base and LCL deltas, both against the AGL METAR ceiling.
+            # cloud_base_ft carries the model's datum — MSL for GFS/ICON/HRRR,
+            # AGL for ECMWF — so it is converted first; lcl_ft is the Espy
+            # surface approximation, a height above the station and therefore
+            # already AGL, so it differences directly. (#441 #3)
             if obs.ceiling_ft is not None:
+                obs_ceiling_ft = float(obs.ceiling_ft)
                 if snap.cloud_base_ft is not None:
-                    score_row.cloud_base_delta_ft = snap.cloud_base_ft - float(obs.ceiling_ft)
+                    cloud_base_agl = to_agl_ceiling(
+                        snap.cloud_base_ft,
+                        elev_map.get(snap.icao),
+                        source_is_agl=_nwp_ceiling_is_agl(snap.model),
+                    )
+                    if cloud_base_agl is not None:
+                        score_row.cloud_base_delta_ft = cloud_base_agl - obs_ceiling_ft
                 if snap.lcl_ft is not None:
-                    score_row.lcl_delta_ft = snap.lcl_ft - float(obs.ceiling_ft)
+                    score_row.lcl_delta_ft = snap.lcl_ft - obs_ceiling_ft
             db.add(score_row)
             existing_score_keys.add(score_key)
             scores_created += 1
