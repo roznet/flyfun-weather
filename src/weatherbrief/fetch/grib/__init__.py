@@ -2835,7 +2835,10 @@ def _enrich_hrrr_replace(
     so a fallen-back pack carries nothing HRRR-specific. Per-fhour failures
     only leave that hour on Open-Meteo levels, mirroring the GFS per-fhour
     tolerance; the fill pass later interpolates those gap hours between the
-    bracketing HRRR anchors (the level-count heuristic in fill.py).
+    bracketing HRRR anchors (the level-count heuristic in fill.py). A crash
+    mid-loop AFTER at least one replacement is contained (logged, loop
+    stops): the pack is already HRRR, so it must never reach the gate's
+    catch-all — the same invariant as the diag-pass containment below.
     """
     forecast_hours = hrrr_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
@@ -2867,20 +2870,40 @@ def _enrich_hrrr_replace(
 
     total_replaced = 0
     for fhour in forecast_hours:
-        decoded_points = _fetch_hrrr_sounding_for_fhour(
-            init_date, init_hour, fhour,
-            run_dir, idx_by_fhour, point_lats, point_lons, session,
-        )
-        if not decoded_points:
-            continue
+        try:
+            decoded_points = _fetch_hrrr_sounding_for_fhour(
+                init_date, init_hour, fhour,
+                run_dir, idx_by_fhour, point_lats, point_lons, session,
+            )
+            if not decoded_points:
+                continue
 
-        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
-        total_replaced += _replace_pressure_levels_from_grib(
-            gfs_sections, all_forecasts, route_points, decoded_points,
-            valid_utc=valid_utc, model_source=ModelSource.GFS,
-        )
-        del decoded_points
-        _grib_gc()
+            valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+            total_replaced += _replace_pressure_levels_from_grib(
+                gfs_sections, all_forecasts, route_points, decoded_points,
+                valid_utc=valid_utc, model_source=ModelSource.GFS,
+            )
+            del decoded_points
+            _grib_gc()
+        except Exception:
+            if total_replaced == 0:
+                # Nothing HRRR has touched the pack — propagate so the
+                # gate's catch-all falls back to plain GFS.
+                raise
+            # Once ANY replacement landed the pack is HRRR (review I1):
+            # contain the crash — log, stop the loop, keep the replaced
+            # hours (unreplaced ones keep their Open-Meteo levels and are
+            # filled later between the HRRR anchors) — and return the run
+            # timestamp. Propagating here would reach the gate's catch-all
+            # and run plain GFS on top of partial HRRR columns: a half-HRRR
+            # pack mis-attributed gfs:noaa. Same invariant as the diag-pass
+            # containment below.
+            logger.warning(
+                "HRRR sounding f%03d crashed after %d replacements; "
+                "keeping the partial HRRR replacement",
+                fhour, total_replaced, exc_info=True,
+            )
+            break
 
     if total_replaced == 0:
         logger.warning("No HRRR sounding data retrieved for enrichment")

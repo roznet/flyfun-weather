@@ -22,6 +22,9 @@ Covered here:
   the plain-GFS run-finder) and the diag pass never runs, so the fallback
   starts from a pack nothing HRRR-specific has touched.
 - The gate's crash catch-all fires with ``_enrich_hrrr_replace`` raising.
+- I1 containment: a sounding-loop crash AFTER a partial replacement keeps
+  the pack ``hrrr:noaa`` (no plain-GFS fallback); a crash with zero hours
+  replaced still propagates to the fallback.
 - fill.py: two HRRR anchors (40 levels) bracketing an Open-Meteo gap hour
   (28 levels) → ``_interp_levels_hourly`` rebuilds the gap by interpolation.
 
@@ -616,6 +619,107 @@ class TestDiagCrashKeepsHrrrSounding:
         for h in wf.hourly:
             assert [pl.pressure_hpa for pl in h.pressure_levels] == [850, 500]
             assert h.nwp_cloud_diagnostics is None
+
+
+class TestSoundingCrashKeepsPartialHrrr:
+    """Review fix (#457, I1): a sounding-loop crash (e.g. a decode dead-letter
+    surfacing via ``_dispatch_decode``) on fhour N AFTER fhours <N already
+    replaced hourlies must be contained — the pack is already HRRR, so it
+    must never reach the gate's catch-all → plain-GFS fallback (a half-HRRR
+    pack mis-attributed ``gfs:noaa``). The replaced hours stand, unreplaced
+    hours keep their Open-Meteo levels, and the run timestamp is still
+    returned. With ZERO prior replacements the crash still propagates to
+    the plain-GFS fallback."""
+
+    @staticmethod
+    def _dispatch_crash_on(crash_fhour: int):
+        """Real sounding decode, except f{crash_fhour} which dead-letters."""
+        def dispatch(worker_name, path, lats, lons, **kw):
+            if worker_name == "decode_hrrr_pressure":
+                if Path(path).name.startswith(f"f{crash_fhour:03d}_"):
+                    raise RuntimeError(f"decode dead-letter f{crash_fhour:03d}")
+                return decode_hrrr_pressure_per_point(
+                    Path(path).read_bytes(), lats, lons,
+                )
+            if worker_name == "decode_hrrr_diag":
+                return [dict(_HRRR_DIAG_RAW) for _ in lats]
+            raise AssertionError(f"unexpected decode worker {worker_name}")
+        return dispatch
+
+    def test_crash_after_first_replacement_keeps_partial_hrrr(
+        self, monkeypatch, tmp_path, sounding_bytes,
+    ):
+        """Unit level: f004's decode crashes after f003 replaced hour 15 —
+        no propagation, the run timestamp is still returned, hour 15 keeps
+        the GRIB column, hours 16/17 keep their Open-Meteo levels."""
+        lat, lon = _target_latlon(_FJ, _FI)
+        cs, wf = _gfs_cross_section([15, 16, 17])
+        _patch_replace_flow(
+            monkeypatch, sounding_bytes, dispatch=self._dispatch_crash_on(4),
+        )
+
+        ts = _run_replace(cs, [_rp(lat, lon)], tmp_path)  # must not raise
+
+        assert ts == HRRR_TS
+        # f003 landed: hour 15 carries the replaced GRIB column.
+        assert [pl.pressure_hpa for pl in wf.hourly[0].pressure_levels] == [
+            850, 500,
+        ]
+        # The loop stopped at the crash: f004/f005 never replaced — OM levels.
+        for h in wf.hourly[1:]:
+            assert [pl.pressure_hpa for pl in h.pressure_levels] == [850]
+
+    def test_crash_after_first_replacement_gate_keeps_hrrr_source(
+        self, monkeypatch, tmp_path, sounding_bytes,
+    ):
+        """Gate level: the plain-GFS run-finder is NOT invoked and the gate
+        still returns ``hrrr:noaa`` when f004's decode crashes after f003
+        already replaced."""
+        lat, lon = _target_latlon(_FJ, _FI)
+        cs, wf = _gfs_cross_section([15, 16, 17])
+        calls = _patch_gate_common(monkeypatch)
+        _patch_replace_flow(
+            monkeypatch, sounding_bytes, dispatch=self._dispatch_crash_on(4),
+        )
+        monkeypatch.setattr(grib_mod, "route_in_hrrr_domain", lambda rps: True)
+
+        ts, source_key = grib_mod._enrich_gfs_inner(  # must not raise
+            [cs], [], [_rp(lat, lon)], DEP,
+            data_dir=tmp_path, flight_duration_hours=2.0,
+        )
+
+        assert (ts, source_key) == (HRRR_TS, "hrrr:noaa")
+        assert calls == ["hrrr"]  # plain-GFS run-finder never called
+        assert [pl.pressure_hpa for pl in wf.hourly[0].pressure_levels] == [
+            850, 500,
+        ]
+        for h in wf.hourly[1:]:
+            assert [pl.pressure_hpa for pl in h.pressure_levels] == [850]
+
+    def test_crash_with_zero_replacements_still_falls_back_to_gfs(
+        self, monkeypatch, tmp_path, sounding_bytes,
+    ):
+        """Zero hours replaced when the crash hits (f003, the FIRST fhour):
+        propagation is still correct — the gate's catch-all runs plain GFS
+        on a pack nothing HRRR-specific has touched."""
+        lat, lon = _target_latlon(_FJ, _FI)
+        cs, wf = _gfs_cross_section([15, 16, 17])
+        calls = _patch_gate_common(monkeypatch)
+        _patch_replace_flow(
+            monkeypatch, sounding_bytes, dispatch=self._dispatch_crash_on(3),
+        )
+        monkeypatch.setattr(grib_mod, "route_in_hrrr_domain", lambda rps: True)
+
+        ts, source_key = grib_mod._enrich_gfs_inner(  # must not raise
+            [cs], [], [_rp(lat, lon)], DEP,
+            data_dir=tmp_path, flight_duration_hours=2.0,
+        )
+
+        assert (ts, source_key) == (GFS_TS, "gfs:noaa")
+        assert calls == ["hrrr", "gfs"]  # GFS run-finder called after crash
+        # Nothing HRRR touched the pack.
+        for h in wf.hourly:
+            assert [pl.pressure_hpa for pl in h.pressure_levels] == [850]
 
 
 # ---------------------------------------------------------------------------
