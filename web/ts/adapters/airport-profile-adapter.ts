@@ -408,7 +408,15 @@ function synthesizeVizPoint(
     capeSurfaceJkg: indices?.cape_surface_jkg ?? surface?.cape_jkg ?? 0,
     worstModelAgreement: 'good',
     nwpCloudDiag: null,
-    soundingCeilingFt: indices?.sounding_ceiling_ft ?? surface?.ceiling_ft ?? null,
+    // MSL only — `VizPoint.soundingCeilingFt` is declared ft MSL and the one
+    // consumer (`ceiling-dd`) subtracts terrain to get AGL. The old
+    // `?? surface?.ceiling_ft` fallback used to be MSL-ish, but the profile
+    // endpoint now serves that field already converted to AGL, so keeping it
+    // would make this one field two different datums depending on which branch
+    // fired — and double-subtract elevation if the profile view ever wires up
+    // the route graph. The profile's AGL ceiling stays in `surface.ceiling_ft`
+    // for anything that wants it.
+    soundingCeilingFt: indices?.sounding_ceiling_ft ?? null,
     terrainElevationFt: elevationFt,
     temperatureC: surface?.temperature_2m_c ?? null,
     // Single-airport profile has no elected cruise level, so ISA deviation /
