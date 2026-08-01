@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ROUTE_GRAPH_METRICS, getMetricById, getMetricOptions, METRIC_NONE,
+  sampleMetric, formatSample,
 } from '../../ts/visualization/route-graph/metrics';
 import { isaTemperatureC } from '../../ts/visualization/data-extract';
 import { makeVizPoint, makeAltitudeLines, makeNwpCloudDiag } from './fixtures/viz-point';
@@ -74,10 +75,11 @@ describe('ceiling-dd metric (sounding ceiling AGL)', () => {
     expect(m().getValue(p)).toBe(0);
   });
 
-  it('returns null when AGL exceeds 5000 ft cap', () => {
-    // Ceiling well above the route → not interesting for plotting.
+  it('reports the true AGL above the display cap, not null', () => {
+    // A ceiling well above the route is knowledge, not absence — null here is
+    // reserved for "no sounding" and would render as a data gap.
     const p = makeVizPoint({ soundingCeilingFt: 8000, terrainElevationFt: 1000 });
-    expect(m().getValue(p)).toBeNull();
+    expect(m().getValue(p)).toBe(7000);
   });
 
   it('keeps values exactly at 5000 ft AGL', () => {
@@ -107,12 +109,76 @@ describe('ceiling-nwp metric', () => {
     expect(m().getValue(p)).toBe(3000);
   });
 
-  it('returns null above 5000 ft AGL cap', () => {
+  it('reports the true AGL above the display cap, not null', () => {
     const p = makeVizPoint({
       terrainElevationFt: 500,
       nwpCloudDiag: makeNwpCloudDiag({ ceilingFt: 9500 }),
     });
-    expect(m().getValue(p)).toBeNull();
+    expect(m().getValue(p)).toBe(9000);
+  });
+});
+
+describe('ceiling above-scale state', () => {
+  // The bug this covers: above-cap and missing both returned null, so "ceiling
+  // is excellent" was indistinguishable from "we have no sounding" — a gap in
+  // the line and a tooltip reading N/A in both cases.
+  for (const id of ['ceiling-dd', 'ceiling-nwp'] as const) {
+    describe(id, () => {
+      const m = () => metric(id);
+      /** Build a point with the given ceiling AGL, for whichever source this metric reads. */
+      const atAgl = (agl: number | null) =>
+        makeVizPoint(
+          id === 'ceiling-dd'
+            ? { soundingCeilingFt: agl === null ? null : agl + 1000, terrainElevationFt: 1000 }
+            : {
+                terrainElevationFt: 1000,
+                nwpCloudDiag: makeNwpCloudDiag({ ceilingFt: agl === null ? null : agl + 1000 }),
+              },
+        );
+
+      it('declares a pinned 0–5000 ft AGL range', () => {
+        expect(m().suggestedRange).toEqual([0, 5000]);
+        expect(m().aboveScale).toBe(true);
+      });
+
+      it('exactly at the cap is a plottable value', () => {
+        expect(sampleMetric(m(), atAgl(5000))).toEqual({ kind: 'value', value: 5000 });
+      });
+
+      it('one foot above the cap is above-scale, carrying the real value', () => {
+        expect(sampleMetric(m(), atAgl(5001))).toEqual({ kind: 'above-scale', value: 5001 });
+      });
+
+      it('missing data is unavailable, distinct from above-scale', () => {
+        expect(sampleMetric(m(), atAgl(null))).toEqual({ kind: 'unavailable' });
+      });
+
+      it('formats above-scale as a bound and only missing data as N/A', () => {
+        expect(formatSample(m(), sampleMetric(m(), atAgl(8000)))).toBe('> 5,000 ft AGL');
+        expect(formatSample(m(), sampleMetric(m(), atAgl(null)))).toBe('N/A');
+        expect(formatSample(m(), sampleMetric(m(), atAgl(3000)))).toBe('3,000 ft AGL');
+      });
+    });
+  }
+});
+
+describe('sampleMetric on ordinary metrics', () => {
+  it('never yields above-scale for a metric that does not declare it', () => {
+    // cloud-cover has a suggestedRange but no `aboveScale`, so an over-range
+    // value stays a value and the axis expands to fit, as before.
+    const s = sampleMetric(metric('cloud-cover'), makeVizPoint({ cloudCoverTotalPct: 120 }));
+    expect(s).toEqual({ kind: 'value', value: 120 });
+  });
+
+  it('maps a null getValue to unavailable', () => {
+    expect(sampleMetric(metric('temperature'), makeVizPoint({ temperatureC: null })))
+      .toEqual({ kind: 'unavailable' });
+  });
+
+  it('formats a plain value through the metric formatValue', () => {
+    const m = metric('headwind');
+    expect(formatSample(m, { kind: 'value', value: 15 })).toBe('15 kt HW');
+    expect(formatSample(m, { kind: 'unavailable' })).toBe('N/A');
   });
 });
 

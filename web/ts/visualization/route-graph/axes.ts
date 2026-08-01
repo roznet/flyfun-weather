@@ -1,7 +1,7 @@
 /** Draw Y-axes and X grid lines for the route graph. */
 
 import type { PlotArea, VizRouteData } from '../types';
-import type { RouteGraphMetric } from './metrics';
+import type { MetricSample, RouteGraphMetric } from './metrics';
 import { MARGIN } from './constants';
 import { chooseDistanceTickInterval, isDarkTheme } from '../interaction-utils';
 
@@ -18,16 +18,31 @@ export interface YAxisScale {
   valueToY: (v: number) => number;
 }
 
-/** Compute a nice Y-axis scale for a metric's data values. */
+/** Compute a nice Y-axis scale for a metric's sampled values. */
 export function computeYScale(
-  values: (number | null)[],
+  samples: MetricSample[],
   metric: RouteGraphMetric,
   plotArea: PlotArea,
 ): YAxisScale {
-  const nums = values.filter((v): v is number => v !== null);
+  // Only plottable values drive the scale. Above-scale samples deliberately do
+  // not — expanding the axis to fit them is exactly what the cap exists to avoid.
+  const nums = samples.filter((s) => s.kind === 'value').map((s) => s.value);
 
   let min: number;
   let max: number;
+
+  if (metric.aboveScale && metric.suggestedRange) {
+    // Pinned axis: use the range verbatim, so the top tick *is* the cap and a
+    // marker riding the top edge unambiguously reads "above this number".
+    return {
+      min: metric.suggestedRange[0],
+      max: metric.suggestedRange[1],
+      valueToY: (v: number) =>
+        plotArea.top +
+        (1 - (v - metric.suggestedRange![0]) / (metric.suggestedRange![1] - metric.suggestedRange![0])) *
+          plotArea.height,
+    };
+  }
 
   if (metric.suggestedRange) {
     [min, max] = metric.suggestedRange;

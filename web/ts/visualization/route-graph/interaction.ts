@@ -2,7 +2,7 @@
 
 import type { VizRouteData, VizPoint } from '../types';
 import type { RouteGraphRenderer } from './renderer';
-import { getMetricLabel, type RouteGraphMetric } from './metrics';
+import { formatSample, getMetricLabel, sampleMetric, type RouteGraphMetric } from './metrics';
 import {
   getCanvasX, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
   positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
@@ -104,10 +104,7 @@ export function attachRouteGraphInteraction(
   }
 
   function formatMetricLine(metric: RouteGraphMetric, point: VizPoint): string {
-    const v = metric.getValue(point);
-    const fmt = v !== null
-      ? (metric.formatValue ? metric.formatValue(v) : v.toFixed(1))
-      : 'N/A';
+    const fmt = formatSample(metric, sampleMetric(metric, point));
     return `<span style="color:${metric.color}">${getMetricLabel(metric.id)}: ${fmt}</span>`;
   }
 
