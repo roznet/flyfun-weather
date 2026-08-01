@@ -19,7 +19,7 @@ from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
-from weatherbrief.db.models import BriefingPackRow, FlightRow
+from weatherbrief.db.models import BriefingPackRow, FlightRow, UserAircraftRow
 from weatherbrief.fetch.variables import (
     MAX_BOOKING_LEAD_DAYS,
     coverage_start_date,
@@ -347,15 +347,27 @@ def _compute_coverage(departure_time: datetime) -> "CoveragePending | None":
 
 
 def _resolve_aircraft_info(
-    db: Session, aircraft_id: int | None, *, viewer_id: str | None = None,
+    db: Session,
+    aircraft_id: int | None,
+    *,
+    viewer_id: str | None = None,
+    aircraft_by_id: dict[int, UserAircraftRow] | None = None,
 ) -> AircraftInfo | None:
-    """Build AircraftInfo for a flight, privacy-gated by viewer."""
+    """Build AircraftInfo for a flight, privacy-gated by viewer.
+
+    ``aircraft_by_id`` is the list endpoint's batch-prefetched lookup (one
+    IN-query for the whole list); single-flight callers leave it None and
+    fall back to a per-call ``db.get``.
+    """
     if aircraft_id is None:
         return None
-    from weatherbrief.db.models import UserAircraftRow
     from weatherbrief.storage.aircraft_types import get_aircraft_type
 
-    row = db.get(UserAircraftRow, aircraft_id)
+    row = (
+        aircraft_by_id.get(aircraft_id)
+        if aircraft_by_id is not None
+        else db.get(UserAircraftRow, aircraft_id)
+    )
     if row is None:
         return None
 
@@ -451,6 +463,7 @@ def _flight_to_response(
     debrief: FlightDebrief | None = None,
     section: Literal["future", "recent", "past"] | None = None,
     unseen: bool = False,
+    aircraft_by_id: dict[int, UserAircraftRow] | None = None,
 ) -> FlightResponse:
     # viewer_id is required: the role derivation below compares flight.user_id
     # against it, and with viewer_id=None we would silently classify the
@@ -458,7 +471,10 @@ def _flight_to_response(
     # required signature keeps it that way.
     aircraft = None
     if flight.aircraft_id:
-        aircraft = _resolve_aircraft_info(db, flight.aircraft_id, viewer_id=viewer_id)
+        aircraft = _resolve_aircraft_info(
+            db, flight.aircraft_id,
+            viewer_id=viewer_id, aircraft_by_id=aircraft_by_id,
+        )
 
     effective_role = role if role is not None else ("owner" if flight.user_id == viewer_id else "subscriber")
 
@@ -625,6 +641,23 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
     }
 
 
+def _get_aircraft_by_id(db: Session, flights: list[Flight]) -> dict[int, UserAircraftRow]:
+    """Fetch every aircraft referenced by the listed flights in a single query.
+
+    Resolving aircraft per flight via ``db.get`` is an N+1 — the ORM row is
+    dropped as soon as the AircraftInfo is built, so the (weak-ref) identity
+    map doesn't even dedup repeat ids across flights. Returns an
+    ``{aircraft_id: row}`` lookup passed into ``_flight_to_response``.
+    """
+    ids = {f.aircraft_id for f in flights if f.aircraft_id is not None}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(UserAircraftRow).where(UserAircraftRow.id.in_(ids))
+    ).scalars().all()
+    return {row.id: row for row in rows}
+
+
 @router.get("", response_model=list[FlightResponse])
 def list_all_flights(
     response: Response,
@@ -654,6 +687,9 @@ def list_all_flights(
     # Flights with an unopened notify-qualifying update — drives the flight-list
     # red dot, kept consistent with the app-icon badge. One cheap query.
     unseen_ids = unseen_flight_ids(db, user_id)
+    # One IN-query for every aircraft referenced by the list, looked up per
+    # flight below instead of a per-flight db.get.
+    aircraft_by_id = _get_aircraft_by_id(db, [f for f, _, _ in paired])
 
     owned_pairs: list[tuple[Flight, FlightDebrief | None]] = [
         (f, debrief_map.get(f.id)) for f, role, _ in paired if role == "owner"
@@ -680,6 +716,7 @@ def list_all_flights(
             debrief=debrief,
             section=section,
             unseen=f.id in unseen_ids,
+            aircraft_by_id=aircraft_by_id,
         )
         (past if section == "past" else other).append(resp)
 
