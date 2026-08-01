@@ -122,6 +122,9 @@ class BriefingUsage:
     llm_model: str | None = None
     llm_input_tokens: int | None = None
     llm_output_tokens: int | None = None
+    # Prompt-cache split; both are subsets of llm_input_tokens, not extras.
+    llm_cache_read_tokens: int | None = None
+    llm_cache_write_tokens: int | None = None
     metar_taf_fetched: bool = False
     metar_taf_airports: int = 0
     sigmet_fetched: bool = False
@@ -861,6 +864,8 @@ def _execute_briefing_stages(
             result.usage.llm_model = digest_result.llm_model
             result.usage.llm_input_tokens = digest_result.llm_input_tokens
             result.usage.llm_output_tokens = digest_result.llm_output_tokens
+            result.usage.llm_cache_read_tokens = digest_result.llm_cache_read_tokens
+            result.usage.llm_cache_write_tokens = digest_result.llm_cache_write_tokens
         if digest_result.diagnostic:
             result.diagnostics.append(digest_result.diagnostic)
         stage_timings["llm_digest"] = perf_counter() - _t0

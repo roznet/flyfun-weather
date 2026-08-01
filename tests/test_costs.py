@@ -304,3 +304,92 @@ class TestComputeProgramCost:
         }
         assert isinstance(d["fixed_lines"], list)
         assert set(d["fixed_lines"][0].keys()) == {"label", "monthly_usd", "prorated_usd"}
+
+
+class TestPromptCachePricing:
+    """Cached input tokens must bill at their own multipliers, not full price.
+
+    langchain-anthropic reports one ``input_tokens`` total that already
+    *includes* the cached tokens, so compute_cost has to subtract them back out
+    before pricing. Getting this wrong is silent: the ledger would keep showing
+    the pre-caching cost and the saving would be invisible.
+    """
+
+    def test_defaults_reproduce_uncached_pricing(self):
+        """Omitting the cache args must match the old behaviour exactly."""
+        config = _default_config()
+        without = compute_cost(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=config, config_id=1,
+        )
+        explicit_zero = compute_cost(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=config, config_id=1,
+            cache_read_tokens=0, cache_write_tokens=0,
+        )
+        assert without.token_cost_usd == explicit_zero.token_cost_usd
+        # (10000/1000)*0.003 + (1000/1000)*0.015 = 0.03 + 0.015
+        assert abs(without.token_cost_usd - 0.045) < 1e-6
+
+    def test_cache_read_is_cheaper_than_full_price(self):
+        """A read bills 0.1x, so 5k cached of 10k input costs less than 10k raw."""
+        config = _default_config()
+        b = compute_cost(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=config, config_id=1,
+            cache_read_tokens=5000,
+        )
+        # uncached 5000 @ 0.003 = 0.015; read 5000 @ 0.0003 = 0.0015; out 0.015
+        assert abs(b.token_cost_usd - 0.0315) < 1e-6
+        assert b.token_cost_usd < 0.045
+
+    def test_cache_write_is_dearer_than_full_price(self):
+        """A 1h write bills 2x — a first, uncached call must cost more."""
+        config = _default_config()
+        b = compute_cost(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=config, config_id=1,
+            cache_write_tokens=5000,
+        )
+        # uncached 5000 @ 0.003 = 0.015; write 5000 @ 0.006 = 0.030; out 0.015
+        assert abs(b.token_cost_usd - 0.060) < 1e-6
+        assert b.token_cost_usd > 0.045
+
+    def test_read_saving_outweighs_write_cost_at_measured_hit_rate(self):
+        """Sanity-check the whole reason for enabling caching.
+
+        Prod gaps put the hit rate near 84% at the 1h TTL, well above the 53%
+        break-even. Averaging one write against ~5 reads must come out ahead of
+        never caching at all.
+        """
+        config = _default_config()
+        prefix, ctx, out = 4661, 6800, 1200
+        total_in = prefix + ctx
+
+        def cost(**kw):
+            return compute_cost(
+                input_tokens=total_in, output_tokens=out,
+                result_size_bytes=0, config=config, config_id=1, **kw
+            ).token_cost_usd
+
+        baseline = cost()
+        write = cost(cache_write_tokens=prefix)
+        read = cost(cache_read_tokens=prefix)
+        assert write > baseline > read
+        # One miss then four hits — the shape of an 80% hit rate.
+        assert (write + 4 * read) / 5 < baseline
+
+    def test_cached_never_exceeds_input_total(self):
+        """Defends against a provider change making the figures siblings.
+
+        If cache tokens ever stopped being a subset of input_tokens, an
+        unclamped subtraction would drive the uncached count negative and
+        refund the user. Clamping keeps the bill non-negative.
+        """
+        config = _default_config()
+        b = compute_cost(
+            input_tokens=1000, output_tokens=0,
+            result_size_bytes=0, config=config, config_id=1,
+            cache_read_tokens=5000, cache_write_tokens=5000,
+        )
+        assert b.token_cost_usd >= 0

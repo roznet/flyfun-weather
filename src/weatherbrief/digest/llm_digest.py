@@ -83,6 +83,8 @@ class DigestState(TypedDict, total=False):
     digest_text: str
     llm_input_tokens: int | None
     llm_output_tokens: int | None
+    llm_cache_read_tokens: int | None
+    llm_cache_write_tokens: int | None
     diagnostic: Diagnostic | None
 
 
@@ -130,6 +132,33 @@ def build_confidence_note(snapshot: ForecastSnapshot, target_time: datetime) -> 
 # --- Graph node ---
 
 
+def _system_content(system_prompt: str, longrange: bool) -> str | list[dict]:
+    """System message content, with a prompt-cache breakpoint where it pays.
+
+    Anthropic renders ``tools`` → ``system`` → ``messages``, so a breakpoint on
+    the system block caches the structured-output tool schema *and* the whole
+    system prompt — about 4.7k tokens, roughly 40% of a typical digest request.
+    Everything after it (the pack context) stays uncached, which is what we
+    want: it differs on every call.
+
+    The 1-hour TTL is deliberate.  It costs 2x on a write against the default
+    5-minute tier's 1.25x, but break-even is a hit rate of 53% vs 22%, and
+    measured gaps between consecutive digests sharing a prompt clear the bar
+    far more comfortably at an hour (~84%) than at five minutes (~34%).
+
+    Long-range digests are skipped: they run on Haiku 4.5, whose minimum
+    cacheable prefix is 4096 tokens — well above that prompt's ~1.5k — so a
+    breakpoint there caches nothing and silently costs nothing either.
+    """
+    if longrange:
+        return system_prompt
+    return [{
+        "type": "text",
+        "text": system_prompt,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }]
+
+
 def briefer_node(state: DigestState) -> dict:
     """Call LLM with structured output to produce WeatherDigest."""
     config: DigestConfig = state["config"]
@@ -146,7 +175,7 @@ def briefer_node(state: DigestState) -> dict:
         )
 
         raw_result = structured_llm.invoke([
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": _system_content(system_prompt, longrange)},
             {"role": "user", "content": state["context"]},
         ])
 
@@ -158,8 +187,16 @@ def briefer_node(state: DigestState) -> dict:
         if raw_msg is not None:
             usage_meta = getattr(raw_msg, "usage_metadata", None)
             if usage_meta:
+                # NOTE: langchain-anthropic folds cached tokens *into*
+                # ``input_tokens`` (Anthropic's own field excludes them), so
+                # this is the true total and the two cache figures below are
+                # subsets of it — never add them together.  costs.py splits
+                # them back out to price each tier correctly.
                 token_info["llm_input_tokens"] = usage_meta.get("input_tokens")
                 token_info["llm_output_tokens"] = usage_meta.get("output_tokens")
+                details = usage_meta.get("input_token_details") or {}
+                token_info["llm_cache_read_tokens"] = details.get("cache_read") or 0
+                token_info["llm_cache_write_tokens"] = details.get("cache_creation") or 0
 
         return {"digest": result, **token_info}
     except Exception as e:

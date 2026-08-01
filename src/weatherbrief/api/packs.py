@@ -1428,6 +1428,8 @@ def _charge_briefing_cost(
             result_size_bytes=result_size_bytes,
             config=config,
             config_id=config_id,
+            cache_read_tokens=usage.llm_cache_read_tokens or 0,
+            cache_write_tokens=usage.llm_cache_write_tokens or 0,
         )
         charge_briefing(db, user_id, usage_row_id, breakdown)
         logger.info(
@@ -3813,6 +3815,8 @@ def generate_digest(
         llm_model=digest_result.llm_model,
         llm_input_tokens=digest_result.llm_input_tokens,
         llm_output_tokens=digest_result.llm_output_tokens,
+        llm_cache_read_tokens=digest_result.llm_cache_read_tokens,
+        llm_cache_write_tokens=digest_result.llm_cache_write_tokens,
         triggered_by="user",
     )
     pack_size = _measure_pack_size(pack_dir)

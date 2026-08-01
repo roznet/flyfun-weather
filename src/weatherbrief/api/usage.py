@@ -207,6 +207,8 @@ def log_briefing_usage(
         llm_model=usage.llm_model,
         llm_input_tokens=usage.llm_input_tokens,
         llm_output_tokens=usage.llm_output_tokens,
+        llm_cache_read_tokens=usage.llm_cache_read_tokens,
+        llm_cache_write_tokens=usage.llm_cache_write_tokens,
         result_size_bytes=result_size_bytes,
         elapsed_seconds=usage.elapsed_seconds,
         queue_wait_seconds=usage.queue_wait_seconds,

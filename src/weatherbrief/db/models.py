@@ -299,6 +299,11 @@ class BriefingUsageRow(Base):
     llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     llm_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     llm_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Prompt-cache split of llm_input_tokens (subsets of it, not additions):
+    # cache reads bill at 0.1x, cache writes at 2x on the 1h tier. NULL on rows
+    # written before prompt caching shipped, and 0 when nothing was cached.
+    llm_cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_cache_write_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     elapsed_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     queue_wait_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
