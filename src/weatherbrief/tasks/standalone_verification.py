@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import requests
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -1464,14 +1464,68 @@ def _score_cycle(
 # ---------------------------------------------------------------------------
 
 def _prune_old_snapshots(db, retention_days: int = 10) -> int:
-    """Delete forecast snapshots older than retention_days."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-    result = db.execute(
-        AirportForecastSnapshotRow.__table__.delete().where(
-            AirportForecastSnapshotRow.fetched_at < cutoff
-        )
+    """Delete forecast snapshots older than retention_days.
+
+    Once the Parquet archive is running (#522 Phase 2 enabled), a day is only
+    deleted after it has a snapshot manifest — snapshots are the only record
+    of what a forecast actually *said*, so losing an unarchived day means
+    losing the ability to ever re-score it. A missing manifest stalls that
+    day's prune and warns rather than deleting.
+
+    With the archive off, this is the pre-#522 single-statement delete: there
+    would never be a manifest, and gating on one would turn a bounded 10-day
+    table into an unbounded one.
+    """
+    from weatherbrief.tasks.verification_tiering import (
+        snapshot_prune_requires_archive,
     )
-    return result.rowcount
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    if not snapshot_prune_requires_archive():
+        result = db.execute(
+            AirportForecastSnapshotRow.__table__.delete().where(
+                AirportForecastSnapshotRow.fetched_at < cutoff
+            )
+        )
+        return result.rowcount or 0
+
+    from weatherbrief.tasks.archive import snapshot_day_archived
+
+    earliest = db.execute(
+        select(func.min(AirportForecastSnapshotRow.fetched_at))
+    ).scalar()
+    if earliest is None:
+        return 0
+    if earliest.tzinfo is None:
+        earliest = earliest.replace(tzinfo=timezone.utc)
+
+    deleted = 0
+    stalled = 0
+    day = earliest.date()
+    cutoff_date = cutoff.date()
+    while day < cutoff_date:
+        if not snapshot_day_archived(db, day):
+            stalled += 1
+            day += timedelta(days=1)
+            continue
+        day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        result = db.execute(
+            AirportForecastSnapshotRow.__table__.delete().where(
+                AirportForecastSnapshotRow.fetched_at >= day_start,
+                AirportForecastSnapshotRow.fetched_at < day_start + timedelta(days=1),
+            )
+        )
+        deleted += result.rowcount or 0
+        day += timedelta(days=1)
+
+    if stalled:
+        logger.warning(
+            "Snapshot prune: %d day(s) past retention have no archive manifest "
+            "— left in place. Run `verify archive run` and check for errors.",
+            stalled,
+        )
+    return deleted
 
 
 # ---------------------------------------------------------------------------

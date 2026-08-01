@@ -1152,6 +1152,212 @@ class VerificationDailyStatsRow(Base):
     n_convection_false_alarm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class VerificationGlobalDailyStatsRow(Base):
+    """Daily pre-aggregation of NWP verification scores, all airports pooled (#522).
+
+    Same additive-SUM design and identical column names as
+    :class:`VerificationDailyStatsRow`, minus ``icao`` — one row per
+    (date, source, model, days_out), ~90 rows/day against ~12K for the
+    per-airport table. Written as a ``GROUP BY`` over the per-airport table in
+    the same rollup job, so the two can never disagree about a day.
+
+    Exists because every unfiltered dashboard/digest aggregate re-summed
+    ~12K rows/day just to throw the ICAO dimension away. The per-airport table
+    stays: it is the only one that can answer a country/airport-filtered
+    request, and it feeds the optimistic-bias leaderboard.
+
+    Column names deliberately match the per-airport table so the query bodies
+    in ``tasks/verification_stats`` differ only in which class they name.
+    """
+
+    __tablename__ = "verification_global_daily_stats"
+    __table_args__ = (
+        UniqueConstraint(
+            "date", "source", "model", "days_out", name="uq_vgds_key",
+        ),
+        Index("ix_vgds_date", "date"),
+        # Equality columns first, range last — same reasoning as
+        # ix_vds_source_model_days_date on the per-airport table.
+        Index("ix_vgds_source_model_days_date", "source", "model", "days_out", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date_t] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(20), nullable=False)
+    days_out: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ceiling: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_wind: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_temp: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_vis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    n_cat_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_opt_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_opt_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pess_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pess_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    sum_abs_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_wind_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_temp_delta_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_vis_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    n_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sum_abs_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_gust_flagged_peak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sum_gust_flagged_over_peak_kt: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    n_model_gust_flag: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_obs_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_gust_flag_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_opt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_pess: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    n_precip_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip_miss: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip_false_alarm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_convection_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_convection_miss: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_convection_false_alarm: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
+
+
+class VerificationActivityDailyRow(Base):
+    """Daily activity counters that no per-group rollup can reproduce (#522).
+
+    One row per (date, source). ``n_distinct_obs`` is the one number the
+    per-airport rollup structurally cannot carry: one observation produces N
+    scores, so ``COUNT(DISTINCT observation_id)`` doesn't survive a GROUP BY
+    (see the "No observation_id" note on :class:`VerificationDailyStatsRow`).
+
+    Distinct-observation counts **are** additive across days, because an
+    observation has exactly one ``observation_time`` and therefore belongs to
+    exactly one UTC date — summing this column over a window is exact, not an
+    approximation.
+
+    ``n_airports_day`` is the distinct-airport count *for that single day* and
+    is deliberately NOT additive: an airport reporting on both Monday and
+    Tuesday would be counted twice. Windowed distinct-airport counts are
+    computed at read time as ``COUNT(DISTINCT icao)`` over
+    ``verification_daily_stats``, which is cheap on the per-airport table.
+    """
+
+    __tablename__ = "verification_activity_daily"
+    __table_args__ = (
+        UniqueConstraint("date", "source", name="uq_vad_key"),
+        Index("ix_vad_source_date", "source", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date_t] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    n_scores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_distinct_obs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_airports_day: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class TafVerificationDailyRow(Base):
+    """Daily pre-aggregation of TAF-vs-METAR scores (#522).
+
+    One row per (date, source, days_out) where ``days_out = lead_hours // 24``.
+    TAF was excluded from the #154 daily rollup because
+    ``taf_verification_scores`` carries ``lead_hours`` rather than
+    ``model``/``days_out``; at 330K rows that was fine to aggregate live, and
+    at ~2M it isn't.
+
+    Columns mirror the NWP daily table for the fields TAF actually has. There
+    is no temperature column — a TAF doesn't forecast temperature — and the
+    gust "flag" is TAF-specific: a TAF is flagged when its applicable trend
+    carries a gust group, i.e. ``verification_observations.taf_wind_gust_kt``
+    is non-NULL, rather than by the ~10 kt forecast criterion used for NWP.
+    Same two conditionings, never blended — see ``tasks/verification_gust``.
+    """
+
+    __tablename__ = "taf_verification_daily"
+    __table_args__ = (
+        UniqueConstraint("date", "source", "days_out", name="uq_tvd_key"),
+        Index("ix_tvd_source_days_date", "source", "days_out", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date_t] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    days_out: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ceiling: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_wind: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_vis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    n_cat_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_opt_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_opt_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pess_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pess_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    sum_abs_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_wind_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_vis_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_opt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_pess: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Gust — the columns join verification_observations via observation_id,
+    # exactly as the NWP daily rollup does.
+    n_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sum_abs_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_gust_flagged_peak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sum_gust_flagged_over_peak_kt: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    n_taf_gust_flag: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_obs_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_gust_flag_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ArchiveManifestRow(Base):
+    """One row per archived (table, period) Parquet file (#522).
+
+    The manifest is what makes deletion safe: ``tasks/retention`` refuses to
+    prune a period without a manifest row whose ``row_count`` still matches a
+    live recount. Archiving is write-only and re-runnable, so a row is
+    upserted rather than appended — ``UNIQUE(table_name, period)``.
+
+    ``period`` is ``YYYY-MM`` for the monthly tables (observations, scores,
+    taf_scores) and ``YYYY-MM-DD`` for daily snapshots. ``file_path`` is
+    stored relative to the archive root so the archive stays relocatable.
+    """
+
+    __tablename__ = "archive_manifest"
+    __table_args__ = (
+        UniqueConstraint("table_name", "period", name="uq_archive_manifest_key"),
+        Index("ix_archive_manifest_table", "table_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    table_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    period: Mapped[str] = mapped_column(String(16), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class AirportMonthlySummaryRow(Base):
     """Pre-aggregated monthly observation climatology per airport.
 

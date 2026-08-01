@@ -275,6 +275,10 @@ class TestMonthlyRollupGust:
             model_wind_gust_kt=26.0, wind_gust_delta_kt=-4.0, model_gust_flag=True,
         )
 
+        # The monthly rollup sums the daily table (#522), so the days have to
+        # be rolled first — that dependency is what keeps month and day from
+        # ever disagreeing.
+        rollup_day(db_session, date(2026, 3, 10))
         rollup_month(db_session, _utc(2026, 3, 1))
         row = db_session.execute(
             select(VerificationMonthlyStatsRow).where(

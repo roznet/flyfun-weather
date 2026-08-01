@@ -157,6 +157,46 @@ def gust_aggregate_columns() -> list:
     ]
 
 
+def taf_gust_aggregate_columns() -> list:
+    """Labelled TAF gust aggregates for a GROUP BY over TAF scores joined to obs.
+
+    The TAF mirror of :func:`gust_aggregate_columns`, with two differences that
+    follow from where the data lives:
+
+    - **"The TAF shows a gust"** is "the applicable trend carried a gust group",
+      i.e. ``verification_observations.taf_wind_gust_kt`` is non-NULL — not the
+      ~10 kt forecast criterion used for NWP. A TAF gust group is *already*
+      that criterion, applied by whoever wrote the TAF.
+    - The forecast gust itself is read off the observation row rather than the
+      score row: ``taf_verification_scores`` stores only the delta, because
+      unlike an NWP snapshot the TAF gust is permanent on the observation.
+
+    The caller must join :class:`TafVerificationScoreRow` to
+    :class:`VerificationObservationRow` on ``observation_id``. Column labels
+    match ``taf_verification_daily``; ``verification_stats.get_gust_accuracy``
+    consumes the same labels on its raw query-time path so the rollup-backed
+    and raw-backed TAF numbers are the same numbers by construction.
+    """
+    delta = TafVerificationScoreRow.wind_gust_delta_kt
+    taf_flagged = VerificationObservationRow.taf_wind_gust_kt.isnot(None)
+    obs_gusting = VerificationObservationRow.wind_gust_kt.isnot(None)
+    peak = realised_peak_expr()
+    over_peak = VerificationObservationRow.taf_wind_gust_kt - peak
+
+    return [
+        func.count(delta).label("n_gust"),
+        func.sum(func.abs(delta)).label("sum_abs_gust_delta_kt"),
+        func.sum(delta).label("sum_gust_delta_kt"),
+        _sum_when(taf_flagged & peak.isnot(None)).label("n_gust_flagged_peak"),
+        func.sum(
+            case((taf_flagged & peak.isnot(None), over_peak), else_=None)
+        ).label("sum_gust_flagged_over_peak_kt"),
+        _sum_when(taf_flagged).label("n_taf_gust_flag"),
+        _sum_when(obs_gusting).label("n_obs_gust"),
+        _sum_when(taf_flagged & obs_gusting).label("n_gust_flag_hit"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Backfill
 # ---------------------------------------------------------------------------

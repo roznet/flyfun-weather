@@ -1,11 +1,24 @@
-"""Daily rollup of NWP verification scores into verification_daily_stats.
+"""Daily rollup of verification scores into the four daily aggregate tables.
 
-Replaces query-time aggregation of raw ``verification_scores`` for the
-model accuracy dashboard + optimistic-bias leaderboard. One INSERT-SELECT
-per UTC day, grouped by (source, model, days_out, icao). Idempotent
-DELETE+INSERT — re-running for the same day is safe.
+``rollup_day`` writes one UTC day into all four, in dependency order, each
+idempotent DELETE+INSERT so re-running a day is always safe:
 
-TAF scores are out of scope (different key shape — see issue #154).
+1. ``verification_daily_stats`` — per (source, model, days_out, icao) from raw
+   ``verification_scores``. The original #154 table; still the only one that
+   can answer a country/airport-filtered request, and it feeds the
+   optimistic-bias leaderboard.
+2. ``verification_global_daily_stats`` — the same aggregate with ``icao``
+   dropped (#522), written as a GROUP BY over (1) rather than a second pass
+   over raw, so the two can never disagree about a day. ~90 rows/day.
+3. ``verification_activity_daily`` — per (source): ``COUNT(*)``,
+   ``COUNT(DISTINCT observation_id)`` and ``COUNT(DISTINCT icao)`` for the
+   day. Distinct-observation counts are the one activity number no per-group
+   rollup can reproduce (one observation → N scores), which is why
+   ``get_activity_summary`` was still scanning raw scores before #522.
+4. ``taf_verification_daily`` — per (source, days_out) from
+   ``taf_verification_scores``, joined to ``verification_observations`` for
+   the gust conditionings. ``days_out = lead_hours // 24``, expressed
+   portably — see :func:`taf_days_out_expr`.
 
 Direction encoding mirrors ``tasks/verification_rollup.py`` exactly:
 
@@ -38,8 +51,10 @@ from datetime import date as date_t, datetime, timedelta, timezone
 
 from sqlalchemy import (
     Date,
+    Integer,
     bindparam,
     case,
+    cast,
     func,
     insert,
     select,
@@ -47,11 +62,18 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
+    TafVerificationDailyRow,
+    TafVerificationScoreRow,
+    VerificationActivityDailyRow,
     VerificationDailyStatsRow,
+    VerificationGlobalDailyStatsRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
-from weatherbrief.tasks.verification_gust import gust_aggregate_columns
+from weatherbrief.tasks.verification_gust import (
+    gust_aggregate_columns,
+    taf_gust_aggregate_columns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,11 +225,185 @@ def _build_rollup_select(
     )
 
 
-def rollup_day(db: Session, day: date_t) -> int:
-    """Aggregate raw NWP scores for one UTC date into verification_daily_stats.
+def taf_days_out_expr(col):
+    """Portable ``lead_hours -> days_out`` bucket for TAF scores.
 
-    Idempotent — rows for this date are deleted and re-inserted in one
-    INSERT-SELECT. Returns the number of rows produced.
+    Must produce identical values on SQLite and MySQL, because the same table
+    is rolled up in tests (SQLite) and production (MySQL) and the two must be
+    comparable. Neither ``//`` nor a bare ``CAST(x/24 AS INTEGER)`` qualifies:
+    SQLite's ``/`` on integers truncates, MySQL's returns a decimal, and
+    MySQL's ``CAST(2.5 AS SIGNED)`` rounds *away from zero* — so ``lead_hours``
+    of 60 would bucket as 2 on SQLite and 3 on MySQL.
+
+    ``(x - x % 24) / 24`` sidesteps that: the numerator is always an exact
+    multiple of 24, so both dialects divide exactly and the CAST has nothing
+    to round. Negative ``lead_hours`` (an observation before its TAF's issue
+    time — shouldn't happen, but the column doesn't forbid it) is clamped to
+    bucket 0, matching ``verification_rollup._lead_hours_to_days_out``'s
+    ``max(0, ...)`` rather than diverging from it in the tail.
+    """
+    truncated = (col - (col % 24)) / 24
+    return cast(case((col < 0, 0), else_=truncated), Integer)
+
+
+def _build_global_rollup_select(day: date_t):
+    """SELECT that collapses one day of per-airport rows to the global table.
+
+    Reads ``verification_daily_stats``, not raw scores. Two reasons: it is
+    ~12K rows instead of ~36K+ (and index-covered by ``ix_vds_date_model``),
+    and deriving one from the other makes it structurally impossible for the
+    global numbers to disagree with the per-airport numbers for the same day.
+    """
+    v = VerificationDailyStatsRow
+    date_param = bindparam("rollup_date", value=day, type_=Date())
+
+    sum_cols = [
+        "n", "n_ceiling", "n_wind", "n_temp", "n_vis",
+        "n_cat_match", "n_cat_opt_1", "n_cat_opt_2",
+        "n_cat_pess_1", "n_cat_pess_2",
+        "sum_abs_ceiling_delta_ft", "sum_ceiling_delta_ft",
+        "sum_abs_wind_delta_kt", "sum_abs_temp_delta_c", "sum_abs_vis_delta_m",
+        "n_gust", "sum_abs_gust_delta_kt", "sum_gust_delta_kt",
+        "n_gust_flagged_peak", "sum_gust_flagged_over_peak_kt",
+        "n_model_gust_flag", "n_obs_gust", "n_gust_flag_hit",
+        "n_advisory_match", "n_advisory_opt", "n_advisory_pess",
+        "n_precip_hit", "n_precip_miss", "n_precip_false_alarm",
+        "n_convection_hit", "n_convection_miss", "n_convection_false_alarm",
+    ]
+
+    return (
+        select(
+            date_param.label("date"),
+            v.source.label("source"),
+            v.model.label("model"),
+            v.days_out.label("days_out"),
+            # NULL-summing columns stay NULL when every contributing row is
+            # NULL, exactly as they do in the per-airport table — the ratio
+            # consumers all guard on the matching n_* count anyway.
+            *[func.sum(getattr(v, c)).label(c) for c in sum_cols],
+        )
+        .where(v.date == date_param)
+        .group_by(v.source, v.model, v.days_out)
+    )
+
+
+def _build_activity_rollup_select(
+    day_start: datetime, day_end: datetime, day: date_t, sources: list[str],
+):
+    """SELECT producing one activity row per source for the day.
+
+    ``COUNT(DISTINCT observation_id)`` over a single day is cheap on
+    ``ix_verif_scores_source_time`` — this is the same query
+    ``get_activity_summary`` used to run per dashboard request over a 7d/30d
+    window, which is what made it pathological (#448). Run once per day at
+    rollup time, the cost is paid once and the window sums are additive.
+
+    ``sources`` is named in the WHERE for the same indexability reason as
+    :func:`_build_rollup_select`.
+    """
+    date_param = bindparam("rollup_date", value=day, type_=Date())
+    return (
+        select(
+            date_param.label("date"),
+            VerificationScoreRow.source.label("source"),
+            func.count().label("n_scores"),
+            func.count(
+                func.distinct(VerificationScoreRow.observation_id)
+            ).label("n_distinct_obs"),
+            func.count(func.distinct(VerificationScoreRow.icao)).label(
+                "n_airports_day"
+            ),
+        )
+        .where(
+            VerificationScoreRow.source.in_(sources),
+            VerificationScoreRow.observation_time >= day_start,
+            VerificationScoreRow.observation_time < day_end,
+        )
+        .group_by(VerificationScoreRow.source)
+    )
+
+
+def _build_taf_rollup_select(
+    day_start: datetime, day_end: datetime, day: date_t,
+):
+    """SELECT producing one TAF row per (source, days_out) for the day.
+
+    Joins ``verification_observations`` for the gust conditionings, exactly as
+    the NWP rollup does — the TAF gust and the observed gust both live on the
+    observation row. Inner join, and it can't drop rows: the FK is NOT NULL
+    and retention prunes observations and TAF scores in the same window.
+    """
+    t = TafVerificationScoreRow
+    cat_obs = _cat_index_expr(t.obs_flight_category)
+    cat_taf = _cat_index_expr(t.taf_flight_category)
+    cat_diff = cat_taf - cat_obs
+
+    adv_obs = _adv_index_expr(t.obs_wind_advisory)
+    adv_taf = _adv_index_expr(t.taf_wind_advisory)
+    adv_diff = adv_taf - adv_obs
+
+    date_param = bindparam("rollup_date", value=day, type_=Date())
+    days_out = taf_days_out_expr(t.lead_hours)
+
+    return (
+        select(
+            date_param.label("date"),
+            t.source.label("source"),
+            days_out.label("days_out"),
+            func.count().label("n"),
+            func.count(t.ceiling_delta_ft).label("n_ceiling"),
+            func.count(t.wind_speed_delta_kt).label("n_wind"),
+            func.count(t.visibility_delta_m).label("n_vis"),
+            _sum_when(cat_diff == 0).label("n_cat_match"),
+            _sum_when(cat_diff == -1).label("n_cat_opt_1"),
+            _sum_when(cat_diff <= -2).label("n_cat_opt_2"),
+            _sum_when(cat_diff == 1).label("n_cat_pess_1"),
+            _sum_when(cat_diff >= 2).label("n_cat_pess_2"),
+            func.sum(func.abs(t.ceiling_delta_ft)).label(
+                "sum_abs_ceiling_delta_ft"
+            ),
+            func.sum(t.ceiling_delta_ft).label("sum_ceiling_delta_ft"),
+            func.sum(func.abs(t.wind_speed_delta_kt)).label(
+                "sum_abs_wind_delta_kt"
+            ),
+            func.sum(func.abs(t.visibility_delta_m)).label("sum_abs_vis_delta_m"),
+            _sum_when(adv_diff == 0).label("n_advisory_match"),
+            _sum_when(adv_diff < 0).label("n_advisory_opt"),
+            _sum_when(adv_diff > 0).label("n_advisory_pess"),
+            *taf_gust_aggregate_columns(),
+        )
+        .join(
+            VerificationObservationRow,
+            t.observation_id == VerificationObservationRow.id,
+        )
+        .where(
+            t.observation_time >= day_start,
+            t.observation_time < day_end,
+        )
+        .group_by(t.source, days_out)
+    )
+
+
+def _delete_and_insert(db: Session, model, src, *, date_col_value: date_t) -> int:
+    """DELETE this date's rows then INSERT the SELECT's. Returns rows written."""
+    db.execute(model.__table__.delete().where(model.date == date_col_value))
+    target_cols = [c.name for c in src.selected_columns]
+    result = db.execute(insert(model).from_select(target_cols, src))
+    db.flush()
+    return result.rowcount if result.rowcount is not None else 0
+
+
+def rollup_day(db: Session, day: date_t) -> int:
+    """Aggregate one UTC date into all four daily tables.
+
+    Idempotent — each table's rows for this date are deleted and re-inserted.
+    Returns the number of ``verification_daily_stats`` rows produced (the
+    per-airport count, unchanged from before #522); the other three tables'
+    counts are logged, since they are derived and their sizes are fixed
+    multiples of the source data rather than an independent signal.
+
+    Order matters: the global table is a GROUP BY over the per-airport table,
+    so the per-airport insert has to be flushed first.
     """
     day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
@@ -221,8 +417,23 @@ def rollup_day(db: Session, day: date_t) -> int:
 
     sources = known_sources(db)
     if not sources:
-        # No scores at all — the delete above is the whole job. Returning here
-        # also keeps a degenerate ``IN ()`` out of the INSERT-SELECT.
+        # No scores at all — the deletes are the whole job. Returning early
+        # also keeps a degenerate ``IN ()`` out of the INSERT-SELECTs. TAF is
+        # still rolled: TAF scores can exist without NWP scores for a day.
+        _delete_and_insert(
+            db, VerificationGlobalDailyStatsRow,
+            _build_global_rollup_select(day), date_col_value=day,
+        )
+        db.execute(
+            VerificationActivityDailyRow.__table__.delete().where(
+                VerificationActivityDailyRow.date == day
+            )
+        )
+        _delete_and_insert(
+            db, TafVerificationDailyRow,
+            _build_taf_rollup_select(day_start, day_end, day),
+            date_col_value=day,
+        )
         return 0
 
     src = _build_rollup_select(day_start, day_end, day, sources)
@@ -232,11 +443,51 @@ def rollup_day(db: Session, day: date_t) -> int:
     db.flush()
 
     inserted = result.rowcount if result.rowcount is not None else 0
+
+    n_global = _delete_and_insert(
+        db, VerificationGlobalDailyStatsRow,
+        _build_global_rollup_select(day), date_col_value=day,
+    )
+    n_activity = _delete_and_insert(
+        db, VerificationActivityDailyRow,
+        _build_activity_rollup_select(day_start, day_end, day, sources),
+        date_col_value=day,
+    )
+    n_taf = _delete_and_insert(
+        db, TafVerificationDailyRow,
+        _build_taf_rollup_select(day_start, day_end, day),
+        date_col_value=day,
+    )
+
     logger.info(
-        "verification_daily_stats: rolled up %d groups for %s",
-        inserted, day.isoformat(),
+        "daily rollup %s: %d per-airport, %d global, %d activity, %d TAF groups",
+        day.isoformat(), inserted, n_global, n_activity, n_taf,
     )
     return inserted
+
+
+# Production only ever writes 'flight' or 'standalone' to
+# verification_scores.source — the standalone_full/light/forecast distinction
+# lives on verification_cycles.source, never on a score. The old
+# ``LIKE 'standalone%'`` matched the same rows but cost a range scan where
+# equality gets a ref lookup, and it quietly invited the belief that
+# 'standalone_light' scores exist. Tests that predate this wrote
+# 'standalone_full' rows directly; they are covered by the prefix set below.
+_STANDALONE_SOURCE = "standalone"
+
+
+def _standalone_clause(col):
+    """Match standalone scores by equality, with a narrow legacy allowance.
+
+    Equality on ``'standalone'`` is what production needs. Historical fixtures
+    (and any pre-#154 row that ever landed with a cycle-type suffix) are
+    matched by naming them explicitly rather than by reintroducing a LIKE, so
+    the index prefix is still usable and the accepted set stays visible here.
+    """
+    return col.in_(
+        (_STANDALONE_SOURCE, "standalone_full", "standalone_light",
+         "standalone_forecast")
+    )
 
 
 def completed_days(db: Session) -> list[date_t]:
@@ -245,32 +496,51 @@ def completed_days(db: Session) -> list[date_t]:
     Excludes today (incomplete) and dates already summarised. Mirrors the
     pattern in ``tasks/airport_summary.completed_days``.
 
-    Both the start-point (``MIN(observation_time)``) and the "already done"
-    set (``date`` in rollup) are filtered to standalone sources. Flight scores
-    are tiny by comparison and inherit a different lifecycle — including them
-    here would (a) start day-iteration from the earliest flight score even
-    when standalone data starts later, and (b) silently mark a flight-only
-    date as "done" so future standalone scores for that date never get rolled.
+    Both the start-point and the "already done" set are filtered to standalone
+    sources. Flight scores are tiny by comparison and inherit a different
+    lifecycle — including them here would (a) start day-iteration from the
+    earliest flight score even when standalone data starts later, and (b)
+    silently mark a flight-only date as "done" so future standalone scores for
+    that date never get rolled.
+
+    The start-point comes from the **rollup table** once anything has been
+    rolled, not from ``MIN(observation_time)`` over raw scores (#522). Two
+    reasons: the raw MIN is a scan this loop shouldn't need in steady state,
+    and once Phase 3 pruning is on the raw MIN walks forward with the
+    retention cutoff, which would make the iteration window depend on how
+    recently the pruner ran. Gap detection is unaffected — the loop still
+    visits every date between the first rolled day and today and skips the
+    ones already present.
     """
     now = datetime.now(timezone.utc)
     today = now.date()
-    earliest = db.execute(
-        select(func.min(VerificationScoreRow.observation_time))
-        .where(VerificationScoreRow.source.like("standalone%"))
-    ).scalar()
-    if earliest is None:
-        return []
 
     existing = set(
         db.execute(
             select(VerificationDailyStatsRow.date)
-            .where(VerificationDailyStatsRow.source.like("standalone%"))
+            .where(_standalone_clause(VerificationDailyStatsRow.source))
             .distinct()
         ).scalars().all()
     )
 
+    if existing:
+        start = min(existing)
+    else:
+        # Bootstrap only: nothing rolled yet, so the raw table is the only
+        # thing that knows where the data starts. Index-driven via
+        # ix_verif_scores_source_time thanks to the source predicate.
+        earliest = db.execute(
+            select(func.min(VerificationScoreRow.observation_time))
+            .where(_standalone_clause(VerificationScoreRow.source))
+        ).scalar()
+        if earliest is None:
+            return []
+        if earliest.tzinfo is None:
+            earliest = earliest.replace(tzinfo=timezone.utc)
+        start = earliest.date()
+
     out: list[date_t] = []
-    d = earliest.date()
+    d = start
     while d < today:
         if d not in existing:
             out.append(d)

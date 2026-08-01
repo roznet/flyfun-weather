@@ -7,6 +7,8 @@ Usage:
     python -m weatherbrief.verify discover [--prefixes LF,ED,...]
     python -m weatherbrief.verify standalone [--once]
     python -m weatherbrief.verify digest [--period 24h|7d] [--send] [--json]
+    python -m weatherbrief.verify archive run|backfill|list|verify [--table T]
+    python -m weatherbrief.verify prune-raw [--retain-days N] [--apply]
 """
 
 from __future__ import annotations
@@ -767,6 +769,183 @@ def cmd_rollup_daily_stats(args):
         db.close()
 
 
+def cmd_rollup_monthly_stats(args):
+    """Roll completed months into verification_monthly_stats (#522 Phase 4).
+
+    Reads ``verification_daily_stats``, so run ``rollup-daily-stats`` first if
+    daily coverage is incomplete — a month is the sum of its days and will
+    silently under-report if some of them were never rolled.
+    """
+    from datetime import datetime as dt
+
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.tasks.verification_rollup import (
+        rebuild_all_months,
+        rollup_month,
+        run_monthly_rollup,
+    )
+
+    _init_db()
+    load_dotenv()
+
+    db = SessionLocal()
+    try:
+        if args.month:
+            try:
+                year, month = args.month.split("-")
+                month_start = dt(int(year), int(month), 1, tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                print(f"ERROR: invalid --month {args.month!r} (expect YYYY-MM)",
+                      file=sys.stderr)
+                sys.exit(1)
+            n = rollup_month(db, month_start)
+            db.commit()
+            print(f"Rolled up {n} rows for {args.month}.")
+            return
+
+        if args.rebuild:
+            n = rebuild_all_months(db)
+            db.commit()
+            print(f"Re-rolled {n} rows across existing months.")
+            return
+
+        n = run_monthly_rollup(db)
+        db.commit()
+        print(f"Rolled up {n} rows across pending months.")
+    finally:
+        db.close()
+
+
+def cmd_archive(args):
+    """Write, backfill, list or verify the Parquet archive (#522 Phase 2)."""
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.tasks.archive import (
+        ARCHIVE_SPECS,
+        archive_root,
+        list_manifests,
+        pending_periods,
+        run_archive,
+        verify_archives,
+    )
+
+    _init_db()
+    load_dotenv()
+
+    tables = tuple(args.table) if getattr(args, "table", None) else None
+    if tables:
+        unknown = [t for t in tables if t not in ARCHIVE_SPECS]
+        if unknown:
+            print(
+                f"ERROR: unknown table(s) {', '.join(unknown)}; "
+                f"expected one of {', '.join(ARCHIVE_SPECS)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    db = SessionLocal()
+    try:
+        if args.action in ("run", "backfill"):
+            full = args.action == "backfill"
+            if args.dry_run:
+                print(f"Archive root: {archive_root()}")
+                for name in (tables or tuple(ARCHIVE_SPECS)):
+                    periods = pending_periods(db, name, full=full)
+                    shown = ", ".join(periods[:6])
+                    if len(periods) > 6:
+                        shown += ", ..."
+                    print(f"  {name}: {len(periods)} pending"
+                          + (f" ({shown})" if periods else ""))
+                return
+            result = run_archive(db, full=full, tables=tables)
+            db.commit()
+            for name, periods in result["archived"].items():
+                print(f"  {name}: {len(periods)} archived"
+                      + (f" ({periods[0]}..{periods[-1]})" if periods else ""))
+            if result["errors"]:
+                print(f"ERRORS: {result['errors']} (see log)", file=sys.stderr)
+                sys.exit(1)
+            return
+
+        if args.action == "list":
+            rows = list_manifests(db, tables[0] if tables and len(tables) == 1 else None)
+            if not rows:
+                print("No archive manifests recorded.")
+                return
+            print(f"{'table':<14} {'period':<11} {'rows':>10}  file")
+            for m in rows:
+                print(f"{m.table_name:<14} {m.period:<11} {m.row_count:>10}  {m.file_path}")
+            return
+
+        if args.action == "verify":
+            report = verify_archives(
+                db,
+                table_name=tables[0] if tables and len(tables) == 1 else None,
+                check_counts=not args.skip_counts,
+            )
+            bad = [r for r in report if not r["ok"]]
+            for r in report:
+                mark = "ok " if r["ok"] else "BAD"
+                print(f"{mark} {r['table']:<14} {r['period']:<11} "
+                      f"{r['rows']:>10}  {r['problem']}")
+            print(f"\n{len(report) - len(bad)}/{len(report)} archives verified.")
+            if bad:
+                sys.exit(1)
+    finally:
+        db.close()
+
+
+def cmd_prune_raw(args):
+    """Report or apply the raw-verification prune (#522 Phase 3).
+
+    Without ``--apply`` this only reports which months pass both gates — the
+    safe way to validate a retention setting before any row is deleted.
+    """
+    from datetime import timedelta
+
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.tasks.retention import prunable_months, prune_raw_observations
+    from weatherbrief.tasks.verification_tiering import (
+        raw_retention_days,
+        raw_retention_disabled,
+    )
+
+    _init_db()
+    load_dotenv()
+
+    retain = args.retain_days if args.retain_days is not None else raw_retention_days()
+    db = SessionLocal()
+    try:
+        if raw_retention_disabled(retain):
+            print(
+                f"Raw retention is disabled (retain_days={retain}). "
+                "Set VERIFICATION_RAW_RETENTION_DAYS=180 or pass --retain-days."
+            )
+            return
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retain)
+        safe, blocked = prunable_months(db, cutoff)
+        print(f"retain_days={retain}  cutoff={cutoff.date().isoformat()}")
+        print(f"Prunable months: {', '.join(f'{y}-{m:02d}' for y, m in safe) or 'none'}")
+        for reason in blocked:
+            print(f"  BLOCKED: {reason}")
+
+        if not args.apply:
+            print("\nDry run — pass --apply to delete.")
+            return
+
+        result = prune_raw_observations(db, retain_days=retain)
+        db.commit()
+        print(
+            f"Pruned obs={result['observations']} scores={result['scores']} "
+            f"taf={result['taf_scores']}"
+        )
+    finally:
+        db.close()
+
+
 def cmd_digest(args):
     """Preview or send the admin digest."""
     from datetime import timedelta
@@ -998,6 +1177,63 @@ def main():
         help="Re-roll every existing date (use after schema/aggregation changes).",
     )
 
+    # rollup-monthly-stats
+    p_rollup_monthly = subparsers.add_parser(
+        "rollup-monthly-stats",
+        help="Roll verification_daily_stats into verification_monthly_stats",
+    )
+    p_rollup_monthly.add_argument(
+        "--month",
+        help="Roll a specific month (YYYY-MM). Default: every completed month.",
+    )
+    p_rollup_monthly.add_argument(
+        "--rebuild", action="store_true",
+        help="Re-roll every month already in the monthly table.",
+    )
+
+    # archive
+    p_archive = subparsers.add_parser(
+        "archive",
+        help="Parquet archive of the raw verification tables (#522)",
+    )
+    p_archive.add_argument(
+        "action", choices=["run", "backfill", "list", "verify"],
+        help=(
+            "run: archive newly-final periods. backfill: walk all completed "
+            "history, filling gaps. list: show recorded manifests. "
+            "verify: re-check sha256 + row counts."
+        ),
+    )
+    p_archive.add_argument(
+        "--table", action="append",
+        help=(
+            "Limit to one table (repeatable): observations, scores, "
+            "taf_scores, snapshots. Default: all."
+        ),
+    )
+    p_archive.add_argument(
+        "--dry-run", action="store_true",
+        help="run/backfill only: list the periods that would be written.",
+    )
+    p_archive.add_argument(
+        "--skip-counts", action="store_true",
+        help="verify only: check files and checksums but not live row counts.",
+    )
+
+    # prune-raw
+    p_prune = subparsers.add_parser(
+        "prune-raw",
+        help="Report (or apply) the raw verification prune (#522 Phase 3)",
+    )
+    p_prune.add_argument(
+        "--retain-days", type=int, default=None,
+        help="Override VERIFICATION_RAW_RETENTION_DAYS for this run.",
+    )
+    p_prune.add_argument(
+        "--apply", action="store_true",
+        help="Actually delete. Without it this only reports what would go.",
+    )
+
     # digest
     p_digest = subparsers.add_parser(
         "digest",
@@ -1042,6 +1278,12 @@ def main():
         cmd_rollup_summary(args)
     elif args.command == "rollup-daily-stats":
         cmd_rollup_daily_stats(args)
+    elif args.command == "rollup-monthly-stats":
+        cmd_rollup_monthly_stats(args)
+    elif args.command == "archive":
+        cmd_archive(args)
+    elif args.command == "prune-raw":
+        cmd_prune_raw(args)
     elif args.command == "digest":
         cmd_digest(args)
 

@@ -721,11 +721,22 @@ def _run_retention_once() -> None:
     except Exception:
         logger.error("DWD chart cache age-eviction failed", exc_info=True)
 
-    # Roll up completed months/days into the airport summary tables, then
-    # ensure future MySQL partitions exist, then prune raw obs older than
-    # retention (effectively a no-op until VERIFICATION_RAW_RETENTION_DAYS
-    # is set < 9999). Each step is wrapped independently so a single
-    # failure doesn't skip the others.
+    # Verification data tiering (#522), in dependency order:
+    #
+    #   1. airport summary rollups        — the climatology gate raw pruning
+    #                                       requires
+    #   2. verification monthly rollup    — Phase 4, gated off by default
+    #   3. Parquet archive                — Phase 2, gated off by default;
+    #                                       writes the manifests step 4 needs
+    #   4. raw prune                      — Phase 3, no-op until
+    #                                       VERIFICATION_RAW_RETENTION_DAYS < 9999
+    #   5. snapshot inbox rotation        — Phase 3, no-op until
+    #                                       SNAPSHOT_INBOX_RETENTION_DAYS > 0
+    #
+    # Order matters between 3 and 4 only: nothing is deletable before it is
+    # archived. Each step is wrapped independently so a single failure doesn't
+    # skip the others — and a failed archive simply leaves its month
+    # undeletable, which is the safe direction.
     try:
         from weatherbrief.tasks.airport_summary import (
             rollup_all_complete_days,
@@ -751,21 +762,46 @@ def _run_retention_once() -> None:
         logger.error("Airport summary rollup failed", exc_info=True)
 
     try:
-        from weatherbrief.tasks.retention import ensure_future_partitions
+        from weatherbrief.tasks.verification_rollup import run_monthly_rollup
+        from weatherbrief.tasks.verification_tiering import monthly_rollup_enabled
 
-        db = SessionLocal()
-        try:
-            added = ensure_future_partitions(db, months_ahead=3)
-            db.commit()
-            if added:
-                logger.info("Created %d future verification_observations partition(s)", added)
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+        if monthly_rollup_enabled():
+            db = SessionLocal()
+            try:
+                n = run_monthly_rollup(db)
+                db.commit()
+                if n:
+                    logger.info("Verification monthly rollup: %d rows", n)
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
     except Exception:
-        logger.error("Partition maintenance failed", exc_info=True)
+        logger.error("Verification monthly rollup failed", exc_info=True)
+
+    try:
+        from weatherbrief.tasks.archive import run_archive
+        from weatherbrief.tasks.verification_tiering import archive_enabled
+
+        if archive_enabled():
+            db = SessionLocal()
+            try:
+                result = run_archive(db)
+                db.commit()
+                written = {k: v for k, v in result["archived"].items() if v}
+                if written or result["errors"]:
+                    logger.info(
+                        "Verification archive: %s (errors=%d)",
+                        written or "nothing new", result["errors"],
+                    )
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+    except Exception:
+        logger.error("Verification archive failed", exc_info=True)
 
     try:
         from weatherbrief.tasks.retention import prune_raw_observations
@@ -787,6 +823,13 @@ def _run_retention_once() -> None:
             db.close()
     except Exception:
         logger.error("Raw observation retention failed", exc_info=True)
+
+    try:
+        from weatherbrief.tasks.retention import rotate_snapshot_inbox
+
+        rotate_snapshot_inbox()
+    except Exception:
+        logger.error("Snapshot inbox rotation failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
