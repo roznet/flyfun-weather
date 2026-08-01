@@ -294,6 +294,20 @@ def fetch_observations_batch(
 
             # TAF fields
             taf = raw.latest_taf
+            # taf_issue_time comes from the same day-of-month inference as the
+            # METAR time and is itself part of uq_taf_verif_key on
+            # taf_verification_scores, so it needs the same guard. A bad issue
+            # time makes the whole TAF untrustworthy as a key, but says nothing
+            # about the METAR — drop the TAF fields and keep the observation.
+            if taf is not None and taf.observation_time is not None:
+                taf_problem = _observation_time_problem(taf.observation_time, now)
+                if taf_problem is not None:
+                    logger.error(
+                        "Dropping %s TAF: %s (raw: %s)",
+                        raw.icao, taf_problem, (taf.raw_text or "")[:80],
+                    )
+                    taf = None
+
             if taf is not None:
                 obs.taf_raw = taf.raw_text
                 if taf.observation_time is not None:

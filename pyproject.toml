@@ -12,7 +12,11 @@ dependencies = [
     "requests>=2.31",
     "pyyaml>=6.0",
     "pydantic>=2.0",
-    "euro-aip>=0.13.0",
+    # 0.15.1 adds the parser `reference` parameter and fixes month-boundary
+    # timestamp inference (#519). Anything older silently mis-dates reports
+    # collected just after a month rolls over, and lacks the kwarg the
+    # verification repair script needs.
+    "euro-aip>=0.15.1",
     "metpy>=1.5",
     "numpy>=1.24",
     "matplotlib>=3.7",

@@ -11,13 +11,22 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from weatherbrief.db.models import VerificationObservationRow, VerificationScoreRow
+from weatherbrief.db.models import (
+    TafVerificationScoreRow,
+    VerificationObservationRow,
+    VerificationScoreRow,
+)
 from weatherbrief.tasks.verification import (
     _OBS_MAX_AHEAD,
     _observation_time_problem,
 )
 
-from scripts.repair_metar_month_boundary import apply_repairs, find_corrupt
+from scripts.repair_metar_month_boundary import (
+    apply_repairs,
+    apply_taf_repairs,
+    find_corrupt,
+    find_corrupt_taf,
+)
 
 
 COLLECTED = datetime(2026, 8, 1, 0, 0, 1, tzinfo=timezone.utc)
@@ -211,3 +220,109 @@ class TestApplyRepairs:
         second = find_corrupt(db_session, batch=1000, sleep=0)
 
         assert second == []
+
+
+TAF_RAW = "TAF LIPS 302300Z 0100/0109 VRB03KT CAVOK"
+TAF_CORRECT = datetime(2026, 6, 30, 23, 0, tzinfo=timezone.utc)
+TAF_CORRUPT = datetime(2026, 7, 30, 23, 0, tzinfo=timezone.utc)
+TAF_COLLECTED = datetime(2026, 7, 1, 0, 0, 1, tzinfo=timezone.utc)
+
+
+def _add_obs_with_taf(session, icao, obs_time, collected_at, issue_time):
+    row = VerificationObservationRow(
+        icao=icao,
+        observation_time=obs_time.replace(tzinfo=None),
+        collected_at=collected_at.replace(tzinfo=None),
+        metar_raw="METAR LIPS 302255Z 00000KT CAVOK 28/22 Q1013",
+        taf_raw=TAF_RAW,
+        taf_issue_time=issue_time.replace(tzinfo=None) if issue_time else None,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+class TestTafIssueTimeGuard:
+    """taf_issue_time is part of uq_taf_verif_key and needs the same guard."""
+
+    def test_rejects_future_taf_issue_time(self):
+        problem = _observation_time_problem(TAF_CORRUPT, TAF_COLLECTED)
+        assert problem is not None
+
+    def test_accepts_normal_taf_issue_time(self):
+        assert _observation_time_problem(TAF_CORRECT, TAF_COLLECTED) is None
+
+
+class TestTafRepair:
+    """Detection and repair of corrupted taf_issue_time."""
+
+    def test_finds_and_corrects_corrupt_issue_time(self, db_session):
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        row = _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, TAF_CORRUPT)
+
+        findings = find_corrupt_taf(db_session, sleep=0)
+
+        assert len(findings) == 1
+        assert findings[0]["id"] == row.id
+        assert findings[0]["new"] == TAF_CORRECT
+
+    def test_ignores_healthy_issue_time(self, db_session):
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, TAF_CORRECT)
+
+        assert find_corrupt_taf(db_session, sleep=0) == []
+
+    def test_ignores_rows_without_a_taf(self, db_session):
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, None)
+
+        assert find_corrupt_taf(db_session, sleep=0) == []
+
+    def test_applies_the_correction(self, db_session):
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        row = _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, TAF_CORRUPT)
+        findings = find_corrupt_taf(db_session, sleep=0)
+
+        stats = apply_taf_repairs(db_session, findings, delete_scores=False)
+
+        assert stats["taf_repaired"] == 1
+        db_session.refresh(row)
+        assert row.taf_issue_time == TAF_CORRECT.replace(tzinfo=None)
+
+    def test_deletes_taf_scores_when_requested(self, db_session):
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        row = _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, TAF_CORRUPT)
+        db_session.add(
+            TafVerificationScoreRow(
+                observation_id=row.id,
+                icao="LIPS",
+                observation_time=obs_time.replace(tzinfo=None),
+                taf_issue_time=TAF_CORRUPT.replace(tzinfo=None),
+                lead_hours=1,
+                source="standalone",
+            )
+        )
+        db_session.flush()
+        findings = find_corrupt_taf(db_session, sleep=0)
+
+        stats = apply_taf_repairs(db_session, findings, delete_scores=True)
+
+        assert stats["taf_scores_deleted"] == 1
+        assert db_session.query(TafVerificationScoreRow).count() == 0
+
+    def test_is_idempotent(self, db_session):
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, TAF_CORRUPT)
+        apply_taf_repairs(
+            db_session, find_corrupt_taf(db_session, sleep=0), delete_scores=False
+        )
+
+        assert find_corrupt_taf(db_session, sleep=0) == []
+
+    def test_observation_time_repair_is_independent(self, db_session):
+        """A row can have a good observation_time and a corrupt taf_issue_time."""
+        obs_time = TAF_COLLECTED - timedelta(minutes=65)
+        _add_obs_with_taf(db_session, "LIPS", obs_time, TAF_COLLECTED, TAF_CORRUPT)
+
+        assert find_corrupt(db_session, batch=1000, sleep=0) == []
+        assert len(find_corrupt_taf(db_session, sleep=0)) == 1
