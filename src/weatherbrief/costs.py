@@ -17,6 +17,11 @@ class CostConfig:
 
     token_cost_per_1k_input: float = 0.003
     token_cost_per_1k_output: float = 0.015
+    # Prompt-caching multipliers applied to token_cost_per_1k_input. Anthropic
+    # bills a cache write at 1.25x on the 5-minute TTL and 2x on the 1h TTL we
+    # use for digests; a cache read is 0.1x either way.
+    cache_write_multiplier: float = 2.0
+    cache_read_multiplier: float = 0.1
     droplet_monthly_usd: float = 24.0
     misc_monthly_usd: float = 2.0
     subscriptions_monthly_usd: float = 30.0
@@ -66,16 +71,36 @@ def compute_cost(
     result_size_bytes: int,
     config: CostConfig,
     config_id: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> CostBreakdown:
     """Compute the full cost breakdown for a briefing.
 
     All inputs are non-negative integers; config supplies the rate card.
     Returns a frozen CostBreakdown with all components.
+
+    ``cache_read_tokens`` and ``cache_write_tokens`` are **subsets** of
+    ``input_tokens``, not extras — langchain-anthropic reports a single total
+    that already includes both. They are subtracted out and re-priced at their
+    own multipliers, so the three tiers each bill correctly. Both default to 0,
+    which reproduces the pre-caching behaviour exactly for historical rows.
     """
     est = max(config.estimated_monthly_briefings, _MIN_BRIEFINGS)
 
+    # Clamp rather than trust: a provider-side reporting change that made the
+    # cache figures siblings of input_tokens instead of subsets would otherwise
+    # drive uncached negative and silently *refund* users.
+    cached = min(cache_read_tokens + cache_write_tokens, input_tokens)
+    uncached_input = input_tokens - cached
+
     token_cost = (
-        (input_tokens / 1000) * config.token_cost_per_1k_input
+        (uncached_input / 1000) * config.token_cost_per_1k_input
+        + (cache_read_tokens / 1000)
+        * config.token_cost_per_1k_input
+        * config.cache_read_multiplier
+        + (cache_write_tokens / 1000)
+        * config.token_cost_per_1k_input
+        * config.cache_write_multiplier
         + (output_tokens / 1000) * config.token_cost_per_1k_output
     )
     infra_share = (config.droplet_monthly_usd + config.misc_monthly_usd) / est
