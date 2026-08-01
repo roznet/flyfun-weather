@@ -34,9 +34,20 @@ SAMPLE_DIR = Path(__file__).parent / "data" / "hrrr_samples"
 _KBOS = (42.3656, -71.0096)
 
 
+# What scripts/download_hrrr_samples.sh writes. Preferred by name rather than
+# by sort order: the directory is gitignored and long-lived, so a hand-built
+# sample from before the script existed can still be sitting in it, and one
+# named e.g. "hrrr.grib2" sorts AHEAD of the script's output ('.' < '_'). That
+# would silently test against the stale file.
+_SCRIPT_SAMPLE = "hrrr_sample.grib2"
+
+
 def _sample_path() -> Path | None:
     if not SAMPLE_DIR.exists():
         return None
+    preferred = SAMPLE_DIR / _SCRIPT_SAMPLE
+    if preferred.exists():
+        return preferred
     files = sorted(SAMPLE_DIR.glob("*.grib2"))
     return files[0] if files else None
 
