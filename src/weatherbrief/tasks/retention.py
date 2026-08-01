@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow, PirepRow, UserRow
@@ -284,209 +284,322 @@ def _dir_size(path: Path) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Verification observation retention
+# Verification raw-data retention (#522, Phase 3)
 #
-# Independent of the briefing-pack tiered retention above. Once raw obs are
-# rolled up into airport_monthly/daily_summary, we can drop the originals.
-# Default retention is intentionally very high (9999 days = effectively
-# disabled) until the Patterns/Spotlight UI has been live long enough to
-# validate the rollup column set covers everything we query. Once that's
-# confirmed, switch to ~180 days via VERIFICATION_RAW_RETENTION_DAYS.
+# Independent of the briefing-pack tiered retention above. The raw
+# verification tables are tier 1 of a three-tier design: aggregates live
+# forever in the rollup tables, rows live forever as Parquet under
+# DATA_DIR/archive/, and MySQL keeps only the online window that live queries
+# actually read (every dashboard/digest window is <=90 days).
+#
+# Nothing here deletes anything until VERIFICATION_RAW_RETENTION_DAYS is set
+# below the 9999 sentinel *and* the period passes both gates below. See
+# tasks/verification_tiering for the phase gates and
+# designs/plans/verification-data-tiering.md for the rollout order.
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_RAW_RETENTION_DAYS = 9999  # disabled by default — see comment above
+# Rows deleted per statement. Deliberately small: this runs against a shared
+# MySQL server with a 1 GB buffer pool, where one multi-month DELETE would
+# hold a huge transaction, bloat the undo log and stall every other client.
+_DELETE_BATCH = 5_000
+
+
+def _delete_in_batches(db: Session, model, where_clauses, *, batch: int = _DELETE_BATCH) -> int:
+    """Delete rows matching *where_clauses*, a bounded batch at a time.
+
+    Selects primary keys with a LIMIT, then deletes by key, committing after
+    each batch. Two reasons for the select-then-delete shape rather than
+    ``DELETE ... LIMIT``: SQLite only supports that clause when compiled with
+    ``SQLITE_ENABLE_UPDATE_DELETE_LIMIT`` (commonly off, including in the
+    stock CPython build the tests run on), and deleting by explicit primary
+    key gives the server the cheapest possible plan regardless of what the
+    matching predicate could use.
+
+    Commits per batch on purpose: a prune that dies halfway leaves a
+    consistent, smaller table rather than rolling back an hour of work.
+    """
+    total = 0
+    while True:
+        ids = db.execute(
+            select(model.id).where(*where_clauses).limit(batch)
+        ).scalars().all()
+        if not ids:
+            return total
+        result = db.execute(
+            model.__table__.delete().where(model.id.in_(list(ids)))
+        )
+        db.commit()
+        total += result.rowcount or len(ids)
+        if len(ids) < batch:
+            return total
+
+
+def _summarised_months(db: Session) -> set[tuple[int, int]]:
+    """(year, month) pairs with at least one airport_monthly_summary row.
+
+    Any airport row implies the month was rolled up — the summary rollup is
+    all-or-nothing per month.
+    """
+    from weatherbrief.db.models import AirportMonthlySummaryRow
+
+    out: set[tuple[int, int]] = set()
+    for dt in db.execute(
+        select(AirportMonthlySummaryRow.month).distinct()
+    ).scalars().all():
+        if dt is not None:
+            out.add((dt.year, dt.month))
+    return out
+
+
+def _month_bounds(y: int, m: int) -> tuple[datetime, datetime]:
+    start = datetime(y, m, 1, tzinfo=timezone.utc)
+    end = (
+        datetime(y + 1, 1, 1, tzinfo=timezone.utc)
+        if m == 12
+        else datetime(y, m + 1, 1, tzinfo=timezone.utc)
+    )
+    return start, end
+
+
+def prunable_months(
+    db: Session, cutoff: datetime, *, require_archive: bool | None = None,
+) -> tuple[list[tuple[int, int]], list[str]]:
+    """Months that are safe to delete, plus the reasons the others aren't.
+
+    Two independent gates, both required:
+
+    1. **Summarised** — the month has rows in ``airport_monthly_summary``.
+       Never delete observations whose climatology hasn't been derived, even
+       if the cutoff has passed (e.g. the rollup has been failing).
+    2. **Archived** — all three monthly tables have an ``archive_manifest``
+       row whose ``row_count`` still matches a live recount. No manifest, no
+       delete, and the refusal is logged loudly: once a month is gone from
+       MySQL the Parquet file is the only copy, so "the archive job was
+       silently broken" must never be discoverable only after the delete.
+
+    Returned reasons are logged by the caller rather than raised — a month
+    failing a gate is an operational signal, not an error.
+    """
+    from weatherbrief.tasks.archive import month_archive_ok
+    from weatherbrief.tasks.verification_tiering import prune_requires_archive
+
+    if require_archive is None:
+        require_archive = prune_requires_archive()
+
+    safe: list[tuple[int, int]] = []
+    blocked: list[str] = []
+    for (y, m) in sorted(_summarised_months(db)):
+        _, month_end = _month_bounds(y, m)
+        if month_end > cutoff:
+            continue  # still inside the online window
+        if require_archive:
+            ok, reason = month_archive_ok(db, f"{y:04d}-{m:02d}")
+            if not ok:
+                blocked.append(reason)
+                continue
+        safe.append((y, m))
+    return safe, blocked
 
 
 def prune_raw_observations(
     db: Session,
     retain_days: int | None = None,
 ) -> dict[str, int]:
-    """Delete verification_observations / scores older than retain_days.
+    """Delete raw verification rows older than the online-window cutoff.
 
-    Only deletes data older than the cutoff *AND* whose containing month
-    has at least one row in airport_monthly_summary — never delete obs that
-    haven't been summarised yet, even if the cutoff has passed (e.g. if
-    rollup has been failing). This is a safety belt; in normal operation
-    rollup runs nightly and is well ahead of the cutoff.
+    Deletes only whole months that pass :func:`prunable_months`' gates, in
+    bounded batches with a commit per batch.
 
-    Returns a dict with deletion counts per table.
+    Exemptions, none of which are optional:
+
+    - **``source='flight'`` scores are never pruned.** Tiny volume, and they
+      carry pilot/debrief context plus ERA5 re-analysis value — the same
+      reasoning that exempts debriefed flights' packs from T2 retention.
+    - **Observations referenced by ``flight_verification_map`` survive.**
+      Observations are shared between the flight and standalone tracks and
+      have no source column of their own, so this mapping is what identifies
+      flight-linked ground truth. Deleting such an observation would cascade
+      into the exempt flight scores hanging off it.
+    - **Observations that still have a flight score survive** — the same
+      protection expressed against the scores table, in case an observation
+      was linked to a flight without a map row ever being written.
+
+    Returns per-table deletion counts. Commits internally (see
+    :func:`_delete_in_batches`); a caller's own commit afterwards is a no-op.
     """
     from weatherbrief.db.models import (
-        AirportMonthlySummaryRow,
         FlightVerificationMapRow,
         TafVerificationScoreRow,
         VerificationObservationRow,
         VerificationScoreRow,
     )
+    from weatherbrief.tasks.verification_tiering import (
+        raw_retention_days,
+        raw_retention_disabled,
+    )
 
     if retain_days is None:
-        retain_days = int(
-            os.environ.get(
-                "VERIFICATION_RAW_RETENTION_DAYS",
-                str(_DEFAULT_RAW_RETENTION_DAYS),
-            )
-        )
+        retain_days = raw_retention_days()
 
-    if retain_days >= _DEFAULT_RAW_RETENTION_DAYS:
+    empty = {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+
+    if raw_retention_disabled(retain_days):
         # Effectively disabled. Don't even scan.
         logger.debug("Raw observation retention disabled (retain_days=%d)", retain_days)
-        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+        return dict(empty)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
 
-    # Months that have been summarised (any airport row implies the month
-    # was rolled up — rollup is all-or-nothing per month).
-    summarised_months: set[tuple[int, int]] = set()
-    for dt in db.execute(
-        select(AirportMonthlySummaryRow.month).distinct()
-    ).scalars().all():
-        if dt is not None:
-            summarised_months.add((dt.year, dt.month))
-
-    if not summarised_months:
+    if not _summarised_months(db):
         logger.warning(
             "Raw retention: no months summarised yet — refusing to delete"
         )
-        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+        return dict(empty)
 
-    # Build list of (month_start, month_end) ranges fully inside the cutoff
-    # AND in summarised_months.
-    safe_ranges: list[tuple[datetime, datetime]] = []
-    for (y, m) in sorted(summarised_months):
-        month_start = datetime(y, m, 1, tzinfo=timezone.utc)
-        month_end = (
-            datetime(y + 1, 1, 1, tzinfo=timezone.utc)
-            if m == 12
-            else datetime(y, m + 1, 1, tzinfo=timezone.utc)
-        )
-        if month_end <= cutoff:
-            safe_ranges.append((month_start, month_end))
+    safe_months, blocked = prunable_months(db, cutoff)
+    for reason in blocked:
+        logger.warning("Raw retention: refusing to prune — %s", reason)
 
-    if not safe_ranges:
-        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+    if not safe_months:
+        return dict(empty)
 
-    # All three child FKs to verification_observations.id use ON DELETE
-    # CASCADE, so a parent-first delete would also work — but the child
-    # rows would already be gone by the time we ran the child deletes,
-    # making our score/taf counters useless for monitoring. Deleting
-    # children first gives us accurate per-table metrics.
     obs_deleted = 0
     score_deleted = 0
     taf_deleted = 0
-    map_deleted = 0
-    for start, end in safe_ranges:
-        # FlightVerificationMapRow has no observation_time of its own —
-        # find linked map rows by joining through observation_id.
-        obs_id_subquery = (
-            select(VerificationObservationRow.id)
-            .where(VerificationObservationRow.observation_time >= start)
-            .where(VerificationObservationRow.observation_time < end)
-            .scalar_subquery()
-        )
-        r = db.execute(
-            FlightVerificationMapRow.__table__.delete()
-            .where(FlightVerificationMapRow.observation_id.in_(obs_id_subquery))
-        )
-        map_deleted += r.rowcount or 0
-        r = db.execute(
-            VerificationScoreRow.__table__.delete()
-            .where(VerificationScoreRow.observation_time >= start)
-            .where(VerificationScoreRow.observation_time < end)
-        )
-        score_deleted += r.rowcount or 0
-        r = db.execute(
-            TafVerificationScoreRow.__table__.delete()
-            .where(TafVerificationScoreRow.observation_time >= start)
-            .where(TafVerificationScoreRow.observation_time < end)
-        )
-        taf_deleted += r.rowcount or 0
-        r = db.execute(
-            VerificationObservationRow.__table__.delete()
-            .where(VerificationObservationRow.observation_time >= start)
-            .where(VerificationObservationRow.observation_time < end)
-        )
-        obs_deleted += r.rowcount or 0
 
-    # Caller commits — matches the rollup convention. expire_all so any
-    # cached ORM objects representing the deleted rows reflect their absence.
-    db.flush()
+    for (y, m) in safe_months:
+        month_start, month_end = _month_bounds(y, m)
+        # Walk the month a day at a time so each batch's predicate stays
+        # narrow and index-driven, rather than handing the server a
+        # month-wide range to re-evaluate on every batch.
+        day = month_start
+        while day < month_end:
+            day_end = day + timedelta(days=1)
+
+            # source= is not just an exemption, it is what makes the delete
+            # indexable: ix_verif_scores_source_time / _source_days_time both
+            # lead with source, and nothing on this table leads with
+            # observation_time.
+            score_deleted += _delete_in_batches(
+                db, VerificationScoreRow,
+                (
+                    VerificationScoreRow.source != "flight",
+                    VerificationScoreRow.observation_time >= day,
+                    VerificationScoreRow.observation_time < day_end,
+                ),
+            )
+            taf_deleted += _delete_in_batches(
+                db, TafVerificationScoreRow,
+                (
+                    TafVerificationScoreRow.source != "flight",
+                    TafVerificationScoreRow.observation_time >= day,
+                    TafVerificationScoreRow.observation_time < day_end,
+                ),
+            )
+
+            flight_linked = (
+                select(FlightVerificationMapRow.id)
+                .where(
+                    FlightVerificationMapRow.observation_id
+                    == VerificationObservationRow.id
+                )
+                .exists()
+            )
+            has_flight_score = (
+                select(VerificationScoreRow.id)
+                .where(
+                    VerificationScoreRow.observation_id
+                    == VerificationObservationRow.id,
+                    VerificationScoreRow.source == "flight",
+                )
+                .exists()
+            )
+            obs_deleted += _delete_in_batches(
+                db, VerificationObservationRow,
+                (
+                    VerificationObservationRow.observation_time >= day,
+                    VerificationObservationRow.observation_time < day_end,
+                    ~flight_linked,
+                    ~has_flight_score,
+                ),
+            )
+            day = day_end
+
+    # expire_all so any cached ORM objects representing the deleted rows
+    # reflect their absence.
     db.expire_all()
     logger.info(
-        "Raw retention: pruned %d observations, %d scores, %d TAF scores, "
-        "%d map rows (retain_days=%d, cutoff=%s)",
-        obs_deleted, score_deleted, taf_deleted, map_deleted,
+        "Raw retention: pruned %d observations, %d scores, %d TAF scores "
+        "across %d month(s) (retain_days=%d, cutoff=%s)",
+        obs_deleted, score_deleted, taf_deleted, len(safe_months),
         retain_days, cutoff.isoformat(),
     )
     return {
         "observations": obs_deleted,
         "scores": score_deleted,
         "taf_scores": taf_deleted,
-        "map_rows": map_deleted,
+        # Map rows are no longer deleted — they are the exemption that keeps
+        # flight-linked observations alive. Kept in the payload so the
+        # scheduler's log line and any dashboards reading it don't KeyError.
+        "map_rows": 0,
     }
 
 
 # ---------------------------------------------------------------------------
-# MySQL partition maintenance — Phase 4
+# Snapshot inbox rotation (#522, Phase 3)
 # ---------------------------------------------------------------------------
 
 
-def ensure_future_partitions(db: Session, months_ahead: int = 3) -> int:
-    """Pre-create monthly partitions for verification_observations on MySQL.
+def rotate_snapshot_inbox(
+    inbox_dir: str | Path | None = None, retain_days: int | None = None,
+) -> dict[str, int]:
+    """Delete transport artifacts in ``SNAPSHOT_INBOX_DIR`` older than N days.
 
-    Without this, an INSERT for a date past the highest existing partition
-    would fail. SQLite is a no-op (no partitioning).
+    The off-box compute nodes drop ``eu-*.sqlite`` / ``us-*.sqlite`` files
+    here; the ingest reads each one once and never looks at it again
+    (confirmed — nothing re-reads an old artifact). Once a cycle's data is in
+    both MySQL and the Parquet archive the transport file is redundant, so
+    this caps what is otherwise an unbounded disk leak.
 
-    Returns the number of partitions added.
+    ``retain_days=0`` (the shipping default) keeps everything, matching
+    pre-#522 behaviour. Returns ``{"deleted", "bytes_freed"}``.
     """
-    bind = db.get_bind()
-    if bind.dialect.name != "mysql":
-        return 0
+    from weatherbrief.tasks.verification_tiering import snapshot_inbox_retention_days
 
-    # Discover existing partitions
-    rows = db.execute(text(
-        "SELECT partition_name, partition_description "
-        "FROM information_schema.PARTITIONS "
-        "WHERE table_schema = DATABASE() "
-        "AND table_name = 'verification_observations' "
-        "AND partition_name IS NOT NULL"
-    )).all()
+    if retain_days is None:
+        retain_days = snapshot_inbox_retention_days()
+    if retain_days <= 0:
+        return {"deleted": 0, "bytes_freed": 0}
 
-    existing_names = {r[0] for r in rows}
-    if not existing_names:
-        # Table isn't partitioned yet (migration 054 hasn't run). Nothing to do.
-        logger.debug(
-            "ensure_future_partitions: verification_observations not partitioned"
+    if inbox_dir is None:
+        inbox_dir = os.environ.get("SNAPSHOT_INBOX_DIR", "").strip()
+    if not inbox_dir:
+        return {"deleted": 0, "bytes_freed": 0}
+
+    path = Path(inbox_dir)
+    if not path.is_dir():
+        return {"deleted": 0, "bytes_freed": 0}
+
+    cutoff = datetime.now(timezone.utc).timestamp() - retain_days * 86400
+    deleted = 0
+    freed = 0
+    for pattern in ("eu-*.sqlite", "us-*.sqlite"):
+        for f in path.glob(pattern):
+            try:
+                st = f.stat()
+                if st.st_mtime >= cutoff:
+                    continue
+                size = st.st_size
+                f.unlink()
+                deleted += 1
+                freed += size
+            except OSError:
+                logger.warning("Inbox rotation: could not remove %s", f, exc_info=True)
+
+    if deleted:
+        logger.info(
+            "Inbox rotation: removed %d artifact(s), freed %.1f MB (retain_days=%d)",
+            deleted, freed / (1024 * 1024), retain_days,
         )
-        return 0
-
-    # Compute target month names for the next N months.
-    now = datetime.now(timezone.utc)
-    targets: list[tuple[int, int]] = []
-    y, m = now.year, now.month
-    for _ in range(months_ahead):
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
-        targets.append((y, m))
-
-    added = 0
-    for (y, m) in targets:
-        name = f"p_{y:04d}{m:02d}"
-        if name in existing_names:
-            continue
-        # TO_DAYS upper bound = first day of the *following* month
-        next_y, next_m = (y + 1, 1) if m == 12 else (y, m + 1)
-        upper = f"{next_y:04d}-{next_m:02d}-01"
-        # REORGANIZE the catch-all p_future partition to add the new range.
-        db.execute(text(
-            f"ALTER TABLE verification_observations "
-            f"REORGANIZE PARTITION p_future INTO ("
-            f"PARTITION {name} VALUES LESS THAN (TO_DAYS('{upper}')), "
-            f"PARTITION p_future VALUES LESS THAN MAXVALUE)"
-        ))
-        added += 1
-        logger.info("Added partition %s (upper=%s)", name, upper)
-
-    return added
+    return {"deleted": deleted, "bytes_freed": freed}

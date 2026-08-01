@@ -288,6 +288,13 @@ git pull && docker compose up -d --build
 | `HMAC_SECRET` | Prod only | derived from JWT_SECRET | HMAC key for pack integrity + admin approval links |
 | `WB_REFRESH_MAX_ATTEMPTS` | No | `2` | Total attempts per briefing refresh, counting the original run. `1` disables resume-after-restart; see [refresh-durability.md](./refresh-durability.md) |
 | `DISABLE_REFRESH_RESUME` | No | — | `1` skips the boot-time reconciliation pass entirely (rows are still written) |
+| `VERIFICATION_GLOBAL_ROLLUP_READS` | No | `0` | #522 Phase 1. `1` points unfiltered dashboard/digest aggregates at the global rollup tables. Requires the backfill first — see [verification-data-tiering.md](./plans/verification-data-tiering.md) |
+| `VERIFICATION_ARCHIVE_ENABLED` | No | `0` | #522 Phase 2. `1` runs the Parquet archive writer from the daily retention loop. The `verify archive` CLI works regardless |
+| `VERIFICATION_RAW_RETENTION_DAYS` | No | `9999` (disabled) | #522 Phase 3. Online window for raw obs/scores/TAF scores. Target value `180` |
+| `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | No | `1` | Safety belt: no verified `archive_manifest` row → no delete, and the snapshot prune stalls on unarchived days. Only turn off if abandoning the archive |
+| `SNAPSHOT_INBOX_RETENTION_DAYS` | No | `0` (keep forever) | #522 Phase 3. Rotates `eu-*/us-*.sqlite` out of `SNAPSHOT_INBOX_DIR`. Target value `30` |
+| `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | No | `0` | #522 Phase 4. `1` rolls completed months into `verification_monthly_stats` from the daily table |
+| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | No | `0` (keep) | #522 Phase 4 follow-up. Prunes `verification_daily_stats` older than N months. Enable only after monthly rollups are validated against the daily data |
 
 ## References
 

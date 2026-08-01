@@ -1,26 +1,51 @@
-"""Monthly rollup of verification scores into verification_monthly_stats.
+"""Monthly rollup of NWP verification scores into verification_monthly_stats.
 
-Aggregates raw verification_scores and taf_verification_scores into
-per-airport, per-model, per-days_out monthly summaries with category
-direction counts and continuous error metrics.
+Since #522 this is a **roll of the daily rollup**, not a second pass over raw
+scores: one ``DELETE WHERE month=?`` plus one ``INSERT … SELECT … GROUP BY``
+over ``verification_daily_stats``. The daily table's SUM columns were designed
+to compose exactly this way (see the "SUMs, not averages" note on
+:class:`VerificationDailyStatsRow`), so the month is a pure addition of its
+days and cannot disagree with the days it summarises.
+
+What that replaced: a loader that pulled every raw score row for the month
+into Python (`select(VerificationScoreRow)` unbounded), grouped them in a
+dict, and computed means — millions of ORM objects for a table whose whole
+point is that it is small. It also meant the monthly numbers were derived
+independently of the daily numbers and could drift from them.
+
+Two deliberate scope changes came with the rewrite:
+
+- **TAF monthly is out of scope.** ``taf_verification_scores`` has no
+  ``model``/``days_out`` columns, which is why it never fitted this table's
+  key shape. It is now served by ``taf_verification_daily`` at query time, so
+  the ``model='taf'`` rows this module used to write are no longer produced —
+  a re-roll of a month drops any that a previous version left behind.
+- **Precip/convection "no data" is no longer distinguishable from "no
+  events".** The old Python path stored NULL when no row in the group had
+  both an observed and a forecast flag, and 0/0/0 when they were all correct
+  negatives. The daily table only carries the three event counts, so both
+  now read 0/0/0. Nothing consumes these columns today (the dashboard reads
+  the daily tables); they exist for offline analysis, where "0 hits, 0
+  misses, 0 false alarms" is the honest summary either way.
+
+Direction classification (``category_direction`` / ``advisory_direction``)
+stays here as the reference definition — the SQL CASE expressions in
+``verification_daily_rollup`` encode the same rules, and
+``tests/test_verification_daily_rollup`` asserts the two agree.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import DateTime, bindparam, func, insert, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
-    TafVerificationScoreRow,
+    VerificationDailyStatsRow,
     VerificationMonthlyStatsRow,
-    VerificationObservationRow,
-    VerificationScoreRow,
 )
-from weatherbrief.tasks.verification_gust import gust_aggregate_columns
 
 logger = logging.getLogger(__name__)
 
@@ -73,404 +98,169 @@ def advisory_direction(obs_adv: str | None, fcst_adv: str | None) -> str:
     return "optimistic" if diff < 0 else "pessimistic"
 
 
-def _lead_hours_to_days_out(lead_hours: int) -> int:
-    """Bucket lead_hours into days_out (0-24h=0, 24-48h=1, etc.)."""
-    return max(0, lead_hours // 24)
+def _month_end(month_start: datetime) -> datetime:
+    if month_start.month == 12:
+        return datetime(month_start.year + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(
+        month_start.year, month_start.month + 1, 1, tzinfo=timezone.utc,
+    )
+
+
+def _ratio(numerator, denominator):
+    """``SUM(numerator) / SUM(denominator)``, NULL when the denominator is 0.
+
+    ``NULLIF`` rather than a CASE so both dialects produce NULL (not an error,
+    not infinity) for an empty denominator — the monthly table's MAE/bias
+    columns are nullable precisely to express "no comparable rows".
+    """
+    return func.sum(numerator) / func.nullif(func.sum(denominator), 0)
+
+
+def _build_month_select(month_start: datetime):
+    """SELECT that turns a month of daily rows into monthly rows.
+
+    Grouped by (source, model, days_out, icao) — the daily key minus ``date``,
+    which is exactly what makes the sums compose.
+    """
+    v = VerificationDailyStatsRow
+    month_param = bindparam(
+        "rollup_month", value=month_start, type_=DateTime(timezone=True),
+    )
+    start_d = month_start.date()
+    end_d = _month_end(month_start).date()
+
+    return (
+        select(
+            month_param.label("month"),
+            v.source.label("source"),
+            v.model.label("model"),
+            v.days_out.label("days_out"),
+            v.icao.label("icao"),
+            func.sum(v.n).label("n_scores"),
+            func.sum(v.n_cat_match).label("n_cat_match"),
+            func.sum(v.n_cat_opt_1).label("n_cat_optimistic_1"),
+            func.sum(v.n_cat_opt_2).label("n_cat_optimistic_2"),
+            func.sum(v.n_cat_pess_1).label("n_cat_pessimistic_1"),
+            func.sum(v.n_cat_pess_2).label("n_cat_pessimistic_2"),
+            func.sum(v.n_advisory_match).label("n_advisory_match"),
+            func.sum(v.n_advisory_opt).label("n_advisory_optimistic"),
+            func.sum(v.n_advisory_pess).label("n_advisory_pessimistic"),
+            _ratio(v.sum_abs_ceiling_delta_ft, v.n_ceiling).label("ceiling_mae_ft"),
+            _ratio(v.sum_ceiling_delta_ft, v.n_ceiling).label("ceiling_bias_ft"),
+            _ratio(v.sum_abs_vis_delta_m, v.n_vis).label("visibility_mae_m"),
+            _ratio(v.sum_abs_wind_delta_kt, v.n_wind).label("wind_speed_mae_kt"),
+            _ratio(v.sum_abs_temp_delta_c, v.n_temp).label("temperature_mae_c"),
+            # Gust: two conditionings, never blended — see tasks/verification_gust.
+            _ratio(v.sum_abs_gust_delta_kt, v.n_gust).label("wind_gust_mae_kt"),
+            _ratio(v.sum_gust_delta_kt, v.n_gust).label("wind_gust_bias_kt"),
+            func.sum(v.n_gust).label("n_gust"),
+            _ratio(
+                v.sum_gust_flagged_over_peak_kt, v.n_gust_flagged_peak,
+            ).label("gust_over_peak_bias_kt"),
+            func.sum(v.n_gust_flagged_peak).label("n_gust_flagged_peak"),
+            func.sum(v.n_model_gust_flag).label("n_model_gust_flag"),
+            func.sum(v.n_obs_gust).label("n_obs_gust"),
+            func.sum(v.n_gust_flag_hit).label("n_gust_flag_hit"),
+            func.sum(v.n_precip_hit).label("n_precip_hit"),
+            func.sum(v.n_precip_miss).label("n_precip_miss"),
+            func.sum(v.n_precip_false_alarm).label("n_precip_false_alarm"),
+            func.sum(v.n_convection_hit).label("n_convection_hit"),
+            func.sum(v.n_convection_miss).label("n_convection_miss"),
+            func.sum(v.n_convection_false_alarm).label("n_convection_false_alarm"),
+        )
+        .where(v.date >= start_d, v.date < end_d)
+        .group_by(v.source, v.model, v.days_out, v.icao)
+    )
 
 
 def completed_months(db: Session) -> list[datetime]:
-    """Return first-of-month datetimes for months with raw scores that
-    haven't been rolled up yet.
+    """First-of-month datetimes for complete months not yet rolled up.
 
-    A month is considered complete when the current UTC time is past
-    the end of that month.
+    Derived from ``verification_daily_stats``, the table this rollup reads —
+    so a month only becomes a candidate once its days have actually been
+    rolled, and Phase 3 pruning moving the raw floor forward doesn't change
+    which months are eligible.
     """
     now = datetime.now(timezone.utc)
 
-    # Find earliest observation across both model and TAF scores
-    model_min = db.execute(
-        select(func.min(VerificationScoreRow.observation_time))
-    ).scalar()
-    taf_min = db.execute(
-        select(func.min(TafVerificationScoreRow.observation_time))
-    ).scalar()
-
-    candidates = [t for t in (model_min, taf_min) if t is not None]
-    if not candidates:
+    daily_months = {
+        (d.year, d.month)
+        for d in db.execute(
+            select(VerificationDailyStatsRow.date).distinct()
+        ).scalars().all()
+        if d is not None
+    }
+    if not daily_months:
         return []
 
-    min_time: datetime = min(candidates)
-
-    # Already rolled up months
-    existing = set(
-        db.execute(
+    existing_ym = {
+        (dt.year, dt.month)
+        for dt in db.execute(
             select(VerificationMonthlyStatsRow.month).distinct()
         ).scalars().all()
-    )
-    # Normalize existing to (year, month) for comparison
-    existing_ym = set()
-    for dt in existing:
-        if dt is not None:
-            existing_ym.add((dt.year, dt.month))
+        if dt is not None
+    }
 
-    # Generate candidate months from min_time to now
-    months: list[datetime] = []
-    y, m = min_time.year, min_time.month
-    while True:
+    out: list[datetime] = []
+    for (y, m) in sorted(daily_months):
         month_start = datetime(y, m, 1, tzinfo=timezone.utc)
-        # Next month start
-        if m == 12:
-            next_start = datetime(y + 1, 1, 1, tzinfo=timezone.utc)
-        else:
-            next_start = datetime(y, m + 1, 1, tzinfo=timezone.utc)
-
-        # Only include completed months not already rolled up
-        if next_start <= now and (y, m) not in existing_ym:
-            months.append(month_start)
-
-        if next_start > now:
-            break
-        y, m = next_start.year, next_start.month
-
-    return months
+        if _month_end(month_start) > now:
+            continue  # month still in progress
+        if (y, m) in existing_ym:
+            continue
+        out.append(month_start)
+    return out
 
 
 def rollup_month(db: Session, month_start: datetime) -> int:
-    """Aggregate raw scores for a single month into verification_monthly_stats.
+    """Aggregate one month of ``verification_daily_stats`` into monthly stats.
 
-    Returns the number of rollup rows created.
+    Idempotent DELETE + INSERT-SELECT. Returns the number of rows produced.
+    Caller commits.
     """
-    if month_start.month == 12:
-        month_end = datetime(month_start.year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        month_end = datetime(month_start.year, month_start.month + 1, 1, tzinfo=timezone.utc)
-
-    # Delete any existing rollup for this month (idempotent re-run).
-    # Flush + expunge to clear identity map so re-inserted rows don't conflict.
-    stale = db.execute(
-        select(VerificationMonthlyStatsRow).where(
+    db.execute(
+        VerificationMonthlyStatsRow.__table__.delete().where(
             VerificationMonthlyStatsRow.month == month_start
         )
-    ).scalars().all()
-    for row in stale:
-        db.delete(row)
-    if stale:
-        db.flush()
+    )
+    # The delete above may have removed rows the session still holds; expire
+    # so a subsequent flush can't try to re-persist them.
+    db.expire_all()
 
-    rows_created = 0
-    rows_created += _rollup_model_scores(db, month_start, month_end)
-    rows_created += _rollup_taf_scores(db, month_start, month_end)
-
+    src = _build_month_select(month_start)
+    target_cols = [c.name for c in src.selected_columns]
+    result = db.execute(
+        insert(VerificationMonthlyStatsRow).from_select(target_cols, src)
+    )
     db.flush()
+
+    rows_created = result.rowcount if result.rowcount is not None else 0
     logger.info(
-        "Rolled up %d rows for %s",
+        "verification_monthly_stats: rolled up %d rows for %s",
         rows_created, month_start.strftime("%Y-%m"),
     )
     return rows_created
 
 
-def _obs_conditioned_gust_stats(
-    db: Session, month_start: datetime, month_end: datetime,
-) -> dict[tuple[str, str, int, str], dict]:
-    """Per-group gust aggregates that need the observation row (#491).
+def rebuild_all_months(db: Session) -> int:
+    """Re-roll every month already present in the monthly table. Caller commits.
 
-    The observed gust and the realised peak live on
-    ``verification_observations``, so the occurrence contingency and the
-    forecast-flagged magnitude can't be derived from a score row alone. One
-    grouped SQL query per month keeps that off the Python path — loading a
-    month of observations into memory is not an option at watchlist scale.
-
-    Keyed like ``_rollup_model_scores``'s groups: (source, model, days_out,
-    icao). TAF rows have no entry — see ``_compute_taf_stats``.
+    Used after a change to the aggregation logic or the daily column set —
+    existing monthly rows keep their old values until re-rolled.
     """
-    rows = db.execute(
-        select(
-            VerificationScoreRow.source,
-            VerificationScoreRow.model,
-            VerificationScoreRow.days_out,
-            VerificationScoreRow.icao,
-            *gust_aggregate_columns(),
-        )
-        .join(
-            VerificationObservationRow,
-            VerificationScoreRow.observation_id == VerificationObservationRow.id,
-        )
-        .where(
-            VerificationScoreRow.observation_time >= month_start,
-            VerificationScoreRow.observation_time < month_end,
-        )
-        .group_by(
-            VerificationScoreRow.source,
-            VerificationScoreRow.model,
-            VerificationScoreRow.days_out,
-            VerificationScoreRow.icao,
-        )
-    ).all()
-
-    out: dict[tuple[str, str, int, str], dict] = {}
-    for r in rows:
-        n_flagged_peak = int(r.n_gust_flagged_peak or 0)
-        out[(r.source, r.model, r.days_out, r.icao)] = {
-            "n_model_gust_flag": int(r.n_model_gust_flag or 0),
-            "n_obs_gust": int(r.n_obs_gust or 0),
-            "n_gust_flag_hit": int(r.n_gust_flag_hit or 0),
-            "n_gust_flagged_peak": n_flagged_peak,
-            "gust_over_peak_bias_kt": (
-                float(r.sum_gust_flagged_over_peak_kt) / n_flagged_peak
-                if n_flagged_peak and r.sum_gust_flagged_over_peak_kt is not None
-                else None
-            ),
+    months = sorted(
+        {
+            (dt.year, dt.month)
+            for dt in db.execute(
+                select(VerificationMonthlyStatsRow.month).distinct()
+            ).scalars().all()
+            if dt is not None
         }
-    return out
-
-
-def _rollup_model_scores(
-    db: Session, month_start: datetime, month_end: datetime,
-) -> int:
-    """Aggregate verification_scores into monthly stats."""
-    stmt = (
-        select(VerificationScoreRow)
-        .where(
-            VerificationScoreRow.observation_time >= month_start,
-            VerificationScoreRow.observation_time < month_end,
-        )
     )
-    scores = db.execute(stmt).scalars().all()
-
-    obs_gust_stats = _obs_conditioned_gust_stats(db, month_start, month_end)
-
-    # Group by (source, model, days_out, icao)
-    groups: dict[tuple[str, str, int, str], list[VerificationScoreRow]] = {}
-    for s in scores:
-        key = (s.source, s.model, s.days_out, s.icao)
-        groups.setdefault(key, []).append(s)
-
-    rows_created = 0
-    for key, group in groups.items():
-        source, model, days_out, icao = key
-        stats = _compute_model_stats(group)
-        stats.update(obs_gust_stats.get(key, {}))
-        row = VerificationMonthlyStatsRow(
-            month=month_start,
-            source=source,
-            model=model,
-            days_out=days_out,
-            icao=icao,
-            **stats,
-        )
-        db.add(row)
-        rows_created += 1
-
-    return rows_created
-
-
-def _rollup_taf_scores(
-    db: Session, month_start: datetime, month_end: datetime,
-) -> int:
-    """Aggregate taf_verification_scores into monthly stats (model='taf')."""
-    stmt = (
-        select(TafVerificationScoreRow)
-        .where(
-            TafVerificationScoreRow.observation_time >= month_start,
-            TafVerificationScoreRow.observation_time < month_end,
-        )
-    )
-    scores = db.execute(stmt).scalars().all()
-
-    # Group by (source, days_out_bucket, icao)
-    groups: dict[tuple[str, int, str], list[TafVerificationScoreRow]] = {}
-    for s in scores:
-        days_out = _lead_hours_to_days_out(s.lead_hours)
-        key = (s.source, days_out, s.icao)
-        groups.setdefault(key, []).append(s)
-
-    rows_created = 0
-    for (source, days_out, icao), group in groups.items():
-        stats = _compute_taf_stats(group)
-        row = VerificationMonthlyStatsRow(
-            month=month_start,
-            source=source,
-            model="taf",
-            days_out=days_out,
-            icao=icao,
-            **stats,
-        )
-        db.add(row)
-        rows_created += 1
-
-    return rows_created
-
-
-def _accumulate_direction_counts(
-    scores: Sequence,
-    obs_cat_attr: str,
-    fcst_cat_attr: str,
-    obs_adv_attr: str,
-    fcst_adv_attr: str,
-) -> tuple[dict[str, int], dict[str, int]]:
-    """Accumulate category and advisory direction counts from any score type."""
-    cat = {"match": 0, "optimistic_1": 0, "optimistic_2": 0,
-           "pessimistic_1": 0, "pessimistic_2": 0}
-    adv = {"match": 0, "optimistic": 0, "pessimistic": 0}
-
-    for s in scores:
-        d = category_direction(getattr(s, obs_cat_attr), getattr(s, fcst_cat_attr))
-        if d in cat:
-            cat[d] += 1
-
-        ad = advisory_direction(getattr(s, obs_adv_attr), getattr(s, fcst_adv_attr))
-        if ad in adv:
-            adv[ad] += 1
-
-    return cat, adv
-
-
-def _collect_deltas(
-    scores: Sequence, attr: str,
-) -> list[float]:
-    """Collect non-None values for a delta attribute."""
-    return [getattr(s, attr) for s in scores if getattr(s, attr) is not None]
-
-
-def _hit_miss_counts(
-    scores: Sequence, obs_attr: str, fcst_attr: str,
-) -> tuple[int, int, int, bool]:
-    """Count hit/miss/false-alarm for a boolean obs vs forecast pair."""
-    hit = miss = false_alarm = 0
-    has_data = False
-    for s in scores:
-        obs_val = getattr(s, obs_attr)
-        fcst_val = getattr(s, fcst_attr)
-        if obs_val is None or fcst_val is None:
-            continue
-        has_data = True
-        if obs_val and fcst_val:
-            hit += 1
-        elif obs_val and not fcst_val:
-            miss += 1
-        elif not obs_val and fcst_val:
-            false_alarm += 1
-    return hit, miss, false_alarm, has_data
-
-
-def _base_stats(cat: dict[str, int], adv: dict[str, int], n: int,
-                ceiling_deltas: list[float], visibility_deltas: list[float],
-                wind_deltas: list[float], gust_deltas: list[float]) -> dict:
-    """Build the stats dict shared by model and TAF rollups.
-
-    ``gust_deltas`` is the obs-flagged conditioning only: a non-NULL gust
-    delta requires an observed gust, so this is "on the hours the airport
-    actually gusted, how far off was the forecast?" (#491). The
-    forecast-flagged conditioning needs the observation row and is merged in
-    by ``_obs_conditioned_gust_stats``.
-    """
-    return {
-        "n_scores": n,
-        "n_cat_match": cat["match"],
-        "n_cat_optimistic_1": cat["optimistic_1"],
-        "n_cat_optimistic_2": cat["optimistic_2"],
-        "n_cat_pessimistic_1": cat["pessimistic_1"],
-        "n_cat_pessimistic_2": cat["pessimistic_2"],
-        "n_advisory_match": adv["match"],
-        "n_advisory_optimistic": adv["optimistic"],
-        "n_advisory_pessimistic": adv["pessimistic"],
-        "ceiling_mae_ft": _mae(ceiling_deltas),
-        "ceiling_bias_ft": _mean(ceiling_deltas),
-        "visibility_mae_m": _mae(visibility_deltas),
-        "wind_speed_mae_kt": _mae(wind_deltas),
-        "wind_gust_mae_kt": _mae(gust_deltas),
-        "wind_gust_bias_kt": _mean(gust_deltas),
-        "n_gust": len(gust_deltas),
-    }
-
-
-def _compute_model_stats(scores: Sequence[VerificationScoreRow]) -> dict:
-    """Compute aggregate stats from a group of model verification scores."""
-    cat, adv = _accumulate_direction_counts(
-        scores, "obs_flight_category", "model_flight_category",
-        "obs_wind_advisory", "model_wind_advisory",
-    )
-
-    ceiling_deltas = _collect_deltas(scores, "ceiling_delta_ft")
-    visibility_deltas = _collect_deltas(scores, "visibility_delta_m")
-    wind_deltas = _collect_deltas(scores, "wind_speed_delta_kt")
-    gust_deltas = _collect_deltas(scores, "wind_gust_delta_kt")
-    temp_deltas = _collect_deltas(scores, "temperature_delta_c")
-
-    p_hit, p_miss, p_fa, has_precip = _hit_miss_counts(
-        scores, "obs_has_precipitation", "model_has_precipitation",
-    )
-    c_hit, c_miss, c_fa, has_convection = _hit_miss_counts(
-        scores, "obs_has_convection", "model_has_convection",
-    )
-
-    stats = _base_stats(
-        cat, adv, len(scores), ceiling_deltas, visibility_deltas,
-        wind_deltas, gust_deltas,
-    )
-    stats.update({
-        "temperature_mae_c": _mae(temp_deltas),
-        "n_precip_hit": p_hit if has_precip else None,
-        "n_precip_miss": p_miss if has_precip else None,
-        "n_precip_false_alarm": p_fa if has_precip else None,
-        "n_convection_hit": c_hit if has_convection else None,
-        "n_convection_miss": c_miss if has_convection else None,
-        "n_convection_false_alarm": c_fa if has_convection else None,
-    })
-    return stats
-
-
-def _compute_taf_stats(scores: Sequence[TafVerificationScoreRow]) -> dict:
-    """Compute aggregate stats from a group of TAF verification scores."""
-    cat, adv = _accumulate_direction_counts(
-        scores, "obs_flight_category", "taf_flight_category",
-        "obs_wind_advisory", "taf_wind_advisory",
-    )
-
-    ceiling_deltas = _collect_deltas(scores, "ceiling_delta_ft")
-    visibility_deltas = _collect_deltas(scores, "visibility_delta_m")
-    wind_deltas = _collect_deltas(scores, "wind_speed_delta_kt")
-    gust_deltas = _collect_deltas(scores, "wind_gust_delta_kt")
-
-    stats = _base_stats(
-        cat, adv, len(scores), ceiling_deltas, visibility_deltas,
-        wind_deltas, gust_deltas,
-    )
-    stats.update({
-        "temperature_mae_c": None,
-        # Occurrence + forecast-flagged magnitude need the observation row,
-        # and the TAF group key (a lead_hours bucket) has no SQL expression
-        # that truncates identically on SQLite and MySQL. TAF gust occurrence
-        # is served by ``verification_stats.get_gust_accuracy``, which reads
-        # taf_verification_scores joined to observations at query time — the
-        # same treatment every other TAF stat gets (#154).
-        "n_model_gust_flag": None,
-        "n_obs_gust": None,
-        "n_gust_flag_hit": None,
-        "n_gust_flagged_peak": None,
-        "gust_over_peak_bias_kt": None,
-        "n_precip_hit": None,
-        "n_precip_miss": None,
-        "n_precip_false_alarm": None,
-        "n_convection_hit": None,
-        "n_convection_miss": None,
-        "n_convection_false_alarm": None,
-    })
-    return stats
-
-
-def _mae(values: list[float]) -> float | None:
-    """Mean absolute error, or None if no values."""
-    if not values:
-        return None
-    return sum(abs(v) for v in values) / len(values)
-
-
-def _mean(values: list[float]) -> float | None:
-    """Signed mean (bias), or None if no values."""
-    if not values:
-        return None
-    return sum(values) / len(values)
+    total = 0
+    for (y, m) in months:
+        total += rollup_month(db, datetime(y, m, 1, tzinfo=timezone.utc))
+    return total
 
 
 def run_monthly_rollup(db: Session) -> int:
@@ -488,3 +278,51 @@ def run_monthly_rollup(db: Session) -> int:
         total += rollup_month(db, month)
 
     return total
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 follow-up: daily-stats retention
+# ---------------------------------------------------------------------------
+
+
+def prune_daily_stats(db: Session, retain_months: int | None = None) -> int:
+    """Delete ``verification_daily_stats`` rows older than *retain_months*.
+
+    Off by default (``VERIFICATION_DAILY_STATS_RETENTION_MONTHS=0``) and
+    intended to be enabled only once monthly rollups have been validated
+    against the daily data they summarise — the check is "re-derive a month
+    from the daily rows and confirm it matches the stored monthly row", which
+    is impossible after the daily rows are gone.
+
+    Daily stats are deliberately **not** archived: unlike raw scores they are
+    fully re-derivable from the Parquet archive, so a copy would be a second
+    representation of the same facts.
+
+    Caller commits. Returns rows deleted.
+    """
+    from weatherbrief.tasks.verification_tiering import daily_stats_retention_months
+
+    if retain_months is None:
+        retain_months = daily_stats_retention_months()
+    if retain_months <= 0:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    total_months = now.year * 12 + (now.month - 1) - retain_months
+    cutoff = datetime(
+        total_months // 12, total_months % 12 + 1, 1, tzinfo=timezone.utc,
+    ).date()
+
+    result = db.execute(
+        VerificationDailyStatsRow.__table__.delete().where(
+            VerificationDailyStatsRow.date < cutoff
+        )
+    )
+    deleted = result.rowcount or 0
+    if deleted:
+        logger.info(
+            "verification_daily_stats: pruned %d rows older than %s "
+            "(retain_months=%d)",
+            deleted, cutoff.isoformat(), retain_months,
+        )
+    return deleted

@@ -5,15 +5,24 @@ All functions take a SQLAlchemy Session and a date range, returning
 Pydantic models from :mod:`weatherbrief.models.verification`.
 
 The expensive aggregates (per-model accuracy, bias, MAE, wind advisory)
-read from :class:`VerificationDailyStatsRow` — the pre-aggregated rollup
-populated after each standalone verification cycle. NWP-only.
+read from a pre-aggregated rollup, never from raw scores. Which rollup
+depends on the request and on the #522 phase gate:
 
-TAF is rolled up at query time from ``taf_verification_scores`` because
-its shape (lead_hours, no model/days_out) doesn't fit the daily rollup —
-see issue #154 for the rationale.
+===================================  =========================================
+Request                              Table
+===================================  =========================================
+Unfiltered, gate on                  ``verification_global_daily_stats``
+                                     (~90 rows/day), ``taf_verification_daily``
+Country/airport-filtered             ``verification_daily_stats`` (per-airport)
+Gate off (pre-#522 behaviour)        ``verification_daily_stats``, TAF raw
+===================================  =========================================
+
+The two NWP tables carry identical column names, so the query bodies below
+differ only in which class :func:`_nwp_daily_table` hands them.
 
 ``get_notable_misses`` and ``get_missed_warnings`` still read raw
-``verification_scores`` because they need individual row data.
+``verification_scores`` because they need individual row data — their windows
+are ≤30 days, well inside the 180-day raw retention Phase 3 introduces.
 
 Every query filters by ``source`` ('flight' or 'standalone') to ensure
 flight-based and standalone verification data are never mixed.
@@ -31,12 +40,17 @@ from sqlalchemy.orm import Session
 from weatherbrief.db.models import (
     FlightRow,
     FlightVerificationMapRow,
+    TafVerificationDailyRow,
     TafVerificationScoreRow,
+    VerificationActivityDailyRow,
     VerificationCycleRow,
     VerificationDailyStatsRow,
+    VerificationGlobalDailyStatsRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.tasks.verification_gust import taf_gust_aggregate_columns
+from weatherbrief.tasks.verification_tiering import global_rollup_reads_enabled
 from weatherbrief.models.verification import (
     ActivitySummary,
     CategoryAccuracyRow,
@@ -79,6 +93,127 @@ def _icao_clause(col, icao_filter: list[str] | None):
     return col.in_(icao_filter)
 
 
+def _use_global(icao_filter: list[str] | None) -> bool:
+    """Whether this request reads the global (ICAO-collapsed) rollups (#522).
+
+    Only unfiltered requests can: the global table has no ``icao`` column, so
+    a country/airport-filtered request has nothing to filter on and must stay
+    on the per-airport table. That is also the request shape the dashboard
+    never caches, so it was already expected to run live.
+    """
+    return global_rollup_reads_enabled() and not icao_filter
+
+
+def _nwp_daily_table(icao_filter: list[str] | None):
+    """The daily NWP rollup class this request should read.
+
+    The global and per-airport tables declare identical column names, so
+    callers substitute the class and drop nothing else.
+    """
+    if _use_global(icao_filter):
+        return VerificationGlobalDailyStatsRow
+    return VerificationDailyStatsRow
+
+
+def _cat_total_expr(tbl):
+    """Rows in *tbl* that contributed a flight-category comparison.
+
+    Same semantics as the raw query's ``category_match IS NOT NULL``: a score
+    only lands in one of the five direction buckets when both the observed and
+    the forecast category were present and recognised.
+    """
+    return (
+        tbl.n_cat_match + tbl.n_cat_opt_1 + tbl.n_cat_opt_2
+        + tbl.n_cat_pess_1 + tbl.n_cat_pess_2
+    )
+
+
+def _adv_total_expr(tbl):
+    """Rows in *tbl* that contributed a wind-advisory comparison."""
+    return tbl.n_advisory_match + tbl.n_advisory_opt + tbl.n_advisory_pess
+
+
+def _sum_when(condition):
+    """SUM of 1 when *condition* is TRUE (NULL and FALSE both excluded)."""
+    return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
+
+
+def _taf_category_counts(
+    db: Session, since: datetime, until: datetime, source: str,
+    icao_filter: list[str] | None,
+) -> tuple[int, int]:
+    """(matching, comparable) TAF flight-category counts over the window."""
+    if _use_global(icao_filter):
+        since_d, until_d = _date_range(since, until)
+        t = TafVerificationDailyRow
+        row = db.execute(
+            select(
+                func.coalesce(func.sum(t.n_cat_match), 0),
+                func.coalesce(func.sum(_cat_total_expr(t)), 0),
+            ).where(
+                t.date.between(since_d, until_d),
+                t.source == source,
+            )
+        ).one()
+        return int(row[0] or 0), int(row[1] or 0)
+
+    row = db.execute(
+        select(
+            _sum_when(TafVerificationScoreRow.category_match.is_(True)),
+            func.count(TafVerificationScoreRow.id),
+        ).where(
+            TafVerificationScoreRow.observation_time.between(since, until),
+            TafVerificationScoreRow.category_match.isnot(None),
+            TafVerificationScoreRow.source == source,
+            _icao_clause(TafVerificationScoreRow.icao, icao_filter),
+        )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
+
+
+def _taf_advisory_counts(
+    db: Session, since: datetime, until: datetime, source: str,
+    icao_filter: list[str] | None,
+) -> tuple[int, int]:
+    """(matching, comparable) TAF wind-advisory counts over the window."""
+    if _use_global(icao_filter):
+        since_d, until_d = _date_range(since, until)
+        t = TafVerificationDailyRow
+        row = db.execute(
+            select(
+                func.coalesce(func.sum(t.n_advisory_match), 0),
+                func.coalesce(func.sum(_adv_total_expr(t)), 0),
+            ).where(
+                t.date.between(since_d, until_d),
+                t.source == source,
+            )
+        ).one()
+        return int(row[0] or 0), int(row[1] or 0)
+
+    row = db.execute(
+        select(
+            _sum_when(TafVerificationScoreRow.advisory_match.is_(True)),
+            func.count(TafVerificationScoreRow.id),
+        ).where(
+            TafVerificationScoreRow.observation_time.between(since, until),
+            TafVerificationScoreRow.advisory_match.isnot(None),
+            TafVerificationScoreRow.source == source,
+            _icao_clause(TafVerificationScoreRow.icao, icao_filter),
+        )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
+
+
+def _stats_icao_clause(tbl, icao_filter: list[str] | None):
+    """ICAO clause for a rollup table that may not have an ``icao`` column."""
+    col = getattr(tbl, "icao", None)
+    if col is None:
+        # Only reachable with no filter (see _use_global), so a no-op is the
+        # correct clause rather than a silently dropped predicate.
+        return True
+    return _icao_clause(col, icao_filter)
+
+
 def _date_range(since: datetime, until: datetime) -> tuple[date_t, date_t]:
     """Convert datetime range to inclusive UTC date range for rollup queries.
 
@@ -108,17 +243,48 @@ def _date_range(since: datetime, until: datetime) -> tuple[date_t, date_t]:
 # ---------------------------------------------------------------------------
 
 
-def get_activity_summary(
-    db: Session, since: datetime, until: datetime,
-    source: str = "flight",
-    icao_filter: list[str] | None = None,
-) -> ActivitySummary:
-    """High-level counts for a date range, scoped by source.
+def _activity_counts_from_rollup(
+    db: Session, since: datetime, until: datetime, source: str,
+) -> tuple[int, int]:
+    """(distinct observations, distinct airports) for a window, from rollups.
 
-    ``observations_collected`` and ``airports_observed`` still query
-    ``verification_scores`` directly — the rollup groups by (date, source,
-    model, days_out, icao) so summing wouldn't give distinct counts, and
-    these are one bounded query per dashboard request, not per-group.
+    Distinct observations sum straight out of ``verification_activity_daily``:
+    an observation has exactly one ``observation_time`` and so belongs to
+    exactly one UTC date, which makes the per-day counts additive — this is an
+    exact answer, not an approximation.
+
+    Distinct airports are **not** additive that way (an airport reporting on
+    two days would be counted twice), so they come from a
+    ``COUNT(DISTINCT icao)`` over the per-airport daily table for the window —
+    cheap, because that table is ~12K rows/day rather than ~36K+ raw scores,
+    and the (date, source) prefix of ``ix_vds_date_model`` drives it.
+    """
+    since_d, until_d = _date_range(since, until)
+    obs_count = db.execute(
+        select(func.coalesce(func.sum(VerificationActivityDailyRow.n_distinct_obs), 0))
+        .where(
+            VerificationActivityDailyRow.date.between(since_d, until_d),
+            VerificationActivityDailyRow.source == source,
+        )
+    ).scalar() or 0
+    airport_count = db.execute(
+        select(func.count(func.distinct(VerificationDailyStatsRow.icao)))
+        .where(
+            VerificationDailyStatsRow.date.between(since_d, until_d),
+            VerificationDailyStatsRow.source == source,
+        )
+    ).scalar() or 0
+    return int(obs_count), int(airport_count)
+
+
+def _activity_counts_from_raw(
+    db: Session, since: datetime, until: datetime, source: str,
+    icao_filter: list[str] | None,
+) -> tuple[int, int]:
+    """(distinct observations, distinct airports) straight from raw scores.
+
+    The pre-#522 path. Still reached for country/airport-filtered requests
+    (small, bounded result sets) and whenever the Phase 1 gate is off.
     """
     common_where = (
         VerificationScoreRow.observation_time.between(since, until),
@@ -135,18 +301,55 @@ def get_activity_summary(
     # never enters the plan, so 7d and 30d both took ~19 min while 24h (which
     # got the range plan) took 2 s. Forcing the (source, observation_time)
     # range index returns in ~6 s on the same data. SQLite ignores the hint.
+    #
+    # Applied only to the *unfiltered* query, which is the one that went
+    # pathological: with an ICAO filter, ix_verif_scores_icao already gives a
+    # selective plan, and forcing a different index would fight it. Once the
+    # Phase 1 gate is permanently on, nothing unfiltered reaches here at all
+    # and both the hint and ix_verif_scores_source_time can be dropped —
+    # that removal is the explicit last step of Phase 1 (#522).
+    def _hinted(stmt):
+        if icao_filter:
+            return stmt
+        return stmt.with_hint(
+            VerificationScoreRow, _SCORES_SOURCE_TIME_HINT, dialect_name="mysql",
+        )
+
     obs_count = db.execute(
-        select(func.count(func.distinct(VerificationScoreRow.observation_id)))
-        .select_from(VerificationScoreRow)
-        .with_hint(VerificationScoreRow, _SCORES_SOURCE_TIME_HINT, dialect_name="mysql")
-        .where(*common_where)
+        _hinted(
+            select(func.count(func.distinct(VerificationScoreRow.observation_id)))
+            .select_from(VerificationScoreRow)
+        ).where(*common_where)
     ).scalar() or 0
     airport_count = db.execute(
-        select(func.count(func.distinct(VerificationScoreRow.icao)))
-        .select_from(VerificationScoreRow)
-        .with_hint(VerificationScoreRow, _SCORES_SOURCE_TIME_HINT, dialect_name="mysql")
-        .where(*common_where)
+        _hinted(
+            select(func.count(func.distinct(VerificationScoreRow.icao)))
+            .select_from(VerificationScoreRow)
+        ).where(*common_where)
     ).scalar() or 0
+    return int(obs_count), int(airport_count)
+
+
+def get_activity_summary(
+    db: Session, since: datetime, until: datetime,
+    source: str = "flight",
+    icao_filter: list[str] | None = None,
+) -> ActivitySummary:
+    """High-level counts for a date range, scoped by source.
+
+    Observation and airport counts come from the daily rollups once the #522
+    gate is on and the request is unfiltered; otherwise from raw
+    ``verification_scores``. Flight and cycle counts are small bounded queries
+    against their own tables either way.
+    """
+    if _use_global(icao_filter):
+        obs_count, airport_count = _activity_counts_from_rollup(
+            db, since, until, source,
+        )
+    else:
+        obs_count, airport_count = _activity_counts_from_raw(
+            db, since, until, source, icao_filter,
+        )
 
     flights_verified = 0
     flights_completed = 0
@@ -208,31 +411,23 @@ def get_category_accuracy(
     rows: list[CategoryAccuracyRow] = []
 
     since_d, until_d = _date_range(since, until)
+    v = _nwp_daily_table(icao_filter)
     # Total rows that contributed a category — n_cat_match + opt + pess
-    cat_total = (
-        VerificationDailyStatsRow.n_cat_match
-        + VerificationDailyStatsRow.n_cat_opt_1
-        + VerificationDailyStatsRow.n_cat_opt_2
-        + VerificationDailyStatsRow.n_cat_pess_1
-        + VerificationDailyStatsRow.n_cat_pess_2
-    )
+    cat_total = _cat_total_expr(v)
     model_rows = db.execute(
         select(
-            VerificationDailyStatsRow.model,
-            VerificationDailyStatsRow.days_out,
-            func.sum(VerificationDailyStatsRow.n_cat_match).label("n_match"),
+            v.model,
+            v.days_out,
+            func.sum(v.n_cat_match).label("n_match"),
             func.sum(cat_total).label("n_with_cat"),
         )
         .where(
-            VerificationDailyStatsRow.date.between(since_d, until_d),
-            VerificationDailyStatsRow.days_out.in_(_DAYS_OUT_COLS),
-            VerificationDailyStatsRow.source == source,
-            _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
+            v.date.between(since_d, until_d),
+            v.days_out.in_(_DAYS_OUT_COLS),
+            v.source == source,
+            _stats_icao_clause(v, icao_filter),
         )
-        .group_by(
-            VerificationDailyStatsRow.model,
-            VerificationDailyStatsRow.days_out,
-        )
+        .group_by(v.model, v.days_out)
     ).all()
 
     for model, days_out, n_match, n_with_cat in model_rows:
@@ -254,25 +449,13 @@ def get_category_accuracy(
             sample_count=sample,
         ))
 
-    # TAF — still raw (taf_verification_scores has no model/days_out)
-    taf_row = db.execute(
-        select(
-            func.avg(TafVerificationScoreRow.category_match),
-            func.count(TafVerificationScoreRow.id),
-        ).where(
-            TafVerificationScoreRow.observation_time.between(since, until),
-            TafVerificationScoreRow.category_match.isnot(None),
-            TafVerificationScoreRow.source == source,
-            _icao_clause(TafVerificationScoreRow.icao, icao_filter),
-        )
-    ).one()
-
-    if taf_row[1] > 0:
+    n_match, n_with_cat = _taf_category_counts(db, since, until, source, icao_filter)
+    if n_with_cat > 0:
         rows.append(CategoryAccuracyRow(
             model="TAF",
             days_out=0,
-            accuracy_pct=round(float(taf_row[0]) * 100, 1) if taf_row[0] is not None else None,
-            sample_count=taf_row[1],
+            accuracy_pct=round(n_match / n_with_cat * 100, 1),
+            sample_count=n_with_cat,
         ))
 
     return rows
@@ -378,33 +561,25 @@ def get_category_bias_stats(
     are "2 or more levels off" — see :class:`CategoryBiasStats`.
     """
     since_d, until_d = _date_range(since, until)
-    cat_total = (
-        VerificationDailyStatsRow.n_cat_match
-        + VerificationDailyStatsRow.n_cat_opt_1
-        + VerificationDailyStatsRow.n_cat_opt_2
-        + VerificationDailyStatsRow.n_cat_pess_1
-        + VerificationDailyStatsRow.n_cat_pess_2
-    )
+    v = _nwp_daily_table(icao_filter)
+    cat_total = _cat_total_expr(v)
     rows = db.execute(
         select(
-            VerificationDailyStatsRow.model,
-            VerificationDailyStatsRow.days_out,
+            v.model,
+            v.days_out,
             func.sum(cat_total).label("total_scores"),
-            func.sum(VerificationDailyStatsRow.n_cat_opt_1).label("opt_1"),
-            func.sum(VerificationDailyStatsRow.n_cat_opt_2).label("opt_2"),
-            func.sum(VerificationDailyStatsRow.n_cat_pess_1).label("pess_1"),
-            func.sum(VerificationDailyStatsRow.n_cat_pess_2).label("pess_2"),
+            func.sum(v.n_cat_opt_1).label("opt_1"),
+            func.sum(v.n_cat_opt_2).label("opt_2"),
+            func.sum(v.n_cat_pess_1).label("pess_1"),
+            func.sum(v.n_cat_pess_2).label("pess_2"),
         )
         .where(
-            VerificationDailyStatsRow.date.between(since_d, until_d),
-            VerificationDailyStatsRow.days_out.in_(_NEAR_TERM_LEADS),
-            VerificationDailyStatsRow.source == source,
-            _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
+            v.date.between(since_d, until_d),
+            v.days_out.in_(_NEAR_TERM_LEADS),
+            v.source == source,
+            _stats_icao_clause(v, icao_filter),
         )
-        .group_by(
-            VerificationDailyStatsRow.model,
-            VerificationDailyStatsRow.days_out,
-        )
+        .group_by(v.model, v.days_out)
     ).all()
 
     return sorted(
@@ -439,28 +614,25 @@ def get_wind_advisory_accuracy(
     NWP advisory counts come from the rollup. TAF still raw.
     """
     since_d, until_d = _date_range(since, until)
-    adv_total = (
-        VerificationDailyStatsRow.n_advisory_match
-        + VerificationDailyStatsRow.n_advisory_opt
-        + VerificationDailyStatsRow.n_advisory_pess
-    )
+    v = _nwp_daily_table(icao_filter)
+    adv_total = _adv_total_expr(v)
     rows = db.execute(
         select(
-            VerificationDailyStatsRow.model,
-            func.sum(VerificationDailyStatsRow.n_advisory_match).label("n_match"),
+            v.model,
+            func.sum(v.n_advisory_match).label("n_match"),
             func.sum(adv_total).label("n_with_adv"),
         )
         .where(
-            VerificationDailyStatsRow.date.between(since_d, until_d),
-            VerificationDailyStatsRow.source == source,
+            v.date.between(since_d, until_d),
+            v.source == source,
             # Scoped to the same lead times as get_category_accuracy. A single
             # accuracy number blended over *every* lead time isn't a property of
             # the model — it's a property of whatever mix of lead times happens
             # to be in the table, so it moves whenever the horizon moves (#415).
-            VerificationDailyStatsRow.days_out.in_(_DAYS_OUT_COLS),
-            _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
+            v.days_out.in_(_DAYS_OUT_COLS),
+            _stats_icao_clause(v, icao_filter),
         )
-        .group_by(VerificationDailyStatsRow.model)
+        .group_by(v.model)
     ).all()
 
     results = []
@@ -475,24 +647,12 @@ def get_wind_advisory_accuracy(
             sample_count=sample,
         ))
 
-    # TAF — still raw
-    taf_row = db.execute(
-        select(
-            func.avg(TafVerificationScoreRow.advisory_match),
-            func.count(TafVerificationScoreRow.id),
-        ).where(
-            TafVerificationScoreRow.observation_time.between(since, until),
-            TafVerificationScoreRow.advisory_match.isnot(None),
-            TafVerificationScoreRow.source == source,
-            _icao_clause(TafVerificationScoreRow.icao, icao_filter),
-        )
-    ).one()
-
-    if taf_row[1] > 0:
+    n_match, n_with_adv = _taf_advisory_counts(db, since, until, source, icao_filter)
+    if n_with_adv > 0:
         results.append(WindAdvisoryStats(
             model="TAF",
-            accuracy_pct=round(float(taf_row[0]) * 100, 1) if taf_row[0] is not None else None,
-            sample_count=taf_row[1],
+            accuracy_pct=round(n_match / n_with_adv * 100, 1),
+            sample_count=n_with_adv,
         ))
 
     return results
@@ -554,6 +714,61 @@ def _gust_stats(
     )
 
 
+def _taf_gust_row(
+    db: Session, since: datetime, until: datetime, source: str,
+    icao_filter: list[str] | None,
+):
+    """One row of TAF gust aggregates, from the rollup or raw.
+
+    Both paths select the *same labelled columns* — ``taf_verification_daily``
+    stores exactly what :func:`taf_gust_aggregate_columns` produces — so the
+    caller unpacks one shape and the two paths can't drift into reporting
+    different numbers for the same window.
+    """
+    if _use_global(icao_filter):
+        since_d, until_d = _date_range(since, until)
+        t = TafVerificationDailyRow
+        return db.execute(
+            select(
+                func.coalesce(func.sum(t.n), 0).label("n"),
+                func.coalesce(func.sum(t.n_gust), 0).label("n_gust"),
+                func.sum(t.sum_abs_gust_delta_kt).label("sum_abs_gust_delta_kt"),
+                func.sum(t.sum_gust_delta_kt).label("sum_gust_delta_kt"),
+                func.coalesce(func.sum(t.n_gust_flagged_peak), 0).label(
+                    "n_gust_flagged_peak"
+                ),
+                func.sum(t.sum_gust_flagged_over_peak_kt).label(
+                    "sum_gust_flagged_over_peak_kt"
+                ),
+                func.coalesce(func.sum(t.n_taf_gust_flag), 0).label(
+                    "n_taf_gust_flag"
+                ),
+                func.coalesce(func.sum(t.n_obs_gust), 0).label("n_obs_gust"),
+                func.coalesce(func.sum(t.n_gust_flag_hit), 0).label(
+                    "n_gust_flag_hit"
+                ),
+            ).where(
+                t.date.between(since_d, until_d),
+                t.source == source,
+            )
+        ).one()
+
+    t = TafVerificationScoreRow
+    o = VerificationObservationRow
+    return db.execute(
+        select(
+            func.count(t.id).label("n"),
+            *taf_gust_aggregate_columns(),
+        )
+        .join(o, t.observation_id == o.id)
+        .where(
+            t.observation_time.between(since, until),
+            t.source == source,
+            _icao_clause(t.icao, icao_filter),
+        )
+    ).one()
+
+
 def get_gust_accuracy(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
@@ -571,7 +786,7 @@ def get_gust_accuracy(
     side by side rather than averaged.
     """
     since_d, until_d = _date_range(since, until)
-    v = VerificationDailyStatsRow
+    v = _nwp_daily_table(icao_filter)
     rows = db.execute(
         select(
             v.model,
@@ -590,7 +805,7 @@ def get_gust_accuracy(
             v.date.between(since_d, until_d),
             v.source == source,
             v.days_out.in_(_DAYS_OUT_COLS),
-            _icao_clause(v.icao, icao_filter),
+            _stats_icao_clause(v, icao_filter),
         )
         .group_by(v.model, v.days_out)
     ).all()
@@ -614,57 +829,20 @@ def get_gust_accuracy(
 
     results.sort(key=lambda s: (s.model, s.days_out))
 
-    # TAF — raw, joined to the observation for the gust group and peak.
-    t = TafVerificationScoreRow
-    o = VerificationObservationRow
-    peak = func.coalesce(o.wind_gust_kt, o.wind_speed_kt)
-    taf_flagged = o.taf_wind_gust_kt.isnot(None)
-    obs_gusting = o.wind_gust_kt.isnot(None)
-    taf_row = db.execute(
-        select(
-            func.count(t.id).label("n"),
-            func.count(t.wind_gust_delta_kt).label("n_gust"),
-            func.sum(func.abs(t.wind_gust_delta_kt)).label("sum_abs_gust"),
-            func.sum(t.wind_gust_delta_kt).label("sum_gust"),
-            func.coalesce(
-                func.sum(case((taf_flagged, 1), else_=0)), 0,
-            ).label("n_flagged"),
-            func.coalesce(
-                func.sum(case((taf_flagged & peak.isnot(None), 1), else_=0)), 0,
-            ).label("n_flagged_peak"),
-            func.sum(
-                case(
-                    (taf_flagged & peak.isnot(None), o.taf_wind_gust_kt - peak),
-                    else_=None,
-                )
-            ).label("sum_over_peak"),
-            func.coalesce(
-                func.sum(case((obs_gusting, 1), else_=0)), 0,
-            ).label("n_obs_gust"),
-            func.coalesce(
-                func.sum(case((taf_flagged & obs_gusting, 1), else_=0)), 0,
-            ).label("n_flag_hit"),
-        )
-        .join(o, t.observation_id == o.id)
-        .where(
-            t.observation_time.between(since, until),
-            t.source == source,
-            _icao_clause(t.icao, icao_filter),
-        )
-    ).one()
+    taf_row = _taf_gust_row(db, since, until, source, icao_filter)
 
-    if taf_row.n:
+    if taf_row is not None and taf_row.n:
         taf_stats = _gust_stats(
             "TAF", 0,
             n=int(taf_row.n or 0),
             n_gust=int(taf_row.n_gust or 0),
-            sum_abs_gust=taf_row.sum_abs_gust,
-            sum_gust=taf_row.sum_gust,
-            n_flagged=int(taf_row.n_flagged or 0),
-            n_flagged_peak=int(taf_row.n_flagged_peak or 0),
-            sum_over_peak=taf_row.sum_over_peak,
+            sum_abs_gust=taf_row.sum_abs_gust_delta_kt,
+            sum_gust=taf_row.sum_gust_delta_kt,
+            n_flagged=int(taf_row.n_taf_gust_flag or 0),
+            n_flagged_peak=int(taf_row.n_gust_flagged_peak or 0),
+            sum_over_peak=taf_row.sum_gust_flagged_over_peak_kt,
             n_obs_gust=int(taf_row.n_obs_gust or 0),
-            n_flag_hit=int(taf_row.n_flag_hit or 0),
+            n_flag_hit=int(taf_row.n_gust_flag_hit or 0),
         )
         if taf_stats.n_gust or taf_stats.n_flagged or taf_stats.n_obs_gust:
             results.append(taf_stats)

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
+
+from conftest import make_app_engine
 
 from flyfun_common.db import DEV_USER_ID
 from flyfun_common.db.models import UserRow
@@ -542,11 +547,53 @@ class TestDebriefExemption:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def prune_session():
+    """Isolated engine + session for the raw pruner.
+
+    ``prune_raw_observations`` commits after every delete batch — a prune that
+    dies halfway must leave a smaller consistent table rather than roll back
+    an hour of work. That defeats the shared ``db_session`` fixture, whose
+    isolation is a rollback against a session-scoped in-memory engine, so
+    committed deletes (and everything else pending in the session) would leak
+    into later tests. Its own engine keeps the commit semantics honest.
+    """
+    engine = make_app_engine()
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+    engine.dispose()
+
+
+@pytest.fixture
+def no_archive_gate(monkeypatch):
+    """Turn off the Phase-3 archive gate for tests about the other rules.
+
+    The gate is on by default and refuses to delete a month with no verified
+    Parquet manifest, which would otherwise mask every other assertion here.
+    It gets its own tests below.
+    """
+    monkeypatch.setenv("VERIFICATION_PRUNE_REQUIRE_ARCHIVE", "0")
+
+
+def _manifest_month(db, period: str, counts: dict[str, int]) -> None:
+    """Record archive manifests for a month so the prune gate passes."""
+    from weatherbrief.db.models import ArchiveManifestRow
+
+    for table, n in counts.items():
+        db.add(ArchiveManifestRow(
+            table_name=table, period=period, row_count=n,
+            file_path=f"{table}/{period}.parquet", sha256="0" * 64,
+            created_at=_utc(2026, 4, 1, 0, 0),
+        ))
+    db.flush()
+
+
 class TestPruneRawObservations:
     """Verify the raw-obs retention pruner — disabled-by-default, safety
     belts, and accurate per-table counters when actually pruning."""
 
-    def test_disabled_default_does_nothing(self, db_session):
+    def test_disabled_default_does_nothing(self, prune_session):
         from weatherbrief.db.models import VerificationObservationRow
 
         # Insert one obs from years ago — would absolutely be pruned if
@@ -556,15 +603,15 @@ class TestPruneRawObservations:
             observation_time=_utc(2020, 1, 1, 0, 0),
             collected_at=_utc(2020, 1, 1, 0, 0),
         )
-        db_session.add(old)
-        db_session.flush()
+        prune_session.add(old)
+        prune_session.flush()
 
-        result = prune_raw_observations(db_session)
+        result = prune_raw_observations(prune_session)
         assert result == {
             "observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0,
         }
 
-    def test_no_summarised_months_refuses_to_delete(self, db_session):
+    def test_no_summarised_months_refuses_to_delete(self, prune_session):
         """Safety belt: even if retain_days is short, refuse to delete when
         no months have been rolled up — could indicate a broken rollup loop."""
         from weatherbrief.db.models import VerificationObservationRow
@@ -574,15 +621,17 @@ class TestPruneRawObservations:
             observation_time=_utc(2020, 1, 1, 0, 0),
             collected_at=_utc(2020, 1, 1, 0, 0),
         )
-        db_session.add(old)
-        db_session.flush()
+        prune_session.add(old)
+        prune_session.flush()
 
         # Force an aggressive retention but no AirportMonthlySummary rows exist
-        result = prune_raw_observations(db_session, retain_days=1)
+        result = prune_raw_observations(prune_session, retain_days=1)
         assert result["observations"] == 0
-        assert db_session.get(VerificationObservationRow, old.id) is not None
+        assert prune_session.get(VerificationObservationRow, old.id) is not None
 
-    def test_deletes_children_before_parent_with_accurate_counters(self, db_session):
+    def test_deletes_children_before_parent_with_accurate_counters(
+        self, prune_session, no_archive_gate,
+    ):
         """Children must be deleted before parent so per-table counters
         reflect what was actually removed (with CASCADE FKs the parent-first
         order would silently zero the child counters)."""
@@ -598,8 +647,8 @@ class TestPruneRawObservations:
             observation_time=_utc(2026, 2, 15, 12, 0),
             collected_at=_utc(2026, 2, 15, 12, 0),
         )
-        db_session.add(feb_obs)
-        db_session.flush()
+        prune_session.add(feb_obs)
+        prune_session.flush()
         feb_id = feb_obs.id  # capture before prune (which expires the session)
         score = VerificationScoreRow(
             icao="LFPG",
@@ -611,20 +660,20 @@ class TestPruneRawObservations:
             days_out=0,
             source="standalone",
         )
-        db_session.add(score)
+        prune_session.add(score)
         # Mark Feb 2026 as summarised so retention will prune it.
-        db_session.add(AirportMonthlySummaryRow(
+        prune_session.add(AirportMonthlySummaryRow(
             month=_utc(2026, 2, 1), icao="LFPG", n_obs=1,
         ))
-        db_session.flush()
+        prune_session.flush()
 
         # retain_days=1 with cutoff way in the future from Feb 2026 → prune
-        result = prune_raw_observations(db_session, retain_days=1)
+        result = prune_raw_observations(prune_session, retain_days=1)
         assert result["observations"] == 1
         assert result["scores"] == 1  # would be 0 if parent-first w/ CASCADE
-        assert db_session.get(VerificationObservationRow, feb_id) is None
+        assert prune_session.get(VerificationObservationRow, feb_id) is None
 
-    def test_unsummarised_month_left_alone(self, db_session):
+    def test_unsummarised_month_left_alone(self, prune_session, no_archive_gate):
         """Obs from a month that's never been rolled up stays put even when
         the cutoff has passed — protects against a broken rollup loop."""
         from weatherbrief.db.models import (
@@ -643,15 +692,200 @@ class TestPruneRawObservations:
             observation_time=_utc(2026, 3, 15, 12, 0),
             collected_at=_utc(2026, 3, 15, 12, 0),
         )
-        db_session.add_all([feb_obs, mar_obs])
-        db_session.add(AirportMonthlySummaryRow(
+        prune_session.add_all([feb_obs, mar_obs])
+        prune_session.add(AirportMonthlySummaryRow(
             month=_utc(2026, 3, 1), icao="LFPG", n_obs=1,
         ))
-        db_session.flush()
+        prune_session.flush()
         feb_id, mar_id = feb_obs.id, mar_obs.id  # capture before prune
 
-        result = prune_raw_observations(db_session, retain_days=1)
+        result = prune_raw_observations(prune_session, retain_days=1)
         # Only March (the summarised month past cutoff) gets pruned
         assert result["observations"] == 1
-        assert db_session.get(VerificationObservationRow, feb_id) is not None
-        assert db_session.get(VerificationObservationRow, mar_id) is None
+        assert prune_session.get(VerificationObservationRow, feb_id) is not None
+        assert prune_session.get(VerificationObservationRow, mar_id) is None
+
+    def test_no_archive_manifest_blocks_delete(self, prune_session):
+        """The archive gate: no manifest, no delete, and it says so."""
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+        )
+
+        obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        prune_session.add(obs)
+        prune_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=1,
+        ))
+        prune_session.flush()
+        obs_id = obs.id
+
+        result = prune_raw_observations(prune_session, retain_days=1)
+        assert result["observations"] == 0
+        assert prune_session.get(VerificationObservationRow, obs_id) is not None
+
+    def test_manifest_matching_live_count_allows_delete(self, prune_session):
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+        )
+
+        obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        prune_session.add(obs)
+        prune_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=1,
+        ))
+        prune_session.flush()
+        obs_id = obs.id
+        _manifest_month(prune_session, "2026-02", {
+            "observations": 1, "scores": 0, "taf_scores": 0,
+        })
+
+        result = prune_raw_observations(prune_session, retain_days=1)
+        assert result["observations"] == 1
+        assert prune_session.get(VerificationObservationRow, obs_id) is None
+
+    def test_stale_manifest_count_blocks_delete(self, prune_session):
+        """A month that gained rows after archiving must not be deleted."""
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+        )
+
+        for day in (14, 15):
+            prune_session.add(VerificationObservationRow(
+                icao="LFPG",
+                observation_time=_utc(2026, 2, day, 12, 0),
+                collected_at=_utc(2026, 2, day, 12, 0),
+            ))
+        prune_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=2,
+        ))
+        prune_session.flush()
+        # Manifest says 1 row; the table now holds 2.
+        _manifest_month(prune_session, "2026-02", {
+            "observations": 1, "scores": 0, "taf_scores": 0,
+        })
+
+        result = prune_raw_observations(prune_session, retain_days=1)
+        assert result["observations"] == 0
+
+    def test_flight_scores_and_linked_observations_are_exempt(
+        self, prune_session, no_archive_gate,
+    ):
+        """Flight-track data survives pruning; standalone data alongside it doesn't."""
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            FlightVerificationMapRow,
+            FlightRow,
+            VerificationObservationRow,
+            VerificationScoreRow,
+        )
+
+        shared_obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        lone_obs = VerificationObservationRow(
+            icao="EDDF",
+            observation_time=_utc(2026, 2, 15, 13, 0),
+            collected_at=_utc(2026, 2, 15, 13, 0),
+        )
+        prune_session.add_all([shared_obs, lone_obs])
+        prune_session.flush()
+
+        prune_session.add(UserRow(id="u1", email="u1@example.com"))
+        prune_session.flush()
+        flight = FlightRow(
+            id="LFPG-EDDF-2026-02-15-abc", user_id="u1",
+            route_name="LFPG-EDDF", waypoints_json="[]",
+            departure_time=_utc(2026, 2, 15, 10, 0),
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            flight_duration_hours=2.0,
+        )
+        prune_session.add(flight)
+        prune_session.add(FlightVerificationMapRow(
+            flight_id=flight.id, icao="LFPG", observation_id=shared_obs.id,
+        ))
+        # Same observation carries both a flight score and a standalone score.
+        prune_session.add(VerificationScoreRow(
+            icao="LFPG", observation_id=shared_obs.id,
+            observation_time=shared_obs.observation_time,
+            model="gfs", model_init_time=_utc(2026, 2, 15, 0, 0),
+            lead_hours=12, days_out=0, source="flight",
+        ))
+        prune_session.add(VerificationScoreRow(
+            icao="LFPG", observation_id=shared_obs.id,
+            observation_time=shared_obs.observation_time,
+            model="gfs", model_init_time=_utc(2026, 2, 15, 6, 0),
+            lead_hours=6, days_out=0, source="standalone",
+        ))
+        prune_session.add(VerificationScoreRow(
+            icao="EDDF", observation_id=lone_obs.id,
+            observation_time=lone_obs.observation_time,
+            model="gfs", model_init_time=_utc(2026, 2, 15, 6, 0),
+            lead_hours=7, days_out=0, source="standalone",
+        ))
+        prune_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=2,
+        ))
+        prune_session.flush()
+        shared_id, lone_id = shared_obs.id, lone_obs.id
+
+        result = prune_raw_observations(prune_session, retain_days=1)
+
+        # Both standalone scores gone, the flight score kept.
+        assert result["scores"] == 2
+        remaining = prune_session.execute(select(VerificationScoreRow)).scalars().all()
+        assert [s.source for s in remaining] == ["flight"]
+        # The flight-linked observation survives (deleting it would cascade
+        # into the exempt flight score); the standalone-only one doesn't.
+        assert prune_session.get(VerificationObservationRow, shared_id) is not None
+        assert prune_session.get(VerificationObservationRow, lone_id) is None
+        assert result["observations"] == 1
+
+
+# ---------------------------------------------------------------------------
+# rotate_snapshot_inbox
+# ---------------------------------------------------------------------------
+
+
+class TestRotateSnapshotInbox:
+    def test_disabled_by_default(self, tmp_path, monkeypatch):
+        from weatherbrief.tasks.retention import rotate_snapshot_inbox
+
+        monkeypatch.delenv("SNAPSHOT_INBOX_RETENTION_DAYS", raising=False)
+        art = tmp_path / "eu-20260101.sqlite"
+        art.write_bytes(b"x" * 10)
+        os.utime(art, (0, 0))  # epoch — as old as it gets
+
+        assert rotate_snapshot_inbox(tmp_path)["deleted"] == 0
+        assert art.exists()
+
+    def test_removes_only_old_artifacts(self, tmp_path):
+        from weatherbrief.tasks.retention import rotate_snapshot_inbox
+
+        old = tmp_path / "eu-20260101.sqlite"
+        old.write_bytes(b"x" * 10)
+        os.utime(old, (0, 0))
+        fresh = tmp_path / "us-20260401.sqlite"
+        fresh.write_bytes(b"y" * 10)
+        unrelated = tmp_path / "notes.txt"
+        unrelated.write_text("keep me")
+        os.utime(unrelated, (0, 0))
+
+        result = rotate_snapshot_inbox(tmp_path, retain_days=30)
+        assert result["deleted"] == 1
+        assert result["bytes_freed"] == 10
+        assert not old.exists()
+        assert fresh.exists()
+        assert unrelated.exists()

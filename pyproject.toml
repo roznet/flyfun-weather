@@ -54,6 +54,10 @@ dependencies = [
     # (#457) depend on it directly, so pin it explicitly.
     "pyproj>=3.4",
     "timezonefinder>=6.2",
+    # Row-level Parquet archive for the verification tables (#522). Imported
+    # lazily inside tasks/archive so a deployment that hasn't enabled the
+    # archive still starts if the wheel is missing.
+    "pyarrow>=15",
 ]
 
 [project.optional-dependencies]

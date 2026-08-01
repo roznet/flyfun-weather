@@ -1,22 +1,32 @@
-"""Tests for verification monthly rollup aggregation."""
+"""Tests for verification monthly rollup aggregation.
+
+Since #522 the monthly rollup reads ``verification_daily_stats`` rather than
+raw scores, so every integration test here rolls the relevant UTC days first —
+that dependency is the point of the rewrite (a month is the sum of its days
+and cannot disagree with them), so the tests exercise it rather than mock it.
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy import select
 
 from weatherbrief.db.models import (
+    TafVerificationDailyRow,
     TafVerificationScoreRow,
+    VerificationDailyStatsRow,
     VerificationMonthlyStatsRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.tasks.verification_daily_rollup import rollup_day
 from weatherbrief.tasks.verification_rollup import (
     advisory_direction,
     category_direction,
     completed_months,
+    prune_daily_stats,
     rollup_month,
     run_monthly_rollup,
 )
@@ -24,6 +34,12 @@ from weatherbrief.tasks.verification_rollup import (
 
 def _utc(*args) -> datetime:
     return datetime(*args, tzinfo=timezone.utc)
+
+
+def _roll(db_session, *days: date) -> None:
+    """Roll the given UTC days into the daily tables the monthly rollup reads."""
+    for d in days:
+        rollup_day(db_session, d)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +213,8 @@ def _make_taf_score(
 MARCH_1 = _utc(2026, 3, 1)
 MARCH_15 = _utc(2026, 3, 15, 12)
 MARCH_16 = _utc(2026, 3, 16, 12)
+MARCH_15_D = date(2026, 3, 15)
+MARCH_16_D = date(2026, 3, 16)
 
 
 class TestRollupMonth:
@@ -215,6 +233,7 @@ class TestRollupMonth:
                           obs_cat="MVFR", model_cat="IFR",
                           ceiling_delta=-300.0, temp_delta=-1.0)
 
+        _roll(db_session, MARCH_15_D, MARCH_16_D)
         n = rollup_month(db_session, MARCH_1)
         assert n == 1  # one group: (standalone, gfs, 1, LFPG)
 
@@ -236,7 +255,14 @@ class TestRollupMonth:
         # Temperature MAE: avg(|2|, |-1|) = 1.5
         assert row.temperature_mae_c == pytest.approx(1.5)
 
-    def test_taf_scores_rollup(self, db_session):
+    def test_taf_is_out_of_monthly_scope(self, db_session):
+        """TAF lands in taf_verification_daily, never in the monthly table (#522).
+
+        The monthly table is keyed on (model, days_out); TAF carries
+        lead_hours, which is what kept it out of the daily NWP rollup in the
+        first place. It now has its own daily table and is served from there
+        at query time.
+        """
         obs = _make_obs(db_session, "EGLL", MARCH_15)
 
         # TAF optimistic by 1 (MVFR obs, VFR forecast), lead 6h -> days_out=0
@@ -244,20 +270,19 @@ class TestRollupMonth:
                         obs_cat="MVFR", taf_cat="VFR",
                         ceiling_delta=200.0)
 
-        n = rollup_month(db_session, MARCH_1)
-        assert n == 1
-
-        row = db_session.execute(
+        _roll(db_session, MARCH_15_D)
+        assert rollup_month(db_session, MARCH_1) == 0
+        assert db_session.execute(
             select(VerificationMonthlyStatsRow)
-        ).scalar_one()
+        ).scalars().all() == []
 
-        assert row.model == "taf"
-        assert row.days_out == 0
-        assert row.n_scores == 1
-        assert row.n_cat_optimistic_1 == 1
-        # TAF has no temperature or precip
-        assert row.temperature_mae_c is None
-        assert row.n_precip_hit is None
+        taf_row = db_session.execute(
+            select(TafVerificationDailyRow)
+        ).scalars().one()
+        assert taf_row.days_out == 0
+        assert taf_row.n == 1
+        assert taf_row.n_cat_opt_1 == 1
+        assert taf_row.sum_abs_ceiling_delta_ft == pytest.approx(200.0)
 
     def test_multiple_airports_and_models(self, db_session):
         obs_pg = _make_obs(db_session, "LFPG", MARCH_15)
@@ -268,6 +293,7 @@ class TestRollupMonth:
                           model_init_time=_utc(2026, 3, 15, 6))
         _make_model_score(db_session, obs_ll, model="gfs", days_out=0)
 
+        _roll(db_session, MARCH_15_D)
         n = rollup_month(db_session, MARCH_1)
         # 3 groups: (standalone,gfs,0,LFPG), (standalone,icon,0,LFPG), (standalone,gfs,0,EGLL)
         assert n == 3
@@ -276,6 +302,7 @@ class TestRollupMonth:
         obs = _make_obs(db_session, "LFPG", MARCH_15)
         _make_model_score(db_session, obs, model="gfs", days_out=1)
 
+        _roll(db_session, MARCH_15_D)
         rollup_month(db_session, MARCH_1)
         count_1 = db_session.execute(
             select(VerificationMonthlyStatsRow)
@@ -305,6 +332,7 @@ class TestRollupMonth:
                           obs_precip=False, model_precip=True,
                           model_init_time=_utc(2026, 3, 15, 12))
 
+        _roll(db_session, MARCH_15_D)
         rollup_month(db_session, MARCH_1)
         row = db_session.execute(
             select(VerificationMonthlyStatsRow)
@@ -321,6 +349,7 @@ class TestCompletedMonths:
         obs = _make_obs(db_session, "LFPG", MARCH_15)
         _make_model_score(db_session, obs, model="gfs", days_out=1)
 
+        _roll(db_session, MARCH_15_D)
         months = completed_months(db_session)
         assert MARCH_1 in months
 
@@ -328,6 +357,7 @@ class TestCompletedMonths:
         obs = _make_obs(db_session, "LFPG", MARCH_15)
         _make_model_score(db_session, obs, model="gfs", days_out=1)
 
+        _roll(db_session, MARCH_15_D)
         # Roll up March
         rollup_month(db_session, MARCH_1)
 
@@ -341,11 +371,43 @@ class TestRunMonthlyRollup:
         _make_model_score(db_session, obs, model="gfs", days_out=1)
         _make_taf_score(db_session, obs, lead_hours=12)
 
+        _roll(db_session, MARCH_15_D)
         total = run_monthly_rollup(db_session)
-        assert total == 2  # 1 model group + 1 TAF group
+        assert total == 1  # 1 model group; TAF is served from its own daily table
 
         rows = db_session.execute(
             select(VerificationMonthlyStatsRow)
         ).scalars().all()
         models = {r.model for r in rows}
-        assert models == {"gfs", "taf"}
+        assert models == {"gfs"}
+
+
+class TestPruneDailyStats:
+    """Phase 4 follow-up — off unless explicitly configured."""
+
+    def test_disabled_by_default(self, db_session, monkeypatch):
+        monkeypatch.delenv(
+            "VERIFICATION_DAILY_STATS_RETENTION_MONTHS", raising=False,
+        )
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1)
+        _roll(db_session, MARCH_15_D)
+
+        assert prune_daily_stats(db_session) == 0
+        assert db_session.execute(
+            select(VerificationDailyStatsRow)
+        ).scalars().all() != []
+
+    def test_prunes_rows_older_than_window(self, db_session):
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1)
+        _roll(db_session, MARCH_15_D)
+
+        # March 2026 is comfortably more than 1 month before "now" in the
+        # frozen test clock's future — retain_months is passed explicitly so
+        # the test doesn't depend on the env gate.
+        deleted = prune_daily_stats(db_session, retain_months=1)
+        assert deleted >= 1
+        assert db_session.execute(
+            select(VerificationDailyStatsRow)
+        ).scalars().all() == []

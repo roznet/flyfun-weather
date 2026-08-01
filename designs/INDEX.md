@@ -163,9 +163,10 @@ Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
 ## Verification, evaluation & pilot feedback
 
 ### metar-taf-accuracy [project]
-Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone pan-European monitoring (~830 airports) via three decoupled loops (METAR ingest, forecast+sounding fetch, scoring). Monthly rollups, dashboard cache with staleness tracking, graceful degradation.
-Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `run_monthly_rollup`, `rebuild_all`, `is_stale`, `VerificationDigestData`, `VerificationObservation`
+Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone pan-European monitoring (~830 airports) via three decoupled loops (METAR ingest, forecast+sounding fetch, scoring). Daily/monthly rollups, dashboard cache with staleness tracking, graceful degradation. Storage is tiered (#522): raw rows in MySQL for a bounded online window, aggregates forever in rollup tables, row-level history forever as Parquet under `DATA_DIR/archive/` — every phase behind an env gate, rollout runbook in `plans/verification-data-tiering.md`.
+Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `rollup_day`, `run_monthly_rollup`, `run_archive`, `verify_archives`, `prune_raw_observations`, `rebuild_all`, `is_stale`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
+→ Rollout plan: plans/verification-data-tiering.md
 
 ### eval-digest-workbench [project]
 Dev-only golden-labelling workbench for the LLM digest eval (#254): renders the standard briefing view for a curated corpus of pulled prod packs, with an in-view panel to record golden GREEN/AMBER/RED labels per guidance. File-based corpus served through existing endpoints via a "virtual-flight" resolver (`eval-<corpus_id>` ids), runtime-gated by `WEATHERBRIEF_EVAL_WORKBENCH` + admin (never in prod). Labels committed (`label.json`), pack payloads gitignored/re-pullable. Backend+scripts+tests done; frontend written, runtime verification pending.
