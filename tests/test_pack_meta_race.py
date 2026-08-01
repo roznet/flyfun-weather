@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import sessionmaker
 
 from flyfun_common.db import DEV_USER_ID
+from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.storage.flights import load_pack_meta, save_flight, save_pack_meta
@@ -80,25 +82,47 @@ class TestSavePackMetaRace:
         assert loaded.assessment_reason == "digest concluded all clear"
         assert loaded.has_digest is True
 
-    def test_session_survives_the_conflict(
-        self, db_session, dev_user, sample_flight
-    ):
+    def test_session_survives_the_conflict(self, sample_flight):
         """The SAVEPOINT contains the failure: the session stays usable and a
-        commit afterwards persists both the raced row and later work."""
-        save_flight(db_session, sample_flight, dev_user)
-        save_pack_meta(db_session, _meta(sample_flight.id))
-        save_pack_meta(db_session, _meta(sample_flight.id, assessment="GREEN"))
+        commit afterwards persists both the raced row and later work.
 
-        later = _meta(
-            sample_flight.id,
-            fetch_timestamp=datetime(2026, 2, 20, 9, 0, 0, tzinfo=timezone.utc),
-            days_out=1,
-        )
-        save_pack_meta(db_session, later)
-        db_session.commit()
+        Runs on a private engine, not the shared session-scoped ``db_engine``:
+        committing there would persist the dev-user row and make every later
+        ``dev_user`` fixture setup collide on ``users.id``.
+        """
+        from conftest import make_app_engine
 
-        assert _pack_count(db_session, sample_flight.id) == 2
-        loaded = load_pack_meta(
-            db_session, sample_flight.id, later.fetch_timestamp
-        )
-        assert loaded.days_out == 1
+        engine = make_app_engine()
+        session = sessionmaker(bind=engine)()
+        try:
+            session.add(
+                UserRow(
+                    id=DEV_USER_ID,
+                    provider="local",
+                    provider_sub="dev",
+                    email="dev@localhost",
+                    display_name="Dev User",
+                    approved=True,
+                )
+            )
+            session.flush()
+            save_flight(session, sample_flight, DEV_USER_ID)
+            save_pack_meta(session, _meta(sample_flight.id))
+            save_pack_meta(session, _meta(sample_flight.id, assessment="GREEN"))
+
+            later = _meta(
+                sample_flight.id,
+                fetch_timestamp=datetime(2026, 2, 20, 9, 0, 0, tzinfo=timezone.utc),
+                days_out=1,
+            )
+            save_pack_meta(session, later)
+            session.commit()
+
+            assert _pack_count(session, sample_flight.id) == 2
+            loaded = load_pack_meta(
+                session, sample_flight.id, later.fetch_timestamp
+            )
+            assert loaded.days_out == 1
+        finally:
+            session.close()
+            engine.dispose()
