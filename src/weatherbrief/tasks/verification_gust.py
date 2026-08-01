@@ -221,15 +221,6 @@ def backfill_taf_gust_deltas(
     return updated
 
 
-def _naive_utc(dt: datetime | None) -> datetime | None:
-    """Normalise to naive UTC so SQLite and MySQL rows key identically."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 def backfill_model_gust(db: Session, *, days: int = 10) -> int:
     """Fill model gust fields on ``verification_scores`` from snapshots.
 
@@ -377,8 +368,8 @@ def _backfill_model_gust_day(
 
     by_key: dict[tuple, list[tuple]] = {}
     for icao, model, init_time, fhour, wind, gust in snap_rows:
-        key = (icao, model, _naive_utc(init_time))
-        by_key.setdefault(key, []).append((_naive_utc(fhour), wind, gust))
+        key = (icao, model, init_time)
+        by_key.setdefault(key, []).append((fhour, wind, gust))
 
     obs_ids = sorted({s.observation_id for s in scores})
     obs_gusts: dict[int, float | None] = {}
@@ -397,12 +388,12 @@ def _backfill_model_gust_day(
 
     mappings: list[dict] = []
     for s in scores:
-        candidates = by_key.get((s.icao, s.model, _naive_utc(s.model_init_time)))
+        candidates = by_key.get((s.icao, s.model, s.model_init_time))
         if not candidates:
             continue
         picked = _pick_scored_snapshot(
             candidates,
-            obs_time=_naive_utc(s.observation_time),
+            obs_time=s.observation_time,
             obs_wind_kt=obs_winds.get(s.observation_id),
             stored_wind_delta_kt=s.wind_speed_delta_kt,
         )

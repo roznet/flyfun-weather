@@ -260,8 +260,6 @@ def completed_days(db: Session) -> list[date_t]:
     ).scalar()
     if earliest is None:
         return []
-    if earliest.tzinfo is None:
-        earliest = earliest.replace(tzinfo=timezone.utc)
 
     existing = set(
         db.execute(

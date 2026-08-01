@@ -302,18 +302,13 @@ def _surface_from_cache(
     ).scalars().all()
 
     # Pick the freshest snapshot per forecast_hour (latest model_init_time).
-    # Normalise every key to `timezone.utc` regardless of how the driver
-    # presents the value: SQLite returns naive (treat as UTC), MySQL
-    # returns aware but the offset object may be `timezone(timedelta(0))`
-    # rather than `timezone.utc` — both compare equal as datetimes but
-    # Python uses identity-then-equality on dict lookup, so converting
-    # explicitly with astimezone() avoids any subtle miss.
+    # `forecast_hour` is a TZDateTime column, so every key is already
+    # `timezone.utc`-aware on both dialects and matches the aware hours built
+    # by `_build_hours`.
     by_hour: dict[datetime, AirportForecastSnapshotRow] = {}
     for r in rows:
-        fh = r.forecast_hour
-        fh = fh.replace(tzinfo=timezone.utc) if fh.tzinfo is None else fh.astimezone(timezone.utc)
-        if fh not in by_hour:
-            by_hour[fh] = r
+        if r.forecast_hour not in by_hour:
+            by_hour[r.forecast_hour] = r
 
     # The NWP ceiling follows the model's datum (AGL for ECMWF, MSL otherwise);
     # the sounding ceiling is geopotential-height MSL for every model.

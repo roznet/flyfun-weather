@@ -12,11 +12,10 @@ Two layers, matching ``storage/refresh_jobs.py``:
 Collect-only in v1 (issue #515): nothing reads these rows yet. See
 ``designs/freshness-markers.md``.
 
-Note for whoever writes the read side: writes take aware-UTC datetimes, but
-both SQLite and MySQL hand them back **naive** despite ``DateTime(timezone=
-True)``. Re-attach UTC on read, as ``storage/flights.py`` does — subtracting
-a naive column from an aware ``now`` raises, and silently treating it as
-local time would corrupt exactly the drift figures this table exists for.
+Datetime columns are :class:`~weatherbrief.db.types.TZDateTime` (issue #520):
+writes must be aware (naive raises ``ValueError``), and reads come back
+UTC-aware on both SQLite and MySQL — no per-call-site tzinfo fixups needed on
+either side.
 """
 
 from __future__ import annotations

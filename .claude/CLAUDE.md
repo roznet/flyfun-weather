@@ -45,6 +45,11 @@ Dev uses SQLite, production uses MySQL. Migrations must work on both:
 - **Column renames on MySQL** need `existing_type` parameter — see memory note.
 - If dialect-specific logic is needed, use `op.get_bind().dialect.name == "mysql"` (see migrations 014, 015).
 
+## Datetime Columns
+
+- **Use `TZDateTime` (from `weatherbrief.db.types`) for new datetime columns**, not `DateTime(timezone=True)` — the latter is a no-op on MySQL and what a read hands back then depends on the dialect/driver. `TZDateTime` is always UTC-aware in Python and naive-UTC in the DB; naive writes (including query bind params) raise `ValueError` immediately instead of corrupting data downstream. Existing columns are being migrated incrementally (issue #520) — switching one over needs no schema migration, but every writer of that column must then pass aware datetimes.
+- **Use `TZDateTime(fsp=6)` (MySQL `DATETIME(6)`) for any datetime used as a natural key, a uniqueness component, or an equality predicate.** Plain `DATETIME` truncates to whole seconds on MySQL while SQLite keeps microseconds — invisible to the test suite, and the cause of the migration-015 bug. Plain `TZDateTime()` is fine elsewhere.
+
 ## Setup
 
 - Frontend uses esbuild. `npm run dev` runs watch mode and rebuilds `web/dist/*.js` on change — usually already running in a tmux session managed by `/devserver`, so don't run `npm run build` manually.

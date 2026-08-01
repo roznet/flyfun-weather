@@ -62,7 +62,9 @@ from weatherbrief.tasks.forecast_grid import forecast_days, sample_hours_for_day
 # UTC-date rule, not the shape). Without this, a deploy that drops the client's
 # fallback would show a ~12-hour half-outage until the next standalone cycle
 # rebuilt the cache. v2 (#419): added the baked ``consensus_majority`` block.
-FORECAST_MAP_CACHE_VERSION = "v2"
+# v3 (#520): observation timestamps became TZDateTime reads, so the baked
+# ``observation_time`` strings gained a ``+00:00`` offset.
+FORECAST_MAP_CACHE_VERSION = "v3"
 
 
 def forecast_map_cache_key(day: int, hour: int) -> str:
@@ -133,8 +135,7 @@ def is_stale(db: Session, cache_key: str, source: str) -> bool:
         return True
     if source == "snapshot":
         if computed_at is not None:
-            ca = computed_at.astimezone(timezone.utc) if computed_at.tzinfo else computed_at
-            if ca.date() < datetime.now(timezone.utc).date():
+            if computed_at.date() < datetime.now(timezone.utc).date():
                 return True
         live_max = get_snapshot_max_time(db)
     else:

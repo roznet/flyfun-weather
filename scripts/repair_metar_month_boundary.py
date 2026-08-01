@@ -160,15 +160,13 @@ def find_corrupt_targeted(session: Session, sleep: float) -> list[int]:
                 VerificationObservationRow.observation_time,
                 VerificationObservationRow.collected_at,
             ).where(
-                VerificationObservationRow.observation_time >= start.replace(tzinfo=None),
-                VerificationObservationRow.observation_time < end.replace(tzinfo=None),
+                VerificationObservationRow.observation_time >= start,
+                VerificationObservationRow.observation_time < end,
             )
         ).all()
 
         hits = 0
         for row_id, obs_time, collected_at in rows:
-            obs_time = _as_utc(obs_time)
-            collected_at = _as_utc(collected_at)
             if obs_time is None or collected_at is None:
                 continue
             if obs_time - collected_at > _MAX_AHEAD:
@@ -215,8 +213,6 @@ def find_corrupt_full(session: Session, batch: int, sleep: float) -> list[int]:
         ).all()
 
         for row_id, obs_time, collected_at in rows:
-            obs_time = _as_utc(obs_time)
-            collected_at = _as_utc(collected_at)
             if obs_time is None or collected_at is None:
                 continue
             if obs_time - collected_at > _MAX_AHEAD:
@@ -267,8 +263,6 @@ def find_corrupt(
         ).all()
 
         for row_id, icao, obs_time, collected_at, raw in rows:
-            obs_time = _as_utc(obs_time)
-            collected_at = _as_utc(collected_at)
             if not raw:
                 findings.append(
                     dict(id=row_id, icao=icao, old=obs_time, new=None,
@@ -358,16 +352,14 @@ def find_corrupt_taf(session: Session, sleep: float, full: bool = False) -> list
                 VerificationObservationRow.collected_at,
                 VerificationObservationRow.taf_raw,
             ).where(
-                VerificationObservationRow.observation_time >= start.replace(tzinfo=None),
-                VerificationObservationRow.observation_time < end.replace(tzinfo=None),
+                VerificationObservationRow.observation_time >= start,
+                VerificationObservationRow.observation_time < end,
                 VerificationObservationRow.taf_issue_time.is_not(None),
             )
         ).all()
 
         hits = 0
         for row_id, icao, issue_time, collected_at, raw in rows:
-            issue_time = _as_utc(issue_time)
-            collected_at = _as_utc(collected_at)
             if issue_time is None or collected_at is None:
                 continue
             if issue_time - collected_at <= _MAX_AHEAD:
@@ -437,7 +429,7 @@ def apply_taf_repairs(
         session.execute(
             update(VerificationObservationRow)
             .where(VerificationObservationRow.id == f["id"])
-            .values(taf_issue_time=f["new"].replace(tzinfo=None))
+            .values(taf_issue_time=f["new"])
         )
         stats["taf_repaired"] += 1
 
@@ -469,8 +461,7 @@ def apply_repairs(
         clash = session.execute(
             select(VerificationObservationRow.id).where(
                 VerificationObservationRow.icao == f["icao"],
-                VerificationObservationRow.observation_time
-                == f["new"].replace(tzinfo=None),
+                VerificationObservationRow.observation_time == f["new"],
                 VerificationObservationRow.id != f["id"],
             )
         ).scalar_one_or_none()
@@ -495,7 +486,7 @@ def apply_repairs(
         session.execute(
             update(VerificationObservationRow)
             .where(VerificationObservationRow.id == f["id"])
-            .values(observation_time=f["new"].replace(tzinfo=None))
+            .values(observation_time=f["new"])
         )
         stats["repaired"] += 1
 

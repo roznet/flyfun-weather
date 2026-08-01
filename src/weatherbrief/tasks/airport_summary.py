@@ -55,12 +55,6 @@ _PRECIP_MARKERS = ("RA", "DZ", "SN", "SG", "IC", "PL", "GR", "GS", "UP")
 _CAT_SEVERITY = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 
 
-def _ensure_utc(dt: datetime | None) -> datetime | None:
-    if dt is None:
-        return None
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
-
-
 def _has_marker(weather: list[str], markers: tuple[str, ...]) -> bool:
     """True if any code in *weather* contains any of *markers* as substring."""
     return any(any(m in code for m in markers) for code in weather)
@@ -98,14 +92,11 @@ def _category_changes_within_day(obs_list: list[VerificationObservationRow]) -> 
     """
     by_day: dict[date, list[VerificationObservationRow]] = defaultdict(list)
     for obs in obs_list:
-        t = _ensure_utc(obs.observation_time)
-        if t is None:
-            continue
-        by_day[t.date()].append(obs)
+        by_day[obs.observation_time.date()].append(obs)
 
     total = 0
     for day_obs in by_day.values():
-        day_obs.sort(key=lambda o: _ensure_utc(o.observation_time))
+        day_obs.sort(key=lambda o: o.observation_time)
         prev: str | None = None
         for obs in day_obs:
             cat = obs.flight_category
@@ -129,10 +120,7 @@ def _build_diurnal_json(obs_list: list[VerificationObservationRow]) -> str | Non
         return None
     by_hour: dict[int, list[VerificationObservationRow]] = defaultdict(list)
     for obs in obs_list:
-        t = _ensure_utc(obs.observation_time)
-        if t is None:
-            continue
-        by_hour[t.hour].append(obs)
+        by_hour[obs.observation_time.hour].append(obs)
 
     out: dict[str, dict[str, int | None]] = {}
     for h in sorted(by_hour):
@@ -382,7 +370,6 @@ def completed_months(db: Session) -> list[datetime]:
     ).scalar()
     if earliest is None:
         return []
-    earliest = _ensure_utc(earliest)
 
     existing = {
         (dt.year, dt.month)
@@ -421,7 +408,6 @@ def completed_days(db: Session) -> list[date]:
     ).scalar()
     if earliest is None:
         return []
-    earliest = _ensure_utc(earliest)
 
     existing = set(
         db.execute(select(AirportDailySummaryRow.date).distinct()).scalars().all()
