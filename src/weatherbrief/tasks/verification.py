@@ -33,6 +33,43 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CORRIDOR_NM = 15.0
 _BATCH_SIZE = 400  # aviationweather.gov limit per request
 
+# METAR/TAF timestamps encode only DDHHMM, so the month and year are inferred
+# from context by the parser.  Getting that wrong is silent and corrosive:
+# observation_time is the natural key, the dedup bucket key, and what every
+# score is joined on, so a wrong month scores an observation against an
+# entirely different forecast (issue #519).
+#
+# A report is always issued shortly *before* we collect it.  A collected-at
+# time in the future is therefore impossible and means the date was
+# reconstructed wrongly — refuse to store it rather than let it propagate.
+# Stale reports are legitimate (a closed aerodrome may not issue for days), so
+# those are only logged.
+_OBS_MAX_AHEAD = timedelta(hours=6)
+_OBS_STALE_WARN = timedelta(days=7)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Attach UTC to a naive datetime; pass an aware one through."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _observation_time_problem(obs_time, collected_at) -> str | None:
+    """Return a reason string if `obs_time` cannot be a real observation time.
+
+    Returns None when the time is usable.  A non-None result for a *future*
+    time means the row must be dropped; staleness is reported by the caller
+    but not treated as fatal.
+    """
+    if obs_time is None:
+        return "missing observation_time"
+    obs_time = _as_utc(obs_time)
+    if obs_time - collected_at > _OBS_MAX_AHEAD:
+        return (
+            f"observation_time {obs_time.isoformat()} is ahead of collection "
+            f"{collected_at.isoformat()} — month inference likely wrong"
+        )
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Phase A — Find active flights
@@ -219,6 +256,22 @@ def fetch_observations_batch(
             metar = raw.latest_metar
             if metar is None:
                 continue  # Skip airports without METAR
+
+            # Guard the natural key at the boundary — see _observation_time_problem.
+            problem = _observation_time_problem(metar.observation_time, now)
+            if problem is not None:
+                logger.error(
+                    "Rejecting %s observation: %s (raw: %s)",
+                    raw.icao, problem, (metar.raw_text or "")[:80],
+                )
+                continue
+
+            obs_age = now - _as_utc(metar.observation_time)
+            if obs_age > _OBS_STALE_WARN:
+                logger.warning(
+                    "%s observation is %s old at collection (raw: %s)",
+                    raw.icao, obs_age, (metar.raw_text or "")[:80],
+                )
 
             obs = VerificationObservation(
                 icao=raw.icao,
