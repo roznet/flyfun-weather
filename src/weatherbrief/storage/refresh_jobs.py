@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
 from weatherbrief.db.models import BriefingRefreshJobRow
+from weatherbrief.db.retry import db_retry
 
 logger = logging.getLogger(__name__)
 
@@ -147,12 +148,23 @@ def latest_job_for_flight(db: Session, flight_id: str) -> BriefingRefreshJobRow 
 
 
 def _best_effort(what: str, fn):
-    """Run ``fn(db)`` in its own committed session, swallowing all failures."""
+    """Run ``fn(db)`` in its own committed session, swallowing all failures.
+
+    Transient InnoDB deadlocks/lock-wait timeouts are retried first
+    (``db_retry`` — ``fn`` plus the commit re-run after a rollback, since a
+    lock error can surface at either the flush or the commit); only once
+    those retries are exhausted does the failure hit the swallow below, so a
+    momentary lock conflict no longer silently drops the job row. The
+    swallow contract itself is unchanged: any persistent failure still
+    returns None instead of raising into a refresh.
+    """
     db = None
     try:
         db = SessionLocal()
-        result = fn(db)
-        db.commit()
+        for attempt in db_retry(db):
+            with attempt:
+                result = fn(db)
+                db.commit()
         return result
     except Exception:
         # Deliberately broad and non-fatal: refresh durability is diagnostic.

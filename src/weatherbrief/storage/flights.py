@@ -25,6 +25,7 @@ from weatherbrief.db.models import (
     FlightRow,
     FlightSubscriptionRow,
 )
+from weatherbrief.db.retry import db_retry
 from weatherbrief.models import (
     AdvisorySummary,
     BriefingPackMeta,
@@ -543,33 +544,40 @@ def subscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
     Returns True if a new subscription was created, False if it already existed.
     Raises KeyError if the flight doesn't exist, and SubscriptionError if the
     user is the flight owner.
+
+    Retried on InnoDB deadlocks/lock-wait timeouts (``db_retry``): the whole
+    check-then-insert re-runs per attempt (the rollback expires the loaded
+    flight, so it must be re-fetched), with the SAVEPOINT race guard inside
+    each attempt.
     """
-    flight = session.get(FlightRow, flight_id)
-    if flight is None:
-        raise KeyError(f"Flight not found: {flight_id}")
-    if flight.user_id == user_id:
-        raise SubscriptionError("Owners cannot subscribe to their own flights")
+    for attempt in db_retry(session):
+        with attempt:
+            flight = session.get(FlightRow, flight_id)
+            if flight is None:
+                raise KeyError(f"Flight not found: {flight_id}")
+            if flight.user_id == user_id:
+                raise SubscriptionError("Owners cannot subscribe to their own flights")
 
-    existing = session.execute(
-        select(FlightSubscriptionRow).where(
-            FlightSubscriptionRow.flight_id == flight_id,
-            FlightSubscriptionRow.user_id == user_id,
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return False
+            existing = session.execute(
+                select(FlightSubscriptionRow).where(
+                    FlightSubscriptionRow.flight_id == flight_id,
+                    FlightSubscriptionRow.user_id == user_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return False
 
-    # Wrap the insert in a SAVEPOINT so only this statement rolls back if two
-    # concurrent subscribe calls race past the existence check and the loser
-    # trips the uq_flight_subs_flight_user constraint. A full session.rollback()
-    # here would discard any prior work on this session (safe today since the
-    # endpoint only does a SELECT first, but fragile for future callers).
-    try:
-        with session.begin_nested():
-            session.add(FlightSubscriptionRow(flight_id=flight_id, user_id=user_id))
-        return True
-    except IntegrityError:
-        return False
+            # Wrap the insert in a SAVEPOINT so only this statement rolls back if two
+            # concurrent subscribe calls race past the existence check and the loser
+            # trips the uq_flight_subs_flight_user constraint. A full session.rollback()
+            # here would discard any prior work on this session (safe today since the
+            # endpoint only does a SELECT first, but fragile for future callers).
+            try:
+                with session.begin_nested():
+                    session.add(FlightSubscriptionRow(flight_id=flight_id, user_id=user_id))
+                return True
+            except IntegrityError:
+                return False
 
 
 def unsubscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
@@ -667,16 +675,24 @@ def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
     update of the existing row instead of poisoning the request transaction.
     The SAVEPOINT (begin_nested) contains the IntegrityError so any earlier
     work on this session survives — same pattern as ``subscribe_flight``.
+
+    Retried on InnoDB deadlocks/lock-wait timeouts (``db_retry``): the whole
+    insert-or-update attempt — SAVEPOINT race guard included — re-runs after
+    a rollback, since the server killed the transaction. Only the DB
+    statements sit inside the retry; row building and the HMAC are pure
+    local computation done once.
     """
     row = _meta_to_row(meta)
     row.integrity_hmac = _compute_pack_hmac(row)
-    try:
-        with session.begin_nested():
-            session.add(row)
-            session.flush()
-    except IntegrityError:
-        if not update_pack_meta(session, meta):
-            raise
+    for attempt in db_retry(session):
+        with attempt:
+            try:
+                with session.begin_nested():
+                    session.add(row)
+                    session.flush()
+            except IntegrityError:
+                if not update_pack_meta(session, meta):
+                    raise
 
 
 def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
@@ -684,19 +700,24 @@ def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
 
     Returns True when an existing row was updated, False when no row existed
     (caller should fall back to ``save_pack_meta``).
+
+    Retried on InnoDB deadlocks/lock-wait timeouts (``db_retry``) — the row
+    lookup re-runs per attempt because the retry rollback expires it.
     """
     naive_ts = meta.fetch_timestamp.replace(tzinfo=None)
     stmt = select(BriefingPackRow).where(
         BriefingPackRow.flight_id == meta.flight_id,
         BriefingPackRow.fetch_timestamp == naive_ts,
     )
-    row = session.execute(stmt).scalar_one_or_none()
-    if row is None:
-        return False
-    _apply_meta_to_row(row, meta)
-    row.integrity_hmac = _compute_pack_hmac(row)
-    session.flush()
-    return True
+    for attempt in db_retry(session):
+        with attempt:
+            row = session.execute(stmt).scalar_one_or_none()
+            if row is None:
+                return False
+            _apply_meta_to_row(row, meta)
+            row.integrity_hmac = _compute_pack_hmac(row)
+            session.flush()
+            return True
 
 
 def load_pack_meta(
