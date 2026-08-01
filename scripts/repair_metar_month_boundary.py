@@ -7,8 +7,18 @@ after a month rolled over was dated into the following month — e.g. a METAR
 collected at 2026-08-01 00:00:01 carrying ``312255Z`` (31 July) was stored as
 31 August.
 
-``metar_raw`` is retained, so the repair is lossless: re-parse each suspect row
-against its own ``collected_at`` and write back the correct time.
+``metar_raw`` and ``taf_raw`` are retained, so the repair is lossless: re-parse
+each suspect row against its own ``collected_at`` and write back the correct
+time.
+
+Two fields are affected, both fed by the same inference:
+
+* ``observation_time`` — natural key of ``verification_observations`` and the
+  join key for ``verification_scores``.
+* ``taf_issue_time`` — part of ``uq_taf_verif_key`` on
+  ``taf_verification_scores``. In production this was corrupted about six times
+  more often than ``observation_time``, because one TAF stays current for hours
+  and is copied onto every observation collected in that window.
 
 Safety
 ------
@@ -61,15 +71,15 @@ from sqlalchemy import create_engine, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
+    TafVerificationScoreRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
+# Share the ingestion guard's threshold rather than restating it, so detection
+# here and rejection at write time cannot drift apart.
+from weatherbrief.tasks.verification import _OBS_MAX_AHEAD as _MAX_AHEAD
 
 logger = logging.getLogger("repair519")
-
-# A report is issued before it is collected.  Anything beyond this ahead of
-# collected_at is the bug signature, not clock skew.
-_MAX_AHEAD = timedelta(hours=6)
 
 _DEFAULT_BATCH = 50_000
 _DEFAULT_SLEEP = 0.05
@@ -90,6 +100,16 @@ def _reparse(raw: str, collected_at: datetime) -> datetime | None:
     from euro_aip.briefing.weather.parser import WeatherParser
 
     report = WeatherParser.parse_metar(raw, reference=collected_at)
+    if report is None:
+        return None
+    return _as_utc(report.observation_time)
+
+
+def _reparse_taf(raw: str, collected_at: datetime) -> datetime | None:
+    """Re-derive a TAF issue time from raw TAF text against its collection time."""
+    from euro_aip.briefing.weather.parser import WeatherParser
+
+    report = WeatherParser.parse_taf(raw, reference=collected_at)
     if report is None:
         return None
     return _as_utc(report.observation_time)
@@ -278,6 +298,153 @@ def find_corrupt(
     return findings
 
 
+def _month_boundary_windows(lo: datetime, hi: datetime) -> list[tuple[datetime, datetime]]:
+    """Windows spanning each month boundary, for the TAF issue-time scan.
+
+    A TAF stays current for hours after issue, so one issued late on the last
+    day of a month is still the latest TAF for observations collected into the
+    next one.  That makes the affected observation_time range wider than the
+    METAR case — cover two days either side of each boundary.
+
+    Note the range runs one month *past* ``hi``: unlike a corrupted
+    observation_time, a corrupted taf_issue_time leaves observation_time
+    untouched, so the affected rows sit just *before* the boundary that
+    corrupted them and the final boundary would otherwise be missed.
+    """
+    windows = []
+    year, month = lo.year, lo.month
+    end_year, end_month = divmod(hi.year * 12 + (hi.month - 1) + 1, 12)
+    end_month += 1
+    while (year, month) <= (end_year, end_month):
+        start = datetime(year, month, 1, tzinfo=timezone.utc) - timedelta(days=2)
+        end = datetime(year, month, 1, tzinfo=timezone.utc) + timedelta(days=3)
+        windows.append((start, end))
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return windows
+
+
+def find_corrupt_taf(session: Session, sleep: float, full: bool = False) -> list[dict]:
+    """Locate rows whose taf_issue_time needs correcting.
+
+    ``taf_issue_time`` is produced by the same day-of-month inference as
+    ``observation_time`` and is part of ``uq_taf_verif_key`` on
+    ``taf_verification_scores``, so it needs the same treatment.
+    """
+    bounds = session.execute(
+        select(
+            func.min(VerificationObservationRow.observation_time),
+            func.max(VerificationObservationRow.observation_time),
+        )
+    ).one()
+    lo, hi = _as_utc(bounds[0]), _as_utc(bounds[1])
+    if lo is None or hi is None:
+        return []
+
+    if full:
+        windows = [(lo - timedelta(days=1), hi + timedelta(days=1))]
+    else:
+        windows = _month_boundary_windows(lo, hi)
+
+    findings: list[dict] = []
+    for start, end in windows:
+        rows = session.execute(
+            select(
+                VerificationObservationRow.id,
+                VerificationObservationRow.icao,
+                VerificationObservationRow.taf_issue_time,
+                VerificationObservationRow.collected_at,
+                VerificationObservationRow.taf_raw,
+            ).where(
+                VerificationObservationRow.observation_time >= start.replace(tzinfo=None),
+                VerificationObservationRow.observation_time < end.replace(tzinfo=None),
+                VerificationObservationRow.taf_issue_time.is_not(None),
+            )
+        ).all()
+
+        hits = 0
+        for row_id, icao, issue_time, collected_at, raw in rows:
+            issue_time = _as_utc(issue_time)
+            collected_at = _as_utc(collected_at)
+            if issue_time is None or collected_at is None:
+                continue
+            if issue_time - collected_at <= _MAX_AHEAD:
+                continue
+
+            hits += 1
+            if not raw:
+                findings.append(
+                    dict(id=row_id, icao=icao, old=issue_time, new=None,
+                         collected_at=collected_at, reason="no raw TAF text")
+                )
+                continue
+            corrected = _reparse_taf(raw, collected_at)
+            if corrected is None:
+                findings.append(
+                    dict(id=row_id, icao=icao, old=issue_time, new=None,
+                         collected_at=collected_at, reason="TAF re-parse failed")
+                )
+                continue
+            if corrected == issue_time:
+                findings.append(
+                    dict(id=row_id, icao=icao, old=issue_time, new=None,
+                         collected_at=collected_at, reason="re-parse matches stored")
+                )
+                continue
+            findings.append(
+                dict(id=row_id, icao=icao, old=issue_time, new=corrected,
+                     collected_at=collected_at, reason=None)
+            )
+
+        logger.info(
+            "taf window %s..%s: %d rows with a TAF, %d suspect",
+            start.date(), end.date(), len(rows), hits,
+        )
+        if sleep:
+            time.sleep(sleep)
+
+    return findings
+
+
+def apply_taf_repairs(
+    session: Session,
+    findings: list[dict],
+    delete_scores: bool,
+) -> dict:
+    """Write corrected TAF issue times.
+
+    ``taf_issue_time`` is not part of the observations table's own unique key,
+    so there is no collision to resolve here — but it *is* part of
+    ``uq_taf_verif_key``, so any dependent taf_verification_scores rows are
+    keyed on the old value and must be recomputed.
+
+    Does not commit — the caller owns the transaction boundary.
+    """
+    stats = defaultdict(int)
+    repairable = [f for f in findings if f["new"] is not None]
+
+    for f in repairable:
+        if delete_scores:
+            removed = session.execute(
+                delete(TafVerificationScoreRow).where(
+                    TafVerificationScoreRow.observation_id == f["id"]
+                )
+            ).rowcount
+            stats["taf_scores_deleted"] += removed or 0
+
+        session.execute(
+            update(VerificationObservationRow)
+            .where(VerificationObservationRow.id == f["id"])
+            .values(taf_issue_time=f["new"].replace(tzinfo=None))
+        )
+        stats["taf_repaired"] += 1
+
+    session.flush()
+    return dict(stats)
+
+
 def apply_repairs(
     session: Session,
     findings: list[dict],
@@ -338,8 +505,8 @@ def main() -> int:
     group.add_argument("--apply", action="store_true", help="write corrected times")
     parser.add_argument(
         "--delete-scores", action="store_true",
-        help="also delete verification_scores rows for repaired observations "
-             "so they are recomputed (requires --apply)",
+        help="also delete verification_scores / taf_verification_scores rows for "
+             "repaired observations so they are recomputed (requires --apply)",
     )
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
     parser.add_argument(
@@ -422,17 +589,55 @@ def main() -> int:
                     f"(collected {f['collected_at'].isoformat()})"
                 )
 
+        # --- TAF issue times -------------------------------------------------
+        logger.info("scanning for corrupted TAF issue times...")
+        taf_findings = find_corrupt_taf(session, args.sleep, full=args.full)
+        taf_repairable = [f for f in taf_findings if f["new"] is not None]
+        taf_skipped = [f for f in taf_findings if f["new"] is None]
+        taf_score_count = 0
+
+        print()
+        print(f"suspect taf_issue_time rows : {len(taf_findings)}")
+        print(f"  repairable                : {len(taf_repairable)}")
+        print(f"  skipped                   : {len(taf_skipped)}")
+
+        if taf_skipped:
+            reasons = defaultdict(int)
+            for f in taf_skipped:
+                reasons[f["reason"]] += 1
+            for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+                print(f"      {reason}: {count}")
+
+        if taf_repairable:
+            taf_ids = [f["id"] for f in taf_repairable]
+            for i in range(0, len(taf_ids), 500):
+                taf_score_count += session.execute(
+                    select(func.count()).select_from(TafVerificationScoreRow).where(
+                        TafVerificationScoreRow.observation_id.in_(taf_ids[i : i + 500])
+                    )
+                ).scalar_one()
+            print(f"dependent taf_verification_scores rows : {taf_score_count}")
+            print()
+            print(f"examples (first {args.limit_report}):")
+            for f in taf_repairable[: args.limit_report]:
+                print(
+                    f"  id={f['id']:<9} {f['icao']}  "
+                    f"{f['old'].isoformat()} -> {f['new'].isoformat()}  "
+                    f"(collected {f['collected_at'].isoformat()})"
+                )
+
         if args.dry_run:
             print()
             print("DRY RUN — nothing written.")
             return 0
 
-        if not repairable:
+        if not repairable and not taf_repairable:
             print()
             print("Nothing to repair.")
             return 0
 
         stats = apply_repairs(session, findings, args.delete_scores)
+        stats.update(apply_taf_repairs(session, taf_findings, args.delete_scores))
         session.commit()
         print()
         print("applied:", stats)
@@ -443,11 +648,18 @@ def main() -> int:
                 "Re-run scoring for the affected dates, or re-run with "
                 "--delete-scores."
             )
-        print(
-            "NOTE: airport_daily_summary / airport_monthly_summary bucket "
-            "observations directly and must be rebuilt for the affected dates "
-            "(tasks.airport_summary.rollup_day / rollup_month)."
-        )
+        if taf_score_count and not args.delete_scores:
+            print(
+                f"NOTE: {taf_score_count} dependent taf_verification_scores rows "
+                "are keyed on the old taf_issue_time (uq_taf_verif_key) and are "
+                "now stale. Re-run TAF scoring, or re-run with --delete-scores."
+            )
+        if repairable:
+            print(
+                "NOTE: airport_daily_summary / airport_monthly_summary bucket "
+                "observations directly and must be rebuilt for the affected dates "
+                "(tasks.airport_summary.rollup_day / rollup_month)."
+            )
         return 0
 
 
