@@ -150,52 +150,57 @@ async def process_auto_refreshes(app_state) -> None:
     db = SessionLocal()
     try:
         due = _find_due_flights(db)
-        if not due:
-            return
-        logger.info("Auto-refresh: %d flight(s) due", len(due))
-
-        for row in due:
-            from weatherbrief.api.packs import refresh_registry
-
-            entry = refresh_registry.try_register(
-                row.id, triggered_by="scheduler", user_id=row.user_id,
-                source="scheduler",
-            )
-            if entry is None:
-                logger.info("Auto-refresh: skipping %s (refresh already in progress)", row.id)
-                continue
-
-            try:
-                refresh_registry.set_refreshing(row.id)
-                ran = await asyncio.to_thread(
-                    _auto_refresh_one, row, app_state, row.user_id
-                )
-                # Record the refresh timestamp
-                mark_db = SessionLocal()
-                try:
-                    mark_row = mark_db.get(FlightRow, row.id)
-                    if mark_row:
-                        mark_row.last_auto_refresh_at = datetime.now(timezone.utc)
-                        mark_db.commit()
-                finally:
-                    mark_db.close()
-                # "skipped" and "succeeded" are both terminal, but only one of
-                # them means a briefing was produced — the durable record has
-                # to tell them apart to be worth anything (#499).
-                refresh_registry.mark_outcome(
-                    row.id, "succeeded" if ran else "skipped",
-                    None if ran else "refresh gate declined a full run",
-                )
-                logger.info(
-                    "Auto-refresh %s: %s", "completed" if ran else "skipped", row.id,
-                )
-            except Exception as exc:
-                refresh_registry.mark_outcome(row.id, "failed", str(exc))
-                logger.error("Auto-refresh failed for %s", row.id, exc_info=True)
-            finally:
-                refresh_registry.unregister(row.id)
+        # Extract plain values and release the pooled connection BEFORE the
+        # loop: each refresh below runs a minutes-long pipeline in a thread
+        # and must not pin this session's connection across it.
+        due_refs = [(row.id, row.user_id) for row in due]
     finally:
         db.close()
+
+    if not due_refs:
+        return
+    logger.info("Auto-refresh: %d flight(s) due", len(due_refs))
+
+    for flight_id, user_id in due_refs:
+        from weatherbrief.api.packs import refresh_registry
+
+        entry = refresh_registry.try_register(
+            flight_id, triggered_by="scheduler", user_id=user_id,
+            source="scheduler",
+        )
+        if entry is None:
+            logger.info("Auto-refresh: skipping %s (refresh already in progress)", flight_id)
+            continue
+
+        try:
+            refresh_registry.set_refreshing(flight_id)
+            ran = await asyncio.to_thread(
+                _auto_refresh_one, flight_id, app_state, user_id
+            )
+            # Record the refresh timestamp
+            mark_db = SessionLocal()
+            try:
+                mark_row = mark_db.get(FlightRow, flight_id)
+                if mark_row:
+                    mark_row.last_auto_refresh_at = datetime.now(timezone.utc)
+                    mark_db.commit()
+            finally:
+                mark_db.close()
+            # "skipped" and "succeeded" are both terminal, but only one of
+            # them means a briefing was produced — the durable record has
+            # to tell them apart to be worth anything (#499).
+            refresh_registry.mark_outcome(
+                flight_id, "succeeded" if ran else "skipped",
+                None if ran else "refresh gate declined a full run",
+            )
+            logger.info(
+                "Auto-refresh %s: %s", "completed" if ran else "skipped", flight_id,
+            )
+        except Exception as exc:
+            refresh_registry.mark_outcome(flight_id, "failed", str(exc))
+            logger.error("Auto-refresh failed for %s", flight_id, exc_info=True)
+        finally:
+            refresh_registry.unregister(flight_id)
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +415,7 @@ def _flight_start_dt(row: FlightRow) -> datetime | None:
 
 
 def _auto_refresh_one(
-    flight_row: FlightRow,
+    flight_id: str,
     app_state,
     user_id: str,
     *,
@@ -429,6 +434,11 @@ def _auto_refresh_one(
     to close the durable job row honestly — a gated skip is the routine case
     for a flight that already has a recent pack, and recording it as
     ``succeeded`` would make the post-mortem record lie (issue #499).
+
+    Session scoping: the reads (flight row, gate, ``_prepare_refresh``) run in
+    one short session that is closed BEFORE the pipeline — a pooled connection
+    must not stay pinned across minutes of GRIB/LLM work — and the finalize +
+    commit + notify runs in a fresh session afterwards.
     """
     from weatherbrief.api.packs import (
         _build_data_status, _days_out_now, _finalize_refresh,
@@ -439,12 +449,16 @@ def _auto_refresh_one(
 
     db = SessionLocal()
     try:
+        flight_row = db.get(FlightRow, flight_id)
+        if flight_row is None:
+            logger.info("Auto-refresh: flight %s no longer exists, skipping", flight_id)
+            return False
         flight = _row_to_flight(flight_row)
 
         # Tiered refresh gate: the scheduler applies the same
         # full/none policy as the manual button but never the realtime
         # fallback — live METAR/TAF is the verification loop's job.
-        packs = list_packs(db, flight_row.id)
+        packs = list_packs(db, flight_id)
         if packs:
             latest = packs[0]
             status = _build_data_status(latest, flight)
@@ -452,50 +466,54 @@ def _auto_refresh_one(
             if decision.mode != "full":
                 logger.info(
                     "Auto-refresh: gate=%s for %s (%s), skipping",
-                    decision.mode, flight_row.id, decision.reason,
+                    decision.mode, flight_id, decision.reason,
                 )
                 return False
 
         db_path = getattr(app_state, "db_path", "")
         if not db_path:
-            logger.warning("Auto-refresh: AIRPORTS_DB not configured, skipping %s", flight_row.id)
+            logger.warning("Auto-refresh: AIRPORTS_DB not configured, skipping %s", flight_id)
             return False
 
         route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
-            flight, db_path, user_id, flight_row.id, db=db, is_privileged=True,
+            flight, db_path, user_id, flight_id, db=db, is_privileged=True,
         )
+    finally:
+        db.close()
 
-        from weatherbrief.fetch.grib import DecodePriority, set_decode_priority
-        from weatherbrief.pipeline import execute_briefing
+    from weatherbrief.fetch.grib import DecodePriority, set_decode_priority
+    from weatherbrief.pipeline import execute_briefing
 
-        # Auto-refresh decode work is SCHEDULED — below interactive user
-        # refreshes / airport profiles, above background standalone cycles.
-        # Runs in asyncio.to_thread, which copies the context, so this set is
-        # isolated to the cycle and visible to enrich_forecasts.
-        set_decode_priority(DecodePriority.SCHEDULED)
+    # Auto-refresh decode work is SCHEDULED — below interactive user
+    # refreshes / airport profiles, above background standalone cycles.
+    # Runs in asyncio.to_thread, which copies the context, so this set is
+    # isolated to the cycle and visible to enrich_forecasts.
+    set_decode_priority(DecodePriority.SCHEDULED)
 
-        result = execute_briefing(
-            route=route,
-            departure_time=flight.departure_time,
-            options=options,
-            # Nobody streams a scheduled or resumed refresh, but a user who
-            # opens the briefing while one runs polls /refresh/status — without
-            # this they watch "Starting refresh" for the whole pipeline. It also
-            # keeps the durable job row's heartbeat and last-stage moving, so a
-            # resumed run that dies again still records where (#499).
-            progress_callback=lambda stage, detail=None: (
-                refresh_registry.update_progress(flight_row.id, stage, detail)
-            ),
-        )
+    result = execute_briefing(
+        route=route,
+        departure_time=flight.departure_time,
+        options=options,
+        # Nobody streams a scheduled or resumed refresh, but a user who
+        # opens the briefing while one runs polls /refresh/status — without
+        # this they watch "Starting refresh" for the whole pipeline. It also
+        # keeps the durable job row's heartbeat and last-stage moving, so a
+        # resumed run that dies again still records where (#499).
+        progress_callback=lambda stage, detail=None: (
+            refresh_registry.update_progress(flight_id, stage, detail)
+        ),
+    )
 
-        # Capture timing before unregister
-        queue_wait, total_elapsed = refresh_registry.get_timing(flight_row.id)
-        result.usage.elapsed_seconds = total_elapsed
-        result.usage.queue_wait_seconds = queue_wait
-        result.usage.triggered_by = triggered_by
+    # Capture timing before unregister
+    queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
+    result.usage.elapsed_seconds = total_elapsed
+    result.usage.queue_wait_seconds = queue_wait
+    result.usage.triggered_by = triggered_by
 
+    db = SessionLocal()
+    try:
         meta = _finalize_refresh(
-            flight_row.id, flight, fetch_ts, pack_path, result, db,
+            flight_id, flight, fetch_ts, pack_path, result, db,
             user_id=user_id, model_metadata=model_metadata,
             as_of_time=resolved_as_of,
         )
@@ -547,21 +565,17 @@ def _run_verification_once(app_state) -> None:
 
     from weatherbrief.tasks.verification import collect_and_store
 
-    db = SessionLocal()
-    try:
-        result = collect_and_store(db, db_path)
-        if result["flights"] > 0:
-            logger.info(
-                "Verification cycle: %d flight(s), %d airport(s), "
-                "%d observation(s) stored, %d finalized",
-                result["flights"], result["airports"],
-                result["observations"], result["finalized"],
-            )
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    # collect_and_store owns its sessions: the read phases commit and close
+    # before the aviationweather.gov fetch, the store phase runs in a fresh
+    # session after it.
+    result = collect_and_store(db_path)
+    if result["flights"] > 0:
+        logger.info(
+            "Verification cycle: %d flight(s), %d airport(s), "
+            "%d observation(s) stored, %d finalized",
+            result["flights"], result["airports"],
+            result["observations"], result["finalized"],
+        )
 
 
 # ---------------------------------------------------------------------------

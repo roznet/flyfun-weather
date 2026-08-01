@@ -100,14 +100,18 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
     from flyfun_common.db import SessionLocal
 
     try:
+        from weatherbrief.api.packs import _build_route_config, _load_advisory_profile
+        from weatherbrief.storage.flights import load_flight
+        from weatherbrief.tasks.advise import derive_assessment_from_advisories
+        from weatherbrief.tasks.artifacts import save_time_options
+        from weatherbrief.tasks.time_scan import run_time_scan
+
+        # Reads run in one short session, closed BEFORE run_time_scan: the
+        # scan is a slow GRIB decode and a pooled connection must not stay
+        # pinned across it. The pack-row update + usage row commit in a
+        # fresh session afterwards.
         db = SessionLocal()
         try:
-            from weatherbrief.api.packs import _build_route_config, _load_advisory_profile
-            from weatherbrief.storage.flights import load_flight
-            from weatherbrief.tasks.advise import derive_assessment_from_advisories
-            from weatherbrief.tasks.artifacts import save_time_options
-            from weatherbrief.tasks.time_scan import run_time_scan
-
             flight = load_flight(db, flight_id)
             # Re-read mode inside the worker — it may have changed while queued.
             if flight.flexibility == "none":
@@ -140,39 +144,44 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
             ) = _load_advisory_profile(
                 db, flight, flight.user_id, None, pack_dir, db_path=db_path,
             )
+        finally:
+            db.close()
 
-            scan = run_time_scan(
-                pack_dir, route, flight.departure_time,
-                flexibility=flight.flexibility,
-                alt_departure_time=flight.alt_departure_time,
-                advisory_models=adv_models,
-                enabled_ids=enabled_ids,
-                advisory_enabled=enabled_map,
-                user_params=user_params,
-                aggregation=aggregation,
-                airports_db_path=db_path,
-                airport_conditions_recompute=recompute_conds,
-                icing_method=icing_method,
-                cloud_source=cloud_source,
-                convective_method=convective_method,
-                locale=locale,
-                declared_approach_icaos=declared_approaches,
-            )
-            if scan is None:
-                _write_status(pack_dir, "skipped", flight.flexibility, reason="no_data")
-                return
+        scan = run_time_scan(
+            pack_dir, route, flight.departure_time,
+            flexibility=flight.flexibility,
+            alt_departure_time=flight.alt_departure_time,
+            advisory_models=adv_models,
+            enabled_ids=enabled_ids,
+            advisory_enabled=enabled_map,
+            user_params=user_params,
+            aggregation=aggregation,
+            airports_db_path=db_path,
+            airport_conditions_recompute=recompute_conds,
+            icing_method=icing_method,
+            cloud_source=cloud_source,
+            convective_method=convective_method,
+            locale=locale,
+            declared_approach_icaos=declared_approaches,
+        )
+        if scan is None:
+            _write_status(pack_dir, "skipped", flight.flexibility, reason="no_data")
+            return
 
-            # Preserve paid confirm verdicts across a same-run rescan (e.g.
-            # the "Set as alternate" flow rebuilding the candidate list).
-            from weatherbrief.tasks.artifacts import load_time_options
+        # Preserve paid confirm verdicts across a same-run rescan (e.g.
+        # the "Set as alternate" flow rebuilding the candidate list).
+        from weatherbrief.tasks.artifacts import load_time_options
 
-            merge_confirmed(load_time_options(pack_dir), scan)
-            save_time_options(pack_dir, scan)
+        merge_confirmed(load_time_options(pack_dir), scan)
+        save_time_options(pack_dir, scan)
 
-            # The pinned alternate row keeps the legacy pack-row alt fields
-            # (and the planned↔alt web UI) alive — mirror what the retired
-            # in-pipeline alt stage recorded.
-            alt_row = next((c for c in scan.candidates if c.is_alternate), None)
+        # The pinned alternate row keeps the legacy pack-row alt fields
+        # (and the planned↔alt web UI) alive — mirror what the retired
+        # in-pipeline alt stage recorded.
+        alt_row = next((c for c in scan.candidates if c.is_alternate), None)
+
+        db = SessionLocal()
+        try:
             if alt_row is not None:
                 _update_pack_alt_fields(db, flight_id, pack_dir, fetch_ts, alt_row)
 
@@ -188,10 +197,10 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
                 api_calls=1, user_id=flight.user_id, flight_id=flight_id,
             )
             db.commit()
-
-            _write_status(pack_dir, "done", flight.flexibility)
         finally:
             db.close()
+
+        _write_status(pack_dir, "done", flight.flexibility)
     except Exception:
         logger.warning("time-scan: job failed for %s", flight_id, exc_info=True)
         try:

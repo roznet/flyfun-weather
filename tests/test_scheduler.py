@@ -531,7 +531,7 @@ class TestAutoRefreshGate:
             mode="realtime", reason="d0", needed=1, n_eligible=3, n_updated=0, days_out=0,
         )
 
-        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+        _auto_refresh_one("test-flight", SimpleNamespace(db_path="/fake/db"), "u1")
 
         mock_exec.assert_not_called()
         mock_prepare.assert_not_called()
@@ -571,7 +571,7 @@ class TestAutoRefreshGate:
         )
         mock_exec.return_value = MagicMock()
 
-        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+        _auto_refresh_one("test-flight", SimpleNamespace(db_path="/fake/db"), "u1")
 
         mock_exec.assert_called_once()
 
@@ -618,7 +618,7 @@ class TestAutoRefreshGate:
         )
         mock_exec.return_value = MagicMock()
 
-        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+        _auto_refresh_one("test-flight", SimpleNamespace(db_path="/fake/db"), "u1")
 
         callback = mock_exec.call_args.kwargs.get("progress_callback")
         assert callback is not None, "scheduled/resumed refreshes must report progress"

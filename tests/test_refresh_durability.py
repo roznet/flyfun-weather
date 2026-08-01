@@ -389,9 +389,9 @@ class TestReconcileOne:
         """Capture calls to the shared pipeline runner instead of running it."""
         calls: list[dict] = []
 
-        def _fake(flight_row, app_state, user_id, *, triggered_by="scheduler"):
+        def _fake(flight_id, app_state, user_id, *, triggered_by="scheduler"):
             calls.append({
-                "flight_id": flight_row.id,
+                "flight_id": flight_id,
                 "user_id": user_id,
                 "triggered_by": triggered_by,
             })

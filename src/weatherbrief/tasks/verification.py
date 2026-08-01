@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from flyfun_common.db import SessionLocal
 from weatherbrief.db.models import (
     BriefingPackRow,
     FlightRow,
@@ -447,11 +448,15 @@ def _ms_since(t0: float) -> int:
 
 
 def collect_and_store(
-    db: Session,
     airports_db_path: str,
     corridor_nm: float = _DEFAULT_CORRIDOR_NM,
 ) -> dict:
     """Run one complete collection cycle.
+
+    Session scoping: the read phases share one short session that is
+    committed and closed BEFORE the aviationweather.gov fetch — a pooled
+    connection must not stay pinned across that network I/O — and the store
+    phase runs in a fresh session afterwards.
 
     Returns summary dict with counts.
     """
@@ -459,35 +464,43 @@ def collect_and_store(
     started_at = datetime.now(timezone.utc)
     timings: dict[str, int] = {}
 
-    # Phase E — finalize flights past their window (runs independently)
-    t0 = time.monotonic()
-    finalized = finalize_completed_flights(db)
-    if finalized:
+    db = SessionLocal()
+    try:
+        # Phase E — finalize flights past their window (runs independently)
+        t0 = time.monotonic()
+        finalized = finalize_completed_flights(db)
+        if finalized:
+            db.commit()
+        timings["finalize"] = _ms_since(t0)
+
+        t0 = time.monotonic()
+        scored = _score_completed(db, airports_db_path)
+        timings["score"] = _ms_since(t0)
+
+        # Phase A — find active flights
+        t0 = time.monotonic()
+        flights = find_verifiable_flights(db)
+        timings["find"] = _ms_since(t0)
+
+        if not flights:
+            # No active flights — skip metrics row
+            return {"flights": 0, "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
+
+        t0 = time.monotonic()
+        icao_to_flights = gather_airports(flights, db, airports_db_path, corridor_nm)
+        timings["gather"] = _ms_since(t0)
+
+        if not icao_to_flights:
+            _record_cycle(db, started_at, cycle_start, timings,
+                          flights=len(flights), airports=0, inserted=0,
+                          finalized=finalized, scored=scored)
+            return {"flights": len(flights), "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
+
+        # Checkpoint the corridor-cache writes before the fetch — the
+        # connection goes back to the pool here, not after the network call.
         db.commit()
-    timings["finalize"] = _ms_since(t0)
-
-    t0 = time.monotonic()
-    scored = _score_completed(db, airports_db_path)
-    timings["score"] = _ms_since(t0)
-
-    # Phase A — find active flights
-    t0 = time.monotonic()
-    flights = find_verifiable_flights(db)
-    timings["find"] = _ms_since(t0)
-
-    if not flights:
-        # No active flights — skip metrics row
-        return {"flights": 0, "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
-
-    t0 = time.monotonic()
-    icao_to_flights = gather_airports(flights, db, airports_db_path, corridor_nm)
-    timings["gather"] = _ms_since(t0)
-
-    if not icao_to_flights:
-        _record_cycle(db, started_at, cycle_start, timings,
-                      flights=len(flights), airports=0, inserted=0,
-                      finalized=finalized, scored=scored)
-        return {"flights": len(flights), "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
+    finally:
+        db.close()
 
     unique_icaos = sorted(icao_to_flights.keys())
     logger.info(
@@ -495,21 +508,25 @@ def collect_and_store(
         len(flights), len(unique_icaos),
     )
 
-    # Phase B — fetch METARs
+    # Phase B — fetch METARs (no session held across the network fetch)
     t0 = time.monotonic()
     observations = fetch_observations_batch(unique_icaos, airports_db_path)
     timings["fetch"] = _ms_since(t0)
 
-    # Phase C — store observations
-    t0 = time.monotonic()
-    inserted = store_observations(observations, icao_to_flights, db)
-    timings["store"] = _ms_since(t0)
+    db = SessionLocal()
+    try:
+        # Phase C — store observations
+        t0 = time.monotonic()
+        inserted = store_observations(observations, icao_to_flights, db)
+        timings["store"] = _ms_since(t0)
 
-    _record_cycle(db, started_at, cycle_start, timings,
-                  flights=len(flights), airports=len(unique_icaos),
-                  inserted=inserted, finalized=finalized, scored=scored)
+        _record_cycle(db, started_at, cycle_start, timings,
+                      flights=len(flights), airports=len(unique_icaos),
+                      inserted=inserted, finalized=finalized, scored=scored)
 
-    db.commit()
+        db.commit()
+    finally:
+        db.close()
 
     logger.info(
         "Verification: %d observations stored, %d flights finalized, %d scored",

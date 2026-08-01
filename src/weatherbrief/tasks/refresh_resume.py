@@ -246,18 +246,22 @@ async def reconcile_one(job_id: int, app_state) -> None:
         f"interrupted by process restart; resumed as {decision.reason}",
     )
 
-    # Own session for the duration: _auto_refresh_one reads attributes off the
-    # FlightRow while it runs, so the row must stay attached to a live session
-    # (same shape as the scheduler's auto-refresh cycle).
+    # The flight-exists check gets its own short session — _auto_refresh_one
+    # opens and closes its own sessions around its reads and its finalize, so
+    # no pooled connection is pinned across the pipeline here either.
     run_db = SessionLocal()
     try:
         flight_row = run_db.get(FlightRow, flight_id)
+    finally:
+        run_db.close()
+
+    try:
         if flight_row is None:
             refresh_registry.mark_outcome(flight_id, "abandoned", "flight disappeared")
             return
         refresh_registry.set_refreshing(flight_id)
         ran = await asyncio.to_thread(
-            _auto_refresh_one, flight_row, app_state, user_id, triggered_by="resume",
+            _auto_refresh_one, flight_id, app_state, user_id, triggered_by="resume",
         )
         # decide_resume already checked the gate, so a skip here means it moved
         # underneath us (the scheduler got there first). Record it as such
@@ -275,7 +279,6 @@ async def reconcile_one(job_id: int, app_state) -> None:
         logger.error("Refresh resume failed for flight %s", flight_id, exc_info=True)
     finally:
         refresh_registry.unregister(flight_id)
-        run_db.close()
 
 
 async def run_refresh_resume(app_state) -> None:

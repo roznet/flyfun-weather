@@ -79,10 +79,11 @@ def cmd_collect(args):
 
             print(f"Stored {inserted} new observations from {len(observations)} fetched.")
         else:
-            # Full collection cycle
+            # Full collection cycle (owns its sessions — the db above is only
+            # for the single-flight branch)
             from weatherbrief.tasks.verification import collect_and_store
 
-            result = collect_and_store(db, airports_db, args.corridor)
+            result = collect_and_store(airports_db, args.corridor)
             print(f"Flights: {result['flights']}")
             print(f"Airports: {result['airports']}")
             print(f"New observations: {result['observations']}")
