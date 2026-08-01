@@ -680,7 +680,11 @@ def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
     insert-or-update attempt — SAVEPOINT race guard included — re-runs after
     a rollback, since the server killed the transaction. Only the DB
     statements sit inside the retry; row building and the HMAC are pure
-    local computation done once.
+    local computation done once. The update fallback calls the non-retrying
+    ``_update_pack_meta_once`` core: this function's own retry loop already
+    re-runs the whole insert-or-update, and retry loops must never nest —
+    an inner loop's ``session.rollback()`` could silently discard the
+    caller's prior uncommitted work (see ``db/retry.py``).
     """
     row = _meta_to_row(meta)
     row.integrity_hmac = _compute_pack_hmac(row)
@@ -691,8 +695,29 @@ def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
                     session.add(row)
                     session.flush()
             except IntegrityError:
-                if not update_pack_meta(session, meta):
+                if not _update_pack_meta_once(session, meta):
                     raise
+
+
+def _update_pack_meta_once(session: Session, meta: BriefingPackMeta) -> bool:
+    """One attempt at the update, with no retry of its own.
+
+    The non-retrying core of ``update_pack_meta`` — and the entry point for
+    ``save_pack_meta``'s race fallback, which already runs inside its own
+    ``db_retry`` loop (retry loops must never nest; see ``db/retry.py``).
+    """
+    naive_ts = meta.fetch_timestamp.replace(tzinfo=None)
+    stmt = select(BriefingPackRow).where(
+        BriefingPackRow.flight_id == meta.flight_id,
+        BriefingPackRow.fetch_timestamp == naive_ts,
+    )
+    row = session.execute(stmt).scalar_one_or_none()
+    if row is None:
+        return False
+    _apply_meta_to_row(row, meta)
+    row.integrity_hmac = _compute_pack_hmac(row)
+    session.flush()
+    return True
 
 
 def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
@@ -704,20 +729,9 @@ def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
     Retried on InnoDB deadlocks/lock-wait timeouts (``db_retry``) — the row
     lookup re-runs per attempt because the retry rollback expires it.
     """
-    naive_ts = meta.fetch_timestamp.replace(tzinfo=None)
-    stmt = select(BriefingPackRow).where(
-        BriefingPackRow.flight_id == meta.flight_id,
-        BriefingPackRow.fetch_timestamp == naive_ts,
-    )
     for attempt in db_retry(session):
         with attempt:
-            row = session.execute(stmt).scalar_one_or_none()
-            if row is None:
-                return False
-            _apply_meta_to_row(row, meta)
-            row.integrity_hmac = _compute_pack_hmac(row)
-            session.flush()
-            return True
+            return _update_pack_meta_once(session, meta)
 
 
 def load_pack_meta(

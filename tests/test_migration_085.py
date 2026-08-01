@@ -135,11 +135,11 @@ NEW_INDEXES = [
     ("users", "uq_users_provider_sub", ["provider", "provider_sub"], True),
 ]
 
-# Spec Tier-2 item 5, verbatim — the 13 leftmost-prefix duplicates plus
-# ix_afs_hour_model. All of these exist on a SQLite schema migrated to 084
-# (asserted below before the upgrade), so "gone at head" is meaningful. The
-# 15th drop (the plain duplicate on oauth_refresh_tokens.token_hash) never
-# exists on SQLite — covered separately in test_redundant_indexes_dropped.
+# Spec Tier-2 item 5 — the 13 leftmost-prefix duplicates. All of these exist
+# on a SQLite schema migrated to 084 (asserted below before the upgrade), so
+# "gone at head" is meaningful. The 14th drop (the plain duplicate on
+# oauth_refresh_tokens.token_hash) never exists on SQLite — covered
+# separately in test_redundant_indexes_dropped.
 DROPPED_INDEXES = [
     ("verification_observations", "ix_verif_obs_icao"),
     ("verification_scores", "ix_verif_scores_icao"),
@@ -154,7 +154,6 @@ DROPPED_INDEXES = [
     ("analytics_event_daily", "ix_aed_day"),
     ("analytics_briefing_feature_daily", "ix_abfd_day"),
     ("analytics_xsection_config_daily", "ix_axcd_day"),
-    ("airport_forecast_snapshots", "ix_afs_hour_model"),
 ]
 
 # Never dropped (spec Tier-2 item 5): the FORCE-INDEXed one and the two
@@ -164,6 +163,14 @@ KEPT_SCORES_INDEXES = [
     "ix_verif_scores_model",
     "ix_verif_scores_source_time",
 ]
+
+# The spec listed ix_afs_hour_model among the drops (081's "once serving is
+# region-aware" follow-up), but serving never became region-aware — the map
+# path still filters bare forecast_hour (api/maps.py availability scan,
+# tasks/map_queries.py init-time probe, tasks/cache_builder.py rebuild
+# probe), which only this index serves. Final review Important #1: the drop
+# was removed from 085, so the index must still exist at head.
+AFS_KEPT_INDEX = ("airport_forecast_snapshots", "ix_afs_hour_model")
 
 
 def _index_map(conn, table: str) -> dict:
@@ -200,6 +207,7 @@ def test_redundant_indexes_dropped(db_at_084):
         # "gone at head" assertions below would be vacuous on SQLite.
         for table, name in DROPPED_INDEXES:
             assert name in _index_map(conn, table), f"{name} never existed"
+        assert AFS_KEPT_INDEX[1] in _index_map(conn, AFS_KEPT_INDEX[0])
     engine.dispose()
 
     command.upgrade(_config(), "head")
@@ -211,7 +219,12 @@ def test_redundant_indexes_dropped(db_at_084):
         kept = _index_map(conn, "verification_scores")
         for name in KEPT_SCORES_INDEXES:
             assert name in kept, f"FORCE-INDEXed/evidence-gated {name} dropped"
-        # The 15th drop targets the NON-UNIQUE duplicate of
+        # ix_afs_hour_model must EXIST at head: the drop was removed from 085
+        # (final review Important #1) because the map path still filters bare
+        # forecast_hour with no region predicate.
+        afs_idx = _index_map(conn, AFS_KEPT_INDEX[0])[AFS_KEPT_INDEX[1]]
+        assert afs_idx["column_names"] == ["forecast_hour", "model"]
+        # The 14th drop targets the NON-UNIQUE duplicate of
         # oauth_refresh_tokens.token_hash that only prod MySQL carries; on
         # SQLite the only index by that name IS the unique one (migration 041
         # declared unique=True + index=True, one merged index) — the guard
@@ -329,4 +342,5 @@ def test_upgrade_is_idempotent(db_at_084):
         assert "uq_users_provider_sub" in _index_map(conn, "users")
         for table, name in DROPPED_INDEXES:
             assert name not in _index_map(conn, table)
+        assert AFS_KEPT_INDEX[1] in _index_map(conn, AFS_KEPT_INDEX[0])
     engine.dispose()

@@ -82,6 +82,40 @@ class TestSavePackMetaRace:
         assert loaded.assessment_reason == "digest concluded all clear"
         assert loaded.has_digest is True
 
+    def test_race_fallback_does_not_nest_a_second_retry_loop(
+        self, db_session, dev_user, sample_flight, monkeypatch
+    ):
+        """The IntegrityError fallback runs inside save_pack_meta's own
+        db_retry loop, so it must use the non-retrying ``_update_pack_meta_once``
+        core: exactly ONE db_retry loop is entered for the whole raced save.
+        An inner loop's ``session.rollback()`` could silently discard the
+        caller's prior uncommitted work (final review Important #3)."""
+        import weatherbrief.storage.flights as flights_mod
+        from weatherbrief.db.retry import db_retry as real_db_retry
+
+        calls = 0
+
+        def spy_db_retry(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return real_db_retry(*args, **kwargs)
+
+        monkeypatch.setattr(flights_mod, "db_retry", spy_db_retry)
+
+        save_flight(db_session, sample_flight, dev_user)
+        save_pack_meta(db_session, _meta(sample_flight.id))
+        calls = 0  # only the raced (fallback) save counts
+
+        finalized = _meta(sample_flight.id, assessment="GREEN")
+        save_pack_meta(db_session, finalized)
+
+        assert calls == 1
+        assert _pack_count(db_session, sample_flight.id) == 1
+        loaded = load_pack_meta(
+            db_session, sample_flight.id, finalized.fetch_timestamp
+        )
+        assert loaded.assessment == "GREEN"
+
     def test_session_survives_the_conflict(self, sample_flight):
         """The SAVEPOINT contains the failure: the session stays usable and a
         commit afterwards persists both the raced row and later work.

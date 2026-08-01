@@ -30,12 +30,19 @@ Tier-1 item 4, Tier-2 items 5-7):
   indexed and duplicate-identity races impossible. A pre-check refuses with a
   clear error if duplicates exist (expected zero; they would need a manual
   account-merge decision, never a silent dedupe).
-* **Drop 15 redundant indexes** — 13 leftmost-prefix duplicates of wider
-  UNIQUE keys, the non-unique ``oauth_refresh_tokens.token_hash`` duplicate,
-  and ``ix_afs_hour_model`` (081's documented follow-up). Never dropped:
-  ``ix_verif_scores_lead`` / ``ix_verif_scores_model`` (need
-  ``sys.schema_unused_indexes`` evidence) and the FORCE-INDEXed
-  ``ix_verif_scores_source_time``.
+* **Drop 14 redundant indexes** — 13 leftmost-prefix duplicates of wider
+  UNIQUE keys and the non-unique ``oauth_refresh_tokens.token_hash``
+  duplicate. Never dropped: ``ix_verif_scores_lead`` /
+  ``ix_verif_scores_model`` (need ``sys.schema_unused_indexes`` evidence),
+  the FORCE-INDEXed ``ix_verif_scores_source_time``, and
+  ``ix_afs_hour_model`` — dropping that one was considered (081's documented
+  follow-up assumed region-aware serving) and rejected: the map path still
+  filters bare ``forecast_hour`` with no region predicate
+  (``api/maps.py:118-129`` availability scan,
+  ``tasks/map_queries.py:262-266`` per-model init-time probe,
+  ``tasks/cache_builder.py:275-279`` rebuild probe), so the region-leading
+  ``ix_afs_region_hour_model`` cannot serve those queries and the drop would
+  restore full/per-model scans on the hot map path.
 * **Money → DECIMAL** — ``cost_ledger.cost`` and
   ``donation_ledger.amount/amount_usd/net_usd`` to ``DECIMAL(12,4)``,
   ``donation_ledger.fx_rate`` to ``DECIMAL(12,6)``.
@@ -144,11 +151,18 @@ _NEW_INDEXES = [
     ("users", "uq_users_provider_sub", ["provider", "provider_sub"], True),
 ]
 
-# Spec Tier-2 item 5, verbatim: the 13 leftmost-prefix duplicates plus
-# ix_afs_hour_model (081's follow-up). Columns are kept on each row so the
-# downgrade can recreate them. The 15th drop — the non-unique duplicate on
-# oauth_refresh_tokens.token_hash — is handled separately in upgrade()
-# because its guard is uniqueness-aware.
+# Spec Tier-2 item 5: the 13 leftmost-prefix duplicates. Columns are kept on
+# each row so the downgrade can recreate them. The 14th drop — the non-unique
+# duplicate on oauth_refresh_tokens.token_hash — is handled separately in
+# upgrade() because its guard is uniqueness-aware.
+#
+# ix_afs_hour_model is deliberately NOT in this list: the spec's premise for
+# dropping it (081's "drop once serving filters by region" follow-up) is
+# unmet — the map path still filters bare forecast_hour with no region
+# predicate (api/maps.py:118-129, tasks/map_queries.py:262-266,
+# tasks/cache_builder.py:275-279), and the region-leading
+# ix_afs_region_hour_model needs a region predicate to be usable. Dropping it
+# would restore the full/per-model table scans migration 077 fixed (#415).
 _REDUNDANT_INDEXES = [
     ("verification_observations", "ix_verif_obs_icao", ["icao"]),
     ("verification_scores", "ix_verif_scores_icao", ["icao"]),
@@ -167,7 +181,6 @@ _REDUNDANT_INDEXES = [
     ("analytics_event_daily", "ix_aed_day", ["day"]),
     ("analytics_briefing_feature_daily", "ix_abfd_day", ["day"]),
     ("analytics_xsection_config_daily", "ix_axcd_day", ["day"]),
-    ("airport_forecast_snapshots", "ix_afs_hour_model", ["forecast_hour", "model"]),
 ]
 
 # Spec Tier-2 item 7: (table, column, target type, nullable).
@@ -231,11 +244,13 @@ def upgrade() -> None:
     for table, name, columns, unique in _NEW_INDEXES:
         _create_index_if_absent(name, table, columns, unique=unique)
 
-    # --- Drop the 15 redundant indexes (spec Tier-2 item 5) ---
+    # --- Drop the 14 redundant indexes (spec Tier-2 item 5) ---
     # Leftmost-prefix duplicates of wider UNIQUE keys; DROP INDEX is
     # metadata-only on MySQL 8. Kept: ix_verif_scores_lead / _model (awaiting
-    # sys.schema_unused_indexes evidence) and FORCE-INDEXed
-    # ix_verif_scores_source_time.
+    # sys.schema_unused_indexes evidence), FORCE-INDEXed
+    # ix_verif_scores_source_time, and ix_afs_hour_model (drop considered and
+    # rejected — the map path still filters bare forecast_hour, see the note
+    # above _REDUNDANT_INDEXES).
     for table, name, _columns in _REDUNDANT_INDEXES:
         _drop_index_if_present(table, name)
     # oauth_refresh_tokens.token_hash: migration 041 declared the column

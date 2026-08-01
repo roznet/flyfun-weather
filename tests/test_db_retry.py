@@ -43,6 +43,30 @@ def _lock_wait_timeout() -> OperationalError:
     return _lock_error(1205, "Lock wait timeout exceeded; try restarting transaction")
 
 
+def _savepoint_rollback_error() -> OperationalError:
+    """The masking shape: a failed ``ROLLBACK TO SAVEPOINT`` (MySQL 1305),
+    which SQLAlchemy re-raises in place of the original error."""
+    return OperationalError(
+        "ROLLBACK TO SAVEPOINT sa_savepoint_1",
+        {},
+        _FakeDBAPIError(1305, "SAVEPOINT sa_savepoint_1 does not exist"),
+    )
+
+
+def _deadlock_masked_two_levels_deep() -> OperationalError:
+    """The shape a 1213 takes when the victim dies inside begin_nested: the
+    server already rolled the transaction back, the savepoint rollback fails
+    (1305) and is re-raised — the real 1213 survives only on the
+    ``__context__`` chain, here two levels deep."""
+    try:
+        raise _deadlock()
+    except OperationalError:
+        try:
+            raise RuntimeError("savepoint rollback bookkeeping")
+        except RuntimeError:
+            raise _savepoint_rollback_error()
+
+
 class TestDbRetry:
     @pytest.mark.parametrize("errno_factory", [_deadlock, _lock_wait_timeout])
     def test_retryable_lock_error_succeeds_on_second_attempt(
@@ -134,6 +158,57 @@ class TestDbRetry:
             with attempt:
                 block()
         assert calls == 2
+
+    def test_deadlock_two_levels_deep_in_context_chain_is_retried(self, db_session):
+        """A 1213 raised inside ``session.begin_nested()`` arrives masked by
+        the savepoint-rollback 1305; the real deadlock sits two levels deep on
+        the ``__context__`` chain and must still be detected."""
+        calls = 0
+
+        def block() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise _deadlock_masked_two_levels_deep()
+
+        for attempt in db_retry(db_session, base_delay_s=0):
+            with attempt:
+                block()
+        assert calls == 2
+
+    def test_deadlock_attached_via_cause_is_retried(self, db_session):
+        """Explicit ``raise ... from`` wrappers (``__cause__``) are walked too."""
+        wrapped = _savepoint_rollback_error()
+        wrapped.__cause__ = _deadlock()
+        calls = 0
+
+        def block() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise wrapped
+
+        for attempt in db_retry(db_session, base_delay_s=0):
+            with attempt:
+                block()
+        assert calls == 2
+
+    def test_savepoint_error_without_lock_error_in_chain_not_retried(self, db_session):
+        """A bare 1305 — no 1213/1205 anywhere in the chain — is NOT retried."""
+        alone = _savepoint_rollback_error()
+        calls = 0
+
+        def block() -> None:
+            nonlocal calls
+            calls += 1
+            raise alone
+
+        with pytest.raises(OperationalError) as exc_info:
+            for attempt in db_retry(db_session, base_delay_s=0):
+                with attempt:
+                    block()
+        assert exc_info.value is alone
+        assert calls == 1
 
     def test_session_rolled_back_between_attempts(self, db_session, monkeypatch):
         events: list[str] = []

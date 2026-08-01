@@ -826,10 +826,16 @@ class AirportForecastSnapshotRow(Base):
         Index("ix_afs_icao_hour", "icao", "forecast_hour"),
         Index("ix_afs_fetched", "fetched_at"),
         Index("ix_afs_model_init", "model", "model_init_time"),
+        # The map's availability scan still filters bare forecast_hour with no
+        # region predicate (api/maps.py:118-129; likewise
+        # tasks/map_queries.py:262-266 and tasks/cache_builder.py:275-279), so
+        # the region-leading index below cannot serve it. Migration 085
+        # considered dropping this index as redundant (081's follow-up
+        # premise: region-aware serving) and rejected the drop — it stays.
+        Index("ix_afs_hour_model", "forecast_hour", "model"),
         # Region-leading, for the map's "which hours/models exist per day, in
-        # this region" scan as an index-only scan (EU/US seam). Its
-        # forecast_hour-leading predecessor ix_afs_hour_model was dropped by
-        # migration 085 as redundant (081's documented follow-up).
+        # this region" scan as an index-only scan (EU/US seam) once serving
+        # gains a region predicate.
         Index("ix_afs_region_hour_model", "region", "forecast_hour", "model"),
     )
 
