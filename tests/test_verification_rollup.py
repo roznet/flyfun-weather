@@ -8,7 +8,7 @@ and cannot disagree with them), so the tests exercise it rather than mock it.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -398,16 +398,114 @@ class TestPruneDailyStats:
             select(VerificationDailyStatsRow)
         ).scalars().all() != []
 
-    def test_prunes_rows_older_than_window(self, db_session):
+    def test_refuses_a_month_with_no_monthly_rollup(self, db_session):
+        """Daily rows are the only summary until the monthly rollup exists."""
         obs = _make_obs(db_session, "LFPG", MARCH_15)
         _make_model_score(db_session, obs, model="gfs", days_out=1)
         _roll(db_session, MARCH_15_D)
 
-        # March 2026 is comfortably more than 1 month before "now" in the
-        # frozen test clock's future — retain_months is passed explicitly so
-        # the test doesn't depend on the env gate.
+        assert prune_daily_stats(db_session, retain_months=1) == 0
+        assert db_session.execute(
+            select(VerificationDailyStatsRow)
+        ).scalars().all() != []
+
+    def test_prunes_rows_older_than_window_once_rolled(self, db_session):
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1)
+        _roll(db_session, MARCH_15_D)
+        rollup_month(db_session, MARCH_1)
+
         deleted = prune_daily_stats(db_session, retain_months=1)
         assert deleted >= 1
         assert db_session.execute(
             select(VerificationDailyStatsRow)
         ).scalars().all() == []
+        # The monthly summary it was pruned in favour of survives.
+        assert db_session.execute(
+            select(VerificationMonthlyStatsRow)
+        ).scalars().all() != []
+
+
+class TestRollupMonthGuards:
+
+    def test_does_not_zero_a_month_whose_daily_rows_are_gone(self, db_session):
+        """A re-roll after prune_daily_stats must not wipe the monthly row."""
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1)
+        _roll(db_session, MARCH_15_D)
+        rollup_month(db_session, MARCH_1)
+        prune_daily_stats(db_session, retain_months=1)
+
+        assert rollup_month(db_session, MARCH_1) == 0
+        assert db_session.execute(
+            select(VerificationMonthlyStatsRow)
+        ).scalars().all() != []
+
+    def test_rerolling_a_day_invalidates_its_month(self, db_session):
+        """Otherwise a late backfill could never reach the monthly aggregate."""
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1)
+        _roll(db_session, MARCH_15_D)
+        rollup_month(db_session, MARCH_1)
+        assert db_session.execute(
+            select(VerificationMonthlyStatsRow)
+        ).scalars().all() != []
+
+        # A day of the same month is re-rolled (e.g. a backfilled score).
+        _roll(db_session, MARCH_16_D)
+        assert db_session.execute(
+            select(VerificationMonthlyStatsRow)
+        ).scalars().all() == []
+        assert MARCH_1 in completed_months(db_session)
+
+
+class TestRebuildAllMonths:
+
+    def test_re_derives_every_existing_month(self, db_session):
+        from weatherbrief.tasks.verification_rollup import rebuild_all_months
+
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1,
+                          ceiling_delta=500.0)
+        _roll(db_session, MARCH_15_D)
+        rollup_month(db_session, MARCH_1)
+
+        # A second score arrives and the day is re-rolled.
+        obs2 = _make_obs(db_session, "LFPG", MARCH_15 + timedelta(hours=1))
+        _make_model_score(db_session, obs2, model="gfs", days_out=1,
+                          ceiling_delta=-300.0)
+        _roll(db_session, MARCH_15_D)
+        rollup_month(db_session, MARCH_1)
+
+        n = rebuild_all_months(db_session)
+        assert n == 1
+        row = db_session.execute(
+            select(VerificationMonthlyStatsRow)
+        ).scalars().one()
+        assert row.n_scores == 2
+        assert row.ceiling_mae_ft == pytest.approx(400.0)
+
+
+class TestCompletedMonthsCoverage:
+
+    def test_defers_a_month_with_an_unrolled_day_that_has_scores(self, db_session):
+        obs_a = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs_a, model="gfs", days_out=1)
+        obs_b = _make_obs(db_session, "LFPG", MARCH_16)
+        _make_model_score(db_session, obs_b, model="gfs", days_out=1)
+
+        # Only the 15th is rolled; the 16th has raw scores waiting.
+        _roll(db_session, MARCH_15_D)
+        assert MARCH_1 not in completed_months(db_session)
+
+        _roll(db_session, MARCH_16_D)
+        assert MARCH_1 in completed_months(db_session)
+
+    def test_a_day_with_no_scores_is_not_a_gap(self, db_session):
+        """Otherwise a quiet day would defer its month forever."""
+        obs = _make_obs(db_session, "LFPG", MARCH_15)
+        _make_model_score(db_session, obs, model="gfs", days_out=1)
+        _roll(db_session, MARCH_15_D)
+
+        # Every later day of March has no scores at all — nothing to roll.
+        assert MARCH_1 in completed_months(db_session)

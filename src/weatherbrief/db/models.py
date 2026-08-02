@@ -1187,17 +1187,37 @@ class VerificationGlobalDailyStatsRow(Base):
     model: Mapped[str] = mapped_column(String(20), nullable=False)
     days_out: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_ceiling: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_wind: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_temp: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_vis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_ceiling: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_wind: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_temp: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_vis: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
-    n_cat_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_opt_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_opt_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_pess_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_pess_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_match: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_opt_1: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_opt_2: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_pess_1: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_pess_2: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
     sum_abs_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1205,26 +1225,52 @@ class VerificationGlobalDailyStatsRow(Base):
     sum_abs_temp_delta_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_abs_vis_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    n_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_gust: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     sum_abs_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
-    n_gust_flagged_peak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_gust_flagged_peak: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     sum_gust_flagged_over_peak_kt: Mapped[float | None] = mapped_column(
         Float, nullable=True,
     )
-    n_model_gust_flag: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_obs_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_gust_flag_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_model_gust_flag: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_obs_gust: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_gust_flag_hit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
-    n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_advisory_opt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_advisory_pess: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_match: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_advisory_opt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_advisory_pess: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
-    n_precip_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_precip_miss: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_precip_false_alarm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_convection_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_convection_miss: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip_hit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_precip_miss: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_precip_false_alarm: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_convection_hit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_convection_miss: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     n_convection_false_alarm: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0,
     )
@@ -1260,9 +1306,15 @@ class VerificationActivityDailyRow(Base):
     date: Mapped[date_t] = mapped_column(Date, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
 
-    n_scores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_distinct_obs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_airports_day: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_scores: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_distinct_obs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_airports_day: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
 
 class TafVerificationDailyRow(Base):
@@ -1293,38 +1345,72 @@ class TafVerificationDailyRow(Base):
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     days_out: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_ceiling: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_wind: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_vis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_ceiling: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_wind: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_vis: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
-    n_cat_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_opt_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_opt_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_pess_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_cat_pess_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_match: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_opt_1: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_opt_2: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_pess_1: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_cat_pess_2: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
     sum_abs_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_abs_wind_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_abs_vis_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_advisory_opt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_advisory_pess: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_match: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_advisory_opt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_advisory_pess: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
     # Gust — the columns join verification_observations via observation_id,
     # exactly as the NWP daily rollup does.
-    n_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_gust: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     sum_abs_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
-    n_gust_flagged_peak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_gust_flagged_peak: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     sum_gust_flagged_over_peak_kt: Mapped[float | None] = mapped_column(
         Float, nullable=True,
     )
-    n_taf_gust_flag: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_obs_gust: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    n_gust_flag_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_taf_gust_flag: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_obs_gust: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_gust_flag_hit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
 
 class ArchiveManifestRow(Base):
@@ -1338,6 +1424,14 @@ class ArchiveManifestRow(Base):
     ``period`` is ``YYYY-MM`` for the monthly tables (observations, scores,
     taf_scores) and ``YYYY-MM-DD`` for daily snapshots. ``file_path`` is
     stored relative to the archive root so the archive stays relocatable.
+
+    ``max_id`` — the highest source-table primary key in the file — is what
+    makes the delete gate exact. Keys are monotonic, so any row inserted after
+    the archive was written has a higher ``id`` whatever its timestamp, and
+    "is anything live newer than the archive?" is a single comparison.
+    ``row_count`` cannot answer that once pruning starts: pruning deliberately
+    leaves ``source='flight'`` rows behind, so a pruned month's live count
+    sits permanently below its archived count.
     """
 
     __tablename__ = "archive_manifest"
@@ -1350,6 +1444,9 @@ class ArchiveManifestRow(Base):
     table_name: Mapped[str] = mapped_column(String(64), nullable=False)
     period: Mapped[str] = mapped_column(String(16), nullable=False)
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0",
+    )
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -548,6 +548,13 @@ class TestDebriefExemption:
 
 
 @pytest.fixture
+def archive_dir(tmp_path, monkeypatch):
+    """Point DATA_DIR at a temp tree so the archive writes under it."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    return tmp_path / "archive" / "verification"
+
+
+@pytest.fixture
 def prune_session():
     """Isolated engine + session for the raw pruner.
 
@@ -576,17 +583,18 @@ def no_archive_gate(monkeypatch):
     monkeypatch.setenv("VERIFICATION_PRUNE_REQUIRE_ARCHIVE", "0")
 
 
-def _manifest_month(db, period: str, counts: dict[str, int]) -> None:
-    """Record archive manifests for a month so the prune gate passes."""
-    from weatherbrief.db.models import ArchiveManifestRow
+def _archive_month(db, period: str) -> None:
+    """Actually archive a month so the prune gate passes.
 
-    for table, n in counts.items():
-        db.add(ArchiveManifestRow(
-            table_name=table, period=period, row_count=n,
-            file_path=f"{table}/{period}.parquet", sha256="0" * 64,
-            created_at=_utc(2026, 4, 1, 0, 0),
-        ))
-    db.flush()
+    Writes real Parquet rather than faking manifest rows: the gate re-hashes
+    the file and compares ``max_id``, so a hand-written manifest would only
+    prove the test knows how to bypass the gate. Requires the ``archive_dir``
+    fixture to have pointed DATA_DIR at a temp tree.
+    """
+    from weatherbrief.tasks.archive import MONTHLY_TABLES, archive_period
+
+    for table in MONTHLY_TABLES:
+        archive_period(db, table, period)
 
 
 class TestPruneRawObservations:
@@ -728,7 +736,7 @@ class TestPruneRawObservations:
         assert result["observations"] == 0
         assert prune_session.get(VerificationObservationRow, obs_id) is not None
 
-    def test_manifest_matching_live_count_allows_delete(self, prune_session):
+    def test_verified_archive_allows_delete(self, prune_session, archive_dir):
         from weatherbrief.db.models import (
             AirportMonthlySummaryRow,
             VerificationObservationRow,
@@ -745,38 +753,114 @@ class TestPruneRawObservations:
         ))
         prune_session.flush()
         obs_id = obs.id
-        _manifest_month(prune_session, "2026-02", {
-            "observations": 1, "scores": 0, "taf_scores": 0,
-        })
+        _archive_month(prune_session, "2026-02")
 
         result = prune_raw_observations(prune_session, retain_days=1)
         assert result["observations"] == 1
         assert prune_session.get(VerificationObservationRow, obs_id) is None
 
-    def test_stale_manifest_count_blocks_delete(self, prune_session):
+    def test_rows_arriving_after_archiving_block_delete(
+        self, prune_session, archive_dir,
+    ):
         """A month that gained rows after archiving must not be deleted."""
         from weatherbrief.db.models import (
             AirportMonthlySummaryRow,
             VerificationObservationRow,
         )
 
-        for day in (14, 15):
-            prune_session.add(VerificationObservationRow(
-                icao="LFPG",
-                observation_time=_utc(2026, 2, day, 12, 0),
-                collected_at=_utc(2026, 2, day, 12, 0),
-            ))
+        prune_session.add(VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 14, 12, 0),
+            collected_at=_utc(2026, 2, 14, 12, 0),
+        ))
         prune_session.add(AirportMonthlySummaryRow(
             month=_utc(2026, 2, 1), icao="LFPG", n_obs=2,
         ))
         prune_session.flush()
-        # Manifest says 1 row; the table now holds 2.
-        _manifest_month(prune_session, "2026-02", {
-            "observations": 1, "scores": 0, "taf_scores": 0,
-        })
+        _archive_month(prune_session, "2026-02")
+
+        # A late observation lands after the archive was written.
+        prune_session.add(VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        ))
+        prune_session.flush()
 
         result = prune_raw_observations(prune_session, retain_days=1)
         assert result["observations"] == 0
+
+    def test_missing_archive_file_blocks_delete(self, prune_session, archive_dir):
+        """A manifest whose file vanished must not authorise a delete."""
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+        )
+
+        obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        prune_session.add(obs)
+        prune_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=1,
+        ))
+        prune_session.flush()
+        obs_id = obs.id
+        _archive_month(prune_session, "2026-02")
+        (archive_dir / "observations" / "2026-02.parquet").unlink()
+
+        result = prune_raw_observations(prune_session, retain_days=1)
+        assert result["observations"] == 0
+        assert prune_session.get(VerificationObservationRow, obs_id) is not None
+
+    def test_already_pruned_month_is_not_reported_as_blocked(
+        self, prune_session, archive_dir,
+    ):
+        """Pruning leaves flight rows behind — that must not read as a failure.
+
+        The archive gate has to distinguish "this month is done" from "the
+        archive is broken", every day, forever. A pruned month keeps its
+        exempt rows, so its live count can never match the manifest again.
+        """
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+            VerificationScoreRow,
+        )
+        from weatherbrief.tasks.retention import prunable_months
+
+        obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        prune_session.add(obs)
+        prune_session.flush()
+        prune_session.add(VerificationScoreRow(
+            icao="LFPG", observation_id=obs.id,
+            observation_time=obs.observation_time,
+            model="gfs", model_init_time=_utc(2026, 2, 15, 0, 0),
+            lead_hours=12, days_out=0, source="standalone",
+        ))
+        prune_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=1,
+        ))
+        prune_session.flush()
+        _archive_month(prune_session, "2026-02")
+
+        assert prune_raw_observations(prune_session, retain_days=1)["scores"] == 1
+
+        # Second pass: nothing left to do, and nothing to complain about.
+        safe, blocked = prunable_months(
+            prune_session, _utc(2026, 8, 1, 0, 0),
+        )
+        assert safe == []
+        assert blocked == []
+        assert prune_raw_observations(prune_session, retain_days=1) == {
+            "observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0,
+        }
 
     def test_flight_scores_and_linked_observations_are_exempt(
         self, prune_session, no_archive_gate,

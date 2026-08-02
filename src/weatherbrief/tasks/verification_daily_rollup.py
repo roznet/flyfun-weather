@@ -67,6 +67,7 @@ from weatherbrief.db.models import (
     VerificationActivityDailyRow,
     VerificationDailyStatsRow,
     VerificationGlobalDailyStatsRow,
+    VerificationMonthlyStatsRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
@@ -323,8 +324,21 @@ def _build_activity_rollup_select(
     )
 
 
+def known_taf_sources(db: Session) -> list[str]:
+    """Every ``source`` value present in ``taf_verification_scores``.
+
+    The TAF mirror of :func:`known_sources`, and needed for the same reason:
+    ``ix_taf_verif_source_time`` leads with ``source``, so a day-range filter
+    that doesn't name it can't seek and full-scans the table instead. Cheap
+    (loose index scan on the leading column).
+    """
+    return sorted(
+        db.execute(select(TafVerificationScoreRow.source).distinct()).scalars().all()
+    )
+
+
 def _build_taf_rollup_select(
-    day_start: datetime, day_end: datetime, day: date_t,
+    day_start: datetime, day_end: datetime, day: date_t, sources: list[str],
 ):
     """SELECT producing one TAF row per (source, days_out) for the day.
 
@@ -332,6 +346,9 @@ def _build_taf_rollup_select(
     the NWP rollup does — the TAF gust and the observed gust both live on the
     observation row. Inner join, and it can't drop rows: the FK is NOT NULL
     and retention prunes observations and TAF scores in the same window.
+
+    ``sources`` is named in the WHERE for the same indexability reason as
+    :func:`_build_rollup_select` — see :func:`known_taf_sources`.
     """
     t = TafVerificationScoreRow
     cat_obs = _cat_index_expr(t.obs_flight_category)
@@ -377,6 +394,7 @@ def _build_taf_rollup_select(
             t.observation_id == VerificationObservationRow.id,
         )
         .where(
+            t.source.in_(sources),
             t.observation_time >= day_start,
             t.observation_time < day_end,
         )
@@ -393,6 +411,28 @@ def _delete_and_insert(db: Session, model, src, *, date_col_value: date_t) -> in
     return result.rowcount if result.rowcount is not None else 0
 
 
+def _invalidate_month(db: Session, day: date_t) -> None:
+    """Drop the monthly rollup for the month containing *day*.
+
+    A month is the sum of its days, so re-rolling a day makes the month it
+    belongs to stale. Without this, ``completed_months``' "already rolled" set
+    is a one-way ratchet: a day backfilled after its month was rolled would
+    never be reflected, and the undercount would be permanent short of a
+    manual ``--rebuild``.
+
+    Cheap and almost always a no-op — the scheduler only re-rolls today and
+    yesterday, and the current month is never rolled up in the first place.
+    The retention loop runs the monthly rollup right after the daily one, so
+    an invalidated completed month is re-derived in the same pass.
+    """
+    month_start = datetime(day.year, day.month, 1, tzinfo=timezone.utc)
+    db.execute(
+        VerificationMonthlyStatsRow.__table__.delete().where(
+            VerificationMonthlyStatsRow.month == month_start
+        )
+    )
+
+
 def rollup_day(db: Session, day: date_t) -> int:
     """Aggregate one UTC date into all four daily tables.
 
@@ -404,6 +444,9 @@ def rollup_day(db: Session, day: date_t) -> int:
 
     Order matters: the global table is a GROUP BY over the per-airport table,
     so the per-airport insert has to be flushed first.
+
+    Also invalidates the monthly rollup for this day's month — see
+    :func:`_invalidate_month`.
     """
     day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
@@ -414,10 +457,27 @@ def rollup_day(db: Session, day: date_t) -> int:
             VerificationDailyStatsRow.date == day
         )
     )
+    _invalidate_month(db, day)
 
+    taf_sources = known_taf_sources(db)
     sources = known_sources(db)
+
+    def _roll_taf() -> int:
+        if not taf_sources:
+            db.execute(
+                TafVerificationDailyRow.__table__.delete().where(
+                    TafVerificationDailyRow.date == day
+                )
+            )
+            return 0
+        return _delete_and_insert(
+            db, TafVerificationDailyRow,
+            _build_taf_rollup_select(day_start, day_end, day, taf_sources),
+            date_col_value=day,
+        )
+
     if not sources:
-        # No scores at all — the deletes are the whole job. Returning early
+        # No NWP scores at all — the deletes are the whole job. Returning early
         # also keeps a degenerate ``IN ()`` out of the INSERT-SELECTs. TAF is
         # still rolled: TAF scores can exist without NWP scores for a day.
         _delete_and_insert(
@@ -429,11 +489,7 @@ def rollup_day(db: Session, day: date_t) -> int:
                 VerificationActivityDailyRow.date == day
             )
         )
-        _delete_and_insert(
-            db, TafVerificationDailyRow,
-            _build_taf_rollup_select(day_start, day_end, day),
-            date_col_value=day,
-        )
+        _roll_taf()
         return 0
 
     src = _build_rollup_select(day_start, day_end, day, sources)
@@ -453,11 +509,7 @@ def rollup_day(db: Session, day: date_t) -> int:
         _build_activity_rollup_select(day_start, day_end, day, sources),
         date_col_value=day,
     )
-    n_taf = _delete_and_insert(
-        db, TafVerificationDailyRow,
-        _build_taf_rollup_select(day_start, day_end, day),
-        date_col_value=day,
-    )
+    n_taf = _roll_taf()
 
     logger.info(
         "daily rollup %s: %d per-airport, %d global, %d activity, %d TAF groups",
@@ -545,6 +597,41 @@ def completed_days(db: Session) -> list[date_t]:
         if d not in existing:
             out.append(d)
         d += timedelta(days=1)
+    return out
+
+
+def unrolled_days_with_data(db: Session) -> list[date_t]:
+    """Pending days that actually have raw scores waiting to be rolled.
+
+    :func:`completed_days` returns every date between the first rolled day and
+    today that has no rollup rows — which includes days that legitimately have
+    nothing to roll (an ingest outage, a quiet day). Those are not gaps: a
+    rollup of them would write zero rows and they would stay "pending"
+    forever.
+
+    A real gap is a day with raw standalone scores but no rollup rows. This
+    filters to those, so callers can distinguish "the daily rollup is behind"
+    from "nothing happened that day". Bounded work: one EXISTS per pending
+    day, and in steady state the pending list is empty or a single day.
+
+    Note that after Phase 3 pruning removes a month's raw scores, its days can
+    no longer look like gaps — correctly so, since they were rolled long
+    before the retention cutoff reached them.
+    """
+    out: list[date_t] = []
+    for d in completed_days(db):
+        day_start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+        row = db.execute(
+            select(VerificationScoreRow.id)
+            .where(
+                _standalone_clause(VerificationScoreRow.source),
+                VerificationScoreRow.observation_time >= day_start,
+                VerificationScoreRow.observation_time < day_start + timedelta(days=1),
+            )
+            .limit(1)
+        ).first()
+        if row is not None:
+            out.append(d)
     return out
 
 
