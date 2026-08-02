@@ -69,8 +69,21 @@ class DigestConfig(BaseModel):
         """
         rel_path = getattr(self.prompts, key)
         prompt_path = _CONFIGS_DIR / rel_path
-        prompt = prompt_path.read_text()
+        return self.render_prompt(prompt_path.read_text(), locale, guidance_key)
 
+    def render_prompt(
+        self,
+        prompt: str,
+        locale: str | None = None,
+        guidance_key: str | None = None,
+    ) -> str:
+        """Inject locale + guidance into already-loaded prompt text.
+
+        Split out of ``load_prompt`` so callers holding a prompt from somewhere
+        other than ``self.prompts`` — the eval runner's ``--prompt`` override,
+        for one — render it the same way rather than shipping raw ``{guidance}``
+        and ``{locale}`` placeholders to the model.
+        """
         prompt = self._inject_locale(prompt, locale)
         prompt = self._inject_guidance(prompt, guidance_key)
         return prompt

@@ -197,7 +197,11 @@ def main():
     # Load LLM config and prompt
     config = load_digest_config(args.config)
     if args.prompt:
-        system_prompt = Path(args.prompt).read_text()
+        # Render the override the same way load_prompt() would — otherwise a
+        # templated prompt reaches the model with literal {guidance}/{locale}.
+        system_prompt = config.render_prompt(
+            Path(args.prompt).read_text(), guidance_key=guidance_key
+        )
     else:
         system_prompt = config.load_prompt("briefer", guidance_key=guidance_key)
 
