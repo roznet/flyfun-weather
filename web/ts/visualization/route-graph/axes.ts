@@ -24,10 +24,6 @@ export function computeYScale(
   metric: RouteGraphMetric,
   plotArea: PlotArea,
 ): YAxisScale {
-  // Only plottable values drive the scale. Above-scale samples deliberately do
-  // not — expanding the axis to fit them is exactly what the cap exists to avoid.
-  const nums = samples.filter((s) => s.kind === 'value').map((s) => s.value);
-
   let min: number;
   let max: number;
 
@@ -43,6 +39,11 @@ export function computeYScale(
           plotArea.height,
     };
   }
+
+  // Only plottable values drive the scale. Above-scale samples deliberately do
+  // not — expanding the axis to fit them is exactly what the cap exists to avoid.
+  // Computed after the pinned-axis return, which never consults the data.
+  const nums = samples.filter((s) => s.kind === 'value').map((s) => s.value);
 
   if (metric.suggestedRange) {
     [min, max] = metric.suggestedRange;
