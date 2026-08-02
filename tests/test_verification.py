@@ -524,3 +524,119 @@ class TestVerificationObservationModel:
 
     def test_weather_from_json_invalid(self):
         assert VerificationObservation.weather_from_json("not json") == []
+
+
+# ---------------------------------------------------------------------------
+# Naive-datetime boundary (#520)
+# ---------------------------------------------------------------------------
+#
+# The verification columns are `TZDateTime`, which rejects naive datetimes at
+# the bind. The euro_aip parser's awareness is not guaranteed, so the two
+# defences below are what stand between it and a failed ingestion cycle:
+# normalise at the parser boundary, and survive it if one slips through.
+
+
+def _fake_metar(observation_time):
+    return SimpleNamespace(
+        observation_time=observation_time,
+        raw_text="METAR EGTK 011200Z 27010KT 9999 FEW040 12/05 Q1013",
+        ceiling_ft=4000,
+        visibility_meters=9999,
+        wind_direction=270,
+        wind_speed=10,
+        wind_gust=None,
+        temperature=12,
+        dewpoint=5,
+        altimeter=1013.0,
+        weather_conditions=[],
+        flight_category=None,
+    )
+
+
+class TestFetchObservationsBatchNormalisesParserTimes:
+    """`fetch_observations_batch` is the parser boundary — nothing naive past it.
+
+    `VerificationObservation` normalises via a field validator, but Pydantic
+    runs validators on *assignment* only under `validate_assignment=True`,
+    which the model does not set. `taf_issue_time` is assigned after
+    construction, so the explicit `_as_utc` at that call site is the only thing
+    covering it — and nothing exercised that call site until this test.
+    """
+
+    def _run(self, taf_issue_time):
+        now = datetime.now(timezone.utc)
+        metar = _fake_metar(now - timedelta(minutes=20))
+        taf = SimpleNamespace(
+            observation_time=taf_issue_time,
+            raw_text="TAF EGTK 011100Z 0112/0212 27010KT 9999 FEW040",
+        )
+        airport = SimpleNamespace(icao="EGTK", latest_metar=metar, latest_taf=taf)
+
+        fake_service = MagicMock()
+        fake_service.fetch_route_weather.return_value = SimpleNamespace(
+            airports=[airport],
+        )
+
+        with patch(
+            "euro_aip.briefing.weather.route_weather.RouteWeatherService",
+            return_value=fake_service,
+        ), patch(
+            "weatherbrief.airports._load_airport_model", return_value=object(),
+        ), patch(
+            "euro_aip.briefing.weather.analysis.WeatherAnalyzer.find_applicable_taf",
+            return_value=None,
+        ):
+            return fetch_observations_batch(["EGTK"], "unused.db")
+
+    def test_naive_taf_issue_time_is_made_aware(self):
+        """Regression guard: drop the `_as_utc` at the call site and this fails."""
+        naive = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+
+        observations = self._run(naive)
+
+        assert len(observations) == 1
+        issued = observations[0].taf_issue_time
+        assert issued is not None
+        assert issued.tzinfo is not None, (
+            "naive taf_issue_time escaped the parser boundary — it will raise "
+            "at the TZDateTime bind and fail the whole batch"
+        )
+        assert issued.utcoffset() == timedelta(0)
+
+    def test_aware_taf_issue_time_passes_through_unchanged(self):
+        aware = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        observations = self._run(aware)
+
+        assert observations[0].taf_issue_time == aware
+
+
+class TestStoreObservationsSurvivesBadValue:
+    """One unstorable observation must not take down the whole chunk.
+
+    The flush is wrapped in `except IntegrityError` for the insert race;
+    a naive datetime raises `StatementError`, which that clause does not
+    match, so before the `except StatementError` handler this failed every
+    airport in the batch rather than skipping the offending row.
+    """
+
+    def test_naive_taf_issue_time_skips_only_that_row(self, db_session, dev_user):
+        flight = _make_flight(db_session, dev_user, verification_status="collecting")
+        icao_map = {"EGTK": {flight.id}, "LFPB": {flight.id}}
+
+        bad = _make_observation(icao="EGTK")
+        # Assignment, not construction — the one path the validator misses.
+        bad.taf_issue_time = datetime(2026, 4, 1, 11, 0)
+        assert bad.taf_issue_time.tzinfo is None, "fixture must stay naive"
+
+        good = _make_observation(icao="LFPB")
+
+        # Bad one first, so a surviving second insert proves the batch continued.
+        count = store_observations([bad, good], icao_map, db_session)
+        db_session.flush()
+
+        assert count == 1
+        rows = db_session.execute(
+            select(VerificationObservationRow)
+        ).scalars().all()
+        assert [r.icao for r in rows] == ["LFPB"]

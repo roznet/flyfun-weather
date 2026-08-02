@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -427,13 +427,22 @@ def store_observations(
                 taf_wind_speed_kt=obs.taf_wind_speed_kt,
                 taf_wind_gust_kt=obs.taf_wind_gust_kt,
             )
-            db.add(row)
+            # The savepoint has to open *before* the row is added:
+            # `begin_nested()` autoflushes pending state, so adding first put
+            # the INSERT outside the `try` below and neither handler could see
+            # it — the exception escaped `store_observations` and failed the
+            # whole chunk. Adding inside the savepoint is what makes
+            # `nested.commit()` the statement that raises.
             nested = db.begin_nested()
             try:
+                db.add(row)
                 nested.commit()  # flushes within savepoint
             except IntegrityError:
                 nested.rollback()
-                db.expunge(row)
+                # Rolling the savepoint back already evicts the pending row;
+                # expunging it again raises "not present in this Session".
+                if row in db:
+                    db.expunge(row)
                 # Lost the race — another cycle inserted this observation
                 existing = db.execute(
                     select(VerificationObservationRow)
@@ -444,6 +453,24 @@ def store_observations(
                     obs_row_id = existing.id
                 else:
                     continue
+            except StatementError:
+                # Bad value for a column type — in practice a naive datetime
+                # reaching a `TZDateTime` column, which raises `ValueError` in
+                # the bind processor and surfaces here wrapped. Without this
+                # clause the exception escapes the whole chunk (every airport
+                # in the batch) instead of dropping the one bad observation:
+                # `IntegrityError` above is the insert-race path and does not
+                # match. Must stay *after* it — `IntegrityError` is itself a
+                # `StatementError` subclass, so the reverse order would
+                # swallow the race recovery.
+                nested.rollback()
+                if row in db:
+                    db.expunge(row)
+                logger.error(
+                    "Skipping %s observation at %s — could not be stored",
+                    obs.icao, obs.observation_time, exc_info=True,
+                )
+                continue
             else:
                 obs_row_id = row.id
                 inserted += 1
