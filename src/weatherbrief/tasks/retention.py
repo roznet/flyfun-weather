@@ -362,6 +362,84 @@ def _month_bounds(y: int, m: int) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _prunable_score_clauses(model, start: datetime, end: datetime):
+    """WHERE clauses selecting the score rows a prune may delete."""
+    return (
+        model.source != "flight",
+        model.observation_time >= start,
+        model.observation_time < end,
+    )
+
+
+def _prunable_observation_clauses(start: datetime, end: datetime):
+    """WHERE clauses selecting the observation rows a prune may delete.
+
+    The two ``NOT EXISTS`` legs are the flight-track exemption: observations
+    are shared between the flight and standalone tracks and carry no source
+    column of their own, so a flight link — or a surviving flight score, which
+    would be cascade-deleted with its parent — is what identifies ground truth
+    that must outlive the standalone window.
+    """
+    from weatherbrief.db.models import (
+        FlightVerificationMapRow,
+        VerificationObservationRow,
+        VerificationScoreRow,
+    )
+
+    flight_linked = (
+        select(FlightVerificationMapRow.id)
+        .where(
+            FlightVerificationMapRow.observation_id
+            == VerificationObservationRow.id
+        )
+        .exists()
+    )
+    has_flight_score = (
+        select(VerificationScoreRow.id)
+        .where(
+            VerificationScoreRow.observation_id == VerificationObservationRow.id,
+            VerificationScoreRow.source == "flight",
+        )
+        .exists()
+    )
+    return (
+        VerificationObservationRow.observation_time >= start,
+        VerificationObservationRow.observation_time < end,
+        ~flight_linked,
+        ~has_flight_score,
+    )
+
+
+def _month_has_prunable_rows(db: Session, start: datetime, end: datetime) -> bool:
+    """Whether a month still holds anything this pruner is allowed to delete.
+
+    Checked *before* the archive gate so an already-pruned month costs one
+    bounded EXISTS rather than three file hashes — and, more importantly, so
+    it stops being reported as "blocked" forever. A pruned month keeps its
+    exempt flight rows, so it can never again look untouched; without this
+    check the gate would log a refusal for every month, every day, and "the
+    archive is broken" would be indistinguishable from "this month is done".
+    """
+    from weatherbrief.db.models import (
+        TafVerificationScoreRow,
+        VerificationObservationRow,
+        VerificationScoreRow,
+    )
+
+    probes = (
+        select(VerificationScoreRow.id).where(
+            *_prunable_score_clauses(VerificationScoreRow, start, end)
+        ),
+        select(TafVerificationScoreRow.id).where(
+            *_prunable_score_clauses(TafVerificationScoreRow, start, end)
+        ),
+        select(VerificationObservationRow.id).where(
+            *_prunable_observation_clauses(start, end)
+        ),
+    )
+    return any(db.execute(p.limit(1)).first() is not None for p in probes)
+
+
 def prunable_months(
     db: Session, cutoff: datetime, *, require_archive: bool | None = None,
 ) -> tuple[list[tuple[int, int]], list[str]]:
@@ -373,10 +451,14 @@ def prunable_months(
        Never delete observations whose climatology hasn't been derived, even
        if the cutoff has passed (e.g. the rollup has been failing).
     2. **Archived** — all three monthly tables have an ``archive_manifest``
-       row whose ``row_count`` still matches a live recount. No manifest, no
-       delete, and the refusal is logged loudly: once a month is gone from
-       MySQL the Parquet file is the only copy, so "the archive job was
-       silently broken" must never be discoverable only after the delete.
+       row whose file still hashes correctly and whose ``max_id`` covers every
+       live row in the month. No manifest, no delete, and the refusal is
+       logged loudly: once a month is gone from MySQL the Parquet file is the
+       only copy, so "the archive job was silently broken" must never be
+       discoverable only after the delete.
+
+    Months with nothing left to delete are skipped before either gate runs —
+    see :func:`_month_has_prunable_rows`.
 
     Returned reasons are logged by the caller rather than raised — a month
     failing a gate is an operational signal, not an error.
@@ -390,9 +472,11 @@ def prunable_months(
     safe: list[tuple[int, int]] = []
     blocked: list[str] = []
     for (y, m) in sorted(_summarised_months(db)):
-        _, month_end = _month_bounds(y, m)
+        month_start, month_end = _month_bounds(y, m)
         if month_end > cutoff:
             continue  # still inside the online window
+        if not _month_has_prunable_rows(db, month_start, month_end):
+            continue  # already pruned, or never had anything deletable
         if require_archive:
             ok, reason = month_archive_ok(db, f"{y:04d}-{m:02d}")
             if not ok:
@@ -429,7 +513,6 @@ def prune_raw_observations(
     :func:`_delete_in_batches`); a caller's own commit afterwards is a no-op.
     """
     from weatherbrief.db.models import (
-        FlightVerificationMapRow,
         TafVerificationScoreRow,
         VerificationObservationRow,
         VerificationScoreRow,
@@ -480,49 +563,20 @@ def prune_raw_observations(
             # source= is not just an exemption, it is what makes the delete
             # indexable: ix_verif_scores_source_time / _source_days_time both
             # lead with source, and nothing on this table leads with
-            # observation_time.
+            # observation_time. The clause builders are shared with
+            # _month_has_prunable_rows so "is there anything to delete?" and
+            # "delete it" can never disagree about what is exempt.
             score_deleted += _delete_in_batches(
                 db, VerificationScoreRow,
-                (
-                    VerificationScoreRow.source != "flight",
-                    VerificationScoreRow.observation_time >= day,
-                    VerificationScoreRow.observation_time < day_end,
-                ),
+                _prunable_score_clauses(VerificationScoreRow, day, day_end),
             )
             taf_deleted += _delete_in_batches(
                 db, TafVerificationScoreRow,
-                (
-                    TafVerificationScoreRow.source != "flight",
-                    TafVerificationScoreRow.observation_time >= day,
-                    TafVerificationScoreRow.observation_time < day_end,
-                ),
-            )
-
-            flight_linked = (
-                select(FlightVerificationMapRow.id)
-                .where(
-                    FlightVerificationMapRow.observation_id
-                    == VerificationObservationRow.id
-                )
-                .exists()
-            )
-            has_flight_score = (
-                select(VerificationScoreRow.id)
-                .where(
-                    VerificationScoreRow.observation_id
-                    == VerificationObservationRow.id,
-                    VerificationScoreRow.source == "flight",
-                )
-                .exists()
+                _prunable_score_clauses(TafVerificationScoreRow, day, day_end),
             )
             obs_deleted += _delete_in_batches(
                 db, VerificationObservationRow,
-                (
-                    VerificationObservationRow.observation_time >= day,
-                    VerificationObservationRow.observation_time < day_end,
-                    ~flight_linked,
-                    ~has_flight_score,
-                ),
+                _prunable_observation_clauses(day, day_end),
             )
             day = day_end
 

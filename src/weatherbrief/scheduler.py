@@ -762,16 +762,28 @@ def _run_retention_once() -> None:
         logger.error("Airport summary rollup failed", exc_info=True)
 
     try:
-        from weatherbrief.tasks.verification_rollup import run_monthly_rollup
+        from weatherbrief.tasks.verification_rollup import (
+            prune_daily_stats,
+            run_monthly_rollup,
+        )
         from weatherbrief.tasks.verification_tiering import monthly_rollup_enabled
 
         if monthly_rollup_enabled():
             db = SessionLocal()
             try:
                 n = run_monthly_rollup(db)
+                # Ageing out daily stats is a separate opt-in (default 0) and
+                # runs after the monthly rollup on purpose: it refuses to
+                # prune a month the rollup hasn't summarised, so doing it in
+                # this order means a month becomes prunable in the same pass
+                # that makes it safe to prune.
+                pruned = prune_daily_stats(db)
                 db.commit()
-                if n:
-                    logger.info("Verification monthly rollup: %d rows", n)
+                if n or pruned:
+                    logger.info(
+                        "Verification monthly rollup: %d rows, "
+                        "daily-stats pruned: %d rows", n, pruned,
+                    )
             except Exception:
                 db.rollback()
                 raise

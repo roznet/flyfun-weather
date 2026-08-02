@@ -59,12 +59,28 @@ A period is archived only once it can no longer change:
 
 Re-runnability
 --------------
-Every write is: keyset-paginated SELECT → Parquet temp file → fsync → verify
-the file's row count against a live ``COUNT(*)`` → atomic rename → upsert the
-manifest row. Re-archiving a period overwrites the file and updates the
-manifest. If a live count later drifts from the manifest (a late row, a
-repair), :func:`verify_archives` reports it and the fix is to re-archive, not
-to error out.
+Every write is: keyset-paginated SELECT → Parquet temp file → fsync (file and
+directory) → verify the file's row count against a live ``COUNT(*)`` → atomic
+rename → upsert the manifest row. Re-archiving a period overwrites the file
+and updates the manifest. If a live count later drifts from the manifest (a
+late row, a repair), :func:`verify_archives` reports it and the fix is to
+re-archive, not to error out.
+
+What the manifest proves
+------------------------
+``max_id`` — the highest primary key written for the period — is what makes
+the Phase 3 delete gate exact. Primary keys are monotonic, so *any* row
+inserted after the archive was written has a higher ``id``, regardless of its
+``observation_time``. The gate therefore asks "does every live row in this
+period have ``id <= max_id``?" rather than "do the counts still match".
+
+Counts can't answer that question once pruning starts, because pruning
+deliberately leaves ``source='flight'`` rows and flight-linked observations
+behind: a pruned month's live count is permanently *below* its manifest count,
+which a count-equality gate would report as a failure forever — making "the
+archive is broken" indistinguishable from "this month is already done".
+``max_id`` distinguishes them: rows going away is fine (the archive is a
+superset), rows appearing is not.
 
 Querying the archive with DuckDB
 --------------------------------
@@ -286,17 +302,18 @@ def list_manifests(db: Session, table_name: str | None = None) -> list[ArchiveMa
 
 def _upsert_manifest(
     db: Session, *, table_name: str, period: str, row_count: int,
-    file_path: str, sha256: str,
+    max_id: int, file_path: str, sha256: str,
 ) -> None:
     row = get_manifest(db, table_name, period)
     now = datetime.now(timezone.utc)
     if row is None:
         db.add(ArchiveManifestRow(
             table_name=table_name, period=period, row_count=row_count,
-            file_path=file_path, sha256=sha256, created_at=now,
+            max_id=max_id, file_path=file_path, sha256=sha256, created_at=now,
         ))
     else:
         row.row_count = row_count
+        row.max_id = max_id
         row.file_path = file_path
         row.sha256 = sha256
         row.created_at = now
@@ -332,13 +349,30 @@ def live_count(db: Session, spec: ArchiveSpec, period: str) -> int:
     trick, same reason, as ``verification_daily_rollup._build_rollup_select``.
     """
     start, end = period_bounds(spec, period)
-    stmt = select(func.count()).select_from(spec.table).where(
-        spec.time_col >= start, spec.time_col < end,
+    return int(
+        db.execute(
+            _period_filter(db, select(func.count()).select_from(spec.table), spec, period)
+        ).scalar() or 0
     )
+
+
+def live_max_id(db: Session, spec: ArchiveSpec, period: str) -> int:
+    """Highest live primary key in a period, or 0 if the period is empty."""
+    return int(
+        db.execute(
+            _period_filter(db, select(func.max(spec.model.id)), spec, period)
+        ).scalar() or 0
+    )
+
+
+def _period_filter(db: Session, stmt, spec: ArchiveSpec, period: str):
+    """Add the period's time range (and the indexability source clause)."""
+    start, end = period_bounds(spec, period)
+    stmt = stmt.where(spec.time_col >= start, spec.time_col < end)
     sources = _known_sources(db, spec)
     if sources:
         stmt = stmt.where(spec.model.source.in_(sources))
-    return int(db.execute(stmt).scalar() or 0)
+    return stmt
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +422,14 @@ def _arrow_type(pa, col):
 
 
 def _arrow_schema(pa, spec: ArchiveSpec):
+    """Arrow schema mirroring the table, nullability included.
+
+    Nullability tracks the column, so a re-import can't quietly accept a NULL
+    the source table forbids — and ``id`` in particular stays non-nullable,
+    since the joins the archive exists to support depend on it.
+    """
     return pa.schema([
-        pa.field(c.name, _arrow_type(pa, c), nullable=c.nullable or c.primary_key)
+        pa.field(c.name, _arrow_type(pa, c), nullable=c.nullable)
         for c in spec.table.columns
     ])
 
@@ -415,25 +455,26 @@ def _iter_pages(db: Session, spec: ArchiveSpec, period: str):
     Keyset rather than OFFSET: a month of scores is ~1.5M rows, and OFFSET
     pagination re-walks the skipped prefix on every page, so page N costs
     O(N·page) on the server. ``id > last_id`` costs the same for every page.
+
+    Carries the same ``source IN (...)`` clause as :func:`live_count`, and for
+    the same reason: nothing on ``verification_scores`` leads with
+    ``observation_time``, so without it every page is a full scan of 8.8M rows
+    — paid once per page, per period, for the whole backfill.
     """
     cols = [spec.table.c[c.name] for c in spec.table.columns]
-    start, end = period_bounds(spec, period)
+    id_pos = [c.name for c in spec.table.columns].index("id")
     last_id = 0
     while True:
         rows = db.execute(
-            select(*cols)
-            .where(
-                spec.time_col >= start,
-                spec.time_col < end,
-                spec.model.id > last_id,
-            )
+            _period_filter(db, select(*cols), spec, period)
+            .where(spec.model.id > last_id)
             .order_by(spec.model.id)
             .limit(_PAGE_ROWS)
         ).all()
         if not rows:
             return
         yield rows
-        last_id = rows[-1][0]
+        last_id = rows[-1][id_pos]
 
 
 def _sha256_file(path: Path) -> str:
@@ -442,6 +483,29 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _fsync_path(path: Path) -> None:
+    """Flush a written file to stable storage."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: Path) -> None:
+    """Flush a directory entry (the rename itself) to stable storage."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:  # pragma: no cover - not all filesystems allow this
+        return
+    try:
+        os.fsync(fd)
+    except OSError:  # pragma: no cover - e.g. some network filesystems
+        pass
+    finally:
+        os.close(fd)
 
 
 def archive_period(
@@ -460,7 +524,8 @@ def archive_period(
     spec = ARCHIVE_SPECS[table_name]
     pa, pq = _require_pyarrow()
 
-    expected = live_count(db, spec, period)
+    pre_count = live_count(db, spec, period)
+    pre_max_id = live_max_id(db, spec, period)
     existing = get_manifest(db, table_name, period)
     out_dir = archive_root() / table_name
     out_path = out_dir / f"{period}.parquet"
@@ -468,11 +533,12 @@ def archive_period(
     if (
         not force
         and existing is not None
-        and existing.row_count == expected
+        and existing.row_count == pre_count
+        and existing.max_id == pre_max_id
         and out_path.exists()
     ):
         return {
-            "table": table_name, "period": period, "rows": expected,
+            "table": table_name, "period": period, "rows": pre_count,
             "path": str(out_path), "skipped": True,
         }
 
@@ -494,6 +560,16 @@ def archive_period(
         writer.close()
         writer = None
 
+        # Recount *after* the write, not before. A row landing mid-write is
+        # the one race this module has to survive: if it lands before
+        # pagination reaches its key the keyset picks it up (ids ascend), and
+        # if it lands after, the post-write count exceeds what was written and
+        # this raises. Comparing against a count taken before the write would
+        # match in both cases and record a manifest for a file that is missing
+        # a row — a manifest that later authorises deleting it.
+        expected = live_count(db, spec, period)
+        max_id = live_max_id(db, spec, period)
+
         if written != expected:
             raise ArchiveError(
                 f"{table_name}/{period}: wrote {written} rows but the live "
@@ -508,7 +584,13 @@ def archive_period(
             )
 
         digest = _sha256_file(tmp_path)
+        _fsync_path(tmp_path)
         os.replace(tmp_path, out_path)
+        # The rename is atomic but not durable: without fsyncing the directory
+        # too, a crash can leave the manifest committed in MySQL while the
+        # entry that points at the file never reached disk — and the manifest
+        # is what authorises deleting the only other copy.
+        _fsync_dir(out_dir)
     finally:
         if writer is not None:
             writer.close()
@@ -517,6 +599,7 @@ def archive_period(
 
     _upsert_manifest(
         db, table_name=table_name, period=period, row_count=expected,
+        max_id=max_id,
         # Relative to the archive root so the whole tree stays relocatable
         # (an off-box backup restores it under a different DATA_DIR).
         file_path=f"{table_name}/{period}.parquet",
@@ -554,14 +637,19 @@ def pending_periods(
 ) -> list[str]:
     """Final periods for *table_name* that have no manifest row yet.
 
-    Incremental mode (the default, used by the scheduled run) walks forward
-    from the newest archived period, so the steady-state cost is one or two
-    periods per day and no scan of the raw table.
+    Incremental mode (the default, used by the scheduled run) walks from the
+    **oldest** archived period, not the newest, and filters out everything
+    already in the manifest. Walking forward from ``max(existing)`` would be
+    marginally cheaper and permanently wrong: if one period in a run fails
+    while a later one succeeds, the max moves past the failure and every
+    subsequent incremental run starts after it, so the gap is never retried
+    and only an explicit ``archive backfill`` would ever find it. Filtering a
+    set of at most a few hundred period strings costs nothing.
 
-    ``full=True`` (``archive backfill``) walks from the earliest live row
-    instead, so gaps left by a deleted manifest row or an interrupted
-    backfill are picked up. That start point costs one ``MIN(time_col)`` —
-    acceptable for an explicitly-invoked backfill, not for a daily loop.
+    ``full=True`` (``archive backfill``) starts from the earliest live row
+    instead, which additionally picks up periods older than the first
+    manifest. That start point costs one ``MIN(time_col)`` — acceptable for an
+    explicitly-invoked backfill, not for a daily loop.
     """
     spec = ARCHIVE_SPECS[table_name]
     now = now or datetime.now(timezone.utc)
@@ -574,12 +662,7 @@ def pending_periods(
         if start is None:
             return []
     else:
-        newest_done = max(existing)
-        start = (
-            _next_month(newest_done)
-            if spec.granularity == "monthly"
-            else (date_t.fromisoformat(newest_done) + timedelta(days=1)).isoformat()
-        )
+        start = min(existing)
 
     return [p for p in _walk_periods(spec, start, newest) if p not in existing]
 
@@ -651,11 +734,25 @@ def verify_archives(
         if check_counts:
             spec = ARCHIVE_SPECS.get(m.table_name)
             if spec is not None:
+                # Unlike the delete gate, this reports count drift in *both*
+                # directions, because a human running `archive verify` wants
+                # to see "this month shrank" too — after Phase 3 that is the
+                # expected, healthy state of every pruned month, so it is
+                # labelled as such rather than as a failure.
                 live = live_count(db, spec, m.period)
-                if live != m.row_count:
+                live_max = live_max_id(db, spec, m.period)
+                if live_max > m.max_id:
                     entry.update(
                         ok=False,
-                        problem=f"live count {live} != manifest {m.row_count}",
+                        problem=(
+                            f"live rows newer than the archive "
+                            f"(max id {live_max} > archived {m.max_id})"
+                        ),
+                    )
+                elif live < m.row_count:
+                    entry["problem"] = (
+                        f"live count {live} < archived {m.row_count} "
+                        f"(expected after pruning)"
                     )
         out.append(entry)
     return out
@@ -666,32 +763,83 @@ def verify_archives(
 # ---------------------------------------------------------------------------
 
 
-def month_archive_ok(db: Session, period: str) -> tuple[bool, str]:
-    """Whether all three monthly tables are archived and still match for *period*.
+def archive_file_ok(m: ArchiveManifestRow) -> tuple[bool, str]:
+    """Whether a manifest's Parquet file is still present and unmodified.
 
-    This is the gate Phase 3's raw prune consults. It re-counts live rows
-    rather than trusting the stored ``row_count``, so a month that gained rows
-    after being archived (a late score, a repair) fails the gate and stays
-    undeletable until it is re-archived. Returns ``(ok, reason)`` — the reason
-    is what gets logged when a delete is refused, so it has to name the table.
+    A manifest row is a database fact; the file it describes lives on a
+    filesystem that can lose or corrupt it (a bad restore, a disk fault, an
+    accidental ``rm``). Checking only the row would let the prune delete the
+    last remaining copy of data whose "archive" is a dangling pointer, so the
+    delete gates re-hash the file rather than trusting the manifest alone.
+
+    This is the expensive part of the gate, which is why
+    :func:`weatherbrief.tasks.retention.prunable_months` only reaches it for
+    months that still have rows to delete — an already-pruned month never
+    re-hashes its archive.
     """
-    for name in MONTHLY_TABLES:
-        m = get_manifest(db, name, period)
-        if m is None:
-            return False, f"no {name} manifest for {period}"
-        live = live_count(db, ARCHIVE_SPECS[name], period)
-        if live != m.row_count:
-            return False, (
-                f"{name}/{period}: live count {live} != manifest {m.row_count}"
-            )
+    path = archive_root() / m.file_path
+    if not path.exists():
+        return False, f"{m.table_name}/{m.period}: archive file missing ({path})"
+    if _sha256_file(path) != m.sha256:
+        return False, f"{m.table_name}/{m.period}: archive file sha256 mismatch"
     return True, ""
 
 
-def snapshot_day_archived(db: Session, day: date_t) -> bool:
-    """Whether ``snapshots`` for a ``fetched_at`` UTC date has a manifest row.
+def period_fully_archived(
+    db: Session, table_name: str, period: str,
+) -> tuple[bool, str]:
+    """Whether every live row of a period is inside the archived file.
 
-    The snapshot prune consults this per day. Deliberately *not* a count
-    recheck: snapshot rows are immutable after insert, so a stale count can
-    only mean rows arrived late, and the D+2 finality rule already covers that.
+    Asks "is there a live row the archive doesn't have?", not "do the counts
+    still match". Primary keys are monotonic, so any row inserted after the
+    archive was written has ``id > manifest.max_id`` — regardless of its
+    ``observation_time``, which matters because a backfilled old METAR gets a
+    new high ``id``.
+
+    Count equality cannot be used here: pruning deliberately leaves
+    ``source='flight'`` rows and flight-linked observations behind, so a
+    pruned month's live count sits permanently below its manifest count. A
+    count gate would report every already-pruned month as broken forever,
+    which is precisely the "is the archive broken or is this month done?"
+    ambiguity the gate exists to prevent.
     """
-    return get_manifest(db, "snapshots", day.isoformat()) is not None
+    m = get_manifest(db, table_name, period)
+    if m is None:
+        return False, f"no {table_name} manifest for {period}"
+
+    ok, reason = archive_file_ok(m)
+    if not ok:
+        return False, reason
+
+    live_max = live_max_id(db, ARCHIVE_SPECS[table_name], period)
+    if live_max > m.max_id:
+        return False, (
+            f"{table_name}/{period}: live rows newer than the archive "
+            f"(max id {live_max} > archived {m.max_id}) — re-archive first"
+        )
+    return True, ""
+
+
+def month_archive_ok(db: Session, period: str) -> tuple[bool, str]:
+    """Whether all three monthly tables are safely archived for *period*.
+
+    This is the gate Phase 3's raw prune consults before permanently deleting
+    MySQL rows. Returns ``(ok, reason)`` — the reason is what gets logged when
+    a delete is refused, so it names the table.
+    """
+    for name in MONTHLY_TABLES:
+        ok, reason = period_fully_archived(db, name, period)
+        if not ok:
+            return False, reason
+    return True, ""
+
+
+def snapshot_day_archived(db: Session, day: date_t) -> tuple[bool, str]:
+    """Whether ``snapshots`` for a ``fetched_at`` UTC date is safely archived.
+
+    Same gate as :func:`month_archive_ok`, for the one table the 10-day
+    snapshot prune deletes. Snapshot rows are immutable after insert, so the
+    ``max_id`` check will normally pass trivially; the file-integrity half is
+    what earns its keep here.
+    """
+    return period_fully_archived(db, "snapshots", day.isoformat())

@@ -264,25 +264,96 @@ class TestRoundTrip:
             assert len(joined) == 4
             assert all(a == b == "LFPG" for a, b in joined)
 
-            # Field-level fidelity on the columns that carry the awkward types:
-            # a nullable gust, a JSON-ish text column, a float, a tz datetime.
-            obs = fresh.execute(
+            # Every column of the observation row round-trips, not a sample:
+            # the archive is the only copy after Phase 3, so a column that
+            # silently stops surviving export is unrecoverable data loss.
+            src_rows = db_session.execute(
                 select(VerificationObservationRow)
                 .order_by(VerificationObservationRow.observation_time)
             ).scalars().all()
-            assert obs[0].wind_gust_kt == 24
-            assert obs[1].wind_gust_kt is None
-            assert obs[0].weather == '["RA"]'
-            assert obs[0].qnh == pytest.approx(1013.2)
-            assert obs[0].metar_raw.startswith("LFPG")
+            dst_rows = fresh.execute(
+                select(VerificationObservationRow)
+                .order_by(VerificationObservationRow.observation_time)
+            ).scalars().all()
+            assert len(src_rows) == len(dst_rows) == 4
+            cols = [c.name for c in VerificationObservationRow.__table__.columns]
+            for src, dst in zip(src_rows, dst_rows):
+                for name in cols:
+                    a, b = getattr(src, name), getattr(dst, name)
+                    if isinstance(a, datetime) or isinstance(b, datetime):
+                        # SQLite hands back naive datetimes for
+                        # DateTime(timezone=True); compare the instants.
+                        a = a.replace(tzinfo=timezone.utc) if a and not a.tzinfo else a
+                        b = b.replace(tzinfo=timezone.utc) if b and not b.tzinfo else b
+                    assert a == b, f"{name}: {a!r} != {b!r}"
+
+            # The Parquet itself carries tz-aware timestamps, whatever the
+            # database round-trip does with them.
+            table = pq.read_table(archive_dir / "observations" / "2026-05.parquet")
+            for field in table.schema:
+                if str(field.type).startswith("timestamp"):
+                    assert "tz=UTC" in str(field.type), field.name
+            for value in table.column("observation_time").to_pylist():
+                assert value.tzinfo is not None
         finally:
             fresh.close()
             engine.dispose()
 
+    def test_one_manifest_row_survives_a_re_archive(self, db_session, archive_dir):
+        """UNIQUE(table_name, period) is what makes the gate lookup unambiguous."""
+        _seed(db_session, n_obs=1)
+        archive_period(db_session, "scores", "2026-05")
+        _seed(db_session, n_obs=1, hour_offset=5)
+        archive_period(db_session, "scores", "2026-05")
+
+        rows = db_session.execute(
+            select(ArchiveManifestRow).where(
+                ArchiveManifestRow.table_name == "scores",
+                ArchiveManifestRow.period == "2026-05",
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].row_count == 2
+
+    def test_a_row_inserted_mid_archive_is_not_silently_manifested(
+        self, db_session, archive_dir, monkeypatch,
+    ):
+        """The write is only as safe as its post-write recount.
+
+        Simulates the race the module's safety claim depends on: a row lands
+        after pagination has passed its key but before the manifest is
+        written. The verification step must catch the mismatch and refuse to
+        record a manifest, because that manifest would later authorise
+        deleting a row the file never contained.
+        """
+        from weatherbrief.tasks import archive as archive_mod
+
+        _seed(db_session, n_obs=1)
+        real_pages = archive_mod._iter_pages
+
+        def racing_pages(db, spec, period):
+            yield from real_pages(db, spec, period)
+            # After the last page is read, a new score arrives.
+            _seed(db, n_obs=1, hour_offset=5)
+
+        monkeypatch.setattr(archive_mod, "_iter_pages", racing_pages)
+
+        with pytest.raises(ArchiveError):
+            archive_period(db_session, "scores", "2026-05")
+
+        assert db_session.execute(
+            select(ArchiveManifestRow).where(
+                ArchiveManifestRow.table_name == "scores"
+            )
+        ).scalars().all() == []
+        assert not (archive_dir / "scores" / "2026-05.parquet").exists()
+
 
 class TestPendingPeriods:
 
-    def test_incremental_walks_from_the_newest_manifest(self, db_session, archive_dir):
+    def test_incremental_lists_everything_final_and_unarchived(
+        self, db_session, archive_dir,
+    ):
         _seed(db_session)
         archive_period(db_session, "scores", "2026-05")
 
@@ -291,14 +362,19 @@ class TestPendingPeriods:
         )
         assert pending == ["2026-06", "2026-07"]
 
-    def test_backfill_refills_a_gap(self, db_session, archive_dir):
+    def test_incremental_retries_an_interior_gap(self, db_session, archive_dir):
+        """A period that failed while a later one succeeded must be retried.
+
+        Walking forward from ``max(existing)`` would step over it permanently
+        and only an explicit backfill would ever find it.
+        """
         _seed(db_session)
         archive_period(db_session, "scores", "2026-05")
-        # Simulate a manifest row lost to a restore: archive July, drop May.
         archive_period(db_session, "scores", "2026-07")
+        # As if 2026-06 had errored during that run.
         db_session.execute(
             ArchiveManifestRow.__table__.delete().where(
-                ArchiveManifestRow.period == "2026-05"
+                ArchiveManifestRow.period == "2026-06"
             )
         )
         db_session.flush()
@@ -306,7 +382,18 @@ class TestPendingPeriods:
         incremental = pending_periods(
             db_session, "scores", now=_utc(2026, 8, 15, 0, 0),
         )
-        assert "2026-05" not in incremental  # walks forward from 2026-07
+        assert incremental == ["2026-06"]
+
+    def test_backfill_reaches_periods_older_than_the_first_manifest(
+        self, db_session, archive_dir,
+    ):
+        _seed(db_session)
+        archive_period(db_session, "scores", "2026-07")
+
+        incremental = pending_periods(
+            db_session, "scores", now=_utc(2026, 8, 15, 0, 0),
+        )
+        assert incremental == []  # nothing archived before 2026-07 is known
 
         full = pending_periods(
             db_session, "scores", now=_utc(2026, 8, 15, 0, 0), full=True,
@@ -332,14 +419,29 @@ class TestVerifyArchives:
         report = verify_archives(db_session)
         assert [r["problem"] for r in report] == ["file missing"]
 
-    def test_detects_count_drift(self, db_session, archive_dir):
+    def test_detects_rows_newer_than_the_archive(self, db_session, archive_dir):
         _seed(db_session, n_obs=1)
         archive_period(db_session, "scores", "2026-05")
-        _seed(db_session, n_obs=1, hour_offset=5)  # live table grows past manifest
+        _seed(db_session, n_obs=1, hour_offset=5)  # a row the archive lacks
 
         report = verify_archives(db_session)
         assert not report[0]["ok"]
-        assert "live count 2 != manifest 1" in report[0]["problem"]
+        assert "newer than the archive" in report[0]["problem"]
+
+    def test_shrinkage_is_reported_but_not_a_failure(self, db_session, archive_dir):
+        """After Phase 3 every pruned month has fewer live rows than it archived."""
+        _seed(db_session, n_obs=2)
+        archive_period(db_session, "scores", "2026-05")
+        db_session.execute(
+            VerificationScoreRow.__table__.delete().where(
+                VerificationScoreRow.icao == "LFPG"
+            )
+        )
+        db_session.flush()
+
+        report = verify_archives(db_session)
+        assert report[0]["ok"] is True
+        assert "expected after pruning" in report[0]["problem"]
 
 
 class TestGates:
@@ -358,7 +460,9 @@ class TestGates:
         archive_period(db_session, "taf_scores", "2026-05")
         assert month_archive_ok(db_session, "2026-05") == (True, "")
 
-    def test_month_fails_when_live_count_moved(self, db_session, archive_dir):
+    def test_month_fails_when_a_row_arrives_after_archiving(
+        self, db_session, archive_dir,
+    ):
         _seed(db_session, n_obs=1)
         for name in ("observations", "scores", "taf_scores"):
             archive_period(db_session, name, "2026-05")
@@ -367,7 +471,51 @@ class TestGates:
         _seed(db_session, n_obs=1, hour_offset=5)
         ok, reason = month_archive_ok(db_session, "2026-05")
         assert not ok
-        assert "live count" in reason
+        assert "newer than the archive" in reason
+
+    def test_month_still_ok_after_rows_are_pruned(self, db_session, archive_dir):
+        """The gate must not read "already pruned" as "archive broken".
+
+        Pruning leaves flight rows behind, so a pruned month's live count is
+        permanently below its archived count. A count-equality gate would
+        report every pruned month as failing forever.
+        """
+        _seed(db_session, n_obs=2)
+        for name in ("observations", "scores", "taf_scores"):
+            archive_period(db_session, name, "2026-05")
+
+        db_session.execute(
+            VerificationScoreRow.__table__.delete().where(
+                VerificationScoreRow.icao == "LFPG"
+            )
+        )
+        db_session.flush()
+
+        assert month_archive_ok(db_session, "2026-05") == (True, "")
+
+    def test_month_fails_when_the_archive_file_is_gone(self, db_session, archive_dir):
+        """The gate authorises permanent deletion — a dangling manifest must fail."""
+        _seed(db_session, n_obs=1)
+        for name in ("observations", "scores", "taf_scores"):
+            archive_period(db_session, name, "2026-05")
+        assert month_archive_ok(db_session, "2026-05")[0] is True
+
+        (archive_dir / "scores" / "2026-05.parquet").unlink()
+        ok, reason = month_archive_ok(db_session, "2026-05")
+        assert not ok
+        assert "archive file missing" in reason
+
+    def test_month_fails_when_the_archive_file_is_corrupt(
+        self, db_session, archive_dir,
+    ):
+        _seed(db_session, n_obs=1)
+        for name in ("observations", "scores", "taf_scores"):
+            archive_period(db_session, name, "2026-05")
+
+        (archive_dir / "taf_scores" / "2026-05.parquet").write_bytes(b"corrupt")
+        ok, reason = month_archive_ok(db_session, "2026-05")
+        assert not ok
+        assert "sha256 mismatch" in reason
 
     def test_snapshot_day_gate(self, db_session, archive_dir):
         db_session.add(AirportForecastSnapshotRow(
@@ -379,9 +527,15 @@ class TestGates:
         ))
         db_session.flush()
 
-        assert snapshot_day_archived(db_session, date(2026, 5, 15)) is False
+        assert snapshot_day_archived(db_session, date(2026, 5, 15))[0] is False
         archive_period(db_session, "snapshots", "2026-05-15")
-        assert snapshot_day_archived(db_session, date(2026, 5, 15)) is True
+        assert snapshot_day_archived(db_session, date(2026, 5, 15)) == (True, "")
+
+        # A lost file must revoke the permission, not keep it.
+        (archive_dir / "snapshots" / "2026-05-15.parquet").unlink()
+        ok, reason = snapshot_day_archived(db_session, date(2026, 5, 15))
+        assert not ok
+        assert "archive file missing" in reason
 
 
 class TestSnapshotPruneGate:

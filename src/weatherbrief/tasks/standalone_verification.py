@@ -1501,12 +1501,13 @@ def _prune_old_snapshots(db, retention_days: int = 10) -> int:
         earliest = earliest.replace(tzinfo=timezone.utc)
 
     deleted = 0
-    stalled = 0
+    stalled: list[str] = []
     day = earliest.date()
     cutoff_date = cutoff.date()
     while day < cutoff_date:
-        if not snapshot_day_archived(db, day):
-            stalled += 1
+        ok, reason = snapshot_day_archived(db, day)
+        if not ok:
+            stalled.append(reason)
             day += timedelta(days=1)
             continue
         day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
@@ -1521,9 +1522,10 @@ def _prune_old_snapshots(db, retention_days: int = 10) -> int:
 
     if stalled:
         logger.warning(
-            "Snapshot prune: %d day(s) past retention have no archive manifest "
-            "— left in place. Run `verify archive run` and check for errors.",
-            stalled,
+            "Snapshot prune: %d day(s) past retention are not safely archived "
+            "— left in place. First: %s. Run `verify archive run` and "
+            "`verify archive verify`.",
+            len(stalled), stalled[0],
         )
     return deleted
 

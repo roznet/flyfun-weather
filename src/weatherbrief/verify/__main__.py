@@ -781,6 +781,7 @@ def cmd_rollup_monthly_stats(args):
     from flyfun_common.db import SessionLocal
 
     from weatherbrief.tasks.verification_rollup import (
+        prune_daily_stats,
         rebuild_all_months,
         rollup_month,
         run_monthly_rollup,
@@ -791,6 +792,12 @@ def cmd_rollup_monthly_stats(args):
 
     db = SessionLocal()
     try:
+        if args.prune_daily is not None:
+            n = prune_daily_stats(db, retain_months=args.prune_daily)
+            db.commit()
+            print(f"Pruned {n} verification_daily_stats rows.")
+            return
+
         if args.month:
             try:
                 year, month = args.month.split("-")
@@ -1189,6 +1196,14 @@ def main():
     p_rollup_monthly.add_argument(
         "--rebuild", action="store_true",
         help="Re-roll every month already in the monthly table.",
+    )
+    p_rollup_monthly.add_argument(
+        "--prune-daily", type=int, default=None, metavar="MONTHS",
+        help=(
+            "Phase 4 follow-up: delete verification_daily_stats rows older "
+            "than MONTHS. Only prunes months that already have a monthly "
+            "rollup. Overrides VERIFICATION_DAILY_STATS_RETENTION_MONTHS."
+        ),
     )
 
     # archive

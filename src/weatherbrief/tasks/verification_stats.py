@@ -405,8 +405,11 @@ def get_category_accuracy(
 ) -> list[CategoryAccuracyRow]:
     """Flight-category match rate per model and days-out.
 
-    NWP models read from the daily rollup. TAF is a pseudo-model (days_out=0)
-    still aggregated from ``taf_verification_scores``.
+    NWP models read from the daily rollup — global or per-airport depending on
+    the request, see :func:`_nwp_daily_table`. TAF is a pseudo-model
+    (days_out=0) read from ``taf_verification_daily`` or, when that table
+    doesn't apply, aggregated from raw ``taf_verification_scores``; both paths
+    live in :func:`_taf_category_counts`.
     """
     rows: list[CategoryAccuracyRow] = []
 
@@ -611,7 +614,9 @@ def get_wind_advisory_accuracy(
 ) -> list[WindAdvisoryStats]:
     """Per-model wind advisory match rate.
 
-    NWP advisory counts come from the rollup. TAF still raw.
+    NWP advisory counts come from the daily rollup; TAF from
+    :func:`_taf_advisory_counts`, which reads ``taf_verification_daily`` or
+    raw scores depending on the request.
     """
     since_d, until_d = _date_range(since, until)
     v = _nwp_daily_table(icao_filter)
@@ -776,10 +781,11 @@ def get_gust_accuracy(
 ) -> list[GustAccuracyStats]:
     """Per-model gust accuracy under both conditionings (#491).
 
-    NWP reads the daily rollup (one row per model/days_out); TAF is
-    aggregated at query time from ``taf_verification_scores`` joined to
-    ``verification_observations``, like every other TAF stat — the TAF gust
-    and the observed gust both live on the observation row.
+    NWP reads the daily rollup (one row per model/days_out); TAF comes from
+    :func:`_taf_gust_row`, which reads ``taf_verification_daily`` when the
+    #522 gate applies and otherwise aggregates ``taf_verification_scores``
+    joined to ``verification_observations`` — the TAF gust and the observed
+    gust both live on the observation row.
 
     See ``tasks/verification_gust`` for what "flagged" and "realised peak"
     mean, and why the forecast-flagged and obs-flagged numbers are reported

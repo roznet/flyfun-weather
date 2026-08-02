@@ -180,7 +180,26 @@ def completed_months(db: Session) -> list[datetime]:
     so a month only becomes a candidate once its days have actually been
     rolled, and Phase 3 pruning moving the raw floor forward doesn't change
     which months are eligible.
+
+    A month is skipped while any of its days is a real gap —
+    :func:`~weatherbrief.tasks.verification_daily_rollup.unrolled_days_with_data`,
+    i.e. a day that has raw scores but no daily rows. "The daily table has
+    *some* row in this month" is not enough: if a cycle failed or a deploy
+    gapped a few days near month-end, rolling anyway would write a permanently
+    undercounted monthly aggregate, and the "already rolled" set would stop it
+    ever being recomputed. Waiting for the daily rollup to catch up costs a day
+    and makes the month correct.
+
+    Deliberately *not* gated on ``completed_days`` alone: that also lists days
+    with nothing to roll (an ingest outage, a quiet day), which would never
+    stop being pending and would defer their month forever.
+
+    ``rollup_day`` deletes a month's monthly rows whenever one of its days is
+    re-rolled, so a late backfill also un-sticks a month that was rolled
+    earlier — the pair is what keeps this from being a one-way ratchet.
     """
+    from weatherbrief.tasks.verification_daily_rollup import unrolled_days_with_data
+
     now = datetime.now(timezone.utc)
 
     daily_months = {
@@ -200,6 +219,7 @@ def completed_months(db: Session) -> list[datetime]:
         ).scalars().all()
         if dt is not None
     }
+    pending_ym = {(d.year, d.month) for d in unrolled_days_with_data(db)}
 
     out: list[datetime] = []
     for (y, m) in sorted(daily_months):
@@ -208,8 +228,26 @@ def completed_months(db: Session) -> list[datetime]:
             continue  # month still in progress
         if (y, m) in existing_ym:
             continue
+        if (y, m) in pending_ym:
+            logger.info(
+                "verification_monthly_stats: %s has un-rolled days — "
+                "deferring until the daily rollup catches up",
+                month_start.strftime("%Y-%m"),
+            )
+            continue
         out.append(month_start)
     return out
+
+
+def has_daily_source_rows(db: Session, month_start: datetime) -> bool:
+    """Whether ``verification_daily_stats`` still holds this month's days."""
+    row = db.execute(
+        select(VerificationDailyStatsRow.id).where(
+            VerificationDailyStatsRow.date >= month_start.date(),
+            VerificationDailyStatsRow.date < _month_end(month_start).date(),
+        ).limit(1)
+    ).first()
+    return row is not None
 
 
 def rollup_month(db: Session, month_start: datetime) -> int:
@@ -217,7 +255,30 @@ def rollup_month(db: Session, month_start: datetime) -> int:
 
     Idempotent DELETE + INSERT-SELECT. Returns the number of rows produced.
     Caller commits.
+
+    Refuses to run when the month has no daily rows *and* already has monthly
+    rows: the DELETE would land, the INSERT…SELECT would produce nothing, and
+    a permanent aggregate would be silently zeroed. That combination is
+    exactly what a re-roll of an old month looks like once the Phase 4
+    follow-up gate starts ageing out ``verification_daily_stats`` — the daily
+    rows are re-derivable from the Parquet archive, but only if the monthly
+    row they fed is still there to notice the loss.
     """
+    if not has_daily_source_rows(db, month_start):
+        existing = db.execute(
+            select(VerificationMonthlyStatsRow.id).where(
+                VerificationMonthlyStatsRow.month == month_start
+            ).limit(1)
+        ).first()
+        if existing is not None:
+            logger.warning(
+                "verification_monthly_stats: %s has no daily rows to roll but "
+                "already has monthly rows — leaving them alone. Re-import the "
+                "daily source (or the Parquet archive) before re-rolling.",
+                month_start.strftime("%Y-%m"),
+            )
+            return 0
+
     db.execute(
         VerificationMonthlyStatsRow.__table__.delete().where(
             VerificationMonthlyStatsRow.month == month_start
@@ -298,6 +359,12 @@ def prune_daily_stats(db: Session, retain_months: int | None = None) -> int:
     fully re-derivable from the Parquet archive, so a copy would be a second
     representation of the same facts.
 
+    Gated the same way Phase 3's raw prune is: a month is only pruned once it
+    has rows in ``verification_monthly_stats``. Without that check this would
+    happily delete the only summary of a month the monthly rollup never got
+    to, and the monthly table is the thing that is supposed to be permanent.
+    Months blocked by the gate are logged, not skipped silently.
+
     Caller commits. Returns rows deleted.
     """
     from weatherbrief.tasks.verification_tiering import daily_stats_retention_months
@@ -313,12 +380,42 @@ def prune_daily_stats(db: Session, retain_months: int | None = None) -> int:
         total_months // 12, total_months % 12 + 1, 1, tzinfo=timezone.utc,
     ).date()
 
-    result = db.execute(
-        VerificationDailyStatsRow.__table__.delete().where(
-            VerificationDailyStatsRow.date < cutoff
+    rolled_ym = {
+        (dt.year, dt.month)
+        for dt in db.execute(
+            select(VerificationMonthlyStatsRow.month).distinct()
+        ).scalars().all()
+        if dt is not None
+    }
+    candidate_ym = sorted({
+        (d.year, d.month)
+        for d in db.execute(
+            select(VerificationDailyStatsRow.date)
+            .where(VerificationDailyStatsRow.date < cutoff)
+            .distinct()
+        ).scalars().all()
+        if d is not None
+    })
+
+    deleted = 0
+    for (y, m) in candidate_ym:
+        if (y, m) not in rolled_ym:
+            logger.warning(
+                "verification_daily_stats: %04d-%02d is past the retention "
+                "window but has no monthly rollup — refusing to prune it. "
+                "Run `verify rollup-monthly-stats` first.",
+                y, m,
+            )
+            continue
+        month_start = datetime(y, m, 1, tzinfo=timezone.utc)
+        result = db.execute(
+            VerificationDailyStatsRow.__table__.delete().where(
+                VerificationDailyStatsRow.date >= month_start.date(),
+                VerificationDailyStatsRow.date < _month_end(month_start).date(),
+            )
         )
-    )
-    deleted = result.rowcount or 0
+        deleted += result.rowcount or 0
+
     if deleted:
         logger.info(
             "verification_daily_stats: pruned %d rows older than %s "

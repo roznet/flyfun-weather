@@ -40,7 +40,7 @@ directly.
 | `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | `1` | — | leave `1` | No verified archive manifest → no delete. Safety belt; only turn off if abandoning the archive |
 | `SNAPSHOT_INBOX_RETENTION_DAYS` | `0` (keep) | 3 | `30` | Rotates `eu-*/us-*.sqlite` out of `SNAPSHOT_INBOX_DIR` |
 | `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | `0` | 4 | `1` | Retention loop rolls completed months into monthly stats |
-| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | `0` (keep) | 4 follow-up | `18` | Prunes `verification_daily_stats` older than N months |
+| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | `0` (keep) | 4 follow-up | `18` | Prunes `verification_daily_stats` older than N months, and only for months that already have a monthly rollup. Runs from the retention loop alongside the monthly rollup (so it needs `VERIFICATION_MONTHLY_ROLLUP_ENABLED=1` too) |
 | (path) `DATA_DIR/archive/verification/` | — | 2 | — | Archive root |
 
 Deployment prerequisite for Phase 2 onward: `pyarrow>=15` (declared in
@@ -224,7 +224,9 @@ VERIFICATION_ARCHIVE_ENABLED=1   # then restart
 **Validate**
 
 - [ ] `verify archive verify` reports every manifest OK (file present, sha256
-      matches, live count matches).
+      matches, nothing live newer than the archive). After Phase 3 it will
+      also note `live count N < archived M (expected after pruning)` on pruned
+      months — that line is informational, not a failure.
 - [ ] Round-trip by hand with DuckDB — recipes are in the `tasks/archive.py`
       module docstring:
       ```sql
@@ -282,8 +284,14 @@ SNAPSHOT_INBOX_RETENTION_DAYS=30
 **What the pruner will and won't touch**
 
 - Deletes whole months only, and only months that are past the cutoff **and**
-  summarised **and** archived-with-matching-count. A month with no manifest is
-  logged loudly (`Raw retention: refusing to prune — …`) and left alone.
+  summarised **and** safely archived — meaning, for all three monthly tables:
+  a manifest exists, its Parquet file is still on disk, the file still hashes
+  to the recorded sha256, and no live row in the month is newer than the
+  archive (`max_id`). Any of those failing is logged loudly
+  (`Raw retention: refusing to prune — …`) and the month is left alone.
+- Months with nothing left to delete are skipped *before* the gate runs, so an
+  already-pruned month neither re-hashes its archive nor reports itself as
+  blocked. If you see a "refusing to prune" line, it is a real problem.
 - Never deletes `source='flight'` scores — tiny volume, pilot/debrief context,
   ERA5 re-analysis value. Mirrors the debriefed-flights T2 exemption.
 - Never deletes an observation referenced by `flight_verification_map`, or one
@@ -348,6 +356,11 @@ VERIFICATION_MONTHLY_ROLLUP_ENABLED=1   # then restart
 
 **Validate**
 
+- [ ] Nothing was deferred: a month with a *real* daily gap (a day that has raw
+      scores but no daily rows) logs
+      `has un-rolled days — deferring until the daily rollup catches up` and is
+      skipped. Run `verify rollup-daily-stats` and re-run if you see it. A day
+      with no scores at all is not a gap and does not defer anything.
 - [ ] For one month, the monthly row equals the sum of its daily rows:
       ```sql
       SELECT m.n_scores, d.n FROM verification_monthly_stats m
@@ -372,9 +385,17 @@ production consumer today):
 **Rollback:** `VERIFICATION_MONTHLY_ROLLUP_ENABLED=0`. Nothing in the app reads
 this table yet; it exists for offline analysis.
 
+Note that re-rolling any day invalidates its month's monthly rows (they are
+deleted and re-derived on the next monthly pass). That is what stops a late
+backfill from being permanently invisible to the monthly aggregate — but it
+does mean a large `rollup-daily-stats --rebuild` will clear the monthly table
+until `rollup-monthly-stats` runs again. Run them in that order.
+
 ### Phase 4 follow-up — daily-stats retention (separate decision)
 
-**Gate:** `VERIFICATION_DAILY_STATS_RETENTION_MONTHS=18`
+**Gate:** `VERIFICATION_DAILY_STATS_RETENTION_MONTHS=18` (requires
+`VERIFICATION_MONTHLY_ROLLUP_ENABLED=1` — it runs in the same retention-loop
+step, right after the monthly rollup).
 
 Do **not** enable this at the same time as Phase 4. The validation for the
 monthly rollup is "re-derive a month from its daily rows and confirm it
@@ -386,6 +407,19 @@ matches", which becomes impossible once the daily rows are gone.
       is 30.
 - Daily stats are deliberately **not** archived: unlike raw scores they are
   fully re-derivable from the Parquet archive.
+
+**Try it first without the gate:**
+
+```bash
+python -m weatherbrief.verify rollup-monthly-stats --prune-daily 18
+```
+
+Its own gate: a month with no rows in `verification_monthly_stats` is never
+pruned, and the refusal is logged (`refusing to prune it. Run
+verify rollup-monthly-stats first`). Relatedly, `rollup_month` refuses to
+re-roll a month whose daily rows are gone *and* which already has monthly
+rows — otherwise a `--rebuild` after this prune would delete a permanent
+aggregate and insert nothing in its place.
 
 **Rollback:** set back to `0`. Deleted rows are re-derivable by re-running
 `verify rollup-daily-stats --rebuild` **only for days still inside the raw
@@ -400,10 +434,10 @@ What each automated test protects, so a failure points at a phase:
 | Test module | Protects |
 |---|---|
 | `tests/test_verification_global_rollup.py` | Phase 1: global/activity/TAF rollup correctness, gust columns, TAF `days_out` bucketing on both dialects, `completed_days` source equality — and `TestReadSwitchAgreement`, which asserts gate-on and gate-off report identical numbers |
-| `tests/test_verification_archive.py` | Phase 2: finality rules, manifest write/verify, round-trip export → re-import into an empty DB, tamper/drift detection, the prune gates, snapshot prune stalling without a manifest |
+| `tests/test_verification_archive.py` | Phase 2: finality rules, manifest write/verify, full-column round-trip export → re-import into an empty DB, mid-write insertion race, tamper/loss/drift detection, gap retry in incremental mode, the prune gates (missing file, corrupt file, rows newer than the archive, already-pruned month), snapshot prune stalling without a safe archive |
 | `tests/test_retention.py::TestPruneRawObservations` | Phase 3: both gates, flight-score and flight-linked-observation exemptions, batched deletes |
 | `tests/test_retention.py::TestRotateSnapshotInbox` | Phase 3: inbox rotation, off by default |
-| `tests/test_verification_rollup.py` | Phase 4: monthly-from-daily rewrite, TAF out of scope, `prune_daily_stats` |
+| `tests/test_verification_rollup.py` | Phase 4: monthly-from-daily rewrite, TAF out of scope, month-defers-on-real-gap, day-re-roll invalidates its month, `rollup_month`'s no-source guard, `rebuild_all_months`, `prune_daily_stats`' monthly gate |
 | `tests/test_verification_stats_rollup_gate.py` | Pre-existing #154 gate — still the reference that rollup-backed numbers equal raw-computed ones |
 
 Run the set with:

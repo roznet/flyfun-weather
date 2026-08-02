@@ -855,12 +855,25 @@ emits an artifact, so the SQLite inbox has holes on node-failure days.
 
 ### Archive finality and the manifest
 
-`archive_manifest(table_name, period, row_count, file_path, sha256, created_at)`
-with `UNIQUE(table_name, period)` records every written file. Each write is:
-keyset-paginated SELECT → Parquet temp file → verify the file's row count
-against a live `COUNT(*)` → atomic rename → upsert manifest. A failed
-verification discards the temp file and writes no manifest row, so a broken
-archive can never authorise a delete.
+`archive_manifest(table_name, period, row_count, max_id, file_path, sha256,
+created_at)` with `UNIQUE(table_name, period)` records every written file.
+Each write is: keyset-paginated SELECT → Parquet temp file → recount live rows
+**after** the write and compare → fsync (file and directory) → atomic rename →
+upsert the manifest. The recount comes after the write on purpose: a row
+landing mid-write is either picked up by the keyset (ids ascend) or caught by
+the mismatch, whereas a count taken beforehand would match in both cases and
+record a manifest for a file missing a row. A failed verification discards the
+temp file and writes no manifest row, so a broken archive can never authorise
+a delete.
+
+`max_id` — the highest source primary key in the file — is what makes the
+Phase 3 delete gate exact. Keys are monotonic, so any row inserted after the
+archive was written has a higher `id` whatever its timestamp (a backfilled old
+METAR included), and the gate asks "is any live row newer than the archive?"
+rather than "do the counts still match". Counts cannot answer that once
+pruning starts: pruning deliberately leaves `source='flight'` rows behind, so
+a pruned month's live count sits permanently below its archived count, and a
+count-equality gate would report every pruned month as broken forever.
 
 A period is archived only once it can no longer change: monthly tables at ≥10
 days into the following month (late scores can't arrive past the 10-day
@@ -872,10 +885,20 @@ restamps `fetched_at` at ingest time).
 
 `tasks/retention.prune_raw_observations` deletes whole months only, and only
 months that pass **both** gates: the `airport_monthly_summary` climatology gate
-*and* an `archive_manifest` row for all three monthly tables whose `row_count`
-still matches a live recount. No manifest → no delete, logged loudly. Deletes
-run in 5,000-row batches with a commit per batch, walking a day at a time —
-never one multi-month statement on the shared server.
+*and*, for all three monthly tables, an `archive_manifest` row whose Parquet
+file still exists, still hashes to the recorded sha256, and whose `max_id`
+covers every live row in the month. A manifest row alone is not enough — it is
+a database fact about a file on a filesystem that can lose or corrupt it, and
+the gate authorises deleting the only other copy. No manifest, missing file,
+bad checksum, or newer live rows → no delete, logged loudly.
+
+Months with nothing left to delete are skipped *before* the gate runs, which
+is what keeps "this month is done" distinguishable from "the archive is
+broken" — and keeps the file re-hash off the daily path for every month
+already pruned.
+
+Deletes run in 5,000-row batches with a commit per batch, walking a day at a
+time — never one multi-month statement on the shared server.
 
 Exemptions, none optional:
 
@@ -887,8 +910,8 @@ Exemptions, none optional:
   identifies flight-linked ground truth; deleting one would cascade into the
   exempt flight scores hanging off it.
 
-The snapshot prune (`_prune_old_snapshots`, 10 days) only deletes `fetched_at`
-days with a snapshot manifest — but only once archiving is actually enabled,
+The snapshot prune (`_prune_old_snapshots`, 10 days) applies the same gate per
+`fetched_at` day — but only once archiving is actually enabled,
 because with the archive off there would never be a manifest and a bounded
 table would become unbounded.
 
@@ -955,6 +978,9 @@ Dashboard and digest breakdowns — per-model accuracy at lead time, TAF-vs-mode
 | Flight scores and flight-linked observations exempt from pruning | Tiny volume, pilot/debrief context, ERA5 re-analysis value; and observations are shared between tracks, so deleting one would cascade into an exempt flight score |
 | Batched deletes with a commit per batch | Shared MySQL server with a 1 GB buffer pool — one multi-month DELETE would hold a huge transaction and stall every other client |
 | Monthly rollup reads the daily table | The daily SUM columns were designed to compose this way; the old load-a-month-of-ORM-rows path derived the month independently and could drift from the days |
+| A month waits for its days | A month is the sum of its days, so rolling one with a real gap writes a permanently undercounted aggregate that the "already rolled" set would never revisit. A day with *no* scores isn't a gap — gating on that instead would defer a month forever |
+| `rollup_day` invalidates its month | Otherwise "already rolled" is a one-way ratchet and a late backfill could never reach the monthly aggregate |
+| `max_id`, not row counts, in the delete gate | Counts stop being comparable the moment pruning starts leaving exempt rows behind; monotonic keys answer "is anything live newer than the archive?" exactly |
 | Dual-track (flight + standalone) | Flight-based provides real route context; standalone provides broader coverage independent of user activity |
 | Source column in unique constraints | Prevents flight and standalone scores from conflicting; all queries filter by source |
 | Decoupled ingest/forecast/score loops | METAR ingest (30 min) separate from forecast fetch (07/19 UTC) and scoring (06/09/12/15/18 UTC) — cheap obs accumulate independently of twice-daily model fetches |

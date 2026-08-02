@@ -395,15 +395,88 @@ class TestReadSwitchAgreement:
     def test_gate_on_still_reads_per_airport_when_filtered(
         self, populated, gate_on,
     ):
-        """The global table has no icao column, so a filter must not use it."""
+        """The global table has no icao column, so a filter must not use it.
+
+        Every gated query is covered, not a sample: they all share
+        ``_use_global``, so one of them silently reading the global table
+        under a filter would report pan-European numbers on an
+        airport-filtered dashboard — right-looking, completely wrong.
+        """
         rows = get_category_accuracy(
             populated, SINCE, UNTIL, "standalone", ["LFPG"],
         )
         gfs = next(r for r in rows if r.model == "gfs")
         assert gfs.sample_count == 1  # one airport, not three
 
+        bias = get_category_bias_stats(
+            populated, SINCE, UNTIL, "standalone", ["LFPG"],
+        )
+        assert {r.total_scores for r in bias} == {1}
+
+        wind = get_wind_advisory_accuracy(
+            populated, SINCE, UNTIL, "standalone", ["LFPG"],
+        )
+        assert {r.sample_count for r in wind if r.model != "TAF"} == {1}
+
+        gust = get_gust_accuracy(
+            populated, SINCE, UNTIL, "standalone", ["LFPG"],
+        )
+        assert {r.n for r in gust if r.model == "gfs"} == {1}
+
         activity = get_activity_summary(
             populated, SINCE, UNTIL, "standalone", ["LFPG"],
         )
         assert activity.airports_observed == 1
         assert activity.observations_collected == 1
+
+    def test_taf_stats_also_narrow_under_a_filter(self, populated, gate_on):
+        """TAF has its own gated path (taf_verification_daily), same rule."""
+        all_taf = next(
+            r for r in get_category_accuracy(populated, SINCE, UNTIL, "standalone")
+            if r.model == "TAF"
+        )
+        one_taf = next(
+            r for r in get_category_accuracy(
+                populated, SINCE, UNTIL, "standalone", ["LFPG"],
+            )
+            if r.model == "TAF"
+        )
+        assert all_taf.sample_count == 3
+        assert one_taf.sample_count == 1
+
+
+class TestTafDaysOutOnMySQL:
+    """The bucketing expression has to truncate the same way on both dialects.
+
+    The suite runs on SQLite, so MySQL correctness can only be checked by
+    compiling. What is asserted is the *shape* the docstring's argument rests
+    on — that the numerator is reduced by a modulo before dividing — because
+    the failure mode is a future "simplification" to ``CAST(x/24 AS INTEGER)``,
+    which MySQL rounds half away from zero (60 h → 3, not 2).
+    """
+
+    def _compiled(self, dialect):
+        from sqlalchemy import select as sa_select
+
+        stmt = sa_select(
+            taf_days_out_expr(TafVerificationScoreRow.lead_hours)
+        ).select_from(TafVerificationScoreRow)
+        return str(stmt.compile(dialect=dialect))
+
+    def test_compiles_on_mysql(self):
+        from sqlalchemy.dialects import mysql
+
+        sql = self._compiled(mysql.dialect())
+        # The modulo reduction is the load-bearing part: it makes the
+        # numerator an exact multiple of 24, so the CAST has nothing to round.
+        assert "lead_hours %%" in sql
+        # MySQL renders an integer CAST as SIGNED INTEGER, not INTEGER — a
+        # bare "AS INTEGER" would be a syntax error there.
+        assert "AS SIGNED INTEGER" in sql
+
+    def test_compiles_on_sqlite(self):
+        from sqlalchemy.dialects import sqlite
+
+        sql = self._compiled(sqlite.dialect())
+        assert "lead_hours %" in sql
+        assert "AS INTEGER" in sql
