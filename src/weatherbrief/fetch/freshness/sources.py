@@ -147,6 +147,7 @@ def _check_hrrr_noaa(model: str) -> Observation | None:
     return Observation(
         init=init,
         published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+        observed_via=VIA_HTTP_LAST_MODIFIED,
     )
 
 

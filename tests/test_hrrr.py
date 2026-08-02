@@ -1429,6 +1429,39 @@ def test_hrrr_readiness_dispatch_registered():
     assert _DISPATCH["hrrr_noaa"] is _check_hrrr_noaa
 
 
+def test_hrrr_observation_declares_its_instrument():
+    """HRRR must label which clock measured ``published_at`` (#515).
+
+    The dispatch omitted ``observed_via`` while every sibling set it, so HRRR
+    rows landed in ``model_delivery_log`` unlabelled — precisely the pooling
+    of differently-clocked measurements that column exists to prevent. Caught
+    in production only by the loud-but-not-fatal warning in ``check_source``.
+
+    ``published_at`` is read from the probe's ``Last-Modified`` header, so the
+    instrument is the HTTP one, same as GFS.
+    """
+    from weatherbrief.fetch.freshness.sources import (
+        VIA_HTTP_LAST_MODIFIED,
+        _check_hrrr_noaa,
+    )
+
+    class _Resp:
+        headers = {"Last-Modified": "Sat, 01 Aug 2026 18:54:50 GMT"}
+
+    with patch(
+        "weatherbrief.fetch.grib.hrrr_fetch.find_latest_hrrr_run_with_response",
+        return_value=("20260801", 18, _Resp()),
+    ):
+        obs = _check_hrrr_noaa("hrrr")
+
+    assert obs is not None
+    assert obs.observed_via == VIA_HTTP_LAST_MODIFIED
+    assert obs.published_at == datetime(
+        2026, 8, 1, 18, 54, 50, tzinfo=timezone.utc,
+    )
+    assert obs.init == _utc(2026, 8, 1, 18)
+
+
 def test_hrrr_tracked_by_marker_store():
     from weatherbrief.fetch.freshness.sources import all_tracked_sources
 
