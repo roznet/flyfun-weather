@@ -58,10 +58,12 @@ from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
     NWPCloudDiagnostics,
+    PressureLevelData,
     RouteCrossSection,
     RoutePoint,
     WaypointForecast,
 )
+from weatherbrief.models.analysis import CONDENSATE_LEVEL_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -4026,13 +4028,13 @@ def _prefetch_icon_eu_data_inner(
     completion.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_VARIABLES,
         fetch_icon_eu_per_level,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
         icon_explicit_conv_cache_key,
+        icon_model_level_fetch_variables,
         icon_model_level_var_label,
         icon_model_level_var_legacy_label,
     )
@@ -4040,6 +4042,9 @@ def _prefetch_icon_eu_data_inner(
     variant = ctx.variant
     prefix = variant.cache_prefix
     diag_key = icon_cloud_diag_cache_key(variant)
+    # Per-variant, plus opt-in extras (#530) — NOT the module-level ICON-EU
+    # tuple, which would fetch EU's species list for D2 and drop qr/qs/qg.
+    model_level_vars = icon_model_level_fetch_variables(variant)
 
     # Discretionary callers (the warm loop) pass an explicit outer_workers and
     # get HALF the shared connection pool, so a warm pass in flight leaves an
@@ -4159,7 +4164,7 @@ def _prefetch_icon_eu_data_inner(
             # a blob "covers" it, decode would then refuse the blob, and the
             # hour would be skipped forever until the blob aged out. Fetch only
             # the levels not already on disk (#469).
-            for var in ICON_EU_VARIABLES:
+            for var in model_level_vars:
                 missing = [
                     level for level in ctx.levels
                     if not is_cached(
@@ -4174,7 +4179,7 @@ def _prefetch_icon_eu_data_inner(
             # variable + level, so nothing model-level needs fetching.
             pass
         else:
-            for var in ICON_EU_VARIABLES:
+            for var in model_level_vars:
                 ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
                 if not is_cached(ctx.run_dir, ck):
                     jobs.append((_fetch_var, fhour, var, ck))
@@ -4289,13 +4294,15 @@ def _decode_and_merge_icon_eu(
     Called after prefetch has cached all data to disk.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_VARIABLES,
         icon_model_level_var_label,
         icon_model_level_var_legacy_label,
     )
 
     variant = ctx.variant
     prefix = variant.cache_prefix
+    # The REQUIRED set (#530): opt-in extras such as tke are fetched but not
+    # decoded, so a missing extra must not fail the completeness check below.
+    model_level_vars = variant.model_level_variables
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
 
     # CLC-derived cloud layers are a time-VARYING forecast field, so keep each
@@ -4350,7 +4357,7 @@ def _decode_and_merge_icon_eu(
         # legacy blobs outright rather than trusting them.
         var_paths: dict[str, list[str]] = {}
         incomplete: list[str] = []
-        for var in ICON_EU_VARIABLES:
+        for var in model_level_vars:
             if not variant.per_level_cache:
                 legacy_var_ck = cache_key(
                     fhour, icon_model_level_var_legacy_label(variant, var),
@@ -4371,7 +4378,7 @@ def _decode_and_merge_icon_eu(
                 incomplete.append(f"{var}:{len(level_paths)}/{len(ctx.levels)}")
                 continue
             var_paths[var] = level_paths
-        missing_vars = [v for v in ICON_EU_VARIABLES if v not in var_paths]
+        missing_vars = [v for v in model_level_vars if v not in var_paths]
         if var_paths and (incomplete or missing_vars):
             detail = ", ".join(
                 incomplete + [f"{v}:absent" for v in missing_vars if v not in
@@ -4946,6 +4953,41 @@ def _enrich_icon_d2_explicit_convective(
 # ---------------------------------------------------------------------------
 
 
+# Per-level GRIB fields patched onto an EXISTING PressureLevelData: the
+# decoded key IS the model attribute name. Both merge loops below walk this
+# list, so a field added for one cannot be missed on the other — the drift
+# #485 fixed for the cloud diagnostics.
+#
+# This is the field-PATCH path (GFS cloud-only enrichment). The models that
+# replace the whole sounding — ECMWF, ICON, HRRR — go through
+# ``decode.build_pressure_levels_from_grib`` instead, which has its own
+# passthrough list; both derive their hydrometeor species from
+# ``CONDENSATE_LEVEL_FIELDS`` so the two cannot diverge.
+_MERGE_LEVEL_FIELDS: tuple[str, ...] = CONDENSATE_LEVEL_FIELDS + (
+    "cloud_area_fraction_pct",
+)
+
+
+def _apply_merge_level_fields(
+    pl: "PressureLevelData", level_data: dict[str, float],
+) -> bool:
+    """Copy decoded per-level fields onto one PressureLevelData.
+
+    Returns True when cloud liquid water was set — the historical definition
+    of "this level was enriched", kept so the reported count means the same
+    thing it always did.
+    """
+    enriched = False
+    for name in _MERGE_LEVEL_FIELDS:
+        val = level_data.get(name)
+        if val is None:
+            continue
+        setattr(pl, name, val)
+        if name == "cloud_liquid_water_kg_kg":
+            enriched = True
+    return enriched
+
+
 def _merge_cloud_water_into_sections(
     sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
@@ -4982,18 +5024,8 @@ def _merge_cloud_water_into_sections(
                     if level_data is None:
                         continue
 
-                    clwmr = level_data.get("cloud_liquid_water_kg_kg")
-                    if clwmr is not None:
-                        pl.cloud_liquid_water_kg_kg = clwmr
+                    if _apply_merge_level_fields(pl, level_data):
                         enriched_count += 1
-
-                    icmr = level_data.get("ice_mixing_ratio_kg_kg")
-                    if icmr is not None:
-                        pl.ice_mixing_ratio_kg_kg = icmr
-
-                    clc = level_data.get("cloud_area_fraction_pct")
-                    if clc is not None:
-                        pl.cloud_area_fraction_pct = clc
 
     # Also enrich waypoint-only forecasts
     wp_data_lookup: dict[str, dict[int, dict[str, float]]] = {}
@@ -5015,14 +5047,6 @@ def _merge_cloud_water_into_sections(
                 level_data = point_data.get(pl.pressure_hpa)
                 if level_data is None:
                     continue
-                clwmr = level_data.get("cloud_liquid_water_kg_kg")
-                if clwmr is not None:
-                    pl.cloud_liquid_water_kg_kg = clwmr
-                icmr = level_data.get("ice_mixing_ratio_kg_kg")
-                if icmr is not None:
-                    pl.ice_mixing_ratio_kg_kg = icmr
-                clc = level_data.get("cloud_area_fraction_pct")
-                if clc is not None:
-                    pl.cloud_area_fraction_pct = clc
+                _apply_merge_level_fields(pl, level_data)
 
     return enriched_count

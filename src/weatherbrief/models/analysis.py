@@ -216,6 +216,12 @@ class NWPCloudDiagnostics(BaseModel):
     # cap (matches MetPy sounding CIN and the `eff_cin < -200` gate). Provider
     # magnitudes are normalized at decode by `_normalize_model_cin`. (#441)
     ml_cin_jkg: Optional[float] = None
+    # ICON-EU parameterized-convection extras (#530). Data availability only —
+    # decoded and carried through interpolation, consumed by no grader yet.
+    # lpi_con_max is a MAX over the output interval (see
+    # NWP_CLOUD_DIAG_RATE_SCALARS); conv_cape is instantaneous.
+    lpi_con_max_j_kg: Optional[float] = None        # Lightning Potential Index (J/kg)
+    conv_cape_jkg: Optional[float] = None           # convection scheme's own CAPE (J/kg)
 
     total_cover_pct: Optional[float] = None
     boundary_cover_pct: Optional[float] = None
@@ -274,7 +280,17 @@ are midpoint-aligned along with ``NWP_CLOUD_DIAG_AVERAGED_SCALARS``.
 NWP_CLOUD_DIAG_AVERAGED_SCALARS: tuple[str, ...] = ("boundary_cover_pct",)
 """Scalars GFS publishes ONLY as a time-average over the step's window."""
 
-NWP_CLOUD_DIAG_RATE_SCALARS: tuple[str, ...] = ("convective_precip_mm_h",)
+NWP_CLOUD_DIAG_RATE_SCALARS: tuple[str, ...] = (
+    "convective_precip_mm_h",
+    # ICON `lpi_con_max` is a MAXIMUM over the output interval, not an
+    # instantaneous value (#530) — same covering-interval semantics as a
+    # de-accumulated rate and as the ECMWF 10fg gust the docstring cites, so
+    # it belongs here rather than in the instantaneous default. ICON is
+    # fetched hourly for every window hour, so no gap-hour actually exercises
+    # this today; classifying it correctly now is what stops a future coarser
+    # step from forward-filling a quiet interval over a firing one.
+    "lpi_con_max_j_kg",
+)
 """Scalars that are a RATE over the window ENDING at their anchor hour.
 
 De-accumulated precipitation rates (ECMWF ``cp``, ICON ``rain_con``) describe
@@ -463,8 +479,41 @@ class PressureLevelData(BaseModel):
     vertical_velocity_pa_s: Optional[float] = None  # omega (Pa/s)
     cloud_liquid_water_kg_kg: Optional[float] = None  # CLWMR from GRIB2
     ice_mixing_ratio_kg_kg: Optional[float] = None  # ICMR from GRIB2
+    # PRECIPITATING hydrometeors (#530) — what is falling, as opposed to the
+    # suspended cloud species above. ICON-D2 publishes all three (qr/qs/qg);
+    # ICON-EU publishes none of them, so an EU-sourced icon slot leaves these
+    # None and every consumer falls back exactly as before. Named
+    # model-agnostically: AROME's ICE3 scheme carries the same five species
+    # (#529) and will fill these same fields.
+    rain_water_kg_kg: Optional[float] = None  # qr — liquid precipitation
+    snow_water_kg_kg: Optional[float] = None  # qs — snow
+    graupel_water_kg_kg: Optional[float] = None  # qg — graupel (frequently 0)
     cloud_area_fraction_pct: Optional[float] = None  # CLC from ICON-EU GRIB2 (0–100%)
     clw_interpolated: bool = False  # True when CLW filled by spatial interpolation
+
+
+CONDENSATE_LEVEL_FIELDS: tuple[str, ...] = (
+    "cloud_liquid_water_kg_kg",
+    "ice_mixing_ratio_kg_kg",
+    "rain_water_kg_kg",
+    "snow_water_kg_kg",
+    "graupel_water_kg_kg",
+)
+"""Per-level hydrometeor mixing ratios, in ANCHOR-FIRST order.
+
+The same single-source-of-truth arrangement as ``NWP_CLOUD_DIAG_SCALARS``
+above, for the same reason: these values are carried across two independent
+interpolation axes (spatially between route points, temporally between
+enriched hours) plus the GRIB merge, and before #530 each site hand-listed
+the two cloud species. Adding qr/qs/qg to only some of them would have left a
+level with cloud water but no rain water — which the precipitation classifier
+reads as "no precipitation species here" and silently demotes to the cloud
+proxy.
+
+``cloud_liquid_water_kg_kg`` leads because every carrier keys its "this level
+has data" test on it and rides the rest along; the decoders write the whole
+set from one fetch, so a level carrying qr without qc does not occur.
+"""
 
 
 class HourlyForecast(BaseModel):
@@ -803,6 +852,14 @@ class DerivedLevel(BaseModel):
     cloud_liquid_water_g_m3: Optional[float] = None  # LWC converted from CLWMR
     cloud_liquid_water_g_kg: Optional[float] = None  # CLW mixing ratio (g/kg) for SFIP
     ice_mixing_ratio_g_kg: Optional[float] = None  # ICE mixing ratio (g/kg) for glaciation factor
+    rain_water_g_kg: Optional[float] = None  # qr mixing ratio (g/kg) — PRECIPITATING liquid
+    # True when non-trivial rain water coexists with a sub-freezing
+    # temperature at this level (#530) — freezing rain / large-droplet
+    # regime, physically distinct from the supercooled CLOUD droplets
+    # `cloud_liquid_water_g_kg` describes and considerably more hazardous.
+    # Only a model publishing qr can set it (ICON-D2 today), so False means
+    # "not detected here", never "no rain here" — see meteorology-decisions §24.
+    supercooled_rain: bool = False
     sfip_raw: Optional[float] = None  # SFIP index 0.0–1.0
     sfip_100: Optional[float] = None  # SFIP index 0–100
     sfip_severity: Optional[str] = None  # "NONE"/"LIGHT"/"MODERATE"/"SEVERE" (GA mapping)
@@ -872,6 +929,12 @@ class IcingZone(BaseModel):
     risk: IcingRisk = IcingRisk.NONE
     icing_type: IcingType = IcingType.NONE
     sld_risk: bool = False
+    # True when any level in this zone carries DerivedLevel.supercooled_rain
+    # (#530). Reported, NOT graded: it does not enter `risk` and does not make
+    # a NONE zone hazardous — see meteorology-decisions §24 for why the grade
+    # effect waits on the #411 validation, and `sld_risk` above for the same
+    # deliberately-dormant shape.
+    supercooled_rain: bool = False
     mean_temperature_c: Optional[float] = None
     mean_wet_bulb_c: Optional[float] = None
     mean_icing_index: Optional[float] = None  # Mean Ogimet icing index for the zone

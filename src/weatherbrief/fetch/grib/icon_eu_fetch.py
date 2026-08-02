@@ -71,6 +71,15 @@ class IconVariant:
             this variant. NOT identical between variants: ICON-D2 has no deep-
             convection parameterization, so ``hbas_con``/``htop_con``/``rain_con``
             don't exist (or are meaningless) on its feed — see the D2 tuple below.
+        model_level_variables: Model-level sounding variables to fetch AND
+            decode. Also NOT identical between variants (#530): ICON-D2
+            publishes the full ICE3-style hydrometeor set (``qr``/``qs``/``qg``
+            on top of ``qc``/``qi``/``qv``), ICON-EU only the cloud species —
+            verified live against opendata.dwd.de 2026-07-30. Every variable
+            here is REQUIRED at decode: an hour missing one is skipped for ICON
+            entirely (#478). Opt-in extras that have no consumer yet (``tke``)
+            are added by :func:`icon_model_level_fetch_variables` on the fetch
+            side only, deliberately outside this required set.
         explicit_conv_variables: Explicit-convection storm diagnostics (#462) —
             reflectivity, echo top, LPI, updraft, updraft helicity.
             Only convection-permitting variants (D2) publish these; empty for
@@ -117,6 +126,7 @@ class IconVariant:
     hourly_to_h: int
     coarse_step_h: int
     cloud_diag_variables: tuple[str, ...]
+    model_level_variables: tuple[str, ...]
     explicit_conv_variables: tuple[str, ...] = ()
     per_level_cache: bool = False
 
@@ -150,11 +160,25 @@ class IconVariant:
 # tower with rain_con ~0 but real convective snow simply keeps its tier (no
 # regression, just an unclosed corner). If added, sum the two de-accumulated
 # rates before assigning convective_precip_mm_h.
+# lpi_con_max / cape_con added in #530. Both are parameterized-convection
+# products, so they exist on EU and NOT on convection-permitting D2:
+# - lpi_con_max — Lightning Potential Index, max over the output interval
+#   (J/kg). We already get a lightning signal from D2's lpi_max, but only
+#   inside D2's 43.18–58.08 N / −3.94–20.34 E box; this one covers the whole
+#   ICON-EU domain, i.e. every corridor D2 cannot see.
+# - cape_con — CAPE as the convection scheme itself computed it, complementing
+#   the cape_ml we already fetch (a diagnostic mixed-layer parcel). Where the
+#   two disagree the scheme's own value is what drove the model's convective
+#   tendencies.
+# Both are DATA AVAILABILITY only in #530: decoded onto NWPCloudDiagnostics,
+# consumed by no grader. Wiring them into convective firing is a separate,
+# calibrated decision.
 ICON_EU_CLOUD_DIAG_VARIABLES = (
     "ceiling", "hbas_con", "htop_con",
     "clcl", "clcm", "clch", "clct",
     "cape_ml", "cin_ml",
     "rain_con",
+    "lpi_con_max", "cape_con",
 )
 
 # Single-level diagnostics for ICON-D2 — deliberately SMALLER than ICON-EU's
@@ -208,6 +232,51 @@ ICON_D2_EXPLICIT_CONV_VARIABLES = (
     "dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max",
 )
 
+# Model-level sounding variables.
+#
+# "qv" (specific humidity) is used instead of "relhum" because relhum is only
+# published on pressure levels, not model levels, on DWD Open Data.
+# "fi" (geopotential) is NOT available on model levels either — geopotential
+# height is derived from pressure via the hypsometric equation in the sounding
+# analysis instead.
+ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
+
+# ICON-D2 adds the three PRECIPITATING hydrometeor species (#530), verified
+# live 2026-07-30 on the same regular-lat-lon model-level layout as qc:
+#   qr — rain water, qs — snow, qg — graupel.
+# ICON-EU does NOT publish them (its moisture set is qc/qi/qv only), which is
+# exactly why this list is per-variant.
+#
+# Volume: DWD's own file sizes for run 00z step 003 put qg at 2.4 KB and qr at
+# 18.7 KB against qc's 13.6 KB — the three together cost ~2.5x one qc, i.e.
+# ~21 MB over 50 levels x 12 forecast hours. Negligible against D2's ~494
+# MB/fhour sounding, and cached per (variable, level) like every other D2
+# species, so a partial download stays detectable.
+#
+# Why they matter: qc/qi are CLOUD condensate. Precipitation phase was being
+# classified from the cloud partition (a proxy — cloud droplets are not what is
+# falling), and supercooled RAIN was indistinguishable from supercooled cloud
+# droplets even though the two are physically different icing hazards. See
+# meteorology-decisions §24.
+ICON_D2_VARIABLES = ICON_EU_VARIABLES + ("qr", "qs", "qg")
+
+# Turbulent kinetic energy (#530) — published on model levels by BOTH variants,
+# fetched by NEITHER unless explicitly configured. There is no TKE consumer in
+# the analysis today, so every byte is speculative, and ICON-EU's tke is the
+# most expensive field on the feed by a wide margin: ~903 KB per level-hour
+# (turbulence compresses badly) against qc's 88.7 KB, i.e. ~36 MB per forecast
+# hour across 40 levels. D2's is cheap by comparison but still buys nothing yet.
+#
+# Enable with WB_ICON_TKE — a comma-separated list of variant slugs, or "all":
+#   WB_ICON_TKE=icon-d2            → D2 only
+#   WB_ICON_TKE=icon-d2,icon-eu    → both
+#   WB_ICON_TKE=all                → both
+# Unset (the default) fetches it for neither. tke is deliberately NOT part of
+# IconVariant.model_level_variables: that tuple is the REQUIRED decode set, and
+# a failed optional download must not make the pipeline skip the whole hour.
+ICON_TKE_VARIABLE = "tke"
+ICON_TKE_ENV_VAR = "WB_ICON_TKE"
+
 
 # ICON-EU model-level horizon depends on the run cycle (verified empirically
 # against opendata.dwd.de directory listings):
@@ -238,6 +307,7 @@ ICON_EU = IconVariant(
     hourly_to_h=78,
     coarse_step_h=3,
     cloud_diag_variables=ICON_EU_CLOUD_DIAG_VARIABLES,
+    model_level_variables=ICON_EU_VARIABLES,
 )
 
 # ICON-D2: 2.2 km convection-permitting, central-Europe domain, 8 runs/day,
@@ -277,6 +347,7 @@ ICON_D2 = IconVariant(
     hourly_to_h=48,
     coarse_step_h=1,
     cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
+    model_level_variables=ICON_D2_VARIABLES,
     explicit_conv_variables=ICON_D2_EXPLICIT_CONV_VARIABLES,
     # D2's column is 50 levels × 9 variables per forecast hour — the most files,
     # so the most exposed to a partial download. Cache per (variable, level) so
@@ -348,30 +419,53 @@ def icon_eu_window_out_of_range(
                 return False
     return True
 
-# Variables to fetch: sounding + cloud microphysics + pressure for vertical interpolation.
-# Note: "qv" (specific humidity) is used instead of "relhum" because relhum is only
-# available on pressure levels, not model levels on DWD Open Data.
-# "fi" (geopotential) is NOT available on model levels — only on pressure levels.
-# Geopotential height is instead derived from pressure via the hypsometric equation
-# in the sounding analysis (or omitted — not critical for core analysis).
-ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
+def icon_tke_enabled(variant: IconVariant) -> bool:
+    """True when ``tke`` is explicitly configured for *variant* (#530).
+
+    Reads :data:`ICON_TKE_ENV_VAR` at call time (not import time) so a test or
+    a redeploy can flip it without reimporting the module. Unset → False for
+    every variant: TKE has no consumer yet and ICON-EU's is ~36 MB per
+    forecast hour.
+    """
+    raw = os.environ.get(ICON_TKE_ENV_VAR, "").strip().lower()
+    if not raw:
+        return False
+    slugs = {tok.strip() for tok in raw.split(",") if tok.strip()}
+    return "all" in slugs or variant.slug in slugs
+
+
+def icon_model_level_fetch_variables(variant: IconVariant) -> tuple[str, ...]:
+    """Model-level variables to DOWNLOAD for *variant*.
+
+    The required decode set (``variant.model_level_variables``) plus any
+    opt-in extras. Distinct from the decode set on purpose: an extra is
+    groundwork with no consumer, so a missing one must not trigger the #478
+    "incomplete column → skip the hour" rule that guards the sounding.
+    """
+    if icon_tke_enabled(variant):
+        return variant.model_level_variables + (ICON_TKE_VARIABLE,)
+    return variant.model_level_variables
+
 
 # Cache-key label for the single-level cloud-diagnostic blob. Bumped to V2 in
-# #421 when rain_con was added: the blob is cached under ONE key for all
-# variables, so adding a variable changes the blob's *content* but not its key.
-# Bumping the label forces existing (rain_con-less) cached blobs to re-fetch —
-# without it a warm cache would silently keep the pre-#421 gate-less behaviour.
-# Referenced everywhere the blob is cached (prefetch, enrichment, precache,
-# standalone verification) so the four call sites can never drift apart.
-ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V2"
+# #421 when rain_con was added, and to V3 in #530 when lpi_con_max/cape_con
+# were: the blob is cached under ONE key for all variables, so adding a
+# variable changes the blob's *content* but not its key. Bumping the label
+# forces existing (short-schema) cached blobs to re-fetch — without it a warm
+# cache would silently keep serving the previous variable set. Referenced
+# everywhere the blob is cached (prefetch, enrichment, precache, standalone
+# verification) so the four call sites can never drift apart.
+ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V3"
 
 
 def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     """Cache-key label for a variant's single-level cloud-diagnostic blob.
 
-    ``{cache_prefix}_CLOUD_DIAG_V2`` — the ``_V2`` suffix matches the ICON-EU
-    constant so the two share the same rain_con-inclusive schema; only the
-    prefix differs so ICON-D2 blobs never masquerade as ICON-EU in a cache dir.
+    ``{cache_prefix}_CLOUD_DIAG_V3`` — the ``_V3`` suffix matches the ICON-EU
+    constant; only the prefix differs so ICON-D2 blobs never masquerade as
+    ICON-EU in a cache dir. D2's own variable list is unchanged by #530, so its
+    bump is a no-op re-fetch of a 6h-TTL blob (2.7% of a D2 run's volume) —
+    cheaper than letting the two variants' schema versions drift apart.
 
     #462 note: the D2 explicit-convection fields deliberately do NOT join this
     blob (they live in per-variable blobs under
@@ -381,7 +475,7 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     keeps the EU/D2 cloud-diag schema shared and lets the sub-hourly explicit
     files use message-level decode instead of the cfgrib blob path.
     """
-    return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
+    return f"{variant.cache_prefix}_CLOUD_DIAG_V3"
 
 
 def icon_model_level_var_label(

@@ -1046,12 +1046,14 @@ class TestIconEuSingleLevel:
 
         assert "rain_con" in ICON_EU_CLOUD_DIAG_VARIABLES
 
-    def test_cloud_diag_cache_key_bumped_to_v2(self):
-        """Adding rain_con changed the blob content → key bumped so warm caches
-        re-fetch instead of silently keeping the gate-less blob (#421)."""
+    def test_cloud_diag_cache_key_bumped_for_each_schema_change(self):
+        """The blob is cached under ONE key for all its variables, so adding a
+        variable changes its CONTENT but not its key — the label carries the
+        schema version instead. V2 = rain_con (#421), V3 = lpi_con_max/cape_con
+        (#530). Without a bump a warm cache keeps serving the old variable set."""
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_CLOUD_DIAG_CACHE_KEY
 
-        assert ICON_EU_CLOUD_DIAG_CACHE_KEY == "ICON_EU_CLOUD_DIAG_V2"
+        assert ICON_EU_CLOUD_DIAG_CACHE_KEY == "ICON_EU_CLOUD_DIAG_V3"
 
     def test_previous_step_hourly_grid(self):
         """Below 78h the predecessor is one hour back (1-hourly grid)."""

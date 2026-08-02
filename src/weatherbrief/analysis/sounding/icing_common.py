@@ -19,6 +19,42 @@ from weatherbrief.models import (
 )
 
 
+# ── Supercooled rain (#530) ────────────────────────────────────────
+
+
+# Minimum rain-water mixing ratio (kg/kg) that counts as rain actually
+# falling, rather than numerical residue or a trace advected in.
+# 1e-6 kg/kg = 0.001 g/kg. Reasoning and rejected alternatives:
+# meteorology-decisions §24.
+SUPERCOOLED_RAIN_MIN_QR_KG_KG = 1e-6
+
+# Temperature at or below which falling rain is supercooled. Plain 0 °C: a
+# liquid drop below freezing IS supercooled, and there is no calibration
+# freedom in the phase boundary itself — the judgement is entirely in how
+# much rain counts (above).
+SUPERCOOLED_RAIN_MAX_TEMP_C = 0.0
+
+
+def is_supercooled_rain(
+    rain_water_kg_kg: float | None,
+    temperature_c: float | None,
+) -> bool:
+    """True when non-trivial rain water sits at a sub-freezing temperature.
+
+    Freezing rain / large-droplet regime: physically distinct from
+    supercooled cloud droplets and a considerably worse airframe icing
+    hazard. Requires BOTH inputs — a model that publishes no qr (ICON-EU,
+    GFS, ECMWF) yields False, which means "not detected", never "no
+    supercooled rain here".
+    """
+    if rain_water_kg_kg is None or temperature_c is None:
+        return False
+    return (
+        rain_water_kg_kg >= SUPERCOOLED_RAIN_MIN_QR_KG_KG
+        and temperature_c < SUPERCOOLED_RAIN_MAX_TEMP_C
+    )
+
+
 # ── Cloud layer gating ─────────────────────────────────────────────
 
 

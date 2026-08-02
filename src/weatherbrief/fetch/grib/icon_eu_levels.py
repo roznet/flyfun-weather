@@ -34,6 +34,12 @@ TARGET_PRESSURE_LEVELS_HPA = EXTENDED_PRESSURE_LEVELS
 _FIELD_BOUNDS: dict[str, tuple[float | None, float | None]] = {
     "cloud_liquid_water_kg_kg": (0.0, None),
     "ice_mixing_ratio_kg_kg": (0.0, None),
+    # Precipitating hydrometeors (#530) — mixing ratios, non-negative like the
+    # cloud species. A log-pressure interpolation across a sharp precipitation
+    # edge can undershoot below zero otherwise.
+    "rain_water_kg_kg": (0.0, None),
+    "snow_water_kg_kg": (0.0, None),
+    "graupel_water_kg_kg": (0.0, None),
     "raw_specific_humidity_kg_kg": (0.0, None),
     "cloud_area_fraction_pct": (0.0, 100.0),
 }
