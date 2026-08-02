@@ -764,26 +764,36 @@ def _fill_cloud_water(
 
 
 def _fill_clw_hourly(hourly_list: list[HourlyForecast]) -> int:
-    """Forward-fill CLW/ICMR per pressure level across time."""
+    """Forward-fill condensate mixing ratios per pressure level across time.
+
+    Carries every species in ``CONDENSATE_LEVEL_FIELDS``, not just the two
+    cloud ones: an ICON-D2 hour that forward-filled qc but left qr behind
+    would read to the precipitation classifier as "cloud here, nothing
+    falling" and silently drop back to the cloud proxy (#530).
+    """
+    from weatherbrief.models.analysis import CONDENSATE_LEVEL_FIELDS
+
+    anchor, *riders = CONDENSATE_LEVEL_FIELDS
+
     filled = 0
-    # Track last known values per pressure level: {hpa: (clw, icmr)}
-    last: dict[int, tuple[float | None, float | None]] = {}
+    # Last known values per pressure level: {hpa: {field: value}}
+    last: dict[int, dict[str, float | None]] = {}
 
     for h in sorted(hourly_list, key=lambda h: h.time):
         for pl in h.pressure_levels:
             p = pl.pressure_hpa
-            if pl.cloud_liquid_water_kg_kg is not None:
+            if getattr(pl, anchor) is not None:
                 # Anchor — record this native-hour value
-                last[p] = (
-                    pl.cloud_liquid_water_kg_kg,
-                    pl.ice_mixing_ratio_kg_kg,
-                )
+                last[p] = {
+                    name: getattr(pl, name) for name in CONDENSATE_LEVEL_FIELDS
+                }
             elif p in last:
-                prev_clw, prev_icmr = last[p]
-                if prev_clw is not None:
-                    pl.cloud_liquid_water_kg_kg = prev_clw
-                    if prev_icmr is not None and pl.ice_mixing_ratio_kg_kg is None:
-                        pl.ice_mixing_ratio_kg_kg = prev_icmr
+                prev = last[p]
+                if prev[anchor] is not None:
+                    setattr(pl, anchor, prev[anchor])
+                    for name in riders:
+                        if prev[name] is not None and getattr(pl, name) is None:
+                            setattr(pl, name, prev[name])
                     filled += 1
     return filled
 
@@ -1324,6 +1334,7 @@ def _interp_levels_at(
 ) -> list[PressureLevelData]:
     """Build a new pressure_levels list by per-level linear interp at ``frac``."""
     from weatherbrief.models import PressureLevelData
+    from weatherbrief.models.analysis import CONDENSATE_LEVEL_FIELDS
 
     out: list[PressureLevelData] = []
     for prev in prev_levels:
@@ -1355,6 +1366,14 @@ def _interp_levels_at(
             frac,
         )
 
+        # Every hydrometeor species, from the shared inventory — a gap hour
+        # that lerped qc but dropped qr would lose the precipitation partition
+        # for exactly the hours between anchors (#530).
+        condensate = {
+            name: _lerp(getattr(prev, name), getattr(nxt, name), frac)
+            for name in CONDENSATE_LEVEL_FIELDS
+        }
+
         out.append(PressureLevelData(
             pressure_hpa=prev.pressure_hpa,
             temperature_c=t_c,
@@ -1364,8 +1383,7 @@ def _interp_levels_at(
             wind_direction_deg=wd,
             geopotential_height_m=_lerp(prev.geopotential_height_m, nxt.geopotential_height_m, frac),
             vertical_velocity_pa_s=_lerp(prev.vertical_velocity_pa_s, nxt.vertical_velocity_pa_s, frac),
-            cloud_liquid_water_kg_kg=_lerp(prev.cloud_liquid_water_kg_kg, nxt.cloud_liquid_water_kg_kg, frac),
-            ice_mixing_ratio_kg_kg=_lerp(prev.ice_mixing_ratio_kg_kg, nxt.ice_mixing_ratio_kg_kg, frac),
+            **condensate,
             cloud_area_fraction_pct=_lerp(prev.cloud_area_fraction_pct, nxt.cloud_area_fraction_pct, frac),
             # ``clw_interpolated`` flags spatial fill, not temporal. Preserve
             # from prev so spatially-filled levels stay flagged across the

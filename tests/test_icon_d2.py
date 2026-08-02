@@ -131,8 +131,8 @@ class TestD2HorizonAndGrid:
         assert (ICON_D2.level_min, ICON_D2.level_max) == (16, 65)
         assert ICON_D2.slug == "icon-d2"
         assert ICON_D2.source_key == "icon_d2:dwd"
-        assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V2"
-        assert icon_cloud_diag_cache_key(ICON_EU) == "ICON_EU_CLOUD_DIAG_V2"
+        assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V3"
+        assert icon_cloud_diag_cache_key(ICON_EU) == "ICON_EU_CLOUD_DIAG_V3"
 
     def test_d2_diag_list_drops_parameterized_convection_fields(self):
         # D2 has no deep-convection scheme: hbas_con/htop_con 404 on the feed

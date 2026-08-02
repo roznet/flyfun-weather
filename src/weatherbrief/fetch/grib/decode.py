@@ -36,6 +36,16 @@ _VAR_MAP = {
     "qc": "cloud_liquid_water_kg_kg",     # ICON-EU cloud liquid water
     "qi": "ice_mixing_ratio_kg_kg",       # ICON-EU cloud ice
     "clc": "cloud_area_fraction_pct",     # ICON-EU cloud area fraction (0–100%)
+    # PRECIPITATING hydrometeors (#530) — ICON-D2 only on the DWD feed; EU
+    # publishes qc/qi/qv and nothing else. Distinct from qc/qi, which are the
+    # SUSPENDED cloud species: qr/qs/qg are what is actually falling, which is
+    # what precipitation-phase classification and supercooled-rain detection
+    # need. Field names are deliberately model-agnostic — Météo-France AROME
+    # publishes the same ICE3 species (crwc/cswc/graupel), so #529 can feed
+    # these exact fields and every consumer stays unchanged.
+    "qr": "rain_water_kg_kg",             # ICON-D2 rain water
+    "qs": "snow_water_kg_kg",             # ICON-D2 snow
+    "qg": "graupel_water_kg_kg",          # ICON-D2 graupel
     "clwc": "cloud_liquid_water_kg_kg",   # ECMWF IFS cloud liquid water content
     "ciwc": "ice_mixing_ratio_kg_kg",     # ECMWF IFS cloud ice water content
     "cc": "cloud_area_fraction_pct",      # ECMWF IFS cloud cover (0–1 fraction, ×100 in decode)
@@ -166,6 +176,23 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     # lowercased cfgrib var name (see decode_icon_eu_cloud_diag_per_point), so
     # the key MUST be `crr` for the field to be picked up at all.
     "crr": "conv_rain_kg_m2",
+    # Parameterized-convection diagnostics, ICON-EU only (#530).
+    #
+    # SHORTNAME CAVEAT — these two could NOT be verified against a live GRIB
+    # message (no eccodes/feed access at implementation time), and DWD's
+    # products routinely decode under a name that is not the product name:
+    # RAIN_CON arrives as `crr` above, and HRRR's CIMIXR arrives as `unknown`.
+    # The product names are mapped (the same spelling that already works for
+    # cape_ml/cin_ml, so DWD's local table names do reach cfgrib here) plus one
+    # near variant for LPI. Deliberately NO bare `cape`/`lpi` fallback: a
+    # generic key risks colliding with cape_ml in the flat raw dict, and a
+    # WRONG value silently attributed to the convective scheme is worse than
+    # no value. If the live name is none of these the fields stay None —
+    # ordinary missing-data semantics, already handled everywhere downstream.
+    # Confirm against a real message before anything grades on them.
+    "lpi_con_max": "lpi_con_max_j_kg",   # J/kg, max over the output interval
+    "lpi_con": "lpi_con_max_j_kg",
+    "cape_con": "conv_cape_jkg",         # J/kg, convection scheme's own CAPE
 }
 
 # ECMWF single-level (a1) field mapping.
@@ -1227,6 +1254,11 @@ def decode_icon_eu_per_point_chunked(
     for var_name, field_key in (
         ("qc", "cloud_liquid_water_kg_kg"),
         ("qi", "ice_mixing_ratio_kg_kg"),
+        # Precipitating species (#530) — ICON-D2 only; absent bytes are simply
+        # skipped below, so an ICON-EU column produces None for all three.
+        ("qr", "rain_water_kg_kg"),
+        ("qs", "snow_water_kg_kg"),
+        ("qg", "graupel_water_kg_kg"),
         ("clc", "cloud_area_fraction_pct"),
         ("t", "raw_temperature_k"),
         ("qv", "raw_specific_humidity_kg_kg"),
@@ -1401,6 +1433,7 @@ def decode_icon_eu_per_point(
 
         _ICON_INTERP_FIELDS = (
             "cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
+            "rain_water_kg_kg", "snow_water_kg_kg", "graupel_water_kg_kg",
             "raw_temperature_k", "raw_specific_humidity_kg_kg",
             "raw_u_wind_m_s", "raw_v_wind_m_s",
             "raw_w_m_s",
@@ -1699,6 +1732,15 @@ def build_icon_cloud_diagnostics(
     # ICON CIN_ML is a positive magnitude with -999.9 as the undefined
     # sentinel → convert to internal negative convention. (#441 finding #2)
     ml_cin = _normalize_model_cin(raw, "ml_cin_jkg", drop_at_or_below=-900.0)
+    # Parameterized-convection extras (#530), ICON-EU only. Both are
+    # non-negative energies; DWD uses -999.9 for undefined on this feed, so
+    # drop anything negative rather than propagate a sentinel as a value.
+    lpi_con_max = _opt_float(raw, "lpi_con_max_j_kg")
+    if lpi_con_max is not None and lpi_con_max < 0:
+        lpi_con_max = None
+    conv_cape = _opt_float(raw, "conv_cape_jkg")
+    if conv_cape is not None and conv_cape < 0:
+        conv_cape = None
 
     # Only create diagnostics if at least one field is populated
     has_any = (
@@ -1711,6 +1753,8 @@ def build_icon_cloud_diagnostics(
         or total_cover is not None
         or ml_cape is not None
         or ml_cin is not None
+        or lpi_con_max is not None
+        or conv_cape is not None
     )
     if not has_any:
         return None
@@ -1725,6 +1769,8 @@ def build_icon_cloud_diagnostics(
         convective_top_ft=convective_top_ft,
         ml_cape_jkg=ml_cape,
         ml_cin_jkg=ml_cin,
+        lpi_con_max_j_kg=lpi_con_max,
+        conv_cape_jkg=conv_cape,
     )
 
 
@@ -2503,10 +2549,16 @@ def _convert_raw_sounding(
     """
     import math
 
+    from weatherbrief.models.analysis import CONDENSATE_LEVEL_FIELDS
+
     out: dict[str, float] = {}
 
-    # Pass through fields that need no conversion
-    for key in ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
+    # Pass through fields that need no conversion. The hydrometeor species
+    # come from the shared inventory rather than a hand-written pair (#530):
+    # this is the FULL SOUNDING REPLACEMENT path — the one ICON and ECMWF
+    # actually take — so a species missing here is decoded, interpolated, and
+    # then silently dropped on the floor before it ever reaches a consumer.
+    for key in (*CONDENSATE_LEVEL_FIELDS,
                 "cloud_area_fraction_pct", "vertical_velocity_pa_s"):
         if key in raw:
             out[key] = raw[key]

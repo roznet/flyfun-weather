@@ -755,6 +755,9 @@ class TestFreezingLevelMirror:
                 vertical_velocity_pa_s=0.1 * scale,
                 cloud_liquid_water_kg_kg=0.0001 * scale,
                 ice_mixing_ratio_kg_kg=0.0002 * scale,
+                rain_water_kg_kg=0.0003 * scale,
+                snow_water_kg_kg=0.0004 * scale,
+                graupel_water_kg_kg=0.0005 * scale,
                 cloud_area_fraction_pct=60.0 * scale,
                 clw_interpolated=True,
             )

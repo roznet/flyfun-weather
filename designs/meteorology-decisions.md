@@ -2945,3 +2945,136 @@ design.
   here as the single definition.
 - `analysis/sounding/advisories.py` — geometry-gated branch; imports the band
   constants rather than redeclaring them.
+
+---
+
+## 24. Precipitation phase comes from the falling species; supercooled rain is detected but not graded
+
+**Date:** 2026-08-02
+**Status:** Implemented (#530). The supercooled-rain **grade effect** is
+deliberately dormant pending #411.
+**Context:** DWD's ICON-D2 feed publishes three hydrometeor species we had
+never fetched — `qr` (rain water), `qs` (snow), `qg` (graupel) — on the same
+`regular-lat-lon` model-level layout as the `qc`/`qi` we already read. ICON-EU
+publishes none of them. They cost ~21 MB across 50 levels × 12 forecast hours,
+about 2.5× a single `qc`, against a D2 sounding that already runs ~494
+MB/forecast-hour.
+
+Two things were wrong before we had them, and neither was visible in any test.
+
+### Part A — the phase classifier was reading the wrong condensate
+
+`_compute_ice_fraction` partitioned `clwmr` vs `icmr` and used the result to
+classify **precipitation** phase. Those are the *cloud* species: droplets and
+ice crystals suspended in the air. What is falling through them is a different
+population entirely, and the two routinely disagree — a glaciated cloud layer
+raining through from a warmer source aloft reads 90 % ice on the cloud
+partition while every drop reaching the aircraft is liquid.
+
+**Decision:** classify from `qr` vs `(qs + qg)` — liquid against frozen, among
+the species that are actually precipitating — wherever the model supplies
+them. The existing three-tier shape is preserved, with the real partition
+inserted at the top:
+
+| tier | source | when |
+|---|---|---|
+| 1 | `(qs+qg) / (qr+qs+qg)` | model publishes precipitating species (ICON-D2; AROME next, #529) |
+| 2 | `icmr / (clwmr+icmr)` | cloud partition — every other model, exactly as before |
+| 3 | wet-bulb bands | no condensate at all |
+
+The severity thresholds are unchanged (`>0.8` snow, `0.2–0.8` mixed, `<0.2`
+rain): the fix is *which quantity* is thresholded, not where the boundaries
+sit. This is a **classification-accuracy** change, not a grade change — no
+advisory reads precipitation phase as a graded input.
+
+**Missing vs zero vs nothing-falling**, the same three-way distinction §23
+records for the condensate cloud builder:
+
+| condition | result | meaning |
+|---|---|---|
+| no precipitating species reported at all | `None` | no data → fall through to tier 2 |
+| some reported, all zero | `None` | nothing falling here → nothing to classify |
+| some reported, total > 0 | fraction | a genuine partition |
+
+A level reporting `qr` and `qs` but no `qg` counts the absent species as zero:
+a model writing two of three is saying "no graupel", not "unknown graupel".
+Returning `0.0` for the all-zero case instead of `None` would have been the
+easy bug — a fraction of zero reads as RAIN, so every dry level in the column
+would have been classified as raining.
+
+**One helper, two consumers.** `_level_ice_fraction` picks the tier once, and
+both the per-level classification and the zone-mean `ice_fraction` summary
+call it. Grading the levels on the precipitation partition while summarising
+the zone on the cloud partition would produce a zone labelled RAIN carrying
+`ice_fraction: 0.9` — unreadable, and the kind of drift #485 fixed for the
+cloud diagnostics.
+
+**Rejected — use `qr/qs/qg` only, drop the cloud fallback.** Cleaner, and
+wrong for every model except D2: ICON-EU, GFS, ECMWF and HRRR publish no
+precipitating species, so phase classification would regress to wet-bulb for
+the overwhelming majority of briefings. The cloud partition is a proxy, but it
+is a better-informed proxy than wet-bulb alone.
+
+### Part B — supercooled rain, and why it does not move a grade
+
+`qr > 0` at `T < 0 °C` is **freezing rain**: drops 0.5–5 mm, far outside the
+Appendix C envelope, an entirely different airframe hazard from the
+supercooled cloud droplets the Ogimet and SFIP methods already grade. Before
+#530 nothing in the pipeline could tell the two apart — `clouds.py` and the
+icing methods only ever saw cloud liquid and cloud ice.
+
+**Threshold: `qr ≥ 1×10⁻⁶ kg/kg` (0.001 g/kg) at `T < 0 °C`.**
+
+The temperature half has no calibration freedom — a liquid drop below freezing
+*is* supercooled. The entire judgement is in how much rain counts as rain.
+
+| alternative | rejected because |
+|---|---|
+| any `qr > 0` | model microphysics leave numerical residue at 10⁻¹²–10⁻¹⁰ kg/kg and advect traces far from any real precipitation; every winter column would flag |
+| `1×10⁻⁷` (the `_CONDENSATE_CLOUDY_KG_KG` value from §23) | that number is HRRR's documented **cloud-base detection** threshold, calibrated against how *cloud* condensate packs. Cloud presence is not falling precipitation, and borrowing a threshold across that boundary is exactly the mismatched-quantity error Part A is about |
+| `1×10⁻⁵` | erases light freezing drizzle, which sits around 10⁻⁶–10⁻⁵ kg/kg — and freezing drizzle is the *dominant* SLD exposure for the GA fleet this tool serves. A threshold that only catches heavy freezing rain catches the case a pilot was already going to avoid |
+
+`1×10⁻⁶` sits an order of magnitude above residue and at the bottom of real
+drizzle. It is a starting point, not a validated number.
+
+**The flag is reported, not graded.** `DerivedLevel.supercooled_rain` is
+computed at enrichment and rolled up to `IcingZone.supercooled_rain` (any
+level in the zone flags the zone — freezing rain is not something a zone mean
+should dilute). It does **not** enter `risk`, does **not** appear in
+`_enhance_severity`, and does **not** make a zone `is_hazardous`.
+
+That restraint is the decision, not an oversight. The detector has never been
+run against a real winter freezing-rain case; #411 exists precisely to
+validate SLD detection end-to-end. Wiring an unvalidated signal into icing
+severity would move grades on every ICON-D2 winter briefing simultaneously,
+with no case to check them against and no way to tell a true upgrade from a
+threshold artefact. The dormant-contract shape mirrors `IcingZone.sld_risk`
+(see `advisories/_helpers.py:387-401`) — a populated field waiting on the
+validation that lets it grade.
+
+`False` therefore means **"not detected"**, never "no supercooled rain here":
+only a model publishing `qr` can set it, which today means ICON-D2 alone.
+
+### Also landed, no meteorological decision attached
+
+- **ICON-EU `lpi_con_max` + `cape_con`.** Lightning potential across the full
+  ICON-EU domain (D2's `lpi_max` covers only 43.18–58.08 N / −3.94–20.34 E),
+  and the convection scheme's own CAPE alongside the diagnostic `cape_ml`.
+  Decoded onto `NWPCloudDiagnostics`, consumed by no grader. Wiring either
+  into convective firing is a separate, calibrated decision — the #462 firing
+  table (§19) is not portable to a parameterized-convection product.
+- **`tke`, opt-in and off.** Available on both variants, fetched by neither
+  unless `WB_ICON_TKE` names the variant. No turbulence consumer exists, and
+  ICON-EU's `tke` is ~903 KB per level-hour (~36 MB per forecast hour).
+
+### Files changed
+
+- `fetch/grib/icon_eu_fetch.py` — `IconVariant.model_level_variables`,
+  `ICON_D2_VARIABLES`, `icon_tke_enabled`, cloud-diag key → `V3`.
+- `fetch/grib/decode.py` — `qr`/`qs`/`qg` mappings, `lpi_con_max`/`cape_con`.
+- `models/analysis.py` — three `PressureLevelData` species,
+  `CONDENSATE_LEVEL_FIELDS`, `DerivedLevel.supercooled_rain`,
+  `IcingZone.supercooled_rain`.
+- `analysis/sounding/precipitation.py` — `_compute_precip_ice_fraction`,
+  `_level_ice_fraction`.
+- `analysis/sounding/icing_common.py` — threshold + `is_supercooled_rain`.

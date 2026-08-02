@@ -302,10 +302,12 @@ def _interpolate_level(
     distances: list[float],
     max_gap_nm: float,
 ) -> int:
-    """Interpolate CLW/ICMR at one pressure level across route points.
+    """Interpolate condensate species at one pressure level across route points.
 
     Returns the number of (point, level) pairs filled.
     """
+    from weatherbrief.models.analysis import CONDENSATE_LEVEL_FIELDS
+
     has_data: list[int] = []
     needs_fill: list[int] = []
 
@@ -346,20 +348,19 @@ def _interpolate_level(
         else:
             frac = (distances[pt_idx] - distances[left_idx]) / gap_nm
 
-        # Interpolate CLW
-        if left_pl.cloud_liquid_water_kg_kg is not None and right_pl.cloud_liquid_water_kg_kg is not None:
-            target_pl.cloud_liquid_water_kg_kg = round(
-                left_pl.cloud_liquid_water_kg_kg * (1 - frac)
-                + right_pl.cloud_liquid_water_kg_kg * frac,
-                9,
-            )
-
-        # Interpolate ICMR (if both neighbors have it)
-        if left_pl.ice_mixing_ratio_kg_kg is not None and right_pl.ice_mixing_ratio_kg_kg is not None:
-            target_pl.ice_mixing_ratio_kg_kg = round(
-                left_pl.ice_mixing_ratio_kg_kg * (1 - frac)
-                + right_pl.ice_mixing_ratio_kg_kg * frac,
-                9,
+        # Interpolate each condensate species independently. A species is
+        # filled ONLY when both endpoints carry it: a one-sided value would
+        # invent precipitation on the far side of a gap nothing measured.
+        # qr/qs/qg (#530) are ICON-D2 only, so on an ICON-EU or GFS section
+        # both endpoints are None and all three are skipped.
+        for name in CONDENSATE_LEVEL_FIELDS:
+            left_val = getattr(left_pl, name)
+            right_val = getattr(right_pl, name)
+            if left_val is None or right_val is None:
+                continue
+            setattr(
+                target_pl, name,
+                round(left_val * (1 - frac) + right_val * frac, 9),
             )
 
         target_pl.clw_interpolated = True

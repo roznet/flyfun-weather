@@ -18,6 +18,7 @@ from weatherbrief.models import (
 )
 from weatherbrief.models.analysis import CloudCoverage
 
+from weatherbrief.analysis.sounding.icing_common import is_supercooled_rain
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,15 @@ def _enrich_lwc(
             dl.cloud_liquid_water_g_kg = round(raw.cloud_liquid_water_kg_kg * 1000.0, 6)
         if raw.ice_mixing_ratio_kg_kg is not None:
             dl.ice_mixing_ratio_g_kg = round(raw.ice_mixing_ratio_kg_kg * 1000.0, 6)
+
+        # Precipitating liquid + the supercooled-rain flag (#530). Only models
+        # publishing qr (ICON-D2 today) reach this; everywhere else both stay
+        # at their defaults, which is the pre-#530 behaviour exactly.
+        if raw.rain_water_kg_kg is not None:
+            dl.rain_water_g_kg = round(raw.rain_water_kg_kg * 1000.0, 6)
+        dl.supercooled_rain = is_supercooled_rain(
+            raw.rain_water_kg_kg, dl.temperature_c,
+        )
 
         # Propagate spatial interpolation flag
         if raw.clw_interpolated:

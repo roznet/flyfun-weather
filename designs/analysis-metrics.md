@@ -143,6 +143,22 @@ ICON-EU GRIB now does a **full sounding replacement** (not just enrichment) for 
 | Cloud Liquid Water | QC | kg/kg | Same | On model levels, interpolated to pressure levels |
 | Cloud Ice Mixing Ratio | QI | kg/kg | Same | Same interpolation |
 | Pressure | P | Pa | Same | Used for log-pressure vertical interpolation |
+| Rain water | QR | kg/kg | **ICON-D2 only** | → `rain_water_kg_kg` (#530). Not published on ICON-EU. |
+| Snow | QS | kg/kg | **ICON-D2 only** | → `snow_water_kg_kg` (#530). Not published on ICON-EU. |
+| Graupel | QG | kg/kg | **ICON-D2 only** | → `graupel_water_kg_kg` (#530). Frequently 0 — that is correct, not missing data. |
+
+**The three precipitating species are per-variant (#530).** ICON-D2 publishes
+`QR`/`QS`/`QG`; ICON-EU's model-level moisture set is `QC`/`QI`/`QV` only
+(verified against live directory listings 2026-07-30). Where present they give
+a genuine precipitation partition — liquid `qr` vs frozen `qs + qg` — which
+replaces the *cloud* partition (`clwmr` vs `icmr`) as the top tier of
+precipitation-phase classification, and `qr > 0` below 0 °C raises
+`DerivedLevel.supercooled_rain`, distinguishing freezing rain from supercooled
+cloud droplets for the first time. The flag is reported, **not graded** —
+see meteorology-decisions §24 (threshold, rejected alternatives, and why the
+grade effect waits on #411). Also fetched on both variants but **off by
+default**: `TKE` (opt-in via `WB_ICON_TKE`; no consumer, ~36 MB/forecast-hour
+on EU).
 
 #### ICON-EU Cloud Diagnostics (via DWD opendata)
 
@@ -157,6 +173,10 @@ Single-level scalar fields providing cloud ceiling, convective boundaries, and l
 | Medium cloud cover | CLCM | `mid.cover_pct` | % | 6500–20000ft cloud fraction |
 | High cloud cover | CLCH | `high.cover_pct` | % | >20000ft cloud fraction |
 | Total cloud cover | CLCT | `total_cover_pct` | % | Full-column cloud fraction |
+| Mixed-layer CAPE / CIN | CAPE_ML / CIN_ML | `ml_cape_jkg` / `ml_cin_jkg` | J/kg | Native convective track (#283) |
+| Convective rain | RAIN_CON | `convective_precip_mm_h` | mm/h | De-accumulated in the merge loop (#421) |
+| Lightning Potential Index | LPI_CON_MAX | `lpi_con_max_j_kg` | J/kg | **ICON-EU only** (#530). Whole-EU lightning signal; D2's `lpi_max` covers only central Europe. Interval MAX, not instantaneous. **No consumer yet.** |
+| Convective CAPE | CAPE_CON | `conv_cape_jkg` | J/kg | **ICON-EU only** (#530). The convection scheme's own CAPE, beside the diagnostic `cape_ml`. **No consumer yet.** |
 
 Unit conversion: meters → feet (× 3.28084) for heights. Cloud cover percentages (0–100%) stored as-is. Unlike GFS which uses gpm for ceiling and Pa for cloud boundaries, ICON-EU reports all heights in meters. CLCL/CLCM/CLCH/CLCT supply the bulk band percentages; the per-level `clc` (above) additionally drives `nwp_3d` cloud layers and `_nwp_cloud_cover_at()` with model-native data instead of Open-Meteo ICAO band values.
 
@@ -224,7 +244,7 @@ These are computed in `analysis/sounding/thermodynamics.py` (`compute_derived_le
 | **Cloud liquid water** (g/kg) | `CLWMR × 1000` | CLWMR (GRIB2) | Mixing ratio in g/kg. | SFIP icing index input. GFS globally, ECMWF (EU+US ≤ 7 days), ICON-EU (Europe ≤ 5 days). |
 | **Ice mixing ratio** (g/kg) | `ICMR × 1000` | ICMR (GRIB2) | Ice content mixing ratio. | Glaciation factor: CLW/(CLW+ICE). Reduces SFIP when cloud is glaciated. Available wherever CLW is. |
 | **SFIP per-level** | Fuzzy-logic membership + weights | T, RH, CLW, ω, CAPE | See §3.2e. 0–100 icing potential at each level. | Stored as `sfip_raw`, `sfip_100`, `sfip_severity`, `sfip_variant` on each DerivedLevel. Six variants: `"full"`, `"full_no_vv"`, `"interp"`, `"interp_no_vv"`, `"proxy"`, `"proxy_no_vv"` — `_no_vv` suffix when omega unavailable. `clw_interpolated` flag tracks spatially- or vertically-interpolated CLW. |
-| **Precipitation phase** | Wet-bulb T or GRIB2 ice fraction | Tw or CLWMR+ICMR | Phase of precipitation at altitude. | Stored as `precip_phase` on each DerivedLevel. See §3.6. |
+| **Precipitation phase** | Precipitation partition, else cloud ice fraction, else wet-bulb T | QR/QS/QG, else CLWMR+ICMR, else Tw | Phase of precipitation at altitude. | Stored as `precip_phase` on each DerivedLevel. Three-tier since #530. See §3.6. |
 
 ### 2.2 Profile-Level Indices
 
@@ -501,9 +521,14 @@ Aggregates cloud, icing, turbulence, and vertical motion data into vertical regi
 
 Classifies precipitation phase at each pressure level and detects hazardous profiles (freezing rain, ice pellets).
 
-**Per-level phase classification** (two methods, GRIB2 preferred):
-1. **GRIB2 ice fraction** (when CLWMR + ICMR available): `ice_frac = ICMR / (CLWMR + ICMR)`. >0.8 = snow, 0.2–0.8 = mixed, <0.2 = rain.
-2. **Wet-bulb temperature** (fallback): Tw < −5°C = snow, −5 to 0°C = mixed, >0°C = rain.
+**Per-level phase classification** (three tiers, first available wins — #530):
+1. **Precipitation partition** (when QR/QS/QG available — ICON-D2 today, AROME next per #529): `ice_frac = (qs + qg) / (qr + qs + qg)`. The genuine partition of what is *falling*.
+2. **Cloud ice fraction** (when CLWMR + ICMR available): `ice_frac = ICMR / (CLWMR + ICMR)`. A proxy — cloud droplets and cloud ice are suspended, not falling — and what tier 1 replaces where a model supplies the real thing.
+3. **Wet-bulb temperature** (fallback): Tw < 0°C = snow, 0 to 1.3°C = mixed, >1.3°C = rain.
+
+Tiers 1–2 share the same severity thresholds (>0.8 = snow, 0.2–0.8 = mixed, <0.2 = rain) — #530 changed *which quantity* is thresholded, not where the boundaries sit. `_level_ice_fraction` picks the tier once so the per-level phase and the zone-mean `ice_fraction` can never be graded on different tiers. Reasoning and rejected alternatives: meteorology-decisions §24.
+
+**Supercooled rain** (#530): `qr ≥ 1×10⁻⁶ kg/kg` at `T < 0 °C` sets `DerivedLevel.supercooled_rain`, rolled up to `IcingZone.supercooled_rain` (any level flags the zone). Freezing rain / large-droplet regime — physically distinct from the supercooled *cloud* droplets the icing methods grade. **Reported, not graded:** it does not enter `risk`, `_enhance_severity`, or `is_hazardous`, pending the #411 end-to-end SLD validation. `False` means "not detected", never "no supercooled rain" — only a model publishing `qr` can set it.
 
 **Warm nose detection:** Identifies temperature inversions where T > 0°C exists between sub-zero layers. Cold surface + warm nose above = freezing rain risk. Deep cold surface layer + significant warm nose = ice pellets.
 
@@ -566,7 +591,7 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 | ICMR (ice mixing ratio) | **GRIB2** | **GRIB2**‡ | **GRIB2**† | **n/a** | **n/a** | **n/a** | Same sources as CLWMR |
 | NWP cloud diagnostics | **GRIB2** | **GRIB2**‡ | **GRIB2**† | **n/a** | **n/a** | **n/a** | GFS: full (ceiling, base/top/temp per layer). ECMWF: ceiling, covers per tier, convective top (hcct). ICON: ceiling, convective base/top, covers per tier. |
 | SFIP icing index | Full | Full‡/Proxy | Full†/Proxy | Proxy | Proxy | Proxy | Full uses GRIB2 CLW (+ω where available); proxy uses DD+cloud cover. ICON full now includes ω from GRIB. |
-| Precipitation phase | GRIB2+Tw | Tw only | GRIB2†+Tw | Tw only | Tw only | Tw only | GRIB2 ice fraction preferred, wet-bulb fallback |
+| Precipitation phase | GRIB2+Tw | Tw only | GRIB2†+Tw | Tw only | Tw only | Tw only | Precipitation partition (QR vs QS+QG — ICON-D2 only) preferred, then cloud ice fraction, then wet-bulb |
 
 † ICON GRIB2 enrichment only available when route is within ICON-EU domain (Europe: 29.5–70.5°N, 23.5°W–62.5°E).
 

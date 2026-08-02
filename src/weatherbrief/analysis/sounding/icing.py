@@ -195,6 +195,13 @@ def _enhance_severity(
     The MODERATE → SEVERE upgrade additionally requires the zone to be cold
     enough (mean temp ≤ -5°C) — warm icing near the freezing level is
     unlikely to be truly severe regardless of moisture signals.
+
+    Supercooled rain (#530) is deliberately NOT a modifier here. The zone
+    carries ``IcingZone.supercooled_rain`` for display and diagnosis, but the
+    signal has never been checked against a real winter freezing-rain case,
+    and an unvalidated upgrade on a hazard this severe would move grades on
+    every ICON-D2 winter briefing at once. See meteorology-decisions §24 for
+    the threshold, and #411 for the validation that gates the upgrade.
     """
     if base_risk == IcingRisk.NONE:
         return IcingRisk.NONE
@@ -348,6 +355,13 @@ def _build_zone_simple(
         mean_wet_bulb_c=round(sum(wb_vals) / len(wb_vals), 1) if wb_vals else None,
         mean_icing_index=round(sum(indices) / len(indices), 1) if indices else None,
         mean_rh_pct=round(sum(rh_vals) / len(rh_vals), 0) if rh_vals else None,
+        # Reported, deliberately not graded (#530). A single supercooled-rain
+        # level makes the whole zone one — freezing rain is not something a
+        # zone mean should dilute — but it does NOT move `risk` and does not
+        # make a NONE zone hazardous. See meteorology-decisions §24: the grade
+        # effect is held until a real winter freezing-rain case validates the
+        # detector end-to-end (#411).
+        supercooled_rain=any(lv.supercooled_rain for lv in levels_in_zone),
     )
 
 

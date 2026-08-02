@@ -2,9 +2,14 @@
 
 from datetime import datetime
 
+import pytest
+
 from weatherbrief.analysis.sounding.precipitation import (
     _classify_intensity,
+    _classify_levels,
     _compute_ice_fraction,
+    _compute_precip_ice_fraction,
+    _level_ice_fraction,
     detect_warm_nose,
     _determine_surface_phase,
     _level_phase_from_ice_fraction,
@@ -403,3 +408,153 @@ def test_surface_amounts_passed_through():
     assert result.total_mm == 3.5
     assert result.rain_mm == 2.5
     assert result.snow_cm == 0.0
+
+
+# --- Precipitation partition from qr/qs/qg (#530) ---
+#
+# Three tiers, in order: the genuine precipitation partition (qr vs qs+qg)
+# where the model publishes the falling species, the cloud partition
+# (clwmr vs icmr) as the historical proxy, then wet-bulb. The tests below pin
+# each tier AND the hand-off between them, because the failure mode of getting
+# the order wrong is invisible: every tier returns a plausible phase.
+
+
+def test_precip_partition_all_snow():
+    raw = PressureLevelData(
+        pressure_hpa=850,
+        rain_water_kg_kg=0.0,
+        snow_water_kg_kg=5e-4,
+        graupel_water_kg_kg=1e-5,
+    )
+    assert _compute_precip_ice_fraction(raw) == 1.0
+    assert _level_phase_from_ice_fraction(
+        _compute_precip_ice_fraction(raw),
+    ) == PrecipPhase.SNOW
+
+
+def test_precip_partition_all_rain():
+    raw = PressureLevelData(
+        pressure_hpa=925,
+        rain_water_kg_kg=4e-4,
+        snow_water_kg_kg=0.0,
+        graupel_water_kg_kg=0.0,
+    )
+    assert _compute_precip_ice_fraction(raw) == 0.0
+    assert _level_phase_from_ice_fraction(
+        _compute_precip_ice_fraction(raw),
+    ) == PrecipPhase.RAIN
+
+
+def test_precip_partition_mixed():
+    raw = PressureLevelData(
+        pressure_hpa=900,
+        rain_water_kg_kg=2e-4,
+        snow_water_kg_kg=2e-4,
+        graupel_water_kg_kg=0.0,
+    )
+    assert _compute_precip_ice_fraction(raw) == 0.5
+    assert _level_phase_from_ice_fraction(
+        _compute_precip_ice_fraction(raw),
+    ) == PrecipPhase.MIXED
+
+
+def test_precip_partition_counts_graupel_as_frozen():
+    """qg is frequently 0 — but when it is not, it is ice, not rain."""
+    raw = PressureLevelData(
+        pressure_hpa=700,
+        rain_water_kg_kg=1e-4,
+        snow_water_kg_kg=0.0,
+        graupel_water_kg_kg=9e-4,
+    )
+    assert _compute_precip_ice_fraction(raw) == pytest.approx(0.9)
+
+
+def test_precip_partition_tolerates_a_single_missing_species():
+    """A model writing qr and qs but no qg is saying "no graupel", not
+    "unknown graupel" — the same missing-vs-zero rule the cloud builder uses."""
+    raw = PressureLevelData(
+        pressure_hpa=900, rain_water_kg_kg=1e-4, snow_water_kg_kg=3e-4,
+    )
+    assert _compute_precip_ice_fraction(raw) == 0.75
+
+
+def test_precip_partition_absent_when_no_species_reported():
+    """ICON-EU / GFS / ECMWF: nothing published, so nothing to partition."""
+    raw = PressureLevelData(pressure_hpa=850, cloud_liquid_water_kg_kg=1e-4)
+    assert _compute_precip_ice_fraction(raw) is None
+
+
+def test_precip_partition_absent_when_nothing_is_falling():
+    """All three reported as zero: no precipitation at this level, so the
+    partition is undefined — not "0% ice", which would read as RAIN."""
+    raw = PressureLevelData(
+        pressure_hpa=850,
+        rain_water_kg_kg=0.0,
+        snow_water_kg_kg=0.0,
+        graupel_water_kg_kg=0.0,
+    )
+    assert _compute_precip_ice_fraction(raw) is None
+
+
+# --- The three-tier fallback chain ---
+
+
+def test_precip_partition_wins_over_the_cloud_proxy():
+    """The decisive case: cloud is glaciated (would say SNOW) while what is
+    actually falling is rain. Only the precipitation partition gets this right."""
+    raw = PressureLevelData(
+        pressure_hpa=900,
+        cloud_liquid_water_kg_kg=1e-5,
+        ice_mixing_ratio_kg_kg=9e-5,   # 90% cloud ice → the proxy says SNOW
+        rain_water_kg_kg=5e-4,          # ...but rain is what is falling
+        snow_water_kg_kg=0.0,
+        graupel_water_kg_kg=0.0,
+    )
+    assert _compute_ice_fraction(raw) == 0.9
+    assert _level_ice_fraction(raw) == 0.0
+
+    levels = [DerivedLevel(pressure_hpa=900, altitude_ft=3000, wet_bulb_c=-4.0)]
+    phases = _classify_levels(levels, {900: raw})
+    assert phases[0][1] == PrecipPhase.RAIN
+
+
+def test_falls_back_to_the_cloud_proxy_when_species_are_absent():
+    raw = PressureLevelData(
+        pressure_hpa=850,
+        cloud_liquid_water_kg_kg=1e-5,
+        ice_mixing_ratio_kg_kg=9e-5,
+    )
+    assert _level_ice_fraction(raw) == 0.9
+
+    levels = [DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=5.0)]
+    phases = _classify_levels(levels, {850: raw})
+    assert phases[0][1] == PrecipPhase.SNOW  # cloud proxy, not the warm wet-bulb
+
+
+def test_falls_back_to_wet_bulb_when_no_condensate_at_all():
+    raw = PressureLevelData(pressure_hpa=850)
+    assert _level_ice_fraction(raw) is None
+
+    levels = [DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=-4.0)]
+    phases = _classify_levels(levels, {850: raw})
+    assert phases[0][1] == PrecipPhase.SNOW
+
+
+def test_zone_ice_fraction_uses_the_same_tier_as_the_levels():
+    """The zone mean and the per-level phase must never be graded on different
+    tiers — a zone labelled RAIN with ice_fraction 0.9 is unreadable."""
+    raw = PressureLevelData(
+        pressure_hpa=900,
+        cloud_liquid_water_kg_kg=1e-5,
+        ice_mixing_ratio_kg_kg=9e-5,
+        rain_water_kg_kg=5e-4,
+        snow_water_kg_kg=0.0,
+        graupel_water_kg_kg=0.0,
+    )
+    levels = [DerivedLevel(pressure_hpa=900, altitude_ft=3000, wet_bulb_c=-4.0)]
+    hourly = HourlyForecast(time=datetime(2025, 1, 1), precipitation_mm=2.0)
+
+    result = assess_precipitation(levels, [raw], hourly=hourly)
+    zone = result.precipitation_zones[0]
+    assert zone.phase == PrecipPhase.RAIN
+    assert zone.ice_fraction == 0.0

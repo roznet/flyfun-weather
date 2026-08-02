@@ -133,8 +133,41 @@ def _level_phase_from_ice_fraction(ice_fraction: float) -> PrecipPhase:
     return PrecipPhase.RAIN
 
 
+def _compute_precip_ice_fraction(raw: PressureLevelData) -> float | None:
+    """Frozen fraction of the PRECIPITATING hydrometeors (#530).
+
+    ``(qs + qg) / (qr + qs + qg)`` — snow and graupel against rain, i.e. the
+    partition of what is actually falling. This is the quantity the phase
+    classifier has always wanted; before ICON-D2's extra species were fetched
+    it only had the cloud partition below to stand in for it.
+
+    Requires at least one species to be reported: a model that writes qr but
+    no qg at a warm level is saying "no graupel", not "unknown graupel", so a
+    missing species counts as zero as long as SOMETHING was reported. Returns
+    None when the level carries no precipitating species at all, or when the
+    total is zero (nothing falling here → nothing to classify), so callers
+    fall through to the cloud proxy and then to wet-bulb.
+    """
+    qr = raw.rain_water_kg_kg
+    qs = raw.snow_water_kg_kg
+    qg = raw.graupel_water_kg_kg
+    if qr is None and qs is None and qg is None:
+        return None
+    frozen = (qs or 0.0) + (qg or 0.0)
+    total = (qr or 0.0) + frozen
+    if total <= 0:
+        return None
+    return frozen / total
+
+
 def _compute_ice_fraction(raw: PressureLevelData) -> float | None:
-    """Compute ice fraction from CLWMR and ICMR, guarding div-by-zero."""
+    """Compute CLOUD ice fraction from CLWMR and ICMR, guarding div-by-zero.
+
+    A proxy for precipitation phase, not a measurement of it: cloud droplets
+    and cloud ice are suspended, not falling. Kept as the second tier of
+    :func:`_level_ice_fraction` for every model that publishes no
+    precipitating species.
+    """
     clwmr = raw.cloud_liquid_water_kg_kg
     icmr = raw.ice_mixing_ratio_kg_kg
     if clwmr is None or icmr is None:
@@ -143,6 +176,21 @@ def _compute_ice_fraction(raw: PressureLevelData) -> float | None:
     if total <= 0:
         return None
     return icmr / total
+
+
+def _level_ice_fraction(raw: PressureLevelData) -> float | None:
+    """Best available frozen fraction for one level: precipitation, then cloud.
+
+    The genuine precipitation partition wins wherever the model supplies it
+    (ICON-D2 today, AROME next — #529); everywhere else the cloud partition
+    stands in exactly as it did before #530. One helper so the per-level
+    classification and the zone-mean summary can never disagree about which
+    tier a level was graded on.
+    """
+    frac = _compute_precip_ice_fraction(raw)
+    if frac is not None:
+        return frac
+    return _compute_ice_fraction(raw)
 
 
 def _classify_levels(
@@ -155,9 +203,10 @@ def _classify_levels(
         if lv.altitude_ft is None:
             continue
 
-        # Try GRIB2-based classification first
+        # Try GRIB2-based classification first: real precipitation partition
+        # where the model has one, cloud partition otherwise, wet-bulb last.
         raw = raw_by_pressure.get(lv.pressure_hpa)
-        ice_frac = _compute_ice_fraction(raw) if raw else None
+        ice_frac = _level_ice_fraction(raw) if raw else None
         if ice_frac is not None:
             phase = _level_phase_from_ice_fraction(ice_frac)
         elif lv.wet_bulb_c is not None:
@@ -314,12 +363,12 @@ def _finalize_zone(
     wb_vals = [lv.wet_bulb_c for lv in zone_levels if lv.wet_bulb_c is not None]
     mean_wb = round(sum(wb_vals) / len(wb_vals), 1) if wb_vals else None
 
-    # Compute mean ice fraction if GRIB2 data available
+    # Mean frozen fraction, on the same tier the levels were classified on
     ice_fracs: list[float] = []
     for lv in zone_levels:
         raw = raw_by_pressure.get(lv.pressure_hpa)
         if raw:
-            frac = _compute_ice_fraction(raw)
+            frac = _level_ice_fraction(raw)
             if frac is not None:
                 ice_fracs.append(frac)
     mean_ice_frac = round(sum(ice_fracs) / len(ice_fracs), 2) if ice_fracs else None

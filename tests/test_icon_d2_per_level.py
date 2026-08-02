@@ -25,6 +25,7 @@ from weatherbrief.fetch.grib import _IconEuContext
 from weatherbrief.fetch.grib.cache import cache_key, get_cached, put_cached
 from weatherbrief.fetch.grib.icon_eu_fetch import (
     ICON_D2,
+    ICON_D2_VARIABLES,
     ICON_EU,
     ICON_EU_VARIABLES,
     fetch_icon_eu_per_level,
@@ -139,7 +140,7 @@ def test_prefetch_caches_each_level_separately(tmp_path, d2_prefetch):
     ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
     grib_mod._prefetch_icon_eu_data_inner(ctx)
 
-    for var in ICON_EU_VARIABLES:
+    for var in ICON_D2_VARIABLES:
         for level in (16, 17):
             ck = cache_key(12, icon_model_level_var_label(ICON_D2, var, level))
             assert get_cached(tmp_path, ck) == f"12-{var}-{level}".encode()
@@ -170,7 +171,7 @@ def test_prefetch_ignores_legacy_whole_column_blob(tmp_path, d2_prefetch):
     grib_mod._prefetch_icon_eu_data_inner(ctx)
 
     fetched_vars = {var for _, var, _ in d2_prefetch["per_level"]}
-    assert fetched_vars == set(ICON_EU_VARIABLES)  # including "t"
+    assert fetched_vars == set(ICON_D2_VARIABLES)  # including "t"
 
 
 def test_prefetch_ignores_legacy_combined_blob(tmp_path, d2_prefetch):
@@ -180,7 +181,7 @@ def test_prefetch_ignores_legacy_combined_blob(tmp_path, d2_prefetch):
     grib_mod._prefetch_icon_eu_data_inner(ctx)
 
     fetched_vars = {var for _, var, _ in d2_prefetch["per_level"]}
-    assert fetched_vars == set(ICON_EU_VARIABLES)
+    assert fetched_vars == set(ICON_D2_VARIABLES)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +212,7 @@ def _capture_decode_jobs(tmp_path, ctx):
 
 def test_decode_builds_per_level_path_lists(tmp_path):
     # Two levels of every variable cached per-level.
-    for var in ICON_EU_VARIABLES:
+    for var in ICON_D2_VARIABLES:
         for level in (16, 17):
             put_cached(tmp_path, cache_key(12, icon_model_level_var_label(ICON_D2, var, level)), b"x")
     ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
@@ -221,7 +222,7 @@ def test_decode_builds_per_level_path_lists(tmp_path):
     worker, (var_paths, _lats, _lons) = jobs[0]
     assert worker == "decode_icon_chunked"
     # Every variable resolves to a list of its two per-level files.
-    assert set(var_paths.keys()) == set(ICON_EU_VARIABLES)
+    assert set(var_paths.keys()) == set(ICON_D2_VARIABLES)
     for paths in var_paths.values():
         assert len(paths) == 2
         assert all(Path(p).name.startswith("f012_ICON_D2_") for p in paths)
@@ -240,7 +241,7 @@ def test_decode_skips_hour_when_a_variable_is_incomplete(tmp_path, caplog):
     import logging
 
     # Every variable complete over 3 levels except "u", which is missing one.
-    for var in ICON_EU_VARIABLES:
+    for var in ICON_D2_VARIABLES:
         levels = (16, 17) if var == "u" else (16, 17, 18)
         for level in levels:
             put_cached(
@@ -263,7 +264,7 @@ def test_decode_skips_hour_when_a_variable_is_incomplete(tmp_path, caplog):
 
 def test_decode_runs_when_every_variable_is_complete(tmp_path):
     """The inverse — completeness must not be over-eager and skip good hours."""
-    for var in ICON_EU_VARIABLES:
+    for var in ICON_D2_VARIABLES:
         for level in (16, 17, 18):
             put_cached(
                 tmp_path,
@@ -328,7 +329,7 @@ def test_per_level_variant_refuses_legacy_whole_column_blobs(tmp_path):
     """D2 must not trust a legacy blob: the writer concatenated whatever levels
     arrived, so its level count is unverifiable after the fact — the exact
     ambiguity the per-level layout exists to close."""
-    for var in ICON_EU_VARIABLES:
+    for var in ICON_D2_VARIABLES:
         put_cached(tmp_path, cache_key(12, f"ICON_D2_{var.upper()}"), b"blob")
     ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
 
