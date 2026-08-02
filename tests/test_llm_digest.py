@@ -348,3 +348,34 @@ class TestCacheUsageExtraction:
         out = self._run({"input_tokens": 900, "output_tokens": 100})
         assert out["llm_cache_read_tokens"] == 0
         assert out["llm_cache_write_tokens"] == 0
+
+
+class TestDigestModelLabelling:
+    """``llm_model`` must name the model that actually ran.
+
+    Beyond the ECMWF GRIB horizon run_digest() switches to ``config.longrange``
+    (Haiku 4.5), but the recorded label was built unconditionally from
+    ``config.llm``, so every long-range digest was logged as Sonnet. Observed on
+    prod row 5562 — a D+7 flight recorded as claude-sonnet-4-6.
+    """
+
+    def _label(self, longrange: bool) -> str:
+        from unittest.mock import MagicMock, patch
+        from weatherbrief.tasks import outputs
+
+        fake = {
+            "digest": MagicMock(), "digest_text": "text", "longrange": longrange,
+            "llm_input_tokens": 100, "llm_output_tokens": 10,
+            "llm_cache_read_tokens": 0, "llm_cache_write_tokens": 0,
+            "diagnostic": None, "digest_trace_id": None,
+        }
+        with patch("weatherbrief.digest.llm_digest.run_digest", return_value=fake):
+            # No pack_dir/data_dir → returns before any file write.
+            return outputs.run_llm_digest(MagicMock(), MagicMock()).llm_model
+
+    def test_short_range_labels_the_main_model(self):
+        assert self._label(longrange=False) == "anthropic:claude-sonnet-4-6"
+
+    def test_long_range_labels_the_longrange_model(self):
+        label = self._label(longrange=True)
+        assert "haiku" in label, f"long-range digest mislabelled as {label!r}"

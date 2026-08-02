@@ -267,7 +267,14 @@ def run_llm_digest(
             )
 
         digest_obj = digest_result.get("digest")
-        llm_model = f"{config.llm.provider}:{config.llm.model}"
+        # Beyond the ECMWF GRIB horizon run_digest() switches to the cheaper
+        # ``config.longrange`` model, so labelling every row with ``config.llm``
+        # recorded those Haiku digests as Sonnet. Harmless while compute_cost
+        # applies one flat token rate to every model, but it makes the ledger
+        # unable to tell a cheap digest from an expensive one — which is exactly
+        # what per-model rates would need.
+        model_cfg = config.longrange if digest_result.get("longrange") else config.llm
+        llm_model = f"{model_cfg.provider}:{model_cfg.model}"
         llm_input_tokens = digest_result.get("llm_input_tokens")
         llm_output_tokens = digest_result.get("llm_output_tokens")
         llm_cache_read_tokens = digest_result.get("llm_cache_read_tokens")
