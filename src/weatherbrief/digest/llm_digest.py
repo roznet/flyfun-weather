@@ -132,6 +132,29 @@ def build_confidence_note(snapshot: ForecastSnapshot, target_time: datetime) -> 
 # --- Graph node ---
 
 
+def _cache_write_tokens(details: dict) -> int:
+    """Cache-creation tokens from a langchain ``input_token_details`` block.
+
+    Version-tolerant on purpose.  ``langchain-anthropic`` 1.3.x reported a
+    TTL-tiered cache write in ``cache_creation``; 1.5.x zeroes that key and
+    reports the count only under ``ephemeral_5m_input_tokens`` /
+    ``ephemeral_1h_input_tokens``.  Reading ``cache_creation`` alone silently
+    recorded every write as 0 on 1.5.x, which made ``compute_cost`` bill a 2x
+    cache write as 1x uncached input — an undercharge, and invisible because
+    nothing raises.
+
+    The ``cache_creation`` branch wins when it is non-zero so 1.3.x is not
+    double-counted: there it is populated *and* mirrored into the tiered keys.
+    """
+    write = details.get("cache_creation") or 0
+    if write:
+        return write
+    return (
+        (details.get("ephemeral_5m_input_tokens") or 0)
+        + (details.get("ephemeral_1h_input_tokens") or 0)
+    )
+
+
 def _system_content(
     system_prompt: str, llm_config: LLMConfig, longrange: bool
 ) -> str | list[dict]:
@@ -212,7 +235,7 @@ def briefer_node(state: DigestState) -> dict:
                 token_info["llm_output_tokens"] = usage_meta.get("output_tokens")
                 details = usage_meta.get("input_token_details") or {}
                 token_info["llm_cache_read_tokens"] = details.get("cache_read") or 0
-                token_info["llm_cache_write_tokens"] = details.get("cache_creation") or 0
+                token_info["llm_cache_write_tokens"] = _cache_write_tokens(details)
 
         return {"digest": result, **token_info}
     except Exception as e:

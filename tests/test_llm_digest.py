@@ -286,13 +286,49 @@ class TestCacheUsageExtraction:
         assert out["llm_cache_read_tokens"] == 4661
         assert out["llm_cache_write_tokens"] == 0
 
-    def test_cache_write_is_extracted(self):
+    def test_cache_write_langchain_1_3_shape(self):
+        """1.3.x populated ``cache_creation`` and mirrored it into the tiers."""
         out = self._run({
             "input_tokens": 11478,
             "output_tokens": 1170,
-            "input_token_details": {"cache_read": 0, "cache_creation": 4661},
+            "input_token_details": {
+                "cache_read": 0, "cache_creation": 4661,
+                "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 4661,
+            },
         })
+        # Must not double-count the mirrored tier key.
         assert out["llm_cache_write_tokens"] == 4661
+
+    def test_cache_write_langchain_1_5_shape(self):
+        """1.5.x zeroes ``cache_creation`` and reports only the tiered key.
+
+        Observed live on prod's langchain-anthropic 1.5.3: a cold call whose
+        raw Anthropic usage said ``cache_creation_input_tokens: 4689`` surfaced
+        as ``cache_creation: 0`` with ``ephemeral_1h_input_tokens: 4689``.
+        Reading ``cache_creation`` alone recorded the write as 0, so
+        compute_cost billed a 2x write as 1x uncached input.
+        """
+        out = self._run({
+            "input_tokens": 5141,
+            "output_tokens": 316,
+            "input_token_details": {
+                "cache_read": 0, "cache_creation": 0,
+                "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 4689,
+            },
+        })
+        assert out["llm_cache_write_tokens"] == 4689
+
+    def test_cache_write_five_minute_tier(self):
+        """Same fallback must work if the TTL is ever switched back to 5m."""
+        out = self._run({
+            "input_tokens": 5141,
+            "output_tokens": 316,
+            "input_token_details": {
+                "cache_read": 0, "cache_creation": 0,
+                "ephemeral_5m_input_tokens": 4689, "ephemeral_1h_input_tokens": 0,
+            },
+        })
+        assert out["llm_cache_write_tokens"] == 4689
 
     def test_cache_tokens_are_a_subset_of_input_tokens(self):
         """The invariant compute_cost relies on: never add these together.
