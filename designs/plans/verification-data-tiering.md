@@ -172,11 +172,34 @@ is still there and still correct.
 **Phase 1 final step — only after a full release cycle with the gate on:**
 
 - [ ] Delete `_SCORES_SOURCE_TIME_HINT` and the `_activity_counts_from_raw`
-      fallback from `tasks/verification_stats.py`, and drop the
-      `ix_verif_scores_source_time` index declaration plus a migration to drop
-      the index. The `FORCE INDEX` hint is a hard SQL error on MySQL if the
-      index is missing, so the three must move together. Do **not** do this
-      while a rollback to gate-off is still on the table.
+      fallback from `tasks/verification_stats.py`. The `FORCE INDEX` hint is a
+      hard SQL error on MySQL if its index is ever dropped, so the hint has to
+      go before anything else can be considered. Do **not** do this while a
+      rollback to gate-off is still on the table.
+
+> **Do not drop `ix_verif_scores_source_time`.** An earlier version of this
+> step said to, on the reasoning that Phase 1 retires the last raw-scan
+> consumer. It does not. `EXPLAIN` on production shows that index chosen by
+> six live consumers, none of which Phase 1 touches: the daily rollup's
+> per-day scan and its activity counts (`source IN (...) AND observation_time
+> >= ... < ...` — exactly `(source, observation_time)`), the gust rollup,
+> `get_notable_misses`, `get_missed_warnings`, the Phase 3 pruner's day walk,
+> and the Phase 2 archive writer's pagination. `ix_verif_scores_source_days_time`
+> cannot substitute: it cannot range-seek `observation_time` without an
+> equality on `days_out`. Dropping it degrades the every-cycle rollup, the
+> pruner and the archive writer — the three jobs this whole design depends on.
+>
+> The index that *does* become droppable after Phase 1 is
+> `ix_verif_scores_source_model_days` (~325 MB): its only consumer is the
+> unhinted activity `COUNT(DISTINCT)` that the read switch replaces.
+> `ix_verif_scores_source_days_time` is never chosen today either, but it is
+> the right shape for `get_notable_misses` / `get_missed_warnings` — which
+> currently scan 3.8M rows at 0.32% selectivity because the optimizer prefers
+> a backward scan on `source_time` to avoid a filesort. Test it with
+> `FORCE INDEX` before deciding drop-versus-adopt.
+>
+> (Migration 086 already dropped `ix_verif_scores_lead`, `ix_verif_scores_icao`
+> and `ix_verif_scores_model` — ~620 MB with no consumer in any plan.)
 
 ---
 
