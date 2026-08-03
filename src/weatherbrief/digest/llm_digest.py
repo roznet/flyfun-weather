@@ -156,7 +156,7 @@ def _cache_write_tokens(details: dict) -> int:
 
 
 def _system_content(
-    system_prompt: str, llm_config: LLMConfig, longrange: bool
+    system_prompt: str, llm_config: LLMConfig, longrange: bool, ttl: str = "1h"
 ) -> str | list[dict]:
     """System message content, with a prompt-cache breakpoint where it pays.
 
@@ -166,10 +166,17 @@ def _system_content(
     Everything after it (the pack context) stays uncached, which is what we
     want: it differs on every call.
 
-    The 1-hour TTL is deliberate.  It costs 2x on a write against the default
-    5-minute tier's 1.25x, but break-even is a hit rate of 53% vs 22%, and
-    measured gaps between consecutive digests sharing a prompt clear the bar
-    far more comfortably at an hour (~84%) than at five minutes (~34%).
+    The default 1-hour ``ttl`` is deliberate for production.  It costs 2x on a
+    write against the 5-minute tier's 1.25x, but break-even is a hit rate of
+    53% vs 22%, and measured gaps between consecutive production digests clear
+    the bar more comfortably at an hour than at five minutes.
+
+    Callers running a *burst* — the eval replays back-to-back, seconds apart —
+    should pass ``ttl="5m"`` instead: nothing expires inside a run, so the
+    cheaper write premium wins outright.  Note the ledger's
+    ``cache_write_multiplier`` is calibrated to the 1h tier; anything changing
+    the TTL on a path that *charges* a user must move that with it.  The eval
+    does not write to the ledger, so it is free to choose.
 
     Two cases fall back to a plain string:
 
@@ -190,7 +197,7 @@ def _system_content(
     return [{
         "type": "text",
         "text": system_prompt,
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        "cache_control": {"type": "ephemeral", "ttl": ttl},
     }]
 
 

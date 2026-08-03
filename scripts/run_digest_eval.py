@@ -53,7 +53,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from weatherbrief.digest.llm_config import DigestConfig, create_llm, load_digest_config
-from weatherbrief.digest.llm_digest import WeatherDigest, ecmwf_grib_horizon_days
+from weatherbrief.digest.llm_digest import (
+    WeatherDigest,
+    _system_content,
+    ecmwf_grib_horizon_days,
+)
 from weatherbrief.eval_workbench.corpus import CorpusPack, list_corpus, pack_path
 
 _ASSESSMENT_ORDER = {"GREEN": 0, "AMBER": 1, "RED": 2}
@@ -104,14 +108,28 @@ def run_one(
     context: str,
     system_prompt: str,
     config: DigestConfig,
+    cache: bool = False,
 ) -> tuple[WeatherDigest, dict]:
-    """Run a single short-range digest call. Returns (digest, info)."""
+    """Run a single short-range digest call. Returns (digest, info).
+
+    ``cache=True`` puts a 5-minute prompt-cache breakpoint on the system block.
+    An eval is the ideal caching workload — every call in a run shares a
+    byte-identical prefix and they land seconds apart — so one write carries the
+    whole run. Five minutes rather than production's hour because nothing
+    expires inside a burst and the write premium is 1.25x instead of 2x.
+    Off by default so importers (tests/test_digest_assertions.py) are unaffected.
+    """
     llm = create_llm(config)
     structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
 
+    system_content = (
+        _system_content(system_prompt, config.llm, longrange=False, ttl="5m")
+        if cache else system_prompt
+    )
+
     t0 = time.time()
     raw_result = structured_llm.invoke([
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": context},
     ])
     info = {"elapsed_s": round(time.time() - t0, 1)}
@@ -152,6 +170,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="List what would run, no LLM calls")
     parser.add_argument("--show", type=str, help="Print one entry's context and exit")
     parser.add_argument("--output", type=str, help="Save results JSON here")
+    parser.add_argument("--baseline", type=str,
+                        help="A previous --output JSON; also report drift against it")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Disable the 5-minute prompt cache (on by default)")
     args = parser.parse_args()
 
     areas = ["corpus", "staging"] if args.area == "both" else [args.area]
@@ -192,10 +214,12 @@ def main() -> int:
 
     # One job per (entry, guidance) the golden label actually covers.
     wanted = GUIDANCES if args.guidance == "all" else (args.guidance,)
+    # Ordered by guidance first: each preset renders a different prompt, so
+    # grouping keeps one cache prefix hot per block instead of cycling three.
     jobs = [
         (p, g, p.label.assessments[g])
-        for p in runnable
         for g in wanted
+        for p in runnable
         if p.label and g in p.label.assessments
     ]
 
@@ -234,7 +258,8 @@ def main() -> int:
         # Render per job: guidance changes the prompt, so it cannot be hoisted.
         system_prompt = config.render_prompt(template, guidance_key=guidance)
         try:
-            digest, info = run_one(context_path(p).read_text(), system_prompt, config)
+            digest, info = run_one(context_path(p).read_text(), system_prompt, config,
+                                   cache=not args.no_cache)
         except Exception as exc:  # noqa: BLE001 — one bad entry must not kill the run
             print(f"  [{i:>3}/{len(jobs)}] ERROR {p.corpus_id[:40]}: {exc}", flush=True)
             results.append({"corpus_id": p.corpus_id, "guidance": guidance, "error": str(exc)})
@@ -278,6 +303,36 @@ def main() -> int:
         print(f"  {g:<13} {hits}/{len(rows)}")
     print(f"Golden distribution: {dict(Counter(r['golden'] for r in results if 'golden' in r))}")
     print(f"Model  distribution: {dict(Counter(r['got'] for r in results if 'got' in r))}")
+    # Drift vs a previous run: "did this prompt change what the model says?",
+    # which is a different question from "is the model right". Golden accuracy
+    # can sit still for labelling-philosophy reasons while a prompt edit quietly
+    # moves real recommendations, so a prompt change wants both numbers.
+    if args.baseline:
+        try:
+            prev = json.loads(Path(args.baseline).read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"\n(could not read baseline {args.baseline}: {exc})")
+        else:
+            before = {(r["corpus_id"], r["guidance"]): r["got"]
+                      for r in prev if "got" in r}
+            pairs = [(r, before[(r["corpus_id"], r["guidance"])])
+                     for r in results
+                     if "got" in r and (r["corpus_id"], r["guidance"]) in before]
+            moved = [(r, b) for r, b in pairs if r["got"] != b]
+            print(f"\nDrift vs {Path(args.baseline).name}: "
+                  f"{len(pairs) - len(moved)}/{len(pairs)} unchanged, {len(moved)} moved")
+            for r, b in moved:
+                # Flag whether the move went toward or away from the golden.
+                verdict = ("-> now matches golden" if r["got"] == r["golden"]
+                           else ("was matching golden" if b == r["golden"] else "both wrong"))
+                print(f"  {compare_assessment(b, r['got'])} {b:5} -> {r['got']:5} "
+                      f"| {r['guidance']:<13} {r['corpus_id'][:40]}  ({verdict})")
+            if not moved and pairs:
+                print("  (no recommendation changed)")
+            missing = len(results) - len(pairs)
+            if missing > 0:
+                print(f"  ({missing} result(s) absent from the baseline — not compared)")
+
     print(f"Tokens: {tok_in:,} in ({cached:,} from cache) + {tok_out:,} out")
 
     if args.output:
