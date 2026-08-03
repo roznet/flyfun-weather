@@ -638,9 +638,10 @@ class VerificationScoreRow(Base):
             name="uq_verif_scores_key",
         ),
         Index("ix_verif_scores_obs", "observation_id"),
-        Index("ix_verif_scores_model", "model", "days_out"),
-        Index("ix_verif_scores_icao", "icao"),
-        Index("ix_verif_scores_lead", "lead_hours"),
+        # ix_verif_scores_model / _icao / _lead were dropped in migration 086.
+        # Nothing selected them: the only `icao=`/`model=` predicate is the
+        # scoring dedup, which uq_verif_scores_key answers as a `const` lookup,
+        # and `lead_hours` is written but never filtered, joined or grouped on.
         Index("ix_verif_scores_source_model_days", "source", "model", "days_out"),
         # Created by migration 038; load-bearing since #448 — the activity
         # COUNT(DISTINCT) queries FORCE INDEX it by name (hard SQL error on
