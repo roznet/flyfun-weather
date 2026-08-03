@@ -151,11 +151,29 @@ python -m weatherbrief.verify rebuild-cache
 
 **Validate after**
 
-- [ ] Dashboard 24h/7d/30d accuracy, bias, wind-advisory and gust numbers are
-      **identical** to a screenshot taken before the flip. They must be: the
-      automated test `test_verification_global_rollup.py::TestReadSwitchAgreement`
-      asserts gate-on and gate-off produce byte-identical results, so any
-      visible difference means a backfill gap, not a rounding difference.
+- [ ] Dashboard 24h/7d/30d **accuracy, bias, wind-advisory and gust** numbers
+      are **identical** to a screenshot taken before the flip. They must be:
+      the global table is the per-airport table with `icao` summed away, so it
+      cannot disagree, and
+      `test_verification_global_rollup.py::TestReadSwitchAgreement::test_aggregates_match_across_the_gate`
+      asserts exactly that. A visible difference in *these four* means a
+      backfill gap.
+- [ ] **Activity counts and the TAF category/advisory counts will change on the
+      24h period, and that is expected** — do not read it as a backfill gap.
+      Gate-off reads raw by exact `observation_time`; gate-on reads a rollup
+      keyed by UTC `date`, so `_date_range` widens the window to inclusive
+      whole days. A trailing-24h request becomes "yesterday all day + today so
+      far" — up to ~38h. On 7d/30d the relative widening is under 4%, i.e.
+      rounding noise.
+
+      This is deliberate and the blast radius is small: every consumer of these
+      numbers is admin-only (`/admin/verification`, and the daily
+      `send_admin_digest` to `get_admin_emails` — no public route, no MCP tool,
+      nothing user-facing), and every *other* rollup-backed metric on the same
+      page has always worked in UTC-day buckets. Keeping a true trailing-24h
+      would mean keeping a raw scan of an 8.8M-row table alive permanently to
+      sharpen one admin counter. `test_activity_widens_to_utc_days_off_boundary`
+      pins the behaviour so it is not "fixed" back by accident.
 - [ ] A country/airport-filtered dashboard request still returns per-airport
       numbers (it deliberately keeps reading `verification_daily_stats`).
 - [ ] **Measure and record the cache-rebuild wall time**, before and after —

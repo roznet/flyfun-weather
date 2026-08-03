@@ -1449,8 +1449,15 @@ class ArchiveManifestRow(Base):
     )
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # TZDateTime, not DateTime(timezone=True): the latter is a no-op on MySQL,
+    # so what a read hands back would depend on dialect and driver. This column
+    # records when an archive was written, and the archive outlives the process
+    # that wrote it by design — an ambiguous timestamp here is exactly the kind
+    # nobody can resolve later. Renders identical DDL, so migration 087 needs no
+    # change. All writers already pass aware datetimes (tasks/archive
+    # `_upsert_manifest` uses `datetime.now(timezone.utc)`).
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        TZDateTime(), nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 

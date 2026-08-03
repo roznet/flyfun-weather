@@ -342,7 +342,17 @@ class TestCompletedDays:
 
 
 class TestReadSwitchAgreement:
-    """Gate on and gate off must report identical numbers."""
+    """What the read switch does and does not preserve.
+
+    The NWP aggregates (category accuracy, bias, wind advisory, gust) agree
+    exactly across the gate — the global table is the per-airport table with
+    ``icao`` summed away, so it cannot disagree.
+
+    Activity and the TAF counts are different: gate-off reads raw by exact
+    ``observation_time``, gate-on reads a UTC-day-keyed rollup, so an
+    off-boundary window widens. That is asserted explicitly below rather than
+    hidden behind a midnight-aligned fixture.
+    """
 
     @pytest.fixture
     def populated(self, db_session):
@@ -384,6 +394,12 @@ class TestReadSwitchAgreement:
         assert before == after
 
     def test_activity_matches_across_the_gate(self, populated, monkeypatch):
+        """Whole-UTC-day window: the two paths agree exactly.
+
+        This is the aligned case. For a window that does *not* start at
+        midnight see :meth:`test_activity_widens_to_utc_days_off_boundary`,
+        which is the shape a real trailing-24h request has.
+        """
         monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "0")
         raw = get_activity_summary(populated, SINCE, UNTIL, "standalone")
         monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "1")
@@ -391,6 +407,42 @@ class TestReadSwitchAgreement:
 
         assert raw.observations_collected == rolled.observations_collected == 3
         assert raw.airports_observed == rolled.airports_observed == 3
+
+    def test_activity_widens_to_utc_days_off_boundary(
+        self, populated, monkeypatch,
+    ):
+        """Gate-on activity is a whole-UTC-day figure, and deliberately so.
+
+        The rollup is keyed by UTC ``date``, so ``_date_range`` widens any
+        window to inclusive day boundaries. Gate-off reads raw with an exact
+        ``observation_time BETWEEN``, so for a window starting mid-day the two
+        paths *cannot* agree — a trailing-24h request becomes "yesterday all
+        day + today so far", up to ~38h.
+
+        Asserted rather than merely tolerated, because the sibling test above
+        uses a midnight-to-midnight window that makes the widening a no-op. It
+        passed while testing nothing about this, which is how the runbook came
+        to promise operators that flipping the gate changes no numbers. It
+        changes these, they are admin-only, and every other rollup-backed
+        metric on that page already works in UTC-day buckets.
+
+        The seeded observations sit at 12:00 on DAY. A window running from
+        18:00 the previous day to 06:00 on DAY contains none of them by exact
+        time, but covers both UTC days once widened.
+        """
+        since = _utc(2026, 5, 11, 18, 0)
+        until = _utc(2026, 5, 12, 6, 0)
+
+        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "0")
+        raw = get_activity_summary(populated, since, until, "standalone")
+        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "1")
+        rolled = get_activity_summary(populated, since, until, "standalone")
+
+        # Exact-time window excludes the noon observations entirely...
+        assert raw.observations_collected == 0
+        # ...while the day-keyed rollup picks up all of DAY.
+        assert rolled.observations_collected == 3
+        assert rolled.airports_observed == 3
 
     def test_gate_on_still_reads_per_airport_when_filtered(
         self, populated, gate_on,

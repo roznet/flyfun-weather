@@ -109,6 +109,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import date as date_t, datetime, timedelta, timezone
 from pathlib import Path
@@ -566,7 +567,15 @@ def archive_period(
     out_dir.mkdir(parents=True, exist_ok=True)
     schema = _arrow_schema(pa, spec)
     names = [c.name for c in spec.table.columns]
-    tmp_path = out_dir / f".{period}.parquet.tmp"
+    # Unique per writer, not a fixed `.{period}.parquet.tmp`. Two writers for
+    # the same (table, period) are a supported configuration — the scheduled
+    # run_archive can overlap a hand-run `verify archive backfill` (see
+    # designs/multi-user-deployment.md) — and on a shared path they interleave
+    # into one file. The row-count check would still pass, because it counts
+    # live rows rather than the file, so the result is a hashed, manifested
+    # Parquet matching neither writer's output. That manifest is the sole gate
+    # retention consults before deleting the rows it claims to hold.
+    tmp_path = out_dir / f".{period}.parquet.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
 
     written = 0
     # The highest id actually written to the file. This — not a second
