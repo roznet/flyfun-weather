@@ -22,7 +22,7 @@ Target — three explicit tiers:
 
 | Tier | Store | Retention | Serves |
 |---|---|---|---|
-| Raw operational | MySQL (`verification_observations`, `verification_scores`, `taf_verification_scores`, `airport_forecast_snapshots`) | 180 days (snapshots 10, unchanged) | scoring, rollup jobs, notable-misses/missed-warnings, ad-hoc debugging |
+| Raw operational | MySQL (`verification_observations`, `verification_scores`, `taf_verification_scores`, `airport_forecast_snapshots`) | 90 days (snapshots 10, unchanged) | scoring, rollup jobs, notable-misses/missed-warnings, ad-hoc debugging |
 | Aggregates | MySQL rollup tables (per-airport daily, **global daily**, **TAF daily**, activity, monthly) | forever | all dashboard/digest/leaderboard reads |
 | Row-level archive | Parquet in `DATA_DIR/archive/verification/` | forever | re-scoring, calibration, data science (DuckDB), re-import |
 
@@ -36,7 +36,7 @@ directly.
 |---|---|---|---|---|
 | `VERIFICATION_GLOBAL_ROLLUP_READS` | `0` | 1 | `1` | Unfiltered dashboard/digest aggregates read the global rollups |
 | `VERIFICATION_ARCHIVE_ENABLED` | `0` | 2 | `1` | Daily retention loop runs the Parquet archive writer |
-| `VERIFICATION_RAW_RETENTION_DAYS` | `9999` (disabled) | 3 | `180` | Online window for raw obs/scores/TAF scores |
+| `VERIFICATION_RAW_RETENTION_DAYS` | `9999` (disabled) | 3 | `90` | Online window for raw obs/scores/TAF scores |
 | `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | `1` | — | leave `1` | No verified archive manifest → no delete. Safety belt; only turn off if abandoning the archive |
 | `SNAPSHOT_INBOX_RETENTION_DAYS` | `0` (keep) | 3 | `30` | Rotates `eu-*/us-*.sqlite` out of `SNAPSHOT_INBOX_DIR` |
 | `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | `0` | 4 | `1` | Retention loop rolls completed months into monthly stats |
@@ -51,7 +51,7 @@ while the archive is off).
 
 ## Phase 0 — deploy the code (no behaviour change)
 
-**What lands:** migration `086_verification_tiering` (four new tables, all
+**What lands:** migration `087_verification_tiering` (four new tables, all
 empty), the new rollup writers, the gated read switch, `tasks/archive.py`,
 the reworked pruner, the rewritten monthly rollup, and four new CLI verbs.
 
@@ -68,7 +68,7 @@ behaviour-preserving:
 
 **Pre-flight**
 
-- [ ] `alembic heads` shows a single head at `086`.
+- [ ] `alembic heads` shows a single head at `087`.
 - [ ] Confirm the #519 METAR month-boundary repair is deployed **and** the
       affected production rows are corrected. The Phase 2 backfill freezes
       whatever is in the database into the archive — running it against
@@ -91,7 +91,7 @@ alembic upgrade head
       `daily rollup <date>: N per-airport, N global, N activity, N TAF groups`.
 - [ ] Dashboard numbers unchanged (the gate is off).
 
-**Rollback:** `alembic downgrade 085`. Nothing reads the new tables yet.
+**Rollback:** `alembic downgrade 086`. Nothing reads the new tables yet.
 
 ---
 
@@ -275,8 +275,29 @@ therefore stops deleting.
 
 ## Phase 3 — enable pruning
 
-**Gates:** `VERIFICATION_RAW_RETENTION_DAYS=180`, and separately
+**Gates:** `VERIFICATION_RAW_RETENTION_DAYS=90`, and separately
 `SNAPSHOT_INBOX_RETENTION_DAYS=30`.
+
+**Why 90 and not 180** (decided 2026-08-03). Verification history only starts
+2026-04-01, so a 180-day window prunes *nothing* until late September, and at
+~2.3M scores/month the table would settle around 14M rows — roughly 60% larger
+than the 8.8M that motivated this design. 90 days makes April prunable
+immediately (~1.75M scores, ~20% of the table, ~780 MB across scores and
+observations) and holds the steady state near 7M rows, about 20% below today.
+The whole point of Phase 3 is to stop the table growing; 180 days postpones
+that past the point where it would have doubled.
+
+Nothing reads raw beyond 90 days: `get_notable_misses` and
+`get_missed_warnings` use ≤30-day windows, and every dashboard/digest
+aggregate — including the 90-day bias leaderboard — reads the rollup tables,
+which are kept forever. There is margin on top of that, because the pruner
+deletes whole months only and a month must be *entirely* past the cutoff, so
+in practice 90–120 days of raw stay online.
+
+The cost is that re-rolling daily stats from raw only reaches back 90 days;
+older days need a Parquet re-import first. That is exactly what the archive is
+for, which is why Phase 2 must be validated and backed up off-box before this
+gate goes on.
 
 **Preconditions — all of them**
 
@@ -290,16 +311,16 @@ therefore stops deleting.
 
 ```bash
 # Reports which months pass BOTH gates and why the others don't. Deletes nothing.
-python -m weatherbrief.verify prune-raw --retain-days 180
+python -m weatherbrief.verify prune-raw --retain-days 90
 
 # When the report looks right:
-python -m weatherbrief.verify prune-raw --retain-days 180 --apply
+python -m weatherbrief.verify prune-raw --retain-days 90 --apply
 ```
 
 Then hand it to the scheduler:
 
 ```bash
-VERIFICATION_RAW_RETENTION_DAYS=180
+VERIFICATION_RAW_RETENTION_DAYS=90
 SNAPSHOT_INBOX_RETENTION_DAYS=30
 # then restart
 ```
@@ -338,7 +359,7 @@ SNAPSHOT_INBOX_RETENTION_DAYS=30
       ```
 - [ ] Dashboard 24h/7d/30d unchanged (they read rollups now).
 - [ ] `get_notable_misses` / `get_missed_warnings` still populate — their
-      windows are ≤30 days, well inside 180.
+      windows are ≤30 days, well inside 90.
 - [ ] Table sizes drop: re-check `information_schema.TABLES` data+index length.
 - [ ] Snapshot prune: with the archive on, it only deletes `fetched_at` days
       that have a snapshot manifest. A warning
@@ -446,7 +467,7 @@ aggregate and insert nothing in its place.
 
 **Rollback:** set back to `0`. Deleted rows are re-derivable by re-running
 `verify rollup-daily-stats --rebuild` **only for days still inside the raw
-180-day window**; older days need a re-import from Parquet first.
+90-day window**; older days need a re-import from Parquet first.
 
 ---
 
