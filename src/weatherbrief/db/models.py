@@ -1272,7 +1272,7 @@ class VerificationGlobalDailyStatsRow(Base):
         Integer, nullable=False, default=0, server_default="0",
     )
     n_convection_false_alarm: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0,
+        Integer, nullable=False, default=0, server_default="0",
     )
 
 

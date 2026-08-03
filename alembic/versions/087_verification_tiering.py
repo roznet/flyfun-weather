@@ -28,8 +28,8 @@ migration is safe to deploy ahead of any of the #522 phases being enabled.
 Index names are declared identically on the ORM models so dev ``create_all``
 and this migration agree.
 
-Revision ID: 086
-Revises: 085
+Revision ID: 087
+Revises: 086
 """
 
 from typing import Sequence, Union
@@ -37,8 +37,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "086"
-down_revision: Union[str, None] = "085"
+revision: str = "087"
+down_revision: Union[str, None] = "086"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
