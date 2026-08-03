@@ -125,6 +125,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.orm import Session
+from sqlalchemy.types import TypeDecorator, to_instance
 
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
@@ -365,11 +366,19 @@ def live_max_id(db: Session, spec: ArchiveSpec, period: str) -> int:
     )
 
 
-def _period_filter(db: Session, stmt, spec: ArchiveSpec, period: str):
-    """Add the period's time range (and the indexability source clause)."""
+def _period_filter(db: Session, stmt, spec: ArchiveSpec, period: str, sources=None):
+    """Add the period's time range (and the indexability source clause).
+
+    *sources* lets a caller that applies this filter repeatedly — notably
+    :func:`_iter_pages`, once per 50K-row page — resolve the distinct sources
+    once and pass them in. Left to itself this re-issues ``SELECT DISTINCT
+    source`` on every call, which for a ~1.5M-row month is ~30 redundant
+    round-trips per period, times four tables, across the whole backfill.
+    """
     start, end = period_bounds(spec, period)
     stmt = stmt.where(spec.time_col >= start, spec.time_col < end)
-    sources = _known_sources(db, spec)
+    if sources is None:
+        sources = _known_sources(db, spec)
     if sources:
         stmt = stmt.where(spec.model.source.in_(sources))
     return stmt
@@ -400,8 +409,18 @@ def _arrow_type(pa, col):
     Deliberately narrow: these four tables use six column types between them,
     and an unrecognised one should fail loudly at write time rather than be
     silently stringified into a file nobody re-reads for two years.
+
+    ``TypeDecorator`` columns are resolved to the type they wrap before
+    matching. ``TZDateTime`` (#520) is a decorator over ``DateTime``, so an
+    ``isinstance(t, DateTime)`` test is False for it and every converted
+    column would raise here — the archive would refuse to write
+    ``observation_time`` at all. Unwrapping keeps the "fail loudly on a type
+    we have not thought about" property while following the decorator to the
+    storage type that actually determines the Arrow mapping.
     """
     t = col.type
+    while isinstance(t, TypeDecorator):
+        t = to_instance(t.impl)
     if isinstance(t, Boolean):
         return pa.bool_()
     if isinstance(t, DateTime):
@@ -463,10 +482,12 @@ def _iter_pages(db: Session, spec: ArchiveSpec, period: str):
     """
     cols = [spec.table.c[c.name] for c in spec.table.columns]
     id_pos = [c.name for c in spec.table.columns].index("id")
+    # Resolved once, not per page — see :func:`_period_filter`.
+    sources = _known_sources(db, spec)
     last_id = 0
     while True:
         rows = db.execute(
-            _period_filter(db, select(*cols), spec, period)
+            _period_filter(db, select(*cols), spec, period, sources=sources)
             .where(spec.model.id > last_id)
             .order_by(spec.model.id)
             .limit(_PAGE_ROWS)
@@ -548,6 +569,17 @@ def archive_period(
     tmp_path = out_dir / f".{period}.parquet.tmp"
 
     written = 0
+    # The highest id actually written to the file. This — not a second
+    # live_max_id() query — is what the manifest records, because max_id is
+    # the *sole* gate Phase 3 consults before deleting rows
+    # (:func:`period_fully_archived`). A row inserted between the post-write
+    # live_count() and a separate live_max_id() would be invisible to the
+    # count check and yet raise the recorded max_id above its own id, so the
+    # gate would report the period fully archived and authorise deleting a row
+    # that was never written. Taking it from the pages closes that window by
+    # construction: max_id cannot describe a row the file does not contain.
+    max_id = 0
+    id_pos = names.index("id")
     writer = pq.ParquetWriter(str(tmp_path), schema, compression="zstd")
     try:
         for page in _iter_pages(db, spec, period):
@@ -557,6 +589,10 @@ def archive_period(
             ]
             writer.write_table(pa.Table.from_arrays(columns, schema=schema))
             written += len(page)
+            # Pages arrive ordered by id, so the last row of the last page
+            # carries the maximum; max() rather than an assignment so this
+            # holds even if that ordering guarantee is ever relaxed.
+            max_id = max(max_id, page[-1][id_pos])
         writer.close()
         writer = None
 
@@ -568,7 +604,6 @@ def archive_period(
         # match in both cases and record a manifest for a file that is missing
         # a row — a manifest that later authorises deleting it.
         expected = live_count(db, spec, period)
-        max_id = live_max_id(db, spec, period)
 
         if written != expected:
             raise ArchiveError(

@@ -411,6 +411,29 @@ def _delete_and_insert(db: Session, model, src, *, date_col_value: date_t) -> in
     return result.rowcount if result.rowcount is not None else 0
 
 
+def _month_has_other_daily_days(db: Session, day: date_t) -> bool:
+    """Whether ``verification_daily_stats`` holds any day of *day*'s month but *day*.
+
+    The "but *day*" matters: :func:`rollup_day` may already have inserted this
+    date, so a bare existence check would always be true and would gate
+    nothing.
+    """
+    if day.month == 12:
+        month_end = date_t(day.year + 1, 1, 1)
+    else:
+        month_end = date_t(day.year, day.month + 1, 1)
+    month_start = date_t(day.year, day.month, 1)
+    return db.execute(
+        select(VerificationDailyStatsRow.date)
+        .where(
+            VerificationDailyStatsRow.date >= month_start,
+            VerificationDailyStatsRow.date < month_end,
+            VerificationDailyStatsRow.date != day,
+        )
+        .limit(1)
+    ).first() is not None
+
+
 def _invalidate_month(db: Session, day: date_t) -> None:
     """Drop the monthly rollup for the month containing *day*.
 
@@ -424,8 +447,34 @@ def _invalidate_month(db: Session, day: date_t) -> None:
     yesterday, and the current month is never rolled up in the first place.
     The retention loop runs the monthly rollup right after the daily one, so
     an invalidated completed month is re-derived in the same pass.
+
+    Refuses when the month has a monthly row but *no other day* left in
+    ``verification_daily_stats``. That is what an aged-out month looks like
+    once the Phase 4 follow-up gate starts pruning daily stats: deleting the
+    monthly row would destroy a permanent aggregate that the surviving daily
+    rows — this one day — cannot rebuild, and ``completed_months`` would then
+    re-roll the month from that single day and freeze the undercount in.
+    ``rollup_month`` carries the same guard, but it is a no-op there once this
+    function has already removed the row it keys on, so the check has to live
+    at both ends. Reachable from ``verify rollup-daily-stats --day <date>``,
+    documented as safe to re-run at any time.
     """
     month_start = datetime(day.year, day.month, 1, tzinfo=timezone.utc)
+
+    already_rolled = db.execute(
+        select(VerificationMonthlyStatsRow.id)
+        .where(VerificationMonthlyStatsRow.month == month_start)
+        .limit(1)
+    ).first()
+    if already_rolled is not None and not _month_has_other_daily_days(db, day):
+        logger.warning(
+            "verification_monthly_stats: %s has monthly rows but no daily rows "
+            "outside %s — not invalidating. Re-import the month's daily source "
+            "(or the Parquet archive) before re-rolling it.",
+            month_start.strftime("%Y-%m"), day.isoformat(),
+        )
+        return
+
     db.execute(
         VerificationMonthlyStatsRow.__table__.delete().where(
             VerificationMonthlyStatsRow.month == month_start
@@ -528,18 +577,46 @@ def rollup_day(db: Session, day: date_t) -> int:
 _STANDALONE_SOURCE = "standalone"
 
 
+_STANDALONE_SOURCES = (
+    _STANDALONE_SOURCE, "standalone_full", "standalone_light",
+    "standalone_forecast",
+)
+
+
 def _standalone_clause(col):
     """Match standalone scores by equality, with a narrow legacy allowance.
 
     Equality on ``'standalone'`` is what production needs. Historical fixtures
     (and any pre-#154 row that ever landed with a cycle-type suffix) are
     matched by naming them explicitly rather than by reintroducing a LIKE, so
-    the index prefix is still usable and the accepted set stays visible here.
+    the accepted set stays visible here.
+
+    Note this is a filter, not an access path: an ``IN`` list over ~95% of the
+    table is no more selective than the ``LIKE`` it replaced, and MySQL scans
+    the index either way. Where that matters — an aggregate whose whole cost is
+    the scan — use :func:`_earliest_standalone_time` instead of this clause.
     """
-    return col.in_(
-        (_STANDALONE_SOURCE, "standalone_full", "standalone_light",
-         "standalone_forecast")
-    )
+    return col.in_(_STANDALONE_SOURCES)
+
+
+def _earliest_standalone_time(db: Session) -> datetime | None:
+    """``MIN(observation_time)`` over standalone scores, one seek per source.
+
+    MySQL's MIN/MAX index optimisation ("Select tables optimized away") needs a
+    *single* equality on the index prefix. Neither ``LIKE 'standalone%'`` nor
+    ``IN (...)`` qualifies — both degrade to a range scan of every matching
+    entry in ``ix_verif_scores_source_time``, which is ~4.3M of the 8.8M rows
+    and measured at 10-26 s on production. One equality per known source and a
+    Python ``min`` over the handful of results is the same answer in ~1 ms each.
+    """
+    seen = [
+        db.execute(
+            select(func.min(VerificationScoreRow.observation_time))
+            .where(VerificationScoreRow.source == src)
+        ).scalar()
+        for src in _STANDALONE_SOURCES
+    ]
+    return min((t for t in seen if t is not None), default=None)
 
 
 def completed_days(db: Session) -> list[date_t]:
@@ -579,12 +656,8 @@ def completed_days(db: Session) -> list[date_t]:
         start = min(existing)
     else:
         # Bootstrap only: nothing rolled yet, so the raw table is the only
-        # thing that knows where the data starts. Index-driven via
-        # ix_verif_scores_source_time thanks to the source predicate.
-        earliest = db.execute(
-            select(func.min(VerificationScoreRow.observation_time))
-            .where(_standalone_clause(VerificationScoreRow.source))
-        ).scalar()
+        # thing that knows where the data starts.
+        earliest = _earliest_standalone_time(db)
         if earliest is None:
             return []
         if earliest.tzinfo is None:

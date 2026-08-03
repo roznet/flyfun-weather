@@ -374,14 +374,22 @@ def _prunable_score_clauses(model, start: datetime, end: datetime):
 def _prunable_observation_clauses(start: datetime, end: datetime):
     """WHERE clauses selecting the observation rows a prune may delete.
 
-    The two ``NOT EXISTS`` legs are the flight-track exemption: observations
+    The three ``NOT EXISTS`` legs are the flight-track exemption: observations
     are shared between the flight and standalone tracks and carry no source
     column of their own, so a flight link — or a surviving flight score, which
     would be cascade-deleted with its parent — is what identifies ground truth
     that must outlive the standalone window.
+
+    ``TafVerificationScoreRow`` needs its own leg, not just the METAR one: it
+    carries an ``observation_id`` FK with ``ondelete="CASCADE"`` and its own
+    ``source`` column, so an observation whose only flight evidence is a TAF
+    flight score would otherwise be prunable and would cascade that exempt
+    score away — breaking the design's "never deletes source='flight' scores"
+    guarantee through the back door.
     """
     from weatherbrief.db.models import (
         FlightVerificationMapRow,
+        TafVerificationScoreRow,
         VerificationObservationRow,
         VerificationScoreRow,
     )
@@ -402,11 +410,21 @@ def _prunable_observation_clauses(start: datetime, end: datetime):
         )
         .exists()
     )
+    has_taf_flight_score = (
+        select(TafVerificationScoreRow.id)
+        .where(
+            TafVerificationScoreRow.observation_id
+            == VerificationObservationRow.id,
+            TafVerificationScoreRow.source == "flight",
+        )
+        .exists()
+    )
     return (
         VerificationObservationRow.observation_time >= start,
         VerificationObservationRow.observation_time < end,
         ~flight_linked,
         ~has_flight_score,
+        ~has_taf_flight_score,
     )
 
 
