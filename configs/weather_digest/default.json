@@ -7,6 +7,6 @@
     "temperature": 0.0
   },
   "prompts": {
-    "briefer": "prompts/briefer_v2.md"
+    "briefer": "prompts/briefer_v3.md"
   }
 }

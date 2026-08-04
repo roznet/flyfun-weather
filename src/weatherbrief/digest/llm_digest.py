@@ -156,7 +156,11 @@ def _cache_write_tokens(details: dict) -> int:
 
 
 def _system_content(
-    system_prompt: str, llm_config: LLMConfig, longrange: bool, ttl: str = "1h"
+    head: str,
+    tail: str,
+    llm_config: LLMConfig,
+    longrange: bool,
+    ttl: str = "1h",
 ) -> str | list[dict]:
     """System message content, with a prompt-cache breakpoint where it pays.
 
@@ -193,12 +197,18 @@ def _system_content(
       there caches nothing and silently costs nothing either.
     """
     if llm_config.provider != "anthropic" or longrange:
-        return system_prompt
-    return [{
+        return head + tail
+    # Breakpoint on the head only. Everything after it is uncached, which is
+    # the point: the head is identical for every pilot, the guidance tail is
+    # not, so all guidance presets share one cache entry instead of forking.
+    blocks: list[dict] = [{
         "type": "text",
-        "text": system_prompt,
+        "text": head,
         "cache_control": {"type": "ephemeral", "ttl": ttl},
     }]
+    if tail:
+        blocks.append({"type": "text", "text": tail})
+    return blocks
 
 
 def briefer_node(state: DigestState) -> dict:
@@ -213,14 +223,14 @@ def briefer_node(state: DigestState) -> dict:
         locale = state.get("locale")
         guidance_key = state.get("guidance_key")
         prompt_key = "briefer_longrange" if longrange else "briefer"
-        system_prompt = config.load_prompt(
+        head, tail = config.load_prompt_parts(
             prompt_key, locale=locale, guidance_key=guidance_key,
         )
 
         raw_result = structured_llm.invoke([
             {
                 "role": "system",
-                "content": _system_content(system_prompt, llm_config, longrange),
+                "content": _system_content(head, tail, llm_config, longrange),
             },
             {"role": "user", "content": state["context"]},
         ])

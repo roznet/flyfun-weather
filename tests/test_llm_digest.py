@@ -224,28 +224,32 @@ class TestSystemContentCacheBreakpoint:
 
     def test_anthropic_short_range_gets_a_breakpoint(self):
         from weatherbrief.digest.llm_digest import _system_content
-        out = _system_content("PROMPT", self._cfg(), longrange=False)
+        out = _system_content("HEAD", "TAIL", self._cfg(), longrange=False)
         assert isinstance(out, list)
-        assert out[0]["text"] == "PROMPT"
+        # Breakpoint on the head only — the guidance tail must stay uncached,
+        # or every guidance preset forks into its own cache entry again.
+        assert out[0]["text"] == "HEAD"
         assert out[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        assert out[1]["text"] == "TAIL"
+        assert "cache_control" not in out[1]
 
     def test_openai_provider_gets_a_plain_string(self):
         from weatherbrief.digest.llm_digest import _system_content
-        out = _system_content("PROMPT", self._cfg("openai", "gpt-4o"), longrange=False)
-        assert out == "PROMPT"
+        out = _system_content("HEAD", "TAIL", self._cfg("openai", "gpt-4o"), longrange=False)
+        assert out == "HEADTAIL"
 
     def test_longrange_gets_a_plain_string(self):
         """Haiku 4.5's 4096-token minimum is above the long-range prompt."""
         from weatherbrief.digest.llm_digest import _system_content
-        out = _system_content("PROMPT", self._cfg(model="claude-haiku-4-5"), longrange=True)
-        assert out == "PROMPT"
+        out = _system_content("HEAD", "TAIL", self._cfg(model="claude-haiku-4-5"), longrange=True)
+        assert out == "HEADTAIL"
 
     def test_shipped_openai_config_never_gets_a_breakpoint(self):
         """Guards the real config, not just a synthetic one."""
         from weatherbrief.digest.llm_config import load_digest_config
         from weatherbrief.digest.llm_digest import _system_content
         cfg = load_digest_config("openai")
-        assert _system_content("PROMPT", cfg.llm, longrange=False) == "PROMPT"
+        assert _system_content("HEAD", "TAIL", cfg.llm, longrange=False) == "HEADTAIL"
 
 
 class TestCacheUsageExtraction:

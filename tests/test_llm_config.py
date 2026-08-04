@@ -135,3 +135,37 @@ def test_explicit_name_overrides_env():
         config = load_digest_config("default")
         assert config.name == "default"
         assert config.llm.provider == "anthropic"
+
+
+class TestLoadPromptParts:
+    """The head/tail split is what lets all guidance presets share one cache entry."""
+
+    def test_split_is_byte_identical_to_load_prompt(self):
+        """head + tail must equal load_prompt() exactly, or production drifts."""
+        from weatherbrief.digest.llm_config import load_digest_config
+        config = load_digest_config("default")
+        for guidance in ("balanced", "conservative", "tolerant"):
+            head, tail = config.load_prompt_parts("briefer", guidance_key=guidance)
+            assert head + tail == config.load_prompt("briefer", guidance_key=guidance)
+
+    def test_head_is_identical_across_guidance_presets(self):
+        """The whole point: one cached prefix for every pilot.
+
+        If a prompt puts {guidance} back near the top this fails, which is the
+        signal that the cache breakpoint has stopped paying for itself.
+        """
+        from weatherbrief.digest.llm_config import load_digest_config
+        config = load_digest_config("default")
+        heads = {
+            g: config.load_prompt_parts("briefer", guidance_key=g)[0]
+            for g in ("balanced", "conservative", "tolerant")
+        }
+        assert len(set(heads.values())) == 1, "guidance leaked into the cached head"
+
+    def test_guidance_lands_in_the_tail_not_the_head(self):
+        from weatherbrief.digest.llm_config import load_digest_config, load_guidance_text
+        config = load_digest_config("default")
+        head, tail = config.load_prompt_parts("briefer", guidance_key="conservative")
+        marker = load_guidance_text("conservative").strip().splitlines()[0].strip()
+        assert marker in tail
+        assert marker not in head

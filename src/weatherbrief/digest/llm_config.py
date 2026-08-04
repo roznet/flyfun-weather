@@ -71,6 +71,39 @@ class DigestConfig(BaseModel):
         prompt_path = _CONFIGS_DIR / rel_path
         return self.render_prompt(prompt_path.read_text(), locale, guidance_key)
 
+    def load_prompt_parts(
+        self,
+        key: str,
+        locale: str | None = None,
+        guidance_key: str | None = None,
+    ) -> tuple[str, str]:
+        """Split the rendered prompt at ``{guidance}`` into (head, tail).
+
+        ``head + tail`` is byte-identical to ``load_prompt()`` — the split is
+        purely about where a prompt-cache breakpoint can go. In ``briefer_v3``
+        the guidance sits at the end, so ``head`` is identical across all three
+        guidance presets and can be cached once for every pilot, while the tail
+        that actually varies stays uncached.
+
+        Splitting *before* guidance injection is what guarantees the byte
+        equality: ``_inject_guidance`` is a plain replace of the placeholder, so
+        injecting into the tail alone produces the same bytes as injecting into
+        the whole. Locale is injected first because it also substitutes
+        vocabulary tokens throughout the body.
+
+        A prompt with the placeholder still near the top (``briefer_v2``) splits
+        fine but leaves a head too short to reach the model's minimum cacheable
+        prefix — correct, just not worth much.
+        """
+        rel_path = getattr(self.prompts, key)
+        prompt = (_CONFIGS_DIR / rel_path).read_text()
+        prompt = self._inject_locale(prompt, locale)
+        if "{guidance}" not in prompt:
+            return prompt, ""
+        head, rest = prompt.split("{guidance}", 1)
+        tail = self._inject_guidance("{guidance}" + rest, guidance_key)
+        return head, tail
+
     def render_prompt(
         self,
         prompt: str,
