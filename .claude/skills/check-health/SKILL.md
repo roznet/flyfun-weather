@@ -32,7 +32,7 @@ need, not the whole file** — a targeted check usually needs two or three:
 | Any section — before flagging *anything* | "Thresholds at a glance" |
 | §1 droplet metrics, §4b slow pipeline | §L1 (low CPU + slow = GIL, not cores) |
 | §2 container memory, §6 cycle peaks | §L2 (cgroup ≠ pressure; read `rss=`) |
-| §2 `shared-mysql` looks small | §L10 (swapped-out buffer pool reads low) |
+| §2 `<mysql-container>` looks small | §L10 (swapped-out buffer pool reads low) |
 | §3 error triage | "Log-noise tiers", §L6 (scan traffic) |
 | §5 GRIB pool | §L3 ("pool stuck" is the fix firing) |
 | §6 standalone cycle | "Standalone cycle detail" |
@@ -40,6 +40,8 @@ need, not the whole file** — a targeted check usually needs two or three:
 | §8 upstreams | "Upstream steady-state rates" |
 | §9 disk | §L9 (composition + headroom math) |
 | §9 retention looks silent | §L11 (silence ≠ failure) |
+| §10 MySQL config / counters / connections | §L12 (lifetime ≠ rate; drift is an incident) |
+| §10 slow query log | §L13 (shared instance; filename + rotation traps) |
 | Tempted to suggest more cores / a smaller droplet | §L1, §L5 |
 
 Several routine conditions look alarming, so check the relevant lesson **before** flagging.
@@ -75,14 +77,17 @@ ssh <user>@<server> "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports
 
 Check all containers are `(healthy)`, and read `weatherbrief` memory against the 6 GiB cgroup.
 
-For `shared-mysql`, read §L10 before concluding anything from RSS — a swapped-out buffer pool
-reads low while the config is still correct. To confirm the setting (needs MySQL root creds
-from the shared-infra stack's env on the server):
+For `<mysql-container>`, read §L10 before concluding anything from RSS — a swapped-out buffer
+pool reads low while the config is still correct. Confirm the setting with the credential-safe
+form from §10 (don't put the password on the command line):
 
 ```bash
-ssh <user>@<server> "docker exec shared-mysql mysql -uroot -p<root-pw> \
-  -e \"SHOW VARIABLES LIKE 'innodb_buffer_pool_size'\""
+ssh <user>@<server> "docker exec <mysql-container> sh -c \
+  'mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -t -e \"\$1\"' _ \
+  \"SELECT @@global.innodb_buffer_pool_size\""
 ```
+
+Full config-drift checking lives in §10 — this is just the one value worth having early.
 
 For host swap, attribute it before judging (§L2, §L10) — production parks mmap-backed cfgrib
 pages there under pressure, and cold pages accumulate on a long-uptime box:
@@ -238,7 +243,7 @@ MySQL size + binlogs (treat data and logs separately):
 
 ```bash
 ssh <user>@<server> \
-  'docker exec shared-mysql sh -c "du -sh /var/lib/mysql/weatherbrief && \
+  'docker exec <mysql-container> sh -c "du -sh /var/lib/mysql/weatherbrief && \
    ls -lh /var/lib/mysql/weatherbrief/*.ibd 2>/dev/null | sort -k5 -h | tail -6 && \
    echo --- && du -ch /var/lib/mysql/binlog.0000* 2>/dev/null | tail -1 && \
    echo --- oldest_binlog && ls -lt /var/lib/mysql/binlog.0000* | tail -1"'
@@ -258,6 +263,104 @@ ssh <user>@<server> "docker logs --since 48h weatherbrief 2>&1 \
 Read §L11 carefully before calling retention broken — `freed=0.0 MB` and a silent GRIB purge
 are both normal, and `Retention applied:` is the line that proves the loop ran.
 
+## 10. MySQL config & behaviour
+
+The instance is **shared** across every app on the droplet, so everything here is
+cross-app: a change made for weatherbrief can break WordPress, and a slow query from
+WordPress lands in the same log. `<mysql-container>` and the expected values come from
+`deploy/mysql-baseline.json` (gitignored; `deploy/mysql-baseline.example.json` documents
+the shape). Read §L12 and §L13 before flagging anything.
+
+**Credentials: never pass the password on a command line.** Read it from the container's
+own environment — this form keeps it out of your shell history, the process list and the
+log of this session:
+
+```bash
+ssh <user>@<server> "docker exec <mysql-container> sh -c \
+  'mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -t -e \"\$1\"' _ \"<SQL>\""
+```
+
+**10a. Config drift — the highest-value check here.**
+
+```sql
+SELECT @@global.innodb_buffer_pool_size, @@global.innodb_redo_log_capacity,
+       @@global.innodb_io_capacity, @@global.innodb_io_capacity_max,
+       @@global.max_connections, @@global.slow_query_log,
+       @@global.long_query_time, @@global.slow_query_log_file;
+```
+
+Compare every value against `expected_variables` in the baseline file. **`innodb_buffer_pool_size`
+reading 134217728 (128 MB, the stock default) is an incident, not a note** — it means the
+persisted config was lost, and the verification cache rebuild goes from ~90 s toward ~40 min
+(§L12). Ignore a mismatch on anything listed under `known_pending` in the baseline —
+`PERSIST_ONLY` settings deliberately differ from the running value until the next start.
+
+Non-default values live **only** in `mysqld-auto.cnf` inside the datadir, which is on the data
+volume and in no repo. Confirm what is actually persisted:
+
+```bash
+ssh <user>@<server> "docker exec <mysql-container> cat /var/lib/mysql/mysqld-auto.cnf" \
+  | python3 -m json.tool
+```
+
+Check uptime in the same pass — a restart is what turns a latent config gap into a live one,
+and it also zeroes every counter below:
+
+```sql
+SHOW GLOBAL STATUS LIKE 'Uptime';
+```
+
+If uptime is short and you didn't expect a restart, verify 10a **before** reading anything else.
+
+**10b. Slow query log.**
+
+Confirm it is on, then read it. The filename must be an explicit stable path; if
+`slow_query_log_file` matches `<hostname>-slow.log` the deployment is exposed to §L13.
+
+```bash
+ssh <user>@<server> "docker exec <mysql-container> sh -c \
+  'tail -c 20000 /var/lib/mysql/slow.log' " | grep -E '^# (Time|Query_time)|^SELECT|^INSERT|^UPDATE'
+```
+
+Or rank fingerprints: `docker exec <mysql-container> mysqldumpslow -s t -t 20 /var/lib/mysql/slow.log`.
+
+What matters is **what is new**, not the volume. Compare against
+`expected_slow_log_fingerprints.known` in the baseline and report only unrecognised entries.
+Two standing exclusions: the nightly `mysqldump` (identify by `SQL_NO_CACHE`) and other apps'
+queries — this is the shared instance. Also note nothing rotates this file (§L13).
+
+**10c. Connections.**
+
+```sql
+SHOW GLOBAL STATUS LIKE 'Connection_errors_max_connections';
+SHOW GLOBAL STATUS LIKE 'Max_used_connections';
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+```
+
+`Connection_errors_max_connections` above the baseline means the ceiling was hit since the
+last check. **Attribute it before acting — it is usually not this app** (§L12). weatherbrief
+pools and holds a handful:
+
+```sql
+SELECT USER, HOST, CURRENT_CONNECTIONS, TOTAL_CONNECTIONS
+  FROM performance_schema.accounts WHERE USER IS NOT NULL
+ ORDER BY TOTAL_CONNECTIONS DESC;
+```
+
+`performance_schema` keeps no history, so this catches a standing consumer, not a past spike.
+
+**10d. InnoDB pressure.**
+
+```sql
+SHOW GLOBAL STATUS LIKE 'Innodb_log_waits';
+SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_wait_free';
+SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_reads';
+```
+
+`Innodb_log_waits` should be **0**; non-zero means the redo log is a bottleneck. The other two
+are **lifetime totals and are large for historical reasons** — judge them by rate across the
+window, never by the absolute number (§L12). Subtract the baseline, divide by elapsed uptime.
+
 ## Output
 
 ```
@@ -276,6 +379,7 @@ disk total: <data-volume> X% of 199 GB (band ~62–78%)                (ok|warn)
 caches:     icon-d2 N GB, icon-eu N GB, gfs N GB, ecmwf N GB         (ok|warn if out-of-band)
 growing:    packs N GB / F flights, mysql data N GB, binlogs N GB    (ok|note|warn)
 retention:  Retention applied (last <time>); GRIB purge alive        (ok|warn if missing)
+mysql:      config matches baseline, uptime Nd, slow log N new       (ok|warn|issue)
 
 what to look at (only if verdict != ok):
 - <specific bullet pointing at a log line, container, or grep result>

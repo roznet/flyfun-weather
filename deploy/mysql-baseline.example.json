@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "Expected MySQL configuration and counter baselines for a deployment, used by",
+    "the `check-health` skill (§10) to detect config drift and judge counters.",
+    "",
+    "Copy to deploy/mysql-baseline.json and fill in real values. That file is",
+    "gitignored because container names, host paths and tuning values are",
+    "deployment-specific — this repo is public. Same pattern as compute-nodes.json.",
+    "",
+    "The AUTHORITATIVE source of these settings is the private infra repo that owns",
+    "the MySQL compose stack. This file is a check-against baseline, not a deploy",
+    "artifact: nothing reads it to configure MySQL, only to notice when MySQL has",
+    "stopped matching what you intended."
+  ],
+
+  "container": "shared-mysql",
+  "compose_project": "shared-infra",
+  "database": "weatherbrief",
+
+  "datadir_container": "/var/lib/mysql",
+  "datadir_host": "/mnt/<data-volume>/mysql",
+
+  "_persisted_config_comment": [
+    "mysqld-auto.cnf lives in the datadir and is the ONLY home for any setting not",
+    "passed on the command line or in an option file. It survives restart, reboot",
+    "and container recreation because the datadir is a bind mount — but it is NOT",
+    "in any repo, so a lost or rebuilt volume silently reverts every value below to",
+    "the MySQL default. That is the failure this baseline exists to catch."
+  ],
+  "persisted_config_file": "/var/lib/mysql/mysqld-auto.cnf",
+
+  "expected_variables": {
+    "innodb_buffer_pool_size": 1073741824,
+    "innodb_redo_log_capacity": 1073741824,
+    "innodb_io_capacity": 600,
+    "innodb_io_capacity_max": 1200,
+    "max_connections": 151,
+    "slow_query_log": 1,
+    "long_query_time": 2,
+    "slow_query_log_file": "/var/lib/mysql/slow.log"
+  },
+
+  "variable_notes": {
+    "innodb_buffer_pool_size": "The one that matters most. If it reads 134217728 (128 MB, the stock default) the config has been lost — expect the verification cache rebuild to go from ~90 s toward ~40 min. Treat as an incident, not a note.",
+    "innodb_redo_log_capacity": "PERSIST_ONLY — the running value only changes at the next MySQL start. A mismatch between the running value and this baseline is EXPECTED until then, and is not drift.",
+    "max_connections": "Was briefly lowered and reverted. Lowering it frees no memory at steady state; see the connection-attribution check before touching it.",
+    "slow_query_log_file": "Must be an explicit stable path. MySQL's default is <hostname>-slow.log, and in Docker the hostname is the container ID — so on any container recreation MySQL silently starts a NEW log file and orphans the old one, muting anything keyed to the filename."
+  },
+
+  "baseline_counters": {
+    "_comment": "Lifetime totals from a long-uptime instance. Judge by RATE across a window, never by the lifetime figure — several of these are large purely because of past backfills.",
+    "as_of": "YYYY-MM-DD",
+    "uptime_days_at_capture": 94,
+    "Innodb_buffer_pool_wait_free": 5936245,
+    "Innodb_buffer_pool_reads": 591631281,
+    "Innodb_log_waits": 0,
+    "Connection_errors_max_connections": 35,
+    "Max_used_connections": 152,
+    "Threads_connected": 6
+  },
+
+  "counter_notes": {
+    "Innodb_buffer_pool_wait_free": "Lifetime figure is historical (accumulated during backfills) and measured ZERO across a 21 h window. A large number here is not evidence of a current problem.",
+    "Innodb_log_waits": "Should stay 0. Non-zero means the redo log is a bottleneck.",
+    "Connection_errors_max_connections": "Non-zero means the connection ceiling has actually been hit. Attribute it before acting — it is usually not this app."
+  },
+
+  "expected_slow_log_fingerprints": {
+    "_comment": "Queries known to appear and already understood. The value of the slow log is what appears that is NOT on this list. Update it when a phase retires one.",
+    "known": [
+      "INSERT INTO verification_daily_stats ... SELECT  (the daily rollup itself)",
+      "count(distinct flight_verification_map.flight_id)  (activity flight leg)",
+      "mysqldump  (nightly backup; identify by SQL_NO_CACHE and exclude)"
+    ]
+  }
+}

@@ -19,6 +19,8 @@ Resolve once at the start of a session and reuse; don't re-derive per command.
 | `<data-volume>` | The **mount point** holding all of the above — the disk gauge in health checks | **Derive it, don't guess** (see below). It is a *parent* of `HOST_DATA_DIR`, not equal to it. |
 | `<shared-infra-dir>` | Directory holding the shared MySQL compose stack on the server | `ssh <user>@<server> "ls -d ~/*/docker-compose.y*ml"` and pick the shared-infra one |
 | `<node.ssh>`, `<node.repo>`, `<node.venv>`, `<node.branch>` | Compute-node fields | Entries in `deploy/compute-nodes.json` (gitignored — ssh targets are deployment-private). `deploy/compute-nodes.example.json` is tracked and documents every field. |
+| `<mysql-container>` | Container name of the shared MySQL instance | `deploy/mysql-baseline.json` (gitignored; `.example.json` is tracked), or `ssh <user>@<server> "docker ps --format '{{.Names}}' \| grep -i mysql"` |
+| MySQL root password | Root credential for the shared instance | **Never pass it on a command line.** Read it from the container's own env: `docker exec <mysql-container> sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" …'`. It stays out of shell history, the process list and session logs. |
 | `<admin-token>` | Admin session cookie for `/api/admin/metrics` | Supplied by the user at run time. Never read it from disk. |
 
 ## The two traps

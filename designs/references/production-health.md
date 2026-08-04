@@ -204,7 +204,7 @@ steady-state number suggests. Check the per-cache lines before trusting the head
 reads low while the config is still correct. Confirm with `SHOW VARIABLES LIKE
 'innodb_buffer_pool_size'` before concluding the setting was lost. Config right + RSS low +
 swap high = paged-out pool: not a regression, but DB reads are hitting disk, and a
-`docker compose restart shared-mysql` in a quiet window faults it back in.
+`docker compose restart <mysql-container>` in a quiet window faults it back in.
 
 On a long-uptime box, cold swap pages accumulate without indicating live pressure — read
 `free -h` **available** and current load before flagging swap at all.
@@ -219,6 +219,54 @@ On a long-uptime box, cold swap pages accumulate without indicating live pressur
 - `Retention cycle failed` / `GRIB cache purge failed` / `ECMWF delivery purge failed` are all
   real issues; the pass aborted mid-way.
 - If `Retention applied:` is missing for >36 h, the loop is wedged.
+
+### §L12 — MySQL: lifetime counters are not rates, and config drift is an incident
+
+**Judge every InnoDB counter by rate, never by its absolute value.** These are lifetime
+totals on an instance that has been up for months and has run large backfills.
+`Innodb_buffer_pool_wait_free` in the millions looks alarming and measured **zero** across a
+21 h window — the total accumulated historically. Subtract the baseline in
+`deploy/mysql-baseline.json`, divide by elapsed uptime, and compare that. The two counters
+that *are* meaningful as absolutes: `Innodb_log_waits` should be 0, and
+`Connection_errors_max_connections` rising since the last check means the ceiling was hit.
+
+**`innodb_buffer_pool_size` at 134217728 is an incident.** That is MySQL's 128 MB stock
+default, and seeing it means the persisted configuration was lost — not that someone chose a
+small pool. The tell is timing: the verification cache rebuild goes from ~90 s toward ~40 min.
+Every non-default value lives only in `mysqld-auto.cnf` inside the datadir, which is on the
+data volume and in no repository, so a rebuilt volume reverts everything silently. A recent
+restart with an unexpected uptime is the moment to check this.
+
+**Attribute connection exhaustion before acting on it.** The instance is shared. When
+`Connection_errors_max_connections` is non-zero the intuitive fix — raise `max_connections` —
+is usually wrong, and lowering it is worse: MySQL allocates per-connection buffers on demand,
+not against the limit, so the limit frees no memory at steady state. Check
+`performance_schema.accounts` for who actually holds connections. A prefork Apache with a high
+`MaxRequestWorkers` can claim nearly the whole ceiling by itself while the app you are
+debugging holds a handful. Fix the consumer, not the limit.
+
+### §L13 — MySQL: the slow log is shared, unrotated, and its default name is a trap
+
+**The filename must be an explicit stable path.** MySQL's default `slow_query_log_file` is
+`<hostname>-slow.log`, and in Docker the hostname is the **container ID**. Recreate the
+container — an image bump, a compose change — and MySQL silently begins a *new* log under a
+*new* name, orphaning the old one. Anything keyed to the filename then goes quiet, and quiet
+reads as "no slow queries": the failure mode is invisible and looks like good news. If the
+configured path still matches the container ID, fix it before relying on the log.
+
+To repoint it without losing history: `mv` the file first (same filesystem, so the inode is
+unchanged and MySQL's open descriptor follows it), *then*
+`SET PERSIST slow_query_log_file = '<stable path>'`. The reverse order strands the old content.
+
+**It is the shared instance**, so other apps' slow queries land in the same file — filter to
+the tables you care about. Exclude the nightly `mysqldump` by its `SQL_NO_CACHE` marker.
+
+**Nothing rotates it.** MySQL never rotates the slow log and will grow it indefinitely on the
+data volume (order ~90 KB/day). Rotation needs `logrotate` plus `FLUSH SLOW LOGS`, or a
+periodic truncate. Low urgency, but it does not stop on its own.
+
+Judge the log by **what is new**, not by volume. Known-and-understood fingerprints belong in
+`expected_slow_log_fingerprints` in the baseline file; report the entries that aren't there.
 
 ---
 
@@ -293,7 +341,7 @@ Add a line when a band is re-baselined; don't narrate inside the bands themselve
 
 - **Volume resize** — data volume grew 149 GB → 199 GB; the ICON-D2 cache arrived at the same
   time. Bands in §L9 are post-resize.
-- **MySQL buffer pool** — `innodb_buffer_pool_size` raised 128 MB → 1 GiB, so `shared-mysql`
+- **MySQL buffer pool** — `innodb_buffer_pool_size` raised 128 MB → 1 GiB, so `<mysql-container>`
   sits at ~1.2–1.6 GiB instead of the old ~330 MiB. A reading back near ~330 MiB means the
   container restarted *without* the compose-file setting: re-run `docker compose up -d` in
   `<shared-infra-dir>`, or re-apply `SET GLOBAL innodb_buffer_pool_size`. See §L10 before

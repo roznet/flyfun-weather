@@ -63,3 +63,10 @@ scratch/
 # Real compute-node inventory: ssh targets and paths are deployment-private.
 # deploy/compute-nodes.example.json is tracked and documents the shape.
 deploy/compute-nodes.json
+
+# Real MySQL config/counter baseline: container names, host paths and tuning
+# values are deployment-specific. Used by the check-health skill (§10) to spot
+# config drift. deploy/mysql-baseline.example.json is tracked and documents the
+# shape. Not a deploy artifact — the authoritative config lives in the private
+# infra repo that owns the MySQL compose stack.
+deploy/mysql-baseline.json
