@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from weatherbrief.analysis.sounding import analyze_sounding
 from weatherbrief.analysis.sounding.prepare import prepare_profile
 from weatherbrief.analysis.sounding.thermodynamics import compute_derived_levels
@@ -120,13 +122,14 @@ def test_cat_risk_from_low_ri():
     levels = [
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5,
-                     richardson_number=0.3),
+                     richardson_number=0.15),
         DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-1.0,
                      richardson_number=0.8),
     ]
     assessment = assess_vertical_motion(levels)
 
-    # Ri=0.3 → SEVERE, Ri=0.8 → MODERATE — different severities → 2 layers
+    # Ri=0.15 at 10,000 ft (classical tiers) → SEVERE; Ri=0.8 at 18,000 ft
+    # (tiers scaled ×1.8) → MODERATE — different severities → 2 layers
     assert len(assessment.cat_risk_layers) == 2
     assert assessment.cat_risk_layers[0].risk == CATRiskLevel.SEVERE
     assert assessment.cat_risk_layers[0].base_ft == 10000
@@ -135,7 +138,7 @@ def test_cat_risk_from_low_ri():
 
 
 def test_no_cat_risk_high_ri():
-    """No CAT layers when Ri > 1.0 everywhere."""
+    """No CAT layers when Ri is well above the LIGHT tier everywhere."""
     levels = [
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5,
@@ -152,14 +155,15 @@ def test_cat_layer_grouping_same_severity():
     levels = [
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5,
-                     richardson_number=0.6),
+                     richardson_number=0.3),
         DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-1.2,
-                     richardson_number=0.7),
+                     richardson_number=0.5),
         DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-1.0,
                      richardson_number=5.0),
     ]
     assessment = assess_vertical_motion(levels)
-    # Both levels are MODERATE (0.5 <= Ri < 1.0) — one layer
+    # MODERATE at both: 0.3 against the classical 0.25/0.5 tiers at 10,000 ft,
+    # 0.5 against the ×1.4-scaled 0.35/0.7 tiers at 14,000 ft — one layer
     assert len(assessment.cat_risk_layers) == 1
     layer = assessment.cat_risk_layers[0]
     assert layer.base_ft == 10000
@@ -178,15 +182,15 @@ def test_severity_split_boundary_layer():
     levels = [
         DerivedLevel(pressure_hpa=1000, altitude_ft=545, omega_pa_s=-0.1),
         DerivedLevel(pressure_hpa=975, altitude_ft=1224, omega_pa_s=-0.0,
-                     richardson_number=0.31),   # SEVERE
+                     richardson_number=0.155),  # SEVERE
         DerivedLevel(pressure_hpa=950, altitude_ft=1916, omega_pa_s=-0.2,
-                     richardson_number=0.89),   # MODERATE
+                     richardson_number=0.445),  # MODERATE
         DerivedLevel(pressure_hpa=925, altitude_ft=2621, omega_pa_s=-0.3,
-                     richardson_number=1.60),   # LIGHT
+                     richardson_number=0.80),   # LIGHT
         DerivedLevel(pressure_hpa=900, altitude_ft=3343, omega_pa_s=-0.3,
-                     richardson_number=0.66),   # MODERATE
+                     richardson_number=0.33),   # MODERATE
         DerivedLevel(pressure_hpa=850, altitude_ft=4839, omega_pa_s=-0.2,
-                     richardson_number=0.78),   # MODERATE
+                     richardson_number=0.39),   # MODERATE
     ]
     assessment = assess_vertical_motion(levels)
 
@@ -223,7 +227,7 @@ def test_boundary_layer_shear_not_merged_to_cruise():
         DerivedLevel(pressure_hpa=950, altitude_ft=1800, omega_pa_s=-0.5,
                      richardson_number=0.2),
         DerivedLevel(pressure_hpa=900, altitude_ft=3200, omega_pa_s=-0.5,
-                     richardson_number=0.3),
+                     richardson_number=0.15),
         # Gap — no shear at mid-levels
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.5,
                      richardson_number=5.0),
@@ -256,11 +260,11 @@ def test_scattered_cat_not_merged_across_stable_gap():
         DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-0.5),
         # BL low-Ri cluster (indices 1, 2, 3)
         DerivedLevel(pressure_hpa=975, altitude_ft=1100, omega_pa_s=-0.5,
-                     richardson_number=0.59),   # MODERATE
+                     richardson_number=0.295),  # MODERATE
         DerivedLevel(pressure_hpa=950, altitude_ft=1800, omega_pa_s=-0.5,
-                     richardson_number=0.96),   # MODERATE
+                     richardson_number=0.48),   # MODERATE
         DerivedLevel(pressure_hpa=925, altitude_ft=2500, omega_pa_s=-0.5,
-                     richardson_number=1.04),   # LIGHT
+                     richardson_number=0.52),   # LIGHT
         # Stable gap (indices 4, 5, 6, 7)
         DerivedLevel(pressure_hpa=900, altitude_ft=3200, omega_pa_s=-0.5,
                      richardson_number=2.84),
@@ -272,7 +276,7 @@ def test_scattered_cat_not_merged_across_stable_gap():
                      richardson_number=20.0),
         # Upper low-Ri (index 8)
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
-                     richardson_number=0.71),   # MODERATE
+                     richardson_number=0.355),  # MODERATE
     ]
     assessment = assess_vertical_motion(levels)
     # BL: MODERATE(1100-1800) + LIGHT(2500) = 2 sub-layers
@@ -482,6 +486,156 @@ def test_negative_ri_surface_layer_skipped():
     ]
     assessment = assess_vertical_motion(levels)
     assert assessment.cat_risk_layers == []
+
+
+# --- Altitude-dependent Ri calibration (#533) ---
+
+
+def test_ri_thresholds_classical_in_lower_troposphere():
+    """Below 10,000 ft the classical 0.25/0.5/1.0 tiers apply unchanged.
+
+    Ri = 0.35 at 2,500 ft used to read SEVERE under the flat 0.5/1.0/2.0
+    calibration — the defect behind the EGNY→EGKB "severe CAT at 2,500 ft"
+    reports. It is MODERATE now.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1800, richardson_number=0.35),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3200, richardson_number=1.20),
+    ]
+    assessment = assess_vertical_motion(levels)
+    risks = [la.risk for la in assessment.cat_risk_layers]
+    # 0.35 → MODERATE (was SEVERE); 1.20 → NONE (was LIGHT)
+    assert risks == [CATRiskLevel.MODERATE]
+
+
+def test_ri_thresholds_loosened_in_upper_troposphere():
+    """At/above 20,000 ft the tiers are the old loosened 0.5/1.0/2.0.
+
+    The resolution argument genuinely holds up there: 25 hPa spans ~800 m at
+    300 hPa, far coarser than the shear sheet it needs to resolve.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=400, altitude_ft=24000),
+        DerivedLevel(pressure_hpa=350, altitude_ft=26000, richardson_number=0.35),
+        DerivedLevel(pressure_hpa=300, altitude_ft=30000, richardson_number=0.80),
+    ]
+    assessment = assess_vertical_motion(levels)
+    risks = [la.risk for la in assessment.cat_risk_layers]
+    # Both would be one tier lower under the classical tiers: 0.35 MODERATE,
+    # 0.80 LIGHT.
+    assert risks == [CATRiskLevel.SEVERE, CATRiskLevel.MODERATE]
+
+
+def test_ri_threshold_scale_ramps_between_10k_and_20k():
+    """The multiplier ramps rather than stepping — no cliff at a fixed level."""
+    from weatherbrief.analysis.sounding.vertical_motion import _ri_threshold_scale
+
+    assert _ri_threshold_scale(2500) == 1.0
+    assert _ri_threshold_scale(10000) == 1.0
+    assert _ri_threshold_scale(15000) == pytest.approx(1.5)
+    assert _ri_threshold_scale(20000) == 2.0
+    assert _ri_threshold_scale(35000) == 2.0
+
+
+# --- Well-mixed boundary layer suppression (#533) ---
+
+
+def _mixed_layer_profile(ri_at_2500: float) -> list[DerivedLevel]:
+    """Daytime profile with a mixed layer topping out at 2,500 ft.
+
+    Lapse rate on level *i* describes the layer *above* it, so the two
+    surface-rooted layers here are at the dry adiabat (9.8 °C/km) and
+    everything above 2,500 ft is stable.
+    """
+    return [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=500, lapse_rate_c_per_km=9.8),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1200, lapse_rate_c_per_km=9.8,
+                     richardson_number=0.6),
+        DerivedLevel(pressure_hpa=950, altitude_ft=2500, lapse_rate_c_per_km=4.0,
+                     richardson_number=ri_at_2500),
+        DerivedLevel(pressure_hpa=925, altitude_ft=3900, lapse_rate_c_per_km=6.0,
+                     richardson_number=0.8),
+        DerivedLevel(pressure_hpa=900, altitude_ft=5200, lapse_rate_c_per_km=6.0,
+                     richardson_number=9.0),
+    ]
+
+
+def test_well_mixed_layer_suppresses_positive_ri_cat():
+    """Small-*positive* Ri inside the daytime mixed layer is not CAT.
+
+    The §8(c) guard only caught negative Ri at the two lowest levels; a
+    3,000–4,000 ft deep mixed layer with Ri ≈ 0.2 sailed past it and produced
+    "Severe CAT" at 2,500 ft on a CAVOK August afternoon (#533).
+    """
+    assessment = assess_vertical_motion(_mixed_layer_profile(ri_at_2500=0.2))
+
+    assert assessment.mixed_layer_top_ft == 2500
+    # Only the layer above the mixed-layer top survives.
+    assert [la.base_ft for la in assessment.cat_risk_layers] == [3900]
+
+
+def test_shear_above_mixed_layer_top_still_flagged():
+    """Suppression stops at the mixed-layer top — no blanket low-altitude floor.
+
+    A hard 5,000 ft floor would blind us to genuine low-level wind shear; the
+    capping/entrainment layer just above the mixed layer is exactly where a
+    frontal day puts it.
+    """
+    levels = _mixed_layer_profile(ri_at_2500=0.2)
+    levels[3].richardson_number = 0.15  # sharp shear sheet at 3,900 ft
+    assessment = assess_vertical_motion(levels)
+
+    assert len(assessment.cat_risk_layers) == 1
+    assert assessment.cat_risk_layers[0].risk == CATRiskLevel.SEVERE
+    assert assessment.cat_risk_layers[0].base_ft == 3900
+
+
+def test_no_mixed_layer_when_surface_layer_is_stable():
+    """A stable surface layer means no mixed layer — nothing is suppressed."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=500, lapse_rate_c_per_km=4.0),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1200, lapse_rate_c_per_km=5.0,
+                     richardson_number=0.2),
+        DerivedLevel(pressure_hpa=950, altitude_ft=2500, lapse_rate_c_per_km=6.0,
+                     richardson_number=9.0),
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    assert assessment.mixed_layer_top_ft is None
+    assert len(assessment.cat_risk_layers) == 1
+    assert assessment.cat_risk_layers[0].risk == CATRiskLevel.SEVERE
+
+
+def test_mixed_layer_depth_is_capped():
+    """A dry-adiabatic column is not treated as a 30,000 ft deep mixed layer."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000 - 25 * i, altitude_ft=500 + 2000 * i,
+                     lapse_rate_c_per_km=9.8,
+                     richardson_number=(0.2 if i else None))
+        for i in range(12)
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    assert assessment.mixed_layer_top_ft is not None
+    assert assessment.mixed_layer_top_ft - 500 <= 10000
+
+
+# --- Boundary-layer tagging (#533) ---
+
+
+def test_boundary_layer_flag_set_for_low_layers():
+    """Layers wholly inside the boundary layer are tagged for the advisory gate."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=500),
+        DerivedLevel(pressure_hpa=950, altitude_ft=2500, richardson_number=0.2),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, richardson_number=0.2),
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    by_base = {la.base_ft: la for la in assessment.cat_risk_layers}
+    assert by_base[2500].boundary_layer is True
+    assert by_base[10000].boundary_layer is False
 
 
 def test_stability_indicators_store_negative_ri():

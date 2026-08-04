@@ -3078,3 +3078,137 @@ only a model publishing `qr` can set it, which today means ICON-D2 alone.
 - `analysis/sounding/precipitation.py` — `_compute_precip_ice_fraction`,
   `_level_ice_fraction`.
 - `analysis/sounding/icing_common.py` — threshold + `is_supercooled_rain`.
+## 24. Richardson CAT is calibrated by altitude, and stops at the mixed-layer top
+
+**Date:** 2026-08-04
+**Status:** Implemented (#533)
+**Context:** A pilot debrief on `egny_egkb-2026-08-03-0d8b` (dep 15:00Z, cruise
+2,500 ft) reported ICON claiming *severe CAT at 2,500 ft* for a week straight
+on an anticyclonic CAVOK August afternoon — "CAT is only modelled from 5,000 ft
+up, so something has gone wrong". The advisory was RED on all seven packs back
+to 07-29 while GFS was green/amber and ECMWF mostly green.
+
+The reporter's premise was wrong — there is no 5,000 ft floor anywhere in the
+codebase — but the verdict was right. Three separate things were wrong.
+
+### What ICON was actually seeing
+
+Not instability — **shear**. At the layer containing 2,500 ft, ICON's N² is
+normal and comparable to the other models; its S² is 5–40× larger. At route
+point 3, 950→925 hPa: ICON 087/20.4 → 106/11.0 kt (speed nearly halves plus a
+19° veer over 750 ft, ≈10 kt/1000 ft), GFS 095/13.2 → 102/12.9 kt (≈0.5
+kt/1000 ft), ECMWF 082/19.5 → 092/16.1 kt. ICON is resolving a sharp low-level
+decoupling in the anticyclonic easterly that GFS smooths away entirely, and it
+is most likely *right* about the shear existing — it is the higher-resolution
+model. The defect is in what we did with it.
+
+### (a) The resolution correction is a function of altitude, so it is applied as one
+
+The original calibration loosened the classical Miles-Howard tiers from
+0.25/0.5/1.0 to **0.5/1.0/2.0**, justified by "model vertical resolution
+(25–50 hPa between levels) is too coarse to resolve the thin shear layers
+(100–300 m) where KH instability develops". That justification is sound —
+**and it is altitude-dependent, which the flat constants were not**. 25 hPa
+spans ≈230 m at 950 hPa and ≈800 m at 300 hPa. Down low the model levels are
+*already* at the shear-layer scale; the correction there simply inflated every
+tier by one.
+
+So the tiers are the classical 0.25/0.5/1.0 again, scaled by a multiplier that
+is 1.0 at and below 10,000 ft, ramps linearly, and reaches 2.0 at and above
+20,000 ft — reproducing the old calibration exactly where the resolution
+argument holds. A ramp rather than a step: with a hard switch, two adjacent
+levels either side of 10,000 ft would classify the same Ri differently.
+
+Re-running `analyze_sounding` over the pack's own data, all 17 route points at
+15Z, isolates this as the primary culprit — classical thresholds alone collapse
+the ICON-vs-GFS disagreement:
+
+| variant | icon SEVERE @cruise | gfs | ecmwf |
+|---|---|---|---|
+| flat 0.5/1.0/2.0 | **8/17** | 3/17 | 0/17 |
+| classical 0.25/0.5/1.0 | 2/17 | 2/17 | 0/17 |
+| classical + skip well-mixed BL layers | 0 @cruise (3/17 in column) | 0/17 | 0/17 |
+
+### (b) §8(c)'s boundary-layer guard now catches the case it was written for
+
+§8(c) excluded *negative* Ri at the two lowest levels, on the rationale that a
+negative-Ri lowest layer "is the routine daytime superadiabatic surface layer
+(thermals) — flagging it as CAT would paint summer-afternoon noise at the
+bottom of every cross-section". That rationale describes this flight exactly.
+The guard missed it on both counts: the mixed layer was 3,000–4,000 ft deep
+(lapse rate 2.99–3.06 °C/1000 ft at points 9–13, i.e. *exactly* dry-adiabatic),
+spanning levels 0–5 rather than 0–1, and its Ri was small-**positive** rather
+than negative.
+
+`mixed_layer_top_index()` now walks up from the surface while each layer's
+lapse rate is ≥ 8.8 °C/km (≈2.7 °C/1000 ft, just under the 9.76 dry adiabat),
+capping the search at 10,000 ft deep so a deep dry-adiabatic column is not
+mistaken for an unbounded boundary layer. Every level inside that layer is
+excluded from CAT **regardless of Ri sign**. The §8(c) `idx <= 1` negative-Ri
+guard is kept as a fallback for profiles with no lapse-rate data to detect a
+mixed layer from; where lapse rates exist it is subsumed (N² < 0 implies a
+lapse steeper than the dry adiabat, which is detected as mixed).
+
+Suppression stops at the mixed-layer top, and the top is published as
+`VerticalMotionAssessment.mixed_layer_top_ft` so the exclusion is inspectable
+rather than a silent swallow.
+
+**Why not the 5,000 ft floor the reporter expected.** A hard floor would also
+blind us to genuine low-level wind shear on a frontal day — a real GA hazard we
+want to keep flagging, and the capping/entrainment layer just above a mixed
+layer is exactly where such a day puts it. The mixed-layer test suppresses the
+*mechanism* that is misdiagnosed, not an altitude band.
+
+### (c) Boundary-layer severe no longer bypasses the route-percentage gate
+
+`TurbulenceEvaluator` graded RED on `has_severe` anywhere at cruise, regardless
+of route percentage — which is why a single BL shear layer at 1 of 17 points
+reddened the advisory and why it never cleared across the week. That bypass is
+written for free-atmosphere severe CAT, a route-wide hazard; a low-level shear
+sheet is local and short-lived.
+
+CAT layers lying wholly within the boundary layer — below the detected
+mixed-layer top, or below 5,000 ft AGL when no mixed layer is detected — are
+tagged `CATRiskLayer.boundary_layer`. A severe one at cruise is **floored at
+AMBER** (grading it GREEN under the percentage threshold while the detail reads
+"SEVERE over …" would be incoherent) and goes RED once it covers enough of the
+route. Free-atmosphere severe keeps the bypass unchanged.
+
+The cross-section ribbon is deliberately left alone: it keys on
+severe-anywhere-in-column while the grade keys on the cruise band (#393), and a
+severe layer is still worth showing where it sits.
+
+### Follow-ups done here
+
+`metrics-catalog.json` documented "Below about 0.25 expect clear-air
+turbulence" while the code fired SEVERE at 0.5 — a 2× disagreement between the
+help text and the implementation. The published tiers were already the
+classical ones, so they are now correct as written; the altitude ramp and the
+mixed-layer exclusion are noted in `best_used_for` / `limitations`. Both copies
+of the catalog (web and iOS) are updated.
+
+### Files changed
+
+- `analysis/sounding/vertical_motion.py` — altitude-scaled tiers
+  (`_ri_threshold_scale`, `_classify_cat_risk`), `mixed_layer_top_index`,
+  boundary-layer tagging in `_build_cat_layers` / `_build_single_cat_layer`.
+- `analysis/advisories/turbulence.py` — BL-severe goes through the percentage
+  gate with an AMBER floor.
+- `models/analysis.py` — `CATRiskLayer.boundary_layer`,
+  `VerticalMotionAssessment.mixed_layer_top_ft`.
+- `web/ts/store/types.ts`, `web/ts/data/metrics-catalog.json`,
+  `app/…/Resources/metrics-catalog.json`.
+- Tests: `tests/test_vertical_motion.py`,
+  `tests/analysis/advisories/test_evaluators.py`. The existing CAT-layer tests
+  were tuned to the old 2× tiers; their Ri values are halved so each test keeps
+  asserting the same severity structure it was written for.
+
+### Real-world validation needed
+
+- Re-run the EGNY→EGKB pack and confirm ICON's turbulence advisory clears at
+  cruise while GFS/ECMWF are unchanged.
+- A winter frontal case with genuine low-level wind shear under a stable BL —
+  confirm the layer still surfaces (no mixed layer detected → nothing
+  suppressed) and grades at least AMBER.
+- An upper-level jet-flank case at FL300 — confirm the ×2 ramp leaves the
+  existing severe-CAT behaviour untouched.

@@ -310,14 +310,16 @@ vm = assess_vertical_motion(derived_levels)
 
 **CAT layer merging:** `_build_cat_layers()` groups adjacent low-Ri levels using dual-gap adjacency: BOTH pressure gap ≤ 100 hPa AND original-index gap ≤ 2. Prevents chaining scattered low-Ri levels across large stable gaps (e.g., GFS 25 hPa spacing where stable levels are simply skipped).
 
-**CAT risk from Richardson number** (loosened from classical 0.25/0.5/1.0 to compensate for NWP vertical resolution bias — 25-50 hPa between levels is too coarse to resolve thin shear layers where KH instability develops, so computed Ri is systematically too high):
+**Mixed-layer suppression:** `mixed_layer_top_index()` walks up from the surface while each layer's lapse rate is ≥ 8.8 °C/km (≈ dry-adiabatic), capped at 10,000 ft deep. Levels inside that layer are excluded from CAT entirely — shear there is convective-BL roughness, not a KH shear sheet. The top is reported as `mixed_layer_top_ft`. Surviving layers that lie wholly inside the boundary layer (mixed-layer top, or 5,000 ft AGL when none is detected) are tagged `boundary_layer` for the advisory gate. See [meteorology-decisions §24](./meteorology-decisions.md).
 
-| Ri range | CAT Risk |
-|----------|----------|
-| < 0.5 | SEVERE (Kelvin-Helmholtz instability) |
-| 0.5-1.0 | MODERATE |
-| 1.0-2.0 | LIGHT |
-| > 2.0 | NONE |
+**CAT risk from Richardson number** — classical Miles-Howard tiers, scaled by altitude. The NWP positive-Ri bias (model layers too thick to resolve the 100–300 m shear sheet) scales with layer thickness, which scales with altitude: 25 hPa is ~230 m at 950 hPa but ~800 m at 300 hPa. So the correction is applied aloft only, ramping ×1 → ×2 between 10,000 and 20,000 ft:
+
+| Ri range (≤ 10,000 ft) | Ri range (≥ 20,000 ft) | CAT Risk |
+|----------|----------|----------|
+| < 0.25 | < 0.5 | SEVERE (Kelvin-Helmholtz instability) |
+| 0.25-0.5 | 0.5-1.0 | MODERATE |
+| 0.5-1.0 | 1.0-2.0 | LIGHT |
+| > 1.0 | > 2.0 | NONE |
 
 **Vertical motion magnitude reference:**
 
