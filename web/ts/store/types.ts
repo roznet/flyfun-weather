@@ -374,6 +374,9 @@ export interface CATRiskLayer {
   top_pressure_hpa: number | null;
   richardson_number: number | null;
   risk: CATRiskLevel;
+  /** Layer lies wholly inside the boundary layer (#533) — a SEVERE one is
+   *  graded by route percentage rather than forcing RED on its own. */
+  boundary_layer?: boolean;
 }
 
 export interface VerticalMotionAssessment {
@@ -384,6 +387,9 @@ export interface VerticalMotionAssessment {
   cat_risk_layers: CATRiskLayer[];
   e_shear_layers: CATRiskLayer[];
   convective_contamination: boolean;
+  /** Top of the surface well-mixed layer, when detected (#533). CAT layers
+   *  below it are suppressed as boundary-layer roughness, not KH shear. */
+  mixed_layer_top_ft?: number | null;
 }
 
 export interface InversionLayer {

@@ -389,6 +389,102 @@ class TestTurbulence:
         result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    @staticmethod
+    def _bl_severe_ctx(n_flagged: int) -> RouteContext:
+        """Route where *n_flagged* of 17 points carry a BL-severe layer at cruise."""
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        def vm(boundary_layer: bool) -> VerticalMotionAssessment:
+            return VerticalMotionAssessment(
+                classification=VerticalMotionClass.QUIESCENT,
+                cat_risk_layers=[CATRiskLayer(
+                    base_ft=2000, top_ft=3000, risk=CATRiskLevel.SEVERE,
+                    boundary_layer=boundary_layer,
+                )],
+            )
+
+        clear = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT, cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"icon_eu": SoundingAnalysis(
+                    vertical_motion=(vm(True) if i < n_flagged else clear),
+                )},
+            )
+            for i in range(17)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["icon_eu"],
+            cruise_altitude_ft=2500, flight_ceiling_ft=18000, total_distance_nm=170,
+        )
+
+    def test_boundary_layer_severe_does_not_force_red(self):
+        """A BL-severe layer at 1 of 17 points is AMBER, not RED (#533).
+
+        The EGNY→EGKB case: ICON resolved a sharp low-level shear sheet at
+        2,500 ft that GFS smoothed away, and severe-anywhere → RED reddened
+        the whole advisory off a single route point for a week. Boundary-layer
+        severe shear now goes through the route-percentage gate — floored at
+        AMBER so the SEVERE detail text stays coherent, but not RED.
+        """
+        result = TurbulenceEvaluator.evaluate(
+            self._bl_severe_ctx(1), {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+
+    def test_boundary_layer_severe_reds_when_widespread(self):
+        """BL-severe over most of the route still REDs — the gate, not a mute."""
+        result = TurbulenceEvaluator.evaluate(
+            self._bl_severe_ctx(15), {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_free_atmosphere_severe_still_forces_red(self):
+        """A severe layer above the boundary layer keeps the severe-anywhere bypass."""
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        severe_vm = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT,
+            cat_risk_layers=[CATRiskLayer(
+                base_ft=7000, top_ft=10000, risk=CATRiskLevel.SEVERE,
+                boundary_layer=False,
+            )],
+        )
+        clear = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT, cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    vertical_motion=(severe_vm if i == 0 else clear),
+                )},
+            )
+            for i in range(17)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=170,
+        )
+        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        assert result.aggregate_status == AdvisoryStatus.RED
+
 
 class TestConvective:
     def test_green_no_convection(self, clear_context: RouteContext):

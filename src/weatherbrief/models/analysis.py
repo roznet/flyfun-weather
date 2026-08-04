@@ -1067,6 +1067,12 @@ class CATRiskLayer(BaseModel):
     top_pressure_hpa: Optional[int] = None
     richardson_number: Optional[float] = None  # minimum Ri in layer
     risk: CATRiskLevel = CATRiskLevel.NONE
+    # True when the layer lies wholly inside the boundary layer (#533). Such a
+    # layer is still graded, but a SEVERE one does not bypass the route-
+    # percentage gate the way free-atmosphere severe CAT does: low-level shear
+    # is real, yet it is a local, short-lived feature rather than the
+    # route-wide hazard "severe CAT anywhere → RED" was written for.
+    boundary_layer: bool = False
 
 
 class VerticalMotionAssessment(BaseModel):
@@ -1079,6 +1085,10 @@ class VerticalMotionAssessment(BaseModel):
     cat_risk_layers: list[CATRiskLayer] = Field(default_factory=list)
     e_shear_layers: list[CATRiskLayer] = Field(default_factory=list)
     convective_contamination: bool = False
+    # Top of the surface well-mixed layer (#533), when one is detected. CAT
+    # layers below it are suppressed — reported so that suppression is
+    # inspectable. None when the surface layer is not well mixed.
+    mixed_layer_top_ft: Optional[float] = None
 
 
 class SoundingAnalysis(BaseModel):
