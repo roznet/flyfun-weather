@@ -271,6 +271,7 @@ def mixed_layer_top_index(derived_levels: list[DerivedLevel]) -> int:
 
 def _build_cat_layers(
     derived_levels: list[DerivedLevel],
+    ml_top_idx: int,
     max_index_gap: int = 2,
 ) -> list[CATRiskLayer]:
     """Group adjacent low-Ri levels into CAT risk layers, split by severity.
@@ -286,17 +287,34 @@ def _build_cat_layers(
     severity tier so that e.g. boundary-layer SEVERE shear doesn't paint
     an entire deep layer SEVERE when higher levels are only MODERATE.
 
-    Levels inside the surface well-mixed layer are excluded entirely (#533),
-    and the layers that survive are tagged ``boundary_layer`` when they lie
-    wholly within the boundary layer.
+    Levels inside the surface well-mixed layer (up to *ml_top_idx*, from
+    ``mixed_layer_top_index``) are excluded entirely (#533), and the layers
+    that survive are tagged ``boundary_layer`` when they lie wholly within
+    the boundary layer.
     """
-    ml_top_idx = mixed_layer_top_index(derived_levels)
     surface_ft = derived_levels[0].altitude_ft if derived_levels else None
     ml_top_ft = (
         derived_levels[ml_top_idx].altitude_ft if ml_top_idx > 0 else None
     )
-    # Boundary-layer ceiling used only for tagging surviving layers: the
-    # detected mixed-layer top when there is one, else a fixed AGL fallback.
+    # Boundary-layer ceiling, used only for tagging the layers that survive
+    # suppression. Deliberately the HIGHER of the detected mixed-layer top and
+    # the fixed AGL fallback, not an either/or (#534 review):
+    #
+    #   - The two only differ when a mixed layer was actually detected, i.e. a
+    #     convective daytime BL. A frontal low-level-wind-shear day has no
+    #     well-mixed surface layer, so ml_top_ft is None and the fallback is
+    #     what applies — the case the fallback exists for.
+    #   - Where they do differ, a shear sheet between the mixed-layer top and
+    #     5,000 ft AGL is most often that layer's own entrainment/capping
+    #     shear — a BL phenomenon, so tagging it BL is right.
+    #   - Taking only ml_top_ft would re-open the #533 failure mode: with a
+    #     shallow detected mixed layer (say 1,200 ft), a severe sheet at
+    #     2,000 ft would read as free atmosphere and RED the whole route off
+    #     one point of seventeen.
+    #
+    # The tag is not a mute: a BL-tagged severe layer is still floored at
+    # AMBER, still REDs past the route-percentage threshold, and still paints
+    # its band in the cross-section.
     bl_top_ft: float | None = None
     if surface_ft is not None:
         bl_top_ft = max(ml_top_ft or 0.0, surface_ft + _BL_FALLBACK_DEPTH_FT)
@@ -417,16 +435,17 @@ def assess_vertical_motion(
                 max_w = lv.w_fpm
                 max_w_level = lv.altitude_ft
 
-    # Build CAT risk layers from Ri
-    cat_layers = _build_cat_layers(derived_levels)
-
-    # Surface well-mixed layer top (#533) — the depth over which CAT layers
-    # were suppressed. Reported so the suppression is inspectable rather than
-    # silently swallowing layers.
+    # Surface well-mixed layer (#533) — CAT layers inside it are suppressed,
+    # and its top is reported so the suppression is inspectable rather than
+    # silently swallowing layers. Resolved once and shared with the layer
+    # builder rather than walked twice (#534 review).
     ml_top_idx = mixed_layer_top_index(derived_levels)
     mixed_layer_top_ft = (
         derived_levels[ml_top_idx].altitude_ft if ml_top_idx > 0 else None
     )
+
+    # Build CAT risk layers from Ri
+    cat_layers = _build_cat_layers(derived_levels, ml_top_idx)
 
     # Detect convective contamination: mid-level |omega| > threshold
     convective_contamination = False
