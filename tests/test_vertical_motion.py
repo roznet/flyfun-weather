@@ -591,6 +591,39 @@ def test_shear_above_mixed_layer_top_still_flagged():
     assert assessment.cat_risk_layers[0].base_ft == 3900
 
 
+def test_bl_ceiling_is_the_higher_of_mixed_layer_top_and_agl_fallback():
+    """The BL ceiling is max(mixed-layer top, surface + 5,000 ft) — not either/or.
+
+    Pins the #534 review decision. A shear sheet at 3,900 ft above a 2,500 ft
+    mixed layer (surface 500 ft, so the fallback ceiling is 5,500 ft) is still
+    tagged boundary-layer: it is most likely the mixed layer's own
+    entrainment/capping shear, and reading it as free atmosphere would let a
+    single route point RED the advisory again — the #533 failure mode.
+
+    The tag is not a mute. Such a layer is still floored at AMBER and still
+    REDs past the route-percentage threshold; see ``TestTurbulence``.
+    """
+    levels = _mixed_layer_profile(ri_at_2500=0.2)
+    levels[3].richardson_number = 0.15  # 3,900 ft — above the mixed-layer top
+    assessment = assess_vertical_motion(levels)
+
+    assert assessment.mixed_layer_top_ft == 2500
+    layer = assessment.cat_risk_layers[0]
+    assert layer.base_ft == 3900
+    assert layer.boundary_layer is True
+
+
+def test_layer_above_the_agl_fallback_is_free_atmosphere():
+    """Above surface + 5,000 ft the tag is off, so severe keeps its RED bypass."""
+    levels = _mixed_layer_profile(ri_at_2500=0.2)
+    levels.append(DerivedLevel(pressure_hpa=850, altitude_ft=6200,
+                               richardson_number=0.15))
+    assessment = assess_vertical_motion(levels)
+
+    by_base = {la.base_ft: la for la in assessment.cat_risk_layers}
+    assert by_base[6200].boundary_layer is False
+
+
 def test_no_mixed_layer_when_surface_layer_is_stable():
     """A stable surface layer means no mixed layer — nothing is suppressed."""
     levels = [

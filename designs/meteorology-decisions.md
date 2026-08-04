@@ -3167,12 +3167,33 @@ reddened the advisory and why it never cleared across the week. That bypass is
 written for free-atmosphere severe CAT, a route-wide hazard; a low-level shear
 sheet is local and short-lived.
 
-CAT layers lying wholly within the boundary layer — below the detected
-mixed-layer top, or below 5,000 ft AGL when no mixed layer is detected — are
-tagged `CATRiskLayer.boundary_layer`. A severe one at cruise is **floored at
-AMBER** (grading it GREEN under the percentage threshold while the detail reads
+CAT layers lying wholly within the boundary layer are tagged
+`CATRiskLayer.boundary_layer`. A severe one at cruise is **floored at AMBER**
+(grading it GREEN under the percentage threshold while the detail reads
 "SEVERE over …" would be incoherent) and goes RED once it covers enough of the
 route. Free-atmosphere severe keeps the bypass unchanged.
+
+**The boundary-layer ceiling is the *higher* of the detected mixed-layer top
+and 5,000 ft AGL — not an either/or.** The PR #534 review read the max() as a
+bug against this paragraph's earlier wording; the max() is the intended
+behaviour and this text was the imprecise half. The reasoning:
+
+- The two readings only diverge when a mixed layer was actually detected, i.e.
+  a convective daytime BL. A frontal low-level-wind-shear day has no
+  well-mixed surface layer, so no top is detected and the AGL fallback is what
+  applies — the case the fallback exists for.
+- Where they do diverge, a shear sheet between the mixed-layer top and 5,000 ft
+  AGL is most often that layer's own entrainment/capping shear, so tagging it
+  boundary-layer is the right reading.
+- Using only the detected top would re-open the #533 failure mode from the
+  other side: with a shallow mixed layer (say 1,200 ft), a severe sheet at
+  2,000 ft would read as free atmosphere and RED the whole route off one point
+  of seventeen.
+
+The tag is not a mute, which is what makes the generous ceiling safe: a
+BL-tagged severe layer is still floored at AMBER, still REDs past the
+route-percentage threshold, and still paints its band in the cross-section.
+`test_bl_ceiling_is_the_higher_of_mixed_layer_top_and_agl_fallback` pins it.
 
 The cross-section ribbon is deliberately left alone: it keys on
 severe-anywhere-in-column while the grade keys on the cruise band (#393), and a
