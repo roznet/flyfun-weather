@@ -427,6 +427,67 @@ class TestTurbulence:
             cruise_altitude_ft=2500, flight_ceiling_ft=18000, total_distance_nm=170,
         )
 
+    @staticmethod
+    def _risk_ctx(n_flagged: int, risk: "CATRiskLevel") -> RouteContext:
+        """Route where *n_flagged* of 17 points carry a free-atmosphere layer
+        of the given risk at cruise."""
+        from weatherbrief.models import (
+            CATRiskLayer,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        flagged = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT,
+            cat_risk_layers=[CATRiskLayer(
+                base_ft=2000, top_ft=3000, risk=risk, boundary_layer=False,
+            )],
+        )
+        clear = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT, cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"icon_eu": SoundingAnalysis(
+                    vertical_motion=(flagged if i < n_flagged else clear),
+                )},
+            )
+            for i in range(17)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["icon_eu"],
+            cruise_altitude_ft=2500, flight_ceiling_ft=18000, total_distance_nm=170,
+        )
+
+    def test_light_only_widespread_is_amber_not_red(self):
+        """LIGHT chop over most of the route caps at AMBER (#533 follow-up).
+
+        The RED tier of the coverage gate requires moderate-or-worse: with
+        honest layer geometry, an Ri read of a sheared low-level day produces
+        widespread light/moderate coverage, and light-everywhere is a
+        ride-quality note, not a RED hazard.
+        """
+        from weatherbrief.models import CATRiskLevel
+
+        result = TurbulenceEvaluator.evaluate(
+            self._risk_ctx(15, CATRiskLevel.LIGHT),
+            {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+
+    def test_moderate_widespread_still_reds(self):
+        """MODERATE over half the route keeps the RED coverage tier."""
+        from weatherbrief.models import CATRiskLevel
+
+        result = TurbulenceEvaluator.evaluate(
+            self._risk_ctx(15, CATRiskLevel.MODERATE),
+            {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
     def test_boundary_layer_severe_does_not_force_red(self):
         """A BL-severe layer at 1 of 17 points is AMBER, not RED (#533).
 

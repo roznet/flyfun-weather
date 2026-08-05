@@ -37,7 +37,8 @@ class TurbulenceEvaluator:
                 "Checks CAT risk layers and vertical motion at cruise altitude. "
                 "Severe free-atmosphere CAT triggers RED regardless of route "
                 "percentage; severe boundary-layer shear is floored at AMBER "
-                "and graded by route percentage."
+                "and graded by route percentage. RED via coverage requires "
+                "moderate-or-worse risk — light-only coverage caps at AMBER."
             ),
             category="turbulence",
             altitude_dependent=True,
@@ -79,6 +80,13 @@ class TurbulenceEvaluator:
         for model in ctx.models:
             has_severe = False
             has_bl_severe = False
+            # Points with MODERATE-or-worse at cruise (or a strong updraft).
+            # The RED tier of the percentage gate keys on this count, not on
+            # any-risk coverage: LIGHT chop over half the route is an AMBER
+            # ride-quality note, not a RED hazard (#533 follow-up — with the
+            # corrected layer geometry, light/moderate coverage is what an
+            # honest Ri read of a sheared low-level day produces).
+            significant_points = 0
             worst_cat = CATRiskLevel.NONE
             # One evidence sample per route point (#393). The ribbon and the grade
             # key on DIFFERENT predicates here, so each sample carries both: the
@@ -109,6 +117,7 @@ class TurbulenceEvaluator:
                     continue
 
                 point_affected = False
+                point_significant = False
                 strong_w_here = False
                 severe_layers: list = []
                 moderate_cruise_layers: list = []
@@ -117,6 +126,8 @@ class TurbulenceEvaluator:
                     at_cruise = layer.base_ft <= cruise <= layer.top_ft
                     if at_cruise and layer.risk != CATRiskLevel.NONE:
                         point_affected = True
+                        if layer.risk != CATRiskLevel.LIGHT:
+                            point_significant = True
                         if _CAT_ORDER.index(layer.risk) > _CAT_ORDER.index(worst_cat):
                             worst_cat = layer.risk
                         if layer.risk == CATRiskLevel.SEVERE:
@@ -140,7 +151,11 @@ class TurbulenceEvaluator:
                 if vm.max_w_fpm is not None and abs(vm.max_w_fpm) > strong_w_fpm:
                     if vm.max_w_level_ft is not None and abs(vm.max_w_level_ft - cruise) < 3000:
                         point_affected = True
+                        point_significant = True
                         strong_w_here = True
+
+                if point_significant:
+                    significant_points += 1
 
                 # Per-point ribbon verdict + CAT-layer cutout (#375). Strong-w is
                 # resolved to a single level (max_w_level_ft), not a band — it
@@ -187,7 +202,16 @@ class TurbulenceEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("turbulence.smooth", loc)
             else:
-                status = pct_above_threshold(affected, total, route_pct_amber, red_pct=50)
+                # AMBER from any-risk coverage; the RED tier requires the
+                # moderate-or-worse count to clear the 50% bar. Light-only
+                # coverage over most of the route is a ride-quality note, not
+                # a RED hazard.
+                status = pct_above_threshold(affected, total, route_pct_amber)
+                if (
+                    pct_above_threshold(significant_points, total, route_pct_amber, red_pct=50)
+                    == AdvisoryStatus.RED
+                ):
+                    status = AdvisoryStatus.RED
                 # A severe boundary-layer layer sitting at cruise is at least
                 # AMBER even below the route-percentage threshold — grading it
                 # GREEN while the detail reads "SEVERE over …" would be
