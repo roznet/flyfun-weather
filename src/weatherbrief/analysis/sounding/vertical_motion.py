@@ -8,6 +8,7 @@ NWP omega/w and derived stability indicators.
 from __future__ import annotations
 
 import logging
+import math
 
 import metpy.calc as mpcalc
 import numpy as np
@@ -50,15 +51,26 @@ _RI_LOOSEN_MAX = 2.0
 
 # Surface well-mixed (convective boundary) layer detection (#533).
 #
-# A surface-rooted layer whose temperature lapse rate is at or near the dry
-# adiabat (9.76 °C/km) is convectively mixed. Shear inside it is boundary-layer
+# Inside a convectively mixed layer virtual potential temperature is
+# near-constant with height, so the standard parcel criterion applies: the
+# mixed layer extends while θv stays within a small excess of its surface
+# value (Holtslag-style +0.5 K over land). Shear inside it is boundary-layer
 # roughness — thermals and mechanical mixing — not the sheet-like KH
 # instability the Ri diagnostic is calibrated for, and flagging it as CAT
 # paints summer-afternoon noise at the bottom of every cross-section. This
 # generalises the §8(c) guard, which only caught *negative* Ri at the two
 # lowest levels: a 3,000–4,000 ft deep mixed layer with small-positive Ri
 # sailed straight past it.
-_MIXED_LAYER_LAPSE_C_PER_KM = 8.8  # ≈ 2.7 °C/1000 ft
+#
+# A per-layer lapse-rate walk (each layer ≥ _MIXED_LAYER_LAPSE_C_PER_KM) is
+# kept as the fallback when temperatures are unavailable. It is NOT the
+# primary detector because it is brittle: one interpolation kink below the
+# dry adiabat truncates the walk, and on the #533 pack that read a mixed
+# layer reaching 3,000–4,000 ft as ~1,000 ft deep at a third of the route
+# points. The θv criterion integrates over the column instead of gating on
+# every 25 hPa slice.
+_MIXED_LAYER_THETA_V_EXCESS_K = 0.5
+_MIXED_LAYER_LAPSE_C_PER_KM = 8.8  # ≈ 2.7 °C/1000 ft (fallback walk only)
 _MIXED_LAYER_MAX_DEPTH_FT = 10000.0
 
 # Fallback boundary-layer depth (AGL) used to tag CAT layers as boundary-layer
@@ -234,21 +246,43 @@ def _classify_cat_risk(ri: float, altitude_ft: float) -> CATRiskLevel:
     return CATRiskLevel.NONE
 
 
+def _theta_v_k(lv: DerivedLevel) -> float | None:
+    """Virtual potential temperature (K) of a level, plain math (no MetPy).
+
+    Standalone runs this per level over tens of thousands of soundings on a
+    single core, so scalar MetPy calls are deliberately avoided. Bolton (1980)
+    vapour pressure from dewpoint; dry θ when dewpoint is missing (inside a
+    mixed layer mixing ratio is near-constant, so the dry fallback shifts the
+    profile, not the gradient the detector keys on).
+    """
+    if lv.temperature_c is None:
+        return None
+    theta = (lv.temperature_c + 273.15) * (1000.0 / lv.pressure_hpa) ** 0.2854
+    if lv.dewpoint_c is None:
+        return theta
+    e_hpa = 6.112 * math.exp(17.67 * lv.dewpoint_c / (lv.dewpoint_c + 243.5))
+    e_hpa = min(e_hpa, 0.9 * lv.pressure_hpa)
+    r = 0.622 * e_hpa / (lv.pressure_hpa - e_hpa)
+    return theta * (1.0 + 0.61 * r)
+
+
 def mixed_layer_top_index(derived_levels: list[DerivedLevel]) -> int:
     """Index of the highest level still inside the surface well-mixed layer.
 
-    Walks up from the surface while each layer's temperature lapse rate is at
-    or above ``_MIXED_LAYER_LAPSE_C_PER_KM`` (i.e. at/near dry-adiabatic),
-    stopping at the first stable layer or once the mixed layer would exceed
-    ``_MIXED_LAYER_MAX_DEPTH_FT`` above the lowest level.
+    Parcel criterion: walks up from the surface while each level's virtual
+    potential temperature stays within ``_MIXED_LAYER_THETA_V_EXCESS_K`` of
+    the surface value (θv is near-constant in a mixed layer and climbs
+    through the capping stable air), stopping at the first exceedance or once
+    the layer would exceed ``_MIXED_LAYER_MAX_DEPTH_FT`` above the lowest
+    level. Falls back to the per-layer lapse-rate walk when temperatures are
+    unavailable.
 
     Returns 0 when the surface layer is not well mixed — nothing is suppressed
     in that case, since Ri is only ever stored from index 1 upwards.
 
-    Note the index convention: ``lapse_rate_c_per_km`` on level *i* describes
-    the layer *above* it (i → i+1), whereas ``richardson_number`` on level
-    *i+1* describes the layer *below* it — the same layer. So a returned index
-    of *n* means levels 1…*n* carry the Ri of a well-mixed layer.
+    Index convention: ``richardson_number`` on level *i* describes the layer
+    below it (*i-1* → *i*), so a returned index of *n* means levels 1…*n*
+    carry the Ri of well-mixed layers.
     """
     if not derived_levels:
         return 0
@@ -257,6 +291,27 @@ def mixed_layer_top_index(derived_levels: list[DerivedLevel]) -> int:
     if surface_ft is None:
         return 0
 
+    theta_v0 = _theta_v_k(derived_levels[0])
+    if theta_v0 is None:
+        return _mixed_layer_top_index_lapse(derived_levels)
+
+    top = 0
+    for i in range(1, len(derived_levels)):
+        lv = derived_levels[i]
+        if lv.altitude_ft is None or (lv.altitude_ft - surface_ft) > _MIXED_LAYER_MAX_DEPTH_FT:
+            break
+        theta_v = _theta_v_k(lv)
+        if theta_v is None or theta_v > theta_v0 + _MIXED_LAYER_THETA_V_EXCESS_K:
+            break
+        top = i
+    return top
+
+
+def _mixed_layer_top_index_lapse(derived_levels: list[DerivedLevel]) -> int:
+    """Fallback detector: per-layer lapse-rate walk (used when θv can't be
+    computed). Brittle — a single sub-adiabatic kink truncates it — which is
+    why it is no longer the primary method (#534 follow-up review)."""
+    surface_ft = derived_levels[0].altitude_ft
     top = 0
     for i in range(len(derived_levels) - 1):
         lapse = derived_levels[i].lapse_rate_c_per_km
@@ -319,8 +374,15 @@ def _build_cat_layers(
     if surface_ft is not None:
         bl_top_ft = max(ml_top_ft or 0.0, surface_ft + _BL_FALLBACK_DEPTH_FT)
 
-    # Collect qualifying levels with their original index in derived_levels
-    cat_levels: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = []
+    # Collect qualifying levels with their original index in derived_levels.
+    # ``richardson_number`` on level *idx* describes the layer BELOW it
+    # (idx-1 → idx), so each qualifying level carries its base level too and
+    # the resulting CAT layer spans the physical layer, not just the upper
+    # bound. Building layers from the flagged levels' own altitudes emitted
+    # zero-thickness layers (base == top) whenever a single level qualified —
+    # on the #533 pack that put a severe "layer" at 2,523–2,523 ft over a
+    # 2,500 ft cruise, silently missing it by 23 ft.
+    cat_levels: list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]] = []
     for idx, lv in enumerate(derived_levels):
         if lv.richardson_number is None or lv.altitude_ft is None:
             continue
@@ -334,21 +396,37 @@ def _build_cat_layers(
         # layer from. Elevated statically-unstable layers (idx > 1) qualify.
         if lv.richardson_number < 0 and idx <= 1:
             continue
-        risk = _classify_cat_risk(lv.richardson_number, lv.altitude_ft)
+        base_lv = lv
+        if idx > 0:
+            below = derived_levels[idx - 1]
+            # Same 100 hPa adjacency criterion as the grouping below: across a
+            # sparse column (missing levels), extending the base would paint a
+            # multi-thousand-ft band from one Ri of dubious meaning — keep the
+            # old upper-bound-only behaviour there.
+            if (
+                below.altitude_ft is not None
+                and (below.pressure_hpa - lv.pressure_hpa) <= 100
+            ):
+                base_lv = below
+        # Classify at the physical layer's midpoint — the Ri characterises the
+        # whole idx-1 → idx layer, so the threshold scale shouldn't be read at
+        # its upper bound.
+        mid_ft = (base_lv.altitude_ft + lv.altitude_ft) / 2.0
+        risk = _classify_cat_risk(lv.richardson_number, mid_ft)
         if risk == CATRiskLevel.NONE:
             continue
-        cat_levels.append((idx, lv, risk, lv.richardson_number))
+        cat_levels.append((idx, base_lv, lv, risk, lv.richardson_number))
 
     if not cat_levels:
         return []
 
     # Group adjacent levels (pressure gap <= 100 hPa AND index gap <= max_index_gap)
-    groups: list[list[tuple[int, DerivedLevel, CATRiskLevel, float]]] = []
-    current: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
+    groups: list[list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]]] = []
+    current: list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
 
     for item in cat_levels[1:]:
-        prev_idx, prev_lv = current[-1][0], current[-1][1]
-        this_idx, this_lv = item[0], item[1]
+        prev_idx, prev_lv = current[-1][0], current[-1][2]
+        this_idx, this_lv = item[0], item[2]
         if (
             (this_idx - prev_idx) <= max_index_gap
             and abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100
@@ -362,14 +440,14 @@ def _build_cat_layers(
     # Split each adjacency group into sub-layers by severity tier
     layers: list[CATRiskLayer] = []
     for group in groups:
-        items = [(lv, risk, ri) for _, lv, risk, ri in group]
+        items = [(base_lv, lv, risk, ri) for _, base_lv, lv, risk, ri in group]
         layers.extend(_split_by_severity(items, bl_top_ft))
 
     return layers
 
 
 def _split_by_severity(
-    items: list[tuple[DerivedLevel, CATRiskLevel, float]],
+    items: list[tuple[DerivedLevel, DerivedLevel, CATRiskLevel, float]],
     bl_top_ft: float | None = None,
 ) -> list[CATRiskLayer]:
     """Split a group of adjacent levels into sub-layers by severity tier.
@@ -378,10 +456,10 @@ def _split_by_severity(
     This ensures each layer's risk accurately reflects its altitude range.
     """
     result: list[CATRiskLayer] = []
-    run: list[tuple[DerivedLevel, CATRiskLevel, float]] = [items[0]]
+    run: list[tuple[DerivedLevel, DerivedLevel, CATRiskLevel, float]] = [items[0]]
 
     for item in items[1:]:
-        if item[1] == run[-1][1]:
+        if item[2] == run[-1][2]:
             run.append(item)
         else:
             result.append(_build_single_cat_layer(run, bl_top_ft))
@@ -392,15 +470,22 @@ def _split_by_severity(
 
 
 def _build_single_cat_layer(
-    items: list[tuple[DerivedLevel, CATRiskLevel, float]],
+    items: list[tuple[DerivedLevel, DerivedLevel, CATRiskLevel, float]],
     bl_top_ft: float | None = None,
 ) -> CATRiskLayer:
-    """Build a CATRiskLayer from a group of same-severity levels."""
-    risk = items[0][1]
-    min_ri = min(ri for _, _, ri in items)
+    """Build a CATRiskLayer from a group of same-severity levels.
+
+    Each item is ``(base_lv, lv, risk, ri)`` where ``base_lv`` is the level
+    below ``lv`` — the bottom of the physical layer that ``lv``'s Ri
+    describes. The layer therefore spans base of the first item → the last
+    item's level, so a single qualifying level still yields a layer with real
+    thickness rather than a zero-thickness line at its upper bound.
+    """
+    risk = items[0][2]
+    min_ri = min(ri for _, _, _, ri in items)
 
     base = items[0][0]
-    top = items[-1][0]
+    top = items[-1][1]
 
     return CATRiskLayer(
         base_ft=round(base.altitude_ft),

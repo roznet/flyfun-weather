@@ -279,16 +279,19 @@ def test_scattered_cat_not_merged_across_stable_gap():
                      richardson_number=0.355),  # MODERATE
     ]
     assessment = assess_vertical_motion(levels)
-    # BL: MODERATE(1100-1800) + LIGHT(2500) = 2 sub-layers
-    # Upper: MODERATE(10000) = 1 layer
+    # BL: MODERATE(300-1800) + LIGHT(1800-2500) = 2 sub-layers
+    # Upper: MODERATE(6200-10000; the Ri at 700 hPa describes the layer down
+    # to the 800 hPa level below it) = 1 layer
     assert len(assessment.cat_risk_layers) == 3, (
         f"Expected 3 layers (2 BL sub-layers + 1 upper), got {len(assessment.cat_risk_layers)}"
     )
     # BL layers stay low
     assert assessment.cat_risk_layers[0].top_ft <= 2000
     assert assessment.cat_risk_layers[1].top_ft <= 3000
-    # Upper layer is separate
-    assert assessment.cat_risk_layers[2].base_ft >= 9000
+    # Upper layer is separate — it does not chain down into the BL cluster
+    assert assessment.cat_risk_layers[2].base_ft == 6200
+    assert assessment.cat_risk_layers[2].top_ft == 10000
+    assert assessment.cat_risk_layers[2].base_ft > assessment.cat_risk_layers[1].top_ft
 
 
 def test_cat_merges_across_single_stable_level():
@@ -571,8 +574,9 @@ def test_well_mixed_layer_suppresses_positive_ri_cat():
     assessment = assess_vertical_motion(_mixed_layer_profile(ri_at_2500=0.2))
 
     assert assessment.mixed_layer_top_ft == 2500
-    # Only the layer above the mixed-layer top survives.
-    assert [la.base_ft for la in assessment.cat_risk_layers] == [3900]
+    # Only the layer above the mixed-layer top survives — it spans from the
+    # mixed-layer top to the level whose Ri describes it.
+    assert [(la.base_ft, la.top_ft) for la in assessment.cat_risk_layers] == [(2500, 3900)]
 
 
 def test_shear_above_mixed_layer_top_still_flagged():
@@ -583,12 +587,15 @@ def test_shear_above_mixed_layer_top_still_flagged():
     frontal day puts it.
     """
     levels = _mixed_layer_profile(ri_at_2500=0.2)
-    levels[3].richardson_number = 0.15  # sharp shear sheet at 3,900 ft
+    levels[3].richardson_number = 0.15  # sharp shear sheet in the 2,500–3,900 ft layer
     assessment = assess_vertical_motion(levels)
 
     assert len(assessment.cat_risk_layers) == 1
     assert assessment.cat_risk_layers[0].risk == CATRiskLevel.SEVERE
-    assert assessment.cat_risk_layers[0].base_ft == 3900
+    # The layer spans from the mixed-layer top (suppression stops there) up to
+    # the level carrying the low Ri.
+    assert assessment.cat_risk_layers[0].base_ft == 2500
+    assert assessment.cat_risk_layers[0].top_ft == 3900
 
 
 def test_bl_ceiling_is_the_higher_of_mixed_layer_top_and_agl_fallback():
@@ -604,12 +611,12 @@ def test_bl_ceiling_is_the_higher_of_mixed_layer_top_and_agl_fallback():
     REDs past the route-percentage threshold; see ``TestTurbulence``.
     """
     levels = _mixed_layer_profile(ri_at_2500=0.2)
-    levels[3].richardson_number = 0.15  # 3,900 ft — above the mixed-layer top
+    levels[3].richardson_number = 0.15  # 2,500–3,900 ft — above the mixed-layer top
     assessment = assess_vertical_motion(levels)
 
     assert assessment.mixed_layer_top_ft == 2500
     layer = assessment.cat_risk_layers[0]
-    assert layer.base_ft == 3900
+    assert (layer.base_ft, layer.top_ft) == (2500, 3900)
     assert layer.boundary_layer is True
 
 
@@ -620,8 +627,9 @@ def test_layer_above_the_agl_fallback_is_free_atmosphere():
                                richardson_number=0.15))
     assessment = assess_vertical_motion(levels)
 
-    by_base = {la.base_ft: la for la in assessment.cat_risk_layers}
-    assert by_base[6200].boundary_layer is False
+    # The 5,200–6,200 ft layer pokes above the 5,500 ft BL ceiling.
+    by_top = {la.top_ft: la for la in assessment.cat_risk_layers}
+    assert by_top[6200].boundary_layer is False
 
 
 def test_no_mixed_layer_when_surface_layer_is_stable():
@@ -666,9 +674,131 @@ def test_boundary_layer_flag_set_for_low_layers():
     ]
     assessment = assess_vertical_motion(levels)
 
-    by_base = {la.base_ft: la for la in assessment.cat_risk_layers}
-    assert by_base[2500].boundary_layer is True
-    assert by_base[10000].boundary_layer is False
+    by_top = {la.top_ft: la for la in assessment.cat_risk_layers}
+    assert by_top[2500].boundary_layer is True
+    assert by_top[10000].boundary_layer is False
+
+
+# --- CAT layer geometry: Ri describes the layer BELOW its level (#534) ---
+
+
+def test_single_level_cat_layer_spans_the_layer_below():
+    """A lone qualifying level yields a layer spanning its physical layer.
+
+    Regression for the EGNY→EGKB miss: ICON point 8 stored Ri=0.24 on the
+    925 hPa level at 2,523 ft, describing the 950→925 hPa layer
+    (1,765–2,523 ft) that contains the 2,500 ft cruise. Building the layer
+    from the flagged level's own altitude produced a zero-thickness band at
+    2,523–2,523 ft, and the evaluator missed cruise by 23 ft — reading a
+    still-sheared column as "smooth ride expected".
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=292),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1765, richardson_number=2.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2523, richardson_number=0.24),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3296, richardson_number=5.0),
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    assert len(assessment.cat_risk_layers) == 1
+    layer = assessment.cat_risk_layers[0]
+    assert (layer.base_ft, layer.top_ft) == (1765, 2523)
+    assert layer.risk == CATRiskLevel.SEVERE
+    assert layer.base_ft < 2500 < layer.top_ft  # cruise inside the physical layer
+
+
+def test_sparse_column_does_not_extend_base_across_wide_gap():
+    """Across a >100 hPa gap the base is NOT extended down.
+
+    Ri computed over such a slab is already dubious; extending the layer
+    would paint a multi-thousand-ft band from a single number. The old
+    upper-bound-only behaviour is kept there (mirrors the 100 hPa adjacency
+    criterion used for grouping).
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, richardson_number=5.0),
+        DerivedLevel(pressure_hpa=300, altitude_ft=30000, richardson_number=0.2),
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    assert len(assessment.cat_risk_layers) == 1
+    assert assessment.cat_risk_layers[0].base_ft == 30000
+
+
+# --- θv-parcel mixed-layer detection (#534 follow-up) ---
+
+
+def _thetav_profile() -> list[DerivedLevel]:
+    """Convective profile whose second layer has a mild sub-adiabatic kink
+    (8.0 °C/km) inside an otherwise well-mixed 2,500 ft column, capped by an
+    inversion. θv stays within 0.5 K of the surface value up to 2,500 ft."""
+    return [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300, temperature_c=25.0,
+                     lapse_rate_c_per_km=9.9),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1000, temperature_c=22.9,
+                     lapse_rate_c_per_km=8.0, richardson_number=0.3),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1750, temperature_c=21.07,
+                     lapse_rate_c_per_km=9.8, richardson_number=0.2),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2500, temperature_c=18.83,
+                     lapse_rate_c_per_km=-2.7, richardson_number=0.2),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3300, temperature_c=19.5,
+                     richardson_number=0.15),
+    ]
+
+
+def test_theta_v_parcel_walks_through_a_lapse_kink():
+    """The θv criterion integrates over the column; the per-layer lapse walk
+    truncates at the first sub-8.8 layer.
+
+    This is the #533-pack failure mode: one interpolation kink at the second
+    level read a deep mixed layer as ~1,000 ft, leaving small-positive Ri
+    inside it flagged as CAT. θv keeps walking (cumulative excess ≈0.41 K)
+    and stops at the real inversion.
+    """
+    from weatherbrief.analysis.sounding.vertical_motion import (
+        _mixed_layer_top_index_lapse,
+        mixed_layer_top_index,
+    )
+
+    levels = _thetav_profile()
+    assert mixed_layer_top_index(levels) == 3  # 2,500 ft — through the kink
+    assert _mixed_layer_top_index_lapse(levels) == 1  # truncated at the kink
+
+
+def test_theta_v_suppression_covers_the_kinked_mixed_layer():
+    """CAT inside the θv-detected mixed layer is suppressed; the inversion
+    shear above it survives (spanning up from the mixed-layer top)."""
+    assessment = assess_vertical_motion(_thetav_profile())
+
+    assert assessment.mixed_layer_top_ft == 2500
+    assert [(la.base_ft, la.top_ft, la.risk) for la in assessment.cat_risk_layers] == [
+        (2500, 3300, CATRiskLevel.SEVERE),
+    ]
+
+
+def test_theta_v_stable_surface_detects_no_mixed_layer():
+    """θv climbing off the surface means no mixed layer — nothing suppressed."""
+    from weatherbrief.analysis.sounding.vertical_motion import mixed_layer_top_index
+
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300, temperature_c=12.0),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1000, temperature_c=11.5),
+    ]
+    assert mixed_layer_top_index(levels) == 0
+
+
+def test_lapse_fallback_used_when_temperatures_missing():
+    """Without temperatures the θv criterion can't run; the lapse walk takes
+    over so lapse-only profiles (older packs) keep their detection."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=500, lapse_rate_c_per_km=9.8),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1200, lapse_rate_c_per_km=9.8),
+        DerivedLevel(pressure_hpa=950, altitude_ft=2500, lapse_rate_c_per_km=4.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=3900),
+    ]
+    from weatherbrief.analysis.sounding.vertical_motion import mixed_layer_top_index
+
+    assert mixed_layer_top_index(levels) == 2  # 2,500 ft via the lapse walk
 
 
 def test_stability_indicators_store_negative_ri():

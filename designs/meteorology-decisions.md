@@ -3120,14 +3120,13 @@ argument holds. A ramp rather than a step: with a hard switch, two adjacent
 levels either side of 10,000 ft would classify the same Ri differently.
 
 Re-running `analyze_sounding` over the pack's own data, all 17 route points at
-15Z, isolates this as the primary culprit — classical thresholds alone collapse
-the ICON-vs-GFS disagreement:
-
-| variant | icon SEVERE @cruise | gfs | ecmwf |
-|---|---|---|---|
-| flat 0.5/1.0/2.0 | **8/17** | 3/17 | 0/17 |
-| classical 0.25/0.5/1.0 | 2/17 | 2/17 | 0/17 |
-| classical + skip well-mixed BL layers | 0 @cruise (3/17 in column) | 0/17 | 0/17 |
+15Z, shows classical thresholds collapsing the severe count (8/17 → 2/17 for
+ICON). An earlier revision of this section reported the full fix reaching "0
+severe at cruise" — that figure was real but partly an **artifact of the
+layer-geometry bug documented in (d)**: severe layers were emitted as
+zero-thickness lines at the shear layer's upper bound, and several missed the
+2,500 ft cruise by tens of feet (2,523 ft at point 8). The honest per-model
+outcome after the full fix chain (a)–(f) is in the table under (f).
 
 ### (b) §8(c)'s boundary-layer guard now catches the case it was written for
 
@@ -3140,14 +3139,29 @@ The guard missed it on both counts: the mixed layer was 3,000–4,000 ft deep
 spanning levels 0–5 rather than 0–1, and its Ri was small-**positive** rather
 than negative.
 
-`mixed_layer_top_index()` now walks up from the surface while each layer's
-lapse rate is ≥ 8.8 °C/km (≈2.7 °C/1000 ft, just under the 9.76 dry adiabat),
-capping the search at 10,000 ft deep so a deep dry-adiabatic column is not
-mistaken for an unbounded boundary layer. Every level inside that layer is
-excluded from CAT **regardless of Ri sign**. The §8(c) `idx <= 1` negative-Ri
-guard is kept as a fallback for profiles with no lapse-rate data to detect a
-mixed layer from; where lapse rates exist it is subsumed (N² < 0 implies a
-lapse steeper than the dry adiabat, which is detected as mixed).
+`mixed_layer_top_index()` detects the mixed layer with the standard **θv
+parcel criterion**: walk up from the surface while each level's virtual
+potential temperature stays within 0.5 K of the surface value (Holtslag-style
+excess over land), capped at 10,000 ft deep so a deep dry-adiabatic column is
+not mistaken for an unbounded boundary layer. Every level inside that layer is
+excluded from CAT **regardless of Ri sign**.
+
+The first implementation used a per-layer lapse-rate walk (each layer
+≥ 8.8 °C/km). The post-review re-run on the pack showed it is brittle: one
+interpolation kink below the threshold truncates the walk, and on this very
+pack it read the mixed layer as ~1,000 ft deep at a third of the ICON route
+points while adjacent points detected 7,400 ft. θv integrates over the column
+instead of gating on every 25 hPa slice, so a mild kink (cumulative excess
+< 0.5 K) doesn't truncate it. The lapse walk is retained only as a fallback
+for profiles without temperatures (older packs). Caveat, recorded rather than
+hidden: on ICON's own profiles for points 3–8 of this route, θv *agrees* with
+the shallow ~1,000 ft top — ICON genuinely models a shallow marine-influenced
+layer capped by a sheared weakly-stable band there, which is why (d) and (f)
+matter as much as the detector.
+
+The §8(c) `idx <= 1` negative-Ri guard is kept as a final fallback for
+profiles with no thermal data at all; where temperatures exist it is subsumed
+(N² < 0 keeps θv from climbing, which the parcel criterion reads as mixed).
 
 Suppression stops at the mixed-layer top, and the top is published as
 `VerticalMotionAssessment.mixed_layer_top_ft` so the exclusion is inspectable
@@ -3199,7 +3213,75 @@ The cross-section ribbon is deliberately left alone: it keys on
 severe-anywhere-in-column while the grade keys on the cruise band (#393), and a
 severe layer is still worth showing where it sits.
 
-### Follow-ups done here
+### (d) CAT layers span the physical layer their Ri describes
+
+Found by an independent post-review of this PR and verified against the pack.
+`richardson_number` on `DerivedLevel` *i* describes the layer **below** it
+(*i−1* → *i*), but `_build_single_cat_layer()` built layers from the flagged
+levels' own altitudes. Consequences: every CAT band was clipped at the bottom
+by one layer, and a *single* qualifying level produced a **zero-thickness
+layer at the shear layer's upper bound**. On this pack, ICON point 8 emitted a
+severe layer at `2,523–2,523 ft` for a shear layer physically spanning
+1,765–2,523 ft — so the 2,500 ft cruise was missed by 23 ft, and 3 of ICON's 4
+severe layers along the route were zero-thickness. The bug pre-dates #533;
+the old doubled tiers merged neighbouring levels into thick bands often
+enough to conceal it, and the recalibration exposed it.
+
+Layers now span from the level below the first flagged level to the last
+flagged level. The base is only extended when the level below is within
+100 hPa (the same adjacency criterion the grouping uses) so a sparse column
+cannot paint a several-thousand-ft band from one Ri of dubious meaning.
+Threshold scaling (a) is evaluated at the physical layer's **midpoint**
+rather than its upper bound, for the same reason.
+
+### (e) Where the honest numbers land
+
+With (a)–(d) in place and no further changes, the pack's ICON outcome is NOT
+green: 11/17 points carry some CAT risk in the 2,500 ft cruise band (5×
+moderate, 2× boundary-layer severe, 3× light, plus one light band from the
+free atmosphere), because ICON genuinely models a sheared weakly-stable band
+over a shallow mixed layer across the middle of the route. Under the
+any-risk ≥50% rule that graded RED — reproducing the #533 complaint from a
+different direction, with every individual piece now defensible.
+
+### (f) The RED coverage tier requires moderate-or-worse
+
+`pct_above_threshold` counted every affected point identically, so LIGHT chop
+over half the route graded RED — indistinguishable from severe-everywhere.
+Now: AMBER still keys on any-risk coverage (light over 20%+ of the route is a
+legitimate ride-quality note), but RED-via-coverage requires
+moderate-or-worse over 50%. Severe handling is unchanged (free-atmosphere
+severe bypasses; BL severe is amber-floored and coverage-gated). Strong
+updrafts count as moderate-tier, preserving their old ability to RED.
+
+Resulting EGNY→EGKB grades, the honest version of the table in (a):
+
+| variant | icon | gfs | ecmwf |
+|---|---|---|---|
+| pre-#533 (flat tiers, severe-anywhere bypass) | **RED** ("severe CAT at 2,500 ft") | amber | green |
+| #534 as first written (geometry bug hiding 11/17) | green "smooth ride" | amber | green |
+| final: (a)–(f) | **AMBER**, worst severe (BL), mod+ 8/17 | AMBER (5/17 light) | GREEN (3/17 light) |
+
+AMBER-with-detail is the defensible read of this day: ICON resolves real
+low-level shear the other models smooth away, the briefing should direct
+attention to it, and a week of RED was the defect — not the shear.
+
+### Sibling and scope notes (from the #534 review rounds)
+
+- **E-Shear checked, not affected.** The Ri false-positive engine is the
+  vanishing denominator: inside a well-mixed layer N² → 0 by definition, so
+  any shear reads as severity. E-Shear (`E = (5·HWS + VWS² + 42)/4`, Dutton
+  1980) has no stability term — weak shear cannot be amplified. On the #533
+  shear sheet it reads LIGHT. It also feeds no advisory grade (rendered
+  bands only). Applying mixed-layer suppression to it would be a regression:
+  a 25 kt/1000 ft shear inside the BL is real, and E-Shear only fires there
+  when shear is genuinely that strong.
+- **The altitude ramp is calibrated against ICON/GFS/ECMWF on this route
+  only**; UKMO and Météo-France were not spot-checked. For coarser models the
+  classical tiers err toward under-detection, so the uniform ramp fails safe
+  (misses rather than false alarms). The principled follow-up is scaling by
+  each layer's actual thickness Δz — available per level pair since (d) — 
+  which subsumes both the altitude ramp and per-model spacing.
 
 `metrics-catalog.json` documented "Below about 0.25 expect clear-air
 turbulence" while the code fired SEVERE at 0.5 — a 2× disagreement between the
@@ -3211,25 +3293,32 @@ of the catalog (web and iOS) are updated.
 ### Files changed
 
 - `analysis/sounding/vertical_motion.py` — altitude-scaled tiers
-  (`_ri_threshold_scale`, `_classify_cat_risk`), `mixed_layer_top_index`,
-  boundary-layer tagging in `_build_cat_layers` / `_build_single_cat_layer`.
+  (`_ri_threshold_scale`, `_classify_cat_risk` at the layer midpoint),
+  θv-parcel `mixed_layer_top_index` (+ `_theta_v_k`, lapse-walk fallback),
+  physical-layer geometry and boundary-layer tagging in `_build_cat_layers` /
+  `_build_single_cat_layer`.
 - `analysis/advisories/turbulence.py` — BL-severe goes through the percentage
-  gate with an AMBER floor.
+  gate with an AMBER floor; RED-via-coverage requires moderate-or-worse.
 - `models/analysis.py` — `CATRiskLayer.boundary_layer`,
   `VerticalMotionAssessment.mixed_layer_top_ft`.
 - `web/ts/store/types.ts`, `web/ts/data/metrics-catalog.json`,
   `app/…/Resources/metrics-catalog.json`.
 - Tests: `tests/test_vertical_motion.py`,
   `tests/analysis/advisories/test_evaluators.py`. The existing CAT-layer tests
-  were tuned to the old 2× tiers; their Ri values are halved so each test keeps
-  asserting the same severity structure it was written for.
+  were tuned to the old 2× tiers (Ri values halved) and then to the physical-
+  layer geometry (bases extend one level down). Regression tests pin the
+  point-8 zero-thickness scenario, the θv-vs-lapse kink behaviour, the sparse-
+  column guard, and the light-vs-moderate coverage gate.
 
 ### Real-world validation needed
 
-- Re-run the EGNY→EGKB pack and confirm ICON's turbulence advisory clears at
-  cruise while GFS/ECMWF are unchanged.
+- ~~Re-run the EGNY→EGKB pack~~ Done, honestly this time: ICON AMBER /
+  GFS AMBER / ECMWF GREEN, zero zero-thickness layers (see (f)).
 - A winter frontal case with genuine low-level wind shear under a stable BL —
-  confirm the layer still surfaces (no mixed layer detected → nothing
-  suppressed) and grades at least AMBER.
+  confirm the layer still surfaces (θv climbs off the surface → no mixed
+  layer → nothing suppressed) and grades at least AMBER.
 - An upper-level jet-flank case at FL300 — confirm the ×2 ramp leaves the
-  existing severe-CAT behaviour untouched.
+  existing severe-CAT behaviour untouched (note the midpoint change in (d)
+  shifts the effective ramp down by half a layer aloft).
+- A pilot debrief on a moderate-coverage day — does AMBER-with-detail read
+  right where RED used to cry wolf?
