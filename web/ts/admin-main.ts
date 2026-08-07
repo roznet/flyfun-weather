@@ -469,7 +469,9 @@ function renderRatingRow(fb: FeedbackEntry): string {
   const when = fb.created_at ? relativeTime(fb.created_at) : '';
 
   const isArchived = fb.status === 'replied' || fb.status === 'ignored';
-  const canReply = fb.sentiment === 'down' && !!fb.comment && fb.contact_ok && !isArchived;
+  // Any comment is worth a reply — a 👍 with a question in it deserves an
+  // answer as much as a 👎 does. Sentiment does not gate this.
+  const canReply = !!fb.comment && fb.contact_ok && !isArchived;
 
   // Expanded detail
   let detail = '';
