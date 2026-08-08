@@ -122,12 +122,67 @@ no migration. The serialized `CostConfig` keys: `token_cost_per_1k_input`,
 
 The two cache multipliers scale `token_cost_per_1k_input` for Anthropic prompt
 caching: a cache write bills at 2x on the 1-hour TTL the digest uses (1.25x on
-the 5-minute tier), a cache read at 0.1x. They are **not** independent of the
-TTL chosen in `digest/llm_digest.py:_system_content` — change one without the
-other and every digest is mis-priced. Note the admin cost-config form in
-`web/ts/admin-cost-view.ts` enumerates its fields explicitly and does not yet
-render these two, though `update_cost_config` already accepts them (it derives
-its allowed keys from the `CostConfig` dataclass).
+the 5-minute tier), a cache read at 0.1x.
+
+### TTL ↔ write multiplier are coupled by derivation
+
+A cache write's price depends on the TTL it was written with, and **nothing
+downstream records which TTL produced a write** — cost is computed later, in
+`_charge_briefing_cost()`, from a `briefing_usage` row that has only the token
+count. So a TTL change that the multiplier doesn't follow mis-prices every
+digest's writes by 60%, silently: no test fails, no log line.
+
+The defence is derivation, not documentation (issue #535):
+
+```
+costs.DIGEST_CACHE_TTL = "1h"                 # the TTL the charging path writes with
+costs.CACHE_WRITE_MULTIPLIERS = {"5m": 1.25, "1h": 2.0}   # the only price table
+CostConfig.cache_write_multiplier = CACHE_WRITE_MULTIPLIERS[DIGEST_CACHE_TTL]
+_system_content(..., ttl: str = DIGEST_CACHE_TTL)         # single call site default
+```
+
+- Move `DIGEST_CACHE_TTL` and the write price follows automatically.
+- An unpriced TTL (`"30m"`) raises `ValueError` at the call site rather than
+  billing at the wrong tier — a new Anthropic tier has to be priced first.
+- `tests/test_costs.py::TestCacheTtlPricingCoupling` pins the table against
+  Anthropic's published premiums and asserts the digest writes at the TTL the
+  rate card prices. `test_llm_digest.py` keeps a literal `"1h"` assertion as a
+  tripwire so a TTL change is a deliberate act.
+- The eval (`scripts/run_digest_eval.py`) overrides to `"5m"` — legitimate only
+  because a burst never expires *and* an eval writes no ledger row.
+- For the record, 5m is not the cheaper bet in prod: replayed arrival gaps give
+  a 20.0% hit rate against a 21.7% break-even, i.e. it bills more than not
+  caching at all. Break-even is `(w - 1) / (w - 0.1)`.
+
+A rate-card row can still override `cache_write_multiplier` (the DB wins over
+the derived default). `update_cost_config` logs a warning when a submitted
+value disagrees with `DIGEST_CACHE_TTL` rather than rejecting it, since the
+operator may be modelling a price change. Note the active prod row carries no
+cache keys at all, so both multipliers come from the dataclass defaults.
+
+Note the admin cost-config form in `web/ts/admin-cost-view.ts` enumerates its
+fields explicitly and does not yet render these two, though
+`update_cost_config` already accepts them (it derives its allowed keys from the
+`CostConfig` dataclass).
+
+### `cache_saving_usd` — what caching bought
+
+`CostBreakdown.cache_saving_usd` (and `ProgramCostReport.cache_saving_usd`)
+report the cached tokens priced at 1x minus what they actually billed:
+
+```python
+saving = (cache_read + cache_write) * rate
+       - (cache_read * read_mult + cache_write * write_mult) * rate
+```
+
+Reporting only — it is *already inside* `token_cost_usd` / `variable_token_usd`
+and must never be added to a subtotal. Negative on a pure cache write (2x is a
+real surcharge); the value is not floored. `detail_json` is schemaless, so this
+was purely additive — **no migration**. Rows charged before the field existed
+have no key, and every reader (`_program_variable_and_counts`, the per-user
+aggregate in `api/admin.py`, both frontends) keeps *absent* distinct from a
+measured `0.0`: `None`/omitted renders as nothing rather than "caching saved
+$0.00", which would be a lie about untracked history.
 
 Versioned: updating creates a new row, deactivates the previous. History queryable.
 `subscriptions_monthly_usd` is kept in sync server-side as the sum of
@@ -164,8 +219,8 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 
 - **adapters/credits-adapter.ts**: `fetchCostSummary()`, `fetchTransparency()` — typed API client
 - **adapters/admin-adapter.ts**: `fetchCostReport()`, `fetchCostConfig()`, `fetchCostConfigHistory()`, `updateCostConfig()` — program report + rate-card editing
-- **user-costs-main.ts**: Admin per-user cost dashboard with stacked bar chart, transaction ledger with expandable USD breakdowns
-- **admin-cost-view.ts**: Admin "Cost" tab — program report (7d/30d toggle, summary cards, fixed-line table) + rate-card editor (itemized subscription rows with live subtotal, versioned save, config history)
+- **user-costs-main.ts**: Admin per-user cost dashboard with stacked bar chart, transaction ledger with expandable USD breakdowns. Prompt-cache saving is shown as a line under the bar and a cell in the expanded breakdown — never a bar segment, since it is not a cost component
+- **admin-cost-view.ts**: Admin "Cost" tab — program report (7d/30d toggle, summary cards, fixed-line table) + rate-card editor (itemized subscription rows with live subtotal, versioned save, config history). A "Cache saved" card + note sentence appear only when the window has the figure (`cache_saving_usd != null`)
 - **cost-summary.html / cost-summary-main.ts**: Program cost (what it costs to run the service, fixed breakdown + composition bar + per-briefing/per-user economics) plus the viewer's own usage. Admin-gated now via `is_admin`; designed to move into a Settings tab + add a donation link + a public program endpoint later.
 
 ## Donations (Stripe)
@@ -470,6 +525,8 @@ there are no donations or `active_users == 0`.
 - The transparency endpoint is public (no auth) — intentionally exposes the cost structure.
 - Historical `description` fields may still contain "credits" text from before the migration.
 - `detail_json` holds the full CostBreakdown; `metadata_json` is for lightweight context. Don't mix them.
+- Adding a `CostBreakdown` field is migration-free but only reaches *new* rows. Readers must treat a missing key as unknown, never as `0.0` — see `cache_saving_usd` above.
+- Never hardcode a prompt-cache TTL. It lives in `costs.DIGEST_CACHE_TTL`, and the rate card's write multiplier is derived from it.
 - `reference_id` stores `briefing_usage_id` as a string — admin queries cast it to int for the JOIN.
 - The program report sums variable cost by parsing each briefing's `detail_json` in Python (dialect-agnostic) rather than SQL JSON extraction; bounded by briefings-per-window so it's cheap.
 - `/api/admin/cost-report` returns `null` (not 404) when no active config exists — the frontend renders an empty state.

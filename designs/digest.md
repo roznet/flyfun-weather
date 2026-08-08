@@ -242,8 +242,10 @@ The `WEATHERBRIEF_GUIDANCE_DIR` env var can override the guidance directory to a
   ~40% of a request) are identical across digests sharing a (locale, guidance) pair, and
   Anthropic renders `tools` → `system` → `messages`, so one breakpoint covers both. 1-hour
   TTL, chosen against measured inter-digest gaps; skipped for long-range, whose Haiku 4.5
-  prompt is below that model's 4096-token cacheable minimum. See
-  `designs/cost-attribution-design.md` for how the read/write split is priced.
+  prompt is below that model's 4096-token cacheable minimum. The TTL is **not** a local
+  constant — it is `costs.DIGEST_CACHE_TTL`, and the rate card's write multiplier is derived
+  from it, so the two cannot drift. See `designs/cost-attribution-design.md` for how the
+  read/write split is priced.
 - **Versioned prompts** — `briefer_v1.md` allows prompt iteration without code changes
 
 ## Gotchas

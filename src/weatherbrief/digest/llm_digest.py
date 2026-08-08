@@ -20,6 +20,7 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+from weatherbrief.costs import DIGEST_CACHE_TTL, cache_write_multiplier_for
 from weatherbrief.digest.exceptions import classify_llm_exception
 from weatherbrief.digest.llm_config import DigestConfig, LLMConfig, create_llm
 from weatherbrief.digest.outlook import OUTLOOK_ICONS, OUTLOOK_LABELS
@@ -160,7 +161,7 @@ def _system_content(
     tail: str,
     llm_config: LLMConfig,
     longrange: bool,
-    ttl: str = "1h",
+    ttl: str = DIGEST_CACHE_TTL,
 ) -> str | list[dict]:
     """System message content, with a prompt-cache breakpoint where it pays.
 
@@ -170,17 +171,25 @@ def _system_content(
     Everything after it (the pack context) stays uncached, which is what we
     want: it differs on every call.
 
-    The default 1-hour ``ttl`` is deliberate for production.  It costs 2x on a
-    write against the 5-minute tier's 1.25x, but break-even is a hit rate of
-    53% vs 22%, and measured gaps between consecutive production digests clear
-    the bar more comfortably at an hour than at five minutes.
+    The default ``ttl`` comes from ``costs.DIGEST_CACHE_TTL`` — 1 hour, which
+    is deliberate for production.  It costs 2x on a write against the 5-minute
+    tier's 1.25x, but break-even is a hit rate of 53% vs 22%, and measured gaps
+    between consecutive production digests clear the bar more comfortably at an
+    hour than at five minutes (replaying real arrival gaps at 5m gives a 20%
+    hit rate — below its own 21.7% break-even, i.e. worse than not caching).
+
+    **Do not hardcode a TTL here.**  The ledger's ``cache_write_multiplier`` is
+    derived from ``DIGEST_CACHE_TTL`` via ``CACHE_WRITE_MULTIPLIERS``, and the
+    charged write price never travels with the write — cost is computed later,
+    from a ``briefing_usage`` row that does not record which TTL produced its
+    tokens.  Move the constant and the price follows; hardcode a string and
+    every digest mis-prices its writes silently.  An unpriced TTL raises rather
+    than billing at the wrong tier.
 
     Callers running a *burst* — the eval replays back-to-back, seconds apart —
-    should pass ``ttl="5m"`` instead: nothing expires inside a run, so the
-    cheaper write premium wins outright.  Note the ledger's
-    ``cache_write_multiplier`` is calibrated to the 1h tier; anything changing
-    the TTL on a path that *charges* a user must move that with it.  The eval
-    does not write to the ledger, so it is free to choose.
+    may pass ``ttl="5m"``: nothing expires inside a run, so the cheaper write
+    premium wins outright.  That override is only legitimate because the eval
+    does not write to the ledger.
 
     Two cases fall back to a plain string:
 
@@ -198,6 +207,7 @@ def _system_content(
     """
     if llm_config.provider != "anthropic" or longrange:
         return head + tail
+    cache_write_multiplier_for(ttl)  # reject a TTL the rate card cannot price
     # Breakpoint on the head only. Everything after it is uncached, which is
     # the point: the head is identical for every pilot, the guidance tail is
     # not, so all guidance presets share one cache entry instead of forking.

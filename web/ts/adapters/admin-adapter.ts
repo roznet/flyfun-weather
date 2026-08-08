@@ -159,6 +159,10 @@ export interface UserCostBreakdown {
   storage_cost_usd: number;
   margin_usd: number;
   total_usd: number;
+  /** What prompt caching saved. Absent when every charged briefing predates
+   *  the field — absent means unknown, not a measured $0.00. Already inside
+   *  token_cost_usd, so never add it to a total. */
+  cache_saving_usd?: number;
 }
 
 export interface UserCostsResponse {
@@ -208,6 +212,10 @@ export interface CostReport {
   variable_token_usd: number;
   variable_storage_usd: number;
   variable_usd: number;
+  /** Prompt-cache saving over the window. `null` when no ledger row in the
+   *  window records it (all pre-date the field); already inside
+   *  variable_token_usd, so it is reporting-only. */
+  cache_saving_usd?: number | null;
   subtotal_usd: number;
   margin_percent: number;
   margin_usd: number;

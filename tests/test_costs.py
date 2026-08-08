@@ -1,10 +1,16 @@
 """Tests for the cost computation module."""
 
+import pytest
+
 from weatherbrief.costs import (
+    CACHE_READ_MULTIPLIER,
+    CACHE_WRITE_MULTIPLIERS,
+    DIGEST_CACHE_TTL,
     CostBreakdown,
     CostConfig,
     DEFAULT_CONFIG,
     breakdown_to_dict,
+    cache_write_multiplier_for,
     compute_cost,
     compute_program_cost,
     program_report_to_dict,
@@ -192,7 +198,7 @@ class TestBreakdownToDict:
         assert set(d.keys()) == {
             "token_cost_usd", "infra_share_usd", "subscription_share_usd",
             "storage_cost_usd", "subtotal_usd", "margin_usd", "total_usd",
-            "config_id",
+            "config_id", "cache_saving_usd",
         }
 
 
@@ -298,6 +304,7 @@ class TestComputeProgramCost:
         assert set(d.keys()) == {
             "window_days", "fixed_lines", "fixed_monthly_usd", "fixed_prorated_usd",
             "variable_token_usd", "variable_storage_usd", "variable_usd",
+            "cache_saving_usd",
             "subtotal_usd", "margin_percent", "margin_usd", "total_usd",
             "num_briefings", "num_users", "cost_per_briefing_usd",
             "cost_per_user_usd", "config_id",
@@ -379,6 +386,68 @@ class TestPromptCachePricing:
         # One miss then four hits — the shape of an 80% hit rate.
         assert (write + 4 * read) / 5 < baseline
 
+    def test_saving_is_the_gap_against_pricing_the_same_tokens_at_1x(self):
+        """cache_saving_usd = what the cached tokens would have cost at 1x,
+        minus what they actually cost at their multipliers."""
+        config = _default_config()
+        read, write = 4000, 1000
+        b = compute_cost(
+            input_tokens=10000, output_tokens=0,
+            result_size_bytes=0, config=config, config_id=1,
+            cache_read_tokens=read, cache_write_tokens=write,
+        )
+        rate = config.token_cost_per_1k_input
+        at_1x = (read + write) / 1000 * rate
+        actual = (
+            read / 1000 * rate * config.cache_read_multiplier
+            + write / 1000 * rate * config.cache_write_multiplier
+        )
+        assert abs(b.cache_saving_usd - (at_1x - actual)) < 1e-9
+
+    def test_saving_equals_the_gap_against_the_uncached_bill(self):
+        """The saving must reconcile against a real uncached run, not just its
+        own formula — otherwise it could drift from what token_cost_usd bills."""
+        config = _default_config()
+        kw = dict(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=config, config_id=1,
+        )
+        uncached = compute_cost(**kw)
+        cached = compute_cost(**kw, cache_read_tokens=6000)
+        assert abs(cached.cache_saving_usd - (uncached.token_cost_usd - cached.token_cost_usd)) < 1e-9
+
+    def test_a_pure_write_is_a_negative_saving(self):
+        """A first, uncached call bills 2x — the 'saving' is a real surcharge
+        and must show as negative rather than being floored at zero."""
+        b = compute_cost(
+            input_tokens=10000, output_tokens=0,
+            result_size_bytes=0, config=_default_config(), config_id=1,
+            cache_write_tokens=5000,
+        )
+        assert b.cache_saving_usd < 0
+
+    def test_no_caching_means_no_saving(self):
+        b = compute_cost(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=_default_config(), config_id=1,
+        )
+        assert b.cache_saving_usd == 0.0
+
+    def test_saving_is_not_double_counted_in_any_total(self):
+        """It is reporting-only: token_cost_usd already reflects it."""
+        config = _default_config()
+        b = compute_cost(
+            input_tokens=10000, output_tokens=1000,
+            result_size_bytes=0, config=config, config_id=1,
+            cache_read_tokens=6000,
+        )
+        expected_subtotal = (
+            b.token_cost_usd + b.infra_share_usd
+            + b.subscription_share_usd + b.storage_cost_usd
+        )
+        assert abs(b.subtotal_usd - expected_subtotal) < 1e-6
+        assert abs(b.total_usd - (b.subtotal_usd + b.margin_usd)) < 1e-6
+
     def test_cached_never_exceeds_input_total(self):
         """Defends against a provider change making the figures siblings.
 
@@ -393,3 +462,107 @@ class TestPromptCachePricing:
             cache_read_tokens=5000, cache_write_tokens=5000,
         )
         assert b.token_cost_usd >= 0
+
+
+class TestCacheTtlPricingCoupling:
+    """The cache TTL and its write multiplier must not be able to disagree.
+
+    Cost is computed long after the call, from a ``briefing_usage`` row that
+    records *how many* cache-write tokens there were but not which TTL produced
+    them. So nothing downstream can detect a TTL change — a switch from 1h to
+    5m without the multiplier following mis-prices every write by 60%, silently.
+    The defence is derivation: one named TTL constant, one price table, and the
+    rate-card default read out of the table rather than typed as a literal.
+    """
+
+    def test_default_multiplier_is_derived_from_the_digest_ttl(self):
+        """The whole point: no hand-typed number in the rate card."""
+        assert CostConfig().cache_write_multiplier == CACHE_WRITE_MULTIPLIERS[DIGEST_CACHE_TTL]
+        assert DEFAULT_CONFIG.cache_write_multiplier == CACHE_WRITE_MULTIPLIERS[DIGEST_CACHE_TTL]
+        assert CostConfig().cache_read_multiplier == CACHE_READ_MULTIPLIER
+
+    def test_price_table_matches_anthropics_published_premiums(self):
+        """Pins the table itself — the one place a wrong number could hide.
+
+        Anthropic bills a cache write at 1.25x on the 5-minute tier and 2x on
+        the 1-hour tier; a read is 0.1x on both.
+        """
+        assert CACHE_WRITE_MULTIPLIERS == {"5m": 1.25, "1h": 2.0}
+        assert CACHE_READ_MULTIPLIER == 0.1
+
+    def test_the_digest_writes_at_the_ttl_the_rate_card_prices(self):
+        """Closes the loop across modules: a hardcoded TTL at the call site
+        would still bill at the constant's multiplier, so assert the call site
+        uses the constant."""
+        from weatherbrief.digest.llm_config import LLMConfig
+        from weatherbrief.digest.llm_digest import _system_content
+
+        out = _system_content(
+            "HEAD", "TAIL",
+            LLMConfig(provider="anthropic", model="claude-sonnet-4-6"),
+            longrange=False,
+        )
+        assert out[0]["cache_control"]["ttl"] == DIGEST_CACHE_TTL
+
+    def test_an_unpriced_ttl_is_rejected_rather_than_mispriced(self):
+        """A new tier has to be priced before anything can write with it."""
+        from weatherbrief.digest.llm_config import LLMConfig
+        from weatherbrief.digest.llm_digest import _system_content
+
+        with pytest.raises(ValueError, match="Unpriced prompt-cache TTL"):
+            cache_write_multiplier_for("30m")
+        with pytest.raises(ValueError, match="Unpriced prompt-cache TTL"):
+            _system_content(
+                "HEAD", "TAIL",
+                LLMConfig(provider="anthropic", model="claude-sonnet-4-6"),
+                longrange=False, ttl="30m",
+            )
+
+    def test_switching_the_ttl_moves_the_price_with_it(self):
+        """The 5m tier is a legitimate future choice — it must arrive priced."""
+        assert cache_write_multiplier_for("5m") == 1.25
+        assert cache_write_multiplier_for("1h") == 2.0
+        # A 5m rate card bills a write at 1.25x, not the 1h tier's 2x.
+        cfg = _default_config(cache_write_multiplier=cache_write_multiplier_for("5m"))
+        b = compute_cost(
+            input_tokens=10000, output_tokens=0,
+            result_size_bytes=0, config=cfg, config_id=1,
+            cache_write_tokens=10000,
+        )
+        assert abs(b.token_cost_usd - (10000 / 1000 * 0.003 * 1.25)) < 1e-9
+
+
+class TestProgramCacheSaving:
+    """Program-wide saving is reporting-only, and absent when unmeasured."""
+
+    def test_none_when_no_row_carries_the_field(self):
+        """Windows made entirely of pre-field briefings must not report $0.00
+        saved — that reads as 'caching achieved nothing', which is a lie."""
+        r = compute_program_cost(
+            _default_config(), config_id=1, window_days=30,
+            variable_token_usd=1.0, variable_storage_usd=0.1,
+            num_briefings=10, num_users=3,
+        )
+        assert r.cache_saving_usd is None
+        assert program_report_to_dict(r)["cache_saving_usd"] is None
+
+    def test_measured_zero_is_kept_distinct_from_absent(self):
+        r = compute_program_cost(
+            _default_config(), config_id=1, window_days=30,
+            variable_token_usd=1.0, variable_storage_usd=0.1,
+            num_briefings=10, num_users=3, cache_saving_usd=0.0,
+        )
+        assert r.cache_saving_usd == 0.0
+
+    def test_saving_never_moves_a_total(self):
+        """It is already inside variable_token_usd."""
+        kw = dict(
+            config=_default_config(), config_id=1, window_days=30,
+            variable_token_usd=1.0, variable_storage_usd=0.1,
+            num_briefings=10, num_users=3,
+        )
+        without = compute_program_cost(**kw)
+        with_saving = compute_program_cost(**kw, cache_saving_usd=0.42)
+        assert with_saving.total_usd == without.total_usd
+        assert with_saving.variable_usd == without.variable_usd
+        assert with_saving.cost_per_briefing_usd == without.cost_per_briefing_usd
