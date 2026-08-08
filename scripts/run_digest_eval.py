@@ -104,6 +104,23 @@ def partition(packs: list[CorpusPack]) -> tuple[list[CorpusPack], Counter]:
 # --- LLM ---------------------------------------------------------------------
 
 
+def cached_system_content(system_prompt: str, config: DigestConfig):
+    """The eval's system block, with a 5-minute cache breakpoint on it.
+
+    Split out of ``run_one`` purely so a unit test can exercise this call
+    without standing up an LLM — ``_system_content`` is production code and has
+    changed signature under the eval before (briefer_v3 moved it to a head/tail
+    pair, and this call site was missed, breaking every cached eval run).
+
+    The whole rendered prompt goes in the ``head`` with an empty ``tail``, which
+    is deliberately *not* what production does. Prod splits at the guidance so
+    its three presets share one entry across pilots; an eval renders each preset
+    once and runs its jobs grouped by preset, so caching the lot in one block is
+    both simpler and strictly better here — nothing else would land in the tail.
+    """
+    return _system_content(system_prompt, "", config.llm, longrange=False, ttl="5m")
+
+
 def run_one(
     context: str,
     system_prompt: str,
@@ -119,7 +136,8 @@ def run_one(
     because nothing expires inside a burst and the write premium is 1.25x
     instead of 2x; the override is only legitimate here because an eval never
     writes to the cost ledger, which prices writes at the production TTL.
-    Off by default so importers (tests/test_digest_assertions.py) are unaffected.
+    Off by default so importers (tests/test_digest_assertions.py) are unaffected;
+    the CLI turns it on unless ``--no-cache`` is passed.
 
     The prompt is passed whole as the cached head with an empty tail: the eval
     renders one prompt per run (guidance included), so there is no per-caller
@@ -129,7 +147,7 @@ def run_one(
     structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
 
     system_content = (
-        _system_content(system_prompt, "", config.llm, longrange=False, ttl="5m")
+        cached_system_content(system_prompt, config)
         if cache else system_prompt
     )
 

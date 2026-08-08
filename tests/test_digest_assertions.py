@@ -22,6 +22,7 @@ import json
 import importlib.util
 import os
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -41,20 +42,33 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 EVAL_DIR = Path(__file__).resolve().parent / "eval_data" / "digests"
 
 
-def _load_run_one():
-    """Load ``run_one`` from ``scripts/run_digest_eval.py`` by file path.
+def _load_eval_module():
+    """Load ``scripts/run_digest_eval.py`` by file path.
 
     ``scripts/`` is not a package and not on ``sys.path`` under the default
     pytest config, so a plain ``from scripts.run_digest_eval import run_one``
     would ``ModuleNotFoundError`` when someone first enables the live subset.
     Loading by path sidesteps that regardless of how pytest was invoked.
+
+    ``load_dotenv`` is stubbed out for the duration of the import. The script
+    calls it at module scope — correct for a CLI, poison for a test session:
+    it merges the developer's real ``.env`` into ``os.environ`` for every test
+    that runs afterwards. That silently rerouted the GRIB precache tests at the
+    data directories in ``.env`` and made them assert against zero fetches.
+    Nothing else runs at import time (``main()`` is behind a ``__main__``
+    guard), so neutralising this one call makes the load inert.
     """
     script = _REPO_ROOT / "scripts" / "run_digest_eval.py"
     spec = importlib.util.spec_from_file_location("run_digest_eval", script)
     assert spec and spec.loader, f"cannot load {script}"
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.run_one
+    with mock.patch("dotenv.load_dotenv", return_value=False):
+        spec.loader.exec_module(module)
+    return module
+
+
+def _load_run_one():
+    return _load_eval_module().run_one
 
 
 def _git_tracked_fixture_ids() -> set[str] | None:
@@ -584,3 +598,49 @@ def test_conv_vfr_consistency_no_false_positive_on_cloud_attribution():
         assessment_reason="Isolated cells are circumnavigable. VFR is not viable at the destination due to an OVC deck."
     )
     assert check_convective_vfr_consistency(d, _AMBER_CTX) == []
+
+
+class TestEvalCachedSystemContent:
+    """Guard the eval's call into production's ``_system_content``.
+
+    briefer_v3 changed that function from ``(prompt, llm_config, ...)`` to a
+    ``(head, tail, llm_config, ...)`` pair and this call site was not updated,
+    so every cached eval run — the default, since the CLI only disables caching
+    on ``--no-cache`` — died with a ``TypeError``. Nothing caught it: the live
+    subset is opt-in and ``run_one``'s own default is ``cache=False``, so the
+    suite stayed green while the script was unusable.
+
+    These assertions execute the real call, so a future signature change fails
+    here instead of at the top of someone's eval run.
+    """
+
+    def test_call_site_still_matches_the_signature(self):
+        from weatherbrief.digest.llm_config import DigestConfig
+
+        content = _load_eval_module().cached_system_content("SYSTEM", DigestConfig())
+
+        assert isinstance(content, list), "expected cache blocks, got a plain string"
+        assert len(content) == 1, "eval caches the whole prompt — no tail block"
+        assert content[0]["text"] == "SYSTEM"
+
+    def test_breakpoint_uses_the_five_minute_tier(self):
+        """5m, not production's 1h: an eval is a burst, so the 1.25x write wins.
+
+        It is also the only reason the eval may diverge from the ledger's
+        ``cache_write_multiplier``, which is calibrated to the 1h tier — the
+        eval does not charge anyone, so it is free to choose.
+        """
+        from weatherbrief.digest.llm_config import DigestConfig
+
+        content = _load_eval_module().cached_system_content("SYSTEM", DigestConfig())
+
+        assert content[0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+    def test_non_anthropic_provider_falls_back_to_a_plain_string(self):
+        """``cache_control`` is Anthropic-only wire format (configs/…/openai.json)."""
+        from weatherbrief.digest.llm_config import DigestConfig, LLMConfig
+
+        config = DigestConfig(llm=LLMConfig(provider="openai", model="gpt-4o"))
+        content = _load_eval_module().cached_system_content("SYSTEM", config)
+
+        assert content == "SYSTEM"
