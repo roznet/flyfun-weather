@@ -21,14 +21,33 @@ enum FlightResolver {
     // the nonisolated test target — and any actor context — can call them
     // synchronously. They touch no shared state, only their arguments.
 
-    /// The soonest upcoming flight (departure ≥ now), or nil if none upcoming.
+    /// Whether a flight still lies ahead of `now` — the one "upcoming" test for
+    /// every intent surface.
+    ///
+    /// Duration-aware, so it agrees with `FlightResponse.resolvedSection`,
+    /// `FlightListView.groupedFlights` and the server's `_flight_has_ended`
+    /// (#536): a flight that departed 30 minutes ago on a 3-hour trip is in
+    /// progress, and the app's list shows it at the top of Future. Gating these
+    /// surfaces on bare `departureDate >= now` instead would make Siri report no
+    /// upcoming flights while the list showed one — the exact disagreement the
+    /// shared boundary exists to prevent.
+    ///
+    /// A flight whose `departureTime` won't parse counts as upcoming, matching
+    /// what `resolvedSection` and the list's legacy bucketing do with it.
+    nonisolated static func isUpcoming(_ flight: FlightResponse, now: Date) -> Bool {
+        !flight.hasEnded(now: now)
+    }
+
+    /// The soonest upcoming flight, or nil if none upcoming. An in-progress
+    /// flight is the soonest of all — which is right: it's the flight whose
+    /// briefing you want when you ask for "my next flight" mid-trip.
     ///
     /// Deliberately does NOT follow the `flight_order` display preference: "my
     /// next flight" means the soonest departure however the list happens to be
     /// drawn, and returning the furthest-away one would be a real bug.
     nonisolated static func nextFlight(in flights: [FlightResponse], now: Date = Date()) -> FlightResponse? {
         flights
-            .filter { ($0.departureDate ?? .distantPast) >= now }
+            .filter { isUpcoming($0, now: now) }
             .min(by: { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) })
     }
 
@@ -53,10 +72,10 @@ enum FlightResolver {
             ? { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) }
             : { ($0.departureDate ?? .distantPast) > ($1.departureDate ?? .distantPast) }
         let upcoming = flights
-            .filter { ($0.departureDate ?? .distantPast) >= now }
+            .filter { isUpcoming($0, now: now) }
             .sorted(by: upcomingSorted)
         let past = flights
-            .filter { ($0.departureDate ?? .distantPast) < now }
+            .filter { !isUpcoming($0, now: now) }
             .sorted { ($0.departureDate ?? .distantPast) > ($1.departureDate ?? .distantPast) }
         return upcoming + past
     }

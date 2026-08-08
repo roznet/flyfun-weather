@@ -120,13 +120,28 @@ struct FlyFunShortcuts: AppShortcutsProvider {
 `FlightResolver` has two ordering entry points and they answer different
 questions:
 
-- `orderedForSuggestions(_:order:now:)` — the **display** list, backing
-  `FlightEntityQuery.suggestedEntities()` and the overview intent. It follows the
-  account's `flight_order` preference so Shortcuts and Siri match what the flight
-  list shows; only the upcoming half flips, past stays most-recent-first.
+- `orderedForSuggestions(_:order:now:)` — the **display** list backing
+  `FlightEntityQuery.suggestedEntities()`. Its caller passes the account's
+  `flight_order` preference so the Shortcuts picker matches what the flight list
+  shows; only the upcoming half flips, past stays most-recent-first.
 - `nextFlight(in:now:)` — deliberately **not** preference-driven. "My next
   flight" means the soonest departure however the list happens to be drawn;
   following a display preference here would return the furthest-away flight.
+- `IntentDialogs.overviewSummary` — calls `orderedForSuggestions` but pins
+  `.soonestFirst`, for that reason plus a second one: it truncates to five, so a
+  furthest-first preference would make it read out the five most *distant*
+  flights and silently omit the one departing tomorrow.
+
+The rule: **entity pickers follow the display preference; spoken
+"next/upcoming" answers stay chronological.**
+
+All three share one duration-aware `FlightResolver.isUpcoming(_:now:)`, so they
+agree with `FlightResponse.resolvedSection`, `FlightListView.groupedFlights` and
+the server's `_flight_has_ended` about when a flight stops being upcoming.
+Gating them on bare `departureDate >= now` would make Siri report no upcoming
+flights while the list showed an in-progress one at the top of Future — and
+`nextFlight` skip the flight you are actually on. A flight whose `departureTime`
+won't parse counts as upcoming, matching the list.
 
 `order` is a parameter rather than a read of global state: the function is
 `nonisolated` and pure so the non-MainActor test target can call it, while

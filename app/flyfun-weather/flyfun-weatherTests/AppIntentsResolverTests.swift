@@ -97,6 +97,46 @@ struct FlightOrderingTests {
         #expect(FlightResolver.nextFlight(in: flights, now: now) == nil)
     }
 
+    // MARK: - Duration-aware "upcoming" (#536 review round 2)
+    //
+    // The intent surfaces must agree with `FlightListView`/`resolvedSection`/the
+    // server about when a flight stops being upcoming. `now` is 10:00Z; the
+    // in-progress flight departed 09:30Z on a 3-hour trip, so it has not ended.
+
+    private var inProgress: FlightResponse {
+        makeFlight(id: "flying", departureTime: "2026-07-08T09:30:00Z", flightDurationHours: 3.0)
+    }
+
+    private var alreadyLanded: FlightResponse {
+        makeFlight(id: "landed", departureTime: "2026-07-08T06:00:00Z", flightDurationHours: 1.0)
+    }
+
+    @Test("isUpcoming is duration-aware, matching the list and the server")
+    func isUpcomingIsDurationAware() {
+        #expect(FlightResolver.isUpcoming(inProgress, now: now))
+        #expect(!FlightResolver.isUpcoming(alreadyLanded, now: now))
+        // Zero duration: past the instant it departs.
+        let zero = makeFlight(departureTime: "2026-07-08T09:59:00Z", flightDurationHours: 0)
+        #expect(!FlightResolver.isUpcoming(zero, now: now))
+    }
+
+    @Test("nextFlight returns the flight you're currently on, not the next scheduled one")
+    func nextFlightPrefersInProgress() {
+        let flights = [makeFlight(id: "tomorrow", departureTime: "2026-07-09T12:00:00Z"), inProgress]
+        #expect(FlightResolver.nextFlight(in: flights, now: now)?.id == "flying")
+    }
+
+    @Test("an in-progress flight is upcoming in the suggestions list, not past")
+    func suggestionsIncludeInProgress() {
+        let flights = [makeFlight(id: "tomorrow", departureTime: "2026-07-09T12:00:00Z"), inProgress, alreadyLanded]
+        // Soonest-first: the in-progress flight leads, landed one falls to the past half.
+        #expect(FlightResolver.orderedForSuggestions(flights, order: .soonestFirst, now: now).map(\.id)
+            == ["flying", "tomorrow", "landed"])
+        // Furthest-first flips the upcoming half only; past stays at the back.
+        #expect(FlightResolver.orderedForSuggestions(flights, order: .furthestFirst, now: now).map(\.id)
+            == ["tomorrow", "flying", "landed"])
+    }
+
     /// Two upcoming + two past, deliberately shuffled.
     private var mixed: [FlightResponse] {
         [
@@ -327,6 +367,20 @@ struct DialogTests {
     func overviewEmpty() {
         let past = makeFlight(departureTime: "2026-01-01T12:00:00Z")
         #expect(IntentDialogs.overviewSummary([past], now: now) == "You have no upcoming flights.")
+    }
+
+    @Test("overview: an in-progress flight still counts as upcoming")
+    func overviewIncludesInProgress() {
+        // `now` is 10:00Z (see the suite's `now`); departed 09:30Z on a 3-hour
+        // trip. The list shows it at the top of Future, so Siri must not say
+        // "you have no upcoming flights".
+        let flying = makeFlight(
+            waypoints: ["EGKB", "EGTF"],
+            departureTime: "2026-07-08T09:30:00Z",
+            flightDurationHours: 3.0
+        )
+        #expect(IntentDialogs.overviewSummary([flying], now: now)
+            == "You have 1 upcoming flight: EGKB → EGTF, not yet briefed.")
     }
 
     @Test("overview: truncation always keeps the SOONEST five, whatever the list preference")
