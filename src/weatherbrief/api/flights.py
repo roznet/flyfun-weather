@@ -29,6 +29,7 @@ from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.notify.badge import unseen_flight_ids
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
+from weatherbrief.api.preferences import load_flight_order
 from weatherbrief.storage.flights import (
     SHARE_CODE_RE,
     SubscriptionError,
@@ -526,6 +527,28 @@ def _flight_to_response(
     )
 
 
+def _flight_has_ended(flight: Flight, now: datetime) -> bool:
+    """Has this flight finished — departure plus its planned duration?
+
+    The single boundary between the ``future`` section and everything behind
+    it. A flight that departed 30 minutes ago on a 3-hour trip is in progress,
+    not past, so it stays in the upcoming list (and under "soonest first" sits
+    at the very top, which is where you want it while flying). This mirrors the
+    web's ``isFlightPast`` (``web/ts/utils.ts``), which has always been
+    duration-aware.
+
+    ``flight_duration_hours`` defaults to ``0.0`` and zero-duration flights are
+    a real case (the add-flight flow has a ``confirmZeroDuration`` dialog) —
+    those behave exactly as before: past the instant they depart.
+
+    ``_classify_section`` and ``_compute_recent_section`` must both go through
+    here; if they disagree, an airborne flight can be ``future`` by one and a
+    ``recent`` candidate by the other.
+    """
+    duration = flight.flight_duration_hours or 0.0
+    return flight.departure_time + timedelta(hours=duration) < now
+
+
 def _classify_section(
     flight: Flight,
     *,
@@ -540,7 +563,7 @@ def _classify_section(
     ``_compute_recent_section`` and pass it in.
     """
     now = now or datetime.now(timezone.utc)
-    if flight.departure_time >= now:
+    if not _flight_has_ended(flight, now):
         return "future"
     if flight.id in recent_set:
         return "recent"
@@ -574,7 +597,7 @@ def _compute_recent_section(
         f
         for f, d in owned_flights_with_debrief
         if d is None
-        and f.departure_time < now
+        and _flight_has_ended(f, now)
         and f.departure_time >= cutoff
     ]
     candidates.sort(key=lambda f: f.departure_time, reverse=True)
@@ -625,6 +648,26 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
     }
 
 
+def _reorder_future_soonest_first(
+    flights: list[FlightResponse],
+    meta: list[tuple[str, datetime]],
+) -> None:
+    """Re-sort the ``future`` entries of ``flights`` ascending by departure, in place.
+
+    Only the slots holding future flights are rewritten; ``recent`` entries keep
+    both their positions and their most-recent-first order, which is what the
+    preference promises (#536). The two sections can interleave in the incoming
+    ``departure_time desc`` order — an in-progress flight departed before a
+    just-ended short one — so this deliberately permutes within a subset rather
+    than partitioning the list.
+    """
+    slots = [i for i, (section, _) in enumerate(meta) if section == "future"]
+    ordered = sorted(slots, key=lambda i: meta[i][1])
+    picked = [flights[i] for i in ordered]
+    for slot, resp in zip(slots, picked):
+        flights[slot] = resp
+
+
 @router.get("", response_model=list[FlightResponse])
 def list_all_flights(
     response: Response,
@@ -665,6 +708,10 @@ def list_all_flights(
     # (departure_time desc); the frontend re-buckets by ``section`` so the
     # concatenation order below only needs to preserve per-section order.
     other: list[FlightResponse] = []  # future + recent
+    # Parallel to ``other``: (section, departure_time) per entry, so the
+    # soonest-first reorder below can pick out the future members without
+    # re-parsing the ISO strings on the responses.
+    other_meta: list[tuple[str, datetime]] = []
     past: list[FlightResponse] = []
     for f, role, owner_name in paired:
         debrief = debrief_map.get(f.id) if role == "owner" else None
@@ -681,7 +728,18 @@ def list_all_flights(
             section=section,
             unseen=f.id in unseen_ids,
         )
-        (past if section == "past" else other).append(resp)
+        if section == "past":
+            past.append(resp)
+        else:
+            other.append(resp)
+            other_meta.append((section, f.departure_time))
+
+    # Upcoming-flights ordering (#536). Opt-in account preference, loaded here
+    # in the body rather than via ``Depends()``: ``api/agent.py`` (the ChatGPT
+    # connector) calls this function directly, where a Depends default would
+    # arrive as a ``fastapi.params.Depends`` instance and never match.
+    if load_flight_order(db, user_id) == "soonest_first":
+        _reorder_future_soonest_first(other, other_meta)
 
     response.headers["X-Past-Total"] = str(len(past))
     if past_limit is not None:

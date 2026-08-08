@@ -49,6 +49,9 @@ export interface PreferencesResponse {
   icing_severity_enhance: boolean;
   locale: string;
   units_region: string;
+  // Ordering of the upcoming-flights section only (#536):
+  // 'furthest_first' (default, historical) | 'soonest_first'.
+  flight_order: string;
   display_currency: string;
   synoptic_forecast_map_enabled: boolean;
   defer_email_for_model_update: boolean;
@@ -82,6 +85,7 @@ export interface PreferencesUpdate {
   icing_severity_enhance?: boolean;
   locale?: string;
   units_region?: string;
+  flight_order?: string;
   display_currency?: string;
   synoptic_forecast_map_enabled?: boolean;
   defer_email_for_model_update?: boolean;

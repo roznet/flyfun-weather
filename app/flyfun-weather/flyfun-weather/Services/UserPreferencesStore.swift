@@ -9,7 +9,7 @@ import OSLog
 @MainActor
 @Observable
 final class UserPreferencesStore {
-    private static let defaultsKey = "cachedUserPreferences"
+    nonisolated private static let defaultsKey = "cachedUserPreferences"
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "UserPreferences")
 
     private(set) var preferences: PreferencesResponse
@@ -57,6 +57,27 @@ final class UserPreferencesStore {
             BriefingUpdatesUpdateRequest(notifyScope: updates.scope, notifyChangeOnly: updates.changeOnly),
             field: "briefing_updates", client: client
         )
+    }
+
+    /// Change the upcoming-flights ordering (#536). Affects the Future section
+    /// only; Recent and Past stay most-recent-first.
+    func updateFlightOrder(_ order: FlightOrder, using client: APIClient) async {
+        await put(FlightOrderUpdateRequest(flightOrder: order.rawValue), field: "flight_order", client: client)
+    }
+
+    /// The cached upcoming-flights ordering, readable off the main actor.
+    ///
+    /// Exists for the App Intents surface: `FlightResolver.orderedForSuggestions`
+    /// is deliberately `nonisolated` and pure so the non-MainActor test target can
+    /// call it, and `FlightEntityQuery.suggestedEntities()` must not hop to the
+    /// main actor just to read one preference. Decodes the same UserDefaults blob
+    /// `init` reads at launch, with the same plain `JSONDecoder`, so the two can
+    /// never disagree about the stored shape.
+    nonisolated static func cachedFlightOrder() -> FlightOrder {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let cached = try? JSONDecoder().decode(PreferencesResponse.self, from: data)
+        else { return .furthestFirst }
+        return cached.flightOrderPreference
     }
 
     /// Dismiss the one-time channel-invariant decay notice.

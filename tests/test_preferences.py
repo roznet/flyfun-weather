@@ -85,6 +85,53 @@ class TestPreferencesAPI:
         resp = client.put("/api/user/preferences", json={"units_region": "metric"})
         assert resp.status_code == 422
 
+    def test_flight_order_defaults_to_furthest_first(self, client, app_db):
+        # Absent from app_prefs_json → today's ordering, for every existing user.
+        assert client.get("/api/user/preferences").json()["flight_order"] == "furthest_first"
+
+        from weatherbrief.api.preferences import load_flight_order
+
+        s = app_db()
+        assert load_flight_order(s, DEV_USER_ID) == "furthest_first"
+        s.close()
+
+    def test_flight_order_round_trip(self, client, app_db):
+        resp = client.put("/api/user/preferences", json={"flight_order": "soonest_first"})
+        assert resp.status_code == 200
+        assert resp.json()["flight_order"] == "soonest_first"
+        assert client.get("/api/user/preferences").json()["flight_order"] == "soonest_first"
+
+        from weatherbrief.api.preferences import load_flight_order
+
+        s = app_db()
+        assert load_flight_order(s, DEV_USER_ID) == "soonest_first"
+        s.close()
+
+    def test_flight_order_rejects_invalid(self, client):
+        resp = client.put("/api/user/preferences", json={"flight_order": "chronological"})
+        assert resp.status_code == 422
+
+    def test_flight_order_does_not_disturb_other_prefs(self, client):
+        client.put("/api/user/preferences", json={"units_region": "us"})
+        client.put("/api/user/preferences", json={"flight_order": "soonest_first"})
+        data = client.get("/api/user/preferences").json()
+        assert data["units_region"] == "us"
+        assert data["flight_order"] == "soonest_first"
+
+    def test_load_flight_order_ignores_unknown_stored_value(self, client, app_db):
+        """A hand-edited blob can't produce an order no client knows how to render."""
+        from weatherbrief.api.preferences import load_flight_order
+
+        client.get("/api/user/preferences")  # ensure the row exists
+        s = app_db()
+        row = s.get(UserPreferencesRow, DEV_USER_ID)
+        data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+        data["flight_order"] = "sideways"
+        row.app_prefs_json = json.dumps(data)
+        s.commit()
+        assert load_flight_order(s, DEV_USER_ID) == "furthest_first"
+        s.close()
+
     def test_defer_email_for_model_update_round_trip(self, client, app_db):
         # Default off (current behaviour).
         assert client.get("/api/user/preferences").json()["defer_email_for_model_update"] is False

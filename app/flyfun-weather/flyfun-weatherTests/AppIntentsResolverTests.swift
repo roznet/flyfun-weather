@@ -97,16 +97,41 @@ struct FlightOrderingTests {
         #expect(FlightResolver.nextFlight(in: flights, now: now) == nil)
     }
 
-    @Test("suggestions list upcoming soonest-first then past recent-first")
-    func ordering() {
-        let flights = [
+    /// Two upcoming + two past, deliberately shuffled.
+    private var mixed: [FlightResponse] {
+        [
             makeFlight(id: "later", departureTime: "2026-07-20T12:00:00Z"),
             makeFlight(id: "past-old", departureTime: "2026-06-01T12:00:00Z"),
             makeFlight(id: "soon", departureTime: "2026-07-09T12:00:00Z"),
             makeFlight(id: "past-recent", departureTime: "2026-07-05T12:00:00Z"),
         ]
-        let ordered = FlightResolver.orderedForSuggestions(flights, now: now).map(\.id)
+    }
+
+    @Test("suggestions follow the soonest-first preference, past stays recent-first")
+    func orderingSoonestFirst() {
+        let ordered = FlightResolver.orderedForSuggestions(mixed, order: .soonestFirst, now: now).map(\.id)
         #expect(ordered == ["soon", "later", "past-recent", "past-old"])
+    }
+
+    @Test("suggestions follow the furthest-first preference, past stays recent-first")
+    func orderingFurthestFirst() {
+        let ordered = FlightResolver.orderedForSuggestions(mixed, order: .furthestFirst, now: now).map(\.id)
+        #expect(ordered == ["later", "soon", "past-recent", "past-old"])
+    }
+
+    @Test("furthest-first is the default, matching the server's default preference")
+    func orderingDefault() {
+        #expect(FlightResolver.orderedForSuggestions(mixed, now: now).map(\.id)
+            == FlightResolver.orderedForSuggestions(mixed, order: .furthestFirst, now: now).map(\.id))
+    }
+
+    @Test("nextFlight ignores the display preference — it always means the soonest")
+    func nextFlightIgnoresPreference() {
+        // Regression guard: "my next flight" returning the furthest-away one
+        // would be a real bug, so `nextFlight` takes no `order` at all.
+        for _ in FlightOrder.allCases {
+            #expect(FlightResolver.nextFlight(in: mixed, now: now)?.id == "soon")
+        }
     }
 }
 

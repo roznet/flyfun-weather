@@ -34,6 +34,11 @@ router = APIRouter(prefix="/user/preferences", tags=["preferences"])
 #: Notification scope — which refreshes notify (single choice).
 NotifyScope = Literal["auto", "all", "off"]
 
+#: Ordering of the upcoming-flights section (#536). The default reproduces the
+#: historical ``departure_time desc`` ordering exactly.
+FlightOrder = Literal["furthest_first", "soonest_first"]
+DEFAULT_FLIGHT_ORDER: str = "furthest_first"
+
 
 class FxBlock(BaseModel):
     """Display-currency block carried on USD-canonical cost/donation responses.
@@ -83,6 +88,11 @@ class PreferencesResponse(BaseModel):
     icing_severity_enhance: bool
     locale: str
     units_region: str
+    # Ordering of the *upcoming* flights section only (#536). "furthest_first"
+    # is the historical behaviour (departure_time desc); "soonest_first" puts
+    # the next departure at the top. Past/Recent stay most-recent-first under
+    # both — past pagination is offset-based over that order.
+    flight_order: str
     display_currency: str  # ISO 4217 or "auto" (cost/donation display only)
     synoptic_forecast_map_enabled: bool
     defer_email_for_model_update: bool
@@ -129,6 +139,7 @@ class PreferencesUpdate(BaseModel):
     icing_severity_enhance: bool | None = None
     locale: str | None = None
     units_region: Literal["auto", "europe", "us"] | None = None
+    flight_order: FlightOrder | None = None
     display_currency: str | None = None  # "auto" or an ISO 4217 code (e.g. "EUR")
     synoptic_forecast_map_enabled: bool | None = None
     defer_email_for_model_update: bool | None = None
@@ -237,6 +248,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
+        "flight_order": data.get("flight_order", DEFAULT_FLIGHT_ORDER),
         "display_currency": data.get("display_currency", "auto"),
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
         "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
@@ -389,6 +401,8 @@ def update_preferences(
         data["locale"] = body.locale
     if body.units_region is not None:
         data["units_region"] = body.units_region
+    if body.flight_order is not None:
+        data["flight_order"] = body.flight_order
     if body.display_currency is not None:
         # Already normalized by the PreferencesUpdate field validator.
         data["display_currency"] = body.display_currency
@@ -558,6 +572,29 @@ def load_units_region(db: Session, user_id: str) -> str:
         return "auto"
 
 
+def load_flight_order(db: Session, user_id: str) -> str:
+    """Load the user's upcoming-flights ordering ('furthest_first' | 'soonest_first').
+
+    Read in the *body* of ``flights.list_all_flights`` rather than injected as a
+    ``Depends()`` parameter: that route is also called directly as a plain
+    function by the ChatGPT connector (``api/agent.py``), where a ``Depends``
+    default would silently arrive as a ``fastapi.params.Depends`` instance and
+    compare unequal to every valid value. See .claude/CLAUDE.md →
+    "Changing Function Signatures".
+
+    Anything unrecognized falls back to the default, so a hand-edited blob can
+    never produce an ordering no client knows how to render.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if not row or not row.app_prefs_json:
+        return DEFAULT_FLIGHT_ORDER
+    try:
+        value = json.loads(row.app_prefs_json).get("flight_order")
+    except json.JSONDecodeError:
+        return DEFAULT_FLIGHT_ORDER
+    return value if value in ("furthest_first", "soonest_first") else DEFAULT_FLIGHT_ORDER
+
+
 # Display-currency derivation from the existing units_region preference.
 _REGION_CURRENCY = {"europe": "EUR", "us": "USD"}
 
@@ -674,7 +711,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "units_region": "auto", "display_currency": "auto", "defer_email_for_model_update": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "units_region": "auto", "flight_order": DEFAULT_FLIGHT_ORDER, "display_currency": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 

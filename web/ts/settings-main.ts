@@ -843,6 +843,12 @@ function populateAccountForm(prefs: PreferencesResponse): void {
     unitsRegionSelect.value = ur === 'us' || ur === 'europe' ? ur : 'auto';
   }
 
+  // Upcoming-flights ordering — server-stored, applies to the Future section only (#536)
+  const flightOrderSelect = document.getElementById('input-flight-order') as HTMLSelectElement;
+  if (flightOrderSelect) {
+    flightOrderSelect.value = prefs.flight_order === 'soonest_first' ? 'soonest_first' : 'furthest_first';
+  }
+
   // Display-currency picker — "auto" or an ISO code (cost/donation display only)
   const currencySelect = document.getElementById('input-display-currency') as HTMLSelectElement;
   if (currencySelect) {
@@ -1682,6 +1688,8 @@ async function handleSave(): Promise<void> {
   const unitsRegionVal = (document.getElementById('input-units-region') as HTMLSelectElement)?.value;
   const selectedUnitsRegion = unitsRegionVal === 'us' || unitsRegionVal === 'europe' ? unitsRegionVal : 'auto';
   const selectedDisplayCurrency = (document.getElementById('input-display-currency') as HTMLSelectElement)?.value || 'auto';
+  const flightOrderVal = (document.getElementById('input-flight-order') as HTMLSelectElement)?.value;
+  const selectedFlightOrder = flightOrderVal === 'soonest_first' ? 'soonest_first' : 'furthest_first';
 
   try {
     // Save profile settings
@@ -1703,6 +1711,7 @@ async function handleSave(): Promise<void> {
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
       units_region: selectedUnitsRegion,
+      flight_order: selectedFlightOrder,
       display_currency: selectedDisplayCurrency,
       synoptic_forecast_map_enabled: synopticEnabled,
       defer_email_for_model_update: deferModelUpdate,

@@ -19,8 +19,10 @@ struct FlightGroupingTests {
         ISO8601DateFormatter().string(from: now.addingTimeInterval(offsetDays * 86400))
     }
 
-    private func flight(_ id: String, days: Double, section: String? = nil) -> FlightResponse {
-        var f = makeFlight(id: id, departureTime: Self.iso(days))
+    private func flight(
+        _ id: String, days: Double, section: String? = nil, durationHours: Double = 2.0
+    ) -> FlightResponse {
+        var f = makeFlight(id: id, departureTime: Self.iso(days), flightDurationHours: durationHours)
         f.section = section
         return f
     }
@@ -59,6 +61,81 @@ struct FlightGroupingTests {
         )
         #expect(ids(groups.first { $0.title == "Recent" }) == ["a"])
         #expect(ids(groups.first { $0.title == "Past" }) == ["b"])
+    }
+
+    // MARK: - Upcoming-flights ordering preference (#536)
+
+    /// Future first (furthest → soonest by default), Recent and Past always
+    /// most-recent-first. Sections come from the server so the test pins the
+    /// ordering alone.
+    private var orderingFixture: [FlightResponse] {
+        [
+            flight("near", days: 2, section: "future"),
+            flight("far", days: 9, section: "future"),
+            flight("mid", days: 5, section: "future"),
+            flight("recent-old", days: -5, section: "recent"),
+            flight("recent-new", days: -1, section: "recent"),
+            flight("past-old", days: -40, section: "past"),
+            flight("past-new", days: -30, section: "past"),
+        ]
+    }
+
+    @Test("Default (furthest first) keeps Future most-distant-first")
+    func futureFurthestFirst() {
+        let groups = FlightListView.groupedFlights(orderingFixture, order: .furthestFirst, now: Self.now)
+        #expect(ids(groups.first { $0.title == "Future" }) == ["far", "mid", "near"])
+    }
+
+    @Test("Soonest first reverses Future only")
+    func futureSoonestFirst() {
+        let groups = FlightListView.groupedFlights(orderingFixture, order: .soonestFirst, now: Self.now)
+        #expect(ids(groups.first { $0.title == "Future" }) == ["near", "mid", "far"])
+    }
+
+    @Test("Recent and Past stay most-recent-first under both orders")
+    func recentAndPastUnaffected() {
+        for order in FlightOrder.allCases {
+            let groups = FlightListView.groupedFlights(orderingFixture, order: order, now: Self.now)
+            #expect(ids(groups.first { $0.title == "Recent" }) == ["recent-new", "recent-old"])
+            #expect(ids(groups.first { $0.title == "Past" }) == ["past-new", "past-old"])
+        }
+    }
+
+    @Test("Legacy fallback honours the order too")
+    func legacyFallbackOrdering() {
+        let flights = [flight("near", days: 2), flight("far", days: 9), flight("mid", days: 5)]
+        #expect(ids(FlightListView.groupedFlights(flights, order: .soonestFirst, now: Self.now)
+            .first { $0.title == "Future" }) == ["near", "mid", "far"])
+        #expect(ids(FlightListView.groupedFlights(flights, order: .furthestFirst, now: Self.now)
+            .first { $0.title == "Future" }) == ["far", "mid", "near"])
+    }
+
+    // MARK: - Duration-aware Future boundary (#536 part 2)
+
+    @Test("An in-progress flight is Future, and leads under soonest-first")
+    func inProgressFlightIsFuture() {
+        // Departed 30 min ago on a 3-hour trip — still flying.
+        let flying = flight("flying", days: -0.5 / 24, durationHours: 3.0)
+        let later = flight("later", days: 3)
+        let groups = FlightListView.groupedFlights([flying, later], order: .soonestFirst, now: Self.now)
+        #expect(ids(groups.first { $0.title == "Future" }) == ["flying", "later"])
+    }
+
+    @Test("A zero-duration flight is past the instant it departs")
+    func zeroDurationIsPastImmediately() {
+        let f = flight("zero", days: -1.0 / 1440, durationHours: 0)   // departed 1 min ago
+        let groups = FlightListView.groupedFlights([f], now: Self.now)
+        #expect(titles(groups) == ["Recent"])
+    }
+
+    @Test("hasEnded mirrors the server boundary")
+    func hasEndedBoundary() {
+        let f = makeFlight(departureTime: "2026-06-24T12:00:00Z", flightDurationHours: 2.0)
+        func at(_ iso: String) -> Date { ISO8601DateFormatter().date(from: iso)! }
+        #expect(!f.hasEnded(now: at("2026-06-24T12:00:00Z")))   // departing
+        #expect(!f.hasEnded(now: at("2026-06-24T13:59:59Z")))   // airborne
+        #expect(!f.hasEnded(now: at("2026-06-24T14:00:00Z")))   // exactly at the end
+        #expect(f.hasEnded(now: at("2026-06-24T14:00:01Z")))    // landed
     }
 
     // MARK: - flightSection computed fallback (uses real `Date()`)

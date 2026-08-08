@@ -13,7 +13,11 @@ from sqlalchemy.orm import sessionmaker
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
 from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.api.app import create_app
-from weatherbrief.api.flights import _classify_section, _compute_recent_section
+from weatherbrief.api.flights import (
+    _classify_section,
+    _compute_recent_section,
+    _flight_has_ended,
+)
 from weatherbrief.debriefs.taxonomy import ConditionTag, Decision
 from weatherbrief.models import Flight, FlightDebrief
 from weatherbrief.storage.debriefs import upsert_debrief
@@ -36,6 +40,20 @@ def _flt(idx: int, days_offset: int) -> Flight:
         departure_time=dep,
         cruise_altitude_ft=8000,
         flight_duration_hours=1.0,
+        created_at=dep - timedelta(days=1),
+    )
+
+
+def _flt_hours(idx: int, hours_offset: float, duration: float) -> Flight:
+    """Build a Flight departing hours_offset hours from _NOW, with a given duration."""
+    dep = _NOW + timedelta(hours=hours_offset)
+    return Flight(
+        id=f"h-{idx}",
+        user_id="u",
+        route_name="r",
+        departure_time=dep,
+        cruise_altitude_ft=8000,
+        flight_duration_hours=duration,
         created_at=dep - timedelta(days=1),
     )
 
@@ -123,6 +141,57 @@ class TestClassifySection:
     def test_past_undebriefed_outside_recent(self):
         f = _flt(1, -100)
         assert _classify_section(f, has_debrief=False, recent_set=set(), now=_NOW) == "past"
+
+
+class TestDurationAwareBoundary:
+    """The future/past boundary is departure + duration, not departure (#536).
+
+    Matches the web's ``isFlightPast``, which has always been duration-aware.
+    """
+
+    def test_in_progress_flight_has_not_ended(self):
+        # Departed 30 minutes ago on a 3-hour trip — still flying.
+        f = _flt_hours(1, hours_offset=-0.5, duration=3.0)
+        assert _flight_has_ended(f, _NOW) is False
+
+    def test_flight_past_its_duration_has_ended(self):
+        f = _flt_hours(2, hours_offset=-4.0, duration=3.0)
+        assert _flight_has_ended(f, _NOW) is True
+
+    def test_zero_duration_is_past_the_instant_it_departs(self):
+        # Zero duration is a real case (the web add-flight flow confirms it) and
+        # must behave exactly as before: past as soon as it departs.
+        f = _flt_hours(3, hours_offset=-0.01, duration=0.0)
+        assert _flight_has_ended(f, _NOW) is True
+
+    def test_departure_exactly_now_is_not_ended(self):
+        # Unchanged from the old ``departure_time >= now`` boundary.
+        f = _flt_hours(4, hours_offset=0.0, duration=0.0)
+        assert _flight_has_ended(f, _NOW) is False
+
+    def test_none_duration_treated_as_zero(self):
+        f = _flt_hours(5, hours_offset=-0.01, duration=1.0)
+        f.flight_duration_hours = None  # type: ignore[assignment]
+        assert _flight_has_ended(f, _NOW) is True
+
+    def test_in_progress_flight_classifies_as_future(self):
+        f = _flt_hours(6, hours_offset=-0.5, duration=3.0)
+        assert _classify_section(f, has_debrief=False, recent_set=set(), now=_NOW) == "future"
+
+    def test_classify_and_recent_agree_for_in_progress_flight(self):
+        # The two functions test the boundary independently; if they disagree an
+        # airborne flight is ``future`` to one and a ``recent`` candidate to the
+        # other. Both must go through ``_flight_has_ended``.
+        f = _flt_hours(7, hours_offset=-0.5, duration=3.0)
+        recent = _compute_recent_section([(f, None)], now=_NOW)
+        assert recent == set()
+        assert _classify_section(f, has_debrief=False, recent_set=recent, now=_NOW) == "future"
+
+    def test_just_ended_flight_becomes_recent(self):
+        f = _flt_hours(8, hours_offset=-3.5, duration=3.0)
+        recent = _compute_recent_section([(f, None)], now=_NOW)
+        assert recent == {f.id}
+        assert _classify_section(f, has_debrief=False, recent_set=recent, now=_NOW) == "recent"
 
 
 # --- Integration test against the real API ---
@@ -285,6 +354,89 @@ class TestPastPagination:
         resp = client.get("/api/flights")
         assert resp.headers["X-Past-Total"] == "3"
         assert len([f for f in resp.json() if f["section"] == "past"]) == 3
+
+
+def _set_flight_order(app_db, order: str) -> None:
+    """Write the ordering preference straight into ``app_prefs_json``."""
+    s = app_db()
+    row = s.get(UserPreferencesRow, DEV_USER_ID)
+    data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+    data["flight_order"] = order
+    row.app_prefs_json = json.dumps(data)
+    s.commit()
+    s.close()
+
+
+class TestFlightOrderPreference:
+    """Upcoming-flights ordering (#536): only the future section reorders."""
+
+    def _future_ids(self, client) -> list[str]:
+        return [f["id"] for f in client.get("/api/flights").json() if f["section"] == "future"]
+
+    def test_default_is_furthest_first(self, client, app_db):
+        near = _save_flight(app_db, route="fo-near", days_offset=+2, idx=1)
+        far = _save_flight(app_db, route="fo-far", days_offset=+9, idx=2)
+        mid = _save_flight(app_db, route="fo-mid", days_offset=+5, idx=3)
+        assert self._future_ids(client) == [far.id, mid.id, near.id]
+
+    def test_soonest_first_reverses_future_only(self, client, app_db):
+        near = _save_flight(app_db, route="so-near", days_offset=+2, idx=1)
+        far = _save_flight(app_db, route="so-far", days_offset=+9, idx=2)
+        mid = _save_flight(app_db, route="so-mid", days_offset=+5, idx=3)
+        _set_flight_order(app_db, "soonest_first")
+        assert self._future_ids(client) == [near.id, mid.id, far.id]
+
+    def test_recent_and_past_unchanged_under_both(self, client, app_db):
+        # 2 recent (within 30 days, undebriefed, capped at 2) + 2 past.
+        for i in range(4):
+            _save_flight(app_db, route=f"ro{i}", days_offset=-(i + 1), idx=i)
+        for i in range(2):
+            _save_flight(app_db, route=f"po{i}", days_offset=-(40 + i), idx=10 + i)
+        _save_flight(app_db, route="fo-a", days_offset=+3, idx=20)
+        _save_flight(app_db, route="fo-b", days_offset=+8, idx=21)
+
+        def sectioned(section: str) -> list[str]:
+            return [f["id"] for f in client.get("/api/flights").json() if f["section"] == section]
+
+        default_recent, default_past = sectioned("recent"), sectioned("past")
+        _set_flight_order(app_db, "soonest_first")
+        assert sectioned("recent") == default_recent
+        assert sectioned("past") == default_past
+
+    def test_past_pagination_unaffected(self, client, app_db):
+        for i in range(5):
+            _save_flight(app_db, route=f"pp{i}", days_offset=-(40 + i), idx=i)
+        _save_flight(app_db, route="pp-fut", days_offset=+5, idx=99)
+        _set_flight_order(app_db, "soonest_first")
+
+        resp = client.get("/api/flights?past_limit=2&past_offset=0")
+        assert resp.headers["X-Past-Total"] == "5"
+        page1 = [f["id"] for f in resp.json() if f["section"] == "past"]
+        page2 = [
+            f["id"]
+            for f in client.get("/api/flights?past_limit=2&past_offset=2").json()
+            if f["section"] == "past"
+        ]
+        assert len(page1) == 2 and len(page2) == 2
+        assert set(page1).isdisjoint(page2)
+        # The full-order past list is still most-recent-first.
+        full = [f["id"] for f in client.get("/api/flights").json() if f["section"] == "past"]
+        assert full[:2] == page1
+        assert full[2:4] == page2
+
+    def test_unknown_stored_value_falls_back_to_default(self, client, app_db):
+        near = _save_flight(app_db, route="uk-near", days_offset=+2, idx=1)
+        far = _save_flight(app_db, route="uk-far", days_offset=+9, idx=2)
+        _set_flight_order(app_db, "sideways")
+        assert self._future_ids(client) == [far.id, near.id]
+
+    def test_in_progress_flight_leads_under_soonest_first(self, client, app_db):
+        # Departed 30 min ago on a 1-hour trip → still future, and the soonest
+        # departure, so it sits at the very top while you're flying.
+        flying = _save_flight(app_db, route="ip-now", days_offset=-0.5 / 24, idx=1)
+        later = _save_flight(app_db, route="ip-later", days_offset=+3, idx=2)
+        _set_flight_order(app_db, "soonest_first")
+        assert self._future_ids(client) == [flying.id, later.id]
 
 
 class TestApiSections:

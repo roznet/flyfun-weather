@@ -32,9 +32,14 @@ enum IntentDialogs {
         return "Your \(route) flight has no assessment yet."
     }
 
-    /// One-line-per-flight traffic-light overview of upcoming flights.
-    static func overviewSummary(_ flights: [FlightResponse], now: Date = Date()) -> String {
-        let upcoming = FlightResolver.orderedForSuggestions(flights, now: now)
+    /// One-line-per-flight traffic-light overview of upcoming flights, spoken in
+    /// the user's chosen list order (#536) so it matches what the app shows.
+    static func overviewSummary(
+        _ flights: [FlightResponse],
+        order: FlightOrder = .furthestFirst,
+        now: Date = Date()
+    ) -> String {
+        let upcoming = FlightResolver.orderedForSuggestions(flights, order: order, now: now)
             .filter { ($0.departureDate ?? .distantPast) >= now }
         guard !upcoming.isEmpty else { return "You have no upcoming flights." }
         let listLimit = 5

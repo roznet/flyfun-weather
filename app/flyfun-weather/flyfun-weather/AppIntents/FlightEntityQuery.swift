@@ -32,10 +32,16 @@ struct FlightEntityQuery: EntityStringQuery {
     }
 
     /// Suggestions shown in the Shortcuts parameter picker — upcoming flights
-    /// first (soonest at top), then the rest most-recent-first.
+    /// first (in the user's chosen order), then the rest most-recent-first.
+    ///
+    /// The preference is read from the cached-prefs blob via a `nonisolated`
+    /// accessor rather than the `@MainActor` store, so this stays off the main
+    /// actor. Shortcuts caches suggested entities, so a preference flip may not
+    /// reorder its picker until iOS refreshes them; in-app order is immediate.
     func suggestedEntities() async throws -> [FlightEntity] {
         guard let flights = try? await Self.loadFlights() else { return [] }
-        return FlightResolver.orderedForSuggestions(flights).map(FlightEntity.init)
+        let order = UserPreferencesStore.cachedFlightOrder()
+        return FlightResolver.orderedForSuggestions(flights, order: order).map(FlightEntity.init)
     }
 
     /// Cache-first flight load, shared by every query path. Does *not* gate on

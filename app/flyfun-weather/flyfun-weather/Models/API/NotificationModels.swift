@@ -26,6 +26,12 @@ struct BriefingUpdatesUpdateRequest: Encodable, Sendable {
     let notifyChangeOnly: Bool    // -> "notify_change_only"
 }
 
+/// Body for `PUT /api/user/preferences` when changing the upcoming-flights
+/// ordering (#536).
+struct FlightOrderUpdateRequest: Encodable, Sendable {
+    let flightOrder: String   // -> "flight_order" ("furthest_first" | "soonest_first")
+}
+
 /// Body for dismissing the one-time channel-invariant decay notice.
 struct NotifyDecayDismissRequest: Encodable, Sendable {
     let notifyDecayNotice: Bool   // -> "notify_decay_notice" (always false)
