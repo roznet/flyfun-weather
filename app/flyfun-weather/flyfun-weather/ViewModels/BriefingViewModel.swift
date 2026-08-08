@@ -118,12 +118,18 @@ final class BriefingViewModel {
     private(set) var timeOptions: TimeOptionsResponse?
     private(set) var timeOptionsOffline = false
     @ObservationIgnored private var timeOptionsPollTask: Task<Void, Never>?
+    /// Handle for the active-refresh follow, so it can be cancelled on
+    /// background / disappear rather than only when its own bound expires.
+    @ObservationIgnored private var refreshStatusPollTask: Task<Void, Never>?
 
     // Refresh state
     private(set) var refreshState: RefreshState = .idle
     /// Guards against overlapping `syncLatestPack()` runs when several triggers
     /// fire close together (e.g. foreground + push). Non-observed — internal only.
     @ObservationIgnored private var isSyncing = false
+    /// True while `refresh()` owns a live SSE stream on this device. See its use
+    /// in `checkActiveRefresh`.
+    @ObservationIgnored private var isStreamingRefresh = false
 
     // Download/cache state
     private(set) var downloadState: DownloadState = .notDownloaded
@@ -509,6 +515,13 @@ final class BriefingViewModel {
     func refresh() async {
         guard !refreshState.isRefreshing else { return }
         refreshState = .refreshing(stage: "Starting", detail: nil, progress: 0)
+        // Marks *this* device as the one streaming the refresh, so a foreground
+        // `checkActiveRefresh` doesn't start a second, polled follow of the same
+        // run and race the SSE stream for `refreshState`. Distinct from
+        // `refreshState.isRefreshing`, which is also true while merely following
+        // someone else's refresh — the case foregrounding must be able to re-arm.
+        isStreamingRefresh = true
+        defer { isStreamingRefresh = false }
 
         do {
             let stream = await repository.refreshStream(flightId: flight.id)
@@ -570,8 +583,15 @@ final class BriefingViewModel {
         return "Already up to date — no refresh needed."
     }
 
-    /// Check if a refresh is already running (started from web or another device).
+    /// Check if a refresh is already running (started from web or another device),
+    /// and if so follow it to completion. Offline: skip outright — the round trip
+    /// can only fail, and waking the radio to learn that costs the same as a real
+    /// request. Safe to call repeatedly (briefing open, return to foreground):
+    /// `stopRefreshStatusPolling` collapses any prior follow.
     func checkActiveRefresh() async {
+        if let networkMonitor, !networkMonitor.isConnected { return }
+        // The SSE stream on this device is already reporting this run's progress.
+        guard !isStreamingRefresh else { return }
         do {
             let status = try await repository.refreshStatus(flightId: flight.id)
             if status.active {
@@ -589,11 +609,55 @@ final class BriefingViewModel {
         }
     }
 
+    /// Cancel the refresh-status follow. Called when the briefing leaves the
+    /// screen or the app backgrounds — the app is normally suspended in the
+    /// background, but the `remote-notification` background mode can wake the
+    /// process for ~30s, during which a suspended `Task.sleep` resumes and fires
+    /// round trips nobody is looking at. Re-entry / foreground restarts it via
+    /// `checkActiveRefresh()`.
+    func stopRefreshStatusPolling() {
+        refreshStatusPollTask?.cancel()
+        refreshStatusPollTask = nil
+    }
+
+    /// Wall-clock ceiling on following an active refresh. A generation takes
+    /// ~2 minutes; ten is generous cover for a queued or slow one. This bounds
+    /// the loop in *time* rather than iterations — with backoff, an iteration
+    /// count no longer maps to a predictable duration.
+    private static let maxRefreshStatusPollDuration: TimeInterval = 10 * 60
+
+    /// Follow an in-progress refresh to completion.
+    ///
+    /// Backoff mirrors `pollTimeOptions` and the flight list's active-refresh
+    /// poll (3s → ×1.5 → cap 15s) rather than the flat 3s this used to run: a
+    /// fixed 3s cadence spent up to 100 round trips on a single briefing open,
+    /// each one a separate radio wake with its own tail. Progress still updates
+    /// promptly — the first ticks are 3s apart — but a long refresh settles to a
+    /// cadence the user can't perceive the difference from.
     private func pollRefreshStatus() async {
-        for _ in 0..<100 {
-            try? await Task.sleep(for: .seconds(3))
+        stopRefreshStatusPolling()
+        // Explicit type: without it the trailing `self?.…` makes Swift infer
+        // `Task<Void?, Never>`, which won't assign to the stored handle.
+        let task: Task<Void, Never> = Task { [weak self] in await self?.runRefreshStatusPoll() }
+        refreshStatusPollTask = task
+        await task.value
+    }
+
+    private func runRefreshStatusPoll() async {
+        let deadline = Date().addingTimeInterval(Self.maxRefreshStatusPollDuration)
+        var delay: Double = 3
+        while !Task.isCancelled, Date() < deadline {
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            // Offline mid-poll: don't wake the radio every few seconds for a call
+            // that can't succeed. Back off harder and let the next tick retry.
+            if let networkMonitor, !networkMonitor.isConnected {
+                delay = min(delay * 2, 30)
+                continue
+            }
             do {
                 let status = try await repository.refreshStatus(flightId: flight.id)
+                guard !Task.isCancelled else { return }
                 if !status.active {
                     refreshState = .completed(elapsedSeconds: 0)
                     // Reload data. A refresh started elsewhere (web/another device)
@@ -613,8 +677,9 @@ final class BriefingViewModel {
                     detail: status.detail,
                     progress: status.progress ?? 0
                 )
+                delay = min(delay * 1.5, 15)
             } catch {
-                break
+                return
             }
         }
     }
@@ -690,8 +755,9 @@ final class BriefingViewModel {
     /// Hard cap on `pollTimeOptions` iterations — a safety backstop so the loop
     /// is bounded even if the server never reports a terminal status. With the
     /// 3s→×1.5→15s backoff this is ~18 min worst case; a real scan reaches a
-    /// terminal state well before then. Mirrors `pollRefreshStatus`'s 100-iter
-    /// bound. Terminal status remains the primary exit.
+    /// terminal state well before then. (`pollRefreshStatus` bounds itself in
+    /// wall-clock instead — with backoff, an iteration count no longer maps to a
+    /// predictable duration.) Terminal status remains the primary exit.
     private static let maxTimeOptionsPollIterations = 80
 
     /// Poll `GET …/time-options` until a terminal status, mirroring the web

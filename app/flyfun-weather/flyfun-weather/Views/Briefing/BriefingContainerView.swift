@@ -169,8 +169,26 @@ struct BriefingContainerView: View {
             // Returning to the foreground: seamlessly sync to the newest online
             // pack (no-op if unchanged). Mirrors the flight list's foreground
             // reload — the open briefing shouldn't stay frozen on a stale pack.
+            // `checkActiveRefresh` re-arms the status follow cancelled on the way
+            // out, and also picks up a refresh started elsewhere while we were away.
             if scenePhase == .active {
-                Task { await viewModel?.syncLatestPack() }
+                Task {
+                    await viewModel?.syncLatestPack()
+                    await viewModel?.checkActiveRefresh()
+                }
+            } else {
+                // Don't follow a refresh in the background. The process is normally
+                // suspended there, but the `remote-notification` background mode can
+                // wake it for ~30s — long enough for a suspended poll to resume and
+                // fire round trips at a screen nobody is looking at.
+                //
+                // The timing-scenario poll is deliberately NOT cancelled here: it has
+                // no resume trigger (it is armed by `loadPackData`, and a foreground
+                // `syncLatestPack` no-ops when the pack is unchanged), so cancelling
+                // it would strand a still-running scan on "Scenarios running…"
+                // forever. It is already backoff-capped at 15s and hard-bounded at
+                // 80 iterations, so the background-wake cost is small.
+                viewModel?.stopRefreshStatusPolling()
             }
         }
         .onChange(of: appState.externalSync) {
@@ -185,6 +203,11 @@ struct BriefingContainerView: View {
             // until the scan reaches a terminal state. Re-entry recreates the VM
             // via `.task` and restarts polling.
             viewModel?.stopTimeOptionsPolling()
+            // Same reasoning for the active-refresh follow: it is an unstructured
+            // `Task` held by the view model, so cancelling the `.task` above does
+            // NOT reach it. Without this it would keep polling to its own deadline
+            // after the pilot has left the briefing.
+            viewModel?.stopRefreshStatusPolling()
         }
     }
 

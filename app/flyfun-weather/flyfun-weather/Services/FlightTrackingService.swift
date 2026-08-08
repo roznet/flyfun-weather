@@ -46,6 +46,44 @@ final class FlightTrackingService: NSObject {
     /// A one-shot `requestLocation()` is in flight (PIREP pre-fill outside an
     /// active route track). Cleared once a fix (or failure) lands.
     private var oneShotActive = false
+    /// When the last fix was delivered. Drives the watchdog's staleness rule —
+    /// the auto-stop conditions inside `projectLocation` can only fire when a fix
+    /// arrives, which is exactly what stops happening once the aircraft parks.
+    private var lastFixTime: Date = .distantPast
+    private var watchdogTask: Task<Void, Never>?
+
+    // MARK: - Energy budget
+
+    /// Horizontal accuracy requested from Core Location.
+    ///
+    /// **Not `kCLLocationAccuracyBest`.** `Best` drives the GPS chip in
+    /// continuous maximum-rate mode and is the single largest energy cost of a
+    /// tracking session. Route projection resolves position to ~0.1nm (185m) and
+    /// the cross-track threshold is 10nm, so ten metres is an order of magnitude
+    /// more precision than any consumer of this data needs.
+    ///
+    /// Note that `distanceFilter` (below) is *not* an energy control: it gates
+    /// **delegate delivery**, not the hardware duty cycle. `desiredAccuracy` is
+    /// the only knob here that changes what the radio actually does.
+    private static let trackingAccuracy = kCLLocationAccuracyNearestTenMeters
+
+    /// Delegate-delivery threshold, in metres. Saves the projection work below
+    /// (already throttled to `projectionThrottleInterval`) and SwiftUI ticks —
+    /// but no radio energy. See `trackingAccuracy`.
+    private static let trackingDistanceFilter: CLLocationDistance = 200 // ~0.1nm
+
+    /// How often the watchdog re-evaluates the auto-stop conditions.
+    private static let watchdogInterval: TimeInterval = 60
+
+    /// Stop tracking after this long with no fix delivered.
+    ///
+    /// With a 200m delivery filter, a moving aircraft produces a fix every few
+    /// seconds; fifteen minutes of silence means it has moved less than 200m in
+    /// that time — parked, or the GPS has no usable signal. Either way the live
+    /// position on screen has been frozen for a quarter of an hour, so stopping
+    /// is both honest and the only thing that releases the GPS: the in-fix
+    /// auto-stops cannot run when no fix arrives.
+    private static let staleFixTimeout: TimeInterval = 15 * 60
 
     // MARK: - Start / Stop
 
@@ -62,8 +100,11 @@ final class FlightTrackingService: NSObject {
 
         let manager = CLLocationManager()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 200 // ~0.1nm, throttles at GPS level
+        manager.desiredAccuracy = Self.trackingAccuracy
+        manager.distanceFilter = Self.trackingDistanceFilter
+        // Tells Core Location to expect fast, high-altitude motion so it filters
+        // and duty-cycles for flight rather than the default `.other` profile.
+        manager.activityType = .airborne
         self.locationManager = manager
 
         manager.requestWhenInUseAuthorization()
@@ -71,13 +112,13 @@ final class FlightTrackingService: NSObject {
         // Start if already authorized
         let status = manager.authorizationStatus
         if status == .authorizedWhenInUse || status == .authorizedAlways {
-            manager.startUpdatingLocation()
-            isTracking = true
-            logger.info("Flight tracking started")
+            beginTracking(with: manager)
         }
     }
 
     func stop() {
+        watchdogTask?.cancel()
+        watchdogTask = nil
         locationManager?.stopUpdatingLocation()
         locationManager?.delegate = nil
         locationManager = nil
@@ -88,7 +129,65 @@ final class FlightTrackingService: NSObject {
         routePoints = []
         flightEndTime = nil
         destinationCoordinate = nil
+        lastFixTime = .distantPast
         logger.info("Flight tracking stopped")
+    }
+
+    /// Turn the GPS on and arm the watchdog. Shared by `start()` and the
+    /// authorization callback, which both reach "tracking is now live" — keeping
+    /// it in one place means the watchdog can never be armed on one path only.
+    private func beginTracking(with manager: CLLocationManager) {
+        manager.startUpdatingLocation()
+        isTracking = true
+        lastFixTime = Date()
+        watchdogTask?.cancel()
+        watchdogTask = Task { [weak self] in await self?.runWatchdog() }
+        logger.info("Flight tracking started")
+    }
+
+    /// Wall-clock backstop for the auto-stop rules.
+    ///
+    /// Both conditions in `projectLocation` are evaluated only when a fix is
+    /// delivered, so neither can fire once the aircraft stops moving: with a 200m
+    /// delivery filter a parked aircraft produces no fixes at all, and the GPS
+    /// would stay on until the pilot manually tapped Stop (or the process died).
+    /// The same gap swallows a diversion, where the near-destination test never
+    /// becomes true. This loop closes both by running on the clock instead.
+    private func runWatchdog() async {
+        var lastTick = Date()
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Self.watchdogInterval))
+            if Task.isCancelled { return }
+            guard isTracking else { return }
+
+            let now = Date()
+            let sinceLastTick = now.timeIntervalSince(lastTick)
+            lastTick = now
+
+            if let endTime = flightEndTime, now > endTime {
+                logger.info("Watchdog auto-stop: past flight window")
+                stop()
+                return
+            }
+
+            // A tick that arrives far later than scheduled means the process was
+            // suspended in between (the app was backgrounded — location delivery
+            // is suspended there too, since we hold when-in-use authorization and
+            // declare no `location` background mode). The silence says nothing
+            // about the aircraft, so roll the fix clock forward rather than
+            // reading a backgrounded stretch as a landing.
+            if sinceLastTick > Self.watchdogInterval * 2 {
+                lastFixTime = now
+                continue
+            }
+
+            let silence = now.timeIntervalSince(lastFixTime)
+            if silence > Self.staleFixTimeout {
+                logger.info("Watchdog auto-stop: no fix in \(Int(silence))s — parked or no GPS signal")
+                stop()
+                return
+            }
+        }
     }
 
     /// Request a single current-position fix WITHOUT starting full route
@@ -108,7 +207,9 @@ final class FlightTrackingService: NSObject {
         currentLocation = nil
         let manager = locationManager ?? CLLocationManager()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
+        // Same budget as a live track: a position report doesn't need the GPS
+        // driven at `Best` for the seconds it takes to land one fix.
+        manager.desiredAccuracy = Self.trackingAccuracy
         self.locationManager = manager
         oneShotActive = true
 
@@ -131,6 +232,7 @@ final class FlightTrackingService: NSObject {
 
     private func projectLocation(_ location: CLLocation) {
         let now = Date()
+        lastFixTime = now
 
         // Auto-stop: past flight window
         if let endTime = flightEndTime, now > endTime {
@@ -211,8 +313,12 @@ final class FlightTrackingService: NSObject {
             headingDeg: heading
         )
 
+        // `.debug`, not `.info`: this fires every `projectionThrottleInterval`
+        // (~720×/hour in flight) and `.info` is persisted to the unified log.
+        // The one-off "First location" above stays at `.info` — it's the line
+        // that says tracking actually acquired.
         let altStr = altitudeFt.map { "\(Int($0))ft" } ?? "no-alt"
-        logger.info("Projected: \(bestAlongDistance, format: .fixed(precision: 1))nm along, \(altStr), \(bestPerpDistance, format: .fixed(precision: 1))nm off-track")
+        logger.debug("Projected: \(bestAlongDistance, format: .fixed(precision: 1))nm along, \(altStr), \(bestPerpDistance, format: .fixed(precision: 1))nm off-track")
     }
 
     /// Great-circle initial bearing from one coordinate to another, in degrees (0-360).
@@ -236,9 +342,7 @@ extension FlightTrackingService: @preconcurrency CLLocationManagerDelegate {
             let status = manager.authorizationStatus
             if status == .authorizedWhenInUse || status == .authorizedAlways {
                 if !routePoints.isEmpty && !isTracking {
-                    manager.startUpdatingLocation()
-                    isTracking = true
-                    logger.info("Authorization granted, tracking started")
+                    beginTracking(with: manager)
                 } else if oneShotActive {
                     manager.requestLocation()
                 }
