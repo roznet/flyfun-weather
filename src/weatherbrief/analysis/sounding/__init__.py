@@ -136,6 +136,81 @@ def _enrich_lwc(
     # spacing between 50-hPa GRIB levels).  Sorted high-to-low pressure.
     _interpolate_cloud_water(derived_levels)
 
+    # Pass 3: the same treatment for precipitating liquid. Kept as its own
+    # pass, with its own bracket index, so that adding qr cannot perturb which
+    # neighbours the CLW/ICMR pass picks — a rain-only level must not become a
+    # bracket endpoint for cloud water and suppress an interpolation that used
+    # to happen.
+    _interpolate_rain_water(derived_levels)
+
+
+def _bracketing_pressures(
+    enriched_pressures: list[int], p: int
+) -> tuple[int | None, int | None]:
+    """Nearest enriched pressures straddling ``p``.
+
+    ``enriched_pressures`` is sorted descending (high pressure first = low
+    altitude). Returns ``(p_above, p_below)`` where *above* is the higher
+    pressure / lower altitude; either is None when ``p`` is outside the
+    enriched span, in which case the caller must not extrapolate.
+    """
+    p_above: int | None = None  # higher pressure (lower altitude)
+    p_below: int | None = None  # lower pressure (higher altitude)
+    for ep in enriched_pressures:
+        if ep > p:
+            p_above = ep
+        elif ep < p:
+            p_below = ep
+            break
+    return p_above, p_below
+
+
+def _interpolate_rain_water(derived_levels: list[DerivedLevel]) -> None:
+    """Fill intermediate levels' rain water, re-deriving the supercooled flag.
+
+    The qr counterpart of ``_interpolate_cloud_water`` (#530 review): without
+    it, a model whose raw hydrometeor levels don't align 1:1 with the analysis
+    grid would carry cloud water onto interpolated levels but silently drop
+    rain water and ``supercooled_rain``.
+
+    ``supercooled_rain`` is RE-DERIVED from the interpolated qr against the
+    level's own temperature — never interpolated. It is a threshold test on two
+    quantities, so blending the booleans of the bracketing levels would invent
+    freezing rain at a level whose temperature is above freezing (and lose it
+    at one below).
+
+    Dormant for ICON today: ``DerivedLevel.pressure_hpa`` is sourced from the
+    same level list as ``raw_levels``, so pass 1's direct match always succeeds
+    and nothing is left to fill.
+    """
+    enriched: dict[int, DerivedLevel] = {
+        dl.pressure_hpa: dl
+        for dl in derived_levels
+        if dl.rain_water_g_kg is not None
+    }
+    if len(enriched) < 2:
+        return
+
+    enriched_pressures = sorted(enriched.keys(), reverse=True)
+
+    for dl in derived_levels:
+        if dl.rain_water_g_kg is not None:
+            continue  # set by the direct-match pass — authoritative
+
+        p_above, p_below = _bracketing_pressures(enriched_pressures, dl.pressure_hpa)
+        if p_above is None or p_below is None:
+            continue
+
+        above = enriched[p_above].rain_water_g_kg
+        below = enriched[p_below].rain_water_g_kg
+        if above is None or below is None:  # pragma: no cover - index guarantees
+            continue
+
+        frac = (p_above - dl.pressure_hpa) / (p_above - p_below)
+        qr_g_kg = round(above * (1 - frac) + below * frac, 6)
+        dl.rain_water_g_kg = qr_g_kg
+        dl.supercooled_rain = is_supercooled_rain(qr_g_kg / 1000.0, dl.temperature_c)
+
 
 def _interpolate_cloud_water(derived_levels: list[DerivedLevel]) -> None:
     """Fill intermediate levels by linear interpolation between enriched neighbors.
@@ -164,14 +239,7 @@ def _interpolate_cloud_water(derived_levels: list[DerivedLevel]) -> None:
         p = dl.pressure_hpa
 
         # Find bracketing enriched pressures
-        p_above: int | None = None  # higher pressure (lower altitude)
-        p_below: int | None = None  # lower pressure (higher altitude)
-        for ep in enriched_pressures:
-            if ep > p:
-                p_above = ep
-            elif ep < p:
-                p_below = ep
-                break
+        p_above, p_below = _bracketing_pressures(enriched_pressures, p)
 
         if p_above is None or p_below is None:
             continue

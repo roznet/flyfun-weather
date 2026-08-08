@@ -43,6 +43,11 @@ enum IntentDialogs {
     /// departing tomorrow. Entity pickers follow the display preference; spoken
     /// "next/upcoming" answers stay chronological.
     static func overviewSummary(_ flights: [FlightResponse], now: Date = Date()) -> String {
+        // The `.filter` is NOT redundant with the ordering call:
+        // `orderedForSuggestions` returns `upcoming + past` (it is the entity
+        // picker's list, which deliberately includes history so you can pick a
+        // past flight). This strips that past suffix — without it the overview
+        // would announce every past flight as upcoming.
         let upcoming = FlightResolver.orderedForSuggestions(flights, order: .soonestFirst, now: now)
             .filter { FlightResolver.isUpcoming($0, now: now) }
         guard !upcoming.isEmpty else { return "You have no upcoming flights." }

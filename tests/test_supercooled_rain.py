@@ -76,6 +76,99 @@ class TestEnrichment:
         assert dl.rain_water_g_kg is None
 
 
+class TestRainInterpolation:
+    """Pass 3 of `_enrich_lwc` — qr on intermediate levels (#530 review).
+
+    Dormant for ICON today (its derived grid matches its raw hydrometeor
+    levels 1:1, so pass 1 always hits), but a carrier whose grids don't align
+    must not get cloud water on interpolated levels while rain water silently
+    drops out.
+    """
+
+    def _run(
+        self,
+        derived: list[tuple[int, float]],
+        raw: list[tuple[int, float | None, float | None]],
+    ) -> dict[int, DerivedLevel]:
+        levels = [
+            DerivedLevel(pressure_hpa=p, temperature_c=t, altitude_ft=0)
+            for p, t in derived
+        ]
+        _enrich_lwc(
+            levels,
+            [
+                PressureLevelData(
+                    pressure_hpa=p, cloud_liquid_water_kg_kg=clw, rain_water_kg_kg=qr
+                )
+                for p, clw, qr in raw
+            ],
+        )
+        return {dl.pressure_hpa: dl for dl in levels}
+
+    def test_gap_level_between_two_rain_levels_is_filled(self):
+        out = self._run(
+            derived=[(900, -5.0), (875, -5.0), (850, -5.0)],
+            raw=[(900, 1e-5, 2e-4), (850, 1e-5, 4e-4)],
+        )
+        assert out[875].rain_water_g_kg == 0.3  # midway between 0.2 and 0.4
+
+    def test_flag_is_rederived_against_the_levels_own_temperature(self):
+        """A warm nose between two freezing layers is exactly the freezing-rain
+        profile. Blending the neighbours' booleans would invent supercooled
+        rain at a level that is above zero."""
+        out = self._run(
+            derived=[(900, -5.0), (875, 5.0), (850, -5.0)],
+            raw=[(900, 1e-5, 3e-4), (850, 1e-5, 3e-4)],
+        )
+        assert out[900].supercooled_rain is True
+        assert out[850].supercooled_rain is True
+        assert out[875].rain_water_g_kg == 0.3
+        assert out[875].supercooled_rain is False
+
+    def test_flag_appears_on_a_cold_gap_between_warm_rain_levels(self):
+        out = self._run(
+            derived=[(900, 5.0), (875, -5.0), (850, 5.0)],
+            raw=[(900, 1e-5, 3e-4), (850, 1e-5, 3e-4)],
+        )
+        assert out[900].supercooled_rain is False
+        assert out[875].supercooled_rain is True
+
+    def test_direct_match_values_are_never_overwritten(self):
+        out = self._run(
+            derived=[(900, -5.0), (875, -5.0), (850, -5.0)],
+            raw=[(900, 1e-5, 2e-4), (875, 1e-5, 9e-4), (850, 1e-5, 4e-4)],
+        )
+        assert out[875].rain_water_g_kg == 0.9  # not the 0.3 interpolant
+
+    def test_no_extrapolation_beyond_the_enriched_span(self):
+        out = self._run(
+            derived=[(925, -5.0), (900, -5.0), (850, -5.0), (800, -5.0)],
+            raw=[(900, 1e-5, 3e-4), (850, 1e-5, 3e-4)],
+        )
+        assert out[925].rain_water_g_kg is None
+        assert out[800].rain_water_g_kg is None
+        assert out[925].supercooled_rain is False
+
+    def test_model_without_qr_anywhere_stays_untouched(self):
+        out = self._run(
+            derived=[(900, -5.0), (875, -5.0), (850, -5.0)],
+            raw=[(900, 1e-5, None), (850, 1e-5, None)],
+        )
+        assert all(dl.rain_water_g_kg is None for dl in out.values())
+        assert out[875].cloud_liquid_water_g_kg is not None  # CLW still filled
+
+    def test_a_rain_only_level_does_not_narrow_the_cloud_water_bracket(self):
+        """Why rain gets its own bracket index: folding qr into the CLW index
+        would make 875 an endpoint for 860 and, having no CLW of its own,
+        suppress a cloud-water interpolation that used to happen."""
+        out = self._run(
+            derived=[(900, -5.0), (875, -5.0), (860, -5.0), (850, -5.0)],
+            raw=[(900, 1e-5, 2e-4), (875, None, 3e-4), (850, 1e-5, 2e-4)],
+        )
+        assert out[860].cloud_liquid_water_g_kg is not None
+        assert out[860].rain_water_g_kg is not None
+
+
 class TestZoneRollUp:
     def _zone(self, supercooled: list[bool]):
         from weatherbrief.analysis.sounding.icing import _build_zone_simple
