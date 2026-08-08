@@ -207,3 +207,81 @@ def test_real_icing_still_produces_escape_advisories():
     """No over-correction — the same geometry at MODERATE still advises."""
     adv = compute_altitude_advisories({"gfs": _sounding()}, 8000, 18000)
     assert _descend(adv) is not None
+
+
+# --- CAT / boundary-layer wording on the waypoint advisory (#534 round 4) ---
+
+
+def _vm_sounding(*layers):
+    from weatherbrief.models import (
+        CATRiskLayer,
+        CATRiskLevel,
+        VerticalMotionAssessment,
+        VerticalMotionClass,
+    )
+
+    return SoundingAnalysis(
+        vertical_motion=VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT,
+            cat_risk_layers=[
+                CATRiskLayer(base_ft=b, top_ft=t, risk=r, boundary_layer=bl)
+                for (b, t, r, bl) in layers
+            ],
+        ),
+    )
+
+
+def _cat_advisory(advisories):
+    return next(
+        (a for a in advisories.advisories if a.advisory_type == "cat_turbulence"),
+        None,
+    )
+
+
+def test_bl_only_severe_reads_as_low_level_wind_shear():
+    """A boundary-layer severe layer must not read as unqualified "CAT
+    turbulence SEVERE" on the per-waypoint surface — that is the exact
+    "severe CAT at 2,500 ft" framing #533 was reported for, reachable here
+    because this advisory bypasses TurbulenceEvaluator's gating. The layer
+    still shows (point-level detail keeps full depth); the wording says what
+    it is."""
+    from weatherbrief.models import CATRiskLevel
+
+    adv = compute_altitude_advisories(
+        {"icon": _vm_sounding((1765, 2523, CATRiskLevel.SEVERE, True))},
+        2500, 18000,
+    )
+    cat = _cat_advisory(adv)
+    assert cat is not None
+    assert cat.reason.startswith("Low-level wind shear SEVERE")
+    assert "boundary layer" in cat.reason
+    assert "CAT turbulence" not in cat.reason
+
+
+def test_free_atmosphere_severe_keeps_cat_wording():
+    from weatherbrief.models import CATRiskLevel
+
+    adv = compute_altitude_advisories(
+        {"icon": _vm_sounding((7000, 9000, CATRiskLevel.SEVERE, False))},
+        8000, 18000,
+    )
+    cat = _cat_advisory(adv)
+    assert cat is not None
+    assert cat.reason.startswith("CAT turbulence SEVERE")
+
+
+def test_mixed_bl_and_free_layers_keep_cat_wording():
+    """One free-atmosphere layer in the mix dominates the label — only a
+    purely boundary-layer picture gets the softer wording."""
+    from weatherbrief.models import CATRiskLevel
+
+    adv = compute_altitude_advisories(
+        {"icon": _vm_sounding(
+            (1765, 2523, CATRiskLevel.SEVERE, True),
+            (7000, 9000, CATRiskLevel.MODERATE, False),
+        )},
+        8000, 18000,
+    )
+    cat = _cat_advisory(adv)
+    assert cat is not None
+    assert cat.reason.startswith("CAT turbulence SEVERE")

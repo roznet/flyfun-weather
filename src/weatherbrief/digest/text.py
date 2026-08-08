@@ -300,10 +300,11 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
             lines.append(f"  Vertical motion [{model}]: {', '.join(vm_parts)}")
             if vm.cat_risk_layers:
                 for layer in vm.cat_risk_layers:
+                    bl_note = " (BL)" if layer.boundary_layer else ""
                     lines.append(
                         f"    CAT {layer.risk.value.upper()} "
                         f"{layer.base_ft:.0f}-{layer.top_ft:.0f}ft "
-                        f"(Ri={layer.richardson_number:.2f})"
+                        f"(Ri={layer.richardson_number:.2f}){bl_note}"
                     )
             if vm.convective_contamination:
                 lines.append(f"    ** Mid-level convective contamination **")

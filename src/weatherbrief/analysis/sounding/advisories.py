@@ -455,20 +455,32 @@ def _cat_turbulence_advisory(
     if worst_risk == CATRiskLevel.NONE:
         return None
 
-    # Collect all CAT layer ranges across models for the reason text
+    # Collect all CAT layer ranges across models for the reason text. Track
+    # whether every contributing layer is boundary-layer-tagged (#534 round 4):
+    # this waypoint surface bypasses TurbulenceEvaluator's gating, and an
+    # unqualified "CAT turbulence SEVERE" here for a BL shear layer is the
+    # exact "severe CAT at 2,500 ft" framing #533 was about — and not really
+    # CAT either. The layer still shows (point-level detail keeps full depth,
+    # same call as the cross-section ribbon); only the wording changes.
     all_bases = []
     all_tops = []
+    considered_bl: list[bool] = []
     for sa in soundings.values():
         if sa.vertical_motion:
             for layer in sa.vertical_motion.cat_risk_layers:
                 if _CAT_RISK_ORDER.index(layer.risk) >= _CAT_RISK_ORDER.index(CATRiskLevel.MODERATE):
                     all_bases.append(layer.base_ft)
                     all_tops.append(layer.top_ft)
+                    considered_bl.append(layer.boundary_layer)
+
+    bl_only = bool(considered_bl) and all(considered_bl)
+    label = "Low-level wind shear" if bl_only else "CAT turbulence"
 
     if all_bases:
+        qualifier = "boundary layer, low Richardson number" if bl_only else "low Richardson number"
         reason = (
-            f"CAT turbulence {worst_risk.value.upper()} "
-            f"{min(all_bases):.0f}-{max(all_tops):.0f}ft (low Richardson number)"
+            f"{label} {worst_risk.value.upper()} "
+            f"{min(all_bases):.0f}-{max(all_tops):.0f}ft ({qualifier})"
         )
     else:
         reason = f"CAT turbulence risk {worst_risk.value.upper()}"
