@@ -32,10 +32,14 @@ enum FlightResolver {
             .min(by: { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) })
     }
 
-    /// Upcoming flights in the user's chosen order, then past flights
-    /// most-recent-first — the order used for Shortcuts suggestions and for the
-    /// "overview" intent. This is the *display* list, so it follows the
-    /// `flight_order` preference and matches what the flight list shows.
+    /// Upcoming flights in the requested order, then past flights
+    /// most-recent-first — the order used for the Shortcuts entity picker.
+    ///
+    /// That picker is a *display* list, so its caller passes the user's
+    /// `flight_order` preference and it matches what the flight list shows. The
+    /// overview intent calls this too but pins `.soonestFirst`: it truncates to
+    /// five and is answering "what's coming up", so it must not read out the
+    /// five most distant flights.
     ///
     /// `order` is a parameter rather than a read of global state so the function
     /// stays pure and callable from the nonisolated test target; callers pass

@@ -131,6 +131,9 @@ class TestPreferencesAPI:
         s.commit()
         assert load_flight_order(s, DEV_USER_ID) == "furthest_first"
         s.close()
+        # The GET response applies the same coercion, so what the client is told
+        # can't disagree with the ordering the list actually uses.
+        assert client.get("/api/user/preferences").json()["flight_order"] == "furthest_first"
 
     def test_defer_email_for_model_update_round_trip(self, client, app_db):
         # Default off (current behaviour).

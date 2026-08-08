@@ -329,6 +329,24 @@ struct DialogTests {
         #expect(IntentDialogs.overviewSummary([past], now: now) == "You have no upcoming flights.")
     }
 
+    @Test("overview: truncation always keeps the SOONEST five, whatever the list preference")
+    func overviewTruncationIsChronological() {
+        // The spoken overview is not the display list: it cuts at five, so if it
+        // followed a furthest-first preference it would omit the flight
+        // departing tomorrow. Distinct routes make the selection observable.
+        let days = ["09", "10", "11", "12", "13", "14", "15"]
+        let flights = days.map { day in
+            makeFlight(
+                id: "flt-\(day)",
+                waypoints: ["LFMD", "LF\(day)"],
+                departureTime: "2026-07-\(day)T12:00:00Z"
+            )
+        }
+        let summary = IntentDialogs.overviewSummary(flights, now: now)
+        for day in days.prefix(5) { #expect(summary.contains("LFMD → LF\(day)")) }
+        for day in days.suffix(2) { #expect(!summary.contains("LFMD → LF\(day)")) }
+    }
+
     @Test("overview: more than five upcoming lists five and states the remainder")
     func overviewTruncates() {
         // 7 upcoming flights, soonest-first: 2026-07-09 … 2026-07-15.

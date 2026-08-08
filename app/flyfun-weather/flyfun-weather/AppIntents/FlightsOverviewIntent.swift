@@ -14,8 +14,7 @@ struct FlightsOverviewIntent: AppIntent {
         let repo = IntentSupport.makeRepository()
         do {
             let flights = try await repo.flights()
-            let order = UserPreferencesStore.cachedFlightOrder()
-            return .result(dialog: "\(IntentDialogs.overviewSummary(flights, order: order))")
+            return .result(dialog: "\(IntentDialogs.overviewSummary(flights))")
         } catch APIError.unauthorized {
             // Token expired and the silent refresh failed (Decision 4).
             return .result(dialog: "\(IntentSupport.signedOutSpokenLine)")
