@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var errorMessage: String?
     @State private var pushBusy = false
     @State private var notifyBusy = false
+    @State private var flightOrderBusy = false
     @State private var showPushDeniedAlert = false
     #if DEBUG
     /// Transient footer message for the Developer sections (tips overrides, copy).
@@ -80,6 +81,22 @@ struct SettingsView: View {
                             Text("Email is your only channel — set Briefing updates to Off to stop, or enable Push.")
                         }
                     }
+                }
+
+                Section {
+                    Picker("Upcoming flights", selection: Binding(
+                        get: { notifyPrefs.flightOrderPreference },
+                        set: { setFlightOrder($0) }
+                    )) {
+                        ForEach(FlightOrder.allCases) { order in
+                            Text(order.label).tag(order)
+                        }
+                    }
+                    .disabled(flightOrderBusy || appState.apiClient == nil)
+                } header: {
+                    Text("Flights")
+                } footer: {
+                    Text("“Furthest first” puts the flight departing last at the top, so newly added flights appear first. “Soonest first” puts the flight departing next at the top. Applies to upcoming flights only — past flights always stay most-recent-first.")
                 }
 
                 Section {
@@ -321,6 +338,18 @@ struct SettingsView: View {
             }
             await appState.userPreferences.updateNotifyEmail(enabled, using: client)
             notifyBusy = false
+        }
+    }
+
+    /// Change the upcoming-flights ordering (#536). Server-backed: the PUT
+    /// returns the full fresh preferences, which the store adopts as its cache,
+    /// so the flight list reorders as soon as the round-trip lands.
+    private func setFlightOrder(_ order: FlightOrder) {
+        guard let client = appState.apiClient else { return }
+        flightOrderBusy = true
+        Task {
+            await appState.userPreferences.updateFlightOrder(order, using: client)
+            flightOrderBusy = false
         }
     }
 

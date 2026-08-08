@@ -93,16 +93,19 @@ struct FlightResponse: Codable, Identifiable, Sendable {
 
     /// Logbook section folded to an enum. On a legacy server that omits
     /// `section`, mirror `FlightListView.groupedFlights`' date bucketing exactly
-    /// (Recent = departed within 7 days) so a card's Recent-debrief nudge matches
-    /// the list's Recent group instead of never appearing.
-    var flightSection: FlightSection {
+    /// (Future until the flight *ends*, then Recent = departed within 7 days) so
+    /// a card's Recent-debrief nudge matches the list's Recent group instead of
+    /// never appearing. The Future boundary is duration-aware on both sides —
+    /// the server's `_flight_has_ended` — so an in-progress flight stays Future.
+    func resolvedSection(now: Date = Date()) -> FlightSection {
         if let section, let parsed = FlightSection(rawValue: section) { return parsed }
         guard let dep = departureDate else { return .future }
-        let now = Date()
-        if dep >= now { return .future }
+        if !hasEnded(now: now) { return .future }
         if dep >= now.addingTimeInterval(-7 * 24 * 3600) { return .recent }
         return .past
     }
+
+    var flightSection: FlightSection { resolvedSection() }
 
     /// Whether this flight already has a stored debrief.
     var hasDebrief: Bool { debrief != nil }
@@ -115,9 +118,17 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// Whether the flight has already ended (departure + duration in the past).
     /// Mirrors the web `isFlightPast` so past-flight UI gating matches across
     /// clients (e.g. the per-flight notify bell is hidden for flown flights).
-    var isPast: Bool {
+    var isPast: Bool { hasEnded() }
+
+    /// Whether the flight has ended by `now` (departure + duration). The single
+    /// duration-aware boundary on this type, mirroring the server's
+    /// `_flight_has_ended` and the web's `isFlightPast`: a flight that departed
+    /// 30 minutes ago on a 3-hour trip is still in progress, not past. A
+    /// zero-duration flight (a real case — the add-flight flow confirms it) is
+    /// past the instant it departs. `now` is a parameter for deterministic tests.
+    func hasEnded(now: Date = Date()) -> Bool {
         guard let departure = departureDate else { return false }
-        return Date() > departure.addingTimeInterval(flightDurationHours * 3600)
+        return now > departure.addingTimeInterval(flightDurationHours * 3600)
     }
 
     /// Whether `now` falls in the flight's tracking window: departure −2h to

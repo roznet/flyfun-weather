@@ -115,6 +115,28 @@ struct FlyFunShortcuts: AppShortcutsProvider {
 }
 ```
 
+### Display ordering vs. "my next flight" (#536)
+
+`FlightResolver` has two ordering entry points and they answer different
+questions:
+
+- `orderedForSuggestions(_:order:now:)` — the **display** list, backing
+  `FlightEntityQuery.suggestedEntities()` and the overview intent. It follows the
+  account's `flight_order` preference so Shortcuts and Siri match what the flight
+  list shows; only the upcoming half flips, past stays most-recent-first.
+- `nextFlight(in:now:)` — deliberately **not** preference-driven. "My next
+  flight" means the soonest departure however the list happens to be drawn;
+  following a display preference here would return the furthest-away flight.
+
+`order` is a parameter rather than a read of global state: the function is
+`nonisolated` and pure so the non-MainActor test target can call it, while
+`UserPreferencesStore` is `@MainActor`. Callers pass
+`UserPreferencesStore.cachedFlightOrder()`, a `nonisolated` accessor that decodes
+the same `cachedUserPreferences` `UserDefaults` blob the store reads at launch —
+so `suggestedEntities()` never has to hop to the main actor. Shortcuts caches
+suggested entities, so a preference flip may not reorder its picker until iOS
+refreshes them; in-app order is immediate.
+
 ### Resolver Design — "the flight tomorrow to Fairoaks"
 
 `FlightEntity` is resolved by an `EntityStringQuery` over a **tiny, closed set** — the

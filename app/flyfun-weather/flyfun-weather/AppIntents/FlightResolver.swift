@@ -22,18 +22,35 @@ enum FlightResolver {
     // synchronously. They touch no shared state, only their arguments.
 
     /// The soonest upcoming flight (departure ≥ now), or nil if none upcoming.
+    ///
+    /// Deliberately does NOT follow the `flight_order` display preference: "my
+    /// next flight" means the soonest departure however the list happens to be
+    /// drawn, and returning the furthest-away one would be a real bug.
     nonisolated static func nextFlight(in flights: [FlightResponse], now: Date = Date()) -> FlightResponse? {
         flights
             .filter { ($0.departureDate ?? .distantPast) >= now }
             .min(by: { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) })
     }
 
-    /// Upcoming flights soonest-first, then past flights most-recent-first — the
-    /// order used for Shortcuts suggestions and for the "overview" intent.
-    nonisolated static func orderedForSuggestions(_ flights: [FlightResponse], now: Date = Date()) -> [FlightResponse] {
+    /// Upcoming flights in the user's chosen order, then past flights
+    /// most-recent-first — the order used for Shortcuts suggestions and for the
+    /// "overview" intent. This is the *display* list, so it follows the
+    /// `flight_order` preference and matches what the flight list shows.
+    ///
+    /// `order` is a parameter rather than a read of global state so the function
+    /// stays pure and callable from the nonisolated test target; callers pass
+    /// `UserPreferencesStore.cachedFlightOrder()`.
+    nonisolated static func orderedForSuggestions(
+        _ flights: [FlightResponse],
+        order: FlightOrder = .furthestFirst,
+        now: Date = Date()
+    ) -> [FlightResponse] {
+        let upcomingSorted: (FlightResponse, FlightResponse) -> Bool = order == .soonestFirst
+            ? { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) }
+            : { ($0.departureDate ?? .distantPast) > ($1.departureDate ?? .distantPast) }
         let upcoming = flights
             .filter { ($0.departureDate ?? .distantPast) >= now }
-            .sorted { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) }
+            .sorted(by: upcomingSorted)
         let past = flights
             .filter { ($0.departureDate ?? .distantPast) < now }
             .sorted { ($0.departureDate ?? .distantPast) > ($1.departureDate ?? .distantPast) }

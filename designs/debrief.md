@@ -82,12 +82,43 @@ TS mirror in `web/ts/components/debrief-taxonomy.ts` must stay in sync
 
 ### Section assignment
 
-- **future**: `departure_time >= now`
+- **future**: the flight has not ended — `departure_time + flight_duration_hours >= now`, via the shared `_flight_has_ended(flight, now)` predicate. Duration-aware since #536: a flight that departed 30 minutes ago on a 3-hour trip is in progress, not past. Zero duration (a real case — the web add-flight flow confirms it) is past the instant it departs, exactly as before. This matches the web's `isFlightPast` and iOS's `FlightResponse.hasEnded(now:)`.
 - **recent**: most-recent `RECENT_SECTION_CAP` (= 2) past undebriefed flights whose `departure_time` is within the last `RECENT_SECTION_MAX_AGE_DAYS` (= 30) days. Independent of debrief history — debriefing one flight doesn't pull a third into the slot, but anything older than the window drops to Past so the nudge stays bounded.
 - **past**: everything else
 
+`_classify_section` and `_compute_recent_section` must both test the boundary
+through `_flight_has_ended`; if they diverge, an airborne flight is `future` to
+one and a `recent` candidate to the other.
+
 The cap is hard-coded in `api/flights.py` for Phase 1; revisit if usage
 patterns suggest a different ceiling or a per-user setting.
+
+### Section ordering (#536)
+
+Within a section the list order is `departure_time desc`, with one opt-in
+account preference — `flight_order` in `app_prefs_json` (no migration; default
+`"furthest_first"` = today's behaviour):
+
+- `"furthest_first"` — the flight departing last is at the top. Newly added
+  flights, usually the furthest ahead, appear first.
+- `"soonest_first"` — only the **future** section flips to ascending, so the
+  next departure (or the flight currently in progress) is at the top.
+
+Recent and Past stay most-recent-first under both values. Past pagination is
+offset-based over that order, so reordering it would produce duplicate and
+skipped rows across pages.
+
+`load_flight_order(db, user_id)` is read in the *body* of `list_all_flights`,
+never as a `Depends()` parameter: `api/agent.py` calls that route directly as a
+plain function, where a `Depends` default would arrive as a
+`fastapi.params.Depends` instance and silently compare unequal to every valid
+value. The agent/MCP surfaces inherit the ordering for free, which is intended —
+a chatbot printing the list then matches what the app shows.
+
+iOS applies the same preference in `FlightListView.groupedFlights(_:order:now:)`
+and in `FlightResolver.orderedForSuggestions(_:order:now:)` (the Siri/Shortcuts
+display list). `FlightResolver.nextFlight` deliberately does **not** follow it —
+"my next flight" means the soonest departure however the list is drawn.
 
 ## Stats
 

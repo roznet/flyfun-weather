@@ -17,6 +17,11 @@ struct PreferencesResponse: Codable, Sendable {
     let notifyDecayNotice: Bool?
     // Registered APNs device count — push is only actionable with ≥1 device.
     let pushDeviceCount: Int?
+    // Ordering of the *upcoming* flights section (#536). Optional for the same
+    // reason as the notify fields, and one more: this struct is cached to
+    // UserDefaults and decoded at launch, so a non-optional addition would fail
+    // that decode and silently reset every cached flag to `.empty`.
+    let flightOrder: String?
 
     var pushEnabled: Bool { notifyPush ?? false }
     var emailEnabled: Bool { notifyEmail ?? true }
@@ -25,6 +30,9 @@ struct PreferencesResponse: Codable, Sendable {
     var decayNotice: Bool { notifyDecayNotice ?? false }
     var deviceCount: Int { pushDeviceCount ?? 0 }
     var hasPushDevice: Bool { deviceCount > 0 }
+    /// Upcoming-flights ordering, defaulting to today's behaviour on an older
+    /// server (or an unknown value written by a future one).
+    var flightOrderPreference: FlightOrder { FlightOrder(rawValue: flightOrder ?? "") ?? .furthestFirst }
 
     /// "Briefing updates" 3-stop — folds scope + change-only into one control
     /// (off / changes / every). Kept identical to the web fold so the two
@@ -38,8 +46,25 @@ struct PreferencesResponse: Codable, Sendable {
     static let empty = PreferencesResponse(
         pirepCanView: false, pirepCanPublish: false,
         notifyEmail: nil, notifyPush: nil, notifyScope: nil, notifyChangeOnly: nil,
-        notifyDecayNotice: nil, pushDeviceCount: nil
+        notifyDecayNotice: nil, pushDeviceCount: nil, flightOrder: nil
     )
+}
+
+/// How the *upcoming* flights section is ordered (#536). Past and Recent are
+/// always most-recent-first, under both values. Raw values mirror the server's
+/// `flight_order` preference key.
+enum FlightOrder: String, CaseIterable, Sendable, Identifiable {
+    case furthestFirst = "furthest_first"
+    case soonestFirst = "soonest_first"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .furthestFirst: "Furthest first"
+        case .soonestFirst: "Soonest first"
+        }
+    }
 }
 
 /// The three "Briefing updates" stops. Off silences default-resolution flights;
