@@ -44,7 +44,7 @@ enum IntentDialogs {
     /// "next/upcoming" answers stay chronological.
     static func overviewSummary(_ flights: [FlightResponse], now: Date = Date()) -> String {
         let upcoming = FlightResolver.orderedForSuggestions(flights, order: .soonestFirst, now: now)
-            .filter { ($0.departureDate ?? .distantPast) >= now }
+            .filter { FlightResolver.isUpcoming($0, now: now) }
         guard !upcoming.isEmpty else { return "You have no upcoming flights." }
         let listLimit = 5
         let lines = upcoming.prefix(listLimit).map { flight -> String in
