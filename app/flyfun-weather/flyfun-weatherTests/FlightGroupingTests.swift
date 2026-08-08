@@ -103,3 +103,46 @@ struct FlightTrackingWindowTests {
         #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T16:00:01Z")))
     }
 }
+
+/// `FlightResponse.isHistoricalForRefresh` — the boundary that gates the briefing
+/// refresh control. It mirrors `_classify_refresh_time` in `api/packs.py`
+/// (`_INFLIGHT_GRACE` 3h, `_MAX_INFLIGHT_WINDOW` 12h), so these cases exist to
+/// catch drift from the server, and to pin the distinction from `isPast` — the
+/// bug this helper was written to avoid.
+@Suite("FlightHistoricalRefreshGate")
+struct FlightHistoricalRefreshTests {
+    // Departure 12:00Z, 2h flight → live until 17:00Z (dep + 2h + 3h grace).
+    static let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z", flightDurationHours: 2.0)
+    static func at(_ iso: String) -> Date { ISO8601DateFormatter().date(from: iso)! }
+
+    @Test("not historical before departure or while in progress")
+    func live() {
+        #expect(!Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-24T06:00:00Z")))
+        #expect(!Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-24T12:00:00Z")))
+        #expect(!Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-24T13:30:00Z")))
+    }
+
+    @Test("the post-arrival grace window is still live, not historical")
+    func graceWindow() {
+        // Landed at 14:00Z, so `isPast` (departure + duration, no grace) is
+        // already true from 14:00Z — gating refresh on it would disable the
+        // button through this whole window, exactly when a re-pull matters.
+        #expect(!Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-24T14:30:00Z")))
+        #expect(!Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-24T17:00:00Z")))  // edge
+    }
+
+    @Test("historical once past the grace window")
+    func historical() {
+        #expect(Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-24T17:00:01Z")))
+        #expect(Self.flight.isHistoricalForRefresh(now: Self.at("2026-06-25T12:00:00Z")))
+    }
+
+    @Test("an oversized duration is capped by the 12h max window")
+    func maxWindowCap() {
+        // 40h duration: grace would put the edge at 55h, but the cap pins it to
+        // departure +12h, matching `_MAX_INFLIGHT_WINDOW`.
+        let long = makeFlight(departureTime: "2026-06-24T12:00:00Z", flightDurationHours: 40.0)
+        #expect(!long.isHistoricalForRefresh(now: Self.at("2026-06-25T00:00:00Z")))  // +12h edge
+        #expect(long.isHistoricalForRefresh(now: Self.at("2026-06-25T00:00:01Z")))
+    }
+}

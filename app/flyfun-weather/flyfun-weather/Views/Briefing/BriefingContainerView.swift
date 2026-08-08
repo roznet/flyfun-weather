@@ -2,6 +2,32 @@ import CoreLocation
 import SwiftUI
 import TipKit
 
+/// Why the refresh control is unavailable, or `nil` when a refresh is possible.
+///
+/// The web hides the button in both these cases (`renderBriefingSharing` makes it
+/// owner-only; `briefing-main.ts` disables it for past flights). We show it and
+/// explain instead — a control that silently vanishes is harder to reason about
+/// than one that says why it's off. Both cases are enforced server-side anyway:
+/// `_load_owned_flight` 404s a subscriber and the historical branch 403s a
+/// non-admin, so without this the button's only outcome was a red error banner.
+enum RefreshGate {
+    /// Read-only shared flight — refreshing belongs to the owner.
+    case subscriber
+    /// Beyond the server's live window: archive path, admin-only.
+    case historical
+
+    var reason: String {
+        switch self {
+        case .subscriber:
+            return "This is a shared flight — only its owner can refresh the briefing."
+        case .historical:
+            // No admin escape hatch here on purpose: the app has no admin flag,
+            // and the as-of-date historical rebuild is a web-only affordance.
+            return "This flight has already flown. Rebuilding a historical briefing is done from the web app."
+        }
+    }
+}
+
 /// Tab-based briefing viewer for a single flight.
 struct BriefingContainerView: View {
     let flight: FlightResponse
@@ -39,6 +65,14 @@ struct BriefingContainerView: View {
     /// exactly one place (was duplicated here and in `FlightListView`).
     private var isInFlightWindow: Bool {
         flight.isInTrackingWindow()
+    }
+
+    /// Whether refresh is gated, and why. Subscriber wins over historical so a
+    /// read-only viewer gets the ownership reason rather than a date one.
+    private var refreshGate: RefreshGate? {
+        if !flight.isEditable { return .subscriber }
+        if flight.isHistoricalForRefresh() { return .historical }
+        return nil
     }
 
     var body: some View {
@@ -115,7 +149,8 @@ struct BriefingContainerView: View {
                             notifyBellMenu
                         }
                         BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
-                                            isInFlightWindow: isInFlightWindow, startTracking: startTracking)
+                                            isInFlightWindow: isInFlightWindow, startTracking: startTracking,
+                                            refreshGate: refreshGate)
                     }
                 }
             }
@@ -261,16 +296,23 @@ struct BriefingContainerView: View {
     }
 }
 
-/// Toolbar with pack history picker, flight tracking, and refresh button.
+/// Toolbar with flight tracking and the refresh button.
+///
+/// The download control used to live here. Downloads are automatic now, so its
+/// state is worth *knowing* but never worth *pressing* — it moved onto the pack
+/// chip (`BriefingPackToolbar`), which already tracked per-pack cache status.
 private struct BriefingToolbarView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
     var isInFlightWindow: Bool
     var startTracking: () -> Void
+    /// Non-nil when refresh is unavailable; renders an explaining menu instead
+    /// of a live button.
+    var refreshGate: RefreshGate?
 
-    // Contextual tips (#312): the refresh/download pair reads side by side, so
-    // the download tip is sequenced after the refresh tip donates its event.
-    private let downloadTip = DownloadBriefingTip()
+    // Contextual tip (#312). The download tip now anchors on the pack chip, but
+    // its eligibility still keys off this one having been seen, so the donation
+    // below stays here.
     private let refreshTip = RefreshBriefingTip()
 
     var body: some View {
@@ -291,76 +333,45 @@ private struct BriefingToolbarView: View {
                 }
             }
 
-            // Pack history picker now lives in the connective header (§4.10).
+            // Pack history picker and the offline-copy indicator both live in
+            // the leading pack chip (§4.10).
 
-            // Download / cache button
-            switch viewModel.downloadState {
-            case .notDownloaded:
+            // Refresh — always present, so the control never disappears from
+            // under the user. When gated it becomes a menu carrying the reason
+            // (a bare `.disabled` button explains nothing on iOS; the notify
+            // bell below uses the same Section-of-Text idiom).
+            if let gate = refreshGate {
+                Menu {
+                    Section { Text(gate.reason) }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("refreshGatedMenu")
+                .accessibilityHint(gate.reason)
+            } else {
                 Button {
                     Task {
-                        await viewModel.downloadCurrentPack()
-                        // Retire the download tip once its pack is saved.
-                        if case .downloaded = viewModel.downloadState {
-                            downloadTip.invalidate(reason: .actionPerformed)
-                        }
+                        await viewModel.refresh()
+                        // Don't burn the coaching tip on a failed refresh — keep
+                        // it visible so the user can retry with the coaching
+                        // present. `.completed`/`.noRefresh` are the successful
+                        // terminal states; `.error` is failure.
+                        if case .error = viewModel.refreshState { return }
+                        refreshTip.invalidate(reason: .actionPerformed)
                     }
                 } label: {
-                    Image(systemName: "arrow.down.circle")
-                }
-                .popoverTip(downloadTip)
-            case .downloading(let progress, _, _):
-                ProgressView(value: progress)
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-                    .frame(width: 20, height: 20)
-            case .downloaded:
-                Menu {
-                    Button(role: .destructive) {
-                        Task { await viewModel.deleteCurrentPack() }
-                    } label: {
-                        Label("Remove Download", systemImage: "trash")
+                    if viewModel.refreshState.isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
                     }
-                } label: {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .foregroundStyle(.green)
                 }
-                // Auto-download means the briefing is almost always already
-                // `.downloaded` by the time the toolbar renders, so the tip must
-                // anchor here too — otherwise its only anchor (`.notDownloaded`)
-                // is never in the hierarchy and the coachmark can never show
-                // (nor can "Show All Tips" render it). Reworded as an offline-
-                // availability *indicator* (#312), it explains this green icon.
-                .popoverTip(downloadTip)
-            case .error:
-                Button {
-                    Task { await viewModel.downloadCurrentPack() }
-                } label: {
-                    Image(systemName: "exclamationmark.arrow.circlepath")
-                        .foregroundStyle(.red)
-                }
+                .disabled(viewModel.refreshState.isRefreshing)
+                .accessibilityIdentifier("refreshButton")
+                .popoverTip(refreshTip)
             }
-
-            // Refresh button
-            Button {
-                Task {
-                    await viewModel.refresh()
-                    // Don't burn the coaching tip on a failed refresh — keep it
-                    // visible so the user can retry with the coaching present
-                    // (mirrors the download-tip guard). `.completed`/`.noRefresh`
-                    // are the successful terminal states; `.error` is failure.
-                    if case .error = viewModel.refreshState { return }
-                    refreshTip.invalidate(reason: .actionPerformed)
-                }
-            } label: {
-                if viewModel.refreshState.isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                }
-            }
-            .disabled(viewModel.refreshState.isRefreshing)
-            .popoverTip(refreshTip)
         }
         // Sequence the download tip after the refresh tip: when the refresh tip
         // is dismissed — closed via its × OR acted on by refreshing — donate the
@@ -381,8 +392,14 @@ private struct BriefingToolbarView: View {
             // `.invalidated` next launch. If the refresh tip is already
             // dismissed but the event never landed, donate proactively so the
             // download tip can't get stuck permanently ineligible.
-            if case .invalidated = refreshTip.status,
-               BriefingTipEvents.refreshTipSeen.donations.isEmpty {
+            guard BriefingTipEvents.refreshTipSeen.donations.isEmpty else { return }
+            if case .invalidated = refreshTip.status {
+                Task { await BriefingTipEvents.refreshTipSeen.donate() }
+            } else if refreshGate != nil {
+                // Gated: the refresh tip has no anchor in the hierarchy, so it
+                // can never be seen — and the download tip, which waits on this
+                // event, would stay ineligible forever on a shared or already-
+                // flown flight. Unblock it.
                 Task { await BriefingTipEvents.refreshTipSeen.donate() }
             }
         }
@@ -607,32 +624,85 @@ private struct BriefingContentView: View {
 private struct BriefingPackToolbar: View {
     @Bindable var viewModel: BriefingViewModel
 
+    // Anchors here now (was the trailing download button, which is gone).
+    // Auto-download means this chip is almost always already `.downloaded`, and
+    // unlike the old button it's in the hierarchy for every state — so the
+    // coachmark can actually show, and "Show All Tips" can render it.
+    private let downloadTip = DownloadBriefingTip()
+
     var body: some View {
-        if viewModel.packHistory.count > 1 {
+        // The menu is no longer conditional on having more than one pack: it
+        // also carries the offline-copy actions, which apply just as much to a
+        // single-pack briefing.
+        if viewModel.pack != nil {
             Menu {
-                Section(freshnessText) {
-                    ForEach(viewModel.packHistory, id: \.fetchTimestamp) { pack in
-                        Button {
-                            viewModel.selectedPackTimestamp = pack.fetchTimestamp
-                        } label: {
-                            HStack {
-                                Text(viewModel.packLabel(for: pack))
-                                if viewModel.packCacheStatus[pack.fetchTimestamp] == true {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                        .foregroundStyle(Theme.green)
-                                }
-                                if pack.fetchTimestamp == viewModel.selectedPackTimestamp {
-                                    Image(systemName: "checkmark")
+                if viewModel.packHistory.count > 1 {
+                    Section(freshnessText) {
+                        ForEach(viewModel.packHistory, id: \.fetchTimestamp) { pack in
+                            Button {
+                                viewModel.selectedPackTimestamp = pack.fetchTimestamp
+                            } label: {
+                                HStack {
+                                    Text(viewModel.packLabel(for: pack))
+                                    if viewModel.packCacheStatus[pack.fetchTimestamp] == true {
+                                        Image(systemName: "arrow.down.circle.fill")
+                                            .foregroundStyle(Theme.green)
+                                    }
+                                    if pack.fetchTimestamp == viewModel.selectedPackTimestamp {
+                                        Image(systemName: "checkmark")
+                                    }
                                 }
                             }
                         }
                     }
+                } else {
+                    // Single pack: no rows to head, so the freshness line reads
+                    // as content rather than an orphaned section header.
+                    Section { Text(freshnessText) }
                 }
+                offlineSection
             } label: {
                 label
             }
-        } else if viewModel.pack != nil {
-            label
+            .accessibilityIdentifier("packToolbarMenu")
+            .popoverTip(downloadTip)
+        }
+    }
+
+    /// Offline-copy status and its (optional) actions. Downloading is automatic,
+    /// so nothing here is required in the happy path — this exists so a stuck or
+    /// unwanted copy can still be retried or reclaimed.
+    @ViewBuilder
+    private var offlineSection: some View {
+        switch viewModel.downloadState {
+        case .downloaded:
+            Section("Saved for offline") {
+                Button(role: .destructive) {
+                    Task { await viewModel.deleteCurrentPack() }
+                } label: {
+                    Label("Remove Download", systemImage: "trash")
+                }
+            }
+        case .downloading:
+            Section { Text("Saving for offline…") }
+        case .notDownloaded:
+            // Reachable when auto-download is off in Settings, or before it runs.
+            Section {
+                Button {
+                    Task { await viewModel.downloadCurrentPack() }
+                } label: {
+                    Label("Save for Offline", systemImage: "arrow.down.circle")
+                }
+            }
+        case .error(let message):
+            Section("Offline copy failed") {
+                Button {
+                    Task { await viewModel.downloadCurrentPack() }
+                } label: {
+                    Label("Retry Download", systemImage: "arrow.clockwise")
+                }
+                Text(message)
+            }
         }
     }
 
@@ -643,6 +713,30 @@ private struct BriefingPackToolbar: View {
                 .frame(width: 7, height: 7)
             Text(currentPackLabel)
                 .font(.caption.weight(.medium))
+            downloadBadge
+        }
+    }
+
+    /// Offline availability as a passive badge — the state the old button was
+    /// really communicating, minus the implication that you have to press it.
+    @ViewBuilder
+    private var downloadBadge: some View {
+        switch viewModel.downloadState {
+        case .downloaded:
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.caption2)
+                .foregroundStyle(Theme.green)
+                .accessibilityLabel("Saved for offline")
+        case .downloading:
+            ProgressView()
+                .controlSize(.mini)
+        case .error:
+            Image(systemName: "exclamationmark.circle")
+                .font(.caption2)
+                .foregroundStyle(.red)
+                .accessibilityLabel("Offline copy failed")
+        case .notDownloaded:
+            EmptyView()
         }
     }
 

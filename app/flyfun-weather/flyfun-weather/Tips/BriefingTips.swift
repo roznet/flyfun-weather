@@ -34,14 +34,16 @@ struct RefreshBriefingTip: Tip {
     var image: Image? { Image(systemName: "arrow.clockwise") }
 }
 
-/// 2. Download indicator (`arrow.down.circle` / `.fill`). Sequenced after the
+/// 2. Offline-availability badge on the leading pack chip. Sequenced after the
 /// refresh tip via the `refreshTipSeen` event so the fetch-new / offline-save
 /// pair reads in order. If the user ignores the refresh tip, this one simply
-/// waits — it is still non-forced.
+/// waits — it is still non-forced. (When refresh is gated and its tip can never
+/// appear, `BriefingToolbarView` donates the event anyway so this can't stick.)
 ///
-/// Downloads now happen automatically, so this reads as a *status signal*, not
-/// a "tap to download" action: the icon fills in green once the briefing is
-/// saved and available to view offline.
+/// Downloads happen automatically, so this reads as a *status signal*, not a
+/// "tap to download" action: the badge fills in green once the briefing is saved
+/// and available to view offline. It anchors on the pack chip — the standalone
+/// download button it used to describe was removed for exactly that reason.
 struct DownloadBriefingTip: Tip {
     var title: Text { Text("Offline availability") }
     var message: Text? {

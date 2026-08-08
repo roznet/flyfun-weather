@@ -133,6 +133,25 @@ struct FlightResponse: Codable, Identifiable, Sendable {
         return now >= start && now <= end
     }
 
+    /// Whether a refresh would take the server's *historical* (admin-only) path.
+    ///
+    /// Mirrors `_classify_refresh_time` in `api/packs.py`: a flight stays a live
+    /// refresh until `departure + min(duration + 3h, 12h)`, and only past that is
+    /// it archive-only. Deliberately **not** `isPast` — that fires at
+    /// `departure + duration`, so gating refresh on it would kill the button
+    /// during the post-arrival grace window, which is precisely the in-progress
+    /// period where a pilot most wants to re-pull. Keep the two constants in step
+    /// with `_INFLIGHT_GRACE` / `_MAX_INFLIGHT_WINDOW` server-side.
+    /// `now` is a parameter for deterministic testing.
+    func isHistoricalForRefresh(now: Date = Date()) -> Bool {
+        guard let departure = departureDate else { return false }
+        guard departure < now else { return false }
+        let grace: TimeInterval = 3 * 3600
+        let maxWindow: TimeInterval = 12 * 3600
+        let liveWindow = min(flightDurationHours * 3600 + grace, maxWindow)
+        return now > departure.addingTimeInterval(liveWindow)
+    }
+
     /// Short title: "ORIGIN → DEST" from waypoints.
     var shortTitle: String {
         guard let origin = waypoints.first, let dest = waypoints.last else {
