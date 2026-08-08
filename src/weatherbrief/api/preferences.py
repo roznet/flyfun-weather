@@ -40,6 +40,16 @@ FlightOrder = Literal["furthest_first", "soonest_first"]
 DEFAULT_FLIGHT_ORDER: str = "furthest_first"
 
 
+def _normalize_flight_order(value: object) -> str:
+    """Coerce a stored ``flight_order`` to a value every client can render.
+
+    The single normalizer, shared by the GET response and by
+    :func:`load_flight_order`, so a hand-edited or future-version blob can never
+    make the reported preference disagree with the ordering actually applied.
+    """
+    return value if value in ("furthest_first", "soonest_first") else DEFAULT_FLIGHT_ORDER
+
+
 class FxBlock(BaseModel):
     """Display-currency block carried on USD-canonical cost/donation responses.
 
@@ -248,7 +258,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
-        "flight_order": data.get("flight_order", DEFAULT_FLIGHT_ORDER),
+        "flight_order": _normalize_flight_order(data.get("flight_order")),
         "display_currency": data.get("display_currency", "auto"),
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
         "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
@@ -582,8 +592,9 @@ def load_flight_order(db: Session, user_id: str) -> str:
     compare unequal to every valid value. See .claude/CLAUDE.md →
     "Changing Function Signatures".
 
-    Anything unrecognized falls back to the default, so a hand-edited blob can
-    never produce an ordering no client knows how to render.
+    Anything unrecognized falls back to the default via
+    :func:`_normalize_flight_order` — the same coercion the GET response applies,
+    so what the client is told and what the list does can't diverge.
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row or not row.app_prefs_json:
@@ -592,7 +603,7 @@ def load_flight_order(db: Session, user_id: str) -> str:
         value = json.loads(row.app_prefs_json).get("flight_order")
     except json.JSONDecodeError:
         return DEFAULT_FLIGHT_ORDER
-    return value if value in ("furthest_first", "soonest_first") else DEFAULT_FLIGHT_ORDER
+    return _normalize_flight_order(value)
 
 
 # Display-currency derivation from the existing units_region preference.

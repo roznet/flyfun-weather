@@ -32,14 +32,18 @@ enum IntentDialogs {
         return "Your \(route) flight has no assessment yet."
     }
 
-    /// One-line-per-flight traffic-light overview of upcoming flights, spoken in
-    /// the user's chosen list order (#536) so it matches what the app shows.
-    static func overviewSummary(
-        _ flights: [FlightResponse],
-        order: FlightOrder = .furthestFirst,
-        now: Date = Date()
-    ) -> String {
-        let upcoming = FlightResolver.orderedForSuggestions(flights, order: order, now: now)
+    /// One-line-per-flight traffic-light overview of upcoming flights, always
+    /// soonest-first.
+    ///
+    /// Deliberately does NOT follow the `flight_order` display preference
+    /// (#536), for the same reason `FlightResolver.nextFlight` doesn't: this is a
+    /// spoken answer to "what's coming up", not a rendering of the list. It also
+    /// truncates to `listLimit`, so following a furthest-first preference would
+    /// read out the five most *distant* flights and silently omit the one
+    /// departing tomorrow. Entity pickers follow the display preference; spoken
+    /// "next/upcoming" answers stay chronological.
+    static func overviewSummary(_ flights: [FlightResponse], now: Date = Date()) -> String {
+        let upcoming = FlightResolver.orderedForSuggestions(flights, order: .soonestFirst, now: now)
             .filter { ($0.departureDate ?? .distantPast) >= now }
         guard !upcoming.isEmpty else { return "You have no upcoming flights." }
         let listLimit = 5
