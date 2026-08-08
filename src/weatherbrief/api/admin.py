@@ -450,6 +450,11 @@ def get_user_costs(
         "margin_usd": 0.0,
         "total_usd": 0.0,
     }
+    # Prompt-cache saving is summed separately and stays absent unless at least
+    # one row carries it: briefings charged before the field existed would
+    # otherwise aggregate into a measured-looking $0.00.  It is informational —
+    # already inside token_cost_usd — so it never joins the sums above.
+    cache_saving_usd: float | None = None
     for (bj,) in briefing_entries:
         if not bj:
             continue
@@ -463,9 +468,14 @@ def get_user_costs(
         agg_breakdown["storage_cost_usd"] += bd.get("storage_cost_usd", 0.0)
         agg_breakdown["margin_usd"] += bd.get("margin_usd", 0.0)
         agg_breakdown["total_usd"] += bd.get("total_usd", 0.0)
+        saving = bd.get("cache_saving_usd")
+        if saving is not None:
+            cache_saving_usd = (cache_saving_usd or 0.0) + saving
     # Round all aggregated values
     for k in agg_breakdown:
         agg_breakdown[k] = round(agg_breakdown[k], 4)
+    if cache_saving_usd is not None:
+        agg_breakdown["cache_saving_usd"] = round(cache_saving_usd, 4)
 
     return {
         "user": {

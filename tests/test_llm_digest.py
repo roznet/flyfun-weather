@@ -229,6 +229,11 @@ class TestSystemContentCacheBreakpoint:
         # Breakpoint on the head only — the guidance tail must stay uncached,
         # or every guidance preset forks into its own cache entry again.
         assert out[0]["text"] == "HEAD"
+        # Literal on purpose: this is the tripwire that makes a TTL change an
+        # explicit act. The write *price* follows the constant automatically
+        # (costs.DIGEST_CACHE_TTL -> CACHE_WRITE_MULTIPLIERS, guarded in
+        # tests/test_costs.py::TestCacheTtlPricingCoupling); this line just
+        # stops one drifting in unnoticed.
         assert out[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
         assert out[1]["text"] == "TAIL"
         assert "cache_control" not in out[1]
@@ -250,6 +255,50 @@ class TestSystemContentCacheBreakpoint:
         from weatherbrief.digest.llm_digest import _system_content
         cfg = load_digest_config("openai")
         assert _system_content("HEAD", "TAIL", cfg.llm, longrange=False) == "HEADTAIL"
+
+
+class TestEvalCacheCallSite:
+    """The eval is the only legitimate caller of a non-production TTL.
+
+    It lives in ``scripts/``, outside the import graph pytest walks, so a
+    signature change to ``_system_content`` cannot break it visibly — the
+    ``head``/``tail`` split did exactly that and the cached eval path has been
+    raising ``TypeError`` ever since. This exercises the call site with the LLM
+    mocked out.
+    """
+
+    def _run_one(self):
+        import importlib.util
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parent.parent / "scripts" / "run_digest_eval.py"
+        spec = importlib.util.spec_from_file_location("run_digest_eval_ttl", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _invoke(self, module, *, cache):
+        structured = MagicMock()
+        structured.invoke.return_value = {"raw": None, "parsed": MagicMock()}
+        llm = MagicMock()
+        llm.with_structured_output.return_value = structured
+        with patch.object(module, "create_llm", return_value=llm):
+            module.run_one("ctx", "SYSTEM PROMPT", DigestConfig(), cache=cache)
+        return structured.invoke.call_args[0][0][0]["content"]
+
+    def test_cached_eval_call_still_matches_the_signature(self):
+        module = self._run_one()
+        content = self._invoke(module, cache=True)
+        assert isinstance(content, list)
+        assert content[0]["text"] == "SYSTEM PROMPT"
+        # 5m, not production's 1h: a burst never expires, and the eval writes
+        # no ledger row, so the cheaper write premium is free to take.
+        assert content[0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+    def test_uncached_eval_call_sends_a_plain_string(self):
+        module = self._run_one()
+        assert self._invoke(module, cache=False) == "SYSTEM PROMPT"
 
 
 class TestCacheUsageExtraction:

@@ -23,6 +23,10 @@ const COST_COLORS: Record<CostKey, string> = {
   margin_usd: '#d97706',
 };
 
+// A cache "saving" is genuinely negative when writes outran reads, and
+// "$-0.03" reads as a typo — keep the sign in front of the currency.
+const signedUsd4 = (n: number) => (n < 0 ? `-$${Math.abs(n).toFixed(4)}` : `$${n.toFixed(4)}`);
+
 const COST_LABELS: Record<CostKey, string> = {
   token_cost_usd: 'LLM Tokens',
   infra_share_usd: 'Infrastructure',
@@ -154,11 +158,19 @@ function renderCostDistribution(bd: UserCostBreakdown, avgCost: number, totalBri
 
   const avgUsd = totalBriefings > 0 ? (total / totalBriefings).toFixed(4) : '0.0000';
 
+  // Prompt-cache saving is not a cost component — it is already netted off
+  // inside LLM Tokens — so it stays out of the bar and the legend. Absent
+  // (undefined) means no charged briefing recorded it, not a saving of zero.
+  const savingLine = bd.cache_saving_usd === undefined
+    ? ''
+    : `<div class="cost-avg">Prompt caching saved <strong>${signedUsd4(bd.cache_saving_usd)}</strong> of the LLM token cost</div>`;
+
   container.innerHTML = `
     <div class="cost-bar-container">
       <div class="cost-stacked-bar">${segments}</div>
       <div class="cost-legend">${legendItems}</div>
       <div class="cost-avg">Total: <strong>$${total.toFixed(2)}</strong> across ${totalBriefings} briefings &middot; Average: <strong>$${avgUsd}</strong> per briefing</div>
+      ${savingLine}
     </div>`;
 }
 
@@ -177,6 +189,10 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
     let breakdownRow = '';
     if (tx.breakdown) {
       const bd = tx.breakdown;
+      // 'Cache saved' is informational (already inside LLM Tokens) and sits
+      // after the total for that reason. Briefings charged before the field
+      // existed have no key at all — the undefined filter below drops the
+      // cell rather than showing a $0.0000 that looks measured.
       const items = [
         ['LLM Tokens', bd.token_cost_usd],
         ['Infra', bd.infra_share_usd],
@@ -184,9 +200,10 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
         ['Storage', bd.storage_cost_usd],
         ['Other costs', bd.margin_usd],
         ['Total', bd.total_usd],
+        ['Cache saved', bd.cache_saving_usd],
       ]
         .filter(([, v]) => v !== undefined)
-        .map(([label, v]) => `<div><span class="bd-label">${label}</span><br><span class="bd-value">${typeof v === 'number' ? '$' + v.toFixed(4) : v}</span></div>`)
+        .map(([label, v]) => `<div><span class="bd-label">${label}</span><br><span class="bd-value">${typeof v === 'number' ? signedUsd4(v) : v}</span></div>`)
         .join('');
       breakdownRow = `<tr class="tx-breakdown" data-tx-detail="${tx.id}"><td colspan="5"><div class="breakdown-grid">${items}</div></td></tr>`;
     }

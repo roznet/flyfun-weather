@@ -115,15 +115,21 @@ def run_one(
     ``cache=True`` puts a 5-minute prompt-cache breakpoint on the system block.
     An eval is the ideal caching workload — every call in a run shares a
     byte-identical prefix and they land seconds apart — so one write carries the
-    whole run. Five minutes rather than production's hour because nothing
-    expires inside a burst and the write premium is 1.25x instead of 2x.
+    whole run. Five minutes rather than production's ``DIGEST_CACHE_TTL``
+    because nothing expires inside a burst and the write premium is 1.25x
+    instead of 2x; the override is only legitimate here because an eval never
+    writes to the cost ledger, which prices writes at the production TTL.
     Off by default so importers (tests/test_digest_assertions.py) are unaffected.
+
+    The prompt is passed whole as the cached head with an empty tail: the eval
+    renders one prompt per run (guidance included), so there is no per-caller
+    tail to keep outside the breakpoint the way production has.
     """
     llm = create_llm(config)
     structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
 
     system_content = (
-        _system_content(system_prompt, config.llm, longrange=False, ttl="5m")
+        _system_content(system_prompt, "", config.llm, longrange=False, ttl="5m")
         if cache else system_prompt
     )
 

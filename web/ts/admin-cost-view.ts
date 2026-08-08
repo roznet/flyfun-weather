@@ -25,6 +25,9 @@ let subItems: Array<{ name: string; amount: number }> = [];
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 const usd4 = (n: number) => `$${n.toFixed(4)}`;
+// A cache "saving" is genuinely negative in a write-heavy window, and "$-0.03"
+// reads as a typo — keep the sign in front of the currency.
+const signedUsd4 = (n: number) => (n < 0 ? `-$${Math.abs(n).toFixed(4)}` : usd4(n));
 
 export async function initCostTab(): Promise<void> {
   if (costInitialized) return;
@@ -81,9 +84,17 @@ function renderReport(r: CostReport | null): void {
     return;
   }
 
+  // Reporting-only: the saving is already netted off inside variable_usd, so
+  // it gets its own card rather than a slot in the cost sequence. Absent when
+  // no ledger row in the window carries the figure.
+  const savingCard = r.cache_saving_usd == null
+    ? ''
+    : `<div class="summary-card"><div class="value">${signedUsd4(r.cache_saving_usd)}</div><div class="label">Cache saved</div></div>`;
+
   summary.innerHTML = `
     <div class="summary-card"><div class="value">${usd(r.fixed_prorated_usd)}</div><div class="label">Fixed</div></div>
     <div class="summary-card"><div class="value">${usd(r.variable_usd)}</div><div class="label">Variable</div></div>
+    ${savingCard}
     <div class="summary-card"><div class="value">${usd(r.margin_usd)}</div><div class="label">Other costs (${r.margin_percent}%)</div></div>
     <div class="summary-card"><div class="value">${usd(r.total_usd)}</div><div class="label">Total</div></div>
     <div class="summary-card"><div class="value">${r.num_briefings}</div><div class="label">Briefings</div></div>
@@ -103,9 +114,18 @@ function renderReport(r: CostReport | null): void {
       <td class="num">${usd(r.fixed_prorated_usd)}</td>
     </tr>`;
 
+  // Prompt-cache saving is reporting-only — it is already inside the token
+  // figure above. `null`/absent means no row in the window recorded it (they
+  // pre-date the field), which must not render as a measured $0.00.
+  const saving = r.cache_saving_usd;
+  const savingNote = saving == null
+    ? ''
+    : ` Prompt caching saved ${signedUsd4(saving)} of that token cost`
+      + `${saving < 0 ? ' (negative: cache writes outran the reads in this window)' : ''}.`;
+
   note.innerHTML = `Fixed cost is prorated from the rate card (monthly &times; ${r.window_days}/30). `
     + `Variable is the actual LLM token (${usd4(r.variable_token_usd)}) + storage (${usd4(r.variable_storage_usd)}) `
-    + `charged over the window. Total includes the ${r.margin_percent}% margin.`;
+    + `charged over the window.${savingNote} Total includes the ${r.margin_percent}% margin.`;
 }
 
 // --- Rate-card editor ---

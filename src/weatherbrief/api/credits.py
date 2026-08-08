@@ -13,11 +13,13 @@ from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
 from weatherbrief.costs import (
+    DIGEST_CACHE_TTL,
     CostBreakdown,
     CostConfig,
     DEFAULT_CONFIG,
     ProgramCostReport,
     breakdown_to_dict,
+    cache_write_multiplier_for,
     compute_cost,
     compute_program_cost,
     config_from_row,
@@ -335,6 +337,27 @@ def update_cost_config(
 
     CostConfig.from_json(json.dumps(merged))
 
+    # The rate card can override the write premium, but the digest writes at
+    # DIGEST_CACHE_TTL and nothing downstream records which TTL produced a
+    # write — so an override that disagrees with the TTL mis-prices every
+    # subsequent briefing.  Loud in the log rather than a hard 422: the
+    # operator may legitimately be modelling a price change.
+    try:
+        submitted_write = float(merged["cache_write_multiplier"])
+    except (KeyError, TypeError, ValueError):
+        # A non-numeric multiplier would otherwise store cleanly and only blow
+        # up later, inside the charging path, where failures are swallowed.
+        raise HTTPException(
+            status_code=422, detail="cache_write_multiplier must be a number",
+        )
+    expected_write = cache_write_multiplier_for(DIGEST_CACHE_TTL)
+    if abs(submitted_write - expected_write) > 1e-9:
+        logger.warning(
+            "cost_config cache_write_multiplier=%s disagrees with the %s digest "
+            "cache TTL (expected %s) — writes will be mis-priced",
+            submitted_write, DIGEST_CACHE_TTL, expected_write,
+        )
+
     new_row = CostConfigRow(
         active_from=now,
         config_json=json.dumps(merged),
@@ -370,11 +393,15 @@ _ALLOWED_WINDOWS = {"7d": 7, "30d": 30}
 
 def _program_variable_and_counts(
     db: Session, since: datetime,
-) -> tuple[float, float, int, int]:
+) -> tuple[float, float, int, int, float | None]:
     """Sum actual token/storage cost and count briefings + distinct users since.
 
     Variable cost is pulled from each briefing's stored CostBreakdown so it
     reflects what was actually charged, independent of the current rate card.
+
+    The trailing element is the prompt-cache saving over the window, or
+    ``None`` when no row carries it — rows written before ``cache_saving_usd``
+    existed must not read as a measured $0.00.
     """
     rows = (
         db.query(CostLedgerRow.detail_json, CostLedgerRow.user_id)
@@ -387,6 +414,7 @@ def _program_variable_and_counts(
     )
     token_usd = 0.0
     storage_usd = 0.0
+    cache_saving_usd: float | None = None
     users: set[str] = set()
     for detail_json, user_id in rows:
         users.add(user_id)
@@ -398,7 +426,10 @@ def _program_variable_and_counts(
             continue
         token_usd += bd.get("token_cost_usd", 0.0)
         storage_usd += bd.get("storage_cost_usd", 0.0)
-    return token_usd, storage_usd, len(rows), len(users)
+        saving = bd.get("cache_saving_usd")
+        if saving is not None:
+            cache_saving_usd = (cache_saving_usd or 0.0) + saving
+    return token_usd, storage_usd, len(rows), len(users), cache_saving_usd
 
 
 def build_program_report(db: Session, window_days: int) -> ProgramCostReport | None:
@@ -413,7 +444,9 @@ def build_program_report(db: Session, window_days: int) -> ProgramCostReport | N
 
     config, config_id = config_from_row(config_row)
     since = datetime.now(timezone.utc) - timedelta(days=window_days)
-    token_usd, storage_usd, num_briefings, num_users = _program_variable_and_counts(db, since)
+    (
+        token_usd, storage_usd, num_briefings, num_users, cache_saving_usd,
+    ) = _program_variable_and_counts(db, since)
 
     return compute_program_cost(
         config=config,
@@ -423,6 +456,7 @@ def build_program_report(db: Session, window_days: int) -> ProgramCostReport | N
         variable_storage_usd=storage_usd,
         num_briefings=num_briefings,
         num_users=num_users,
+        cache_saving_usd=cache_saving_usd,
     )
 
 

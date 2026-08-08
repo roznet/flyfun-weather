@@ -76,7 +76,13 @@ def _seed_active_config(session, **overrides) -> int:
     return cid
 
 
-def _add_briefing(session, user_id, token_usd, storage_usd, *, days_ago=0):
+def _add_briefing(session, user_id, token_usd, storage_usd, *, days_ago=0, cache_saving=None):
+    """Seed a charged briefing.
+
+    ``cache_saving=None`` writes a **historical-shaped** row — no
+    ``cache_saving_usd`` key at all, exactly like every row charged before the
+    field existed. That absence is the thing worth testing.
+    """
     bd = {
         "token_cost_usd": token_usd,
         "infra_share_usd": 0.05,
@@ -87,6 +93,8 @@ def _add_briefing(session, user_id, token_usd, storage_usd, *, days_ago=0):
         "total_usd": token_usd + storage_usd + 0.14,
         "config_id": 1,
     }
+    if cache_saving is not None:
+        bd["cache_saving_usd"] = cache_saving
     session.add(CostLedgerRow(
         user_id=user_id,
         service=SERVICE,
@@ -146,6 +154,90 @@ class TestCostReportEndpoint:
         assert abs(data["fixed_prorated_usd"] - 56.0 * 7 / 30) < 1e-2
 
 
+class TestCacheSavingReporting:
+    """``cache_saving_usd`` is additive on a schemaless ``detail_json``.
+
+    Every row charged before the field existed simply lacks the key, so the
+    reporting path has to tell "not recorded" apart from "recorded as zero" —
+    and must never blow up on the old shape.
+    """
+
+    def test_legacy_rows_report_absent_not_zero(self, client, app_db):
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, "user-a", 0.20, 0.01)   # pre-field shape
+        _add_briefing(s, "user-b", 0.10, 0.02)
+        s.commit()
+        s.close()
+
+        data = client.get("/api/admin/cost-report?window=30d").json()
+        # A $0.00 here would read as "caching achieved nothing", which is a lie.
+        assert data["cache_saving_usd"] is None
+        assert abs(data["variable_token_usd"] - 0.30) < 1e-6
+
+    def test_sums_only_the_rows_that_carry_it(self, client, app_db):
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, "user-a", 0.20, 0.01)                      # legacy
+        _add_briefing(s, "user-a", 0.10, 0.00, cache_saving=0.012)
+        _add_briefing(s, "user-b", 0.05, 0.00, cache_saving=0.008)
+        s.commit()
+        s.close()
+
+        data = client.get("/api/admin/cost-report?window=30d").json()
+        assert abs(data["cache_saving_usd"] - 0.02) < 1e-6
+        assert data["num_briefings"] == 3
+
+    def test_a_write_heavy_window_reports_a_negative_saving(self, client, app_db):
+        """A window of cache misses really did cost more — don't floor it."""
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, "user-a", 0.20, 0.0, cache_saving=-0.03)
+        s.commit()
+        s.close()
+
+        data = client.get("/api/admin/cost-report?window=30d").json()
+        assert abs(data["cache_saving_usd"] + 0.03) < 1e-6
+
+    def test_saving_does_not_move_any_total(self, client, app_db):
+        """It is already inside the token cost — reporting only."""
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, "user-a", 0.20, 0.01, cache_saving=0.05)
+        s.commit()
+        s.close()
+
+        data = client.get("/api/admin/cost-report?window=30d").json()
+        assert abs(data["variable_usd"] - 0.21) < 1e-6
+        assert abs(data["subtotal_usd"] - (56.0 + 0.21)) < 1e-3
+
+    def test_user_costs_aggregate_omits_the_key_for_legacy_rows(self, client, app_db):
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, DEV_USER_ID, 0.20, 0.01)
+        s.commit()
+        s.close()
+
+        data = client.get(f"/api/admin/users/{DEV_USER_ID}/costs").json()
+        assert "cache_saving_usd" not in data["cost_breakdown"]
+        # The transaction breakdown is the raw stored detail — also untouched.
+        assert "cache_saving_usd" not in data["transactions"][0]["breakdown"]
+
+    def test_user_costs_aggregate_sums_recorded_savings(self, client, app_db):
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, DEV_USER_ID, 0.20, 0.01)                       # legacy
+        _add_briefing(s, DEV_USER_ID, 0.10, 0.00, cache_saving=0.011)
+        _add_briefing(s, DEV_USER_ID, 0.10, 0.00, cache_saving=0.009)
+        s.commit()
+        s.close()
+
+        data = client.get(f"/api/admin/users/{DEV_USER_ID}/costs").json()
+        assert abs(data["cost_breakdown"]["cache_saving_usd"] - 0.02) < 1e-6
+        # Still not part of the cost sum it is reported alongside.
+        assert abs(data["cost_breakdown"]["token_cost_usd"] - 0.40) < 1e-6
+
+
 class TestConfigSubscriptionAutoSum:
     def test_put_auto_sums_subscriptions_from_details(self, client, app_db):
         _seed_active_config(app_db())
@@ -163,5 +255,46 @@ class TestConfigSubscriptionAutoSum:
         resp = client.put(
             "/api/admin/cost-config",
             json={"subscription_details": {"open_meteo": "free"}},
+        )
+        assert resp.status_code == 422
+
+
+class TestConfigCacheMultiplierGuard:
+    """A rate-card override can still disagree with the digest's cache TTL.
+
+    The derivation in ``costs.py`` fixes the *default*; the DB row wins over it.
+    Nothing records which TTL produced a write, so a disagreeing override
+    mis-prices every subsequent briefing — worth a log line, not a refusal
+    (the operator may be modelling an announced price change).
+    """
+
+    def test_matching_multiplier_is_silent(self, client, app_db, caplog):
+        from weatherbrief.costs import CACHE_WRITE_MULTIPLIERS, DIGEST_CACHE_TTL
+
+        _seed_active_config(app_db())
+        with caplog.at_level("WARNING"):
+            resp = client.put(
+                "/api/admin/cost-config",
+                json={"cache_write_multiplier": CACHE_WRITE_MULTIPLIERS[DIGEST_CACHE_TTL]},
+            )
+        assert resp.status_code == 200
+        assert "cache_write_multiplier" not in caplog.text
+
+    def test_disagreeing_multiplier_is_accepted_but_warned(self, client, app_db, caplog):
+        _seed_active_config(app_db())
+        with caplog.at_level("WARNING"):
+            resp = client.put(
+                "/api/admin/cost-config", json={"cache_write_multiplier": 1.25},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["config"]["cache_write_multiplier"] == 1.25
+        assert "mis-priced" in caplog.text
+
+    def test_non_numeric_multiplier_rejected(self, client, app_db):
+        """Otherwise it stores fine and only fails inside the charging path,
+        where exceptions are swallowed so the briefing never blocks."""
+        _seed_active_config(app_db())
+        resp = client.put(
+            "/api/admin/cost-config", json={"cache_write_multiplier": "free"},
         )
         assert resp.status_code == 422
