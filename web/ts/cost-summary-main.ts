@@ -7,12 +7,11 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchCostReport, type CostReport } from './adapters/admin-adapter';
 import { fetchCostSummary, type CostSummary } from './adapters/credits-adapter';
-import { redirectToLogin, renderUserInfo, escapeHtml, formatDate } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, usd4 } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
-const usd4 = (n: number) => `$${n.toFixed(4)}`;
 
 const COMPOSITION: Array<{ key: 'fixed_prorated_usd' | 'variable_usd' | 'margin_usd'; label: string; color: string }> = [
   { key: 'fixed_prorated_usd', label: 'Fixed', color: '#6366f1' },

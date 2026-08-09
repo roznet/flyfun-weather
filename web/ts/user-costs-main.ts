@@ -7,7 +7,7 @@ import {
   type UserCostTransaction,
   type UserCostBreakdown,
 } from './adapters/admin-adapter';
-import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt, signedUsd4 } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
@@ -22,10 +22,6 @@ const COST_COLORS: Record<CostKey, string> = {
   storage_cost_usd: '#059669',
   margin_usd: '#d97706',
 };
-
-// A cache "saving" is genuinely negative when writes outran reads, and
-// "$-0.03" reads as a typo — keep the sign in front of the currency.
-const signedUsd4 = (n: number) => (n < 0 ? `-$${Math.abs(n).toFixed(4)}` : `$${n.toFixed(4)}`);
 
 const COST_LABELS: Record<CostKey, string> = {
   token_cost_usd: 'LLM Tokens',

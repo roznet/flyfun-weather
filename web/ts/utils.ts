@@ -181,6 +181,21 @@ export function formatAlt(ft: number): string {
   return `${ft}ft`;
 }
 
+/** Format a USD amount at 4dp — the resolution the cost surfaces need, where
+ *  a per-briefing figure rounds to $0.00 at 2dp. */
+export function usd4(n: number): string {
+  return `$${n.toFixed(4)}`;
+}
+
+/** Format a USD amount at 4dp, keeping a minus sign in front of the currency.
+ *
+ *  For quantities that are legitimately negative — a cache "saving" is a real
+ *  surcharge in a write-heavy window — where `$-0.0300` reads as a typo. Only
+ *  the sign placement differs from `usd4`. */
+export function signedUsd4(n: number): string {
+  return n < 0 ? `-${usd4(Math.abs(n))}` : usd4(n);
+}
+
 /** Check if a flight's end time (start + duration) is in the past.
  *  Accepts either a departure_time ISO string or legacy target_date + target_time_utc. */
 export function isFlightPast(targetDate: string, targetTimeUtc: number, durationHours: number, departureTime?: string): boolean {

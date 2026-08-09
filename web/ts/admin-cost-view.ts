@@ -14,7 +14,7 @@ import {
   fetchCostReport, fetchCostConfig, fetchCostConfigHistory, updateCostConfig,
   type CostReport, type CostConfigData, type CostConfigVersion,
 } from './adapters/admin-adapter';
-import { escapeHtml, formatDate } from './utils';
+import { escapeHtml, formatDate, usd4, signedUsd4 } from './utils';
 
 type Window = '7d' | '30d';
 
@@ -24,10 +24,6 @@ let reportWindow: Window = '30d';
 let subItems: Array<{ name: string; amount: number }> = [];
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
-const usd4 = (n: number) => `$${n.toFixed(4)}`;
-// A cache "saving" is genuinely negative in a write-heavy window, and "$-0.03"
-// reads as a typo — keep the sign in front of the currency.
-const signedUsd4 = (n: number) => (n < 0 ? `-$${Math.abs(n).toFixed(4)}` : usd4(n));
 
 export async function initCostTab(): Promise<void> {
   if (costInitialized) return;
