@@ -3078,7 +3078,7 @@ only a model publishing `qr` can set it, which today means ICON-D2 alone.
 - `analysis/sounding/precipitation.py` — `_compute_precip_ice_fraction`,
   `_level_ice_fraction`.
 - `analysis/sounding/icing_common.py` — threshold + `is_supercooled_rain`.
-## 24. Richardson CAT is calibrated by altitude, and stops at the mixed-layer top
+## 25. Richardson CAT is calibrated by altitude, and stops at the mixed-layer top
 
 **Date:** 2026-08-04
 **Status:** Implemented (#533)
