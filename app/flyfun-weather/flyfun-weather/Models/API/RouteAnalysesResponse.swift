@@ -112,12 +112,19 @@ struct ConvectiveAssessment: Codable, Sendable {
 struct VerticalMotionAssessment: Codable, Sendable {
     let classification: String?
     let catRiskLayers: [CATRiskLayer]?
+    /// Top of the detected surface well-mixed layer (#533); CAT layers below
+    /// it are suppressed server-side. Optional — absent on pre-#534 packs.
+    let mixedLayerTopFt: Double?
 }
 
 struct CATRiskLayer: Codable, Sendable {
     let baseFt: Double
     let topFt: Double
     let risk: String
+    /// Layer lies wholly inside the boundary layer (#533): a SEVERE one is
+    /// coverage-gated rather than forcing RED, and reads as "low-level wind
+    /// shear" rather than CAT. Optional — absent on pre-#534 packs.
+    let boundaryLayer: Bool?
 }
 
 struct NWPCloudDiagnostics: Codable, Sendable {
