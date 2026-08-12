@@ -115,6 +115,179 @@ import MapKit
         #expect(vm.hasForecastAffectingChange)
     }
 
+    // MARK: Structural change detection (Move / Duplicate, #552)
+
+    /// A time-only nudge that stays inside the same UTC day is an ordinary
+    /// forecast-affecting edit — PATCH handles it, no Move/Duplicate prompt.
+    @Test func timeOnlyEditInsideSameUtcDayIsNotStructural() {
+        let vm = makeVM(flight: makeFlight(departureTime: "2026-06-24T12:00:00Z"))
+        vm.departureTime.timeZoneId = "UTC"
+        vm.departureTime.setHour(14)
+        #expect(vm.hasChanges)
+        #expect(vm.hasForecastAffectingChange)
+        #expect(vm.hasStructuralChange == false)
+    }
+
+    /// The case the picker's own calendar day cannot see: a pilot on
+    /// `Europe/Paris` nudges the *time* to 00:30 local, which is 22:30 UTC the
+    /// day before. The local day never moved, but `target_date` did — so PATCH
+    /// would 422 and this must route to Move/Duplicate.
+    @Test func localTimeEditCrossingUtcMidnightIsStructural() {
+        let vm = makeVM(flight: makeFlight(departureTime: "2026-06-24T01:00:00Z"))
+        vm.departureTime.timeZoneId = "Europe/Paris"   // UTC+2 in June
+        let localDayBefore = vm.departureTime.dateProxy
+        vm.departureTime.setHour(0)
+        vm.departureTime.setMinute(30)
+        // The picker still shows the same local calendar day…
+        #expect(Calendar.current.isDate(vm.departureTime.dateProxy,
+                                        inSameDayAs: localDayBefore))
+        // …but the UTC day it derives from moved back one.
+        #expect(vm.departureDayChanged)
+        #expect(vm.hasStructuralChange)
+    }
+
+    @Test func departureDateChangeIsStructural() {
+        let vm = makeVM(flight: makeFlight(departureTime: "2026-06-24T12:00:00Z"))
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+        #expect(vm.departureDayChanged)
+        #expect(vm.hasStructuralChange)
+    }
+
+    @Test func originOrDestinationChangeIsStructural() {
+        var vm = makeVM(flight: makeFlight(waypoints: ["LFMD", "LFML"]))
+        vm.waypointsText = "LFAT LFML"          // new origin
+        #expect(vm.routeEndpointsChanged)
+        #expect(vm.hasStructuralChange)
+
+        vm = makeVM(flight: makeFlight(waypoints: ["LFMD", "LFML"]))
+        vm.waypointsText = "LFMD LFAT"          // new destination
+        #expect(vm.routeEndpointsChanged)
+        #expect(vm.hasStructuralChange)
+    }
+
+    /// A mid-route waypoint insert keeps both endpoints, so the flight ID is
+    /// unchanged and PATCH accepts it — it must NOT prompt for Move/Duplicate.
+    @Test func midRouteWaypointInsertIsNotStructural() {
+        let vm = makeVM(flight: makeFlight(waypoints: ["LFMD", "LFML"]))
+        vm.waypointsText = "LFMD LFAT LFML"
+        #expect(vm.hasChanges)
+        #expect(vm.hasForecastAffectingChange)
+        #expect(vm.routeEndpointsChanged == false)
+        #expect(vm.hasStructuralChange == false)
+    }
+
+    /// The three-way branch the Save button takes: structural wins over the
+    /// re-brief confirm, which wins over a silent save.
+    @Test func saveBranchesStructuralThenRebriefThenSilent() {
+        // Aircraft-only → silent save.
+        var vm = makeVM(flight: makeFlight(aircraftId: nil))
+        vm.selectedAircraftId = 7
+        #expect(vm.hasStructuralChange == false)
+        #expect(vm.hasForecastAffectingChange == false)
+        // Altitude → re-brief confirm, still not structural.
+        vm = makeVM(flight: makeFlight(cruiseAltitudeFt: 8000))
+        vm.cruiseAltitudeFt = 9000
+        #expect(vm.hasStructuralChange == false)
+        #expect(vm.hasForecastAffectingChange)
+        // Date → structural, even though it is also forecast-affecting.
+        vm = makeVM(flight: makeFlight(departureTime: "2026-06-24T12:00:00Z"))
+        vm.departureDate = vm.departureDate.addingTimeInterval(48 * 3600)
+        #expect(vm.hasStructuralChange)
+    }
+
+    // MARK: Move / Duplicate submission
+
+    @Test func moveRequestEncodesIso8601WithOffset() async throws {
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(makeFlight(id: "flt-2"))
+        let vm = AddFlightViewModel(
+            repository: repo,
+            flight: makeFlight(departureTime: "2026-06-24T12:00:00Z")
+        )
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+
+        let moved = await vm.moveFlight()
+        #expect(moved?.id == "flt-2")
+        #expect(repo.lastMovedFlightId == "flt-1")
+
+        let request = try #require(repo.lastMoveRequest)
+        let encoded = try JSONEncoder.weatherBrief.encode(request)
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let departure = try #require(json["departure_time"] as? String)
+        #expect(departure == "2026-06-25T12:00:00Z")
+        // The server rejects a naive datetime, so the offset must survive encoding.
+        #expect(ISO8601DateFormatter().date(from: departure) != nil)
+        #expect(json["waypoints"] as? [String] == ["LFMD", "LFML"])
+        // Route untouched → no raw_route, so the server keeps the stored one.
+        #expect(json["raw_route"] == nil)
+    }
+
+    /// Duplicate keeps the original: it goes through `createFlight` with the
+    /// edited values and never touches move/delete.
+    @Test func duplicateCreatesASecondFlight() async throws {
+        let repo = MockBriefingRepository()
+        repo.createFlightResult = .success(makeFlight(id: "flt-copy"))
+        let vm = AddFlightViewModel(
+            repository: repo,
+            flight: makeFlight(departureTime: "2026-06-24T12:00:00Z", cruiseAltitudeFt: 8000)
+        )
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+        vm.cruiseAltitudeFt = 9000
+
+        let copy = await vm.duplicateFlight()
+        #expect(copy?.id == "flt-copy")
+        let request = try #require(repo.lastCreateRequest)
+        #expect(request.departureTime == "2026-06-25T12:00:00Z")
+        #expect(request.cruiseAltitudeFt == 9000)
+        #expect(repo.lastMoveRequest == nil)
+        #expect(repo.deletedFlightIds.isEmpty)
+    }
+
+    /// A 409 from the move endpoint reads as pilot-facing copy, not "Server error 409".
+    @Test func moveCollisionSurfacesHumanCopy() async {
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .failure(APIError.serverError(409, "A flight with ID 'x' already exists."))
+        let vm = AddFlightViewModel(
+            repository: repo,
+            flight: makeFlight(departureTime: "2026-06-24T12:00:00Z")
+        )
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+
+        #expect(await vm.moveFlight() == nil)
+        #expect(vm.errorMessage?.contains("already have a flight on that date") == true)
+    }
+
+    /// The server's decoded `detail` reaches the pilot verbatim for the 422s that
+    /// already read well (booking cap, rejected waypoints).
+    @Test func serverDetailIsSurfacedVerbatim() {
+        let capped = APIError.serverError(422, "That date is more than 180 days out\u{2026}")
+        #expect(AddFlightViewModel.submitErrorMessage(capped) == "That date is more than 180 days out\u{2026}")
+        let past = APIError.forbidden("Only admins can move a flight into the past")
+        #expect(AddFlightViewModel.submitErrorMessage(past).contains("already in the past"))
+    }
+
+    // MARK: Dismiss-first regeneration
+
+    /// The regression behind the second half of #544: a `refetch_needed` edit must
+    /// *queue* the pipeline and return, not sit on the SSE stream for two minutes.
+    @Test func refetchNeededEditQueuesRefreshInsteadOfStreaming() async throws {
+        let flight = makeFlight()
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight,
+                                                                  invalidation: .refetchNeeded))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.flightDurationHours = 3.0
+
+        let saved = await vm.saveEditedFlight(regenerate: true)
+        #expect(saved?.id == flight.id)
+        // `saveEditedFlight` returned without waiting; the queueing task is the
+        // only thing still outstanding.
+        await vm.pendingRefreshTask?.value
+        #expect(repo.triggeredRefreshIds == [flight.id])
+    }
+
     @Test func canSaveAircraftReflectsIcaoTypeRegex() {
         let vm = makeVM()
         vm.newAircraftIcaoType = "C172"

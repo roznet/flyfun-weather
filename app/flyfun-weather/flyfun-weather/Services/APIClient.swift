@@ -329,14 +329,34 @@ actor APIClient {
         case 200...299:
             return data
         case 403:
-            let msg = (try? JSONDecoder().decode([String: String].self, from: data))?["detail"]
-            throw APIError.forbidden(msg ?? "Forbidden")
+            throw APIError.forbidden(Self.detailMessage(from: data) ?? "Forbidden")
         case 404:
             throw APIError.notFound
         default:
-            let msg = String(data: data, encoding: .utf8)
-            throw APIError.serverError(http.statusCode, msg)
+            throw APIError.serverError(http.statusCode, Self.detailMessage(from: data))
         }
+    }
+
+    /// Pull FastAPI's human sentence out of an error body so callers can show it
+    /// verbatim instead of raw JSON (`{"detail":"Cannot change the flight
+    /// date…"}` used to reach the pilot with the braces still on).
+    ///
+    /// `detail` has two shapes: a plain string from `HTTPException`, and a list
+    /// of `{loc, msg, type}` objects from a pydantic request-validation 422 —
+    /// join the `msg`s for the latter. Anything else falls back to the raw body,
+    /// so no information is ever lost, and substring matchers on the message
+    /// (e.g. the `autorouter_not_linked` 409) keep working because a
+    /// single-string `detail` passes through unchanged.
+    private static func detailMessage(from data: Data) -> String? {
+        let raw = String(data: data, encoding: .utf8)
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dict = object as? [String: Any] else { return raw }
+        if let detail = dict["detail"] as? String { return detail }
+        if let items = dict["detail"] as? [[String: Any]] {
+            let messages = items.compactMap { $0["msg"] as? String }
+            if !messages.isEmpty { return messages.joined(separator: "; ") }
+        }
+        return raw
     }
 }
 

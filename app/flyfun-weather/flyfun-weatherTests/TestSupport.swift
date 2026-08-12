@@ -39,6 +39,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var aircraftResult: Result<[AircraftResponse], Error> = .success([])
     var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
     var updateFlightResult: Result<UpdateFlightResponse, Error> = .failure(MockError.notStubbed("updateFlight"))
+    var moveFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("moveFlight"))
+    /// Pack history for the edited flight — the Move confirm's "discards N
+    /// briefings" count reads this. Empty by default (the no-packs copy).
+    var packsResult: Result<[PackMetaResponse], Error> = .success([])
     /// Delete succeeds by default (the common case under test is the happy path);
     /// set a `.failure` to drive the surfaced-error branch.
     var deleteFlightResult: Result<Void, Error> = .success(())
@@ -60,6 +64,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var submitPirepsBatchCallCount = 0
     private(set) var interpretRouteCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
+    private(set) var lastMoveRequest: MoveFlightRequest?
+    private(set) var lastMovedFlightId: String?
+    private(set) var triggeredRefreshIds: [String] = []
     private(set) var deletedFlightIds: [String] = []
     /// One entry per `bulkDeleteFlights` call. NOT chunk boundaries: this mock
     /// stands in for the *online* layer, which is where chunking happens
@@ -94,6 +101,14 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         lastUpdateRequest = request
         return try updateFlightResult.get()
     }
+    func moveFlight(flightId: String, request: MoveFlightRequest) async throws -> FlightResponse {
+        lastMovedFlightId = flightId
+        lastMoveRequest = request
+        return try moveFlightResult.get()
+    }
+    func triggerRefresh(flightId: String) async throws {
+        triggeredRefreshIds.append(flightId)
+    }
     func deleteFlight(id: String) async throws {
         deletedFlightIds.append(id)
         try deleteFlightResult.get()
@@ -118,7 +133,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
-    func packs(flightId: String) async throws -> [PackMetaResponse] { throw MockError.notStubbed("packs") }
+    func packs(flightId: String) async throws -> [PackMetaResponse] { try packsResult.get() }
     func flightByShareCode(_ code: String) async throws -> FlightResponse { throw MockError.notStubbed("flightByShareCode") }
     func subscribeFlight(id: String) async throws { throw MockError.notStubbed("subscribeFlight") }
     func unsubscribeFlight(id: String) async throws { throw MockError.notStubbed("unsubscribeFlight") }

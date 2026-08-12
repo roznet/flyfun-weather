@@ -73,16 +73,19 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// Flights created during a journey via `createFlight`, so the new flight
     /// shows up on the next `flights()` reload.
     private var createdFlights: [FlightResponse] = []
-    /// Flights bulk-deleted during a journey, filtered out of subsequent loads so
-    /// the multi-select journey can assert the rows are gone. Bulk delete is
-    /// served for real (not `notProvided`) because the whole point of that journey
-    /// is that the rows disappear after the confirmation.
+    /// Flights removed during a journey, filtered out of subsequent loads. Two
+    /// producers, same need: bulk delete (whose whole assertion is that the
+    /// selected rows disappear after the confirmation, so it is served for real
+    /// rather than `notProvided`) and `moveFlight`, where the source flight stops
+    /// being listed exactly as it does server-side — a move is create-new +
+    /// delete-old in one transaction.
     private var deletedFlightIds: Set<String> = []
 
     // MARK: Served
 
     func flights() async throws -> [FlightResponse] { allFlights }
 
+    /// Every fixture + journey-created flight, minus anything deleted or moved.
     private var allFlights: [FlightResponse] {
         (flightsFixture + createdFlights).filter { !deletedFlightIds.contains($0.id) }
     }
@@ -122,6 +125,40 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         deletedFlightIds.formUnion(deleted)
         return BulkDeleteResponse(deleted: deleted, notFound: ids.filter { !known.contains($0) })
     }
+
+    /// Mirror the server's move semantics well enough for the structural-edit
+    /// journey (#552): the source flight disappears and a *new* flight takes its
+    /// place, so the list ends up with the same number of rows and the pilot lands
+    /// on the new one. Duplicate needs nothing extra — it goes through
+    /// `createFlight`, which already leaves the original in place.
+    func moveFlight(flightId: String, request: MoveFlightRequest) async throws -> FlightResponse {
+        guard let source = allFlights.first(where: { $0.id == flightId }) else {
+            throw APIError.notFound
+        }
+        let moved = FlightResponse(
+            id: "moved-\(flightId)",
+            userId: source.userId, profileId: source.profileId,
+            aircraftId: source.aircraftId, aircraft: source.aircraft,
+            routeName: (request.waypoints ?? source.waypoints).joined(separator: " "),
+            waypoints: request.waypoints ?? source.waypoints,
+            departureTime: request.departureTime ?? source.departureTime,
+            targetDate: String((request.departureTime ?? source.departureTime).prefix(10)),
+            targetTimeUtc: source.targetTimeUtc,
+            cruiseAltitudeFt: request.cruiseAltitudeFt ?? source.cruiseAltitudeFt,
+            flightCeilingFt: request.flightCeilingFt ?? source.flightCeilingFt,
+            flightDurationHours: request.flightDurationHours ?? source.flightDurationHours,
+            private: source.private, autoRefresh: source.autoRefresh,
+            autoRefreshHour: source.autoRefreshHour,
+            createdAt: source.createdAt, latestBriefing: nil, coverage: nil, role: source.role,
+            flexibility: source.flexibility, altDepartureTime: source.altDepartureTime
+        )
+        deletedFlightIds.insert(flightId)
+        createdFlights.append(moved)
+        return moved
+    }
+
+    func triggerRefresh(flightId: String) async throws {}
+
     func aircraft() async throws -> [AircraftResponse] { [] }
     func profiles() async throws -> [ProfileResponse] { [] }
     func usageSummary() async throws -> UsageSummaryResponse {
@@ -211,7 +248,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
             .split(whereSeparator: { $0 == " " || $0 == "\n" })
             .map { $0.uppercased() }
         let waypoints = tokens.map {
-            RouteWaypointInfo(icao: $0, name: $0, lat: 0, lon: 0, timezone: "UTC")
+            RouteWaypointInfo(icao: $0, name: $0, lat: 0, lon: 0, timezone: Self.fixtureTimeZone(for: $0))
         }
         return InterpretRouteResponse(
             originalTokens: tokens,
@@ -221,6 +258,19 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
             waypoints: waypoints
         )
     }
+    /// Plausible IANA zone for a fixture waypoint, by ICAO prefix. The real
+    /// resolver returns the airport's own zone; a flat "UTC" would leave the
+    /// departure timezone picker with a single option and so make the
+    /// local-day-vs-UTC-day distinction (#552) untestable in a journey.
+    private static func fixtureTimeZone(for icao: String) -> String {
+        switch icao.prefix(2) {
+        case "LF": return "Europe/Paris"
+        case "EG": return "Europe/London"
+        case "ED": return "Europe/Berlin"
+        default: return "UTC"
+        }
+    }
+
     func flightByShareCode(_ code: String) async throws -> FlightResponse { throw FixtureError.notProvided("flightByShareCode") }
     func subscribeFlight(id: String) async throws { throw FixtureError.notProvided("subscribeFlight") }
     func unsubscribeFlight(id: String) async throws { throw FixtureError.notProvided("unsubscribeFlight") }

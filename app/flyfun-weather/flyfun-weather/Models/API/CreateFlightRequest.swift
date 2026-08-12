@@ -42,6 +42,28 @@ struct UpdateFlightRequest: Encodable {
     var notifyOverride: String? = nil
 }
 
+/// Request body for POST /api/flights/{id}/move — the structural sibling of
+/// PATCH. The flight ID is derived from route + date + altitude/ceiling/duration,
+/// so changing the date or the origin/destination is a new identity by
+/// construction and PATCH rejects it (422). Move creates the new flight and
+/// deletes the old one (discarding its briefings) in a single transaction.
+///
+/// Every field is optional and inherits from the source flight when omitted.
+/// `departureTime` **must** carry a timezone offset — the server rejects a naive
+/// datetime — so always build it with `AddFlightViewModel.iso8601(_:)`.
+struct MoveFlightRequest: Encodable {
+    var departureTime: String? = nil
+    var waypoints: [String]? = nil
+    var cruiseAltitudeFt: Int? = nil
+    var flightCeilingFt: Int? = nil
+    var flightDurationHours: Double? = nil
+    /// Original Field-15 text. Send it ONLY when the pilot actually edited the
+    /// route input: omitting it makes the server preserve the source flight's
+    /// stored `raw_route`/`parser_version`, while sending it re-stamps the
+    /// parser version and so defeats its role as a re-derive marker.
+    var rawRoute: String? = nil
+}
+
 /// How much of the briefing an edit invalidated, returned alongside the updated
 /// flight from PATCH /api/flights/{id}.
 enum FlightInvalidation: String, Codable, Sendable {
