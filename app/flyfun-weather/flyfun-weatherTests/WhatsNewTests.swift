@@ -150,6 +150,39 @@ struct WhatsNewSyncTests {
     }
 }
 
+@Suite("WhatsNew card expansion")
+struct WhatsNewExpansionTests {
+
+    /// The PR-554 review finding: expansion is *derived* from "which entry is
+    /// newest", not accumulated into a set. Accumulating left the old and the new
+    /// newest both open when a refresh surfaced a fresh top entry.
+    @Test("Only the newest entry is open by default, before and after a refresh")
+    func newestOnlyIsOpenByDefault() {
+        func open(_ id: Int, newest: Int) -> Bool {
+            WhatsNewView.isExpanded(id: id, newestId: newest, opened: [], closed: [])
+        }
+        // Before a refresh, 42 is newest.
+        #expect(open(42, newest: 42))
+        #expect(!open(41, newest: 42))
+        // A refresh surfaces 43 — 42 closes on its own, no stale second card.
+        #expect(open(43, newest: 43))
+        #expect(!open(42, newest: 43))
+    }
+
+    @Test("An explicit choice outranks the default in both directions")
+    func explicitChoiceWins() {
+        // Reader closed the newest.
+        #expect(!WhatsNewView.isExpanded(id: 42, newestId: 42, opened: [], closed: [42]))
+        // Reader opened an older one.
+        #expect(WhatsNewView.isExpanded(id: 41, newestId: 42, opened: [41], closed: []))
+    }
+
+    @Test("An empty stream expands nothing")
+    func emptyStreamExpandsNothing() {
+        #expect(!WhatsNewView.isExpanded(id: 42, newestId: nil, opened: [], closed: []))
+    }
+}
+
 @Suite("MarkdownLiteText bullets")
 struct MarkdownLiteBulletTests {
 

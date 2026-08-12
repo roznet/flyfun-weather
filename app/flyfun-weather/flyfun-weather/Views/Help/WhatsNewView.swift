@@ -18,7 +18,12 @@ struct WhatsNewView: View {
 
     /// Ids of entries the user has expanded, plus the newest one (expanded by
     /// default, matching the web card list).
-    @State private var expanded: Set<Int> = []
+    ///
+    /// Held as the reader's *explicit* choices rather than a plain expanded-set,
+    /// so "newest is open" stays derived. Accumulating into a set left the old
+    /// and new newest both open when a refresh surfaced a fresh top entry.
+    @State private var userOpened: Set<Int> = []
+    @State private var userClosed: Set<Int> = []
 
     var body: some View {
         NavigationStack {
@@ -35,13 +40,40 @@ struct WhatsNewView: View {
             .background(Theme.bg)
         }
         .task {
-            // Expand the newest entry, then refresh so a just-published entry
-            // appears without waiting for the next foreground, and mark the
-            // stream seen (clearing the dot here and on the web).
-            if let newest = appState.whatsNew.messages.first { expanded.insert(newest.id) }
+            // Refresh so a just-published entry appears without waiting for the
+            // next foreground, then mark the stream seen (clearing the dot here
+            // and on the web). Nothing to expand — `isExpanded` derives it.
             await appState.refreshWhatsNew()
-            if let newest = appState.whatsNew.messages.first { expanded.insert(newest.id) }
             await appState.markWhatsNewSeen()
+        }
+    }
+
+    /// Whether an entry's body is showing: the reader's explicit choice if they
+    /// made one, else open for the newest entry and closed for the rest.
+    /// `messages` is newest-first (`GET /api/messages` orders by date desc).
+    private func isExpanded(_ message: SystemMessage) -> Bool {
+        Self.isExpanded(id: message.id,
+                        newestId: appState.whatsNew.messages.first?.id,
+                        opened: userOpened, closed: userClosed)
+    }
+
+    /// The rule, extracted so it can be tested: an explicit choice wins, else
+    /// only the newest entry is open. Deriving rather than accumulating is what
+    /// keeps a refresh that surfaces a new top entry from leaving two open.
+    nonisolated static func isExpanded(id: Int, newestId: Int?,
+                                       opened: Set<Int>, closed: Set<Int>) -> Bool {
+        if opened.contains(id) { return true }
+        if closed.contains(id) { return false }
+        return id == newestId
+    }
+
+    private func toggle(_ message: SystemMessage) {
+        if isExpanded(message) {
+            userOpened.remove(message.id)
+            userClosed.insert(message.id)
+        } else {
+            userClosed.remove(message.id)
+            userOpened.insert(message.id)
         }
     }
 
@@ -57,12 +89,10 @@ struct WhatsNewView: View {
     }
 
     private func card(_ message: SystemMessage) -> some View {
-        let isExpanded = expanded.contains(message.id)
+        let isExpanded = isExpanded(message)
         return VStack(alignment: .leading, spacing: Theme.spacingS) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    if isExpanded { expanded.remove(message.id) } else { expanded.insert(message.id) }
-                }
+                withAnimation(.easeInOut(duration: 0.15)) { toggle(message) }
             } label: {
                 VStack(alignment: .leading, spacing: Theme.spacingXS) {
                     HStack(spacing: Theme.spacingS) {
