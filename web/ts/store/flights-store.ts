@@ -21,6 +21,7 @@ export interface FlightsState {
   loading: boolean;
   loaded: boolean;  // a flights fetch has completed at least once
   loadingMore: boolean;  // a "Show more" past-page fetch is in flight
+  pastFiltering: boolean;  // a past-filter query is in flight (server round-trip)
   error: string | null;
   selectedIds: Set<string>;  // flights ticked for bulk actions
 
@@ -79,6 +80,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   loading: false,
   loaded: false,
   loadingMore: false,
+  pastFiltering: false,
   error: null,
   selectedIds: new Set(),
   upcomingQuery: '',
@@ -123,18 +125,22 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   setPastQuery: async (q) => {
     const seq = ++flightsLoadSeq;
     // Reset to the first page: offsets from the previous query index into a
-    // different result set.
-    set({ pastQuery: q });
+    // different result set. `pastFiltering` gives the section a busy state:
+    // unlike the client-side upcoming filter, this is a network round-trip, so
+    // without it the list just sits there looking stale on a slow connection.
+    set({ pastQuery: q, pastFiltering: true });
     try {
       const { flights, pastTotal } = await api.fetchFlights({
         pastLimit: PAST_PAGE_SIZE,
         pastQuery: q || undefined,
       });
-      if (seq !== flightsLoadSeq) return;  // superseded by a later load
-      set({ flights, pastTotal, loaded: true });
+      // Only the newest request owns the flag; a superseded one clearing it
+      // would drop the busy state while a later query is still running.
+      if (seq !== flightsLoadSeq) return;
+      set({ flights, pastTotal, loaded: true, pastFiltering: false });
     } catch (err) {
       if (seq !== flightsLoadSeq) return;
-      set({ error: `Failed to filter flights: ${err}` });
+      set({ error: `Failed to filter flights: ${err}`, pastFiltering: false });
     }
   },
 

@@ -578,6 +578,16 @@ html {
   color: var(--text);
 }
 
+/* The past filter is a server round-trip, unlike the client-side upcoming one.
+   Dim the rows it is about to replace so a slow connection reads as "working"
+   rather than "nothing happened". */
+.past-flights-section.is-filtering .past-flights-list,
+.past-flights-section.is-filtering .btn-show-more-past {
+  opacity: 0.45;
+  transition: opacity 0.12s ease-in;
+  pointer-events: none;
+}
+
 .list-filter-count {
   color: var(--text-muted);
   font-size: 0.8rem;

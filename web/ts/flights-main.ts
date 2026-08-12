@@ -682,9 +682,12 @@ async function init(): Promise<void> {
 
   // Flights-list filters (#542). Two section-scoped queries: upcoming filters
   // future + recent in the browser, past round-trips to the server.
-  const filterHandlers = (state: { upcomingQuery: string; pastQuery: string }) => ({
+  const filterHandlers = (state: {
+    upcomingQuery: string; pastQuery: string; pastFiltering: boolean;
+  }) => ({
     upcomingQuery: state.upcomingQuery,
     pastQuery: state.pastQuery,
+    pastFiltering: state.pastFiltering,
     onUpcomingQuery: (q: string) => store.getState().setUpcomingQuery(q),
     onPastQuery: (q: string) => void store.getState().setPastQuery(q),
   });
@@ -699,7 +702,8 @@ async function init(): Promise<void> {
       state.debriefStats !== prev.debriefStats ||
       state.loaded !== prev.loaded ||
       state.upcomingQuery !== prev.upcomingQuery ||
-      state.pastQuery !== prev.pastQuery
+      state.pastQuery !== prev.pastQuery ||
+      state.pastFiltering !== prev.pastFiltering
     ) {
       ui.renderFlightList(
         state.flights,

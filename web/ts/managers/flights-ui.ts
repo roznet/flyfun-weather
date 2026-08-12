@@ -109,6 +109,8 @@ export interface FilterHandlers {
   upcomingQuery: string;
   /** Server-side query over the paginated past section. */
   pastQuery: string;
+  /** A past-filter round-trip is in flight — drives the section's busy state. */
+  pastFiltering: boolean;
   onUpcomingQuery: (q: string) => void;
   onPastQuery: (q: string) => void;
 }
@@ -122,7 +124,7 @@ function renderFilterBox(id: string, value: string, placeholder: string): string
       <input type="text" id="${id}" class="list-filter-input" value="${escapeHtml(value)}"
              placeholder="${escapeHtml(placeholder)}" autocomplete="off"
              autocapitalize="characters" spellcheck="false" maxlength="${MAX_QUERY_LEN}">
-      <button type="button" class="list-filter-clear" data-clears="${id}"
+      <button type="button" class="list-filter-clear"
               title="${clearLabel}" aria-label="${clearLabel}"${value ? '' : ' hidden'}>&times;</button>
     </div>
   `;
@@ -552,8 +554,9 @@ export function renderFlightList(
     const pastBody = past.length === 0 && pastTokens.length > 0
       ? renderNoMatch(pastQuery)
       : `<div class="past-flights-list">${pastCards}</div>${showMoreBtn}`;
+    const busyClass = filters?.pastFiltering ? ' is-filtering' : '';
     pastSection = `
-      <div class="past-flights-section${expandedClass}">
+      <div class="past-flights-section${expandedClass}${busyClass}" aria-busy="${filters?.pastFiltering ? 'true' : 'false'}">
         <button class="past-flights-toggle" id="past-flights-toggle">
           ${t('flights.past', { count: totalPast })}
         </button>
