@@ -302,6 +302,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.submitDigestFeedback(request)
     }
 
+    func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws {
+        try await online.submitGeneralFeedback(request)
+    }
+
     // MARK: - Cache-aware data endpoints
 
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {

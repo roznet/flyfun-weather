@@ -147,6 +147,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse { throw MockError.notStubbed("upsertDebrief") }
     func deleteDebrief(flightId: String) async throws { throw MockError.notStubbed("deleteDebrief") }
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws { throw MockError.notStubbed("submitDigestFeedback") }
+    func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws { throw MockError.notStubbed("submitGeneralFeedback") }
 }
 
 // MARK: - Fixture factories

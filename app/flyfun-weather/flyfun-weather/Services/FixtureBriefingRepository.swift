@@ -117,6 +117,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     }
     func deleteDebrief(flightId: String) async throws {}
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {}
+    func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws {}
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }

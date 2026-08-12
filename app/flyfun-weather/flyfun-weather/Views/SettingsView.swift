@@ -29,9 +29,13 @@ struct SettingsView: View {
             List {
                 Section {
                     Button {
-                        openURL(AppState.defaultBaseURL)
+                        // The web settings page, not the site root — this button
+                        // lives *in* Settings, so it should land on the same
+                        // subject (preferences, aircraft, profiles, services)
+                        // rather than the flight list.
+                        openURL(.flyfunWeb("settings.html"))
                     } label: {
-                        Label("Open on Website", systemImage: "safari")
+                        Label("Open Settings on Website", systemImage: "safari")
                     }
                 }
 

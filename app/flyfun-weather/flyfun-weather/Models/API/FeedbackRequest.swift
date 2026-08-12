@@ -36,3 +36,58 @@ struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
         self.contactOk = contactOk
     }
 }
+
+/// Free-text feedback with a category, posted to `POST /api/feedback` with
+/// `target = "general"` — the iOS twin of the web help page's "Submit Feedback"
+/// modal (`help-main.ts::showFeedbackModal`). No `sentiment`, so the server
+/// requires a non-empty `comment` (`FeedbackRequest.require_comment_unless_thumb`).
+///
+/// `flightId` / `packTimestamp` stay empty for app-level feedback (the web sends
+/// the same empty strings); they exist so a future in-briefing entry point can
+/// pin the report to a pack without a second request type.
+struct GeneralFeedbackRequest: Encodable, Sendable, Equatable {
+    let flightId: String
+    let packTimestamp: String
+    /// One of the server's `ALLOWED_CATEGORIES` minus `digest_rating` — see
+    /// `FeedbackCategory`, which is the only thing that builds this.
+    let category: String
+    /// Free-text (≤ 2000 chars). Must be non-empty.
+    let comment: String
+    /// Always `"general"` for this path.
+    let target: String
+    /// Whether the pilot allows a reply by email.
+    let contactOk: Bool
+
+    init(category: FeedbackCategory, comment: String, contactOk: Bool,
+         flightId: String = "", packTimestamp: String = "") {
+        self.flightId = flightId
+        self.packTimestamp = packTimestamp
+        self.category = category.rawValue
+        self.comment = comment
+        self.target = "general"
+        self.contactOk = contactOk
+    }
+}
+
+/// The categories the feedback form offers. Raw values mirror the server's
+/// `ALLOWED_CATEGORIES` and the labels mirror the web `feedback.cat.*` strings,
+/// so a report filed from iOS lands in the same admin bucket as a web one.
+enum FeedbackCategory: String, CaseIterable, Identifiable, Sendable {
+    case dataIssue = "data_issue"
+    case tooConservative = "too_conservative"
+    case tooOptimistic = "too_optimistic"
+    case incorrectInterpretation = "incorrect_interpretation"
+    case other = "other"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .dataIssue: return "Briefing Data Issue"
+        case .tooConservative: return "Briefing Too Conservative"
+        case .tooOptimistic: return "Briefing Too Optimistic"
+        case .incorrectInterpretation: return "Briefing Incorrect Interpretation"
+        case .other: return "Other Bug/Issue"
+        }
+    }
+}
