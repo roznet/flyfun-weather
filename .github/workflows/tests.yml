@@ -1,0 +1,123 @@
+name: Tests
+
+# Until now CI ran only the alembic single-head check and the review bot, so
+# ~5600 tests were load-bearing only when someone remembered to run them
+# locally. This makes them gate every push instead.
+#
+# The repo is public, so standard-runner minutes are free and unlimited — the
+# per-push cost here is compute, not budget. (The review bot that already runs
+# on every push is the expensive one.)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &ignored
+      # This workflow exercises the Python server and the web app only. A commit
+      # touching just the iOS app or documentation has nothing here to break, so
+      # skip it rather than spend a runner. NOTE: a run is skipped only when
+      # *every* changed file matches — a commit spanning app/ and src/ still runs.
+      - 'app/**'           # iOS/iPadOS app — has its own toolchain (xcodebuild)
+      - 'designs/**'       # design docs
+      - '**.md'
+      - '.claude/**'       # agent instructions, skills, commands
+      - 'LICENSE'
+  pull_request:
+    paths-ignore: *ignored
+
+concurrency:
+  # A new push supersedes an in-flight run for the same ref, so rapid pushes
+  # don't stack up behind each other.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install
+        run: |
+          python -m venv venv
+          ./venv/bin/pip install --upgrade pip
+          ./venv/bin/pip install -e ".[dev]"
+      # pyproject sets `addopts = -m 'not slow'`, so the slow-marked tests are
+      # excluded here exactly as they are locally.
+      - name: pytest
+        run: ./venv/bin/python -m pytest -q
+
+  web:
+    name: typecheck + build + vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build bundles
+        run: npm run build
+      - name: Unit tests
+        run: npx vitest run
+
+  e2e:
+    name: playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # playwright.config.ts starts the app with
+      # `cd .. && source venv/bin/activate && uvicorn …`, so the venv has to
+      # live at the repo root under that exact name.
+      - name: Install app
+        run: |
+          python -m venv venv
+          ./venv/bin/pip install --upgrade pip
+          ./venv/bin/pip install -e ".[dev]"
+      - name: Install web deps
+        run: npm ci
+        working-directory: web
+      - name: Build bundles
+        run: npm run build
+        working-directory: web
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Playwright
+        run: npx playwright test
+        working-directory: web
+        env:
+          # The specs stub every API call they rely on, so the server only has
+          # to boot. These keep it from reaching for real data or secrets.
+          DATA_DIR: ${{ runner.temp }}/data
+          DATABASE_URL: sqlite:///${{ runner.temp }}/test.db
+          JWT_SECRET: ci-not-a-real-secret
+          ENVIRONMENT: development
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7
