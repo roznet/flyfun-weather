@@ -24,6 +24,13 @@ on:
   pull_request:
     paths-ignore: *ignored
 
+# Least privilege: every job here only checks out, builds and runs tests —
+# nothing writes back to the repo, posts a comment or touches a deployment.
+# Without this the default GITHUB_TOKEN scope applies, which is broader than
+# any of them need (and broader still on a public repo taking fork PRs).
+permissions:
+  contents: read
+
 concurrency:
   # A new push supersedes an in-flight run for the same ref, so rapid pushes
   # don't stack up behind each other.
