@@ -115,3 +115,35 @@ describe('flights store: out-of-order guard', () => {
     );
   });
 });
+
+describe('flights store: pruneSelection', () => {
+  it('drops selections whose row the filter is hiding', () => {
+    // The hazard: a row ticked before the filter was applied keeps its id in
+    // `selectedIds` with no checkbox rendered, so it cannot be unticked while
+    // the filter is active — and bulk delete would still take it.
+    flightsStore.setState({ selectedIds: new Set(['visible-1', 'hidden-1']) });
+
+    flightsStore.getState().pruneSelection(['visible-1', 'visible-2']);
+
+    expect([...flightsStore.getState().selectedIds]).toEqual(['visible-1']);
+  });
+
+  it('keeps identity stable when nothing needs dropping', () => {
+    // An unconditional set() would churn `selectedIds` identity and re-render
+    // the list on every pass, since the render path calls this during render.
+    const before = new Set(['a', 'b']);
+    flightsStore.setState({ selectedIds: before });
+
+    flightsStore.getState().pruneSelection(['a', 'b', 'c']);
+
+    expect(flightsStore.getState().selectedIds).toBe(before);
+  });
+
+  it('clears everything when nothing is visible', () => {
+    flightsStore.setState({ selectedIds: new Set(['a', 'b']) });
+
+    flightsStore.getState().pruneSelection([]);
+
+    expect(flightsStore.getState().selectedIds.size).toBe(0);
+  });
+});

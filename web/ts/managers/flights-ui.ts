@@ -225,21 +225,47 @@ export function wireUpcomingFilter(onQuery: (q: string) => void): void {
   });
 }
 
-interface FilterFocus { id: string; start: number | null; end: number | null }
-
-/** Remember which filter input had focus (and where the caret was) before an
- *  innerHTML swap wipes it. */
-function captureFilterFocus(container: HTMLElement): FilterFocus | null {
-  const active = document.activeElement as HTMLInputElement | null;
-  if (!active || !active.id || !container.contains(active)) return null;
-  if (!active.classList.contains('list-filter-input')) return null;
-  return { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+interface FilterState {
+  id: string;
+  /** Live DOM value, which during the debounce window is *ahead* of the store. */
+  value: string;
+  focused: boolean;
+  start: number | null;
+  end: number | null;
 }
 
-function restoreFilterFocus(state: FilterFocus | null): void {
+/** Snapshot the in-container filter input before an innerHTML swap wipes it.
+ *
+ *  The value matters as much as the caret: the input is re-rendered from the
+ *  last *committed* `pastQuery`, so a keystroke still inside the 250ms debounce
+ *  window isn't in the store yet. Any unrelated re-render in that window —
+ *  active-refresh polling picking up a status transition, a post-debrief
+ *  reload, a selection change — would otherwise roll the box back to the
+ *  previous query and the user watches their typing vanish (or, if they keep
+ *  going, type into a half-reverted string).
+ *
+ *  Captured whether or not the input has focus, so a click that triggers a
+ *  re-render mid-debounce doesn't discard the draft either.
+ */
+function captureFilterState(container: HTMLElement): FilterState | null {
+  const input = container.querySelector('.list-filter-input') as HTMLInputElement | null;
+  if (!input || !input.id) return null;
+  const focused = document.activeElement === input;
+  return {
+    id: input.id,
+    value: input.value,
+    focused,
+    start: focused ? input.selectionStart : null,
+    end: focused ? input.selectionEnd : null,
+  };
+}
+
+function restoreFilterState(state: FilterState | null): void {
   if (!state) return;
   const input = document.getElementById(state.id) as HTMLInputElement | null;
   if (!input) return;
+  if (input.value !== state.value) input.value = state.value;
+  if (!state.focused) return;
   input.focus();
   if (state.start != null && state.end != null) {
     try {
@@ -387,6 +413,8 @@ export interface SelectionHandlers {
   onSelectAllPast: (pastIds: string[]) => void;
   onBulkDelete: () => void;
   onClearSelection: () => void;
+  /** Drop selections whose row the active filter is hiding (#542). */
+  onPruneSelection: (visibleIds: string[]) => void;
 }
 
 export function renderFlightList(
@@ -411,7 +439,7 @@ export function renderFlightList(
   // The past filter input lives inside this container, so a re-render destroys
   // it. Capture focus + caret first and restore after the innerHTML swap,
   // otherwise typing in it loses focus after the first debounced keystroke.
-  const focusState = captureFilterFocus(container);
+  const focusState = captureFilterState(container);
 
   // A filter that matches nothing must never reach the global empty state —
   // "No flights yet" while a query is active reads as data loss. Those cases
@@ -594,7 +622,7 @@ export function renderFlightList(
     });
   }
 
-  restoreFilterFocus(focusState);
+  restoreFilterState(focusState);
 
   // Wire up event listeners
   container.querySelectorAll('.btn-briefing').forEach((btn) => {
@@ -709,6 +737,23 @@ export function renderFlightList(
   // selected" must never reach a flight the active filter is hiding. `past` is
   // already the filtered set (the server applied past_q), so it needs no
   // further narrowing here.
+  //
+  // Scoping select-all isn't sufficient on its own: a row ticked *before* the
+  // filter was applied stays in `selectedIds` with its checkbox unrendered, so
+  // it can't be unticked while the filter is active and bulk-delete would still
+  // take it. Prune those, but only while a filter is actually active — with no
+  // filter, `past` is merely the loaded page and pruning would silently drop
+  // selections belonging to not-yet-loaded pages.
+  if (filterActive && selectedIds.size > 0) {
+    const visible = new Set([...futureShown, ...recentShown, ...past].map(f => f.id));
+    const hidden = [...selectedIds].filter(id => !visible.has(id));
+    if (hidden.length > 0) {
+      // Re-enters render via the store, but with nothing left to prune, so it
+      // settles after one extra pass rather than looping.
+      selection.onPruneSelection([...visible]);
+    }
+  }
+
   const active = [...futureShown, ...recentShown];
   const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
   const selectablePast = past.filter(f => f.role !== 'subscriber').map(f => f.id);

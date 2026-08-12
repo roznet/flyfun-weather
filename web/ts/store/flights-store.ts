@@ -55,6 +55,7 @@ export interface FlightsState {
   toggleSelected: (id: string) => void;
   setSelected: (ids: string[]) => void;
   clearSelection: () => void;
+  pruneSelection: (visibleIds: string[]) => void;
   bulkDeleteSelected: () => Promise<{ deleted: number; notFound: number }>;
 }
 
@@ -277,6 +278,16 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
 
   clearSelection: () => {
     set({ selectedIds: new Set() });
+  },
+
+  pruneSelection: (visibleIds) => {
+    const current = get().selectedIds;
+    const visible = new Set(visibleIds);
+    const kept = [...current].filter((id) => visible.has(id));
+    // No-op unless something was actually dropped: an unconditional set() would
+    // churn `selectedIds` identity and re-render the list on every pass.
+    if (kept.length === current.size) return;
+    set({ selectedIds: new Set(kept) });
   },
 
   bulkDeleteSelected: async () => {
