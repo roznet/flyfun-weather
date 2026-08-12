@@ -25,6 +25,13 @@ protocol BriefingRepository: Sendable {
     /// Online-only; the caching layer also drops the flight's local pack cache,
     /// since a deleted flight can never be refreshed or re-downloaded.
     func deleteFlight(id: String) async throws
+    /// Permanently delete several of the viewer's own flights in one round trip
+    /// (the flight list's multi-select). Owner-scoped and forgiving: ids the
+    /// viewer doesn't own come back in `notFound` rather than failing the call,
+    /// so callers must surface a partial result. Requests longer than the server
+    /// cap are chunked (`BulkDeleteResponse.maxIdsPerRequest`). Online-only; the
+    /// caching layer evicts the local packs of every *confirmed* deleted id.
+    func bulkDeleteFlights(ids: [String]) async throws -> BulkDeleteResponse
     func aircraft() async throws -> [AircraftResponse]
     func profiles() async throws -> [ProfileResponse]
     /// Account usage summary — the iOS app reads only the durable timing-scan
@@ -148,6 +155,13 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func deleteFlight(id: String) async throws {
         try await client.requestVoid("/api/flights/\(id)")
+    }
+
+    func bulkDeleteFlights(ids: [String]) async throws -> BulkDeleteResponse {
+        try await BulkDeleteResponse.sendChunked(ids: ids) { chunk in
+            let body = try JSONEncoder.weatherBrief.encode(BulkDeleteRequest(ids: chunk))
+            return try await client.request("/api/flights/bulk-delete", method: "POST", body: body)
+        }
     }
 
     func aircraft() async throws -> [AircraftResponse] {

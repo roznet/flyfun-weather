@@ -22,7 +22,7 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 
 **Authentication**: adopts `FlyFunCommon` (login buttons aligned with flyfun-forms). Google OAuth + native Sign in with Apple (`SignInWithAppleButton`, token exchange with `/auth/apple/token` from flyfun-common). JWT in Keychain. Dev login for simulator (`/auth/dev-token`, `#if targetEnvironment(simulator)`). Dev server base URL points at the HTTPS dev instance (`https://localhost.ro-z.me:8443`).
 
-**Flight list**: `NavigationSplitView` — sidebar + detail briefing pane on iPad (collapsible). "ORIGIN → DEST" titles. Pull-to-refresh. Aircraft dropdown (hidden when none). Ellipsis menu replaces logout button.
+**Flight list**: `NavigationSplitView` — sidebar + detail briefing pane on iPad (collapsible). "ORIGIN → DEST" titles. Pull-to-refresh. Aircraft dropdown (hidden when none). Ellipsis menu replaces logout button. Single-flight Delete (swipe / context menu, owner-only, behind a confirmation alert) and **multi-select bulk delete** — the ellipsis menu's "Select & Delete Flights…" opens `FlightSelectionView`, a *separate* `List(selection:)` sheet rather than an edit mode on the sidebar list, so the second selection binding can never disturb the split view's `SidebarSelection`. Owned flights only (a subscriber's row isn't selectable; shared flights are dropped with Unsubscribe), online-only, chunked at the server's 200-id cap, and a partial `not_found` result is surfaced rather than swallowed (#553).
 
 **Briefing viewer** (tabs: Advisories, Cross-Section, Map, Digest, PIREPs):
 - Advisory dashboard — 3-column grid on iPad, model status badges as colored capsules, short names (MF for Météo-France)

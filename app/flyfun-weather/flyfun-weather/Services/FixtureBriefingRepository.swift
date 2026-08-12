@@ -73,13 +73,22 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// Flights created during a journey via `createFlight`, so the new flight
     /// shows up on the next `flights()` reload.
     private var createdFlights: [FlightResponse] = []
+    /// Flights bulk-deleted during a journey, filtered out of subsequent loads so
+    /// the multi-select journey can assert the rows are gone. Bulk delete is
+    /// served for real (not `notProvided`) because the whole point of that journey
+    /// is that the rows disappear after the confirmation.
+    private var deletedFlightIds: Set<String> = []
 
     // MARK: Served
 
-    func flights() async throws -> [FlightResponse] { flightsFixture + createdFlights }
+    func flights() async throws -> [FlightResponse] { allFlights }
+
+    private var allFlights: [FlightResponse] {
+        (flightsFixture + createdFlights).filter { !deletedFlightIds.contains($0.id) }
+    }
 
     func flight(id: String) async throws -> FlightResponse {
-        guard let match = (flightsFixture + createdFlights).first(where: { $0.id == id }) else {
+        guard let match = allFlights.first(where: { $0.id == id }) else {
             throw APIError.notFound
         }
         return match
@@ -102,6 +111,16 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         )
         createdFlights.append(flight)
         return flight
+    }
+    /// Served (not `notProvided`): the multi-select journey's whole assertion is
+    /// that the selected rows are gone after the confirmation, so the fixture has
+    /// to actually forget them. Unknown ids come back in `notFound`, like the
+    /// server's owner-scoped behaviour.
+    func bulkDeleteFlights(ids: [String]) async throws -> BulkDeleteResponse {
+        let known = Set(allFlights.map(\.id))
+        let deleted = ids.filter { known.contains($0) }
+        deletedFlightIds.formUnion(deleted)
+        return BulkDeleteResponse(deleted: deleted, notFound: ids.filter { !known.contains($0) })
     }
     func aircraft() async throws -> [AircraftResponse] { [] }
     func profiles() async throws -> [ProfileResponse] { [] }

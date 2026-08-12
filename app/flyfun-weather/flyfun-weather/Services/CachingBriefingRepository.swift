@@ -88,6 +88,26 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         await cache.removeFlightDirectory(flightId: id)
     }
 
+    /// Same contract as `deleteFlight`, for many ids at once: the server decides
+    /// what actually went, and only then is the local copy dropped. Eviction is
+    /// restricted to the ids the server confirmed in `deleted` — anything it put
+    /// in `notFound` still exists (someone else's flight, or already gone), so
+    /// its packs must not be touched. One `cachedPacks()` read for the whole
+    /// batch; index entries first, then each flight directory, matching the order
+    /// `deleteFlight` and the `pruneStalePacks` sweep use.
+    func bulkDeleteFlights(ids: [String]) async throws -> BulkDeleteResponse {
+        let response = try await online.bulkDeleteFlights(ids: ids)
+        let deleted = Set(response.deleted)
+        guard !deleted.isEmpty else { return response }
+        for entry in await cache.cachedPacks() where deleted.contains(entry.flightId) {
+            await cache.deletePack(flightId: entry.flightId, timestamp: entry.timestamp)
+        }
+        for id in deleted {
+            await cache.removeFlightDirectory(flightId: id)
+        }
+        return response
+    }
+
     func aircraft() async throws -> [AircraftResponse] {
         try await online.aircraft()
     }
