@@ -632,19 +632,15 @@ struct AddFlightView: View {
         }
     }
 
-    /// Date + time + timezone controls for the pinned alternate departure,
-    /// mirroring the primary departure picker.
+    /// Time + timezone controls for the pinned alternate departure.
+    ///
+    /// Deliberately **no** date picker: the server requires the alternate to sit
+    /// on the same day as the primary departure, so every other day the picker
+    /// offered was a 422 the pilot had no way to anticipate. The day is bound to
+    /// the departure's (what the web does by pinning `flight.target_date`) and
+    /// shown read-only below.
     @ViewBuilder
     private var altDepartureControls: some View {
-        DatePicker(
-            "Alt date",
-            selection: Binding(
-                get: { viewModel.altDepartureTime.dateProxy },
-                set: { viewModel.altDepartureTime.dateProxy = $0 }
-            ),
-            displayedComponents: .date
-        )
-
         HStack {
             Text("Alt time")
             Spacer()
@@ -680,6 +676,27 @@ struct AddFlightView: View {
             }
         }
         .pickerStyle(.menu)
+
+        Text("On the departure date \u{2014} \(Self.altDayLabel(viewModel.alignedAltDepartureInstant))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+        if viewModel.altDepartureCollidesWithDeparture {
+            Text("The alternate must differ from the departure time.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("altDepartureCollisionNote")
+        }
+    }
+
+    /// Read-only label for the bound alternate day, shown in UTC because that is
+    /// the day the server compares against.
+    private static func altDayLabel(_ instant: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "d MMM yyyy 'at' HH:mm 'UTC'"
+        return formatter.string(from: instant)
     }
 
     private var altitudeSection: some View {
@@ -700,21 +717,68 @@ struct AddFlightView: View {
             Text("\(viewModel.cruiseAltitudeFt) ft")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            // Ceiling — the web has had `flight_ceiling_ft` since the form
+            // shipped; without it here the altitude sweep silently kept whatever
+            // the profile last set, and an iOS edit couldn't raise it.
+            HStack {
+                Text("FL\(viewModel.flightCeilingFt / 100)")
+                    .monospacedDigit()
+                    .frame(width: 60)
+                Slider(
+                    value: Binding(
+                        get: { Double(viewModel.flightCeilingFt) },
+                        set: { viewModel.flightCeilingFt = Int($0) }
+                    ),
+                    in: 1000...45000,
+                    step: 500
+                )
+                .accessibilityIdentifier("ceilingSlider")
+            }
+            Text("Ceiling \(viewModel.flightCeilingFt) ft")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         } header: {
             Text("Cruise Altitude")
+        } footer: {
+            Text("The ceiling bounds the altitude sweep the advisories grade — set it to the highest level you'd actually use.")
         }
     }
 
     private var durationSection: some View {
         Section {
-            Stepper(
-                String(format: "%.1f hours", viewModel.flightDurationHours),
-                value: $viewModel.flightDurationHours,
-                in: 0.5...12.0,
-                step: 0.5
-            )
+            HStack {
+                Text("Duration")
+                Spacer()
+                Picker("Duration hours", selection: Binding(
+                    get: { viewModel.durationHours },
+                    set: { viewModel.durationHours = $0 }
+                )) {
+                    ForEach(0...FlightDuration.maxHours, id: \.self) { h in
+                        Text("\(h)").tag(h)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("durationHoursPicker")
+                Text("h").foregroundStyle(.secondary)
+                Picker("Duration minutes", selection: Binding(
+                    get: { viewModel.durationMinutes },
+                    set: { viewModel.durationMinutes = $0 }
+                )) {
+                    ForEach(FlightDuration.minuteOptions, id: \.self) { m in
+                        Text(String(format: "%02d", m)).tag(m)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("durationMinutesPicker")
+                Text("m").foregroundStyle(.secondary)
+            }
         } header: {
             Text("Duration")
+        } footer: {
+            Text("Quarter-hour steps, matching the web form — a 1h15 flight stays 1h15.")
         }
     }
 

@@ -11,8 +11,36 @@ final class AddFlightViewModel {
     /// the rest of the VM keeps working with a plain `Date`.
     let departureTime: DepartureTimeModel
     var cruiseAltitudeFt: Int = 5500
+    /// Highest usable level for the altitude advisory sweep — the web's
+    /// `flight_ceiling_ft`. Seeded from the flight when editing, from the
+    /// selected profile when creating.
+    var flightCeilingFt: Int = 13000
     var flightDurationHours: Double = 2.0
     var selectedAircraftId: Int?
+
+    /// Duration as the hour + quarter-hour pair the pickers edit. Both clients
+    /// present the stored decimal hours this way (see `FlightDuration`), so a
+    /// 1h15 flight round-trips instead of being coerced to the nearest half hour.
+    var durationHours: Int {
+        get { FlightDuration.split(flightDurationHours).hours }
+        set { flightDurationHours = FlightDuration.combine(hours: newValue, minutes: durationMinutes) }
+    }
+
+    var durationMinutes: Int {
+        get { FlightDuration.split(flightDurationHours).minutes }
+        set { flightDurationHours = FlightDuration.combine(hours: durationHours, minutes: newValue) }
+    }
+
+    /// The Field-15 text the pilot actually typed, captured *before*
+    /// `applyInterpretedRoute()` normalises the field to the resolved waypoints.
+    ///
+    /// nil until the pilot edits the route — which is exactly the web's rule for
+    /// when `raw_route` may be sent. An untouched route must keep the flight's
+    /// stored annotation *and* its `parser_version`: re-sending the stored value
+    /// would push the server into its "new raw route" branch and re-stamp the
+    /// version to the current euro_aip release, destroying its meaning as a
+    /// re-derive marker.
+    private(set) var editedRawRoute: String?
 
     // MARK: Flexibility (timing scenarios, #357)
 
@@ -122,6 +150,7 @@ final class AddFlightViewModel {
         if let flight {
             waypointsText = flight.waypoints.joined(separator: " ")
             cruiseAltitudeFt = flight.cruiseAltitudeFt
+            flightCeilingFt = flight.flightCeilingFt
             flightDurationHours = flight.flightDurationHours
             selectedAircraftId = flight.aircraftId
             selectedProfileId = flight.profileId
@@ -172,6 +201,7 @@ final class AddFlightViewModel {
         guard let original = editingFlight else { return true }
         if routeDiffers(from: original) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
+        if flightCeilingFt != original.flightCeilingFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         if selectedAircraftId != original.aircraftId { return true }
         if selectedProfileId != original.profileId { return true }
@@ -197,7 +227,7 @@ final class AddFlightViewModel {
         guard let originalAlt = original.altDepartureTime.flatMap({ Date.parseISO8601($0) }) else {
             return true   // no stored alt time yet → setting one is a change
         }
-        return abs(altDepartureTime.instant.timeIntervalSince(originalAlt)) > 1
+        return abs(alignedAltDepartureInstant.timeIntervalSince(originalAlt)) > 1
     }
 
     // MARK: - Structural change (Move / Duplicate, #552)
@@ -267,6 +297,42 @@ final class AddFlightViewModel {
         return calendar.dateComponents([.year, .month, .day], from: date)
     }
 
+    // MARK: - Alternate departure day binding
+
+    /// The pinned alternate re-anchored onto the departure's UTC day, keeping its
+    /// time of day.
+    ///
+    /// The server requires the two to be on the same day and compares them as
+    /// stored — i.e. in UTC (`update_flight`: "Alt departure time must be on the
+    /// same day as the primary departure"). The form used to offer a free "Alt
+    /// date" picker, so any day but the departure's produced a 422 the pilot had
+    /// no way to predict. Binding the day the way the web does (`flight-main.ts`
+    /// pins `flight.target_date`) removes the failure instead of reporting it.
+    var alignedAltDepartureInstant: Date {
+        Self.alignUTCDay(of: altDepartureTime.instant, to: departureDate)
+    }
+
+    /// True when the alternate collapses onto the primary departure once bound to
+    /// its day — the server's other alternate rule ("must differ from the primary
+    /// departure time"). Surfaced inline rather than left to a 422.
+    var altDepartureCollidesWithDeparture: Bool {
+        flexibility == .alternate && alignedAltDepartureInstant == departureDate
+    }
+
+    /// Move `instant` onto `reference`'s UTC calendar day, preserving its UTC
+    /// time of day.
+    static func alignUTCDay(of instant: Date, to reference: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        let day = calendar.dateComponents([.year, .month, .day], from: reference)
+        var components = calendar.dateComponents([.hour, .minute], from: instant)
+        components.year = day.year
+        components.month = day.month
+        components.day = day.day
+        components.second = 0
+        return calendar.date(from: components) ?? instant
+    }
+
     /// Whether the edit changes a forecast-affecting field (route/time/FL/duration).
     /// Aircraft-only edits are excluded — they don't regenerate the briefing, so
     /// they save without the re-briefing confirm (§4.4).
@@ -274,6 +340,9 @@ final class AddFlightViewModel {
         guard let original = editingFlight else { return false }
         if routeDiffers(from: original) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
+        // The ceiling bounds the altitude-advisory sweep, so it re-grades the
+        // briefing exactly as the cruise altitude does.
+        if flightCeilingFt != original.flightCeilingFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         // A profile carries model/method choices, so changing it can change the
         // forecast — treat it like a forecast-affecting field (rebrief confirm).
@@ -340,6 +409,10 @@ final class AddFlightViewModel {
             errorMessage = "Enter at least two waypoints."
             return .failed
         }
+        // Capture the pilot's Field-15 text *before* `applyInterpretedRoute()`
+        // rewrites the field to the resolved waypoints, and only when they
+        // actually edited it — that is what makes it safe to send as `raw_route`.
+        if routeChangedFromOriginal { editedRawRoute = route }
         isInterpreting = true
         defer { isInterpreting = false }
         do {
@@ -574,6 +647,11 @@ final class AddFlightViewModel {
         selectedProfileId = id
         guard let profile = profileOptions.first(where: { $0.id == id }) else { return }
         if let alt = profile.settings.cruiseAltitudeFt { cruiseAltitudeFt = alt }
+        // The ceiling too: the form now always sends `flight_ceiling_ft`, and the
+        // server only fills it from the profile when the request omits it. Without
+        // this, picking a profile would apply its altitude but silently keep the
+        // old ceiling.
+        if let ceiling = profile.settings.flightCeilingFt { flightCeilingFt = ceiling }
     }
 
     func prepareNewAircraftForm() {
@@ -743,7 +821,9 @@ final class AddFlightViewModel {
         let request = CreateFlightRequest(
             waypoints: waypoints,
             departureTime: Self.iso8601(departureDate),
+            rawRoute: editedRawRoute,
             cruiseAltitudeFt: cruiseAltitudeFt,
+            flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
             aircraftId: selectedAircraftId,
             profileId: selectedProfileId,
@@ -786,15 +866,12 @@ final class AddFlightViewModel {
             departureTime: Self.iso8601(departureDate),
             waypoints: waypoints,
             cruiseAltitudeFt: cruiseAltitudeFt,
-            // The form has no ceiling control yet, so carry the flight's own
-            // value: omitting it would also inherit, but sending it keeps the
-            // ID-defining tuple explicit in the request.
-            flightCeilingFt: editingFlight.flightCeilingFt,
+            flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
             // Only when the pilot actually retyped the route: an untouched route
             // must keep the source flight's stored Field-15 annotation and its
             // `parser_version` re-derive marker (mirrors the web `moveBtn`).
-            rawRoute: routeChangedFromOriginal ? waypointsText.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+            rawRoute: editedRawRoute
         )
 
         do {
@@ -826,8 +903,9 @@ final class AddFlightViewModel {
         let request = CreateFlightRequest(
             waypoints: waypoints,
             departureTime: Self.iso8601(departureDate),
+            rawRoute: editedRawRoute,
             cruiseAltitudeFt: cruiseAltitudeFt,
-            flightCeilingFt: editingFlight.flightCeilingFt,
+            flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
             aircraftId: selectedAircraftId,
             profileId: selectedProfileId,
@@ -941,8 +1019,14 @@ final class AddFlightViewModel {
         let request = UpdateFlightRequest(
             aircraftId: aircraftId,
             waypoints: waypoints,
+            // Only what the pilot actually typed. Omitted on an untouched route,
+            // which the server reads as "still valid, leave it alone"; on an
+            // edited route omitting it instead would CLEAR the flight's Field-15
+            // annotation, which is what every iOS route edit used to do.
+            rawRoute: editedRawRoute,
             departureTime: Self.iso8601(departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
+            flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
             profileId: selectedProfileId,
             flexibility: flexibility,
@@ -977,7 +1061,8 @@ final class AddFlightViewModel {
     /// day-scan flight's pinned "★ your alternate" from an unrelated edit.
     private var altDepartureTimePayload: String? {
         if flexibility == .alternate {
-            return Self.iso8601(altDepartureTime.instant)
+            // Bound to the departure's UTC day — see `alignedAltDepartureInstant`.
+            return Self.iso8601(alignedAltDepartureInstant)
         }
         // Only clear when the edit is actually *leaving* `.alternate` mode.
         if editingFlight?.effectiveFlexibility == .alternate { return "" }
