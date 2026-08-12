@@ -70,6 +70,17 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// sites unchanged; absent on older servers / the owner's own view → nil.
     var ownerDisplayName: String? = nil
 
+    /// The original Field-15 route text the pilot typed, when one was captured
+    /// (`raw_route`). NULL for flights created without one — distinct from "the
+    /// input was empty" — and paired server-side with a `parser_version` stamp
+    /// that marks which euro_aip release derived `waypoints` from it. The app
+    /// reads it to decide whether a route edit should replace the annotation:
+    /// sending `raw_route` on an *untouched* route would re-stamp
+    /// `parser_version` to the current release and destroy its value as a
+    /// re-derive marker. `var … = nil` so it decodes AND keeps the synthesized
+    /// memberwise init's existing call sites unchanged.
+    var rawRoute: String? = nil
+
     /// Whether the viewer has already subscribed to this (someone else's) flight.
     /// Flips the shared-flight preview banner button Subscribe ↔ Unsubscribe.
     /// `var … = nil` so it decodes AND keeps memberwise-init call sites unchanged;

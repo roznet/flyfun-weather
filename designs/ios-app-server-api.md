@@ -54,6 +54,24 @@ those are carried over from the source flight. A client whose form can change th
 in the same edit (iOS has one Save button) follows the move with a PATCH on the
 new flight; see `AddFlightViewModel.applyResidualEdits(to:)`.
 
+### Two flight fields that punish a client for guessing
+
+- **`raw_route`** is three-way, on `create`, `move` *and* `PATCH`: present →
+  store and stamp `parser_version` with the current euro_aip release; absent
+  with a changed route → **clear** (the old string would now lie); absent with
+  an unchanged route → leave alone. So a client must send it **only when the
+  pilot actually edited the route input**, and must send what they *typed*, not
+  the resolved waypoints — resending a stored value re-stamps `parser_version`
+  and destroys its meaning as a re-derive marker, while omitting it on an edited
+  route silently drops the annotation. iOS captures it in
+  `AddFlightViewModel.editedRawRoute`, before `applyInterpretedRoute()`
+  normalises the field.
+- **`alt_departure_time`** must be on the same day as the primary departure and
+  must differ from it (`update_flight`), compared as stored — i.e. in **UTC**. A
+  free alternate-date control therefore offers days the server rejects; both
+  clients bind the day to the departure's instead (web pins
+  `flight.target_date`, iOS uses `AddFlightViewModel.alignedAltDepartureInstant`).
+
 ### Queueing a refresh without watching it
 
 `POST /api/flights/{id}/packs/refresh?source=user` returns **202** and runs the

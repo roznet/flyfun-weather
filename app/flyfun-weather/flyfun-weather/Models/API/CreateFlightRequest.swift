@@ -5,6 +5,10 @@ struct CreateFlightRequest: Encodable {
     let waypoints: [String]
     let departureTime: String
     var routeName: String = ""
+    /// Original Field-15 text the pilot typed, stored verbatim alongside
+    /// `waypoints` so a future parser improvement can re-derive the route.
+    /// Send only what the pilot actually typed — see `FlightResponse.rawRoute`.
+    var rawRoute: String? = nil
     var cruiseAltitudeFt: Int?
     var flightCeilingFt: Int?
     var flightDurationHours: Double?
@@ -26,6 +30,13 @@ struct CreateFlightRequest: Encodable {
 struct UpdateFlightRequest: Encodable {
     var aircraftId: Int? = nil
     var waypoints: [String]? = nil
+    /// Field-15 text, sent ONLY when the pilot actually edited the route input.
+    /// The server's three-way rule: present → store and re-stamp
+    /// `parser_version`; absent with a changed route → clear (the old string
+    /// would now lie); absent with an unchanged route → leave alone. Sending an
+    /// untouched route's stored value would take the first branch and falsely
+    /// claim the current parser derived these waypoints.
+    var rawRoute: String? = nil
     var departureTime: String? = nil
     var cruiseAltitudeFt: Int? = nil
     var flightCeilingFt: Int? = nil

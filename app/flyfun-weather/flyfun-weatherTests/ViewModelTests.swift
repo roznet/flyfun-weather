@@ -288,6 +288,110 @@ import MapKit
         #expect(repo.triggeredRefreshIds == [flight.id])
     }
 
+    // MARK: Form parity with the web (#552 phase 4)
+
+    /// Quarter-hour granularity, matching `web/ts/utils/duration.ts`: a 1h15
+    /// flight must round-trip, and a still-air estimate rounds **up** so we never
+    /// advertise a window shorter than the computed time.
+    @Test func durationSplitsAndCombinesOnQuarterHours() {
+        #expect(FlightDuration.split(1.25) == FlightDuration.Parts(hours: 1, minutes: 15))
+        #expect(FlightDuration.split(0.75) == FlightDuration.Parts(hours: 0, minutes: 45))
+        // 1h02 rounds up to 1h15, never down to 1h00.
+        #expect(FlightDuration.split(62.0 / 60) == FlightDuration.Parts(hours: 1, minutes: 15))
+        // Clamped to the 12h45 picker ceiling; non-positive input is 0h00.
+        #expect(FlightDuration.split(99) == FlightDuration.Parts(hours: 12, minutes: 45))
+        #expect(FlightDuration.split(-1) == FlightDuration.Parts(hours: 0, minutes: 0))
+        #expect(FlightDuration.combine(hours: 1, minutes: 45) == 1.75)
+        #expect(FlightDuration.label(1.25) == "1h15")
+        #expect(FlightDuration.label(2.0) == "2h")
+    }
+
+    @Test func durationPickerBindingsPreserveTheOtherComponent() {
+        let vm = makeVM(flight: makeFlight(flightDurationHours: 2.0))
+        vm.durationMinutes = 15
+        #expect(vm.flightDurationHours == 2.25)
+        vm.durationHours = 3
+        #expect(vm.flightDurationHours == 3.25)
+        #expect(vm.hasChanges)
+    }
+
+    @Test func ceilingIsEditableAndCountsAsAForecastAffectingChange() async throws {
+        let flight = makeFlight()                     // flightCeilingFt: 13000
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        #expect(vm.flightCeilingFt == 13000)
+        vm.flightCeilingFt = 16000
+        #expect(vm.hasChanges)
+        #expect(vm.hasForecastAffectingChange)
+
+        _ = await vm.saveEditedFlight(regenerate: false)
+        #expect(repo.lastUpdateRequest?.flightCeilingFt == 16000)
+    }
+
+    /// An untouched route must not carry `raw_route`: the server reads its
+    /// presence as "here is a fresh Field-15 string" and re-stamps
+    /// `parser_version` to the current euro_aip release, destroying the marker.
+    @Test func untouchedRouteSendsNoRawRoute() async throws {
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"])
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        repo.interpretRouteResult = .success(makeInterpretResponse(interpreted: ["LFMD", "LFML"]))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.cruiseAltitudeFt = 9000                    // unrelated edit
+
+        #expect(await vm.interpretRouteForSubmit() == .ready)
+        _ = await vm.saveEditedFlight(regenerate: false)
+        #expect(repo.lastUpdateRequest?.rawRoute == nil)
+    }
+
+    /// An edited route sends what the pilot *typed*, captured before the
+    /// interpretation rewrites the field to the resolved waypoints. Omitting it
+    /// on a changed route makes the server clear the annotation instead — which
+    /// is what every iOS route edit used to do.
+    @Test func editedRouteSendsTheTypedFieldFifteenText() async throws {
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"])
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        repo.interpretRouteResult = .success(makeInterpretResponse(interpreted: ["LFMD", "LFAT", "LFML"]))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.waypointsText = "LFMD DCT LFAT DCT LFML"
+
+        #expect(await vm.interpretRouteForSubmit() == .ready)
+        // The field is now the resolved route…
+        #expect(vm.waypointsText == "LFMD LFAT LFML")
+        // …but the captured raw route is still what the pilot typed.
+        #expect(vm.editedRawRoute == "LFMD DCT LFAT DCT LFML")
+
+        _ = await vm.saveEditedFlight(regenerate: false)
+        #expect(repo.lastUpdateRequest?.rawRoute == "LFMD DCT LFAT DCT LFML")
+    }
+
+    /// The alternate departure is bound to the primary's UTC day — the picker
+    /// used to offer days the server rejects outright.
+    @Test func alternateDepartureIsBoundToTheDepartureDay() {
+        let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z",
+                                flexibility: .alternate,
+                                altDepartureTime: "2026-06-24T15:00:00Z")
+        let vm = makeVM(flight: flight)
+        // Move the departure two days out; the alternate follows onto that day,
+        // keeping its 15:00 UTC time.
+        vm.departureDate = vm.departureDate.addingTimeInterval(48 * 3600)
+        let aligned = vm.alignedAltDepartureInstant
+        #expect(AddFlightViewModel.utcDay(of: aligned)
+                == AddFlightViewModel.utcDay(of: vm.departureDate))
+        #expect(aligned == Date.parseISO8601("2026-06-26T15:00:00Z"))
+        #expect(vm.altDepartureCollidesWithDeparture == false)
+    }
+
+    @Test func alternateEqualToDepartureIsFlaggedLocally() {
+        let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z",
+                                flexibility: .alternate,
+                                altDepartureTime: "2026-06-24T12:00:00Z")
+        let vm = makeVM(flight: flight)
+        #expect(vm.altDepartureCollidesWithDeparture)
+    }
+
     @Test func canSaveAircraftReflectsIcaoTypeRegex() {
         let vm = makeVM()
         vm.newAircraftIcaoType = "C172"
