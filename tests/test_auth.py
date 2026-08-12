@@ -99,6 +99,15 @@ def _make_client(auth_db, tmp_path, monkeypatch, user_id: str | None = None):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET", TEST_SECRET)
+    # flyfun_common.auth.config registers each OAuth provider only when its
+    # client_id env var is set, so without these `/auth/login/google` is never
+    # mounted and returns 404. They arrived from the developer's .env until
+    # now, which meant the login-redirect test passed on a machine with real
+    # Google credentials and 404'd anywhere without them — CI being the first
+    # place that showed. Dummy values are enough: registration is all that is
+    # gated, and discovery is stubbed above so nothing is sent anywhere.
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
     _stub_oauth_discovery(monkeypatch)
 
     app = create_app()
