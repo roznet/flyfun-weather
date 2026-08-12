@@ -1392,6 +1392,160 @@ class TestRefreshEndpoint:
             client.app.state.db_path = ""
 
 
+class TestRefreshParamsChangeGate:
+    """The refresh gate must tell "no new model run" apart from "the flight
+    changed" (#552).
+
+    ``decide_refresh`` only knows about model-run freshness, so right after a
+    departure-time or duration edit — when no new run exists — it answered
+    ``none`` and both refresh endpoints handed the OLD pack back as ``complete``.
+    The PATCH immediately before had returned ``refetch_needed``, so the client
+    reported "Briefing regenerated" over a briefing computed for the previous
+    departure time, and ``force=true`` is admin-gated so nothing could work
+    around it.
+    """
+
+    @staticmethod
+    def _fresh_status():
+        """Every selected model current and covering the horizon — i.e. exactly
+        the state that makes the real ``decide_refresh`` answer ``none``."""
+        from weatherbrief.api.packs import DataStatus, ModelStatus
+
+        now = int(_NOW.timestamp())
+        next_run = (_NOW + timedelta(hours=6)).isoformat()
+        return DataStatus(
+            fresh=True,
+            next_expected_update=next_run,
+            models={
+                name: ModelStatus(
+                    source=f"{name}:openmeteo", pack_init=now, latest_available=now,
+                    next_expected=next_run, state="current", covers_horizon=True,
+                )
+                for name in ("gfs", "ecmwf", "icon")
+            },
+        )
+
+    @staticmethod
+    def _pack_for(flight, *, stamped=True):
+        from weatherbrief.models import BriefingPackMeta
+        from weatherbrief.storage.flights import compute_flight_params_hash
+
+        return BriefingPackMeta(
+            flight_id=flight.id,
+            fetch_timestamp=datetime.now(timezone.utc),
+            days_out=3,
+            artifact_path="/tmp/params-gate-pack",
+            flight_params_hash=compute_flight_params_hash(flight) if stamped else None,
+        )
+
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.airports._load_airport_model")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_departure_edit_forces_full_refresh(
+        self, mock_list, mock_status, mock_load, mock_execute, client, sample_flight,
+    ):
+        """PATCH says refetch_needed, so the refresh that follows must actually run.
+
+        ``execute_briefing`` is stubbed to raise immediately (as in
+        ``test_refresh_flight``) so the queued worker exits through its
+        except-branch instead of running the real pipeline against the
+        torn-down test engine.
+        """
+        import time
+
+        from airport_mocks import TEST_AIRPORTS, mock_model
+        from weatherbrief.api.packs import refresh_registry
+
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        mock_execute.side_effect = RuntimeError("test stub — pipeline skipped")
+        mock_list.return_value = [self._pack_for(sample_flight)]
+        mock_status.return_value = self._fresh_status()
+        client.app.state.db_path = "/fake/db"
+        try:
+            new_dt = (_FUTURE_DEPARTURE_DT + timedelta(hours=2)).isoformat()
+            patched = client.patch(
+                f"/api/flights/{sample_flight.id}", json={"departure_time": new_dt},
+            )
+            assert patched.status_code == 200
+            assert patched.json()["invalidation"] == "refetch_needed"
+
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 202
+            assert resp.json()["status"] == "queued"
+        finally:
+            client.app.state.db_path = ""
+            for _ in range(20):
+                if not refresh_registry._entries.get(sample_flight.id):
+                    break
+                time.sleep(0.1)
+            else:
+                refresh_registry.unregister(sample_flight.id)
+
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_unedited_flight_still_gated(
+        self, mock_list, mock_status, client, sample_flight,
+    ):
+        """The override must not defeat the freshness gate for an untouched
+        flight — that is the whole point of the tiered gate."""
+        mock_list.return_value = [self._pack_for(sample_flight)]
+        mock_status.return_value = self._fresh_status()
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "already_fresh"
+            assert resp.json()["mode"] == "none"
+        finally:
+            client.app.state.db_path = ""
+
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_legacy_pack_without_stamp_is_left_alone(
+        self, mock_list, mock_status, client, sample_flight,
+    ):
+        """A pack written before migration 088 has no hash. Treating NULL as
+        "changed" would force one full refresh for every legacy pack the first
+        time its owner pressed the button, so it must fall through to the
+        model-freshness decision."""
+        mock_list.return_value = [self._pack_for(sample_flight, stamped=False)]
+        mock_status.return_value = self._fresh_status()
+        client.app.state.db_path = "/fake/db"
+        try:
+            new_dt = (_FUTURE_DEPARTURE_DT + timedelta(hours=2)).isoformat()
+            client.patch(f"/api/flights/{sample_flight.id}",
+                         json={"departure_time": new_dt})
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "already_fresh"
+        finally:
+            client.app.state.db_path = ""
+
+    def test_params_hash_covers_the_forecast_inputs(self, sample_flight):
+        """Every field the pipeline's forecast depends on moves the hash; the
+        ones that don't affect what is fetched leave it alone."""
+        from weatherbrief.storage.flights import compute_flight_params_hash
+
+        base = compute_flight_params_hash(sample_flight)
+        for field, value in [
+            ("waypoints", ["EGTK", "LFAT", "LSGS"]),   # mid-route insert: same ID!
+            ("departure_time", sample_flight.departure_time + timedelta(hours=2)),
+            ("cruise_altitude_ft", 9000),
+            ("flight_ceiling_ft", 16000),
+            ("flight_duration_hours", 5.0),
+        ]:
+            changed = sample_flight.model_copy(update={field: value})
+            assert compute_flight_params_hash(changed) != base, field
+
+        # Profile/aircraft/Flexibility don't change the weather that is fetched.
+        for field, value in [
+            ("profile_id", 42), ("aircraft_id", 7), ("flexibility", "next_day"),
+        ]:
+            same = sample_flight.model_copy(update={field: value})
+            assert compute_flight_params_hash(same) == base, field
+
+
 class TestRefreshStreamEncoder:
     """Guard the JSON-encoder path used by ``/refresh/stream`` SSE events.
 

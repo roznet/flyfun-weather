@@ -176,6 +176,12 @@ class BriefingPackMeta(BaseModel):
     metoffice_charts_default_id: Optional[str] = None  # "ana" | "012" .. "120"
     metoffice_charts_in_coverage: bool = False
     metoffice_charts_within_horizon: bool = False
+    # Hash of the flight parameters (route, departure time, altitude, ceiling,
+    # duration) this pack was computed for — see
+    # ``storage.flights.compute_flight_params_hash``. Lets the refresh gate tell
+    # "no new model run" apart from "the flight itself changed" (#552). None for
+    # packs written before the column existed.
+    flight_params_hash: Optional[str] = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
