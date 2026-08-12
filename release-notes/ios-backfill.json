@@ -1,0 +1,37 @@
+[
+  {
+    "date": "2026-05-08",
+    "title": "iOS 1.0 — The iPhone & iPad app launches",
+    "category": "app_release",
+    "highlight": false,
+    "body": "Initial release."
+  },
+  {
+    "date": "2026-07-08",
+    "title": "iOS 1.1 — Cross-section layers, alternates and timing scenarios",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- New cross-section & map layers — GRAMET/Windy/ForeFlight presets, DWD & Met Office synoptic front charts, current-conditions overlay.\n- tabbed briefing (Advisory/Discussion/Cross-Section/Map), cross-section color themes, offline packs, cache-first cold start\n- Weather alternates — regulatory alternate-requirement assessment (FAA + EASA) with weather-based airport suggestions.\n- Timing Scenarios — scan adjacent days to find a better-weather departure window.\n- Options to improve — actionable advisory mitigations (altitude levers, VFR corridors) that never change the grade.\n- Sun & night awareness — sunrise/sunset markers, into-the-sun sectors, night shading.\n- Convective insight — model-vs-diagnostic cross-check and VFR-avoidability character."
+  },
+  {
+    "date": "2026-07-12",
+    "title": "iOS 1.2 — Briefing notifications, Siri and seamless updates",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Briefing update notifications — Opt in to be notified when a flight's briefing changes, with per-flight control (Default / Always / Mute) and an account setting for how often.\n- Siri, Shortcuts & Spotlight — Open a flight's briefing by voice or from search.\n- Seamless forecast updates — The flight list and any open briefing quietly sync to the latest forecast on open, on pull-to-refresh, and when you return to the app — with a live \"Updating…\" indicator.\n- Smoother flight creation — Routes typed with airway/SID/Field-15 syntax are interpreted before saving, future flights beyond the forecast horizon open cleanly, and accidental double-submits are prevented.\n- Clearer weather display — Wind directions and headings are zero-padded to three digits, plus cloud-layer fixes for more accurate cross-sections."
+  },
+  {
+    "date": "2026-07-18",
+    "title": "iOS 1.3 — Flight sharing, the European forecast map and debriefs",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Share a flight: send any flight to another pilot with a link. They can subscribe and follow your briefing read-only.\n- European forecast map: a new pan-European overview map with tap-to-open airport cards, plus an airport forecast overlay right on the briefing route map.\n- Rate your briefings: thumbs up / thumbs down feedback on the weather digest, and a new post-flight debrief to tell us how the forecast held up.\n- Smarter timing: flights now show how much timing flexibility the latest forecast data gives you, and the flight list refreshes automatically when you return to it.\n- Clearer advisories: advisories now explain why a region fired, not just how severe it is. Convective grading is sharper, and missing data is flagged distinctly instead of appearing green.\n- iPad polish: native tab bar and smoother scrolling on iPad."
+  },
+  {
+    "date": "2026-08-08",
+    "title": "iOS 1.4 — Route SIGMETs, observations and approach feasibility",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Route SIGMETs — area hazards along your route now show in the briefing, with tappable detail\n- Current Observations — a table of METARs from the nearest airports, capped to the 10 closest on iPhone\n- New approach-feasibility advisory — flags when the published approach isn't aligned with the runway the wind favours, and you can now declare your own unpublished cloud-break procedures\n- Sharper thunderstorm detection in Europe (ICON-D2 explicit convection) and high-resolution HRRR forecasts on US routes\n- Flight list — swipe to delete, a red dot marks briefings you haven't opened, plus sharing polish\n- iPad — the forecast map now has a sidebar toggle so it can't strand you\n- Cross-section legend redesigned for colour-blind readability; cleaner icing advisories and airport card layout"
+  }
+]

@@ -41,7 +41,7 @@ from dotenv import load_dotenv
 from flyfun_common.db import SessionLocal, get_engine
 from weatherbrief.db.models import SystemMessageRow
 
-VALID_CATEGORIES = ("feature", "change", "fix")
+VALID_CATEGORIES = ("feature", "change", "fix", "app_release")
 
 
 def _read_body(args: argparse.Namespace) -> str:

@@ -7,7 +7,7 @@ export interface SystemMessage {
   date: string;
   title: string;
   body: string;
-  category: 'feature' | 'change' | 'fix';
+  category: 'feature' | 'change' | 'fix' | 'app_release';
   highlight: boolean;
 }
 

@@ -4,6 +4,16 @@ import { logout, type CurrentUser } from './adapters/auth-adapter';
 import { matchedWaypointIndices } from './helpers/flight-search';
 import { t, getAcceptLanguage, getLocale } from './i18n/i18n';
 
+/**
+ * App Store listing for the iPhone/iPad companion app.
+ *
+ * No `/<country>/` prefix, so the App Store redirects each visitor to their own
+ * storefront rather than pinning everyone to the US one. Single source for the
+ * rendered "install" call to action; the static help-page section links to the
+ * same URL inline.
+ */
+export const APP_STORE_URL = 'https://apps.apple.com/app/id6760951972';
+
 // --- HTML escaping ---
 
 export function escapeHtml(text: string): string {

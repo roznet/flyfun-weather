@@ -805,6 +805,8 @@
   "messages.category.feature": "Nuevo",
   "messages.category.change": "Cambio",
   "messages.category.fix": "Corrección",
+  "messages.category.app_release": "App de iOS",
+  "messages.installApp": "Instalar la app para iPhone y iPad",
   "legend.sld.light": "Light",
   "legend.sld.lightDesc": "Marginal SLD conditions — monitor",
   "legend.sld.moderate": "Moderate",

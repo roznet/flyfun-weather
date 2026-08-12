@@ -905,6 +905,8 @@
   "messages.category.feature": "New",
   "messages.category.change": "Change",
   "messages.category.fix": "Fix",
+  "messages.category.app_release": "iOS app",
+  "messages.installApp": "Install the iPhone & iPad app",
   "debrief.openCta": "Debrief →",
   "debrief.recentHeader": "Recent — you can debrief",
   "debrief.editCta": "Edit debrief",

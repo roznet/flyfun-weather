@@ -3,7 +3,7 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchMessages, markMessagesSeen, type SystemMessage } from './adapters/messages-adapter';
 import { submitFeedback } from './adapters/api-adapter';
-import { renderUserInfo, checkMessagesBadge, escapeHtml } from './utils';
+import { renderUserInfo, checkMessagesBadge, escapeHtml, APP_STORE_URL } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { mountDataSourcesTable } from './data-sources-table';
@@ -325,6 +325,19 @@ function renderMessageCard(msg: SystemMessage): string {
   const formattedDate = formatMessageDate(msg.date);
   const bodyHtml = renderSimpleMarkdown(msg.body);
 
+  // An app release is the one entry a reader may not be able to act on yet, so
+  // it carries an install link. Emitted from the category rather than written
+  // into each entry's body: one URL, and no entry can forget it. The iOS app
+  // renders the same stream without this — a reader already inside the app has
+  // nothing to install.
+  const installCta = msg.category === 'app_release'
+    ? `<p class="message-install-cta">
+         <a href="${APP_STORE_URL}" target="_blank" rel="noopener" class="btn btn-primary">
+           ${escapeHtml(t('messages.installApp'))}
+         </a>
+       </p>`
+    : '';
+
   return `
     <div class="message-card collapsed">
       <div class="message-card-header" role="button" tabindex="0">
@@ -333,7 +346,7 @@ function renderMessageCard(msg: SystemMessage): string {
         <span class="message-card-title">${escapeHtml(msg.title)}</span>
         <span class="message-card-date">${escapeHtml(formattedDate)}</span>
       </div>
-      <div class="message-card-body">${bodyHtml}</div>
+      <div class="message-card-body">${bodyHtml}${installCta}</div>
     </div>`;
 }
 

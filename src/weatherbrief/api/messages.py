@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/messages", tags=["messages"])
 admin_router = APIRouter(prefix="/admin/messages", tags=["admin"])
 
-MessageCategory = Literal["feature", "change", "fix"]
+# "app_release" marks one entry per shipped iOS/iPadOS app version, whose body is
+# the App Store "What's New" text. It is a kind of entry, not a platform filter:
+# the stream stays unified because most changes here (a new advisory, a threshold
+# change) reach app users the moment they deploy, with no app release involved.
+MessageCategory = Literal["feature", "change", "fix", "app_release"]
 
 
 # --- Pydantic models ---

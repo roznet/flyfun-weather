@@ -6975,9 +6975,27 @@ html {
   color: var(--green);
 }
 
+/* App-release chip. Opts out of the uppercase transform the other chips use —
+   uppercasing would render the label as "IOS APP" and lose the product casing. */
+.message-category-app_release {
+  background: #ede9fe;
+  color: #7c3aed;
+  text-transform: none;
+}
+
 [data-theme="dark"] .message-category-feature {
   background: rgba(37, 99, 235, 0.2);
   color: #93bbfd;
+}
+
+[data-theme="dark"] .message-category-app_release {
+  background: rgba(124, 58, 237, 0.22);
+  color: #c4b5fd;
+}
+
+/* "Install the app" call to action, rendered only under an app_release entry. */
+.message-install-cta {
+  margin-top: 0.75rem;
 }
 
 .message-card-body {
