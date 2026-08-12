@@ -71,6 +71,9 @@ final class AppState {
     /// (i)-popup help content (metrics + advisories). Seeded from disk cache or
     /// the bundled baseline at init; refreshed opportunistically when online.
     let helpCatalog = HelpCatalogStore()
+    /// Release stream ("What's New") plus its unseen badge count. Seeded from
+    /// disk cache at init so the view isn't the one blank screen when offline.
+    let whatsNew = WhatsNewStore()
 
     /// Digests the user has rated (👍/👎) this session, keyed
     /// "flightId|packTimestamp" (per pack version). Session-only, matching the
@@ -641,6 +644,27 @@ final class AppState {
         await helpCatalog.refresh(using: apiClient)
     }
 
+    /// Authoritative release-stream read — used when the What's New view opens.
+    func refreshWhatsNew() async {
+        guard let apiClient else { return }
+        await whatsNew.refresh(using: apiClient)
+    }
+
+    /// Background release-stream sync for launch / sign-in / foreground: always
+    /// re-reads the cheap unseen count, downloads the stream only when the cache
+    /// can't be current. Offline it silently keeps what's cached.
+    func syncWhatsNew() async {
+        guard let apiClient else { return }
+        await whatsNew.syncIfNeeded(using: apiClient)
+    }
+
+    /// Mark the release stream seen. The pointer (`messages_last_seen_id`) is one
+    /// value per user, so this clears the web app's nav dot too.
+    func markWhatsNewSeen() async {
+        guard let apiClient else { return }
+        await whatsNew.markSeen(using: apiClient)
+    }
+
     // MARK: - Private
 
     /// Typed accessor for cache operations (download/delete).
@@ -693,6 +717,7 @@ final class AppState {
         pirepOfflineStore = PirepOfflineStore(fileURL: Self.scopedPirepURL(scope: scope))
         Task { await userPreferences.refresh(using: client) }
         Task { await helpCatalog.refresh(using: client) }
+        Task { await whatsNew.syncIfNeeded(using: client) }
         // Open any cached airports DB immediately (offline-safe), then refresh it
         // from the server if the AIRAC copy changed (ETag → usually a 304 no-op).
         AirportDatabase.shared.loadCached()

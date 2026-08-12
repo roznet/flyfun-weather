@@ -24,6 +24,9 @@ struct FlightListView: View {
     @State private var showHelp = false
     /// Native "Send Feedback" sheet (the web help page's modal, in-app).
     @State private var showFeedback = false
+    /// Release stream ("What's New") — native, not the web page, so it reads
+    /// offline from the cached stream (#550).
+    @State private var showWhatsNew = false
     @State private var showSignOutWarning = false
     @State private var editingFlight: FlightResponse?
     /// A flight the user chose to file a PIREP for from the list (context menu),
@@ -209,6 +212,21 @@ struct FlightListView: View {
                             }
 
                             Button {
+                                showWhatsNew = true
+                            } label: {
+                                // A menu row can't carry a dot, so the unseen
+                                // count rides in the title (the ellipsis itself
+                                // shows the dot — see the Menu label below).
+                                Label(
+                                    appState.whatsNew.unseenCount > 0
+                                        ? "What's New (\(appState.whatsNew.unseenCount))"
+                                        : "What's New",
+                                    systemImage: "sparkles"
+                                )
+                            }
+                            .accessibilityIdentifier("whatsNewButton")
+
+                            Button {
                                 showFeedback = true
                             } label: {
                                 Label("Send Feedback", systemImage: "exclamationmark.bubble")
@@ -229,7 +247,19 @@ struct FlightListView: View {
                                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                             }
                         } label: {
+                            // Red dot for unseen highlighted release entries —
+                            // same affordance as the flight card's unseen-briefing
+                            // dot, and the web nav's Help badge.
                             Label("More", systemImage: "ellipsis.circle")
+                                .overlay(alignment: .topTrailing) {
+                                    if appState.whatsNew.unseenCount > 0 {
+                                        Circle()
+                                            .fill(.red)
+                                            .frame(width: 8, height: 8)
+                                            .offset(x: 3, y: -2)
+                                            .accessibilityLabel("Unread updates")
+                                    }
+                                }
                         }
                     }
                 }
@@ -253,6 +283,9 @@ struct FlightListView: View {
             }
             .sheet(isPresented: $showFeedback) {
                 FeedbackFormView()
+            }
+            .sheet(isPresented: $showWhatsNew) {
+                WhatsNewView()
             }
             .sheet(item: $editingFlight) { flight in
                 if let repo = appState.repository {

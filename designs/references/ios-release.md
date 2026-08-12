@@ -2,7 +2,8 @@
 
 Background for the `archive` skill (`.claude/skills/archive/SKILL.md`). The skill holds the
 release procedure; this doc holds the *why* — the reasoning behind each pre-flight gate, the
-tagging convention, and how reviewer sign-in works.
+tagging convention, how reviewer sign-in works, and why the release-stream entry is drafted at
+archive but published only at App Store approval.
 
 Read the section the skill points you at. The skill is complete on its own for a normal
 archive.
@@ -111,3 +112,37 @@ re-add them to `.env`; they are absent from the repo by design.
 > Note that the dev `.env` `JWT_SECRET` is the same value as production's. That's what makes
 > local minting work, and it also means a compromised dev checkout can forge production
 > tokens. Worth knowing when deciding where that file lives.
+
+## §A6 — The release-stream entry: drafted at archive, published at approval
+
+Every shipped app version gets one `app_release` entry in the site's What's New stream
+(`system_messages`), whose body is the App Store "What's New" text. Before #550 the archive
+skill wrote App Store notes and stopped there, so app news lived only in App Store Connect and
+five versions shipped without appearing in the stream at all.
+
+**Why the two steps are split.** Archiving happens *before* upload, and Apple review sits
+between that and users being able to install. An entry announcing a version nobody can download
+is wrong — but the commit range that the notes are derived from is freshest at archive time, and
+reconstructing it days later is worse. So: draft at archive (Step 8), publish at approval
+(Step 11). Reset the `date` when publishing; the stream is ordered by that field rather than by
+insert order, so a stale date would file the entry in the past.
+
+**Title convention:** `iOS {version} — <short headline>`, e.g. `iOS 1.4 — Route SIGMETs,
+observations and approach feasibility`. The version is in the title rather than in a separate
+field because the stream is unified: an entry sits among server-side features and changes, and
+the reader needs to see at a glance that this one is an app version.
+
+**Body is the App Store bullets verbatim.** Two hand-maintained copies of the same notes drift;
+copying them keeps the App Store listing and the stream identical by construction.
+
+**Highlighting is a judgement, not a rule.** `highlight` is what lights the unseen dot (the
+`/api/messages/status` count includes highlighted rows only). Highlight a release carrying real
+user-facing news; leave a bug-fix-only build unhighlighted. Historical backfill
+(`release-notes/ios-backfill.json`, 1.0–1.4) is all unhighlighted — importing it must not hand
+existing users a wall of dots for work they've already been using.
+
+**The stream is not platform-filtered.** Most entries (a new advisory, a threshold change) reach
+app users the moment the server deploys, with no app release involved, so splitting the stream
+by platform would be wrong. `app_release` is a *kind* of entry, not a filter. What is
+per-client is the rendering: the web adds an install call to action under `app_release` entries
+(from a single `APP_STORE_URL`), and the iOS app deliberately omits it.

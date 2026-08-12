@@ -61,6 +61,10 @@ struct WeatherBriefApp: App {
                         await appState.reconcilePushAuthorization()
                     }
                     Task { await appState.refreshHelpCatalog() }
+                    // Release stream: always re-read the unseen dot (it must be
+                    // current the moment the menu opens), download the stream
+                    // itself only when the cache can't be current.
+                    Task { await appState.syncWhatsNew() }
                     Task { await appState.pruneStaleCache() }
                     // Badge is server-authoritative: reconcile on every activation
                     // (the correctness backstop for coalesced/missed silent pushes).

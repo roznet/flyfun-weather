@@ -17,6 +17,9 @@ import
     highlight}). Dedupes on (date, title) so re-runs are idempotent.
     Use --force-no-highlight for a historical backfill so existing users
     don't get a wall of notification dots for past work.
+    Pass ``-`` to read the JSON from stdin: ``release-notes/`` is not in the
+    container image, so publishing a drafted entry on the server means piping
+    it in over SSH rather than naming a path the container can't see.
 
 Examples
 --------
@@ -25,6 +28,8 @@ Examples
         --category feature --highlight --body-file - < notes.md
     python -m weatherbrief.release import release-notes/backfill-grouped.json \
         --force-no-highlight
+    ssh user@host "docker exec -i weatherbrief python -m weatherbrief.release \
+        import -" < release-notes/ios-1.5.json
 """
 
 from __future__ import annotations
@@ -105,7 +110,10 @@ def _cmd_add(args: argparse.Namespace) -> None:
 
 
 def _cmd_import(args: argparse.Namespace) -> None:
-    raw = Path(args.file).read_text(encoding="utf-8")
+    # "-" reads stdin so a drafted entry can be piped straight into the
+    # container, which has no copy of `release-notes/`. Same reasoning as
+    # `add --body-file -`.
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
     data: Any = json.loads(raw)
     if not isinstance(data, list):
         raise SystemExit("error: import file must be a JSON list of entries")
@@ -175,7 +183,7 @@ def main(argv: list[str] | None = None) -> None:
     p_add.set_defaults(func=_cmd_add)
 
     p_imp = sub.add_parser("import", help="Bulk-import entries from a JSON file")
-    p_imp.add_argument("file", help="Path to JSON file (list of entries)")
+    p_imp.add_argument("file", help="Path to JSON file (list of entries); - for stdin")
     p_imp.add_argument("--force-no-highlight", action="store_true",
                        help="Force highlight=false on all imported entries "
                             "(use for historical backfill)")

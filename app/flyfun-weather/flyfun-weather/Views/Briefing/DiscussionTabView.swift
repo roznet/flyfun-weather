@@ -54,7 +54,7 @@ struct DiscussionTabView: View {
                         Text(section.title)
                             .font(.headline)
                             .foregroundStyle(Theme.text)
-                        DigestMarkdownText(markdown: section.text)
+                        MarkdownLiteText(markdown: section.text)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Theme.cardPadding)
