@@ -31,6 +31,16 @@ final class AddFlightViewModel {
     /// The view observes this to present the explainer sheet, then clears it.
     var showFlexibilityExplainer = false
 
+    /// The fire-and-forget refresh queued by `queueRefresh`, retained ONLY so
+    /// tests can await it. Nothing in the app waits on it — that is the whole
+    /// point: the editor dismisses while the server keeps working.
+    private(set) var pendingRefreshTask: Task<Void, Never>?
+
+    /// How many briefing packs the edited flight already has — the "discards N
+    /// briefing(s)" count in the structural note and the Move confirm. Loaded
+    /// when the editor opens; stays 0 (the no-packs copy) if it can't be read.
+    private(set) var existingPackCount = 0
+
     /// Session-scoped ack: once the explainer has fired (or we've learned the
     /// pilot already uses the feature) this app run, subsequent mode toggles and
     /// re-opened editors don't re-fire it. The durable `timeScanUsed` flag still
@@ -190,6 +200,73 @@ final class AddFlightViewModel {
         return abs(altDepartureTime.instant.timeIntervalSince(originalAlt)) > 1
     }
 
+    // MARK: - Structural change (Move / Duplicate, #552)
+
+    /// Whether the edited departure falls on a **different UTC calendar day**
+    /// than the flight's.
+    ///
+    /// UTC, deliberately: the flight's server-side `target_date` (and therefore
+    /// its ID) is derived from the UTC instant, while `DepartureTimeModel`
+    /// edits the wall-clock of the *selected* timezone. A pilot on
+    /// `Europe/Paris` picking 00:30 local is 22:30 UTC the previous day — a date
+    /// change the picker's own calendar day would report as "same day", so PATCH
+    /// would 422 and the pilot would be told nothing. Comparing UTC days also
+    /// catches the case the web can't express at all: nudging only the *time*
+    /// across UTC midnight (the web pins `flight.target_date` and rewrites only
+    /// the time-of-day, `flight-main.ts:313`).
+    var departureDayChanged: Bool {
+        guard let original = editingFlight?.departureDate else { return false }
+        return Self.utcDay(of: departureDate) != Self.utcDay(of: original)
+    }
+
+    /// Whether the edited route changes the **origin or destination**. A
+    /// mid-route waypoint insert/removal is NOT structural — the flight ID only
+    /// encodes the endpoints, so PATCH handles it (mirrors the web's
+    /// `detectStructuralChange`).
+    var routeEndpointsChanged: Bool {
+        guard let original = editingFlight, routeDiffers(from: original) else { return false }
+        let originalWaypoints = original.waypoints.map { $0.uppercased() }
+        guard let oldOrigin = originalWaypoints.first, let oldDest = originalWaypoints.last,
+              let newOrigin = waypoints.first, let newDest = waypoints.last else { return false }
+        return newOrigin != oldOrigin || newDest != oldDest
+    }
+
+    /// True when the edit changes something the flight ID is built from and PATCH
+    /// therefore refuses. The Save button branches into the Move / Duplicate
+    /// choice instead of issuing a PATCH that would 422.
+    var hasStructuralChange: Bool { departureDayChanged || routeEndpointsChanged }
+
+    /// Inline note under the Departure section once the date change is detected.
+    /// Web copy verbatim (`flightDetail.dateChangedNote`).
+    var departureChangeNote: String? {
+        guard departureDayChanged else { return nil }
+        return "Date changed. Move replaces this flight (discards \(existingPackCount) existing briefing(s) "
+            + "for the old date) \u{2014} or Duplicate keeps both."
+    }
+
+    /// Inline note under the Route section. Web copy verbatim
+    /// (`flightDetail.routeChangedNote`).
+    var routeChangeNote: String? {
+        guard routeEndpointsChanged else { return nil }
+        return "Origin or destination changed. Move replaces this flight (discards \(existingPackCount) "
+            + "existing briefing(s) for the old route) \u{2014} or Duplicate keeps both."
+    }
+
+    /// Confirm-dialog body for Move. Web copy verbatim
+    /// (`flightDetail.moveConfirmWithPacks` / `\u{2026}NoPacks`).
+    var moveConfirmMessage: String {
+        existingPackCount > 0
+            ? "Move this flight? \(existingPackCount) existing briefing(s) for the old values will be discarded."
+            : "Move this flight? The new flight will start with no briefings."
+    }
+
+    /// UTC calendar day of an instant — the unit `target_date` is derived in.
+    static func utcDay(of date: Date) -> DateComponents {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        return calendar.dateComponents([.year, .month, .day], from: date)
+    }
+
     /// Whether the edit changes a forecast-affecting field (route/time/FL/duration).
     /// Aircraft-only edits are excluded — they don't regenerate the briefing, so
     /// they save without the re-briefing confirm (§4.4).
@@ -327,6 +404,18 @@ final class AddFlightViewModel {
             timeScanUsed = try await repository.usageSummary().timeScanUsed
         } catch {
             Self.logger.debug("Usage summary unavailable: \(error)")
+        }
+    }
+
+    /// Load the edited flight's pack count for the Move copy. Non-fatal: the
+    /// count only sharpens the wording, so a failure just leaves the no-packs
+    /// variant rather than blocking the editor.
+    func loadPackCount() async {
+        guard let editingFlight else { return }
+        do {
+            existingPackCount = try await repository.packs(flightId: editingFlight.id).count
+        } catch {
+            Self.logger.debug("Pack count unavailable: \(error)")
         }
     }
 
@@ -651,12 +740,9 @@ final class AddFlightViewModel {
             statusMessage = nil
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-
         let request = CreateFlightRequest(
             waypoints: waypoints,
-            departureTime: formatter.string(from: departureDate),
+            departureTime: Self.iso8601(departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightDurationHours: flightDurationHours,
             aircraftId: selectedAircraftId,
@@ -671,10 +757,168 @@ final class AddFlightViewModel {
             Self.logger.info("Created flight \(flight.id): \(flight.shortTitle)")
             return flight
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.submitErrorMessage(error)
             Self.logger.error("Create flight failed: \(error)")
             return nil
         }
+    }
+
+    // MARK: - Move / Duplicate (structural edits, #552)
+
+    /// Replace the flight with one carrying the edited structural values.
+    ///
+    /// The old flight (and every briefing it accumulated) is discarded
+    /// server-side in the same transaction, which is why the view confirms
+    /// first. The move request carries only what its body accepts — see
+    /// `applyResidualEdits(to:)` for the rest.
+    func moveFlight() async -> FlightResponse? {
+        guard canSubmit, let editingFlight else { return nil }
+
+        isSubmitting = true
+        errorMessage = nil
+        statusMessage = "Moving flight\u{2026}"
+        defer {
+            isSubmitting = false
+            statusMessage = nil
+        }
+
+        let request = MoveFlightRequest(
+            departureTime: Self.iso8601(departureDate),
+            waypoints: waypoints,
+            cruiseAltitudeFt: cruiseAltitudeFt,
+            // The form has no ceiling control yet, so carry the flight's own
+            // value: omitting it would also inherit, but sending it keeps the
+            // ID-defining tuple explicit in the request.
+            flightCeilingFt: editingFlight.flightCeilingFt,
+            flightDurationHours: flightDurationHours,
+            // Only when the pilot actually retyped the route: an untouched route
+            // must keep the source flight's stored Field-15 annotation and its
+            // `parser_version` re-derive marker (mirrors the web `moveBtn`).
+            rawRoute: routeChangedFromOriginal ? waypointsText.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        )
+
+        do {
+            let moved = try await repository.moveFlight(flightId: editingFlight.id, request: request)
+            Self.logger.info("Moved flight \(editingFlight.id) \u{2192} \(moved.id)")
+            return await applyResidualEdits(to: moved)
+        } catch {
+            errorMessage = Self.submitErrorMessage(error)
+            Self.logger.error("Move flight failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Create a *second* flight from the edited values, leaving the original (and
+    /// its briefings) untouched — the non-destructive half of the structural
+    /// choice. Reuses `createFlight` with merged values, like the web's
+    /// Duplicate button.
+    func duplicateFlight() async -> FlightResponse? {
+        guard canSubmit, let editingFlight else { return nil }
+
+        isSubmitting = true
+        errorMessage = nil
+        statusMessage = "Duplicating flight\u{2026}"
+        defer {
+            isSubmitting = false
+            statusMessage = nil
+        }
+
+        let request = CreateFlightRequest(
+            waypoints: waypoints,
+            departureTime: Self.iso8601(departureDate),
+            cruiseAltitudeFt: cruiseAltitudeFt,
+            flightCeilingFt: editingFlight.flightCeilingFt,
+            flightDurationHours: flightDurationHours,
+            aircraftId: selectedAircraftId,
+            profileId: selectedProfileId,
+            // The create endpoint rejects `.alternate` (it needs an alt time,
+            // which only PATCH can set), so the copy starts without it; the day
+            // modes carry over unchanged.
+            flexibility: (flexibility == .none || flexibility == .alternate) ? nil : flexibility
+        )
+
+        do {
+            let created = try await repository.createFlight(request)
+            Self.logger.info("Duplicated flight \(editingFlight.id) \u{2192} \(created.id)")
+            return created
+        } catch {
+            errorMessage = Self.submitErrorMessage(error)
+            Self.logger.error("Duplicate flight failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Apply the edits `POST /move` has no request field for.
+    ///
+    /// `MoveFlightRequest` carries only the structural + numeric fields; the
+    /// aircraft, the profile and Flexibility are inherited from the source
+    /// flight. iOS shows a single **Save** button (the web swaps in separate
+    /// Move/Duplicate buttons), so one edit can legitimately change the date
+    /// *and* the aircraft — without this follow-up PATCH half of it would vanish
+    /// with no message. Best-effort: the move itself already succeeded and the
+    /// pilot is about to land on the new flight, so a failure here is logged
+    /// rather than discarding a completed move.
+    private func applyResidualEdits(to moved: FlightResponse) async -> FlightResponse {
+        guard let original = editingFlight else { return moved }
+        var request = UpdateFlightRequest()
+        var hasResidual = false
+
+        if selectedAircraftId != original.aircraftId {
+            // `0` is the server's "detach aircraft" sentinel.
+            request.aircraftId = selectedAircraftId ?? 0
+            hasResidual = true
+        }
+        if let selectedProfileId, selectedProfileId != original.profileId {
+            request.profileId = selectedProfileId
+            hasResidual = true
+        }
+        // Send an alt time only when the mode changed (entering `.alternate`
+        // needs one, leaving it clears the stale value) or the pilot edited it —
+        // otherwise the server's own carry-over stays authoritative.
+        if flexibility != original.effectiveFlexibility {
+            request.flexibility = flexibility
+            request.altDepartureTime = altDepartureTimePayload
+            hasResidual = true
+        } else if flexibility == .alternate, altDepartureChanged(from: original) {
+            request.altDepartureTime = altDepartureTimePayload
+            hasResidual = true
+        }
+
+        guard hasResidual else { return moved }
+        do {
+            return try await repository.updateFlight(flightId: moved.id, request: request).flight
+        } catch {
+            Self.logger.error("Post-move residual edit failed for \(moved.id): \(error)")
+            return moved
+        }
+    }
+
+    /// Pilot-facing copy for a create/move/duplicate failure.
+    ///
+    /// `APIClient` already decodes the server's `detail`, so the 422s (bad
+    /// waypoints, the 180-day booking cap) read well verbatim. The two that
+    /// don't are rewritten here: a 403 whose detail talks about admins, and the
+    /// bare 409 that only names the colliding ID.
+    static func submitErrorMessage(_ error: Error) -> String {
+        switch error {
+        case APIError.forbidden(let detail) where detail.localizedCaseInsensitiveContains("past"):
+            return "That departure is already in the past. Pick a future date and time."
+        case APIError.serverError(409, _):
+            return "You already have a flight on that date for this route. "
+                + "Pick a different time, or edit the existing flight."
+        case APIError.serverError(_, let detail?) where !detail.isEmpty:
+            return detail
+        default:
+            return error.localizedDescription
+        }
+    }
+
+    /// ISO-8601 with an explicit offset. Both `create` and `move` reject a naive
+    /// datetime server-side, so every departure string the app sends is built here.
+    static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
     }
 
     /// Save edits, then run the invalidation-aware regeneration when requested.
@@ -691,15 +935,13 @@ final class AddFlightViewModel {
             statusMessage = nil
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
         // `0` is the server's "detach aircraft" sentinel: send it only when the
         // flight had an aircraft and the user cleared the picker.
         let aircraftId = selectedAircraftId ?? (editingFlight.aircraftId == nil ? nil : 0)
         let request = UpdateFlightRequest(
             aircraftId: aircraftId,
             waypoints: waypoints,
-            departureTime: formatter.string(from: departureDate),
+            departureTime: Self.iso8601(departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightDurationHours: flightDurationHours,
             profileId: selectedProfileId,
@@ -723,7 +965,7 @@ final class AddFlightViewModel {
             Self.logger.info("Updated flight \(response.flight.id): invalidation=\(response.invalidation.rawValue)")
             return response.flight
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.submitErrorMessage(error)
             Self.logger.error("Edit flight failed: \(error)")
             return nil
         }
@@ -735,18 +977,28 @@ final class AddFlightViewModel {
     /// day-scan flight's pinned "★ your alternate" from an unrelated edit.
     private var altDepartureTimePayload: String? {
         if flexibility == .alternate {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime]
-            return formatter.string(from: altDepartureTime.instant)
+            return Self.iso8601(altDepartureTime.instant)
         }
         // Only clear when the edit is actually *leaving* `.alternate` mode.
         if editingFlight?.effectiveFlexibility == .alternate { return "" }
         return nil
     }
 
-    /// Regenerate the briefing according to the invalidation hint:
-    /// `advisoriesOnly` recomputes advisories in place, `refetchNeeded` runs the
-    /// full streamed refresh.
+    /// Kick off the regeneration an edit made necessary — **without** holding the
+    /// editor open for it.
+    ///
+    /// `advisoriesOnly` is a fast in-place recompute, so it is awaited; the pilot
+    /// is back on the list within a second either way. `refetchNeeded` is the
+    /// ~2-minute pipeline: it is *queued* (202) and deliberately not watched, so
+    /// the sheet dismisses immediately. Awaiting the SSE stream here was the
+    /// second half of #544 — "Regenerating briefing…" sitting on the Edit form
+    /// for two minutes reads exactly like "Save didn't exit".
+    ///
+    /// Dropping the stream costs nothing: the pipeline runs in a server-side
+    /// executor independent of it (`api/packs.py`,
+    /// `loop.run_in_executor(_refresh_executor, run_pipeline)`), the flight list
+    /// polls `/api/refresh/active` every 5 s and repaints on completion, and an
+    /// APNs push is the second signal.
     private func regenerateBriefing(for flight: FlightResponse, invalidation: FlightInvalidation) async throws {
         switch invalidation {
         case .none:
@@ -762,34 +1014,27 @@ final class AddFlightViewModel {
                 )
             } catch APIError.notFound {
                 // No existing pack to recompute against — fall back to a full refresh.
-                try await refreshBriefing(flightId: flight.id)
+                queueRefresh(flightId: flight.id)
             }
         case .refetchNeeded:
-            try await refreshBriefing(flightId: flight.id)
+            queueRefresh(flightId: flight.id)
         }
     }
 
-    private func refreshBriefing(flightId: String) async throws {
-        statusMessage = "Regenerating briefing\u{2026}"
-        let stream = await repository.refreshStream(flightId: flightId)
-        var completed = false
-        for try await event in stream {
-            switch event.type {
-            case "progress":
-                statusMessage = event.label ?? event.stage ?? "Regenerating briefing\u{2026}"
-            case "briefing_ready":
-                statusMessage = "Briefing ready\u{2026}"
-            case "complete":
-                completed = true
-                statusMessage = "Briefing regenerated"
-            case "error":
-                throw APIError.serverError(500, event.message ?? "Briefing regeneration failed")
-            default:
-                break
+    /// Queue a full refresh from a task the dismissed view doesn't own.
+    ///
+    /// The `Task` is unstructured (not a `.task` modifier), so it is not
+    /// cancelled when the sheet goes away; it captures only the repository, not
+    /// `self`. Failures are logged rather than surfaced — by the time this runs
+    /// the editor is gone, and the flight list's active-refresh poll plus the
+    /// pilot's own Refresh button are the recovery path.
+    private func queueRefresh(flightId: String) {
+        pendingRefreshTask = Task { [repository] in
+            do {
+                try await repository.triggerRefresh(flightId: flightId)
+            } catch {
+                Self.logger.error("Queueing refresh after edit failed for \(flightId): \(error)")
             }
-        }
-        if !completed {
-            Self.logger.warning("Refresh stream ended before a complete event while editing \(flightId)")
         }
     }
 

@@ -10,6 +10,11 @@ struct AddFlightView: View {
     @State private var showFplSheet = false
     @State private var showAircraftSheet = false
     @State private var showRebriefConfirm = false
+    /// Presented instead of `showRebriefConfirm` when the edit changes a field the
+    /// flight ID is built from (date / origin / destination). PATCH cannot express
+    /// that, so the pilot picks Move or Duplicate — the iOS shape of the web's
+    /// swap-Save-for-Move/Duplicate toolbar.
+    @State private var showStructuralConfirm = false
     @State private var showInterpretSheet = false
     @State private var showAutorouterSheet = false
     /// Which submit a create/save flow is confirming through the interpret sheet.
@@ -40,6 +45,17 @@ struct AddFlightView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // First section, not last: appended after eight sections of a
+                // long Form the error sat below the fold, so the pilot saw the
+                // sheet refuse to close with no visible reason (#544).
+                if let error = viewModel.errorMessage {
+                    Section {
+                        Text(error)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("flightFormError")
+                    }
+                }
+
                 importSection
                 profileSection
                 aircraftSection
@@ -49,13 +65,6 @@ struct AddFlightView: View {
                 altitudeSection
                 durationSection
                 statusSection
-
-                if let error = viewModel.errorMessage {
-                    Section {
-                        Text(error)
-                            .foregroundStyle(.red)
-                    }
-                }
             }
             .navigationTitle(viewModel.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
@@ -81,8 +90,34 @@ struct AddFlightView: View {
             } message: {
                 Text("Route, time, altitude or duration changes affect the forecast, so saving regenerates the briefing. Cancel to leave the flight and its briefing unchanged.")
             }
+            .confirmationDialog(
+                structuralConfirmTitle,
+                isPresented: $showStructuralConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Move flight", role: .destructive) {
+                    Task { await submitMove() }
+                }
+                .accessibilityIdentifier("moveFlightButton")
+                Button("Duplicate as new flight") {
+                    Task { await submitDuplicate() }
+                }
+                .accessibilityIdentifier("duplicateFlightButton")
+                Button("Cancel", role: .cancel) {
+                    // Terminal branch like every other: release the submit guard
+                    // so the pilot can adjust the form and tap Save again.
+                    viewModel.isPreparingSubmit = false
+                }
+            } message: {
+                Text(viewModel.moveConfirmMessage)
+            }
             .task {
                 await viewModel.loadAircraft()
+            }
+            .task {
+                // The "discards N briefing(s)" count in the structural note and
+                // the Move confirm.
+                await viewModel.loadPackCount()
             }
             .task {
                 await viewModel.loadProfiles()
@@ -233,10 +268,25 @@ struct AddFlightView: View {
             dismiss()
             return
         }
-        if viewModel.hasForecastAffectingChange {
+        // Structural first: the date and the origin/destination are encoded in
+        // the flight ID, so a PATCH would 422 no matter what the re-brief
+        // confirm decided. Move/Duplicate is the only path that can express it.
+        if viewModel.hasStructuralChange {
+            showStructuralConfirm = true
+        } else if viewModel.hasForecastAffectingChange {
             showRebriefConfirm = true
         } else {
             await submitEdit(regenerate: false)
+        }
+    }
+
+    /// Dialog title naming which structural field moved, so the pilot sees the
+    /// reason for the Move/Duplicate choice before reading the body copy.
+    private var structuralConfirmTitle: String {
+        switch (viewModel.departureDayChanged, viewModel.routeEndpointsChanged) {
+        case (true, true): return "Date and route changed"
+        case (false, true): return "Origin or destination changed"
+        default: return "Flight date changed"
         }
     }
 
@@ -262,6 +312,24 @@ struct AddFlightView: View {
             onCreated(flight)
             dismiss()
         }
+    }
+
+    /// Replace the flight (old briefings discarded) and land on the new one.
+    private func submitMove() async {
+        if let flight = await viewModel.moveFlight() {
+            onCreated(flight)
+            dismiss()
+        }
+        viewModel.isPreparingSubmit = false
+    }
+
+    /// Keep the original and land on the copy.
+    private func submitDuplicate() async {
+        if let flight = await viewModel.duplicateFlight() {
+            onCreated(flight)
+            dismiss()
+        }
+        viewModel.isPreparingSubmit = false
     }
 
     // MARK: - Sections
@@ -447,7 +515,14 @@ struct AddFlightView: View {
         } header: {
             Text("Route")
         } footer: {
-            Text("Enter waypoints separated by spaces (ICAO codes, navaids, or fixes). Tap Interpret to see what was understood and view it on the map.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Enter waypoints separated by spaces (ICAO codes, navaids, or fixes). Tap Interpret to see what was understood and view it on the map.")
+                if let note = viewModel.routeChangeNote {
+                    Text(note)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("routeChangedNote")
+                }
+            }
         }
         // Resolve the route (interpretation + timezones) a bit after typing
         // settles. Longer debounce than autocomplete since it's a network call.
@@ -487,6 +562,7 @@ struct AddFlightView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .accessibilityIdentifier("departureHourPicker")
                 Text(":").foregroundStyle(.secondary)
                 Picker("Minute", selection: Binding(
                     get: { viewModel.departureTime.minuteOption },
@@ -498,6 +574,7 @@ struct AddFlightView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .accessibilityIdentifier("departureMinutePicker")
             }
 
             Picker("Timezone", selection: Binding(
@@ -509,10 +586,18 @@ struct AddFlightView: View {
                 }
             }
             .pickerStyle(.menu)
+            .accessibilityIdentifier("departureTimezonePicker")
         } header: {
             Text("Departure")
         } footer: {
-            Text("The time is interpreted in the selected timezone. Enter a route to offer each airport's local time.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("The time is interpreted in the selected timezone. Enter a route to offer each airport's local time.")
+                if let note = viewModel.departureChangeNote {
+                    Text(note)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("dateChangedNote")
+                }
+            }
         }
     }
 

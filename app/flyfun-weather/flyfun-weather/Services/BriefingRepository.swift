@@ -20,6 +20,22 @@ protocol BriefingRepository: Sendable {
     func flight(id: String) async throws -> FlightResponse
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse
+    /// Replace a flight with one carrying new *structural* values — date,
+    /// origin or destination. Those are encoded in the flight ID, so PATCH
+    /// refuses them (422); `POST /api/flights/{id}/move` creates the new flight,
+    /// deletes the old one and commits both in one transaction, returning the
+    /// new flight. Online-only; the caching layer also evicts the old flight's
+    /// local pack cache, since a deleted flight can never be re-downloaded.
+    /// Throws `APIError.forbidden` (past departure), `APIError.serverError(409,…)`
+    /// (the new ID already exists) or `422` (booking cap / rejected waypoints).
+    func moveFlight(flightId: String, request: MoveFlightRequest) async throws -> FlightResponse
+    /// Queue a full briefing regeneration and return as soon as the server has
+    /// accepted it — `POST /api/flights/{id}/packs/refresh?source=user` (202).
+    /// The pipeline runs in a server-side executor independent of any client
+    /// stream, so the caller may dismiss immediately and let the flight list's
+    /// active-refresh poll (plus the APNs push) report completion. Use this
+    /// instead of `refreshStream` whenever nothing is left on screen to watch it.
+    func triggerRefresh(flightId: String) async throws
     /// Permanently delete one of the viewer's own flights and all of its briefing
     /// history (server 204, owner-only — a subscriber unsubscribes instead).
     /// Online-only; the caching layer also drops the flight's local pack cache,
@@ -151,6 +167,20 @@ final class OnlineBriefingRepository: BriefingRepository {
         // Server returns the updated flight plus an invalidation hint describing
         // how much of the briefing the edit invalidated.
         return try await client.request("/api/flights/\(flightId)", method: "PATCH", body: body)
+    }
+
+    func moveFlight(flightId: String, request: MoveFlightRequest) async throws -> FlightResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/flights/\(flightId)/move", method: "POST", body: body)
+    }
+
+    func triggerRefresh(flightId: String) async throws {
+        // `requestDataURL` (not `requestData`) so the `?source=` query survives:
+        // `appendingPathComponent` would percent-encode the `?` into the path.
+        _ = try await client.requestDataURL(
+            "/api/flights/\(flightId)/packs/refresh?source=\(RefreshSource.manual.rawValue)",
+            method: "POST"
+        )
     }
 
     func deleteFlight(id: String) async throws {

@@ -74,6 +74,24 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.updateFlight(flightId: flightId, request: request)
     }
 
+    /// Move server-side first; only once it confirms do we drop the source
+    /// flight's local packs. The server deleted that flight, so its cached packs
+    /// can never be refreshed or re-downloaded again — same reasoning (and same
+    /// eviction order) as `deleteFlight` below.
+    func moveFlight(flightId: String, request: MoveFlightRequest) async throws -> FlightResponse {
+        let moved = try await online.moveFlight(flightId: flightId, request: request)
+        for entry in await cache.cachedPacks() where entry.flightId == flightId {
+            await cache.deletePack(flightId: flightId, timestamp: entry.timestamp)
+        }
+        await cache.removeFlightDirectory(flightId: flightId)
+        return moved
+    }
+
+    func triggerRefresh(flightId: String) async throws {
+        // Online-only: queuing work on the server has no offline meaning.
+        try await online.triggerRefresh(flightId: flightId)
+    }
+
     /// Delete server-side first — only once the server confirms (204) do we drop
     /// the local copy, so a failed delete leaves a flight that still exists with
     /// its downloaded packs intact. After that the packs are unreachable (no

@@ -737,6 +737,7 @@ struct FlightListView: View {
                     Label("Edit", systemImage: "pencil")
                 }
                 .tint(.blue)
+                .accessibilityIdentifier("editFlightSwipeButton")
             }
             // Unsubscribe from a shared flight — the first row-removal flow on iOS
             // (#446). Online-only; drops the viewer's subscription then reloads.

@@ -25,7 +25,46 @@ Server-side work is phased to match the app roadmap. Endpoints listed below are 
 | `/api/flights/{id}/packs/refresh/status` | GET | done | Check active refresh status |
 | `/api/flights/{id}/packs/{ts}/sounding-profile/{point_index}/{model}` | GET | done | Raw sounding profile for client Skew-T |
 | `/api/flights/{id}/packs/{ts}/bundle` | GET | done | Gzipped single-JSON offline bundle (see Phase 2) |
+| `/api/flights/{id}/move` | POST | done | Structural edit — see below |
+| `/api/flights/{id}/packs/refresh` | POST | done | Queue a refresh (202) without holding a stream — see below |
 | `/auth/apple/token` | POST | done | Native Apple Sign In token exchange |
+
+### Editing a flight: PATCH vs move (#552)
+
+The flight ID is derived from route + date + altitude/ceiling/duration
+(`_compute_flight_id`, `api/flights.py`), so **the date and the origin/destination
+are part of the flight's identity**. `PATCH /api/flights/{id}` rejects both with a
+422 (`"Cannot change the flight date. Create a new flight instead."`); a client
+that only knows PATCH therefore cannot express a date change at all, which is
+exactly the bug in #544.
+
+- **Non-structural** (time-of-day inside the same UTC day, mid-route waypoints,
+  altitude, ceiling, duration, aircraft, profile, Flexibility) → `PATCH`.
+- **Structural** (different UTC day, different first/last waypoint) → either
+  `POST /{id}/move` (replaces the flight, discards its packs, keeps the share
+  code) or `POST /api/flights` with the merged values (keeps both flights). The
+  client asks the pilot which.
+
+The structural test must compare **UTC calendar days**, not the picker's local
+day: `target_date` is derived from the UTC instant, so 00:30 in `Europe/Paris` is
+the previous UTC day. iOS does this in `AddFlightViewModel.departureDayChanged`.
+
+`MoveFlightRequest` has no `profile_id` / `aircraft_id` / `flexibility` field —
+those are carried over from the source flight. A client whose form can change them
+in the same edit (iOS has one Save button) follows the move with a PATCH on the
+new flight; see `AddFlightViewModel.applyResidualEdits(to:)`.
+
+### Queueing a refresh without watching it
+
+`POST /api/flights/{id}/packs/refresh?source=user` returns **202** and runs the
+pipeline in a server-side executor that is independent of any client stream
+(`api/packs.py`, `loop.run_in_executor(_refresh_executor, run_pipeline)`).
+Prefer it over `/packs/refresh/stream` whenever the UI that triggered the refresh
+is about to go away — the editor sheet after a save, for instance. Progress then
+comes from the flight list's `/api/refresh/active` poll and the APNs push, not
+from a stream nobody is looking at. (It can also answer **200 `already_fresh`**;
+the pack-params gate that stops that from happening right after a parameter edit
+is described in `refresh-durability.md`.)
 
 ## Phase 1 — Auth Extension (DONE)
 

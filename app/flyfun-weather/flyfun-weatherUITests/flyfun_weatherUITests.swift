@@ -141,6 +141,117 @@ final class flyfun_weatherUITests: XCTestCase {
         waitForBriefingLoaded(app)
     }
 
+    /// Open the edit form for a listed flight via its trailing swipe action.
+    @MainActor
+    private func openEditForm(_ app: XCUIApplication, flightId: String) {
+        revealFlightList(app)
+        let card = app.descendants(matching: .any)["flightCard-\(flightId)"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "\(flightId) should be listed")
+        card.swipeLeft()
+        let edit = app.buttons["editFlightSwipeButton"].firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 5), "the Edit swipe action should appear")
+        edit.tap()
+        XCTAssertTrue(app.textFields["waypointsField"].waitForExistence(timeout: 5),
+                      "the edit form should appear")
+    }
+
+    /// Pick a value from a `.menu`-style SwiftUI `Picker`, addressed by the
+    /// accessibility identifier set on it (the rendered *label* folds in the
+    /// current value, so it is not a stable selector).
+    @MainActor
+    private func selectFromMenuPicker(_ app: XCUIApplication, identifier: String, value: String) {
+        let picker = app.buttons[identifier].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "the \(identifier) picker should be present")
+        picker.tap()
+        let option = app.buttons[value].firstMatch
+        XCTAssertTrue(option.waitForExistence(timeout: 5), "\(value) should be offered by \(identifier)")
+        option.tap()
+    }
+
+    /// Replace a text field's contents. Deleting the existing value key-by-key is
+    /// the idiom that works on both idioms; the long-press "Select All" menu is
+    /// timing-sensitive.
+    @MainActor
+    private func replaceText(_ field: XCUIElement, with text: String) {
+        field.tap()
+        let existing = (field.value as? String) ?? ""
+        if !existing.isEmpty {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
+        }
+        field.typeText(text)
+    }
+
+    /// Journey 8 (#552) — the reported regression: an edit that changes a field the
+    /// flight ID is built from must offer Move / Duplicate and then actually
+    /// **dismiss**. Here the destination changes, so Move replaces the flight: the
+    /// form closes and the list shows the new flight in place of the old one.
+    @MainActor
+    func testStructuralEditOffersMoveAndDismisses() throws {
+        let app = launchMockApp()
+        openEditForm(app, flightId: "fixture-2")
+
+        // fixture-2 is EGTF → LFAT; retype it with a new destination.
+        let waypoints = app.textFields["waypointsField"]
+        replaceText(waypoints, with: "EGTF LFMD")
+
+        // The inline note explains what Move will discard, before the pilot commits.
+        XCTAssertTrue(app.staticTexts["routeChangedNote"].waitForExistence(timeout: 5),
+                      "an origin/destination change should explain Move vs Duplicate inline")
+
+        app.buttons["submitFlightButton"].tap()
+
+        let move = app.buttons["moveFlightButton"].firstMatch
+        XCTAssertTrue(move.waitForExistence(timeout: 10),
+                      "a structural change should offer Move / Duplicate, not a plain Save")
+        move.tap()
+
+        // The regression: the sheet must actually go away.
+        XCTAssertTrue(waypoints.waitForNonExistence(timeout: 10),
+                      "the edit form should dismiss once the move succeeds")
+
+        revealFlightList(app)
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-moved-fixture-2"]
+                        .firstMatch.waitForExistence(timeout: 10),
+                      "the moved flight should be listed")
+        XCTAssertFalse(app.descendants(matching: .any)["flightCard-fixture-2"].firstMatch.exists,
+                       "Move replaces the flight, so the original should be gone")
+    }
+
+    /// Journey 9 (#552) — the date half of the same choice, driven through the
+    /// timezone picker so it exercises the local-day-vs-UTC-day trap: fixture-2
+    /// departs 13:00Z; shown in Europe/Paris that is 15:00 on the same local day,
+    /// and moving it to 00:xx local lands on the *previous* UTC day. Duplicate
+    /// keeps both flights.
+    @MainActor
+    func testDateEditCrossingUtcMidnightOffersDuplicate() throws {
+        let app = launchMockApp()
+        openEditForm(app, flightId: "fixture-2")
+
+        // The route must resolve before its airports' zones are offered.
+        selectFromMenuPicker(app, identifier: "departureTimezonePicker", value: "Paris (GMT+2)")
+        selectFromMenuPicker(app, identifier: "departureHourPicker", value: "00")
+
+        XCTAssertTrue(app.staticTexts["dateChangedNote"].waitForExistence(timeout: 5),
+                      "00:xx Paris is the previous UTC day, so the date note should show")
+
+        app.buttons["submitFlightButton"].tap()
+
+        let duplicate = app.buttons["duplicateFlightButton"].firstMatch
+        XCTAssertTrue(duplicate.waitForExistence(timeout: 10),
+                      "a UTC-day change should offer Move / Duplicate")
+        duplicate.tap()
+
+        XCTAssertTrue(app.textFields["waypointsField"].waitForNonExistence(timeout: 10),
+                      "the edit form should dismiss once the duplicate is created")
+
+        revealFlightList(app)
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-created-1"]
+                        .firstMatch.waitForExistence(timeout: 10),
+                      "the duplicate should be listed")
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-2"].firstMatch.exists,
+                      "Duplicate keeps the original, so both flights should be listed")
+    }
+
     /// Journey 3 (#318) — briefing → advisory drill-down. Open fixture-1, tap the
     /// RED convective advisory's "Why it's RED", and confirm the detail sheet
     /// shows the per-model split (GFS + ECMWF rows). iPhone + iPad.
