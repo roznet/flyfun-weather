@@ -204,6 +204,11 @@ export function wireUpcomingFilter(onQuery: (q: string) => void): void {
   const clear = document.getElementById('upcoming-filter-clear');
   if (!input) return;
 
+  // Set here rather than hardcoded in the markup so MAX_QUERY_LEN stays the
+  // single source of truth across the HTML, the TS helper and the Python
+  // matcher (the past box already renders it from the constant).
+  input.maxLength = MAX_QUERY_LEN;
+
   input.addEventListener('input', () => onQuery(input.value.trim()));
   input.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') ev.preventDefault();
