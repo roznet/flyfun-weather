@@ -61,7 +61,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var interpretRouteCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
     private(set) var deletedFlightIds: [String] = []
-    /// One entry per `bulkDeleteFlights` call, so a test can assert chunk sizes.
+    /// One entry per `bulkDeleteFlights` call. NOT chunk boundaries: this mock
+    /// stands in for the *online* layer, which is where chunking happens
+    /// (`OnlineBriefingRepository`), so it only ever sees the full id list handed
+    /// down by `CachingBriefingRepository`. Chunking is asserted against
+    /// `BulkDeleteResponse.sendChunked` directly.
     private(set) var bulkDeleteRequests: [[String]] = []
     private(set) var lastCreateRequest: CreateFlightRequest?
     private(set) var lastInterpretRawRoute: String?

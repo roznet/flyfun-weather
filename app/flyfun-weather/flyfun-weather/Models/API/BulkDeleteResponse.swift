@@ -15,6 +15,16 @@ struct BulkDeleteResponse: Codable, Sendable {
     let notFound: [String]
 }
 
+/// Thrown when a chunked bulk delete fails part-way through. Deletion is not
+/// transactional across chunks: whatever earlier chunks confirmed is *already
+/// gone server-side*, so a plain rethrow would strand those flights in the local
+/// list (tappable, 404 on open) with their packs orphaned on disk. `partial`
+/// carries the confirmed result so callers can still evict and drop them.
+struct BulkDeletePartialFailure: Error {
+    let partial: BulkDeleteResponse
+    let underlying: Error
+}
+
 extension BulkDeleteResponse {
     /// Server cap on `ids` per request (`BulkDeleteRequest.ids`, `max_length=200`
     /// in `api/flights.py`). A "Select All" over a long logbook exceeds it, so
@@ -28,9 +38,10 @@ extension BulkDeleteResponse {
     ///
     /// Pure control flow around an injected sender so the chunk boundaries and the
     /// merge are testable without a network layer. Chunks are sent sequentially:
-    /// each one deletes rows and `rmtree`s pack directories server-side, and a
-    /// failure mid-way must leave the already-confirmed deletes reported (it
-    /// throws, and the caller reloads the list — see `FlightSelectionView`).
+    /// each one deletes rows and `rmtree`s pack directories server-side, so a
+    /// failure part-way through throws `BulkDeletePartialFailure` carrying what
+    /// the earlier chunks confirmed — those deletes are real and must not be lost
+    /// to the error. A failure on the very first chunk rethrows as-is.
     static func sendChunked(
         ids: [String],
         chunkSize: Int = maxIdsPerRequest,
@@ -42,9 +53,17 @@ extension BulkDeleteResponse {
         var notFound: [String] = []
         for start in stride(from: 0, to: ids.count, by: size) {
             let chunk = Array(ids[start..<min(start + size, ids.count)])
-            let response = try await send(chunk)
-            deleted.append(contentsOf: response.deleted)
-            notFound.append(contentsOf: response.notFound)
+            do {
+                let response = try await send(chunk)
+                deleted.append(contentsOf: response.deleted)
+                notFound.append(contentsOf: response.notFound)
+            } catch {
+                guard !deleted.isEmpty || !notFound.isEmpty else { throw error }
+                throw BulkDeletePartialFailure(
+                    partial: BulkDeleteResponse(deleted: deleted, notFound: notFound),
+                    underlying: error
+                )
+            }
         }
         return BulkDeleteResponse(deleted: deleted, notFound: notFound)
     }
