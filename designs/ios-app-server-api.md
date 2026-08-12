@@ -82,7 +82,7 @@ is about to go away — the editor sheet after a save, for instance. Progress th
 comes from the flight list's `/api/refresh/active` poll and the APNs push, not
 from a stream nobody is looking at. (It can also answer **200 `already_fresh`**;
 the pack-params gate that stops that from happening right after a parameter edit
-is described in `refresh-durability.md`.)
+is described in `freshness-markers.md`, under "Tiered Refresh Gate".)
 
 ## Phase 1 — Auth Extension (DONE)
 

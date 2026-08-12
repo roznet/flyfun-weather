@@ -647,8 +647,14 @@ def get_freshness(
     status = _build_data_status(packs[0], flight)
     # Attach the tiered-gate outcome for the current lead time so the freshness
     # UI reflects what the refresh button will actually do (and not just the
-    # raw min-rule ``fresh`` flag).
-    status.refresh_decision = decide_refresh(status, _days_out_now(flight))
+    # raw min-rule ``fresh`` flag). The params-change override has to be applied
+    # here too, not only on the refresh endpoints: without it the bar reports
+    # "up to date" right after a parameter edit while pressing the button runs a
+    # full refresh — the banner-disagrees-with-the-button symptom this gate
+    # exists to remove.
+    status.refresh_decision = apply_params_change_override(
+        decide_refresh(status, _days_out_now(flight)), packs[0], flight,
+    )
     return status
 
 

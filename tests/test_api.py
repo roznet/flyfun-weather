@@ -562,13 +562,15 @@ class TestFlightsAPI:
     def test_move_flight_alt_departure_reanchored_across_midnight(
         self, client, app_db, sample_flight,
     ):
-        """A sub-day move that splits the pair re-anchors instead of storing an
-        alternate on a different day than the primary.
+        """A sub-day move that splits the pair keeps the alternate's ORIGINAL
+        time of day, not the shifted one.
 
         Departure 09:00 with an alternate at 23:00 the same day: pushing the
         departure 2h later would carry the alternate to 01:00 the *next* day,
-        which ``update_flight`` would reject outright. The alternate keeps its
-        shifted time of day but stays on the departure's day.
+        which ``update_flight`` would reject outright. Re-anchoring the *shifted*
+        01:00 onto the departure's day is worse than useless — it lands ten hours
+        BEFORE the primary, silently inverting the later-alternative the pilot
+        set up. Their chosen 23:00 stays 23:00, and stays after the primary.
         """
         session = app_db()
         row = session.get(FlightRow, sample_flight.id)
@@ -587,8 +589,38 @@ class TestFlightsAPI:
         alt = datetime.fromisoformat(body["alt_departure_time"])
         departure = datetime.fromisoformat(body["departure_time"])
         assert alt.date() == departure.date()
-        assert alt.hour == 1
+        assert alt.hour == 23
+        assert alt > departure       # still the *later* option it was set up as
         assert body["flexibility"] == "alternate"
+
+    def test_move_flight_drops_alternate_that_collides_with_departure(
+        self, client, app_db, sample_flight,
+    ):
+        """When re-anchoring lands the alternate exactly on the primary there is
+        no valid alternate left, and ``flexibility`` must fall back with it —
+        "alternate" without an alt time is not a storable state
+        (``update_flight`` rejects it)."""
+        session = app_db()
+        row = session.get(FlightRow, sample_flight.id)
+        # 23:00 alternate + a 10h move → 09:00 the next day, re-anchored onto the
+        # new departure's day at 23:00… so instead pin the alternate at the hour
+        # the move will land on, which is the collision case.
+        row.alt_departure_time = _FUTURE_DEPARTURE_DT.replace(hour=23)
+        row.flexibility = "alternate"
+        session.commit()
+        session.close()
+
+        # Move the departure to 23:00 the next day: the alternate re-dates onto
+        # that day at its own 23:00, i.e. exactly the primary.
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=1)).replace(hour=23)
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": new_dt.isoformat()},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["alt_departure_time"] is None
+        assert body["flexibility"] == "none"
 
     def test_move_flight_keeps_subscribers(self, client, app_db, sample_flight):
         """``delete_flight`` cascades flight_subscriptions while ``share_code`` is
@@ -1521,6 +1553,39 @@ class TestRefreshParamsChangeGate:
             assert resp.json()["status"] == "already_fresh"
         finally:
             client.app.state.db_path = ""
+
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_freshness_endpoint_agrees_with_the_button(
+        self, mock_list, mock_status, client, sample_flight,
+    ):
+        """`GET /packs/freshness` feeds the freshness bar, and `freshness-markers.md`
+        promises the bar agrees with what the refresh button will do.
+
+        Wrapping only the two refresh endpoints would have moved the original
+        symptom rather than fixed it: the banner would read "up to date" right
+        after a parameter edit while the button ran a full refresh.
+        """
+        mock_list.return_value = [self._pack_for(sample_flight)]
+        mock_status.return_value = self._fresh_status()
+
+        # Untouched flight: the tiered gate still applies.
+        resp = client.get(f"/api/flights/{sample_flight.id}/packs/freshness")
+        assert resp.status_code == 200
+        assert resp.json()["refresh_decision"]["mode"] == "none"
+
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(hours=2)).isoformat()
+        assert client.patch(
+            f"/api/flights/{sample_flight.id}", json={"departure_time": new_dt},
+        ).status_code == 200
+
+        resp = client.get(f"/api/flights/{sample_flight.id}/packs/freshness")
+        assert resp.status_code == 200
+        decision = resp.json()["refresh_decision"]
+        assert decision["mode"] == "full"
+        # The model-wait fields describe a wait that no longer gates anything.
+        assert decision["pending_models"] == []
+        assert decision["eta_useful"] is None
 
     def test_params_hash_covers_the_forecast_inputs(self, sample_flight):
         """Every field the pipeline's forecast depends on moves the hash; the

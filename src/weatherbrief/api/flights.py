@@ -1506,14 +1506,22 @@ def shift_alt_departure(
 
     The alternate is shifted by the same delta as the primary departure, so a
     pilot who pushes a flight one day out keeps their "…or two hours later"
-    two hours later.
+    two hours later. That is the whole-day case, which is the common one.
 
     The stored invariant is stricter than a plain shift, though: ``update_flight``
     requires the alternate to be on the *same calendar day* as the primary and to
     differ from it. A sub-day move can break the first — 23:00 + 2h crosses
-    midnight while 01:00 + 2h does not — so a shifted alternate that lands on
-    another day is re-anchored to the new departure's day, keeping its time of
-    day. If that collides with the primary there is no valid alternate left and
+    midnight while 09:00 + 2h does not — and then the delta simply cannot be
+    preserved: no time on the primary's day is 14 hours after 11:00.
+
+    When that happens we fall back to the alternate's **original time of day** on
+    the new departure's day, rather than the shifted one. Keeping the shifted
+    clock time is worse than useless: in the 09:00/23:00 → 11:00 case it yields
+    01:00, which is ten hours *before* the primary — silently inverting the
+    "later alternative" the pilot set up. Their chosen 23:00 at least stays their
+    chosen 23:00, and stays after the primary.
+
+    If the result collides with the primary there is no valid alternate left and
     we return ``None``; the caller then also drops ``flexibility`` from
     ``"alternate"``, because the pair must stay consistent.
 
@@ -1525,9 +1533,12 @@ def shift_alt_departure(
     if source_alt is None:
         return None
     anchor = new_departure.astimezone(timezone.utc)
-    shifted = (source_alt + (new_departure - source_departure)).astimezone(timezone.utc)
+    source_alt_utc = source_alt.astimezone(timezone.utc)
+    shifted = (source_alt_utc + (new_departure - source_departure)).astimezone(timezone.utc)
     if shifted.date() != anchor.date():
-        shifted = shifted.replace(year=anchor.year, month=anchor.month, day=anchor.day)
+        shifted = source_alt_utc.replace(
+            year=anchor.year, month=anchor.month, day=anchor.day,
+        )
     return None if shifted == anchor else shifted
 
 

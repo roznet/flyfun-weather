@@ -80,10 +80,7 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// eviction order) as `deleteFlight` below.
     func moveFlight(flightId: String, request: MoveFlightRequest) async throws -> FlightResponse {
         let moved = try await online.moveFlight(flightId: flightId, request: request)
-        for entry in await cache.cachedPacks() where entry.flightId == flightId {
-            await cache.deletePack(flightId: flightId, timestamp: entry.timestamp)
-        }
-        await cache.removeFlightDirectory(flightId: flightId)
+        await evictLocalCopies(of: [flightId])
         return moved
     }
 

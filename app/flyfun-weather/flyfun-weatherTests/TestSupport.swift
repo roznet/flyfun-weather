@@ -109,8 +109,13 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         lastMoveRequest = request
         return try moveFlightResult.get()
     }
+    /// Awaited *inside* `triggerRefresh` before it returns — lets a test hold the
+    /// queued refresh suspended and prove `saveEditedFlight` already returned.
+    var beforeTriggerRefreshReturn: (@Sendable () async -> Void)?
+
     func triggerRefresh(flightId: String) async throws {
         triggeredRefreshIds.append(flightId)
+        if let hook = beforeTriggerRefreshReturn { await hook() }
         // Results are consumed in order so a test can drive the 409-then-succeed
         // retry; once exhausted, every further call succeeds.
         if !triggerRefreshResults.isEmpty {
