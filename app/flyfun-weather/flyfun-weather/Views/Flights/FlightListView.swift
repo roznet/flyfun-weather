@@ -20,6 +20,10 @@ struct FlightListView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showAddFlight = false
     @State private var showSettings = false
+    /// In-app help guide (`/help.html`) — see `WebPageSheet` for why it's web.
+    @State private var showHelp = false
+    /// Native "Send Feedback" sheet (the web help page's modal, in-app).
+    @State private var showFeedback = false
     @State private var showSignOutWarning = false
     @State private var editingFlight: FlightResponse?
     /// A flight the user chose to file a PIREP for from the list (context menu),
@@ -198,6 +202,18 @@ struct FlightListView: View {
                                 Label("Open Website", systemImage: "safari")
                             }
 
+                            Button {
+                                showHelp = true
+                            } label: {
+                                Label("Help", systemImage: "questionmark.circle")
+                            }
+
+                            Button {
+                                showFeedback = true
+                            } label: {
+                                Label("Send Feedback", systemImage: "exclamationmark.bubble")
+                            }
+
                             Divider()
 
                             Button(role: .destructive) {
@@ -230,6 +246,13 @@ struct FlightListView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showHelp) {
+                WebPageSheet(url: .flyfunWeb("help.html"))
+                    .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showFeedback) {
+                FeedbackFormView()
             }
             .sheet(item: $editingFlight) { flight in
                 if let repo = appState.repository {
