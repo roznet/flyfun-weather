@@ -1,6 +1,7 @@
 /** Shared utilities for the Flyfun Weather web app. */
 
 import { logout, type CurrentUser } from './adapters/auth-adapter';
+import { matchedWaypointIndices } from './helpers/flight-search';
 import { t, getAcceptLanguage, getLocale } from './i18n/i18n';
 
 // --- HTML escaping ---
@@ -332,22 +333,49 @@ export interface CompactRoute {
 /** Compact route renderer: shows first 2 + ellipsis + last 2 when the route
  *  has more than `maxVisible` (default 4) waypoints; otherwise the full
  *  chain. Returns HTML-escaped output ready for innerHTML. */
-export function flightRouteCompact(waypoints: string[], maxVisible: number = 4): CompactRoute {
+export function flightRouteCompact(
+  waypoints: string[],
+  maxVisible: number = 4,
+  tokens: string[] = [],
+): CompactRoute {
   if (waypoints.length === 0) {
     return { html: '', fullText: '', isTruncated: false };
   }
   const fullText = waypoints.join(' \u2192 ');
-  const escaped = waypoints.map(escapeHtml);
-  if (waypoints.length <= maxVisible) {
-    return { html: escaped.join(' \u2192 '), fullText, isTruncated: false };
-  }
-  const head = escaped.slice(0, 2).join(' \u2192 ');
-  const tail = escaped.slice(-2).join(' \u2192 ');
-  return {
-    html: `${head} \u2192 \u2026 \u2192 ${tail}`,
-    fullText,
-    isTruncated: true,
+  const matched = tokens.length > 0 ? matchedWaypointIndices(waypoints, tokens) : new Set<number>();
+  const render = (i: number): string => {
+    const safe = escapeHtml(waypoints[i]);
+    return matched.has(i) ? `<strong class="route-match">${safe}</strong>` : safe;
   };
+
+  if (waypoints.length <= maxVisible) {
+    return { html: waypoints.map((_, i) => render(i)).join(' \u2192 '), fullText, isTruncated: false };
+  }
+
+  // Head/tail window, widened to always include filter matches (#542): without
+  // this a flight surfaced by an intermediate waypoint renders as
+  // `LFMD \u2192 MTL \u2192 \u2026 \u2192 EGTF`, with the code you searched for hidden inside the
+  // ellipsis \u2014 the row then looks unrelated to the query that found it.
+  const n = waypoints.length;
+  // Anchors are split evenly between the two ends, so `maxVisible` genuinely
+  // bounds the window (at 4 this is the historical first-2 + last-2).
+  const perEnd = Math.max(1, Math.floor(maxVisible / 2));
+  const visible = new Set<number>();
+  for (let i = 0; i < perEnd; i++) {
+    visible.add(i);
+    visible.add(n - 1 - i);
+  }
+  for (const i of matched) visible.add(i);
+  const ordered = [...visible].sort((a, b) => a - b);
+
+  const parts: string[] = [];
+  let prev = -1;
+  for (const i of ordered) {
+    if (prev >= 0) parts.push(i === prev + 1 ? ' \u2192 ' : ' \u2192 \u2026 \u2192 ');
+    parts.push(render(i));
+    prev = i;
+  }
+  return { html: parts.join(''), fullText, isTruncated: ordered.length < n };
 }
 
 /** Normalize an unknown caught value into a user-facing error string.

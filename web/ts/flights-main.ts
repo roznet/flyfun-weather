@@ -679,6 +679,16 @@ async function init(): Promise<void> {
     void store.getState().loadDebriefStats();
   };
 
+  // Flights-list filters (#542). Two section-scoped queries: upcoming filters
+  // future + recent in the browser, past round-trips to the server.
+  const filterHandlers = (state: { upcomingQuery: string; pastQuery: string }) => ({
+    upcomingQuery: state.upcomingQuery,
+    pastQuery: state.pastQuery,
+    onUpcomingQuery: (q: string) => store.getState().setUpcomingQuery(q),
+    onPastQuery: (q: string) => void store.getState().setPastQuery(q),
+  });
+  ui.wireUpcomingFilter((q) => store.getState().setUpcomingQuery(q));
+
   store.subscribe((state, prev) => {
     if (
       state.flights !== prev.flights ||
@@ -686,7 +696,9 @@ async function init(): Promise<void> {
       state.activeRefreshes !== prev.activeRefreshes ||
       state.selectedIds !== prev.selectedIds ||
       state.debriefStats !== prev.debriefStats ||
-      state.loaded !== prev.loaded
+      state.loaded !== prev.loaded ||
+      state.upcomingQuery !== prev.upcomingQuery ||
+      state.pastQuery !== prev.pastQuery
     ) {
       ui.renderFlightList(
         state.flights,
@@ -702,6 +714,7 @@ async function init(): Promise<void> {
         (id) => store.getState().unsubscribeFlight(id),
         state.debriefStats,
         refreshAfterDebrief,
+        filterHandlers(state),
       );
     }
     if (state.flights !== prev.flights) {

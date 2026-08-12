@@ -29,6 +29,7 @@ from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.notify.badge import unseen_flight_ids
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
+from weatherbrief.api.flight_search import MAX_QUERY_LEN, matches as _search_matches, parse_query
 from weatherbrief.api.preferences import load_flight_order
 from weatherbrief.storage.flights import (
     SHARE_CODE_RE,
@@ -673,6 +674,7 @@ def list_all_flights(
     response: Response,
     past_limit: int | None = Query(default=None, ge=0),
     past_offset: int = Query(default=0, ge=0),
+    past_q: str | None = Query(default=None, max_length=MAX_QUERY_LEN),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -687,6 +689,14 @@ def list_all_flights(
     omitted (iOS/MCP clients), the full past list is returned unchanged. The
     ``X-Past-Total`` response header always carries the full past count so the
     client knows whether more pages exist.
+
+    Filtering (#542): ``past_q`` filters the ``past`` section by route tokens
+    (see ``api/flight_search``). It is past-scoped on purpose — it sits
+    alongside ``past_limit``/``past_offset``, and the web client filters the
+    always-fully-loaded future + recent sections in the browser instead. The
+    filter is applied *before* the header and the slice, so ``X-Past-Total``
+    reports the number of **matches** and "show more" pages through the
+    filtered set rather than the whole history.
 
     Section computation runs over the *full* owned set before slicing, so
     ``_compute_recent_section`` still sees every past flight.
@@ -740,6 +750,13 @@ def list_all_flights(
     # arrive as a ``fastapi.params.Depends`` instance and never match.
     if load_flight_order(db, user_id) == "soonest_first":
         _reorder_future_soonest_first(other, other_meta)
+
+    # Filter before the count + slice so "show more" pages through matches.
+    # Runs after section classification so a filtered-out past flight still
+    # counted towards ``_compute_recent_section`` above.
+    search_tokens = parse_query(past_q)
+    if search_tokens:
+        past = [p for p in past if _search_matches(p.waypoints, p.route_name, search_tokens)]
 
     response.headers["X-Past-Total"] = str(len(past))
     if past_limit is not None:

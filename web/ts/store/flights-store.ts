@@ -24,9 +24,18 @@ export interface FlightsState {
   error: string | null;
   selectedIds: Set<string>;  // flights ticked for bulk actions
 
+  // Filters (#542). Two independent, section-scoped queries: `upcomingQuery`
+  // filters future + recent purely in the browser (those sections always come
+  // back in full), while `pastQuery` round-trips to the server because the
+  // past section is paginated and the matches may not be loaded yet.
+  upcomingQuery: string;
+  pastQuery: string;
+
   // Actions
   loadFlights: () => Promise<void>;
   loadMorePast: () => Promise<void>;
+  setUpcomingQuery: (q: string) => void;
+  setPastQuery: (q: string) => Promise<void>;
   loadDebriefStats: () => Promise<void>;
   pollActiveRefreshes: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
@@ -49,6 +58,12 @@ export interface FlightsState {
   bulkDeleteSelected: () => Promise<{ deleted: number; notFound: number }>;
 }
 
+/** Monotonic token for past-filter fetches. Typing fires a request per
+ *  (debounced) keystroke and they can land out of order — only the newest one
+ *  is allowed to write to the store, so a slow early response can't overwrite
+ *  the results of a later, narrower query. */
+let pastQuerySeq = 0;
+
 export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
   pastTotal: 0,
@@ -59,6 +74,8 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   loadingMore: false,
   error: null,
   selectedIds: new Set(),
+  upcomingQuery: '',
+  pastQuery: '',
 
   loadFlights: async () => {
     set({ loading: true, error: null });
@@ -67,10 +84,39 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       // flight's inline `latest_briefing`, so a single request paints the
       // page — no per-flight /packs/latest round-trips. Only the past section
       // is paginated; future + recent always come back in full.
-      const { flights, pastTotal } = await api.fetchFlights({ pastLimit: PAST_PAGE_SIZE });
+      // Any active past filter rides along so a background reload (e.g. after
+      // a debrief) doesn't silently drop it.
+      const { flights, pastTotal } = await api.fetchFlights({
+        pastLimit: PAST_PAGE_SIZE,
+        pastQuery: get().pastQuery || undefined,
+      });
       set({ flights, pastTotal, loading: false, loaded: true });
     } catch (err) {
       set({ loading: false, error: `Failed to load flights: ${err}` });
+    }
+  },
+
+  setUpcomingQuery: (q) => {
+    // Pure client-side: future + recent are always fully loaded, so this is a
+    // re-render, not a fetch.
+    set({ upcomingQuery: q });
+  },
+
+  setPastQuery: async (q) => {
+    const seq = ++pastQuerySeq;
+    // Reset to the first page: offsets from the previous query index into a
+    // different result set.
+    set({ pastQuery: q });
+    try {
+      const { flights, pastTotal } = await api.fetchFlights({
+        pastLimit: PAST_PAGE_SIZE,
+        pastQuery: q || undefined,
+      });
+      if (seq !== pastQuerySeq) return;  // superseded by a later keystroke
+      set({ flights, pastTotal, loaded: true });
+    } catch (err) {
+      if (seq !== pastQuerySeq) return;
+      set({ error: `Failed to filter flights: ${err}` });
     }
   },
 
@@ -86,6 +132,9 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       const { flights: page, pastTotal } = await api.fetchFlights({
         pastLimit: PAST_PAGE_SIZE,
         pastOffset: loadedPast,
+        // Under a filter, `loadedPast` counts loaded *matches*, which is the
+        // right offset into the filtered set the server is paging.
+        pastQuery: get().pastQuery || undefined,
       });
       // The page also re-lists future + recent (always returned in full); keep
       // only the genuinely new past rows and append them to the past bucket.
