@@ -256,6 +256,88 @@ class TestSystemContentCacheBreakpoint:
         cfg = load_digest_config("openai")
         assert _system_content("HEAD", "TAIL", cfg.llm, longrange=False) == "HEADTAIL"
 
+    def test_uncacheable_locale_gets_a_plain_string(self):
+        """A locale off the allowlist bills 1x rather than 2x for a dead write."""
+        from weatherbrief.digest.llm_digest import _system_content
+        out = _system_content(
+            "HEAD", "TAIL", self._cfg(), longrange=False, locale_cacheable=False,
+        )
+        assert out == "HEADTAIL"
+
+
+class TestCacheLocaleAllowlist:
+    """Which locales earn a cache breakpoint.
+
+    Locale is injected *before* the head/tail split, so unlike guidance it
+    forks the cached head. The allowlist keeps sparse locales from paying the
+    2x write premium on an entry that expires unread — measured on production
+    2026-08-11 as `de`: 6 digests / 11 days, 0 hits, 2 wasted writes.
+    """
+
+    def test_none_and_en_and_unknown_all_resolve_together(self):
+        """The three render a byte-identical head, so they must decide alike."""
+        from weatherbrief.digest.llm_config import DigestConfig, resolve_locale_key
+        assert resolve_locale_key(None) == "en"
+        assert resolve_locale_key("en") == "en"
+        # No zz.md on disk -> falls back to English, so it shares the entry.
+        assert resolve_locale_key("zz") == "en"
+
+        cfg = DigestConfig()
+        heads = {cfg.load_prompt_parts("briefer", locale=loc)[0]
+                 for loc in (None, "en", "zz")}
+        assert len(heads) == 1, "None/en/unknown must render one identical head"
+        assert all(cfg.should_cache_locale(loc) for loc in (None, "en", "zz"))
+
+    def test_translated_locale_is_excluded_by_default(self):
+        from weatherbrief.digest.llm_config import DigestConfig
+        cfg = DigestConfig()
+        assert cfg.should_cache_locale("de") is False
+        # ...and it really is a different head, i.e. a real fork being avoided.
+        assert (cfg.load_prompt_parts("briefer", locale="de")[0]
+                != cfg.load_prompt_parts("briefer", locale="en")[0])
+
+    def test_allowlist_is_configurable_without_a_code_change(self):
+        """Turning a locale on once it earns its keep is a config edit."""
+        from weatherbrief.digest.llm_config import DigestConfig
+        assert DigestConfig(cache_locales=["en", "de"]).should_cache_locale("de")
+
+    def test_shipped_default_config_caches_english_only(self):
+        from weatherbrief.digest.llm_config import load_digest_config
+        cfg = load_digest_config()
+        assert cfg.cache_locales == ["en"]
+        assert cfg.should_cache_locale(None) is True
+        assert all(cfg.should_cache_locale(loc) is False for loc in ("de", "es", "fr"))
+
+    def _sent_content(self, locale):
+        """What ``briefer_node`` actually puts on the wire for ``locale``."""
+        from unittest.mock import MagicMock, patch
+        from weatherbrief.digest.llm_config import DigestConfig
+        from weatherbrief.digest.llm_digest import briefer_node
+
+        structured = MagicMock()
+        structured.invoke.return_value = {
+            "raw": None, "parsed": MagicMock(), "parsing_error": None,
+        }
+        llm = MagicMock()
+        llm.with_structured_output.return_value = structured
+        with patch("weatherbrief.digest.llm_digest.create_llm", return_value=llm):
+            briefer_node({
+                "config": DigestConfig(), "context": "ctx",
+                "longrange": False, "locale": locale,
+            })
+        return structured.invoke.call_args[0][0][0]["content"]
+
+    def test_call_site_actually_threads_the_flag(self):
+        """The gate is worthless if ``briefer_node`` forgets to pass it.
+
+        A config flag wired to nothing fails silently — exactly how the
+        ``head``/``tail`` split broke the eval call site. Assert on the wire
+        format, not on the predicate.
+        """
+        assert isinstance(self._sent_content(None), list)      # cached: blocks
+        assert isinstance(self._sent_content("en"), list)
+        assert isinstance(self._sent_content("de"), str)       # uncached: plain
+
 
 class TestEvalCacheCallSite:
     """The eval is the only legitimate caller of a non-production TTL.

@@ -162,6 +162,7 @@ def _system_content(
     llm_config: LLMConfig,
     longrange: bool,
     ttl: str = DIGEST_CACHE_TTL,
+    locale_cacheable: bool = True,
 ) -> str | list[dict]:
     """System message content, with a prompt-cache breakpoint where it pays.
 
@@ -191,7 +192,14 @@ def _system_content(
     premium wins outright.  That override is only legitimate because the eval
     does not write to the ledger.
 
-    Two cases fall back to a plain string:
+    Three cases fall back to a plain string:
+
+    * **A locale outside ``DigestConfig.cache_locales``** (``locale_cacheable``
+      False).  Locale is injected before the head/tail split, so each one forks
+      the cached head — and a locale too sparse to re-read its entry inside the
+      TTL pays 2x for a write nobody reads.  Defaults True so the non-Anthropic
+      and long-range paths, which never reach the breakpoint anyway, need not
+      thread it through; the production caller passes it explicitly.
 
     * **Non-Anthropic providers.** ``cache_control`` is Anthropic-only wire
       format, and ``configs/weather_digest/openai.json`` points this same
@@ -205,7 +213,7 @@ def _system_content(
       prefix is 4096 tokens, well above that prompt's ~1.5k, so a breakpoint
       there caches nothing and silently costs nothing either.
     """
-    if llm_config.provider != "anthropic" or longrange:
+    if llm_config.provider != "anthropic" or longrange or not locale_cacheable:
         return head + tail
     cache_write_multiplier_for(ttl)  # reject a TTL the rate card cannot price
     # Breakpoint on the head only. Everything after it is uncached, which is
@@ -240,7 +248,10 @@ def briefer_node(state: DigestState) -> dict:
         raw_result = structured_llm.invoke([
             {
                 "role": "system",
-                "content": _system_content(head, tail, llm_config, longrange),
+                "content": _system_content(
+                    head, tail, llm_config, longrange,
+                    locale_cacheable=config.should_cache_locale(locale),
+                ),
             },
             {"role": "user", "content": state["context"]},
         ])
