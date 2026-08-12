@@ -1,6 +1,12 @@
 # Flyfun Weather
 
+[![Tests](https://github.com/roznet/flyfun-weather/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/roznet/flyfun-weather/actions/workflows/tests.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 **Medium-range aviation weather assessment for cross-country GA flights in Europe**
+
+🌍 **[weather.flyfun.aero](https://weather.flyfun.aero)** — live web app &nbsp;·&nbsp; 📱 **[iOS / iPadOS app](https://apps.apple.com/app/id6760951972)**
 
 > The Python package and module are named `weatherbrief`; the product is **Flyfun Weather**.
 
@@ -10,7 +16,7 @@ Flyfun Weather fetches forecast data from multiple numerical weather prediction 
 
 ## What it does
 
-- **Multi-model forecasting** — Fetches 6 NWP models via Open-Meteo (GFS, ECMWF IFS, DWD ICON, UKMO, Meteo-France, Best Match) at 8 pressure levels along your route, with high-resolution **GRIB2 enrichment** (upper-air soundings, cloud microphysics) direct from ECMWF IFS, DWD ICON-EU, and NOAA GFS where coverage allows
+- **Multi-model forecasting** — Fetches 6 NWP models via Open-Meteo (GFS, ECMWF IFS, DWD ICON, UKMO, Meteo-France, Best Match) at up to 28 pressure levels along your route, with high-resolution **GRIB2 enrichment** (upper-air soundings, cloud microphysics) direct from ECMWF IFS, DWD ICON-EU, and NOAA GFS where coverage allows
 - **~85 derived metrics** — From raw NWP data, derives thermodynamic indices (CAPE, CIN, Lifted Index, K-Index, etc.), cloud layers, icing zones (multiple methods), CAT turbulence risk, convective potential, wind shear, and more using MetPy
 - **20+ route advisories across 11 categories** — Deterministic hazard evaluators (icing incl. freezing precipitation, cloud, en-route visibility/precipitation, turbulence incl. wave-corroborated mountain wind, convective incl. terminal convective & LLWS, winds-aloft trip impact, airport conditions incl. density altitude, feasibility, model quality, fronts, sun/daylight) with per-model GREEN/AMBER/RED severity grading and worst/majority aggregation
 - **D-0 observations** — METAR/TAF for departure/arrival airports plus route **SIGMETs** (area hazards), with a deterministic banner flagging conditions that have worsened since the last refresh
@@ -24,6 +30,12 @@ Flyfun Weather fetches forecast data from multiple numerical weather prediction 
 - **Navigation database** — Resolves non-airport waypoints (5-letter fixes, navaids, free-route points) from ~95,900 deduplicated points built from four free public sources, refreshed on the 28-day AIRAC/NASR cycle
 - **PDF/HTML reports & email** — Self-contained briefing reports you can download or email to yourself
 - **Terrain-aware** — SRTM 90m elevation profiles for mountain crossing risk assessment
+- **Pan-European forecast map** — Standalone map of the same derived metrics across Europe, independent of any single route
+- **Native iOS / iPadOS app** — SwiftUI client sharing the same API: flights, briefing, cross-section, map, Skew-T, push notifications when a briefing is ready
+- **PIREPs** — File your own pilot reports and read others' (permission-gated per user)
+- **Post-flight debrief** — Rate a briefing after you fly, so assessments can be checked against what actually happened
+- **Forecast verification** — Model forecasts scored against later observations and analyses, feeding a skill view per model and metric (admin-facing while it settles)
+- **MCP server** — Exposes flights, briefings, advisory detail and airport weather as tools for AI assistants (Claude, ChatGPT), with OAuth 2.1
 
 ## Weather Models
 
@@ -36,7 +48,7 @@ Flyfun Weather fetches forecast data from multiple numerical weather prediction 
 | **UKMO** | UK Met Office | 7 days |
 | **Meteo-France** | Meteo-France Arpege | 6 days |
 
-Not all variables are available from all models (e.g., omega/vertical velocity is missing from ICON and Meteo-France, visibility from ECMWF). WeatherBrief derives fallbacks where possible and clearly indicates when data is unavailable.
+Not all variables are available from all models (e.g., omega/vertical velocity is missing from ICON and Meteo-France, visibility from ECMWF). Flyfun Weather derives fallbacks where possible and clearly indicates when data is unavailable.
 
 ## Route Advisories
 
@@ -67,11 +79,15 @@ Advisory parameters are user-tunable (terrain margins, percentage thresholds, et
 
 ## Tech Stack
 
-**Backend:** Python 3.12+ / FastAPI / Pydantic v2 / SQLAlchemy / MetPy / Matplotlib / LangChain+LangGraph
+**Backend:** Python 3.11+ / FastAPI / Pydantic v2 / SQLAlchemy + Alembic / MetPy / Matplotlib / LangChain+LangGraph / FastMCP
 
-**Frontend:** TypeScript / Vanilla DOM (no framework) / Zustand / Canvas API / esbuild
+**Frontend:** TypeScript / Vanilla DOM (no framework) / Zustand / Canvas API / Leaflet / esbuild
+
+**iOS / iPadOS:** Swift / SwiftUI / Xcode
 
 **Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Multi-provider OAuth (Google, Apple)
+
+**Testing:** pytest (~5,000 tests) / vitest / Playwright — all gated by [CI](.github/workflows/tests.yml) on every push and PR
 
 ## Project Structure
 
@@ -79,18 +95,32 @@ Advisory parameters are user-tunable (terrain margins, percentage thresholds, et
 src/weatherbrief/
 ├── models/           # Pydantic v2 data models
 ├── pipeline.py       # Core engine: fetch → analyze → outputs
-├── fetch/            # Data retrieval (Open-Meteo, SRTM elevation, GRAMET, DWD text)
+├── tasks/            # Independently runnable pipeline stages (fetch, analyze, advise, …)
+├── fetch/            # Data retrieval (Open-Meteo, GRIB2 enrichment, SRTM, GRAMET, DWD text)
 ├── analysis/
 │   ├── wind.py       # Headwind/crosswind decomposition
 │   ├── comparison.py # Multi-model divergence scoring
 │   ├── advisories/   # 20+ route hazard evaluators (registry pattern)
 │   └── sounding/     # MetPy thermodynamic analysis (clouds, icing, CAT, convective)
+├── frontal/          # Frontal zone detection
+├── hewson/           # Hewson θe diagnostic field precompute (NPZ snapshots)
+├── era5/             # ERA5 reanalysis loaders for retrospective calibration
 ├── digest/           # Text digest, Skew-T plots, LLM briefing (LangGraph)
 ├── api/              # FastAPI app (auth, flights, packs, preferences, admin)
+├── mcp/              # MCP server exposing briefings as AI-assistant tools
+├── connectors/       # Shared agent-facing response shaping (MCP + GPT/OpenAPI)
 ├── db/               # SQLAlchemy ORM + Alembic migrations
 ├── storage/          # File-based artifact persistence
 ├── report/           # HTML/PDF rendering (Jinja2 + WeasyPrint)
-└── notify/           # Email delivery
+├── notify/           # Email delivery + push notifications
+├── verify/           # Forecast verification vs METAR/TAF (collect, stats, digest, archive)
+├── debriefs/         # Post-flight pilot judgement capture
+├── analytics/        # Privacy-first usage analytics
+├── costs.py          # Cost ledger / spend tracking
+├── eval_workbench/   # Dev-only golden-labelling workbench for the LLM digest eval
+├── scenario/         # Scenario previews ("where/when could I fly") — measurement harness
+├── triage/           # AI-assisted feedback triage CLI
+└── release/          # Release-notes / What's New CLI
 
 web/
 ├── ts/
@@ -98,30 +128,38 @@ web/
 │   ├── store/          # Zustand state management
 │   ├── managers/       # DOM rendering (briefing, advisories, flights)
 │   ├── adapters/       # API communication
+│   ├── i18n/           # Locale bundles (en, fr, de, es)
 │   └── data/           # Metrics catalog, display config
+├── tests/              # Playwright e2e specs + vitest unit tests
 ├── css/style.css
 ├── index.html          # Flights list
 ├── briefing.html       # Briefing report (collapsible sections)
 ├── flight.html         # Single flight detail / edit
 ├── maps.html           # Pan-European forecast map
+├── verification.html   # Forecast verification / model skill (admin)
+├── pireps.html         # Pilot reports
 ├── settings.html       # User preferences + advisory tuning
 ├── admin.html          # User approval + usage tracking
 ├── login.html          # Authentication page
 ├── help.html           # User help / FAQ + What's New
 ├── donate.html         # Optional support / donations (Stripe)
+├── privacy.html        # Privacy policy
+├── eval.html           # LLM digest eval workbench (dev/admin)
 ├── cost-summary.html   # Service cost transparency (admin)
 └── user-costs.html     # Personal usage & cost tracking
 
+app/flyfun-weather/   # Native iOS / iPadOS app (SwiftUI, Xcode project)
 configs/              # LLM digest configuration and prompts
-designs/              # Design documentation (40+ docs)
-tests/                # pytest test suite
+designs/              # Design documentation (46 docs)
+tests/                # pytest test suite (~200 modules, ~5,000 tests)
+alembic/versions/     # Database migrations
 ```
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.11+ (CI runs 3.13)
 - Node.js 22+ (for frontend build)
 - SQLite (development) or MySQL (production)
 
@@ -148,7 +186,8 @@ cd ..
 
 ### Environment Variables
 
-Create a `.env` file in the project root:
+Copy [`.env.sample`](.env.sample) to `.env` in the project root and fill in what you need.
+The essentials:
 
 ```env
 ENVIRONMENT=development
@@ -185,11 +224,39 @@ cd web && npm run dev
 
 Then open http://localhost:8000
 
-**CLI (single briefing):**
+**MCP server (AI-assistant tools):**
 
 ```bash
-weatherbrief EGTK LFQA LSGS --date 2026-03-15 --time 9 --alt 8000
+python -m weatherbrief.mcp
 ```
+
+Other operational entry points follow the same pattern — `python -m weatherbrief.verify`
+(forecast verification), `python -m weatherbrief.hewson` (frontal diagnostic precompute),
+`python -m weatherbrief.release` (What's New stream). Each prints its own usage.
+
+### Testing
+
+The full suite runs in CI on every push and PR (see the badge above); to run it locally:
+
+```bash
+# Python — ~5,000 tests. `-m 'not slow'` is applied by default via pyproject
+source venv/bin/activate
+pytest
+
+# Frontend typecheck, build and unit tests
+cd web
+npx tsc --noEmit
+npm run build
+npx vitest run
+
+# End-to-end (boots the API server itself; needs the venv at the repo root)
+npx playwright install --with-deps chromium
+npx playwright test
+```
+
+CI is defined in [`.github/workflows/tests.yml`](.github/workflows/tests.yml) and runs
+three parallel jobs — `pytest`, `typecheck + build + vitest`, and `playwright`. Commits
+touching only `app/`, `designs/`, `.claude/` or Markdown skip it.
 
 ### Docker
 
@@ -226,7 +293,7 @@ These per-point results feed into the 20+ route-level advisory evaluators that p
 ## Known Limitations
 
 - **Not a certified weather product** — this is an exploratory tool for understanding NWP data
-- **Coarse vertical resolution** — 8 pressure levels (1000-300 hPa) means thin cloud layers can be missed
+- **Vertical resolution varies by model** — GFS resolves 28 pressure levels (~25 hPa spacing in the lower atmosphere), but ECMWF offers only 13 via Open-Meteo, so thin cloud layers can still be missed on the coarser models
 - **No ensemble data** — currently uses deterministic runs only (except precipitation probability from GFS/ECMWF)
 - **European focus** — airport database and some features (DWD text, Autorouter GRAMET) are Europe-centric
 - **NWP cloud vs sounding cloud** — two independent cloud detection methods can disagree (see design docs for details)
@@ -256,3 +323,7 @@ MIT
 ## Contributing
 
 This is an early-stage personal project. Issues and discussions are welcome. If you're a meteorologist or aviation weather professional and spot something wrong, please open an issue — corrections are very much appreciated.
+
+If you're sending a pull request, the [test suite](#testing) gates every PR — running
+`pytest` and the web checks locally first will save you a round trip. Migrations must
+work on both SQLite (dev) and MySQL (prod); use `batch_alter_table` for any `ALTER`.
