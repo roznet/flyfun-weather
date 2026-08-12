@@ -58,11 +58,17 @@ export interface FlightsState {
   bulkDeleteSelected: () => Promise<{ deleted: number; notFound: number }>;
 }
 
-/** Monotonic token for past-filter fetches. Typing fires a request per
- *  (debounced) keystroke and they can land out of order — only the newest one
- *  is allowed to write to the store, so a slow early response can't overwrite
- *  the results of a later, narrower query. */
-let pastQuerySeq = 0;
+/** Monotonic token shared by *every* async path that replaces the flights list:
+ *  filter keystrokes, "show more past", and background reloads.
+ *
+ *  These race against each other, not just against themselves. A "show more"
+ *  page or a post-debrief `loadFlights()` that resolves after a filter change
+ *  would otherwise repaint the list with results for the *previous* query while
+ *  the filter input still shows the new one — silently wrong, and invisible
+ *  until you notice the rows don't match what you typed. Newest request started
+ *  wins; superseded ones drop their data but still clear their own loading flag.
+ */
+let flightsLoadSeq = 0;
 
 export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
@@ -78,6 +84,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   pastQuery: '',
 
   loadFlights: async () => {
+    const seq = ++flightsLoadSeq;
     set({ loading: true, error: null });
     try {
       // The card and the debrief form read everything they need from each
@@ -90,8 +97,18 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         pastLimit: PAST_PAGE_SIZE,
         pastQuery: get().pastQuery || undefined,
       });
+      // Superseded (e.g. the user typed a filter while this was in flight):
+      // drop the stale payload, but still clear our own spinner.
+      if (seq !== flightsLoadSeq) {
+        set({ loading: false });
+        return;
+      }
       set({ flights, pastTotal, loading: false, loaded: true });
     } catch (err) {
+      if (seq !== flightsLoadSeq) {
+        set({ loading: false });
+        return;
+      }
       set({ loading: false, error: `Failed to load flights: ${err}` });
     }
   },
@@ -103,7 +120,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   },
 
   setPastQuery: async (q) => {
-    const seq = ++pastQuerySeq;
+    const seq = ++flightsLoadSeq;
     // Reset to the first page: offsets from the previous query index into a
     // different result set.
     set({ pastQuery: q });
@@ -112,10 +129,10 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         pastLimit: PAST_PAGE_SIZE,
         pastQuery: q || undefined,
       });
-      if (seq !== pastQuerySeq) return;  // superseded by a later keystroke
+      if (seq !== flightsLoadSeq) return;  // superseded by a later load
       set({ flights, pastTotal, loaded: true });
     } catch (err) {
-      if (seq !== pastQuerySeq) return;
+      if (seq !== flightsLoadSeq) return;
       set({ error: `Failed to filter flights: ${err}` });
     }
   },
@@ -125,6 +142,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
     // loadedPast wouldn't advance, so concurrent calls would all request the
     // same offset and waste round-trips.
     if (get().loadingMore) return;
+    const seq = ++flightsLoadSeq;
     const current = get().flights;
     const loadedPast = current.filter((f) => f.section === 'past').length;
     set({ loadingMore: true });
@@ -136,12 +154,24 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         // right offset into the filtered set the server is paging.
         pastQuery: get().pastQuery || undefined,
       });
+      // Superseded by a filter change or reload started after this page: both
+      // `current` and the page itself describe the old query, so appending
+      // would revert the list to stale rows under a filter that no longer
+      // matches them.
+      if (seq !== flightsLoadSeq) {
+        set({ loadingMore: false });
+        return;
+      }
       // The page also re-lists future + recent (always returned in full); keep
       // only the genuinely new past rows and append them to the past bucket.
       const existingIds = new Set(current.map((f) => f.id));
       const newPast = page.filter((f) => f.section === 'past' && !existingIds.has(f.id));
       set({ flights: [...current, ...newPast], pastTotal, loadingMore: false });
     } catch (err) {
+      if (seq !== flightsLoadSeq) {
+        set({ loadingMore: false });
+        return;
+      }
       set({ error: `Failed to load more flights: ${err}`, loadingMore: false });
     }
   },

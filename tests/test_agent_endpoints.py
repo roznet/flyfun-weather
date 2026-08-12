@@ -335,3 +335,42 @@ def test_advisory_detail_injects_cross_check_guardrail(client, app_db):
     assert "per_model" in body and len(body["per_model"]) == 2
     assert "convective_note" in body
     assert body["flight_id"] == flight.id
+
+
+def test_list_flights_does_not_leak_query_sentinels(client, app_db):
+    """The connector calls ``flights.list_all_flights`` directly, not via DI.
+
+    Any ``Query()``-defaulted parameter that the call site forgets to pass binds
+    to the ``fastapi.params.Query`` sentinel instead of its default. The
+    sentinel is truthy, so it sails past ``if not q`` guards and only blows up
+    deeper in — ``past_q`` reached ``parse_query`` and raised
+    ``AttributeError: 'Query' object has no attribute 'split'``, taking down
+    ``listFlights`` on every call (PR #547 review).
+
+    This is the ``Depends()`` footgun from CLAUDE.md wearing a ``Query()`` hat.
+    The endpoint had no test at all, which is why the regression shipped —
+    so this guards the whole call, not just ``past_q``.
+    """
+    flight = _seed_flight(app_db, suffix="agent-list")
+
+    resp = client.get("/agent/v1/flights")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    ids = [f["id"] for f in body["flights"]]
+    assert flight.id in ids
+
+
+def test_list_flights_returns_all_sections(client, app_db):
+    """past_q must not be applied when the connector omits it.
+
+    Guards the inverse mistake of the fix: passing something truthy (or letting
+    a stray default through) would silently filter the connector's list.
+    """
+    _seed_flight(app_db, suffix="agent-list-a")
+    _seed_flight(app_db, suffix="agent-list-b")
+
+    resp = client.get("/agent/v1/flights")
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["flights"]) == 2

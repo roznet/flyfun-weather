@@ -182,8 +182,14 @@ def list_flights(
     (GREEN/AMBER/RED/UNAVAILABLE) from the latest briefing. Use this to see
     which flights need attention or have stale briefings.
     """
+    # Every Query()-defaulted parameter must be passed explicitly: called
+    # outside FastAPI's request handling, an omitted one binds to the
+    # ``fastapi.params.Query`` sentinel itself rather than its default, and the
+    # sentinel is truthy — so ``past_q`` would reach ``parse_query`` and blow up
+    # on ``.split()``. Same footgun as ``Depends()`` defaults (see CLAUDE.md).
     flights = flights_api.list_all_flights(
-        response=Response(), past_limit=None, past_offset=0, user_id=user_id, db=db,
+        response=Response(), past_limit=None, past_offset=0, past_q=None,
+        user_id=user_id, db=db,
     )
     result = []
     for f in flights:
