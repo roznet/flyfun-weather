@@ -21,11 +21,13 @@ _FUTURE_DEPARTURE_DT = _FUTURE_DEPARTURE.replace(
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from weatherbrief.api.app import create_app
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
 from flyfun_common.db.models import UserPreferencesRow, UserRow
+from weatherbrief.db.models import FlightRow
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.storage.flights import pack_dir_for, save_flight, save_pack_meta
 
@@ -507,6 +509,120 @@ class TestFlightsAPI:
         assert resp.status_code == 409
         assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
         assert client.get(f"/api/flights/{other.id}").status_code == 200
+
+    def test_move_flight_preserves_flexibility_and_notify_override(
+        self, client, app_db, sample_flight,
+    ):
+        """A move must not silently reset timing-scan and bell state.
+
+        The moved flight used to be built with only profile/aircraft/private/
+        auto_refresh/share_code carried over, so ``flexibility`` and
+        ``notify_override`` fell back to their column defaults — a pilot who
+        moved a next_day-scanning, always-notify flight lost both with no warning.
+        """
+        session = app_db()
+        row = session.get(FlightRow, sample_flight.id)
+        row.flexibility = "next_day"
+        row.notify_override = "notify"
+        session.commit()
+        session.close()
+
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move", json={"departure_time": new_dt},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["flexibility"] == "next_day"
+        assert body["notify_override"] == "notify"
+
+    def test_move_flight_shifts_alt_departure_time(self, client, app_db, sample_flight):
+        """The pinned alternate rides along, shifted by the same delta."""
+        session = app_db()
+        row = session.get(FlightRow, sample_flight.id)
+        row.alt_departure_time = _FUTURE_DEPARTURE_DT + timedelta(hours=3)  # 12:00
+        row.flexibility = "alternate"
+        session.commit()
+        session.close()
+
+        new_dt = _FUTURE_DEPARTURE_DT + timedelta(days=2)
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": new_dt.isoformat()},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["flexibility"] == "alternate"
+        alt = datetime.fromisoformat(body["alt_departure_time"])
+        # Same +3h offset, on the new date — the invariant update_flight enforces
+        # (alternate on the same calendar day as the primary) still holds.
+        assert alt == new_dt + timedelta(hours=3)
+        assert alt.date() == datetime.fromisoformat(body["departure_time"]).date()
+
+    def test_move_flight_alt_departure_reanchored_across_midnight(
+        self, client, app_db, sample_flight,
+    ):
+        """A sub-day move that splits the pair re-anchors instead of storing an
+        alternate on a different day than the primary.
+
+        Departure 09:00 with an alternate at 23:00 the same day: pushing the
+        departure 2h later would carry the alternate to 01:00 the *next* day,
+        which ``update_flight`` would reject outright. The alternate keeps its
+        shifted time of day but stays on the departure's day.
+        """
+        session = app_db()
+        row = session.get(FlightRow, sample_flight.id)
+        row.alt_departure_time = _FUTURE_DEPARTURE_DT.replace(hour=23)
+        row.flexibility = "alternate"
+        session.commit()
+        session.close()
+
+        new_dt = _FUTURE_DEPARTURE_DT + timedelta(hours=2)  # 11:00, same day
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": new_dt.isoformat()},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        alt = datetime.fromisoformat(body["alt_departure_time"])
+        departure = datetime.fromisoformat(body["departure_time"])
+        assert alt.date() == departure.date()
+        assert alt.hour == 1
+        assert body["flexibility"] == "alternate"
+
+    def test_move_flight_keeps_subscribers(self, client, app_db, sample_flight):
+        """``delete_flight`` cascades flight_subscriptions while ``share_code`` is
+        carried over — so a move used to leave the shared link resolving while
+        every subscriber was silently dropped. They must follow the flight."""
+        from weatherbrief.db.models import FlightSubscriptionRow
+
+        session = app_db()
+        session.add(UserRow(
+            id="sub-user", provider="local", provider_sub="sub",
+            email="sub@localhost", display_name="Subscriber", approved=True,
+        ))
+        session.flush()
+        session.add(FlightSubscriptionRow(
+            flight_id=sample_flight.id, user_id="sub-user",
+        ))
+        session.commit()
+        session.close()
+
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move", json={"departure_time": new_dt},
+        )
+        assert resp.status_code == 200
+        new_id = resp.json()["id"]
+
+        session = app_db()
+        subscriber_ids = session.execute(
+            select(FlightSubscriptionRow.user_id).where(
+                FlightSubscriptionRow.flight_id == new_id
+            )
+        ).scalars().all()
+        session.close()
+        assert subscriber_ids == ["sub-user"]
 
     def test_move_flight_not_owner(self, client, app_db):
         """Cannot move someone else's flight."""
