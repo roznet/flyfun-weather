@@ -101,7 +101,27 @@ Python edit needs a manual TS + Swift-baseline update (source of truth = Python)
 The `KEYWORD_MAP` matcher is web-only by design (iOS dropped `matchTagsInText` for
 v1) — don't flag its absence on iOS.
 
-### 5. Known parity gaps (informational)
+### 5. Release-stream category rendering
+
+Both clients render the same `/api/messages` stream, and both decide *per client*
+how a category is presented. The category set is server-owned
+(`MessageCategory` in `src/weatherbrief/api/messages.py`, mirrored by
+`VALID_CATEGORIES` in `src/weatherbrief/release/__main__.py`); the chip labels are
+hand-copied:
+
+| Role | File | Symbols |
+|---|---|---|
+| Source of truth (set) | `src/weatherbrief/api/messages.py` | `MessageCategory` |
+| Web labels | `web/ts/i18n/locales/*.json` | `messages.category.*` |
+| iOS labels | `app/flyfun-weather/.../Models/API/SystemMessageResponse.swift` | `SystemMessage.categoryLabel` |
+
+Check that every category in the Literal has a label on both clients, and that the
+English strings match. **The install call to action is web-only by design** — the
+web emits it under `app_release` entries from `APP_STORE_URL` (`web/ts/utils.ts`);
+a reader already inside the app has nothing to install, so its absence on iOS is
+not a divergence.
+
+### 6. Known parity gaps (informational)
 
 List these so they are **not** re-flagged as new divergences, and note any *new*
 gap the branch introduced:
@@ -110,7 +130,7 @@ gap the branch introduced:
   `sld-bands`, `surface-obscuration-bands`.
 - Cross-section color themes (web-only; tracked in #320).
 
-### 6. SYNC-comment integrity
+### 7. SYNC-comment integrity
 
 Verify reciprocity for each `SYNC`-commented file pair:
 

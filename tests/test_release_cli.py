@@ -79,6 +79,23 @@ def test_import_dry_run_writes_nothing(cli_db, tmp_path):
     assert _all(cli_db) == []
 
 
+def test_import_reads_stdin(cli_db, monkeypatch):
+    """`import -` reads the JSON from stdin.
+
+    This is the path that publishes an iOS release entry on prod: `release-notes/`
+    isn't in the container image, so the drafted file is piped in over SSH rather
+    than named as a path the container can't see.
+    """
+    import io
+
+    entries = [{"date": "2026-08-20", "title": "iOS 1.5 — Something",
+                "body": "- A bullet", "category": "app_release", "highlight": True}]
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps(entries)))
+
+    cli.main(["import", "-"])
+    assert _all(cli_db) == [("2026-08-20", "iOS 1.5 — Something", True)]
+
+
 def test_import_rejects_bad_category(cli_db, tmp_path):
     path = _write(tmp_path, [
         {"date": "2026-05-20", "title": "A", "body": "x", "category": "bogus", "highlight": False},

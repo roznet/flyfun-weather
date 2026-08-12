@@ -253,7 +253,7 @@ struct AdvisoryTabView: View {
                 Text("Watch")
                     .font(.headline)
                     .foregroundStyle(Theme.text)
-                DigestMarkdownText(markdown: watch)
+                MarkdownLiteText(markdown: watch)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Theme.cardPadding)
