@@ -259,6 +259,7 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.metoffice_charts_default_id = meta.metoffice_charts_default_id
     row.metoffice_charts_in_coverage = meta.metoffice_charts_in_coverage
     row.metoffice_charts_within_horizon = meta.metoffice_charts_within_horizon
+    row.flight_params_hash = meta.flight_params_hash
 
 
 def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
@@ -395,7 +396,39 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         metoffice_charts_default_id=row.metoffice_charts_default_id,
         metoffice_charts_in_coverage=row.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=row.metoffice_charts_within_horizon,
+        flight_params_hash=row.flight_params_hash,
     )
+
+
+def compute_flight_params_hash(flight: Flight) -> str:
+    """Fingerprint the flight parameters a briefing is computed *for*.
+
+    The same tuple ``_compute_flight_id`` hashes — route, departure time,
+    altitude, ceiling, duration — except that this one covers the *whole*
+    departure instant and the full waypoint list, not just the time-of-day and
+    the route slug. It has to: a mid-route waypoint insert and a
+    same-date time nudge both keep the flight ID and both change the forecast.
+
+    Stamped onto every pack at persist time and compared by the refresh gate, so
+    an edited flight re-runs the pipeline even when no new model run has landed
+    (issue #552). Deliberately excludes the profile, aircraft and Flexibility:
+    those don't change the weather the pipeline fetches, and a profile change
+    already invalidates via ``advisories_only``.
+
+    Truncated to 32 hex chars to fit the column; a collision would need two
+    genuinely different parameter sets sharing a 128-bit prefix.
+    """
+    payload = json.dumps(
+        {
+            "waypoints": [w.upper() for w in flight.waypoints],
+            "departure": _ensure_utc(flight.departure_time).isoformat(),
+            "alt": flight.cruise_altitude_ft,
+            "ceil": flight.flight_ceiling_ft,
+            "dur": flight.flight_duration_hours,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
 # --- Flight CRUD ---

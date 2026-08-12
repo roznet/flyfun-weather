@@ -279,6 +279,14 @@ class BriefingPackRow(Base):
         Boolean, default=False, server_default="0",
     )
     integrity_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Hash of the flight parameters this pack was computed for — route,
+    # departure time, altitude, ceiling, duration (see
+    # ``storage.flights.compute_flight_params_hash``). The refresh gate compares
+    # it with the flight's current hash so an edited flight always re-runs the
+    # pipeline, even when no new model run has landed yet (#552). NULL for packs
+    # written before migration 088; the gate treats NULL as "don't know" and
+    # leaves the model-freshness decision alone.
+    flight_params_hash: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
 

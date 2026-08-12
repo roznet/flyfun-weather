@@ -73,6 +73,7 @@ from weatherbrief.models import (
     RouteWindOverlay,
 )
 from weatherbrief.storage.flights import (
+    compute_flight_params_hash,
     list_packs,
     load_pack_meta,
     pack_dir_for,
@@ -1062,6 +1063,50 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     )
 
 
+def apply_params_change_override(
+    decision: RefreshDecision,
+    latest: BriefingPackMeta,
+    flight: Flight,
+) -> RefreshDecision:
+    """Force a full refresh when the newest pack was built for *different* flight
+    parameters (issue #552).
+
+    :func:`decide_refresh` is a pure function of model-run freshness and knows
+    nothing about the flight itself having changed. Right after a departure-time,
+    duration, altitude or route edit there is no new model run, so it answers
+    ``none`` (or ``realtime`` at D-0) and the endpoint hands the OLD pack back as
+    ``complete``. The client — which the PATCH just told ``refetch_needed`` —
+    then reports "Briefing regenerated" over a briefing computed for the previous
+    departure time. ``force=true`` is admin-gated, so no client could work around
+    it.
+
+    Comparing the pack's stamped parameter hash with the flight's current one
+    closes that. It is stateless and self-healing: it needs no edit bookkeeping,
+    and it catches an edit made on another device or through the MCP tools just
+    as well as one made here.
+
+    A pack with no stamp (written before migration 088) is left alone —
+    treating NULL as "changed" would force one full refresh for every legacy pack
+    the first time its owner pressed the button.
+    """
+    if decision.mode == "full" or latest.flight_params_hash is None:
+        return decision
+    if latest.flight_params_hash == compute_flight_params_hash(flight):
+        return decision
+    logger.info(
+        "Refresh gate for %s: forcing full — pack params hash %s != current %s",
+        flight.id, latest.flight_params_hash, compute_flight_params_hash(flight),
+    )
+    return decision.model_copy(update={
+        "mode": "full",
+        "reason": (
+            "Flight parameters changed since this briefing was built "
+            "— running full refresh"
+        ),
+        "eta_useful": None,
+    })
+
+
 def _can_force_refresh(request: Request, db: Session) -> bool:
     """Return True if the user is allowed to force-refresh (admin or dev mode)."""
     if is_dev_mode():
@@ -1596,6 +1641,10 @@ def _build_pack_meta(
         metoffice_charts_default_id=result.metoffice_charts_default_id,
         metoffice_charts_in_coverage=result.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=result.metoffice_charts_within_horizon,
+        # What this briefing was computed *for*. The refresh gate compares it
+        # with the flight's current parameters so an edit forces a full re-run
+        # even before any new model run lands (#552).
+        flight_params_hash=compute_flight_params_hash(flight),
     )
 
 
@@ -1989,7 +2038,9 @@ async def refresh_briefing(
         if packs:
             latest = packs[0]
             status = _build_data_status(latest, flight)
-            decision = decide_refresh(status, _days_out_now(flight))
+            decision = apply_params_change_override(
+                decide_refresh(status, _days_out_now(flight)), latest, flight,
+            )
             if decision.mode != "full":
                 logger.info(
                     "Refresh gate for %s: mode=%s (%s)",
@@ -2223,7 +2274,9 @@ async def refresh_briefing_stream(
             if packs:
                 latest = packs[0]
                 status = _build_data_status(latest, flight)
-                decision = decide_refresh(status, _days_out_now(flight))
+                decision = apply_params_change_override(
+                    decide_refresh(status, _days_out_now(flight)), latest, flight,
+                )
                 if decision.mode != "full":
                     logger.info(
                         "Refresh gate for %s (stream): mode=%s (%s)",

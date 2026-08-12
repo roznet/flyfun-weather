@@ -127,6 +127,16 @@ The `min(…, n_eligible)` cap handles small selections: 2 models selected → D
 - Auto-refresh scheduler (`scheduler._auto_refresh_one`): same **full/none** policy, but **no** realtime fallback — live METAR/TAF is the verification loop's job. So a non-`full` decision means skip.
 - `force=true` (admin) still bypasses the gate entirely.
 
+**The gate knows about model runs, not about the flight (issue #552).** `decide_refresh` is a pure function of *model-run* freshness, so it cannot see that the flight's own parameters changed. Right after a departure-time, duration, altitude or route edit no new run exists → `n_updated == 0` → `mode != "full"` → both endpoints return the **old pack** as `complete`, while the `PATCH` that preceded it has just answered `refetch_needed`. The client then reports "Briefing regenerated" over a briefing computed for the previous departure time (and `force=true` is admin-gated, so nothing could work around it).
+
+`briefing_packs.flight_params_hash` closes that. Every pack is stamped at persist time (`_build_pack_meta` → `storage.flights.compute_flight_params_hash`) with a hash of the flight's **route + departure instant + altitude + ceiling + duration**; `apply_params_change_override` wraps the `decide_refresh` call on both endpoints and forces `mode="full"` when the stamp differs from the flight's current hash.
+
+- Stateless and self-healing — no edit bookkeeping, and an edit made on another device or via MCP is caught just the same.
+- Broader than `_compute_flight_id`'s tuple on purpose: that one hashes the time-of-day and the route *slug*, so a mid-route waypoint insert and a same-date time nudge both keep the flight ID while changing the forecast.
+- Deliberately excludes profile / aircraft / Flexibility: they don't change the weather that is fetched, and a profile change already invalidates via `advisories_only`.
+- **NULL means "don't know", not "changed"** — packs predating migration 088 have no stamp, and forcing a full refresh for each of them on its owner's next press would be a stampede for no benefit. The model-freshness decision stands for those.
+- The auto-refresh scheduler is deliberately *not* wired to this: its question is "has new model data landed?", and a parameter edit is already followed by a client-driven refresh.
+
 **Freshness UI agrees with the button.** `GET /packs/freshness` attaches the decision as `DataStatus.refresh_decision` (and the gated SSE complete carries it on the returned pack's `data_status`), so the client never re-derives gate logic. The freshness bar (`web/ts/managers/briefing-ui.ts:renderFreshnessBar`) renders by mode:
 - `realtime` (D-0) → "day of flight — refresh updates live METAR/TAF" (a press is always useful).
 - `none` → **one consistent "Up to date" line at every stage**: "Up to date · next full refresh in ~{eta_useful} (awaiting {pending_models})". It answers *when* a full refresh becomes worthwhile (the run that crosses the threshold) and *what* we're waiting on (the not-yet-updated models), so the wording doesn't lurch as runs trickle in — the `awaiting` list just shrinks. Deliberately **not** keyed on `n_updated`: whether 0 or 2 of 3 models have ticked, the message and styling stay the same; only reaching the threshold flips it.
@@ -210,6 +220,7 @@ When tuning registry offsets:
 - Existing helpers wrapped: `fetch/model_status.py`, `fetch/grib/{grib_fetch,icon_eu_fetch,ecmwf_watcher}.py`
 - Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_finalize_refresh` (records `model_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
 - Tiered gate: `api/packs.py:decide_refresh` + `_refresh_threshold`/`_days_out_now`/`RefreshDecision`, `ModelStatus.covers_horizon`; wired into `refresh_briefing`, `refresh_briefing_stream`, `scheduler._auto_refresh_one`; realtime seam `tasks/route_weather.run_realtime_refresh` (see [metar-taf-route-weather.md](metar-taf-route-weather.md))
+- Parameter-change override (#552): `api/packs.py:apply_params_change_override`, `storage/flights.py:compute_flight_params_hash`, `BriefingPackMeta.flight_params_hash`, migration `088`
 - Loop wiring: `scheduler.py:run_freshness_loop`, `api/app.py:lifespan`
 - Admin endpoint: `api/admin.py:freshness_markers`
 - Public catalog: `fetch/freshness/catalog.py`, `api/data_sources.py` (GET `/api/data-sources`)
