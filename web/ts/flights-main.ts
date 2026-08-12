@@ -670,6 +670,7 @@ async function init(): Promise<void> {
     ),
     onBulkDelete: bulkDeleteHandler,
     onClearSelection: () => store.getState().clearSelection(),
+    onPruneSelection: (visibleIds: string[]) => store.getState().pruneSelection(visibleIds),
   };
 
   const refreshAfterDebrief = () => {
