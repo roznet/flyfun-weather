@@ -80,7 +80,12 @@ function injectBlindStyle(): void {
   document.head.appendChild(style);
 }
 
-function el(tag: string, props: Partial<HTMLElement> = {}, html = ''): HTMLElement {
+// `props` is assigned onto the created element, so it legitimately carries
+// element-specific fields (`placeholder`, `value`, …) that don't exist on the
+// base HTMLElement. Typing it as Partial<HTMLElement> made every such call a
+// type error; the tag is a runtime string, so the precise element type isn't
+// knowable here anyway.
+function el(tag: string, props: Record<string, unknown> = {}, html = ''): HTMLElement {
   const e = document.createElement(tag);
   Object.assign(e, props);
   if (html) e.innerHTML = html;
