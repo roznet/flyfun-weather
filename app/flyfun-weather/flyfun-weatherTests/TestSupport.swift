@@ -40,6 +40,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
     var updateFlightResult: Result<UpdateFlightResponse, Error> = .failure(MockError.notStubbed("updateFlight"))
     var moveFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("moveFlight"))
+    /// Queued outcomes for successive `triggerRefresh` calls; empty (the default)
+    /// means every call succeeds.
+    var triggerRefreshResults: [Result<Void, Error>] = []
     /// Pack history for the edited flight — the Move confirm's "discards N
     /// briefings" count reads this. Empty by default (the no-packs copy).
     var packsResult: Result<[PackMetaResponse], Error> = .success([])
@@ -108,6 +111,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func triggerRefresh(flightId: String) async throws {
         triggeredRefreshIds.append(flightId)
+        // Results are consumed in order so a test can drive the 409-then-succeed
+        // retry; once exhausted, every further call succeeds.
+        if !triggerRefreshResults.isEmpty {
+            try triggerRefreshResults.removeFirst().get()
+        }
     }
     func deleteFlight(id: String) async throws {
         deletedFlightIds.append(id)
