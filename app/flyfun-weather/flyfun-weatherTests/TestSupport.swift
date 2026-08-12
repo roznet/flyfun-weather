@@ -42,6 +42,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     /// Delete succeeds by default (the common case under test is the happy path);
     /// set a `.failure` to drive the surfaced-error branch.
     var deleteFlightResult: Result<Void, Error> = .success(())
+    /// Bulk delete: by default every requested id comes back confirmed-deleted.
+    /// Set a closure to model a partial result (`not_found`) or a server failure.
+    var bulkDeleteHandler: (@Sendable ([String]) throws -> BulkDeleteResponse)?
     var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
@@ -58,6 +61,8 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var interpretRouteCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
     private(set) var deletedFlightIds: [String] = []
+    /// One entry per `bulkDeleteFlights` call, so a test can assert chunk sizes.
+    private(set) var bulkDeleteRequests: [[String]] = []
     private(set) var lastCreateRequest: CreateFlightRequest?
     private(set) var lastInterpretRawRoute: String?
 
@@ -88,6 +93,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func deleteFlight(id: String) async throws {
         deletedFlightIds.append(id)
         try deleteFlightResult.get()
+    }
+    func bulkDeleteFlights(ids: [String]) async throws -> BulkDeleteResponse {
+        bulkDeleteRequests.append(ids)
+        if let handler = bulkDeleteHandler { return try handler(ids) }
+        return BulkDeleteResponse(deleted: ids, notFound: [])
     }
     func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
     func profiles() async throws -> [ProfileResponse] { [] }

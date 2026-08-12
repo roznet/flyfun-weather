@@ -12,6 +12,7 @@ Server-side work is phased to match the app roadmap. Endpoints listed below are 
 | `/auth/me` | GET | 1 | Current user info |
 | `/api/flights` | GET | 1 | List user's flights |
 | `/api/flights/{id}` | GET | 1 | Flight details |
+| `/api/flights/bulk-delete` | POST | done | Delete many owned flights at once (`{ids: […≤200]}` → `{deleted, not_found}`); backs the app's multi-select sheet. Owner-scoped — other users' ids come back in `not_found`, not as an error |
 | `/api/flights/{id}/packs/latest` | GET | 1 | Latest pack metadata |
 | `/api/flights/{id}/packs/{ts}/snapshot` | GET | 1 | Full briefing data |
 | `/api/flights/{id}/packs/{ts}/advisories` | GET | 1 | Route advisories |

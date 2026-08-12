@@ -451,6 +451,58 @@ final class flyfun_weatherUITests: XCTestCase {
                       "tapping the toggle again should restore the flight list")
     }
 
+    /// Journey 10 (#553) — multi-select + bulk delete. Open the sheet from the
+    /// More menu, tick both fixture flights, delete, confirm — and check the rows
+    /// are gone from the flight list itself, not merely from the sheet.
+    ///
+    /// The whole point of the dedicated sheet is that it can't disturb the main
+    /// list, so the assertion has to land back on the main list.
+    @MainActor
+    func testBulkSelectAndDeleteFlights() throws {
+        let app = launchMockApp()
+        revealFlightList(app)
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-1"].waitForExistence(timeout: 10),
+                      "fixture-1 should be listed before the delete")
+
+        app.buttons["More"].firstMatch.tap()
+        let menuItem = app.buttons["bulkSelectMenuItem"].firstMatch
+        XCTAssertTrue(menuItem.waitForExistence(timeout: 5),
+                      "the More menu should offer Select & Delete Flights")
+        menuItem.tap()
+
+        // The sheet opens already in select mode, so a row tap ticks it.
+        let row1 = app.descendants(matching: .any)["selectFlightRow-fixture-1"].firstMatch
+        XCTAssertTrue(row1.waitForExistence(timeout: 10), "the selection sheet should list fixture-1")
+        row1.tap()
+        app.descendants(matching: .any)["selectFlightRow-fixture-2"].firstMatch.tap()
+
+        let deleteButton = app.buttons["bulkDeleteButton"].firstMatch
+        XCTAssertTrue(deleteButton.isEnabled, "Delete should be enabled once flights are selected")
+        deleteButton.tap()
+
+        // Destructive confirmation — an alert (never a popover, which would drop
+        // the Cancel button on iPad). SwiftUI doesn't always surface an
+        // accessibilityIdentifier set on an alert button, so fall back to the
+        // alert's own Delete button.
+        var confirm = app.buttons["confirmBulkDeleteButton"].firstMatch
+        if !confirm.waitForExistence(timeout: 5) {
+            confirm = app.alerts.buttons["Delete"].firstMatch
+        }
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a delete confirmation should appear")
+        XCTAssertTrue(app.alerts.buttons["Cancel"].firstMatch.exists,
+                      "the confirmation must keep a Cancel button on every idiom")
+        confirm.tap()
+
+        // Back on the flight list, both rows are gone. Deliberately no
+        // `revealFlightList` here: with every fixture deleted the list is replaced
+        // by its empty state, so the helper's `flightList` identifier is gone and
+        // it would fail the test on a *correct* outcome.
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: app.descendants(matching: .any)["flightCard-fixture-1"])
+        expectation(for: gone, evaluatedWith: app.descendants(matching: .any)["flightCard-fixture-2"])
+        waitForExpectations(timeout: 15)
+    }
+
     /// First element with an exact accessibility label, regardless of element type.
     /// SwiftUI renders a `Label(_:systemImage:)` as different element types across
     /// idioms, so matching on the label text is more durable than on `.staticTexts`.

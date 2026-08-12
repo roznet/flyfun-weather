@@ -28,6 +28,9 @@ struct FlightListView: View {
     /// offline from the cached stream (#550).
     @State private var showWhatsNew = false
     @State private var showSignOutWarning = false
+    /// Multi-select + bulk delete sheet (#553). A sheet, not an edit mode on this
+    /// list — see `FlightSelectionView` for why.
+    @State private var showBulkSelect = false
     @State private var editingFlight: FlightResponse?
     /// A flight the user chose to file a PIREP for from the list (context menu),
     /// presented as the reporting sheet. nil when closed.
@@ -232,6 +235,20 @@ struct FlightListView: View {
                                 Label("Send Feedback", systemImage: "exclamationmark.bubble")
                             }
 
+                            // Bulk delete lives behind the overflow menu, with the
+                            // other sheets — it's a rare, destructive power-user
+                            // action, not a primary affordance. Online-only, like
+                            // the per-row Delete swipe (the endpoint is a server
+                            // write and there's no offline queue for it).
+                            if let viewModel, !viewModel.isOffline, viewModel.state.hasData {
+                                Button {
+                                    showBulkSelect = true
+                                } label: {
+                                    Label("Select & Delete Flights…", systemImage: "checkmark.circle")
+                                }
+                                .accessibilityIdentifier("bulkSelectMenuItem")
+                            }
+
                             Divider()
 
                             Button(role: .destructive) {
@@ -276,6 +293,24 @@ struct FlightListView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showBulkSelect) {
+                if let repo = appState.repository,
+                   let viewModel, case .loaded(let flights) = viewModel.state {
+                    FlightSelectionView(
+                        flights: flights,
+                        order: appState.userPreferences.preferences.flightOrderPreference,
+                        repository: repo
+                    ) { deletedIds in
+                        // Same detail-pane hygiene as the single delete: an iPad
+                        // detail showing a flight that's just been deleted would
+                        // otherwise dangle on a flight the server no longer has.
+                        if case .flight(let shown) = selection, deletedIds.contains(shown.id) {
+                            selection = nil
+                        }
+                        Task { await viewModel.loadFlights() }
+                    }
+                }
             }
             .sheet(isPresented: $showHelp) {
                 WebPageSheet(url: .flyfunWeb("help.html"))
