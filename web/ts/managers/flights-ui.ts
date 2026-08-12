@@ -744,13 +744,17 @@ export function renderFlightList(
   // take it. Prune those, but only while a filter is actually active — with no
   // filter, `past` is merely the loaded page and pruning would silently drop
   // selections belonging to not-yet-loaded pages.
+  let effectiveSelected = selectedIds;
   if (filterActive && selectedIds.size > 0) {
     const visible = new Set([...futureShown, ...recentShown, ...past].map(f => f.id));
-    const hidden = [...selectedIds].filter(id => !visible.has(id));
-    if (hidden.length > 0) {
-      // Re-enters render via the store, but with nothing left to prune, so it
-      // settles after one extra pass rather than looping.
-      selection.onPruneSelection([...visible]);
+    if ([...selectedIds].some(id => !visible.has(id))) {
+      // Apply locally for the rest of *this* render, and push to the store on a
+      // microtask. Calling the store inline would update it synchronously,
+      // re-entering this function; the inner pass would draw the correct bar
+      // and then the outer pass would carry on and repaint it from its stale
+      // `selectedIds`, resurrecting the very selection we just dropped.
+      effectiveSelected = new Set([...selectedIds].filter(id => visible.has(id)));
+      queueMicrotask(() => selection.onPruneSelection([...visible]));
     }
   }
 
@@ -758,7 +762,7 @@ export function renderFlightList(
   const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
   const selectablePast = past.filter(f => f.role !== 'subscriber').map(f => f.id);
   renderSelectionBar(
-    selectedIds.size,
+    effectiveSelected.size,
     [...selectableActive, ...selectablePast],
     selectablePast,
     selection,
