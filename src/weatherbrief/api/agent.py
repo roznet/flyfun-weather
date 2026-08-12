@@ -133,8 +133,13 @@ def _freshness_dict(db: Session, user_id: str, flight_id: str) -> dict[str, Any]
         return {"fresh": False}
     try:
         status = packs_api._build_data_status(packs[0], flight)
-        status.refresh_decision = packs_api.decide_refresh(
-            status, packs_api._days_out_now(flight)
+        # Same override as ``/packs/freshness`` (which this mirrors): a pack
+        # built for parameters the flight no longer has is stale regardless of
+        # model runs.
+        status.refresh_decision = packs_api.apply_params_change_override(
+            packs_api.decide_refresh(status, packs_api._days_out_now(flight)),
+            packs[0],
+            flight,
         )
         return status.model_dump()
     except Exception:

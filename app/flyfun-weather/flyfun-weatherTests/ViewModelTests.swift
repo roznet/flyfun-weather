@@ -176,9 +176,11 @@ import MapKit
         #expect(vm.hasStructuralChange == false)
     }
 
-    /// The three-way branch the Save button takes: structural wins over the
-    /// re-brief confirm, which wins over a silent save.
-    @Test func saveBranchesStructuralThenRebriefThenSilent() {
+    /// The flags that drive the Save button's three-way branch. The branching
+    /// itself lives in `AddFlightView.continueEditAfterInterpret()` and is
+    /// exercised by the XCUITest journeys — this covers only the predicates it
+    /// reads, in the priority order it reads them.
+    @Test func saveBranchFlagsRankStructuralAboveRebrief() {
         // Aircraft-only → silent save.
         var vm = makeVM(flight: makeFlight(aircraftId: nil))
         vm.selectedAircraftId = 7
@@ -272,20 +274,94 @@ import MapKit
 
     /// The regression behind the second half of #544: a `refetch_needed` edit must
     /// *queue* the pipeline and return, not sit on the SSE stream for two minutes.
-    @Test func refetchNeededEditQueuesRefreshInsteadOfStreaming() async throws {
+    ///
+    /// The refresh is held suspended for the whole assertion, so this fails if
+    /// `saveEditedFlight` ever waits on it — checking only *which* repository
+    /// method was called would still pass against an awaited implementation.
+    @Test func refetchNeededEditReturnsBeforeTheRefreshCompletes() async throws {
         let flight = makeFlight()
         let repo = MockBriefingRepository()
         repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight,
                                                                   invalidation: .refetchNeeded))
+        let gate = TestGate()
+        repo.beforeTriggerRefreshReturn = { await gate.wait() }
         let vm = AddFlightViewModel(repository: repo, flight: flight)
         vm.flightDurationHours = 3.0
 
+        // Returns while the queued refresh is still suspended in the gate.
         let saved = await vm.saveEditedFlight(regenerate: true)
         #expect(saved?.id == flight.id)
-        // `saveEditedFlight` returned without waiting; the queueing task is the
-        // only thing still outstanding.
+
+        await gate.open()
         await vm.pendingRefreshTask?.value
         #expect(repo.triggeredRefreshIds == [flight.id])
+    }
+
+    // MARK: Move residual edits
+
+    /// `applyResidualEdits` exists because iOS has one Save button, so a single
+    /// edit can change the date *and* the aircraft — the move body has no field
+    /// for the latter.
+    @Test func moveCarriesAnAircraftChangeThroughAFollowUpPatch() async throws {
+        let flight = makeFlight(aircraftId: 3, departureTime: "2026-06-24T12:00:00Z")
+        let moved = makeFlight(id: "flt-moved", aircraftId: 3)
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(moved)
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: moved))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+        vm.selectedAircraftId = 9
+
+        #expect(await vm.moveFlight() != nil)
+        #expect(repo.lastUpdateRequest?.aircraftId == 9)
+    }
+
+    /// …but it must NOT fire for the alternate the pilot never touched.
+    ///
+    /// `alignedAltDepartureInstant` re-dates the alternate onto the departure's
+    /// day, so it always differs from the stored value once the day moves.
+    /// Comparing those two made the follow-up PATCH overwrite the
+    /// delta-preserving alt time `shift_alt_departure` had just computed
+    /// server-side — defeating the Phase 2 fix on every single move.
+    @Test func moveLeavesAnUntouchedAlternateToTheServer() async throws {
+        let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z",
+                                flexibility: .alternate,
+                                altDepartureTime: "2026-06-24T15:00:00Z")
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(makeFlight(id: "flt-moved"))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(48 * 3600)
+
+        #expect(await vm.moveFlight() != nil)
+        // No residual PATCH at all — nothing outside the move body changed.
+        #expect(repo.lastUpdateRequest == nil)
+    }
+
+    /// An alternate the pilot *did* edit still overrides the server's carry-over.
+    @Test func moveSendsAnEditedAlternate() async throws {
+        let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z",
+                                flexibility: .alternate,
+                                altDepartureTime: "2026-06-24T15:00:00Z")
+        let moved = makeFlight(id: "flt-moved")
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(moved)
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: moved))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(48 * 3600)
+        vm.setAltHour(17)
+
+        #expect(await vm.moveFlight() != nil)
+        // Bound to the new departure's UTC day, carrying the edited hour.
+        #expect(repo.lastUpdateRequest?.altDepartureTime == "2026-06-26T17:00:00Z")
+    }
+
+    /// The ceiling the form sends when nothing sets one must match what the
+    /// server would have picked had the field been omitted (18000), and what the
+    /// web form hard-codes — otherwise an iOS-created flight silently gets a
+    /// shallower altitude-advisory sweep than the same flight created on web.
+    @Test func defaultCeilingMatchesTheServerFallback() {
+        let vm = makeVM()
+        #expect(vm.flightCeilingFt == 18000)
     }
 
     // MARK: Form parity with the web (#552 phase 4)

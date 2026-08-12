@@ -14,7 +14,14 @@ final class AddFlightViewModel {
     /// Highest usable level for the altitude advisory sweep — the web's
     /// `flight_ceiling_ft`. Seeded from the flight when editing, from the
     /// selected profile when creating.
-    var flightCeilingFt: Int = 13000
+    ///
+    /// The fallback must match what the server would have chosen had the field
+    /// been omitted (`profile_settings.get("flight_ceiling_ft") or 18000`,
+    /// `api/flights.py`) and what the web form hard-codes (`index.html`). The
+    /// form now always *sends* this value, so a lower default here would quietly
+    /// give an iOS-created flight a shallower advisory sweep than the same flight
+    /// created on the web.
+    var flightCeilingFt: Int = 18000
     var flightDurationHours: Double = 2.0
     var selectedAircraftId: Int?
 
@@ -66,6 +73,17 @@ final class AddFlightViewModel {
     /// `.alternate` mode (net-new on iOS). Shares the route's timezone options
     /// with the primary departure picker.
     let altDepartureTime: DepartureTimeModel
+
+    /// Whether the pilot actually touched the alternate-departure controls this
+    /// session (set by `setAltHour`/`setAltMinute`/`setAltTimeZone`).
+    ///
+    /// Load-bearing on the Move path. `alignedAltDepartureInstant` re-dates the
+    /// alternate onto the departure's day, so after any date change it *always*
+    /// differs from the flight's stored alternate — comparing the two would make
+    /// `applyResidualEdits` fire a PATCH on every single move, overwriting the
+    /// delta-preserving value `shift_alt_departure` just computed server-side
+    /// and defeating this PR's own Phase 2 fix. Only a real edit may override it.
+    private(set) var altDepartureEdited = false
     /// Durable "has this pilot ever run a timing scan?" flag from `/usage` —
     /// gates the first-time explainer. Defaults to `false` so we err toward
     /// gently informing when it hasn't loaded.
@@ -221,7 +239,7 @@ final class AddFlightViewModel {
         if selectedProfileId != original.profileId { return true }
         if flexibility != original.effectiveFlexibility { return true }
         // An alternate-time change (in `.alternate` mode) is a real edit too.
-        if flexibility == .alternate, altDepartureChanged(from: original) { return true }
+        if flexibility == .alternate, altDepartureEdited { return true }
         guard let originalDate = original.departureDate else { return true }
         return abs(departureDate.timeIntervalSince(originalDate)) > 1
     }
@@ -233,15 +251,6 @@ final class AddFlightViewModel {
     var routeChangedFromOriginal: Bool {
         guard let original = editingFlight else { return true }
         return routeDiffers(from: original)
-    }
-
-    /// Whether the edited alt-departure instant differs from the flight's stored
-    /// one (or newly sets one). Used only in `.alternate` mode.
-    private func altDepartureChanged(from original: FlightResponse) -> Bool {
-        guard let originalAlt = original.altDepartureTime.flatMap({ Date.parseISO8601($0) }) else {
-            return true   // no stored alt time yet → setting one is a change
-        }
-        return abs(alignedAltDepartureInstant.timeIntervalSince(originalAlt)) > 1
     }
 
     // MARK: - Structural change (Move / Duplicate, #552)
@@ -331,6 +340,26 @@ final class AddFlightViewModel {
     /// departure time"). Surfaced inline rather than left to a 422.
     var altDepartureCollidesWithDeparture: Bool {
         flexibility == .alternate && alignedAltDepartureInstant == departureDate
+    }
+
+    /// The alternate-departure controls route through the view model rather than
+    /// binding straight to `altDepartureTime`, so a pilot edit is distinguishable
+    /// from the re-dating `alignedAltDepartureInstant` does on its own.
+    func setAltHour(_ hour: Int) {
+        altDepartureTime.setHour(hour)
+        altDepartureEdited = true
+    }
+
+    func setAltMinute(_ minute: Int) {
+        altDepartureTime.setMinute(minute)
+        altDepartureEdited = true
+    }
+
+    func setAltTimeZone(_ identifier: String) {
+        // A timezone switch preserves the instant, so on its own it changes
+        // nothing to send — but it is how the pilot re-expresses the time they
+        // want, and the hour/minute they pick next are read in this zone.
+        altDepartureTime.timeZoneId = identifier
     }
 
     /// Move `instant` onto `reference`'s UTC calendar day, preserving its UTC
@@ -932,11 +961,36 @@ final class AddFlightViewModel {
         do {
             let created = try await repository.createFlight(request)
             Self.logger.info("Duplicated flight \(editingFlight.id) \u{2192} \(created.id)")
-            return created
+            return await applyAlternateAfterCreate(to: created)
         } catch {
             errorMessage = Self.submitErrorMessage(error)
             Self.logger.error("Duplicate flight failed: \(error)")
             return nil
+        }
+    }
+
+    /// Restore `.alternate` on a freshly created copy.
+    ///
+    /// `POST /api/flights` rejects `flexibility == "alternate"` outright — it
+    /// needs an `alt_departure_time` only PATCH can set — so `duplicateFlight`
+    /// has to drop it from the create request. Without this follow-up the copy
+    /// would silently lose the pinned alternate the pilot was looking at, which
+    /// is the same create-then-patch dance the web form does. Best-effort: the
+    /// duplicate itself succeeded and the original is untouched, so a failure
+    /// here is logged rather than surfaced as a failed duplicate.
+    private func applyAlternateAfterCreate(to created: FlightResponse) async -> FlightResponse {
+        guard flexibility == .alternate else { return created }
+        let request = UpdateFlightRequest(
+            flexibility: .alternate,
+            altDepartureTime: Self.iso8601(
+                Self.alignUTCDay(of: altDepartureTime.instant, to: departureDate)
+            )
+        )
+        do {
+            return try await repository.updateFlight(flightId: created.id, request: request).flight
+        } catch {
+            Self.logger.error("Restoring the alternate on duplicate \(created.id) failed: \(error)")
+            return created
         }
     }
 
@@ -971,18 +1025,29 @@ final class AddFlightViewModel {
             request.flexibility = flexibility
             request.altDepartureTime = altDepartureTimePayload
             hasResidual = true
-        } else if flexibility == .alternate, altDepartureChanged(from: original) {
+        } else if flexibility == .alternate, altDepartureEdited {
             request.altDepartureTime = altDepartureTimePayload
             hasResidual = true
         }
 
         guard hasResidual else { return moved }
-        do {
-            return try await repository.updateFlight(flightId: moved.id, request: request).flight
-        } catch {
-            Self.logger.error("Post-move residual edit failed for \(moved.id): \(error)")
-            return moved
+        // Retried once: the move has already committed, so the realistic failure
+        // here is a transient hiccup in the few hundred ms between two requests,
+        // and losing the pilot's aircraft/profile edit to that would be silent.
+        for attempt in 0..<2 {
+            do {
+                return try await repository.updateFlight(flightId: moved.id, request: request).flight
+            } catch {
+                Self.logger.error(
+                    "Post-move residual edit failed for \(moved.id) (attempt \(attempt + 1)): \(error)"
+                )
+            }
         }
+        // Still the moved flight — the structural half of the edit stands. The
+        // non-structural half did not apply; say so rather than dismissing as if
+        // the whole save succeeded.
+        errorMessage = "The flight moved, but the aircraft/profile change didn't save. Re-open Edit to apply it."
+        return moved
     }
 
     /// Pilot-facing copy for a create/move/duplicate failure.

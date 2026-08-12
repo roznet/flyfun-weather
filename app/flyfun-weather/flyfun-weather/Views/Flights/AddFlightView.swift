@@ -646,7 +646,7 @@ struct AddFlightView: View {
             Spacer()
             Picker("Alt hour", selection: Binding(
                 get: { viewModel.altDepartureTime.hour },
-                set: { viewModel.altDepartureTime.setHour($0) }
+                set: { viewModel.setAltHour($0) }
             )) {
                 ForEach(0..<24, id: \.self) { h in
                     Text(String(format: "%02d", h)).tag(h)
@@ -657,7 +657,7 @@ struct AddFlightView: View {
             Text(":").foregroundStyle(.secondary)
             Picker("Alt minute", selection: Binding(
                 get: { viewModel.altDepartureTime.minuteOption },
-                set: { viewModel.altDepartureTime.setMinute($0) }
+                set: { viewModel.setAltMinute($0) }
             )) {
                 ForEach(DepartureTimeModel.minuteOptions, id: \.self) { m in
                     Text(String(format: "%02d", m)).tag(m)
@@ -669,7 +669,7 @@ struct AddFlightView: View {
 
         Picker("Alt timezone", selection: Binding(
             get: { viewModel.altDepartureTime.timeZoneId },
-            set: { viewModel.altDepartureTime.timeZoneId = $0 }
+            set: { viewModel.setAltTimeZone($0) }
         )) {
             ForEach(viewModel.altDepartureTime.options) { option in
                 Text(option.label).tag(option.identifier)
