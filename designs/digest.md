@@ -238,14 +238,47 @@ The `WEATHERBRIEF_GUIDANCE_DIR` env var can override the guidance directory to a
 - **Config files, not code** — switching providers (Anthropic <-> OpenAI) is a JSON change.
   `_system_content()` is gated on the resolved provider for exactly this reason: it attaches
   an Anthropic-only `cache_control` breakpoint, which must not reach `ChatOpenAI`.
-- **Prompt caching on the system block** — the tool schema plus system prompt (~4.7k tokens,
-  ~40% of a request) are identical across digests sharing a (locale, guidance) pair, and
-  Anthropic renders `tools` → `system` → `messages`, so one breakpoint covers both. 1-hour
-  TTL, chosen against measured inter-digest gaps; skipped for long-range, whose Haiku 4.5
-  prompt is below that model's 4096-token cacheable minimum. The TTL is **not** a local
-  constant — it is `costs.DIGEST_CACHE_TTL`, and the rate card's write multiplier is derived
-  from it, so the two cannot drift. See `designs/cost-attribution-design.md` for how the
-  read/write split is priced.
+- **Prompt caching on the system block** — the tool schema plus system prompt (~4.2k tokens,
+  ~30% of a request) sit before the pack context, and Anthropic renders `tools` → `system`
+  → `messages`, so one breakpoint covers both. Since `briefer_v3` the breakpoint is on the
+  *head* only and guidance lives in an uncached tail, so all three guidance presets share
+  one entry. 1-hour TTL, chosen against measured inter-digest gaps; skipped for long-range,
+  whose Haiku 4.5 prompt is below that model's 4096-token cacheable minimum. The TTL is
+  **not** a local constant — it is `costs.DIGEST_CACHE_TTL`, and the rate card's write
+  multiplier is derived from it, so the two cannot drift. See
+  `designs/cost-attribution-design.md` for how the read/write split is priced.
+- **Locale still forks the cached head, so caching is allowlisted** (`DigestConfig.cache_locales`,
+  default `["en"]`). Guidance was collapsed into the tail; locale cannot be, because
+  `_inject_locale` substitutes vocabulary tokens *throughout* the body and runs before the
+  head/tail split. Each locale is therefore its own cache entry, and an entry only pays back
+  above a ~53% hit rate — a locale too sparse to re-read inside the 1h TTL writes at 2x and
+  reads back never. `None`, `"en"` and any unknown locale resolve through
+  `resolve_locale_key()` to the same English head, so they share one entry; `de`/`es`/`fr`
+  bill a plain 1x until promoted. Promotion is a **config edit, decided from the ledger** —
+  see below.
+
+### Monitoring: when to promote a locale
+
+Re-run against production alongside the monthly cache review. Add a locale to `cache_locales`
+once it sustains more than roughly **one write per day** (below that, an entry costs more in
+2x writes than it returns). `briefing_usage` keys on `timestamp`, not `created_at`, and the
+long-range Haiku rows skip caching by design — filter to Sonnet or they drag the rate down.
+
+```sql
+SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(up.app_prefs_json,'$.locale')),'(none)') AS locale,
+       COUNT(DISTINCT f.user_id) AS users, COUNT(*) AS digests,
+       SUM(bu.llm_cache_read_tokens > 0)  AS hits,
+       SUM(bu.llm_cache_write_tokens > 0) AS writes
+FROM briefing_usage bu
+JOIN flights f ON f.id = bu.flight_id
+LEFT JOIN user_preferences up ON up.user_id = f.user_id
+WHERE bu.timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND bu.llm_model LIKE '%sonnet%'
+GROUP BY locale ORDER BY digests DESC;
+```
+
+Baseline at 2026-08-11 (11 days): `(none)` 208 digests / 157 hits, `en` 171 / 121 — one shared
+entry across 68 users. `de` 6 digests / 2 users / **0 hits, 2 writes** over gaps of 9 h to 8 d,
+which is what the allowlist exists to stop.
 - **Versioned prompts** — `briefer_v1.md` allows prompt iteration without code changes
 
 ## Gotchas

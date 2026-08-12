@@ -8,5 +8,6 @@
   },
   "prompts": {
     "briefer": "prompts/briefer_v3.md"
-  }
+  },
+  "cache_locales": ["en"]
 }

@@ -8,13 +8,35 @@ from pathlib import Path
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _CONFIGS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "weather_digest"
 _LOCALES_DIR = _CONFIGS_DIR / "prompts" / "locales"
 _GUIDANCE_DIR_DEFAULT = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "digest_guidance"
 
 DEFAULT_GUIDANCE = "balanced"
+
+# Locales whose rendered prompt head is worth a prompt-cache breakpoint.  See
+# ``DigestConfig.cache_locales`` for why this is an allowlist rather than "all".
+DEFAULT_CACHE_LOCALES = ["en"]
+
+
+def resolve_locale_key(locale: str | None) -> str:
+    """Resolve a requested locale to the locale file that will render.
+
+    ``None`` and ``"en"`` both resolve to ``en``, and so does any locale with no
+    file on disk — the three produce a **byte-identical** prompt head, which is
+    what makes them share one prompt-cache entry.  Callers deciding whether to
+    cache must key off this, not the raw request value: ``locale="zz"`` renders
+    English and should cache with everyone else.
+
+    Single source of truth for the rule — ``_inject_locale`` resolves through
+    here too, so the fallback cannot drift away from the caching decision.
+    """
+    lang = locale if locale and locale != "en" else "en"
+    if not (_LOCALES_DIR / f"{lang}.md").exists():
+        lang = "en"
+    return lang
 
 
 class LLMConfig(BaseModel):
@@ -53,6 +75,30 @@ class DigestConfig(BaseModel):
         temperature=0.0,
     )
     prompts: PromptsConfig = PromptsConfig()
+    # Locales that get a prompt-cache breakpoint.  Locale is injected *before*
+    # the head/tail split (vocabulary tokens land throughout the body), so
+    # unlike guidance it genuinely forks the cached head — one cache entry per
+    # locale.  A write costs 2x and only pays back above a ~53% hit rate, so a
+    # locale with traffic too sparse to re-read an entry inside the 1h TTL
+    # writes an entry nobody reads and bills 2x for the privilege.  Measured on
+    # production 2026-08-11: `de` ran 6 digests / 11 days across 2 users, gaps
+    # of 9h-8d, 0 hits and 2 wasted writes.  So: allowlist the locales dense
+    # enough to amortize, let the rest bill a plain 1x.
+    #
+    # This is deliberately *not* self-tuning — flipping it on is a decision
+    # made from the ledger, not from a request-time guess.  Re-run the locale
+    # cohort query in `designs/digest.md` and add a locale once it sustains
+    # more than roughly one write per day.
+    cache_locales: list[str] = Field(default_factory=lambda: list(DEFAULT_CACHE_LOCALES))
+
+    def should_cache_locale(self, locale: str | None) -> bool:
+        """Whether ``locale``'s rendered prompt head is worth caching.
+
+        Resolves through :func:`resolve_locale_key` first, so ``None``, ``"en"``
+        and any unknown locale — all three of which render the *same* English
+        head — share one entry rather than being split by the raw request value.
+        """
+        return resolve_locale_key(locale) in self.cache_locales
 
     def load_prompt(
         self,
@@ -141,10 +187,7 @@ class DigestConfig(BaseModel):
     @staticmethod
     def _inject_locale(prompt: str, locale: str | None) -> str:
         """Replace {locale} and locale vocabulary tokens."""
-        lang = locale if locale and locale != "en" else "en"
-        locale_path = _LOCALES_DIR / f"{lang}.md"
-        if not locale_path.exists():
-            locale_path = _LOCALES_DIR / "en.md"
+        locale_path = _LOCALES_DIR / f"{resolve_locale_key(locale)}.md"
 
         metadata, body = DigestConfig._parse_locale_file(locale_path.read_text())
 
