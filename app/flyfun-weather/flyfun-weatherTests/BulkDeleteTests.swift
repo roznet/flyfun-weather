@@ -80,6 +80,36 @@ struct BulkDeleteChunkingTests {
         #expect(result.deleted.count == 248)
     }
 
+    /// Chunks aren't one transaction: whatever an earlier chunk confirmed is
+    /// already gone server-side. Losing that to the thrown error would strand
+    /// those flights in the local list — tappable, and 404 on open.
+    @Test("A failure part-way through reports what earlier chunks deleted")
+    func partialFailureCarriesConfirmedIds() async throws {
+        var callCount = 0
+        do {
+            _ = try await BulkDeleteResponse.sendChunked(ids: ids(0..<450)) { chunk in
+                callCount += 1
+                if callCount == 3 { throw MockError.injected("server down") }
+                return BulkDeleteResponse(deleted: chunk, notFound: [])
+            }
+            Issue.record("expected the third chunk to fail")
+        } catch let failure as BulkDeletePartialFailure {
+            #expect(failure.partial.deleted == ids(0..<400))
+            #expect(failure.underlying is MockError)
+        }
+    }
+
+    /// Nothing confirmed yet → nothing to salvage, so the caller sees the plain
+    /// error rather than an empty partial wrapper it would have to unwrap.
+    @Test("A failure on the first chunk rethrows the original error")
+    func firstChunkFailureRethrows() async throws {
+        await #expect(throws: MockError.self) {
+            _ = try await BulkDeleteResponse.sendChunked(ids: ids(0..<450)) { _ in
+                throw MockError.injected("server down")
+            }
+        }
+    }
+
     @Test("Decodes the server's snake_case not_found")
     func decodesWireShape() throws {
         let json = """
@@ -159,6 +189,32 @@ struct BulkDeleteCacheEvictionTests {
 
         #expect(await cache.hasCachedPacks(flightId: "f1"))
         #expect(await cache.hasCachedPacks(flightId: "f2"))
+    }
+
+    /// A chunked request that failed part-way still deleted flights server-side.
+    /// Those packs are unreachable now (no refresh, no re-download), so they must
+    /// be evicted even though the call threw — while the flights the failing
+    /// chunk never reached keep theirs.
+    @Test("A partial failure still evicts the ids that were confirmed")
+    func partialFailureEvictsConfirmedIds() async throws {
+        let cache = try await seededCache()
+        let online = MockBriefingRepository()
+        online.bulkDeleteHandler = { _ in
+            throw BulkDeletePartialFailure(
+                partial: BulkDeleteResponse(deleted: ["f1"], notFound: []),
+                underlying: MockError.injected("server down")
+            )
+        }
+        let repo = CachingBriefingRepository.makeForTesting(online: online, cache: cache)
+
+        await #expect(throws: BulkDeletePartialFailure.self) {
+            _ = try await repo.bulkDeleteFlights(ids: ["f1", "f2", "f3"])
+        }
+
+        #expect(await cache.hasCachedPacks(flightId: "f1") == false)
+        #expect(await cache.readFlightMetadata(flightId: "f1", name: "flight") == nil)
+        #expect(await cache.hasCachedPacks(flightId: "f2"))
+        #expect(await cache.hasCachedPacks(flightId: "f3"))
     }
 }
 

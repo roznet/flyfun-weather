@@ -82,30 +82,43 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// eviction sweep in `pruneStalePacks` uses.
     func deleteFlight(id: String) async throws {
         try await online.deleteFlight(id: id)
-        for entry in await cache.cachedPacks() where entry.flightId == id {
-            await cache.deletePack(flightId: id, timestamp: entry.timestamp)
-        }
-        await cache.removeFlightDirectory(flightId: id)
+        await evictLocalCopies(of: [id])
     }
 
     /// Same contract as `deleteFlight`, for many ids at once: the server decides
     /// what actually went, and only then is the local copy dropped. Eviction is
     /// restricted to the ids the server confirmed in `deleted` — anything it put
     /// in `notFound` still exists (someone else's flight, or already gone), so
-    /// its packs must not be touched. One `cachedPacks()` read for the whole
-    /// batch; index entries first, then each flight directory, matching the order
-    /// `deleteFlight` and the `pruneStalePacks` sweep use.
+    /// its packs must not be touched.
+    ///
+    /// A long selection is split into chunks, and those chunks are not one
+    /// transaction: if one fails, the earlier ones have still deleted flights
+    /// server-side. That arrives as `BulkDeletePartialFailure`, whose confirmed
+    /// ids are evicted before the error is rethrown — otherwise those packs would
+    /// linger unreachable until the departure-date sweep reached them.
     func bulkDeleteFlights(ids: [String]) async throws -> BulkDeleteResponse {
-        let response = try await online.bulkDeleteFlights(ids: ids)
-        let deleted = Set(response.deleted)
-        guard !deleted.isEmpty else { return response }
-        for entry in await cache.cachedPacks() where deleted.contains(entry.flightId) {
+        do {
+            let response = try await online.bulkDeleteFlights(ids: ids)
+            await evictLocalCopies(of: Set(response.deleted))
+            return response
+        } catch let failure as BulkDeletePartialFailure {
+            await evictLocalCopies(of: Set(failure.partial.deleted))
+            throw failure
+        }
+    }
+
+    /// Drop every local trace of flights the server has confirmed deleted: index
+    /// entries first, then each flight directory including its sidecars — the
+    /// order the `pruneStalePacks` eviction sweep uses. One `cachedPacks()` read
+    /// covers the whole batch.
+    private func evictLocalCopies(of ids: Set<String>) async {
+        guard !ids.isEmpty else { return }
+        for entry in await cache.cachedPacks() where ids.contains(entry.flightId) {
             await cache.deletePack(flightId: entry.flightId, timestamp: entry.timestamp)
         }
-        for id in deleted {
+        for id in ids {
             await cache.removeFlightDirectory(flightId: id)
         }
-        return response
     }
 
     func aircraft() async throws -> [AircraftResponse] {

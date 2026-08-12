@@ -190,27 +190,54 @@ struct FlightSelectionView: View {
     /// parent. The sheet stays open on a partial result so the user can see which
     /// rows survived; a clean full delete dismisses it.
     private func performDelete() {
-        let ids = Array(selectedIDs)
+        // Intersect with what's actually on screen. The parent re-renders this
+        // sheet on every background list reload (the 5s active-refresh poll, a
+        // push, foregrounding), and `List(selection:)` does not prune ids whose
+        // rows have gone — so a flight deleted on the web meanwhile would still
+        // be sent, come back in `not_found`, and report a bogus partial failure
+        // on a delete that fully succeeded. Same fix as the web's
+        // `pruneSelection`.
+        let visible = Set(allIDs)
+        let ids = Array(selectedIDs.intersection(visible))
+        selectedIDs.formIntersection(visible)
         guard !ids.isEmpty else { return }
         isDeleting = true
         Task {
             defer { isDeleting = false }
             do {
                 let response = try await repository.bulkDeleteFlights(ids: ids)
-                selectedIDs.subtract(response.deleted)
-                locallyDeleted.formUnion(response.deleted)
-                if !response.deleted.isEmpty { onDeleted(response.deleted) }
+                applyDeleted(response.deleted)
                 if response.notFound.isEmpty {
                     dismiss()
                 } else {
                     partialMessage = "Deleted \(response.deleted.count) flight\(response.deleted.count == 1 ? "" : "s"); \(response.notFound.count) could not be deleted."
                 }
-            } catch let error as APIError {
-                errorMessage = error.errorDescription ?? "Couldn’t delete the selected flights."
+            } catch let failure as BulkDeletePartialFailure {
+                // Earlier chunks landed before the failure. Those flights are gone
+                // server-side, so drop their rows and tell the parent — keeping
+                // them would leave a list of flights that 404 when opened.
+                applyDeleted(failure.partial.deleted)
+                errorMessage = Self.errorText(failure.underlying,
+                                              alreadyDeleted: failure.partial.deleted.count)
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = Self.errorText(error, alreadyDeleted: 0)
             }
         }
+    }
+
+    /// Record ids the server confirmed deleted: untick them, drop their rows from
+    /// this sheet's snapshot, and let the parent re-sync its list.
+    private func applyDeleted(_ deleted: [String]) {
+        guard !deleted.isEmpty else { return }
+        selectedIDs.subtract(deleted)
+        locallyDeleted.formUnion(deleted)
+        onDeleted(deleted)
+    }
+
+    private static func errorText(_ error: Error, alreadyDeleted: Int) -> String {
+        let reason = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        guard alreadyDeleted > 0 else { return reason }
+        return "Deleted \(alreadyDeleted) flight\(alreadyDeleted == 1 ? "" : "s") before the request failed: \(reason)"
     }
 }
 
@@ -220,33 +247,43 @@ struct FlightSelectionView: View {
 private struct FlightSelectionRow: View {
     let flight: FlightResponse
 
+    private var assessment: Assessment {
+        flight.latestBriefing?.assessment
+            .flatMap { Assessment(rawValue: $0.lowercased()) } ?? .unavailable
+    }
+
+    private var dateText: String? {
+        flight.departureDate.map {
+            "\(DateFormatter.shortDate.string(from: $0)) \(DateFormatter.utcTime.string(from: $0))"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            assessmentDot
+            // GREEN / AMBER / RED at a glance, grey when the flight has no
+            // assessment (never briefed, or beyond the forecast horizon). A dot,
+            // not the full badge — the row is a picker, not a briefing summary.
+            Circle()
+                .fill(assessment.color)
+                .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(flight.shortTitle)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                if let date = flight.departureDate {
-                    Text("\(DateFormatter.shortDate.string(from: date)) \(DateFormatter.utcTime.string(from: date))")
+                if let dateText {
+                    Text(dateText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 0)
         }
+        // One element with an explicit label: a bare `Circle` is decorative, so a
+        // label on it is dropped and VoiceOver would read route + date only —
+        // losing the traffic light, which is what tells the pilot which old
+        // flights to clear.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([flight.shortTitle, dateText, assessment.label].compactMap { $0 }.joined(separator: ", "))
         .accessibilityIdentifier("selectFlightRow-\(flight.id)")
-    }
-
-    /// GREEN / AMBER / RED at a glance, grey when the flight has no assessment
-    /// (never briefed, or beyond the forecast horizon). A dot, not the full
-    /// badge — the row is a picker, not a briefing summary.
-    private var assessmentDot: some View {
-        let assessment: Assessment = flight.latestBriefing?.assessment
-            .flatMap { Assessment(rawValue: $0.lowercased()) } ?? .unavailable
-        return Circle()
-            .fill(assessment.color)
-            .frame(width: 10, height: 10)
-            .accessibilityLabel(assessment.label)
     }
 }
