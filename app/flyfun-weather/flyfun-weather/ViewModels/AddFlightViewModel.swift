@@ -42,6 +42,20 @@ final class AddFlightViewModel {
     /// re-derive marker.
     private(set) var editedRawRoute: String?
 
+    /// The `raw_route` a request may carry — `editedRawRoute`, but only while the
+    /// route still differs from the flight's.
+    ///
+    /// `editedRawRoute` is captured at interpret time and outlives the attempt
+    /// that produced it: an interpret that fails, or a confirm sheet the pilot
+    /// cancels, leaves it set. Reverting the route and saving something else
+    /// would then send a route the pilot backed out of *and* re-stamp
+    /// `parser_version` for an unchanged one. Re-checking here also suppresses
+    /// the send when interpretation normalises a cosmetic edit (`LFMD DCT LFML`)
+    /// straight back to the stored route.
+    private var rawRoutePayload: String? {
+        routeChangedFromOriginal ? editedRawRoute : nil
+    }
+
     // MARK: Flexibility (timing scenarios, #357)
 
     /// Selected Flexibility mode. Seeded from the flight when editing. The view's
@@ -821,7 +835,7 @@ final class AddFlightViewModel {
         let request = CreateFlightRequest(
             waypoints: waypoints,
             departureTime: Self.iso8601(departureDate),
-            rawRoute: editedRawRoute,
+            rawRoute: rawRoutePayload,
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
@@ -871,7 +885,7 @@ final class AddFlightViewModel {
             // Only when the pilot actually retyped the route: an untouched route
             // must keep the source flight's stored Field-15 annotation and its
             // `parser_version` re-derive marker (mirrors the web `moveBtn`).
-            rawRoute: editedRawRoute
+            rawRoute: rawRoutePayload
         )
 
         do {
@@ -903,7 +917,7 @@ final class AddFlightViewModel {
         let request = CreateFlightRequest(
             waypoints: waypoints,
             departureTime: Self.iso8601(departureDate),
-            rawRoute: editedRawRoute,
+            rawRoute: rawRoutePayload,
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
@@ -1023,7 +1037,7 @@ final class AddFlightViewModel {
             // which the server reads as "still valid, leave it alone"; on an
             // edited route omitting it instead would CLEAR the flight's Field-15
             // annotation, which is what every iOS route edit used to do.
-            rawRoute: editedRawRoute,
+            rawRoute: rawRoutePayload,
             departureTime: Self.iso8601(departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,
@@ -1115,13 +1129,42 @@ final class AddFlightViewModel {
     /// pilot's own Refresh button are the recovery path.
     private func queueRefresh(flightId: String) {
         pendingRefreshTask = Task { [repository] in
-            do {
-                try await repository.triggerRefresh(flightId: flightId)
-            } catch {
-                Self.logger.error("Queueing refresh after edit failed for \(flightId): \(error)")
+            for attempt in 0..<Self.queueRefreshAttempts {
+                do {
+                    try await repository.triggerRefresh(flightId: flightId)
+                    return
+                } catch APIError.serverError(409, _) {
+                    // A refresh was already running when the edit landed. It is
+                    // computing the OLD parameters, so letting it stand would
+                    // leave the pilot looking at a briefing for values they just
+                    // changed. Wait for the registry to clear and re-queue. The
+                    // params-hash gate would eventually self-heal this, but only
+                    // on the pilot's next manual press.
+                    Self.logger.info(
+                        "Refresh already in progress for \(flightId) — retrying (\(attempt + 1))"
+                    )
+                    try? await Task.sleep(for: Self.queueRefreshRetryDelay)
+                } catch {
+                    Self.logger.error("Queueing refresh after edit failed for \(flightId): \(error)")
+                    return
+                }
             }
+            Self.logger.error(
+                "Gave up queueing a post-edit refresh for \(flightId): still in progress"
+            )
         }
     }
+
+    /// How many times `queueRefresh` re-tries a 409, and how long it waits
+    /// between attempts. Sized to outlast a typical pipeline run (~2 min) without
+    /// spinning: the pilot's own Refresh button and the params-hash gate are the
+    /// backstop if it never clears.
+    ///
+    /// The delay is a `var` purely so tests don't sleep for half a minute —
+    /// MainActor-isolated like `explainerAckedThisSession`, and only the retry
+    /// test writes it.
+    private static let queueRefreshAttempts = 6
+    @MainActor static var queueRefreshRetryDelay: Duration = .seconds(30)
 
     // MARK: - Aircraft form helpers
 

@@ -367,6 +367,51 @@ import MapKit
         #expect(repo.lastUpdateRequest?.rawRoute == "LFMD DCT LFAT DCT LFML")
     }
 
+    /// `editedRawRoute` outlives the attempt that captured it (a failed interpret,
+    /// or a confirm sheet the pilot cancels), so the payload must re-check that
+    /// the route still differs. Otherwise a revert-then-save-something-else sends
+    /// a route the pilot backed out of AND re-stamps `parser_version` for an
+    /// unchanged one.
+    @Test func revertedRouteDoesNotSendAStaleRawRoute() async throws {
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"])
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        repo.interpretRouteResult = .failure(APIError.serverError(500, "interpret down"))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+
+        // First attempt: a real route edit, captured, then interpretation fails.
+        vm.waypointsText = "LFMD DCT LFAT DCT LFBD"
+        #expect(await vm.interpretRouteForSubmit() == .failed)
+        #expect(vm.editedRawRoute == "LFMD DCT LFAT DCT LFBD")
+
+        // The pilot backs the route out and saves an unrelated change instead.
+        vm.waypointsText = "LFMD LFML"
+        vm.cruiseAltitudeFt = 9000
+        _ = await vm.saveEditedFlight(regenerate: false)
+        #expect(repo.lastUpdateRequest?.rawRoute == nil)
+    }
+
+    /// A refresh already running when the edit lands is computing the OLD
+    /// parameters, so a 409 must be re-queued rather than dropped.
+    @Test func queuedRefreshRetriesWhenOneIsAlreadyInProgress() async throws {
+        let flight = makeFlight()
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight,
+                                                                  invalidation: .refetchNeeded))
+        repo.triggerRefreshResults = [.failure(APIError.serverError(409, "Refresh already in progress"))]
+        let previousDelay = AddFlightViewModel.queueRefreshRetryDelay
+        AddFlightViewModel.queueRefreshRetryDelay = .milliseconds(1)
+        defer { AddFlightViewModel.queueRefreshRetryDelay = previousDelay }
+
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.flightDurationHours = 3.0
+
+        #expect(await vm.saveEditedFlight(regenerate: true) != nil)
+        await vm.pendingRefreshTask?.value
+        // Once on the 409, once on the retry that succeeds.
+        #expect(repo.triggeredRefreshIds == [flight.id, flight.id])
+    }
+
     /// The alternate departure is bound to the primary's UTC day — the picker
     /// used to offer days the server rejects outright.
     @Test func alternateDepartureIsBoundToTheDepartureDay() {

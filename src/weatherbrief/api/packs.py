@@ -1091,12 +1091,17 @@ def apply_params_change_override(
     """
     if decision.mode == "full" or latest.flight_params_hash is None:
         return decision
-    if latest.flight_params_hash == compute_flight_params_hash(flight):
+    current = compute_flight_params_hash(flight)
+    if latest.flight_params_hash == current:
         return decision
     logger.info(
         "Refresh gate for %s: forcing full — pack params hash %s != current %s",
-        flight.id, latest.flight_params_hash, compute_flight_params_hash(flight),
+        flight.id, latest.flight_params_hash, current,
     )
+    # Clear the "what are we waiting on" fields along with the mode: they describe
+    # a *model-run* wait that no longer gates anything, and a "full" decision that
+    # still lists pending models is internally inconsistent for any client reading
+    # DataStatus.refresh_decision.
     return decision.model_copy(update={
         "mode": "full",
         "reason": (
@@ -1104,6 +1109,7 @@ def apply_params_change_override(
             "— running full refresh"
         ),
         "eta_useful": None,
+        "pending_models": [],
     })
 
 

@@ -690,14 +690,19 @@ struct AddFlightView: View {
     }
 
     /// Read-only label for the bound alternate day, shown in UTC because that is
-    /// the day the server compares against.
+    /// the day the server compares against. The formatter is cached (the
+    /// codebase's convention) because this renders from `body`.
     private static func altDayLabel(_ instant: Date) -> String {
+        altDayFormatter.string(from: instant)
+    }
+
+    private static let altDayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.dateFormat = "d MMM yyyy 'at' HH:mm 'UTC'"
-        return formatter.string(from: instant)
-    }
+        return formatter
+    }()
 
     private var altitudeSection: some View {
         Section {
