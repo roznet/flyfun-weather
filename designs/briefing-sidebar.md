@@ -60,6 +60,17 @@ renders.
   adds zero coupling to data managers.
 - **Banners stay outside the shell** — freshness/error warnings must survive
   focus mode and are therefore pinned full-width above both panes.
+- **The page-header is sticky app-wide, and the rail adds no back-link**
+  (issue #543) — `.page-header` is `position: sticky; top: 0; z-index: 50` on
+  every page, so the nav is always reachable: in the sidebar layout, in classic,
+  and on narrow viewports where the rail is not sticky. A "‹ Flights" breadcrumb
+  in the rail was built and then removed — pinned directly under a pinned nav
+  bar that already says *Flights*, it was pure duplication.
+  `trackHeaderHeight()` (`web/ts/utils.ts`) publishes its rendered
+  height as `--header-h` on `:root`; the rail's sticky `top`/`max-height`, the
+  help TOC, and `html { scroll-padding-top }` all read that var instead of
+  hard-coding a height. Leaflet maps (panes at z-index 400–1000) get
+  `.leaflet-container { z-index: 0 }` so they cannot paint over the header.
 - **`data-section` is the contract** — section roots are tagged with
   `data-section` (statically in `web/briefing.html`); the nav is generated from
   those tags, so adding a section to the nav is just adding the attribute (+ a

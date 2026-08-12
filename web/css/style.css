@@ -100,6 +100,13 @@
   background: var(--bg);
 }
 
+/* Leaflet's panes and controls run z-index 400–1000. Left in the root stacking
+   context they would paint over the sticky .page-header (z-index 50), so give
+   every map its own context — relative ordering inside the map is unchanged. */
+.leaflet-container {
+  z-index: 0;
+}
+
 /* Leaflet dark overrides */
 [data-theme="dark"] .leaflet-control-zoom a,
 [data-theme="dark"] .leaflet-control-attribution {
@@ -293,6 +300,11 @@ label {
 
 /* --- Page header --- */
 
+/* The nav bar stays pinned to the top of the viewport on every page, so the
+   Flights / Forecast / Settings links are reachable from anywhere in a long
+   briefing without scrolling back up (issue #543). `--header-h` is kept in
+   sync with the real rendered height by `trackHeaderHeight()` (web/ts/utils.ts)
+   so sticky side rails can offset themselves below it. */
 .page-header {
   display: flex;
   align-items: center;
@@ -300,6 +312,18 @@ label {
   padding: 1rem 0;
   border-bottom: 1px solid var(--border);
   margin-bottom: 1rem;
+  position: sticky;
+  top: 0;
+  /* Above page content and the rail (sticky, z-index auto), below the loading
+     overlay (100) and the lightbox (200). */
+  z-index: 50;
+  background: var(--bg);
+}
+
+/* Anchors and `scrollIntoView({block:'start'})` must clear the pinned header —
+   without this the rail's section nav parks each heading underneath it. */
+html {
+  scroll-padding-top: calc(var(--header-h, 60px) + 0.5rem);
 }
 
 /* --- Flight cards --- */
@@ -5055,9 +5079,10 @@ label {
 
 .help-toc {
   position: sticky;
-  top: 0.75rem;
+  /* Clear the pinned page-header (see .page-header). */
+  top: calc(var(--header-h, 60px) + 0.75rem);
   align-self: start;
-  max-height: calc(100vh - 1.5rem);
+  max-height: calc(100vh - var(--header-h, 60px) - 1.5rem);
   overflow-y: auto;
   font-size: 0.82rem;
 }
@@ -7524,9 +7549,10 @@ body.resizing-rail {
 }
 .briefing-rail {
   position: sticky;
-  top: 0.5rem;
+  /* Sits below the pinned page-header rather than underneath it. */
+  top: calc(var(--header-h, 60px) + 0.5rem);
   align-self: start;
-  max-height: calc(100vh - 1rem);
+  max-height: calc(100vh - var(--header-h, 60px) - 1rem);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
