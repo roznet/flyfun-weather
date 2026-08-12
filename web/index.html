@@ -119,6 +119,20 @@
 
     <div id="loading-spinner">Loading flights...</div>
 
+    <!-- Upcoming-flights filter (#542). Deliberately outside #flight-list:
+         that container is re-rendered wholesale on every state change, which
+         would destroy this input (and the caret) mid-keystroke. Hidden until
+         the upcoming list is long enough to be worth filtering. -->
+    <div id="upcoming-filter-row" class="list-filter-row" hidden>
+      <div class="list-filter">
+        <svg class="list-filter-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="upcoming-filter-input" class="list-filter-input"
+               autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64">
+        <button type="button" id="upcoming-filter-clear" class="list-filter-clear" hidden>&times;</button>
+      </div>
+      <span id="upcoming-filter-count" class="list-filter-count"></span>
+    </div>
+
     <!-- Flight list -->
     <div id="flight-list"></div>
   </div>

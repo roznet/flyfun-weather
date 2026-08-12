@@ -42,10 +42,15 @@ export interface FlightsPage {
 export async function fetchFlights(opts?: {
   pastLimit?: number;
   pastOffset?: number;
+  /** Route-token filter applied to the past section only (#542). When set,
+   *  X-Past-Total reports the number of matches, so pagination walks the
+   *  filtered set. */
+  pastQuery?: string;
 }): Promise<FlightsPage> {
   const params = new URLSearchParams();
   if (opts?.pastLimit != null) params.set('past_limit', String(opts.pastLimit));
   if (opts?.pastOffset != null) params.set('past_offset', String(opts.pastOffset));
+  if (opts?.pastQuery) params.set('past_q', opts.pastQuery);
   const qs = params.toString();
 
   let pastTotal: number | null = null;

@@ -3,6 +3,7 @@
 import type { BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse } from '../store/types';
 import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
+import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
 import { t, getDateLocale } from '../i18n/i18n';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefPill, renderDebriefSummary } from '../components/debrief-summary';
@@ -99,6 +100,151 @@ function advisorySummaryHtml(lb: BriefingStatusInfo): string {
   </div>`;
 }
 
+/** Minimum section size before a filter box is worth its row (#542). Below
+ *  this a user can just read the list, and the control is pure clutter. */
+export const FILTER_MIN_FLIGHTS = 5;
+
+export interface FilterHandlers {
+  /** Client-side query over future + recent. */
+  upcomingQuery: string;
+  /** Server-side query over the paginated past section. */
+  pastQuery: string;
+  onUpcomingQuery: (q: string) => void;
+  onPastQuery: (q: string) => void;
+}
+
+/** Render the shared filter-box markup used by both sections. */
+function renderFilterBox(id: string, value: string, placeholder: string): string {
+  const clearLabel = escapeHtml(t('flights.filterClear'));
+  return `
+    <div class="list-filter">
+      <svg class="list-filter-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="${id}" class="list-filter-input" value="${escapeHtml(value)}"
+             placeholder="${escapeHtml(placeholder)}" autocomplete="off"
+             autocapitalize="characters" spellcheck="false" maxlength="${MAX_QUERY_LEN}">
+      <button type="button" class="list-filter-clear" data-clears="${id}"
+              title="${clearLabel}" aria-label="${clearLabel}"${value ? '' : ' hidden'}>&times;</button>
+    </div>
+  `;
+}
+
+/** A section-scoped "nothing matched" line. Deliberately not the global
+ *  `flights.empty` state — telling someone they have no flights because a
+ *  filter is active reads as data loss. */
+function renderNoMatch(query: string): string {
+  return `
+    <div class="list-filter-nomatch">
+      <span>${escapeHtml(t('flights.filterNoMatch', { query }))}</span>
+      <button type="button" class="btn btn-outline btn-sm btn-clear-filter">${escapeHtml(t('flights.filterNoMatchClear'))}</button>
+    </div>
+  `;
+}
+
+/** Show/hide + update the static upcoming-filter row above the list.
+ *
+ *  The row lives in index.html rather than in the list container so that a
+ *  re-render (which replaces the container's innerHTML) can never destroy the
+ *  input while it has focus. Only its value, visibility and count change here.
+ *  Listeners are attached once by `wireUpcomingFilter`.
+ */
+function renderUpcomingFilter(
+  filters: FilterHandlers | undefined,
+  total: number,
+  shown: number,
+): void {
+  const row = document.getElementById('upcoming-filter-row');
+  const input = document.getElementById('upcoming-filter-input') as HTMLInputElement | null;
+  const count = document.getElementById('upcoming-filter-count');
+  const clear = document.getElementById('upcoming-filter-clear');
+  if (!row || !input || !count || !clear) return;
+
+  const query = filters?.upcomingQuery ?? '';
+  // Keep the box while a query is live even if it filtered the list below the
+  // threshold — otherwise it would disappear from under the cursor.
+  const visible = filters != null && (total > FILTER_MIN_FLIGHTS || query.length > 0);
+  row.hidden = !visible;
+  if (!visible) return;
+
+  input.placeholder = t('flights.filterPlaceholder');
+  const clearLabel = t('flights.filterClear');
+  clear.setAttribute('title', clearLabel);
+  clear.setAttribute('aria-label', clearLabel);
+  // Don't clobber what the user is typing; the store echoes it back verbatim.
+  if (document.activeElement !== input && input.value !== query) input.value = query;
+  clear.hidden = query.length === 0;
+  count.textContent = query ? t('flights.filterCount', { shown, total }) : '';
+}
+
+/** Debounce for the past filter. The upcoming filter needs none (it re-renders
+ *  from memory); the past filter issues a request per keystroke, so it waits
+ *  for a typing pause. */
+const PAST_QUERY_DEBOUNCE_MS = 250;
+let pastQueryTimer: ReturnType<typeof setTimeout> | undefined;
+
+function schedulePastQuery(value: string, onQuery: (q: string) => void): void {
+  if (pastQueryTimer) clearTimeout(pastQueryTimer);
+  pastQueryTimer = setTimeout(() => {
+    pastQueryTimer = undefined;
+    onQuery(value.trim());
+  }, PAST_QUERY_DEBOUNCE_MS);
+}
+
+/** Apply immediately, cancelling any pending debounce (Escape / clear button —
+ *  a queued keystroke must not resurrect the query the user just cleared). */
+function flushPastQuery(value: string, onQuery: (q: string) => void): void {
+  if (pastQueryTimer) clearTimeout(pastQueryTimer);
+  pastQueryTimer = undefined;
+  onQuery(value.trim());
+}
+
+/** Attach the upcoming-filter listeners. Called once at page init — the input
+ *  is static markup, so unlike the past box it is never re-created. */
+export function wireUpcomingFilter(onQuery: (q: string) => void): void {
+  const input = document.getElementById('upcoming-filter-input') as HTMLInputElement | null;
+  const clear = document.getElementById('upcoming-filter-clear');
+  if (!input) return;
+
+  input.addEventListener('input', () => onQuery(input.value.trim()));
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') ev.preventDefault();
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      input.value = '';
+      onQuery('');
+    }
+  });
+  clear?.addEventListener('click', () => {
+    input.value = '';
+    onQuery('');
+    input.focus();
+  });
+}
+
+interface FilterFocus { id: string; start: number | null; end: number | null }
+
+/** Remember which filter input had focus (and where the caret was) before an
+ *  innerHTML swap wipes it. */
+function captureFilterFocus(container: HTMLElement): FilterFocus | null {
+  const active = document.activeElement as HTMLInputElement | null;
+  if (!active || !active.id || !container.contains(active)) return null;
+  if (!active.classList.contains('list-filter-input')) return null;
+  return { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+}
+
+function restoreFilterFocus(state: FilterFocus | null): void {
+  if (!state) return;
+  const input = document.getElementById(state.id) as HTMLInputElement | null;
+  if (!input) return;
+  input.focus();
+  if (state.start != null && state.end != null) {
+    try {
+      input.setSelectionRange(state.start, state.end);
+    } catch {
+      // Some input types reject setSelectionRange; focus alone is enough.
+    }
+  }
+}
+
 /** Track whether the past-flights section is expanded. */
 let pastExpanded = false;
 
@@ -110,12 +256,15 @@ function renderFlightCard(
   f: FlightResponse,
   refreshEntry: RefreshEntry | undefined,
   selected: boolean,
+  matchTokens: string[] = [],
 ): string {
   const wps = f.waypoints.length > 0
     ? f.waypoints
     : f.route_name.split('_').map(w => w.toUpperCase());
   const title = flightTitle(wps);
-  const compactRoute = wps.length > 2 ? flightRouteCompact(wps) : null;
+  // Tokens make the compact route keep (and bold) the waypoints that matched
+  // the filter, so a hit on an intermediate fix isn't swallowed by the "…".
+  const compactRoute = wps.length > 2 ? flightRouteCompact(wps, 4, matchTokens) : null;
   const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
   const pastBadge = past ? `<span class="badge badge-past">${t('flights.pastBadge')}</span> ` : '';
 
@@ -249,16 +398,28 @@ export function renderFlightList(
   onUnsubscribe?: (id: string) => void,
   stats?: DebriefStats | null,
   onDebriefChanged?: () => void,
+  filters?: FilterHandlers,
 ): void {
   const container = $('flight-list');
   if (!container) return;
 
-  if (flights.length === 0) {
+  // The past filter input lives inside this container, so a re-render destroys
+  // it. Capture focus + caret first and restore after the innerHTML swap,
+  // otherwise typing in it loses focus after the first debounced keystroke.
+  const focusState = captureFilterFocus(container);
+
+  // A filter that matches nothing must never reach the global empty state —
+  // "No flights yet" while a query is active reads as data loss. Those cases
+  // fall through to the per-section no-match lines below.
+  const filterActive = !!(filters?.upcomingQuery || filters?.pastQuery);
+
+  if (flights.length === 0 && !filterActive) {
     // Don't claim "no flights" until the list has actually been fetched —
     // otherwise the empty-state flashes while the user's flights are still
     // downloading. The loading spinner covers the pre-fetch window.
     if (!loaded) {
       container.innerHTML = '';
+      renderUpcomingFilter(filters, 0, 0);
       renderSelectionBar(0, [], [], selection);
       return;
     }
@@ -267,6 +428,7 @@ export function renderFlightList(
         <p>${t('flights.empty')}</p>
       </div>
     `;
+    renderUpcomingFilter(filters, 0, 0);
     renderSelectionBar(0, [], [], selection);
     return;
   }
@@ -285,56 +447,90 @@ export function renderFlightList(
     else past.push(f);
   }
 
-  const futureCards = future.map(f =>
-    renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id)),
+  // --- Upcoming filter (client-side over future + recent) ---
+  const upcomingQuery = filters?.upcomingQuery ?? '';
+  const upcomingTokens = parseQuery(upcomingQuery);
+  const upcomingTotal = future.length + recent.length;
+  const keep = (f: FlightResponse) =>
+    matchesQuery(f.waypoints, f.route_name, upcomingTokens);
+  const futureShown = upcomingTokens.length > 0 ? future.filter(keep) : future;
+  const recentShown = upcomingTokens.length > 0 ? recent.filter(keep) : recent;
+  renderUpcomingFilter(filters, upcomingTotal, futureShown.length + recentShown.length);
+
+  const futureCards = futureShown.map(f =>
+    renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), upcomingTokens),
   ).join('');
 
   let recentSection = '';
-  if (recent.length > 0) {
+  // A section with no matches hides entirely rather than rendering "(0)".
+  if (recentShown.length > 0) {
     const expandedClass = recentExpanded ? '' : ' collapsed';
-    const recentCards = recent.map(f =>
-      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id)),
+    const recentCards = recentShown.map(f =>
+      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), upcomingTokens),
     ).join('');
     recentSection = `
       <div class="recent-flights-section${expandedClass}">
         <button class="recent-flights-toggle" id="recent-flights-toggle">
-          ${t('debrief.recentHeader')} (${recent.length})
+          ${t('debrief.recentHeader')} (${recentShown.length})
         </button>
         <div class="recent-flights-list">${recentCards}</div>
       </div>
     `;
   }
 
+  // Upcoming filter that matched nothing: say so where the cards would be.
+  const upcomingNoMatch = upcomingTokens.length > 0 && futureShown.length === 0 && recentShown.length === 0
+    ? renderNoMatch(upcomingQuery)
+    : '';
+
   const statsSection = stats
     ? `<div class="debrief-stats-section">${renderDebriefStats(stats)}</div>`
     : '';
 
+  // --- Past section (filter is server-side: see store.setPastQuery) ---
+  const pastQuery = filters?.pastQuery ?? '';
+  const pastTokens = parseQuery(pastQuery);
   let pastSection = '';
-  if (past.length > 0) {
+  // Under an active filter the section must survive a zero-match result —
+  // otherwise the box you are typing into vanishes on the first miss.
+  if (past.length > 0 || pastTokens.length > 0) {
     const expandedClass = pastExpanded ? '' : ' collapsed';
     const pastCards = past.map(f =>
-      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id)),
+      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), pastTokens),
     ).join('');
     // The past section is paginated: the header shows the full count while
-    // only `past.length` rows are loaded. "Show more" appears while more
-    // remain to be fetched.
+    // only `past.length` rows are loaded. Under a filter the server reports
+    // the number of *matches*, so both the header and "show more" describe the
+    // filtered set rather than the whole history.
     const totalPast = Math.max(pastTotal, past.length);
     const remaining = totalPast - past.length;
     const showMoreBtn = remaining > 0
       ? `<button type="button" class="btn btn-outline btn-show-more-past" id="show-more-past">${t('flights.showMorePast', { count: remaining })}</button>`
       : '';
+    // The past filter belongs to the open section, but it is *rendered*
+    // unconditionally and hidden by CSS when collapsed — the toggle only flips
+    // a class (no re-render), so a render-time `pastExpanded` check would leave
+    // the box missing until something else re-rendered the list.
+    const showPastFilter = filters != null
+      && (totalPast > FILTER_MIN_FLIGHTS || pastTokens.length > 0);
+    const pastFilter = showPastFilter
+      ? `<div class="list-filter-row list-filter-row-inset">${renderFilterBox('past-filter-input', pastQuery, t('flights.filterPastPlaceholder'))}</div>`
+      : '';
+    const pastBody = past.length === 0 && pastTokens.length > 0
+      ? renderNoMatch(pastQuery)
+      : `<div class="past-flights-list">${pastCards}</div>${showMoreBtn}`;
     pastSection = `
       <div class="past-flights-section${expandedClass}">
         <button class="past-flights-toggle" id="past-flights-toggle">
           ${t('flights.past', { count: totalPast })}
         </button>
-        <div class="past-flights-list">${pastCards}</div>
-        ${showMoreBtn}
+        ${pastFilter}
+        ${pastBody}
       </div>
     `;
   }
 
-  container.innerHTML = futureCards + recentSection + statsSection + pastSection;
+  container.innerHTML = futureCards + upcomingNoMatch + recentSection + statsSection + pastSection;
 
   // Wire toggle
   const toggleBtn = document.getElementById('past-flights-toggle');
@@ -353,6 +549,47 @@ export function renderFlightList(
     const section = recentToggleBtn.closest('.recent-flights-section');
     section?.classList.toggle('collapsed', !recentExpanded);
   });
+
+  // --- Past filter (#542) ---
+  // Re-wired on every render because the input is inside this container.
+  if (filters) {
+    const pastInput = document.getElementById('past-filter-input') as HTMLInputElement | null;
+    if (pastInput) {
+      pastInput.addEventListener('input', () => {
+        // Debounced: each keystroke is a server round-trip.
+        schedulePastQuery(pastInput.value, filters.onPastQuery);
+      });
+      pastInput.addEventListener('keydown', (ev) => {
+        const e = ev as KeyboardEvent;
+        // Both boxes sit outside create-flight-form, so Enter has nothing to
+        // submit — but stop it explicitly so that stays true if markup moves.
+        if (e.key === 'Enter') e.preventDefault();
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          pastInput.value = '';
+          flushPastQuery('', filters.onPastQuery);
+        }
+      });
+    }
+    container.querySelectorAll('.list-filter-clear').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (pastInput) pastInput.value = '';
+        flushPastQuery('', filters.onPastQuery);
+      });
+    });
+    // "Clear" inside a no-match line: clears whichever filter owns that block.
+    container.querySelectorAll('.btn-clear-filter').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.closest('.past-flights-section')) {
+          flushPastQuery('', filters.onPastQuery);
+        } else {
+          filters.onUpcomingQuery('');
+        }
+      });
+    });
+  }
+
+  restoreFilterFocus(focusState);
 
   // Wire up event listeners
   container.querySelectorAll('.btn-briefing').forEach((btn) => {
@@ -463,7 +700,11 @@ export function renderFlightList(
   // Subscribed flights aren't bulk-deletable — exclude them from "select all"/"select all past".
   // "Active" here = future + recent (everything pre-departure plus the recent
   // undebriefed window the pilot can still act on).
-  const active = [...future, ...recent];
+  // Only *visible* rows are selectable: "Select all" followed by "Delete
+  // selected" must never reach a flight the active filter is hiding. `past` is
+  // already the filtered set (the server applied past_q), so it needs no
+  // further narrowing here.
+  const active = [...futureShown, ...recentShown];
   const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
   const selectablePast = past.filter(f => f.role !== 'subscriber').map(f => f.id);
   renderSelectionBar(
