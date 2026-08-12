@@ -19,7 +19,7 @@ from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
-from weatherbrief.db.models import BriefingPackRow, FlightRow
+from weatherbrief.db.models import BriefingPackRow, FlightRow, FlightSubscriptionRow
 from weatherbrief.fetch.variables import (
     MAX_BOOKING_LEAD_DAYS,
     coverage_start_date,
@@ -1497,6 +1497,40 @@ class MoveFlightRequest(BaseModel):
         return v
 
 
+def shift_alt_departure(
+    source_departure: datetime,
+    source_alt: datetime | None,
+    new_departure: datetime,
+) -> datetime | None:
+    """Carry a flight's pinned alternate departure through a move.
+
+    The alternate is shifted by the same delta as the primary departure, so a
+    pilot who pushes a flight one day out keeps their "…or two hours later"
+    two hours later.
+
+    The stored invariant is stricter than a plain shift, though: ``update_flight``
+    requires the alternate to be on the *same calendar day* as the primary and to
+    differ from it. A sub-day move can break the first — 23:00 + 2h crosses
+    midnight while 01:00 + 2h does not — so a shifted alternate that lands on
+    another day is re-anchored to the new departure's day, keeping its time of
+    day. If that collides with the primary there is no valid alternate left and
+    we return ``None``; the caller then also drops ``flexibility`` from
+    ``"alternate"``, because the pair must stay consistent.
+
+    Everything is normalised to UTC first: ``new_departure`` comes straight from
+    ``datetime.fromisoformat`` and may carry any offset, while the stored
+    alternate is aware-UTC, so comparing their naive ``.date()`` would otherwise
+    be comparing days in two different zones.
+    """
+    if source_alt is None:
+        return None
+    anchor = new_departure.astimezone(timezone.utc)
+    shifted = (source_alt + (new_departure - source_departure)).astimezone(timezone.utc)
+    if shifted.date() != anchor.date():
+        shifted = shifted.replace(year=anchor.year, month=anchor.month, day=anchor.day)
+    return None if shifted == anchor else shifted
+
+
 @router.post("/{flight_id}/move", response_model=FlightResponse)
 def move_flight(
     flight_id: str,
@@ -1612,6 +1646,18 @@ def move_flight(
         new_raw_route = source.raw_route
         new_parser_version = source.parser_version
 
+    # Timing-scenario state follows the flight. Left to their column defaults
+    # these silently reset to "none" / NULL / "default", so a pilot who moved a
+    # next_day-scanning flight lost the scan with no warning.
+    new_alt_departure_time = shift_alt_departure(
+        source.departure_time, source.alt_departure_time, new_departure_time,
+    )
+    new_flexibility = source.flexibility
+    if new_flexibility == "alternate" and new_alt_departure_time is None:
+        # The invariant update_flight enforces: "alternate" without an alt time
+        # is not a storable state.
+        new_flexibility = "none"
+
     new_flight = Flight(
         id=new_id,
         user_id=user_id,
@@ -1624,6 +1670,9 @@ def move_flight(
         flight_ceiling_ft=new_ceil,
         flight_duration_hours=new_dur,
         private=source.private,
+        alt_departure_time=new_alt_departure_time,
+        flexibility=new_flexibility,
+        notify_override=source.notify_override,
         auto_refresh=source.auto_refresh,
         auto_refresh_hour=source.auto_refresh_hour,
         raw_route=new_raw_route,
@@ -1635,9 +1684,31 @@ def move_flight(
         created_at=datetime.now(tz=timezone.utc),
     )
 
+    # Subscribers follow the flight too. ``delete_flight`` cascades
+    # ``flight_subscriptions`` while ``share_code`` is deliberately carried over
+    # above — so without this the shared link keeps resolving for everyone who
+    # has it, but every existing subscriber is silently dropped. Snapshot before
+    # the delete, re-insert after the new row exists, so the FK holds at every
+    # step of the transaction.
+    subscribers = [
+        (row.user_id, row.created_at)
+        for row in db.execute(
+            select(FlightSubscriptionRow).where(
+                FlightSubscriptionRow.flight_id == flight_id
+            )
+        ).scalars().all()
+    ]
+
     # Single transaction: delete old (cascades packs + artifacts), insert new.
     delete_flight(db, flight_id)
     save_flight(db, new_flight, user_id)
+    for subscriber_id, subscribed_at in subscribers:
+        db.add(
+            FlightSubscriptionRow(
+                flight_id=new_id, user_id=subscriber_id, created_at=subscribed_at,
+            )
+        )
+    db.flush()
 
     return _flight_to_response(new_flight, db, viewer_id=user_id)
 
