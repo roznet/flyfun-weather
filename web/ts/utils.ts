@@ -81,6 +81,33 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
 
   // Fire-and-forget: check for unseen messages and show badge
   checkMessagesBadge();
+
+  // The header is sticky; publish its height so sticky side rails can offset.
+  trackHeaderHeight();
+}
+
+let _headerObserver: ResizeObserver | null = null;
+
+/**
+ * Publish the pinned page-header's rendered height as `--header-h` on :root.
+ *
+ * The header is `position: sticky` on every page, but its height varies (an
+ * `<h1>` on most pages, a slim nav-only bar on the briefing page, and it
+ * reflows when the nav wraps or the hamburger menu takes over). Anything that
+ * needs to sit below it — the briefing rail, the help TOC, `scroll-padding-top`
+ * — reads the var rather than hard-coding a guess. Idempotent: safe to call on
+ * every nav re-render; the observer is attached once.
+ */
+export function trackHeaderHeight(): void {
+  const header = document.querySelector('.page-header') as HTMLElement | null;
+  if (!header) return;
+  const apply = (): void => {
+    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+  };
+  apply();
+  if (_headerObserver) return;
+  _headerObserver = new ResizeObserver(apply);
+  _headerObserver.observe(header);
 }
 
 let _navDismissBound = false;
