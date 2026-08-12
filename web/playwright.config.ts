@@ -13,7 +13,11 @@ export default defineConfig({
     { name: 'chromium', use: { browserName: 'chromium' } },
   ],
   webServer: {
-    command: 'cd .. && source venv/bin/activate && uvicorn weatherbrief.api.app:app --port 8000',
+    // Call the venv's uvicorn directly rather than activating first: the
+    // command runs under /bin/sh, which is dash on Ubuntu, where `source` is
+    // not a builtin (`source: not found`, exit 127). Invoking the entrypoint
+    // needs no activation and behaves the same on macOS and CI.
+    command: 'cd .. && venv/bin/uvicorn weatherbrief.api.app:app --port 8000',
     url: 'http://localhost:8000',
     reuseExistingServer: true,
   },
