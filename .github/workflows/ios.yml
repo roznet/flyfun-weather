@@ -1,0 +1,109 @@
+name: iOS
+
+# The iOS app's 397 unit tests were load-bearing only when someone remembered to
+# run them locally — `tests.yml` deliberately skips `app/**` because it has no
+# Xcode toolchain. This is the other half of that split.
+#
+# UI tests are intentionally NOT run here. They drive a simulator, are the
+# flaky-on-CI half of the suite, and would mask a real logic regression behind a
+# launch hiccup. The unit target is hermetic (no URLSession, no Task.sleep, no
+# expectation waiting), which is what makes it worth gating on.
+#
+# The repo is public, so standard GitHub-hosted runners — macOS included — are
+# free and unlimited. (Only the *larger* macOS runners are billed on public
+# repos, and this uses a standard one.)
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - 'app/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths: *paths
+
+# Mirror of tests.yml: this job only checks out, builds and tests. Nothing
+# writes back to the repo or touches a deployment.
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: xcodebuild test
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    env:
+      # Pinned rather than left on the image default so a runner-image bump
+      # can't silently change the compiler under us. 26.6 is both the current
+      # macos-26 default and what the app is developed against locally.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      # The app's deployment target is iOS 26.2; the image carries 26.2, 26.4
+      # and 26.5 runtimes. OS=latest rather than a pin, because the installed
+      # runtime set moves with the image and an unavailable pin is a hard
+      # failure. iPhone 17 is present in every runtime the image ships.
+      DESTINATION: 'platform=iOS Simulator,name=iPhone 17,OS=latest'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # All seven SPM dependencies are public repos (rzutils, rzflight, rzskewt,
+      # flyfun-common, fmdb, Geomagnetism, KDTree), so resolution needs no token.
+      # -clonedSourcePackagesDirPath pulls the checkouts out of DerivedData so
+      # they can be cached on their own.
+      - name: Cache SPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: .spm
+          key: spm-${{ runner.os }}-${{ hashFiles('app/flyfun-weather/flyfun-weather.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project app/flyfun-weather/flyfun-weather.xcodeproj \
+            -scheme flyfun-weather \
+            -clonedSourcePackagesDirPath .spm
+
+      # -only-testing filters *execution*, not the build: the shared scheme
+      # lists both testables, so the UI target still compiles. It is two files,
+      # so that costs almost nothing and keeps the scheme untouched.
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project app/flyfun-weather/flyfun-weather.xcodeproj \
+            -scheme flyfun-weather \
+            -destination "$DESTINATION" \
+            -only-testing:flyfun-weatherTests \
+            -clonedSourcePackagesDirPath .spm \
+            -resultBundlePath unit.xcresult \
+            -skipMacroValidation \
+            -quiet
+
+      # `-only-testing:` matching nothing is a SILENT vacuous pass — xcodebuild
+      # prints "** TEST SUCCEEDED **" and exits 0 having run zero tests. The
+      # exit status alone is therefore not evidence the suite ran; read the
+      # count back out of the result bundle.
+      - name: Guard against a vacuous pass
+        run: |
+          total=$(xcrun xcresulttool get test-results summary --path unit.xcresult \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["totalTestCount"])')
+          echo "Ran $total unit tests" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::xcodebuild reported success but ran 0 tests — the -only-testing filter matched nothing."
+            exit 1
+          fi
+          echo "Ran $total unit tests."
+
+      - name: Upload result bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-xcresult
+          path: unit.xcresult
+          retention-days: 7
