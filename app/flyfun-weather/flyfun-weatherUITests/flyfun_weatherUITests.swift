@@ -141,6 +141,19 @@ final class flyfun_weatherUITests: XCTestCase {
         waitForBriefingLoaded(app)
     }
 
+    /// Get back to the flight list after a Move / Duplicate. Both select the new
+    /// flight, so iPhone pushes its briefing on top of the list; iPad keeps the
+    /// list in the split view and this is a no-op. The back button carries the
+    /// sidebar's title ("Flights") — same English-label assumption as the
+    /// "Show Sidebar" fallback above.
+    @MainActor
+    private func returnToFlightList(_ app: XCUIApplication) {
+        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 5) { return }
+        let back = app.navigationBars.buttons["Flights"].firstMatch
+        if back.waitForExistence(timeout: 5) { back.tap() }
+        revealFlightList(app)
+    }
+
     /// Open the edit form for a listed flight via its trailing swipe action.
     @MainActor
     private func openEditForm(_ app: XCUIApplication, flightId: String) {
@@ -155,12 +168,26 @@ final class flyfun_weatherUITests: XCTestCase {
                       "the edit form should appear")
     }
 
+    /// Scroll a `Form` row into view. `Form` is backed by a lazy `List`, so a
+    /// section below the fold is not merely off-screen — it is absent from the
+    /// accessibility tree entirely, and `waitForExistence` on it fails no matter
+    /// how long it waits. Swipe until it materializes.
+    @MainActor
+    private func scrollToFormRow(_ app: XCUIApplication, _ element: XCUIElement, maxSwipes: Int = 8) {
+        var swipes = 0
+        while !element.exists && swipes < maxSwipes {
+            app.swipeUp()
+            swipes += 1
+        }
+    }
+
     /// Pick a value from a `.menu`-style SwiftUI `Picker`, addressed by the
     /// accessibility identifier set on it (the rendered *label* folds in the
     /// current value, so it is not a stable selector).
     @MainActor
     private func selectFromMenuPicker(_ app: XCUIApplication, identifier: String, value: String) {
         let picker = app.buttons[identifier].firstMatch
+        scrollToFormRow(app, picker)
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "the \(identifier) picker should be present")
         picker.tap()
         let option = app.buttons[value].firstMatch
@@ -209,7 +236,7 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(waypoints.waitForNonExistence(timeout: 10),
                       "the edit form should dismiss once the move succeeds")
 
-        revealFlightList(app)
+        returnToFlightList(app)
         XCTAssertTrue(app.descendants(matching: .any)["flightCard-moved-fixture-2"]
                         .firstMatch.waitForExistence(timeout: 10),
                       "the moved flight should be listed")
@@ -244,7 +271,7 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(app.textFields["waypointsField"].waitForNonExistence(timeout: 10),
                       "the edit form should dismiss once the duplicate is created")
 
-        revealFlightList(app)
+        returnToFlightList(app)
         XCTAssertTrue(app.descendants(matching: .any)["flightCard-created-1"]
                         .firstMatch.waitForExistence(timeout: 10),
                       "the duplicate should be listed")
