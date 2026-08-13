@@ -357,18 +357,54 @@ class TestDecideResume:
             s.close()
         assert decision.action == "resume"
 
+    def test_resumes_when_the_flight_changed_under_an_unmoved_gate(
+        self, app_db, monkeypatch,
+    ):
+        """The #552 blind spot on the resume path.
+
+        A refresh queued *because* the pilot edited the flight has, by
+        construction, no new model run behind it, so the bare model-freshness
+        gate says ``none``. Abandoning there would drop the very job that exists
+        to rebuild the pack, leaving a briefing computed for the old departure
+        time. The params-change override has to reach this call site too.
+        """
+        self._patch_gate(monkeypatch, mode="none", params_hash="hash-of-the-old-params")
+        s = app_db()
+        try:
+            job = _make_job(s)
+            decision = refresh_resume.decide_resume(s, job, max_attempts=2)
+        finally:
+            s.close()
+        assert decision.action == "resume"
+
     @staticmethod
-    def _patch_gate(monkeypatch, *, mode: str) -> None:
+    def _patch_gate(
+        monkeypatch, *, mode: str, params_hash: str | None = None,
+    ) -> None:
+        """Pin the refresh gate's answer.
+
+        ``params_hash`` is the stamp on the newest pack: ``None`` is a legacy
+        pack (pre-088), which the params-change override deliberately leaves
+        alone, so the ``mode`` given here is what ``decide_resume`` sees. Pass a
+        value that cannot match the flight's real hash to exercise the override.
+        """
         from types import SimpleNamespace
 
         from weatherbrief.api import packs as packs_mod
         from weatherbrief.storage import flights as flights_mod
 
-        monkeypatch.setattr(flights_mod, "list_packs", lambda db, fid: ["pack"])
+        pack = SimpleNamespace(flight_params_hash=params_hash)
+        monkeypatch.setattr(flights_mod, "list_packs", lambda db, fid: [pack])
         monkeypatch.setattr(packs_mod, "_build_data_status", lambda pack, flight: "status")
+        # A real RefreshDecision, not a stand-in: the override reaches it with
+        # `model_copy`, so a SimpleNamespace would pass the test for the wrong
+        # reason (AttributeError instead of the branch under test).
         monkeypatch.setattr(
             packs_mod, "decide_refresh",
-            lambda status, days_out: SimpleNamespace(mode=mode, reason="because"),
+            lambda status, days_out: packs_mod.RefreshDecision(
+                mode=mode, reason="because", needed=1, n_eligible=1,
+                n_updated=0, days_out=days_out,
+            ),
         )
 
 
