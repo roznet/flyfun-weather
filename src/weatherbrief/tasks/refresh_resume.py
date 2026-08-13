@@ -269,9 +269,12 @@ async def reconcile_one(job_id: int, app_state) -> None:
         ran = await asyncio.to_thread(
             _auto_refresh_one, flight_row, app_state, user_id, triggered_by="resume",
         )
-        # decide_resume already checked the gate, so a skip here means it moved
-        # underneath us (the scheduler got there first). Record it as such
-        # rather than as a briefing that never happened.
+        # decide_resume already checked the gate — including the params-change
+        # override, which `_auto_refresh_one` re-applies for `triggered_by=
+        # "resume"` so the two agree. A skip here therefore means the gate moved
+        # underneath us (the scheduler got there first), not that the two checks
+        # disagreed. Record it as such rather than as a briefing that never
+        # happened.
         refresh_registry.mark_outcome(
             flight_id, "succeeded" if ran else "skipped",
             None if ran else "refresh gate declined a full run",
