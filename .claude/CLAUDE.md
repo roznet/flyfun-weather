@@ -55,6 +55,7 @@ Dev uses SQLite, production uses MySQL. Migrations must work on both:
 
 - Frontend uses esbuild. `npm run dev` runs watch mode and rebuilds `web/dist/*.js` on change — usually already running in a tmux session managed by `/devserver`, so don't run `npm run build` manually.
 - **Each worktree (including `main/`) has its own venv at `./venv`.** Do NOT fall back to `../main/venv` — that pattern caused editable-install bugs (the `weatherbrief` package would silently resolve to whichever directory last ran `pip install -e .`). If a worktree is missing its venv, run `/worktree-init` (for new worktrees) or `python3 -m venv venv && source venv/bin/activate && pip install -e ".[dev]"` (for `main`).
+- **CI runs the iOS unit target only** — the XCUI journeys aren't gated, so a green CI says nothing about them. Run them locally (`-only-testing:flyfun-weatherUITests`, ~5 min) before merging a UI change; nightly on main via `.github/workflows/ios-ui-nightly.yml`.
 - Local environment variables live in `.env`. In worktrees, `.env` is copied verbatim from `main/.env` by `/worktree-init`; absolute paths in it (e.g. `DATA_DIR`, `DATABASE_URL`) keep heavy data and the DB shared with main. There is intentionally NO `data/` directory in a worktree — code that bypasses `DATA_DIR` and writes to `./data` should fail loudly.
 
 ## Worktree workflow

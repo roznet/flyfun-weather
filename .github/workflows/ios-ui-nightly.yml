@@ -1,0 +1,119 @@
+name: iOS UI (nightly)
+
+# The other half of ios.yml's deliberate split. That workflow gates PRs on the
+# hermetic unit target and explains why the XCUI journeys are not gated: they
+# drive a simulator, they are the flaky half, and a launch hiccup failing a PR
+# teaches everyone to ignore red.
+#
+# The cost of that choice showed up in PR #556: both of its new UI journeys were
+# green here (unit-only) while failing on a real simulator — a lazy-`Form`
+# selector that could never resolve, and a post-Move navigation the helper did
+# not handle. Nobody was misled for long, but only because the tests happened to
+# be run locally. Nightly closes that without putting a flaky gate on anyone's
+# PR: breakage surfaces within a day, and the result bundle carries the
+# screenshots to explain it.
+#
+# Not a gate. A failure here is a message, not a block — read it, then decide.
+
+on:
+  schedule:
+    # 03:17 UTC daily. Off-round minute on purpose: GitHub queues scheduled jobs
+    # at the top of the hour, so :00 runs are the ones that get delayed.
+    - cron: '17 3 * * *'
+  # So it can be run on demand against main before a release without waiting
+  # for the small hours.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ui-nightly
+  cancel-in-progress: false
+
+jobs:
+  ui:
+    name: xcodebuild test (UI)
+    runs-on: macos-26
+    # ~5 min of execution locally on Apple silicon; GitHub's runners are
+    # substantially slower and every XCUI test relaunches the app (~15-20s
+    # each), so the ceiling is generous.
+    timeout-minutes: 60
+
+    env:
+      # Both pinned to match ios.yml exactly — the two workflows should differ
+      # in *what they run*, nothing else.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DESTINATION: 'platform=iOS Simulator,name=iPhone 17,OS=latest'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: .spm
+          key: spm-${{ runner.os }}-${{ hashFiles('app/flyfun-weather/flyfun-weather.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project app/flyfun-weather/flyfun-weather.xcodeproj \
+            -scheme flyfun-weather \
+            -clonedSourcePackagesDirPath .spm
+
+      # -retry-tests-on-failure is what makes this reportable rather than noise:
+      # it re-runs only the tests that failed, so a simulator launch hiccup
+      # self-heals and what lands in the log is a reproducible failure. The
+      # journeys are launch-heavy, so a retry costs one app launch, not a rerun
+      # of the suite.
+      #
+      # One test (testForecastMapOffersSidebarToggleOnPad) is iPad-only and will
+      # report as skipped on this destination. Adding an iPad leg means checking
+      # a device name that actually exists on the runner image — an unavailable
+      # name is a hard failure, not a skip — so it is left for when someone can
+      # verify it against the image manifest.
+      - name: UI tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project app/flyfun-weather/flyfun-weather.xcodeproj \
+            -scheme flyfun-weather \
+            -destination "$DESTINATION" \
+            -only-testing:flyfun-weatherUITests \
+            -clonedSourcePackagesDirPath .spm \
+            -resultBundlePath ui.xcresult \
+            -retry-tests-on-failure \
+            -test-iterations 2 \
+            -skipMacroValidation \
+            -quiet
+
+      # Same trap as ios.yml: `-only-testing:` matching nothing is a SILENT
+      # vacuous pass — "** TEST SUCCEEDED **", exit 0, zero tests run. Worse
+      # here, because nobody watches a nightly that is always green.
+      - name: Guard against a vacuous pass
+        if: always()
+        run: |
+          summary=$(xcrun xcresulttool get test-results summary --path ui.xcresult)
+          total=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["totalTestCount"])')
+          passed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["passedTests"])')
+          failed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["failedTests"])')
+          skipped=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skippedTests"])')
+          echo "UI journeys: $passed passed, $failed failed, $skipped skipped (of $total)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::xcodebuild ran 0 UI tests — the -only-testing filter matched nothing."
+            exit 1
+          fi
+          echo "Ran $total UI tests: $passed passed, $failed failed, $skipped skipped."
+
+      # Always, not just on failure: the journeys attach screenshots
+      # (.lifetime = .keepAlways), and a passing run's screenshots are how a
+      # layout regression that no assertion covers gets noticed at all.
+      - name: Upload result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-xcresult
+          path: ui.xcresult
+          retention-days: 14
