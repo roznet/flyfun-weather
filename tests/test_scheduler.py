@@ -575,6 +575,111 @@ class TestAutoRefreshGate:
 
         mock_exec.assert_called_once()
 
+    @staticmethod
+    def _params_change_setup(mock_session, mock_row_to_flight, mock_list,
+                             mock_status, mock_decide, mock_prepare, mock_exec):
+        """A pack built for *different* flight parameters, under an unmoved gate.
+
+        The shape a crash-resume hits after a departure/route edit: no new model
+        run, so the model-freshness gate can only say ``none``. `_row_to_flight`
+        returns a flight carrying every field `compute_flight_params_hash` reads,
+        so the real override (imported inside `_auto_refresh_one`, deliberately
+        not patched here) computes a hash that cannot match the pack's stamp.
+        """
+        from unittest.mock import MagicMock
+
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models import BriefingPackMeta
+
+        mock_session.return_value = MagicMock()
+        mock_row_to_flight.return_value = SimpleNamespace(
+            id="f",   # the override logs it when it forces a full run
+            departure_time=datetime.now(timezone.utc) + timedelta(days=2),
+            waypoints=["EGTF", "LFAT"],
+            cruise_altitude_ft=5500,
+            flight_ceiling_ft=18000,
+            flight_duration_hours=2.0,
+        )
+        mock_list.return_value = [BriefingPackMeta(
+            flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
+            days_out=2, artifact_path="/tmp/pack",
+            flight_params_hash="stamp-of-the-pre-edit-parameters",
+        )]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="none", reason="no new run", needed=3, n_eligible=3,
+            n_updated=0, days_out=2,
+        )
+        mock_prepare.return_value = (
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+        )
+        mock_exec.return_value = MagicMock()
+
+    @patch("weatherbrief.api.packs._finalize_refresh")
+    @patch("weatherbrief.api.packs._prepare_refresh")
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights._row_to_flight")
+    @patch("weatherbrief.scheduler.SessionLocal")
+    def test_resume_runs_when_the_flight_params_changed(
+        self, mock_session, mock_row_to_flight, mock_list,
+        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
+    ):
+        """`decide_resume` authorising a resume must not be undone here (#552).
+
+        The override is the *only* reason the resume was authorised, so this
+        re-check has to apply it too — otherwise the two gates disagree and the
+        recovered refresh is skipped, leaving the pack stale for the edited
+        departure/route.
+        """
+        from weatherbrief.scheduler import _auto_refresh_one
+
+        self._params_change_setup(
+            mock_session, mock_row_to_flight, mock_list,
+            mock_status, mock_decide, mock_prepare, mock_exec,
+        )
+
+        ran = _auto_refresh_one(
+            _make_row(), SimpleNamespace(db_path="/fake/db"), "u1",
+            triggered_by="resume",
+        )
+
+        assert ran is True
+        mock_exec.assert_called_once()
+
+    @patch("weatherbrief.api.packs._finalize_refresh")
+    @patch("weatherbrief.api.packs._prepare_refresh")
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights._row_to_flight")
+    @patch("weatherbrief.scheduler.SessionLocal")
+    def test_scheduler_cycle_stays_un_overridden_on_a_params_change(
+        self, mock_session, mock_row_to_flight, mock_list,
+        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
+    ):
+        """The routine cycle keeps the deliberate exclusion.
+
+        Identical setup to the resume case above, minus `triggered_by`: an edit
+        is already followed by a client-driven refresh, so the nightly cycle
+        forcing its own full run per edited flight would just buy a second one.
+        Pins that this stayed scoped to the resume path.
+        """
+        from weatherbrief.scheduler import _auto_refresh_one
+
+        self._params_change_setup(
+            mock_session, mock_row_to_flight, mock_list,
+            mock_status, mock_decide, mock_prepare, mock_exec,
+        )
+
+        ran = _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+
+        assert ran is False
+        mock_exec.assert_not_called()
+
     @patch("weatherbrief.api.packs._finalize_refresh")
     @patch("weatherbrief.api.packs._prepare_refresh")
     @patch("weatherbrief.pipeline.execute_briefing")
