@@ -32,8 +32,9 @@ final class flyfun_weatherUITests: XCTestCase {
 
     /// A briefing is open once its internal tab bar is present. The tab titles
     /// (Advisory / Cross-Section / …) render as buttons on both idioms — an
-    /// iPhone bottom `Tab`, an iPad pill band — so this is the idiom-agnostic
+    /// iPhone bottom `Tab`, an iPad top tab bar — so this is the idiom-agnostic
     /// "briefing loaded" signal (replaces keying off localized header text).
+    /// Keyed on Advisory, which is the first tab and so never paginated away.
     @MainActor
     private func waitForBriefingLoaded(_ app: XCUIApplication) {
         XCTAssertTrue(app.buttons["Advisory"].firstMatch.waitForExistence(timeout: 15),
@@ -55,15 +56,29 @@ final class flyfun_weatherUITests: XCTestCase {
         waitForBriefingLoaded(app)
     }
 
-    /// Switch the open briefing to a named internal tab. On iPhone the tabs are a
-    /// native bottom `TabBar` (selection registers only via the tab-bar button);
-    /// on iPad they're a custom pill band of plain buttons. Try the tab bar
-    /// first, then fall back to a plain button.
+    /// Switch the open briefing to a named internal tab. Both idioms render a
+    /// native `TabView` (#437): a bottom tab bar on iPhone, a top tab bar on
+    /// iPad. XCUI surfaces the iPad one as plain buttons rather than a
+    /// `tabBars` element, so try the tab bar first and fall back to a button.
     @MainActor
     private func switchToBriefingTab(_ app: XCUIApplication, _ title: String) {
-        // Prefer the bottom tab bar (iPhone); fall back to the pill band (iPad).
+        // Prefer the bottom tab bar (iPhone); fall back to a plain button (iPad).
         var tab = app.tabBars.buttons[title]
         if !tab.waitForExistence(timeout: 3) { tab = app.buttons[title].firstMatch }
+        // iPad: when the split view's detail column is narrow — portrait with
+        // the sidebar showing, which is how these journeys run — the top tab
+        // bar paginates, leaving the later tabs (Cross-Section, Map) behind a
+        // "Next Page" chevron. Page forward until the wanted tab surfaces,
+        // exactly as a pilot on an 11-inch would. Hiding the sidebar would also
+        // widen the bar, but paging is what the app actually asks of the user.
+        var pages = 0
+        while !tab.waitForExistence(timeout: 2) && pages < 4 {
+            let next = app.buttons["Next Page"]
+            guard next.exists else { break }
+            next.tap()
+            pages += 1
+            tab = app.buttons[title].firstMatch
+        }
         XCTAssertTrue(tab.waitForExistence(timeout: 10), "\(title) tab should be present")
         // Coordinate tap: in this SwiftUI setup a plain `.tap()` on the tab-bar
         // button passes XCUI's hittability gate without registering the TabView
