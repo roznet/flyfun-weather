@@ -146,6 +146,16 @@ jobs:
           fi
           echo "Ran $total UI tests: $passed passed, $failed failed, $skipped skipped."
 
+          # `-quiet` swallows the assertion text, so without this a red nightly
+          # can only be diagnosed by downloading the result bundle — 170 MB to
+          # read four lines. Print name + message straight into the run page.
+          # One-lined on purpose: inside a `run: |` block a multi-line python -c
+          # would need its top-level statements at column 0 to be valid Python,
+          # which ends the YAML block scalar.
+          if [ "$failed" -gt 0 ]; then
+            echo "$summary" | python3 -c "import json,sys; [print('- **%s** - %s' % (t.get('testName'), t.get('failureText'))) for t in json.load(sys.stdin).get('testFailures', [])]" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       # Always, not just on failure: the journeys attach screenshots
       # (.lifetime = .keepAlways), and a passing run's screenshots are how a
       # layout regression that no assertion covers gets noticed at all.

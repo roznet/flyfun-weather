@@ -17,6 +17,24 @@ final class flyfun_weatherUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// How long to wait for something that *should* appear — a presented sheet,
+    /// a pushed detail, a rendered section.
+    ///
+    /// Sized for the slowest machine that runs these, not the fastest. The
+    /// first nightly CI run failed four journeys on a 5-second wait
+    /// — all four "the form should appear" — while the same commit passed all
+    /// sixteen locally on iPhone and iPad: GitHub's shared macOS runners are
+    /// several times slower than local Apple silicon. Waiting longer is close to
+    /// free, because `waitForExistence` returns the moment the element exists;
+    /// the cost is paid only by a test that was going to fail anyway.
+    private static let uiTimeout: TimeInterval = 20
+
+    /// Wait for a "is it already on screen?" probe, where *not* finding it is a
+    /// normal outcome that selects another path (iPad's sidebar toggle). Kept
+    /// short on purpose: `uiTimeout` here would add its full duration to every
+    /// run that legitimately takes the other branch.
+    private static let probeTimeout: TimeInterval = 8
+
     /// Launch the app as a UI test would: fake-authenticated + fixture-backed.
     /// `offline: true` also sets `FLYFUN_MOCK_OFFLINE` so the fixtures present as
     /// a cached list (offline banner + read-only rows) for the offline journey.
@@ -37,7 +55,7 @@ final class flyfun_weatherUITests: XCTestCase {
     /// Keyed on Advisory, which is the first tab and so never paginated away.
     @MainActor
     private func waitForBriefingLoaded(_ app: XCUIApplication) {
-        XCTAssertTrue(app.buttons["Advisory"].firstMatch.waitForExistence(timeout: 15),
+        XCTAssertTrue(app.buttons["Advisory"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the briefing (with its Advisory tab) should be shown")
     }
 
@@ -51,7 +69,7 @@ final class flyfun_weatherUITests: XCTestCase {
         // its child nodes, so the id resolves to several elements — fine for
         // `waitForExistence`, but `.tap()` needs a single element.
         let card = app.descendants(matching: .any)["flightCard-fixture-1"].firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 10), "fixture-1 should be listed")
+        XCTAssertTrue(card.waitForExistence(timeout: Self.uiTimeout), "fixture-1 should be listed")
         card.tap()
         waitForBriefingLoaded(app)
     }
@@ -79,7 +97,7 @@ final class flyfun_weatherUITests: XCTestCase {
             pages += 1
             tab = app.buttons[title].firstMatch
         }
-        XCTAssertTrue(tab.waitForExistence(timeout: 10), "\(title) tab should be present")
+        XCTAssertTrue(tab.waitForExistence(timeout: Self.uiTimeout), "\(title) tab should be present")
         // Coordinate tap: in this SwiftUI setup a plain `.tap()` on the tab-bar
         // button passes XCUI's hittability gate without registering the TabView
         // selection; hitting the element's centre point directly does.
@@ -94,7 +112,7 @@ final class flyfun_weatherUITests: XCTestCase {
         // Already on screen (iPhone, or iPad landscape) — keyed off the list's
         // accessibility identifier, not fixture content, so renaming a fixture
         // route can't silently break iPad handling.
-        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 5) { return }
+        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: Self.probeTimeout) { return }
         // iPad portrait: the list sits behind the split-view toggle — a system
         // control with no stable identifier we can set, matched by its (English)
         // label. CI runs English sims.
@@ -112,9 +130,9 @@ final class flyfun_weatherUITests: XCTestCase {
 
         // Both fixture flights render (keyed off the card identifiers, not the
         // route text, so a route-formatter change can't break the assertion).
-        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-1"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-1"].waitForExistence(timeout: Self.uiTimeout),
                       "first fixture flight should be listed")
-        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-2"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-2"].waitForExistence(timeout: Self.uiTimeout),
                       "second fixture flight should be listed")
 
         // The primary action is reachable.
@@ -136,7 +154,7 @@ final class flyfun_weatherUITests: XCTestCase {
         app.buttons["addFlightButton"].tap()
 
         let waypoints = app.textFields["waypointsField"]
-        XCTAssertTrue(waypoints.waitForExistence(timeout: 5), "add-flight form should appear")
+        XCTAssertTrue(waypoints.waitForExistence(timeout: Self.uiTimeout), "add-flight form should appear")
         let submit = app.buttons["submitFlightButton"]
 
         // One waypoint → submit disabled.
@@ -163,9 +181,9 @@ final class flyfun_weatherUITests: XCTestCase {
     /// "Show Sidebar" fallback above.
     @MainActor
     private func returnToFlightList(_ app: XCUIApplication) {
-        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 5) { return }
+        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: Self.probeTimeout) { return }
         let back = app.navigationBars.buttons["Flights"].firstMatch
-        if back.waitForExistence(timeout: 5) { back.tap() }
+        if back.waitForExistence(timeout: Self.probeTimeout) { back.tap() }
         revealFlightList(app)
     }
 
@@ -174,12 +192,12 @@ final class flyfun_weatherUITests: XCTestCase {
     private func openEditForm(_ app: XCUIApplication, flightId: String) {
         revealFlightList(app)
         let card = app.descendants(matching: .any)["flightCard-\(flightId)"].firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 10), "\(flightId) should be listed")
+        XCTAssertTrue(card.waitForExistence(timeout: Self.uiTimeout), "\(flightId) should be listed")
         card.swipeLeft()
         let edit = app.buttons["editFlightSwipeButton"].firstMatch
-        XCTAssertTrue(edit.waitForExistence(timeout: 5), "the Edit swipe action should appear")
+        XCTAssertTrue(edit.waitForExistence(timeout: Self.uiTimeout), "the Edit swipe action should appear")
         edit.tap()
-        XCTAssertTrue(app.textFields["waypointsField"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.textFields["waypointsField"].waitForExistence(timeout: Self.uiTimeout),
                       "the edit form should appear")
     }
 
@@ -203,10 +221,10 @@ final class flyfun_weatherUITests: XCTestCase {
     private func selectFromMenuPicker(_ app: XCUIApplication, identifier: String, value: String) {
         let picker = app.buttons[identifier].firstMatch
         scrollToFormRow(app, picker)
-        XCTAssertTrue(picker.waitForExistence(timeout: 5), "the \(identifier) picker should be present")
+        XCTAssertTrue(picker.waitForExistence(timeout: Self.uiTimeout), "the \(identifier) picker should be present")
         picker.tap()
         let option = app.buttons[value].firstMatch
-        XCTAssertTrue(option.waitForExistence(timeout: 5), "\(value) should be offered by \(identifier)")
+        XCTAssertTrue(option.waitForExistence(timeout: Self.uiTimeout), "\(value) should be offered by \(identifier)")
         option.tap()
     }
 
@@ -237,23 +255,23 @@ final class flyfun_weatherUITests: XCTestCase {
         replaceText(waypoints, with: "EGTF LFMD")
 
         // The inline note explains what Move will discard, before the pilot commits.
-        XCTAssertTrue(app.staticTexts["routeChangedNote"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.staticTexts["routeChangedNote"].waitForExistence(timeout: Self.uiTimeout),
                       "an origin/destination change should explain Move vs Duplicate inline")
 
         app.buttons["submitFlightButton"].tap()
 
         let move = app.buttons["moveFlightButton"].firstMatch
-        XCTAssertTrue(move.waitForExistence(timeout: 10),
+        XCTAssertTrue(move.waitForExistence(timeout: Self.uiTimeout),
                       "a structural change should offer Move / Duplicate, not a plain Save")
         move.tap()
 
         // The regression: the sheet must actually go away.
-        XCTAssertTrue(waypoints.waitForNonExistence(timeout: 10),
+        XCTAssertTrue(waypoints.waitForNonExistence(timeout: Self.uiTimeout),
                       "the edit form should dismiss once the move succeeds")
 
         returnToFlightList(app)
         XCTAssertTrue(app.descendants(matching: .any)["flightCard-moved-fixture-2"]
-                        .firstMatch.waitForExistence(timeout: 10),
+                        .firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the moved flight should be listed")
         XCTAssertFalse(app.descendants(matching: .any)["flightCard-fixture-2"].firstMatch.exists,
                        "Move replaces the flight, so the original should be gone")
@@ -273,22 +291,22 @@ final class flyfun_weatherUITests: XCTestCase {
         selectFromMenuPicker(app, identifier: "departureTimezonePicker", value: "Paris (GMT+2)")
         selectFromMenuPicker(app, identifier: "departureHourPicker", value: "00")
 
-        XCTAssertTrue(app.staticTexts["dateChangedNote"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.staticTexts["dateChangedNote"].waitForExistence(timeout: Self.uiTimeout),
                       "00:xx Paris is the previous UTC day, so the date note should show")
 
         app.buttons["submitFlightButton"].tap()
 
         let duplicate = app.buttons["duplicateFlightButton"].firstMatch
-        XCTAssertTrue(duplicate.waitForExistence(timeout: 10),
+        XCTAssertTrue(duplicate.waitForExistence(timeout: Self.uiTimeout),
                       "a UTC-day change should offer Move / Duplicate")
         duplicate.tap()
 
-        XCTAssertTrue(app.textFields["waypointsField"].waitForNonExistence(timeout: 10),
+        XCTAssertTrue(app.textFields["waypointsField"].waitForNonExistence(timeout: Self.uiTimeout),
                       "the edit form should dismiss once the duplicate is created")
 
         returnToFlightList(app)
         XCTAssertTrue(app.descendants(matching: .any)["flightCard-created-1"]
-                        .firstMatch.waitForExistence(timeout: 10),
+                        .firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the duplicate should be listed")
         XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-2"].firstMatch.exists,
                       "Duplicate keeps the original, so both flights should be listed")
@@ -305,7 +323,7 @@ final class flyfun_weatherUITests: XCTestCase {
         // Advisory is the default tab. The RED convective card offers the
         // "Why it's RED" drill-down (AMBER/RED only).
         let why = app.buttons["advisoryWhy-convective"].firstMatch
-        XCTAssertTrue(why.waitForExistence(timeout: 10),
+        XCTAssertTrue(why.waitForExistence(timeout: Self.uiTimeout),
                       "RED convective advisory should offer a 'Why it's RED' drill-down")
         // Coordinate tap: the button renders on-screen but XCUI reports it "not
         // hittable" (a thin control inside the scroll view); hitting its centre
@@ -313,9 +331,9 @@ final class flyfun_weatherUITests: XCTestCase {
         why.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         // The detail sheet shows the per-model reconciliation.
-        XCTAssertTrue(app.descendants(matching: .any)["advisoryDetail"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["advisoryDetail"].waitForExistence(timeout: Self.uiTimeout),
                       "advisory detail sheet should open")
-        XCTAssertTrue(app.descendants(matching: .any)["advisoryDetailModel-gfs"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any)["advisoryDetailModel-gfs"].waitForExistence(timeout: Self.uiTimeout),
                       "per-model GFS row (the RED driver) should be shown")
         XCTAssertTrue(app.descendants(matching: .any)["advisoryDetailModel-ecmwf"].exists,
                       "per-model ECMWF row should be shown")
@@ -333,7 +351,7 @@ final class flyfun_weatherUITests: XCTestCase {
         // The canvas element only exists once the cross-section actually draws
         // (its absence is the "Loading…"/"No Data" placeholder), so finding it
         // confirms both the tab switch and a successful render from the fixture.
-        XCTAssertTrue(app.descendants(matching: .any)["crossSectionCanvas"].waitForExistence(timeout: 15),
+        XCTAssertTrue(app.descendants(matching: .any)["crossSectionCanvas"].waitForExistence(timeout: Self.uiTimeout),
                       "cross-section canvas should render for the fixture (ECMWF has data)")
 
         let shot = XCTAttachment(screenshot: app.screenshot())
@@ -350,12 +368,12 @@ final class flyfun_weatherUITests: XCTestCase {
         let app = launchMockApp(offline: true)
         revealFlightList(app)
 
-        XCTAssertTrue(app.descendants(matching: .any)["offlineBanner"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["offlineBanner"].waitForExistence(timeout: Self.uiTimeout),
                       "offline banner should show when the list is served from cache")
 
         // The offline-ready flight is still listed and openable from cache.
         let card = app.descendants(matching: .any)["flightCard-fixture-1"].firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 10), "cached flight should be listed offline")
+        XCTAssertTrue(card.waitForExistence(timeout: Self.uiTimeout), "cached flight should be listed offline")
         card.tap()
         waitForBriefingLoaded(app)   // the cached flight's briefing opens offline
     }
@@ -374,15 +392,15 @@ final class flyfun_weatherUITests: XCTestCase {
         // section only exists when an airport actually reported, so finding it
         // also confirms the `hasObservations` gate and the spy wiring.
         let pill = app.buttons["Observations"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 15),
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout),
                       "the Observations spy pill should be present for the D-0 fixture")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        XCTAssertTrue(app.descendants(matching: .any)["observationsSection"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["observationsSection"].waitForExistence(timeout: Self.uiTimeout),
                       "observations section should render")
 
         // Fixture airports appear as rows (the ⓘ button carries the label).
-        XCTAssertTrue(app.buttons["LFMD details"].firstMatch.waitForExistence(timeout: 5),
+        XCTAssertTrue(app.buttons["LFMD details"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "LFMD row should render")
         XCTAssertTrue(app.buttons["LFTH details"].firstMatch.exists,
                       "LFTH row (the CONFLICTING case) should render")
@@ -415,7 +433,7 @@ final class flyfun_weatherUITests: XCTestCase {
         // crosswind capsules are covered by a visual record.
         if UIDevice.current.userInterfaceIdiom != .pad {
             let wind = app.buttons["Wind"].firstMatch
-            if wind.waitForExistence(timeout: 5) {
+            if wind.waitForExistence(timeout: Self.probeTimeout) {
                 wind.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
                 let windShot = XCTAttachment(screenshot: app.screenshot())
                 windShot.name = "Observations-Wind"
@@ -433,15 +451,15 @@ final class flyfun_weatherUITests: XCTestCase {
         openFixture1Briefing(app)
 
         let pill = app.buttons["Observations"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Observations spy pill should be present")
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "Observations spy pill should be present")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         let info = app.buttons["LFTH details"].firstMatch
-        XCTAssertTrue(info.waitForExistence(timeout: 10), "LFTH row should render")
+        XCTAssertTrue(info.waitForExistence(timeout: Self.uiTimeout), "LFTH row should render")
         info.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         // The sheet is titled with the ICAO and shows the raw METAR text.
-        XCTAssertTrue(app.staticTexts["METAR"].firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.staticTexts["METAR"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "detail sheet should show a METAR block")
         XCTAssertTrue(app.staticTexts["Runway wind"].firstMatch.exists,
                       "detail sheet should show the runway-wind breakdown")
@@ -465,15 +483,15 @@ final class flyfun_weatherUITests: XCTestCase {
         // The spy pill only exists when a SIGMET actually matched the corridor,
         // so finding it also confirms the `hasSigmets` gate and the spy wiring.
         let pill = app.buttons["Hazards"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 15),
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout),
                       "the Hazards spy pill should be present for the D-0 fixture")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        XCTAssertTrue(app.descendants(matching: .any)["sigmetsSection"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["sigmetsSection"].waitForExistence(timeout: Self.uiTimeout),
                       "SIGMET section should render")
 
         // Both fixture bulletins appear as rows (the ⓘ button carries the label).
-        XCTAssertTrue(app.buttons["LFMM EMBD TS details"].firstMatch.waitForExistence(timeout: 5),
+        XCTAssertTrue(app.buttons["LFMM EMBD TS details"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the embedded-TS row should render")
         XCTAssertTrue(app.buttons["LFMM SEV TURB details"].firstMatch.exists,
                       "the SEV row (which drives the severe banner) should render")
@@ -501,14 +519,14 @@ final class flyfun_weatherUITests: XCTestCase {
         openFixture1Briefing(app)
 
         let pill = app.buttons["Hazards"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Hazards spy pill should be present")
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "Hazards spy pill should be present")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         let info = app.buttons["LFMM SEV TURB details"].firstMatch
-        XCTAssertTrue(info.waitForExistence(timeout: 10), "SEV TURB row should render")
+        XCTAssertTrue(info.waitForExistence(timeout: Self.uiTimeout), "SEV TURB row should render")
         info.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        XCTAssertTrue(app.staticTexts["Raw bulletin"].firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.staticTexts["Raw bulletin"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "detail sheet should show the raw bulletin block")
         XCTAssertTrue(app.staticTexts["Hazard"].firstMatch.exists,
                       "detail sheet should show the hazard meta block")
@@ -532,11 +550,11 @@ final class flyfun_weatherUITests: XCTestCase {
         openFixture1Briefing(app)
 
         let pill = app.buttons["Conditions"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Conditions spy pill should be present")
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "Conditions spy pill should be present")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         // Both fixture cards render.
-        XCTAssertTrue(app.staticTexts["LFMD"].firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.staticTexts["LFMD"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "departure card should render")
         XCTAssertTrue(app.staticTexts["LFML"].firstMatch.exists, "arrival card should render")
 
@@ -547,7 +565,7 @@ final class flyfun_weatherUITests: XCTestCase {
 
         // The arrival wind is the worst case — gusting, so the longest string.
         let wind = firstElement(in: app, labelled: "300@12G18kt")
-        XCTAssertTrue(wind.waitForExistence(timeout: 10), "arrival wind cell should render")
+        XCTAssertTrue(wind.waitForExistence(timeout: Self.uiTimeout), "arrival wind cell should render")
         XCTAssertLessThan(wind.frame.height, maxSingleLine,
                           "wind cell wrapped to multiple lines — the row is being compressed (#494)")
 
@@ -583,7 +601,7 @@ final class flyfun_weatherUITests: XCTestCase {
         app.buttons["forecastMapButton"].tap()
 
         let toggle = app.buttons["mapSidebarToggle"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 15),
+        XCTAssertTrue(toggle.waitForExistence(timeout: Self.uiTimeout),
                       "the iPad map should offer a sidebar toggle")
 
         // Collapse the sidebar — the state the user got stranded in.
@@ -597,10 +615,10 @@ final class flyfun_weatherUITests: XCTestCase {
         add(collapsed)
 
         // …and the same control brings it back. This is the whole bug.
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5),
+        XCTAssertTrue(toggle.waitForExistence(timeout: Self.uiTimeout),
                       "the toggle must survive collapsing — it is the only way back")
         toggle.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["flightList"].waitForExistence(timeout: Self.uiTimeout),
                       "tapping the toggle again should restore the flight list")
     }
 
@@ -614,18 +632,18 @@ final class flyfun_weatherUITests: XCTestCase {
     func testBulkSelectAndDeleteFlights() throws {
         let app = launchMockApp()
         revealFlightList(app)
-        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-1"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-1"].waitForExistence(timeout: Self.uiTimeout),
                       "fixture-1 should be listed before the delete")
 
         app.buttons["More"].firstMatch.tap()
         let menuItem = app.buttons["bulkSelectMenuItem"].firstMatch
-        XCTAssertTrue(menuItem.waitForExistence(timeout: 5),
+        XCTAssertTrue(menuItem.waitForExistence(timeout: Self.uiTimeout),
                       "the More menu should offer Select & Delete Flights")
         menuItem.tap()
 
         // The sheet opens already in select mode, so a row tap ticks it.
         let row1 = app.descendants(matching: .any)["selectFlightRow-fixture-1"].firstMatch
-        XCTAssertTrue(row1.waitForExistence(timeout: 10), "the selection sheet should list fixture-1")
+        XCTAssertTrue(row1.waitForExistence(timeout: Self.uiTimeout), "the selection sheet should list fixture-1")
         row1.tap()
         app.descendants(matching: .any)["selectFlightRow-fixture-2"].firstMatch.tap()
 
@@ -638,10 +656,10 @@ final class flyfun_weatherUITests: XCTestCase {
         // accessibilityIdentifier set on an alert button, so fall back to the
         // alert's own Delete button.
         var confirm = app.buttons["confirmBulkDeleteButton"].firstMatch
-        if !confirm.waitForExistence(timeout: 5) {
+        if !confirm.waitForExistence(timeout: Self.probeTimeout) {
             confirm = app.alerts.buttons["Delete"].firstMatch
         }
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a delete confirmation should appear")
+        XCTAssertTrue(confirm.waitForExistence(timeout: Self.uiTimeout), "a delete confirmation should appear")
         XCTAssertTrue(app.alerts.buttons["Cancel"].firstMatch.exists,
                       "the confirmation must keep a Cancel button on every idiom")
         confirm.tap()
