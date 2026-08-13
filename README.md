@@ -88,7 +88,7 @@ Advisory parameters are user-tunable (terrain margins, percentage thresholds, et
 
 **Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Multi-provider OAuth (Google, Apple)
 
-**Testing:** pytest (~5,000 tests) / vitest / Playwright / Swift Testing (397 iOS unit tests) — all gated by CI on every push and PR
+**Testing:** pytest (~5,000 tests) / vitest / Playwright / Swift Testing (iOS unit tests) — all gated by CI on every push and PR
 
 ## Project Structure
 
@@ -151,8 +151,8 @@ web/
 
 app/flyfun-weather/   # Native iOS / iPadOS app (SwiftUI, Xcode project)
 configs/              # LLM digest configuration and prompts
-designs/              # Design documentation (46 docs)
-tests/                # pytest test suite (~200 modules, ~5,000 tests)
+designs/              # Design documentation (see designs/INDEX.md)
+tests/                # pytest test suite (~5,000 tests)
 alembic/versions/     # Database migrations
 ```
 
@@ -256,7 +256,7 @@ npx playwright test
 ```
 
 ```bash
-# iOS — 397 unit tests, run from the repo root (the block above leaves you in web/).
+# iOS unit tests, run from the repo root (the block above leaves you in web/).
 # The UI tests are excluded here, as they are in CI: they drive a simulator and are
 # run manually.
 xcodebuild test \
@@ -316,7 +316,7 @@ These per-point results feed into the 20+ route-level advisory evaluators that p
 
 ## Design Documentation
 
-The `designs/` directory contains 40+ detailed design documents covering architecture, data models, analysis methods, metrics catalog, and implementation plans. Start with `designs/architecture.md` for the system overview, or `designs/INDEX.md` for the module map.
+The `designs/` directory contains detailed design documents covering architecture, data models, analysis methods, metrics catalog, and implementation plans. Start with [`designs/architecture.md`](designs/architecture.md) for the system overview, or [`designs/INDEX.md`](designs/INDEX.md) for the full module map.
 
 ## AI Acknowledgment
 
