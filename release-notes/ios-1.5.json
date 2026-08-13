@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-08-13",
+    "title": "iOS 1.5 — Move, duplicate and bulk-manage your flights",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- Move or duplicate a flight when the route or date changes — the flight's state and briefing history come with it\n- Select several flights at once and delete them in one go\n- A new What's New screen in the More menu, so each release explains itself\n- The add and edit flight form now covers everything the web version does\n- Help and feedback moved into the main menu, and Settings links straight through to your web preferences\n- Optionally order upcoming flights soonest-first — Siri reads them back in the same order\n- Better-calibrated turbulence advisories: clear-air turbulence now scales with altitude and stops at the top of the mixed layer, so low-level thermal bumps no longer read as CAT\n- Sharper icing calls from the model's rain and snow content, and briefings re-run automatically when you change a flight's parameters"
+  }
+]
