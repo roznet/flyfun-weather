@@ -391,6 +391,25 @@ import MapKit
         #expect(vm.hasChanges)
     }
 
+    @Test func aDurationPastThePickerCeilingIsClampedOnLoadNotOnEdit() {
+        // Only reachable from outside this form — an imported FPL, or a flight
+        // created via the web/API/MCP.
+        let vm = makeVM(flight: makeFlight(flightDurationHours: 14.0))
+
+        // Clamped on the way in, so what the pickers show is what will be saved.
+        #expect(vm.flightDurationHours == FlightDuration.maxDecimalHours)
+        #expect(vm.durationHours == 12)
+        #expect(vm.durationMinutes == 45)
+
+        // The regression: each setter recombines using the *other* picker's
+        // clamped getter, so touching only the minutes used to rewrite the hours
+        // too — 14h became 12h the moment the pilot edited a field they hadn't
+        // meant to change. With the load-time clamp the hours stay put.
+        vm.durationMinutes = 30
+        #expect(vm.durationHours == 12)
+        #expect(vm.flightDurationHours == 12.5)
+    }
+
     @Test func ceilingIsEditableAndCountsAsAForecastAffectingChange() async throws {
         let flight = makeFlight()                     // flightCeilingFt: 13000
         let repo = MockBriefingRepository()

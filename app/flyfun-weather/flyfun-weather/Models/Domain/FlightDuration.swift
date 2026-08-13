@@ -43,6 +43,24 @@ enum FlightDuration {
         Double(hours) + Double(minutes) / 60.0
     }
 
+    /// Clamp a stored duration to what the pickers can actually represent.
+    ///
+    /// `split` clamps its *return value*, but the stored decimal hours are not
+    /// clamped anywhere — and each picker's setter recombines using the other
+    /// picker's (already clamped) getter. So a longer duration than 12h45, which
+    /// only reaches the app from outside its own form (an imported FPL, or a
+    /// flight created via the web/API/MCP), used to be truncated the instant the
+    /// pilot touched *either* picker, silently dropping hours they never edited.
+    ///
+    /// Clamping on the way in makes the form honest instead: what it shows is
+    /// what it will save. The web reaches the same ceiling by the same route —
+    /// its dropdowns are built from `splitDurationCeil` and its Save reads them
+    /// back — so both clients normalise a longer flight to 12h45 on edit.
+    static func clampToPickerRange(_ decimalHours: Double) -> Double {
+        guard decimalHours.isFinite, decimalHours > 0 else { return 0 }
+        return Swift.min(decimalHours, maxDecimalHours)
+    }
+
     /// Compact "1h15" / "2h" label for read-only display. Rounds up via `split`,
     /// so the label always agrees with what the pickers show for the same value.
     static func label(_ decimalHours: Double) -> String {

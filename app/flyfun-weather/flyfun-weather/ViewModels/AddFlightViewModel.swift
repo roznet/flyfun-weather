@@ -183,7 +183,9 @@ final class AddFlightViewModel {
             waypointsText = flight.waypoints.joined(separator: " ")
             cruiseAltitudeFt = flight.cruiseAltitudeFt
             flightCeilingFt = flight.flightCeilingFt
-            flightDurationHours = flight.flightDurationHours
+            // Clamped so the pickers can represent it: otherwise editing either
+            // one silently truncates the hours the pilot never touched.
+            flightDurationHours = FlightDuration.clampToPickerRange(flight.flightDurationHours)
             selectedAircraftId = flight.aircraftId
             selectedProfileId = flight.profileId
             flexibility = flight.effectiveFlexibility
@@ -822,7 +824,10 @@ final class AddFlightViewModel {
                 cruiseAltitudeFt = alt
             }
             if let duration = result.durationHours {
-                flightDurationHours = duration
+                // An FPL is the most likely source of a duration past the
+                // pickers' 12h45 ceiling — clamp it here rather than let the
+                // pickers drop the excess on the pilot's first edit.
+                flightDurationHours = FlightDuration.clampToPickerRange(duration)
             }
 
             // Build departure date from parsed date + time
