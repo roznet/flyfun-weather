@@ -26,14 +26,53 @@ on:
 
 permissions:
   contents: read
+  # The `changed` guard reads this workflow's own run history to find the last
+  # green SHA. Read-only, like ios.yml — nothing here writes back.
+  actions: read
 
 concurrency:
   group: ios-ui-nightly
   cancel-in-progress: false
 
 jobs:
+  # `schedule` fires on the clock, not on activity, so without this the macOS
+  # runner would re-test an unchanged `main` every night forever. Standard
+  # GitHub-hosted runners are free on a public repo (see ios.yml), so this is
+  # about not burning compute for an answer we already have, not about billing.
+  #
+  # Compared against the last *successful* run on purpose: after a failure the
+  # SHA is unchanged but the last success is older, so a broken main re-tests
+  # nightly until it is fixed rather than going quiet after one red run.
+  changed:
+    name: New commits since last pass?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" \
+                   --workflow ios-ui-nightly.yml --status success \
+                   --limit 1 --json headSha -q '.[0].headSha // ""')
+          echo "HEAD:          $GITHUB_SHA"
+          echo "last green on: ${last:-<none>}"
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Unchanged since the last green run — skipping the simulator." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   ui:
     name: xcodebuild test (UI)
+    needs: changed
+    # A manual run always executes — the point of reaching for the button is
+    # usually to re-test the very commit the guard would skip.
+    if: github.event_name == 'workflow_dispatch' || needs.changed.outputs.should_run == 'true'
     runs-on: macos-26
     # ~5 min of execution locally on Apple silicon; GitHub's runners are
     # substantially slower and every XCUI test relaunches the app (~15-20s
