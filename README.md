@@ -1,6 +1,7 @@
 # Flyfun Weather
 
 [![Tests](https://github.com/roznet/flyfun-weather/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/roznet/flyfun-weather/actions/workflows/tests.yml)
+[![iOS](https://github.com/roznet/flyfun-weather/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/roznet/flyfun-weather/actions/workflows/ios.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -87,7 +88,7 @@ Advisory parameters are user-tunable (terrain margins, percentage thresholds, et
 
 **Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Multi-provider OAuth (Google, Apple)
 
-**Testing:** pytest (~5,000 tests) / vitest / Playwright — all gated by [CI](.github/workflows/tests.yml) on every push and PR
+**Testing:** pytest (~5,000 tests) / vitest / Playwright / Swift Testing (397 iOS unit tests) — all gated by CI on every push and PR
 
 ## Project Structure
 
@@ -254,9 +255,24 @@ npx playwright install --with-deps chromium
 npx playwright test
 ```
 
-CI is defined in [`.github/workflows/tests.yml`](.github/workflows/tests.yml) and runs
-three parallel jobs — `pytest`, `typecheck + build + vitest`, and `playwright`. Commits
-touching only `app/`, `designs/`, `.claude/` or Markdown skip it.
+```bash
+# iOS — 397 unit tests, run from the repo root (the block above leaves you in web/).
+# The UI tests are excluded here, as they are in CI: they drive a simulator and are
+# run manually.
+xcodebuild test \
+  -project app/flyfun-weather/flyfun-weather.xcodeproj \
+  -scheme flyfun-weather \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+  -only-testing:flyfun-weatherTests
+```
+
+CI is split across two workflows, path-filtered so they don't overlap.
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs three parallel jobs —
+`pytest`, `typecheck + build + vitest`, and `playwright` — and
+[`.github/workflows/ios.yml`](.github/workflows/ios.yml) runs the iOS unit tests on a
+macOS runner. A commit touching `app/` runs the iOS job, anything else runs the
+server/web jobs, and a commit spanning both runs both. Commits touching only
+`designs/`, `.claude/` or Markdown skip CI entirely.
 
 ### Docker
 
