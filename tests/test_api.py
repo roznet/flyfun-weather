@@ -536,6 +536,39 @@ class TestFlightsAPI:
         assert body["flexibility"] == "next_day"
         assert body["notify_override"] == "notify"
 
+    def test_move_flight_preserves_the_auto_refresh_cadence_anchor(
+        self, client, app_db, sample_flight,
+    ):
+        """`last_auto_refresh_at` rides along with the auto-refresh settings.
+
+        It is not on the response model, so this reads the row: dropped, it
+        reverts to NULL, which `_next_auto_refresh_time` reads as "never
+        refreshed" and anchors to *today* — handing the pilot an unasked-for
+        briefing on the same day they merely changed the date.
+        """
+        anchor = _FUTURE_DEPARTURE_DT - timedelta(days=1)
+        session = app_db()
+        row = session.get(FlightRow, sample_flight.id)
+        row.auto_refresh = True
+        row.last_auto_refresh_at = anchor
+        session.commit()
+        session.close()
+
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move", json={"departure_time": new_dt},
+        )
+        assert resp.status_code == 200
+
+        session = app_db()
+        try:
+            moved = session.get(FlightRow, resp.json()["id"])
+            assert moved.auto_refresh is True
+            assert moved.last_auto_refresh_at is not None, "cadence anchor was dropped"
+            assert moved.last_auto_refresh_at.replace(tzinfo=timezone.utc) == anchor
+        finally:
+            session.close()
+
     def test_move_flight_shifts_alt_departure_time(self, client, app_db, sample_flight):
         """The pinned alternate rides along, shifted by the same delta."""
         session = app_db()

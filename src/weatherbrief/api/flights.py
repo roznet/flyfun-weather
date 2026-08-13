@@ -1686,6 +1686,12 @@ def move_flight(
         notify_override=source.notify_override,
         auto_refresh=source.auto_refresh,
         auto_refresh_hour=source.auto_refresh_hour,
+        # The cadence anchor travels with the auto-refresh settings above.
+        # `_next_auto_refresh_time` reads NULL as "never refreshed" and anchors
+        # the next slot to *today*, so dropping it here would make every moved
+        # auto-refreshing flight immediately due — an unasked-for briefing on
+        # the same day the pilot merely changed the date.
+        last_auto_refresh_at=source.last_auto_refresh_at,
         raw_route=new_raw_route,
         parser_version=new_parser_version,
         # Carry the source's share_code over so links recipients already
