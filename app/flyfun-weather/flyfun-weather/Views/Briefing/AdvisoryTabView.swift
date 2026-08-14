@@ -21,6 +21,7 @@ struct AdvisoryTabView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 heroSection
                     .spyAnchor("hero")
+                digestAltitudeWarningSection
                 digestFeedbackSection
                 debriefSection
                 advisoriesSection
@@ -83,6 +84,14 @@ struct AdvisoryTabView: View {
         var f = viewModel.flight
         f.debrief = viewModel.debrief
         return f
+    }
+
+    // MARK: Stale-altitude notice — directly under the hero, whose reason line is
+    // itself digest prose written at the pack's altitude.
+
+    @ViewBuilder
+    private var digestAltitudeWarningSection: some View {
+        DigestAltitudeWarning(viewModel: viewModel)
     }
 
     // MARK: Digest feedback (👍/👎) — below the hero, shown once a digest loads

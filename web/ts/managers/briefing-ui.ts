@@ -2269,6 +2269,27 @@ function buildDigestProfileWarning(
 }
 
 /**
+ * Render the same altitude warning at the top of the page, directly under the
+ * assessment banner.
+ *
+ * The synopsis-section copy sits above the digest prose, which is correct but is
+ * a long way down the page — and the assessment banner is itself stale digest
+ * text (`pack.assessment_reason`; `recalculate_advisories` never calls
+ * `update_pack_meta`). A pilot reading only the top line would otherwise get the
+ * old altitude's verdict with nothing to flag it.
+ */
+export function renderDigestAltitudeBanner(
+  flight: FlightResponse | null,
+  packCruiseAltFt: number | null,
+): void {
+  const el = $('digest-altitude-banner');
+  if (!el) return;
+  const html = flight ? buildDigestAltitudeWarning(flight, packCruiseAltFt) : '';
+  el.innerHTML = html;
+  el.style.display = html ? '' : 'none';
+}
+
+/**
  * Build a warning banner if the flight's cruise altitude no longer matches the
  * altitude the pack (and therefore its digest) was generated with. An altitude
  * edit only invalidates advisories — the digest text is never regenerated, so

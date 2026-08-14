@@ -49,6 +49,9 @@ struct DiscussionTabView: View {
                                        description: Text("No discussion is available for this briefing."))
                     .padding(.top, Theme.sectionSpacing)
             } else {
+                // Above the prose, mirroring the web placement — the narrative
+                // below is what still describes the pack's altitude.
+                DigestAltitudeWarning(viewModel: viewModel)
                 ForEach(sections, id: \.id) { section in
                     VStack(alignment: .leading, spacing: Theme.spacingS) {
                         Text(section.title)
