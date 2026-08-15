@@ -8,7 +8,7 @@ import Foundation
 //       web/ts/visualization/cross-section/advisory-presets.ts (ADVISORY_PRESETS,
 //       ADVISORY_TO_PRESET, ADVISORY_OVERRIDES, getPresetForAdvisory)
 //   • Cloud source×style axes:
-//       web/ts/visualization/cross-section/cloud-bands-factory.ts (CLOUD_LAYER_BY_AXES,
+//       web/ts/visualization/cross-section/layers/cloud-bands-factory.ts (CLOUD_LAYER_BY_AXES,
 //       parseCloudLayerId)
 //
 // iOS uses its own layer IDs and lacks a few web layers (ieng-icing-bands,

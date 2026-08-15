@@ -1124,6 +1124,11 @@ function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | u
   `;
 }
 
+/** SYNC: the iOS app renders the same route-observations shape in
+ *  app/flyfun-weather/flyfun-weather/Views/Briefing/RouteObservationsView.swift
+ *  (decoded by `RouteObservations` in Models/API/SnapshotResponse.swift). The
+ *  payload itself is defined by src/weatherbrief/models/observations.py — keep
+ *  the two client renderings in step when the shape or the columns change. */
 export function renderRouteObservations(
   snapshot: ForecastSnapshot | null,
   onRefresh?: () => Promise<void>,
@@ -1873,6 +1878,11 @@ function renderSigmetPopup(s: RouteSigmets['sigmets'][number]): string {
   `;
 }
 
+/** SYNC: the iOS app renders the same route-SIGMET shape in
+ *  app/flyfun-weather/flyfun-weather/Views/Briefing/RouteSigmetsView.swift
+ *  (decoded by `RouteSigmets` in Models/API/SnapshotResponse.swift). The payload
+ *  itself is defined by src/weatherbrief/models/observations.py — keep the two
+ *  client renderings in step when the shape or the columns change. */
 export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
   const el = $('sigmets-section');
   const wrapper = $('sigmets-wrapper');

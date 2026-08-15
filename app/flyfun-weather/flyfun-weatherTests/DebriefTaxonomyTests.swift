@@ -62,6 +62,22 @@ struct DebriefTaxonomyTests {
         #expect(debrief.advisoryTagMap["vfr_feasibility"] == "IMC")
     }
 
+    @Test("Bundled baseline maps every advisory the Python taxonomy maps")
+    func baselineCoversAdvisoryTagMap() {
+        // The offline baseline backstops a cold first launch, before the served
+        // catalog arrives — a missing id silently drops that outcome row from the
+        // flown form. `approach_feasibility` was exactly that drift, so pin the
+        // whole key set against Python's ADVISORY_TAG_MAP rather than spot-checks.
+        #expect(
+            Set(DebriefTaxonomy.bundledBaseline.advisoryTagMap.keys) == [
+                "icing_escape", "fiki_icing", "vmc_cruise", "cloud_top",
+                "vfr_feasibility", "ifr_feasibility", "approach_feasibility",
+                "flight_category", "turbulence", "mountain_wind", "convective",
+                "airport_wind",
+            ]
+        )
+    }
+
     @Test("Missing debrief key decodes to nil (old cached payload)")
     func backwardCompatibleWithoutDebrief() throws {
         let json = #"{ "version": "v", "metrics": { "x": { "name": "X" } }, "advisories": [] }"#

@@ -116,6 +116,7 @@ struct DebriefTaxonomy: Codable, Sendable, Equatable {
             "cloud_top": "IMC",
             "vfr_feasibility": "IMC",
             "ifr_feasibility": "IMC",
+            "approach_feasibility": "IMC",
             "flight_category": "IMC",
             "turbulence": "TURB",
             "mountain_wind": "TURB",
