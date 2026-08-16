@@ -13,20 +13,44 @@ import UIKit
 
 final class flyfun_weatherUITests: XCTestCase {
 
+    @MainActor
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // Pin the orientation instead of inheriting whatever the simulator was
+        // last left in. Device orientation persists in the simulator's own
+        // state, so it is an input to the test that nothing here was setting:
+        // locally the devices happen to sit in portrait, while GitHub's runner
+        // image hands out an iPhone 17 already in landscape (874x402).
+        //
+        // That is what made the first four nightlies fail the same four
+        // journeys — deterministically, and not for the reason it looked like.
+        // `Form` is backed by a lazy `List` (see `scrollToFormRow`), so halving
+        // the height does not merely push the Route section off-screen: it
+        // leaves `waypointsField` out of the accessibility tree altogether, and
+        // "the form should appear" fails against a form that is plainly open.
+        // Raising the timeout could never have fixed it, and didn't.
+        //
+        // Portrait is also the orientation these journeys are written for — the
+        // iPad split-view handling in `revealFlightList` / `switchToBriefingTab`
+        // assumes it, and #494's one-line assertions only bite in the narrower
+        // layout. Landscape is worth covering, but as its own deliberate test.
+        XCUIDevice.shared.orientation = .portrait
     }
 
     /// How long to wait for something that *should* appear — a presented sheet,
     /// a pushed detail, a rendered section.
     ///
-    /// Sized for the slowest machine that runs these, not the fastest. The
-    /// first nightly CI run failed four journeys on a 5-second wait
-    /// — all four "the form should appear" — while the same commit passed all
-    /// sixteen locally on iPhone and iPad: GitHub's shared macOS runners are
-    /// several times slower than local Apple silicon. Waiting longer is close to
-    /// free, because `waitForExistence` returns the moment the element exists;
-    /// the cost is paid only by a test that was going to fail anyway.
+    /// Sized for the slowest machine that runs these, not the fastest: GitHub's
+    /// shared macOS runners are several times slower than local Apple silicon.
+    /// Waiting longer is close to free, because `waitForExistence` returns the
+    /// moment the element exists; the cost is paid only by a test that was
+    /// going to fail anyway.
+    ///
+    /// This value was raised from 5s to 20s to fix four nightly failures it
+    /// turned out not to cause — those were the landscape simulator described
+    /// in `setUpWithError`, and stayed red at 20s. Kept anyway, on its own
+    /// merits, but the episode is the argument for reading the result bundle's
+    /// element tree before assuming a red CI-only test is just slow.
     private static let uiTimeout: TimeInterval = 20
 
     /// Wait for a "is it already on screen?" probe, where *not* finding it is a

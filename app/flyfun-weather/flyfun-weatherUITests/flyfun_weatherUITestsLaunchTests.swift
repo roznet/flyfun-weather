@@ -13,8 +13,14 @@ final class flyfun_weatherUITestsLaunchTests: XCTestCase {
         true
     }
 
+    @MainActor
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // Same reason as the journey suite: the simulator's persisted
+        // orientation is an input, and CI's is landscape. This test exists to
+        // file a launch screenshot, so an orientation that drifts with the
+        // machine makes the screenshots incomparable run to run.
+        XCUIDevice.shared.orientation = .portrait
     }
 
     @MainActor
