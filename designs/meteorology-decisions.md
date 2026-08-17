@@ -9,7 +9,9 @@ improvements.
 ## 1. Ceiling derivation: DD vs NWP-adjusted cloud layers
 
 **Date:** 2026-04-01
-**Status:** Implemented (DD chosen)
+**Status:** **Superseded 2026-08-16 — see "Revision" at the end of this section.**
+The ceiling now follows the resolved cloud source (NWP when the model has a native
+one, DD otherwise) instead of always being DD-derived.
 **Context:** Discovered via an inconsistency bug where the advisory showed LIFR/IFR
 at an airport while the cross-section showed nearly clear skies at the same location.
 
@@ -142,6 +144,83 @@ reality. Key questions:
   `icing_ogimet_dd_zones` now serialized to `route_analyses.json`
 - `src/weatherbrief/models/analysis.py` — comment update reflecting
   serialization change
+
+### Revision 2026-08-16 — the ceiling follows the resolved cloud source
+
+**Status:** Implemented. **Supersedes the 2026-04-01 decision above.**
+
+**Trigger.** A pilot thumbs-downed the EGKB→EGJB briefing of 2026-08-16 (RED VFR
+Feasibility, "overcast below 650 ft at Guernsey") on a day that was CAVOK. The
+trace is the same failure this section's own "What we decided against" §1
+predicted and left unvalidated — only worse, because the destination was graded
+IFR off a deck **no model reported**:
+
+| Evidence at EGJB, 17Z | ECMWF | ICON |
+|---|---|---|
+| GRIB low cloud cover | 0.0 % | 58.6 % |
+| Model 3D cloud fraction @1000 hPa | 0.0 % | 17.3 % (FEW) |
+| Model's own ceiling diagnostic | none | 4,577 ft |
+| DD deck → published ceiling | BKN 503–632 ft → **666 ft, IFR** | OVC 509–562 ft → **344 ft, LIFR** |
+
+The entire signal came from **one level** — 1000 hPa, the lowest in the dataset,
+~170 ft AGL — with a dewpoint depression of 0.8–1.6 °C. Every level above was
+DD 3–8 °C. A 53–130 ft thick "overcast" is not a deck; it is threshold-crossing
+interpolation around a single moist sample in a marine boundary layer. EGJB
+itself reported **CAVOK at 17/16 (DD 1 °C)** at 03:50Z that night — feed those
+numbers to `_classify_coverage` and it returns OVC.
+
+**The bug underneath the decision.** `cloud_source` has defaulted to `"nwp"`
+since #403 (`ENGINE_METHOD_DEFAULTS`), and `_resolve_analyses` correctly swaps
+`cloud_layers` to the model-native set. But `indices.sounding_ceiling_ft` is
+derived from `cloud_layers` at *analysis* time and was never re-pointed when the
+slot swapped, and `_ceiling_from_sounding` pinned its fallback to
+`dd_cloud_layers` outright. So the ceiling graded on DD **whatever the profile
+asked for** — verified on the real pack: `cloud_source="nwp"` empties ECMWF's low
+layers and still published 666 ft.
+
+**What changed.**
+
+- `ThermodynamicIndices` gains `dd_sounding_ceiling_ft` / `nwp_sounding_ceiling_ft`,
+  stamped in `analyze_sounding`. They must be computed there, not at resolve time:
+  the LCL floor needs `derived_levels`, which the pack does not serialize.
+- `_resolve_analyses` re-points `sounding_ceiling_ft` at the slot it selected,
+  recomputing from the layers for packs written before those fields existed
+  (never erasing a ceiling on `None`).
+- `_ceiling_from_sounding` reads the active slot instead of `dd_cloud_layers`.
+
+Effect on the triggering pack: all three models → VFR at EGJB, `flight_category`
+and `vfr_feasibility` → GREEN.
+
+**What we knowingly gave up.** The 2026-04-01 rationale was *signal independence*
+— `reconcile_ceiling = min(sounding, nwp)` combining two independent estimates.
+With the sounding estimate now NWP-derived, for ICON/ECMWF both sides come from
+the same family and the reconciliation collapses toward one source. That was
+accepted deliberately: an independent second estimate is only worth having if it
+is *informative*, and a DD deck that contradicts every native cloud product the
+model publishes is noise, not signal.
+
+**The precondition this section named is now met.** It deferred the revisit
+"pending access to ECMWF full-precision GRIB data, which would provide cloud
+diagnostic ceiling as a proper second estimate" — live since 2026-04-20.
+
+**Residual limits, deliberately not addressed here.**
+
+- The GRIB enrichment window is narrow (in the triggering pack: ECMWF from 13Z,
+  ICON/GFS from 16Z). Outside it `nwp_cloud_layers is None` and DD is still the
+  only source, so this policy is not uniform across a day.
+- Neither method caught the *real* fog at EGJB that morning (06:20–08:20Z,
+  `BKN000/001`, 550 m): DD produced a token SCT at 07Z, NWP had no data at all.
+  Preferring NWP loses nothing there — but it gains nothing either, so
+  under-forecast low stratus remains an open exposure.
+- `dd_nwp_agreement` (written, default-disabled) is the natural place to surface
+  DD-vs-NWP divergence as a "model struggling" signal instead of a silent override.
+- **The verification/forecast-map surface still grades on DD.**
+  `snapshot_fields.py` reads `indices.sounding_ceiling_ft` straight off
+  `analyze_sounding`, and its callers (`standalone_verification`,
+  `decode_worker`) never run `_resolve_analyses` — there is no user profile in
+  that path. Aligning it would move the verification baseline and break
+  comparability with stored history, so it needs its own decision rather than
+  riding along with this one.
 
 ---
 

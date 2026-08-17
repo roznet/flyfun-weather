@@ -814,6 +814,17 @@ class ThermodynamicIndices(BaseModel):
     bulk_shear_0_1km_kt: Optional[float] = None
     sounding_ceiling_ft: Optional[float] = None
     nwp_ceiling_ft: Optional[float] = None
+    # Per-source sounding ceilings, so the cloud-source preference (#410) can
+    # re-point ``sounding_ceiling_ft`` when ``_resolve_analyses`` swaps the
+    # active ``cloud_layers`` slot. ``sounding_ceiling_ft`` always mirrors
+    # whichever slot is active; these record the two underlying estimates.
+    # Recomputing at resolve time is not an option — ``derived_levels`` is not
+    # serialized into the pack, and the LCL floor needs it.
+    # ``nwp_sounding_ceiling_ft`` is None both when the model has no native
+    # cloud source and when its layers carry no BKN/OVC deck; use
+    # ``nwp_cloud_layers is None`` to tell those apart.
+    dd_sounding_ceiling_ft: Optional[float] = None
+    nwp_sounding_ceiling_ft: Optional[float] = None
     nwp_cape_jkg: Optional[float] = None
     nwp_cape_type: Optional[str] = None  # "sb", "ml", "mu", "unknown"
     nwp_cin_jkg: Optional[float] = None

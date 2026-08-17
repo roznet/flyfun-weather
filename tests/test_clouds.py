@@ -482,3 +482,128 @@ def test_resolve_analyses_dd_source_keeps_dd():
     rpa, _, _ = _make_rpa_with_clouds()
     result = _resolve_analyses([rpa], None, "dd")
     assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
+
+
+# --- ceiling follows the resolved cloud source (EGJB 2026-08-16 regression) ---
+
+
+def _make_rpa_for_ceiling(*, nwp_layers, dd_ceiling, nwp_ceiling, stamp=True):
+    """RoutePointAnalysis whose DD slot has a low deck and NWP slot may not.
+
+    Mirrors the EGJB case: a moist marine boundary layer gives DD a sub-1000 ft
+    BKN deck while the model's own cloud scheme reports no low cloud at all.
+    ``stamp=False`` simulates a pack written before the per-source ceiling
+    fields existed.
+    """
+    from datetime import datetime, timezone
+    from weatherbrief.models import RoutePointAnalysis
+    from weatherbrief.models.analysis import ThermodynamicIndices
+
+    dd_layers = [
+        EnhancedCloudLayer(base_ft=503, top_ft=632, coverage=CloudCoverage.BKN),
+    ]
+    indices = ThermodynamicIndices(sounding_ceiling_ft=dd_ceiling)
+    if stamp:
+        indices.dd_sounding_ceiling_ft = dd_ceiling
+        indices.nwp_sounding_ceiling_ft = nwp_ceiling
+    sounding = SoundingAnalysis(
+        cloud_layers=list(dd_layers),
+        dd_cloud_layers=list(dd_layers),
+        nwp_cloud_layers=None if nwp_layers is None else list(nwp_layers),
+        indices=indices,
+    )
+    return RoutePointAnalysis(
+        point_index=0, lat=49.4, lon=-2.6, distance_from_origin_nm=0.0,
+        interpolated_time=datetime.now(timezone.utc),
+        forecast_hour=datetime.now(timezone.utc), track_deg=250.0,
+        sounding={"ecmwf": sounding},
+    )
+
+
+def test_resolve_analyses_nwp_repoints_ceiling_off_the_dd_deck():
+    """Resolving to NWP must not leave the DD-derived ceiling behind.
+
+    The bug this pins: ``sounding_ceiling_ft`` is derived from ``cloud_layers``,
+    so swapping that slot without re-pointing it published a 1002 ft ceiling —
+    and an IFR destination — for a model whose own cloud scheme reported no low
+    cloud whatsoever (EGJB, 2026-08-16 briefing).
+    """
+    from weatherbrief.tasks.advise import _resolve_analyses
+    from weatherbrief.analysis.airport_conditions import _ceiling_from_sounding
+
+    # NWP sees only high cloud: no BKN/OVC below, so no ceiling.
+    high = [EnhancedCloudLayer(base_ft=34250, top_ft=36709,
+                               coverage=CloudCoverage.SCT, source="nwp_3d")]
+    rpa = _make_rpa_for_ceiling(nwp_layers=high, dd_ceiling=1002.0, nwp_ceiling=None)
+
+    resolved = _resolve_analyses([rpa], None, "nwp")[0].sounding["ecmwf"]
+    assert resolved.cloud_method_effective == "nwp"
+    assert resolved.indices.sounding_ceiling_ft is None
+    assert _ceiling_from_sounding(resolved) is None
+    # Original untouched.
+    assert rpa.sounding["ecmwf"].indices.sounding_ceiling_ft == 1002.0
+
+
+def test_resolve_analyses_dd_source_keeps_the_dd_ceiling():
+    """Explicitly choosing DD keeps the DD deck and its ceiling."""
+    from weatherbrief.tasks.advise import _resolve_analyses
+    from weatherbrief.analysis.airport_conditions import _ceiling_from_sounding
+
+    high = [EnhancedCloudLayer(base_ft=34250, top_ft=36709,
+                               coverage=CloudCoverage.SCT, source="nwp_3d")]
+    rpa = _make_rpa_for_ceiling(nwp_layers=high, dd_ceiling=1002.0, nwp_ceiling=None)
+
+    resolved = _resolve_analyses([rpa], None, "dd")[0].sounding["ecmwf"]
+    assert resolved.cloud_method_effective == "dd"
+    assert _ceiling_from_sounding(resolved) == 1002.0
+
+
+def test_resolve_analyses_nwp_unavailable_falls_back_to_dd_ceiling():
+    """No native NWP source → DD layers *and* the DD ceiling are kept.
+
+    ``nwp_cloud_layers is None`` (GEM/UKMO/MétéoFr, or any hour outside the
+    GRIB enrichment window) must not silently clear the ceiling.
+    """
+    from weatherbrief.tasks.advise import _resolve_analyses
+    from weatherbrief.analysis.airport_conditions import _ceiling_from_sounding
+
+    rpa = _make_rpa_for_ceiling(nwp_layers=None, dd_ceiling=1002.0, nwp_ceiling=None)
+
+    resolved = _resolve_analyses([rpa], None, "nwp")[0].sounding["ecmwf"]
+    assert resolved.cloud_method_effective == "dd"
+    assert resolved.cloud_layers[0].base_ft == 503
+    assert _ceiling_from_sounding(resolved) == 1002.0
+
+
+def test_resolve_analyses_recomputes_ceiling_for_packs_without_the_fields():
+    """Packs predating the per-source fields recompute rather than erase.
+
+    ``dd_sounding_ceiling_ft``/``nwp_sounding_ceiling_ft`` are absent on older
+    packs. Treating that ``None`` as "no ceiling" would drop a real deck, so the
+    resolver recomputes from the layers instead.
+    """
+    from weatherbrief.tasks.advise import _resolve_analyses
+    from weatherbrief.analysis.airport_conditions import _ceiling_from_sounding
+
+    nwp = [EnhancedCloudLayer(base_ft=2400, top_ft=5200,
+                              coverage=CloudCoverage.OVC, source="nwp_3d")]
+    rpa = _make_rpa_for_ceiling(
+        nwp_layers=nwp, dd_ceiling=1002.0, nwp_ceiling=None, stamp=False,
+    )
+
+    resolved = _resolve_analyses([rpa], None, "nwp")[0].sounding["ecmwf"]
+    # Recomputed from the NWP deck, not inherited from DD and not erased.
+    assert _ceiling_from_sounding(resolved) == 2400
+
+
+def test_ceiling_from_sounding_reads_the_active_slot():
+    """The fallback scan follows the resolved slot, not ``dd_cloud_layers``."""
+    from weatherbrief.analysis.airport_conditions import _ceiling_from_sounding
+    from weatherbrief.models.analysis import ThermodynamicIndices
+
+    sounding = SoundingAnalysis(
+        cloud_layers=[EnhancedCloudLayer(base_ft=9000, top_ft=12000, coverage=CloudCoverage.OVC)],
+        dd_cloud_layers=[EnhancedCloudLayer(base_ft=503, top_ft=632, coverage=CloudCoverage.BKN)],
+        indices=ThermodynamicIndices(),
+    )
+    assert _ceiling_from_sounding(sounding) == 9000

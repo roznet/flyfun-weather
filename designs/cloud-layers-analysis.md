@@ -185,7 +185,9 @@ Three native sources, tried in this preference order (then `None`):
 `SoundingAnalysis` exposes three cloud-layer fields:
 - `dd_cloud_layers` — immutable DD-derived layers (Method 1).
 - `nwp_cloud_layers` — immutable NWP-derived layers (Method 2), or `None` if the model has no native NWP source.
-- `cloud_layers` — the **active slot** consumed by Skew-T, cross-section, ceiling computation, and downstream icing/IFR feasibility. Today it is set to `list(dd_cloud_layers)` verbatim.
+- `cloud_layers` — the **active slot** consumed by Skew-T, cross-section, ceiling computation, and downstream icing/IFR feasibility. `analyze_sounding` writes `list(dd_cloud_layers)` verbatim; `_resolve_analyses` (`tasks/advise.py`) then re-points it per the profile's `cloud_source`, which **defaults to `"nwp"`** — NWP layers when the model has a native source, DD only when `nwp_cloud_layers is None`. So the persisted pack shows DD here while the graded advisories usually ran on NWP.
+
+**The ceiling follows the slot (since 2026-08-16).** `indices.sounding_ceiling_ft` is derived from `cloud_layers`, so `_resolve_analyses` re-points it too, using the per-source `dd_sounding_ceiling_ft` / `nwp_sounding_ceiling_ft` stamped at analysis time (they must be computed there — the LCL floor needs `derived_levels`, which the pack does not serialize; packs predating them recompute from the layers). `_ceiling_from_sounding` reads the active slot rather than pinning to `dd_cloud_layers`. Before this, a swap to NWP left the DD-derived ceiling in place, so a model reporting **no low cloud at all** could still publish a sub-1000 ft ceiling and grade a destination IFR — see [meteorology-decisions.md §1 Revision 2026-08-16](./meteorology-decisions.md).
 
 #### ICAO band overlay (disabled)
 
