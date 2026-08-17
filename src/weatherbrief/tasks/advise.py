@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
+from weatherbrief.analysis.sounding import compute_sounding_ceiling_ft
 from weatherbrief.models import (
     AdvisoryAggregation,
     AdvisoryChip,
@@ -23,6 +24,7 @@ from weatherbrief.models import (
     AirportConditions,
     AltitudeTableResult,
     ElevationProfile,
+    EnhancedCloudLayer,
     IcingZone,
     RouteAdvisoriesManifest,
     RouteConfig,
@@ -30,6 +32,7 @@ from weatherbrief.models import (
     RouteFrontsManifest,
     RoutePointAnalysis,
     RouteWindOverlay,
+    SoundingAnalysis,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +61,40 @@ class AdvisoryResult:
 # ---------------------------------------------------------------------------
 # Non-mutating method resolution
 # ---------------------------------------------------------------------------
+
+
+def _repoint_ceiling(
+    sounding: SoundingAnalysis,
+    updates: dict,
+    *,
+    layers: list[EnhancedCloudLayer],
+    stored: float | None,
+) -> None:
+    """Re-point ``indices.sounding_ceiling_ft`` at the resolved cloud slot.
+
+    ``sounding_ceiling_ft`` is derived from ``cloud_layers``, so swapping that
+    slot without re-pointing it leaves a stale value from the *other* source —
+    which is how a model whose own cloud scheme reports no low cloud at all
+    could still publish a sub-1000 ft ceiling and grade the destination IFR.
+
+    Prefers the per-source value stamped at analysis time (which had
+    ``derived_levels`` and could therefore apply the LCL floor). Packs written
+    before those fields existed carry ``None``, so recompute from the layers
+    instead and accept the un-floored — i.e. lower, more conservative —
+    result rather than silently erasing the ceiling.
+    """
+    if sounding.indices is None:
+        return
+    ceiling = stored
+    if ceiling is None:
+        ceiling = compute_sounding_ceiling_ft(
+            list(layers),
+            sounding.derived_levels or [],
+            sounding.indices.lcl_altitude_ft,
+        )
+    updates["indices"] = sounding.indices.model_copy(
+        update={"sounding_ceiling_ft": ceiling},
+    )
 
 
 def _resolve_analyses(
@@ -117,6 +154,14 @@ def _resolve_analyses(
             if swap_cloud:
                 if cloud_source == "nwp" and sounding.nwp_cloud_layers is not None:
                     updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
+                    _repoint_ceiling(
+                        sounding, updates,
+                        layers=sounding.nwp_cloud_layers,
+                        stored=(
+                            sounding.indices.nwp_sounding_ceiling_ft
+                            if sounding.indices else None
+                        ),
+                    )
                     # Determine effective method from layer source tags. The
                     # shared NATIVE_NWP_CLOUD_SOURCES set classifies all
                     # three native envelope builders (GFS band geometry,
@@ -138,6 +183,14 @@ def _resolve_analyses(
                     # Fallback: restore DD source
                     updates["cloud_layers"] = list(sounding.dd_cloud_layers)
                     updates["cloud_method_effective"] = "dd"
+                    _repoint_ceiling(
+                        sounding, updates,
+                        layers=sounding.dd_cloud_layers,
+                        stored=(
+                            sounding.indices.dd_sounding_ceiling_ft
+                            if sounding.indices else None
+                        ),
+                    )
             else:
                 # DD source requested: ``cloud_layers`` already holds the
                 # DD-derived layers, so there is nothing to swap — but the grade

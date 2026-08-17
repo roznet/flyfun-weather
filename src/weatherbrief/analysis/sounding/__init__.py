@@ -421,6 +421,12 @@ def analyze_sounding_lite(
 
     indices.sounding_ceiling_ft = sounding_ceiling_ft
     indices.nwp_ceiling_ft = nwp_ceiling_ft
+    # DD-source estimate, kept alongside the active one so the cloud-source
+    # preference can re-point ``sounding_ceiling_ft`` later. The NWP-source
+    # counterpart needs ``nwp_cloud_layers``, which only the heavy pass builds.
+    indices.dd_sounding_ceiling_ft = compute_sounding_ceiling_ft(
+        dd_cloud_layers, derived_levels, indices.lcl_altitude_ft,
+    )
 
     return SoundingAnalysis(
         indices=indices,
@@ -529,6 +535,16 @@ def _analyze_sounding_heavy(
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
         pressure_levels=levels,
     )
+
+    # NWP-source sounding ceiling, the counterpart to the DD one set by the
+    # lite pass. ``None`` when the model has no native cloud source, which is
+    # what makes "prefer NWP, fall back to DD" decidable at resolve time —
+    # recomputing there is impossible because ``derived_levels`` (needed for
+    # the LCL floor) is not serialized into the pack.
+    if nwp_cloud_layers is not None:
+        indices.nwp_sounding_ceiling_ft = compute_sounding_ceiling_ft(
+            nwp_cloud_layers, derived_levels, indices.lcl_altitude_ft,
+        )
 
     # SFIP icing index (full → NWP-gated, proxy → DD-gated)
     sfip_zones = assess_sfip_zones(
