@@ -222,9 +222,13 @@ const GRAMET_ENABLED: Record<string, boolean> = {
   'freezing-level': true,
   'minus-10c': false,
   'minus-20c': false,
-  'lcl-line': false,
-  'lfc-line': false,
-  'el-line': false,
+  // NB: stability-line layer ids here are 'lcl'/'lfc'/'el'. The '*-line' ids
+  // belong to compare-layers.ts and match nothing in this registry — using them
+  // silently left the parcel lines on (they are defaultEnabled and setVizPreset
+  // merges rather than resets).
+  'lcl': false,
+  'lfc': false,
+  'el': false,
   'cruise-altitude': true,
 };
 
@@ -252,9 +256,9 @@ const WINDY_ENABLED: Record<string, boolean> = {
   'freezing-level': true,
   'minus-10c': false,
   'minus-20c': false,
-  'lcl-line': false,
-  'lfc-line': false,
-  'el-line': false,
+  'lcl': false,
+  'lfc': false,
+  'el': false,
   'cruise-altitude': true,
 };
 
@@ -282,9 +286,9 @@ const FOREFLIGHT_ENABLED: Record<string, boolean> = {
   'freezing-level': true,
   'minus-10c': false,
   'minus-20c': false,
-  'lcl-line': false,
-  'lfc-line': false,
-  'el-line': false,
+  'lcl': false,
+  'lfc': false,
+  'el': false,
   'cruise-altitude': true,
 };
 
