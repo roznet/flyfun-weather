@@ -424,8 +424,15 @@ def analyze_sounding_lite(
     # DD-source estimate, kept alongside the active one so the cloud-source
     # preference can re-point ``sounding_ceiling_ft`` later. The NWP-source
     # counterpart needs ``nwp_cloud_layers``, which only the heavy pass builds.
-    indices.dd_sounding_ceiling_ft = compute_sounding_ceiling_ft(
-        dd_cloud_layers, derived_levels, indices.lcl_altitude_ft,
+    # With the overlay off the active slot *is* ``dd_cloud_layers`` verbatim, so
+    # reuse the value rather than recomputing it from identical inputs — this
+    # runs per point/model/hour, ~56K times in a standalone cycle.
+    indices.dd_sounding_ceiling_ft = (
+        sounding_ceiling_ft
+        if not _APPLY_NWP_COVERAGE_OVERLAY
+        else compute_sounding_ceiling_ft(
+            dd_cloud_layers, derived_levels, indices.lcl_altitude_ft,
+        )
     )
 
     return SoundingAnalysis(

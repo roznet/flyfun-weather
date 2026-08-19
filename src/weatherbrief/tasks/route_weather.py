@@ -384,8 +384,11 @@ def run_observation_comparison(
             default). The model flight category shown here must be derived the
             same way the advisories derive theirs, or the same briefing can show
             a VFR headline beside a "model says IFR, conflicting" comparison for
-            the same airport and hour. Only the cloud axis is resolved: the
-            sounding is used solely for ``reconcile_ceiling``.
+            the same airport and hour. Resolution runs all three engine axes —
+            reusing ``_resolve_analyses`` keeps this in step with the advisories
+            rather than duplicating the rule — but only the cloud axis reaches
+            the output here: the sounding is used solely for
+            ``reconcile_ceiling``.
 
     Returns:
         The same RouteObservations, enriched with comparisons.
