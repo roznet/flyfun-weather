@@ -18,14 +18,17 @@ Make WeatherBrief available to a small group of trusted pilots (friends, not pub
 ### Target architecture
 
 ```
-weather.flyfun.aero (Caddy, auto-TLS)
-    → reverse_proxy localhost:8020
-        → weatherbrief Docker container (FastAPI + uvicorn)
-            → shared-mysql (Docker network: shared-services)
-            → /app/data volume (artifact files)
+weather.flyfun.aero (Caddy) → localhost:8020 → weatherbrief      (FastAPI + uvicorn)
+mcp.flyfun.aero     (Caddy) → localhost:8021 → weatherbrief-mcp  (same image, MCP server)
+    both → shared-mysql (Docker network: shared-services)
+         → /app/data (artifacts) + /data/ecmwf (GRIB) + /app/snapshot_inbox (ro, compute-node artifacts)
 ```
 
-Port 8020 chosen to avoid conflicts with existing services (8000=maps, 8002=mcp, 8010=boarding).
+Port 8020 chosen to avoid conflicts with existing services (8000=maps, 8010=boarding). Both
+services build from the same image and `.env`; `mcp-server` starts only once the app's healthcheck
+passes. The app container has a **6G memory limit** (raised 3G→4G→6G for GRIB-decode headroom — the
+rationale is in `docker-compose.yml` comments, don't lower it) and logs to **journald** so logs
+survive a `--build` rebuild.
 
 ### Content Security Policy
 
@@ -42,23 +45,19 @@ Caddy injects CSP headers via `deploy/weather.flyfun.aero.caddy`. Key directives
 
 **Gotcha**: Any new external resource (CDN script, external fetch, new tile provider) will be silently blocked. The `/code-review` command checks PRs against this policy. When adding external resources, either update the CSP in the Caddy file or refactor to stay within the policy.
 
+The same Caddy file also owns three things the app never sees: it **answers** `/.well-known/apple-app-site-association` (Universal Links, appID `M7QSSF3624.net.ro-z.flyfun-weather`) and `/.well-known/oauth-authorization-server` (RFC 8414 metadata — advertises only the `flights:read` scope; the broad `mcp` scope is advertised from mcp.flyfun.aero's own site file) from literal `respond` blocks, and it **404s** `/ts/*` and `*.map` so the StaticFiles mount can't leak TypeScript sources or sourcemaps. Change any of those and the edit belongs in the Caddy file, not in Python.
+
 ## Development Mode
 
-`ENVIRONMENT=development` (from `.env`) activates dev mode:
-
-- **Auth bypass**: Middleware auto-injects a dev user (`dev-user-001`, email `dev@localhost`). No login page needed.
-- **SQLite instead of MySQL**: defaults to `sqlite:///{DATA_DIR}/flyfun.db` (shared with other flyfun apps via the common engine). SQLAlchemy abstracts the dialect.
-- **Same file storage and API routes**: everything works identically.
-
-On first startup: creates DB, tables, and dev user automatically. No manual setup needed.
+`ENVIRONMENT=development` (from `.env`) activates dev mode. File storage and API routes are identical to prod; first startup creates DB, tables and the dev user automatically, so there is no manual setup.
 
 | Concern | Development | Production |
 |---------|------------|------------|
-| Auth | Auto-injected dev user + `/auth/dev-token` endpoint | Google OAuth + JWT |
-| Database | SQLite (file) | MySQL (shared-services) |
+| Auth | Auto-injected dev user (`dev-user-001` / `dev@localhost`) + `/auth/dev-token` | Google / Apple OAuth or magic link → JWT |
+| Database | `sqlite:///{DATA_DIR}/flyfun.db` (shared with the other flyfun apps via the common engine) | MySQL (shared-services) |
 | Artifacts | `data/packs/...` | `/app/data/packs/...` (volume) |
 | TLS | None (localhost) | Caddy auto-TLS |
-| Rate limits | Disabled | Enforced per-user |
+| Rate limits | Bypassed (dev counts as "privileged", same as admin) | Enforced per-user |
 | Credential encryption | Same (Fernet) | Same (Fernet) |
 
 ## Database Schema (MySQL / SQLite via SQLAlchemy)
@@ -77,13 +76,13 @@ Column definitions live in code — shared rows (`users`, `user_preferences`, `c
 Mission preferences (`flight_profiles` — models/advisories/flight-rules in `settings_json`, `system_template_key` → `configs/system_profiles.json`) vs physical capabilities (`user_aircraft` — cruise speed, ceiling, FIKI, IFR). They are **independent**: selecting an aircraft pre-fills profile defaults but doesn't constrain the profile. ICAO type data is a static JSON file (`configs/icao_aircraft_types.json`, ~150 GA types loaded into memory), not a table — searched via `storage/aircraft_types.py`. **Privacy rule:** `tail_number`/`nickname` are returned only when `viewer_id == aircraft.user_id`; type/capabilities are always visible. This applies uniformly across flight-detail, shared flights, and PIREPs.
 
 ### flights
-PK `id = {route_slug}-{target_date}-{hash}` — same route+date with different time/altitude is a different flight. `departure_time` is aware-UTC (replaced the old `target_date` + `target_time_utc`); `alt_departure_time` drives "what-if" alt-time advisories. Notable flags: `private` (hide from others' shared links), `auto_refresh`/`auto_refresh_hour`/`last_auto_refresh_at`, `verification_status`, `raw_route` + `parser_version` (the Field-15 route the pilot typed), `share_code` (random base62 token for `/s/{code}`). FKs to `flight_profiles`/`user_aircraft` are SET NULL on delete; `user_id` cascades.
+PK `id = {route_slug}-{target_date}-{hash}` — same route+date with different time/altitude is a different flight. `departure_time` is aware-UTC (replaced the old `target_date` + `target_time_utc`); `alt_departure_time` drives "what-if" alt-time advisories. Notable flags: `private` (hide from others' shared links), `auto_refresh`/`auto_refresh_hour`/`last_auto_refresh_at`, `flexibility` (`none|alternate|same_day|prev_day|next_day` — timing-scenario mode), `notify_override` (`default|notify|mute`, per-flight notification override, independent of `auto_refresh`), `verification_status`, `raw_route` + `parser_version` (the Field-15 route the pilot typed), `share_code` (random base62 token for `/s/{code}`). FKs to `flight_profiles`/`user_aircraft` are SET NULL on delete; `user_id` cascades.
 
 ### flight_subscriptions
 Read-only sharing between pilots — surfaces the owner's latest briefing on the subscriber's flight list and flight/briefing pages; write endpoints still gate on `row.user_id == viewer_id`. UNIQUE `(flight_id, user_id)` prevents double-subscription, and `subscribe_flight` catches the resulting `IntegrityError` inside a SAVEPOINT to make concurrent POSTs idempotent. The privacy flip is enforced at query time in `list_flights_with_role`: subscribed flights disappear from the recipient's list when `flights.private = TRUE`.
 
 ### briefing_packs
-Pack metadata only — the artifacts themselves are files (see [data-models.md](./data-models.md)). Notable columns: `assessment` GREEN/AMBER/RED + reason, `integrity_hmac` (tamper check over pack contents), `model_init_times_json`, `artifact_path`. JSON/flag columns omitted for brevity: `grib_init_times_json`, `model_sources_json`, `models_skipped_region_json`, `diagnostics_json`, the alt-time fields (`alt_assessment*`, `has_alt_advisories`), and the DWD / Met Office surface-chart reference columns (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). Chart bytes live in the shared `DATA_DIR` cache; the row stores only references.
+Pack metadata only — the artifacts themselves are files (see [data-models.md](./data-models.md)). Notable columns: `assessment` GREEN/AMBER/RED + reason, `integrity_hmac` (tamper check over pack contents), `flight_params_hash` (stamped flight params; the refresh gate forces a full refresh when it no longer matches — NULL on pre-088 packs means "leave alone"), `model_init_times_json`, `artifact_path`. JSON/flag columns omitted for brevity: `grib_init_times_json`, `model_sources_json`, `models_skipped_region_json`, `diagnostics_json`, the alt-time fields (`alt_assessment*`, `has_alt_advisories`), and the DWD / Met Office surface-chart reference columns (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). Chart bytes live in the shared `DATA_DIR` cache; the row stores only references.
 
 ### briefing_usage & feedback
 `briefing_usage` — per-refresh resource accounting (Open-Meteo call count, GRAMET success/fail, LLM model + input/output tokens, result size, elapsed + queue-wait seconds, `triggered_by` = user/scheduler/admin) that feeds cost attribution. `feedback` — user submission with `category`, workflow `status` (`pending → ready → replied`/`ignored`), and AI triage (`classification` = BUG_FIXABLE/RESPOND_ONLY/NEEDS_INVESTIGATION/DEFER_TO_HUMAN, `confidence`, `ai_analysis`, plus audit `triage_prompt`/`triage_raw_response` stored as MEDIUMTEXT on MySQL), `admin_reply`/`admin_notes`.
@@ -91,8 +90,10 @@ Pack metadata only — the artifacts themselves are files (see [data-models.md](
 ### pireps
 Pilot weather reports (community observations) — full schema in `designs/future/pirep-plan.md`. `client_uuid` UNIQUE for offline dedup; `source` = manual/inflight/postflight; `aircraft_id`/`pack_id`/`user_id` are all SET NULL on delete (`user_id` nulled to anonymize on account deletion). **Permission gating:** `pirep_can_view`/`pirep_can_publish` flags in `app_prefs_json` (admin sets per-user or bulk); feature-gating 403s must NOT trigger a login redirect in the frontend (see `apiFetch` in `web/ts/utils.ts`). **Flight query:** matched by `pack_id`, or for pack-less PIREPs by user + flight time window (departure ±2h). **Retention:** never deleted, and packs linked to PIREPs are exempt from T1/T2 retention cleanup.
 
-### device_tokens
-APNs push tokens (M2 — table created but not yet used): `user_id` FK CASCADE, `token` UNIQUE, `environment` sandbox/production.
+### device_tokens & flight_briefing_seen
+`device_tokens` — APNs push tokens, **live** (`notify/push.py`, `api/devices.py`): `user_id` FK CASCADE, `token` UNIQUE, `environment` sandbox/production **as reported by the client** (never inferred from the server env — routing is per-token). Rows APNs reports dead (`Unregistered`/`BadDeviceToken`) are deleted on send. `flight_briefing_seen` — per-(user, flight) server-derived badge state; both are covered in [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md).
+
+Other app tables not owned by this doc (`flight_debriefs`, `system_messages`, `cost_config`, the `verification_*` family) are listed in [architecture.md](./architecture.md).
 
 ## Authentication (via flyfun-common)
 
@@ -136,11 +137,7 @@ A third sign-in path alongside Google/Apple, for users who don't want to link th
 
 **Auth flow**: `Authorization: Bearer ff_...` header → hash lookup → user resolution. Falls through to JWT cookie if no Bearer token.
 
-**Admin endpoints**: `POST /api/admin/agents` (create agent + token), `POST .../tokens` (add token), `DELETE .../tokens/{id}` (revoke).
-
-### Admin Auth Unification
-
-Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens. The `current_user_id()` dependency checks for a `Bearer` token first, then falls back to the JWT cookie.
+**Admin endpoints**: `POST /api/admin/agents` (create agent + token), `POST /api/admin/agents/{user_id}/tokens` (add token), `DELETE .../tokens/{token_id}` (revoke). Because the fallback is in `current_user_id()`, admin endpoints accept both browser cookies and Bearer tokens with no per-route work.
 
 ### Account Deletion
 
@@ -185,7 +182,8 @@ Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`,
 During a refresh, the SSE stream and freshness bar show:
 - Pipeline stage labels with progress percentage (14 stages, 5%–95%; `_STAGE_LABELS`/`_STAGE_PROGRESS` in `api/packs.py`)
 - **"You can close this page"** hint with average refresh time (from `/api/refresh/stats`)
-- **"Email me when done"** checkbox — passes `?notify_email=true` to the stream endpoint, which calls `send_briefing_email()` on completion
+
+The old per-refresh **"Email me when done"** checkbox (`?notify_email=` / `force_email`) is **gone**. Completion notification is now an account-level preference (email + APNs push channels, scope, change-only) dispatched from the single post-commit sink `api/packs.py::_notify_refresh_complete` → `notify/dispatch.py`, which covers every refresh path (auto / in-app / Siri / MCP). Don't reintroduce a per-request email flag — see [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md) for the WHEN/HOW split. `POST /api/flights/{id}/packs/{ts}/email` (an explicit user-initiated send) is a separate thing and still exists.
 
 ## Auto-Refresh Scheduler
 
@@ -199,7 +197,7 @@ Background scheduler (`scheduler.py`) polls every 10 minutes for flights with `a
 - Skips flights whose start time has passed
 - Checks data freshness before refreshing (skips if models unchanged)
 - Uses `RefreshRegistry` to prevent concurrent refreshes
-- Sends email notification on successful refresh (if SMTP configured)
+- Notifies via the shared `_notify_refresh_complete` sink (email + push, per user prefs) — the scheduler no longer sends mail itself
 - Records `last_auto_refresh_at` timestamp after each refresh
 
 **Integration**: started as an `asyncio.Task` from the FastAPI app lifespan (30s startup delay).
@@ -230,42 +228,30 @@ runbook lives in **[triage-sandbox.md](./triage-sandbox.md)**.
 ### First-time setup
 
 ```bash
-# 1. Clone repo on server
 git clone https://github.com/roznet/flyfun-weather.git && cd flyfun-weather
-
-# 2. Create MySQL database
 docker exec -i shared-mysql mysql -u root -p < deploy/03-create-weatherbrief-db.sql
-
-# 3. Create .env with production settings
-# (ENVIRONMENT=production, DATABASE_URL, DATA_DIR, AIRPORTS_DB, API keys)
-
-# 4. Copy nav.db into data/ (AIRPORTS_DB points at data/nav.db; built by euro_aip)
-mkdir -p data && cp /path/to/nav.db data/
-
-# 5. Build, start, migrate
-docker compose up -d --build
-docker exec weatherbrief alembic upgrade head
-
-# 6. Add Caddy config
-cp deploy/weather.flyfun.aero.caddy /etc/caddy/sites-enabled/
-caddy reload --config /etc/caddy/Caddyfile
+# write .env (ENVIRONMENT=production, DATABASE_URL, DATA_DIR, AIRPORTS_DB, HOST_* mounts, API keys)
+# put nav.db (built by euro_aip) where AIRPORTS_DB points — prod: under /mnt/flyfun_data, not the project dir
+docker compose up -d --build && docker exec weatherbrief alembic upgrade head
+# Caddy: see gotcha below, then `caddy validate` + `systemctl reload caddy`
 ```
+
+**Caddy gotcha**: the *deployed* site files live in the **private `digitalocean` config repo**, not in this repo's `deploy/`. `deploy/*.caddy` here is the reference copy that `/code-review` checks the CSP against — copying it straight into `sites-enabled` can clobber hand-applied prod edits. Preview with `syncfiles install`, apply with a manual `sudo cp`, validate, then reload.
 
 ### Updating
 
-```bash
-git pull && docker compose up -d --build
-# If new migrations: docker exec weatherbrief alembic upgrade head
-```
+`git pull && docker compose up -d --build`, then `docker exec weatherbrief alembic upgrade head` if there are new migrations. Use the `/deploy` skill — it runs the pre-flight checks and stops for confirmation.
 
 ### Key files
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | App image (python:3.13-slim, non-root UID 2000) |
-| `docker-compose.yml` | Service config, port 8020, shared-services network |
-| `deploy/weather.flyfun.aero.caddy` | Caddy reverse proxy with security headers |
+| `Dockerfile` | App image (node build stage → python:3.13-slim, non-root UID 2000) |
+| `docker-compose.yml` | `weatherbrief` (8020) + `weatherbrief-mcp` (8021), mounts, 6G limit, journald |
+| `deploy/weather.flyfun.aero.caddy`, `deploy/mcp.flyfun.aero-weather.caddy` | Reference Caddy sites (headers, CSP, `.well-known` responders) |
+| `deploy/maintenance.caddy` | Swap-in site file for maintenance windows |
 | `deploy/03-create-weatherbrief-db.sql` | MySQL database + user creation template |
+| `deploy/compute-nodes.json`, `deploy/mysql-baseline.json` | Deployment-private inventories (gitignored; `.example.json` siblings are tracked and document the fields) |
 | `alembic.ini` + `alembic/` | Schema migrations (prod only) |
 
 ### Environment variables
@@ -285,6 +271,10 @@ git pull && docker compose up -d --build
 | `RESEND_API_KEY` | No | — | Resend email API key (falls back to SMTP if absent) |
 | `RESEND_FROM` | No | — | Resend sender address |
 | `RESEND_REPLY_TO` | No | — | Resend reply-to address |
+| `APNS_KEY_P8` / `APNS_KEY_P8_PATH` | For push | — | .p8 signing key, inline or by path (either one) |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | For push | — | All three required; push is a no-op if any is missing |
+| `HOST_DATA_DIR` / `HOST_ECMWF_GRIB_DIR` / `HOST_SNAPSHOT_INBOX` | Prod only | `./data…` | Host paths bind-mounted into the container (prod: under `/mnt/flyfun_data`, NOT the project dir) |
+| `SNAPSHOT_INBOX_DIR` | No | `/app/snapshot_inbox` | Where `verify ingest-artifact` reads compute-node snapshots |
 | `HMAC_SECRET` | Prod only | derived from JWT_SECRET | HMAC key for pack integrity + admin approval links |
 | `WB_REFRESH_MAX_ATTEMPTS` | No | `2` | Total attempts per briefing refresh, counting the original run. `1` disables resume-after-restart; see [refresh-durability.md](./refresh-durability.md) |
 | `DISABLE_REFRESH_RESUME` | No | — | `1` skips the boot-time reconciliation pass entirely (rows are still written) |
@@ -298,7 +288,9 @@ git pull && docker compose up -d --build
 
 ## References
 
-- Server infra: `~/Developer/private/digitalocean/CLAUDE.md`
+- Server infra: `~/Developer/private/digitalocean/CLAUDE.md` (also the source of truth for deployed Caddy files)
+- Resolving hosts/paths in runbooks: [references/deployment-paths.md](./references/deployment-paths.md)
+- Briefing notifications (push/email/badge semantics): [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md)
 - Architecture: [architecture.md](./architecture.md)
 - Data models: [data-models.md](./data-models.md)
 - Cost attribution: [cost-attribution-design.md](./cost-attribution-design.md)

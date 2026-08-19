@@ -2,12 +2,12 @@
 
 > Add CONUS airports to the standalone verification pipeline as a second region alongside the existing European watchlist. Goal: attract US users without compromising the EU pipeline.
 
-**Revised 2026-07-29** with measured delivery timings. The schedule decision changed —
-**four cycles at ~02:15 / 08:15 / 14:15 / 20:15Z**, not the 13Z/01Z pair this doc originally
-specified — and three other premises turned out to be wrong: ECMWF is delivered on all four
-cycles (not just 00/12Z), `ncep_gfs025` has no surface variables, and HRRR's variable coverage is
-complete (it was rejected on horizon alone). See **Cycle timing** for the evidence and
-**Two things that will fail silently** for what must be fixed before any US cycle hour is added.
+**Revised 2026-07-29** with measured delivery timings, which overturned four premises: the
+schedule is **four cycles at ~02:15 / 08:15 / 14:15 / 20:15Z** (not the original 13Z/01Z pair),
+ECMWF is delivered on all four cycles (not just 00/12Z), `ncep_gfs025` has no surface variables,
+and HRRR was rejected on horizon alone (its variable coverage is complete). See **Cycle timing**
+for the evidence and **Two things that will fail silently** for what must be fixed before any US
+cycle hour is added. Status re-checked 2026-08-15; nothing built since.
 
 ## Context
 
@@ -17,14 +17,14 @@ The standalone verification pipeline currently monitors ~619 European airports a
 
 - **2 models for US**: GFS (Open-Meteo) + ECMWF (GRIB-direct). No ICON (DWD model is European-domain only). No NBM/HRRR initially — see "Models considered and rejected" below.
 - **Airport set**: TAF-issuing US airports only. Measured 2026-07-29 from aviationweather.gov (tiled bbox sweep, to defeat the API's per-request result cap): **605 TAF-issuing CONUS `K` stations** (662 including bordering non-`K`), so ~665 with AK/HI/PR. Slightly smaller than the ~780 first estimated here. Cycle volume stays comparable to EU (619 × 3 models = 1857 model-airport calls; US ~665 × 2 = ~1330). METAR-only stations not included in v1.
-  - **`discover` will overshoot 3× if pointed at `K` prefixes as-is.** The same sweep found **1,853 METAR-reporting** `K` stations, and `airport_watchlist.discover_metar_airports` filters on *METAR* presence, not TAF. The US path needs a TAF-presence filter (`/api/data/taf`) or it seeds ~1,850 airports.
+  - **`discover` will overshoot 3× if pointed at `K` prefixes as-is.** The same sweep found **1,853 METAR-reporting** `K` stations, and `discover_airports` (`tasks/airport_watchlist.py`) queries aviationweather.gov's *METAR* endpoint (`_AWC_METAR_URL`) — TAF presence is never checked. The US path needs a TAF-presence filter (`/api/data/taf`) or it seeds ~1,850 airports.
 - **Schedule: four cycles at ~02:15 / 08:15 / 14:15 / 20:15Z.** Phase in as 14:15 + 02:15 first, then add 08:15 + 20:15. This supersedes the original "offset 6h from EU → 13Z and 01Z", which was written before the delivery times below were measured and is wrong in two ways — see "Cycle timing" for the evidence.
   - **13:15/01:15 is too early.** GFS 06Z was measured publishing at **13:47Z** (+7h47m). A 13:15 cycle misses it and silently runs on the 00Z init, 13¼ h old. Same for 01:15 vs the 18Z run.
   - **Two cycles can't serve both coasts**, and worse, a 2-cycle US schedule at 14:15/02:15 puts the *entire* US region on the 06/18Z short cut-off ECMWF runs while EU sits entirely on the full 00/12Z runs — a systematic confound in any cross-region model comparison.
   - **Constraint — the 02:15 cycle depends on GFS staying outside the warming window (#475).** The airport-profile precache is gated to a 03Z–21Z wall-clock window per model (`MODEL_WARMING_WINDOW_UTC` in `fetch/grib/precache.py`); `icon-eu` and `icon-d2` are gated, **GFS deliberately is not**. The 14:15 and 20:15 US cycles sit inside the window either way, but **02:15 sits outside it** — it works only because US is GFS + ECMWF (GFS ungated, ECMWF push-delivered with no precache at all). Gating GFS "for consistency" would silently leave the 02:15 US cycle on a cold cache. The reasoning currently lives in a comment in `precache.py`; it is restated here because the two files are easy to change independently.
 - **Region tagging**: add a `region` column to `airport_forecast_snapshots` (`eu` / `us`) so cache rebuilds can split by region. Alternative — derive region from ICAO prefix at query time — works but loses an index opportunity.
-- **Watchlist file structure**: extend `configs/airport_watchlist.json` with a region-keyed top-level: `{"airports_eu": {...}, "airports_us": {...}}`. Or split into two files. Either is fine; pick what makes the discover/refresh tooling simpler.
-- **Cache split**: `forecast_map` cache entries keyed per-region (`forecast_map:eu:{day}:{hour}`, `forecast_map:us:{day}:{hour}`). Doubles entry count from 20 → 40 but keeps each blob under 1.5 MB. Verification map and stats caches similar.
+- **Watchlist file structure**: `configs/airport_watchlist.json` is today `{"generated_at": ..., "airports": {prefix: [icao, ...]}}` (619 EU airports under 33 prefixes; written by `save_watchlist`). Add a region level — either `{"airports": {"eu": {prefix: [...]}, "us": {...}}}` or a sibling `airports_us` key — or split into two files. Either is fine; pick what makes the discover/refresh tooling simpler. Whichever wins, `load_watchlist_with_coords` and its callers (`api/maps.py`, `standalone_verification`) all read the flat shape today.
+- **Cache split**: `forecast_map` cache entries keyed per-region. The key is today `forecast_map:{FORECAST_MAP_CACHE_VERSION}:{day}:{hour}` (`tasks/cache_builder.py`), so the region segment slots in alongside the version. Doubles entry count from 20 → 40 but keeps each blob under 1.5 MB. Verification map and stats caches similar.
 - **Forecast horizon**: keep at 4 days for US (same as EU). Long-range fixed-airport verification is too noisy to be useful; per-flight briefing is the right tool for D+5+.
 - **LLM digest cost**: scales linearly with airports — US adds ~125% to current digest spend. Real cost driver, watch closely. Consider gating US digest behind a feature flag at first.
 
@@ -62,6 +62,10 @@ Two consequences:
 - Any US cycle must sit **≥ +8 h after its target init** to be safe. Hence 14:15/02:15, not
   13:15/01:15.
 - The EU evening cycle should move **19:15 → ~19:45Z** independently of US work.
+  **Not done as of 2026-08-15** — `FORECAST_FETCH_HOURS_UTC` is still `[7, 19]`
+  (`tasks/standalone_verification.py`), so the EU evening map is still on the
+  wrong side of Open-Meteo's 12Z GFS publication most evenings. The scheduler
+  fires at the hour + 15 min, so this is a one-literal change plus a minute offset.
 
 A contributing detail: `/v1/gfs` is a *seamless blend* of `ncep_gfs013` (surface) and
 `ncep_gfs025` (pressure levels), and it is gated by the slower half. On 2026-07-29 at 11:32Z
@@ -120,9 +124,7 @@ airports are extracted from the same run. So:
   runs with the EU cycle, so co-scheduling those into one node run with a merged airport set makes
   four cycles cost far less than 2× two cycles.
 - Four cycles/day is ~40 min of node time. Irrelevant.
-- **The real cost is `verification_scores`**: four cycles roughly doubles this doc's US estimate
-  (~24 GB/yr for EU+US, vs the ~17 GB/yr in "Storage growth" below, which assumed two). That pulls
-  the deferred `verification_monthly_stats` rollup + prune forward.
+- **The real cost is `verification_scores`** — see "Storage growth" below.
 
 ## Two things that will fail silently
 
@@ -191,16 +193,14 @@ Linear in airport count for the snapshot table (10-day retention bounds it). `ve
 |---|---|---|
 | Snapshot rows/cycle | ~37k | ~84k |
 | Snapshot table | 236 MB | ~540 MB |
-| Score table /year | ~10 GB | ~17 GB |
+| Score table /year | ~10 GB | ~17 GB (two US cycles) / **~24 GB (four)** |
 
-Score table growth is the storage concern. Activate the existing `verification_monthly_stats` rollup (table schema already in place, currently empty in prod) and prune raw scores after rollup at ~12 months. Defer until score table exceeds 5 GB.
-
-**The table above assumes two US cycles per day.** The four-cycle schedule decided in "Cycle
-timing" stores four distinct inits per model per day instead of two, so it roughly doubles the US
-contribution to both rows — call it **~24 GB/yr** for EU+US rather than ~17. That is more
-verification signal (more init/lead pairs), not waste, but it brings the rollup + prune work
-forward rather than leaving it deferred. This is the one place where four cycles genuinely costs
-more than two; compute does not (see "Compute cost is not the constraint").
+Score table growth is the storage concern, and **it is the only place four cycles genuinely cost
+more than two** — four distinct inits per model per day roughly doubles the US contribution.
+That is more verification signal (more init/lead pairs), not waste, but it pulls the rollup
+forward from "deferred" to "do it with US". Activate the existing `VerificationMonthlyStatsRow`
+rollup (`verification_monthly_stats` — schema in place, empty in prod) and prune raw scores after
+rollup at ~12 months.
 
 ### The GRIB disk budget does NOT constrain US expansion
 
@@ -241,7 +241,7 @@ not by geographic filtering:
   math, no coordinate join. Each region blob is that region's airports only (~665 US),
   <1.5 MB.
 - **A region index only matters off the hot path** — the live-fallback query and the
-  cache-rebuild query in `get_forecast_map_data` (`tasks/map_queries.py:322-361`), which
+  cache-rebuild query in `get_forecast_map_data` (`tasks/map_queries.py`), which
   become `WHERE region=:r AND (model, model_init_time, forecast_hour) …`. Prepend `region`
   to the existing `ix_afs_hour_model` → **`(region, forecast_hour, model)`** to cover both
   without a table scan (this is the "index opportunity" noted under Key Decisions).
@@ -274,15 +274,17 @@ Rationale: the toggle is the escape hatch, so the chain only needs to set a *sma
   2-model consensus gracefully. The per-day variable-model-availability machinery in
   `tasks/forecast_grid.py` (the D+5/D+6 two-model logic) is the same shape of problem and
   can be leaned on.
-- **`GET /maps/airport-weather` rejects non-European ICAO prefixes** today
-  (`api/maps.py:198,214-216` via `DEFAULT_PREFIXES`) — this gate must become region-aware
-  or US airport clicks break.
+- **`GET /maps/airport-weather` rejects non-European ICAO prefixes** today — the resolver
+  gates on `supported_prefixes = set(DEFAULT_PREFIXES)` (`api/maps.py`, imported from
+  `tasks/airport_watchlist`) — this gate must become region-aware or US airport clicks break.
 - **Cache-key version** — the region segment re-segments the keys, but bump
-  `FORECAST_MAP_CACHE_VERSION` so old `forecast_map:v2:{day}:{hour}` entries never match the
-  new `forecast_map:{region}:{day}:{hour}` shape and the endpoint falls through to the live
-  path instead of serving a stale shape.
-- **Visibility is already region-aware** (SM vs km) in `web/ts/data/map-metrics-catalog.json`
-  — no change needed there.
+  `FORECAST_MAP_CACHE_VERSION` (currently `"v3"`) so old `forecast_map:v3:{day}:{hour}`
+  entries never match the new region-segmented shape and the endpoint falls through to the
+  live path instead of serving a stale shape.
+- **Visibility labels are already region-aware** — `formatVisibility` (`web/ts/units.ts`)
+  switches SM/km on `units_region`. The *colour bands* in
+  `web/ts/data/map-metrics-catalog.json` convert m→SM unconditionally (`convert: "m_to_sm"`)
+  and that is deliberate — the banding is a fixed scale, not a display unit. No change needed.
 - **iOS** consumes the same `/maps/forecast` payload; the open "which region does the map
   summarise" question in `designs/future/ios-forecast-map.md` is answered by the same
   `region` param + the selection chain above.
@@ -300,17 +302,26 @@ kept out of this repo — see the private compute-offload working notes.
 
 ## Implementation order
 
-Status re-checked against code 2026-07-22 — the DB seam landed with the
-compute-offload work (the snapshot artifact carries `region`), so this list is no
-longer "all unbuilt".
+Status re-checked against code 2026-08-15 — the DB seam and the region *plumbing*
+landed with the compute-offload work (the snapshot artifact carries `region`), so
+this list is no longer "all unbuilt". Nothing has moved since 2026-07-29; the
+schedule/grid work below is all still open.
 
-1. **Pre-req: DONE.** Standalone-verification parallelisation (issue #110 — chunk-level parallelism inside `_fetch_forecasts_for_model`) is shipped: `ThreadPoolExecutor` over airport chunks in `standalone_verification.py` (~line 438). Distinct from issue #112, which parallelises the per-model loop in the *briefing* pipeline; also shipped, unrelated to standalone capacity headroom.
+1. **Pre-req: DONE.** Standalone-verification parallelisation (issue #110 — chunk-level parallelism inside `_fetch_forecasts_for_model`) is shipped: `ThreadPoolExecutor` over airport chunks in `standalone_verification.py`. Distinct from issue #112, which parallelises the per-model loop in the *briefing* pipeline; also shipped, unrelated to standalone capacity headroom.
 2. **DONE.** ~~Add `region` column to `AirportForecastSnapshotRow`~~ — shipped:
-   `String(2)`, `default="eu"`, `server_default="eu"`, and threaded through
-   `standalone_verification._store_snapshots(..., region="eu")`. Still to do: the
-   region key in the **watchlist JSON** (`configs/airport_watchlist.json` is still
-   a flat `{prefix: [icao...]}` map of 619 EU airports).
-3. Extend `STANDALONE_MODELS` to be region-aware: `{"eu": ["gfs", "icon", "ecmwf"], "us": ["gfs", "ecmwf"]}`. The commented-out stub in `standalone_verification.py` currently reads `["ncep_gfs025", "ecmwf"]` — **use `"gfs"`, not `ncep_gfs025`** (see the warning under "Open-Meteo model name convention"; `ncep_gfs025` has no surface variables).
+   `String(2)`, `default="eu"`, `server_default="eu"`, threaded through
+   `standalone_verification._store_snapshots(..., region="eu")`, guarded at the
+   library boundary in `run_standalone_verification` (unonboarded region raises),
+   and exposed as `verify standalone --region eu|us|all`. Still to do: the
+   region key in the **watchlist JSON** (see "Watchlist file structure").
+3. **PARTLY DONE.** `STANDALONE_MODELS_BY_REGION` exists in
+   `standalone_verification.py` but holds only `{"eu": STANDALONE_MODELS}`; the US
+   entry is a commented-out stub reading `["ncep_gfs025", "ecmwf"]`. Uncomment it as
+   `["gfs", "ecmwf"]` — **not `ncep_gfs025`** (see "Open-Meteo model name convention";
+   `ncep_gfs025` has no surface variables). **The comment above that dict is stale**:
+   it says the US entry lands "once the `ncep_` Open-Meteo models are registered in
+   `MODEL_ENDPOINTS`", which is exactly the mistake this doc rules out — no
+   registration is needed, `"gfs"` already covers CONUS. Fix the comment with the entry.
 4. **Generalise `_expected_cycle_init()` before adding any US hour** — otherwise every offset-cycle artifact is rejected and the droplet silently falls back to local compute daily. See "Two things that will fail silently". Then add the US cycle hours to `FORECAST_FETCH_HOURS_UTC` (or split the loop) — **14:15 / 02:15 first, then 08:15 / 20:15**; see the 02:15/warming-window constraint under Key Decisions. Prefer availability-triggered firing over fixed-clock if the scheduling seam allows it.
 4b. **Make the map sample grid region-aware** — US needs `(12, 15, 18, 21, 00)`, not EU's `(6, 9, 12, 15, 18)`, or the US map has no afternoon/evening slot. `VERIFICATION_HOURS_UTC` follows.
 5. Update cache builder to emit per-region keys; update API endpoints to accept `region`

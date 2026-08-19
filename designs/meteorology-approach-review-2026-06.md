@@ -12,7 +12,13 @@ audit docs: trust the reasoning, re-verify line numbers against current code.
 `src/weatherbrief/analysis/sounding/` (icing, sfip, clouds, convective,
 vertical_motion, e_shear, advisories), `src/weatherbrief/analysis/advisories/`
 (all 14 evaluators + helpers), `web/ts/visualization/` (cross-section layers,
-route graph, route map).
+route graph, route map). "14 evaluators" is the June-2026 count — the registry
+has grown well past that since, partly from this review's §5.
+
+**Parent doc:** [meteorology-decisions.md](./meteorology-decisions.md) (links
+here from §8 and §11); this review is its point-in-time companion, not a
+standalone spec. Findings that were acted on became decision-log sections
+(§8–§11, §25); this file keeps the original reasoning as the record.
 
 ---
 
@@ -51,6 +57,11 @@ escape-logic issues — plus a small number of genuine bugs.
 > fixed — `analysis.md` reads `< 10 NONE / 10–30 LIGHT`, matching
 > `icing.py:53-55`. All §2 findings are resolved. (Line numbers below have
 > drifted by a few lines as code moved; the resolutions still hold.)
+> Re-verified again 2026-08-15 — every §2 fix is still in place
+> (`advisories.py:634` `max(candidates)`, `:663` terrain floor, `:603` FZRA
+> guard; `icing.py:561` real `_vapor_density`; `e_shear.py:42-43`
+> `_VWS_SCALE`/`_HWS_SCALE`; `vertical_motion.py:163-170` stores negative Ri).
+> Line numbers have drifted ~60 lines in `advisories.py`; the reasoning holds.
 
 ### 2.1 `_descend_below_icing`: code contradicts its own docstring, and the wrong way
 
@@ -188,6 +199,31 @@ as SEVERE CAT (or at least MODERATE), not as missing data.
 
 ## 3. Calibration & soundness observations (no bug, but worth a decision-log entry)
 
+> **Status (verified 2026-08-15).** Two items have since landed:
+> - **§3.6 GREEN-by-absence — RESOLVED.** `_helpers.below_coverage()` +
+>   `EvidenceSample.assessed` (#391/#393) downgrade a would-be-GREEN to
+>   UNAVAILABLE when under half the domain was assessable; a flagged verdict
+>   always stands. `turbulence.py` now emits UNAVAILABLE per unassessed point
+>   and for the whole grade. The *capability-weighted vote* half of §3.6 (icing
+>   models on proxy microphysics voting equal to GFS/ECMWF/ICON) is still open.
+> - **§3.7 %-of-route on short routes — PARTIALLY RESOLVED for convective.**
+>   Decisions §11(a): `FlightCategoryEvaluator` grades convection within
+>   `conv_radius_nm` (25 nm) of each end with **no** percentage threshold. Icing
+>   and turbulence still have no absolute-extent floor.
+>
+> Two items have *sharpened* rather than aged out:
+> - **§3.3**: decisions §25 (#533) gave Richardson an altitude-dependent
+>   resolution correction. E-Shear still has none, so the two CAT methods are
+>   now calibrated asymmetrically as well as being non-independent.
+> - **§5.7's `cloud_cover_low_pct`**: still only an ICAO-band *fallback* in
+>   `sounding/advisories.py:347-353`, not the third ceiling signal §3.4 wants.
+>
+> §3.1, §3.2, §3.4, §3.5, §3.8–§3.11 are all still open exactly as described
+> (`icing.py:140` `raw/2`; `sfip.py:37-42` un-renormalized `_W_*_PROXY`;
+> `RunwayWind` has no `crosswind_gust_kt`; `flight_category.py` params are
+> still `amber_vis_sm`/`red_vis_sm`; `_climb_above_icing` still computes
+> `feasible` against the sounding top).
+
 ### 3.1 Pure stratiform Ogimet can never exceed MODERATE
 
 `_compute_icing_index` (`icing.py:124-140`): `raw/2` normalization caps a
@@ -317,6 +353,19 @@ compute `feasible` against the theoretical top (or mark feasibility
 
 ## 4. Cross-section / visualization findings
 
+> **Status (verified 2026-08-15).** §4.2 is **largely addressed by a different
+> mechanism than the one recommended**: instead of a per-layer "no data" hatch,
+> `data-extract.ts:getUnavailableLayers` (now ~line 458) grays out the toggle
+> for any layer whose source is structurally absent — explicitly distinguishing
+> "model says clear sky" (`nwpCloudLayers === []`) from "no NWP enrichment"
+> (`null`) — and `cross-section/nwp-fallback.ts` substitutes an available
+> method (NWP clouds → DD, NWP/SFIP icing → Ogimet-DD, NWP convective →
+> thermodynamic) so a layer never silently renders nothing. That closes the
+> "blank reads as clear" ambiguity at the *control* level; the residual gap is
+> on-canvas (compare mode still shows an unannotated blank panel). §4.1, §4.3
+> and every §4.4 item are unchanged (`estimateTowerTop` still lives in
+> `thermo-convective-bg.ts`; `route-map/metrics.ts:59` still SCT=0.3/BKN=0.7).
+
 ### 4.1 Zone interpolation can bridge data gaps (icing/CAT bands)
 
 `zone-matching.ts:34-98` matches zones between adjacent route points by any
@@ -380,11 +429,22 @@ realized/potential gate applies to what's drawn.
 Ordered by estimated decision value per implementation effort. The first three
 fill genuine hazard gaps; the rest are refinements.
 
-> **Implementation status (2026-06-20):** §5.1, §5.2, and §5.3 have all been
-> built since this review — `advisories/freezing_precip.py`,
+> **Implementation status (2026-06-20, extended 2026-08-15):** §5.1, §5.2, and
+> §5.3 have all been built — `advisories/freezing_precip.py`,
 > `advisories/llws.py`, and `advisories/density_altitude.py` (all
-> auto-registered via the registry's pkgutil module-walk). §5.4–5.6 remain
-> open ideas.
+> auto-registered via the registry's pkgutil module-walk; see
+> `registry.ENTRY_ORDER` for where each lands in the catalog).
+> **§5.6 is also BUILT** — decisions §11(d) gave `mountain_wind.py`
+> wave-signature corroboration (ridge-top inversion in a −1000/+2000 ft band,
+> or `VerticalMotionClass.OSCILLATING`) and deliberately *rejected* the
+> cross-ridge component this review suggested, as false precision on a
+> perpendicular-crossing assumption. Two §5.7 endorsements also landed:
+> ECMWF `kx`/`totalx` are decoded (`fetch/grib/decode.py:219-220` →
+> `nwp_total_totals`) and Open-Meteo `showers` is consumed as convective-precip
+> corroboration (`advisories/convective_character.py`).
+> **Still open: §5.4 (carb icing), §5.5 (radiation fog at ETA), and §5.7's
+> `cloud_cover_low_pct` third ceiling signal + surface precip-phase strip** —
+> no carb/fog code exists and the cross-section has no precip-phase layer.
 
 ### 5.1 Freezing precipitation / SLD route advisory (highest value) — BUILT
 
@@ -433,7 +493,7 @@ models, so a physics proxy materially improves D-1/D-0 evening-arrival calls —
 currently FlightCategory just goes quiet for the vis-less models
 (GREEN-by-absence, §3.6).
 
-### 5.6 Mountain-wave upgrade for MountainWind
+### 5.6 Mountain-wave upgrade for MountainWind — BUILT (decisions §11(d))
 
 `mountain_wind.py` grades wind *speed* near terrain only. The classical wave
 criteria are nearly free here: cross-ridge component (route track and terrain
@@ -467,20 +527,23 @@ currently feeds no advisory at all.
 
 ## 6. Summary of recommended actions
 
-| # | Action | Type | Where |
-|---|--------|------|-------|
-| 1 | Fix `_descend_below_icing` min→max + terrain floor + warm-nose guard | bug | `sounding/advisories.py:524` |
-| 2 | Audit E-Shear units vs CloudPath calibration; pin with test | bug | `sounding/e_shear.py:29` |
-| 3 | IENG convective term: pass real level vapor density | bug | `sounding/icing.py:547` |
-| 4 | Treat N²<0 + shear as CAT, not missing | bug | `vertical_motion.py:121` |
-| 5 | UNAVAILABLE (not GREEN) when a model structurally lacks the input | aggregation | `turbulence.py` et al. |
-| 6 | Renormalize SFIP weights for `_no_vv` | calibration | `sfip.py` |
-| 7 | Decide/document the stratiform-MODERATE Ogimet ceiling | decision-log | `icing.py:140` |
-| 8 | Gust-speed crosswind grading | advisory | `airport_wind.py` |
-| 9 | Feasibility of climb-above vs theoretical max top | advisory | `sounding/advisories.py:593` |
-| 10 | "No data" hatching per layer on cross-section | viz | `web/ts/visualization` |
-| 11 | Server-side convective tower geometry (retire client fallback) | viz | `thermo-convective-bg.ts` |
-| 12 | New: freezing-precip advisory (+ cross-section marker) | feature | §5.1 |
-| 13 | New: LLWS advisory from 0–1 km shear + inversions | feature | §5.2 |
-| 14 | New: density-altitude advisory | feature | §5.3 |
-| 15 | New: carb-icing, fog-at-ETA, wave-criteria upgrades | feature | §5.4–5.6 |
+Status column verified 2026-08-15. "open" means the code still reads as the
+review described it — re-check before assuming, but don't re-derive the finding.
+
+| # | Action | Type | Where | Status |
+|---|--------|------|-------|--------|
+| 1 | Fix `_descend_below_icing` min→max + terrain floor + warm-nose guard | bug | `sounding/advisories.py` | **done** (§2.1–2.3) |
+| 2 | Audit E-Shear units vs CloudPath calibration; pin with test | bug | `sounding/e_shear.py` | **done** (+ `tests/test_e_shear.py`) |
+| 3 | IENG convective term: pass real level vapor density | bug | `sounding/icing.py:561` | **done** |
+| 4 | Treat N²<0 + shear as CAT, not missing | bug | `vertical_motion.py:163` | **done** (storage; classification unreviewed) |
+| 5 | UNAVAILABLE (not GREEN) when a model structurally lacks the input | aggregation | `_helpers.below_coverage`, `turbulence.py` | **done** (#391/#393) |
+| 6 | Renormalize SFIP weights for `_no_vv` | calibration | `sfip.py:37-42` | open |
+| 7 | Decide/document the stratiform-MODERATE Ogimet ceiling | decision-log | `icing.py:140` | open |
+| 8 | Gust-speed crosswind grading | advisory | `airport_wind.py`, `RunwayWind` | open |
+| 9 | Feasibility of climb-above vs theoretical max top | advisory | `sounding/advisories.py:733` | open |
+| 10 | "No data" hatching per layer on cross-section | viz | `web/ts/visualization` | mostly addressed differently (see §4 status) |
+| 11 | Server-side convective tower geometry (retire client fallback) | viz | `thermo-convective-bg.ts` | open |
+| 12 | New: freezing-precip advisory (+ cross-section marker) | feature | §5.1 | **built** (evaluator; no cross-section marker) |
+| 13 | New: LLWS advisory from 0–1 km shear + inversions | feature | §5.2 | **built** |
+| 14 | New: density-altitude advisory | feature | §5.3 | **built** |
+| 15 | New: carb-icing, fog-at-ETA, wave-criteria upgrades | feature | §5.4–5.6 | wave **built** (§11(d)); carb + fog open |

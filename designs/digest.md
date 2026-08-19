@@ -16,7 +16,7 @@ Always generated. Formats `ForecastSnapshot` into console-readable text.
 text = format_digest(snapshot, target_time, output_paths=["data/..."])
 ```
 
-Sections: header (route/date/alt), per-waypoint forecasts + analysis, model agreement summary, output files footer. Handles missing data gracefully throughout.
+Sections: header (route/date/alt), per-waypoint forecasts + analysis, METAR/TAF observations and route SIGMETs (D-0 only), weather alternates (when present), model agreement summary, output files footer. Handles missing data gracefully throughout.
 
 **Sounding analysis formatting** — for each waypoint with sounding data:
 - Thermodynamic indices: freezing level, CAPE, LCL, K-index, total totals, precipitable water, lifted index, bulk shear
@@ -35,16 +35,11 @@ Skew-T inset).
 paths = generate_all_skewts(snapshot, target_time, output_dir)  # also emits companion hodographs
 ```
 
-**Skew-T plot:**
-- Temperature (red), dewpoint (green), wind barbs, parcel profile (dashed), LCL/LFC/EL markers
-- CAPE/CIN shading (`skew.shade_cape` / `skew.shade_cin`) between parcel and environment profiles
-- Analysis overlays: cloud layers, icing zones, and inversion layers drawn from the sounding analysis (`_draw_cloud_layers` / `_draw_icing_zones` / `_draw_inversion_layers`); fallback generic icing band (0 to -20°C) when no analysis zones
-- Altitude labels on the right edge, cruise-altitude line, standard adiabats/mixing lines
+**Skew-T plot** (`generate_skewt`): temperature/dewpoint/wind barbs, parcel profile with LCL/LFC/EL markers, CAPE/CIN shading, altitude labels + cruise line. Analysis overlays (`_draw_cloud_layers` / `_draw_icing_zones` / `_draw_inversion_layers`) come from the sounding analysis; a generic 0 to -20°C icing band is the fallback when there are no analysis zones.
 
-**Companion hodograph** (`generate_hodograph`, standalone PNG via `_draw_hodograph_on_axes`): altitude-colored wind trace; requires wind data.
+**Companion hodograph** (`generate_hodograph`, via `_draw_hodograph_on_axes`): altitude-colored wind trace; requires wind data.
 
-**Output:** PNG at 150 DPI. Skew-T figsize `(9, 5)`; hodograph `(6, 6)`.
-
+- PNG at 150 DPI; Skew-T figsize `(9, 5)`, hodograph `(6, 6)`
 - Requires >= 3 pressure levels with temperature; dewpoint and wind optional
 - Uses `matplotlib.use("agg")` — required for worker thread compatibility (macOS backend crashes on non-main threads)
 
@@ -63,7 +58,8 @@ prompt = config.load_prompt("briefer", locale="fr", guidance_key="balanced")  # 
 - JSON configs in `configs/weather_digest/{name}.json`
 - Resolution: explicit name → `WEATHERBRIEF_DIGEST_CONFIG` env → `"default"`
 - `create_llm()` uses LangChain `init_chat_model(model, model_provider, temperature)` — no custom provider logic
-- `load_prompt()` injects locale content (from `prompts/locales/{locale}.md` frontmatter + body, replacing `{locale}` and vocabulary tokens) and the `{guidance}` placeholder (from `digest_guidance/{key}.md`). `DigestConfig` also carries a separate `translator` LLMConfig (default `claude-haiku-4-5`) used by DWD translation.
+- `load_prompt()` injects locale content (from `prompts/locales/{locale}.md` frontmatter + body, replacing `{locale}` and vocabulary tokens) and the `{guidance}` placeholder (from `digest_guidance/{key}.md`). `load_prompt_parts()` is the cache-aware variant: it splits the rendered prompt at `{guidance}` into `(head, tail)` — byte-identical to `load_prompt()` when concatenated — so the breakpoint can sit on the head. `render_prompt()` renders text a caller already holds (eval `--prompt` override)
+- `DigestConfig` also carries separate `longrange` and `translator` LLMConfigs (both default `claude-haiku-4-5-20251001`), used by the long-range regime and DWD translation respectively.
 
 ### Context Assembly (`digest/prompt_builder.py`)
 
@@ -94,6 +90,8 @@ Builds structured text. Sections are appended only when their data is present:
 8. `=== TEXT FORECASTS (...) ===` — translated DWD blocks (`_format_dwd_translated_context`, full or synoptic-extract framing) if available, else NWS AFD / raw DWD entries
 9. `=== PREVIOUS DIGEST (for trend comparison) ===` — prior assessment/reason/synoptic/trend (if available)
 
+Sections 5–9 are shared by both regimes and appended by `_append_shared_sections`. Two exclusions to know about: the `model_agreement` advisory is filtered out of the advisories and tactical blocks (`_DIGEST_EXCLUDE_IDS` — meta-level, not useful to the LLM), and **weather alternates are deliberately NOT fed to the prompt** (#210) — `_format_alternates_context` exists and is wired into the plain-text digest and the UI, but the call site in `_append_shared_sections` is a commented-out NOTE. Don't "fix" it without reopening that decision.
+
 ### LangGraph Pipeline (`digest/llm_digest.py`)
 
 Single-node graph — the heavy data prep happens *outside* the graph so only a
@@ -121,6 +119,9 @@ result["llm_cache_read_tokens"]   # → prompt-cache split, subsets of
 result["llm_cache_write_tokens"]  #   llm_input_tokens — never add them to it
 result["dwd_translated"]    # → translated DWD blocks (attached post-graph)
 result["digest_trace_id"]   # → controlled LangSmith root run id (str UUID)
+result["longrange"]         # → which regime actually ran
+result["digest_context"]    # → the exact context string sent to the LLM, so the
+                            #   pack can persist a byte-faithful eval fixture (#254)
 result["diagnostic"]        # → typed Diagnostic if the LLM call failed, else None
                             #   (see weatherbrief.models.Diagnostic +
                             #    weatherbrief.digest.exceptions.classify_llm_exception)
@@ -195,7 +196,7 @@ Beyond the **ECMWF GRIB horizon** (`ecmwf_grib_horizon_days()` — 168h → 7 da
 
 ### Deterministic Guardrails (`digest/guardrails.py`)
 
-A **prompt/approach-independent safety layer** (`run_guardrails(context, output) → list[Violation]`, pure, no LLM) that verifies promises the briefer prompt already makes, by checking the structured output against the raw context string it was generated from. Checks: **coordinate leak** (raw `58°N`/`8°W` that should have been converted to plain geography), **fabricated sources** (citing DWD/NWS/AFD when no `=== TEXT FORECASTS` section was provided), **number traceability** (every hPa/ft/FL figure in the output must fuzzily trace to a number in the context), and **structure** (enum assessment, all fields present, per-field sentence/length bounds). Currently used to **gate CI on recorded eval output** (`tests/test_digest_assertions.py`); designed to also run against a live subset or in front of user-facing output. Bounds were recalibrated to real output in #253.
+A **prompt/approach-independent safety layer** (`run_guardrails(digest, context) → list[Violation]`, pure, no LLM) that verifies promises the briefer prompt already makes, by checking the structured output against the raw context string it was generated from. Checks: **structure** (enum assessment, all fields present, per-field sentence/length bounds), **coordinate leak** (raw `58°N`/`8°W` that should have been converted to plain geography), **fabricated sources** (citing DWD/NWS/AFD when no `=== TEXT FORECASTS` section was provided), **number traceability** (every hPa/ft/FL figure in the output must fuzzily trace to a number in the context), **cloud group format** (`BKN010` already carries its altitude — "BKN010ft" / "BKN010–025ft" reads as tens of feet), **regulatory claim** (the briefing's lane is weather; no legal verdicts like "IFR is the only legal option"), and **convective/VFR consistency** (don't call VFR impossible *because of convection* when the Convective Character advisory is AMBER, i.e. circumnavigable — #294). Currently used to **gate CI on recorded eval output** (`tests/test_digest_assertions.py`); designed to also run against a live subset or in front of user-facing output. Bounds were recalibrated to real output in #253.
 
 ### Markdown Output
 
@@ -211,7 +212,7 @@ For Europe routes, the digest pipeline also fetches DWD German weather text, tra
 
 ### System Prompt
 
-The shipped configs (`default.json`, `openai.json`) point `briefer` at `configs/weather_digest/prompts/briefer_v2.md` (the `DigestConfig.prompts.briefer` code default is still `briefer_v1.md`, but the JSON overrides it). It sets an aviation weather briefer persona addressing a competent pilot (do NOT over-simplify), instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
+`default.json` points `briefer` at `configs/weather_digest/prompts/briefer_v3.md` (the guidance-at-the-end layout that makes the cached head preset-independent); `openai.json` is still on `briefer_v2.md`. The `DigestConfig.prompts.briefer` code default is `briefer_v1.md`, but the JSON always overrides it. The prompt sets an aviation weather briefer persona addressing a competent pilot (do NOT over-simplify), instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
 
 The prompt contains a `{guidance}` placeholder that is replaced at runtime with a guidance preset. This controls how the LLM interprets advisory severity when producing the GREEN/AMBER/RED assessment.
 
@@ -227,7 +228,7 @@ Three preset files control assessment calibration:
 
 `index.json` provides localised names and descriptions (en/fr/de/es) for the frontend.
 
-Presets are stored per-profile in `settings_json.digest_guidance`. System templates map: VFR Only → conservative, IFR Conservative → balanced, IFR FIKI → tolerant.
+Presets are stored per-profile in `settings_json.digest_guidance` (read in `api/packs.py` when building briefing options). The system-template mapping — VFR Only → conservative, IFR Conservative → balanced, IFR FIKI → tolerant — is seed data in `configs/system_profiles.json`, not code.
 
 The `WEATHERBRIEF_GUIDANCE_DIR` env var can override the guidance directory to allow updates without redeploying.
 
@@ -252,10 +253,9 @@ The `WEATHERBRIEF_GUIDANCE_DIR` env var can override the guidance directory to a
   `_inject_locale` substitutes vocabulary tokens *throughout* the body and runs before the
   head/tail split. Each locale is therefore its own cache entry, and an entry only pays back
   above a ~53% hit rate — a locale too sparse to re-read inside the 1h TTL writes at 2x and
-  reads back never. `None`, `"en"` and any unknown locale resolve through
-  `resolve_locale_key()` to the same English head, so they share one entry; `de`/`es`/`fr`
-  bill a plain 1x until promoted. Promotion is a **config edit, decided from the ledger** —
-  see below.
+  reads back never. `resolve_locale_key()` collapses `None`, `"en"` and any unknown locale
+  onto the same English head (one shared entry); `de`/`es`/`fr` bill a plain 1x until
+  promoted, which is a **config edit decided from the ledger** — see below.
 
 ### Monitoring: when to promote a locale
 

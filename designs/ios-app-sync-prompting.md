@@ -31,12 +31,14 @@ Observation created
   Mark .synced
 ```
 
-- **Queue** — observations persist in SwiftData with `syncStatus = .local`
+- **Queue** — observations persist in SwiftData with `syncStatus = .local` (aspirational: the app imports SwiftData nowhere; see the implementation note below)
 - **Retry** — on connectivity change (`NWPathMonitor`), flush the queue
 - **Conflict** — server is append-only for observations. No conflict resolution needed (each observation is immutable once created; amendments are new observations linked to the original)
 - **Backpressure** — if queue grows large (extended offline), batch in chunks of 50
 
 ### Real-time sharing (Starlink-connected pilots)
+
+> Status: spec only (Phase 3c). Neither the app nor the server has any WebSocket code — grep for `WebSocket` returns nothing in `app/` or `src/weatherbrief/`. PIREP exchange is HTTP-only (`POST /api/pireps`, `POST /api/pireps/batch`, bounds/airport queries).
 
 - **WebSocket** connection kept alive during flight session
 - Outbound: observations pushed immediately on creation
@@ -45,17 +47,19 @@ Observation created
 
 ### Current implementation note (Phase 3 M1)
 
-`PirepOfflineStore` actor writes the queue to a JSON file (`pending_pireps.json`) in Documents (not SwiftData yet). Offline detection lives on `APIError.isTransientNetwork`: it unwraps `case .networkError(let inner)`, casts `inner as? URLError`, and only treats an allowlist of codes as offline (`.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`) — `APIClient` wraps URL errors in `APIError.networkError`, so the raw `URLError.code` is on the inner error, not the top level. `PirepViewModel.submit` catches `where apiError.isTransientNetwork`, calls `offlineStore.enqueue(request)`, and shows a synthetic `PirepResponse.offline`. On a successful online submit it first calls `offlineStore.sync(using: repository)`, which drains the whole queue in one `submitPirepsBatch` call (no chunking yet — server dedups via `client_uuid`).
+`PirepOfflineStore` actor writes the queue to a JSON file (`pending_pireps.json`) in Documents (not SwiftData yet). Offline detection lives on `APIError.isTransientNetwork`: it unwraps `case .networkError(let inner)`, casts `inner as? URLError`, and only treats an allowlist of codes as offline (`.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`) — `APIClient` wraps URL errors in `APIError.networkError`, so the raw `URLError.code` is on the inner error, not the top level. `PirepViewModel.submit` catches `where apiError.isTransientNetwork`, calls `offlineStore.enqueue(request)`, and shows a synthetic `PirepResponse.offline`. After a *successful* online submit (connectivity just confirmed) it calls `offlineStore.sync(using: repository)`, which drains the whole queue in one `submitPirepsBatch` call (no chunking yet — server dedups via `client_uuid`). `sync` is all-or-nothing: any throw leaves the entire queue intact and returns 0, so a single bad request can't be isolated. The queue file is written `.completeFileProtectionUntilFirstUserAuthentication` (pilot-authored content + positions, encrypted at rest) and deliberately *not* backup-excluded — these are unsent submissions, not regenerable cache. `clear()` drops queue + file on account deletion.
 
 A `NetworkMonitor` (wraps `NWPathMonitor`, `@MainActor @Observable`, on `AppState`) now exists, but it is **not** wired to flush the PIREP queue — it only gates Wi-Fi-only auto-download (`BriefingViewModel`) and drives offline UI hints (`FlightListViewModel`, `BriefingViewModel`). The queue is still flushed on just two triggers: (1) the successful-submit path above, and (2) `AppState.syncPendingPireps()` (calls `offlineStore.load()` then `sync(using:)`), invoked from `WeatherBriefApp` on `scenePhase == .active` — i.e. the queue retries when the app is foregrounded, not on a connectivity-restored event, even though the monitor could now supply such an event.
 
 ## Prompting Engine (Phase 3b — Detailed Spec)
 
-> Status: design intent only — none of this is implemented yet. No `RouteProgressTracker`, trigger rules, priority queue, or `ForecastSummary`/`forecastAtCurrentPosition()` exist in the iOS code. The Swift below is illustrative of the intended shape, not real symbols.
+> Status: the *prompting* half is design intent only — no trigger rules, priority queue, cooldowns, or `ForecastSummary`/`forecastAtCurrentPosition()` exist in Swift. The Swift below is illustrative of the intended shape, not real symbols.
+>
+> What *does* exist is the position half of the tracker, under a different name: `Services/FlightTrackingService.swift` ("Start Flight", shipped) wraps `CLLocationManager` and publishes `ProjectedPosition` — along-route distance (nm), GPS altitude MSL, cross-track distance, `isOnRoute` (<10 nm), heading — projected onto `[TrackingRoutePoint]` via RZFlight's `RouteGeometry`. It has **no look-ahead and no forecast coupling**: it never reads cross-section data, computes no next-N-minutes window, and emits no transition events. So the section below is really "what is still missing on top of `FlightTrackingService`" — build the engine against that service rather than introducing a second `RouteProgressTracker`.
 
 The intelligence layer that makes the app "smart" — watches aircraft progress, reads ahead in the forecast, decides when and what to ask. Requires Phase 2 offline data (synced cross-section data at each route point).
 
-### Route Progress Tracker
+### Route Progress Tracker (partly shipped as `FlightTrackingService`)
 
 Continuously match aircraft GPS position to nearest route point and track progress as percentage / distance along route:
 - **Current conditions** — what the forecast predicts at current position and altitude
@@ -130,4 +134,5 @@ This is why cross-section data is part of the lightweight sync payload — it's 
 
 - [Features](./ios-app-features.md) — trigger types and prompt UX
 - [UI](./ios-app-ui.md) — prompted report card layout
-- [Data Models](./ios-app-data-models.md) — `ForecastSummary`, `ObservationResponse`
+- [Data Models](./ios-app-data-models.md) — `ForecastSummary`/`ObservationResponse` were never built; live tracking state (`ProjectedPosition`, `TrackingRoutePoint`) is in-memory only, nothing persisted
+- Key code paths: `app/flyfun-weather/flyfun-weather/Services/{PirepOfflineStore,NetworkMonitor,FlightTrackingService}.swift`, `ViewModels/PirepViewModel.swift`, `App/AppState.swift` (`syncPendingPireps`)

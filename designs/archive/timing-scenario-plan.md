@@ -1,12 +1,25 @@
 # Timing scenario scan — better departure-window discovery
 
-> **Status (2026-07-11): SHIPPED — all 4 slices MERGED (backend+web PR #341,
-> 2026-07-04; iOS client port #357, see `timing-scenario-ios-port.md`).** This
-> is now a historical build record: the ✅ slices below reflect what was built,
-> and the "as-built" annotations are the durable truth. Ready to fold the
-> durable architecture into a real design doc and archive this plan. Code lives
-> in `tasks/time_scan.py`, `tasks/time_scan_runner.py`, `models/time_scan.py`,
-> `api/packs.py` (`/time-options` endpoints), migration `074_flight_flexibility`.
+> **Status (verified against code 2026-08-15): SHIPPED — all 4 slices MERGED
+> (backend+web PR #341, 2026-07-04; iOS client port #357, see
+> `timing-scenario-ios-port.md`), plus the #434 persist-all follow-up on
+> backend+web.** This is now a historical build record: the ✅ slices below
+> reflect what was built, and the "as-built" annotations are the durable truth.
+> **ARCHIVED 2026-08-17 — the durable architecture was folded into
+> [`designs/timing-scenarios.md`](../timing-scenarios.md), which is the design doc to
+> read. Keep this file for the dated build record and the rejected options only.** Code lives in `tasks/time_scan.py`, `tasks/time_scan_runner.py`,
+> `models/time_scan.py`, `api/packs.py` (`/time-options`, `/time-options/rescan`,
+> `/time-options/confirm`), `web/ts/helpers/time-scenario-display.ts`, migration
+> `074_flight_flexibility`, `flights.flexibility` column (`db/models.py`).
+>
+> **Never built (the residue — see *Remaining build-time details* and the #434
+> section):** the None-flight lightbulb hint (`get_timing_hint_ids()` exists in
+> `analysis/advisories/registry.py` but has **zero call sites**), the digest
+> diurnal-swing hint, the decision-B early-exit benchmark, and the iOS mirror of
+> the #434 DTO fields (`TimeOptionsResponse.swift` still has no `disposition` /
+> `advisory_status`). None of these are blockers — the shipped feature works
+> without them — but don't read the plan as if they landed.
+>
 > History: brainstorm 2026-07-01 → code review of the reuse premise (same day,
 > reshaped around the enrichment window) → full code-verified plan review + flow
 > decisions 2026-07-02 (Flexibility toggle, background scenario job — see
@@ -43,7 +56,7 @@ a **Flexibility** setting:
   and fills in results when ready.
 - **Delivery is polling, not SSE.** The refresh SSE stream (`POST
   /refresh/stream`) closes with `complete` when the pipeline finishes
-  (`api/packs.py:1990`) — before the scan does — so there is no live channel for
+  (`api/packs.py`) — before the scan does — so there is no live channel for
   a `time_scan_ready` event. The client polls `GET .../time-options` (backed by
   a scan-status field in pack meta) after `briefing_ready`. Same for confirm
   results.
@@ -70,15 +83,18 @@ a **Flexibility** setting:
 - **Hint for `None` flights** (keeps the proactive attention-director goal):
   when a hint-class advisory is RED/AMBER at the planned time, show the soft
   lightbulb — "this hazard varies through the day — set Flexibility to scan for
-  a better window." Costs nothing, never auto-scans.
+  a better window." Costs nothing, never auto-scans. **NOT BUILT** — the
+  classification half shipped (`timing_hint=True` on `flight_category`,
+  `get_timing_hint_ids()` in the registry) but nothing calls it; no UI surface
+  exists on either client.
 - **±day realities.** Previous/Next day need an **extra OM fetch**: OM data on
   disk covers only the target date — the pipeline windows the fetch with
-  `start_date = end_date = target day` (`tasks/fetch.py:275-313`,
+  `start_date = end_date = target day` (`tasks/fetch.py`,
   `fetch_multi_point`); the next day is present only when the flight crosses
   midnight. Previous day clamps away when already in the past; Next day can
   cross the ECMWF horizon for far-out flights — the flexibility window must
   **visibly stop where ECMWF fidelity stops**. The horizon is already derived
-  from the max step on disk per run (`ecmwf_fetch.py:381`), not hardcoded — use
+  from the max step on disk per run (`ecmwf_fetch.py`), not hardcoded — use
   that, not the nominal 90/168h order figures.
 - **DB:** one new column — a `flexibility` enum on flights (batch_alter
   migration per house rules). `alt_departure_time` is reused as-is for the
@@ -105,10 +121,10 @@ window. The cost is **not uniform across models** (verified against `fetch.md`,
 
 | Layer | Full-day cost | Fidelity off the flight window |
 |---|---|---|
-| Open-Meteo base | **free for the target day** — whole 24h already on disk (`tasks/fetch.py:275-313`); **adjacent days need a new fetch** | **degraded** icing/convective |
+| Open-Meteo base | **free for the target day** — whole 24h already on disk (`tasks/fetch.py`); **adjacent days need a new fetch** | **degraded** icing/convective |
 | **ECMWF** | **decode only, no download** — full GRIB run on local ECPDS disk (`ECMWF_GRIB_DIR`, horizon from files on disk) | **full** (CLW/ICMR from a2 GRIB) — *but not decoded into the pack off-window; see below* |
-| GFS | moderate — per-fhour S3 byte-range (a handful of ranged GETs per fhour, `grib_fetch.py:33`, `gfs_idx.py`) | full |
-| ICON | **heavy download** — per fhour ≈ 40 model levels × N variables of bz2 files from DWD (`icon_eu_fetch.py:433-462`) | full |
+| GFS | moderate — per-fhour S3 byte-range (a handful of ranged GETs per fhour, `grib_fetch.py`, `gfs_idx.py`) | full |
+| ICON | **heavy download** — per fhour ≈ 40 model levels × N variables of bz2 files from DWD (`icon_eu_fetch.py`) | full |
 
 The trap: **Open-Meteo alone would mislead** exactly on the axes that matter
 most. `CLWMR`/`ICMR` (cloud-water/ice — 0.35 of the icing fuzzy-logic weight)
@@ -125,27 +141,27 @@ The reuse premise — "just re-grade at another hour with `run_alt_from_pack`,
 it's free" — is only **half true**, and getting this wrong would silently
 violate the honesty posture. Verified in code:
 
-- `run_alt_from_pack` (`tasks/advise.py:704`) **does** take an arbitrary
+- `run_alt_from_pack` (`tasks/advise.py`) **does** take an arbitrary
   `alt_departure_time: datetime` and an `advisory_models` subset, and re-runs
   analysis + front detection at the shifted ETAs (it also re-writes
   `route_fronts_alt.json` and airport conditions). So the *re-grading machinery*
   generalises to any hour and any model set for free. ✓
 - **But it re-grades against the *saved pack* `cross_sections`, not against the
   on-disk GRIB.** GRIB enrichment is windowed around the flight — **the ±3h
-  margin is ECMWF-specific** (`margin = timedelta(hours=3)`,
-  `fetch/grib/__init__.py:2071-2077`); GFS and ICON use forward flight-window
-  hours instead (`grib_fetch.py:176`, `icon_eu_fetch.py:361`), not a symmetric
+  margin is ECMWF-specific** (`ECMWF_FLIGHT_WINDOW_MARGIN`,
+  `fetch/grib/__init__.py`); GFS and ICON use forward flight-window
+  hours instead (`grib_fetch.py`, `icon_eu_fetch.py`), not a symmetric
   bracket. OM base spans the whole target day, but CLW/ICMR/cloud-diagnostics —
   the icing fuel and the GRIB cloud geometry — exist only in each model's
   enriched window. **Coverage must therefore be checked per model, never
   assumed.**
 - `at_time()` picks the **closest** stored hour and **silently clamps** past the
-  edge (`models/analysis.py:329-342`, ~18 call sites, one method definition). So
+  edge (`models/analysis.py`, ~18 call sites, one method definition). So
   a naive off-window `run_alt_from_pack` returns OM-clamped values **labelled
   ECMWF** — a confident-but-wrong provisional, the exact failure the posture
   forbids.
 - **Accumulated-field constraint:** ECMWF tp/sf/cp are step-differenced across
-  consecutive processed steps (`grib/__init__.py:2067,2205`). The daylight
+  consecutive processed steps (`grib/__init__.py`). The daylight
   extension must decode a **contiguous run of fhours** — cherry-picking only
   "promising" hours would corrupt precip/snow deltas.
 
@@ -161,10 +177,13 @@ not "reuse `run_alt_from_pack` for free."** You reuse the analysis + advisory
 *machinery*; you build the full-day *data layer* fresh (bounded to ECMWF, decode
 from local disk). Hard invariant: **never grade a candidate hour whose fields
 aren't actually decoded for the model being claimed** — extend enrichment to
-cover it, or refuse the hour. No silent `at_time()` clamp. Implementation:
-record per-model enriched-hour **coverage as explicit metadata** and check it
-*before* grading (refuse up front), with an opt-in `strict` kwarg on `at_time`
-as a localized backstop — don't thread strictness through all ~18 call sites.
+cover it, or refuse the hour. No silent `at_time()` clamp. **As-built:** the
+explicit-metadata half is what shipped — `compute_model_coverage` in
+`tasks/time_scan.py` derives per-route-point `(lo, hi)` enriched spans per GRIB
+model and the scan refuses any candidate whose shifted flight window falls
+outside them (`refused_times`). The mooted `strict` kwarg on `at_time` was
+**not** added — checking coverage up front made the backstop unnecessary, so
+`at_time` still clamps silently for every other caller.
 
 ## Core idea — ECMWF-anchored, native-cadence, coarse-to-fine
 
@@ -183,7 +202,7 @@ locally-delivered one**.
    candidate is a `departure_shift`, so the confirm needs ICON/GFS at *all*
    native steps spanning the shifted flight window (typically 2–5 fhours), not
    one step — roughly **one briefing-equivalent** of ICON+GFS fetch. Both
-   fetchers are already per-fhour (`icon_eu_fetch.py:433`, `grib_fetch.py:33`),
+   fetchers are already per-fhour (`icon_eu_fetch.py`, `grib_fetch.py`),
    so no fetch-layer changes. Expect tens of seconds to a couple of minutes;
    async with polling; result cached on the candidate (invalidated by new runs
    per decision H).
@@ -224,13 +243,13 @@ though `flight_category` is not scan-driven. The classification now decides:
 2. **Ranking emphasis** (what "improves" is worth surfacing first).
 
 Config stays declarative: add a `timing_class` flag to `AdvisoryCatalogEntry`
-(`models/advisories.py:144`, sibling of `altitude_dependent` at `:153`), with a
+(`models/advisories.py`, sibling of `altitude_dependent`), with a
 registry helper mirroring `get_altitude_dependent_ids()`
-(`analysis/advisories/registry.py:31`), so a new evaluator auto-participates.
+(`analysis/advisories/registry.py`), so a new evaluator auto-participates.
 Note two evaluators register their IDs via constants (`fronts`, `sun`) — don't
 grep for literal `id="..."`.
 
-### Mapping (all 21 evaluators — verified complete against the registry)
+### Mapping (re-verified against the registry 2026-08-15 — now 22 evaluators: 9 `scan` / 6 `cheap` / 7 `none`)
 
 **Hint-class** (triggers the None-flight hint; decision C): the 9 `scan` rows +
 `flight_category` (via `timing_hint=True` — the hint set is
@@ -256,14 +275,16 @@ grep for literal `id="..."`.
 | `freezing_precip` | **scan-class** (see table above) |
 | `fronts` | **excluded** until the advisory matures (experimental, default-off) |
 
-#### `cheap` — OM-sufficient, never drives the hint
-`density_altitude`, `sun`, `airport_wind`, `llws` — their timing sensitivity is
-already visible in free OM data; improvements still appear in candidate diffs.
+#### `cheap` — OM-sufficient, never drives the hint (except `flight_category`)
+`density_altitude`, `sun`, `airport_wind`, `llws`, `flight_category`, plus
+`approach_feasibility` (added after this plan was written — it inherited `cheap`
+correctly). Their timing sensitivity is already visible in free OM data;
+improvements still appear in candidate diffs.
 
 #### `none` — timing not the lever
 `headwind`, `turbulence` (altitude is the lever; its thermal part is captured by
 the convective scan), `mountain_wind`, `enroute_precip`, `model_agreement`,
-`dd_nwp_agreement`.
+`dd_nwp_agreement`, `fronts` (excluded per decision C).
 
 ## Alternate time — the old alt-departure feature, unified
 
@@ -271,17 +292,21 @@ The old `alt_departure_time` feature (single manually-set alternate time, graded
 synchronously in-pipeline with a planned↔alt toggle) is **subsumed as
 Flexibility=Alternate time — a single-candidate scenario job**:
 
-- **No column change.** `alt_departure_time` (DB `db/models.py:111`, DTOs)
+- **No column change.** `alt_departure_time` (DB `db/models.py`, DTOs)
   keeps its name and stores the Alternate-time value.
-- **Grading moves out of the synchronous pipeline** into the scenario job
-  (`pipeline.py:437-444` alt stage retires). This resolves an ordering
+- **Grading moves out of the synchronous pipeline** into the scenario job.
+  **As-built:** the retirement happened at the *caller* — `api/packs.py`
+  deliberately no longer sets `BriefingOptions.alt_departure_time` (there is an
+  explicit NOTE there), so the pipeline's section-3.1 alt stage is dormant dead
+  code rather than deleted. Don't "clean it up" without checking the
+  historical/scenario-measure callers. This resolves an ordering
   contradiction: an off-window alternate time graded in-pipeline would hit
   exactly the silent-clamp failure the invariant forbids, before any enrichment
   extension exists. **Behavior change:** alt advisories now arrive a beat
   *after* the briefing ("Scenarios running…") instead of with it — accepted.
 - **Artifact compatibility:** the job still writes `route_advisories_alt.json`
-  for the alternate time (web already consumes it — `briefing-store.ts:379`,
-  `briefing-main.ts:485`), now with an explicit **model-coverage/confidence
+  for the alternate time (web already consumes it — `briefing-store.ts`,
+  `briefing-main.ts`), now with an explicit **model-coverage/confidence
   field**, since off-window grades are ECMWF-only until confirmed. The web
   planned↔alt UI must render that label. (iOS has **zero** alt-departure code
   today — nothing to migrate; the reframe is web-only.)
@@ -293,7 +318,7 @@ Flexibility=Alternate time — a single-candidate scenario job**:
 **Artifact** — `time_options.json` on the pack, keyed by ECMWF run (decision H):
 ```
 TimeWindowScan {
-  ecmwf_run: str                                       # staleness key (decision H)
+  ecmwf_run_ts: int | None                             # staleness key (decision H; as-built name)
   baseline:   { time, ecmwf_assessment }               # planned time, ECMWF view
   window:     { start, end, cadence, daylight_clipped, flexibility_mode }
   candidates: [ TimeCandidate {
@@ -309,7 +334,7 @@ TimeWindowScan {
 ```
 (`departure_shift` not a single `valid_time`: shifting departure moves *every*
 route point's ETA — `analyze_all_route_points` re-derives per-point valid-times,
-`tasks/analyze.py:345-354`. The diff is vs the **ECMWF-only baseline**, stored —
+`tasks/analyze.py`. The diff is vs the **ECMWF-only baseline**, stored —
 never apples-to-oranges vs the multi-model headline.)
 
 **Background job** — `run_time_scan`. **Reality check: there is no task queue**
@@ -324,7 +349,7 @@ First step is **decode the daylight ECMWF fhours** (contiguous, ephemeral —
 decisions above), then re-grade ECMWF-only at each native-cadence step. Daylight
 bounds from `RouteSunAnalysis` / night intervals. (The altitude table is *not* a
 competing background job — it's computed inside `run_advisories` while
-cross-sections are in memory, `tasks/advise.py:375-390`.)
+cross-sections are in memory, `tasks/advise.py`.)
 
 **Endpoints**
 - `GET .../packs/{ts}/time-options` → scan result or status ("Scenarios
@@ -436,16 +461,19 @@ user to the app rather than exposing half a workflow.
 - iOS surfacing (web-only for v1 backend+web). *Since shipped as a separate
   client port — #357, `timing-scenario-ios-port.md`.*
 
-## Remaining build-time details (no user decision needed)
+## Remaining build-time details (status 2026-08-15)
 
-- Exact margin thresholds for "improves / materially worsens" (shape decided —
-  decision D).
-- Hint copy + digest hint wording.
-- Whether the None-flight hint ships in slice 1 or with slice 2.
-- **Early-exit benchmark (decision B):** once slice 2 gives real scan-cost
-  numbers, compare OM-variance vs coarse-ECMWF-first on real packs —
-  `cost(check)` vs `cost(full scan) × skip_rate` — and keep whichever (if
-  either) pays for itself.
+- ✅ Exact margin thresholds for "improves / materially worsens" — tuned in
+  `tasks/time_scan.py` (`_disposition()` + `_MIN_MARGIN`).
+- ⬜ Hint copy + digest hint wording — moot until the hint itself is built.
+- ⬜ The None-flight hint shipped in **neither** slice. Classification exists
+  (`timing_hint`, `get_timing_hint_ids()`); no caller, no UI. Cheap to add if
+  ever wanted; nothing else depends on it.
+- ⬜ **Early-exit benchmark (decision B)** — never run. `run_time_scan` has no
+  step-0 "day pinned bad" check; the scan always sweeps the (`_MAX_GRID = 24`)
+  bounded grid. In practice the (flight, ECMWF run) cache made scan cost
+  tolerable, so the optimization was never needed. Revisit only if scan cost
+  shows up in refresh-pipeline profiling.
 
 ## Follow-up: persist all graded candidates + disposition (#434)
 
@@ -481,6 +509,13 @@ a prev-day scan that graded 07-17 midday convective-worse just went empty).
   times (greyed, UNAVAILABLE chip). `advisory_status` mirrored on the DTO.
 - **iOS** mirrors the DTO fields in a separate PR (contract change), defaulting
   the panel filter to improving+neutral so it doesn't suddenly show worse rows.
+  **NOT DONE (verified 2026-08-15)** — `Models/API/TimeOptionsResponse.swift`
+  decodes neither `disposition` nor `advisory_status`, and
+  `TimingScenariosView` still renders every candidate and counts every
+  non-baseline/non-alternate row toward its "better windows" headline. Since
+  #434 made the backend persist `neutral` and `worse` rows too, iOS now
+  **over-counts** — the opposite of the web undercount in the rollout note
+  below. This is the one real open follow-up left.
 
 **Rollout note (transient):** `disposition` defaults to `neutral`, so a
 `time_options.json` persisted **before** this change reloads with every swept
@@ -497,9 +532,9 @@ large; stays gated), and the confirm/rescan flow.
 
 - Persist-all follow-up: #434 (`models/time_scan.py` `disposition`/`advisory_status`, `tasks/time_scan.py` unfiltered persistence, `tasks/advise.py::per_model_status_from_manifest`, web `renderTimeScenarios` show-all)
 - Mitigation framework + `MitigationKind.TIMING` (reserved): [advisories.md](../advisories.md) *Mitigations* section, #328/#330
-- Reuse machinery: `run_alt_from_pack` (`tasks/advise.py:704`), `AdvisoryCatalogEntry` (`models/advisories.py:144`, `altitude_dependent` `:153`), registry helper pattern (`analysis/advisories/registry.py:31`)
-- Enrichment windows: ECMWF ±3h (`fetch/grib/__init__.py:2071-2077`); GFS forward window (`grib_fetch.py:176`); ICON forward window (`icon_eu_fetch.py:361`); silent clamp (`models/analysis.py:329-342`); accumulated-field step-differencing (`grib/__init__.py:2067,2205`)
-- OM fetch windowing: `tasks/fetch.py:275-313` (`fetch_multi_point`, target-day only)
-- Per-fhour fetch primitives: ICON (`icon_eu_fetch.py:433-462`), GFS byte-range (`grib_fetch.py:33`, `gfs_idx.py`)
+- Reuse machinery: `run_alt_from_pack` (`tasks/advise.py`), `AdvisoryCatalogEntry` (`models/advisories.py`, `altitude_dependent`), registry helper pattern (`analysis/advisories/registry.py`)
+- Enrichment windows: ECMWF ±3h (`fetch/grib/__init__.py`); GFS forward window (`grib_fetch.py`); ICON forward window (`icon_eu_fetch.py`); silent clamp (`models/analysis.py`); accumulated-field step-differencing (`grib/__init__.py`)
+- OM fetch windowing: `tasks/fetch.py` (`fetch_multi_point`, target-day only)
+- Per-fhour fetch primitives: ICON (`icon_eu_fetch.py`), GFS byte-range (`grib_fetch.py`, `gfs_idx.py`)
 - Data-fidelity basis: [fetch.md](../fetch.md), [icing-models-analysis.md](../icing-models-analysis.md), [convective-analysis.md](../convective-analysis.md)
-- Substrate: decode priority dispatcher (#172, `DecodePriority`), standalone subprocess isolation (#236), altitude table inside `run_advisories` (#259, `tasks/advise.py:375-390`), alt artifacts (`tasks/artifacts.py:345-357`), web alt UI (`web/ts/store/briefing-store.ts:379`, `briefing-main.ts:485`)
+- Substrate: decode priority dispatcher (#172, `DecodePriority`), standalone subprocess isolation (#236), altitude table inside `run_advisories` (#259, `tasks/advise.py`), alt artifacts (`tasks/artifacts.py`), web alt UI (`web/ts/store/briefing-store.ts`, `briefing-main.ts`)

@@ -10,9 +10,11 @@ calibration work re-analyses against ERA5 reanalysis. This module owns the
 data side. The pilot-facing summary panel exists to make the feature
 *useful enough that the pilot fills it in* — calibration falls out.
 
-Phase 1 (this module): web-only data capture + per-user summary stats. No
-post-ETA prompts, no cross-user aggregation, no calibration harness changes.
-Calibration is a separate problem that consumes this data later.
+Phase 1 (this module): data capture + per-user summary stats. Web shipped
+first; iOS capture has since landed (form + card on the Advisory tab, rendered
+from the served taxonomy — see *iOS surfaces*). Still out: post-ETA prompts,
+cross-user aggregation, calibration harness changes. Calibration is a separate
+problem that consumes this data later.
 
 ## Schema
 
@@ -62,10 +64,22 @@ Single shared vocabulary in `weatherbrief.debriefs.taxonomy`:
 
 `Decision`: `cancelled | flown | monitoring`. `OutcomeValue`: `consistent | better | worse`.
 
-`KEYWORD_MAP` maps each tag to phrases that the free-text note matches —
-used by the hybrid entry UX to auto-toggle chips as the pilot types. The
-TS mirror in `web/ts/components/debrief-taxonomy.ts` must stay in sync
-(small surface, hand-maintained).
+Python owns the *display* metadata too — `DECISION_ORDER`, `DECISION_LABELS`,
+`TAG_LABELS`, `TAG_DESCRIPTIONS`, `OUTCOME_LABELS`, `NOTE_MAX_LENGTH` and
+`ADVISORY_TAG_MAP` (advisory id → tag; per-id because one category can cover
+several phenomena, and `model` advisories map to nothing). `build_taxonomy_catalog()`
+serves all of it inside `/api/help/catalog` under the `debrief` key, so iOS renders
+its whole debrief form from the wire and never hand-copies a Swift third copy
+(`DebriefTaxonomy.bundledBaseline` is only the cold-first-launch fallback).
+
+Three copies exist in practice: Python (source), the build-time TS mirror
+`web/ts/components/debrief-taxonomy.ts` (hand-maintained — the web build doesn't
+read the catalog), and the iOS baseline. A taxonomy edit means touching Python
+plus those two mirrors.
+
+`KEYWORD_MAP` maps each tag to phrases that the free-text note matches — used by
+the hybrid entry UX to auto-toggle chips as the pilot types. It is deliberately
+**not** in the served catalog, so note→chip auto-toggling is a web-only affordance.
 
 ## API
 
@@ -75,6 +89,7 @@ TS mirror in `web/ts/components/debrief-taxonomy.ts` must stay in sync
 | `PUT` | `/api/flights/{id}/debrief` | Upsert |
 | `DELETE` | `/api/flights/{id}/debrief` | Idempotent remove |
 | `GET` | `/api/debriefs/stats?window_days=90` | Per-user aggregate |
+| `GET` | `/api/help/catalog` | `debrief` key = served taxonomy (labels, advisory map, note cap) |
 
 `GET /api/flights` is extended with two new fields per flight:
 - `debrief: DebriefResponse | null` — owned past flights only
@@ -106,7 +121,9 @@ account preference — `flight_order` in `app_prefs_json` (no migration; default
 
 Recent and Past stay most-recent-first under both values. Past pagination is
 offset-based over that order, so reordering it would produce duplicate and
-skipped rows across pages.
+skipped rows across pages. The `past_q` route-token filter (#542) narrows the
+past page *after* section classification, so a filtered-out flight still counts
+towards `_compute_recent_section`.
 
 `load_flight_order(db, user_id)` is read in the *body* of `list_all_flights`,
 never as a `Depends()` parameter: `api/agent.py` calls that route directly as a
@@ -124,7 +141,8 @@ display list). `FlightResolver.nextFlight` deliberately does **not** follow it �
 
 `compute_stats(flights, debriefs, window_days=90)` is a pure function
 returning `DebriefStats`:
-- Activity counts (flown / cancelled / pending)
+- Activity counts (flown / cancelled / monitoring / pending, where pending is
+  the in-window remainder with no debrief)
 - Cancellation reason histogram
 - Per-category accuracy (consistent / better / worse counts)
 
@@ -167,6 +185,18 @@ under "Latest Assessment" for owner past flights only:
 
 Both surfaces share the same `debrief-form.ts` component.
 
+### iOS surfaces
+
+- `DebriefCard` sits on the Advisory tab of the briefing (owner-only), showing
+  the stored debrief or an entry prompt; tapping it presents `DebriefFormView`
+  as a sheet, driven by `DebriefViewModel`.
+- The flights list shows a "Needs debrief" nudge glyph on cards the server put
+  in `section == "recent"` (and only when `isEditable` — debrief is owner-only).
+  Tapping the row opens the briefing, where the card lives.
+- `/api/flights` inlines `debrief` so the list can draw the debriefed state and
+  the briefing can seed its card without a second call.
+- No stats panel on iOS — `/api/debriefs/stats` is web-only so far.
+
 ### Form behaviour
 
 Hybrid entry on the cancel form:
@@ -178,8 +208,12 @@ Hybrid entry on the cancel form:
 Outcome form (flown):
 - Defaults every queried category to `consistent`.
 - Pilot only flips the ones that weren't.
-- (Phase 1 wires `flaggedCategories=[]` placeholder; the briefing-side
-  hookup that derives flagged categories from advisories is a follow-up.)
+- The queried set = `flaggedCategories`, now derived from the briefing's
+  non-green advisories through `ADVISORY_TAG_MAP` —
+  `flaggedTagsFromAdvisories(manifest)` on web (flights list *and* flight
+  detail), `DebriefTaxonomy.flaggedTagIds(fromAdvisories:)` on iOS. It falls
+  back to `[]` when no manifest is loaded, which is why an un-briefed flight
+  shows an empty outcome list rather than all eight categories.
 
 The "default consistent" choice biases data toward "very inconsistent
 only" — accepted trade-off. Phase 2 (post-ETA prompt) will record an
@@ -188,7 +222,8 @@ all. Stats panel surfaces a copy caveat acknowledging the bias.
 
 ## Files
 
-- `src/weatherbrief/debriefs/taxonomy.py` — enums, keyword map, matcher
+- `src/weatherbrief/debriefs/taxonomy.py` — enums, labels, advisory map, keyword map, matcher, `build_taxonomy_catalog()`
+- `src/weatherbrief/api/help.py` — serves the taxonomy under `/api/help/catalog`
 - `src/weatherbrief/debriefs/stats.py` — aggregate computation
 - `src/weatherbrief/models/storage.py` — `FlightDebrief` Pydantic
 - `src/weatherbrief/db/models.py` — `FlightDebriefRow` ORM
@@ -199,6 +234,8 @@ all. Stats panel surfaces a copy caveat acknowledging the bias.
 - `alembic/versions/045_flight_debriefs.py` — table create
 - `web/ts/components/debrief-{form,summary,stats,taxonomy}.ts`
 - `web/ts/adapters/debrief-adapter.ts`
+- `app/.../Models/API/DebriefTaxonomy.swift`, `DebriefResponse.swift` — iOS wire types + baseline
+- `app/.../ViewModels/DebriefViewModel.swift`, `Views/Briefing/DebriefFormView.swift` — iOS form + card
 
 ## Out of scope (deferred)
 
@@ -206,7 +243,8 @@ all. Stats panel surfaces a copy caveat acknowledging the bias.
   future export script.
 - **cancel.md backfill**: fresh start.
 - **Post-ETA prompts** (Phase 2)
-- **iOS UI** (Phase 2 — same data shape)
+- **iOS stats panel** — capture shipped, `/api/debriefs/stats` still web-only
+- **Note→chip auto-toggle on iOS** — `KEYWORD_MAP` isn't in the served catalog
 - **Cross-user / aggregate stats** (Phase 3)
 - **`pack_id` FK on debrief**: exempt all packs of a debriefed flight
   instead, simpler.

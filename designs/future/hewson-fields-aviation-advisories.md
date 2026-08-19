@@ -420,10 +420,13 @@ Unattached crossings become single-level chains (`n_levels == 1`, drawn faint).
 
 **Artifact.** `route_fronts.json` gains `front_chains: {model → [FrontChain]}`,
 each chain carrying its ordered per-level `nodes` (level, distance, kind,
-intensity, gradient, Δθe), a consensus `kind`, `n_levels` (depth), and a `tilt`
-diagnostic (`coldward` / `upright` / `warmward`). `vertical_levels` is still
-stamped on each crossing (now from chain membership) so the marker opacity and
-the `fronts` advisory keep working unchanged.
+intensity, gradient, Δθe, `co_location`), a consensus `kind`, `n_levels` (depth),
+and a `tilt` diagnostic (`coldward` / `upright` / `warmward`). `vertical_levels` is
+still stamped on each crossing (now from chain membership) so the marker opacity
+and the `fronts` advisory keep working unchanged. Crossings additionally carry the
+relevance enrichment attached by `tasks/fronts.py` — `co_location`,
+`weather_top_ft`, `persistence` (see §10a.1 as-built note); models in
+`models/fronts.py`.
 
 **Rendering.** `fronts-markers.ts` draws each chain as a slanted polyline through
 its node positions (x = along-route distance at that level, y = the level's
@@ -508,11 +511,25 @@ Surfaced during the 2026-04-24 retrospective pass. None are blockers for shippin
 
 Implication: a loud map might overlay a **dry** synoptic feature that had no operational impact. Or: a boring map might hide **local IMC** (morning stratus, fog). In the 27/28-Apr retrospective pair, the actual blocker on the 27th was local IMC at LFMD which the 850 hPa θe field simply didn't see — it's above the stratus layer.
 
-**Fix track (Phase E moisture cross-check)**:
+**Fix track (Phase E moisture cross-check)** — as originally planned:
 - Compute `RH₉₂₅` from existing T + q (zero new fetch — we already have what we need)
 - Fetch ERA5 / briefing-pipeline **low cloud cover (LCC)** and **total precipitation (TP)** — single-level fields, small additional bytes
 - Optionally **CAPE** for convective outlook
 - Combined filter: "Hewson loud **and** LCC > X **and** RH₉₂₅ > Y" → real weather. "Hewson loud, moisture low" → dry ribbon, probably flyable.
+
+> **As-built note (drift correction, 2026-08-15):** for the **per-leg front path**
+> this gap is largely closed already, and by a cheaper route than the fetch above.
+> `_colocate` in `tasks/fronts.py` tags every detected crossing with
+> `co_location ∈ {dry, partly, wet, convective}` plus `weather_top_ft`, read from
+> the **briefing's own per-model sounding column** at that route point (cloud
+> layers spanning the frontal level, surface precip intensity, realized-vs-potential
+> convective risk) — no new grid fetch at all. The `fronts` advisory grades from it
+> (dry crossing → green), so "Hewson loud but dry" is already suppressed there.
+> See `designs/meteorology-decisions.md` §6 for the realized-vs-potential rule.
+>
+> What is still genuinely open is the **map/snapshot** side: the synoptic Hewson
+> grid has no moisture channel, so a loud map lobe can still be a dry ribbon. That
+> — and the boundary-layer blindness of §10a.2 — is what Phase E is now about.
 
 ### 10a.2 850 hPa is too high for low IMC
 
@@ -614,7 +631,7 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 - Cadence 00Z + 12Z per model
 - Retention: 48 h (see `fetch.md` for the existing retention pattern)
 
-### Phase D — Interactive map + cross-section overlay (NEXT)
+### Phase D — Interactive map + cross-section overlay (D.0–D.2 shipped)
 
 **Goal**: ship forecast-page visualization per §7 (map overlay) + §7.9 (cross-section bands), so pilots can see the Hewson fields *now*, without waiting for the advisory-text calibration loop.
 
@@ -652,19 +669,35 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 - Per-briefing stencil sampling at all 25+ native pressure levels per §7.9 Phase D.2
 - Turns the cross-section's 3 discrete bands into continuous altitude — silently, via data-source swap
 
-### Phase C — Advisory evaluators (after D)
+### Phase C — Advisory evaluators (shipped ahead of D.3, as one advisory not six)
 
-**Goal**: the six advisories from §3 wired into `evaluate_all()`.
+**Original goal**: the six advisories from §3 wired into `evaluate_all()`.
 
-- Six new evaluators in `src/weatherbrief/analysis/advisories/` following the existing registry pattern (`registry.py`; see `designs/advisories.md`)
-- Tri-axis sampling: for each route point × flight altitude (mapped to pressure level) × ETA → get Hewson field values (reuses `sample_hewson_at_route` from Phase A)
-- Per-leg aggregation: max / mean / **P95** of each field across segment sample points (P95 not max — see §10a.3)
-- Threshold logic per §3 table, refined with pilot feedback from Phase D telemetry
-- Integration: new advisories show up alongside the existing 14 in the briefing
+**As built (#195 data layer + #196 evaluator)**: a *single* `fronts` evaluator
+(`analysis/advisories/fronts.py`, `default_enabled=False`) rather than six
+field-by-field advisories. The pipeline runs `run_fronts` (`tasks/fronts.py`)
+before advisories, writing `route_fronts.json`; the evaluator grades from the
+detected crossings/chains, not from raw per-field thresholds. So the §3 table is
+now the *rationale* for the gates in `frontal/gates.py` +
+`frontal/route_sampling.py`, not a spec for six separate evaluators. See
+`designs/frontal-detection.md` for the as-built pipeline.
+
+Still open from the original plan:
+- Per-leg **P95** aggregation instead of max (§10a.3) — the retrospective
+  scripts still use `grad_max`
+- Threshold refinement with pilot feedback / moisture cross-check (Phase E)
+- The other five §3 advisories (air-mass transition, sharp edge, deteriorating /
+  improving ceilings, destination tendency) remain unbuilt — they would join the
+  ~22 evaluators already in the registry (`registry.py`; see `designs/advisories.md`)
 
 ### Phase E — Moisture cross-check + stretch (future)
 
 Opens after Phase D so the map + cross-section surface has something to show moisture *on*.
+
+**Scope narrowed (2026-08-15)**: the *per-leg* moisture cross-check already shipped
+as per-crossing `co_location` in `tasks/fronts.py` (§10a.1 as-built note) — reading
+the briefing's own sounding column, not a new fetch. Phase E is now specifically
+about the **synoptic snapshot / map** side, which still has no moisture channel.
 
 - **RH₉₂₅** derived from existing T/q — zero new fetch (§10a.1)
 - **Low cloud cover (LCC)** + **total precipitation (TP)** fetched alongside existing pipeline variables — small delta
@@ -685,12 +718,12 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | Resolution decision | ✅ 0.25° — consistent across all three models (ECMWF order at 0.25°, GFS/ICON ingestion at 0.25°) |
 | Level decision | ✅ 925 / 850 / 700 hPa (3 levels; 500/400 explicitly rejected as upper-IFR out-of-scope) |
 | Cadence decision | ✅ 2×/day — dedicated scheduler loop fires at 06 Z / 18 Z (`_HEWSON_SAMPLE_HOURS_UTC`, ~6 h after each 00/12 Z init; see §6.1 timing-drift note) |
-| Storage decision | ✅ NPZ flat level-suffixed keys; ~24 MB total across 48h × 3 models |
+| Storage decision | ✅ NPZ flat level-suffixed keys; ~46 MB per snapshot → **~550 MB** peak across 48 h × 3 models × 2 cycles (see §5 — the old "~24 MB total" figure was the float16/1 h-stride draft) |
 | Retention decision | ✅ 48 h cache |
 | ERA5 bulk fetch | ✅ Done (1 year, 2025-02 → 2026-02, ~700 MB on disk at `data/era5/hewson/`) |
-| **Phase A** (route sampling) | ✅ Done (PR #93 open) — `sample_hewson_at_route`, `route-hewson` CLI, retrospective scripts |
-| **Phase B.1** (multi-level Case storage) | ✅ Done (PR #94 open) — multi-level NPZ, back-compat, 10 tests |
-| Phase B.2 (CLI `--levels`, rebuild Ciarán at 3 levels) | 🟡 Small follow-up; can slot anywhere |
+| **Phase A** (route sampling) | ✅ Done (PR #93, merged) — `sample_hewson_at_route`, `route-hewson` CLI, retrospective scripts |
+| **Phase B.1** (multi-level Case storage) | ✅ Done (PR #94, merged) — multi-level NPZ, back-compat, tests in `tests/test_frontal_case.py` |
+| Phase B.2 (CLI `--levels`, rebuild Ciarán at 3 levels) | 🟡 Still open — `new-case` still takes a singular `--level` (default 850); multi-level is library-only via `build_case_from_era5` |
 | **Phase D.0** (precompute loop) | ✅ Done (2026-04-24) — `run_hewson_precompute_loop` + `weatherbrief.hewson.run_once()` + `python -m weatherbrief.hewson` CLI |
 | **Phase D.1** (backend endpoints) | ✅ Done (2026-04-25, PR #96) — `/api/hewson-map`, `/api/hewson-map/manifest`, `/api/hewson-map/all-metrics`; gated to any authenticated user via `_synoptic_auth = current_user_id` (was admin-only `require_admin` while calibrating; relaxed since) |
 | **Phase D.2** (map layer + tooltips + ERA5 cases) | ✅ Done (2026-04-25, PR #96) — Synoptic Forecast tab on `/maps.html`, canvas grid overlay, cursor-following tooltip with all 6 metrics, default/storm scale toggle, briefing-style (i) modal with Discuss-with-AI prompts, `era5-case` CLI for historical events (Storm Ciarán test case) |
@@ -698,12 +731,20 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | Phase D.4 (stencil in GRIB era) | Gated on native-GRIB ingestion being live for the user's briefing model |
 | **Phase C data layer** (#195 Part 1) | ✅ Done — `FrontGateConfig` + `HewsonFieldSource` (snapshot/case), candidate/decision split, `run_fronts` stage + `route_fronts.json` + `auto_front_detection` pref + `GET .../route-fronts`, 2-D TFP=0 extractor + `GET /api/hewson-map/fronts` + synoptic-map overlay, `front-calibrate` sweep CLI + DWD chart overlay. Detection reads the precompute snapshot — milliseconds, zero fetch. |
 | **Phase C advisory evaluators** (#196 Part 2) | ✅ Done — `fronts` advisory evaluator (`analysis/advisories/fronts.py`, `default_enabled=False`, auto-enabled when `route_fronts.json` present, RED on sharp / AMBER on classical+closing); `route_fronts` on `RouteContext` populated in the 3 `tasks/advise.py` sites; pipeline runs fronts *before* advisories; recalc re-runs/clears the artifact per pref; AI digest picks it up via the generic advisory loop; route-map `frontsGroup` overlay + toggle; cross-section `fronts-markers` layer; `routeFronts` in the briefing store + `fetchRouteFronts` adapter (non-blocking); "Experimental Auto Front Detection" settings toggle (`auto_front_detection`). Synoptic maps-page overlay left gated by `_synoptic_auth` (now `current_user_id` — any authenticated user, no longer admin-only) — pref is the long-term gate. |
-| Phase E (moisture cross-check) | After Phase D — RH₉₂₅, LCC, TP, CAPE, debrief feature #92 |
+| Phase E (moisture cross-check) | 🟡 Half done by another route — **per-leg** cross-check shipped as per-crossing `co_location` + `weather_top_ft` from the briefing's own sounding column (`_colocate` in `tasks/fronts.py`, zero new fetch); the **map/snapshot** side still has no moisture channel. Remaining: RH₉₂₅, LCC, TP, CAPE on the synoptic grid, debrief feature #92 |
 | Retrospective validation | ✅ Pairwise cancel test 3/3 (all pilot-cancellation days scored higher than replacement-flown days) — best calibration signal we have |
 
-## 12a. Quick pickup from fresh context (for Phase D.3 start)
+## 12a. Quick pickup from fresh context
 
-Phases D.0 / D.1 / D.2 are done and merged via PR #96. The next session picks up **D.3 — the cross-section bands** that overlay the same precomputed Hewson fields on the route cross-section canvas.
+> **Stale-framing correction (2026-08-15):** this section was written when D.3 was
+> assumed to be next. It wasn't — the work went to **Phase C** (#195 data layer,
+> #196 evaluator + front markers + vertical linking), and the generic per-metric
+> band overlay is now optional rather than the obvious next step (§7.9 drift note).
+> Read it as "what's on main", not as a work order. **For the as-built front
+> pipeline, start from `designs/frontal-detection.md` — it is the current design
+> doc; this one carries the rationale and the unbuilt roadmap.**
+
+Phases D.0 / D.1 / D.2 are done and merged via PR #96; Phase C shipped via #195/#196.
 
 ### What's already on main
 
@@ -738,8 +779,9 @@ Cross-section bands per § 7.9. Sample the precompute snapshot at each waypoint 
 
 ## 13. Related docs
 
-- `designs/frontal-detection.md` — zone-scale detection work this builds on
-- `designs/future/frontal-detection-plan.md` — original plan (deliberately simpler than Hewson)
+- `designs/frontal-detection.md` — **the as-built doc** for everything shipped here (sources/gates/route_sampling/contour_fronts + pipeline wiring). Read it first; this doc is the rationale + unbuilt roadmap
+- `designs/meteorology-decisions.md` §6 — front co-location: realized vs potential convection, the parcel EL (governs `_colocate`)
+- `designs/../archive/frontal-detection-plan.md` — original plan (deliberately simpler than Hewson)
 - `designs/future/front-calibration.md` — calibration workflow and scoring
 - `designs/advisories.md` — where the new advisories plug in
 - `designs/analysis-metrics.md` — where these fields appear in the metric catalog

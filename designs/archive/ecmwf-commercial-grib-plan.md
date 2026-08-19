@@ -7,7 +7,7 @@
 plan is now historical — all phases (0 sample validation → 1 fetch → 2 pipeline
 → 3 full sounding) shipped. The durable design home is `designs/fetch.md`
 (see its "ECMWF IFS enrichment" section + gotchas); the IFS Cycle 50r1 follow-on
-is documented in `designs/future/ifs-cycle-50r1-migration.md`. The real
+is documented in `designs/./ifs-cycle-50r1-migration.md`. The real
 subscription delivers **ifs-ens-cf** at 0.25° (a1 = 29 surface vars, a2 = 10
 vars × 25 pressure levels), not the speculative HRES/AIFS choices weighed below.
 Code lives in `ecmwf_fetch.py` + `ecmwf_watcher.py` + `_enrich_ecmwf()` in
@@ -54,7 +54,7 @@ Reference: [ECMWF file naming convention](https://confluence.ecmwf.int/display/D
 | Decode | cfgrib + byte offset | cfgrib per file | cfgrib or ecCodes |
 | Variables | Per-message in single file | Per-file | TBD — likely multi-message per file |
 
-## Phase 0: Validate Sample Files (Current Step)
+## Phase 0: Validate Sample Files (DONE — Apr 2026)
 
 ### Goal
 Confirm we can read the test GRIB files, extract the variables we need, and
@@ -419,9 +419,10 @@ Config:
 
 ```
 Phase 0  ──►  Sign agreement  ──►  Phase 1  ──►  Phase 2  ──►  Phase 3
-(now)         (decision gate)       (fetch)       (pipeline)    (full sounding)
-~1 day        ~external             ~2-3 days     ~2-3 days     ~1 week
+(done)        (done)                (done)        (done)        (done)
 ```
 
-Phase 0 is the immediate next step. Everything else is contingent on the
-sample file validation and service agreement signing.
+All phases completed by 2026-04-20. The answers to the open questions above
+are recorded in `ecmwf_fetch.py`'s module docstring (ifs-ens-cf, 0.25°,
+a1 = 29 surface vars, a2 = 10 vars × 25 pressure levels, ~6-8h publication
+delay) and the durable design is in `designs/fetch.md`.

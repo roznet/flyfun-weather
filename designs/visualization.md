@@ -36,9 +36,10 @@ data-extract.ts  → extractVizData() → VizRouteData
 │  CrossSectionRenderer │  RouteGraphRenderer  │  RouteMapRenderer    │
 │  ├── axes.ts          │  ├── axes.ts         │  ├── renderer.ts     │
 │  ├── layer-registry   │  ├── metrics.ts (12) │  ├── metrics.ts (13) │
-│  ├── layers/*.ts (19) │  ├── interaction.ts  │  ├── segment-style   │
-│  └── interaction.ts   │  └── constants.ts    │  ├── interaction.ts  │
-│                       │                      │  ├── altitude-slider │
+│  ├── layers/*.ts (20) │  ├── interaction.ts  │  ├── segment-style   │
+│  ├── nwp-fallback.ts  │  └── constants.ts    │  ├── interaction.ts  │
+│  └── interaction.ts   │                      │  ├── altitude-slider │
+│                       │                      │  ├── forecast-overlay│
 │                       │                      │  └── legend.ts       │
 └───────────────────────┴──────────────────────┴──────────────────────┘
         ↓                       ↓                       ↓
@@ -56,14 +57,18 @@ Rendered back-to-front, per `ALL_LAYERS` order in `layer-registry.ts`:
 
 Rendering order: **night shading → obscuration → clouds → convection → icing → CAT/E-Shear/inversions → terrain (covers below-surface artifacts) → current conditions → front markers → lines → reference**.
 
+The **Default** column is each layer's `defaultEnabled` — the fresh-install state
+from `getDefaultEnabled(context)`. Presets, compact mode and the NWP fallback all
+override it at runtime, so "on" here is not what a returning user necessarily sees.
+
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
 | Night shading | Night / Twilight | sun | `night-shading.ts` | **on** | Full-height column tint behind the weather (#227): light wash for civil twilight, darker for night. Reads `VizRouteData.nightIntervals` (from `manifest.sun.night_intervals`); empty on daytime flights / old packs → no-op. Two tones from the theme's `nightShading` colours. Registered first (very back of the stack); terrain masks the below-surface tint. |
-| Soft NWP clouds | Soft NWP | clouds | `cloud-bands-factory.ts` | **on** | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
+| Soft NWP clouds | Soft NWP | clouds | `cloud-bands-factory.ts` | off | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
 | Soft DD clouds | Soft DD | clouds | `cloud-bands-factory.ts` | off | Same soft rendering using DD-derived cloud layers |
 | Natural NWP clouds | NWP Natural | clouds | `cloud-bands-factory.ts` | off | Flat-bottom puffs with bumpy tops; coverage encoded as horizontal fill fraction (SCT = gaps, OVC = continuous blanket) |
 | Natural DD clouds | DD Natural | clouds | `cloud-bands-factory.ts` | off | Same puff rendering using DD-derived cloud layers |
-| Square NWP clouds | Square NWP | clouds | `cloud-bands-factory.ts` | off | Solid filled cells per zone, opacity from cover% (ForeFlight-like) |
+| Square NWP clouds | Square NWP | clouds | `cloud-bands-factory.ts` | **on** | Solid filled cells per zone, opacity from cover% (ForeFlight-like). The one default-on cloud layer. |
 | Square DD clouds | Square DD | clouds | `cloud-bands-factory.ts` | off | Same square cells using DD-derived cloud layers |
 | NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage); full-height **depth-unresolved ghost column** when risk ≥ LOW but no base/top (ECMWF `nwp_precip` / GFS cover-only) |
 | Thermo Convective | Thermo Convective | convection | `thermo-convective-bg.ts` | off | CAPE/CIN tower columns LFC→EL (LCL fallback), hatching, TCU/CB/+TS labels |
@@ -72,19 +77,19 @@ Rendering order: **night shading → obscuration → clouds → convection → i
 | SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
 | IENG bands | IENG | icing | `ieng-icing-bands.ts` | off | Cloud-fraction-weighted Ogimet without glaciation (CloudPath method) |
 | SLD bands | SLD | icing | `sld-bands.ts` | off | SLD from warm-nose freezing rain (experimental, all models) |
-| CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | on | Richardson number turbulence |
+| CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | off | Richardson number turbulence. No layer in the `turbulence` group is `defaultEnabled`, so method resolution falls back to `layers[0]` = this one. |
 | E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
-| Inversion bands | Inversions | stability | `inversion-bands.ts` | on | Purple bands by strength |
+| Inversion bands | Inversions | stability | `inversion-bands.ts` | off | Purple bands by strength |
 | Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Current conditions | Current conditions | conditions | `current-conditions.ts` | off | D-0 overlay: METAR airport columns (flight-category color, ±2 nm, 5000 ft tall) + route SIGMET hatched zones; model-independent, projected from the snapshot |
 | Air-mass boundary | Air-mass boundary (experimental) | fronts | `fronts-markers.ts` | off | Vertical marker at each on-track Hewson front crossing (#196), colored by kind (cold=blue/warm=red/quasi=purple), weighted by intensity, solid/dashed by wet/dry, opacity by persistence, triangle for convective. Reads `VizRouteData.fronts`; skipped in single-airport time-axis view. Advisory-only free-atmosphere boundary. |
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
-| −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
-| −20°C level | −20°C | temperature | `temperature-lines.ts` | off | Navy dashed line |
-| LCL | LCL | stability | `stability-lines.ts` | off | Lifting condensation level. **Dotted** `[2,4]` — see [Colour-blind line encoding](#colour-blind-line-encoding). |
-| LFC | LFC | stability | `stability-lines.ts` | off | Level of free convection. **Dashed** `[6,4]`. |
-| EL | EL | stability | `stability-lines.ts` | off | Equilibrium level. **Dash-dot** `[9,3,2,3]`. |
+| −10°C level | −10°C | temperature | `temperature-lines.ts` | on | Cyan dashed line |
+| −20°C level | −20°C | temperature | `temperature-lines.ts` | on | Navy dashed line |
+| LCL | LCL | stability | `stability-lines.ts` | on | Id is `lcl` (not `lcl-line`). Lifting condensation level. **Dotted** `[2,4]` — see [Colour-blind line encoding](#colour-blind-line-encoding). |
+| LFC | LFC | stability | `stability-lines.ts` | on | Id `lfc`. Level of free convection. **Dashed** `[6,4]`. |
+| EL | EL | stability | `stability-lines.ts` | on | Id `el`. Equilibrium level. **Dash-dot** `[9,3,2,3]`. |
 | Cruise altitude | Cruise | reference | `reference-lines.ts` | on | Dark gray dashed + flight ceiling (purple) |
 | Advisory highlight | Highlight | highlight | `highlight-layer.ts` | off | Scrim (dim wash with severity-outlined cutouts where the hazard is) + verdict ribbon (6px strip in the bottom margin grading the whole route green/amber/red/gray). Registered **last** (very top of stack). Reads the derived `VizRouteData.advisoryHighlights`; no-ops when absent. `clipToPlot: false` so the ribbon draws in the margin. See [Advisory Highlights](#advisory-highlights-373). |
 
@@ -92,22 +97,80 @@ Rendering order: **night shading → obscuration → clouds → convection → i
 
 All layers use **smooth** rendering: monotone cubic spline (Fritsch-Carlson) interpolation between route points. The columns render mode was removed — smooth rendering is always used for terrain, bands, and lines alike.
 
-## Layer Groups & Compact Mode
+## Layer Groups, Preferred Methods & Compact Mode
 
-Four groups support multiple methods with a preferred method setting:
+Method-bearing groups resolve a *method id* to a concrete layer id via
+`PREFERRED_METHOD_LAYER` (`layer-registry.ts`):
 
 ```typescript
 PREFERRED_METHOD_LAYER = {
-  clouds:     { soft_nwp, soft_dd, nwp, dd },
-  icing:      { ogimet_nwp, ogimet_dd, sfip_nwp, ieng },
+  icing:      { ogimet_dd, ogimet_nwp, sfip_nwp, ieng },
   turbulence: { ri, e_shear },
-  convection: { nwp, thermo },
+  convection: { thermo, nwp },
 }
 ```
 
-**Compact mode** collapses each group to the user's preferred method. Defaults (for new users and migrated existing users): Soft NWP clouds, Ogimet-NWP icing, CAT (Ri) turbulence, NWP Convective. User preferences from the backend override these defaults. Legacy values (`dd`, `ogimet_dd`, `thermo`) are auto-upgraded to GRAMET-aligned defaults in `_parse_service_toggles()`.
+**Clouds are deliberately NOT in that map (#410).** A cloud preference is a bare
+*source* (`dd` / `nwp`, plus the backend's `nwp_synthesized` which renders on the
+NWP band); the render *style* (`natural` / `soft` / `square`) is a client-only
+preference in `vizSettings.cloudStyle`. The two axes are fused into a layer id at
+resolution time via `CLOUD_LAYER_BY_AXES[source][style]` — hence the extra
+`cloudStyle` parameter on `getPreferredLayerForGroup()` /
+`getCompactLayerOverrides()`. iOS mirrors this in `cloudLayerId(source:style:)`.
 
-The compact-mode invariant — *only* the preferred layer in each group is enabled — is enforced by `getCompactLayerOverrides(preferredMethods)` (`layer-registry.ts`) and applied in two places: on the mode transition (`displayMode → compact`) and once the async `fetchPreferences()` settles. Both paths are needed: clicking compact before prefs load, or booting straight into compact (the persisted default) with stale extras in localStorage, would otherwise leave non-preferred layers rendering invisibly with no UI to toggle them off (the panel only renders the preferred layer's checkbox in compact mode). When `preferredMethods` is empty, the override falls back to each group's `defaultEnabled` layer rather than disabling all.
+**Where `preferredMethods` comes from (#410).** Account-level engine methods are
+retired — `_parse_service_toggles()` no longer surfaces `icing_method` /
+`cloud_method` / `convective_method` (they were empty for every user and the
+pipeline grades off the flight *profile*). `briefing-main` instead derives them
+with `deriveGradedMethods(routeAdvisories, engineDefaults)`
+(`cross-section/advisory-highlights.ts`): for each method-bearing advisory it
+takes the `primary_method_id` its representative model actually graded on —
+already reflecting any backend fallback — and falls back to the catalog's
+`engine_method_defaults` (`ogimet_nwp` / `nwp` clouds / `nwp` convection; the
+client fallback constant is `ENGINE_METHOD_DEFAULTS_FALLBACK`) when the pack is
+silent. So the compact view always shows the evidence the grade was made on.
+`refreshPreferredMethods()` re-runs it whenever the manifest changes and re-applies
+the compact collapse.
+
+The compact-mode invariant — *only* the preferred layer in each group is enabled —
+is enforced by `getCompactLayerOverrides(preferredMethods, cloudStyle)` and applied
+both on the `displayMode → compact` transition and from `refreshPreferredMethods()`
+when the manifest lands. Both paths are needed: entering compact before the
+manifest loads, or booting straight into compact with stale extras in
+localStorage, would otherwise leave non-preferred layers rendering invisibly with
+no UI to toggle them off (the panel renders only the preferred layer's checkbox in
+compact mode). With an empty `preferredMethods` the override falls back to each
+group's `defaultEnabled` layer (turbulence has none → `layers[0]`, CAT/Ri) rather
+than disabling all.
+
+`advisoryMethodOverrides(adv, model, preferredMethods)` narrows this one step
+further for the chip/deep-link path: only the single group the advisory speaks for
+(`ADVISORY_METHOD_GROUP`) is swapped to that advisory's effective method, so the
+chart paints the evidence *that grade* used rather than whatever else is selected.
+
+## Model Availability & NWP Fallback
+
+Not every model carries native NWP fields, so two halves keep the chart honest —
+and both are mirrored on iOS in `NwpFallback.swift`. **Keep all three in lockstep.**
+
+- **Availability** — `data-extract.ts: getUnavailableLayers(data)` returns the layer
+  ids the *rendered model* cannot supply, probing the extracted `VizPoint`s (no
+  native NWP cloud data ⇒ `nwp-cloud-bands` + `icing-ogimet-nwp-bands` +
+  `ieng-icing-bands`; empty SFIP/SLD/E-Shear zone arrays; no NWP convective; no
+  `currentConditions`; no on-track front crossings). `nwp-cloud-bands` (the
+  natural-style id) is the canonical "NWP source unavailable" signal covering all
+  three NWP cloud styles.
+- **Substitution** — `cross-section/nwp-fallback.ts: applyNwpFallback(enabled, unavailable)`
+  builds a **throwaway** effective-enable map: unavailable layers off, then the
+  fallback method on in their place (NWP clouds → same-style DD clouds, Ogimet-NWP
+  and SFIP → Ogimet-DD, NWP convective → thermo; IENG has no pair so it just goes
+  off). The stored `enabledLayers` preference is never mutated, so switching back to
+  an NWP-capable model auto-restores NWP with no persisted "downgraded" flag. This
+  mirrors the backend's `_resolve_analyses` (advise.py) so chart and advisory agree.
+- **UI** — `getSubstitutedLayers()` diffs stored vs effective; `controls/panel.ts`
+  dims unavailable checkboxes (`viz-layer-unavailable`, "not available for this
+  model") and marks auto-substitutes (`viz-layer-substituted`), and drops a whole
+  group when its layer is unavailable via `hiddenGroups`.
 
 ## Preset System
 
@@ -117,7 +180,15 @@ Layer presets provide one-click configurations. Three presets (`PRESETS` in `lay
 - **Windy** — light theme, Natural NWP clouds + SFIP-NWP icing + NWP Convective + CAT (Ri) + freezing level + terrain + cruise.
 - **ForeFlight** — high-contrast theme, Square DD clouds + Ogimet-DD icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise.
 
-(SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
+(SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides (merge, not clean-slate).
+
+**SYNC with iOS.** Four hand-copied surfaces carry `SYNC:` comments in the TS and
+must move together (the `sync-ios-web` skill audits them): the three layer presets
+→ `CrossSectionPresets.swift`; the cloud source×style id mapping
+(`CLOUD_LAYER_BY_AXES` / `parseCloudLayerId`) → the same file; the NWP fallback
+(`applyNwpFallback` / `getDdSubstituteId` / `SINGLE_LAYER_FALLBACK` +
+`getUnavailableLayers`) → `NwpFallback.swift`; and `ADVISORY_PRESETS` /
+`ADVISORY_TO_PRESET`. Stability-line dashes are a fifth (see below).
 
 ### Advisory presets / lenses (#219, #308)
 
@@ -227,12 +298,24 @@ interface VizRouteData {
   flightCeilingFt: number;      // Y-axis max = max(ceiling, cruise) + 5000
   totalDistanceNm: number;
   waypointMarkers: WaypointMarker[];
+  departureTime: string; flightDurationHours: number;
   terrainProfile: TerrainPoint[] | null;
+  timeAxisMode?: boolean;       // airport-profile drawer: X becomes time, not distance
+  // Nullable extras attached by briefing-main before setData; each layer no-ops
+  // when its slice is null/empty, so old packs degrade silently.
+  currentConditions: VizCurrentConditions | null;   // D-0 METAR + SIGMET
+  fronts: VizFronts | null;                          // Hewson, #196
+  nightIntervals: VizNightInterval[];                // #227
+  sunSide: VizSunSide | null;                        // seating note, #227
+  advisoryHighlights: AdvisoryHighlights | null;     // scrim + ribbon, #373
+  advisoryHighlightName?: string | null;             // ribbon tooltip, #412
 }
 
 interface CrossSectionLayer {
   id: string; name: string; group: LayerGroup; defaultEnabled: boolean;
-  render(ctx, transform, data, mode): void;
+  metricId?: string;            // opens the layer-info popup when present
+  clipToPlot?: boolean;         // false ⇒ may draw in the margins (verdict ribbon)
+  render(ctx, transform, data): void;   // no render-mode arg — smooth always
 }
 
 interface CoordTransform {
@@ -364,6 +447,8 @@ Common utilities extracted from cross-section and route-graph to avoid duplicati
 - `findNearbyWaypoint()` — find waypoint within 1nm
 - `cssVar(name, fallback)` — read a CSS custom property from document root
 - `isDarkTheme()` — check if `data-theme="dark"` is set on `<html>`
+- `fmtFL()`, `altInBand()`, `altNearLine(hoverAlt, lineAlt, tol=1500)` — the band /
+  line hit-tests every tooltip formatter shares
 
 Both cross-section and route-graph interaction modules import from this shared utility.
 
@@ -372,6 +457,14 @@ Both cross-section and route-graph interaction modules import from this shared u
 - **Hover**: vertical crosshair line follows mouse, shows distance/time at cursor
 - **Click**: selects closest route point, highlights with indicator on overlay canvas
 - **Tooltip**: shows waypoint name (if named) + distance + altitude at hover position, plus per-layer rows for every enabled band/zone the cursor altitude intersects.
+- **Verdict-ribbon hover (#412)**: hovering the bottom-margin ribbon yields its own
+  tooltip — advisory name (`VizRouteData.advisoryHighlightName`) + the verdict from
+  `ribbonSeverityAt()` + *why*, from `reasonCodeAt(regions, dist, severity)`. The
+  severity filter is load-bearing: adjacent same-kind regions of differing severity
+  share an exact boundary, and an unfiltered lookup would print a RED reason under
+  an AMBER verdict. Only `icing_escape` / `fiki_icing` / `convective` emit
+  `reason_code`s, and only the codes in `RIBBON_REASON_CODES` have phrasing —
+  anything else shows the verdict alone, never invented text.
 
 ### Per-layer tooltip registry (`tooltip-formatters.ts`)
 
@@ -476,7 +569,9 @@ The briefing UI renders a single "Atmospheric Profile" table (`renderAtmospheric
 - Collects all transition altitudes across models from `VerticalRegime` data
 - Builds a unified altitude column (top-down) with per-model columns
 - Each cell shows multi-line content: cloud status, icing risk/type, inversion label, and diagnostic values
-- Cruise icing banner displayed at top when applicable
+- Cruise icing banner displayed at top when applicable. When an altitude override is
+  active, `recomputeCruiseIcing()` re-derives the banner client-side from each model's
+  `icing_zones` so it tracks the user's probe rather than the manifest's baked value
 - Uses `AltitudeAdvisories.regimes` per model (dict of model → list of `VerticalRegime`)
 
 ## Windy Meteogram Link
@@ -490,7 +585,10 @@ The cross-section toolbar includes a dynamic Windy link ("Open selected location
 
 ## Display Mode (Compact / Full Details)
 
-The briefing UI supports two display modes (persisted to localStorage via `VizSettings.displayMode`):
+The briefing UI supports two display modes. `displayMode` is a **top-level store
+field**, not part of `VizSettings` — persisted separately under
+`localStorage('wb_displayMode')` (alongside `wb_tierVisibility`, the `key` /
+`useful` / `advanced` metric-tier toggles, and `wb_selectedModel`):
 - **Compact**: Shows essential info only — hides sounding analysis, model comparison, secondary advisories (model confidence), and shows only synoptic + trend in the synopsis
 - **Full Details**: Shows everything including all analysis tables and advisory details
 
@@ -530,7 +628,24 @@ Leaflet-based geographic visualization showing weather metrics as colored route 
 | `segment-style.ts` | Pure function: `computeSegmentStyles()` → `{color, weight}[]` from metric + points |
 | `interaction.ts` | Hover (highlight + tooltip + sync), click (select point), event attach/detach |
 | `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |
+| `forecast-overlay.ts` | Pure helpers for the airport forecast overlay (#424): day/hour snapping, deep-link building. No DOM/Leaflet, so it is unit-testable |
 | `legend.ts` | DOM gradient bar with color stops and labels |
+
+### Overlays on top of the segments
+
+Two optional overlays live in `renderer.ts` beside the route segments:
+
+- **Hewson fronts (#196)** — `setFrontLines()` draws the gated 2-D front axes
+  (`GET /api/hewson-map/fronts`, same `FrontGateConfig` as the advisory) for every
+  stored pressure level, styled by `front-style.ts` and faded with altitude, plus a
+  marker per on-track crossing. Toggle: `vizSettings.mapFrontsVisible` (default off).
+- **Airport forecast overlay (#424)** — the same per-airport forecast markers the
+  full forecast map draws, for the snapshot time nearest departure. The fetched
+  `ForecastMapResponse` holds every model, so switching model/metric is a recolour,
+  not a refetch. Toggles: `mapForecastOverlayVisible` (default **on**) and
+  `mapForecastMetric` (default `flight_category`). The forecast horizon and the
+  sample hours each day offers come from the server grid (`fetchAvailableDays`) and
+  are never hardcoded here — see [forecast-page.md](./forecast-page.md).
 
 ### Metric Registry (13 metrics)
 
@@ -575,7 +690,11 @@ All three visualizations synchronize through callbacks in `briefing-main.ts`:
 - `layout`: `'cross-section' | 'compare' | 'split' | 'map'`
 - `mapColorMetric`: default `'icing-risk-at-level'`
 - `mapWidthMetric`: default `'cloud-cover-total'`
-- `mapAltitudeFt`: for level-dependent metrics (default = cruise altitude)
+- `mapAltitudeFt`: for level-dependent metrics (`null` = cruise altitude)
+- `mapFrontsVisible` (off), `mapForecastOverlayVisible` (on), `mapForecastMetric`
+  (`flight_category`) — the two overlays above
+- `cloudStyle`, `activePreset`, `skewtOverlays`, `skewtPrimaryVar`,
+  `activeHighlightAdvisoryId` — cross-section/Skew-T lens state, described above
 
 ### Key Choices
 
@@ -589,7 +708,7 @@ All three visualizations synchronize through callbacks in `briefing-main.ts`:
 
 Single source of truth for all color/opacity functions used by cross-section bands, route graph, and route map:
 - Risk colors: icing (cornflower→red), CAT (amber→red), convection (gray→dark red)
-- Map colors: `riskMapColor()`, `cloudCoverMapColor()`, `headwindMapColor()`, `capeMapColor()`, `freezingLevelMapColor()`, `ceilingMapColor()`, `temperatureMapColor()`, `crosswindMapColor()`, `agreementMapColor()`
+- Map colors: `riskMapColor()`, `cloudCoverMapColor()`, `headwindMapColor()`, `capeMapColor()`, `freezingLevelMapColor()`, `ceilingMapColor()`, `temperatureMapColor()`, `crosswindMapColor()`, `agreementMapColor()`, `flightCategoryColor()`
 - Width: `linearWidth(value, max, minW, maxW)` — linear interpolation for segment width
 - Cloud opacity: modulated by coverage so SCT layers render lighter than OVC
 
@@ -629,6 +748,21 @@ Consensus and overlay-soft modes use a single base RGB per layer from the theme.
 - `VizPoint.altitudeLines` values can be `null` (model doesn't provide that level)
 - Convective tower top fallback logic is deliberately conservative — prefers undersized towers over misleading oversized ones
 - Layer rendering must handle empty arrays gracefully (no data for that layer/model)
+- **Two id namespaces for the parcel lines.** The cross-section layers are `lcl` /
+  `lfc` / `el`; `lcl-line` / `lfc-line` / `el-line` are the *compare-mode* display
+  registry's ids (`compare-layers.ts`). `advisory-presets.ts` uses the correct
+  short ids, but `GRAMET_ENABLED` / `WINDY_ENABLED` / `FOREFLIGHT_ENABLED` in
+  `layer-registry.ts` still key the suffixed ones — those entries are inert, and
+  since all six line layers are `defaultEnabled: true`, the three layer presets do
+  **not** turn the parcel lines off. Fix the preset keys (not the layer ids) if this
+  is revisited.
+- `setVizPreset()` merges (`{...current, ...preset.enabledLayers}`) while
+  `resolveAdvisoryPreset()` is **clean-slate** (reset every resettable group off,
+  then enable). Don't assume either behaviour when adding a preset family.
+- All six horizontal-line layers (0/−10/−20 °C, LCL/LFC/EL) default **on** because
+  their factories (`makeTemperatureLayer` / `makeStabilityLayer`) hardcode
+  `defaultEnabled: true` for every instance — changing one means parameterising the
+  factory, not editing the instance.
 
 ## References
 

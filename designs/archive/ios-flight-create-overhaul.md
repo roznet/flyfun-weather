@@ -5,6 +5,12 @@
 > archive/. Goal was: bring the iOS flight-creation flow to parity with the web
 > flight-create page, fix the stuck "Loading Briefing" screen, add dynamic ICAO autocomplete.
 >
+> The durable knowledge is already folded into the real iOS design docs — the downloaded
+> (not bundled) `airports.db` decision in `ios-app-architecture.md` + `ios-app-data-models.md`,
+> the form shape in `ios-app-overview.md`, `/api/nav/airports-db` in `ios-app-server-api.md`,
+> and the `AirportDatabase`/`KnownAirports` reuse in `ios-app-intents.md`. Read those first;
+> nothing below is load-bearing any more.
+>
 > As-built code paths (verified in `main`):
 > - Item 1: `BriefingViewModel.loadBriefing()` catches `APIError.notFound` and calls
 >   `generateFirstBriefing()` (streams the refresh banner).

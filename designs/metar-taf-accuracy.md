@@ -8,7 +8,7 @@ We already have NWP model forecasts stored in briefing packs (GFS, ECMWF, ICON, 
 
 This system has two verification tracks:
 1. **Flight-based**: Collects METAR/TAF observations during flight windows (1h before → flight end + 1h), scores against briefing pack forecasts
-2. **Standalone**: Monitors ~830 pan-European watchlist airports via three decoupled loops — METAR ingest (every 30 min), forecast fetch (07/19 UTC), and scoring (06/09/12/15/18 UTC) — covering GFS/ICON/ECMWF out to the forecast map's horizon (gfs 6d, icon 4d, ecmwf 6d — see `tasks/forecast_grid.py`)
+2. **Standalone**: Monitors ~620 pan-European watchlist airports via three decoupled loops — METAR ingest (every 30 min), forecast fetch (07/19 UTC), and scoring (06/09/12/15/18 UTC) — covering GFS/ICON/ECMWF out to the forecast map's horizon (gfs 6d, icon 4d, ecmwf 6d — see `tasks/forecast_grid.py`)
 3. **Scores** TAF accuracy against METARs (TAF is also a forecast — was it right?)
 4. **Archives** everything in a standalone, anonymized verification database
 5. **Reports** daily verification digest via email + admin web dashboard
@@ -67,6 +67,7 @@ tasks/verification_stats.py             ← shared queries for digest + dashboar
 ├── get_wind_advisory_accuracy()        ← from verification_daily_stats
 ├── get_gust_accuracy()                 ← from verification_daily_stats; TAF raw (#491)
 ├── get_optimistic_bias_leaderboard()   ← from verification_daily_stats (#154)
+├── get_missed_warnings()               ← raw (needs individual rows)
 └── get_digest_data()                   ← orchestrator → VerificationDigestData
 
 tasks/verification_gust.py              ← gust definitions + aggregates + backfill (#491)
@@ -122,17 +123,20 @@ tasks/airport_watchlist.py              ← standalone airport discovery
 └── discover_airports()                 ← euro_aip DB + aviationweather.gov
 
 tasks/standalone_grib.py                ← GRIB ceiling adapter for standalone
-└── fetch_gfs_cloud_diag()
+├── fetch_gfs_cloud_diag()
+└── fetch_icon_cloud_diag()
 
 notify/verification_email.py            ← HTML + plaintext digest email
 └── send_verification_digest()
 
-models/verification.py                  ← Pydantic models
-├── VerificationObservation, VerificationScore, TafVerificationScore
-├── VerificationSummary
+models/verification.py                  ← Pydantic models (read-side / digest only;
+│                                          scores are written as ORM rows, there is
+│                                          no VerificationScore Pydantic model)
+├── VerificationObservation, VerificationSummary
 ├── VerificationDigestData              ← complete digest payload
 ├── ActivitySummary, CategoryAccuracyRow, NotableMiss
 ├── CategoryBiasStats, WindAdvisoryStats, MissedWarning
+├── GustAccuracyStats, OptimisticBiasLeaderboardRow
 
 db/models.py                            ← SQLAlchemy tables
 ├── VerificationObservationRow          ← (icao, observation_time)
@@ -216,6 +220,43 @@ same idempotent DELETE+INSERT idiom.
   applicable trend carried a gust group (`taf_wind_gust_kt` non-NULL), not the
   ~10 kt forecast criterion used for NWP.
 
+### `airport_monthly_summary` / `airport_daily_summary` — observation climatology
+
+Distinct in purpose from every other rollup here: these summarise **what the
+weather actually did**, not how well a model predicted it. No `model` or
+`days_out` in the key — they aggregate `verification_observations` alone, which
+is what makes them survivable when raw scores are pruned, and what lets them
+answer "what is Fairoaks like in November?" rather than "how good is ICON?".
+They back the Climatology tab (`api/climatology.py`, all routes auth-only).
+
+- **`airport_monthly_summary`** — `UNIQUE(month, icao)`. Category counts
+  (`n_vfr`/`n_mvfr`/`n_ifr`/`n_lifr`), obscuration and precipitation counts
+  (`n_fg`, `n_br`, `n_haze`, `n_ra`, `n_sn`, `n_ts`, `n_freezing`), ceiling and
+  visibility **percentiles** (p10/p25/p50/p75/p90), wind mean/p50/p95 +
+  `gust_max_kt`, threshold counts (`n_ceiling_below_500`, `_below_1500`,
+  `n_visibility_below_5km`, `n_wind_over_25kt`), temperature min/max,
+  `category_changes` (a volatility proxy), and `diurnal_json`.
+- **`diurnal_json`** is the one non-obvious column: a per-hour-of-day map keyed
+  by zero-padded `"HH"` (`"00".."23"`), each value `{n, n_ifr, n_ts, n_fog,
+  n_precip, ceiling_p50}`. **Hours with no observations are omitted rather than
+  zero-filled** — a consumer must treat a missing hour as "no data", not "clear",
+  or a sparsely-reporting airport reads as reliably-VFR overnight.
+- **`airport_daily_summary`** — `UNIQUE(date, icao)`, UTC date. The same
+  category/obscuration counts plus `worst_category`, for calendar heatmaps and
+  "worst day of the month" leaderboards. Added at the same time as the monthly
+  table specifically because **daily granularity cannot be backfilled** once raw
+  observations are pruned — the monthly table can be recomputed from dailies, but
+  not the reverse.
+
+Percentiles are stored, not recomputed, for the same reason the score rollups
+store SUMs: a percentile is not additive, so "last 90 days" cannot be derived by
+combining three monthly p50s. Windowed percentile requests go to the daily table
+or to raw within the online window. Both rollups run from the same daily
+scheduler tick (`rollup_month`/`rollup_day` and their `rollup_all_complete_*`
+backfill variants in `tasks/airport_summary.py`), and both are idempotent
+DELETE+INSERT. Retention (`tasks/retention.py::prune_raw_observations`) will not
+prune a month until its rollup exists.
+
 ### `archive_manifest` — what has been safely archived
 
 `UNIQUE(table_name, period)`; `period` is `YYYY-MM` for the monthly tables and
@@ -242,7 +283,7 @@ The collection query `WHERE verification_status IS NULL OR verification_status N
 
 ### Intent
 
-Flight-based verification is limited to airports along active flight routes. Standalone verification monitors ~830 pan-European watchlist airports, building a broader accuracy dataset independent of user activity.
+Flight-based verification is limited to airports along active flight routes. Standalone verification monitors ~620 pan-European watchlist airports, building a broader accuracy dataset independent of user activity.
 
 ### How It Differs from Flight-Based
 
@@ -250,7 +291,7 @@ Flight-based verification is limited to airports along active flight routes. Sta
 |--------|-------------|-----------|
 | **Trigger** | Active flights in observation window | METAR ingest every 30 min; scoring at fixed hours (6, 9, 12, 15, 18 UTC); forecast fetch at 7/19 UTC |
 | **Polling** | Every 10 minutes | Sleep until next fire time (no polling) |
-| **Airports** | Flight corridor (15nm) | Watchlist (~830 pan-European airports) |
+| **Airports** | Flight corridor (15nm) | Watchlist (~620 pan-European airports) |
 | **Forecast source** | Briefing pack forecasts.json | Independent Open-Meteo fetch + GRIB + sounding (ECMWF prefers direct GRIB) |
 | **Models** | All models in briefing pack | GFS, ICON, ECMWF (3 models) |
 | **Horizon** | D-0 through D-7 (per pack) | Per-model, from `forecast_grid.MAP_FORECAST_DAYS`: gfs 6d, ecmwf 6d, icon 4d (ICON-EU's ceiling GRIB stops at 120h) |
@@ -273,7 +314,11 @@ Forecast cycles do Open-Meteo (+ECMWF GRIB) fetch, sounding enrichment, and GRIB
 
 ### Airport Watchlist
 
-`tasks/airport_watchlist.py` discovers METAR-reporting airports. Default ICAO prefixes: LF, ED, EG, EH, EB, LS, LO (Western/Central Europe). Sources: euro_aip DB + aviationweather.gov METAR endpoint (batch queries with `@prefix`, batch size 400). Config file: `configs/airport_watchlist.json`.
+`tasks/airport_watchlist.py` discovers METAR-reporting airports. `DEFAULT_PREFIXES` is now the full pan-European set (33 prefixes: Western Europe, Nordics, Southern Europe, Central/Eastern Europe, Balkans, Baltics — ET/German military excluded), not the original LF/ED/EG/EH/EB/LS/LO seven. Sources: euro_aip DB + aviationweather.gov METAR endpoint (batch queries with `@prefix`, `_AWC_BATCH_SIZE = 400`).
+
+The **committed `configs/airport_watchlist.json` is the operational source of truth**, not `DEFAULT_PREFIXES` — the loop reads the file, `discover` rewrites it. Currently ~620 ICAOs (an airport only lands in the file if aviationweather actually returned a METAR for it, so the file is much smaller than the prefix candidate set). Quote the file's count, not the prefix list, when reasoning about scale.
+
+Only the EU region is onboarded. `run_standalone_cycle(region=...)` accepts `eu|us|all`, but `us` raises — a US watchlist and model set would have to be added first (see the US-expansion work).
 
 ### Standalone Cycle Flow
 
@@ -296,7 +341,7 @@ Light cycle (fetch_forecasts=False, score=True):
 
 ### Sounding Enrichment
 
-Full cycles fetch pressure-level data alongside surface fields from Open-Meteo. Each snapshot is enriched via `analyze_sounding_lite()` (the lite path — it does NOT compute Richardson/stability indicators, which is why the inline EDR calibration accumulator collects zero data; see [EDR calibration inert]):
+Forecast cycles fetch pressure-level data alongside surface fields from Open-Meteo. Each snapshot is enriched through `_enrich_with_sounding()`, a thin wrapper over `analysis/sounding/snapshot_fields.compute_snapshot_sounding_fields()` — one code path shared by the inline call and the pooled batch worker. That in turn calls `analyze_sounding_lite()` (the lite path — it does NOT compute Richardson/stability indicators, which is why the inline EDR calibration accumulator collects zero data; see [EDR calibration inert]):
 
 - `sounding_ceiling_ft` — thermodynamic ceiling from pressure levels
 - `sounding_cloud_base_ft` — lowest BKN/OVC cloud layer base
@@ -315,7 +360,7 @@ During scoring (Phase D), `_build_sounding_proxy()` reconstructs a minimal `Soun
 
 ### Open-Meteo Batching
 
-Standalone fetches surface + pressure-level variables for ~830 airports per full cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`_OPEN_METEO_BATCH_SIZE`). Chunk-level retry: up to 3 attempts with exponential backoff.
+Standalone fetches surface + pressure-level variables for ~620 airports per forecast cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`_OPEN_METEO_BATCH_SIZE`). Chunk-level retry: up to 3 attempts with exponential backoff.
 
 **Parse-time hour filtering (#236)**: the fetch passes `hour_filter` (the superset of sample hours, `forecast_grid.all_sample_hours()`) to `OpenMeteoClient.fetch_multi_point`, so only sample-hour slots are materialised as `HourlyForecast`/`PressureLevelData` objects. Without it, ~80% of the 6-day hourly response (28 pressure levels for GFS) was parsed into Pydantic objects only to be discarded — and stayed alive across the chunk's sounding analysis in up to 4 concurrent threads, dominating the fetch phase's transient memory. The wire payload still contains every hour; the filter bounds parse memory, not bandwidth.
 
@@ -324,8 +369,12 @@ Standalone fetches surface + pressure-level variables for ~830 airports per full
 The standalone subsystem now runs as **three independent loops** (disable individually with the matching env flag):
 
 - **METAR ingest** (`run_metar_ingest_loop`, `DISABLE_METAR_INGEST=1`) — fires every 30 min on the half hour (`_METAR_INGEST_INTERVAL_SECONDS = 1800`), 200 s startup delay (lands before the standalone loop's 240 s). Runs `run_metar_ingest_cycle`, fetching METAR/TAF for the watchlist into `verification_observations`.
-- **Forecast fetch** (`run_forecast_fetch_loop`, `DISABLE_FORECAST_FETCH=1`) — fires at `FORECAST_FETCH_HOURS_UTC = [7, 19]`. Runs `run_standalone_cycle(fetch_forecasts=True, score_observations=False)`. Timed ~30 min after ECMWF 00Z/12Z deliveries land so each fetch picks up the freshest GFS/ICON/ECMWF inits.
-- **Verification** (`run_standalone_verification_loop`, `DISABLE_STANDALONE_VERIFICATION=1`) — fires at `VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]`. Runs `run_standalone_cycle(fetch_forecasts=False, score_observations=True)`, scoring stored snapshots against whatever observations the ingest loop has persisted (most recent fetch wins).
+- **Forecast fetch** (`run_forecast_fetch_loop`, `DISABLE_FORECAST_FETCH=1`) — keyed to `FORECAST_FETCH_HOURS_UTC = [7, 19]` (constants live in `tasks/standalone_verification.py`, not the scheduler). Runs `run_standalone_cycle(fetch_forecasts=True, score_observations=False)`, timed so the ECMWF 00Z/12Z and Open-Meteo GFS deliveries have landed.
+- **Verification** (`run_standalone_verification_loop`, `DISABLE_STANDALONE_VERIFICATION=1`) — keyed to `VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]`. Runs `run_standalone_cycle(fetch_forecasts=False, score_observations=True)`, scoring stored snapshots against whatever observations the ingest loop has persisted (most recent fetch wins).
+
+**Both hour-keyed loops fire at the hour + 15 min, not on the hour** (`_VERIFICATION_HOUR_OFFSET_SECONDS` / `_FORECAST_FETCH_HOUR_OFFSET_SECONDS` = 900). The offset is load-bearing on each side: verification waits so the HH:00 METAR ingest has fully landed, forecast fetch waits so the model deliveries have. So the real wall-clock schedule is 06:15/09:15/… and 07:15/19:15 — don't reason about cycle timing from the bare hour lists.
+
+The forecast loop has one more step ahead of the cycle: it first calls `_try_ingest_snapshot_artifact()`, and if a home-compute node has delivered this cycle's SQLite artifact, **ingesting it replaces the local cycle entirely** and no fetch runs. Only on a miss does it sleep out the remainder of the offset, wait on marker freshness, and run the fallback cycle locally. That is why some production days have snapshots with no corresponding local forecast cycle row.
 
 The hour-keyed loops compute the next fire hour and sleep until then (no polling), retry after 15 min on failure, use a 240 s startup delay, and trigger `cache_builder.rebuild_all` (after `rollup_today_and_pending`) on each successful verification cycle. The legacy combined cycle (`fetch_forecasts=True, score_observations=True`, cycle source `standalone_full`) is still callable from CLI/tests but is no longer scheduled.
 
@@ -338,7 +387,7 @@ Mechanics worth knowing:
 - **Same code path as manual debugging** — the child *is* the CLI, so worktree reproduction is literally the production command.
 - `--with-rollup` runs `run_post_cycle_tasks` (daily-stats rollup + cache rebuild, shared with the in-process fallback) inside the child, keeping that memory out of the parent too.
 - `--background` renices the child and raises its `oom_score_adj`, so a cgroup OOM mid-cycle kills the disposable child, not the web process.
-- The child gets `GRIB_DECODE_WORKERS` = `STANDALONE_ANALYSIS_WORKERS` (default 2; `0` restores the old inline behaviour) — a deliberate, bounded second pool in the cgroup (#448 PR B): the cycle's dominant cost is ~56K GIL-bound sounding analyses, now shipped to pool workers in ~100-profile batches (`analyze_sounding_batch` via `analysis/sounding/snapshot_fields.py`; the interactive alternates path shares the fetchers but stays inline). The child and its workers are reniced, so interactive work preempts them; a worker OOM kills only the disposable child's pool.
+- The child gets `GRIB_DECODE_WORKERS` = `STANDALONE_ANALYSIS_WORKERS` (default 2; `0` restores the old inline behaviour) — a deliberate, bounded second pool in the cgroup (#448 PR B): the cycle's dominant cost is ~56K GIL-bound sounding analyses, now shipped to pool workers in ~100-profile batches (`analyze_sounding_batch_items` in `analysis/sounding/snapshot_fields.py`; the interactive alternates path shares the fetchers but stays inline). The child and its workers are reniced, so interactive work preempts them; a worker OOM kills only the disposable child's pool.
 - Supervisor enforces a hard timeout (`STANDALONE_SUBPROCESS_TIMEOUT_S`, default 3 h) and records a failed `verification_cycles` row for children that die without writing one (SIGKILL/timeout never reach the in-cycle exception path); rows the child already wrote are not duplicated.
 - **Rollback switch**: `STANDALONE_SUBPROCESS=0` reverts to the old in-process `asyncio.to_thread` path.
 - `peak_rss_mb` on cycle rows now measures the child process (clean per-cycle attribution); `peak_cgroup_mb` semantics are unchanged. The 30-min METAR ingest stays in-process — too cheap to justify 48 spawns/day.
@@ -429,47 +478,16 @@ still lives — see the Phase 1 final step in the rollout plan).
 
 ### Scheduler Integration
 
-Loop in `scheduler.py`, alongside other async loops:
-
-```python
-async def run_verification_loop(app_state) -> None:
-    """Collect METAR/TAF observations for active flights."""
-    logger.info("Verification loop started (poll every %ds)", _VERIF_POLL_SECONDS)
-    await asyncio.sleep(_VERIF_STARTUP_DELAY_SECONDS)
-
-    while True:
-        try:
-            await asyncio.to_thread(_run_verification_once, app_state)  # → collect_and_store
-        except Exception:
-            logger.error("Verification cycle failed", exc_info=True)
-        await asyncio.sleep(_VERIF_POLL_SECONDS)
-```
+`scheduler.run_verification_loop` sits alongside the other async loops: 60 s startup delay, then `asyncio.to_thread(_run_verification_once)` → `collect_and_store` every `_VERIF_POLL_SECONDS`, logging and swallowing exceptions so one bad cycle doesn't kill the loop.
 
 **Poll interval**: 10 minutes. METARs update every 30-60 minutes, SPECIs can be more frequent. 10 minutes gives good coverage without hammering aviationweather.gov.
 
 ### Finding Active Flights
 
-```python
-def find_verifiable_flights(db: Session) -> list[FlightRow]:  # tasks/verification.py
-    """Flights in the observation window: departure-1h to departure+duration+1h."""
-    now = datetime.now(timezone.utc)
-    
-    rows = db.execute(
-        select(FlightRow)
-        .join(BriefingPackRow)  # must have at least one briefing
-        .where(FlightRow.verification_status != "complete")
-        .where(FlightRow.departure_time <= now + timedelta(hours=1))  # started or about to
-        .distinct()
-    ).scalars().all()
+`find_verifiable_flights(db)` in `tasks/verification.py`. Two-stage on purpose — SQL narrows, Python decides:
 
-    active = []
-    for row in rows:
-        flight_end = row.departure_time + timedelta(hours=row.flight_duration_hours)
-        window_end = flight_end + timedelta(hours=1)
-        if now <= window_end:
-            active.append(row)
-    return active
-```
+- **SQL**: join `BriefingPackRow` (a flight with no pack has nothing to score against), `departure_time <= now + 1h`, and `verification_status IS NULL OR NOT IN ('complete','scored')`. The NULL branch is written explicitly because SQL `NOT IN` is NULL-propagating — `status != 'complete'` alone would silently drop every never-touched flight, which is exactly the set the loop exists to pick up.
+- **Python**: recompute `flight_end = departure + flight_duration_hours` and keep the flight while `now <= flight_end + 1h`. Done in Python because the window end is a per-row expression, and because stored datetimes may come back naive — they get stamped UTC here before comparison.
 
 ### Collection Flow
 
@@ -557,85 +575,18 @@ Every derived value must use **the same function the advisory pipeline uses**. T
 | Model precipitation | `hourly.precipitation_mm > 0 or hourly.snowfall_cm > 0` | `analysis/sounding/precipitation.py` (`assess_precipitation`) | Same check as `assess_precipitation()` |
 | Model convection | `sounding.convective.risk_level` from `assess_convective_thermo()` | `analysis/sounding/convective.py` | CAPE thresholds: 50/300/1000/2000 J/kg, CIN suppression |
 
-```python
-def compute_verification_score(
-    obs: VerificationObservation,
-    sounding: SoundingAnalysis | None,
-    hourly: HourlyForecast,
-    runway_ends: list[RunwayEnd],
-    model: str,
-    model_init_time: datetime,
-    days_out: int,
-) -> VerificationScore:
-    """Compare one model forecast against one METAR observation.
-    
-    Uses the SAME derivation functions as the advisory pipeline.
-    """
-    lead_hours = int((obs.observation_time - model_init_time).total_seconds() / 3600)
-    
-    # Ceiling — same as advisory pipeline: reconcile sounding + NWP ceiling
-    model_ceiling = reconcile_ceiling(sounding, hourly)
-    
-    # Visibility — same conversion as advisory pipeline: meters → statute miles
-    model_visibility_sm = (
-        round(hourly.visibility_m / 1609.34, 1)
-        if hourly.visibility_m is not None else None
-    )
-    obs_visibility_sm = (
-        round(obs.visibility_m / 1609.34, 1)
-        if obs.visibility_m is not None else None
-    )
-    
-    # Flight category — same function as advisory pipeline
-    model_cat = classify_flight_category(model_ceiling, model_visibility_sm)
-    
-    # Wind advisory — same function + thresholds as advisory pipeline
-    model_adv, model_rwy, model_xw, model_hw = compute_wind_advisory(
-        hourly.wind_direction_10m_deg, hourly.wind_speed_10m_kt,
-        hourly.wind_gusts_10m_kt, runway_ends,
-    )
-    obs_adv, obs_rwy, obs_xw, obs_hw = compute_wind_advisory(
-        obs.wind_dir, obs.wind_speed_kt, obs.wind_gust_kt, runway_ends,
-    )
-    
-    # Precipitation — same check as assess_precipitation()
-    model_has_precip = (
-        (hourly.precipitation_mm or 0) > 0 or (hourly.snowfall_cm or 0) > 0
-    )
-    obs_has_precip = any(w in _PRECIP_PHENOMENA for w in obs.weather)
-    
-    # Convection — same CAPE-based risk from sounding analysis
-    model_has_convection = (
-        sounding is not None
-        and sounding.convective is not None
-        and sounding.convective.risk_level >= ConvectiveRisk.LOW  # same threshold as advisory
-    )
-    obs_has_convection = "TS" in obs.weather
-    
-    return VerificationScore(
-        icao=obs.icao,
-        observation_time=obs.observation_time,
-        model=model,
-        model_init_time=model_init_time,
-        lead_hours=lead_hours,
-        days_out=days_out,
-        obs_flight_category=obs.flight_category,
-        model_flight_category=str(model_cat),
-        category_match=(obs.flight_category == str(model_cat)),
-        ceiling_delta_ft=_delta(model_ceiling, obs.ceiling_ft),
-        visibility_delta_m=_delta(hourly.visibility_m, obs.visibility_m),
-        wind_speed_delta_kt=_delta(hourly.wind_speed_10m_kt, obs.wind_speed_kt),
-        wind_dir_delta_deg=_circular_delta(hourly.wind_direction_10m_deg, obs.wind_dir),
-        temperature_delta_c=_delta(hourly.temperature_2m_c, obs.temperature_c),
-        obs_wind_advisory=obs_adv,
-        model_wind_advisory=model_adv,
-        advisory_match=(obs_adv == model_adv),
-        obs_has_precipitation=obs_has_precip,
-        model_has_precipitation=model_has_precip,
-        obs_has_convection=obs_has_convection,
-        model_has_convection=model_has_convection,
-    )
-```
+The real entry point is `_score_model_vs_metar()` in `tasks/scoring.py` (and
+`_score_cycle()` on the standalone side). There is **no `VerificationScore`
+Pydantic model** — scoring writes `VerificationScoreRow` ORM rows directly, so
+read `db/models.py` for the field list rather than looking for a schema class.
+
+Shape of one score: take the observation, the nearest-hour `HourlyForecast` and
+the matching `SoundingAnalysis`, run each row of the table above, then store
+`obs_*` and `model_*` side by side for the categorical fields (flight category,
+wind advisory, precipitation, convection) and a signed `*_delta_*` for the
+continuous ones. Sign convention throughout: **`delta = forecast - observed`**.
+`lead_hours` is `(observation_time - model_init_time)` in whole hours; wind
+direction uses a circular delta, never a plain subtraction.
 
 **Ceiling datum.** Every ceiling that meets a METAR ceiling in a delta is first
 converted to **AGL**, because the METAR side always is. `model_ceiling` gets
@@ -652,39 +603,13 @@ datum-naive deltas rather than failing the cycle. (#441 finding #3)
 
 TAF fields are already parsed and stored in `verification_observations`. The TAF-derived flight category uses the same `classify_flight_category()` as advisories.
 
-```python
-def compute_taf_verification(
-    obs: VerificationObservation,
-    runway_ends: list[RunwayEnd],
-) -> TafVerificationScore | None:
-    """Compare TAF prediction against actual METAR for same airport/time."""
-    if not obs.taf_flight_category:
-        return None
-    
-    lead_hours = int((obs.observation_time - obs.taf_issue_time).total_seconds() / 3600)
-    
-    # Wind advisory for TAF — same function as advisory pipeline
-    taf_adv, _, _, _ = compute_wind_advisory(
-        obs.taf_wind_dir, obs.taf_wind_speed_kt, obs.taf_wind_gust_kt, runway_ends,
-    )
-    obs_adv, _, _, _ = compute_wind_advisory(
-        obs.wind_dir, obs.wind_speed_kt, obs.wind_gust_kt, runway_ends,
-    )
-    
-    return TafVerificationScore(
-        icao=obs.icao,
-        observation_time=obs.observation_time,
-        taf_issue_time=obs.taf_issue_time,
-        lead_hours=lead_hours,
-        obs_flight_category=obs.flight_category,
-        taf_flight_category=obs.taf_flight_category,
-        category_match=(obs.flight_category == obs.taf_flight_category),
-        ceiling_delta_ft=_delta(obs.taf_ceiling_ft, obs.ceiling_ft),
-        visibility_delta_m=_delta(obs.taf_visibility_m, obs.visibility_m),
-        wind_speed_delta_kt=_delta(obs.taf_wind_speed_kt, obs.wind_speed_kt),
-        wind_dir_delta_deg=_circular_delta(obs.taf_wind_dir, obs.wind_dir),
-    )
-```
+The implementation is `_score_taf_vs_metar()` in `tasks/scoring.py`, writing
+`TafVerificationScoreRow`. Same idea, fewer inputs: everything it needs is
+already on the observation row (`taf_*` fields were parsed and stored at
+collection time), so it never touches a briefing pack. It returns nothing when
+`taf_flight_category` is missing, derives the TAF's wind advisory with the same
+`compute_wind_advisory()` + runway ends as the METAR side, and keys
+`lead_hours` off `taf_issue_time` rather than a model init.
 
 ### Gust: Two Conditionings, Never Blended (#491)
 
@@ -712,30 +637,24 @@ METARs are issued every 30-60 minutes, and SPECIs can be more frequent. To avoid
 
 ### Accessing Model Data for Scoring
 
-For each observation, we need the `SoundingAnalysis` and `HourlyForecast` at the nearest route point and nearest hour. These come from the briefing pack's stored artifacts:
+For each observation the flight-based scorer needs a `SoundingAnalysis` and an
+`HourlyForecast` at the nearest route point and nearest hour, both pulled from
+the briefing pack's stored artifacts (`_load_pack_data` in `tasks/scoring.py`):
 
-```python
-# 0. Map airport to nearest route point — same logic as run_observation_comparison()
-#    Uses cumulative great-circle distance along route to find nearest waypoint,
-#    then nearest RoutePointAnalysis (20nm spacing) around that waypoint.
-#    Corridor is 15nm, so max off-route distance is small.
-nearest_point_index = find_nearest_route_point(airport_lat, airport_lon, route_points)
-
-# 1. Ceiling + convection: from route_analyses.json
-rpa = route_analyses[nearest_point_index]  # RoutePointAnalysis
-sounding = rpa.sounding.get(model_name)    # SoundingAnalysis
-#    → reconcile_ceiling(sounding, hourly) for ceiling
-#    → sounding.convective.risk_level for convection
-
-# 2. Surface fields: from forecasts.json
-wp_forecast = forecasts[nearest_waypoint][model]  # WaypointForecast
-hourly = wp_forecast.at_time(obs.observation_time) # nearest hour
-#    → hourly.visibility_m, wind_speed_10m_kt, temperature_2m_c, etc.
-
-# 3. Runways: preloaded once per cycle
-runway_data = get_runway_ends(unique_icaos, airports_db_path)
-rwy_ends = runway_data.get(obs.icao, [])
-```
+- **Nearest point** — `_find_nearest_route_point()` walks cumulative
+  great-circle distance along the route, same logic as
+  `run_observation_comparison()`. Route points are ~20 nm apart and the
+  corridor is 15 nm, so the off-route error is bounded and small.
+- **Ceiling + convection** come from `route_analyses.json` — the
+  `RoutePointAnalysis` at that index, its per-model `SoundingAnalysis`.
+- **Surface fields** come from `forecasts.json` — the nearest waypoint's
+  `WaypointForecast`, resolved to the hour nearest `observation_time`. This is
+  a separate lookup because the two artifacts have different spatial and
+  temporal grids; see "Scoring Window Limitations" for what happens when only
+  one of them covers the observation.
+- **Runways** are batch-loaded once per cycle via `get_runway_ends()`
+  (`airports.py`) rather than per observation, and field elevations likewise
+  via `get_airport_elevations()` for the AGL conversion.
 
 ## CLI Interface
 
@@ -768,13 +687,23 @@ python -m weatherbrief.verify export --table scores --source standalone \
 python -m weatherbrief.verify stats --source standalone
 
 # Standalone cycle (subprocess entry point): --light | --forecast-only,
-# plus --with-rollup / --background as the scheduler invokes it
+# plus --with-rollup / --background as the scheduler invokes it.
+# --region eu|us|all — only 'eu' is onboarded, 'us' errors.
 python -m weatherbrief.verify standalone --light --with-rollup --background
 
-# Discover watchlist airports; rebuild dashboard cache; monthly rollup
+# Home-compute offload: emit the cycle's fresh snapshots as a portable SQLite
+# artifact, then import it on the serving replica (checksum-verified).
+python -m weatherbrief.verify standalone --forecast-only --emit-artifact eu-YYYYMMDD.sqlite
+python -m weatherbrief.verify ingest-artifact <path>
+
+# Preview / send the admin verification digest email
+python -m weatherbrief.verify digest --period 24h [--send] [--json]
+
+# Discover watchlist airports (rewrites configs/airport_watchlist.json — the
+# operational source of truth); rebuild dashboard cache; climatology rollup
 python -m weatherbrief.verify discover --prefixes LF,ED,EG
 python -m weatherbrief.verify rebuild-cache
-python -m weatherbrief.verify rollup-summary
+python -m weatherbrief.verify rollup-summary   # airport_monthly/daily_summary
 
 # Daily rollups (all four tables). --rebuild re-rolls every existing day —
 # this is the #522 Phase 1 backfill.
@@ -798,9 +727,10 @@ python -m weatherbrief.verify prune-raw --retain-days 180 [--apply]
 ## Data Volume and Storage Tiers (#522)
 
 The original "negligible at any realistic scale" estimate was written for the
-flight-based track alone and was off by ~250×. Standalone monitoring of ~830
+flight-based track alone and was off by ~250×. Standalone monitoring of ~620
 airports across three models changed the arithmetic completely. Measured in
-production:
+production mid-2026 (a snapshot, not a live number — re-measure before sizing
+anything on it):
 
 | Table | Rows | Size | Growth |
 |---|---|---|---|
@@ -986,7 +916,7 @@ Dashboard and digest breakdowns — per-model accuracy at lead time, TAF-vs-mode
 | Decoupled ingest/forecast/score loops | METAR ingest (30 min) separate from forecast fetch (07/19 UTC) and scoring (06/09/12/15/18 UTC) — cheap obs accumulate independently of twice-daily model fetches |
 | Sounding enrichment in snapshots | Store derived sounding fields once, reconstruct proxy during scoring — avoids re-running MetPy analysis per observation |
 | Error column on cycles | Captures traceback on failure for post-mortem without needing log access |
-| Chunk-level retry with backoff | Partial success beats total failure — 800/830 airports scored is better than 0 |
+| Chunk-level retry with backoff | Partial success beats total failure — 600/620 airports scored is better than 0 |
 | Verification cycles table | Performance monitoring — track phase timings and counts per cycle for both tracks |
 | airport_forecast_snapshots | Standalone needs its own forecast storage since there's no briefing pack to reference |
 | Daily digest at 08:00 UTC (DIGEST_HOUR_UTC) | Fixed time avoids multiple sends; lands after the morning forecast/scoring cycles |
@@ -1005,6 +935,7 @@ Dashboard and digest breakdowns — per-model accuracy at lead time, TAF-vs-mode
 **Phase 2 (Scoring)**: Complete. Model scoring, TAF scoring, wind advisory comparison.
 **Phase 3 (Surfacing)**: Partially complete. Admin dashboard and daily digest email implemented. Per-flight verification report and confidence annotations are future work.
 **Standalone pipeline**: Complete. Airport watchlist, Open-Meteo forecasting, GRIB ceiling enrichment, scoring.
+**Data tiering (#522)**: Code complete and deployed, but **shipped dark** — every gate in the Phase gates table is still at its default-off value in production, so the live system is still pre-#522 behaviour (unfiltered reads hit `verification_daily_stats`, nothing is archived, nothing is pruned). Turning a phase on is the rollout runbook's job, not a code change. Before assuming a global-rollup or archive path is live, check the env, not this doc.
 
 ## Open Considerations
 

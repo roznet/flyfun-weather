@@ -124,7 +124,7 @@ five versions shipped without appearing in the stream at all.
 between that and users being able to install. An entry announcing a version nobody can download
 is wrong — but the commit range that the notes are derived from is freshest at archive time, and
 reconstructing it days later is worse. So: draft at archive (Step 8), publish at approval
-(Step 11). Reset the `date` when publishing; the stream is ordered by that field rather than by
+(Step 12). Reset the `date` when publishing; the stream is ordered by that field rather than by
 insert order, so a stale date would file the entry in the past.
 
 **Title convention:** `iOS {version} — <short headline>`, e.g. `iOS 1.4 — Route SIGMETs,
@@ -146,3 +146,51 @@ app users the moment the server deploys, with no app release involved, so splitt
 by platform would be wrong. `app_release` is a *kind* of entry, not a filter. What is
 per-client is the rendering: the web adds an install call to action under `app_release` entries
 (from a single `APP_STORE_URL`), and the iOS app deliberately omits it.
+
+## §A7 — App Store Connect staging (`scripts/asc.py`)
+
+The release used to end at "the archive is in Organizer" — the pilot then created the version
+in App Store Connect, pasted the What's New text, uploaded via Organizer, and pasted the
+reviewer link. `scripts/asc.py` does all four over the App Store Connect API.
+
+**There is no `submit` subcommand, and that is the design.** Everything else in the chain is
+reversible: a version's metadata can be rewritten, its build swapped, the whole version
+deleted. Submitting to App Review is the one step that hands control to Apple. Rather than
+guard it with a confirmation prompt — which is one stray "yes" away from firing — the
+capability simply does not exist in the tool. The pilot presses Submit in the web UI, having
+seen `asc.py status`. Do not add a submit path.
+
+**Credentials never enter the repo.** This is a public checkout. `ASC_KEY_ID` and
+`ASC_ISSUER_ID` live in the gitignored `.env` (documented by name, with empty values, in
+`.env.sample`); the `.p8` itself lives outside the repo, defaulting to Apple's conventional
+`~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`, which is also where `xcodebuild` and
+`altool` look. `*.p8` is gitignored as a backstop. The key needs the **App Manager** role —
+a Developer-role key reads fine and then fails every write with a 403.
+
+Unlike `APNS_KEY_P8`, there is no inline/base64 form. That shape exists for APNs because prod
+injects the key through docker-compose `env_file`; `asc.py` runs only on a developer machine,
+and `xcodebuild -authenticationKeyPath` wants a real file, so a path is the honest interface.
+
+**Idempotency is the whole point.** A release rarely goes right first time — a rejected
+binary, a typo in the notes, a bumped build number. Every subcommand is re-runnable:
+`ensure-version` reuses the existing editable version (renaming it if the marketing version
+moved) instead of failing on "version already exists", `set-notes` overwrites in place, and
+attaching a build just moves a pointer. The correct response to a mistake is to re-run, never
+to unwind.
+
+**Two failure modes worth knowing:**
+
+- *Version state has two spellings.* Apple added `appVersionState` alongside the older
+  `appStoreState` and both may appear depending on which API revision serves the request.
+  `Asc.state_of` prefers the new one and falls back. It returns `UNKNOWN` when neither is
+  present, and `UNKNOWN` is deliberately absent from `EDITABLE_STATES` — an unparseable state
+  must never read as "safe to edit".
+- *Xcode can rewrite your build number.* The export options set
+  `manageAppVersionAndBuildNumber: false`. Left at its default, Xcode may renumber the build
+  during export, and the build that lands in App Store Connect then won't match the number
+  `attach-build` searches for — which surfaces much later as a confusing "build not found".
+
+**Build numbers are not unique on their own.** They repeat across marketing versions, so
+`find_build` filters on the build number server-side and then matches the pre-release version
+client-side to pin the (1.5, 11) pair. Filtering on the build number alone will eventually
+attach the wrong binary.

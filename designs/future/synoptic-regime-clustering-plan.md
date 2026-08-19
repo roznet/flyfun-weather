@@ -15,11 +15,17 @@ Both domains are always classified. For each airport, the domain with the higher
 
 Over time, accumulate model reconciliation data stratified by regime to determine which NWP model (GFS, ECMWF, ICON) performs best under each regime at each forecast horizon. Use this to produce regime-conditioned model weights for blended forecasts.
 
-Frontal detection and route corridor analysis are covered separately in `frontal-detection-plan.md`.
+Frontal detection and route corridor analysis are covered separately — that work has since shipped, so read [`designs/frontal-detection.md`](../frontal-detection.md) for current truth (`frontal-detection-plan.md` in this folder is now historical).
 
-### Status (2026-06-13)
+### Status (2026-08-15)
 
-Unbuilt future plan. There is no `src/weatherbrief/regime/` module, no `weatherbrief.regime` CLI, and no regime columns on the reconciliation table — Parts 2–6 are entirely future work. Part 1 (ERA5 download) has a working but **untracked** prototype in `tmp/regime/` (`download_era5.py`, `download_era5_t850.py`, `smoke_test_era5.py`) matching the monthly-chunk approach below. The classifier's live-data dependency already exists: `fetch_multi_point()` in `src/weatherbrief/fetch/open_meteo.py` fetches `geopotential_height_500hPa` for GFS/ECMWF/ICON. Promote this to a real design doc (and INDEX entry) only once the `regime` module ships.
+Still an unbuilt future plan, and still a live idea. Nothing has moved on it: there is no `src/weatherbrief/regime/` module, no `weatherbrief.regime` CLI, and no regime columns on any verification table — Parts 2–6 are entirely future work. Promote this to a real design doc (and an INDEX entry) only once the `regime` module ships.
+
+What the surrounding code now gives you for free, verified against the tree:
+
+- **ERA5 bulk download is a solved problem in-repo.** `scripts/download_era5_hewson.py` (tracked, with `scripts/smoke_era5_hewson.py` as a single-day shakeout) is a working, resumable, monthly-chunk CDS downloader — same shape as the Part 1 sketch below, already debugged against the post-2024 CDS. Copy that script rather than the illustrative code in §1.2, and change only the request payload: regime needs `geopotential` at 500 hPa, `2.5°` grid, 12 UTC only, area `[70, -40, 30, 40]`, 1991–2020; the Hewson one pulls t/q/u/v at 925/850/700 on `0.25°`, 4×/day, area `[60, -20, 35, 28]`. The old untracked `tmp/regime/` prototypes (`download_era5.py`, `download_era5_t850.py`, `smoke_test_era5.py`) are superseded by it.
+- **ERA5 GRIB reading exists**: `src/weatherbrief/era5/loader.py` (`load_era5_fields`) — but it is pressure-level t/q/u/v → the frontal field dict, not Z500. Useful as a cfgrib/xarray reference, not directly reusable.
+- **The live-data dependency is confirmed present.** `fetch_multi_point()` in `src/weatherbrief/fetch/open_meteo.py` takes a `chunk_size` override (added for exactly this kind of short-parameter-list caller), and `geopotential_height` at 500 hPa is in the level lists for all three models in `src/weatherbrief/fetch/variables.py` (`ECMWF_PRESSURE_LEVELS`, `EXTENDED_PRESSURE_LEVELS` for GFS, `ICON_PRESSURE_LEVELS`). It lands on `PressureLevelData.geopotential_height_m`.
 
 ### Architecture summary
 
@@ -27,7 +33,7 @@ The system has three distinct phases:
 
 1. **One-time ERA5 download**: bulk-fetch 30 years of Z500 data from Copernicus CDS (runs on MacBook, data stays on MacBook + NAS)
 2. **One-time calibration**: compute climatology, fit PCA + k-means for both domains, persist small artefact files (runs on MacBook, artefacts deployed to prod)
-3. **Daily classification**: fetch live Z500 from Open-Meteo, classify today's regime and predict T+24/48/72 per model, tag reconciliation records
+3. **Daily classification**: fetch live Z500 from Open-Meteo, classify today's regime and predict T+24/48/72 per model, tag verification records
 
 ### Data and artefact separation
 
@@ -81,6 +87,8 @@ CDS requests are queued, not instant. A single 30-year request will likely timeo
 **Submit in parallel** — the CDS allows ~10-15 concurrent requests per user. Submit a batch, poll for completion, download finished ones, submit more.
 
 **Expected timeline**: 1-3 days with parallel submissions. Sequential would take 1-2 weeks.
+
+The code below is illustrative only — `scripts/download_era5_hewson.py` already implements this pattern (resumable, `--max-concurrent`, monthly chunks) and is the thing to copy.
 
 ```python
 import cdsapi
@@ -236,7 +244,7 @@ DOMAINS = {
 | **Cut-off Low** | Closed low detached from jet, usually over Iberia or Gulf of Genoa. Persistent bad weather, hard to forecast. |
 | **Northerly/Mistral** | Strong pressure gradient channeling north wind through Rhône valley. Clear but turbulent. |
 
-**Airport-to-domain mapping**: both domains are always classified. The domain with the higher separation score is used for each airport's regime tag. This self-adapts: a Nice airport under Mistral conditions gets Mediterranean classification (strong Mistral pattern = high separation), but under a deep NAO- trough pushing south, the Atlantic classifier may score higher. When both domains have high separation, both regime labels are stored — the reconciliation system can track skill against either.
+**Airport-to-domain mapping**: both domains are always classified. The domain with the higher separation score is used for each airport's regime tag. This self-adapts: a Nice airport under Mistral conditions gets Mediterranean classification (strong Mistral pattern = high separation), but under a deep NAO- trough pushing south, the Atlantic classifier may score higher. When both domains have high separation, both regime labels are stored — the verification system can track skill against either.
 
 ### 2.2 Compute Climatological Mean
 
@@ -676,27 +684,37 @@ def select_best_domain(results: dict, horizon_key: str = 'observed') -> dict:
 
 ---
 
-## Part 4 — Reconciliation Tagging and Model Skill Analysis
+## Part 4 — Verification Tagging and Model Skill Analysis
 
-### 4.1 Tag Reconciliation Records
+> **Naming**: this part was written before the verification subsystem existed and calls the
+> target table `reconciliation`. **There is no such table.** The real one is
+> **`verification_scores`** (`src/weatherbrief/db/models.py`, `VerificationScoreRow`) —
+> model-vs-METAR records keyed by `(icao, observation_time, model, model_init_time, source)`.
+> Translate before implementing:
+>
+> | This plan says | Actual column |
+> |---|---|
+> | `forecast_horizon_h` | `lead_hours` (also `days_out`) |
+> | `predicted_ceiling` / `actual_ceiling` | `ceiling_delta_ft` (signed model − obs; no pair stored) |
+> | `predicted_visibility` / `actual_visibility` | `visibility_delta_m` |
+>
+> So the skill queries in §4.2 become `AVG(ABS(ceiling_delta_ft))` etc., grouped by
+> `model, regime_label, days_out`, and the `WHERE source = 'standalone'` filter matters —
+> `source` mixes flight-driven and standalone-cycle rows.
 
-Each reconciliation record (predicted vs. actual METAR) should be tagged with the regime that was active on that day. This is the dataset that accumulates over time and enables model skill analysis.
+### 4.1 Tag Verification Records
 
-```python
-# Schema addition to reconciliation table
-# Both domains are always stored; the selected domain is recorded separately
-# ALTER TABLE reconciliation ADD COLUMN atlantic_regime VARCHAR(20);
-# ALTER TABLE reconciliation ADD COLUMN atlantic_separation FLOAT;
-# ALTER TABLE reconciliation ADD COLUMN med_regime VARCHAR(20);
-# ALTER TABLE reconciliation ADD COLUMN med_separation FLOAT;
-# ALTER TABLE reconciliation ADD COLUMN selected_domain VARCHAR(15);
-```
+Each verification record should be tagged with the regime that was active on that day. This is the dataset that accumulates over time and enables model skill analysis.
 
-**No backfill**: Open-Meteo historical API is not available (paid tier). Pre-deployment reconciliation records will not have regime tags. The skill dataset starts accumulating from deployment date only.
+Columns to add to `verification_scores`: `atlantic_regime VARCHAR(20)`, `atlantic_separation FLOAT`, `med_regime VARCHAR(20)`, `med_separation FLOAT`, `selected_domain VARCHAR(15)`. Both domains are always stored; the selected domain is recorded separately. Write the alembic migration with `batch_alter_table` (dev SQLite / prod MySQL — see CLAUDE.md).
+
+**Retention landmine**: `verification_scores` is under the tiering rollout (#522/#527) — hot rows age out at 90 days into parquet artefacts. A regime tag that lives only on the hot table gives you a 90-day window, not the 3–6 months §4.2 assumes. Either carry the regime columns into the tiered export, or accumulate the skill dataset in its own rollup table.
+
+**No backfill**: Open-Meteo historical API is not available (paid tier). Pre-deployment verification records will not have regime tags. The skill dataset starts accumulating from deployment date only.
 
 ### 4.2 Accumulating the Skill Dataset
 
-After several months of tagged reconciliation data, query model error by regime:
+After several months of tagged verification data, query model error by regime:
 
 ```python
 import pandas as pd
@@ -710,17 +728,18 @@ query = """
         selected_domain,
         CASE WHEN selected_domain = 'atlantic'
              THEN atlantic_regime ELSE med_regime END as regime_label,
-        CASE WHEN selected_domain = 'atlantic'
-             THEN atlantic_separation ELSE med_separation END as separation,
-        forecast_horizon_h,
-        AVG(ABS(predicted_ceiling - actual_ceiling)) as mae_ceiling,
-        AVG(ABS(predicted_visibility - actual_visibility)) as mae_visibility,
+        days_out,
+        AVG(ABS(ceiling_delta_ft)) as mae_ceiling,
+        AVG(ABS(visibility_delta_m)) as mae_visibility,
         COUNT(*) as n_samples
-    FROM reconciliation
-    WHERE separation > 0.2            -- exclude low-confidence regime days
-    GROUP BY model, selected_domain, regime_label, forecast_horizon_h
+    FROM verification_scores
+    WHERE source = 'standalone'
+      AND CASE WHEN selected_domain = 'atlantic'
+               THEN atlantic_separation ELSE med_separation END > 0.2
+          -- exclude low-confidence regime days
+    GROUP BY model, selected_domain, regime_label, days_out
     HAVING n_samples > 30             -- minimum sample size for reliability
-    ORDER BY regime_label, forecast_horizon_h, mae_ceiling
+    ORDER BY regime_label, days_out, mae_ceiling
 """
 
 skill_df = pd.read_sql(query, conn)
@@ -733,7 +752,7 @@ For each regime and horizon, compute a simple inverse-MAE weight for each model:
 ```python
 def compute_model_weights(skill_df: pd.DataFrame,
                           regime: str,
-                          horizon_h: int,
+                          days_out: int,
                           variable: str = 'mae_ceiling') -> dict:
     """
     Returns normalized weights for each model given regime and horizon.
@@ -741,7 +760,7 @@ def compute_model_weights(skill_df: pd.DataFrame,
     """
     subset = skill_df[
         (skill_df['regime_label'] == regime) &
-        (skill_df['forecast_horizon_h'] == horizon_h)
+        (skill_df['days_out'] == days_out)
     ].set_index('model')
 
     if len(subset) < 2 or subset['n_samples'].min() < 30:
@@ -859,7 +878,7 @@ Observed: atlantic (NAO+, 0.62 > 0.45)
 
 ### Phase 4 — Pipeline integration (after CLI validation)
 - Wire `classify` into daily cycle
-- Add regime columns to reconciliation table
+- Add regime columns to `verification_scores` (batch_alter_table migration)
 - Start accumulating tagged data
 
 ### Phase 5 — Model weighting (after 3-6 months of data)

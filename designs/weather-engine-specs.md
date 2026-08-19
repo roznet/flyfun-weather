@@ -6,7 +6,7 @@
 
 Open-Meteo provides a convenient API but lacks key variables (cloud liquid water, ice mixing ratio, cloud area fraction) and has limited pressure levels (13 for ECMWF, 19 for ICON). By fetching raw GRIB2 data, we get:
 - **Cloud microphysics** (CLWMR/ICMR/cloud fraction) for accurate icing assessment
-- **Full sounding replacement** (ECMWF: 25 levels, ICON: 40 model levels) for higher-resolution cross-sections
+- **Full sounding replacement** (ECMWF: 25 pressure levels, ICON: 40 (EU) / 50 (D2) model levels) for higher-resolution cross-sections
 - **Cloud diagnostics** (ceiling, layer covers, convective base/top) for NWP-based cloud analysis
 
 The enrichment strategy differs by model:
@@ -30,11 +30,12 @@ sounding is GRIB like ECMWF/ICON.
 | **dewpoint_c** | Open-Meteo | GRIB (`DPT`, **direct**) | GRIB (derived from T+RH) | GRIB (derived from T+RH) |
 | **wind_speed_kt** | Open-Meteo | GRIB (`UGRD`,`VGRD` grid→earth rotated) | GRIB (`u`,`v` → speed) | GRIB (`u`,`v` → speed) |
 | **wind_direction_deg** | Open-Meteo | GRIB (same, rotated) | GRIB (`u`,`v` → dir) | GRIB (`u`,`v` → dir) |
-| **geopotential_height_m** | Open-Meteo | GRIB (`HGT`, **direct**) | GRIB (`z` ÷ 9.80665) | **None** — not on ICON model levels |
+| **geopotential_height_m** | Open-Meteo | GRIB (`HGT`, **direct**) | GRIB (`gh`, **direct** post-amendment; `z` ÷ 9.80665 then hypsometric as fallbacks for old archives) | **None** — not on ICON model levels |
 | **vertical_velocity_pa_s** | Open-Meteo | GRIB (`VVEL`, already Pa/s) | GRIB (`w`) | GRIB (`w`, m/s → omega via −ρ·g·w) |
 | **cloud_liquid_water_kg_kg** | GRIB (`CLMR` patch) | GRIB (`CLMR`) | GRIB (`clwc`) | GRIB (`qc`) |
 | **ice_mixing_ratio_kg_kg** | GRIB (`ICMR` patch) | GRIB (`CIMIXR`) | GRIB (`ciwc`) | GRIB (`qi`) |
 | **cloud_area_fraction_pct** | — | — (no 3D cloud fraction in HRRR) | GRIB (`cc`, 0–1→%) | GRIB (`clc`, already %) |
+| **rain/snow/graupel_water_kg_kg** | — | — | — | GRIB (`qr`,`qs`,`qg`) — **ICON-D2 only** (#530); EU doesn't publish them |
 
 ### Derived Level Fields (`DerivedLevel`) — Computed in Sounding Analysis
 
@@ -57,6 +58,7 @@ All models share the same computation pipeline; inputs vary by what the raw data
 | **icing_index_nwp** (Ogimet-NWP) | T curve × cloud_fraction × glaciation(CLW, ICE) |
 | **sfip_raw/100/severity** | Fuzzy logic: T + RH + CLW (or proxy) + omega |
 | **precip_phase** | Wet-bulb thresholds + warm-nose detection |
+| **rain_water_g_kg / supercooled_rain** | qr × 1000; `is_supercooled_rain(qr, T)` (#530) — ICON-D2 only, defaults everywhere else |
 
 ### Surface Cloud Diagnostics (`NWPCloudDiagnostics`) — Source by Model
 
@@ -78,9 +80,9 @@ All models share the same computation pipeline; inputs vary by what the raw data
 
 | Gap | Model | Impact |
 |-----|-------|--------|
-| `z` on pressure levels | ECMWF | Commercial feed delivers `z` only at 1 hPa — GH on 25 levels derived via hypsometric equation from T+P (accurate ~1%). Order amendment pending. |
-| `geopotential_height_m` | ICON | Not on model levels → derived via hypsometric equation from T+P (same path as ECMWF). |
-| Surface vars (2t, 10u, CAPE, vis…) | ECMWF | ~10 surface vars now decoded via `build_ecmwf_surface_snapshot` (t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp) but only consumed by the standalone verification pipeline — the user-facing forecast still uses Open-Meteo surface fields. Remaining a1 vars unprocessed. |
+| `z` on pressure levels | ECMWF | **Closed by the 2026-04-22 amendment**: `gh` is now delivered on all 25 levels and decoded directly. `z` itself is still 1 hPa only (catalogue limitation), and the `z`/g + hypsometric fills survive only as fallbacks for pre-amendment archives. |
+| `geopotential_height_m` | ICON | Not on model levels → derived via hypsometric equation from T+P (the same fallback path). |
+| Remaining a1 surface vars | ECMWF | The ~10 vars in `build_ecmwf_surface_snapshot` are now live on the user-facing forecast too (see B). The rest of the a1 manifest (10fg, blh, capes, degm10l, fzra, lsp, msl, ptype) is still undecoded. |
 
 ## What's Implemented
 
@@ -128,7 +130,7 @@ Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
 - **Variant selection (issue #456):** the `icon` slot is served by **ICON-D2** (2.2 km, convection-permitting) when the *whole* route fits the D2 domain (43.18–58.08°N, 3.94°W–20.34°E) AND a complete D2 run's 48h horizon reaches the flight-window end; otherwise by **ICON-EU** (6.5 km, all-Europe) exactly as before. All-or-nothing — never a per-point mix of D2 and EU within one briefing. On total D2 failure the icon slot re-runs cleanly on ICON-EU (never a half-D2 pack).
 - The two variants share the whole download/decode path via `IconVariant` (a config object holding domain, cycles, horizon, level slice, filename conventions, cache slug and freshness source key). ICON-D2 filename quirks: model token `icon-d2`, region token `germany`, **lowercase** variable suffix (`…_60_t`), and a `_2d_` segment on single-level files (`…_006_2d_ceiling`).
 - Domain: EU 29.5–70.5°N, 23.5°W–62.5°E; D2 43.18–58.08°N, 3.94°W–20.34°E. Routes outside the chosen domain skip silently.
-- Cycles: both every 3h (00–21z). EU ~3h publication delay, hourly to 78h then 3-hourly to 120h. D2 ~2h delay, hourly to 48h.
+- Cycles: both every 3h (00–21z). EU ~3h publication delay, hourly to 78h then 3-hourly to 120h — but only on the MAIN cycles (00/06/12/18z); the 03/09/15/21z short runs are capped at **30h** (`horizon_short_h`) because f031–f047 aren't published, so a longer flight falls back to the prior main run and keeps a uniform hourly grid. D2 ~2h delay, hourly to 48h on all 8 cycles.
 - Disk cache at `data/.cache/grib/{icon-eu,icon-d2}/{date}_{cycle}z/` (EU 12h TTL, D2 6h TTL). Per-variant cache-key prefix (`ICON_EU_*` / `ICON_D2_*`) keeps them distinct.
 - Pack metadata records which source produced the icon slot via `model_sources["icon"]` = `icon_eu:dwd` or `icon_d2:dwd`; the freshness bar badges `ICON (D2)` when D2 supplied the run.
 
@@ -166,7 +168,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default. `expver` is absent on prod operational files, and `X0080` on TPREd Release Candidate files (ECMWF_ACCEPT_RCP_EXPVER=1 opt-in for staging).
 - **Pressure-level (a2):** t, r, u, v, z, w, gh, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). Post-amendment (2026-04-22): `d` (divergence) was dropped, `gh` (geopotential height) added at all 25 levels, removing the hypsometric fallback from the decode path. `z` is still delivered only at 1 hPa (catalogue limitation).
 - **Surface (a1) — cloud diagnostics:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l, **kx, totalx, mlcape100, mlcin100, cp** → `NWPCloudDiagnostics` (hcct → `convective_top_ft`; deg0l → `freezing_level_ft` + overwrites `hourly.freezing_level_m`; kx/totalx → `k_index`/`total_totals`; mlcape100/mlcin100 → `ml_cape_jkg`/`ml_cin_jkg`; **cp** is accumulated-since-init, de-accumulated by step-difference in the ECMWF merge loop → `convective_precip_mm_h`). These feed the model-native convective track's firing gate + corroboration (#283).
-- **Surface (a1) — surface snapshot:** t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp → `build_ecmwf_surface_snapshot` (unit-converted), consumed by the standalone verification pipeline only — NOT yet wired into the user-facing forecast (which still uses Open-Meteo surface fields)
+- **Surface (a1) — surface snapshot:** t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp → `build_ecmwf_surface_snapshot` (unit-converted). Consumed by BOTH the standalone verification pipeline and — via `_apply_ecmwf_surface_to_hourly` in `fetch/grib/__init__.py` — the user-facing briefing, which writes them straight onto `HourlyForecast` (ungated, overwriting Open-Meteo per covered point; uncovered points keep Open-Meteo). Two field classes: `_ECMWF_HOURLY_INSTANT_FIELDS` (T/dewpoint, wind/gust, vis, CAPE, surface pressure, nwp_k_index, nwp_total_totals) written only at the matching `valid_utc` and linearly interpolated later in `fill.py`; `_ECMWF_HOURLY_RATE_FIELDS` (`precipitation_mm`, `snowfall_cm`) step-differenced from the prior a1's cumulative value and spread evenly over the window — with no prior step, Open-Meteo's value stands. The surface write is **coupled to the cloud-diag write** at the same valid time: `fill.py` uses `nwp_cloud_diagnostics is not None` as its GRIB-anchor detector, so the two must stay in the same loop iteration.
 - **Surface (a1) — native convective indices:** kx, totalx → `nwp_k_index` / `nwp_total_totals` on `HourlyForecast`, copied onto `ThermodynamicIndices.nwp_k_index/nwp_total_totals` during sounding analysis. The convective character advisory prefers these over the MetPy-derived K/Total-Totals for ECMWF (issue #294). `kx` is delivered in Kelvin and normalized to °C via `_k_index_to_c` (#283); Total Totals is offset-immune and passes through unchanged.
 - **Surface (a1) — delivered but not yet processed:** 10fg, blh, capes, degm10l, fzra, lsp, msl, ptype
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
@@ -340,9 +342,9 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 
 ### Near-term (high value, moderate effort)
 
-**1. ECMWF surface variables → forecast** — ~10 a1 surface vars (t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp) are already decoded via `build_ecmwf_surface_snapshot` but only consumed by the standalone verification pipeline. Wiring them into the user-facing forecast (supplement/replace Open-Meteo surface fields) is the remaining work. Other a1 vars (CAPE variants, freezing level family, precip type, etc.) still undecoded.
+**1. Remaining ECMWF a1 surface variables** — the ~10 vars in `build_ecmwf_surface_snapshot` are DONE (decoded and live on the user-facing forecast, see B). Still undecoded: 10fg, blh, capes, degm10l, fzra, lsp, msl, ptype — the CAPE variants, freezing-level family and precip type are the interesting ones.
 
-**2. ECMWF order: add `z` on all 25 pressure levels** — Currently `z` (paramId 129) is delivered only at `isobaricInhPa=1.0 hPa` (single level). Other pressure-level vars (t, r, u, v, w, d, cc, clwc, ciwc) are at all 25 levels as ordered. Interim hypsometric fill from T+P is accurate within ~1% but real `z` is preferred.
+**2. ~~ECMWF order: `z` on all 25 pressure levels~~ — DONE.** The 2026-04-22 amendment added `gh` at all 25 levels (dropping `d`), so geopotential height is read directly. `z` itself is still 1 hPa only, and no longer matters.
 
 **3. Additional GFS variables** — The `.idx` infrastructure supports any GFS variable. High-value additions:
 - `VVEL` (vertical velocity in Pa/s) — raw GFS would give sharper CAT signal than Open-Meteo
@@ -387,7 +389,7 @@ Requires 2D wind fields (not just point values), so needs raw GRIB2 grid, not in
 - **Level coordinate names** — cfgrib may use `generalVerticalLayer`, `generalVertical`, `level`, or `hybrid` for model-level data. Check all variants.
 - **bz2 decompression** — Files are bz2-compressed. Decompress before passing to cfgrib.
 - **Data retention** — DWD deletes files after ~24h. Only the latest run per cycle is available.
-- **Download volume** — ~240 files per enrichment (3 vars × 40 levels × 2 forecast hours). Parallel download essential.
+- **Download volume** — one file per (variable, level, forecast hour): 9 model-level vars × 40 levels = 360 files *per forecast hour* on EU (12 vars × 50 levels = 600 on D2). Parallel download essential.
 
 ## References
 

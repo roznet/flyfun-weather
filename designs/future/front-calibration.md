@@ -264,6 +264,36 @@ done
 
 4. **METAR FROPA validation** — use frontal passage reports from European METAR stations as aviation-native ground truth. Need to verify FROPA availability in EASA-region METARs.
 
+### Carried over from the archived detection plan
+
+These were the "Future Enhancements" list of `archive/frontal-detection-plan.md` — the
+only part of that plan that was never built. They are recorded here because this is
+where threshold/algorithm work now happens. Ordered roughly cheapest-first.
+
+5. **Vorticity as a third criterion** — fronts sit on 850 hPa vorticity maxima, and relative vorticity is computable from the u/v fields already fetched (no extra data cost). Use it as a *filter* on detected zones (gradient AND vorticity), not a standalone detector; persistent non-frontal baroclinic zones typically lack the vorticity signature. Cheapest of the remaining ideas.
+
+6. **Frontogenesis / frontolysis (temporal gradient change)** — the rate of change of gradient between consecutive hours, trivial to compute from the hourly fields. Buys three things: better clearance prediction (a front in rapid frontolysis clears sooner than the static gradient implies), pre-frontal warning (frontogenesis upstream signals worsening before the threshold is crossed), and more physical narrative ("weakening cold front").
+
+7. **Gradient-weighted zone score** — replace the fraction-based score (cells above threshold / total cells) with `sum(gradient within zone)`. Fraction-based scoring misses narrow but intense fronts that have few qualifying cells but high peak gradient. Only worth doing if validation actually shows missed narrow fronts — the current fraction + absolute floor is simpler.
+
+8. **Adaptive thresholds (seasonal or percentile)** — the European background T850 gradient is ~0.5 K/100km in winter vs ~0.2 in summer, so a fixed threshold is over-selective in summer and under-selective in winter. Options: seasonal lookup (simplest), climatological-anomaly detection (most principled), or top-N-percentile per analysis. The percentile variant **needs an absolute floor** alongside it, otherwise a no-front situation still flags its top 15%. Directly related to the T=3.0/θe=6.0 threshold candidate above — evaluate once there is validation data across seasons.
+
+9. **Front classification via gradient alignment** — classify cold/warm from the *angle* between the wind vector and the temperature gradient rather than advection magnitude (which scales with wind strength). Likely more stable and may shrink the indeterminate ring around front axes. Complements rather than replaces the offset-advection approach already adopted.
+
+10. **925 hPa for shallow fronts** — single-level 850 hPa misses shallow cold fronts (common over the UK) and can misplace warm fronts. One extra level plus a simple agreement rule (front at 850 but not 925 → elevated; at 925 but weak at 850 → shallow/surface) is much cheaper than full depth estimation. Requires confirming Open-Meteo exposes 925 hPa for all three models. See also `project_hewson_calibration_may4` — 925 > 850 hPa mattered for GA in that pair.
+
+11. **Front depth from multi-level data** — adding 700/500 hPa temperature would distinguish shallow (surface–800) from deep (surface–500) fronts, which matters for GA: shallow may allow VFR on top at FL100, deep means IFR all the way up. 3× the fields per level, and the cross-section already shows vertical extent at route-point resolution — so lower priority than #10.
+
+12. **Aviation-impact labels in the structured context** — map front type to impact explicitly (cold → convective/turbulence, warm → stratiform cloud/icing, post-frontal → showery/gusty) in the LLM digest context. Pure additive metadata, no detection change; today the LLM infers these from general knowledge.
+
+13. **MSLP for synoptic context** — pressure troughs and cyclone centres are invisible to temperature gradients alone. Partially redundant while the DWD Bodenwetterkarten already give the digest pressure context; revisit only if those charts are dropped or if standalone frontal analysis must be self-sufficient.
+
+14. **Cross-zone front event tracking** — the biggest one, and deliberately not built: the pipeline keeps zone-local timeseries and lets the LLM synthesize spatial relationships. Only pursue if the digest demonstrably fails to connect "cold front in north_france at T+6" with "south_france at T+12". It would buy explicit front-event objects, propagation speed, and confident warm-sector detection, at the cost of a terrain-aware zone adjacency graph and type-evolution handling. Two options were evaluated: **(A) connected components** on a (zone, hour) graph — ~50 lines, standard, handles stalling fronts, but the same-type constraint is fragile across mountains and the ±6h cross-zone window is arbitrary; **(B) forward-chaining greedy propagation** using gradient direction — direction is built in and type evolution stays one event, but it is greedy and ~100 lines. **Recommendation: start with A** and a relaxed type constraint (cold↔indeterminate compatible, cold↔warm not), switch to B if the ±6h window proves too rigid. **Zone adjacency** (needed by both): two zones are adjacent if their bounds share an edge or overlap AND ≥20% of shared-boundary grid points are unmasked (terrain below 1500 m) — this stops `alps`/`po_valley` connecting through masked Alpine terrain, though `alps`/`central_germany` may still connect through the Bavarian foreland, which is physically correct but can look like a front "jumping" the Alps.
+
+15. **Gridded front speed tracking** — track the gradient maximum's position between consecutive hourly frames at grid resolution to get a real km/h speed, instead of inferring propagation from ~200 km zone-to-zone timing. Improves clearance estimates (extrapolate from measured speed rather than waiting for zone-level absence). Pure post-processing on existing gradient fields; a cheaper down-payment on the narrative benefits of #14.
+
+16. **Run-level metadata table** — if frontal results move to DB storage, add a `frontal_runs` parent row recording gradient threshold, smoothing sigma, grid resolution and code version per run, so threshold-calibration comparisons can tell code changes apart from real weather evolution.
+
 ## Route-Scale Hewson Calibration (Real-Flight Pairs)
 
 The sections above cover **zone-scale** detection against drawn fronts on DWD/MF charts. This section covers a separate, complementary calibration track: **route-scale Hewson metrics** validated against pilot-reported flight outcomes. The two are distinct:

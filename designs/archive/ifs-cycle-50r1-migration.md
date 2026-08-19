@@ -25,7 +25,11 @@ Resolved deltas from the plan below, as built:
   `eccodes>=2.45`; cfgrib paramId/shortName mapping unaffected as predicted.
 - TPREd test feed (expver X0080) was mis-provisioned by ECMWF on first
   delivery and re-sent; parser supports the X0080 expver.
-- Wet-bulb temperature (the "Opportunity" below) was NOT pursued.
+- Wet-bulb temperature (the "Opportunity" below) was NOT pursued as an ECMWF
+  delivery parameter — `ECMWF_SOUNDING_VARS` is unchanged. Note this does not
+  mean we lack wet-bulb: it is derived in-house from T/RH
+  (`analysis/sounding/wet_bulb.py`, surfaced as `DerivedLevel.wet_bulb_c`),
+  so there was no reason to add it to the ECPDS order.
 
 **Reference:** https://confluence.ecmwf.int/display/FCST/Implementation+of+IFS+Cycle+50r1
 **Test data:** expver `0080`, available at https://data.ecmwf.int/forecasts/testdata/

@@ -74,7 +74,7 @@ interface RouteGraphMetric {
 | `ceiling-dd` | Ceiling DD | ft AGL | line | `#8b5cf6` (violet) | `soundingCeilingFt` − terrain elevation |
 | `ceiling-nwp` | Ceiling NWP | ft AGL | line | `#d946ef` (fuchsia) | `nwpCloudDiag.ceilingFt` − terrain elevation |
 
-**ISA deviation** plots cruise-level temperature minus the ISA standard at that level — the zero line is "on-ISA", above = warmer (degraded density altitude / climb / TAS). It is derived in `data-extract.ts` from a separate `VizPoint.temperatureCruiseC` (cruise-level temperature, kept distinct from the surface `temperatureC`), so the surface and cruise temperatures stay independent.
+**ISA deviation** plots cruise-level temperature minus the ISA standard at that level — the zero line is "on-ISA", above = warmer (degraded density altitude / climb / TAS). It is derived in `data-extract.ts` from a separate `VizPoint.temperatureCruiseC` (cruise-level temperature, kept distinct from the surface `temperatureC`), so the surface and cruise temperatures stay independent. That one does *not* come from `model_divergence` — it reads `RoutePointAnalysis.cruise_temperature_c[selectedModel]`, a per-model `model_key → °C` map filled in `tasks/analyze.py` (model in `models/analysis.py`). `model_divergence` is the per-model store for *surface* values only.
 
 **Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion, and both pin their axis to 0–5000 ft AGL — a ceiling higher than that renders as **above-scale** (see below), not as a missing value.
 
@@ -134,7 +134,6 @@ These come from `RoutePointAnalysis.model_divergence` entries where `variable` i
 │  Cross-Section Canvas (existing)                │
 │  MARGIN: { left: 60, right: 50, top: 20, bottom: 50 }
 └─────────────────────────────────────────────────┘
-  [▼ Route Graph]  ← toggle button
 ┌─────────────────────────────────────────────────┐
 │  Route Graph Canvas (new)                       │
 │  MARGIN: { left: 60, right: 50, top: 8, bottom: 24 }
@@ -147,7 +146,15 @@ These come from `RoutePointAnalysis.model_divergence` entries where `variable` i
 │         └──────────────────────────────┘        │
 │           (no X labels — shared with above)     │
 └─────────────────────────────────────────────────┘
+  [▼ Route Graph]  Left: [… ▾]  Right: [… ▾]   ← controls
 ```
+
+DOM order inside `#viz-cross-section-pane` (`web/briefing.html`) is
+`#viz-canvas-container` → `#route-graph-container` → `#route-graph-controls`:
+the controls sit *below* the graph, not between it and the cross-section, so the
+two canvases stay adjacent and the shared X-axis reads as one continuous scale.
+Because the container lives in the cross-section pane, the graph disappears with
+it in map-only layout.
 
 - **Height:** Fixed 150px (compact, not an aspect ratio — the cross-section dominates).
 - **X-axis labels omitted** — the cross-section above already draws distance labels. The graph draws only vertical grid lines (aligned) for reference.
@@ -181,10 +188,20 @@ interface RouteGraphTransform {
 - **Click:** Selects route point (same `setSelectedPoint` as cross-section).
 - **Selected point indicator:** Blue vertical line matching cross-section style.
 - Cross-section and route graph hover events are coordinated: moving the mouse over either canvas updates the crosshair on both.
+- **Pointer events, not mouse events.** `interaction.ts` listens on
+  `pointermove/down/up/leave/cancel` with `touch-action: none`, so a touch drag
+  scrubs the crosshair instead of scrolling the page. On touch, `pointerleave`
+  deliberately leaves the crosshair and tooltip *pinned* where the user lifted;
+  only a mouse leave (or `pointercancel`, which is what the OS sends for a
+  notification-shade/home swipe) clears it.
+- `attachRouteGraphInteraction` returns a handle with `update(data, left, right)`
+  so a data/metric change swaps the closed-over state without re-registering
+  listeners; only a layout teardown calls `destroy()`.
 
 ## Controls
 
-The route graph controls are rendered between the cross-section and the graph:
+The route graph controls (`renderRouteGraphControls` in `controls/panel.ts`) are
+rendered into `#route-graph-controls`, immediately **below** the graph canvas:
 
 ```
 [▼ Route Graph]  Left: [Head/Tailwind ▾]  Right: [Temperature ▾]
@@ -194,6 +211,24 @@ The route graph controls are rendered between the cross-section and the graph:
 - **Left dropdown:** Selects the left Y-axis metric from the registry.
 - **Right dropdown:** Selects the right Y-axis metric. Can be set to "None" to show only one metric.
 - Dropdowns populated from the metric registry automatically (`getMetricOptions`) — new metrics appear without UI code changes. Option labels (and the tooltip name) come from `getMetricLabel(id)` → i18n key `graph.<id>`, so adding a metric also means adding its translation key. `getMetricLabel` is the single place that can vary a name by region (QNH→Altimeter); both the dropdown and `interaction.ts` tooltip call it so they never drift.
+
+## Advisory presets drive the metrics (#308/#373)
+
+Metric ids are **not private to this module**. `cross-section/advisory-presets.ts`
+carries a `routeGraph?: { left?, right? }` directive on most presets (e.g. icing →
+`freezing-level`/`ceiling-nwp`, convective → `cape`/`precipitation`, wind →
+`headwind`/`crosswind`), and `applyPresetView` in `briefing-store.ts` writes them
+into `routeGraphLeftMetric` / `routeGraphRightMetric`. Consequences:
+
+- **Renaming or removing a metric id silently breaks presets** — grep
+  `advisory-presets.ts` before touching an id, and keep the id stable even if the
+  i18n label changes.
+- Applying a preset deliberately does **not** touch `routeGraphVisible` — a graph
+  the user collapsed stays collapsed.
+
+`buildXsectionSnapshotProps` (`briefing-main.ts`, analytics #232) also emits
+`route_graph_visible` / `route_graph_left_metric` / `route_graph_right_metric`,
+so metric ids leak into the analytics dimension vocabulary too.
 
 ## State Management
 

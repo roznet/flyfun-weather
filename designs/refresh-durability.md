@@ -125,10 +125,20 @@ orphan of the previous one.
 | Flight deleted | `abandoned` |
 | Flight already departed | `abandoned` |
 | Beyond the forecast horizon | `abandoned` |
-| `decide_refresh` no longer says `full` | `abandoned` — the scheduler already re-briefed it, or no model moved. The gate is a free correctness check |
+| `decide_refresh` (+ `apply_params_change_override`) no longer says `full` | `abandoned` — the scheduler already re-briefed it, or no model moved. The gate is a free correctness check |
 | otherwise | **resume** |
 
-Two consequences of the gate check worth knowing:
+Three consequences of the gate check worth knowing:
+
+- The gate is wrapped in `apply_params_change_override` (#552), like the two
+  refresh endpoints and `/freshness`. A refresh queued *because* the pilot
+  edited the flight has no new model run behind it, so the bare gate answers
+  `none` and we would abandon the very job that exists to rebuild the pack —
+  leaving a briefing computed for the previous departure time.
+  `_auto_refresh_one` re-applies the same override, but only for
+  `triggered_by="resume"`, so its own re-check agrees with `decide_resume`. The
+  routine scheduler cycle deliberately stays un-overridden: an edit there is
+  already followed by a client-driven refresh.
 
 - An SSE refresh killed *after* the `briefing_ready` milestone already wrote a
   provisional pack row from the current runs, so the gate says `none` and the
@@ -157,7 +167,8 @@ non-terminal — if the process dies inside it, the next boot resumes the old ro
 and abandons the new one at the attempt cap, i.e. one extra run rather than a
 lost one. Execution reuses `scheduler._auto_refresh_one`
 (gate → prepare → pipeline → persist → notify), which grew a `triggered_by`
-parameter purely for usage attribution.
+parameter for usage attribution and, since #552, to select the params-change
+override on its own gate re-check.
 
 Registering also drives `idle_seconds()` to zero, so the discretionary GRIB warm
 loop yields to a resume exactly as it does for an interactive briefing — the

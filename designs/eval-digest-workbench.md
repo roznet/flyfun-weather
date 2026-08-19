@@ -14,8 +14,9 @@ ground truth (decision / cancel-reasons / per-category outcomes); and
 **non-destructive advisory re-run + diff** (shallow re-grade or `--deep` sounding
 recompute). For the operational recipes (commands for all of the above) see the
 **`eval-workbench` skill** — that is the source of truth for *how to run* these;
-this doc covers the architecture. (The original status note + verification
-checklist below are historical.)
+this doc covers the architecture. Since then `run_digest_eval.py` was also
+rebased onto the corpus itself (see Scoring tie-in), retiring the compact-fixture
+eval set.
 
 ## Why
 
@@ -85,8 +86,11 @@ forecasts; `route_analyses.json` IS regenerable from it (`rehydrate_eval_cache.p
   from prod (local `data/packs` is a partial sync); attach pilot `flight_debriefs`
   (decision / cancel-reasons / per-category `consistent|better|worse` outcomes)
   as the strongest eval ground truth.
-- **Blind-first labelling.** The panel hides the model's assessment + synopsis
-  (`#latest-assessment`, `[data-section="synopsis"]`) until you toggle blind off.
+- **Blind-first labelling.** The panel hides the model's verdict + synopsis
+  (`#assessment-banner`, `#alt-assessment-banner`, legacy `#latest-assessment`,
+  `[data-section="synopsis"]`) until you toggle blind off. Keep `BLIND_SELECTORS`
+  in `label-panel.ts` in step with any rename of the briefing's verdict nodes —
+  a stale selector leaks the answer with no visible failure.
 
 ## The virtual-flight resolver (the linchpin)
 
@@ -103,10 +107,27 @@ forecasts; `route_analyses.json` IS regenerable from it (`rehydrate_eval_cache.p
 meta's `artifact_path`, which points at `$EVAL_CORPUS_DIR/<corpus_id>/`. The
 `Flight`/`BriefingPackMeta` are built purely from `corpus_meta.json` — no DB.
 
-`fetch_timestamp` in `corpus_meta.json` is date-precision and synthetic: the
-corpus is keyed by `corpus_id` (one pack each), and the resolver ignores the ts
-for disambiguation, so the value only needs to be a stable opaque identity that
-the frontend echoes back in the pack URL.
+`fetch_timestamp` in `corpus_meta.json` is the pack's **real** fetch time (the
+earliest `forecasts[].fetched_at`, via `pack_fetch_datetime`; midnight only as a
+fallback). The resolver ignores it for identity — there is exactly one pack per
+`corpus_id` — but it is what tells two same-day briefings of one flight apart.
+
+**Id collisions (`disambiguated_corpus_id`).** `corpus_id` is keyed on (route,
+target date, days-out, fetch *day*) so a re-pull of the same scenario rebuilds
+`corpus_meta.json` while preserving `label.json` (`_SKIP_ON_COPY`). That key
+collided for genuinely *different* briefings of one flight on one day (an 07:01
+LIFR-departure brief and its 09:38 re-brief graded RED and AMBER) — the second
+ingest silently overwrote the first. Now: identical content hash keeps the bare
+id and overwrites itself; a different briefing gets a `_t<HHMM>` suffix, and the
+incumbent keeps the bare id so committed corpus dirs and their labels stay valid.
+Ids are checked across **both** areas, since `find_pack` searches staging first
+and would otherwise shadow an already-promoted pack.
+
+**Cruise/ceiling come from the advisory baseline, not the snapshot.** The
+snapshot doesn't carry them; without `route_advisories.json` the meta would
+default to 8000/18000 and the resolver would synthesize the eval `Flight` at a
+bogus cruise, drawing the cross-section cruise line inconsistent with the saved
+advisories.
 
 ## Module map
 
@@ -118,7 +139,7 @@ the frontend echoes back in the pack URL.
 | `situations.py` | shared pack-load / advisory-summary / `classify_situations` + `SITUATION_VOCAB` (also imported by `scripts/extract_digest_eval.py`) |
 | `corpus.py` | `CorpusMeta` (+ debrief/priority fields), `CorpusLabel` (+ `priority`), `CorpusPack` (+ `area`); area-threaded list/load/save; `find_pack` (search both areas), `promote`, `coverage_report` |
 | `resolver.py` | `synthesize_flight` / `synthesize_pack_meta(meta, area)`; hooks resolve via `find_pack` (serves staging or corpus) |
-| `ingest.py` | `build_corpus_meta`, `ingest_pack(area=…)` (gzips cross_section via `compact_corpus_pack`, writes `_source.json`), `load_pack_context` |
+| `ingest.py` | `build_corpus_meta`, `ingest_pack(area=…)` (gzips cross_section via `compact_corpus_pack`, writes gitignored `_source.json` breadcrumb for later re-sync), `load_pack_context`, `disambiguated_corpus_id` / `pack_fetch_datetime` (collision handling above) |
 | `candidates.py` | `candidate_reasons`, `base_score`, `select_candidates` (coverage-aware greedy) |
 | `rerun.py` | non-destructive advisory re-run + diff vs saved: `rerun_diff(deep=…)`, `rerun_manifest[_deep]`, `diff_manifests` |
 
@@ -137,50 +158,49 @@ Scripts (commands → **`eval-workbench` skill**): `export_eval_candidates.py`, 
 `pull_debrief_data.py` (attach debriefs), `rerun_advisories_diff.py` (advisory regression, `--deep`),
 `rehydrate_eval_cache.py` (rebuild derived cache).
 
-## Scoring tie-in + bug fixed
+## Scoring tie-in — the corpus IS the eval set
 
-`run_digest_eval.py` now resolves the expected label via `resolve_expected(meta)`
-which prefers `meta["golden"]["assessments"]` (written by the interactive
-`label_digest_eval.py`) and falls back to the legacy top-level
-`expected_assessments` (synthetic fixtures). **Before this fix the runner only
-read `expected_assessments`, so every label produced by the labelling CLI was
-silently ignored at scoring time.**
+**The old compact-fixture flow is superseded.** `run_digest_eval.py` no longer
+reads `tests/eval_data/digests/` fixtures or a `resolve_expected` /
+`expected_assessments` shim; it loads `CorpusPack`s directly (`list_corpus(area)`)
+and scores each pack's saved `digest_context.txt` replay against
+`pack.label.assessments[guidance]`. The workbench corpus is the single source of
+truth for golden labels, so the once-planned "corpus → fixture wiring" is closed
+in the other direction: nothing derives fixtures from the corpus.
 
-For the corpus, golden lives in `label.json` (`CorpusLabel.assessments`). The
-intended end-state is for `extract_digest_eval.py` to derive its compact
-fixtures *from* the labelled corpus so the full-pack corpus is the single source
-of truth — **not yet wired** (see next stages).
+`scripts/extract_digest_eval.py` and `scripts/label_digest_eval.py` (fixture
+extraction + terminal labelling into `meta.json["golden"]`) are the legacy
+pre-workbench path. They still import `eval_workbench.situations`, but nothing
+downstream scores their output — don't reach for them when adding eval entries.
 
-## Verification checklist (next agent)
+The runner **excludes rather than silently skips** three classes, and reports the
+tally: long-range packs (`days_out > ecmwf_grib_horizon_days()`, whose
+production output is `LongRangeDigest.outlook`, a different scale that
+`CorpusLabel` has no vocabulary for — the old fixture set wrongly replayed 74 of
+114 through the short-range prompt), packs with no `digest_context.txt` (context
+is gitignored, re-pull it), and unlabelled packs (scoring against the model's own
+prior output measures self-consistency). Long-range has its own harness,
+`scripts/run_longrange_eval.py` (haiku vs sonnet on the outlook scale).
 
-Run in a worktree with a real `DATA_DIR` and a dev server:
+## Smoke check
 
-1. `python3 -m venv venv && source venv/bin/activate && pip install -e ".[dev]"`.
-2. `pytest tests/eval_workbench/ -q` — should pass (17 tests; pure logic).
-3. Build a tiny corpus: `python scripts/pull_eval_corpus.py --from data/packs`
-   (or via `export_eval_candidates.py` → manifest). Confirm
-   `$EVAL_CORPUS_DIR/<id>/corpus_meta.json` written, payloads copied.
-4. `WEATHERBRIEF_EVAL_WORKBENCH=1` + `/devserver`; open `/eval.html` — list +
-   coverage render. Open a pack → `/briefing.html?flight=eval-<id>` should render
-   the **full standard briefing** (cross-section, advisories, digest, skew-T) and
-   the labelling panel should dock bottom-right, blind by default.
-5. Save a label → confirm `label.json` written; reload shows it pre-selected.
-6. `python scripts/run_digest_eval.py --guidance balanced --dry-run` picks up the
-   golden (once the corpus→fixture wiring lands, step below).
+`pytest tests/eval_workbench/ -q` (26 tests, pure logic — no server needed).
+Runtime: `WEATHERBRIEF_EVAL_WORKBENCH=1` + `/devserver`, open `/eval.html`, then
+a pack → `/briefing.html?flight=eval-<id>` renders the **full standard briefing**
+with the panel docked bottom-right, blind by default. `run_digest_eval.py
+--dry-run` lists what would run plus the exclusion tally, with no LLM calls.
 
-## Open items / risks to validate
+## Open items / risks
 
 - **Edge endpoints on eval flights.** The 3 hooks cover the auto-load path
   (flight + packs + snapshot/advisories/digest). Endpoints doing extra DB work
-  (`audit_pack_access` in `api/packs.py`, observations/advisory *recalc*,
-  email/PDF) were not exercised; the digest/skew-T/chart GETs should be fine via
-  `artifact_path`. Harden any that 500 on an `eval-` flight during step 4.
-- **Core pack endpoints aren't admin-gated** (only `/api/eval/*` is). Acceptable
-  because the whole feature is dev-only (flag off in prod), but note it.
-- **Corpus→fixture wiring** (`extract_digest_eval.py` reading `label.json`) is
-  the last milestone — make the labelled full-pack corpus the source of truth
-  for the compact eval fixtures, retiring the separate `label_digest_eval.py`
-  flow (or pointing it at the corpus).
+  (`audit_pack_access` — defined in `api/security.py`, called from `api/packs.py`
+  on `get_pack`/`get_snapshot` — plus observations/advisory *recalc*, email/PDF)
+  are not exercised by the labelling flow; the digest/skew-T/chart GETs resolve
+  fine via `artifact_path`. Harden any that 500 on an `eval-` flight.
+- **Core pack endpoints aren't admin-gated** (only `/api/eval/*` carries
+  `require_admin` + `require_workbench`). Acceptable because the whole feature is
+  dev-only (flag off in prod), but note it.
 - **`trend` coverage** (#254 acceptance): pull a few packs carrying a
   `previous_digest` (the `previous_digest` situation tag) so `trend` is
   exercised, and label them.

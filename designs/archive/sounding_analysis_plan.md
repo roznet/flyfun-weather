@@ -1,5 +1,43 @@
 # Sounding Analysis Module — Design Document
 
+> **ARCHIVED — founding pre-implementation plan, not current design.** Written before the
+> analysis engine existed. Read it only for original intent and the reasoning behind the
+> early MetPy/heuristic choices. Do NOT implement from it and do NOT treat its module
+> layout, thresholds, or dataclasses as describing the codebase.
+>
+> Current truth: [`designs/analysis.md`](../analysis.md) and its sub-docs
+> ([cloud-layers-analysis](../cloud-layers-analysis.md),
+> [icing-models-analysis](../icing-models-analysis.md),
+> [convective-analysis](../convective-analysis.md),
+> [analysis-metrics](../analysis-metrics.md)), plus
+> [`designs/meteorology-decisions.md`](../meteorology-decisions.md) — read that decisions
+> log before changing any meteorology choice.
+>
+> What actually happened:
+> - **Shipped, but restructured.** Code lives in `weatherbrief/analysis/sounding/`
+>   (`thermodynamics`, `clouds`, `icing`/`icing_common`/`sfip`/`sld`, `convective`,
+>   `vertical_motion`, `inversions`, `wet_bulb`, `e_shear`, `edr`, `precipitation`,
+>   `prepare`, `advisories`, `snapshot_fields`) — not the flat `sounding/` layout of
+>   §4.3. Entry point is `analyze_sounding()`.
+> - **Models are Pydantic, not dataclasses**, and live in `weatherbrief/models/analysis.py`.
+>   `SoundingAnalysis` and `ConvectiveAssessment` survived by name with different fields;
+>   `CloudLayer`, `IcingAssessment`, `TurbulenceIndicator`, `FreezingInfo` and
+>   `FlightLevelBrief` as sketched here did not survive as written.
+> - **The icing heuristics of §2.2 were superseded.** There are now four user-selectable
+>   icing methods (including SFIP — see `archive/sfip-implementation-design.md`), all
+>   gated by `is_in_cloud_layer()`. The temperature-band table here is history.
+> - **§5.2 (CLWC/CIWC) shipped**: GRIB enrichment pulls `clwc`/`ciwc` (ECMWF),
+>   `QC`/`QI` (ICON), `CLWMR`/`ICMR` (GFS), and NWP cloud methods sit alongside the
+>   dewpoint-depression method rather than replacing it.
+> - **§5.3 (Richardson number) and §5.4 (terrain) shipped**: Ri feeds turbulence/EDR
+>   (`vertical_motion.py`, `edr.py`); SRTM elevation shipped, see
+>   `archive/elevation-profile-plan.md`.
+> - **§5.6 (SIGMET cross-reference) only half shipped**: route SIGMETs are fetched and
+>   surfaced (`run_route_sigmets`), but the model-vs-SIGMET reconciliation described
+>   here was never built.
+> - **§5.1 vertical resolution** was resolved per-model in the fetch/GRIB design; see
+>   `designs/fetch.md` and `designs/grib-decode-dispatcher.md`.
+
 ## Overview
 
 This module processes atmospheric sounding profiles (from ECMWF, ICON, GFS) using MetPy to produce aviation-relevant derived metrics. The goal is to enrich a flight briefing app with thermodynamic indices, cloud layer detection, icing risk assessment, turbulence indicators, and convective analysis — computed per-model for cross-model comparison.

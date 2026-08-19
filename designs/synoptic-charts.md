@@ -1,8 +1,14 @@
 # Synoptic Hewson overlay on chart basemaps (DWD + Met Office)
 
+> **Status: SHIPPED and on main** (Phases 0–5). Promoted out of `designs/future/`
+> (2026-08-17) because this is now the design record for live code, not a
+> proposal. Two items were deliberately deferred, not forgotten: URL state for
+> `syn.base`, and gap-based disabling of the basemap picker. Read the phase list
+> below as a build record.
+
 Supersedes GitHub issue #164 and folds in the Met Office chart source (merged
 into main after #164 was written). #164's architecture stands; this doc records
-the deltas and the implementation plan for the **two-source** version.
+the deltas and the implementation of the **two-source** version.
 
 ## Goal
 
@@ -36,8 +42,11 @@ There is **no per-user "prefer DWD vs Met Office" preference**. Layered gating:
   optional service (existing gate, unchanged).
 - **DWD basemap** → available to anyone who can see the tab.
 - **Met Office basemap** → additionally requires `admin` OR
-  `METOFFICE_CHARTS_PUBLIC=1` (`metoffice_charts.public_enabled()` /
-  `_metoffice_charts_allowed` in `packs.py`).
+  `METOFFICE_CHARTS_PUBLIC=1`. As built the gate lives in
+  `api/_chart_serving.py` (`metoffice_charts_allowed()` →
+  `metoffice_charts.public_enabled()` or `require_admin`, wrapped by
+  `source_allowed(spec, …)` keyed off `ChartSourceSpec.admin_gated`);
+  `packs.py` keeps `_metoffice_charts_allowed` as a delegating shim.
 
 Implementation: the manifest endpoint **only lists sources the caller is
 allowed to see**. The picker shows OSM + DWD always; Met Office appears only
@@ -116,25 +125,27 @@ catch standalone than after the renderer exists.
 
 **New**: `src/weatherbrief/api/synoptic_charts.py`
 
-- `GET /api/synoptic-charts/manifest` → `{ sources: [ { slug, run_cycle,
-  issued_at, charts: [ { id, offset_h, chart_type, native_size, valid_time } ] }
-  ] }`. DWD always included; Met Office only if `_metoffice_charts_allowed`.
-  Latest cycle per source via the shared base's `list_cycles`.
+- `GET /api/synoptic-charts/manifest` → `{ sources: [ { slug, label,
+  attribution_html, run_cycle, issued_at, charts: [ { id, offset_h, chart_type,
+  native_size, valid_time } ] } ] }` (built by `build_source_manifest`). DWD
+  always included; Met Office only if `source_allowed`. A source with no cached
+  cycle is omitted entirely. Latest cycle per source via `list_cycles`.
 - `GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}` (as built: no
   `.{ext}` suffix on the route) → shared serve helper (`serve_chart_bytes`,
   which lives in `api/_chart_serving.py`, not in `synoptic_charts.py`):
   validate `source` slug, `run_cycle`, `chart_id` allowlist; long immutable
-  `Cache-Control`; gate Met Office (404 not 403 so non-admins can't probe);
-  404 if evicted.
+  `Cache-Control`; gate Met Office (404 not 403 so non-admins can't probe).
+  Status codes as built: 404 unknown/gated source, 400 bad chart id or
+  run-cycle, **410** when the bytes are evicted or the run skipped that offset.
 - Refactor the existing flight-scoped chart endpoints in `packs.py` to call the
   same shared serve helper (behavior unchanged). Both `synoptic_charts.py` and
   `packs.py` import `serve_chart_bytes` + `SOURCES` from `_chart_serving.py`.
 
 ### Phase 3 — HewsonGridLayer pluggable projector
 
-`web/ts/visualization/hewson-grid-layer.ts`: optional
-`projector?: (lat,lon) => {x,y}`. Default `undefined` = current Web-Mercator
-path, untouched. When set: per-cell 4-corner quad fill in chart-pixel space
+`web/ts/visualization/hewson-grid-layer.ts`: as built a
+`setProjector(p: ChartProjector | null)` method (not a constructor option).
+`null` = current Web-Mercator path, untouched. When set: per-cell 4-corner quad fill in chart-pixel space
 (via `L.CRS.Simple` latLng swap `L.latLng(py, px)`), viewport cull on projected
 center. Perf note from #164: in `CRS.Simple` Leaflet may translate the pane on
 pan, so the canvas only redraws on zoom/viewreset/resize/setSlice — quad-fill
@@ -151,11 +162,16 @@ nearly free). Hover tooltip uses `makeChartInverseProjection` to recover lon/lat
 
 ### Phase 5 — maps-main wiring
 
-`web/ts/maps-main.ts`: 3-way basemap picker (`OSM` / `DWD chart` / `Met Office
-chart`), options gated by the manifest's `sources`. Fetch manifest lazily on
-first chart toggle. Per-source time-match helper (port of
+`web/ts/maps-main.ts`: basemap picker rebuilt from the manifest — a fixed `Map`
+(OSM) button plus one button per allowed source using its manifest `label`
+(`repopulateBasemapPicker`), so it is 2- or 3-way depending on the gate rather
+than a hardcoded 3-way. Manifest fetched lazily on first chart toggle and
+cached for the session; if the active source vanishes (cache evicted) the
+picker falls back to OSM. Per-source time-match helper (port of
 `select_default_chart_id` semantics: nearest valid time, tie-break earlier
-offset). On `synHour` change in chart mode, swap `imageOverlay.setUrl`. Info bar
+offset). On `synHour` change in chart mode: cheap `updateChartImage(url)` when
+the projection key is unchanged, full `setBasemap('chart', …)` rebuild when the
+`chart_type` changes (e.g. DWD `ana` ↔ `icon`). Info bar
 shows source + chart valid time + gap from Hewson valid ("Met Office +48h from
 12Z · 1 h gap"). URL state `syn.base` ∈ `osm|dwd|metoffice`. Per-source
 attribution control. Disable a source when its manifest has no cached cycle or
@@ -193,9 +209,18 @@ shared ChartCache base`). All unit / integration tests green at the time (314 py
 chart/pipeline, 342 web incl. projection equivalence <1px). Phase 6 =
 in-browser visual verification (user-driven).
 
+Re-verified 2026-08-15: every claimed file still exists on main and the
+as-built details above match the code.
+
 This is effectively built; the remaining content is the durable architecture
 note (composable `ChartCache`, two-source gating, projection equivalence
 contract) worth folding into a real design doc rather than leaving as a plan.
+Note the natural home is ambiguous today: `designs/fetch.md` already redirects
+readers of `chart_cache.py` to `frontal-detection.md`, but that doc only covers
+charts as *calibration references* (`_dwd_lonlat_to_pixel`, `validate`/`charts`
+CLI) and says nothing about `ChartCache`, the `synoptic-charts` endpoints, or
+the chart-basemap renderer. Promotion should close that gap rather than leave a
+dangling pointer.
 
 Two items deferred from the plan, by choice:
 - **URL state `syn.base`** — skipped to stay consistent with the existing
@@ -210,7 +235,9 @@ Two items deferred from the plan, by choice:
 
 - Met Office `colour` is 800×540 — blurry zoomed in; cap `maxZoom`. Same as DWD
   `icon`. Acceptable (source resolution).
-- Should the picker remember the last source per session (URL state covers
-  deep-links; session memory is a nicety)?
-- When both sources are allowed, default chart source = ? (proposal: DWD, to
-  match the briefing tab's default ordering).
+- Should the picker remember the last source per session? Still open — the
+  *manifest* is cached per session, but the chosen source is module state and
+  resets to OSM on reload (no URL state either, see deferred items above).
+- Default chart source: **settled by construction** — the map always opens on
+  OSM, and chart buttons follow `SOURCES` insertion order in
+  `_chart_serving.py`, i.e. DWD before Met Office. No explicit default needed.

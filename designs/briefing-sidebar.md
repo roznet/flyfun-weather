@@ -37,10 +37,20 @@ renders.
   banner, and stale-pack banner are deliberately **kept above the shell**
   full-width so focus-mode's `display:none` can never hide a freshness/error
   warning.
-- **Section nav**: built from elements carrying `data-section="<key>"`. `NAV_GROUPS`
-  / `NAV_LABELS` define grouping + friendly labels; empty sections (toggled to
-  `display:none`) are omitted. A `MutationObserver` rebuilds the nav as sections
-  appear/disappear.
+- **Rail composition** (top→bottom): focus bar, `#briefing-header` (route
+  identity), `buildRailControls()` — which **moves** `#display-mode-toggle`
+  (Standard/Details) out of the toolbar — `#freshness-bar`, the glance summary,
+  the section nav, then `buildRailFooter()`, which **moves** `#history-select`
+  in and adds the "Switch to classic layout" button. Moved nodes keep their
+  existing (direct or delegated) listeners, which is why nothing else breaks.
+- **Section nav**: `NAV_GROUPS` is the whitelist — the nav iterates its groups
+  and keeps the keys whose `[data-section="<key>"]` element exists and is not
+  `display:none`. So `data-section` alone is necessary but not sufficient
+  (`advisories` and `time-scenarios` carry the attribute and are deliberately
+  absent from the nav; advisories are surfaced via the glance summary instead).
+  `NAV_LABELS` supplies friendly labels and is optional — the fallback is the
+  section's `h3` text, then the key. A `MutationObserver` rebuilds the nav as
+  sections appear/disappear.
 - **Scroll-spy**: `setupScrollSpy` keeps the active nav item honest; recompute is
   debounced on scroll/resize.
 - **Glance summary** (`buildSummary`): overall assessment chip + non-green
@@ -48,8 +58,10 @@ renders.
   main-pane element. Rebuilt via `MutationObserver` on `#assessment-banner` and
   `#advisories-wrapper` so it tracks model switch / Standard↔Details toggle /
   recalc.
-- **Resizable rail**: `buildResizer` drags `--rail-width` (clamped 260–560 px),
-  persisted to `localStorage['wb_rail_width']`; double-click resets.
+- **Resizable rail**: `buildResizer` drags `--rail-width` (clamped 260–560 px
+  and never past half the shell width; default 320 px in CSS), persisted to
+  `localStorage['wb_rail_width']`; double-click resets. Hidden below 980 px,
+  where the shell collapses to a single column and the rail stops being sticky.
 - **Focus mode**: `enterFocus`/`exitFocus` set `data-focus`/`data-focus-target`
   on the shell so CSS hides all but the chosen section in the main pane.
 
@@ -72,9 +84,10 @@ renders.
   hard-coding a height. Leaflet maps (panes at z-index 400–1000) get
   `.leaflet-container { z-index: 0 }` so they cannot paint over the header.
 - **`data-section` is the contract** — section roots are tagged with
-  `data-section` (statically in `web/briefing.html`); the nav is generated from
-  those tags, so adding a section to the nav is just adding the attribute (+ a
-  `NAV_LABELS` entry, and if it's a new group, a `NAV_GROUPS` entry).
+  `data-section` (statically in `web/briefing.html`); scroll-spy, focus mode and
+  several other consumers key off it. Putting a section *in the nav* additionally
+  requires listing its key in a `NAV_GROUPS` group (labels via `NAV_LABELS` are
+  optional). Sections stay out of the nav by simply not being listed.
 
 ## Gotchas
 
@@ -89,4 +102,5 @@ renders.
 - `web/css/style.css` — `.layout-sidebar`, `.briefing-shell`, `.briefing-rail`,
   `.rail-summary`, `.rail-nav`, focus-mode rules
 - Sections tagged with `data-section`: `web/briefing.html` (the nav/scroll-spy
-  source of truth; `briefing-ui.ts` only reads them)
+  source of truth; `briefing-ui.ts`, `tour/briefing-tour.ts` and
+  `eval/label-panel.ts` only read them)

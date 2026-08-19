@@ -2,6 +2,35 @@
 
 > API-first multi-client architecture for flight briefing configuration, retrieval, history, and a web-based briefing report page.
 
+## Status: ARCHIVED — historical plan, do not treat as current truth
+
+This is the original plan that turned WeatherBrief from a CLI tool into an API + web
+app. It was implemented (Steps 1–10 all shipped) and then substantially outgrown.
+Kept for the *why* behind decisions that survive; the *what* has moved on.
+
+What still holds:
+- One pipeline, multiple frontends. `pipeline.py` is the core; CLI, API, iOS, MCP and
+  the scheduler all call it. This is the load-bearing idea from this plan.
+- FastAPI + Pydantic, vanilla TS + Zustand + esbuild, WeasyPrint for PDF reports,
+  SMTP email with a short HTML body plus attachment.
+- The Flight / BriefingPack split: a saved refreshable target, and one pack per fetch.
+
+What has been superseded — do NOT follow this doc for these:
+- **Storage.** The file-based `data/flights.json` + `data/flights/{id}/packs/` registry
+  never survived. Flights and packs live in a relational DB (`FlightRow`,
+  `BriefingPackRow` in `db/models.py`) under Alembic migrations, SQLite in dev and
+  MySQL in prod. The "Alternatives Considered: database vs file-based" section
+  concluded file-based; that call was later reversed.
+- **Single-user.** The "Open Questions: authentication" and the CORS-wildcard decision
+  predate real auth. The app is multi-user with cookie + token auth via
+  flyfun-common. See `multi-user-deployment.md`.
+- **Flight ID = route + date.** Flights are DB rows with surrogate ids, not slugs, and
+  there is no one-flight-per-route-per-day constraint.
+- **Endpoint tables.** The API surface has grown far past the tables below
+  (`src/weatherbrief/api/` has ~40 modules). Read the code, not this list.
+
+For current architecture start at [architecture.md](../architecture.md).
+
 ## Intent
 
 WeatherBrief currently operates as a CLI tool. This plan introduces:
@@ -778,7 +807,8 @@ The PDF report and email attachment include only ECMWF Skew-T plots, not all mod
 
 ## References
 
-- Current architecture: [architecture.md](./architecture.md)
-- Data models: [data-models.md](./data-models.md)
-- Digest pipeline: [digest.md](./digest.md)
-- Original spec: [flight-weather-tracker-spec.md](./flight-weather-tracker-spec.md)
+- Current architecture: [architecture.md](../architecture.md)
+- Data models: [data-models.md](../data-models.md)
+- Digest pipeline: [digest.md](../digest.md)
+- Multi-user / auth (post-dates this plan): [multi-user-deployment.md](../multi-user-deployment.md)
+- Original spec (also archived): [flight-weather-tracker-spec.md](./flight-weather-tracker-spec.md)

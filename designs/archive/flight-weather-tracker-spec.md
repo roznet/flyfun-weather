@@ -1,5 +1,27 @@
 # Flight Weather Trend Tracker — Architecture & Spec
 
+> **ARCHIVED — this is the original founding spec (pre-implementation), not current design.**
+> Written before any code existed; committed alongside the Phase 1 implementation and archived
+> in the 2026 design-doc consolidation. Read it only for original intent and the reasoning
+> behind early data-source choices. Do NOT implement from it, and do NOT treat its layout,
+> CLI, or config format as describing the codebase. For current design start at
+> [`designs/architecture.md`](../architecture.md) and `designs/INDEX.md`.
+>
+> What actually happened:
+> - **Package/layout superseded.** There is no `flight_weather_tracker` CLI, no `config/routes.yaml`,
+>   no `src/fetch|analysis|skewt|digest` tree. The project became `src/weatherbrief/` — a FastAPI
+>   web app + iOS client + MCP server, with routes/flights in a database, not YAML.
+> - **Never built as specced:** Met Office DataPoint (retired), Météo-France Aéroweb, GAMET/MAVIS,
+>   the Open-Meteo *ensemble* API, and Meteomatics. Text forecasts came from DWD and NWS instead
+>   (`weatherbrief/fetch/dwd_text.py`, `nws_text.py`), plus DWD/Met Office *chart* fetchers.
+> - **Survived, in evolved form:** Open-Meteo fetch, MetPy-based soundings and Skew-T, icing bands,
+>   cloud-layer estimation from RH, multi-model comparison, Autorouter GRAMET/METAR-TAF, and the
+>   LLM digest. All of these are now much deeper than described here (direct ECMWF/ICON GRIB decode
+>   rather than Open-Meteo pressure levels; advisories, cross-sections, verification).
+> - **Product intent reversed.** The "go/no-go assessment" and Green/Amber/Red verdict in the LLM
+>   sections below is explicitly NOT what the product does. The briefing directs attention
+>   (understand / anticipate / mitigate) and never issues a verdict. Do not resurrect this framing.
+
 ## Purpose
 
 A tool for medium-range (D-7 to D-0) weather assessment for cross-country GA flights in Europe. The goal is NOT to replace a proper pre-flight brief — it's to build a daily evolving picture of whether a planned flight is likely flyable, uncertain, or unlikely, starting from a week out and increasing in detail as the flight date approaches.

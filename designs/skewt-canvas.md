@@ -64,7 +64,12 @@ X = left + ((T - Tmin) / tRange + logFrac × skewFactor) × width
 skewFactor = tan(45°) × height / width
 ```
 
-Default ranges: pBottom=1050, pTop=250, T=-60..+40°C, skew=45°.
+Default ranges: pBottom=1050, pTop=250, T=-60..+40°C, skew=45° (`DEFAULT_CONFIG` in `types.ts`).
+
+Because `skewFactor` depends on the plot box's width/height, a freely-resizing box would
+change the isotherm tilt and visually distort the sounding. Both renderers therefore clamp
+the plot box to `PLOT_ASPECT = 1.8` (width/height) and centre it — the classic 960px layout's
+max aspect, so that layout is pixel-identical to before the clamp.
 
 ## Overlay Bands
 
@@ -173,6 +178,10 @@ same words. Omega belongs on **Convective's** side panel (`w_fpm`, positive = up
 - **CAPE/CIN shading bounds**: only between LCL and EL (no shading below LCL or above EL)
 - **Any route point**: clicking any point (waypoint or interpolated) loads its Skew-T — not restricted to named waypoints
 - **Dual-axis side panel**: single fixed-width panel avoids squeezing the Skew-T diagram. Primary + secondary variable with separate scales
+- **No hodograph, no wind barbs — deliberately.** A hodograph shows shear direction and storm-relative helicity: severe-convective forecasting tools that GA cross-country pilots don't use operationally. Wind barbs show raw direction/speed but make the pilot mentally decompose vectors against their own heading. The headwind/crosswind panel answers the two questions that actually matter ("what altitude gives the best tailwind?", "does crosswind exceed my limits at any level?") directly, from `wind_speed_kt` + `wind_direction_deg` + `track_deg`. Don't re-propose barbs as "more standard" — the omission is the design
+- **Parcel path is captured, not recomputed**: `analyze_sounding()` already builds the parcel profile for CAPE/CIN/LCL/LFC/EL, so it is persisted rather than discarded — zero additional CPU. ~0.5 KB per model per waypoint, and the endpoint serves ~6–10 KB against the 50–200 KB PNG it replaced, so this was a net bandwidth *reduction*
+- **Side-panel variable selection lives in localStorage**, same as cross-section layer toggles. If viz preferences ever move server-side, cross-section + Skew-T + side panels should migrate together as one effort rather than drifting apart
+- **Desktop-focused on web**: on narrow viewports the side panels collapse behind a "Variables" drawer, but mobile is intentionally under-invested because the iOS app carries the native Skew-T (rzskewt). Functional, not polished, is the target for mobile web
 
 ## Still Future
 
@@ -180,7 +189,7 @@ same words. Omega belongs on **Convective's** side panel (`w_fpm`, positive = up
 - **Theme integration**: rename `CrossSectionTheme` → `VizTheme` with Skew-T-specific color groups across all three themes
 - **Method sync**: sync icing/cloud preferred method between cross-section and Skew-T overlay toggles
 
-See [future/dynamic-skew-t-view.md](./future/dynamic-skew-t-view.md) for the original design including these planned features.
+See [archive/dynamic-skew-t-view.md](./archive/dynamic-skew-t-view.md) for the original design including these planned features.
 
 ## Gotchas
 
@@ -189,6 +198,7 @@ See [future/dynamic-skew-t-view.md](./future/dynamic-skew-t-view.md) for the ori
 - Cloud/icing layers from API may have `base_pressure_hpa: null` — must fall back to altitude→pressure via standard atmosphere
 - API returns lowercase risk strings (`none`, `light`) — color lookups need both cases
 - FL labels rendered between plot right edge and side panel — `FL_LABEL_WIDTH` (40px) gap reserved in layout
+- Don't let the plot box fill available width — `PLOT_ASPECT` (1.8) must stay clamped in both `renderer.ts` and `compare-renderer.ts`, or the skew transform stretches the sounding. The iOS side hits the same class of problem from the other direction: rzskewt's 45° skew breaks on a narrow iPhone, so the app caps `skewFactor` at 1.0
 
 ## References
 
@@ -196,4 +206,4 @@ See [future/dynamic-skew-t-view.md](./future/dynamic-skew-t-view.md) for the ori
 - Data models: [data-models.md](./data-models.md) (SoundingAnalysis, ParcelPathPoint)
 - Analysis: [analysis.md](./analysis.md) (analyze_sounding pipeline)
 - iOS Skew-T: rzskewt package (github.com/roznet/rzskewt)
-- Original design: [future/dynamic-skew-t-view.md](./future/dynamic-skew-t-view.md)
+- Original design: [archive/dynamic-skew-t-view.md](./archive/dynamic-skew-t-view.md)

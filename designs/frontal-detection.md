@@ -34,6 +34,12 @@ src/weatherbrief/frontal/
 └── __main__.py      — python -m weatherbrief.frontal.cli
 ```
 
+The precomputed Hewson NPZ snapshots that `SnapshotFieldSource` reads are
+*produced* by a sibling package, `src/weatherbrief/hewson/` (`precompute.py`
+`run_once` — also the CLI entry point, so scheduler and ad-hoc re-runs exercise
+identical code; `era5_case.py` for the retrospective set). `scheduler.py` only
+wraps it in a loop.
+
 ### Front detection: source-agnostic, config-driven (#195)
 
 The per-leg locator (`route_sampling.py`) is split along two seams so one
@@ -93,7 +99,7 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
 - **Domain**: 35-60°N, -20 to 28°E at **0.25° resolution** (101 × 193 = 19,493 points). Aligned with ERA5's default CDS regridding so ERA5 and Open-Meteo land on identical grid points (see `designs/future/hewson-fields-aviation-advisories.md` for rationale).
 - **Fetch**: Lightweight `fetch_grid_fields(client, model_key, ...)` module-level helper (takes an `OpenMeteoClient`, not a method on it) — 4 variables per level (T, Td, wind speed/dir), `_GRID_CHUNK_SIZE=500`, returns raw arrays (no WaypointForecast objects). `levels` defaults to `[850]` for single-level detection; pass `[925, 850, 700]` for Hewson multi-level precompute (variable names are level-suffixed, e.g. `temperature_850hPa`)
 - **Field prep**: `prepare_field()` — nearest-neighbor NaN fill, rejects fields with >5% missing. Must run before any gradient computation (gaussian_filter silently corrupts NaN neighbors)
-- **Terrain**: `build_terrain_mask()` from SRTM3 data (>1500m masked), `fill_terrain()` for linear interpolation across masked cells
+- **Terrain**: `build_terrain_mask()` from SRTM3 data (>1500m masked) is the 850-only flat threshold. For multi-level Hewson work use `build_terrain_elevation()` (heights, NaN where SRTM has no data) + `terrain_mask_for_level(elev, level_hPa)` — masks where terrain reaches the level's standard-atmosphere height (925 ≈ 762m, 700 ≈ 3012m), so low-level Alpine artefacts are caught without hiding genuine 700hPa fronts (#216 Fix 3). `fill_terrain()` linearly interpolates across masked cells
 - **θe**: `compute_theta_e()` via MetPy from T850 + Td850
 
 ### Detection (`detect.py`)
@@ -135,7 +141,7 @@ This eliminates Alpine, Pyrenean, and sea-land gradients without per-zone tuning
 
 - **`apply_anomaly_filter()`**: Per-channel anomaly filtering, used by `build_zone_timeseries()` and CLI commands (`score`, `validate`, `diagnose`)
 - **`build_zone_timeseries()`**: Full pipeline for one model → `{zone: [{hour, present, type, intensity, orientation}, ...]}`
-- **Persistence filter**: `_apply_persistence_filter()` — suppresses zones flagged "present" for too many consecutive hours (catches residual stationary gradients the anomaly check misses)
+- **Persistence filter**: `_apply_persistence_filter()` — suppresses zones flagged "present" for too many consecutive hours (catches residual stationary gradients the anomaly check misses). **Currently inert**: `_MAX_PERSISTENCE = 72` and the run must *exceed* it, so nothing trips over a 72h horizon — the per-channel anomaly filter is doing all the work. Lower it (or supply `max_persistence=`) before claiming this filter changed a result.
 - **Clearance timing**: `find_frontal_clearance_time()` — earliest hour with 3+ consecutive clear hours (`find_clearance_times_all_models()` runs it across models)
 - **Timing spread**: `compute_timing_spread()` — inter-model agreement if spread ≤6h
 
@@ -211,7 +217,8 @@ These informed our pivot away from zone-level detection toward per-leg Hewson ad
 
 ## References
 
-- Full plan (with future phases): [frontal-detection-plan.md](./future/frontal-detection-plan.md)
+- Full plan (with future phases): [frontal-detection-plan.md](./archive/frontal-detection-plan.md)
 - Calibration workflow: [front-calibration.md](./future/front-calibration.md)
 - Tests: `tests/test_frontal_*.py` (11 files: detect, grid, zones, tracking, cache, case, route_sampling, gates, decisions, contour_fronts, sources)
-- Key code: `src/weatherbrief/frontal/`
+- Key code: `src/weatherbrief/frontal/`, snapshot producer `src/weatherbrief/hewson/precompute.py`
+- Advisory grading (GREEN/AMBER/RED from `route_fronts.json`): `src/weatherbrief/analysis/advisories/fronts.py` — gated on weather *on* the boundary (dry / below-flight → GREEN, convective or sharp-wet reaching the band → RED), not on the θe gradient alone

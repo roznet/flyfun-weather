@@ -4,6 +4,14 @@
 > VFR mitigation gates and is reused by icing-escape. Issue #335. Supersedes the
 > ad-hoc corridor logic from #328/#330.
 
+**Status: v1 SHIPPED.** `analysis/advisories/vertical_profile.py` (solver) +
+`build_cost_model` in `_helpers.py`; both consumers (`vfr_feasibility.py`,
+`icing_escape.py`) are ported and the #328/#330 gates are deleted. This doc is now the
+design record for live code — see *Implementation outcome (v1)* for what changed from the
+original plan. Promoted out of `designs/future/` (2026-08-17) — it was only ever filed
+there because it was drafted as a plan; it is also linked as a sub-doc from
+`designs/advisories.md` ("Producers").
+
 ## Intent
 
 Today's VFR mitigation logic (`analysis/advisories/vfr_feasibility.py`) reconstructs
@@ -68,22 +76,18 @@ connectivity solver, and it handles multi-deck-with-gaps routes that a greedy
    Grading (R/A/G) and phrasing stay per-advisory and unchanged in v1.
 4. **v1 ignores climb/descent rate.** Leave a `rate_limit` hook in the signature; do
    not implement the gradient constraint first.
-5. **Objective is lexicographic**, not a weighted multi-term cost. Order:
-   *no hard-wall (`∞`) crossing* → *lowest total finite hazard cost* → *closest to
-   preferred cruise* → *fewest vertical transitions*. The finite-hazard-cost tier is
-   **essential, not cosmetic**: for a soft-wall consumer every path is "feasible"
-   (nothing is `∞`), so without it finite costs do nothing and icing avoidance is a
-   no-op — the solver would keep you at cruise in light icing rather than making two
-   transitions to escape most of it.
-   **Correction during implementation:** *closest-to-cruise (deviation) must precede
-   fewest-transitions*, not follow it as the earlier draft (and Codex's note) had it.
-   With transitions ahead of deviation, a flat low profile (0 transitions) beats climbing
-   back to cruise (1 transition) at equal hazard — i.e. an aircraft forced low by a
-   departure deck would never climb back up. Transitions become only a tie-break between
-   equally-close-to-cruise paths (still prevents needless oscillation). Codex's icing
-   concern is unaffected: it is resolved by the hazard tier, which is unchanged.
-   Keeping the objective a strict tier order (not summed weights) still avoids a fragile
-   6-weight function. Leave a hook to add preference terms later.
+5. **Objective is lexicographic**, not a weighted multi-term cost (avoids a fragile
+   6-weight function). Order as shipped: *no hard-wall (`∞`) crossing* → *lowest total
+   finite hazard cost* → *closest to preferred cruise (deviation)* → *fewest vertical
+   transitions*. Two traps, both learned the hard way and both load-bearing:
+   - The **finite-hazard tier is essential, not cosmetic**: for a soft-wall consumer
+     nothing is `∞`, so without it finite costs do nothing and icing avoidance is a no-op
+     (stay at cruise in light icing rather than transition twice to escape it).
+   - **Deviation must precede transitions** (corrected during implementation, against the
+     earlier draft). Transitions-first makes a flat low profile (0 transitions) beat
+     climbing back to cruise (1 transition) at equal hazard — an aircraft forced low by a
+     departure deck would never climb back up. Transitions are only a tie-break between
+     equally-close-to-cruise paths (still prevents oscillation).
 6. **Transitions happen on edges between adjacent route points** (climb-while-
    progressing), not in place. A transition from band `a` at point `i` to band `b` at
    point `i+1` crosses the altitude interval `[a, b]`. **Conservative column
@@ -170,9 +174,11 @@ def build_cost_model(
   `CloudCoverage.{BKN,OVC,...}`).
 - Icing cells: `sounding.icing_zones` (`IcingZone.base_ft/top_ft/risk/icing_type/
   sld_risk`), plus `sounding.indices.freezing_level_ft` for the warm-air floor.
-- Terrain: `ctx.elevation` (`ElevationProfile.points`, `max_elevation_ft`) — reuse the
-  existing `_field_elevation_ft` / `max_terrain_near_point` helpers and the current
-  `_TERRAIN_CLEARANCE_FT` (1000 ft) so the floor matches today's mitigation floor.
+- Terrain: `ctx.elevation`, looked up once inside `build_cost_model` via
+  `terrain_at_distance` (linear interp) so every consumer gets the *same* floor for a
+  point. **As shipped the floor margin is `mitigation_min_base_agl_ft` (3000 ft), not the
+  old `_TERRAIN_CLEARANCE_FT` (1000 ft)** — see *Implementation outcome*. (`_TERRAIN_CLEARANCE_FT`
+  still exists but only in the unrelated `analysis/sounding/advisories.py`.)
 - Ceiling: `ctx.flight_ceiling_ft` per point (flat in v1; per-point hook stays).
 - Altitude bins: align resolution to the terrain-clearance floor and
   `flight_ceiling_ft`; do not invent new constants.
@@ -198,16 +204,12 @@ property of the path model. That deletion is the success signal for this change.
 
 ## Consumer B — Icing escape (soft wall)
 
-Cost field from temperature + moisture + severity: high inside the icing band, **0
-below the freezing level** (warm air is feasible even in cloud), finite (crossable) for
-thin/light layers, `∞` for SLD/freezing precip (decision 8).
-
-- Today `icing_escape.py` models a single transition ("descend to warm air"). The path
-  model expresses the richer maneuver: climb above the icing to on-top, then descend
-  below it (clear of terrain) before destination — a two-transition profile — or reports
-  that no ice-free/warm continuous band exists.
-- Porting `icing_escape` is the validation that the interface isn't VFR-shaped
-  (consumer #2), and it upgrades the feature.
+Cost field (`_icing_cell_cost`): **0 below the freezing level** (warm air is feasible even
+in cloud), `_LIGHT_RIME_COST` for the one soft wall, `∞` for everything else icing-related
+(see decision 8 as tightened — LIGHT+RIME only). The old code modelled a single transition
+("descend to warm air"); the path model expresses climb-on-top-then-descend-below (a
+two-transition profile) or reports that no continuous ice-free/warm band exists. Porting it
+was the validation that the interface isn't VFR-shaped.
 
 ## Result model & cross-section
 
@@ -216,11 +218,16 @@ requirement**: the cross-section is a `(route-distance × altitude)` canvas that
 draws the cruise line + flight ceiling (`reference-lines.ts`), i.e. exactly the solver's
 coordinate space.
 
-- Extend `Mitigation` (`models/advisories.py`) with an **optional**
-  `segments: list[(dist_from_nm, dist_to_nm, alt_band_ft)]` + `transitions`
-  (and a `blocked_interval` for the no-path case). **Keep the existing flat
-  `altitude_ft` / `distance_nm` fields** so old packs deserialize and digest / MCP /
-  iOS / web keep rendering the one-line tip unchanged. Non-breaking.
+- **As shipped** (`models/advisories.py`): the bands landed as a nested sub-model rather
+  than loose fields — `Mitigation.profile: MitigationProfile | None`, where
+  `MitigationProfile{segments: [MitigationSegment(dist_from_nm, dist_to_nm, altitude_ft)],
+  transitions: [MitigationTransition(from_nm, to_nm, from_altitude_ft, to_altitude_ft)]}`.
+  The existing flat `altitude_ft` / `distance_nm` fields are **kept**, so old packs
+  deserialize (`profile=None`) and digest / MCP / iOS / web keep rendering the one-line
+  tip unchanged. Non-breaking.
+- The planned `blocked_interval` field was **not** added: a `Blockage` means "no tip", so
+  there is no mitigation object to hang it on. If the no-path case ever needs to reach the
+  UI it needs a home other than `Mitigation`.
 - The varying-altitude cross-section overlay is a **separate follow-up issue** that
   depends on this result model: a new neutral-colored `mitigation-path` line layer beside
   the reference lines (advice, not verdict — never green/red), a layer toggle, and a
@@ -238,37 +245,36 @@ fall out for free.
 
 ## Testing
 
-Synthetic grids (no fixtures — hand-built cost fields), asserting profile / blockage:
+Synthetic grids (no fixtures — hand-built cost fields), asserting profile / blockage.
+Beyond the obvious cases (single deck, multi-deck-with-a-gap that a greedy max-altitude
+scan misjudges, deck-to-terrain blockage, above-cruise-only band, no-path), three tests
+guard decisions that are easy to silently break — keep them if you refactor:
 
-- single deck (route under it)
-- multi-deck with a gap (greedy max-altitude scan fails; DP must thread the gap)
-- deck running to terrain (blockage reported, no false mitigation)
-- above-cruise-only feasible band (decision 2)
-- no feasible path (blockage with from/to/reason)
-- two-transition icing (climb-over-then-descend, decision 6/8)
 - **departure-anchored deck** (decision 9): OVC at the departure floor → blockage, not a
-  "start at cruise" cheat; and the symmetric arrival case
-- **deck ends between points** (decision 6): deck present at point `i`, clear at `i+1` →
-  the `i→i+1` climb is still blocked by the conservative column convention
-- **soft-wall preference** (decision 5, tier 2): a feasible stay-at-cruise path through
-  light icing must lose to a two-transition path that escapes most of the icing —
-  guards against the finite-cost tier being a no-op
+  "start at cruise" cheat; plus the symmetric arrival case.
+- **deck ends between points** (decision 6): deck at point `i`, clear at `i+1` → the
+  `i→i+1` climb is still blocked by the conservative column convention.
+- **soft-wall preference** (decision 5, hazard tier): a feasible stay-at-cruise path
+  through light icing must lose to a two-transition escape — guards against the
+  finite-cost tier degenerating into a no-op.
 
-Regression: port `vfr_feasibility` first as a **pure refactor** that emits the same flat
-`Mitigation` objects, and behavior-compare over the eval corpus — the 30+ packs that
-carry corridor mitigations are the before/after set. Classify each change as
-same / better / removed / new; the solver must be equal-or-strictly-better before the
-segment model is grown behind it. Do not change the flat output and the model shape in
-the same step, or a solver bug is indistinguishable from a shape change in the diff.
+Regression method used (keep it if the solver is touched again): port as a **pure
+refactor** emitting the same flat `Mitigation` objects, behavior-compare over the eval
+corpus, classify each change as same / better / removed / new, and require
+equal-or-strictly-better *before* growing the segment model behind it. Never change the
+flat output and the model shape in the same step, or a solver bug is indistinguishable
+from a shape change in the diff. Outcome of that compare: see below.
 
-## Sequencing
+## Sequencing (all steps done)
 
-1. This design doc + solver interface (this commit).
-2. `solve()` DP + synthetic-grid tests — pure, no advisory dependency.
-3. Port `vfr_feasibility` mitigations onto the solver; validate equal-or-better across
-   the corridor eval packs; delete the four #328/#330 gates.
-4. Port `icing_escape` (gains climb-over-then-descend); add the two-transition test.
-5. Add optional `segments` to the result model; digest / MCP / iOS / web unchanged.
+1. ~~Design doc + solver interface.~~
+2. ~~`solve()` DP + synthetic-grid tests — pure, no advisory dependency.~~
+3. ~~Port `vfr_feasibility`; validate equal-or-better; delete the four #328/#330 gates.~~
+4. ~~Port `icing_escape` (gains climb-over-then-descend) + two-transition test.~~
+5. ~~Add the optional structured profile to the result model; digest / MCP / iOS / web unchanged.~~
+
+Still open: the varying-altitude cross-section overlay (separate follow-up issue — the
+data shape is shipped, the canvas layer is not).
 
 ## Out of scope / future
 
@@ -326,25 +332,23 @@ the same step, or a solver bug is indistinguishable from a shape change in the d
   `test_vertical_staircase_deck_scans_for_flat_altitude`.
 - **Tests:** `tests/test_vertical_profile.py` (solver, synthetic grids),
   `tests/test_vfr_mitigation.py` (VFR port), `tests/test_icing_escape_mitigation.py`
-  (icing port). Full suite green (3109 passed).
+  (icing port).
 - **Eval-corpus behavior compare (done):** old-code vs new-code mitigations recomputed via
   `eval_workbench.rerun.rerun_manifest` over the 204 staging packs (the committed corpus
   baselines predate the mitigation feature, so the before/after is old-code vs new-code, not
-  saved-baseline vs new). Result for VFR `cruise_imc`: **40 removed = blockage** (new solver
-  finds a full-column cloud wall → no continuous VMC path, old %-scan's lower tip was
-  unflyable), **14 removed = reaches-cruise** (continuity-aware profile reaches cruise, old
-  was over-eager), **1 removed = below the new 3000 ft floor** (expected), **1 changed**
-  (5000 GREEN → 7500 AMBER: the highest *continuously-reachable* band, more correct), 1 kept.
-  Corridor climb/descent tips: a refinement wash (~7 new the solver newly finds, ~7 dropped
-  as not continuously flyable). Icing: ~40 new escape tips (the additive upgrade), bounded by
-  the flight ceiling (e.g. a FL180/ceiling-FL250 flight climbs 1000 ft over a patch). Net:
-  **equal-or-better — removals are overwhelmingly improvements or expected; no regressions
-  found** (every removal is a real wall, a genuine reaches-cruise, or the floor change).
+  saved-baseline vs new). VFR `cruise_imc` **lost ~55 tips and that is the win**: 40 were a
+  full-column cloud wall (old %-scan offered a lower altitude that wasn't continuously
+  flyable), 14 were flights that actually reach cruise, 1 fell below the new 3000 ft floor;
+  1 changed 5000 GREEN → 7500 AMBER (the highest *continuously-reachable* band). Corridor
+  tips were a wash (~7 new, ~7 dropped as not continuously flyable); icing gained ~40 escape
+  tips, ceiling-bounded. Net: **equal-or-better, no regressions found.** If a future change
+  to the solver removes tips, check them against this pattern before assuming a bug.
 
 ## Related
 
 - Issue #335 (this plan), supersedes the corridor logic in #328 / #330.
 - `designs/advisories.md` — evaluator protocol and `RouteContext`.
 - `designs/visualization.md` — cross-section layers / `reference-lines.ts`.
-- `designs/meteorology-decisions.md` — record the BKN/OVC and icing soft-wall calls here
-  once implemented.
+- `designs/meteorology-decisions.md` — **still outstanding:** the BKN/OVC-both-`∞` call
+  (decision 7) and the LIGHT+RIME-only soft wall (decision 8) are shipped but have no entry
+  there yet. Add them before either is revisited.

@@ -1,20 +1,46 @@
 # Refresh pipeline performance investigation
 
-> **Outcome (verified 2026-06-13):** Phases A, B-1', B-2 and B-3 all
-> shipped to prod. B-3 evolved further into a priority-aware,
-> fault-tolerant decode dispatcher (GH #171 / PR #172, shipped
-> 2026-05-22) — see MEMORY note `project_decode_priority_dispatcher.md`
-> and `project_grib_process_pool.md`. Only **Phase C** (ICON memory
-> streaming) and the **parking-lot items (O-1, O-3 dup, O-4, O-5)**
-> remain unbuilt, all deliberately deferred (memory is not a
-> constraint post-upgrade). The active investigation is complete;
-> this doc is now mostly a historical record of the measurements and
-> reasoning. The durable B-3 architecture has since been folded into
-> its own design doc (`designs/grib-decode-dispatcher.md`, in INDEX),
-> so this plan is now a candidate to archive. Two leftover Phase A nits
-> (`_stage_label` dead branch in `scripts/profile_refresh.py`,
-> WARNING-on-full-failure in `fetch_icon_eu_fields`) are still
-> unaddressed but low priority.
+> **Outcome (re-verified against code 2026-08-15):** Phases A, B-1',
+> B-2 and B-3 all shipped to prod. B-3 evolved further into a
+> priority-aware, fault-tolerant decode dispatcher (GH #171 / PR #172,
+> shipped 2026-05-22) — see MEMORY notes
+> `project_decode_priority_dispatcher.md` / `project_grib_process_pool.md`.
+> Only **Phase C** (ICON memory streaming) and the **parking-lot items
+> (O-1, O-3 dup, O-4, O-5)** remain unbuilt, all deliberately deferred
+> (memory is not a constraint post-upgrade). O-4 confirmed still open:
+> `pipeline.py` sections 5 (GRAMET) and 7 (digest) are still sequential.
+> The active investigation is complete; **this doc is now a historical
+> record of the measurements and reasoning, not a live plan.** The
+> durable B-3 architecture lives in its own design doc
+> (`designs/grib-decode-dispatcher.md`, in INDEX), so this plan is a
+> candidate to archive.
+>
+> **What drifted since the briefs were written** (read the code, not the
+> brief, for current shape):
+> - **Line numbers in every brief below are as-of-May-2026 and are now
+>   wrong.** `_decode_pressure_vars_from_datasets` is `decode.py:542`
+>   (not 295), `decode_ecmwf_pressure_per_point` is `:2248` (not 1161),
+>   `decode_ecmwf_surface_per_point` is `:2829` (not 1403).
+> - **B-1' shipped as a numpy advanced-indexing bilinear gather**
+>   (corner indices/weights computed once per dataset), *not* the
+>   `scipy.ndimage.map_coordinates` the brief sketched. Don't grep for
+>   `map_coordinates` — it isn't there.
+> - **`_GribTimer` never moved to a `_grib_timer.py` module** (the B-3
+>   brief speculated one); it stays in `fetch/grib/__init__.py:93`.
+> - **The ICON cycle/horizon constants are no longer literals.**
+>   `ICON_EU_MAIN_CYCLES` / `ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT` in
+>   `icon_eu_fetch.py:361-363` now derive from the `ICON_EU` model
+>   registry entry, so the "single-file two-line revert" note in
+>   *Files touched* no longer describes the code.
+> - **The Phase A smoke-test fix #2 shipped**: `is_cached(run_dir, name)`
+>   exists in `fetch/grib/cache.py:236` and is what the prefetch/precache
+>   paths call; only genuine reads use `get_cached`.
+>
+> **Still open, confirmed 2026-08-15** (low priority, pick up alongside
+> the next touch of these files): `_stage_label` in
+> `scripts/profile_refresh.py:71` is still dead (both call sites pass
+> `None`), and `fetch_icon_eu_fields` (`icon_eu_fetch.py:955`) still
+> logs INFO on full failure while the three sibling fetch helpers warn.
 
 ## Status (2026-05-02)
 

@@ -2,6 +2,16 @@
 
 > Interactive 2D cross-section (GRAMET-inspired) and geographic map to visualize weather metrics along the route
 
+> **ARCHIVED — implemented and since outgrown. Historical planning record; do NOT read as
+> current truth.** Current design: [../visualization.md](../visualization.md) (plus
+> [../skewt-canvas.md](../skewt-canvas.md) and [../route-graph.md](../route-graph.md)).
+> All six phases below shipped despite the unchecked boxes — the checklists are the original
+> plan, never ticked off. What the shipped system added beyond this plan: a fourth `compare`
+> layout mode, a separate route-graph panel for scalar metrics, terrain from the elevation
+> profile, selectable cross-section colour themes, and roughly 20 cross-section layers rather
+> than the eight sketched in §3.2. Read this doc only for the original intent behind the
+> layer/scale/data-extract separation and the resolved decisions in §8.
+
 ## 1. Overview
 
 Two new visualization panels on the briefing page:

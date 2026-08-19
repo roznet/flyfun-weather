@@ -9,14 +9,14 @@
 `compute_alternates` user preference — now **default on** (was experimental /
 opt-out) — and `days_out <= 2`. Pilots can opt out in Settings.
 
-> **Graduating a feature (experimental → default-on).** The recipe used here is
-> the template for promoting any opt-in feature: (1) flip the resolution default
-> in `api/packs.py` (`get(key, True)`) + the `PipelineOptions` default; (2) ship a
-> one-off backfill data-migration that flips existing profiles' `settings_json`
-> (see `alembic/versions/069_alternates_default_on.py`, modelled on 028 — pure
-> Python, dialect-agnostic); (3) drop the "⚠️ Experimental" wording and move the
-> toggle out of the Settings **Experimental / Beta** section. New profiles need no
-> template change — they omit the key and resolve to the new default.
+> **Graduating a feature (experimental → default-on)** — the recipe here is the
+> template: (1) flip the resolution default in `api/packs.py` (`get(key, True)`)
+> + the `PipelineOptions` default; (2) ship a one-off backfill data-migration
+> flipping existing profiles' `settings_json` (`069_alternates_default_on.py`,
+> modelled on 028 — pure Python, dialect-agnostic); (3) drop the "⚠️ Experimental"
+> wording and move the toggle out of Settings' **Experimental / Beta** section.
+> New profiles need no template change — they omit the key and resolve to the
+> new default.
 
 ## Intent
 
@@ -130,10 +130,24 @@ Per-model split reuses `tasks/standalone_verification.py`:
 | GFS, ICON | Open-Meteo multi-point + GFS/ICON GRIB ceiling (`_fetch_forecasts_for_model` + `_enrich_with_grib`) |
 | ECMWF | local GRIB a1 (surface incl. **visibility**) + a2 (pressure) (`fetch_ecmwf_grib_snapshots`) |
 
-ECMWF visibility is GRIB-only (Open-Meteo doesn't republish it). GRIB decode is
-point-count-insensitive, so a few dozen alternates is effectively free on decode;
-the real cost is N×3 lite soundings. Runway ends are fetched per-request via
-`weatherbrief.airports.get_runway_ends` (the map caches watchlist runways only).
+ECMWF visibility is GRIB-only (Open-Meteo doesn't republish it); when no local
+ECMWF run covers the ETA, `_fetch_eta_snapshots` degrades to the Open-Meteo path
+for ECMWF too (no ECMWF visibility, but consensus still runs) rather than
+dropping the model. GRIB decode is point-count-insensitive, so a few dozen
+alternates is effectively free on decode; the real cost is N×3 lite soundings.
+Runway ends and field elevations are fetched per-request via
+`weatherbrief.airports.get_runway_ends` / `get_airport_elevations` (the map
+caches watchlist runways only).
+
+> **The 3 model passes run concurrently** (#271) — each pass writes only its own
+> `model` key per ICAO, so the stage cost collapses toward the slowest single
+> model. Two non-obvious constraints: each worker builds its **own**
+> `requests.Session` (not thread-safe, must not be shared), and submission goes
+> through `copy_context().run` so the **decode-priority ContextVar** propagates —
+> a bare `ThreadPoolExecutor` worker starts from the default context and would
+> silently demote an interactive briefing's GRIB decode to SCHEDULED. Model
+> metadata is fetched once, outside the parallel region. A single model's failure
+> is non-fatal.
 
 > **Batched, early-stopping fetch (latency optimisation, #271 follow-up).**
 > Because the N×3 lite-sounding fetch is the dominant cost, `run_alternates`
@@ -165,17 +179,13 @@ run_alternates(
     max_candidates=ALT_MAX_CANDIDATES,   # 30
     require_hard_runway=True,
     min_runway_ft=ALT_DEFAULT_MIN_RUNWAY_FT,  # 2000
+    aggregation="majority",              # user's advisory aggregation preference
     now=None,
 ) -> RouteAlternates | None
 ```
 `ALT_POSITION_MARGIN_NM = 10.0`.
 
-Candidate selection: (1) geometry union of near-route corridor ∪ dest-radius;
-(2) drop departure + destination; (3) runway suitability (hard runway, length ≥
-min); (4) cap to nearest `max_candidates` by dest distance; (5) batched
-nearest-first fresh fetch + shared assembly at ETA, stopping early once a
-non-major candidate qualifies under FAA+EASA (see "Batched, early-stopping
-fetch"); (6) **per-candidate** approach gate (below).
+Candidate selection runs the funnel tabulated below.
 
 > **No backend preference filtering (changed).** `large_airport` and
 > `scheduled_service` are **no longer dropped** server-side — that silently
@@ -202,20 +212,14 @@ gap between them surprised a reader (e.g. *"25 candidates within 50 nm" but only
 | → | survivors, ranked closest-first | **`len(alternates)`** (returned to the client) |
 | 7. View filters (client) | hide `is_major` (default on) + max-distance-from-dest (default 100 nm) | the **rows the pilot sees** |
 
-So **`candidates_evaluated` is the number actually fetched (stage 5)** — which,
-thanks to the early stop, is often a single batch and *not* the full post-cap
-pool — *not* the number returned. The returned list is what survives stages 5–6;
-the **shown** list is that minus the client-side view filters (stage 7). For a
-typical IFR destination the gate (stage 6) is the dominant server-side reducer —
-most nearby fields are
-sub-VFR with no published approach.
-
-**Cap × majors interaction:** because majors now reach stage 4, they compete for
-the 30 nearest-to-dest slots. The effect is minor (large_airports are rare within
-the corridor/radius) and the default-visible set — non-major fields closest to the
-destination — is exactly what the nearest-to-dest cap favours, so it survives.
-The distance selector's **"All"** means *all returned* candidates, still bounded
-by the stage-4 cap (it does not re-query the backend for a wider net).
+So **`candidates_evaluated` is the number actually fetched (stage 5)** — often a
+single batch thanks to the early stop, *not* the post-cap pool and *not* the
+number returned. For a typical IFR destination the approach gate (stage 6) is the
+dominant server-side reducer: most nearby fields are sub-VFR with no published
+approach. Majors now reach stage 4 and compete for the 30 nearest-to-dest slots
+(minor effect — large_airports are rare in the corridor, and the cap favours
+exactly the default-visible set). The distance selector's **"All"** means *all
+returned*, still bounded by the stage-4 cap — it does not re-query for a wider net.
 
 The returned list is **not** filtered to "beats the destination" — it shows every
 survivor with a per-row `dominates_destination` flag and `vs dest` Δ tags; the
@@ -340,11 +344,14 @@ hidden by default in the UI list controls); operational-friction:
 `AlternateAxisPick` (`axis`, `icao`, `distance_from_dest_nm`, `position`).
 `ALT_AXIS_LABELS` maps axis keys to display labels (used by text digest + UI).
 
-`RouteAlternates` (`destination_icao/_category/_crosswind_kt`, `eta`,
-`corridor_nm`, `radius_nm`, `require_approach`, `approach_filter_relaxed`,
-`candidates_evaluated`, `alternates`, `nearest_improving`, `computed_at`;
-plus `destination_ceiling_ft/_visibility_m` and `alternate_requirement` —
-all three populated by the post-step, see "Regulatory layer").
+`RouteAlternates` (`destination_icao/_category/_crosswind_kt`,
+`destination_ceiling_ft/_visibility_m`, `eta`, `corridor_nm`, `radius_nm`,
+`require_approach`, `approach_filter_relaxed`, `candidates_evaluated`,
+`alternates`, `nearest_improving`, `computed_at`). All of those come from
+`run_alternates`; only `alternate_requirement` is filled later by the post-step
+(see "Regulatory layer"). The `destination_ceiling_ft/_visibility_m` pair is
+`run_alternates`' own dest consensus, seeded *for* the post-step to read on the
+no-TAF path — it is an input to the regulatory layer, not an output of it.
 
 ## Presentation
 - **Briefing web UI**: `briefing-ui.ts:renderRouteAlternates(snapshot)` mirrors
@@ -362,8 +369,24 @@ all three populated by the post-step, see "Regulatory layer").
   via `ALT_AXIS_LABELS`) + ranked table (top 8). When the post-step populated
   `alternate_requirement`, it also prints the destination "Alternate required?
   FAA/EASA" line and per-candidate FAA/EASA tags (owned by alternate-requirement.md).
-- **LLM digest**: intentionally **NOT** fed to the prompt yet — the block in
-  `digest/prompt_builder.py` is commented out (`#210`). Deferred to avoid prompt
+- **iOS**: `Views/Briefing/AlternatesView.swift` + `Models/API/AlternatesResponse.swift`.
+  Mirrors the web defaults exactly (hide majors `@State` on, ≤ 100 nm, "All" =
+  nil) — a hand-copied surface, so a change to the web list controls or the DTO
+  must be mirrored here (`/sync-ios-web`). Cards render `operational_flags` chips
+  and the FAA/EASA tags.
+- **API / connectors**: `GET /api/flights/{id}/packs/{ts}/alternates`
+  (`api/packs.py:get_alternates`) extracts just the `alternates` key of
+  `briefing.json` — the block lives on the snapshot, **not** a standalone pack
+  artifact. Web reads it from the snapshot bundle it already has; iOS / MCP /
+  ChatGPT use this endpoint (`api/agent.py:get_alternates`,
+  `mcp/server.py:get_alternates`, fetched via `mcp/client.py`). 404 covers all
+  three "nothing computed" cases (pre-split pack, no snapshot, alternates off /
+  destination not marginal). `get_briefing` carries only a compact hook; the MCP
+  tool docstring is the place that repeats the **weather-improvement, not
+  operational-suitability** caveat to the model.
+- **LLM digest**: intentionally **NOT** fed to the prompt yet — the call in
+  `digest/prompt_builder.py` is commented out (`#210`), though
+  `_format_alternates_context` is written and ready. Deferred to avoid prompt
   bloat until the feature settles.
 
 ## Gotchas
@@ -391,11 +414,14 @@ all three populated by the post-step, see "Regulatory layer").
 - Shared assembly: `analysis/airport_consensus.py`; consumed by
   `tasks/map_queries.py`
 - Pipeline / prefs: `pipeline.py`, `api/profiles.py`, `api/packs.py`
-- UI: `web/ts/managers/briefing-ui.ts:renderRouteAlternates`
+- UI: `web/ts/managers/briefing-ui.ts:renderRouteAlternates`;
+  iOS `app/flyfun-weather/flyfun-weather/Views/Briefing/AlternatesView.swift`
+- Connector surface: `api/packs.py:get_alternates`, `api/agent.py:get_alternates`,
+  `mcp/server.py:get_alternates`
 - Operational-friction flags (#344): `analysis/operational_flags.py:cross_border_flag`,
   `euro_aip.borders.crossing_requirements`; water crossing follow-up = #345
 - Regulatory post-step: `tasks/alternate_requirement.py`,
   `analysis/alternate_requirement.py` →
   [alternate-requirement.md](./alternate-requirement.md)
-- Related: [standalone-verification-plan.md](./future/standalone-verification-plan.md),
+- Related: [standalone-verification-plan.md](./archive/standalone-verification-plan.md),
   [advisories.md](./advisories.md)

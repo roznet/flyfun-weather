@@ -1,13 +1,15 @@
 # iOS App Modernisation — UX & Visual Brainstorm
 
-> **Status: SHIPPED (verified 2026-07-11). This is now a historical plan, kept for the "why".**
+> **Status: SHIPPED (verified 2026-07-11, re-verified 2026-08-15). Historical plan, kept for the "why".**
 > Started as a brainstorm 2026-06-23; the whole §8 phase plan executed. Epic `#285` and
-> **all phases #286–#293 (P0–P7) are CLOSED.** The §0 baseline and the §4/§6 "DECIDED"
-> items are a **historical snapshot** — do not read them as the app's current shape.
-> The durable design (shared-state briefing, FocusIntent deep-links, cross-section config +
-> readout strip, route graph, map metrics, advisory-detail ladder, Skew-T pass, native
-> edit-flight) now lives in **shipped code** under `app/flyfun-weather/` and should be folded
-> into the `ios-app-*` design docs; this file can then be archived.
+> **all phases #286–#293 (P0–P7) are CLOSED.** The §0 baseline, the §4/§6 "DECIDED" items
+> **and the §5 parity tables** are a **historical snapshot** — do not read any of them as the
+> app's current shape.
+> **The durable design has already been folded into the `ios-app-*` docs** — read those, not
+> this file, for current truth: `ios-app-overview.md` ("Current Implementation Status" — tab
+> set, `FocusIntent`, cross-section layer stack, map overlay, pack chip), `ios-app-ui.md`
+> (per-tab as-built layouts), `ios-app-architecture.md` (module map). Live iOS↔web gaps are
+> tracked in `designs/future/ios-web-known-gaps.md`. **This file is ready to archive.**
 >
 > **Where the build diverged from the plan (so you're not misled):** the shipped briefing
 > tabs are **Advisory · Discussion · Cross-Section · Map** (+ PIREPs when permitted), NOT the
@@ -806,8 +808,18 @@ offline indicator, native nav chrome.
 
 ## 5. Cross-section / Skew-T parity & sync (the "keep in sync going forward" ask)
 
-### 5.1 Current parity vs web
-| Subsystem | iOS coverage | Missing |
+### 5.1 Parity vs web — SNAPSHOT 2026-06-23, MOSTLY CLOSED SINCE
+> **Do not read this table as current.** Phases 1/3/4/6 closed most of it. As of 2026-08-15
+> the app ships: square **and** re-ported natural cloud bands (`Layers/CloudBandsNatural.swift`),
+> LCL/LFC/EL, the route graph (`Views/RouteGraph/`, Swift Charts), the map metric overlay
+> (`Views/Map/MapMetrics.swift`), cross-section themes + presets + legend
+> (`CrossSectionTheme.swift` / `Layers/CrossSectionPresets.swift`), and the Skew-T side-panel
+> variable set (`SkewTVariableCatalog.swift`). **Still genuinely absent** (deferred by design,
+> §4.7/§4.8): multi-model **compare mode**, and the IENG/SLD, E-shear, fronts and
+> night/obscuration cross-section layers (`CrossSectionPresets` keeps e.g. `sld-bands` as a
+> parity id and drops it at apply time). Track those in `designs/future/ios-web-known-gaps.md`.
+
+| Subsystem | iOS coverage (2026-06-23) | Missing then |
 |---|---|---|
 | Cross-section layers | 16/25 (~64%) | **square clouds (missing) + natural needs re-port to the improved algo (§5.4)**, IENG/SLD icing, E-shear turb, fronts, night/obscuration, current-conditions |
 | Temp/stability lines | 3/6 | LCL, LFC, EL (**server data already present — cheap win**) |
@@ -823,6 +835,10 @@ Both clients consume the **same server JSON**, but **rendering is 100% duplicate
 (TS vs Swift). A new web layer = hand-port to Swift + App Store cycle. **No automation.**
 Worse: iOS `SoundingProfileLevel` decode **drops** the extended fields (RH/θe/Ri/icing
 indices…) the web uses for side panels — *the data already arrives and is thrown away.*
+**[FIXED by Phase 0 / #286 — the extended fields decode and feed `SkewTVariableCatalog`;
+`cross_check` and `parameters_used` reach the advisory detail view.]** The *structural*
+anti-drift work (schema codegen, backend-served layer/metric registries) was **not** done —
+rendering is still hand-ported, so the drift mechanism below is still live.
 
 ### 5.3 Sync strategy options (decide later)
 - **A — Shared schema → codegen (low effort, high leverage).** One source-of-truth schema
@@ -840,7 +856,10 @@ indices…) the web uses for side panels — *the data already arrives and is th
 **Working stance:** do **A** (schema/codegen + decode dropped fields) regardless; decide
 B vs C only for the deep-viz parity question after the UX north star settles.
 
-### 5.4 Cloud rendering styles — emulate the web's improved natural + square [DECIDED: port]
+### 5.4 Cloud rendering styles — emulate the web's improved natural + square [DONE — Phase 1 / #287]
+> Shipped in `Views/CrossSection/Layers/CloudBandsNatural.swift` (natural + square in one
+> port, web layer ids `square-cloud-bands` / `square-nwp-cloud-bands` preserved).
+
 The web's `cloud-bands-factory` got materially better — **natural** (flat-bottom puffs, bumpy
 quadratic-Bézier tops, coverage as *horizontal fill-fraction*: SCT gaps / BKN touching / OVC blanket,
 deterministic per-band hash for stable shapes, global-x anchoring for coherent tiling) and **square**

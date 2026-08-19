@@ -1,5 +1,28 @@
 # Vertical Motion & Energy Analysis — Design Document
 
+> **ARCHIVED — implemented. Historical planning record; do NOT read as current truth.**
+>
+> All three tiers shipped: `analysis/sounding/vertical_motion.py`
+> (`compute_stability_indicators`, `classify_vertical_motion`, `assess_vertical_motion`),
+> `omega_pa_s` / `w_fpm` / `richardson_number` / `bv_freq_squared_per_s2` on `DerivedLevel`,
+> `VerticalMotionAssessment` + `CATRiskLayer` + `VerticalMotionClass` / `CATRiskLevel`
+> in `models/analysis.py`, and consumption by `TurbulenceEvaluator` /
+> `MountainWindEvaluator` in `analysis/advisories/`.
+>
+> **The numbers below are the original guesses and several were superseded in
+> implementation — do not port them back.** In particular: the convective omega
+> threshold is 1 Pa/s, not 10; contamination is |ω| > 0.5 Pa/s over 700–400 hPa;
+> Richardson CAT tiers keep the classical 0.25/0.5/1.0 base but are **altitude-ramped**
+> (×1 → ×2 between 10,000 and 20,000 ft) to offset the NWP positive-Ri bias; and ICON,
+> listed here as having no omega, now gets it derived from ICON-EU GRIB `w` inside the
+> EU domain. A second, stability-free turbulence index (E-Shear) was added later and has
+> no counterpart in this plan.
+>
+> For current truth start at [`analysis.md`](../analysis.md) §"Vertical Motion & CAT",
+> [`analysis-metrics.md`](../analysis-metrics.md) (metric catalog + thresholds),
+> [`advisories.md`](../advisories.md) (`TurbulenceEvaluator`), and
+> [`meteorology-decisions.md`](../meteorology-decisions.md) for the rationale.
+
 ## Overview
 
 Add vertical motion diagnostics and turbulence indicators to the sounding analysis pipeline. This extends the existing Phase 4a sounding analysis (thermodynamics, clouds, icing, convective) with NWP-predicted vertical velocity profiles and derived stability indicators.

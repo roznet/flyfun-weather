@@ -34,10 +34,11 @@ server side is built and tested (`tests/test_briefing_notifications.py`):
   `reconcileBadge` / `markBriefingSeen` / `requestPushAuthorizationAndRegister`.
   Badge reconcile + token refresh run in the existing `scenePhase == .active`
   block; mark-seen fires when a briefing opens (`BriefingContainerView`).
-- Settings → a "Briefing Push Alerts" toggle (`SettingsView`) that requests iOS
-  authorization, registers, and writes `notify_push` via
-  `PUT /api/user/preferences`. Entitlement `aps-environment` + the
-  `remote-notification` background mode are added.
+- Settings → a push toggle (`SettingsView`) that requests iOS authorization,
+  registers, and writes `notify_push` via `PUT /api/user/preferences`. (#371
+  reshaped this section into the Briefing-updates 3-stop + Email + Push described
+  below.) Entitlement `aps-environment` + the `remote-notification` background
+  mode are added.
 
 Deployment must set the APNs secrets (see "APNs key management" below).
 
@@ -75,8 +76,11 @@ are now fully controllable on both clients, with the semantics tightened:
   app-deleted-without-sign-out case): losing the *last* device while
   `notify_email` is off **and scope ≠ off** re-enables email and
   raises a one-time `notify_decay_notice` (surfaced in the prefs response,
-  dismissed by PUTting it false). Prefs also carry `push_device_count` so a
-  device-less web user sees an "install the app" push row.
+  dismissed by PUTting it false). `update_preferences` normalizes the same way on
+  write — a PUT that would leave no deliverable channel (`notify_push` with zero
+  devices doesn't count) reroutes `notify_scope` to `off`, so the invariant holds
+  even against a client that doesn't enforce it. Prefs also carry
+  `push_device_count` so a device-less web user sees an "install the app" push row.
 - **UI shape.** Account › Notifications: a **Briefing updates** 3-stop (Off /
   Assessment changes / Every update) folding `notify_scope` + `notify_change_only`,
   an **Email** toggle, and a device-conditional **Push** toggle. Per-flight: a
@@ -86,11 +90,29 @@ are now fully controllable on both clients, with the semantics tightened:
   presence subsumes it: a manual refresh you walk away from now notifies (the
   poll/stream contact goes stale), and one you watch finish does not. `force_email`
   / `?notify_email=` are gone.
+- **UNAVAILABLE is not news (#392).** `notify_briefing_refresh` returns early when
+  the new pack's assessment is `UNAVAILABLE` — no push, no email, **no badge**.
+  Deliberately placed *ahead* of the WHEN gate, so it also wins over a per-flight
+  `notify` override: an unassessable briefing says our data is missing, not that
+  the pilot's weather changed. (`UNAVAILABLE` is likewise absent from
+  `_ASSESSMENT_RANK`, so it never produces a "worsened" delta either way.)
+- **iOS push state is two-valued.** `notify_push` on the server is the *effective*
+  pref = local intent (`AppState.wantsPush`, UserDefaults, seeded from the server
+  pref) **AND** iOS authorization. `reconcilePushAuthorization()` runs on every
+  `.active` and re-syncs `notify_push` both directions, so revoking notifications
+  in iOS Settings silences the server and re-granting auto-resumes it without
+  re-tapping the toggle. `enablePush()` returns `needsSettings` when iOS already
+  denied (it won't re-prompt) while *keeping* the intent.
+- **A push also freshens the open briefing.** Both the alert and silent-push
+  handlers call `AppState.signalExternalSync(flightId:)` — an observable nudge the
+  flight list and any open briefing answer with `syncLatestPack()`. So a foreground
+  push updates the visible pack, not just the badge, and push stays "one more sync
+  trigger" rather than a special path.
 
 ## Related Docs
 
 - [App Intents](./ios-app-intents.md) — the `RefreshBriefingIntent` whose loop this closes
-- [Overview](./ios-app-overview.md) — "push notifications for briefing updates" listed as not-built
+- [Overview](./ios-app-overview.md) — push notifications listed as shipped; the *watch/spatial-match* layer (Phase 3 M2) is what remains unbuilt
 - [Architecture](./ios-app-architecture.md) — auth, deep links (`flyfunweather://`, universal links)
 - [Server API](./ios-app-server-api.md) — endpoints consumed/added
 - [Multi-user deployment](./multi-user-deployment.md) — secrets, Resend email precedent
@@ -110,48 +132,42 @@ are now fully controllable on both clients, with the semantics tightened:
 
 ### Client (iOS)
 
-1. Register for remote notifications; obtain the APNs device token.
-2. `POST /api/devices` with `{ token, environment }` (`environment` = `sandbox` |
-   `production`, since a TestFlight/dev build's token is APNs-sandbox and must not
-   be sent via the prod APNs host). Upsert on the existing `device_tokens` row.
-3. Re-register on token change; **unregister on sign-out** (`DELETE /api/devices/{token}`)
-   so a signed-out device stops receiving another user's briefings.
-4. On tap: read `flight_id` + `timestamp` from the payload and deep-link to the
-   updated briefing — reuse the [App Intents](./ios-app-intents.md) `PendingNavigation`
-   seam (or the existing `flyfunweather://` / universal-link handler), so tap and
-   "open my next FlyFun briefing" land on the same code path.
+Register for remote notifications → `POST /api/devices` with `{ token, environment }`
+(`sandbox` | `production` — see the routing note below; upserts the `device_tokens` row).
+Re-register on token change; **unregister on sign-out** (`DELETE /api/devices/{token}`) so a
+signed-out device stops receiving another user's briefings. On tap, read `flight_id` +
+`timestamp` from the payload and deep-link through the [App Intents](./ios-app-intents.md)
+`PendingNavigation` seam — so a push tap, `flyfunweather://`, a universal link and "open my
+next FlyFun briefing" all land on one code path.
 
 ### Server
 
 - **`notify/push.py`** — token-based APNs (`.p8` key, HTTP/2, `apns-topic` = bundle id).
-  One function `send_briefing_push(user_id, flight, meta, *, delta)` mirroring
-  `send_briefing_email`. Route to the correct APNs host per stored `environment`.
-- **Emit once from the shared post-commit sink** `api/packs.py::_notify_refresh_complete` (after each path commits its pack), guarded
-  like `_try_send_email` (log-and-skip on any failure — a push must never break a refresh).
-  Every refresh (auto, in-app, Siri/MCP) funnels through this one function, so a single
-  hook covers them all — including the `RefreshBriefingIntent` loop. Do **not** copy the
-  email's scheduler-only placement (email fires only for auto-refresh; push must be broader).
+  As built: `send_briefing_push(db, user_id, flight, pack, *, delta, badge)` mirroring
+  `send_briefing_email`, plus `send_silent_badge_push(db, user_id, badge)` and
+  `count_user_devices`. Route to the correct APNs host per stored `environment`.
+- **Emit once from the shared post-commit sink** `api/packs.py::_notify_refresh_complete`
+  (after each path commits its pack), log-and-skip on any failure — a notification must never
+  break a refresh. Every refresh (scheduler, sync `_finalize_refresh`, streaming — so auto,
+  in-app, Siri/MCP) funnels through this one function, including the `RefreshBriefingIntent`
+  loop. Do **not** re-scatter this the way the old scheduler-only email was placed.
 - **Payload**: `alert` title/body from route + new assessment + `compute_refresh_delta`
-  ("EGTF → LFAT: now AMBER, ceiling worsened"); custom data `{ flight_id, timestamp }`;
-  `aps.badge` = server-computed unseen count (see Badge section).
-- **Send gating** — only on a *new* pack whose assessment changed or worsened (avoid
-  "still green" spam). Configurable; default to meaningful-change-only.
-- **In-app suppression** — a user watching the SSE progress bar in-app shouldn't also get a
-  banner. **Resolved by server-side presence** (#371): the notification decision suppresses
-  entirely when the user is *watching this refresh finish*, detected from watch-contact in
-  `refresh_registry` (SSE keepalive or `/packs/refresh/status` poll; see the presence bullet
-  above) — the same signal for web and iOS, so "distinguish 'I'm watching this' from 'tell me
-  when done'" is a server decision now, not a client-only heuristic. iOS
+  (`build_alert_body`); custom data `{ flight_id, timestamp }`; `aps.badge` = server-computed
+  unseen count (see Badge section).
+- **Send gating** — the WHEN gate above; default is meaningful-change-only
+  (`notify_change_only`), to avoid "still green" spam.
+- **In-app suppression** — a user watching the SSE progress bar shouldn't also get a banner.
+  **Resolved by server-side presence** (#371), the same signal for web and iOS, so this is a
+  server decision now rather than a client-only heuristic. iOS
   `UNUserNotificationCenterDelegate.willPresent` foreground banner-suppression remains as a
   harmless delivery backstop (badge still syncs).
 - **Endpoint** `POST /api/devices` (register/upsert) + `DELETE /api/devices/{token}`.
 
 ### Notification preferences
 
-Today email-on-completion is **implicit** — it fires whenever a flight's `auto_refresh`
-runs (when SMTP is configured), with one timing refinement (`defer_email_for_model_update`).
-There is no separate per-flight email flag; "email me when done" ≈ `auto_refresh` on.
-This generalizes into an explicit, channel-aware model with a per-flight override.
+*Pre-#366, email-on-completion was implicit: it fired whenever a flight's `auto_refresh` ran
+(SMTP configured), with no per-flight flag — "email me when done" ≈ `auto_refresh` on. That
+is what the model below replaced.*
 
 **Two orthogonal axes + a per-flight override.**
 
@@ -171,9 +187,13 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
   - `auto` — **legacy** (pre-#371 default); read as "on", never written by the UI.
 - **Content filter** → `notify_change_only` (default **on**): only when the assessment
   changed/worsened (`compute_refresh_delta`), vs every completion.
-- **Timing** → migrate the existing `defer_email_for_model_update` into this group,
-  channel-agnostic ("wait for an imminent model run before notifying" — applies to push too).
-- *(Advanced, optional)* **Quiet hours** — suppress **push** overnight (local); email unaffected.
+- **Timing** → `defer_email_for_model_update` (still email-named, still in the *service
+  toggles* group, not `notify_*`). It was never migrated and doesn't need to be: it shifts
+  the **scheduled refresh itself** (`scheduler.py::_user_defers_for_model_update` →
+  `_next_due_at`), so every channel inherits it for free. Rename only if it starts confusing
+  users.
+- *(Advanced, optional)* **Quiet hours** — not built (deferred out of v1); would suppress
+  **push** overnight (local) with email unaffected. No `quiet_hours` key exists.
 
 **Per-flight override** (flight settings — generalizes today's "email me when done"), on `FlightRow`:
 
@@ -182,7 +202,9 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
   the assessment is unchanged**; the change filter does not apply) | `mute` (never for this
   flight). Channels always follow the global channel selection.
 
-**Effective decision** (evaluated in `notify/dispatch.py::notify_qualifies` + presence, driven from `_notify_refresh_complete`). NOTE: as *shipped* (#371) the WHEN/HOW split is what the top-of-doc summary describes — the pseudocode below is the final form (an earlier draft gated email per-`triggered_by`; that was replaced by presence):
+**Effective decision** — `notify/dispatch.py::notify_qualifies` + presence, driven from
+`_notify_refresh_complete`. This pseudocode is the final (post-#371) form; an earlier draft
+gated email per-`triggered_by`, which presence replaced:
 
 ```
 # Single WHEN decision — presence AND the shared gate — drives badge + both channels:
@@ -202,35 +224,31 @@ email → deliver if notify_email
 
 ### UX principles
 
-- **Orthogonal controls, not a matrix.** Pick channels (multi-select) and one scope —
-  avoid a combinatorial email-auto / email-all / push-auto / push-all grid. One scope
-  applies to all selected channels.
-- **Per-flight is an override, not a second settings screen** — a 3-way segmented control
-  (Default / Notify / Mute) so the common case (follow global) is zero-thought.
-- **Push is conditional UI** — only actionable with a registered device; otherwise show a
-  gentle "install the app / enable notifications" hint.
-- **Migration preserves today's behavior** — existing users default to Email **on**,
-  scope `auto`, change-only **on**, push **off** until a device registers. No surprise.
+- **Orthogonal controls, not a matrix** — channels (multi-select) × one scope, never an
+  email-auto / email-all / push-auto / push-all grid.
+- **Per-flight is an override, not a second settings screen** — 3-way (Default / Notify /
+  Mute) so "follow global" is zero-thought.
+- **Push is conditional UI** — only actionable with a registered device; otherwise an
+  "install the app / enable notifications" hint (`push_device_count` drives this).
+- **Defaults preserve pre-#366 behavior** — email **on**, scope `auto` (still the stored
+  default; the UI writes only `all`/`off`), change-only **on**, push **off**. No surprise.
 
-### Other choices worth offering / deciding
+### Other choices
 
 - **★ DECIDED — per-flight notify stays a separate control, but auto-refresh seeds a smart
-  default.** The data model stays independent: the notify override never enables or schedules
-  auto-refresh, and a per-flight `notify` is still useful for manual/Siri refreshes on a flight
-  whose auto-refresh is off — the Siri-loop case. What changed (post-#371): the old auto-refresh
-  meant "email me whenever a new report is ready" — every scheduled run, unconditionally. The
-  new default (`notify_change_only` on) is quieter, gating on assessment change; but a report's
-  *detail* often moves while the assessment holds, so auto-refresh users would perceive it as
-  going silent. Fix: **enabling auto-refresh defaults that flight's bell to `notify`** (see
-  `api/flights.py::update_auto_refresh`) — restoring the every-completion ping (which is why
-  `notify` bypasses the change filter). It's a default, not a hard link: the user can drop the
-  bell back to `default` or `mute` afterward, and disabling auto-refresh leaves the bell as-is.
+  default.** The data model stays independent (the bell never enables or schedules
+  auto-refresh, and per-flight `notify` is useful for manual/Siri refreshes on a flight whose
+  auto-refresh is off — the Siri-loop case). But old auto-refresh meant "email me whenever a
+  new report is ready", unconditionally, while the new `notify_change_only` default gates on
+  assessment change — and a report's *detail* often moves while the assessment holds, so
+  those users would perceive it as going silent. Fix: **enabling auto-refresh defaults that
+  flight's bell to `notify`** (`api/flights.py::update_auto_refresh`), restoring the
+  every-completion ping — which is why `notify` bypasses the change filter. A default, not a
+  hard link: the user can drop the bell back afterward, and disabling auto-refresh leaves it.
 - **Batching/digest** — the scheduler can finish several flights close together; a future
-  digest could replace N separate pushes.
-- **Per-channel scope** — deliberately NOT in v1 (one scope for all channels); revisit only
-  if users ask for "email everything, push only auto".
-
-*(Badge count / cross-surface sync has its own section below.)*
+  digest could replace N separate pushes. Not built.
+- **Per-channel scope** — deliberately NOT in v1; revisit only if users ask for "email
+  everything, push only auto".
 
 ## Badge count & cross-surface sync
 
@@ -240,23 +258,17 @@ is missed. There is already a precedent to mirror — system-message unseen coun
 (`api/messages.py`: `messages_last_seen_id` in prefs, server-computed `unseen_count`,
 `POST /messages/seen`). We do the same, per-flight.
 
-**State (per user × flight) — a flight counts at most once:**
-- `latest_pack_ts` — the flight's newest pack (already known server-side).
-- `last_notified_pack_ts` — pack ts of the most recent notify-qualifying update.
-- `last_seen_pack_ts` — set to the flight's **current `latest_pack_ts`** when the user opens
-  that flight's briefing (web or app).
-- Flight is **unseen** iff `last_notified_pack_ts > last_seen_pack_ts`.
-- **Badge = count of unseen flights** (each flight 0 or 1), computed server-side on demand
-  (like `unseen_count`).
+**State** — table `flight_briefing_seen` (`db/models.py::FlightBriefingSeenRow`, unique on
+user×flight), maintained by `notify/badge.py`:
+- `last_notified_ts` — pack ts of the most recent notify-qualifying update
+  (`record_notify_qualifying`, called from the dispatch gate).
+- `last_seen_ts` — set to the flight's **current latest pack ts** when the pilot opens that
+  flight's briefing, web or app (`mark_flight_seen`).
+- Flight is **unseen** iff `last_notified_ts > last_seen_ts`; **badge = count of unseen
+  flights** (each 0 or 1), computed on demand by `compute_badge_count`.
 
-This is exactly the intended semantics: if a flight refreshes **twice** and neither is
-opened it still counts **once** (we compare the *latest* notified pack, not each pack);
-opening the briefing marks the current latest pack seen and clears the flight no matter how
-many packs piled up; older unopened packs never add to the count.
-
-Storage: mirror messages (a `briefing_seen` map in `app_prefs_json`) or a small
-`flight_briefing_seen(user_id, flight_id, ts)` table. Flights per user are few; either
-works — lean to the table for cleanliness.
+So a flight that refreshes **twice** unopened still counts **once** (we compare the *latest*
+notified pack, not each pack), and opening clears it however many packs piled up.
 
 **Three mechanisms keep web ↔ app ↔ multi-device in sync:**
 1. **Badge in every alert push** — when a notify-qualifying refresh completes, set
@@ -272,69 +284,55 @@ works — lean to the table for cleanliness.
    app GETs the current count (`GET /api/flights/badge`, mirroring `/messages/status`) and
    sets the badge directly. This is the correctness backstop.
 
-**Why this is accurate (and the naive version isn't):** the server count is the single
-source of truth, push is an optimization, foreground-reconcile is the guarantee. The
-annoying-badge failure mode is the opposite — incrementing/decrementing on the client and
-trusting push delivery. The worry is well-founded; the ordering above is the fix.
+Ordering matters: the server count is the single source of truth, push is an optimization,
+foreground-reconcile is the guarantee. The annoying-badge failure mode is the opposite —
+increment/decrement on the client and trust push delivery.
 
-**Definitions to lock:**
-- **Count once per flight** — the badge counts *flights with an unseen latest update*,
-  never packs. Two unopened refreshes on one flight = 1.
-- **What clears "unseen"?** Opening that flight's **briefing detail** (web or app) — not
-  merely seeing it in the list. Opening sets `last_seen_pack_ts = latest_pack_ts`, so the
-  flight clears even if several packs accumulated and only the newest was viewed.
-- **What counts toward the badge?** Only **notify-qualifying** updates (same gate as the
-  notification: scope + change-filter + not muted) — mirroring "only highlighted messages
-  light the dot". A later non-qualifying refresh (e.g. unchanged) does **not** re-light a
-  flight you already cleared.
-- **Badge vs push-channel toggle** — reconcile keeps the badge correct even if *alert* push
-  is off; recommend the badge follows "a device is registered", independent of alert on/off.
+**Locked semantics:**
+- **Count once per flight**, never packs — two unopened refreshes on one flight = 1.
+- **Only opening the briefing detail clears it** (web or app), not seeing it in the list.
+- **Only notify-qualifying updates light it** — same WHEN gate as the notification, so a
+  later unchanged refresh does **not** re-light a flight you already cleared, and an
+  UNAVAILABLE pack never lights it at all.
+- **Badge is independent of the alert-push toggle** — reconcile keeps it correct even with
+  alerts off.
 
-**New surface area:** `POST /api/flights/{id}/seen` (or fold into the existing briefing
-GET), `GET /api/flights/badge`, the silent-push path, and the app's foreground reconcile +
-mark-seen on briefing open. The **web** calls the same `seen` endpoint on briefing view —
-that is what decrements the app badge.
+**Surface:** `api/notifications.py` — `GET /api/flights/badge`, `POST /api/flights/{id}/seen`
+(both return `BadgeStatus`); the silent-push path; the app's foreground reconcile
+(`AppState.reconcileBadge`) + `markBriefingSeen` from `BriefingContainerView`. The **web**
+calls the same `seen` endpoint on briefing view — that is what decrements the app badge.
 
-## Sequencing vs App Intents
+## Relation to App Intents
 
-```
-Notification work (this doc)                 App Intents (sibling doc)
-──────────────────────────                   ─────────────────────────
-device_tokens endpoint + client reg   ┐
-notify/push.py + APNs key             ├─►    RefreshBriefingIntent
-emit from _notify_refresh_complete    ┘    ("…I'll let you know when it's ready")
-```
+Both halves have shipped. `RefreshBriefingIntent` is the only intent that depended on this
+doc — device registration + `notify/push.py` + the emit from `_notify_refresh_complete` are
+what let it say "I'll let you know when it's ready". The read-only intents
+(`OpenBriefingIntent` / `OpenFlightListIntent` / `CheckBriefingIntent`) never did.
 
-`OpenBriefingIntent` / `OpenFlightListIntent` / `CheckBriefingIntent` do **not**
-depend on this doc and can ship first. Only the refresh intent's satisfying
-close-the-loop UX needs the push.
+## Decisions locked (nothing here is still open)
 
-## Open Questions / Decisions needed
+*notify-when-done vs watching-live* → server-side presence; *dedup with email* → channels are
+independent user choices. **Locked during #366/#371:** APNs library = **httpx-rolled**;
+seen storage = **`flight_briefing_seen` table** (not a prefs blob); device scope = **all of
+the user's devices** for every trigger, manual included (simpler, consistent with
+auto-refresh); change detection = **assessment/outlook transition vs the prior pack** (a
+first briefing counts as changed; a GREEN→AMBER worsening also carries a short delta message
+for the push body); quiet hours = **deferred** (not in v1). The reference detail worth
+keeping:
 
-Resolved by the preferences model above: *notify-when-done vs watching-live* (a push
-**delivery rule** — foreground suppression — plus the `all`/`auto` scope), and *dedup with
-email* (channels are independent user choices). Remaining:
-
-- **APNs provider library** — APNs is just HTTP/2 + a token (ES256 JWT from the `.p8`, header
-  `{kid}`, claims `{iss: team_id, iat}`, cached ~50 min). Options: **(a) roll it on `httpx`**
-  (already a dep; add `httpx[http2]` + `PyJWT` — ~120 lines, full control over retries and
-  response→token-cleanup, no bit-rot risk); **(b) `aioapns`** (async, maintained, token auth,
-  handles HTTP/2). **Avoid `PyAPNs2`/`apns2`** (built on the unmaintained `hyper`). Recommend
-  (a). Send: `POST /3/device/<token>` with `apns-topic: <bundle id>` and `apns-push-type:
-  alert` (or `background` for silent badge syncs); on `BadDeviceToken`/`Unregistered` delete
-  the row.
+- **APNs transport** — APNs is just HTTP/2 + a token (ES256 JWT from the `.p8`, header
+  `{kid}`, claims `{iss: team_id, iat}`, cached ~50 min), rolled on `httpx[http2]` + `PyJWT`
+  in `notify/push.py`. (`aioapns` was the alternative; **avoid `PyAPNs2`/`apns2`** — built on
+  the unmaintained `hyper`.) Send: `POST /3/device/<token>` with `apns-topic: <bundle id>` and
+  `apns-push-type: alert` (or `background` for silent badge syncs); on
+  `BadDeviceToken`/`Unregistered` the row is deleted — which is also the trigger for the
+  last-device email decay above.
 - **APNs key management** — a **single `.p8` token-auth key works for BOTH environments**
   (unlike the old cert auth). Store key + key id + team id as deployment secrets (same
   handling as the existing Resend key). **As built**, `ApnsConfig.from_env()` reads:
   `APNS_KEY_P8` (PEM contents; or `APNS_KEY_P8_PATH` for local dev), `APNS_KEY_ID`,
   `APNS_TEAM_ID`, `APNS_BUNDLE_ID` (→ `apns-topic`). Missing config → log-and-skip.
 
-**Decisions locked during #366 (server half):** APNs library = **httpx-rolled**
-(chosen); seen storage = **`flight_briefing_seen` table** (not a prefs blob);
-device scope = **all of the user's devices** (simpler, consistent with
-auto-refresh); change detection = **assessment/outlook transition vs the prior
-pack** (a first briefing counts as changed; a GREEN→AMBER worsening also carries
-a short delta message for the push body); quiet hours = **deferred** (not in v1).
 - **Sandbox vs production routing** — per-**token**, decided by the *app build on the device*,
   **not** by which server runs: an Xcode **debug** build → `aps-environment: development` →
   **sandbox** token → sandbox host; **TestFlight and App Store** → `production` → production
@@ -344,16 +342,18 @@ a short delta message for the push body); quiet hours = **deferred** (not in v1)
   server routes on `device_tokens.environment`. Wrong host → misleading `BadDeviceToken`. Local
   dev: a debug build on a real device → sandbox token → the local dev server (with the `.p8`
   configured) sends to the **sandbox** host — no separate prod credential needed for dev.
-- **Manual-refresh device scope** — notify only the triggering device, or all the user's
-  devices? (All is simpler and consistent with auto-refresh.)
-- **Quiet hours** — whether to suppress push overnight in v1 (badge sync is unaffected).
-- **Seen storage** — `briefing_seen` map in `app_prefs_json` (mirrors messages) vs a small
-  `flight_briefing_seen` table (see Badge section).
 
 ## References
 
-- Device token model: `src/weatherbrief/db/models.py::DeviceTokenRow`
-- Refresh-complete seams: `src/weatherbrief/scheduler.py`, `src/weatherbrief/api/packs.py`
-- Email precedent to mirror: `src/weatherbrief/notify/email.py`
+- Server: `src/weatherbrief/notify/{dispatch,push,badge}.py`,
+  `src/weatherbrief/api/{devices,notifications,preferences}.py`
+- Models: `db/models.py::DeviceTokenRow`, `db/models.py::FlightBriefingSeenRow`;
+  per-flight `FlightRow.notify_override` (seeded by `api/flights.py::update_auto_refresh`)
+- Refresh-complete seams + presence: `api/packs.py::_notify_refresh_complete`,
+  `refresh_registry.touch_watch` / `is_watched`; `scheduler.py`
+- Tests: `tests/test_briefing_notifications.py`;
+  iOS `flyfun-weatherTests/PushNotificationsTests.swift`
+- iOS: `Services/PushNotifications.swift`, `App/AppState.swift` (push/badge methods),
+  `Views/SettingsView.swift`, `Views/Briefing/BriefingContainerView.swift`
 - Change detection: `compute_refresh_delta` (see [metar-taf-route-weather](./metar-taf-route-weather.md))
 </content>

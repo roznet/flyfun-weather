@@ -1,22 +1,46 @@
 # Frontal Detection — Implementation Plan for FlyFun Weather
 
-> **Status (2026-06-13): largely IMPLEMENTED and promoted.** Phase 1 detection core +
-> CLI is built and has been promoted to the live design doc
+> **ARCHIVED 2026-08-17.** The "Future Enhancements" list — the only part never
+> built — was moved to
+> [`designs/future/front-calibration.md`](../future/front-calibration.md), which is
+> where threshold and algorithm work now happens.
+
+> **Status (2026-08-15): IMPLEMENTED and promoted — this is now a historical planning
+> document.** The live design doc is
 > [`designs/frontal-detection.md`](../frontal-detection.md) (indexed in INDEX.md) — read
-> that for **current truth**. Several specifics in this plan are now stale: the gradient
-> threshold is **2.0 K/100km** (not 0.8 — at 0.8 >50% of the European domain triggered),
-> the grid is **0.25° / 35-60°N, -20-28°E** (not 0.5°), `_MIN_FRONTAL_POINTS = 32` (not 8),
-> and the module set grew well beyond the plan: a **Hewson TFP route locator**
-> (`detect.compute_hewson_diagnostics`, `sources.py`, `route_sampling.py`, `gates.py`'s
-> `FrontGateConfig` preset registry, `contour_fronts.py`, `case.py`) plus a top-level `src/weatherbrief/hewson/`
-> package (precompute/era5_case/cli — NOT under `frontal/`), `api/hewson_map.py`,
-> `models/fronts.py`, `tasks/fronts.py`, and DB storage. The
-> project **pivoted from zone-level detection toward per-leg Hewson advisories** — see
+> that for **current truth**. Do NOT calibrate against the numbers below.
+>
+> **Numbers that drifted** (code vs this plan): gradient threshold **2.0 K/100km** (not
+> 0.8 — at 0.8 >50% of the European domain triggered), θe threshold 4.0 unchanged; grid
+> **0.25° / 35-60°N, -20-28°E** (not 0.5° / -12°E); `_MIN_FRONTAL_POINTS = 32` (not 8),
+> `_MIN_FRONTAL_FRACTION = 0.08` unchanged; **20 zones and 19 route templates** (not 18/17).
+>
+> **Structure that drifted**: there is no `frontal/pipeline.py`. The module set grew a
+> **Hewson TFP route locator** (`detect.compute_hewson_diagnostics`, `sources.py`,
+> `route_sampling.py`, `gates.py`'s `FrontGateConfig` preset registry, `contour_fronts.py`,
+> `case.py`) plus a top-level `src/weatherbrief/hewson/` package (precompute / era5_case /
+> cli — NOT under `frontal/`), `api/hewson_map.py`, `models/fronts.py`, `tasks/fronts.py`.
+> The project **pivoted from zone-level detection toward per-leg Hewson advisories** — see
 > `designs/future/hewson-fields-aviation-advisories.md` and `designs/future/front-calibration.md`.
 >
-> This plan is retained for its **forward-looking phases** (Phase 2-4 integration sequence,
-> Future Enhancements) and its rejected-options reasoning. Treat Parts 1-3 as historical
-> design intent, not current code. Do NOT calibrate against the numbers below.
+> **Phase status** (Part 8 below):
+> - **Phase 1 — done.** grid/cache/detect/zones/cli all exist.
+> - **Phase 2 — done.** `tracking.build_zone_timeseries`, `find_frontal_clearance_time`,
+>   `find_clearance_times_all_models`, `compute_timing_spread`, `zones.find_route_zones`,
+>   CLI `route`. Two-pass anomaly filtering and a persistence filter were added on top;
+>   `classify_zone_label` / `ZONE_LABELS` (§4.3, §5.1) were **never built**.
+> - **Phase 3 — superseded.** No zone-frontal context block is fed to the digest. Fronts
+>   reach the digest through the ordinary advisory path (`tasks/advise.py:_front_context`
+>   → `fronts` advisory), not through §5.2's structured zone summary.
+> - **Phase 4 — superseded.** No `frontal_analysis` table and no alembic migration exist.
+>   The zone path is still CLI-only; the per-leg Hewson path is what got wired in:
+>   `tasks/fronts.py:run_fronts` writes a `route_fronts.json` pack artifact (gated by the
+>   `auto_front_detection` preference, default off), and `hewson/precompute.py` runs on the
+>   scheduler's 06Z/18Z loop instead of a zone-analysis pipeline.
+>
+> Retained for its **rejected-options reasoning** and the **Future Enhancements** list at
+> the end — that list is the only part still forward-looking. Parts 1-7 are historical
+> design intent, not current code.
 
 ## Overview
 
@@ -1258,6 +1282,10 @@ def classify_zone_label(zone_name: str,
 
 ## Part 5 — Output Surfaces
 
+> **Not built as described.** `ZONE_LABELS` / `classify_zone_label` (§4.3, §5.1) do not
+> exist in code, and no zone-frontal context block reaches the digest (§5.2). The route
+> frontal table (§5.3) exists only as CLI output (`frontal.cli route`).
+
 ### 5.1 Zone Annotation Labels
 
 Labels derived from frontal presence and type, used in route tables and LLM digest context:
@@ -1374,6 +1402,9 @@ The CLI remains useful post-deployment for debugging, manual inspection, and one
 
 ## Part 7 — Storage Schema
 
+> **Never built.** No `frontal_analysis` table, no migration. Frontal output is a pack
+> artifact (`route_fronts.json`), not a DB fact table. Historical only.
+
 ### 7.1 Database Table
 
 Results are written to a DB table that briefings read from:
@@ -1438,6 +1469,9 @@ def compute_uncertainty_flag(max_frontal_spread_h: float,
 ---
 
 ## Part 8 — Implementation Sequence
+
+> **Historical.** Phases 1-2 shipped (with changed thresholds/grid); Phases 3-4 were
+> superseded by the per-leg Hewson path. See the Phase status in the banner at the top.
 
 ### Phase 1 — Detection core + CLI (focus here first)
 

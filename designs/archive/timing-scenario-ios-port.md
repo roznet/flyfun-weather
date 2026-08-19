@@ -1,5 +1,10 @@
 # Timing scenario — iOS client port
 
+> **ARCHIVED 2026-08-17.** The durable endpoint contract (the three
+> `/time-options` routes with their 404/409/429 semantics) and the client poll
+> contract now live in [`designs/ios-app-server-api.md`](../ios-app-server-api.md);
+> the feature design is [`designs/timing-scenarios.md`](../timing-scenarios.md).
+
 > **Status (2026-07-05): IMPLEMENTED (all 4 slices, iOS #357).** Client port
 > landed — Flexibility control in the flight editor, DTO decode + poll loop on
 > `BriefingViewModel`, the Timing Scenarios panel in the Advisory tab, and the
@@ -32,7 +37,8 @@ mitigation framework: an **attention-director, never a verdict**.
 
 ## Backend surface (already stable — reference only)
 
-Endpoints (all under `/api/flights/{id}/packs/{ts}/…`, `api/packs.py ~2545`):
+Endpoints (all under `/api/flights/{id}/packs/{ts}/…`, in `api/packs.py` — grep
+`time-options`; the line numbers this plan originally quoted have all drifted):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -40,12 +46,12 @@ Endpoints (all under `/api/flights/{id}/packs/{ts}/…`, `api/packs.py ~2545`):
 | `POST` | `…/time-options/rescan`  | Re-queue scan (owner-only). `202`; 409 if Flexibility=`none`. |
 | `POST` | `…/time-options/confirm` | On-tap multi-model check of one candidate. `202`; **429** if a confirm already runs for this pack; 409 unknown/already-confirmed. |
 
-Flexibility mode lives on the flight: create `flights.py:70-73`
-(`none|same_day|prev_day|next_day`), edit adds `alternate` (requires
-`alt_departure_time` else 422). `FlightResponse` already returns `flexibility`
-(`flights.py:413`); alternate value reuses `alt_departure_time`.
+Flexibility mode lives on the flight: `CreateFlightRequest.flexibility` in
+`api/flights.py` (`none|same_day|prev_day|next_day`), edit/`UpdateFlightRequest`
+adds `alternate` (requires `alt_departure_time` else 422). `FlightResponse`
+already returns `flexibility`; alternate value reuses `alt_departure_time`.
 
-DTOs to mirror from `models/time_scan.py` (web mirror `api-adapter.ts:549-599`):
+DTOs to mirror from `models/time_scan.py` (web mirror `web/ts/adapters/api-adapter.ts`):
 `TimeScanStatus`, `TimeWindowScan`, `TimeScanBaseline`, `TimeScanWindow`,
 `TimeCandidate`, `TimeConfirmation`, `ModelCoverage`.
 
@@ -65,15 +71,20 @@ enforced yet") — the only throttle is the **one-confirm-at-a-time 429**.
 - Net-new **alt-departure `DatePicker`** (iOS has no alt-departure concept).
 - Decode `time_scan_used` / `time_scan_count` from `GET /usage`; first-time
   explainer sheet gated on `!time_scan_used`, re-openable via an (i) button.
-  Copy = web's four beats (`flexibility-explainer.ts`).
+  Copy = web's four beats (`web/ts/components/flexibility-explainer.ts`).
 
 ### Slice 2 — DTO decode + polling
 - Swift Codable mirrors of the `time_scan.py` DTO family.
 - `@Published timeOptions` on `BriefingViewModel` + a repo method hitting
   `GET …/time-options`.
-- Poll loop mirroring `briefing-store.ts:828-880`: backoff 3s → ×1.5 → cap 15s,
-  poll-until-terminal, 404 = no-data, tolerate 3 transient errors; start after
-  pack load only when `flexibility ≠ none`; placeholder when offline.
+- Poll loop mirroring `web/ts/store/briefing-store.ts`: backoff 3s → ×1.5 → cap
+  15s, poll-until-terminal, 404 = no-data, tolerate 3 transient errors; start
+  after pack load only when `flexibility ≠ none`; placeholder when offline.
+  *As built:* the gate reads `pack?.flexibility ?? flight.effectiveFlexibility`
+  (the pack meta carries it too, and the `Flight` object goes stale if
+  Flexibility was edited after the briefing opened), and the loop also carries a
+  hard iteration cap as a backstop against a job that never reaches a terminal
+  status.
 
 ### Slice 3 — Timing Scenarios panel (section in Advisory tab)
 - State ladder: hidden / running (spinner) / failed / skipped (reason copy) /
@@ -82,9 +93,10 @@ enforced yet") — the only throttle is the **one-confirm-at-a-time 429**.
   pill, shift label, "★ your alternate" tag, improves/worsens diff, confidence
   line (`confirmed` up-or-down / `confirm_pending` spinner / `ecmwf_only` +
   button).
-- Expandable per-advisory dot-table: Current vs ECMWF-only vs All-models.
-  ⚠ The "Current" column needs the briefing's own per-advisory **per-model**
-  dots — verify `AdvisoriesResponse` carries `per_model` on iOS here.
+- Expandable per-advisory dot-table: Current vs ECMWF-only vs All-models, rows
+  sorted worst-status first. (The open question here — does iOS's
+  `AdvisoriesResponse` carry the per-advisory **per-model** dots the "Current"
+  column needs — resolved yes: `AdvisoriesResponse.perModel`.)
 - Footnotes: refused-hours, `past_clipped`, `horizon_clipped`.
 
 ### Slice 4 — Confirm / "Check all models" + Set-as-alternate
@@ -93,6 +105,24 @@ enforced yet") — the only throttle is the **one-confirm-at-a-time 429**.
 - "Check all models" on `ecmwf_only` rows.
 - "Set as alternate" on same-day non-baseline rows → PATCH flight
   (`flexibility=alternate` + `alt_departure_time`) then `POST …/rescan`.
+
+## Where it landed (iOS, `app/flyfun-weather/flyfun-weather/`)
+
+- `Models/API/TimeOptionsResponse.swift` — the whole DTO family
+  (`TimeOptionsResponse`, `TimeScanStatusDTO`, `TimeWindowScanDTO`,
+  `TimeBaselineDTO`, `TimeWindowDTO`, `TimeCandidateDTO`, `TimeConfirmationDTO`,
+  `TimeScanJobStatus`, `TimeConfidence`) plus a lenient candidate decoder so one
+  malformed candidate can't nuke the panel.
+- `ViewModels/BriefingViewModel.swift` — `timeOptions` / `timeOptionsOffline`,
+  `pollTimeOptions`, `anyConfirmPending`, confirm/rescan actions.
+- `Views/Briefing/TimingScenariosView.swift` — the panel; hosted from
+  `AdvisoryTabView`.
+- `Views/Flights/AddFlightView.swift` + `ViewModels/AddFlightViewModel.swift` +
+  `Views/Flights/FlexibilityExplainer.swift` — the control and the first-time
+  explainer (gated on `usageSummary().timeScanUsed`).
+- `Services/BriefingRepository.swift` (+ fixture/caching repos) —
+  `timeOptions` / `confirmTimeOption` / `rescanTimeOptions`.
+- Tests: `flyfun-weatherTests/TimingScenariosTests.swift`.
 
 ## Out of scope for v1
 - Offline caching of timing data (revisit if pilots want scenarios in flight).

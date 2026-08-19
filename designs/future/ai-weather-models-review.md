@@ -7,6 +7,13 @@ for use in the aviation weather pipeline. Reviewed April 2026.
 aviation-specific variables (cloud microphysics, icing, convective indices) and
 have insufficient vertical resolution for sounding analysis.
 
+**Status (re-checked against code 2026-08-15):** unchanged — no AI model is
+fetched, decoded, or registered anywhere in the pipeline. The only AIFS string in
+the codebase is in `fetch/grib/ecmwf_fetch.py`: `parse_ecmwf_filename()` recognises
+the `aifs-ens` model token in ECMWF dissemination filenames and `scan_ecmwf_files()`
+can filter on it. That is filename parsing for completeness of the ECMWF feed
+format — nothing downstream ingests AIFS. Do not read it as partial integration.
+
 ---
 
 ## Models Reviewed
@@ -136,13 +143,28 @@ This decision should be reconsidered if:
    to cloud-cover derivation proves skillful, GraphCast's 37 levels with derived
    clouds could be worth evaluating as a consensus model.
 
+The `audit-sources` skill already carries an AIFS probe row (`/v1/ecmwf` with
+`models=ecmwf_aifs025`), so running that skill is the cheapest way to detect
+triggers 1, 2 and 4 without re-reading provider release notes by hand.
+
 ---
 
 ## Current Model Priority
 
 For pipeline improvements, the priority remains traditional NWP with full physics:
 
-1. **ICON-EU GRIB** — 40 native levels with QC/QI, already integrated
-2. **IFS HRES via commercial order** — 25 levels with clwc/ciwc; ECMWF direct-GRIB delivery now live and integrated (`fetch/grib/ecmwf_fetch.py`, scheduler watcher, alternates visibility source)
-3. **GFS GRIB** — 28 levels with CLWMR/ICMR, already integrated
-4. **Open-Meteo multi-model** — 6 models for consensus, already integrated
+1. **ICON-EU GRIB** — 40 native model levels (35–74) with QC/QI, already integrated.
+   The icon slot now upgrades to **ICON-D2** (2.2 km, levels 16–65) whenever the whole
+   route fits its domain — including explicit-convection diagnostics no AI model has.
+2. **IFS HRES via commercial order** — 25 pressure levels with clwc/ciwc; ECMWF
+   direct-GRIB delivery live and integrated (`fetch/grib/ecmwf_fetch.py`, scheduler
+   watcher, alternates visibility source)
+3. **GFS GRIB** — 28 levels with CLWMR/ICMR, already integrated; the gfs slot upgrades
+   to **HRRR** (3 km, 35 levels) inside the CONUS domain
+4. **Open-Meteo multi-model** — 6 models for consensus (`ecmwf`, `gfs`, `icon`, `ukmo`,
+   `meteofrance`, `gem` in `fetch/variables.py`), already integrated
+
+Each of those upgrades moved the pipeline *further* toward parameterized-physics
+fields (condensate, explicit convection, gust/ceiling diagnostics) — i.e. away from
+exactly what the AI models don't produce. The gap analysis above has widened, not
+narrowed, since April 2026.

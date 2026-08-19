@@ -4,7 +4,7 @@
 
 The app is built in three major phases, each delivering standalone value. The architecture (MVVM + Repository) is designed so each phase extends the previous without rewrites.
 
-> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `FileManager`); the shipped iOS PIREP feature is **flight-linked only** (no standalone PIREP, no community feed/map); PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps` (batch at `/api/pireps/batch`), not `/api/observations`. APNs push has since shipped, but for *refresh-complete* deep-links (`Services/PushNotifications.swift`), not for PIREPs. App Intents / Siri Shortcuts also shipped (`AppIntents/`) — but note that is a briefing-navigation surface, NOT the voice-PIREP filing envisioned in 3a below (still unbuilt). The richer community/standalone PIREP surface (query by airport/bounds/radius, severity filters) currently lives on the **web/server** side (`api/pireps.py`, `web/pireps.html`), not in the app. See [Overview](./ios-app-overview.md) for the authoritative current status.
+> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `BriefingCacheStore` + `FileManager`); the `/companion` payload endpoint of Phase 2 was **never built** (the app caches the normal API responses instead); the shipped iOS PIREP feature is **flight-linked only** (no standalone PIREP, no community feed/map) and is gated by two server-side per-user flags, `pirep_can_view` / `pirep_can_publish`; PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps` (batch at `/api/pireps/batch`), not `/api/observations`. APNs push has since shipped, but for *refresh-complete* deep-links (`Services/PushNotifications.swift`), not for PIREPs. App Intents / Siri Shortcuts also shipped (`AppIntents/`) — but note that is a briefing-navigation surface, NOT the voice-PIREP filing envisioned in 3a below (still unbuilt). The richer community/standalone PIREP surface (query by airport/bounds/radius, hazard + severity + altitude filters) currently lives on the **web/server** side (`api/pireps.py`, `web/pireps.html`), not in the app. See [Overview](./ios-app-overview.md) for the authoritative current status.
 
 The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversation that makes this app uniquely valuable. Phases 1 and 2 build the foundation and deliver value along the way.
 
@@ -18,17 +18,17 @@ The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversa
 
 - **Foundation**
   - Xcode project with SwiftUI App lifecycle (no SwiftData — see Decisions Made)
-  - SPM dep: RZFlight (RZUtils planned but not yet imported)
+  - SPM deps: RZFlight (airport DB, autocomplete, tracking geometry) + RZSkewT (Skew-T rendering). RZUtils was planned but never imported
   - API client (URLSession + async/await, JWT auth header) — `APIClient`
   - Repository layer (`BriefingRepository` protocol, `OnlineBriefingRepository`, interface designed for caching)
   - JSON `Codable` API models under `Models/API`; cached as raw JSON files (prepares Phase 2)
   - Error handling and loading states (`LoadingState`)
 
 - **Authentication**
-  - Google OAuth via `ASWebAuthenticationSession` (`LoginView`)
-  - `flyfunweather://auth?token=…` deep-link callback handling (`AppState`)
+  - Google OAuth via `ASWebAuthenticationSession` **plus** native Sign in with Apple (`SignInWithAppleButton` → credential exchange), both in `LoginView`
   - JWT in Keychain via `KeychainBearerTokenStore` (service `aero.flyfun.weather`)
-  - Auto-refresh near expiry, re-auth on 401
+  - `flyfunweather://auth?token=…` deep-link handling survives only as the **App Store reviewer** path — the normal sign-in completes inside `ASWebAuthenticationSession` and never reaches `onOpenURL`. `AppState.shouldAcceptDeepLinkToken` accepts an inbound bare token only when signed out AND the (unverified) `scope` claim is `"review"`; see the comment block on `handleAuthCallback` for the threat model
+  - Session renewal is **server-driven** (`X-Renewed-Token` response header rolls the stored token forward), not a client-side expiry check; 401 clears the keychain and swaps back to `LoginView`
 
 - **Flight list**
   - List user's flights from API
@@ -44,34 +44,35 @@ The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversa
   - Route graph — Swift Charts, scalar metrics along route
   - On-demand artifacts — Skew-T and GRAMET loaded as images (tap-to-load)
 
-- **Layout** — iPhone + iPad adaptive (DynamicStack). iPad: side-by-side. iPhone: stacked/tabbed.
+- **Layout** — iPhone + iPad adaptive. Shipped as `NavigationSplitView` (sidebar + detail on iPad, pushed stack on iPhone) with per-view `horizontalSizeClass` branches; the planned generic `DynamicStack` wrapper was never written.
 
 ### Cross-Section Renderer (Phase 1 — Incremental)
 
 Was built incrementally; cross-section parity with web has largely shipped. Renderer uses the same cross-section data structure as web (TypeScript `extractVizData` ported to Swift; see `Models/Domain/VizData.swift`). Each layer conforms to the `CrossSectionLayerProtocol` and draws on a SwiftUI `Canvas`.
 
-Shipped layer structs (`Views/CrossSection/Layers/`, 14):
+Shipped `CrossSectionLayerProtocol` conformers (`Views/CrossSection/Layers/`, 15):
 - `TerrainLayer`, `TemperatureLinesLayer`, `StabilityLinesLayer`, `ReferenceLinesLayer`
 - `NaturalCloudBandsLayer`, `SquareCloudBandsLayer`, `SoftCloudBandsLayer` (cloud struct names live in `CloudBandsNatural.swift`, not one-file-per-struct)
 - `IcingBandsLayer`, `IcingOgimetNwpBandsLayer`, `SfipBandsLayer`
 - `CATBandsLayer`, `InversionBandsLayer`
 - `NwpConvectiveBgLayer`, `ThermoConvectiveBgLayer`
+- `HighlightLayer` — not on the original plan; draws an advisory's highlight geometry (scrim + verdict ribbon) when a deep link arrives with a preset
 
-Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`, in `Views/CrossSection/`).
+`CrossSectionPresets` supplies the advisory "lenses" (which layers/model a given advisory opens with). Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, and — one level up in `Views/CrossSection/` — `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`, rendering RZSkewT's `SkewTView`).
 
 ## Phase 2 — Offline Briefing Viewer ✅ (offline resilience + refresh-complete push shipped; SwiftData never adopted)
 
 **Goal**: Pilots sync briefing data before departure and view full briefing in flight without connectivity. Push notifications alert when briefings refresh.
 
-**Server-side**: Build `/companion` lightweight payload endpoint.
+**Server-side**: Build `/companion` lightweight payload endpoint. ❌ **Never built** — no `companion` route exists in `src/weatherbrief/api/`. The app consumes the ordinary briefing endpoints and caches their JSON, so the "companion payload" concept has no counterpart in shipped code. Don't go looking for it.
 
 **App work**:
 
-- **Companion sync consumption** — fetch lightweight payload, parse into models
-- **Offline storage** — SwiftData persistence; `CachingBriefingRepository` wraps online repo (cache-first, fallback to API, cache on success). On-demand caching of Skew-T and GRAMET once viewed. Auto-expire old briefings, manual clear
-- **Pre-flight sync** — per-flight "Sync for offline" button (downloads payload + map tiles). Sync status indicator. Background sync on Wi-Fi when departure is within configurable lead time
+- **Companion sync consumption** ❌ — folded into plain repository calls (see above)
+- **Offline storage** ✅ (shipped, not with SwiftData) — file-based `BriefingCacheStore` (JSON under Documents, scoped by the JWT's `sub`); `CachingBriefingRepository` wraps `OnlineBriefingRepository` (cache-first, fallback to API, cache on success). On-demand caching of Skew-T and GRAMET once viewed. Stale packs evicted on launch/foreground (`AppState`, ~1 week after departure)
+- **Pre-flight sync** — landed *differently*: there is no per-flight "Sync for offline" button. Downloads are automatic (the old manual control was removed; its status now rides on the pack chip). `BriefingViewModel.syncLatestPack()` is the cheap seamless adopt-a-newer-pack path, distinct from a full user-triggered refresh
 - **Push notifications** ✅ (shipped — `Services/PushNotifications.swift`, `AppDelegate`) — remote-notification registration, device-token upload to `api/devices.py`, refresh-complete push deep-links into the flight via `PushSupport.pendingNavigation(from:)`, silent content-available badge-sync. Server-side push off by default (`APNS_*` env + migration). See [Briefing Refresh Notifications](./ios-app-briefing-notifications.md)
-- **Offline map tiles** — cache MapKit tiles along route corridor (±30nm, low-to-medium zoom) as part of pre-flight sync
+- **Offline map tiles** ❌ **not built** — no MapKit tile caching anywhere in the app. The route map degrades to whatever iOS happens to have cached when offline. Still a live gap if in-flight map use matters
 
 ## Phase 3 — In-Flight PIREP System 🚧 (3a partially shipped in app)
 
@@ -79,7 +80,9 @@ Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorSc
 
 Three sub-phases, each delivering incremental value.
 
-> Shipped in the app so far (3a subset): GPS tracking (`FlightTrackingService`, projects position onto the route), the in-flight report card (`PirepReportingView` + `PirepViewModel`, one-tap severity, no pre-selected values to avoid confirmation bias), an offline queue (`PirepOfflineStore`, per-user JSON file `pending_pireps.json`) that batch-syncs via the server's `POST /api/pireps/batch` with client UUIDs for dedup, and a read-only per-flight PIREP tab (`PirepListView`). All shipped reports are flight-linked with `source = "inflight"`. Standalone filing, community feed/map, voice/Siri, prompting engine (3b), and live sharing (3c) are NOT in the app.
+> Shipped in the app so far (3a subset): GPS tracking (`FlightTrackingService`, projects position onto the route), the report card (`PirepReportingView` + `PirepViewModel`, one-tap severity, no pre-selected values to avoid confirmation bias), an offline queue (`PirepOfflineStore`, per-user JSON file `pending_pireps.json`) that batch-syncs via the server's `POST /api/pireps/batch` with client UUIDs for dedup, and a per-flight PIREP tab (`PirepListView`). All shipped reports are flight-linked with `source = "inflight"`. Standalone filing, community feed/map, voice/Siri, prompting engine (3b), and live sharing (3c) are NOT in the app.
+>
+> Two gates to know before touching this: **filing is no longer restricted to the in-flight window** (a PIREP is a position report — the reporting sheet is reachable from the briefing at any time), and both filing and viewing are **server-side per-user permissions** (`pirep_can_publish` / `pirep_can_view`, mirrored onto `UserPreferences`). A publish-only account 403s on the list query, so the container skips `loadPireps()` rather than stranding the tab on an error.
 
 ### Phase 3a — PIREP Filing + Offline Sync
 
@@ -97,10 +100,9 @@ Pilots can file PIREPs in two contexts: during an active flight session (linked 
   - Observation saved with `source = .standalone`, `flightId = nil`, `session = nil`
   - Syncs via same offline queue as in-flight observations
 
-- **Flight session lifecycle**
-  - "Start Flight" transitions app from planning to flight mode
-  - "End Flight" on landing (or auto-detect via prolonged GS = 0)
-  - Session persisted with start/end times
+- **Flight session lifecycle** (partly shipped — as *tracking*, not as a session entity)
+  - "Start Flight" is a briefing-toolbar action gated on `isInFlightWindow`; it calls `FlightTrackingService.start(routePoints:flightEndTime:)`. Stop is manual, plus auto-stop when landing is detected (low GS near destination) and a hard stop at `flightEndTime`
+  - ❌ **No persisted session object** — there is no `session_id` anywhere in the app or on a PIREP. Tracking state is in-memory on the view's `@State` service. If a session entity is ever wanted, it's a genuinely new concept, not a rename of what exists
 
 - **GPS tracking** (shipped — `FlightTrackingService`)
   - Core Location with `kCLLocationAccuracyBest` + `distanceFilter = 200` m (the planned `kCLLocationAccuracyKilometer` was dropped in favor of best accuracy throttled at the GPS level)
@@ -109,15 +111,14 @@ Pilots can file PIREPs in two contexts: during an active flight session (linked 
   - Route progress: projects GPS position onto the route (`ProjectedPosition`: along-route distance, cross-track distance, on-route within 10nm)
 
 - **In-flight report UI** (shipped — `PirepReportingView` / `PirepViewModel`)
-  - Report sheet reached during a flight session
+  - Report sheet reached from the briefing toolbar, the flight-list context menu, or the PIREPs tab's persistent "Report a PIREP" bar — **no flight-session or in-flight-window requirement** (deliberate: see the gates note above)
   - One-tap severity buttons, fields start **unset** (no forecast pre-population — deliberately avoids confirmation bias); GPS altitude auto-filled when vertical accuracy is valid
   - Smart field ordering (`PirepField`), optional free-text remarks
   - Saved with `source = "inflight"` (string, not the planned `.manual` enum)
 
-- **Observation timeline**
-  - Scrollable list of observations during the flight
-  - Ability to amend (creates new linked observation)
-  - Shown as pins on the route map
+- **Observation timeline** (partly shipped as the PIREPs tab)
+  - `PirepListView` — per-flight list, expandable rows with severity bars, hazard icons, own-badge
+  - ❌ No amend flow, and ❌ PIREPs are **not** drawn on the route map
 
 - **Offline sync engine** (shipped — `PirepOfflineStore`, simpler than originally specced)
   - Unsent reports persisted to a JSON file (`pending_pireps.json`) via an `actor` queue
@@ -194,7 +195,7 @@ Ideas from the original brainstorm, to be designed when Phase 3 is complete:
 ## Decisions Made
 
 - **Native SwiftUI** — no WKWebView for viz. Cross-section native via SwiftUI Canvas, route graph via Swift Charts. Modern SwiftUI only (iOS 18+).
-- **No third-party heavyweights** — Apple-native SDKs only (URLSession, MapKit, Core Location). RZFlight via SPM (RZUtils planned, not yet imported). Note: SwiftData was the original caching plan but was dropped for file-based caching (`BriefingCacheStore` + `FileManager`).
+- **No third-party heavyweights** — Apple-native SDKs only (URLSession, MapKit, Core Location), plus the author's own RZFlight and RZSkewT via SPM (RZUtils planned, never imported). Note: SwiftData was the original caching plan but was dropped for file-based caching (`BriefingCacheStore` + `FileManager`).
 - **Google OAuth natively** — `ASWebAuthenticationSession`, no token-paste friction. Same flow as web.
 - **Repository pattern from day one** — even Phase 1 uses repos, so Phase 2 adds caching without touching UI.
 - **Subdirectory** — iOS project lives in flyfun-weather repo alongside server code.
@@ -205,11 +206,11 @@ Ideas from the original brainstorm, to be designed when Phase 3 is complete:
 
 ## Open Questions
 
-- **Cross-section data documentation** — snapshot data format feeding the web cross-section renderer needs docs so the Swift extraction logic can be ported accurately. `extractVizData` TypeScript + I/O shapes are the key reference.
+- ~~**Cross-section data documentation**~~ — **closed by the port itself**: `Models/Domain/VizData.swift` is now the Swift mirror of the web `extractVizData` output, and [visualization.md](./visualization.md) covers the shared data shape. The live risk has shifted from "undocumented" to "two hand-copied implementations drift" — run the `sync-ios-web` skill after touching either side.
 - **Avionics integration** — G1000, Avidyne expose data ports (OAT, pressure altitude, winds aloft). Worth investigating for Phase 3+ but not essential.
 - **iPhone vs iPad UX split** — app works on both, but in-flight PIREP UI is primarily for iPad. iPhone experience should focus on planning and notifications. Need to define which Phase 3 features are iPad-only vs universal.
-- **Flight creation in app** — Phase 1 is read-only. Should app allow creating flights directly? Route input UI complexity vs self-sufficiency.
-- **Briefing refresh from app** — should app trigger refreshes, or only consume server-triggered? Endpoint exists (`POST /packs/refresh`); question is whether mobile UX should include this.
+- ~~**Flight creation in app**~~ — **answered yes**. `AddFlightView` / `AddFlightViewModel` do full create *and* edit, with route autocomplete, autorouter interpretation, aircraft + profile pickers, and a Move-vs-Duplicate choice for structural edits.
+- ~~**Briefing refresh from app**~~ — **answered yes**. The app triggers refreshes (`POST /api/flights/{id}/packs/refresh?source=…`), streams progress over SSE, and exposes it via the briefing toolbar and `RefreshBriefingIntent`. Refresh availability is gated (cost confirm, subscriber rows).
 - **Track log upload** — Phase 3a collects track logs. Upload for post-flight analysis, or local-only? Upload enables server-side route deviation analysis and verification.
 - **PIREP format compliance** — format observations as standard PIREP strings for official channels? Deferred post-Phase 3.
 

@@ -8,7 +8,7 @@
 |--------|----------|-----------|
 | **Min iOS** | **26.2** (`IPHONEOS_DEPLOYMENT_TARGET`) | Latest SwiftUI, `@Observable`, new MapKit SwiftUI APIs. No legacy burden. |
 | **UI** | **SwiftUI** | Native, declarative. No UIKit wrappers unless absolutely necessary. |
-| **Persistence** | **File-based JSON + UserDefaults** | No SwiftData. `BriefingCacheStore` (actor, on-disk pack cache under Application Support), `PirepOfflineStore` (JSON queue in Documents), `UserPreferencesStore` (UserDefaults). Simpler than a DB for our cache-the-pack model. |
+| **Persistence** | **File-based JSON + UserDefaults** | No SwiftData. `BriefingCacheStore` (actor, on-disk pack cache under Application Support), `PirepOfflineStore` (JSON queue in Documents), `UserPreferencesStore`/`AppSettingsStore`/`WhatsNewStore` (UserDefaults). Simpler than a DB for our cache-the-pack model. The one SQLite is `AirportDatabase` — a slim `airports.db` **downloaded** from `GET /api/nav/airports-db` (ETag-refreshed, not bundled: it churns per AIRAC), read through RZFlight's `KnownAirports`/FMDB for offline ICAO autocomplete. |
 | **Networking** | **URLSession + async/await** | Built-in, no third-party dep. SSE refresh via `URLSession.bytes`. |
 | **Maps** | **MapKit (`MKMapView` via `UIViewRepresentable`)** | Both the briefing route map and the forecast map are `MKMapView`-backed (converged in #428) so the airport-forecast marker layer is shared, not duplicated per map — the SwiftUI `Map` API janks at the forecast map's ~620-annotation scale. |
 | **Architecture** | **MVVM + Repository** | Natural fit for SwiftUI. Repos abstract API vs cache — offline-ready from day one. |
@@ -61,7 +61,7 @@ No WebSocket client. Live refresh progress streams over **Server-Sent Events** (
 
 All data flows through `BriefingRepository` (`Services/BriefingRepository.swift`), which abstracts over network vs cache. UI and ViewModels depend only on the protocol.
 
-The protocol is one per-endpoint async method (returning the `*Response` Codable types from `Models/API/`), not a single `BriefingPayload`. Roughly: `flights`, `createFlight`, `parseFpl`, `packs`/`latestPack`, the pack-data fetchers (`advisories`, `digest`, `snapshot`, `routeAnalyses`, `elevation`, `soundingProfile`), image fetchers (`skewtImage`, `grametImage`), refresh (`refreshStream` SSE + `refreshStatus`), and PIREP (`submitPirep`, `submitPirepsBatch`, `fetchPireps`).
+The protocol is one per-endpoint async method (returning the `*Response` Codable types from `Models/API/`), not a single `BriefingPayload`. It has grown well past the briefing itself — roughly: flights CRUD (`flights`, `flight`, `createFlight`, `updateFlight`, `moveFlight`, `deleteFlight`, `bulkDeleteFlights`), route entry (`parseFpl`, `interpretRoute`, `routeDistance`, `autorouterRoutes`), aircraft/profiles/`usageSummary`, sharing (`flightByShareCode`, `subscribeFlight`, `unsubscribeFlight`), standalone weather (`airportWeather`, `forecastMap`, `forecastDays`, `frequentAirports`), packs (`packs`/`latestPack`), pack-data fetchers (`advisories`, `advisoryDetail`, `recalculateAdvisories`, `digest`, `snapshot`, `routeAnalyses`, `elevation`, `soundingProfile`, `timeOptions`/`confirmTimeOption`/`rescanTimeOptions`), image fetchers (`skewtImage`, `grametImage`), refresh (`refreshStream` SSE, `refreshStatus`, `triggerRefresh`, `activeRefreshes`), PIREP (`submitPirep`, `submitPirepsBatch`, `fetchPireps`), debrief (`fetchDebrief`, `upsertDebrief`, `deleteDebrief`) and feedback. Adding an endpoint means touching every conformer — keep that in mind before widening the protocol.
 
 ```swift
 protocol BriefingRepository: Sendable { ... }
@@ -71,21 +71,25 @@ final class OnlineBriefingRepository: BriefingRepository { ... }
 
 // Checks on-disk cache first, falls back to API, caches results
 final class CachingBriefingRepository: BriefingRepository { ... }
+
+// DEBUG-only: canned fixtures for XCUITest (FLYFUN_MOCK=1), no backend/network
+final class FixtureBriefingRepository: BriefingRepository { ... }
 ```
 
-`AppState` owns the active `repository` (and exposes `cachingRepository` when caching is enabled).
+`AppState` owns the active `repository` (and exposes `cachingRepository` when caching is enabled). The fixture repo is what makes the XCUI journeys run without a server — `FLYFUN_MOCK_OFFLINE=1` additionally makes it report cached-list status so the offline banner/read-only paths are testable; endpoints no journey needs throw `notProvided` rather than being faked.
 
 ## iOS App Layers
 
 | Layer | Responsibility | Key Components |
 |-------|---------------|----------------|
-| **UI** | SwiftUI views, cockpit-optimized | `Views/` — Briefing (container, advisory dashboard, digest, airport conditions, PIREP list/reporting), CrossSection (Canvas renderer + layer stack), RouteGraph (Swift Charts), Map (MapKit), Flights, Auth |
-| **ViewModels** | State management (`@Observable`) | `FlightListViewModel`, `BriefingViewModel`, `CrossSectionViewModel`, `RouteMapViewModel`, `PirepViewModel`, `AddFlightViewModel` |
-| **Repositories** | Data access (API vs cache) | `BriefingRepository` (Online/Caching impls) |
-| **Domain** | Forecast/assessment view models | `Assessment`, `VizData` (`Models/Domain/`); API DTOs in `Models/API/` |
+| **UI** | SwiftUI views, cockpit-optimized | `Views/` — Briefing (container, advisory dashboard + detail, digest, alternates, timing scenarios, route observations/SIGMETs, debrief, PIREP list/reporting, shared-flight preview), CrossSection (Canvas renderer + `Layers/` stack + Skew-T), RouteGraph (Swift Charts), Map + ForecastMap (both MapKit), Flights, Help/What's-New, Auth, Shared (theme, markdown-lite, marker sizing) |
+| **ViewModels** | State management (`@Observable`) | `FlightListViewModel`, `BriefingViewModel`, `CrossSectionViewModel`, `RouteMapViewModel`, `ForecastMapViewModel`, `RouteForecastOverlayModel`, `PirepViewModel`, `DebriefViewModel`, `AddFlightViewModel`, `DepartureTimeModel`, `RouteAutocompleteController` |
+| **Repositories** | Data access (API vs cache) | `BriefingRepository` (Online/Caching/Fixture impls) |
+| **Domain** | Forecast/assessment view models | `Assessment`, `VizData`, `FlightDuration` (`Models/Domain/`); API DTOs in `Models/API/` |
 | **Location** | Live aircraft position projected onto route. `FlightTrackingService` wraps `CLLocationManager` at `kCLLocationAccuracyBest`. | `FlightTrackingService` (Core Location) |
-| **Storage** | Offline-first persistence | `BriefingCacheStore` (actor, on-disk pack cache), `PirepOfflineStore` (queued PIREPs), `UserPreferencesStore` (UserDefaults) |
-| **Sync** | Server communication, auth, queue flush | `APIClient` (wraps `RollingBearerSession` from FlyFunCommon), `KeychainBearerTokenStore` (FlyFunCommon), SSE refresh, PIREP batch flush |
+| **Storage** | Offline-first persistence | `BriefingCacheStore` (actor, on-disk pack cache), `PirepOfflineStore` (queued PIREPs), `UserPreferencesStore`/`AppSettingsStore`/`WhatsNewStore` (UserDefaults), `HelpCatalogStore`, `AirportDatabase` (downloaded SQLite) |
+| **Sync** | Server communication, auth, queue flush | `APIClient` (wraps `RollingBearerSession` from FlyFunCommon), `KeychainBearerTokenStore` (FlyFunCommon), `NetworkMonitor`, SSE refresh, PIREP batch flush |
+| **System surfaces** | Siri/Shortcuts/Spotlight + APNs | `AppIntents/` (see [App Intents](./ios-app-intents.md)), `Services/PushNotifications.swift` (see [Briefing notifications](./ios-app-briefing-notifications.md)). Both foreground the app through the same `PendingNavigation` seam deep links use. |
 
 ## Authentication Flow
 
@@ -126,7 +130,15 @@ App-side auth is driven by `FlyFunAuthService` (FlyFunCommon), constructed in `L
 
 **`onOpenURL` deep links**: the normal Google/Apple sign-in is captured *inside* `ASWebAuthenticationSession` and never reaches `onOpenURL`. `AppState.handleAuthCallback` therefore accepts a bare-token deep link **only** for the App Store reviewer link, gated by `shouldAcceptDeepLinkToken` (signed-out **and** the token carries `scope:"review"`). Any other inbound token is ignored — this is the H8 login-CSRF carve-out. The `scope` claim is read unverified for *routing only*; server signature verification is still the actual authorization.
 
-**Universal-Link briefing deep links**: `onOpenURL` first tries `AppState.handleUniversalLink`, which routes `https://weather.flyfun.aero/briefing.html?flight=<id>` to `.briefing(flightId:)` via the same cold-launch-safe `PendingNavigation` seam App Intents and push taps use; non-matches fall through to `handleAuthCallback`. This is the target of the web **Smart App Banner** (`<meta name="apple-itunes-app" app-id=6760951972>` on `web/index.html` + `web/briefing.html`), whose `app-argument` carries the current briefing URL. Parsing lives in the pure, `nonisolated` `AppState.navigationTarget(for:)` (unit-tested in `UniversalLinkRoutingTests`). The domain's AASA (`deploy/weather.flyfun.aero.caddy`, served at `/.well-known/apple-app-site-association`, team `M7QSSF3624`) whitelists `paths: ["/auth/callback","/briefing.html"]`. Short share links `/s/{code}` are **not** whitelisted — the app can't resolve the code offline; they 302 to `/briefing.html?flight=<id>` in Safari, where the banner's Open button covers the hand-off. Requires the AASA change to be deployed **before** a new app build ships (iOS caches AASA per-install).
+**Universal-Link deep links**: `onOpenURL` first tries `AppState.handleUniversalLink`; non-matches fall through to `handleAuthCallback`. Parsing lives in the pure, `nonisolated` `AppState.navigationTarget(for:)` (unit-tested in `UniversalLinkRoutingTests`), which maps host `weather.flyfun.aero` plus:
+
+| Path | Target |
+|------|--------|
+| `/briefing.html?flight=<id>` | `.briefing(flightId:)` — the web **Smart App Banner** target (`<meta name="apple-itunes-app" app-id=6760951972>` on `web/index.html` + `web/briefing.html`, `app-argument` = current URL) |
+| `/maps.html?fc.*` | `.forecastMap(MapDeepLink)` (#420) — day/hour/model/metric/apt carried over, so a desktop-shared map link opens the phone in the same state; a bare `/maps.html` opens at the cold-open default |
+| `/s/{code}` | `.share(code:)` (#446) — shared-flight preview with a Subscribe banner; the code shape is validated against the server's `_SHARE_CODE_RE` (`^[0-9A-Za-z]{4,16}$`) so a stray `/s/` can't route to an empty preview |
+
+All of them route through the same cold-launch-safe `PendingNavigation` seam App Intents and push taps use. The domain's AASA (`deploy/weather.flyfun.aero.caddy`, served at `/.well-known/apple-app-site-association`, team `M7QSSF3624`) whitelists `paths: ["/auth/callback","/briefing.html","/maps.html","/s/*"]`. Requires the AASA change to be deployed **before** a new app build ships (iOS caches AASA per-install).
 
 **Token refresh**: rolling session (flyfun-common `SlidingSessionMiddleware`) — JWT default 30-day expiry, refreshed when within the threshold; native Bearer clients pick up the renewed token from the `X-Renewed-Token` response header. On 401, shows the login screen.
 
@@ -136,14 +148,17 @@ SPM-linked: **FlyFunCommon, RZFlight, RZSkewT, RZUtils, RZUtilsSwift, RZUtilsSwi
 
 | Library | What's Reused |
 |---------|---------------|
-| **FlyFunCommon** | imported by `AppState` — `FlyFunAuthService` (Apple/Google sign-in), `RollingBearerSession` (token-refresh URLSession, 401 → `onUnauthorized`), `KeychainBearerTokenStore`. Shared across flyfun apps; repo `github.com/roznet/flyfun-common`. |
-| **RZSkewT** | `SkewTView` in `SkewTDetailView` — see rzskewt entry in INDEX |
-| **RZFlight** | imported by `FlightTrackingService` (airport/aviation types + `RouteGeometry`, a `public enum` in RZFlight's `Route+Geometry.swift` — `directDistanceNm`, `perpendicularDistanceAndRatio` for projecting live position onto the route) |
+| **FlyFunCommon** | `FlyFunAuthService` (Apple/Google sign-in, `LoginView`), `RollingBearerSession` (token-refresh URLSession, 401 → `onUnauthorized`; `AppState` + `APIClient`), `KeychainBearerTokenStore`, plus `IntentSupport`. Shared across flyfun apps; repo `github.com/roznet/flyfun-common`. |
+| **RZSkewT** | `SkewTView` in `SkewTDetailView` (+ `SkewTVariableCatalog`) — see rzskewt entry in INDEX |
+| **RZFlight** | `RouteGeometry` (a `public enum` in `Route+Geometry.swift` — `directDistanceNm`, `perpendicularDistanceAndRatio`) for projecting live position onto the route in `FlightTrackingService`; `KnownAirports` for offline ICAO search in `AirportDatabase`, consumed by `RouteAutocompleteController` and the `AirportEntity`/`FlightResolver` App Intents. FMDB arrives transitively through it — there is no direct SQLite dependency of our own. |
 
-The RZUtils* modules are linked (logging, storage, SwiftUI helpers) but not yet directly imported in these app files. (RZData is not a dependency.)
+The RZUtils* modules are linked (logging, storage, SwiftUI helpers) but not yet directly imported in these app files. (RZData is not a dependency.) `FoundationModels` is used behind `#if canImport` in `FlightPhraseResolver` for on-device intent phrase parsing, with a deterministic fallback when the model is unavailable.
 
 ## References
 
+- [Overview](./ios-app-overview.md) — parent doc, phase status
 - [Data Models](./ios-app-data-models.md)
 - [Server API](./ios-app-server-api.md)
+- [Features](./ios-app-features.md) · [UI](./ios-app-ui.md)
+- [App Intents](./ios-app-intents.md) · [Briefing notifications](./ios-app-briefing-notifications.md)
 - [Sync & Prompting](./ios-app-sync-prompting.md)

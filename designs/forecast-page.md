@@ -24,7 +24,8 @@ api/maps.py                                maps.html (template)
 ├── GET /maps/airport-weather             └── fetchAvailableDays()
 │   → forecast+obs for specific ICAOs      visualization/weather-map.ts (Leaflet map)
 ├── GET /flights/frequent-airports        ├── setForecastData()
-│   → top-5 dep/dest from history (#419)   └── weather-map-format.ts
+│   → top-5 dep/dest from history (#419;   └── weather-map-format.ts
+│     consumed by the iOS map only)
 api/help.py  GET /help/catalog                  (reads baked consensus + served
 └── serves map-metrics-catalog.json              map-metrics-catalog.json colours)
     (colours/thresholds) for iOS          visualization/airport-profile-panel.ts
@@ -53,15 +54,17 @@ The page hosts four tabs (`forecast`, `synoptic`, `climatology`, `stats`). Only 
 - **All mode/metric switches are client-side rerenders.** `/maps/forecast` returns per-model data for every airport plus **both** server pre-computed consensus blocks (`consensus` = worst, `consensus_majority`); the frontend just re-reads the payload and recolours (`weather-map-format.getConsensus`), so changing model OR metric is a pure rerender with no consensus math. Only day/hour changes trigger an API call (different snapshot set)
 
 ### Airport Profile Panel
-- Right-clicking a forecast marker opens a side panel (`airport-profile-panel.ts`) with a single-airport time-axis cross-section.
-- Data comes from `GET /maps/airport-profile` (SSE, in `api/airport_profile.py`) — an on-demand briefing-style cross-section generated per request, not from the snapshot cache. The panel has its own model selector (defaults to ECMWF, or the map's model when one is selected) and requests `_DEFAULT_WINDOW_H` (3) forward hours.
-- Both the open ICAO (`fc.apt`) and panel model (`fc.apModel`) are deep-linked, so a shared URL re-opens the panel.
+- **Left-click / tap** a forecast marker opens a side panel (`airport-profile-panel.ts`); right-click is a desktop alias for the same handler (touch devices have neither hover nor right-click, so click is the primary entry point).
+- **Three view modes** behind a segmented toggle, persisted to `localStorage` under `wb_apProfileView2`: `card` (default), `cross`, `skewt`. The **card is free** — `airport-summary-card.ts` renders it synchronously from the forecast-map payload the page already holds, with **no network round-trip**. Cross-section and Skew-T are the expensive views.
+- Cross-section / Skew-T data comes from `GET /maps/airport-profile` (SSE, in `api/airport_profile.py`) — an on-demand briefing-style profile generated per request, not from the snapshot cache. The stream is warmed **on intent**: pointer-enter, an explicit view switch, or a dwell timer while the user lingers on the card. The panel has its own model selector (`panelDefaultModel()`: the map's model when an individual one is selected, otherwise ECMWF — a consensus mode is not a real model) and requests `_DEFAULT_WINDOW_H` (3) forward hours.
+- Clicking a metric row in the card calls back into `setMetric()`, i.e. it **recolours the whole map** to that metric. The card's consensus column mirrors the map's mode (`panelConsensusMode()`), falling back to `worst`.
+- Open ICAO (`fc.apt`), panel model (`fc.apModel`) and view mode (`fc.apView`) are all deep-linked, so a shared URL re-opens the panel on the right view. A deep-linked model the selected day has no data for is constrained via `setAvailableModels()` **before** the load, not after.
 
 ### Synoptic
 - Hewson frontal-analysis overlay (`synoptic-map.ts` + hewson adapters/colormaps). Inner controls (model/init/level/metric) are NOT yet deep-linked — only the `tab=synoptic` switch is preserved. See [frontal-detection.md](./frontal-detection.md).
 
 ### Climatology
-- `climatology-tab.ts`. Opening it fires the `CLIMATOLOGY_OPENED` analytics event.
+- `climatology-tab.ts`, with its own `Map` / `Top airports` sub-tabs (`#clim-subtabs`, not deep-linked). Opening the tab fires the `CLIMATOLOGY_OPENED` analytics event.
 
 ### Accuracy Stats (`stats`)
 - Embedded iframe to `/verification.html?embed`; loaded lazily on first switch. No inner filters are deep-linked from this page (the iframe carries its own state).
@@ -70,7 +73,7 @@ The page hosts four tabs (`forecast`, `synoptic`, `climatology`, `stats`). Only 
 
 The forecast tab deep-links via the URL query string so any view can be shared as a stable link (PR #117).
 
-- **Encoder/decoder**: `web/ts/utils/url-state.ts` (`createUrlState`) — a schema of `{key: {default, values?}}` parses + serialises the current view to/from `URLSearchParams`. `maps-main.ts` defines `mapsUrlState` with keys: `tab`, `fc.day`, `fc.hour`, `fc.model`, `fc.metric`, `fc.apt` (open airport-profile ICAO), `fc.apModel`. State changes write back via `history.replaceState` (no history pollution). Keys whose value equals the default are omitted, so an untouched view yields a bare `/maps.html`.
+- **Encoder/decoder**: `web/ts/utils/url-state.ts` (`createUrlState`) — a schema of `{key: {default, values?}}` parses + serialises the current view to/from `URLSearchParams`. `maps-main.ts` defines `mapsUrlState` with keys: `tab`, `fc.day`, `fc.hour`, `fc.model`, `fc.metric`, `fc.apt` (open airport-profile ICAO), `fc.apModel`, `fc.apView` (`card|cross|skewt`). State changes write back via `history.replaceState` (no history pollution). Keys whose value equals the default are omitted, so an untouched view yields a bare `/maps.html`.
 - **Share button**: `web/ts/utils/share-link.ts` — copies the canonical URL for the current view to the clipboard with a transient toast.
 - **`tab=` is the dispatch key** with values `forecast | synoptic | climatology | stats`. Only the forecast tab's inner controls are deep-linked; synoptic/climatology/stats preserve the tab switch but not their inner state.
 - **Backwards-compatible**: bookmarks without `tab=` default to forecast tab with the page-level defaults.
@@ -87,15 +90,15 @@ Rules:
 - **Worst mode**: Pick most restrictive flight category across models (VFR=0 < MVFR < IFR < LIFR=3)
 - **Majority mode**: Most common category; ties broken by worst severity
 - **Agreement scoring**: Uses `compare_models()` divergence on wind/ceiling/CAPE/visibility/cloud → good/moderate/poor
-- **Numeric consensus**: Wind direction uses circular mean; every other numeric field takes the least-favourable value in worst mode (`min` or `max` per field, via `_WORST_IS_MIN` server-side / `NUMERIC_CONSENSUS` client-side) and the median of the winning-category pool in majority mode — the rules are identical on both sides
+- **Numeric consensus**: Wind direction uses circular mean; every other numeric field takes the least-favourable value in worst mode (`min` for the fields in `_WORST_IS_MIN`, `max` otherwise) and the median of the winning-category pool in majority mode (`_reduce_numeric`)
 - **Crosswind consensus**: max (largest crosswind) across models — the conservative pick
-- **Headwind consensus**: both server (`_WORST_IS_MIN` includes `headwind_kt`) and client (`NUMERIC_CONSENSUS.headwind_kt.worst = _min`) take `min` in worst mode — a positive headwind helps, so the weakest headwind / strongest tailwind is the least-favourable pick (worst ≠ max here). These were reconciled to agree
+- **Headwind consensus**: `_WORST_IS_MIN` includes `headwind_kt`, so worst mode takes `min` — a positive headwind helps, so the weakest headwind / strongest tailwind is the least-favourable pick (worst ≠ max here). Don't "fix" this to `max`
 
 ## Cache Layer
 
 Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md](./metar-taf-accuracy.md)) to serve pre-computed JSON responses. Cache is rebuilt after each standalone verification cycle via `cache_builder.rebuild_all()`.
 
-**Forecast map**: One cache entry per `forecast_map:{version}:{day}:{hour}` (no mode dimension — the cached payload holds per-model data + both baked consensus blocks). The key is **version-segmented** (`FORECAST_MAP_CACHE_VERSION` / `forecast_map_cache_key`, currently `v2`): bump it whenever the baked payload shape changes so entries written by the old code never match (`is_stale()` only checks `fetched_at` + the UTC-date rule, not the shape) and the endpoint falls through to the live path instead of serving a stale shape. Staleness checked against `MAX(AirportForecastSnapshotRow.fetched_at)`.
+**Forecast map**: One cache entry per `forecast_map:{version}:{day}:{hour}` (no mode dimension — the cached payload holds per-model data + both baked consensus blocks). The key is **version-segmented** (`FORECAST_MAP_CACHE_VERSION` / `forecast_map_cache_key`, currently `v3`): bump it whenever the baked payload shape changes so entries written by the old code never match (`is_stale()` only checks `fetched_at` + the UTC-date rule, not the shape) and the endpoint falls through to the live path instead of serving a stale shape. Staleness checked against `MAX(AirportForecastSnapshotRow.fetched_at)`.
 
 **Fallback**: If cache is stale or missing, the endpoint falls back to a live `get_forecast_map_data()` query transparently.
 
@@ -131,7 +134,7 @@ The colour ramps, thresholds, metric labels and legends are **served data**, not
 
 - **The grid is not rectangular, and the UI is drawn from the data**: the horizon runs D+0..D+6 and is set by ECMWF (168h wall), not by the model that reaches furthest — a day only GFS can reach has nothing to cross-check it. ICON-EU's cloud-diag GRIB stops at 120h, which falls exactly on the D+4/D+5 boundary, so **D+5 and D+6 carry two models**; and ECMWF delivers only 6-hourly steps past 144h, where 09Z/15Z never land, so **D+6 carries three sample hours, not five**. `tasks/forecast_grid.py` is the single source of truth (`MAX_FORECAST_DAY`, `MAP_FORECAST_DAYS`, `sample_hours_for_day`) — the cycle, cache builder and API all read it. `fetchAvailableDays()` reports what each day actually holds, and the day/hour pickers are **rendered from that response**, not from markup; a model that can't reach the selected day is disabled with an explanation, so its absence never reads as agreement. Don't restate the horizon rules in the client. (#415)
 - **Consensus is baked, switching is a pure client rerender**: both `consensus` (worst) and `consensus_majority` are baked into the one payload; switching worst/majority/individual-model just re-reads the payload and recolours — only day/hour hits the API. Don't reintroduce a client-side recompute, a per-mode server query, or a per-mode cache key
-- **Per-model-only metrics (client `computeConsensus`)**: `convective_risk` uses worst-across-models (ordinal max) in consensus mode; `cloud_cover_pct` worst = max; `crosswind_kt` worst = max; `headwind_kt` worst = min (weakest headwind is least favourable; matches the server's `airport_consensus.py` — see Consensus Algorithm)
+- **Per-metric worst rules** (all server-side in `airport_consensus.py`; the client only picks a baked block): `convective_risk` worst = ordinal max across models; `cloud_cover_pct` worst = max; `crosswind_kt` worst = max; `headwind_kt` worst = **min** (weakest headwind is least favourable — see Consensus Algorithm). The client's old `computeConsensus` / `NUMERIC_CONSENSUS` tables no longer exist; `weather-map-consensus.ts` keeps only shared helpers (`isConsensusMode`, `CAT_ORDER`, `RISK_ORDER`, `median`, `circularMean`)
 - **Runway wind data**: Crosswind/headwind require runway headings from the airports database; airports without runway data show no crosswind/headwind values. Best runway is selected by minimizing crosswind then maximizing headwind
 - **Marker sizing**: Radius scales with zoom level (5px at z<=4 up to 11px at z>7) for readability at all zoom levels
 - **All map endpoints require authentication**: forecast data is available to any authenticated user
@@ -144,8 +147,9 @@ The colour ramps, thresholds, metric labels and legends are **served data**, not
 - Consensus (server, single source): `src/weatherbrief/analysis/airport_consensus.py` (`consensus`, `enrich_wind`; re-exported into `map_queries.py` as `_consensus`/`_enrich_wind`). Both modes baked in `get_forecast_map_data`. Client reads the baked blocks via `weather-map-format.getConsensus` — the old `computeConsensus` recompute was retired in #419.
 - Consensus parity guardrail: `tests/test_consensus_parity.py` + `tests/fixtures/consensus_vectors.json`.
 - Map-metrics catalog (colours/thresholds/labels/legends): `web/ts/data/map-metrics-catalog.json`, served via `src/weatherbrief/api/help.py` (`maps` section).
-- Frequent airports (#419): `src/weatherbrief/api/flights.py` (`compute_frequent_airports`, `GET /flights/frequent-airports`).
+- Frequent airports (#419): `src/weatherbrief/api/flights.py` (`compute_frequent_airports`, `GET /flights/frequent-airports`). Only the iOS forecast map consumes it (`ForecastMapViewModel`) — the web page has no caller.
 - API: `src/weatherbrief/api/maps.py`, `src/weatherbrief/api/airport_profile.py` (airport-profile SSE)
 - Queries: `src/weatherbrief/tasks/map_queries.py`; cache key: `src/weatherbrief/tasks/cache_builder.py` (`forecast_map_cache_key`, `FORECAST_MAP_CACHE_VERSION`)
-- Frontend: `web/ts/maps-main.ts`, `web/ts/visualization/weather-map.ts`, `web/ts/visualization/weather-map-format.ts` (catalog interpreter + `getConsensus`), `web/ts/visualization/airport-profile-panel.ts`, `web/ts/visualization/synoptic-map.ts`, `web/ts/visualization/climatology-tab.ts`
+- Frontend: `web/ts/maps-main.ts`, `web/ts/visualization/weather-map.ts`, `web/ts/visualization/weather-map-format.ts` (catalog interpreter + `getConsensus`), `web/ts/visualization/weather-map-consensus.ts` (shared helpers/orderings), `web/ts/visualization/airport-profile-panel.ts` + `web/ts/visualization/airport-summary-card.ts`, `web/ts/visualization/synoptic-map.ts`, `web/ts/visualization/climatology-tab.ts`
+- Panel renderers: `web/ts/visualization/cross-section/renderer.ts`, `web/ts/visualization/skewt/renderer.ts` (shared with `/briefing.html`; the panel keeps its own layer-toggle state under `wb_apProfileLayers` so it doesn't bleed into the briefing view)
 - Synoptic / frontal overlay: [frontal-detection.md](./frontal-detection.md)

@@ -2,7 +2,7 @@
 
 > Per-model input audit, source tracing, interpolation methods, and consistency analysis for all three icing estimation methods.
 
-_Code references verified against the repo on 2026-06-13._
+_Code references verified against the repo on 2026-08-15._
 
 > 📐 The Ogimet icing-zone-width / convective-contribution decision (why Ogimet bands look "wide" vs GRAMET) is documented in [meteorology-decisions.md](./meteorology-decisions.md) §2 — read before re-investigating zone width.
 
@@ -18,7 +18,9 @@ WeatherBrief computes icing potential using four independent methods plus SLD de
 | **IENG** | `analysis/sounding/icing.py` | NWP cloud fraction (no glaciation) | 0–100 |
 | **SLD** | `analysis/sounding/sld.py` | Warm-nose freezing rain (all models) | moderate/severe |
 
-Shared utilities live in `analysis/sounding/icing_common.py`: cloud-proximity checks, NWP cloud altitude lookup, icing type classification, and zone grouping.
+Shared utilities live in `analysis/sounding/icing_common.py`: cloud-layer gating, NWP cloud altitude lookup, icing type classification, zone grouping, and the supercooled-rain test.
+
+**The single most important gating fact:** Ogimet-NWP and IENG return `[]` outright when the model has no *native* NWP cloud envelope. `clouds.build_nwp_cloud_layers()` returns `None` for models with only Open-Meteo bulk low/mid/high percentages (MétéoFr, UKMO, GEM) — bulk-%-narrowed-by-DD synthesis was deliberately removed, because a hybrid layer isn't a model-native layer and the cross-section can't anchor icing to it. Those three models therefore contribute Ogimet-DD and SFIP-proxy only.
 
 ---
 
@@ -40,6 +42,11 @@ Shared utilities live in `analysis/sounding/icing_common.py`: cloud-proximity ch
 | NWP cloud low/mid/high | Open-Meteo API | yes | yes | yes | yes | yes | yes |
 | NWP cloud diagnostics | GRIB2 enrichment | yes (full bulk + base/top) | bulk + cbh + hcct + deg0l (no per-band base/top) | EU only (bulk + ceiling + convective) | **NO** | **NO** | **NO** |
 | CAPE | Open-Meteo API | yes (SB) | yes (MU) | yes (ML) | yes | yes | yes |
+| Rain water (qr) | GRIB2 enrichment | **NO** | **NO** | ICON-D2 only | **NO** | **NO** | **NO** |
+
+**GRIB slot ≠ Open-Meteo model.** Two slots carry a second GRIB variant that changes what the icing methods see:
+- **`gfs` over CONUS** may be sourced from **HRRR** (`grib_sources["gfs"] == "hrrr:noaa"`). HRRR has no band base/top geometry, so its NWP layers come from per-level condensate (`CLMR` + `CIMIXR` → `source="nwp_condensate"`) rather than GRIB bands — see meteorology-decisions §23. HRRR fields are instantaneous, so none of the GFS averaged-window machinery (window-midpoint interp, RH/condensate gate) runs.
+- **`icon` may be ICON-D2** rather than ICON-EU (`icon_d2:dwd` vs `icon_eu:dwd`). D2 additionally publishes `qr`/`qs`/`qg`, which is the only source of the supercooled-rain flag today.
 
 ### Interpolation Chain
 
@@ -48,7 +55,8 @@ Shared utilities live in `analysis/sounding/icing_common.py`: cloud-proximity ch
 | 1. Spatial CLW/ICMR | `spatial_interpolation.py` | Linear in distance-space between route-point neighbors | Max 100nm gap. Preserves 0.0. Sets `clw_interpolated=True` |
 | 2. Vertical CLW/ICMR | `_interpolate_cloud_water()` in `__init__.py` | Linear in pressure-space between 50hPa GRIB levels | Fills 25hPa intermediate levels. Sets `clw_interpolated=True` |
 | 3. Volumetric LWC | `_enrich_lwc()` in `__init__.py` | Ideal gas law: `LWC = CLWMR × P/(Rd×T) × 1000` | Requires temperature; skipped if T missing |
-| 4. ICON model→pressure | GRIB enrichment | Log-pressure interpolation from model levels 35–74 | To 28 extended pressure levels (EXTENDED_PRESSURE_LEVELS) |
+| 4. ICON model→pressure | GRIB enrichment | Log-pressure interpolation from ICON-EU model levels 35–74 | To the 28 `EXTENDED_PRESSURE_LEVELS` |
+| 5. Vertical qr | `_interpolate_rain_water()` in `__init__.py` | Linear in pressure-space, same bracketing as step 2 | `supercooled_rain` is **re-derived**, never interpolated (see below). Dormant for ICON today — pass 1 always matches |
 
 ---
 
@@ -72,13 +80,13 @@ Shared utilities live in `analysis/sounding/icing_common.py`: cloud-proximity ch
 
 **Signal:** `effective = ogimet_index(T) × cloud_fraction(alt) × glaciation(CLW, ICMR)`
 
-| Input | GFS | ECMWF (Europe) | ICON (EU) | MétéoFr/UKMO/GEM |
-|-------|-----|----------------|-----------|------------------|
-| NWP cloud layers (gating) | Full GRIB bulk bands (base/top) | Per-deck from 3D `cc` (source="nwp_3d") | Per-deck from 3D `clc` + convective | Synthesized from Open-Meteo + DD envelope |
-| DD cloud proximity gate | Not needed | Not needed (real deck boundaries) | Not needed | Not needed (synth bands exist) |
-| CLW/ICMR glaciation | Yes (reduces glaciated cloud) | Yes (CLW/CIW from a2 GRIB) | Yes (EU) | **None** (factor=1.0) |
+| Input | GFS (or HRRR) | ECMWF (Europe) | ICON (EU/D2) | MétéoFr/UKMO/GEM |
+|-------|---------------|----------------|--------------|------------------|
+| NWP cloud layers (gating) | GFS: GRIB bulk bands (base/top, `source="grib"`). HRRR: from condensate (`source="nwp_condensate"`) | Per-deck from 3D `cc` (`source="nwp_3d"`) | Per-deck from 3D `clc` + convective | **None** — no native envelope |
+| CLW/ICMR glaciation | Yes (reduces glaciated cloud) | Yes (CLW/CIW from a2 GRIB) | Yes | **N/A** |
+| Method runs at all? | Yes | Yes | Yes | **No — returns `[]`** |
 
-**Degradation path:** For Open-Meteo-only models (MétéoFr/UKMO/GEM), synthesized bands cover ICAO altitude ranges narrowed by the DD cloud envelope. Still imprecise vs. real GRIB boundaries.
+**No degradation path, by design.** `assess_icing_zones_ogimet_nwp()` (and `assess_icing_zones_ieng()`) bail with `[]` when `clouds` is `None` or empty rather than falling back to bulk ICAO percentages: fabricating icing at altitudes the cross-section can't anchor to a drawn cloud band was judged worse than reporting nothing. Do NOT "fix" this by reintroducing synthesized bands — the old bulk-%-narrowed-by-DD synthesis was removed from `clouds.build_nwp_cloud_layers()` for exactly this reason, and the docstring there says so.
 
 Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by DD) to prevent overwrite.
 
@@ -112,13 +120,28 @@ methods; pure-model NWP layers for NWP-gated methods). The caller chooses which
 layer list to pass (`dd_clouds` vs `nwp_clouds`); see the `is_in_cloud_layer`
 call sites in `icing.py` and `sfip.py`.
 
-### `is_near_cloud(level, clouds, dd_threshold, skip_sct)` — deprecated/legacy
+### `is_near_cloud(level, clouds, dd_threshold, skip_sct)` — dead code
 
 The old proximity check that mixed a per-level DD re-check with layer proximity.
-**Deprecated** in favour of `is_in_cloud_layer`; now only referenced by the
-legacy `assess_icing_zones()` (no longer in the pipeline) and tests. The DD
-thresholds it consulted (`DD_BKN_THRESHOLD`=2.0, `DD_SCT_THRESHOLD`=3.0) are kept
-for that backward compatibility. Do not use for new gating.
+Superseded by `is_in_cloud_layer`. The legacy `assess_icing_zones()` it existed
+for has since been deleted, so as of this sync it has **zero callers anywhere —
+not even tests**, and its `DD_BKN_THRESHOLD`=2.0 / `DD_SCT_THRESHOLD`=3.0
+constants are unreferenced too. Its own comments still claim tests use it; they
+don't. Do not use for new gating; it is a removal candidate.
+
+### `is_supercooled_rain(rain_water_kg_kg, temperature_c)` (#530)
+
+True when non-trivial rain water (`qr ≥ 1e-6 kg/kg`) sits at `T < 0°C` —
+freezing-rain / large-droplet regime, physically distinct from supercooled cloud
+droplets. Requires **both** inputs, so a model publishing no `qr` (ICON-EU, GFS,
+ECMWF) yields `False` meaning *not detected*, never *no supercooled rain here*.
+Threshold rationale and rejected alternatives: meteorology-decisions §24.
+
+Flows through as `DerivedLevel.supercooled_rain` → `IcingZone.supercooled_rain`
+(`any()` over the zone's levels). **Deliberately not a severity modifier** —
+`_enhance_severity()` ignores it, because the signal has never been checked
+against a real winter freezing-rain case and an unvalidated upgrade would move
+grades on every ICON-D2 winter briefing at once. Issue #411 gates the upgrade.
 
 ### `nwp_cloud_cover_at_altitude(altitude_ft, ...)`
 
@@ -193,7 +216,7 @@ unified. (Earlier wording here claimed full unification — that was overstated.
 `icing_common.py` and both modules use them. Cloud gating was unified too, but
 has since moved past the original `_is_near_cloud` extraction: all four builders
 now gate on `is_in_cloud_layer` (clean altitude-band check), with the old
-`is_near_cloud` left deprecated/legacy (see Shared Utilities). **Exception:** the
+`is_near_cloud` left behind as dead code (see Shared Utilities). **Exception:** the
 icing-**type** classifier was *not* unified — `icing_common.classify_icing_type()`
 (wet-bulb) is used by the Ogimet-family methods only; SFIP retains its own
 dry-bulb `_classify_icing_type` by design (see Bug #2).
@@ -216,7 +239,7 @@ Uses the same Ogimet layered formula (parabola peaking at −7°C) but weights o
 
 Matches the approach used by CloudPath. Convective component added when CAPE > 100 J/kg, weighted by NWP convective cloud cover.
 
-**Model consistency:** Same as Ogimet-NWP — requires NWP cloud data. Available for all models with Open-Meteo cloud percentages.
+**Model consistency:** Same as Ogimet-NWP — requires a *native* NWP cloud envelope and returns `[]` without one. So GFS/HRRR, ECMWF-in-Europe and ICON only; bulk Open-Meteo percentages alone are not enough.
 
 **Key difference from Ogimet-NWP:** No `glaciation_factor(clw, icmr, T)` call. In ice-dominant clouds (high ICMR/CLW ratio), Ogimet-NWP reduces the index while IENG does not.
 
@@ -226,11 +249,13 @@ Matches the approach used by CloudPath. Convective component added when CAPE > 1
 
 **Active — Warm-nose freezing rain:** When the precipitation module detects a warm layer (Tw > 0°C) above a subfreezing surface layer with `freezing_rain_risk=True`, the cold layer below the warm nose is an SLD zone. Freezing rain drops are 0.5–5mm — SLD by definition. Risk: MODERATE (normal), SEVERE if warm nose ≥ 3000ft deep.
 
-**Disabled — Collision-coalescence:** Deep clouds (>3000ft) with tops warmer than −12°C where ice nucleation is too slow for Bergeron glaciation. Disabled because it fires on virtually every deep stratiform cloud in European weather — NWP models lack droplet size data to distinguish SLD from normal icing. Code retained in `_coalescence_sld_zones()`. See `designs/future/known-issues.md` for details and future improvement ideas.
+**Disabled — Collision-coalescence:** Deep clouds (>3000ft) with tops warmer than −12°C where ice nucleation is too slow for Bergeron glaciation. Disabled because it fires on virtually every deep stratiform cloud in European weather — NWP models lack droplet size data to distinguish SLD from normal icing. Code retained in `_coalescence_sld_zones()`. See `designs/known-issues.md` for details and future improvement ideas.
 
 **Model availability:** Works with all models (uses temperature/wet-bulb profile, not GRIB-specific fields). The `mechanism` field on `SldZone` indicates which detection fired ("warm_nose" or "coalescence").
 
-**Cross-section:** Layer `sld-bands`, disabled by default and in GRAMET preset (experimental). Zones expanded to minimum 1000ft thickness for visibility.
+**Cross-section:** Layer `sld-bands`, disabled by default in every preset (experimental), and marked unavailable when the sounding carries no `sld_zones`. Zones expanded to minimum 1000ft thickness for visibility.
+
+**Gotcha — two unrelated SLD channels.** `sounding.sld_zones` (from `sld.py`) is the live one. `IcingZone.sld_risk` is a *separate* field that **nothing populates**: `icing._build_zone_simple` never sets it and `icing._detect_sld()` returns `False` unconditionally. Advisory code in `advisories/_helpers.py`, `fiki_icing.py` and `icing_escape.py` branches on `zone.sld_risk`, so those branches are all currently unreachable — the safe default there must stay "SLD survives a NONE risk" for whenever it is wired. Don't "clean up" the dormant clauses.
 
 ---
 

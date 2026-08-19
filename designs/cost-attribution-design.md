@@ -41,7 +41,15 @@ per-user balance write and no `topup`/auto-reload noise in the ledger.
 ## Cost Formula
 
 ```python
-token_cost = (input_tokens / 1000) × rate_input
+# cache_read/cache_write are SUBSETS of input_tokens (langchain-anthropic reports
+# one total that already includes them), clamped so a provider-side reporting
+# change can never drive uncached negative and silently refund a user.
+cached   = min(cache_read + cache_write, input_tokens)
+uncached = input_tokens - cached
+
+token_cost = (uncached    / 1000) × rate_input
+           + (cache_read  / 1000) × rate_input × cache_read_multiplier   # 0.1x
+           + (cache_write / 1000) × rate_input × cache_write_multiplier  # 2x @ 1h
            + (output_tokens / 1000) × rate_output
 
 est = max(estimated_monthly_briefings, 500)   # floor

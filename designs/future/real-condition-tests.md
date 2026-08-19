@@ -60,6 +60,30 @@ be ICON-specific.
 
 ---
 
+## Any season — needs widespread stratiform rain
+
+### Bright-band gate, full pipeline (not just the decision table)
+
+**Added:** 2026-08-15 (was the *Outstanding* bullet of the completed 2026-07-21
+entry below; #467 closed 2026-07-22, so it has no issue holding it)
+**Requires:** A fresh bright-band day — widespread non-convective rain with
+melting-layer enhancement, inside the ICON-D2 domain. Findable the same day with
+the scanner above.
+
+The #466 fix was verified by replaying the recorded per-point values through
+`assess_convective_explicit`. That exercises the decision table only. Untested
+end-to-end: decode → payload → freezing-level plumbing → advisory. The
+freezing-level chain feeding the gate has been reworked since
+(`_explicit_freezing_level_ft`, and #487 re-datumed ECMWF's `deg0l` from AGL to
+MSL at the decode boundary), so the input side of the gate is exactly the part
+no live run has ever touched.
+
+**Pass:** a live route through a bright band grades no-fire (or MODERATE at
+worst), and the echo-top/freezing-level Δ that reaches the gate in the real
+payload matches the value the replay assumed.
+
+---
+
 ## Winter (roughly Nov–Mar)
 
 ### ICON-D2 explicit convection — winter graupel-shower control
@@ -78,7 +102,12 @@ since:
 
 - **#468 dropped `grau_gsp`** (it is *surface* graupel precipitation, ~always 0 under
   warm-season cores). So this is no longer "does the graupel corroborator behave" —
-  that channel is gone.
+  that channel is gone. #530 has since added the *model-level* precipitating species
+  `qr`/`qs`/`qg` on D2 (`ICON_D2_VARIABLES`; ICON-EU publishes none of them), so a
+  column mixed-phase quantity now exists in the data — but no convective grader reads
+  it, and `tcond10_mx` is still unfetched. A winter run is the natural place to ask
+  whether either is worth wiring; per meteorology-decisions §19 that restores a
+  non-LPI route to |C| = 2 and is a recalibration, not a drop-in.
 - **#466 added a bright-band gate**: reflectivity is suppressed to NONE when the
   18 dBZ echo top sits < 10,000 ft above the freezing level *and* no storm-process
   corroborator fired.
@@ -109,6 +138,19 @@ shows a 2% move in Δ changes the grade.
 winter, until there is enough spread to say whether 10,000 ft is right, whether it
 should be relative rather than absolute, and how wide the ambiguous band is.
 
+### Also blocked on winter, tracked elsewhere — plan one expedition
+
+Not duplicated here, but they need the same weather, so pull the packs once:
+
+- **#411 (open)** — SLD / freezing-rain detection is dormant end-to-end; needs a
+  real European FZRA day to tell "correctly silent" from "under-sensitive".
+- **meteorology-decisions §24** — `DerivedLevel.supercooled_rain` / `IcingZone
+  .supercooled_rain` are computed from D2's `qr` below 0 °C but deliberately
+  **not graded**, waiting on that same case; the `1e-6 kg/kg` threshold is a
+  starting point, not a validated number.
+- **meteorology-decisions** also parks a winter-stratus freezing-level control
+  and a cold-sector snow-shower AMBER control.
+
 ---
 
 ## Completed
@@ -126,8 +168,6 @@ fields, the thermo track, ICON-EU and GFS all said no convection. Root cause was
 decision table's ≥50 dBZ row bypassing corroborators; the 35–44 band behaved
 correctly. Fixed in #466 (≥50 dBZ now requires |C| ≥ 1, plus the bright-band gate).
 
-**Outstanding:** the fix was verified by replaying the recorded per-point values
-through `assess_convective_explicit`. That exercises the decision table but **not**
-the full pipeline — decode → payload → freezing-level plumbing → advisory. A live
-A/B on a fresh bright-band day would properly close it; kept in #467 while it is
-still convective season.
+**Outstanding:** the fix was verified by replay only, not through the full
+pipeline. #467 closed on 2026-07-22, so that verification now lives as a pending
+entry above ([Bright-band gate, full pipeline](#bright-band-gate-full-pipeline-not-just-the-decision-table)).

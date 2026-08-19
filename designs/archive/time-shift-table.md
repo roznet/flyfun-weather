@@ -2,6 +2,42 @@
 
 > Evaluate advisory severity at multiple candidate departure times across the day (sunrise–sunset), helping pilots pick the best time window — analogous to the altitude table but varying time instead of altitude.
 
+> **STATUS (verified against code 2026-08-15): SUPERSEDED — this idea SHIPPED,
+> under a different name and a materially different design.** It is the
+> **timing-scenario scan** ("Flexibility"): backend+web PR #341 (2026-07-04),
+> iOS port #357, persist-all follow-up #434. Code: `tasks/time_scan.py`,
+> `tasks/time_scan_runner.py`, `models/time_scan.py`, `api/packs.py`
+> (`GET/POST .../time-options`, `/rescan`, `/confirm`), `flights.flexibility`
+> (migration 074). Build record + as-built architecture:
+> `designs/./timing-scenario-plan.md` (and `timing-scenario-ios-port.md`).
+> **Read those, not this.** Kept only as the "how we got here" note — nothing
+> below is a live proposal, and several of its recommendations were rejected
+> in favour of better ones (see the reconciliation table).
+
+## How the shipped design differs from this proposal
+
+Every open question below got answered — mostly *differently*. Do not "revive"
+a bullet from this doc without checking this table first.
+
+| This doc proposed | What actually shipped |
+|---|---|
+| Always-on, computed for every briefing | **User opt-in per flight** via the `flexibility` mode (`none`/`alternate`/`same_day`/`prev_day`/`next_day`). Intent is the compute gate. |
+| 3h steps, "default to 1h if fast enough" | Hourly grid over the daylight window, capped at 24 candidates (`_MAX_GRID`). |
+| `approximate: bool`, flipped by a background enrich | **Per-candidate confidence**: `confirmed_in_window` / `ecmwf_only` / `confirmed`, plus an on-tap multi-model confirm endpoint. Honesty invariant: hours outside model coverage are **refused, never clamp-graded**. |
+| Option C — expand GFS + ECMWF GRIB to sunrise–sunset | **ECMWF-only daylight extension**, decode-only and ephemeral (`extend_ecmwf_daylight`); GFS/ICON keep the flight window. Adjacent-day support is an OM re-fetch (`extend_openmeteo_adjacent_day`). |
+| Grade every candidate on the same footing | Coverage is computed **per model per route point** (`compute_model_coverage`, rule-window ∩ data-marker); OM-only models are `uniform`. |
+| Simple "fewest reds then fewest ambers" best-time pick | **Disposition taxonomy** `improving`/`neutral`/`worse` with a margin threshold and a full-advisory regression check; all candidates persisted and ranked (#434). |
+| `alt_departure_time` possibly deprecated by the table | Kept — folded in as the single-candidate `alternate` flexibility mode. |
+| Sunrise/sunset: Open-Meteo daily vs `astral` | Resolved in `compute_daylight_window` / the shared sun-events helper; the `sun` advisory uses the same source. |
+
+Residue never built (per the plan doc): the None-flight lightbulb hint
+(`get_timing_hint_ids()` has zero call sites), the digest diurnal-swing hint,
+and the iOS mirror of the #434 DTO fields.
+
+---
+
+*Original 2026 proposal below, unedited, for provenance only.*
+
 ## Motivation
 
 The altitude table already answers "what altitude is safest?" by sweeping advisories across an altitude range. Pilots ask the same question about departure time: would leaving 3 hours earlier or later avoid the worst weather? Today the system supports a single alternative departure time (`alt_departure_time`), but this requires the pilot to guess which time to try. A systematic sweep across the day — every 3h slot between sunrise and sunset — would surface the optimal window automatically.

@@ -1,11 +1,13 @@
 # Full GRIB Sounding Plan — ICON-EU
 
 **Status: IMPLEMENTED (this plan is now historical).** Full sounding replacement
-shipped for BOTH ICON-EU (40 model levels) and ECMWF (25 pressure levels). The
-durable design now lives in [weather-engine-specs.md](../weather-engine-specs.md)
-(§B ECMWF + §C ICON-EU, both marked "IMPLEMENTED (full sounding)"). Read that doc,
-not this one, for current truth. This file is kept only as a record of the original
-plan and how the shipped code diverged from it — it should be archived.
+shipped, and the model-agnostic path it produced now serves four models:
+ICON-EU (40 model levels), ECMWF (25 pressure levels), ICON-D2 (#456) and
+HRRR (#457). The durable design now lives in
+[weather-engine-specs.md](../weather-engine-specs.md) (§A.2 HRRR, §B ECMWF,
+§C ICON-EU, §C.2 ICON-D2 — all marked "IMPLEMENTED (full sounding)"). Read that
+doc, not this one, for current truth. This file is kept only as a record of the
+original plan and how the shipped code diverged from it — it should be archived.
 
 **How the shipped code differs from the plan below:**
 - No `icon_eu_sounding.py` module and no `build_icon_sounding()`. The conversion

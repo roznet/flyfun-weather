@@ -2,6 +2,8 @@
 
 > Development changelog of completed implementation phases, extracted from `architecture.md` (it is history, not design context or live planning). Live/known-issue items live in `designs/future/`.
 
+Phase numbering was retired after **12.11** — later work is tracked per-subsystem (design doc + GitHub issue/PR), so the table ending here is complete, not stale. The one row that never shipped is **4c** (ensemble & remaining model-comparison refinement); `architecture.md` still names it as the sole open phase. Note that names in the table are as-shipped-then: e.g. the 10.4 API-token prefix `wb_` is now `ff_`.
+
 ## Phases
 
 | Phase | Status | Summary |

@@ -17,20 +17,34 @@ Related: [ios-app-roadmap.md](../ios-app-roadmap.md) (phase plan + open question
 at `:465` (`advisory-profile-select`) and wired at `:548`; altitude-override
 slider rendered at `:476` and wired at `:599`; the `onRecalculate` callback is
 the option at `:368`, wired to the recalculate button at `:563`. →
-`POST /api/flights/{id}/packs/{ts}/advisories/recalculate` (`recalculate_advisories`,
-`api/packs.py:3080`, `tasks/advise.py:run_advisories_from_pack`).
+`POST /api/flights/{id}/packs/{ts}/advisories/recalculate` (`recalculate_advisories`
+in `api/packs.py`, → `tasks/advise.py:run_advisories_from_pack`). Sibling endpoint
+`advisories/preview` grades *draft* settings with `persist=False` for the settings
+page — recalculate reads the **saved** profile and **writes** into the pack, so the
+two are not interchangeable.
 
 **Context — the Refresh-vs-recalculate decision.** Two distinct operations:
 
 - **Refresh** = *get new data* — new model runs, or on D-0 live METAR/TAF/SIGMET
-  (the tiered `decide_refresh` gate, `api/packs.py:796`). A user pressing Refresh
+  (the tiered `decide_refresh` gate in `api/packs.py`). A user pressing Refresh
   expects the whole briefing, including the AI summary, to reflect the latest
   *weather*. Shared endpoint, identical on web + iOS.
 - **Recalculate** = *re-grade the same forecast against changed settings*
   (altitude, profile, icing/cloud/convective method, advisory params,
   aggregation). No new data came from the sky, so the AI digest is intentionally
-  **not** regenerated — the `digest.profileMismatch` banner flags it as written
-  for the prior settings, with regeneration explicit/opt-in.
+  **not** regenerated — a banner flags it as written for the prior settings,
+  with regeneration explicit/opt-in.
+
+  **Both clients now carry that staleness banner** (this part is no longer a
+  gap): web has `digest.profileMismatch` and `digest.altitudeMismatch`
+  (`buildDigestAltitudeWarning`, `web/ts/managers/briefing-ui.ts`), iOS has the
+  altitude one in `Views/Briefing/DigestAltitudeWarning.swift`. Read its header
+  comment before touching either — the warning must compare the flight altitude
+  against `SnapshotResponse.route` (i.e. `briefing.json`, the one artifact
+  recalculate leaves alone), *not* `AdvisoriesResponse.cruiseAltitudeFt`, which
+  recalculate rewrites and which would make the warning silently dead. iOS has
+  no profile-mismatch counterpart yet — it cannot change profile in-briefing
+  (the gap below), so the case can only arise via an edit elsewhere.
 
 We deliberately did **not** fold a recalc mode into the Refresh gate: it would
 overload Refresh's meaning and create the false expectation that the AI summary
@@ -42,7 +56,7 @@ self-evident ("this recomputes *these*, not the rest").
 selector and altitude slider re-grade in place. iOS has **no in-briefing
 recalculate control** — it only recomputes advisories via the *edit-flight* flow
 (`AddFlightViewModel.regenerateBriefing(for:invalidation:)`,
-`app/.../ViewModels/AddFlightViewModel.swift:750`), which reacts to the
+`app/.../ViewModels/AddFlightViewModel.swift`), which reacts to the
 `PATCH /api/flights/{id}` `invalidation` hint (`advisories_only` →
 `recalculateAdvisories()`). So an iOS user who wants to try a different
 altitude/profile *on an existing briefing* can't, short of editing the flight.
@@ -79,8 +93,11 @@ would be pointless.
 flight (`AddFlightViewModel` `selectedProfileId`, applies the profile's
 altitude/ceiling), but there is **no page to create or edit a profile's
 contents** — name, advisory enabled/params, aggregation, icing/cloud/convective
-method, `advisory_models`, `auto_front_detection`. Those settings live in
-`FlightProfileRow.settings_json` and are only editable from the web app.
+method, `advisory_models`, `auto_front_detection`, plus the newer
+`digest_guidance`, `flight_rules` and the setup-`interview` answers (#387).
+Those settings live in `FlightProfileRow.settings_json` and are only editable
+from the web app. The axis list keeps growing, which raises the porting cost
+each time — see `ProfileSettings` in `api/profiles.py` for the current set.
 
 **Decision.** Accept for now. Profile authoring is a lower-frequency, form-heavy
 task that fits the larger screen; the iOS app's job today is briefing
@@ -91,8 +108,9 @@ built on web.
 
 **Revisit / to build when we do:**
 - A profile list + editor screen driven by the advisory catalog
-  (`GET /api/.../advisories/catalog` gives parameter defs), mirroring the web
-  form. Naturally pairs with the advisory-recalculate port above.
+  (`GET /api/user/preferences/advisories/catalog` gives parameter defs),
+  mirroring the web form, with `advisories/preview` for the "what would change"
+  pane. Naturally pairs with the advisory-recalculate port above.
 
 ---
 

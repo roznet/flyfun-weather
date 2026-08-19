@@ -1,9 +1,12 @@
 # Satellite Cloud-Top Validation for GA Routes
 
-**Status: Investigation paused 2026-05-10** — MTG L2 CTTH (Cloud Top Temperature
-& Height) was successfully fetched and sampled; OCA collection is accessible but
-not yet exercised; L1 brightness-temperature (what Windy displays) is gated
-behind a separate EUMETSAT licence not yet on our account.
+**Status: Investigation paused 2026-05-10** (still paused, re-checked
+2026-08-15) — MTG L2 CTTH (Cloud Top Temperature & Height) was successfully
+fetched and sampled; OCA collection is accessible but not yet exercised; L1
+brightness-temperature (what Windy displays) is gated behind a separate
+EUMETSAT licence not yet on our account. Nothing from this investigation has
+been wired into `src/weatherbrief/` — it lives entirely in the four `scripts/`
+CLIs below.
 
 Goal: cross-check the cloud picture along a GA route against what a pilot
 actually flew through, using EUMETSAT geostationary satellite products.
@@ -268,6 +271,18 @@ scripts/
                                # ~95 MB per 10-min product
 /tmp/eumetsat_ctth/route_*.csv # CSV output from fetch_mtg_ctth_route
 ```
+
+Gotchas when picking this back up:
+
+- **The cache is on `/tmp` and is now empty** — it was cleared long ago. The
+  three offline scripts (`analyze_`, `print_`, `ctth_route_histogram`) will
+  find nothing until `fetch_mtg_ctth_route.py` re-downloads the window. Budget
+  ~95 MB per 10-min timestep. If this gets picked up seriously, move the cache
+  under `DATA_DIR` instead.
+- Script defaults are **relative paths** (`data/nav.db`, `data/packs/debug/…`),
+  so they only resolve from the `main/` worktree — worktrees have no `data/`.
+- `eumdac`, `satpy`, `pyproj`, `xarray` are all present in `main/venv`;
+  `EUMETSAT_CONSUMER_KEY` / `_SECRET` are in `main/.env` (not in `.env.sample`).
 
 ## References
 

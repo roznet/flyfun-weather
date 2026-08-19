@@ -1,25 +1,31 @@
 # Refactor: `nwp_cloud_layers` strictly native NWP
 
-> **STATUS (2026-06-13): SHIPPED & MERGED.** Branch/worktree gone. The
-> strict-native refactor is live: `build_nwp_cloud_layers` returns native
-> (`nwp_3d`/`grib`) layers or `None` (no synth fallback;
-> `clouds.py:507`); Ogimet-NWP/IENG icing short-circuit to `[]` on
-> `None`/empty clouds (`icing.py:442,517`); the model field is typed
-> `list[EnhancedCloudLayer] | None` (`models/analysis.py:726`) and `None`
-> is preserved end-to-end; the frontend gates
-> `nwp-cloud-bands` on `nwpCloudLayers !== null` and `nwp-convective-bg`
-> on `hasNwpConvective` (`data-extract.ts:455,477`). Tests:
+> **STATUS (2026-06-13): SHIPPED & MERGED; re-verified 2026-08-15.** Branch/worktree
+> gone. The strict-native refactor is live: `build_nwp_cloud_layers` returns native
+> layers or `None`, no synth fallback (`clouds.py`, `def build_nwp_cloud_layers`);
+> Ogimet-NWP/IENG icing short-circuit to `[]` on `None`/empty clouds
+> (`icing.py`, `if not levels or not clouds`); the model field is typed
+> `list[EnhancedCloudLayer] | None` (`models/analysis.py`, `nwp_cloud_layers`)
+> and `None` is preserved end-to-end; the frontend gates `nwp-cloud-bands` on
+> `nwpCloudLayers !== null` and `nwp-convective-bg` on `hasNwpConvective`
+> (`web/ts/visualization/data-extract.ts`). Tests:
 > `tests/test_nwp_cloud_layers_from_cc.py`, plus `test_icing.py`/`test_clouds.py`.
 >
-> **Deferred (item 4, by design, not abandoned):** `decode.py` does NOT
-> fake ECMWF single-level `top_ft`. ECMWF cloud decks come from per-level
-> `cc` (`nwp_3d` source) — wired (`decode.py:39`, `_ECMWF_FRAC_TO_PCT`).
-> The open follow-up is the separate ticket: confirm per-level `cc`
-> actually produces `nwp_3d` layers in prod (was empty on the test flight).
+> **Superseded in one respect:** the plan's two-source taxonomy (`nwp_3d`, `grib`)
+> gained a third native source afterwards — per-level condensate
+> (`build_nwp_cloud_layers_from_condensate`, `source="nwp_condensate"`, HRRR
+> `CLMR`+`CIMIXR`, #457/PR #508), tried LAST so GFS keeps its band envelope.
+> Read `designs/cloud-layers-analysis.md` for the current taxonomy, not this plan.
 >
-> The durable design knowledge (source taxonomy, no-synth rationale,
-> bulk-% as severity-modulator-not-gate) now lives in the docstrings of
-> `clouds.py` / `icing.py`. This plan can be archived.
+> **Deferred item 4 — resolved.** `decode.py` still does NOT fake ECMWF
+> single-level `top_ft`; ECMWF decks come from per-level `cc` (`_ECMWF_FRAC_TO_PCT`
+> in `fetch/grib/decode.py`), and that path is now the documented live ECMWF
+> source (`nwp_3d`) in `designs/cloud-layers-analysis.md`. Nothing left open.
+>
+> The durable design knowledge (source taxonomy, no-synth rationale, bulk-% as
+> severity-modulator-not-gate) now lives in `designs/cloud-layers-analysis.md`,
+> `designs/analysis.md`, and the docstrings of `clouds.py` / `icing.py`.
+> This plan can be archived.
 
 ## Why
 

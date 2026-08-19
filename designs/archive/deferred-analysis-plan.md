@@ -1,5 +1,22 @@
 # Deferred Analysis & Background Refresh
 
+> **ARCHIVED (moved here 2026-02-25) — historical plan, not current design.** Do not
+> implement from this doc; read it only for the reasoning behind the split between
+> interactive and background refresh. Outcome as of 2026-08:
+> - **Phase 1/2 (per-model `route_analyses_{model}.json` + `POST .../analyze-route/{model}`) — never built.**
+>   `route_analyses.json` is still one combined `RouteAnalysesManifest`
+>   (`weatherbrief/tasks/artifacts.py`); there is no per-model file and no on-demand
+>   analysis endpoint. The wait-time problem was solved elsewhere (faster analysis,
+>   background pre-build, tiered refresh gating) rather than by deferring per model.
+> - **Phase 3 (digest input hashing) — superseded** by Anthropic prompt caching on the
+>   digest prefix, which attacks the same cost without a reuse/staleness decision.
+> - **Phase 4 (background refresh) — shipped, but in a different shape:** an in-process
+>   asyncio loop in the web app (`weatherbrief/scheduler.py`, `run_scheduler_loop` /
+>   `process_auto_refreshes` / `_auto_refresh_one`), not a separate worker process, with
+>   per-user deferral, tiered lead-time gating, and APNs push. See
+>   `designs/refresh-durability.md` and `designs/freshness-markers.md` for the real
+>   behaviour.
+
 ## Problem
 
 The current refresh pipeline runs **fetch + analysis + digest** synchronously. At 10nm spacing (~48 route points), analyzing all models takes ~12-15 seconds, which the user must wait through during an interactive refresh. Meanwhile, the planned background refresh process should pre-build everything so users get instant results.

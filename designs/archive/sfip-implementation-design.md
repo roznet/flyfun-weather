@@ -1,5 +1,30 @@
 # SFIP Icing Index — Implementation Design Document
 
+> **ARCHIVED — historical proposal, NOT the current spec.** SFIP shipped and lives in
+> `src/weatherbrief/analysis/sounding/sfip.py`. For current truth read
+> [analysis.md](../analysis.md) (§ SFIP-NWP), [analysis-metrics.md](../analysis-metrics.md) (§3.2e),
+> [icing-models-analysis.md](../icing-models-analysis.md), and [data-models.md](../data-models.md).
+> Kept only to record the original reasoning and the papers behind the membership functions.
+>
+> **Where the implementation diverged from this document** (do not "fix" the code back to this doc):
+> - **Severity mapping**: the GA-tuned thresholds (15/30/55) won; the Windy TRACE/HEAVY mapping
+>   below was *not* adopted, so `sfip_severity` is NONE/LIGHT/MODERATE/SEVERE.
+> - **Variants**: six, not two — `full`, `full_no_vv`, `interp`, `interp_no_vv`, `proxy`,
+>   `proxy_no_vv`. The `_no_vv` suffix marks omega-unavailable; `interp` marks spatially- or
+>   vertically-interpolated CLW (tracked by a `clw_interpolated` flag).
+> - **Temperature membership**: exponential decay below −14 °C (`_TEMP_DECAY_K = 0.4`), not the
+>   linear taper to −25 °C written below.
+> - **Cloud gating**: `is_in_cloud_layer()` per variant (full gates on NWP cloud layers, proxy on
+>   DD cloud layers), not the bare temperature gate in "Gating" below.
+> - **Icing type**: SFIP got its own dry-bulb `_classify_icing_type()`, contradicting the
+>   "Ogimet's type classification applies to both" note in Integration Notes.
+> - **glaciation_factor**: gained a `temperature_c` argument.
+> - **Code organization**: option 2 (a new `sounding/sfip.py`) was chosen; shared helpers were
+>   later factored into `sounding/icing_common.py`.
+>
+> The **weights are the one thing that carried over verbatim** — 0.35/0.15/0.35/0.15 (full) and
+> 0.40/0.25/0.25/0.10 (proxy).
+
 ## Purpose
 
 Add a second icing index called **SFIP** (Simplified Forecast Icing Potential) alongside the existing **Ogimet** index. The two indices should be computed independently at each pressure level and both included in the output, so they can be compared. The SFIP is the algorithm family used by Windy.com and operational European met services (IPMA Portugal, UK Met Office) for aviation icing forecasting.

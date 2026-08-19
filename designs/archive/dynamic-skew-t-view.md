@@ -1,6 +1,11 @@
 # Dynamic Canvas Skew-T View
 
-> **Status**: Phases 1–4 implemented, including the multi-model overlay (Compare mode — `compare-renderer.ts`) that was originally listed as future here. See [designs/skewt-canvas.md](../skewt-canvas.md) for the current implementation design doc — that doc is authoritative. This file retains the original planning detail only. The only items still genuinely future are **vertical zoom/pan**, **theme integration** (`CrossSectionTheme` → `VizTheme` rename), and **method sync** (icing/cloud preferred-method sync with the cross-section).
+> **Status**: Phases 1–4 implemented, including the multi-model overlay (Compare mode — `compare-renderer.ts`) that was originally listed as future here. See [designs/skewt-canvas.md](../skewt-canvas.md) for the current implementation design doc — that doc is authoritative. This file retains the original planning detail only. The only items still genuinely future are **vertical zoom/pan**, **theme integration** (`CrossSectionTheme` → `VizTheme` rename — still named `CrossSectionTheme` in `web/ts/visualization/cross-section/theme.ts`), **method sync** (icing/cloud preferred-method sync with the cross-section), and **model divergence shading** in Compare mode. All four are also listed under "Still Future" in skewt-canvas.md.
+>
+> **ARCHIVED 2026-08-17 — the "Resolved Decisions" rationale below was folded into
+> [`designs/skewt-canvas.md`](../skewt-canvas.md) "Key Choices" before archiving.**
+>
+> Content that existed ONLY here: the *why* under "Resolved Decisions" — hodograph deliberately excluded, wind barbs replaced by the headwind/crosswind panel, mobile web deliberately minimal because iOS is the mobile experience.
 
 > Interactive, client-rendered Skew-T log-P diagram for the web app, replacing the static MetPy PNG with a canvas-based view that supports layer overlays, side variable panels, multi-model comparison, and linked interaction with the cross-section.
 
@@ -241,6 +246,8 @@ Keep the existing MetPy static image as a fallback/reference:
 - Default to dynamic once stable
 - MetPy view retains the hodograph companion for reference during development
 
+(As-built: shipped as a **three**-way mode in `briefing-main.ts` — Dynamic / Compare / Static — not the planned two-way toggle; Dynamic is the default.)
+
 ## Data Flow
 
 ```
@@ -289,13 +296,13 @@ For multi-model: fetch `sounding-profile` for each selected model via `Promise.a
 - Inversion bands
 - Convective zone highlight (LFC→EL)
 - Checkbox toggle UI with state persisted to localStorage
-- Note: preferred method sync with cross-section not yet implemented
+- Note: preferred-method sync with the cross-section still not implemented. Advisory-preset lenses (#308) do push a coherent overlay set into the Skew-T (`SkewTRenderer.applyPreset`), but the cross-section's `preferredMethods` (which icing/cloud method is graded) does not follow through to the Skew-T overlay toggles
 
 ### Phase 3 — Side Variable Panels ✅ Implemented (partial)
 - Dual-axis side panel (primary + secondary variable, single fixed-width 110px panel)
-- Variable registry with 12 variables (HW/XW, DD, RH, Wind, Ice-DD, Ice-NWP, SFIP, CLW, ICE, Γ, Ri, w, θe)
+- Variable registry — shipped with 14 variables, grouped into `<optgroup>` blocks (HW/XW, Wind, DD, CC, RH, CLW, ICE, Ice-DD, Ice-NWP, SFIP, Γ, θe, Ri, w). CC (per-level cloud fraction) was not in this plan; it plots for ECMWF/ICON only
 - Dropdown selectors for primary/secondary variable
-- On-the-fly `analyze_sounding()` in endpoint for derived variables (~30ms)
+- Derived variables: shipped **sidecar-first** — `sounding_profiles.json.gz` is written at refresh while `derived_levels` are intact; the on-the-fly `analyze_sounding()` (~30ms) planned here is the fallback for packs without a sidecar
 - Inline computation of DD, RH, lapse rate, θe, CLW, ICE, omega/w from raw data
 - **Not yet implemented**: Unified `VizTheme` rename + Skew-T theme property groups
 

@@ -1571,6 +1571,8 @@ downgrade a DD red.
 - `tests/test_convective.py` — precip-rate tiering, the ECMWF Channel regression
   (`cp` fires when `hcct` absent), and tower-top-stays-primary guard.
 
+---
+
 ## 15. Convective character: a VFR-avoidability axis separate from severity
 
 **Date:** 2026-06-24
@@ -1788,10 +1790,18 @@ does not count as the "independent" RED. Deferred (needs its own re-validation).
 
 ### Files
 
-`configs/weather_digest/prompts/briefer_v2.md` (new active prompt; `briefer_v1.md`
-kept for rollback/diff), `configs/weather_digest/{default,openai}.json` (repointed
-`briefer` → v2). Builds on §15 (`analysis/sounding/convective.py`
+`configs/weather_digest/prompts/briefer_v2.md` (active prompt at the time;
+`briefer_v1.md` kept for rollback/diff), `configs/weather_digest/{default,openai}.json`
+(repointed `briefer` → v2). Builds on §15 (`analysis/sounding/convective.py`
 `classify_convective_character`).
+
+> **Prompt pointer moved 2026-08-04 (commit `09d02f02`).** `default.json` now
+> points at `briefer_v3.md`, which is v2 with the `{guidance}` block relocated
+> from the head to a trailing "Assessment calibration" section so every guidance
+> preset shares one prompt-cache prefix. The convective colour rules decided here
+> are carried through verbatim — this was a caching change, not a meteorological
+> one. `openai.json` is still on v2, so check which prompt a given provider run
+> used before attributing a colour to this decision.
 
 ---
 
@@ -2047,6 +2057,8 @@ follow-up:
 - Watch for any all-quiet-NWP sounding that *did* produce observed convection
   (lightning/METAR-TS) — that is the case the removed floor was protecting, and
   the one that would argue for a narrower cap.
+
+---
 
 ## 19. ICON-D2 explicit-convection track: reflectivity-driven firing with corroborated severity
 
@@ -3078,6 +3090,9 @@ only a model publishing `qr` can set it, which today means ICON-D2 alone.
 - `analysis/sounding/precipitation.py` — `_compute_precip_ice_fraction`,
   `_level_ice_fraction`.
 - `analysis/sounding/icing_common.py` — threshold + `is_supercooled_rain`.
+
+---
+
 ## 25. Richardson CAT is calibrated by altitude, and stops at the mixed-layer top
 
 **Date:** 2026-08-04
@@ -3276,6 +3291,18 @@ attention to it, and a week of RED was the defect — not the shear.
   bands only). Applying mixed-layer suppression to it would be a regression:
   a 25 kt/1000 ft shear inside the BL is real, and E-Shear only fires there
   when shear is genuinely that strong.
+- **The waypoint drill-down had to say what it is too** (#534 round 4,
+  `22e9320c`). `_cat_turbulence_advisory` (`analysis/sounding/advisories.py`)
+  bypasses `TurbulenceEvaluator`, so a BL-tagged severe layer still read as an
+  unqualified "CAT turbulence SEVERE …ft" in the per-waypoint detail — the exact
+  #533 framing, on a layer that is not CAT. When **every** contributing
+  moderate+ layer is BL-tagged the string becomes "Low-level wind shear …
+  (boundary layer, low Richardson number)"; one free-atmosphere layer in the mix
+  keeps the CAT wording. The layer itself still shows at full depth (same call
+  as the cross-section ribbon) — only the wording changed, consistent with (c)'s
+  "the tag is not a mute". `digest/text.py` annotates BL layers "(BL)" in the
+  plain-text pack dump for the same reason: a debugged SEVERE must not be
+  mistaken for the route-level verdict.
 - **The altitude ramp is calibrated against ICON/GFS/ECMWF on this route
   only**; UKMO and Météo-France were not spot-checked. For coarser models the
   classical tiers err toward under-detection, so the uniform ramp fails safe
@@ -3299,6 +3326,8 @@ of the catalog (web and iOS) are updated.
   `_build_single_cat_layer`.
 - `analysis/advisories/turbulence.py` — BL-severe goes through the percentage
   gate with an AMBER floor; RED-via-coverage requires moderate-or-worse.
+- `analysis/sounding/advisories.py` — BL-qualified wording in
+  `_cat_turbulence_advisory`; `digest/text.py` — "(BL)" annotation.
 - `models/analysis.py` — `CATRiskLayer.boundary_layer`,
   `VerticalMotionAssessment.mixed_layer_top_ft`.
 - `web/ts/store/types.ts`, `web/ts/data/metrics-catalog.json`,

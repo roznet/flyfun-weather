@@ -2,17 +2,32 @@
 
 > Pipeline interdependencies, method coupling, inconsistencies, and simplification opportunities across the three subsystems.
 
-_Code references verified against the repo on 2026-06-06; re-checked 2026-06-13, 2026-06-20 and 2026-07-11: findings #1/#5/#6/A/B/C remain fixed in code (icing + cloud-uncertainty now call `convective.effective_cape(indices)`; NWP CAPE is attached to `indices` at `__init__.py:260`, before the convective assessment at `~311`); open findings #2/#3/#4 still open. Embedded line numbers are approximate — the sounding pipeline (`__init__.py`) was reorganized into lite/heavy passes since the original review, so the in-text `__init__.py` line refs no longer match (the live Ogimet-DD icing call is now ~`__init__.py:449` with `cape_jkg=eff_cape`, the ICON-EU convective-transition gate at `advisories.py:162`, `compute_altitude_advisories` at `analyze.py:161`)._
+_Original review 2026-06-06; re-verified 2026-08-15. Status: **#1/#4/#5/#6/A/B/C fixed**, **#2/#3 still open**. Live anchors (the in-text line numbers below the header are from the original review and no longer match — trust these):_
+- _`analyze_sounding_lite` / `_analyze_sounding_heavy` split `__init__.py` (~291 / ~455). NWP CAPE is attached in the **lite** pass (`__init__.py:339`) before both convective assessments (`~390`, `~404-411`) — #6/B fixed._
+- _`eff_cape = effective_cape(indices)` at `__init__.py:504`; feeds `enrich_cloud_top_uncertainty` (505) and all three CAPE-consuming icing calls (545/552/563) — #1/#5/A fixed._
+- _ICON-EU convective-transition gate: `advisories.py:166-171` — **still gated on `convective_cover_pct > 0`** (#3 open)._
+- _`compute_altitude_advisories` still called at `tasks/analyze.py:160`, in the analysis stage before `_resolve_analyses` (`tasks/advise.py:63`) — #2 open._
+- _`icing_method_effective` / `convective_method_effective` now exist (`models/analysis.py:1165-1166`, stamped in `advise.py:156-199`) — #4 fixed by #408._
 
 ## Pipeline Order & Data Flow
 
+Since the original review the pipeline is split into two passes (`__init__.py`):
+
 ```
-prepare → thermodynamics → enrich_lwc → detect_cloud_layers (DD)
-       → inversions → build_nwp_cloud_layers → sfip → ogimet_dd → ogimet_nwp
-       → convective_thermo → convective_nwp → vertical_motion → ceiling
+lite  : prepare → compute_indices_core → attach NWP values (CAPE/CIN/LI/FL/KX/TT)
+        → detect_cloud_layers (DD) → inversions
+        → convective_thermo → convective_nwp | convective_explicit → ceiling
+heavy : compute_indices_extended → enrich_lwc → effective_cape
+        → enrich_cloud_top_uncertainty → inversions → build_nwp_cloud_layers
+        → sfip → ogimet_dd → ogimet_nwp → ieng → precipitation → sld
+        → stability → vertical_motion
 ```
 
+The NWP-value attach moved into the lite pass **ahead of** every consumer — that is the structural fix behind #6/B/A.
+
 All methods computed eagerly at analysis time with fixed inputs. User method preferences only apply later during **resolution** (`_resolve_analyses`), which swaps pre-computed results into active slots via `model_copy()`.
+
+Two additions the original review predates: a fourth icing method **IENG** (`assess_icing_zones_ieng`, `icing.py:511`) and an **explicit-convection** track (`assess_convective_explicit`, used when the hour carries a convection-permitting payload such as ICON-D2, #462). IENG is computed and stored on `ieng_icing_zones` but is **not yet selectable** in `_resolve_analyses` — it can never reach `icing_zones`.
 
 ---
 
@@ -20,14 +35,17 @@ All methods computed eagerly at analysis time with fixed inputs. User method pre
 
 ### What each icing method uses from clouds & convection
 
-| Input | Ogimet-DD | Ogimet-NWP | SFIP |
-|-------|-----------|------------|------|
-| **DD cloud_layers** | ✓ proximity gate (BKN/OVC) | ✓ fallback gate when no GRIB diag | ✓ proxy variant gate (SCT+) |
-| **NWP cloud cover %** | ✗ never | ✓ cloud fraction scaling | ✓ proxy M_CLW membership |
-| **NWP cloud diagnostics** | ✗ never | ✓ altitude-aware cloud cover + glaciation | ✓ altitude-aware cloud + glaciation |
-| **CAPE** | ✓ `cape_surface_jkg` → layered/convective split | ✓ same | ✗ not used |
-| **CLW/ICMR** | ✓ LWC direct (pass 1 gate) | ✗ | ✓ full variant M_CLW |
-| **Convective assessment** | ✗ | ✗ | ✗ |
+| Input | Ogimet-DD | Ogimet-NWP | IENG | SFIP |
+|-------|-----------|------------|------|------|
+| **DD cloud_layers** | ✓ proximity gate (BKN/OVC) | ✗ never | ✗ never | ✓ proxy variant gate (SCT+) |
+| **NWP cloud layers** | ✗ | ✓ hard gate — `[]` if absent | ✓ hard gate — `[]` if absent | ✓ full variant gate |
+| **NWP cloud cover %** | ✗ never | ✓ cloud fraction scaling | ✓ cloud fraction scaling | ✓ proxy M_CLW membership |
+| **NWP cloud diagnostics** | ✗ never | ✓ altitude-aware cloud cover + glaciation | ✓ altitude-aware cloud cover (no glaciation) | ✓ altitude-aware cloud + glaciation |
+| **CAPE** | ✓ `effective_cape` → layered/convective split | ✓ same | ✓ convective component above 100 J/kg | ✗ not used |
+| **CLW/ICMR** | ✓ LWC direct (pass 1 gate) | ✗ | ✗ | ✓ full variant M_CLW |
+| **Convective assessment** | ✗ | ✗ | ✗ | ✗ |
+
+Note the corrected Ogimet-NWP row: it does **not** fall back to a DD proximity gate. `assess_icing_zones_ogimet_nwp` (and IENG) return `[]` outright when no model-native cloud envelope exists, and `_resolve_analyses` translates that into `active_icing_available=False` + `icing_method_effective=None` so evaluators grade UNAVAILABLE rather than clear-by-absence (#391).
 
 ### What altitude advisories use
 
@@ -71,7 +89,7 @@ The icing formula underweights convective icing when SB-CAPE is low but elevated
 
 ### 2. Altitude advisories computed before method resolution ⚠️ Medium
 
-**Problem:** `compute_altitude_advisories()` is called in `analyze.py` (~line 161) during the analysis stage, **before** `_resolve_analyses()` runs in the advisory stage (`tasks/advise.py:64`). The altitude advisories (vertical regimes, descend/climb advisories) always use:
+**Problem:** `compute_altitude_advisories()` is called in `tasks/analyze.py:160` during the analysis stage, **before** `_resolve_analyses()` runs in the advisory stage (`tasks/advise.py:63`). The altitude advisories (vertical regimes, descend/climb advisories) always use:
 - DD cloud layers (default `cloud_layers`)
 - Ogimet-DD icing zones (default `icing_zones`)
 
@@ -88,7 +106,7 @@ Option 3 is reasonable because altitude advisories are meant to be conservative 
 
 ### 3. Altitude advisories use raw `nwp_cloud_diagnostics` for convective transitions ⚠️ Low
 
-**Problem:** In `advisories.py` (~lines 162-167), convective cloud transitions are added to vertical regimes only when `diag.convective_cover_pct > 0`:
+**Problem:** In `advisories.py:166-171`, convective cloud transitions are added to vertical regimes only when `diag.convective_cover_pct > 0`:
 
 ```python
 if (diag.convective_base_ft is not None
@@ -100,15 +118,15 @@ ICON-EU has `convective_base_ft`/`convective_top_ft` but no `convective_cover_pc
 
 **Fix:** Check `convective_base_ft is not None` directly, rather than gating on `convective_cover_pct > 0`.
 
-### 4. No `convective_method_effective` or `icing_method_effective` tracking ⚠️ Low
+**Still open as of 2026-08-15.** Only the GRIB decoder populates `convective_cover_pct` (`fetch/grib/decode.py:115/122` — `tcc` on `convectiveCloudLayer`), so any model without that field keeps its convective base/top invisible to the regime computation. The ICON-D2 explicit-convection track (#462) widens the gap further: it produces convective structure with no `convective_cover_pct` at all.
 
-**Problem:** Cloud method resolution tracks `cloud_method_effective` ("dd", "nwp", "nwp_synthesized") to indicate fallbacks. Neither icing nor convective resolution has equivalent tracking:
-- When `convective_method="nwp"` but NWP is None, silently falls back to thermo
-- When `icing_method="ogimet_nwp"`, there's no flag indicating whether the NWP method had full diagnostics or fell back to DD proximity gating
+### D. IENG icing is computed but unreachable ⚠️ Low
 
-The convective `method` field partially covers this (set at construction: "thermo", "nwp", "nwp_hybrid"), but icing has nothing.
+`assess_icing_zones_ieng` runs on every heavy pass and its output is stored on `ieng_icing_zones`, but `_resolve_analyses` has no `icing_method == "ieng"` branch — only `ogimet_nwp`, `sfip_nwp`, and the implicit `ogimet_dd`. So the fourth method can never be resolved into the active `icing_zones` slot, and every sounding pays its cost. Either wire the branch (plus the settings-page option and `icing_method_effective` label) or stop computing it.
 
-**Fix:** Add `icing_method_effective` and `convective_method_effective` to `SoundingAnalysis`, populated during `_resolve_analyses()`.
+### 4. ~~No `convective_method_effective` or `icing_method_effective` tracking~~ ✅ FIXED
+
+Delivered by #408. Both fields now live on `SoundingAnalysis` and are stamped by `_resolve_analyses` **on every branch**, including the no-swap DD/thermo path — deliberately, so "graded on DD" cannot read the same as "this advisory has no method axis". `icing_method_effective` is left `None` only when the method could not run at all (pairs with `active_icing_available=False`). Evidence regions and `primary_method_id` badge from these fields.
 
 ### 5. ~~Cloud top uncertainty uses `cape_surface_jkg` not `_effective_cape()`~~ ✅ FIXED
 
@@ -152,18 +170,14 @@ Both convective assessments run at line 247-250. NWP CAPE is set at line 291. So
 
 ### A. Unify CAPE selection for icing + convection + cloud uncertainty
 
-Three places independently decide which CAPE to use:
-- **Convective:** `_effective_cape(indices)` → max(SB, MU, ML, NWP)
-- **Icing:** now uses `effective_cape(indices)` (unified ✅)
-- **Cloud top uncertainty:** now uses `effective_cape(indices)` (unified ✅)
+All consumers now route through one function, `convective.effective_cape(indices)` → max(SB, MU, ML, NWP) (`convective.py:58`; `_effective_cape` is a back-compat alias):
+- **Convective:** ✅ · **Icing (all CAPE-using methods):** ✅ via `eff_cape` · **Cloud top uncertainty:** ✅ · **Cloud-top-uncertainty source label** in `advisories.py:794`: ✅
 
-Create a single `effective_cape` field on `ThermodynamicIndices` (computed once after NWP enrichment) and use it everywhere.
+Residual (minor, not scheduled): it is still a function called at ~6 sites rather than a field on `ThermodynamicIndices`. Fine as-is — the ordering hazard that motivated a cached field is gone now that NWP attach happens in the lite pass.
 
-### B. Consider moving NWP enrichment earlier in the pipeline
+### B. ~~Move NWP enrichment earlier in the pipeline~~ ✅ FIXED
 
-The "Raw NWP value preservation" block (lines 288-306) attaches `nwp_cape_jkg`, `nwp_cape_type`, `nwp_cin_jkg`, `nwp_lifted_index`, `nwp_freezing_level_ft` to indices. This should happen **before** any consumer reads those fields. Currently it's at the end, meaning convective assessment, icing, and cloud uncertainty all see stale (None) NWP values.
-
-Move it to right after `compute_indices()` (after line 180).
+The raw-NWP attach block (`nwp_cape_jkg`, `nwp_cape_type`, `nwp_cin_jkg`, `nwp_lifted_index`, `nwp_k_index`, `nwp_total_totals`, `nwp_freezing_level_ft`) now runs in `analyze_sounding_lite` immediately after `compute_indices_core`, ahead of every consumer. `cape_raw_vs_calc_divergent` is computed in the same block.
 
 ### C. ~~`_is_near_cloud` duplication~~ ✅ DONE
 
@@ -175,9 +189,9 @@ The `_is_near_cloud` wrappers in `icing.py` and `sfip.py` have been removed; all
 
 1. **Eager computation + lazy resolution** — All methods computed once, resolution is just a swap. Clean separation of concerns.
 2. **Cloud source independence** — Each icing method uses its natural cloud signal (DD attenuation for Ogimet-DD, NWP fraction for Ogimet-NWP, CLW for SFIP). The user's `cloud_source` choice correctly doesn't affect icing computation.
-3. **`_resolve_analyses` is non-mutating** — Uses `model_copy()`, original data preserved.
-4. **DD fallback in Ogimet-NWP** — When NWP diagnostics are absent, the DD proximity gate prevents false positives from bulk ICAO band percentages. Good defensive design.
-5. **Shared icing utilities** — `icing_common.py` centralizes cloud proximity, icing type classification, and zone grouping. All three methods use consistent type thresholds.
+3. **`_resolve_analyses` is non-mutating** — Uses `model_copy()`, original data preserved. (Its docstring still claims an early return for the all-DD case; there deliberately isn't one any more — provenance is stamped on every path.)
+4. **Ogimet-NWP refuses to fabricate** — With no model-native cloud envelope it returns `[]` rather than gating on bulk ICAO band percentages, and the caller marks that as *unavailable* rather than *clear*. Good defensive design; note this replaced the DD-fallback behaviour the original review praised.
+5. **Shared icing utilities** — `icing_common.py` centralizes cloud proximity (`is_near_cloud`, `is_in_cloud_layer`), icing type classification, and zone grouping. All four methods use consistent type thresholds.
 
 ---
 
@@ -190,7 +204,8 @@ The `_is_near_cloud` wrappers in `icing.py` and `sfip.py` have been removed; all
 | **2** | Altitude advisories use pre-resolution data | Medium | Medium |
 | **5** | ~~Cloud top uncertainty uses SB-CAPE only~~ | ~~Low~~ | ✅ FIXED |
 | **3** | ICON-EU convective transitions skipped in regimes | Low | Low |
-| **4** | No icing/convective method_effective tracking | Low | Low |
+| **4** | ~~No icing/convective method_effective tracking~~ | ~~Low~~ | ✅ FIXED (#408) |
+| **D** | IENG computed but unreachable — no `_resolve_analyses` branch | Low | Low |
 | **B** | ~~Move NWP enrichment earlier (fixes #6, enables #1 and #5)~~ | ~~**High**~~ | ✅ FIXED |
 | **A** | ~~Unify CAPE selection~~ (done via `_effective_cape()`) | ~~Medium~~ | ✅ FIXED |
 | **C** | ~~Deduplicate `_is_near_cloud` wrappers~~ | ~~Low~~ | ✅ DONE |

@@ -21,9 +21,10 @@ and ChatGPT cannot drift.
   Claude  ──▶ │ weatherbrief.mcp.server  │ ─┐
    (MCP)      └──────────────────────────┘  │   shared shaping + guardrails
                                             ├─▶ weatherbrief.connectors.views
-  ChatGPT ──▶ │ weatherbrief.api.agent    │ ─┘   (summarize_advisories,
- (OpenAPI)    └──────────────────────────┘        convective_detail, advisory_detail,
-                                                   summarize_altitude_table,
+              ┌──────────────────────────┐  │    (summarize_advisories,
+  ChatGPT ──▶ │ weatherbrief.api.agent   │ ─┘     convective_detail, advisory_detail,
+ (OpenAPI)    └──────────────────────────┘         summarize_altitude_table,
+                                                   summarize_alternates,
               both reuse upstream logic            briefing_freshness_status, …)
               (analysis pipeline, REST handlers)
 ```
@@ -31,17 +32,28 @@ and ChatGPT cannot drift.
 ## Modules
 
 - **`weatherbrief/connectors/views.py`** `[project]` — pure `dict → dict` shapers,
-  the only logic shared between the two connectors. Carries the guardrails:
-  cross-check is *context, not a downgrade signal* (#178); the convective
-  provenance note (parcel-derived "tops" vs the model's own convective cover);
-  the mitigation note (advice only, reports the *sub-issue's* status if applied,
-  never a grade downgrade — #330). Advisory mitigations mirror `cross_check`'s
-  two-layer exposure: a neutral `aggregate_mitigations_present` hook always, full
-  objects only in the non-green/flagged window. Key exports:
-  `summarize_advisories`, `summarize_altitude_table`, `advisory_detail`,
-  `convective_detail`, `summarize_alternates`, `alternates_hook`,
-  `briefing_freshness_status`, `CROSS_CHECK_NOTE`, `CONVECTIVE_NOTE`,
-  `MITIGATION_NOTE`.
+  the only logic shared between the two connectors. Carries the guardrails, each
+  a module-level `*_NOTE` constant injected into the payload the model sees:
+  - `CROSS_CHECK_NOTE` — cross-check is *context, not a downgrade signal* (#178).
+  - `CONVECTIVE_NOTE` — provenance: `el_top_ft` is parcel-derived, NOT the
+    model's convective cloud field, so high CAPE with `max_cover_pct ~0` is the
+    expected pattern, not a contradiction.
+  - `MITIGATION_NOTE` — advice only; reports the *sub-issue's* status if applied
+    (`mitigated_status`), never a grade downgrade (#330).
+  - `ALTERNATES_NOTE` — these are WEATHER-improvement divert candidates, not
+    legally filed operational alternates; the EASA/FAA "alternate required?"
+    trigger is advisory and no operational suitability (hours, PPR, fuel, NOTAM)
+    is evaluated.
+  - `ASSESSMENT_UNAVAILABLE_NOTE` (via `assessment_note()`) — UNAVAILABLE is the
+    *absence* of an assessment, not a mild GREEN; never narrate it as reassuring.
+
+  Advisory mitigations mirror `cross_check`'s two-layer exposure: a neutral
+  `aggregate_mitigations_present` hook always, full objects only in the
+  non-green/flagged window. `alternates_hook` is the same idea for alternates.
+  Key exports: `summarize_advisories`, `summarize_altitude_table`,
+  `advisory_detail`, `convective_detail`, `summarize_alternates`,
+  `alternates_hook`, `briefing_freshness_status`, `assessment_note`, `nwp_block`,
+  and the five note constants above.
 
 - **`weatherbrief/api/agent.py`** `[project]` — the ChatGPT front-door router,
   mounted at `/agent/v1`. **In-process reuse, no localhost loopback:**
@@ -49,10 +61,16 @@ and ChatGPT cannot drift.
     (`_get_pack_dir`, `list_packs`, `_build_data_status`, `decide_refresh`) and
     read the pack JSON artifacts directly, then apply the shared shapers.
   - *Write* endpoints (`createFlight`, `refreshBriefing`) call the existing
-    route handlers directly with **every dependency passed explicitly** — reusing
-    all the throttling / gating / background-task machinery with zero
-    duplication. (Passing every `Depends`/`Query` param avoids the sentinel
-    footgun called out in CLAUDE.md.)
+    route handlers directly — reusing all the throttling / gating /
+    background-task machinery with zero duplication.
+  - **Whenever a route handler is called out of band, pass every
+    `Depends()`/`Query()`-defaulted param explicitly.** Outside FastAPI's request
+    handling the omitted param binds to the `fastapi.params.*` sentinel object,
+    which is truthy — `listFlights` calling `list_all_flights` would hand a
+    `Query` sentinel to `past_q` and blow up on `.split()`. Same footgun as
+    CLAUDE.md's `Depends()` note; regression-tested by
+    `test_list_flights_does_not_leak_query_sentinels`. (Plain-valued defaults
+    like `refresh_briefing`'s `source="user"` are safe to omit.)
 
 - **`weatherbrief/api/app.py`** — registers `agent_router` (own `/agent/v1`
   prefix, not `/api`) and serves an **isolated OpenAPI** at
@@ -75,7 +93,11 @@ and ChatGPT cannot drift.
 
 The operation **descriptions** (docstrings) mirror the MCP tool docstrings,
 including the "drill in before answering / cross-check is not a downgrade signal"
-guidance, so the GPT behaves like the Claude connector.
+guidance, so the GPT behaves like the Claude connector. The same guardrails are
+repeated in the isolated schema's top-level `description` (built in `app.py`),
+which is where the "alternates are weather-improvement candidates, not
+operational alternates" warning also lives — a GPT reads that description even
+when it doesn't call the operation.
 
 > Note: `getBriefing` reads the **cached** `altitude_table.json` (the cheap GET
 > path persisted at refresh, #259) rather than recomputing the sweep; it is
@@ -94,7 +116,8 @@ Actions require a pre-registered confidential client** (you type `client_id` +
 client through the existing **DCR endpoint** so the secret is hashed the way the
 token endpoint verifies it:
 
-> **Requires `flyfun-common >= 0.6.1` (PKCE optional).** The Claude/MCP flow is
+> **Requires `flyfun-common >= 0.6.1` (PKCE optional)** — `pyproject.toml`
+> currently pins `>=0.6.2`, so the floor is already satisfied. The Claude/MCP flow is
 > OAuth 2.1 + PKCE; the AS originally *required* `code_challenge`. ChatGPT GPT
 > Actions are confidential clients that authenticate with `client_secret` and
 > **do not send PKCE**, so they 422'd at `/oauth/authorize`. `0.6.1` makes PKCE
@@ -161,7 +184,11 @@ scoped `claude.ai`/`claude.com` CORS allowlist).
   one implementation.
 - `tests/test_agent_endpoints.py` — `TestClient` smoke tests for the part unique
   to `api.agent`: the in-process route wiring the shaper/MCP suites don't reach.
-  Covers `getBriefing` (happy path + `none` envelope), the ownership gate (a
-  private flight owned by another user 404s on `getBriefing` / `getDigestContext`),
-  and the advisory-not-found 404 (not a 500 when an advisory dict has no
-  `advisory_id`). The latter two were verified to fail against the pre-fix code.
+  Covers `getBriefing` (happy path, `none` envelope, alternates hook present),
+  `getAlternates` (happy path + `none` when not computed), `listFlights` (all
+  sections, and the Query-sentinel regression), the ownership gate (a private
+  flight owned by another user 404s on `getBriefing` / `getDigestContext` /
+  `getAlternates`), the advisory-not-found 404 (not a 500 when an advisory dict
+  has no `advisory_id`), and that `getAdvisoryDetail` actually injects the
+  cross-check guardrail text. Several of these were verified to fail against the
+  pre-fix code — keep them when refactoring the router.

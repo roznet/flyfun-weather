@@ -46,12 +46,17 @@ tasks/refresh_delta.py
 1. run_fetch()         → NWP model data
 2. run_analysis()      → sounding, wind, model comparison
 3. run_advisories()    → route hazard assessment
-3.5 run_route_weather() + run_observation_comparison()  ← D-0 only
-4. Build snapshot      → route_observations stored on ForecastSnapshot
+3.5 run_route_weather() + run_observation_comparison() + run_route_sigmets()  ← D-0 only
+4. Build snapshot      → route_observations / route_sigmets on ForecastSnapshot
 5-8. GRAMET, Skew-T, LLM digest, text digest
 ```
 
-Gated by `days_out == 0 and options.airports_db_path`. Wrapped in try/except so pipeline continues if aviationweather.gov is down.
+Gated by `days_out == 0 and options.airports_db_path and not options.historical_mode`
+— a historical replay must not splice live observations into a past briefing.
+METAR/TAF and SIGMET each have their own try/except (SIGMETs are fetched even if
+the METAR/TAF fetch raised), so the pipeline continues if aviationweather.gov is down.
+The `run_route_sigmets` import sits *outside* its try so a genuine ImportError
+surfaces rather than being swallowed as a fetch failure.
 
 ## Key Components
 
@@ -97,7 +102,9 @@ For each airport with a METAR:
    - `CONFLICTING`: 2+ categories apart (e.g., VFR↔IFR)
 4. Compute visibility and wind deltas for detail annotation
 
-**Model ceiling**: When `route_analyses` are provided, the model ceiling is derived via `reconcile_ceiling(sounding, hourly)` (same path the advisory system uses — sounding ceiling reconciled against NWP cloud diagnostics) on the nearest `RoutePointAnalysis`'s per-model sounding, then fed to `classify_flight_category(ceiling_ft, visibility_sm)`. This allows ceiling-driven IFR comparisons. Falls back to visibility-only when route analyses are unavailable.
+**Model ceiling**: When `route_analyses` are provided, the model ceiling is derived via `reconcile_ceiling(sounding, hourly, field_elevation_ft=..., model=...)` (same path the advisory system uses — sounding ceiling reconciled against NWP cloud diagnostics) on the nearest `RoutePointAnalysis`'s per-model sounding, then fed to `classify_flight_category(ceiling_ft, visibility_sm)`. This allows ceiling-driven IFR comparisons. Falls back to visibility-only when route analyses are unavailable.
+
+**Ceiling datum (#441 finding #3)**: the reconciled ceiling is asked for in **AGL**, because the METAR flight category it is compared against is AGL. That needs a field elevation, so the pipeline passes `airport_elevations` (from `airports.get_airport_elevations`) alongside `runway_data` into `run_observation_comparison`. The elevation is keyed on the **observed airport** (`obs.icao`), not the nearest waypoint — the METAR reports above its own field. A missing elevation degrades to the MSL/unknown-datum behaviour of `reconcile_ceiling`, it does not raise.
 
 ### Real-time refresh seam (`run_realtime_refresh`)
 
@@ -195,7 +202,7 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | Flat Pydantic models, not euro_aip dataclasses | Serializable to JSON for snapshot storage and template rendering |
 | Category-based comparison (not raw values) | Flight category is the operationally meaningful unit; raw value comparison is noisy |
 | Three-tier classification (no MINOR_DELTA) | Implemented as CONFIRMING/SIGNIFICANT/CONFLICTING; MINOR_DELTA was dropped for simplicity |
-| Sounding ceiling for model category | Uses `sounding_ceiling_ft` from route analyses when available, falling back to visibility-only |
+| Sounding ceiling for model category | `reconcile_ceiling()` on the route analyses' per-model sounding when available (AGL, via the airport's field elevation), falling back to visibility-only |
 | Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; `green`/`amber`/`red` thresholds |
 | TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
 | Per-airport time interpolation | TAF matching and model comparison use `enroute_distance / total_distance * flight_duration` to estimate when the flight passes each airport; falls back to departure time when `flight_duration_hours == 0` |
@@ -209,7 +216,8 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | `RouteSigmetService` | `euro_aip.briefing.weather.route_sigmet` |
 | `WeatherAnalyzer.find_applicable_taf()` / `applicable_trends()` | `euro_aip.briefing.weather.analysis` |
 | `DatabaseStorage.load_model()` (via `weatherbrief.airports._load_airport_model`, cached) | `euro_aip.storage.database_storage` |
-| `classify_flight_category()`, `reconcile_ceiling()` | `weatherbrief.analysis.airport_conditions` |
+| `classify_flight_category()`, `reconcile_ceiling()`, `compute_runway_winds()` | `weatherbrief.analysis.airport_conditions` |
+| `get_runway_ends()`, `get_airport_elevations()` (comparison inputs) | `weatherbrief.airports` |
 
 ## Pipeline Options
 
@@ -298,7 +306,8 @@ clears on the next load. The web UI (`briefing-ui.ts:renderRefreshDelta` →
 - **LLM prompt** (`digest/prompt_builder.py`): `=== SIGMETs ALONG ROUTE ===` section.
 - **HTML report** (`briefing.html`): SIGMET table (Hazard, FIR, Levels, Enroute, Move, raw).
 - **Web UI** (`briefing-ui.ts:renderRouteSigmets`): SIGMET table with per-row info popup;
-  `sigmets-section` in `briefing.html`. Read-only — the observations Refresh button refreshes
+  `sigmets-section` in `web/briefing.html` (the app page — distinct from the
+  same-named report template under `report/templates/`). Read-only — the observations Refresh button refreshes
   SIGMETs too (combined seam).
 
 ### iOS UI (`Views/Briefing/RouteSigmetsView.swift`)
@@ -366,7 +375,7 @@ No re-fetch needed — everything required is already serialized on the snapshot
   polygon-less SIGMETs; SIGMETs *with* polygons match by geometry regardless, so a DB
   without FIR boundaries degrades gracefully (just drops the rare polygon-less SIGMET).
 - **euro_aip dependency**: SIGMET support (`RouteSigmetService`) requires euro_aip
-  `>=0.10.2`; the current pyproject pin is `>=0.13.0`. Earlier `0.9.x` PyPI releases
+  `>=0.10.2`; the current pyproject pin is `>=0.15.1`. Earlier `0.9.x` PyPI releases
   lacked it. Dev installs euro_aip editable from `~/Developer/public/rzflight/euro_aip`.
 
 ## Future Extensions

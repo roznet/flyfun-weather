@@ -1,13 +1,15 @@
 # Verification data tiering — phased rollout plan (#522)
 
-> **All the code is merged and dark.** Every phase below is enabled by an
-> environment variable plus a restart, and disabled by the reverse. Nothing in
-> this plan requires a code change, and no phase deletes anything until its
-> gate is explicitly turned on.
+> **Status (2026-08-15): Phases 0 and 1 are done and live in production.
+> Phases 2–4 are code-complete but dark.** Every remaining phase is enabled by
+> an environment variable plus a container recreate, and disabled by the
+> reverse. Nothing below needs a code change, and no phase deletes anything
+> until its gate is explicitly turned on.
 
 Read `designs/metar-taf-accuracy.md` for the architecture; this file is the
-runbook: what to check before each phase, what to run, how to validate, and
-how to roll back.
+runbook. Rollout state, measured numbers and traps live in
+`scratch/verification-tiering/{HANDOFF,OUTSTANDING}.md` — read those before
+starting a phase, and update them after.
 
 ## Why
 
@@ -32,162 +34,114 @@ Every gate, its shipping default, and the phase that changes it. All are read
 through `tasks/verification_tiering.py` — nothing reads these env vars
 directly.
 
-| Env var | Ships as | Phase | Set to | Meaning |
-|---|---|---|---|---|
-| `VERIFICATION_GLOBAL_ROLLUP_READS` | `0` | 1 | `1` | Unfiltered dashboard/digest aggregates read the global rollups |
-| `VERIFICATION_ARCHIVE_ENABLED` | `0` | 2 | `1` | Daily retention loop runs the Parquet archive writer |
-| `VERIFICATION_RAW_RETENTION_DAYS` | `9999` (disabled) | 3 | `90` | Online window for raw obs/scores/TAF scores |
-| `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | `1` | — | leave `1` | No verified archive manifest → no delete. Safety belt; only turn off if abandoning the archive |
-| `SNAPSHOT_INBOX_RETENTION_DAYS` | `0` (keep) | 3 | `30` | Rotates `eu-*/us-*.sqlite` out of `SNAPSHOT_INBOX_DIR` |
-| `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | `0` | 4 | `1` | Retention loop rolls completed months into monthly stats |
-| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | `0` (keep) | 4 follow-up | `18` | Prunes `verification_daily_stats` older than N months, and only for months that already have a monthly rollup. Runs from the retention loop alongside the monthly rollup (so it needs `VERIFICATION_MONTHLY_ROLLUP_ENABLED=1` too) |
-| (path) `DATA_DIR/archive/verification/` | — | 2 | — | Archive root |
+| Env var | Ships as | Phase | Set to | State in prod | Meaning |
+|---|---|---|---|---|---|
+| `VERIFICATION_GLOBAL_ROLLUP_READS` | `0` | 1 | `1` | **ON since 2026-08-04** | Unfiltered dashboard/digest aggregates read the global rollups |
+| `VERIFICATION_ARCHIVE_ENABLED` | `0` | 2 | `1` | off | Daily retention loop runs the Parquet archive writer |
+| `VERIFICATION_RAW_RETENTION_DAYS` | `9999` (disabled) | 3 | `90` | unset | Online window for raw obs/scores/TAF scores |
+| `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | `1` | — | leave `1` | unset (=1) | No verified archive manifest → no delete. Safety belt; only turn off if abandoning the archive |
+| `SNAPSHOT_INBOX_RETENTION_DAYS` | `0` (keep) | 3 | `30` | unset | Rotates `eu-*/us-*.sqlite` out of `SNAPSHOT_INBOX_DIR` |
+| `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | `0` | 4 | `1` | off | Retention loop rolls completed months into monthly stats |
+| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | `0` (keep) | 4 follow-up | `18` | unset | Prunes `verification_daily_stats` older than N months, and only for months that already have a monthly rollup. Runs from the retention loop alongside the monthly rollup (so it needs `VERIFICATION_MONTHLY_ROLLUP_ENABLED=1` too) |
+| (path) `DATA_DIR/archive/verification/` | — | 2 | — | — | Archive root |
 
 Deployment prerequisite for Phase 2 onward: `pyarrow>=15` (declared in
 `pyproject.toml`; imported lazily so a missing wheel doesn't break startup
-while the archive is off).
+while the archive is off). Verified present in the prod container (25.0.0).
+
+**Flipping a gate means `docker compose up -d weatherbrief`, not
+`docker compose restart`** — a plain restart does not re-read `.env`, so the
+gate appears not to work. This applies to every "then restart" below.
 
 ---
 
-## Phase 0 — deploy the code (no behaviour change)
+## Phase 0 — deploy the code — DONE 2026-08-04
 
-**What lands:** migration `087_verification_tiering` (four new tables, all
-empty), the new rollup writers, the gated read switch, `tasks/archive.py`,
-the reworked pruner, the rewritten monthly rollup, and four new CLI verbs.
+Migration `087_verification_tiering` (four new tables), the new rollup writers,
+the gated read switch, `tasks/archive.py`, the reworked pruner, the rewritten
+monthly rollup and four new CLI verbs (`rollup-daily-stats`,
+`rollup-monthly-stats`, `archive`, `prune-raw`) all shipped behind their gates.
+Migration 086 dropped `ix_verif_scores_lead`/`_icao`/`_model` (~620 MB) for
+real. Alembic head has since moved on (088+); Phase 0's own head was `087`.
 
-Two things take effect immediately and deliberately, because both are
-behaviour-preserving:
+Two things took effect immediately and deliberately, both behaviour-preserving:
 
-- `verification_daily_rollup.rollup_day` now writes the three new daily tables
-  alongside `verification_daily_stats` on every scheduled cycle. Reads still
-  come from the old tables, so this only populates going forward.
-- `ensure_future_partitions` and its scheduler call are **deleted**. Dormant
+- `verification_daily_rollup.rollup_day` writes the three new daily tables
+  alongside `verification_daily_stats` on every scheduled cycle.
+- `ensure_future_partitions` and its scheduler call were **deleted**. Dormant
   machinery: no migration ever partitioned `verification_observations`, and
-  MySQL forbids foreign keys on partitioned tables anyway, so it returned 0
-  on every run since it was written.
+  MySQL forbids foreign keys on partitioned tables anyway, so it returned 0 on
+  every run since it was written. (`designs/../archive/patterns-and-spotlight.md`
+  records the same thing from the partitioning side.)
 
-**Pre-flight**
-
-- [ ] `alembic heads` shows a single head at `087`.
-- [ ] Confirm the #519 METAR month-boundary repair is deployed **and** the
-      affected production rows are corrected. The Phase 2 backfill freezes
-      whatever is in the database into the archive — running it against
-      uncorrected data bakes the corruption in permanently.
-
-**Run**
-
-```bash
-alembic upgrade head
-# restart the app
-```
-
-**Validate**
-
-- [ ] `SHOW TABLES LIKE 'verification_global_daily_stats'` (and
-      `verification_activity_daily`, `taf_verification_daily`,
-      `archive_manifest`) — four tables exist.
-- [ ] After the next standalone verification cycle, all three new daily
-      tables have rows for today. Check the log line
-      `daily rollup <date>: N per-airport, N global, N activity, N TAF groups`.
-- [ ] Dashboard numbers unchanged (the gate is off).
-
-**Rollback:** `alembic downgrade 086`. Nothing reads the new tables yet.
+Validated by the 09:15Z `standalone_light` cycle logging
+`daily rollup 2026-08-03: 12042 per-airport, 45 global, 2 activity, 2 TAF
+groups`, with table counts reconciling exactly.
 
 ---
 
-## Phase 1 — global rollups + read switch
+## Phase 1 — global rollups + read switch — DONE, gate ON 2026-08-04
 
-**Gate:** `VERIFICATION_GLOBAL_ROLLUP_READS=1`
+`VERIFICATION_GLOBAL_ROLLUP_READS=1` is live in prod `.env`. Backfill was 125
+days / 1.16M groups / 670 s, and the agreement check was exact: **zero** rows
+where the global row ≠ the sum of its per-airport rows.
 
-**Precondition to check before enabling**
+**Measured, scheduled-cycle to scheduled-cycle: 39.6 s → 30.3 s (~23%)** for
+the six stats cache entries; `stats:standalone:30d` activity 17.2 s → 7.2 s;
+zero raw `count(distinct verification_scores…)` entries in the slow log after
+the flip. (A 7.7× figure was reported first — it was a warm back-to-back
+rebuild and is **not** representative. Do not quote it.)
 
-- [ ] Phase 0 has been live long enough that today's cycle populates the new
-      tables cleanly (one successful cycle is enough).
-- [ ] The historical backfill below has completed. Flipping the gate on an
-      un-backfilled database shows **empty history**, not wrong numbers — the
-      7d/30d dashboard panels go blank. That is the failure mode to expect if
-      the order is skipped.
+**Backfill lesson, if this ever needs redoing:** run `rollup_day` in a per-day
+loop with a commit per day, **not** `verify rollup-daily-stats --rebuild`. The
+CLI path commits once after all days: ~1.5M rows deleted and reinserted in one
+transaction on a shared instance, holding locks on `verification_daily_stats`
+throughout — and an interrupt loses everything. The script is at
+`scratch/verification-tiering/backfill_rollup.py`; a rewrite must mirror
+`verify/__main__.py::_init_db` and call `get_engine()`, or every mapper raises
+`UnboundExecutionError`.
 
-**Run — backfill, in this order**
+**What the read switch changes, and what it must not** (pinned by
+`test_verification_global_rollup.py`):
 
-```bash
-# 1. Fill any missing days in the per-airport daily table first. The global
-#    table is a GROUP BY over it, so a missing day there is a missing day
-#    everywhere downstream.
-python -m weatherbrief.verify rollup-daily-stats
+- Accuracy, bias, wind-advisory and gust numbers are **identical** across the
+  gate — the global table is the per-airport table with `icao` summed away, so
+  it cannot disagree. `TestReadSwitchAgreement::test_aggregates_match_across_the_gate`
+  asserts it; the prod A/B found **0 NWP value mismatches**. Compare with
+  `scratch/verification-tiering/ab_gate.py`, in one process against one
+  database state — a before/after cache diff is confounded by METAR ingest in
+  between and shows phantom mismatches.
+- **Activity and TAF counts widen to UTC-day buckets, and that is expected.**
+  Gate-off reads raw by exact `observation_time`; gate-on reads a rollup keyed
+  by UTC `date`, so a trailing-24h request becomes "yesterday all day + today
+  so far" — up to ~38h. TAF shifts on **7d and 30d too**, not just 24h: the
+  window edges snap to UTC days whatever the period.
+  `test_activity_widens_to_utc_days_off_boundary` pins this against accidental
+  "fixes". Blast radius is **one admin web page and no email at all**:
+  `/admin/verification` (`api/admin.py::get_verification_stats` →
+  `verification_stats.get_digest_data`) is the only live reader;
+  `notify/verification_email.py::send_verification_digest` exists but nothing
+  calls it, and the daily admin digest uses
+  `tasks/admin_digest_stats.py::get_admin_digest_data`, which never touches
+  these tables.
+- Row **order** differs between the two paths with identical values. Cosmetic;
+  any equality comparison must sort first.
+- A country/airport-filtered dashboard request still reads
+  `verification_daily_stats` by design.
 
-# 2. Re-roll every existing day. This is what populates the three new tables
-#    over full history — rollup_day writes all four. Do this while raw scores
-#    are still complete, i.e. BEFORE Phase 3.
-python -m weatherbrief.verify rollup-daily-stats --rebuild
-```
+**Row-count expectations that were wrong in the first draft** — do not read
+these as gaps: `taf_verification_daily` holds `days_out = 0` **only** (scoring
+pairs each observation with the TAF current at collection time, so
+`MAX(lead_hours) = 20`), and `verification_global_daily_stats` is ~40 rows/day,
+not ~90 (model × days_out × source combinations are sparse). Trust the
+agreement check, not the row count. TAF history starts two days after score
+history.
 
-Expect this to take a while (one INSERT-SELECT per historical day × 4 tables).
-It is idempotent — safe to interrupt and re-run.
+**Rollback:** `VERIFICATION_GLOBAL_ROLLUP_READS=0`, then
+`docker compose up -d weatherbrief`. The old code path is still there and still
+correct.
 
-**Validate before flipping the gate**
-
-- [ ] Row counts look right: `verification_global_daily_stats` should be
-      roughly `days × models × days_out × sources` (~90/day), and
-      `verification_activity_daily` exactly `days × sources`.
-- [ ] Spot-check agreement for one day — the global row must equal the sum of
-      the per-airport rows:
-      ```sql
-      SELECT g.n, s.n FROM verification_global_daily_stats g
-      JOIN (SELECT date, source, model, days_out, SUM(n) n
-            FROM verification_daily_stats GROUP BY 1,2,3,4) s
-        ON (g.date,g.source,g.model,g.days_out)=(s.date,s.source,s.model,s.days_out)
-      WHERE g.date = '2026-07-15';
-      ```
-- [ ] `taf_verification_daily` has rows for `days_out` 0 and 1 (a TAF's
-      validity rarely reaches 48 h).
-
-**Flip**
-
-```bash
-VERIFICATION_GLOBAL_ROLLUP_READS=1   # then restart
-python -m weatherbrief.verify rebuild-cache
-```
-
-**Validate after**
-
-- [ ] Dashboard 24h/7d/30d **accuracy, bias, wind-advisory and gust** numbers
-      are **identical** to a screenshot taken before the flip. They must be:
-      the global table is the per-airport table with `icao` summed away, so it
-      cannot disagree, and
-      `test_verification_global_rollup.py::TestReadSwitchAgreement::test_aggregates_match_across_the_gate`
-      asserts exactly that. A visible difference in *these four* means a
-      backfill gap.
-- [ ] **Activity counts and the TAF category/advisory counts will change on the
-      24h period, and that is expected** — do not read it as a backfill gap.
-      Gate-off reads raw by exact `observation_time`; gate-on reads a rollup
-      keyed by UTC `date`, so `_date_range` widens the window to inclusive
-      whole days. A trailing-24h request becomes "yesterday all day + today so
-      far" — up to ~38h. On 7d/30d the relative widening is under 4%, i.e.
-      rounding noise.
-
-      This is deliberate and the blast radius is small: every consumer of these
-      numbers is admin-only (`/admin/verification`, and the daily
-      `send_admin_digest` to `get_admin_emails` — no public route, no MCP tool,
-      nothing user-facing), and every *other* rollup-backed metric on the same
-      page has always worked in UTC-day buckets. Keeping a true trailing-24h
-      would mean keeping a raw scan of an 8.8M-row table alive permanently to
-      sharpen one admin counter. `test_activity_widens_to_utc_days_off_boundary`
-      pins the behaviour so it is not "fixed" back by accident.
-- [ ] A country/airport-filtered dashboard request still returns per-airport
-      numbers (it deliberately keeps reading `verification_daily_stats`).
-- [ ] **Measure and record the cache-rebuild wall time**, before and after —
-      that is the acceptance number for this phase. Look for the
-      `get_digest_data(...) Nms total (...)` log line, and the
-      `rebuild_all` duration.
-- [ ] MySQL slow-query log shows no aggregate query against raw
-      `verification_scores` / `taf_verification_scores`. Only
-      `get_notable_misses` / `get_missed_warnings` row reads should remain.
-
-**Rollback:** `VERIFICATION_GLOBAL_ROLLUP_READS=0`, restart. The old code path
-is still there and still correct.
-
-**Phase 1 final step — only after a full release cycle with the gate on:**
+**Phase 1 final step — still outstanding, only after a full release cycle:**
 
 - [ ] Delete `_SCORES_SOURCE_TIME_HINT` and the `_activity_counts_from_raw`
       fallback from `tasks/verification_stats.py`. The `FORCE INDEX` hint is a
@@ -215,25 +169,32 @@ is still there and still correct.
 > currently scan 3.8M rows at 0.32% selectivity because the optimizer prefers
 > a backward scan on `source_time` to avoid a filesort. Test it with
 > `FORCE INDEX` before deciding drop-versus-adopt.
->
-> (Migration 086 already dropped `ix_verif_scores_lead`, `ix_verif_scores_icao`
-> and `ix_verif_scores_model` — ~620 MB with no consumer in any plan.)
+
+**The bottleneck has moved, and it is not in Phases 2–4.** Post-Phase-1 the
+biggest item in the cache rebuild is `count(distinct
+flight_verification_map.flight_id)` at ~15 s — a different table, untouched by
+this design. Second is the new rollup path's own `COUNT(DISTINCT icao)` over
+`verification_daily_stats` (~290K rows for a 30-day window; would suit a
+`(source, date, icao)` index). Both are better value than anything below.
 
 ---
 
-## Phase 2 — Parquet archive (write-only; deletes nothing)
+## Phase 2 — Parquet archive (write-only; deletes nothing) — NEXT
 
 **Gate:** `VERIFICATION_ARCHIVE_ENABLED=1`
 
 **Precondition to check**
 
 - [ ] `pyarrow` importable in the production venv:
-      `python -c "import pyarrow; print(pyarrow.__version__)"`.
+      `python -c "import pyarrow; print(pyarrow.__version__)"`. (25.0.0 as of
+      the Phase 0 deploy — re-check after any `--build`.)
 - [ ] `DATA_DIR` has headroom. Budget from a dry run (below); zstd Parquet
       typically lands ~10–20× smaller than the InnoDB footprint, so the whole
       current history should be single-digit GB.
-- [ ] **#519 confirmed repaired in production data** (see Phase 0). This is
-      the last point at which it is cheap to fix.
+- [ ] #519's METAR month-boundary residue is repaired in production data.
+      **Done 2026-08-04** — 57 orphaned `taf_verification_scores` rows fixed.
+      The backfill freezes whatever is in the database into the archive, so
+      this is the last cheap moment to catch anything similar.
 
 **Run**
 
@@ -251,7 +212,7 @@ python -m weatherbrief.verify archive verify
 Then enable the scheduled incremental run:
 
 ```bash
-VERIFICATION_ARCHIVE_ENABLED=1   # then restart
+VERIFICATION_ARCHIVE_ENABLED=1   # then docker compose up -d weatherbrief
 ```
 
 **Finality rules (why a period isn't archived yet)**
@@ -280,7 +241,8 @@ VERIFICATION_ARCHIVE_ENABLED=1   # then restart
       archive is usable for re-scoring, which is the whole justification.
 - [ ] Timestamps read back as UTC-aware (`timestamp[us, tz=UTC]`), not naive.
 - [ ] Point the existing off-box backup job at `DATA_DIR/archive/`. **Do this
-      before Phase 3** — after pruning, these files are the only copy.
+      before Phase 3** — after pruning, these files are the only copy. The
+      user has explicitly confirmed this as a hard gate.
 
 **Let it run for ≥2 weeks** before Phase 3, and confirm the daily incremental
 archive keeps up (`Verification archive: {...}` in the log, no errors).
@@ -296,14 +258,19 @@ therefore stops deleting.
 **Gates:** `VERIFICATION_RAW_RETENTION_DAYS=90`, and separately
 `SNAPSHOT_INBOX_RETENTION_DAYS=30`.
 
-**Why 90 and not 180** (decided 2026-08-03). Verification history only starts
-2026-04-01, so a 180-day window prunes *nothing* until late September, and at
-~2.3M scores/month the table would settle around 14M rows — roughly 60% larger
-than the 8.8M that motivated this design. 90 days makes April prunable
-immediately (~1.75M scores, ~20% of the table, ~780 MB across scores and
-observations) and holds the steady state near 7M rows, about 20% below today.
-The whole point of Phase 3 is to stop the table growing; 180 days postpones
-that past the point where it would have doubled.
+**Why 90 and not 180** (decided 2026-08-03, do not relitigate). Verification
+history only starts 2026-04-01, so a 180-day window prunes *nothing* until late
+September, and at ~2.3M scores/month the table would settle around 14M rows —
+roughly 60% larger than the 8.8M that motivated this design. 90 days makes
+April prunable immediately (~1.75M scores, ~20% of the table, ~780 MB across
+scores and observations) and holds the steady state near 7M rows, about 20%
+below today. The whole point of Phase 3 is to stop the table growing; 180
+postpones that past the point where it would have doubled.
+
+> Stale 180s still in the tree: `verification_tiering.RAW_RETENTION_TARGET_DAYS`
+> (documentation-only, no functional consumer), its module docstring, the
+> `verify prune-raw` error text, and `designs/multi-user-deployment.md`. This
+> runbook is the decision of record.
 
 Nothing reads raw beyond 90 days: `get_notable_misses` and
 `get_missed_warnings` use ≤30-day windows, and every dashboard/digest
@@ -313,9 +280,9 @@ deletes whole months only and a month must be *entirely* past the cutoff, so
 in practice 90–120 days of raw stay online.
 
 The cost is that re-rolling daily stats from raw only reaches back 90 days;
-older days need a Parquet re-import first. That is exactly what the archive is
-for, which is why Phase 2 must be validated and backed up off-box before this
-gate goes on.
+older days need a Parquet re-import first. Phase 1's full-history backfill is
+already done, so that slack has been banked — but it is why Phase 2 must be
+validated and backed up off-box before this gate goes on.
 
 **Preconditions — all of them**
 
@@ -340,7 +307,7 @@ Then hand it to the scheduler:
 ```bash
 VERIFICATION_RAW_RETENTION_DAYS=90
 SNAPSHOT_INBOX_RETENTION_DAYS=30
-# then restart
+# then docker compose up -d weatherbrief
 ```
 
 **What the pruner will and won't touch**
@@ -413,7 +380,7 @@ python -m weatherbrief.verify rollup-monthly-stats --rebuild
 ```
 
 ```bash
-VERIFICATION_MONTHLY_ROLLUP_ENABLED=1   # then restart
+VERIFICATION_MONTHLY_ROLLUP_ENABLED=1   # then docker compose up -d weatherbrief
 ```
 
 **Validate**
@@ -513,6 +480,8 @@ pytest tests/test_verification_global_rollup.py tests/test_verification_archive.
 
 ## Out of scope (tracked separately)
 
-Index removal beyond the Phase-1 final step (invisible-index evaluation needs
-production observation once the last raw-scan consumers are gone), InnoDB
-buffer-pool sizing, a `TZDateTime` TypeDecorator, and a TAF monthly rollup.
+The `flight_verification_map` and `verification_daily_stats` COUNT(DISTINCT)
+hot spots described under Phase 1, index removal beyond the Phase-1 final step
+(invisible-index evaluation needs production observation once the last raw-scan
+consumers are gone), InnoDB buffer-pool sizing, a `TZDateTime` TypeDecorator,
+and a TAF monthly rollup.

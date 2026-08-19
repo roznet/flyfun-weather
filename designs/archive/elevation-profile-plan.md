@@ -2,6 +2,32 @@
 
 > Add terrain elevation data to the cross-section visualization, providing a high-resolution ground profile along the flight route
 
+> **ARCHIVED — implemented. Historical planning record; do NOT read as current truth.**
+>
+> All three phases shipped: `fetch/route_walk.py` (`walk_route`), `fetch/elevation.py`
+> (`get_elevation_profile`), `ElevationPoint`/`ElevationProfile` models,
+> `elevation_profile.json` in the pack directory, `GET /packs/{ts}/elevation`,
+> `web/ts/visualization/cross-section/layers/terrain-fill.ts`, and an iOS
+> `ElevationResponse`. Current truth lives in `designs/architecture.md` (pipeline,
+> pack artifacts, endpoint table, dependency list) and `designs/advisories.md`
+> (`terrain_at_distance`, `max_terrain_near_point`, and the terrain-dependent
+> evaluators — icing escape, mountain wind, density altitude).
+>
+> Known ways the shipped code has moved past this plan — trust the code, not §2/§4 here:
+> - **Data source**: SRTM alone was not enough. `elevation.py` now falls back to the
+>   Open-Meteo Elevation API (Copernicus DEM GLO-90) for coordinates outside SRTM's
+>   ~56S–60N coverage, e.g. high-latitude routes.
+> - **Render order**: terrain is NOT the first layer. It draws late (after the weather
+>   bands) so it masks the below-surface tint; see the ordering comment in
+>   `layer-registry.ts`.
+> - **No UI toggle**: terrain is force-on at render time and deliberately omitted from
+>   the control panel, unlike §4.5's "toggle, default enabled".
+> - **Colour**: theme-driven (`getActiveTheme().terrain.fillColor`), not the hardcoded
+>   `#8B7355` of §4.1.
+>
+> §10's future extensions were largely taken up: terrain now feeds AGL/clearance logic
+> in the advisory evaluators. MEF, obstacle data, and 3D map terrain remain unbuilt.
+
 ## 1. Problem
 
 The cross-section chart shows weather layers (clouds, icing, CAT, etc.) but has no terrain reference. Pilots need to see the ground elevation profile to assess:

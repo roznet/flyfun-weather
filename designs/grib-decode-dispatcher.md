@@ -37,7 +37,9 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
   - `api/airport_profile.py`: `enrich_forecasts(priority=INTERACTIVE)`.
   - `scheduler.py` `_auto_refresh_one`: SCHEDULED. `_run_standalone_once`: BACKGROUND (runs in `asyncio.to_thread`, which copies the context).
   - `tasks/standalone_verification.py`: the ECMWF a1/a2 decode batch passes `priority=BACKGROUND` explicitly (its decode runs off the standalone context); since #459 it fans out via `_dispatch_decode_parallel` (with an optional `GRIB_DECODE_WORKERS_ECMWF` window) rather than one blocking `_dispatch_decode` per step.
-  - `tasks/standalone_grib.py`: the GFS/ICON cloud-diag adapter dispatches by cache path with `priority=BACKGROUND` (#236 — it previously called the decode functions directly in the orchestrating process, putting cfgrib/xarray full-grid decode on that process's heap), batched via `_dispatch_decode_parallel` since #459 (light leg, no cap). Note: scheduled standalone cycles run in a subprocess whose `GRIB_DECODE_WORKERS` is set from `STANDALONE_ANALYSIS_WORKERS` (default 2, `0` restores inline; #448 PR B), so the child runs its own small pool for decode **and** pooled sounding batches (`analyze_sounding_batch` — the first non-decode worker fn); the parent app's pool is untouched.
+  - `tasks/standalone_grib.py`: the GFS/ICON cloud-diag adapter dispatches by cache path with `priority=BACKGROUND` (#236 — it previously called the decode functions directly in the orchestrating process, putting cfgrib/xarray full-grid decode on that process's heap), batched via `_dispatch_decode_parallel` since #459 (light leg, no cap). Note: scheduled standalone cycles run in a subprocess whose `GRIB_DECODE_WORKERS` is set from `STANDALONE_ANALYSIS_WORKERS` (default 2, `0` restores inline; #448 PR B), so the child runs its own small pool for decode **and** pooled sounding batches (`analyze_sounding_batch` — the first non-decode worker fn, gated on the public `decode_pool_enabled()`); the parent app's pool is untouched.
+  - `tasks/time_scan.py` (timing-flexibility ±day scan): BACKGROUND, both via `set_decode_priority` before a bare `_enrich_ecmwf` and via `enrich_forecasts(priority=…)` per candidate slot.
+  - `scenario/measure.py`: BACKGROUND — the RSS-measurement harness mirrors the safest overnight mode.
   - Precache (`scheduler.py`): download-only, no decode → nothing to prioritise.
 
 ## Dispatcher architecture
@@ -54,18 +56,24 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
 
 `_on_done` (pool manager thread): if draining/closed, ignore (a teardown owns it); `BrokenProcessPool` → leave the handle in `inflight` and `_handle_fault(CRASH)`; else resolve the caller future and `_pump`.
 
-**Watchdog** (one daemon thread): parks until the earliest `inflight` deadline; on wake, the in-flight job past its deadline becomes the `TIMEOUT` victim.
+**Watchdog** (one daemon thread): parks until the earliest `inflight` deadline (or `_WATCHDOG_IDLE_POLL_S` = 30 s when nothing is in flight); on wake, the in-flight job past its deadline becomes the `TIMEOUT` victim.
+
+**Where recovery runs matters.** The watchdog owns its own thread, so it calls `_handle_fault` synchronously. Crash faults are different: they surface in `_on_done` / a `_pump` submit, which can run on the pool's *executor-manager thread* — and teardown's `shutdown(wait=True)` joins that thread, so an inline call would self-join (`RuntimeError`) and wedge the dispatcher with `draining` stuck True. Those paths therefore go through `_spawn_recovery`, which runs `_handle_fault` on a fresh daemon thread; the `draining` guard dedups concurrent spawns.
 
 ### Per-job timeout (deliberate improvement)
 
 The legacy `_dispatch_decode_parallel` shared **one** deadline across a whole batch, which false-times-out large batches. The dispatcher gives **each job its own** `GRIB_DECODE_TIMEOUT_S`, which is also what makes timeout-victim identification possible.
+
+### Batch failure isolation
+
+`_dispatch_decode_parallel(..., return_exceptions=False)` mirrors `asyncio.gather`: on `True` a job that ultimately dead-letters yields its exception *in its own slot* instead of raising and discarding its siblings' results. The legacy FIFO path is shared-fate by design (one deadline, batch-wide cancel), so there the same exception lands in every slot.
 
 ### `max_inflight` — throttle a memory-heavy batch below the pool (#459)
 
 `_dispatch_decode_parallel(jobs, ..., max_inflight=None)`:
 
 - `None` — submit the whole batch; the pool size (`GRIB_DECODE_WORKERS`) bounds concurrency. This is the default and what every fan-out used before #459.
-- an `int` — a caller-side **sliding window** (`_collect_windowed`): keep at most that many caller futures outstanding, submit the next as each completes. Bounds how many full GRIB grids decode concurrently for a memory-heavy loop even when the pool is wider. Because there is a **single** pool, the pool is always the hard ceiling — a window `>=` the batch size (or `>=` the pool) is a no-op, and a per-task window can only throttle *down* from `GRIB_DECODE_WORKERS`; to give a task *more*, raise the pool. Ignored on the legacy FIFO path (`GRIB_DECODE_PRIORITY_ENABLED=0`), a rollback switch where the pool size alone bounds concurrency.
+- an `int` — a caller-side **sliding window** (`_collect_windowed`, one `submit_one` per slot): keep at most that many caller futures outstanding, submit the next as each completes. Bounds how many full GRIB grids decode concurrently for a memory-heavy loop even when the pool is wider. Because there is a **single** pool, the pool is always the hard ceiling — a window `>=` the batch size (or `>=` the pool) is a no-op, and a per-task window can only throttle *down* from `GRIB_DECODE_WORKERS`; to give a task *more*, raise the pool. Ignored on the legacy FIFO path (`GRIB_DECODE_PRIORITY_ENABLED=0`), a rollback switch where the pool size alone bounds concurrency.
 
 Two standalone decode loops that used to walk one blocking `_dispatch_decode` per step (only ever 1 worker busy) now collect their jobs and fan out through this primitive:
 
@@ -75,15 +83,18 @@ Two standalone decode loops that used to walk one blocking `_dispatch_decode` pe
 ## Recovery — `_handle_fault(reason, victim=None)`
 
 ```
-under lock: draining=True; snapshot=list(inflight.values()); inflight.clear()
+under lock: if draining/closed: return               # already handled
+            if victim and victim not in inflight: return   # it finished in the gap — no hang, no teardown
+            draining=True; snapshot=list(inflight.values()); inflight.clear()
 if TIMEOUT: _diag_snapshot_workers(pool, ...)        # reuse existing hang-diag
 pool_teardown(wait = reason != TIMEOUT)              # reuse shutdown_decode_pool
 for h in snapshot:
-    if h is victim:                 _dead_letter(h, "decode_hung")        # don't retry — re-running re-hangs
+    if closed:                      _dead_letter(h, "dispatcher_shutdown")  # drain() began mid-recovery
+    elif h is victim:               _dead_letter(h, "decode_hung")        # don't retry — re-running re-hangs
     elif not retry_budget_ok():     _dead_letter(h, "retry_budget_exhausted")
     elif h.retries >= RETRY_CAP:    _dead_letter(h, "retry_cap_exhausted")
     else: h.retries+=1; reenqueue(h, after = 0 if TIMEOUT else jittered_backoff(h.retries))
-draining=False; _pump()                              # rebuild pool lazily, resume in priority order
+draining=False (in finally); _pump()                 # rebuild pool lazily, resume in priority order
 ```
 
 Properties:
@@ -109,12 +120,15 @@ Auto-rescheduling interrupted work is **only safe because dispatched jobs are pu
 
 `shutdown_decode_pool(drain_dispatcher=True)` (called from the app lifespan) first drains the dispatcher — failing every pending/in-flight caller future with `DecodeDispatchError("dispatcher_shutdown")` so blocked callers are released rather than left waiting on a vanishing pool. The fault-recovery path uses `drain_dispatcher=False` (default) because it must **not** touch the durable pending heap.
 
+`force=True` (#448 PR B) additionally TERM→KILLs every known worker — the current pool *and* orphans left by earlier `wait=False` resets — before the executor shutdown. Without it, `wait=False` merely abandons a wedged worker, and at interpreter exit `concurrent.futures`' atexit hook joins the executor manager thread, which never finishes while a worker sits in native code → the process hangs. Used by the disposable standalone child's exit path. The web app's fault-recovery path deliberately does **not** force (see the bounded-leak trade-off below).
+
 ## Config / env vars
 
 | Var | Default | Meaning |
 |---|---|---|
 | `GRIB_DECODE_WORKERS` | 2 | Pool size; `0` = in-process |
 | `GRIB_DECODE_WORKERS_ECMWF` | unset | `max_inflight` window for the standalone ECMWF decode batch (#459); unset/`<=0` → full pool. Only throttles *down* from `GRIB_DECODE_WORKERS` |
+| `GRIB_DECODE_MAX_TASKS_PER_CHILD` | 0 (off) | Worker recycle threshold; `<=0` disables recycling (see the 2026-05-17 incident) |
 | `GRIB_DECODE_TIMEOUT_S` | 300 | **Per-job** deadline |
 | `GRIB_DECODE_PRIORITY_ENABLED` | on | `0` = legacy FIFO (rollback) |
 | `GRIB_DECODE_RETRY_CAP` | 2 | Max reschedules of one crash-interrupted job |
@@ -135,5 +149,5 @@ Auto-rescheduling interrupted work is **only safe because dispatched jobs are pu
 
 ## Tests
 
-- `tests/test_grib_dispatcher.py` — dispatcher behaviour with an injected fake `worker_fn` + thread-backed `FakePool` (no cfgrib): priority ordering, slot bounding, crash reschedule, timeout dead-letter + collateral, crash-backoff vs timeout-immediacy, retry cap, retry budget + recovery, dead-letter observability, both bypass paths, and a ContextVar→ordering integration test through the real `_dispatch_decode`.
+- `tests/test_grib_dispatcher.py` — dispatcher behaviour with an injected fake `worker_fn` + thread-backed `FakePool` (no cfgrib): priority ordering, slot bounding, crash reschedule, timeout dead-letter + collateral, crash-backoff vs timeout-immediacy, retry cap, retry budget + recovery, dead-letter observability, drain semantics (submit-after-drain, drain during crash backoff), both bypass paths, `max_inflight` (caps below the pool, no-op when `>=` batch, `return_exceptions` isolation), a ContextVar→ordering integration test through the real `_dispatch_decode`, and two **real `ProcessPoolExecutor`** tests — including the crash-recovers-off-the-manager-thread regression that pins `_spawn_recovery`.
 - `tests/test_grib_pool.py` — the pool plumbing the dispatcher reuses (pinned to the legacy FIFO path).

@@ -83,14 +83,11 @@ The venv lives at `/mnt/flyfun_data/sandboxes/triage/venv`, owned by the
 source tree remains read-only to `triage`.
 
 The `weatherbrief` package is installed **non-editable** from a writable
-staging copy in `/tmp`, not directly from the sandbox source. Editable
-installs and the default `pip install <path>` both try to create
-`<path>/src/weatherbrief.egg-info/` during the build, which fails because
-the sandbox source tree is read-only to triage by design. Staging into
-`/tmp/triage-build` lets the build run in a writable location; the
-resulting package is copied into the venv's `site-packages/`, and the
-sandbox source tree stays pristine. `claude -p` reads from the sandbox
-source tree at runtime, not from the venv.
+staging copy in `/tmp`, not directly from the sandbox source: both editable
+and plain `pip install <path>` try to create `<path>/src/weatherbrief.egg-info/`
+during the build, which fails against a source tree that is read-only to
+triage by design. `claude -p` reads the sandbox source tree at runtime, not
+the venv.
 
 ```bash
 # 1. Pre-create the venv dir owned by triage (parent is not triage-writable by design)
@@ -115,6 +112,20 @@ The `/home/triage/.cache/pip is not writable` warning from pip is cosmetic —
 triage has no home dir, so downloads are not cached. If you refresh the
 venv often and want to silence it, set `PIP_CACHE_DIR=/tmp/triage-pip-cache`
 and pre-create that dir as triage.
+
+**Trap — the prompt template does not travel with the wheel.**
+`triage/prompt.py` resolves the template as
+`Path(__file__).resolve().parents[3] / "configs" / "triage" / <template>`,
+i.e. it assumes the `src/`-layout repo root three levels above the package.
+That holds for a source checkout, but under the non-editable install above
+`__file__` is `<venv>/lib/pythonX.Y/site-packages/weatherbrief/triage/prompt.py`,
+so `parents[3]` is `<venv>/lib/pythonX.Y` and `load_prompt` raises
+`FileNotFoundError: .../lib/pythonX.Y/configs/triage/triage_prompt_v1.md`.
+`configs/` is not package data — `pyproject.toml` ships only found packages.
+Two ways out: symlink the sandbox's `configs/` into `<venv>/lib/pythonX.Y/`
+(cheap, must be redone on a Python minor bump), or make `prompt.py` fall back
+to CWD-relative `configs/triage` (the wrapper already cds to the sandbox root)
+— the second is the better fix if you touch this code.
 
 ### 6. Scoped MySQL user
 
@@ -163,16 +174,10 @@ sudo chown triage:triage /mnt/flyfun_data/sandboxes/triage/.env
 sudo chmod 0400 /mnt/flyfun_data/sandboxes/triage/.env
 ```
 
-Security posture: the `.env` is readable only by the `triage` user, 0400.
-A prompt-injected LLM running as `triage` can still read it (same-UID
-access to `/proc/self/environ` and to the file itself) — that is the
-accepted residual risk documented at the top of this file. Moving the
-file to `/etc/` or elsewhere does not change that risk, so co-locating
-it with the sandbox is preferred for operational simplicity.
-
-The file is already in the main repo's `.gitignore`, so the sparse
-checkout won't fight it — `git pull` leaves it alone, `git status` in
-the sandbox shows nothing.
+0400 `triage:triage`. A prompt-injected LLM running as `triage` can still
+read it (same UID) — the accepted residual risk at the top of this file.
+Moving it to `/etc/` changes nothing about that, hence co-location. `.env`
+is in the repo's `.gitignore`, so `git pull` in the sandbox leaves it alone.
 
 ### 8. Wrapper script
 
@@ -263,10 +268,16 @@ section 5.
 ### Running triage
 
 ```bash
-triage-run status
+triage-run status [-v]
+triage-run show <feedback_id>          # full item incl. stored prompt / raw response
 triage-run process --id <feedback_id>
 triage-run process -n 5
+triage-run process --id <id> --dry-run # builds the prompt, does not call claude
 ```
+
+`process` also takes `--timeout` (seconds per item, default 300) and
+`--log-file`. `--dry-run` is the safe way to inspect what a piece of
+attacker-authored feedback expands into before it reaches `claude -p`.
 
 ### Verifying the sandbox
 

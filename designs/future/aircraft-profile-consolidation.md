@@ -1,7 +1,40 @@
 # Aircraft ⇄ Profile consolidation
 
-Status: **proposed** (2026-07-12), revised after a read-only audit of production.
-Slices consolidated 2026-07-14 (five → two; see §6).
+Status: **shelved, not implemented.** Proposed 2026-07-12, revised after a
+read-only audit of production, slices consolidated 2026-07-14 (five → two, §6).
+**#396 / #397 / #398 were all closed `NOT_PLANNED` on 2026-08-01 with no closing
+rationale** — a bulk close, not a decision recorded anywhere. Re-verified against
+code 2026-08-15: **none of the data-model work landed.** No
+`ensure_default_aircraft`, no `load_aircraft_context`, no `needs_review` column,
+no migration; `resolve_cruise_speed_ias` still falls back to the profile
+(`atmo.py:34`); the wizard still writes `speed_kt` into the profile; settings
+still says "Flight Defaults".
+
+Read this doc as **an analysis worth keeping** — the §1/§1a prod audit is the
+part with lasting value, and it is what kills the naive "the ceiling is a
+duplicate, delete one" instinct that this design keeps getting re-proposed as.
+Before reviving it, re-run the audit: the numbers are from 2026-07-12 and predate
+migrations 078/079 (sparse profile settings, #402) and the #387 interview work.
+
+**What landed anyway, adjacent to the plan** (so don't re-plan it): the
+*vocabulary* is already in the UI ahead of the model — `settings.html:72` says
+**"Service Ceiling"** and the aircraft (i) popup states the ownership rule
+verbatim (`en.json: flights.form.aircraftInfoBody`); S2's "(i) popup" bullet is
+**done** (`alert()` gone, aircraft + profile popups with "Edit in Settings →"
+deep links, `flights-main.ts:254-260, 301-335`); iOS moved on its own
+(`applyProfile` now applies the ceiling too, default aircraft auto-selected,
+in-app aircraft-create form with ICAO-type typeahead,
+`AddFlightViewModel.swift:646-712`); the flight-creation tour (#400) **shipped**
+(`web/ts/tour/flights-tour.ts`). ⚠️ The interview's `flying_type` question was
+**renamed `flight_rules`** (`interview.py:57`), so that string now means *three*
+things — interview question id, profile settings key, advisory category.
+
+Still unlanded and still true: the ceiling-overwrite handler
+(`flights-main.ts:1064-1069`), the hard-coded English zero-aircraft hint
+(`:1038`), `is_ifr`/`is_fiki` read by nothing outside the aircraft CRUD API,
+`speed_kt` written by the wizard (`welcome-wizard.ts:405-435`).
+
+---
 
 The app looks like it asks for the same facts twice. A prod audit showed that is
 only *half* true — one field is a genuine duplicate, one is a genuine
@@ -27,9 +60,10 @@ Read-only audit, 2026-07-12 (581 users, 1 283 flights, 103 aircraft):
 **The aircraft entity is unused because nothing populates it.** The onboarding
 wizard's step is *called* "aircraft" but creates none — it writes flight rules,
 cruise altitude, ceiling and speed into the *profile's* settings JSON
-(`welcome-wizard.ts:407-436`) and never calls `POST /aircraft`. Users finish
-setup owning zero aircraft, so the flight-creation pane hides its aircraft
-dropdown (`flights-main.ts:953`). The profile absorbed the aircraft's job.
+(`welcome-wizard.ts:405-435`, `collectAndSaveAircraftSettings`) and never calls
+`POST /aircraft`. Users finish setup owning zero aircraft, so the
+flight-creation pane shows a hint instead of a populated dropdown
+(`flights-main.ts:1031`). The profile absorbed the aircraft's job.
 
 ### 1a. The finding that changed the design
 
@@ -39,15 +73,9 @@ alarming — until you split it: **274 are just the seeded system templates**
 **160 users actually authored a ceiling**, and only **26** both authored one *and*
 fly more than one profile.
 
-Then look at *what those users wrote*:
-
-```
-user 903fcde9:  VFR Only 10 000 | IFR Conservative 15 000 | IFR FIKI 25 000
-user 7436d9fe:  VFR Only 10 000 | IFR Conservative 12 000 | IFR FIKI 25 000
-user 62fabc8a:  VFR Only 10 000 | IFR Conservative 25 000 | IFR FIKI 25 000
-```
-
-Same pilot. Same aeroplane. Three ceilings, varying by **mission**.
+Then look at *what those users wrote* — e.g. `VFR Only 10 000 | IFR Conservative
+15 000 | IFR FIKI 25 000` (and 12 000 / 25 000 in the middle slot for two other
+users). Same pilot, same aeroplane, three ceilings, varying by **mission**.
 
 That is not a service ceiling. **`profile.flight_ceiling_ft` and
 `aircraft.ceiling_ft` are not duplicates** — they are two different quantities
@@ -60,18 +88,13 @@ with confusingly similar names:
   comfort. A choice.
 
 The relationship is not "one replaces the other", it is **mission ≤ service**.
-That is *why* half the users who set both have them "disagreeing": they are not
-confused, they are answering two different questions. The original version of
-this doc read that disagreement as evidence of duplication. It is evidence of
-the opposite.
-
+That is *why* half the users who set both have them "disagreeing": they are
+answering two different questions. The first draft of this doc read that
+disagreement as evidence of duplication; it is evidence of the opposite.
 Corroboration: only **17%** of flights override the profile's ceiling (versus
-45% for cruise altitude). The per-profile ceiling is sticky and doing real work
-— it is not a throwaway prefill.
-
-The same logic applies to cruise altitude, which has no aircraft counterpart at
-all and which the templates deliberately vary by mission (5 500 / 8 000 /
-10 000) for the same aeroplane.
+45% for cruise altitude) — it is sticky and doing real work, not a throwaway
+prefill. Same logic for cruise altitude, which has no aircraft counterpart and
+which the templates vary by mission (5 500 / 8 000 / 10 000) for one aeroplane.
 
 ## 2. The ownership rule
 
@@ -100,47 +123,47 @@ real, but it was a *naming* problem wearing a data-model costume.
 
 ### Aircraft (`user_aircraft`)
 
-No new columns. The existing ones finally get used:
-
-- `cruise_speed_kt` — the only source of cruise IAS (profile fallback removed).
-- `ceiling_ft` — relabelled **service ceiling** in every UI. Nullable: unknown is
-  an honest answer, and it simply disables the mission≤service check.
-- `is_ifr`, `is_fiki` — wired into the engine (§4.3).
-- `is_default` — gains teeth: every user is guaranteed exactly one (§4.1).
-
-*(The `typical_cruise_altitude_ft` column proposed in the first draft is
-**dropped**. Cruise altitude is a mission choice and stays on the profile.)*
+No new columns — the existing ones finally get used. `cruise_speed_kt` becomes
+the only source of cruise IAS (profile fallback removed); `ceiling_ft` is
+relabelled **service ceiling** everywhere and stays nullable (unknown is an
+honest answer and simply disables the mission≤service check); `is_ifr`/`is_fiki`
+are wired into the engine (§4.3); `is_default` gains teeth — exactly one per
+user (§4.1). *(The `typical_cruise_altitude_ft` column of the first draft is
+**dropped**: cruise altitude is a mission choice and stays on the profile.)*
 
 ### Profile (`flight_profiles.settings_json`)
 
-- **Remove** `speed_kt` — the only true duplicate.
-- **Keep and relabel** `flight_ceiling_ft` → "mission ceiling", `cruise_altitude_ft`.
-- **Keep** `flight_rules` and everything else unchanged.
-- `configs/system_profiles.json` is untouched — its per-mission altitudes and
-  ceilings are exactly the behaviour we are preserving.
+**Remove** `speed_kt`, the only true duplicate. **Keep and relabel**
+`flight_ceiling_ft` → "mission ceiling"; keep `cruise_altitude_ft`,
+`flight_rules` and everything else unchanged. `configs/system_profiles.json` is
+untouched — its per-mission altitudes/ceilings (5 500/8 000/10 000 and
+10 000/18 000/25 000, still there today) are exactly the behaviour we preserve.
 
 ### Interview
 
-Drops `flying_type` and `icing_equipage` — both are aircraft facts (*"Is your
-aircraft FIKI-certified?"*). **Zero profiles have interview answers in prod**, so
-this deletes no user data. Keeps `minimums`, a real preference.
+Drops the first two questions — `flight_rules` (formerly `flying_type`) and
+`icing_equipage` — both are aircraft facts (*"Is your aircraft FIKI-certified?"*).
+**Zero profiles had interview answers as of the 2026-07-12 audit**, so this
+deleted no user data *then*; re-check before acting. Keeps `minimums`, a real
+preference.
 
 ## 4. Resolution rules
 
 ### 4.1 Every user has a default aircraft
 
 `ensure_default_aircraft(db, user_id)` in `storage/aircraft.py`, mirroring
-`ensure_default_profile` (`storage/flights.py:793`).
+`ensure_default_profile` (`storage/flights.py:835`).
 
 `flights.aircraft_id` stays **nullable** with `SET NULL` on delete; a null
 resolves *lazily* to the user's default aircraft at read time
 (`load_aircraft_context`), exactly as `load_profile_context` already resolves a
-null `profile_id` (`api/profiles.py:392`). Safe deletes, no NOT NULL constraint.
+null `profile_id` (`api/profiles.py:402`). Safe deletes, no NOT NULL constraint.
 
 - `create_flight` attaches `req.aircraft_id or ensure_default_aircraft(...)`, so
   the 72% of flights with no aircraft — and every MCP/ChatGPT flight, which
   cannot send one at all — get one.
-- The `aircraft_id = 0` detach sentinel (`api/flights.py:1871`) is removed.
+- The `aircraft_id = 0` detach sentinel (`api/flights.py:2177-2179`, in the
+  update path) is removed.
 
 ### 4.2 Speed comes from the aircraft; altitude and mission ceiling from the profile
 
@@ -152,7 +175,7 @@ flight_ceiling_ft  = req ?? profile.flight_ceiling_ft  ?? 18000    # mission cei
 
 `resolve_cruise_speed_ias` loses its profile fallback and becomes aircraft-only.
 
-**Delete the ceiling-overwrite handler at `flights-main.ts:989`** — where
+**Delete the ceiling-overwrite handler at `flights-main.ts:1064-1069`** — where
 selecting an aircraft overwrites the ceiling input with the *service* ceiling.
 That single line is the code that conflated the two concepts, and it is the most
 likely origin of the 39 users whose two ceilings disagree.
@@ -164,7 +187,7 @@ clamp.
 
 Existing flights are untouched either way: they snapshot `cruise_altitude_ft` and
 `flight_ceiling_ft` onto their own row at creation (and hash both into the flight
-ID, `api/flights.py:236`).
+ID — `_flight_id` / `"ceil"`, `api/flights.py:257-267`).
 
 ### 4.3 Equipage drives the engine
 
@@ -190,14 +213,17 @@ backfills `is_ifr` from `flight_rules != 'vfr_only'` (§5); a profile/aircraft
 mismatch is *shown*, not silently applied (S2, §6).
 
 Note `profile.flight_rules` is **almost inert today** — its only consumer is one
-line of the digest prompt (`prompt_builder.py:89` → `PILOT CAPABILITY: …`). No
-evaluator reads it. (Beware: `"flight_rules"` is *also* an advisory **category**
-name — the settings group holding `vfr_feasibility` + `ifr_feasibility`,
-`registry.py:54`. Same string, unrelated meaning.) What actually gates the IFR
-advisory today is the advisory `enabled` map, written by the interview's
-`flying_type` question. The derived `effective_rules` takes over that job, which
-is what makes retiring `flying_type` a consequence of the design rather than a
-separate deletion.
+line of the digest prompt (`digest/prompt_builder.py:111-123` →
+`PILOT CAPABILITY: …`). No evaluator reads it. (Beware the **three-way name
+collision**: `"flight_rules"` is also an advisory **category** — the settings
+group holding `vfr_feasibility` + `ifr_feasibility`,
+`analysis/advisories/registry.py:33,56` — *and*, since #387, the id of the
+interview's first question, which used to be `flying_type`
+(`analysis/advisories/interview.py:57`). Three unrelated meanings, one string.)
+What actually gates the IFR advisory today is the advisory `enabled` map,
+written by that interview question. The derived `effective_rules` takes over
+that job, which is what makes retiring the question a consequence of the design
+rather than a separate deletion.
 
 **FIKI.** `aircraft.is_fiki` selects which icing advisory is *eligible* — FIKI ⇒
 `fiki_icing`, otherwise ⇒ `icing_escape` — threaded onto `RouteContext`. This is
@@ -207,8 +233,9 @@ already used for `auto_front_detection` ⇄ `fronts` (#196 model B).
 
 ## 5. Migration
 
-One Alembic revision (`batch_alter_table`, SQLite + MySQL). **No schema change** —
-it is a data migration.
+One Alembic revision (`batch_alter_table`, SQLite + MySQL). Essentially a data
+migration — the only DDL is the `needs_review` boolean of §5a. (Latest revision
+on main is 088, so it lands after that.)
 
 1. **Synthesise a default aircraft for the 487 users who have none**, from their
    default profile:
@@ -218,7 +245,11 @@ it is a data migration.
    - `ceiling_ft ← NULL`
    - `icao_type = 'ZZZZ'`, `nickname = 'My aircraft'`, `is_default = true`
 2. **Strip `speed_kt`** from every `settings_json`. Nothing else in the profile is
-   touched.
+   touched. (The #402 sparsify — migration 079,
+   `analysis/advisories/profile_sparsify.py` — landed since and swept advisory
+   params, the legacy `cloud_method` and engine methods only; top-level
+   `speed_kt` is untouched by it, so this step still has work to do. Reuse its
+   dry-run-report pattern.)
 3. Users who already own aircraft (94) are left completely alone.
 
 ⚠️ **Do not backfill `is_fiki` from the advisory `enabled` map.** 433 users have
@@ -235,29 +266,22 @@ in, and they drive the review prompt (§5a).
 ### 5a. The "review your aircraft" prompt
 
 The migration also sets **`user_aircraft.needs_review = true`** on the 487
-synthesised rows (one new boolean — the only schema change in the plan). On next
-web login, those users get a small modal: *"FlyFun now tracks your aeroplane
-separately from your flying preferences. Here's what we carried over — please
-check it."* Saving clears the flag. The 94 users who already own aircraft never
-see it.
+synthesised rows (one new boolean — the plan's only DDL). On next web login those
+users get a small modal: *"FlyFun now tracks your aeroplane separately from your
+flying preferences. Here's what we carried over — please check it."* Saving clears
+the flag; the 94 users who already own aircraft never see it.
 
 **It completes, it does not gate.** The aircraft already exists, so nothing is
-broken for these users — flights, scheduled refreshes and MCP calls all keep
-working the moment the migration lands. So the modal is *dismissible but
-re-shown* until reviewed: soft and persistent, rather than soft and forgettable.
-Hard-blocking a returning pilot behind a modal before they can read their weather
-is a bad trade for data we already have a reasonable guess at.
+broken — flights, scheduled refreshes and MCP calls keep working the moment the
+migration lands. So the modal is *dismissible but re-shown* until reviewed: soft
+and persistent, not soft and forgettable. Hard-blocking a returning pilot before
+they can read their weather is a bad trade for data we already guess reasonably.
 
-Fields, prefilled from what we actually know:
-
-| field | prefilled from | confidence |
-|---|---|---|
-| cruise speed | `profile.speed_kt` | real data |
-| IFR-equipped | `flight_rules != 'vfr_only'` | real; load-bearing (§4.3) |
-| name | `"My aircraft"` | placeholder |
-| **ICAO type** | empty (typeahead) | **unknown — the main ask** |
-| **service ceiling** | empty | **unknown — deliberately not invented** |
-| FIKI | unticked | unknown; conservative default |
+Fields, prefilled from what we actually know: cruise speed (`profile.speed_kt`,
+real) and IFR-equipped (`flight_rules != 'vfr_only'`, real and load-bearing,
+§4.3); name `"My aircraft"` as a placeholder; FIKI unticked (unknown ⇒
+conservative). **ICAO type** (typeahead) and **service ceiling** are left empty —
+unknown, deliberately not invented, and the main ask of the modal.
 
 **No cruise altitude and no mission ceiling on this form** — they are profile
 (mission) fields, not aircraft fields (§1a). Putting them here would rebuild the
@@ -274,18 +298,21 @@ client slice (S2, §6).
 ## 6. Slices
 
 Two, split along the only seam that matters: **what the server decides** vs **what
-a human is shown**. (This replaces an earlier five-slice split — S1..S5, issues
-#397–#401. It cut across that seam: the agent surfaces were server-side Python
-stranded in a client slice, and the settings rename, the onboarding wizard and
-iOS were three issues restating one rule on three screens. #399 and #401 are
-closed as merged; the tour was never consolidation work and is now independent.)
+a human is shown**. (Replaces an earlier five-slice split, #397–#401, which cut
+across that seam: the agent surfaces were server-side Python stranded in a client
+slice, and the settings rename, the wizard and iOS were three issues restating
+one rule on three screens. #399/#401 were closed `COMPLETED` 2026-07-14 as
+*merged into* S1/S2, not as shipped code.) **All the issues are closed now —
+#396/#397/#398 `NOT_PLANNED` on 2026-08-01 — so reviving this means opening fresh
+ones; the seam below is still the right split.**
 
-**S1 — backend, #397.** Migration (`needs_review` column; synthesise a default
-aircraft for the 487 users with none; strip `speed_kt` from `settings_json`);
-`ensure_default_aircraft` + `load_aircraft_context`; aircraft-only speed
-resolver; `effective_rules` derivation; `is_fiki` on `RouteContext`; interview
-loses `flying_type` + `icing_equipage`; mission ≤ service validation, exposed as
-a **warning signal for the client to render** — never a silent clamp.
+**S1 — backend, #397 (closed, unbuilt).** Migration (`needs_review` column;
+synthesise a default aircraft for the 487 users with none; strip `speed_kt` from
+`settings_json`); `ensure_default_aircraft` + `load_aircraft_context`;
+aircraft-only speed resolver; `effective_rules` derivation; `is_fiki` on
+`RouteContext`; interview loses its `flight_rules` and `icing_equipage`
+questions; mission ≤ service validation, exposed as a **warning signal for the
+client to render** — never a silent clamp.
 
 *Agent surfaces ride here*, because they are Python in the same files: optional
 `aircraft_id` on MCP/ChatGPT `create_flight` (correctness is already covered by
@@ -298,7 +325,7 @@ default *and* honouring an explicit one, all four (`is_ifr` × `flight_rules`)
 combinations, explicit-opt-out-beats-equipage, and a regression test per equipage
 combination.
 
-**S2 — clients (web + iOS), #398.** One issue, because it is one idea — *aircraft
+**S2 — clients (web + iOS), #398 (closed, mostly unbuilt).** One issue, because it is one idea — *aircraft
 = what the machine can do; profile = what you intend to do with it; never
 silently clamp or overwrite* — stated on several screens, in the same words. The
 wizard's aircraft form and the review modal are literally the same field list and
@@ -310,12 +337,11 @@ isn't three issues.
   as **service ceiling**. Render the mission>service and IFR-mismatch warnings
   that S1 exposes.
 - *Flight-creation pane:* **delete the ceiling-overwrite handler**
-  (`flights-main.ts:989`) — the single line that conflates the two ceilings, and
-  the likely origin of the 39 disagreeing users. Replace the aircraft (i)'s raw
-  **`alert()`** (`flights-main.ts:259` — `initInfoPopup()` is already live there,
-  it just isn't used) with `showPopupContent`, add a matching **profile (i)**, and
-  give both an **"Edit in Settings →"** deep link. i18n the hard-coded English
-  zero-aircraft hint.
+  (`flights-main.ts:1064-1069`) — the few lines that conflate the two ceilings,
+  and the likely origin of the 39 disagreeing users. i18n the hard-coded English
+  zero-aircraft hint (`flights-main.ts:1038`). ✅ *Done already, independently:*
+  the aircraft/profile (i) popups now use `showPopupContent` with
+  "Edit in Settings →" deep links.
 - *Onboarding wizard:* step 3 becomes a *real* aircraft — name + ICAO type
   (typeahead against the existing `GET /aircraft/types`), cruise speed, service
   ceiling, IFR + FIKI → `POST /aircraft` with `is_default: true`. No cruise
@@ -327,21 +353,19 @@ isn't three issues.
   the rest in Settings".
 - *Review modal* for the `needs_review` users — §5a. Completes, does not gate.
 - *iOS:* aircraft required in `AddFlightViewModel` (S1 guarantees one exists).
-  Today `applyProfile` sets only cruise altitude and selecting an aircraft changes
-  nothing at all; after this, the aircraft still prefills **nothing** — it *warns*
-  (mission>service, IFR mismatch) and supplies speed and equipage. Decode
-  `needs_review` and point those users at the web modal. Mirror the labels.
+  The client has since moved on its own — `applyProfile` now applies cruise
+  altitude **and** the ceiling, the default aircraft is auto-selected on create,
+  and there is an in-app aircraft-create form with ICAO-type typeahead
+  (`AddFlightViewModel.swift:646-712`). What is still owed: the aircraft should
+  prefill **nothing** — it *warns* (mission>service, IFR mismatch) and supplies
+  speed and equipage. Decode `needs_review` and point those users at the web
+  modal. Mirror the labels.
 
-**Independent, not part of this work — flight-creation tour, #400.** It adds no
-field, moves no data and renames nothing; it only *describes* the model this
-consolidation produces, so it should land after S2 but is not gated by it.
-`driver.js` is already a dependency and `briefing-tour.ts` is a clean
-`DriveStep[]`; this is a new step array plus generalising `tour-storage.ts`
-(today one hard-coded `wb_tour_offered` key → per-tour keys). Steps:
-aircraft+profile → route entry + FPL / Autorouter import → **Interpret** (see how
-the app understood your route, on a map, before committing) →
-date/time/altitude/duration → **Flexibility** (explore alternative departure
-times — *and* be honest that it is heavy server work).
+**Flight-creation tour, #400 — SHIPPED** (2026-07-17, `web/ts/tour/flights-tour.ts`,
+`tour-storage.ts` generalised to per-tour keys). It was never consolidation work:
+it adds no field, moves no data and renames nothing. Noted here only because it
+*describes* the aircraft/profile model — if the model changes, its step copy
+needs a pass.
 
 ## 7. Risks
 
