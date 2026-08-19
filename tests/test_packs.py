@@ -490,3 +490,57 @@ class TestBuildDataStatusFromScratch:
 
         status = self._status(days_out=0)
         assert decide_refresh(status, 0).mode == "full"
+
+
+# --- every realtime-refresh call site must grade on the profile's source ---
+
+
+def test_all_run_realtime_refresh_call_sites_pass_cloud_source():
+    """Guards the bug class, not one instance.
+
+    `run_realtime_refresh` recomputes the observation comparison, which must be
+    graded on the same cloud source as the advisories. There are three call
+    sites and only one was wired at first: the other two hand the function to
+    `asyncio.to_thread` as a *reference*, so a `run_realtime_refresh(` grep
+    misses them entirely and they silently kept using the default (PR #559
+    review). A unit test of the lookup helper would not have caught that — this
+    walks the AST instead, so a fourth call site cannot quietly reintroduce it.
+    """
+    import ast
+    from pathlib import Path
+
+    import weatherbrief.api.packs as packs_mod
+
+    tree = ast.parse(Path(packs_mod.__file__).read_text())
+    sites: list[tuple[int, bool]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        # Direct call: run_realtime_refresh(...)
+        if isinstance(fn, ast.Name) and fn.id == "run_realtime_refresh":
+            sites.append((node.lineno, any(k.arg == "cloud_source" for k in node.keywords)))
+        # Indirect: asyncio.to_thread(run_realtime_refresh, ...)
+        elif (isinstance(fn, ast.Attribute) and fn.attr == "to_thread"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "run_realtime_refresh"):
+            sites.append((node.lineno, any(k.arg == "cloud_source" for k in node.keywords)))
+
+    assert len(sites) >= 3, f"expected at least 3 call sites, found {sites}"
+    missing = [ln for ln, ok in sites if not ok]
+    assert not missing, f"run_realtime_refresh called without cloud_source at lines {missing}"
+
+
+def test_profile_cloud_source_degrades_to_default_on_lookup_failure():
+    """A broken profile lookup must not fail the refresh."""
+    from types import SimpleNamespace
+
+    from weatherbrief.api.packs import _profile_cloud_source
+
+    class _ExplodingDb:
+        def __getattr__(self, name):  # any use raises
+            raise RuntimeError("db gone")
+
+    flight = SimpleNamespace(profile_id=1)
+    assert _profile_cloud_source(_ExplodingDb(), flight, "user-1") is None

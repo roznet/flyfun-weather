@@ -1958,6 +1958,30 @@ class RefreshAccepted(BaseModel):
     delta: RefreshDelta | None = None  # worsening summary (realtime mode)
 
 
+def _profile_cloud_source(db, flight, user_id: str) -> str | None:
+    """The flight profile's cloud grading source, or None for the default.
+
+    ``run_realtime_refresh`` recomputes the observation comparison, whose model
+    flight category must be graded on the same cloud source as the advisories —
+    otherwise a briefing can show a VFR headline beside a "model says IFR,
+    conflicting" comparison for the same airport and hour. Every caller needs
+    this, so it lives here once: the lookup was originally inlined at the manual
+    refresh endpoint only, and the two ``asyncio.to_thread`` call sites in the
+    tiered refresh gate silently kept grading on the default (PR #559 review).
+
+    Never raises — a profile lookup failure degrades to the declared default
+    rather than failing the refresh.
+    """
+    try:
+        from weatherbrief.api.profiles import load_profile_settings
+
+        return load_profile_settings(db, flight.profile_id, user_id).get("cloud_source")
+    except Exception:
+        logger.warning("Profile lookup failed; using the default cloud source",
+                       exc_info=True)
+        return None
+
+
 @router.post(
     "/refresh",
     response_model=RefreshAccepted,
@@ -2067,6 +2091,7 @@ async def refresh_briefing(
                     try:
                         result = await asyncio.to_thread(
                             run_realtime_refresh, Path(latest.artifact_path), db_path,
+                            cloud_source=_profile_cloud_source(db, flight, user_id),
                         )
                         observations = result.observations
                         sigmets = result.sigmets
@@ -2302,6 +2327,7 @@ async def refresh_briefing_stream(
                         try:
                             result = await asyncio.to_thread(
                                 run_realtime_refresh, Path(latest.artifact_path), db_path,
+                                cloud_source=_profile_cloud_source(db, flight, user_id),
                             )
                             obs_payload = result.observations.model_dump(mode="json")
                             if result.sigmets is not None:
@@ -2757,20 +2783,10 @@ def refresh_observations(
         raise HTTPException(status_code=503, detail="Airport database not configured")
 
     try:
-        # Grade the refreshed comparison on the profile's cloud source, so the
-        # cheap path agrees with the advisories the pack was built with.
-        cloud_source = None
-        try:
-            from weatherbrief.api.profiles import load_profile_settings
-
-            cloud_source = load_profile_settings(
-                db, flight.profile_id, user_id,
-            ).get("cloud_source")
-        except Exception:
-            logger.warning("Profile lookup failed; using the default cloud source",
-                           exc_info=True)
-
-        result = run_realtime_refresh(pack_dir, db_path, cloud_source=cloud_source)
+        result = run_realtime_refresh(
+            pack_dir, db_path,
+            cloud_source=_profile_cloud_source(db, flight, user_id),
+        )
         return result.model_dump(mode="json")
     except HTTPException:
         raise
