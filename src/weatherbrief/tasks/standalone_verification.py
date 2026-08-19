@@ -1232,6 +1232,8 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "sounding_cin_jkg": snap.get("sounding_cin_jkg"),
             "sounding_lifted_index": snap.get("sounding_lifted_index"),
             "sounding_convective_risk": snap.get("sounding_convective_risk"),
+            "nwp_layer_ceiling_ft": snap.get("nwp_layer_ceiling_ft"),
+            "nwp_layer_source": snap.get("nwp_layer_source"),
         })
 
     snapshot_insert_ignore(db, rows)

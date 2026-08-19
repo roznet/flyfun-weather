@@ -237,3 +237,97 @@ class TestRealPoolRoundTrip:
             assert results[0] == compute_snapshot_sounding_fields(hourly, "gfs")
         finally:
             shutdown_decode_pool()
+
+
+# --- model-native layer ceiling is persisted alongside the DD one ---
+
+
+def _hourly_with_3d_deck():
+    """Profile whose 3D cloud fraction carries a BKN deck aloft."""
+    from weatherbrief.models.analysis import HourlyForecast, PressureLevelData
+    from datetime import datetime, timezone
+
+    def lvl(p, t, td, caf, gh):
+        return PressureLevelData(
+            pressure_hpa=p, temperature_c=t, dewpoint_c=td,
+            relative_humidity_pct=80.0, cloud_area_fraction_pct=caf,
+            geopotential_height_m=gh,
+        )
+    return HourlyForecast(
+        time=datetime(2026, 8, 20, 11, tzinfo=timezone.utc),
+        pressure_levels=[
+            lvl(1000, 20.0, 15.0, 0.0, 110.0),
+            lvl(950, 17.0, 14.0, 5.0, 540.0),
+            lvl(900, 15.0, 14.5, 70.0, 990.0),    # BKN
+            lvl(850, 12.0, 11.0, 65.0, 1460.0),   # BKN
+            lvl(700, 5.0, -10.0, 0.0, 3010.0),
+        ],
+    )
+
+
+def test_snapshot_fields_record_the_native_layer_ceiling_and_source():
+    """The third ceiling estimate is stored so DD/layer/diag can be compared."""
+    from weatherbrief.analysis.sounding.snapshot_fields import (
+        compute_snapshot_sounding_fields,
+    )
+
+    f = compute_snapshot_sounding_fields(_hourly_with_3d_deck(), "ecmwf")
+    assert f.get("nwp_layer_source") == "nwp_3d"
+    # Lowest BKN/OVC base from the model's own cloud field, not from DD.
+    assert f.get("nwp_layer_ceiling_ft") is not None
+    assert f["nwp_layer_ceiling_ft"] > 0
+
+
+def test_snapshot_fields_omit_layer_ceiling_without_a_native_source():
+    """No native layers -> both columns stay unset.
+
+    NULL source is what tells a later analysis that the engine fell back to DD
+    for this row, so the new ceiling equals the old one. It must not be
+    confused with "native layers present, no BKN/OVC deck".
+    """
+    from datetime import datetime, timezone
+
+    from weatherbrief.analysis.sounding.snapshot_fields import (
+        compute_snapshot_sounding_fields,
+    )
+    from weatherbrief.models.analysis import HourlyForecast, PressureLevelData
+
+    hourly = HourlyForecast(
+        time=datetime(2026, 8, 20, 11, tzinfo=timezone.utc),
+        pressure_levels=[
+            PressureLevelData(pressure_hpa=p, temperature_c=t, dewpoint_c=td,
+                              relative_humidity_pct=70.0)
+            for p, t, td in ((1000, 20.0, 12.0), (900, 15.0, 8.0), (700, 5.0, -10.0))
+        ],
+    )
+    f = compute_snapshot_sounding_fields(hourly, "ukmo")
+    assert "nwp_layer_source" not in f
+    assert "nwp_layer_ceiling_ft" not in f
+
+
+def test_snapshot_fields_flag_a_native_source_that_found_no_deck():
+    """Native layers present but empty -> source set, ceiling NULL.
+
+    Distinct from "no native source" (both NULL): here the engine grades on the
+    model's own cloud field and finds no BKN/OVC, rather than falling back to DD.
+    """
+    from datetime import datetime, timezone
+
+    from weatherbrief.analysis.sounding.snapshot_fields import (
+        compute_snapshot_sounding_fields,
+    )
+    from weatherbrief.models.analysis import HourlyForecast, PressureLevelData
+
+    hourly = HourlyForecast(
+        time=datetime(2026, 8, 20, 11, tzinfo=timezone.utc),
+        pressure_levels=[
+            PressureLevelData(pressure_hpa=p, temperature_c=t, dewpoint_c=td,
+                              relative_humidity_pct=60.0,
+                              cloud_area_fraction_pct=0.0, geopotential_height_m=gh)
+            for p, t, td, gh in ((1000, 20.0, 8.0, 110.0), (900, 15.0, 2.0, 990.0),
+                                 (700, 5.0, -15.0, 3010.0))
+        ],
+    )
+    f = compute_snapshot_sounding_fields(hourly, "ecmwf")
+    assert f.get("nwp_layer_source") is not None
+    assert f.get("nwp_layer_ceiling_ft") is None

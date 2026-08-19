@@ -886,6 +886,19 @@ class AirportForecastSnapshotRow(Base):
     # Sounding-derived fields (from analyze_sounding on pressure levels)
     sounding_ceiling_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_cloud_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Model-native cloud-layer ceiling: lowest BKN/OVC base from the model's own
+    # cloud field (ECMWF/ICON 3D fraction, GFS GRIB bands, HRRR condensate) —
+    # a *third* estimate alongside DD (`sounding_ceiling_ft`) and the model's own
+    # ceiling product (`nwp_ceiling_ft`), so the three can be scored against
+    # METARs after the fact. See meteorology-decisions.md section 1.
+    #
+    # The pair is what makes the reconciled ceiling reconstructable offline:
+    #   source NULL              -> model has no native layer source; the engine
+    #                               falls back to DD, so new ceiling == old
+    #   source set, ceiling NULL -> native layers present but no BKN/OVC deck
+    #   source set, ceiling set  -> new ceiling = min(this, nwp_ceiling_ft)
+    nwp_layer_ceiling_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_layer_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     freezing_level_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_cin_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -73,6 +73,47 @@ def compute_snapshot_sounding_fields(
             lowest = min(bkn_ovc, key=lambda cl: cl.base_ft)
             fields["sounding_cloud_base_ft"] = lowest.base_ft
 
+        # Model-native cloud-layer ceiling — the third ceiling estimate, so DD
+        # vs layer vs the model's own diagnostic can be scored against METARs
+        # later. `analyze_sounding_lite` does not build these (the heavy pass
+        # does), so call the builder directly: it needs only the diagnostics,
+        # the bulk covers and the pressure levels, which is far cheaper than
+        # running the heavy pass over ~56K profiles a cycle.
+        # Strictly additive: its own try/except and getattr defaults, so a
+        # duck-typed `hourly` or a builder change can never take the *existing*
+        # fields down with it. Without the inner guard an AttributeError here
+        # hits the outer fail-silent handler and returns {} — blanking every
+        # sounding column for that row.
+        from weatherbrief.analysis.sounding.clouds import build_nwp_cloud_layers
+
+        try:
+            nwp_layers = build_nwp_cloud_layers(
+                nwp_cloud_diagnostics=getattr(hourly, "nwp_cloud_diagnostics", None),
+                nwp_cloud_low_pct=getattr(hourly, "cloud_cover_low_pct", None),
+                nwp_cloud_mid_pct=getattr(hourly, "cloud_cover_mid_pct", None),
+                nwp_cloud_high_pct=getattr(hourly, "cloud_cover_high_pct", None),
+                pressure_levels=getattr(hourly, "pressure_levels", None),
+            )
+        except Exception:
+            logger.debug("Native cloud-layer ceiling unavailable", exc_info=True)
+            nwp_layers = None
+        if nwp_layers is not None:
+            # A native source exists. Record which one, so a NULL ceiling here
+            # reads as "no BKN/OVC deck" rather than "no layer data" — the two
+            # resolve differently (the latter falls back to DD).
+            srcs = {cl.source for cl in nwp_layers if cl.source}
+            fields["nwp_layer_source"] = (
+                next(iter(srcs)) if len(srcs) == 1 else (",".join(sorted(srcs))[:16] or "nwp")
+            ) if srcs else "nwp"
+            nwp_decks = [
+                cl for cl in nwp_layers
+                if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+            ]
+            if nwp_decks:
+                fields["nwp_layer_ceiling_ft"] = min(
+                    nwp_decks, key=lambda cl: cl.base_ft
+                ).base_ft
+
         if sounding.convective and sounding.convective.risk_level is not None:
             fields["sounding_convective_risk"] = sounding.convective.risk_level.value
 
