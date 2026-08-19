@@ -22,6 +22,12 @@ venv/
 .DS_Store
 .env
 .env.triage
+
+# Apple private keys (App Store Connect API, APNs). These belong outside the
+# repo entirely — ~/.appstoreconnect/private_keys/ is the conventional home —
+# but this is a public checkout, so ignore them as a backstop against an
+# accidental `git add` of a downloaded AuthKey_*.p8.
+*.p8
 .vite
 web/test-results
 

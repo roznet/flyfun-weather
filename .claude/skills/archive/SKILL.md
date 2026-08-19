@@ -9,8 +9,9 @@ disable-model-invocation: true
 Build an Xcode archive ready for App Store upload (iOS only).
 
 Background for every gate below — why both idioms run, the privacy-declaration rationale, the
-tagging convention, release-note style, and how reviewer sign-in works — is in
-`designs/references/ios-release.md` (§A1–§A5). Read the section a step points you at.
+tagging convention, release-note style, how reviewer sign-in works, and how App Store Connect
+staging works — is in `designs/references/ios-release.md` (§A1–§A7). Read the section a step
+points you at.
 
 ## Arguments
 
@@ -226,7 +227,7 @@ Show the release notes to the user for review before pushing tags.
 The same notes also belong in the site's What's New stream, as an `app_release` entry. Draft
 the file now — the commit range is freshest at archive time — but **do not publish it here**:
 Apple review sits between this archive and users being able to install, so publishing happens
-at approval (Step 11). Why the split, and how to pick the title / highlight flag: **§A6**.
+at approval (Step 12). Why the split, and how to pick the title / highlight flag: **§A6**.
 
 Draft `release-notes/ios-{version}.json` in the shape `python -m weatherbrief.release import`
 accepts — a JSON **list** of one entry:
@@ -243,7 +244,7 @@ accepts — a JSON **list** of one entry:
 ]
 ```
 
-- `date` — leave as the archive date for now; **reset it to the approval date in Step 11**, so
+- `date` — leave as the archive date for now; **reset it to the approval date in Step 12**, so
   the entry interleaves chronologically at the point users could actually install it.
 - `title` — `iOS {version} — <short headline>` (e.g. `iOS 1.5 — Route SIGMETs and observations`).
 - `body` — the App Store bullets **verbatim**, so the two surfaces can't drift.
@@ -270,23 +271,12 @@ Published at App Store approval, not here — Apple review sits between this
 archive and users being able to install.
 ```
 
-## Step 9 — Report
+## Step 9 — App Store reviewer sign-in token (ask first)
 
-Tell the user:
-- Pre-flight check results summary
-- Archive created at the path
-- Version and build number in the archive
-- The tag that was created
-- The release notes for the App Store
-- It should now appear in **Xcode → Window → Organizer**
-- From there they can **Distribute App** → **App Store Connect** to upload
-- Remind them to push the version bump commit when ready
-- If a release-stream entry was drafted: its path, and that it is **not published yet** —
-  publish it when Apple approves the build (Step 11)
+This runs **before** staging, because the token's deep link is pushed to App Store Connect as
+part of Step 10 rather than pasted by hand.
 
-## Step 10 — App Store reviewer sign-in token (ask first)
-
-Do **not** mint this by default. After reporting, ask the user:
+Do **not** mint this by default. Ask the user:
 
 > Are you submitting this build to the App Store for review? If so, the App
 > Review notes need a working sign-in deep link, and the previous reviewer
@@ -299,15 +289,73 @@ Only if they say yes, mint it:
 source venv/bin/activate && python3 scripts/mint_reviewer_token.py --days 60
 ```
 
-Then give the user the printed `flyfunweather://auth?token=…` line to paste into
-**App Store Connect → App Review Information → Notes** (alongside the "tap this
-link on the device / simulator to sign in" instruction).
+Keep the printed `flyfunweather://auth?token=…` line — Step 10 passes it to `--review-notes`.
+If the user declines, skip `--review-notes` and leave whatever is already on the version.
 
 How the token works, why a dedicated script exists, and what it reads from `.env`: **§A5** —
 read it before explaining any of this to the user. If the script errors, it names the missing
 `.env` variable; those are absent from the repo by design.
 
-## Step 11 — Publish the release-stream entry (at App Store approval)
+## Step 10 — Stage on App Store Connect
+
+`scripts/asc.py` does the version creation, "What's New", upload, and build attach over the
+App Store Connect API — the steps that used to be manual Organizer + copy-paste work. **It
+cannot submit for review, by design** (there is no such subcommand); the pilot presses Submit.
+Rationale and the credential setup: **§A7**.
+
+If `ASC_KEY_ID` / `ASC_ISSUER_ID` are not in `.env`, this step is unavailable — say so, point
+at §A7, and fall back to the manual route in Step 11.
+
+First show the user what App Store Connect currently thinks:
+
+```bash
+source venv/bin/activate && python3 scripts/asc.py status
+```
+
+Then stage everything in one call. `--notes-file` reads the entry drafted in Step 8, so the
+App Store text and the site's release-stream entry cannot drift:
+
+```bash
+source venv/bin/activate && python3 scripts/asc.py stage \
+  --version {marketing_version} \
+  --build {build_number} \
+  --archive "{archive_path}" \
+  --notes-file release-notes/ios-{version}.json \
+  --review-notes "flyfunweather://auth?token=…"
+```
+
+Notes on behaviour — all three are normal, not errors:
+
+- **Re-running is safe.** `stage` reuses an existing editable version, renames it if the
+  marketing version changed, and overwrites What's New in place. Re-run it to correct a
+  mistake or to push a second binary rather than trying to undo anything.
+- **It waits for Apple.** After upload the build sits in processing for ~5–30 minutes before
+  it can be attached. Use a timeout of 600000ms (10 min) and, if it's still going, re-run
+  `python3 scripts/asc.py wait-build --version X.Y --build N` — **do not re-upload**.
+- **It stops at in-review versions.** If a version is already `WAITING_FOR_REVIEW` or
+  `IN_REVIEW`, it refuses rather than editing. Cancelling a submission is the user's call.
+
+Add `--dry-run` first if the user wants to see the calls before anything is sent.
+
+## Step 11 — Report
+
+Tell the user:
+- Pre-flight check results summary
+- Archive created at the path
+- Version and build number in the archive
+- The tag that was created
+- The release notes for the App Store
+- **If Step 10 ran:** the version is staged on App Store Connect with notes and build
+  attached — they review it in the web UI and press **Submit for Review** themselves. Show
+  the final `asc.py status` output.
+- **If Step 10 was skipped** (no API key configured): the archive appears in **Xcode → Window
+  → Organizer**, and from there **Distribute App** → **App Store Connect** uploads it; the
+  What's New text and reviewer link then have to be pasted in by hand.
+- Remind them to push the version bump commit when ready
+- If a release-stream entry was drafted: its path, and that it is **not published yet** —
+  publish it when Apple approves the build (Step 12)
+
+## Step 12 — Publish the release-stream entry (at App Store approval)
 
 **Not part of the archive run.** This step happens later, when Apple approves the build and
 users can actually install it — invoke the skill again (or just follow this step) then. Why the
