@@ -191,6 +191,24 @@ layers and still published 666 ft.
 Effect on the triggering pack: all three models → VFR at EGJB, `flight_category`
 and `vfr_feasibility` → GREEN.
 
+**The D-0 observation comparison resolves too.** `run_observation_comparison`
+takes a `cloud_source` and resolves the analyses it is handed — the live pipeline
+passes `options.cloud_source`, the realtime-refresh endpoint the flight profile's.
+Callers hand it *unresolved* analyses (`analysis_result.route_analyses`, or a
+reloaded `route_analyses.json`) and `_resolve_analyses` copies rather than
+mutating, so without this the METAR-vs-model panel kept grading on DD while the
+advisory beside it graded on NWP: one briefing could show a VFR headline next to
+a "model says IFR, conflicting" comparison for the same airport and hour. Both
+review bots on PR #559 found this independently.
+
+**`_SoundingProxy` has to track the attribute surface.** The scoring path is fed
+a duck-typed stand-in (`standalone_verification.py`), not a real
+`SoundingAnalysis`, so it must carry every attribute that path reads. Moving
+`_ceiling_from_sounding` onto the active slot made it raise `AttributeError` on
+every clear-sky snapshot row until the proxy gained `cloud_layers`. Duck-typing
+against a model that keeps growing is fragile by construction — worth replacing
+with a narrow explicit interface when that path is next touched.
+
 **What we knowingly gave up.** The 2026-04-01 rationale was *signal independence*
 — `reconcile_ceiling = min(sounding, nwp)` combining two independent estimates.
 With the sounding estimate now NWP-derived, for ICON/ECMWF both sides come from
@@ -214,7 +232,7 @@ diagnostic ceiling as a proper second estimate" — live since 2026-04-20.
   under-forecast low stratus remains an open exposure.
 - `dd_nwp_agreement` (written, default-disabled) is the natural place to surface
   DD-vs-NWP divergence as a "model struggling" signal instead of a silent override.
-- **The verification/forecast-map surface still grades on DD.**
+- **The verification/forecast-map surface is now the only one still grading on DD.**
   `snapshot_fields.py` reads `indices.sounding_ceiling_ft` straight off
   `analyze_sounding`, and its callers (`standalone_verification`,
   `decode_worker`) never run `_resolve_analyses` — there is no user profile in
