@@ -1025,3 +1025,61 @@ class TestGribStepSnapping:
         assert snapshots[0]["nwp_ceiling_ft"] == 2500.0, (
             "snapped hour fetched but never mapped back onto the snapshot"
         )
+
+
+# --- sounding proxy must satisfy every attribute the scoring path reads ---
+
+
+def test_sounding_proxy_supports_ceiling_extraction():
+    """The proxy duck-types SoundingAnalysis for `_ceiling_from_sounding`.
+
+    Regression: `_ceiling_from_sounding` was changed to read the *active*
+    `cloud_layers` slot, which the proxy did not carry — every clear-sky
+    snapshot row (no BKN/OVC deck, but a stored convective risk, so the proxy
+    is still built) raised AttributeError and took down the scoring cycle.
+    """
+    from weatherbrief.analysis.airport_conditions import _ceiling_from_sounding
+    from weatherbrief.models.analysis import CloudCoverage, ConvectiveRisk
+    from weatherbrief.tasks.standalone_verification import (
+        _CloudLayerProxy,
+        _ConvectiveProxy,
+        _IndicesProxy,
+        _SoundingProxy,
+    )
+
+    # Clear sky: no deck at all, only a convective risk — the crashing shape.
+    clear = _SoundingProxy(
+        indices=_IndicesProxy(sounding_ceiling_ft=None),
+        convective=_ConvectiveProxy(risk_level=ConvectiveRisk.NONE),
+    )
+    assert _ceiling_from_sounding(clear) is None
+
+    # A stored deck with no stored ceiling falls through to the layer scan.
+    deck = [_CloudLayerProxy(base_ft=1200.0, coverage=CloudCoverage.BKN)]
+    assert _ceiling_from_sounding(
+        _SoundingProxy(indices=_IndicesProxy(sounding_ceiling_ft=None),
+                       dd_cloud_layers=deck, cloud_layers=deck)
+    ) == 1200.0
+
+    # A stored ceiling still wins over the layer scan.
+    assert _ceiling_from_sounding(
+        _SoundingProxy(indices=_IndicesProxy(sounding_ceiling_ft=900.0),
+                       dd_cloud_layers=deck, cloud_layers=deck)
+    ) == 900.0
+
+
+def test_build_sounding_proxy_mirrors_active_slot_onto_dd():
+    """Verification has no NWP layer data, so both slots hold the DD deck."""
+    from types import SimpleNamespace
+
+    from weatherbrief.tasks.standalone_verification import _build_sounding_proxy
+
+    snap = SimpleNamespace(
+        sounding_ceiling_ft=None,
+        sounding_cloud_base_ft=1500.0,
+        sounding_convective_risk=None,
+    )
+    proxy = _build_sounding_proxy(snap)
+    assert proxy is not None
+    assert [cl.base_ft for cl in proxy.cloud_layers] == [1500.0]
+    assert proxy.cloud_layers == proxy.dd_cloud_layers

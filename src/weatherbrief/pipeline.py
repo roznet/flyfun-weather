@@ -589,6 +589,7 @@ def _execute_briefing_stages(
                 runway_data=obs_runway_data,
                 route_analyses=analysis_result.route_analyses,
                 airport_elevations=obs_elevations,
+                cloud_source=options.cloud_source,
             )
             result_usage_metar = True
             result_usage_metar_airports = route_observations.airports_with_metar

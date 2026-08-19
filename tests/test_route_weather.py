@@ -646,3 +646,102 @@ def test_sigmets_roundtrip_on_snapshot():
     assert reloaded.route_sigmets is not None
     assert reloaded.route_sigmets.count == 1
     assert reloaded.route_sigmets.sigmets[0].coords[0] == (2.0, 49.0)
+
+
+# --- the comparison must grade on the same cloud source as the advisories ---
+
+
+def _egjb_shape_analyses():
+    """RoutePointAnalysis in the EGJB 2026-08-16 shape.
+
+    DD finds a sub-1000 ft deck in a moist marine boundary layer; the model's
+    own cloud scheme reports no low cloud at all (only high cirrus).
+    """
+    from weatherbrief.models import RoutePointAnalysis
+    from weatherbrief.models.analysis import (
+        CloudCoverage,
+        EnhancedCloudLayer,
+        SoundingAnalysis,
+        ThermodynamicIndices,
+    )
+
+    dd = [EnhancedCloudLayer(base_ft=503, top_ft=632, coverage=CloudCoverage.BKN)]
+    nwp = [EnhancedCloudLayer(base_ft=34250, top_ft=36709,
+                              coverage=CloudCoverage.SCT, source="nwp_3d")]
+    sounding = SoundingAnalysis(
+        cloud_layers=list(dd),
+        dd_cloud_layers=list(dd),
+        nwp_cloud_layers=list(nwp),
+        indices=ThermodynamicIndices(
+            sounding_ceiling_ft=503.0,
+            dd_sounding_ceiling_ft=503.0,
+            nwp_sounding_ceiling_ft=None,
+        ),
+    )
+    return [RoutePointAnalysis(
+        point_index=0, lat=51.348, lon=-0.559, distance_from_origin_nm=0.0,
+        interpolated_time=datetime(2024, 6, 1, 10, 0),
+        forecast_hour=datetime(2024, 6, 1, 10, 0), track_deg=90.0,
+        waypoint_icao="EGTF", sounding={"gfs": sounding},
+    )]
+
+
+def _vfr_obs_and_forecast():
+    target_time = datetime(2024, 6, 1, 10, 0)
+    obs = RouteObservations(
+        corridor_nm=30, fetch_time=target_time,
+        airports_found=1, airports_with_metar=1, airports_with_taf=0,
+        airports=[AirportObservation(
+            icao="EGTF", name="Fairoaks", distance_from_route_nm=0.0,
+            nearest_waypoint_icao="EGTF", has_metar=True,
+            metar_flight_category="VFR", metar_visibility_m=10000,
+            metar_wind_speed_kt=8,
+        )],
+    )
+    forecasts = [WaypointForecast(
+        waypoint=Waypoint(icao="EGTF", name="Fairoaks", lat=51.348, lon=-0.559),
+        model=ModelSource.GFS, fetched_at=target_time,
+        hourly=[HourlyForecast(time=target_time, visibility_m=15000.0,
+                               wind_speed_10m_kt=10.0)],
+    )]
+    return obs, forecasts, target_time
+
+
+def test_comparison_grades_ceiling_on_the_default_nwp_cloud_source(two_wp_route):
+    """Default (NWP) source: no low deck, so the model agrees with a VFR METAR.
+
+    Regression for the split this PR could otherwise open — advisories resolved
+    to NWP while this panel stayed on DD, so one briefing showed a VFR headline
+    beside a "model says IFR, conflicting" comparison for the same airport/hour.
+    """
+    obs, forecasts, target_time = _vfr_obs_and_forecast()
+    result = run_observation_comparison(
+        obs, forecasts, target_time, two_wp_route,
+        route_analyses=_egjb_shape_analyses(),
+    )
+    assert result.comparisons[0].model_category == "VFR"
+    assert result.comparisons[0].category_match == "CONFIRMING"
+    assert not result.has_conflicts
+
+
+def test_comparison_honours_an_explicit_dd_cloud_source(two_wp_route):
+    """An explicit DD profile still grades the comparison on the DD deck."""
+    obs, forecasts, target_time = _vfr_obs_and_forecast()
+    result = run_observation_comparison(
+        obs, forecasts, target_time, two_wp_route,
+        route_analyses=_egjb_shape_analyses(), cloud_source="dd",
+    )
+    assert result.comparisons[0].model_category == "IFR"
+    assert result.comparisons[0].category_match != "CONFIRMING"
+
+
+def test_comparison_does_not_mutate_the_caller_analyses(two_wp_route):
+    """Resolution copies; the pipeline's own analyses must be left alone."""
+    obs, forecasts, target_time = _vfr_obs_and_forecast()
+    analyses = _egjb_shape_analyses()
+    run_observation_comparison(
+        obs, forecasts, target_time, two_wp_route, route_analyses=analyses,
+    )
+    s = analyses[0].sounding["gfs"]
+    assert s.indices.sounding_ceiling_ft == 503.0
+    assert s.cloud_layers[0].base_ft == 503

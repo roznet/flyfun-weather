@@ -335,9 +335,19 @@ class _ConvectiveProxy:
 
 @dataclass
 class _SoundingProxy:
-    """Minimal sounding stand-in for reconcile_ceiling and convective scoring."""
+    """Minimal sounding stand-in for reconcile_ceiling and convective scoring.
+
+    Duck-types :class:`SoundingAnalysis` closely enough for the scoring path,
+    which means it has to carry every attribute that path touches — including
+    ``cloud_layers``, the *active* slot ``_ceiling_from_sounding`` reads. It is
+    always the same list as ``dd_cloud_layers``: verification scores from stored
+    snapshot columns, which hold one DD-derived ceiling and no NWP layer data at
+    all, so there is no cloud-source choice to make here. Realigning that is a
+    persistence decision, not a wiring one — see meteorology-decisions.md §1.
+    """
     indices: Optional[_IndicesProxy] = None
     dd_cloud_layers: list = dc_field(default_factory=list)
+    cloud_layers: list = dc_field(default_factory=list)
     convective: Optional[_ConvectiveProxy] = None
 
 
@@ -373,6 +383,7 @@ def _build_sounding_proxy(snap: AirportForecastSnapshotRow):
     return _SoundingProxy(
         indices=indices,
         dd_cloud_layers=dd_cloud_layers,
+        cloud_layers=dd_cloud_layers,
         convective=convective,
     )
 

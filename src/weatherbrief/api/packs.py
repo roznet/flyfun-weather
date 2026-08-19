@@ -2739,7 +2739,7 @@ def refresh_observations(
     existing forecast data, then patches the snapshot on disk.  Returns
     ``{observations, sigmets}``.
     """
-    _load_owned_flight(db, flight_id, user_id)  # authz: owner only
+    flight = _load_owned_flight(db, flight_id, user_id)  # authz: owner only
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     from weatherbrief.tasks.artifacts import load_briefing
@@ -2757,7 +2757,20 @@ def refresh_observations(
         raise HTTPException(status_code=503, detail="Airport database not configured")
 
     try:
-        result = run_realtime_refresh(pack_dir, db_path)
+        # Grade the refreshed comparison on the profile's cloud source, so the
+        # cheap path agrees with the advisories the pack was built with.
+        cloud_source = None
+        try:
+            from weatherbrief.api.profiles import load_profile_settings
+
+            cloud_source = load_profile_settings(
+                db, flight.profile_id, user_id,
+            ).get("cloud_source")
+        except Exception:
+            logger.warning("Profile lookup failed; using the default cloud source",
+                           exc_info=True)
+
+        result = run_realtime_refresh(pack_dir, db_path, cloud_source=cloud_source)
         return result.model_dump(mode="json")
     except HTTPException:
         raise

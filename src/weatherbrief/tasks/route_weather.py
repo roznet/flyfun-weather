@@ -367,6 +367,7 @@ def run_observation_comparison(
     runway_data: dict[str, list[RunwayEnd]] | None = None,
     route_analyses: list | None = None,
     airport_elevations: dict[str, float | None] | None = None,
+    cloud_source: str | None = None,
 ) -> RouteObservations:
     """Compare METAR observations against model predictions at nearest waypoints.
 
@@ -379,6 +380,12 @@ def run_observation_comparison(
         route: Flight route configuration.
         runway_data: Optional runway data for wind advisory comparison.
         route_analyses: Optional RoutePointAnalysis list (provides sounding ceiling).
+        cloud_source: Profile cloud-grading source ("dd"/"nwp", None = declared
+            default). The model flight category shown here must be derived the
+            same way the advisories derive theirs, or the same briefing can show
+            a VFR headline beside a "model says IFR, conflicting" comparison for
+            the same airport and hour. Only the cloud axis is resolved: the
+            sounding is used solely for ``reconcile_ceiling``.
 
     Returns:
         The same RouteObservations, enriched with comparisons.
@@ -387,6 +394,24 @@ def run_observation_comparison(
         reconcile_ceiling,
         classify_flight_category,
     )
+
+    # Grade the ceiling on the same cloud source the advisories use. Callers
+    # hand us the *unresolved* analyses (the live pipeline passes
+    # ``analysis_result.route_analyses``; the realtime refresh reloads
+    # ``route_analyses.json``), and ``_resolve_analyses`` copies rather than
+    # mutating, so without this the comparison keeps grading on DD.
+    if route_analyses:
+        try:
+            from weatherbrief.tasks.advise import _resolve_analyses
+
+            route_analyses = _resolve_analyses(
+                route_analyses, None, cloud_source, None,
+            )
+        except Exception:
+            logger.warning(
+                "Cloud-source resolution failed; comparison falls back to the "
+                "stored ceiling", exc_info=True,
+            )
 
     # Build lookup: waypoint_icao -> RoutePointAnalysis (for sounding ceiling)
     rpa_by_icao: dict = {}
@@ -648,6 +673,7 @@ def run_realtime_refresh(
     *,
     default_corridor_nm: float = 30.0,
     default_sigmet_corridor_nm: float = 50.0,
+    cloud_source: str | None = None,
 ) -> RealtimeRefreshResult:
     """Re-fetch METAR/TAF and recompute the obs-vs-model comparison from a
     pack's *stored* forecasts, then patch ``briefing.json`` in place.
@@ -727,6 +753,7 @@ def run_realtime_refresh(
         runway_data=obs_runway_data,
         route_analyses=route_analyses,
         airport_elevations=obs_elevations,
+        cloud_source=cloud_source,
     )
 
     # Fetch fresh route SIGMETs (area hazards). Non-fatal: a SIGMET source
