@@ -31,7 +31,7 @@ Key exports: `plan_byte_ranges`, `find_best_ecmwf_run`, `IconVariant`, `build_hr
 
 ### freshness-markers
 Marker-based per-(model, source) staleness decision for `/packs/freshness` + auto-refresh: an in-memory `MarkerStore` (5-min refresh loop) feeds a pure-compute, horizon-aware lookup in the HTTP path. Admin endpoint surfaces observed delivery delays vs. registry expectation.
-Key exports: `SOURCE_REGISTRY`, `MarkerStore`, `get_store`, `check_source`, `run_freshness_loop`, `_build_data_status`, `decide_refresh`, `catalog.build`
+Key exports: `SOURCE_REGISTRY`, `MarkerStore`, `get_store`, `check_source`, `run_freshness_loop`, `_build_data_status`, `gated_data_status`, `decide_refresh`, `catalog.build`
 → Full doc: freshness-markers.md
 
 ### time-alignment

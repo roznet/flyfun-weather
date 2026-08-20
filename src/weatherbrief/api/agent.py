@@ -10,7 +10,7 @@ integrations cannot drift.
 Reuse strategy (in-process, no localhost loopback):
 
 * **Read** endpoints call the same helpers the main REST handlers use
-  (``_get_pack_dir``, ``list_packs``, ``_build_data_status``, ``decide_refresh``)
+  (``_get_pack_dir``, ``list_packs``, ``gated_data_status``)
   and read the pack JSON artifacts directly, then apply the shared shapers.
 * **Write** endpoints (create / refresh) call the existing route handlers
   directly with every dependency passed explicitly — reusing all the
@@ -132,16 +132,10 @@ def _freshness_dict(db: Session, user_id: str, flight_id: str) -> dict[str, Any]
     if not packs:
         return {"fresh": False}
     try:
-        status = packs_api._build_data_status(packs[0], flight)
-        # Same override as ``/packs/freshness`` (which this mirrors): a pack
+        # Same boundary as ``/packs/freshness`` (which this mirrors): a pack
         # built for parameters the flight no longer has is stale regardless of
         # model runs.
-        status.refresh_decision = packs_api.apply_params_change_override(
-            packs_api.decide_refresh(status, packs_api._days_out_now(flight)),
-            packs[0],
-            flight,
-        )
-        return status.model_dump()
+        return packs_api.gated_data_status(packs[0], flight).model_dump()
     except Exception:
         logger.exception("freshness computation failed for flight %s; assuming fresh", flight_id)
         return {"fresh": True}

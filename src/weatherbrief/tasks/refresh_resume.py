@@ -98,10 +98,7 @@ def decide_resume(
     can exercise any branch deterministically.
     """
     from weatherbrief.api.packs import (
-        _build_data_status,
-        _days_out_now,
-        apply_params_change_override,
-        decide_refresh,
+        gated_data_status,
         pending_coverage_date,
     )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
@@ -141,18 +138,16 @@ def decide_resume(
     # warranted — the scheduler already re-briefed this flight, or no model has
     # moved since — there is nothing to resume.
     #
-    # Wrapped in the params-change override for the same reason the two refresh
-    # endpoints and /freshness are (#552): a refresh queued *because* the pilot
+    # Goes through ``gated_data_status``, which applies the params-change
+    # override, for the same reason the two refresh endpoints and /freshness do
+    # (#552/#558): a refresh queued *because* the pilot
     # edited the flight has, by construction, no new model run behind it, so the
     # bare gate answers "none" and we would abandon the very job that exists to
     # rebuild the pack. The pilot would be left with a briefing computed for the
     # previous departure time — the exact symptom this issue closes elsewhere.
     packs = list_packs(db, job.flight_id)
     if packs:
-        status = _build_data_status(packs[0], flight)
-        decision = apply_params_change_override(
-            decide_refresh(status, _days_out_now(flight, now)), packs[0], flight,
-        )
+        decision = gated_data_status(packs[0], flight, now=now).refresh_decision
         if decision.mode != "full":
             return ResumeDecision(
                 "abandon", f"refresh gate now says {decision.mode}: {decision.reason}",

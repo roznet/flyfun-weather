@@ -644,18 +644,13 @@ def get_freshness(
     if not packs:
         return DataStatus(fresh=False)
 
-    status = _build_data_status(packs[0], flight)
     # Attach the tiered-gate outcome for the current lead time so the freshness
     # UI reflects what the refresh button will actually do (and not just the
-    # raw min-rule ``fresh`` flag). The params-change override has to be applied
-    # here too, not only on the refresh endpoints: without it the bar reports
-    # "up to date" right after a parameter edit while pressing the button runs a
-    # full refresh — the banner-disagrees-with-the-button symptom this gate
-    # exists to remove.
-    status.refresh_decision = apply_params_change_override(
-        decide_refresh(status, _days_out_now(flight)), packs[0], flight,
-    )
-    return status
+    # raw min-rule ``fresh`` flag). The params-change override applies here too,
+    # not only on the refresh endpoints: without it the bar reports "up to date"
+    # right after a parameter edit while pressing the button runs a full refresh
+    # — the banner-disagrees-with-the-button symptom this gate exists to remove.
+    return gated_data_status(packs[0], flight)
 
 
 # Pack-model name -> freshness source key when GRIB enrichment succeeds for
@@ -1117,6 +1112,49 @@ def apply_params_change_override(
         "eta_useful": None,
         "pending_models": [],
     })
+
+
+def gated_data_status(
+    latest: BriefingPackMeta,
+    flight: Flight,
+    *,
+    now: datetime | None = None,
+    params_override: bool = True,
+) -> DataStatus:
+    """Single entry point for "what would a refresh do for this flight right now?".
+
+    Bundles the three steps every consumer of the tiered gate needs — build the
+    per-model :class:`DataStatus`, run :func:`decide_refresh` for the current
+    lead time, apply :func:`apply_params_change_override` — and returns the
+    status with ``refresh_decision`` populated.
+
+    It exists because the override was *opt-in* at six separate call sites, and
+    three of them only became correct via follow-up commits after the fact
+    (issue #558). The failure it prevents is silent: a flight whose parameters
+    were just edited has, by construction, no new model run behind it, so the
+    bare gate answers ``none`` and the caller hands back a pack computed for the
+    *previous* departure time — labelled up to date, with nothing anywhere
+    reporting an error.
+
+    ``params_override=False`` is the one deliberate exception, taken by the
+    routine scheduler cycle: an edit there is already followed by a
+    client-driven refresh, so forcing a full run per edited flight would only
+    buy a second one. Making it an argument keeps that exclusion visible at the
+    single site that wants it rather than an invisible omission at the five
+    that don't.
+
+    ``now`` pins the reference instant for the lead-time computation, so a
+    caller with its own clock (the resume path) stays deterministic under test.
+
+    Callers keep their own ``list_packs``/``if packs:`` guard: several need the
+    pack itself afterwards, and "no pack at all" is not a question for the gate.
+    """
+    status = _build_data_status(latest, flight)
+    decision = decide_refresh(status, _days_out_now(flight, now))
+    if params_override:
+        decision = apply_params_change_override(decision, latest, flight)
+    status.refresh_decision = decision
+    return status
 
 
 def _can_force_refresh(request: Request, db: Session) -> bool:
@@ -2073,10 +2111,8 @@ async def refresh_briefing(
         packs = list_packs(db, flight_id)
         if packs:
             latest = packs[0]
-            status = _build_data_status(latest, flight)
-            decision = apply_params_change_override(
-                decide_refresh(status, _days_out_now(flight)), latest, flight,
-            )
+            status = gated_data_status(latest, flight)
+            decision = status.refresh_decision
             if decision.mode != "full":
                 logger.info(
                     "Refresh gate for %s: mode=%s (%s)",
@@ -2310,10 +2346,8 @@ async def refresh_briefing_stream(
             packs = list_packs(db, flight_id)
             if packs:
                 latest = packs[0]
-                status = _build_data_status(latest, flight)
-                decision = apply_params_change_override(
-                    decide_refresh(status, _days_out_now(flight)), latest, flight,
-                )
+                status = gated_data_status(latest, flight)
+                decision = status.refresh_decision
                 if decision.mode != "full":
                     logger.info(
                         "Refresh gate for %s (stream): mode=%s (%s)",

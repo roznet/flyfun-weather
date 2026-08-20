@@ -395,10 +395,15 @@ class TestDecideResume:
 
         pack = SimpleNamespace(flight_params_hash=params_hash)
         monkeypatch.setattr(flights_mod, "list_packs", lambda db, fid: [pack])
-        monkeypatch.setattr(packs_mod, "_build_data_status", lambda pack, flight: "status")
-        # A real RefreshDecision, not a stand-in: the override reaches it with
-        # `model_copy`, so a SimpleNamespace would pass the test for the wrong
-        # reason (AttributeError instead of the branch under test).
+        # Real DataStatus/RefreshDecision objects, not stand-ins: the boundary
+        # carries the decision back on the status and the override reaches the
+        # decision with `model_copy`, so a SimpleNamespace or a bare string
+        # would fail for the wrong reason (AttributeError rather than the
+        # branch under test).
+        monkeypatch.setattr(
+            packs_mod, "_build_data_status",
+            lambda pack, flight: packs_mod.DataStatus(fresh=True),
+        )
         monkeypatch.setattr(
             packs_mod, "decide_refresh",
             lambda status, days_out: packs_mod.RefreshDecision(

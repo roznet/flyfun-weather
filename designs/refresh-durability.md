@@ -125,20 +125,22 @@ orphan of the previous one.
 | Flight deleted | `abandoned` |
 | Flight already departed | `abandoned` |
 | Beyond the forecast horizon | `abandoned` |
-| `decide_refresh` (+ `apply_params_change_override`) no longer says `full` | `abandoned` — the scheduler already re-briefed it, or no model moved. The gate is a free correctness check |
+| `gated_data_status(...).refresh_decision` no longer says `full` | `abandoned` — the scheduler already re-briefed it, or no model moved. The gate is a free correctness check |
 | otherwise | **resume** |
 
 Three consequences of the gate check worth knowing:
 
-- The gate is wrapped in `apply_params_change_override` (#552), like the two
-  refresh endpoints and `/freshness`. A refresh queued *because* the pilot
-  edited the flight has no new model run behind it, so the bare gate answers
-  `none` and we would abandon the very job that exists to rebuild the pack —
-  leaving a briefing computed for the previous departure time.
-  `_auto_refresh_one` re-applies the same override, but only for
-  `triggered_by="resume"`, so its own re-check agrees with `decide_resume`. The
-  routine scheduler cycle deliberately stays un-overridden: an edit there is
-  already followed by a client-driven refresh.
+- The gate is reached through `api/packs.py:gated_data_status`, which applies
+  the parameter-change override (#552) for us — the single entry point every
+  caller now shares (#558; see
+  [freshness-markers.md](freshness-markers.md)). A refresh queued *because* the
+  pilot edited the flight has no new model run behind it, so the bare gate
+  answers `none` and we would abandon the very job that exists to rebuild the
+  pack — leaving a briefing computed for the previous departure time.
+  `_auto_refresh_one` calls the same boundary, passing
+  `params_override=(triggered_by == "resume")`, so its own re-check agrees with
+  `decide_resume`. The routine scheduler cycle deliberately stays
+  un-overridden: an edit there is already followed by a client-driven refresh.
 
 - An SSE refresh killed *after* the `briefing_ready` milestone already wrote a
   provisional pack row from the current runs, so the gate says `none` and the

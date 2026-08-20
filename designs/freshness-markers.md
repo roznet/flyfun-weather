@@ -112,10 +112,15 @@ Not in v1, in rough order: the timeline reading the log (draw an observed-lag ba
 It is a **pure function of the `DataStatus`** that `_build_data_status` already computes (no extra I/O):
 
 ```python
-from weatherbrief.api.packs import decide_refresh, _days_out_now
-decision = decide_refresh(status, _days_out_now(flight))
+from weatherbrief.api.packs import gated_data_status
+status = gated_data_status(latest_pack, flight)   # the only entry point — see below
+decision = status.refresh_decision
 # decision.mode ∈ {"full", "realtime", "none"}; .reason; .eta_useful; .needed/.n_eligible/.n_updated
 ```
+
+`decide_refresh` itself stays public and is the pure layer described here, but
+**production code must not call it directly** — `gated_data_status` is the
+boundary that also applies the parameter-change override below.
 
 - `n_eligible` = models whose **latest available run covers the flight horizon** (`ModelStatus.covers_horizon`, set from the same `(init + run_horizon) >= flight_end` test used for staleness).
 - `n_updated` = eligible models with a newer-than-pack covering run (== `len(stale_models)`; `state == "stale"`).
@@ -138,6 +143,18 @@ The `min(…, n_eligible)` cap handles small selections: 2 models selected → D
 - Stateless and self-healing — no edit bookkeeping, and an edit made on another device or via MCP is caught just the same.
 - Broader than `_compute_flight_id`'s tuple on purpose: that one hashes the time-of-day and the route *slug*, so a mid-route waypoint insert and a same-date time nudge both keep the flight ID while changing the forecast.
 - Deliberately excludes profile / aircraft / Flexibility: they don't change the weather that is fetched, and a profile change already invalidates via `advisories_only`.
+
+**One entry point: `gated_data_status` (issue #558).** The override was originally *opt-in* — every caller had to remember to wrap `decide_refresh` in it — and three of the six call sites only became correct via follow-up commits after the fact. The failure mode is silent (a pack built for the previous departure time, returned as up to date, no error anywhere), so nothing catches it but a pilot noticing. `api/packs.py:gated_data_status(latest, flight, *, now=None, params_override=True)` now bundles `_build_data_status` + `decide_refresh` + the override and returns the `DataStatus` with `refresh_decision` populated. All six sites go through it:
+
+| Caller | Purpose |
+| --- | --- |
+| `GET /packs/freshness` | what the freshness bar shows |
+| `refresh_briefing` / `refresh_briefing_stream` | the manual refresh button |
+| `api/agent.py:_freshness_dict` | in-process mirror of `/packs/freshness` |
+| `tasks/refresh_resume.py:decide_resume` | is an interrupted job worth resuming |
+| `scheduler._auto_refresh_one` | the scheduler's pre-execution re-check |
+
+`params_override=False` is the single deliberate opt-out, taken by the **routine** scheduler cycle only (`triggered_by != "resume"`): an edit there is already followed by a client-driven refresh, so forcing a full run per edited flight would just buy a second one. Making it an argument keeps that exclusion visible at the one site that wants it rather than an invisible omission at the five that don't. `tests/test_refresh_gate_boundary.py` holds an AST-based guard test that fails if any module outside `api/packs.py` calls `decide_refresh` or `apply_params_change_override` directly.
 - **NULL means "don't know", not "changed"** — packs predating migration 088 have no stamp, and forcing a full refresh for each of them on its owner's next press would be a stampede for no benefit. The model-freshness decision stands for those.
 - The auto-refresh scheduler is deliberately *not* wired to this: its question is "has new model data landed?", and a parameter edit is already followed by a client-driven refresh.
 
@@ -225,6 +242,7 @@ When tuning registry offsets:
 - Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_SCRATCH_CANDIDATES`/`_DIRECT_SOURCE_KEYS`, `_pack_init_for_source`, `_finalize_refresh` (records `model_sources` from `result.grib_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
 - Tiered gate: `api/packs.py:decide_refresh` + `_refresh_threshold`/`_days_out_now`/`RefreshDecision`, `ModelStatus.covers_horizon`; wired into `refresh_briefing`, `refresh_briefing_stream`, `scheduler._auto_refresh_one`; realtime seam `tasks/route_weather.run_realtime_refresh` (see [metar-taf-route-weather.md](metar-taf-route-weather.md))
 - Parameter-change override (#552): `api/packs.py:apply_params_change_override`, `storage/flights.py:compute_flight_params_hash`, `BriefingPackMeta.flight_params_hash`, migration `088`
+- Single entry point (#558): `api/packs.py:gated_data_status` — the only thing production code should call; guard test `tests/test_refresh_gate_boundary.py`
 - Loop wiring: `scheduler.py:run_freshness_loop`, `api/app.py:lifespan`
 - Admin endpoint: `api/admin.py:freshness_markers`
 - Public catalog: `fetch/freshness/catalog.py`, `api/data_sources.py` (GET `/api/data-sources`)
