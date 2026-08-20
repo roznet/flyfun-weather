@@ -251,7 +251,7 @@ def _build_global_rollup_select(day: date_t):
     """SELECT that collapses one day of per-airport rows to the global table.
 
     Reads ``verification_daily_stats``, not raw scores. Two reasons: it is
-    ~12K rows instead of ~36K+ (and index-covered by ``ix_vds_date_model``),
+    ~12K rows instead of ~36K+ (the ``date =`` seek drives off ``uq_vds_key``),
     and deriving one from the other makes it structurally impossible for the
     global numbers to disagree with the per-airport numbers for the same day.
     """

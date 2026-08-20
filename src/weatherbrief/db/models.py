@@ -1092,7 +1092,6 @@ class VerificationDailyStatsRow(Base):
         UniqueConstraint(
             "date", "source", "model", "days_out", "icao", name="uq_vds_key",
         ),
-        Index("ix_vds_date_model", "date", "source", "model", "days_out"),
         Index("ix_vds_icao_model", "icao", "source", "model", "days_out"),
         # The bias-leaderboard query filters (source, model, days_out) as
         # constants with a date *range*. The date-leading index only works for

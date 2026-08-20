@@ -256,8 +256,8 @@ def _activity_counts_from_rollup(
     Distinct airports are **not** additive that way (an airport reporting on
     two days would be counted twice), so they come from a
     ``COUNT(DISTINCT icao)`` over the per-airport daily table for the window —
-    cheap, because that table is ~12K rows/day rather than ~36K+ raw scores,
-    and the (date, source) prefix of ``ix_vds_date_model`` drives it.
+    cheap, because that table is ~12K rows/day rather than ~36K+ raw scores.
+    MySQL drives it off ``ix_vds_source_model_days_date``.
     """
     since_d, until_d = _date_range(since, until)
     obs_count = db.execute(
