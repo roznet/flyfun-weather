@@ -26,6 +26,30 @@ def _utc(year: int, month: int, day: int, hour: int = 0) -> datetime:
     return datetime(year, month, day, hour, tzinfo=timezone.utc)
 
 
+@pytest.fixture
+def no_interactive_refresh():
+    """Pin the yield gate open — it is process-global and time-based.
+
+    `precache_*_run` defers to interactive briefings via
+    `interactive_refresh_active()`, which reads the module-global
+    `api.packs.refresh_registry` and returns True for
+    WARM_YIELD_COOLDOWN_SECONDS (60 s) after *any* refresh in this process.
+    `test_api.py` and `test_refresh_durability.py` both exercise that
+    registry earlier in the run, so whether these tests saw an open gate
+    depended on how long the suite happened to take to reach this file —
+    under 60 s and the fetch loop breaks on its first forecast hour, making
+    `mock_idx.call_count` 0 instead of one per hour.
+
+    That is a real latent flake, not a property under test here: the tests
+    that care about deferral pass an explicit `should_defer`.
+    """
+    with patch(
+        "weatherbrief.fetch.grib.precache.interactive_refresh_active",
+        return_value=False,
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # airport_profile_forecast_hours
 # ---------------------------------------------------------------------------
@@ -92,6 +116,7 @@ class TestAirportProfileForecastHours:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("no_interactive_refresh")
 class TestPrecacheIconEuRun:
 
     def test_skips_already_cached_combos(self, tmp_path: Path, monkeypatch):
@@ -176,6 +201,7 @@ class TestPrecacheIconEuRun:
         assert sample_path.exists()
 
 
+@pytest.mark.usefixtures("no_interactive_refresh")
 class TestPrecacheGfsRun:
 
     def test_skips_already_cached_combos(self, tmp_path: Path, monkeypatch):

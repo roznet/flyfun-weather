@@ -1083,3 +1083,69 @@ def test_build_sounding_proxy_mirrors_active_slot_onto_dd():
     assert proxy is not None
     assert [cl.base_ft for cl in proxy.cloud_layers] == [1500.0]
     assert proxy.cloud_layers == proxy.dd_cloud_layers
+
+
+class TestScoreCycleIgnoresSpecis:
+    """Standalone scoring must stay on the routine cadence (#562).
+
+    `_score_cycle` keeps whichever observation is *closest* to cycle_time out
+    of a ±90 min window. A SPECI is issued because conditions changed
+    significantly, so admitting one lets it displace the routine report that
+    would otherwise have been scored — depressing measured model skill by an
+    artefact of collection policy rather than anything about the models.
+
+    This is the half of the fix that a refactor could silently drop: unlike
+    the flight path, which is protected structurally (SPECIs are never linked
+    into flight_verification_map), the standalone path is protected only by a
+    single `.where(routine_observation_filter())` clause.
+    """
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_a_nearer_speci_does_not_displace_the_routine_metar(
+        self, mock_rwy, db_session,
+    ):
+        _insert_snapshot(db_session)
+        # Routine report 20 min before the cycle; SPECI only 2 min before, so
+        # it wins the "closest" contest unless it is filtered out first.
+        _insert_observation(
+            db_session,
+            observation_time=NOW - timedelta(minutes=20),
+            ceiling_ft=3500,
+        )
+        _insert_observation(
+            db_session,
+            observation_time=NOW - timedelta(minutes=2),
+            ceiling_ft=200,
+            flight_category="LIFR",
+            report_type="SPECI",
+        )
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        assert row.observation_time == NOW - timedelta(minutes=20), (
+            "the SPECI displaced the routine METAR — routine_observation_filter() "
+            "is missing from _score_cycle's observation query"
+        )
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_a_speci_alone_produces_no_score(self, mock_rwy, db_session):
+        _insert_snapshot(db_session)
+        _insert_observation(db_session, report_type="SPECI")
+
+        scores = _score_cycle(NOW, [], "/fake/db", db_session)
+
+        assert scores == 0
+        assert db_session.execute(
+            select(VerificationScoreRow)
+        ).scalars().all() == []
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_null_report_type_is_still_scored(self, mock_rwy, db_session):
+        """Pre-091 rows carry NULL — they must keep being scored as before."""
+        _insert_snapshot(db_session)
+        _insert_observation(db_session, report_type=None)
+
+        scores = _score_cycle(NOW, [], "/fake/db", db_session)
+
+        assert scores >= 1

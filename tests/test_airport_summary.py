@@ -45,11 +45,13 @@ def _obs(
     gust_kt: int | None = None,
     temp: float | None = 12.0,
     weather: list[str] | None = None,
+    report_type: str | None = "METAR",
 ) -> VerificationObservationRow:
     return VerificationObservationRow(
         icao=icao,
         observation_time=when,
         collected_at=when,
+        report_type=report_type,
         flight_category=category,
         ceiling_ft=ceiling,
         visibility_m=visibility,
@@ -442,3 +444,62 @@ class TestOrchestrators:
         rollup_all_complete_months(db_session)
         rows = db_session.execute(select(AirportMonthlySummaryRow)).scalars().all()
         assert len(rows) == before
+
+
+class TestClimatologyExcludesSpecis:
+    """Climatology needs a sample that is regular in time (#562).
+
+    SPECIs are issued precisely when conditions are bad or volatile. Letting
+    them into the rollup would shift the percentiles and inflate the threshold
+    counts by an artefact of collection policy — the same bias the scoring
+    paths exclude them for. Percentiles over an irregularly-sampled series are
+    not percentiles of anything.
+    """
+
+    def test_speci_does_not_enter_the_monthly_rollup(self, db_session):
+        for day in range(1, 11):
+            db_session.add(_obs("LFPG", _utc(2026, 4, day, 12, 0), ceiling=5000))
+        # A burst of low-ceiling SPECIs on one stormy afternoon.
+        for minute in (5, 17, 29, 41, 53):
+            db_session.add(
+                _obs(
+                    "LFPG", _utc(2026, 4, 5, 15, minute),
+                    ceiling=200, category="LIFR", weather=["+TSRA"],
+                    report_type="SPECI",
+                )
+            )
+        db_session.flush()
+
+        rollup_month(db_session, _utc(2026, 4, 1))
+
+        row = db_session.execute(
+            select(AirportMonthlySummaryRow)
+        ).scalar_one()
+        assert row.n_obs == 10, "SPECIs must not inflate the observation count"
+
+    def test_null_report_type_still_counts_as_routine(self, db_session):
+        """Pre-091 rows carry NULL and must keep their old meaning."""
+        db_session.add(_obs("LFPG", _utc(2026, 4, 2, 12, 0), report_type=None))
+        db_session.add(_obs("LFPG", _utc(2026, 4, 3, 12, 0), report_type="METAR"))
+        db_session.flush()
+
+        rollup_month(db_session, _utc(2026, 4, 1))
+
+        row = db_session.execute(
+            select(AirportMonthlySummaryRow)
+        ).scalar_one()
+        assert row.n_obs == 2
+
+    def test_speci_does_not_enter_the_daily_rollup(self, db_session):
+        db_session.add(_obs("LFPG", _utc(2026, 4, 5, 6, 0)))
+        db_session.add(
+            _obs("LFPG", _utc(2026, 4, 5, 15, 12), ceiling=200, report_type="SPECI")
+        )
+        db_session.flush()
+
+        rollup_day(db_session, date(2026, 4, 5))
+
+        row = db_session.execute(
+            select(AirportDailySummaryRow)
+        ).scalar_one()
+        assert row.n_obs == 1

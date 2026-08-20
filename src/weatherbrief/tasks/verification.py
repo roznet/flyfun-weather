@@ -478,9 +478,12 @@ def store_observations(
 ) -> int:
     """Store observations and create flight linkages.
 
-    Deduplicates on (icao, observation_time). Applies one-per-30-min-bucket
-    filter so HH:00 and HH:30 METARs both land while SPECIs at HH:15 are
-    absorbed. Returns count of newly inserted observations.
+    Deduplicates on (icao, observation_time), then applies the
+    one-per-30-min-bucket filter to *routine* reports only, so HH:00 and HH:30
+    METARs both land. SPECIs bypass the bucket entirely — see
+    :func:`_should_skip_for_bucket_dedup` — and are stored but deliberately
+    not linked to flights, because ``score_flight`` scores one row per linked
+    observation. Returns count of newly inserted observations.
     """
     inserted = 0
 

@@ -172,12 +172,24 @@ def rollup_month(db: Session, month_start: datetime) -> int:
     )
     db.expunge_all()
 
+    from weatherbrief.tasks.verification import routine_observation_filter
+
     # Stream obs for this month grouped by ICAO. ~830 airports × ~150 obs ≈
     # 125k rows worst case — fits easily in memory.
+    #
+    # Routine reports only. Climatology describes the *typical* distribution
+    # at an airport, which needs a sample that is regular in time: percentiles
+    # and threshold counts over an irregularly-sampled series are not
+    # percentiles of anything. SPECIs are issued precisely when conditions are
+    # bad or volatile, so admitting them would shift p10-p90 ceiling and
+    # visibility, inflate n_ts and the below-threshold counts, and add
+    # spurious category_changes — the same collection-policy artefact the
+    # scoring paths avoid (#562).
     rows = db.execute(
         select(VerificationObservationRow)
         .where(VerificationObservationRow.observation_time >= month_start)
         .where(VerificationObservationRow.observation_time < month_end)
+        .where(routine_observation_filter())
     ).scalars().all()
 
     by_icao: dict[str, list[VerificationObservationRow]] = defaultdict(list)
@@ -289,10 +301,14 @@ def rollup_day(db: Session, day: date) -> int:
     )
     db.expunge_all()
 
+    from weatherbrief.tasks.verification import routine_observation_filter
+
+    # Routine reports only, for the same reason as the monthly rollup above.
     rows = db.execute(
         select(VerificationObservationRow)
         .where(VerificationObservationRow.observation_time >= day_start)
         .where(VerificationObservationRow.observation_time < day_end)
+        .where(routine_observation_filter())
     ).scalars().all()
 
     by_icao: dict[str, list[VerificationObservationRow]] = defaultdict(list)
