@@ -121,7 +121,27 @@ web emits it under `app_release` entries from `APP_STORE_URL` (`web/ts/utils.ts`
 a reader already inside the app has nothing to install, so its absence on iOS is
 not a divergence.
 
-### 6. Known parity gaps (informational)
+### 6. Shared form logic ports
+
+Small pure-logic helpers ported by hand between the clients because the server
+has no say in them — they shape what a *form* does with a stored value, not what
+the value means. Compare the symbols, the constants, and the rounding/clamping
+rules:
+
+| Web source | Symbols to compare | iOS mirror |
+|---|---|---|
+| `web/ts/utils/duration.ts` | `DURATION_MINUTE_OPTIONS`, `MAX_DURATION_HOURS`, `splitDurationCeil` (ceil-to-quarter + epsilon), `combineDuration`, `formatDurationHM` | `Models/Domain/FlightDuration.swift` — `minuteOptions`, `maxHours`, `split`, `combine`, `label`, `clampToPickerRange` |
+
+Report a divergence in any option list, ceiling, rounding direction, epsilon, or
+label format. A drift here is silent and pilot-visible: the same stored
+`flight_duration_hours` renders as a different flight window on the two clients,
+and whichever form the pilot saves from writes its own reading back.
+
+`clampToPickerRange` is **iOS-only by design** — the web reaches the same 12h45
+ceiling through its dropdown markup (built from `splitDurationCeil`, read back on
+Save), so its absence from the TS module is not a gap.
+
+### 7. Known parity gaps (informational)
 
 List these so they are **not** re-flagged as new divergences, and note any *new*
 gap the branch introduced:
@@ -130,7 +150,7 @@ gap the branch introduced:
   `sld-bands`, `surface-obscuration-bands`.
 - Cross-section color themes (web-only; tracked in #320).
 
-### 7. SYNC-comment integrity
+### 8. SYNC-comment integrity
 
 Verify reciprocity for each `SYNC`-commented file pair:
 

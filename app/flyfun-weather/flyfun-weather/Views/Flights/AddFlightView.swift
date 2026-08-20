@@ -272,6 +272,11 @@ struct AddFlightView: View {
         // the flight ID, so a PATCH would 422 no matter what the re-brief
         // confirm decided. Move/Duplicate is the only path that can express it.
         if viewModel.hasStructuralChange {
+            // The confirm names how many briefings Move discards. The count is
+            // loaded by the `.task` above; await it here so a pilot who saves
+            // before it lands reads the real number instead of the count-free
+            // fallback (and never the "no briefings" copy).
+            await viewModel.loadPackCount()
             showStructuralConfirm = true
         } else if viewModel.hasForecastAffectingChange {
             showRebriefConfirm = true

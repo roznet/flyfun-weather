@@ -63,6 +63,25 @@ final class AddFlightViewModel {
         routeChangedFromOriginal ? editedRawRoute : nil
     }
 
+    /// The waypoint list a request carries.
+    ///
+    /// On an untouched route the field still holds the *baseline* — which, for a
+    /// flight that has one, is its Field-15 `raw_route`. Its naive token split
+    /// (`["EGKA", "N0180VFR", "EGKB"]`) is not a waypoint list, and nothing has
+    /// interpreted it: `prepareEdit` only interprets a route the pilot changed.
+    /// Sending it would have the server reject the flight on an edit that never
+    /// touched the route. The web avoids this by omitting `waypoints` entirely in
+    /// that case, which the server reads as "unchanged"; iOS's request models
+    /// carry it on every save, so send the flight's stored list instead — the
+    /// same thing, one field later.
+    ///
+    /// On a changed route `applyInterpretedRoute()` has already rewritten the
+    /// field to the server-resolved waypoints, so this is that clean list.
+    private var waypointsPayload: [String] {
+        guard let original = editingFlight, !routeChangedFromOriginal else { return waypoints }
+        return original.waypoints
+    }
+
     // MARK: Flexibility (timing scenarios, #357)
 
     /// Selected Flexibility mode. Seeded from the flight when editing. The view's
@@ -97,9 +116,19 @@ final class AddFlightViewModel {
     private(set) var pendingRefreshTask: Task<Void, Never>?
 
     /// How many briefing packs the edited flight already has — the "discards N
-    /// briefing(s)" count in the structural note and the Move confirm. Loaded
-    /// when the editor opens; stays 0 (the no-packs copy) if it can't be read.
-    private(set) var existingPackCount = 0
+    /// briefing(s)" count in the structural note and the Move confirm.
+    ///
+    /// `nil` while the count is unknown: it resolves through a `.task`, so a
+    /// pilot who edited and tapped Save before it landed used to be shown the
+    /// "no briefings" copy, understating what Move discards. The copy below names
+    /// no number while this is nil, and the view awaits `loadPackCount()` before
+    /// the Move confirm so it rarely still is. A failed load also leaves it nil —
+    /// "couldn't read it" is not "there are none".
+    private(set) var existingPackCount: Int?
+
+    /// The in-flight pack-count load, retained so a later caller awaits the
+    /// first request instead of firing a second one.
+    private var packCountTask: Task<Void, Never>?
 
     /// Session-scoped ack: once the explainer has fired (or we've learned the
     /// pilot already uses the feature) this app run, subsequent mode toggles and
@@ -180,7 +209,7 @@ final class AddFlightViewModel {
         let altInstant = flight?.altDepartureTime.flatMap { Date.parseISO8601($0) } ?? departureInstant
         self.altDepartureTime = DepartureTimeModel(instant: altInstant)
         if let flight {
-            waypointsText = flight.waypoints.joined(separator: " ")
+            waypointsText = Self.baselineRouteInput(for: flight)
             cruiseAltitudeFt = flight.cruiseAltitudeFt
             flightCeilingFt = flight.flightCeilingFt
             // Clamped so the pickers can represent it: otherwise editing either
@@ -224,10 +253,37 @@ final class AddFlightViewModel {
         waypoints.count >= 2 && !isSubmitting && (!isEditing || hasChanges)
     }
 
-    /// Whether the typed route differs from the flight being edited (case- and
-    /// spacing-insensitive). Single source for the three change gates below.
+    /// The route string the edit form is pre-populated with: the flight's
+    /// Field-15 `raw_route` when it has one, else its resolved waypoint list.
+    ///
+    /// Mirrors the web's `baselineRouteInput` (`flight-main.ts`). Showing the
+    /// resolved waypoints for a flight the pilot entered as `EGKA N0180VFR EGKB`
+    /// meant every edit silently replaced their Field-15 string with the parser's
+    /// reading of it — the last real parity gap left by #556.
+    static func baselineRouteInput(for flight: FlightResponse) -> String {
+        let raw = flight.rawRoute?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? flight.waypoints.joined(separator: " ") : raw
+    }
+
+    /// Normalize a route input for change detection: case-insensitive,
+    /// whitespace-collapsed. Web's `normalizeRouteInput`, same purpose — telling
+    /// a real edit apart from the form merely being pre-populated.
+    static func normalizeRouteInput(_ text: String) -> String {
+        text.uppercased()
+            .split(whereSeparator: { " -,".contains($0) })
+            .joined(separator: " ")
+    }
+
+    /// Whether the route *input* differs from what the form was seeded with.
+    /// Single source for the three change gates below.
+    ///
+    /// Compares the text, not the parsed waypoints: the baseline may be a
+    /// Field-15 string (`EGTK DCT MID DCT LSGS`) whose naive token split is not
+    /// a waypoint list, so an untouched field would otherwise read as an edit on
+    /// every raw-route flight. This is the web's `inputUnchanged` test.
     private func routeDiffers(from original: FlightResponse) -> Bool {
-        waypoints != original.waypoints.map { $0.uppercased() }
+        Self.normalizeRouteInput(waypointsText)
+            != Self.normalizeRouteInput(Self.baselineRouteInput(for: original))
     }
 
     /// Any edited field differs from the original (gates the Save button).
@@ -291,11 +347,18 @@ final class AddFlightViewModel {
     /// choice instead of issuing a PATCH that would 422.
     var hasStructuralChange: Bool { departureDayChanged || routeEndpointsChanged }
 
+    /// What Move discards, as the notes below phrase it: "N existing briefing(s)"
+    /// once the count is known, and a count-free phrase while it isn't — naming a
+    /// number we haven't loaded is the one thing this copy must not do.
+    private var discardedBriefingsPhrase: String {
+        existingPackCount.map { "\($0) existing briefing(s)" } ?? "any existing briefings"
+    }
+
     /// Inline note under the Departure section once the date change is detected.
     /// Web copy verbatim (`flightDetail.dateChangedNote`).
     var departureChangeNote: String? {
         guard departureDayChanged else { return nil }
-        return "Date changed. Move replaces this flight (discards \(existingPackCount) existing briefing(s) "
+        return "Date changed. Move replaces this flight (discards \(discardedBriefingsPhrase) "
             + "for the old date) \u{2014} or Duplicate keeps both."
     }
 
@@ -303,16 +366,23 @@ final class AddFlightViewModel {
     /// (`flightDetail.routeChangedNote`).
     var routeChangeNote: String? {
         guard routeEndpointsChanged else { return nil }
-        return "Origin or destination changed. Move replaces this flight (discards \(existingPackCount) "
-            + "existing briefing(s) for the old route) \u{2014} or Duplicate keeps both."
+        return "Origin or destination changed. Move replaces this flight (discards "
+            + "\(discardedBriefingsPhrase) for the old route) \u{2014} or Duplicate keeps both."
     }
 
     /// Confirm-dialog body for Move. Web copy verbatim
-    /// (`flightDetail.moveConfirmWithPacks` / `\u{2026}NoPacks`).
+    /// (`flightDetail.moveConfirmWithPacks` / `\u{2026}NoPacks`), plus a third
+    /// case the web can't hit: it reads the pack count out of an already-loaded
+    /// store, iOS fetches it.
     var moveConfirmMessage: String {
-        existingPackCount > 0
-            ? "Move this flight? \(existingPackCount) existing briefing(s) for the old values will be discarded."
-            : "Move this flight? The new flight will start with no briefings."
+        switch existingPackCount {
+        case .none:
+            return "Move this flight? Any existing briefings for the old values will be discarded."
+        case .some(0):
+            return "Move this flight? The new flight will start with no briefings."
+        case .some(let count):
+            return "Move this flight? \(count) existing briefing(s) for the old values will be discarded."
+        }
     }
 
     /// UTC calendar day of an instant — the unit `target_date` is derived in.
@@ -526,15 +596,27 @@ final class AddFlightViewModel {
     }
 
     /// Load the edited flight's pack count for the Move copy. Non-fatal: the
-    /// count only sharpens the wording, so a failure just leaves the no-packs
-    /// variant rather than blocking the editor.
+    /// count only sharpens the wording, so a failure leaves it unknown (and the
+    /// count-free copy) rather than blocking the editor.
     func loadPackCount() async {
         guard let editingFlight else { return }
-        do {
-            existingPackCount = try await repository.packs(flightId: editingFlight.id).count
-        } catch {
-            Self.logger.debug("Pack count unavailable: \(error)")
+        // Started by the editor's `.task` and awaited again by Save. Both reach
+        // the same request: creating and storing the task is synchronous, so the
+        // second caller always sees it and simply waits.
+        if let packCountTask {
+            await packCountTask.value
+            return
         }
+        // Inherits the MainActor context; `Task` allows the implicit `self`.
+        let task = Task {
+            do {
+                existingPackCount = try await repository.packs(flightId: editingFlight.id).count
+            } catch {
+                Self.logger.debug("Pack count unavailable: \(error)")
+            }
+        }
+        packCountTask = task
+        await task.value
     }
 
     /// Called by the view when the pilot changes the Flexibility picker. Fires
@@ -912,7 +994,7 @@ final class AddFlightViewModel {
 
         let request = MoveFlightRequest(
             departureTime: Self.iso8601(departureDate),
-            waypoints: waypoints,
+            waypoints: waypointsPayload,
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
@@ -949,7 +1031,7 @@ final class AddFlightViewModel {
         }
 
         let request = CreateFlightRequest(
-            waypoints: waypoints,
+            waypoints: waypointsPayload,
             departureTime: Self.iso8601(departureDate),
             rawRoute: rawRoutePayload,
             cruiseAltitudeFt: cruiseAltitudeFt,
@@ -1039,6 +1121,7 @@ final class AddFlightViewModel {
         // Retried once: the move has already committed, so the realistic failure
         // here is a transient hiccup in the few hundred ms between two requests,
         // and losing the pilot's aircraft/profile edit to that would be silent.
+        // A rejection is not a hiccup, though — see `isWorthRetrying`.
         for attempt in 0..<2 {
             do {
                 return try await repository.updateFlight(flightId: moved.id, request: request).flight
@@ -1046,6 +1129,7 @@ final class AddFlightViewModel {
                 Self.logger.error(
                     "Post-move residual edit failed for \(moved.id) (attempt \(attempt + 1)): \(error)"
                 )
+                if !Self.isWorthRetrying(error) { break }
             }
         }
         // Still the moved flight — the structural half of the edit stands. The
@@ -1053,6 +1137,24 @@ final class AddFlightViewModel {
         // the whole save succeeded.
         errorMessage = "The flight moved, but the aircraft/profile change didn't save. Re-open Edit to apply it."
         return moved
+    }
+
+    /// Whether a failed post-move PATCH is worth a second attempt.
+    ///
+    /// The retry above exists for a transient hiccup between two back-to-back
+    /// requests. A 4xx is the server's considered answer to this exact body — a
+    /// 422 on an out-of-range altitude or a profile the pilot can't use will 422
+    /// again — so re-sending it only delays the (accurate) message by a round
+    /// trip. 429 is the exception: it means "later", not "no".
+    static func isWorthRetrying(_ error: Error) -> Bool {
+        switch error {
+        case APIError.unauthorized, APIError.notFound, APIError.forbidden(_):
+            return false
+        case APIError.serverError(let status, _) where (400..<500).contains(status):
+            return status == 429
+        default:
+            return true
+        }
     }
 
     /// Pilot-facing copy for a create/move/duplicate failure.
@@ -1102,7 +1204,7 @@ final class AddFlightViewModel {
         let aircraftId = selectedAircraftId ?? (editingFlight.aircraftId == nil ? nil : 0)
         let request = UpdateFlightRequest(
             aircraftId: aircraftId,
-            waypoints: waypoints,
+            waypoints: waypointsPayload,
             // Only what the pilot actually typed. Omitted on an untouched route,
             // which the server reads as "still valid, leave it alone"; on an
             // edited route omitting it instead would CLEAR the flight's Field-15

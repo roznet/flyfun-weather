@@ -110,7 +110,10 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
             flightDurationHours: request.flightDurationHours ?? 2.0,
             private: false, autoRefresh: false, autoRefreshHour: nil,
             createdAt: "2099-06-25T09:00:00Z", latestBriefing: nil, coverage: nil, role: nil,
-            flexibility: request.flexibility, altDepartureTime: nil
+            flexibility: request.flexibility, altDepartureTime: nil,
+            // Stored like the server does, so a create-then-edit journey sees the
+            // Field-15 string the edit form now seeds its route input from.
+            rawRoute: request.rawRoute
         )
         createdFlights.append(flight)
         return flight
@@ -135,12 +138,28 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         guard let source = allFlights.first(where: { $0.id == flightId }) else {
             throw APIError.notFound
         }
+        let movedWaypoints = request.waypoints ?? source.waypoints
+        // The server's three-way `raw_route` rule (`api/flights.py::move_flight`),
+        // which the rest of this synthesis already mirrors field for field:
+        //   • sent in the body        → store it
+        //   • omitted, route changed  → clear it (the old string would lie)
+        //   • omitted, route unchanged → keep the source's
+        // Hard-coding nil here would give a future raw-route-across-move test a
+        // false pass from the fixture rather than exercising the client.
+        let movedRawRoute: String?
+        if let requested = request.rawRoute {
+            movedRawRoute = requested
+        } else if movedWaypoints != source.waypoints {
+            movedRawRoute = nil
+        } else {
+            movedRawRoute = source.rawRoute
+        }
         let moved = FlightResponse(
             id: "moved-\(flightId)",
             userId: source.userId, profileId: source.profileId,
             aircraftId: source.aircraftId, aircraft: source.aircraft,
-            routeName: (request.waypoints ?? source.waypoints).joined(separator: " "),
-            waypoints: request.waypoints ?? source.waypoints,
+            routeName: movedWaypoints.joined(separator: " "),
+            waypoints: movedWaypoints,
             departureTime: request.departureTime ?? source.departureTime,
             targetDate: String((request.departureTime ?? source.departureTime).prefix(10)),
             targetTimeUtc: source.targetTimeUtc,
@@ -150,7 +169,8 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
             private: source.private, autoRefresh: source.autoRefresh,
             autoRefreshHour: source.autoRefreshHour,
             createdAt: source.createdAt, latestBriefing: nil, coverage: nil, role: source.role,
-            flexibility: source.flexibility, altDepartureTime: source.altDepartureTime
+            flexibility: source.flexibility, altDepartureTime: source.altDepartureTime,
+            rawRoute: movedRawRoute
         )
         deletedFlightIds.insert(flightId)
         createdFlights.append(moved)

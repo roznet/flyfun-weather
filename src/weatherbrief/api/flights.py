@@ -43,6 +43,7 @@ from weatherbrief.storage.flights import (
     lookup_flight_id_by_share_code,
     pack_has_advisories,
     parse_advisory_summary,
+    remove_artifacts_after_commit,
     safe_path_component,
     save_flight,
     subscribe_flight,
@@ -1562,9 +1563,10 @@ def move_flight(
 
     Use this when changing date, origin, or destination — the existing PATCH endpoint
     rejects those because they're encoded in the flight ID. Move creates the new flight,
-    deletes the old one (cascading its packs and on-disk artifacts), and commits both
-    in a single transaction. If the new ID would collide with another existing flight,
-    aborts with 409 and nothing changes.
+    deletes the old one (cascading its packs), and commits both in a single
+    transaction; the old packs' on-disk artifacts are unlinked only once that commit
+    lands. If the new ID would collide with another existing flight, aborts with 409
+    and nothing changes.
     """
     source = _load_owned_flight(db, flight_id, user_id)
 
@@ -1724,8 +1726,14 @@ def move_flight(
         ).scalars().all()
     ]
 
-    # Single transaction: delete old (cascades packs + artifacts), insert new.
-    delete_flight(db, flight_id)
+    # Single transaction: delete old (cascades packs), insert new.
+    #
+    # The old flight's artifact directories are NOT unlinked here. Everything
+    # below still runs inside the transaction, and the docstring's promise that
+    # nothing changes on failure only holds if the on-disk half waits for the
+    # commit too — otherwise a throw between here and the end rolls the rows
+    # back onto directories that are already gone.
+    orphaned_artifacts = delete_flight(db, flight_id, remove_artifacts=False)
     save_flight(db, new_flight, user_id)
     for subscriber_id, subscribed_at in subscribers:
         db.add(
@@ -1734,6 +1742,7 @@ def move_flight(
             )
         )
     db.flush()
+    remove_artifacts_after_commit(db, orphaned_artifacts)
 
     return _flight_to_response(new_flight, db, viewer_id=user_id)
 

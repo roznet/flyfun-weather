@@ -128,6 +128,30 @@ def sample_pack(app_db, sample_flight):
     return meta
 
 
+def _write_pack_artifacts(app_db, flight, tmp_path):
+    """Give ``flight`` one pack with a real artifact directory on disk.
+
+    Returns the directory. ``DATA_DIR`` is already pointed at ``tmp_path/data``
+    by the ``client`` fixture, so ``pack_dir_for`` lands inside the test's own
+    tree and the stored ``artifact_path`` resolves back to it.
+    """
+    fetch_timestamp = _NOW - timedelta(hours=6)
+    pack_dir = pack_dir_for(DEV_USER_ID, flight.id, fetch_timestamp)
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "briefing.json").write_text('{"route": {}}')
+
+    session = app_db()
+    save_pack_meta(session, BriefingPackMeta(
+        flight_id=flight.id,
+        fetch_timestamp=fetch_timestamp,
+        days_out=3,
+        artifact_path=str(pack_dir),
+    ))
+    session.commit()
+    session.close()
+    return pack_dir
+
+
 # --- Health ---
 
 
@@ -688,6 +712,49 @@ class TestFlightsAPI:
         ).scalars().all()
         session.close()
         assert subscriber_ids == ["sub-user"]
+
+    def test_move_flight_removes_pack_artifacts_on_success(
+        self, client, app_db, tmp_path, sample_flight,
+    ):
+        """A completed move takes the old flight's artifact directories with it."""
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move", json={"departure_time": new_dt},
+        )
+        assert resp.status_code == 200
+        assert not pack_dir.exists()
+
+    def test_move_flight_keeps_pack_artifacts_when_the_transaction_rolls_back(
+        self, client, app_db, tmp_path, sample_flight,
+    ):
+        """A failure after the delete must leave the artifacts on disk.
+
+        ``delete_flight`` used to ``_rmtree`` the pack directories before the
+        subscriber re-insert ran, so a throw in between rolled the flight and
+        pack rows back onto directories that were already gone — restored rows
+        pointing at missing files. The removal now waits for the commit, so the
+        rollback leaves a fully readable flight behind.
+        """
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+
+        from weatherbrief.api import flights as flights_api
+
+        with patch.object(
+            flights_api, "save_flight", side_effect=RuntimeError("boom"),
+        ):
+            resp = client.post(
+                f"/api/flights/{sample_flight.id}/move",
+                json={"departure_time": (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()},
+            )
+        assert resp.status_code == 500
+
+        # The flight is back...
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
+        # ...and so is the pack it points at.
+        assert pack_dir.exists()
+        assert (pack_dir / "briefing.json").exists()
 
     def test_move_flight_not_owner(self, client, app_db):
         """Cannot move someone else's flight."""

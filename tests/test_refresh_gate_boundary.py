@@ -228,3 +228,113 @@ class TestGatedDataStatus:
 
         assert status.refresh_decision is not None
         assert status.models  # the per-model detail survives the wrapping
+
+
+class TestAgentFreshnessDict:
+    """``api/agent.py::_freshness_dict`` — the connector's copy of ``/packs/freshness``.
+
+    Item 3 of #558: this helper mirrors two endpoints that are covered, but had
+    no test of its own, so it could drift back off the boundary silently. The
+    AST guard above only proves it doesn't call the *halves* directly — nothing
+    proved it calls ``gated_data_status`` at all, and a helper that returned a
+    bare ``decide_refresh`` status would still pass it.
+    """
+
+    @staticmethod
+    def _flight():
+        """A flight departing in the future.
+
+        ``_freshness_dict`` takes no ``now`` — it is a live HTTP path — so the
+        module-level ``_flight()`` (a fixed 2026-05-25 departure) would read as
+        day-of and answer "realtime" once that date passes.
+        """
+        from weatherbrief.models import Flight
+
+        return Flight(
+            id="egtf_lfat-future", user_id="user-1", route_name="egtf_lfat",
+            waypoints=["EGTF", "LFAT"],
+            departure_time=datetime.now(timezone.utc) + timedelta(days=5),
+            cruise_altitude_ft=8000, flight_duration_hours=2.0,
+            created_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+        )
+
+    def _patched_agent(self, flight, packs):
+        """Pin the two lookups ``_freshness_dict`` does before the gate."""
+        return (
+            patch("weatherbrief.api.agent.flights_api._load_flight_or_404",
+                  return_value=flight),
+            patch("weatherbrief.api.agent.packs_api.list_packs", return_value=packs),
+        )
+
+    def test_an_edited_flight_reads_as_needing_a_full_refresh(self, quiet_models):
+        """The #552 scenario, seen through the connector.
+
+        No covering model has moved, so the bare gate says "none" and the agent
+        would tell the pilot their briefing is current — for a departure time
+        they have since changed.
+        """
+        from weatherbrief.api.agent import _freshness_dict
+
+        flight = self._flight()
+        pack = _pack(flight, "stamped-for-the-old-departure")
+        load, packs = self._patched_agent(flight, [pack])
+        with load, packs:
+            result = _freshness_dict(object(), "user-1", flight.id)
+
+        assert result["refresh_decision"]["mode"] == "full"
+        assert "parameters changed" in result["refresh_decision"]["reason"]
+
+    def test_an_untouched_flight_is_left_alone(self, quiet_models):
+        from weatherbrief.api.agent import _freshness_dict
+        from weatherbrief.storage.flights import compute_flight_params_hash
+
+        flight = self._flight()
+        pack = _pack(flight, compute_flight_params_hash(flight))
+        load, packs = self._patched_agent(flight, [pack])
+        with load, packs:
+            result = _freshness_dict(object(), "user-1", flight.id)
+
+        assert result["fresh"] is True
+        assert result["refresh_decision"]["mode"] == "none"
+
+    def test_a_flight_with_no_packs_is_not_fresh(self, quiet_models):
+        """Nothing to grade against — the connector must not claim "ready"."""
+        from weatherbrief.api.agent import _freshness_dict
+
+        flight = self._flight()
+        load, packs = self._patched_agent(flight, [])
+        with load, packs:
+            result = _freshness_dict(object(), "user-1", flight.id)
+
+        assert result == {"fresh": False}
+
+    def test_a_throwing_gate_degrades_to_fresh_rather_than_500(self, quiet_models):
+        """The documented fallback: the briefing still renders.
+
+        ``briefing_freshness_status`` reads ``fresh`` → "ready", which is the
+        deliberate choice — an unexpected gate failure must not take the whole
+        agent briefing down with it.
+        """
+        from weatherbrief.api.agent import _freshness_dict
+
+        flight = self._flight()
+        load, packs = self._patched_agent(flight, [_pack(flight, None)])
+        with load, packs, patch(
+            "weatherbrief.api.packs.gated_data_status",
+            side_effect=RuntimeError("gate exploded"),
+        ):
+            result = _freshness_dict(object(), "user-1", flight.id)
+
+        assert result == {"fresh": True}
+
+    def test_an_ownership_error_still_propagates(self, quiet_models):
+        """Only the *gate* is caught. A 403/404 must reach the caller."""
+        from fastapi import HTTPException
+
+        from weatherbrief.api.agent import _freshness_dict
+
+        with patch("weatherbrief.api.agent.flights_api._load_flight_or_404",
+                   side_effect=HTTPException(status_code=404, detail="nope")):
+            with pytest.raises(HTTPException) as exc:
+                _freshness_dict(object(), "user-1", "flt-1")
+        assert exc.value.status_code == 404

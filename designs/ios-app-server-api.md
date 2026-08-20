@@ -65,7 +65,20 @@ the previous UTC day. iOS does this in `AddFlightViewModel.departureDayChanged`.
 `MoveFlightRequest` has no `profile_id` / `aircraft_id` / `flexibility` field —
 those are carried over from the source flight. A client whose form can change them
 in the same edit (iOS has one Save button) follows the move with a PATCH on the
-new flight; see `AddFlightViewModel.applyResidualEdits(to:)`.
+new flight; see `AddFlightViewModel.applyResidualEdits(to:)`. That follow-up PATCH
+retries **once**, and only for a transient failure — a 4xx (bar 429) is the
+server's considered answer to that exact body, so a second attempt just delays the
+message (`AddFlightViewModel.isWorthRetrying`).
+
+Move is atomic on both halves. The DB work (delete old, insert new, re-insert the
+snapshotted subscribers) is one transaction; the old packs' **artifact directories
+are unlinked only once that transaction commits**, via
+`storage/flights.py::remove_artifacts_after_commit` — `delete_flight(...,
+remove_artifacts=False)` hands them back instead of `_rmtree`-ing them inline. The
+inline order was safe while the delete was the last statement, and stopped being
+safe once code ran after it: a throw in between rolled the rows back onto
+directories that were already gone. The failure mode now degrades the other way —
+an orphaned directory, never a restored pack row that cannot be read.
 
 ### Two flight fields that punish a client for guessing
 
@@ -79,6 +92,17 @@ new flight; see `AddFlightViewModel.applyResidualEdits(to:)`.
   route silently drops the annotation. iOS captures it in
   `AddFlightViewModel.editedRawRoute`, before `applyInterpretedRoute()`
   normalises the field.
+
+  Both clients also **pre-populate the edit form's route input from `raw_route`**
+  (web `baselineRouteInput`, iOS `AddFlightViewModel.baselineRouteInput(for:)`),
+  so the pilot edits their own Field-15 string rather than the parser's reading
+  of it. Two consequences for any client that copies this: "did the route
+  change?" must compare the *input text* against that baseline (a Field-15
+  string's naive token split is not a waypoint list, so comparing parsed
+  waypoints reads every raw-route flight as edited), and on an unchanged route
+  the request must carry the flight's **stored** waypoints, never the split
+  baseline — the web omits `waypoints` entirely, iOS sends
+  `original.waypoints` (`waypointsPayload`), which the server treats the same.
 - **`alt_departure_time`** must be on the same day as the primary departure and
   must differ from it (`update_flight`), compared as stored — i.e. in **UTC**. A
   free alternate-date control therefore offers days the server rejects; both

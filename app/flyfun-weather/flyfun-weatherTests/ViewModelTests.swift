@@ -545,6 +545,204 @@ import MapKit
         vm.newAircraftIcaoType = ""            // empty
         #expect(vm.canSaveAircraft == false)
     }
+
+    // MARK: Pack count (#558 item 4) — the "discards N briefing(s)" copy
+
+    /// Before the count lands the copy must not claim a number, and above all
+    /// must not claim *zero*: a pilot who edits and taps Save inside that window
+    /// used to be told Move discards nothing while it was about to discard three
+    /// briefings.
+    @Test func moveCopyNamesNoCountUntilThePackCountLands() async throws {
+        let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z")
+        let repo = MockBriefingRepository()
+        repo.packsResult = .success([try makePackMeta(), try makePackMeta()])
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+
+        // Unloaded: no number, and not the no-briefings wording either.
+        #expect(vm.departureChangeNote?.contains("any existing briefings") == true)
+        #expect(vm.moveConfirmMessage.contains("no briefings") == false)
+
+        await vm.loadPackCount()
+        #expect(vm.departureChangeNote?.contains("2 existing briefing(s)") == true)
+        #expect(vm.moveConfirmMessage.contains("2 existing briefing(s)"))
+    }
+
+    /// A *loaded* zero is a different statement from "not loaded yet", and keeps
+    /// the web's no-packs copy.
+    @Test func aLoadedZeroKeepsTheNoBriefingsCopy() async {
+        let vm = makeVM(flight: makeFlight())
+        await vm.loadPackCount()
+        #expect(vm.existingPackCount == 0)
+        #expect(vm.moveConfirmMessage.contains("no briefings"))
+    }
+
+    /// A failed load stays unknown rather than collapsing to zero — "couldn't
+    /// read it" is not "there are none".
+    @Test func aFailedPackCountStaysUnknown() async {
+        let repo = MockBriefingRepository()
+        repo.packsResult = .failure(APIError.serverError(500, "down"))
+        let vm = AddFlightViewModel(repository: repo, flight: makeFlight())
+        await vm.loadPackCount()
+        #expect(vm.existingPackCount == nil)
+        #expect(vm.moveConfirmMessage.contains("Any existing briefings"))
+    }
+
+    /// The editor's `.task` and the Save-time await both call `loadPackCount()`.
+    /// The second joins the first — the Save waits for the real number without
+    /// paying for a second request.
+    @Test func aSaveThatLandsMidLoadJoinsTheInFlightCount() async throws {
+        let repo = MockBriefingRepository()
+        repo.packsResult = .success([try makePackMeta(), try makePackMeta()])
+        let gate = TestGate()
+        repo.beforePacksReturn = { await gate.wait() }
+        let vm = AddFlightViewModel(
+            repository: repo, flight: makeFlight(departureTime: "2026-06-24T12:00:00Z"),
+        )
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+
+        let editorLoad = Task { await vm.loadPackCount() }        // the editor's `.task`
+        // Spin the main actor until the request is actually in flight, so the
+        // second call below lands while the first is still suspended.
+        for _ in 0..<200 where repo.packsCallCount == 0 { await Task.yield() }
+        let saveLoad = Task { await vm.loadPackCount() }          // Save-time await
+        await Task.yield()
+
+        await gate.open()
+        await editorLoad.value
+        await saveLoad.value
+
+        #expect(repo.packsCallCount == 1)
+        #expect(vm.moveConfirmMessage.contains("2 existing briefing(s)"))
+    }
+
+    // MARK: Post-move residual PATCH retry (#558 item 4)
+
+    /// A 422 is the server's considered answer to this exact body — a second
+    /// identical attempt can only 422 again, so it costs a round-trip before the
+    /// (accurate) message appears.
+    @Test func aRejectedResidualPatchIsNotRetried() async throws {
+        let flight = makeFlight(aircraftId: 3, departureTime: "2026-06-24T12:00:00Z")
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(makeFlight(id: "flt-moved", aircraftId: 3))
+        repo.updateFlightResult = .failure(APIError.serverError(422, "Unknown aircraft"))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+        vm.selectedAircraftId = 9
+
+        #expect(await vm.moveFlight() != nil)      // the move itself still stands
+        #expect(repo.updateFlightCallCount == 1)
+        #expect(vm.errorMessage != nil)
+    }
+
+    /// …but a transient failure still gets its second attempt.
+    @Test func aTransientResidualPatchFailureIsRetried() async throws {
+        let flight = makeFlight(aircraftId: 3, departureTime: "2026-06-24T12:00:00Z")
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(makeFlight(id: "flt-moved", aircraftId: 3))
+        repo.updateFlightResult = .failure(APIError.serverError(503, "gateway"))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+        vm.selectedAircraftId = 9
+
+        #expect(await vm.moveFlight() != nil)
+        #expect(repo.updateFlightCallCount == 2)
+    }
+
+    @Test func retryGateSortsRejectionsFromHiccups() {
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.serverError(422, "no")) == false)
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.serverError(409, "no")) == false)
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.notFound) == false)
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.forbidden("no")) == false)
+        // "later", not "no".
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.serverError(429, "slow down")))
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.serverError(503, "gateway")))
+        #expect(AddFlightViewModel.isWorthRetrying(APIError.networkError(URLError(.timedOut))))
+    }
+
+    // MARK: Field-15 route seeding (#558 item 4)
+
+    /// The route field shows what the pilot typed, not the parser's reading of
+    /// it. Web parity (`baselineRouteInput`); the gap #556 deferred.
+    @Test func theRouteFieldIsSeededFromTheStoredFieldFifteenText() {
+        let flight = makeFlight(waypoints: ["EGKA", "EGKB"], rawRoute: "EGKA N0180VFR EGKB")
+        let vm = makeVM(flight: flight)
+        #expect(vm.waypointsText == "EGKA N0180VFR EGKB")
+        // Untouched, so nothing to save and nothing to interpret.
+        #expect(vm.hasChanges == false)
+        #expect(vm.routeChangedFromOriginal == false)
+        #expect(vm.routeEndpointsChanged == false)
+    }
+
+    /// A flight without a stored raw route still seeds from its waypoints.
+    @Test func theRouteFieldFallsBackToTheWaypointList() {
+        let vm = makeVM(flight: makeFlight(waypoints: ["LFMD", "LFML"]))
+        #expect(vm.waypointsText == "LFMD LFML")
+        #expect(vm.hasChanges == false)
+    }
+
+    /// The Field-15 tokens in an untouched field are NOT a waypoint list. Saving
+    /// an unrelated edit must send the flight's stored waypoints, not
+    /// `["EGKA", "N0180VFR", "EGKB"]` — which the server would reject.
+    @Test func anUntouchedFieldFifteenRouteSendsTheStoredWaypoints() async throws {
+        let flight = makeFlight(waypoints: ["EGKA", "EGKB"], rawRoute: "EGKA N0180VFR EGKB")
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.cruiseAltitudeFt = 9000                     // unrelated edit
+
+        _ = await vm.saveEditedFlight(regenerate: false)
+        #expect(repo.lastUpdateRequest?.waypoints == ["EGKA", "EGKB"])
+        // And no raw_route, so the server keeps the stored string + its
+        // `parser_version` re-derive marker.
+        #expect(repo.lastUpdateRequest?.rawRoute == nil)
+    }
+
+    /// Same rule on the Move body.
+    @Test func anUntouchedFieldFifteenRouteMovesWithTheStoredWaypoints() async throws {
+        let flight = makeFlight(waypoints: ["EGKA", "EGKB"],
+                                departureTime: "2026-06-24T12:00:00Z",
+                                rawRoute: "EGKA N0180VFR EGKB")
+        let repo = MockBriefingRepository()
+        repo.moveFlightResult = .success(makeFlight(id: "flt-moved"))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.departureDate = vm.departureDate.addingTimeInterval(24 * 3600)
+
+        #expect(await vm.moveFlight() != nil)
+        #expect(repo.lastMoveRequest?.waypoints == ["EGKA", "EGKB"])
+        #expect(repo.lastMoveRequest?.rawRoute == nil)
+    }
+
+    /// Editing a seeded Field-15 route is a real change: it interprets, sends the
+    /// resolved waypoints, and carries the newly typed raw route.
+    @Test func editingASeededFieldFifteenRouteSendsBothHalves() async throws {
+        let flight = makeFlight(waypoints: ["EGKA", "EGKB"], rawRoute: "EGKA N0180VFR EGKB")
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        repo.interpretRouteResult = .success(
+            makeInterpretResponse(interpreted: ["EGKA", "MID", "EGKB"])
+        )
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.waypointsText = "EGKA N0180VFR MID EGKB"
+
+        #expect(vm.routeChangedFromOriginal)
+        #expect(await vm.interpretRouteForSubmit() == .ready)
+        #expect(vm.waypointsText == "EGKA MID EGKB")
+
+        _ = await vm.saveEditedFlight(regenerate: false)
+        #expect(repo.lastUpdateRequest?.waypoints == ["EGKA", "MID", "EGKB"])
+        #expect(repo.lastUpdateRequest?.rawRoute == "EGKA N0180VFR MID EGKB")
+    }
+
+    /// Whitespace and case are not edits — the seeded field survives a keyboard
+    /// bump without turning into a save.
+    @Test func routeChangeDetectionIgnoresSpacingAndCase() {
+        let vm = makeVM(flight: makeFlight(waypoints: ["EGKA", "EGKB"],
+                                           rawRoute: "EGKA N0180VFR EGKB"))
+        vm.waypointsText = "  egka   n0180vfr  egkb "
+        #expect(vm.hasChanges == false)
+        #expect(vm.routeChangedFromOriginal == false)
+    }
 }
 
 // MARK: - FlightListViewModel (async load state machine)
