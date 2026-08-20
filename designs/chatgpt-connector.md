@@ -58,8 +58,8 @@ and ChatGPT cannot drift.
 - **`weatherbrief/api/agent.py`** `[project]` — the ChatGPT front-door router,
   mounted at `/agent/v1`. **In-process reuse, no localhost loopback:**
   - *Read* endpoints reuse the same helpers the main REST handlers use
-    (`_get_pack_dir`, `list_packs`, `_build_data_status`, `decide_refresh`) and
-    read the pack JSON artifacts directly, then apply the shared shapers.
+    (`_get_pack_dir`, `list_packs`, `gated_data_status`) and read the pack JSON
+    artifacts directly, then apply the shared shapers.
   - *Write* endpoints (`createFlight`, `refreshBriefing`) call the existing
     route handlers directly — reusing all the throttling / gating /
     background-task machinery with zero duplication.

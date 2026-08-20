@@ -431,9 +431,8 @@ def _auto_refresh_one(
     ``succeeded`` would make the post-mortem record lie (issue #499).
     """
     from weatherbrief.api.packs import (
-        _build_data_status, _days_out_now, _finalize_refresh,
-        _notify_refresh_complete, _prepare_refresh,
-        apply_params_change_override, decide_refresh, refresh_registry,
+        _finalize_refresh, _notify_refresh_complete, _prepare_refresh,
+        gated_data_status, refresh_registry,
     )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
 
@@ -447,8 +446,6 @@ def _auto_refresh_one(
         packs = list_packs(db, flight_row.id)
         if packs:
             latest = packs[0]
-            status = _build_data_status(latest, flight)
-            decision = decide_refresh(status, _days_out_now(flight))
             # A resume is recovering a refresh the client already asked for, so
             # it needs the same params-change override `decide_resume` applied
             # to let it through (#552). Without it the two gates disagree: the
@@ -458,8 +455,9 @@ def _auto_refresh_one(
             # scheduler cycle deliberately stays un-overridden: an edit there is
             # already followed by a client-driven refresh, so forcing a full run
             # per edited flight would just buy a second one.
-            if triggered_by == "resume":
-                decision = apply_params_change_override(decision, latest, flight)
+            decision = gated_data_status(
+                latest, flight, params_override=(triggered_by == "resume"),
+            ).refresh_decision
             if decision.mode != "full":
                 logger.info(
                     "Auto-refresh: gate=%s for %s (%s), skipping",
