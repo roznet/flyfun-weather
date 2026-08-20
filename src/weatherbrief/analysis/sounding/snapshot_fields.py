@@ -161,6 +161,7 @@ def compute_snapshot_sounding_fields(
         diag = getattr(sounding, "nwp_cloud_diagnostics", None)
         if diag is not None:
             fields["nwp_ml_cape_jkg"] = getattr(diag, "ml_cape_jkg", None)
+            fields["nwp_ml_cin_jkg"] = getattr(diag, "ml_cin_jkg", None)
 
         # EDR calibration harvest (issue #221) — inert today (the cycle no
         # longer instantiates an accumulator, and analyze_sounding_lite never
