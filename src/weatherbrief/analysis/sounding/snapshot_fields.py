@@ -63,6 +63,31 @@ def compute_snapshot_sounding_fields(
             fields["sounding_cape_jkg"] = sounding.indices.cape_surface_jkg
             fields["sounding_cin_jkg"] = sounding.indices.cin_surface_jkg
             fields["sounding_lifted_index"] = sounding.indices.lifted_index
+            # Every field added below reads through `getattr` with a default.
+            # The block above is inside the function's fail-silent try, so a
+            # single missing attribute — a duck-typed `indices`, a renamed
+            # field — would otherwise raise, be caught by the outer handler,
+            # and return {}, blanking *every* sounding column for that row
+            # rather than just the new one. Same reasoning as the NWP
+            # cloud-layer block further down (#565).
+            idx = sounding.indices
+            fields["sounding_lfc_ft"] = getattr(idx, "lfc_altitude_ft", None)
+            fields["sounding_el_ft"] = getattr(idx, "el_altitude_ft", None)
+
+            # Model-native stability, carried through analyze_sounding_lite from
+            # the hourly forecast (#565). `nwp_cape_type` is what makes the
+            # existing `cape_jkg` column interpretable — it is surface-based for
+            # GFS, most-unstable for ECMWF and mixed-layer for ICON.
+            fields["nwp_cape_type"] = getattr(idx, "nwp_cape_type", None)
+            fields["nwp_cin_jkg"] = getattr(idx, "nwp_cin_jkg", None)
+            fields["nwp_lifted_index"] = getattr(idx, "nwp_lifted_index", None)
+            fields["nwp_k_index"] = getattr(idx, "nwp_k_index", None)
+            fields["nwp_total_totals"] = getattr(idx, "nwp_total_totals", None)
+
+            # NOTE: bulk shear is deliberately absent. It is computed by
+            # `compute_indices_extended`, which `analyze_sounding_lite` skips,
+            # so a column for it would be NULL on every standalone row — the
+            # exact failure `sounding_lifted_index` demonstrated for years.
 
         # Lowest BKN/OVC cloud layer base → sounding_cloud_base_ft
         bkn_ovc = [
@@ -116,6 +141,26 @@ def compute_snapshot_sounding_fields(
 
         if sounding.convective and sounding.convective.risk_level is not None:
             fields["sounding_convective_risk"] = sounding.convective.risk_level.value
+
+        # Convective ingredients from the model-native assessment (#565).
+        # `method` is the load-bearing field: it says which pathway produced the
+        # geometry below — `nwp` (GFS cover), `nwp_hybrid` (ICON base+top),
+        # `nwp_lcl_top` (ECMWF hcct), `nwp_precip`, `nwp_explicit`, or a
+        # `nwp_cape_fallback` / `thermo` non-native grade. Reading the numbers
+        # without it compares different quantities across models.
+        conv_nwp = getattr(sounding, "convective_nwp", None)
+        if conv_nwp is not None:
+            fields["nwp_conv_method"] = getattr(conv_nwp, "method", None)
+            fields["nwp_conv_cover_pct"] = getattr(conv_nwp, "cover_pct", None)
+            fields["nwp_conv_base_ft"] = getattr(conv_nwp, "base_ft", None)
+            fields["nwp_conv_top_ft"] = getattr(conv_nwp, "top_ft", None)
+            fields["nwp_conv_precip_mm_h"] = getattr(
+                conv_nwp, "convective_precip_mm_h", None,
+            )
+
+        diag = getattr(sounding, "nwp_cloud_diagnostics", None)
+        if diag is not None:
+            fields["nwp_ml_cape_jkg"] = getattr(diag, "ml_cape_jkg", None)
 
         # EDR calibration harvest (issue #221) — inert today (the cycle no
         # longer instantiates an accumulator, and analyze_sounding_lite never

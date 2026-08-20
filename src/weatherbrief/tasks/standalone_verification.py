@@ -1231,9 +1231,23 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "sounding_cape_jkg": snap.get("sounding_cape_jkg"),
             "sounding_cin_jkg": snap.get("sounding_cin_jkg"),
             "sounding_lifted_index": snap.get("sounding_lifted_index"),
+            "sounding_lfc_ft": snap.get("sounding_lfc_ft"),
+            "sounding_el_ft": snap.get("sounding_el_ft"),
             "sounding_convective_risk": snap.get("sounding_convective_risk"),
             "nwp_layer_ceiling_ft": snap.get("nwp_layer_ceiling_ft"),
             "nwp_layer_source": snap.get("nwp_layer_source"),
+            # Convective ingredients (#565)
+            "nwp_conv_method": snap.get("nwp_conv_method"),
+            "nwp_conv_cover_pct": snap.get("nwp_conv_cover_pct"),
+            "nwp_conv_base_ft": snap.get("nwp_conv_base_ft"),
+            "nwp_conv_top_ft": snap.get("nwp_conv_top_ft"),
+            "nwp_conv_precip_mm_h": snap.get("nwp_conv_precip_mm_h"),
+            "nwp_ml_cape_jkg": snap.get("nwp_ml_cape_jkg"),
+            "nwp_cape_type": snap.get("nwp_cape_type"),
+            "nwp_cin_jkg": snap.get("nwp_cin_jkg"),
+            "nwp_lifted_index": snap.get("nwp_lifted_index"),
+            "nwp_k_index": snap.get("nwp_k_index"),
+            "nwp_total_totals": snap.get("nwp_total_totals"),
         })
 
     snapshot_insert_ignore(db, rows)
