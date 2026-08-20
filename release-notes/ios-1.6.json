@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-08-20",
+    "title": "iOS 1.6 — Altitude warnings on the briefing",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Changing a flight's cruise altitude no longer leaves the briefing quietly describing the old one. The Advisory and Discussion tabs now tell you when the weather discussion was written for a different altitude.\n- The post-flight debrief now asks about approach conditions on a freshly installed app, rather than only after its first sync."
+  }
+]
