@@ -36,6 +36,7 @@ from weatherbrief.storage.flights import (
     SubscriptionError,
     bulk_delete_flights as _bulk_delete_flights,
     delete_flight,
+    ensure_utc,
     is_subscribed,
     list_flights_with_role,
     load_flight,
@@ -641,7 +642,14 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             outlook_reason=row.outlook_reason,
             has_digest=row.has_digest,
             days_out=row.days_out,
-            fetch_timestamp=row.fetch_timestamp.isoformat(),
+            # ensure_utc before isoformat: the column is DateTime(timezone=True),
+            # which is a no-op on MySQL, so the row reads back *naive* and a bare
+            # isoformat() emits "2026-08-20T06:52:00" with no offset. JS
+            # `new Date()` then reads that as *local* time, so a UTC+2 user saw
+            # the flights-list card say "04:52 UTC" for an 06:52Z refresh.
+            # /flights/{id}/packs already goes through the same helper — this
+            # keeps the two representations of the same field identical.
+            fetch_timestamp=ensure_utc(row.fetch_timestamp).isoformat(),
             has_advisories=pack_has_advisories(row.artifact_path),
             advisory_summary=parse_advisory_summary(row.advisory_summary_json),
         )

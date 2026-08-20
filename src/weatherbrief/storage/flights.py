@@ -36,8 +36,16 @@ from weatherbrief.models import (
 logger = logging.getLogger(__name__)
 
 
-def _ensure_utc(dt: datetime) -> datetime:
-    """Promote naive datetimes to UTC (SQLite loses timezone on round-trip)."""
+def ensure_utc(dt: datetime) -> datetime:
+    """Promote naive datetimes to UTC.
+
+    Every datetime column here is ``DateTime(timezone=True)``, which is a no-op
+    on MySQL and not persisted by SQLite either — so reads come back *naive*
+    even though the stored value is UTC.  Anything that serialises such a value
+    must route it through here first: a bare ``isoformat()`` on a naive
+    datetime emits no offset, and JS ``new Date()`` reads an offset-less
+    timestamp as *local* time (see the flights-list ``fetch_timestamp`` bug).
+    """
     if dt is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
@@ -120,11 +128,11 @@ def _row_to_flight(row: FlightRow) -> Flight:
         aircraft_id=row.aircraft_id,
         route_name=row.route_name,
         waypoints=json.loads(row.waypoints_json),
-        departure_time=_ensure_utc(row.departure_time),
+        departure_time=ensure_utc(row.departure_time),
         cruise_altitude_ft=row.cruise_altitude_ft,
         flight_ceiling_ft=row.flight_ceiling_ft,
         flight_duration_hours=row.flight_duration_hours,
-        alt_departure_time=_ensure_utc(row.alt_departure_time) if row.alt_departure_time else None,
+        alt_departure_time=ensure_utc(row.alt_departure_time) if row.alt_departure_time else None,
         flexibility=row.flexibility or "none",
         notify_override=row.notify_override or "default",
         private=row.private,
@@ -367,7 +375,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
     return BriefingPackMeta(
         id=row.id,
         flight_id=row.flight_id,
-        fetch_timestamp=_ensure_utc(row.fetch_timestamp),
+        fetch_timestamp=ensure_utc(row.fetch_timestamp),
         days_out=row.days_out,
         has_gramet=row.has_gramet,
         has_skewt=row.has_skewt,
@@ -421,7 +429,7 @@ def compute_flight_params_hash(flight: Flight) -> str:
     payload = json.dumps(
         {
             "waypoints": [w.upper() for w in flight.waypoints],
-            "departure": _ensure_utc(flight.departure_time).isoformat(),
+            "departure": ensure_utc(flight.departure_time).isoformat(),
             "alt": flight.cruise_altitude_ft,
             "ceil": flight.flight_ceiling_ft,
             "dur": flight.flight_duration_hours,

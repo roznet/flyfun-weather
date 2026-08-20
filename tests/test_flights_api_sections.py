@@ -270,6 +270,7 @@ def _save_pack(
     assessment: str | None,
     days_out: int,
     artifact_path: str = "",
+    fetch_timestamp: datetime | None = None,
 ) -> None:
     """Insert a minimal latest briefing pack row for a flight."""
     from weatherbrief.db.models import BriefingPackRow
@@ -277,7 +278,7 @@ def _save_pack(
     s = app_db()
     s.add(BriefingPackRow(
         flight_id=flight_id,
-        fetch_timestamp=datetime.now(timezone.utc),
+        fetch_timestamp=fetch_timestamp or datetime.now(timezone.utc),
         days_out=days_out,
         assessment=assessment,
         assessment_reason="test",
@@ -305,6 +306,48 @@ class TestLatestBriefingInline:
         assert lb["fetch_timestamp"] is not None
         # No route_advisories.json on disk → flag is False.
         assert lb["has_advisories"] is False
+
+    def test_fetch_timestamp_is_utc_qualified(self, client, app_db):
+        """``fetch_timestamp`` must carry its UTC offset.
+
+        The column is ``DateTime(timezone=True)``, a no-op on MySQL, so the row
+        reads back naive and a bare ``isoformat()`` emits no offset. JS
+        ``new Date()`` reads an offset-less timestamp as *local* time, so a
+        UTC+2 user saw an 06:52Z refresh rendered as "04:52 UTC" on the
+        flights-list card. Pin the instant, not just its presence.
+        """
+        stamp = datetime(2026, 8, 20, 6, 52, 0, tzinfo=timezone.utc)
+        f = _save_flight(app_db, route="rtz", days_offset=+5, idx=41)
+        _save_pack(app_db, f.id, assessment="GREEN", days_out=2, fetch_timestamp=stamp)
+
+        rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
+        raw = rec["latest_briefing"]["fetch_timestamp"]
+
+        # Offset-qualified: this is precisely what JS `new Date()` keys off.
+        parsed = datetime.fromisoformat(raw)
+        assert parsed.tzinfo is not None, f"naive timestamp leaked to the client: {raw!r}"
+        assert parsed == stamp
+        assert parsed.astimezone(timezone.utc).strftime("%H:%M") == "06:52"
+
+    def test_fetch_timestamp_matches_packs_endpoint(self, client, app_db):
+        """The same field on /flights and /flights/{id}/packs must agree.
+
+        They diverged: the packs route went through ``ensure_utc`` and the list
+        route did not, so one screen said 06:52 UTC and the other 04:52 UTC for
+        the same pack.
+        """
+        stamp = datetime(2026, 8, 20, 6, 52, 0, tzinfo=timezone.utc)
+        f = _save_flight(app_db, route="rtz2", days_offset=+5, idx=42)
+        _save_pack(app_db, f.id, assessment="GREEN", days_out=2, fetch_timestamp=stamp)
+
+        rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
+        from_list = rec["latest_briefing"]["fetch_timestamp"]
+
+        packs = client.get(f"/api/flights/{f.id}/packs").json()
+        from_packs = packs[0]["fetch_timestamp"]
+
+        assert datetime.fromisoformat(from_list) == datetime.fromisoformat(from_packs)
+        assert from_list == from_packs
 
     def test_no_pack_yields_null_briefing(self, client, app_db):
         f = _save_flight(app_db, route="rnone", days_offset=+5, idx=2)
