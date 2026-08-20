@@ -1310,6 +1310,7 @@ def _score_cycle(
         to_agl_ceiling,
     )
     from weatherbrief.tasks.scoring import _score_model_vs_metar, _score_taf_vs_metar
+    from weatherbrief.tasks.verification import routine_observation_filter
 
     # Fetch all snapshots that predict within ±90 min of cycle_time
     window_start = cycle_time - timedelta(minutes=90)
@@ -1329,10 +1330,15 @@ def _score_cycle(
         logger.info("No forecast snapshots matching cycle time %s", cycle_time)
         return 0
 
-    # Fetch observations around cycle_time
+    # Fetch observations around cycle_time. Routine METARs only: the lookup
+    # below keeps whichever observation is *closest* to cycle_time, so a SPECI
+    # — issued because conditions changed significantly — would displace the
+    # routine report that would otherwise have been scored, biasing standalone
+    # accuracy toward bad weather as an artefact of collection policy.
     obs_rows = db.execute(
         select(VerificationObservationRow)
         .where(VerificationObservationRow.observation_time.between(window_start, window_end))
+        .where(routine_observation_filter())
     ).scalars().all()
 
     if not obs_rows:

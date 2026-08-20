@@ -15,7 +15,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,41 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CORRIDOR_NM = 15.0
 _BATCH_SIZE = 400  # aviationweather.gov limit per request
+
+REPORT_TYPE_METAR = "METAR"
+REPORT_TYPE_SPECI = "SPECI"
+
+
+def routine_observation_filter():
+    """SQL predicate matching routine METARs, excluding SPECIs.
+
+    Scoring reads through this so that storing SPECIs cannot move any existing
+    metric. SPECIs are issued *because* conditions are significant, which makes
+    them a deliberately bad-weather-biased sample: feeding them to the scorers
+    would depress measured model skill by an amount that is an artefact of the
+    collection policy, not of the models.
+
+    Both scoring paths would be affected, by different mechanisms — the flight
+    path creates one score per linked observation, so extra rows are extra
+    scores; the standalone path picks the observation *closest* to the cycle
+    time from a ±90 min window, so a SPECI can displace the routine report that
+    would otherwise have been scored.
+
+    NULL is routine. Rows written before migration 091 are whatever
+    ``latest_metar`` returned — overwhelmingly routine, and any stray SPECI
+    among them is already reflected in today's numbers. Treating NULL as
+    routine is what makes this change exactly behaviour-preserving until
+    ``verify backfill-report-type`` is run deliberately.
+    """
+    return or_(
+        VerificationObservationRow.report_type.is_(None),
+        VerificationObservationRow.report_type != REPORT_TYPE_SPECI,
+    )
+
+
+def is_routine(report_type: str | None) -> bool:
+    """In-Python counterpart of :func:`routine_observation_filter`."""
+    return report_type != REPORT_TYPE_SPECI
 
 # METAR/TAF timestamps encode only DDHHMM, so the month and year are inferred
 # from context by the parser.  Getting that wrong is silent and corrosive:
@@ -217,6 +252,114 @@ def gather_airports(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_taf(raw, now: datetime):
+    """The airport's latest TAF, or None if its issue time is untrustworthy.
+
+    Resolved once per airport rather than once per report: the TAF is the same
+    for every METAR/SPECI in the fetch window, and only the *applicable trend*
+    within it depends on the observation time.
+    """
+    taf = raw.latest_taf
+    # taf_issue_time comes from the same day-of-month inference as the
+    # METAR time and is itself part of uq_taf_verif_key on
+    # taf_verification_scores, so it needs the same guard. A bad issue
+    # time makes the whole TAF untrustworthy as a key, but says nothing
+    # about the METAR — drop the TAF fields and keep the observation.
+    if taf is not None and taf.observation_time is not None:
+        taf_problem = _observation_time_problem(taf.observation_time, now)
+        if taf_problem is not None:
+            logger.error(
+                "Dropping %s TAF: %s (raw: %s)",
+                raw.icao, taf_problem, (taf.raw_text or "")[:80],
+            )
+            return None
+    return taf
+
+
+def _build_observation(
+    icao: str,
+    metar,
+    taf,
+    now: datetime,
+) -> VerificationObservation | None:
+    """Build one observation from a single METAR or SPECI report.
+
+    Returns None when the report's timestamp fails the natural-key guard, so
+    one bad report drops without taking the airport's other reports with it.
+    """
+    from euro_aip.briefing.weather.analysis import WeatherAnalyzer
+
+    # Guard the natural key at the boundary — see _observation_time_problem.
+    problem = _observation_time_problem(metar.observation_time, now)
+    if problem is not None:
+        logger.error(
+            "Rejecting %s observation: %s (raw: %s)",
+            icao, problem, (metar.raw_text or "")[:80],
+        )
+        return None
+
+    obs_age = now - _as_utc(metar.observation_time)
+    if obs_age > _OBS_STALE_WARN:
+        logger.warning(
+            "%s observation is %s old at collection (raw: %s)",
+            icao, obs_age, (metar.raw_text or "")[:80],
+        )
+
+    # euro_aip hands back a WeatherType enum; tolerate a plain string or a
+    # missing attribute so one odd report cannot fail the whole airport.
+    raw_type = getattr(metar, "report_type", None)
+    report_type = getattr(raw_type, "value", raw_type) or REPORT_TYPE_METAR
+
+    obs = VerificationObservation(
+        icao=icao,
+        observation_time=_as_utc(metar.observation_time),
+        collected_at=now,
+        metar_raw=metar.raw_text,
+        report_type=report_type,
+        ceiling_ft=metar.ceiling_ft,
+        visibility_m=metar.visibility_meters,
+        wind_dir=metar.wind_direction,
+        wind_speed_kt=metar.wind_speed,
+        wind_gust_kt=metar.wind_gust,
+        temperature_c=metar.temperature,
+        dewpoint_c=metar.dewpoint,
+        qnh=metar.altimeter,
+        weather=list(metar.weather_conditions) if metar.weather_conditions else [],
+    )
+
+    if metar.flight_category is not None:
+        obs.flight_category = metar.flight_category.value
+
+    if taf is not None:
+        obs.taf_raw = taf.raw_text
+        if taf.observation_time is not None:
+            # `_as_utc` here is load-bearing, not belt-and-braces: this
+            # is an *assignment*, and Pydantic only runs field
+            # validators on assignment under
+            # `validate_assignment=True`, which this model does not set
+            # — so `VerificationObservation._aware_utc` covers the
+            # constructor path only. A naive value would otherwise reach
+            # the `TZDateTime` column and raise `StatementError`, which
+            # the flush below catches only as `IntegrityError`, taking
+            # down the whole batch rather than this one row.
+            obs.taf_issue_time = _as_utc(taf.observation_time)
+
+        applicable = WeatherAnalyzer.find_applicable_taf(
+            taf, metar.observation_time,
+        )
+        if applicable is not None:
+            obs.taf_applicable = applicable.raw_text
+            if applicable.flight_category is not None:
+                obs.taf_flight_category = applicable.flight_category.value
+            obs.taf_ceiling_ft = getattr(applicable, "ceiling_ft", None)
+            obs.taf_visibility_m = getattr(applicable, "visibility_meters", None)
+            obs.taf_wind_dir = applicable.wind_direction
+            obs.taf_wind_speed_kt = applicable.wind_speed
+            obs.taf_wind_gust_kt = applicable.wind_gust
+
+    return obs
+
+
 def fetch_observations_batch(
     icaos: list[str],
     airports_db_path: str,
@@ -225,8 +368,17 @@ def fetch_observations_batch(
 
     Chunks into batches of 400 (aviationweather.gov limit).
     Returns parsed VerificationObservation objects for airports with METARs.
+
+    Every report in the fetch window is returned, not just the most recent
+    one. ``euro_aip`` already fetches three hours of history and already
+    distinguishes SPECI from METAR; taking only ``latest_metar`` discarded
+    roughly five reports in six, and with them every SPECI that a routine
+    report happened to follow. SPECIs are issued *because* conditions changed
+    significantly, so they are exactly the observations worth keeping.
+
+    De-duplication against what is already stored is ``store_observations``'
+    job — this function is a pure read.
     """
-    from euro_aip.briefing.weather.analysis import WeatherAnalyzer
     from euro_aip.briefing.weather.route_weather import RouteWeatherService
     from weatherbrief.airports import _load_airport_model
 
@@ -253,89 +405,18 @@ def fetch_observations_batch(
             continue
 
         for raw in result.airports:
-            metar = raw.latest_metar
-            if metar is None:
+            # `.metars()` is METAR *and* SPECI; chronological keeps the
+            # insertion order deterministic for the bucket filter downstream.
+            reports = raw.reports.metars().chronological().all()
+            if not reports:
                 continue  # Skip airports without METAR
 
-            # Guard the natural key at the boundary — see _observation_time_problem.
-            problem = _observation_time_problem(metar.observation_time, now)
-            if problem is not None:
-                logger.error(
-                    "Rejecting %s observation: %s (raw: %s)",
-                    raw.icao, problem, (metar.raw_text or "")[:80],
-                )
-                continue
+            taf = _resolve_taf(raw, now)
 
-            obs_age = now - _as_utc(metar.observation_time)
-            if obs_age > _OBS_STALE_WARN:
-                logger.warning(
-                    "%s observation is %s old at collection (raw: %s)",
-                    raw.icao, obs_age, (metar.raw_text or "")[:80],
-                )
-
-            obs = VerificationObservation(
-                icao=raw.icao,
-                observation_time=_as_utc(metar.observation_time),
-                collected_at=now,
-                metar_raw=metar.raw_text,
-                ceiling_ft=metar.ceiling_ft,
-                visibility_m=metar.visibility_meters,
-                wind_dir=metar.wind_direction,
-                wind_speed_kt=metar.wind_speed,
-                wind_gust_kt=metar.wind_gust,
-                temperature_c=metar.temperature,
-                dewpoint_c=metar.dewpoint,
-                qnh=metar.altimeter,
-                weather=list(metar.weather_conditions) if metar.weather_conditions else [],
-            )
-
-            if metar.flight_category is not None:
-                obs.flight_category = metar.flight_category.value
-
-            # TAF fields
-            taf = raw.latest_taf
-            # taf_issue_time comes from the same day-of-month inference as the
-            # METAR time and is itself part of uq_taf_verif_key on
-            # taf_verification_scores, so it needs the same guard. A bad issue
-            # time makes the whole TAF untrustworthy as a key, but says nothing
-            # about the METAR — drop the TAF fields and keep the observation.
-            if taf is not None and taf.observation_time is not None:
-                taf_problem = _observation_time_problem(taf.observation_time, now)
-                if taf_problem is not None:
-                    logger.error(
-                        "Dropping %s TAF: %s (raw: %s)",
-                        raw.icao, taf_problem, (taf.raw_text or "")[:80],
-                    )
-                    taf = None
-
-            if taf is not None:
-                obs.taf_raw = taf.raw_text
-                if taf.observation_time is not None:
-                    # `_as_utc` here is load-bearing, not belt-and-braces: this
-                    # is an *assignment*, and Pydantic only runs field
-                    # validators on assignment under
-                    # `validate_assignment=True`, which this model does not set
-                    # — so `VerificationObservation._aware_utc` covers the
-                    # constructor path only. A naive value would otherwise reach
-                    # the `TZDateTime` column and raise `StatementError`, which
-                    # the flush below catches only as `IntegrityError`, taking
-                    # down the whole batch rather than this one row.
-                    obs.taf_issue_time = _as_utc(taf.observation_time)
-
-                applicable = WeatherAnalyzer.find_applicable_taf(
-                    taf, metar.observation_time,
-                )
-                if applicable is not None:
-                    obs.taf_applicable = applicable.raw_text
-                    if applicable.flight_category is not None:
-                        obs.taf_flight_category = applicable.flight_category.value
-                    obs.taf_ceiling_ft = getattr(applicable, "ceiling_ft", None)
-                    obs.taf_visibility_m = getattr(applicable, "visibility_meters", None)
-                    obs.taf_wind_dir = applicable.wind_direction
-                    obs.taf_wind_speed_kt = applicable.wind_speed
-                    obs.taf_wind_gust_kt = applicable.wind_gust
-
-            all_obs.append(obs)
+            for metar in reports:
+                obs = _build_observation(raw.icao, metar, taf, now)
+                if obs is not None:
+                    all_obs.append(obs)
 
     return all_obs
 
@@ -348,17 +429,32 @@ def fetch_observations_batch(
 def _should_skip_for_bucket_dedup(
     db: Session, icao: str, obs_time: datetime,
 ) -> bool:
-    """30-min bucket filter: keep at most one observation per airport per
-    30-minute bucket (``[HH:00, HH:30)`` and ``[HH:30, HH+1:00)``).
+    """30-min bucket filter: keep at most one *routine* observation per airport
+    per 30-minute bucket (``[HH:00, HH:30)`` and ``[HH:30, HH+1:00)``).
 
-    Returns True if an observation already exists for this (icao, bucket) —
-    the caller should skip this observation. Once an observation is stored
-    it is never replaced, since scores or FK references may already point
-    to it.
+    Returns True if a routine observation already exists for this
+    (icao, bucket) — the caller should skip this observation. Once an
+    observation is stored it is never replaced, since scores or FK references
+    may already point to it.
 
-    METARs are normally issued every 30 minutes; SPECIs land at off-cycle
-    times. The 30-min bucket lets the new ingest loop (firing every 30 min)
-    capture both regular reports and SPECIs without inflating the table.
+    METARs are normally issued every 30 minutes, so one per bucket is very
+    nearly lossless for routine reports; the filter exists to stop the ingest
+    loop (firing every 30 min over a 3-hour fetch window) from re-storing what
+    it already has.
+
+    **SPECIs are exempt at both ends**, and both halves matter:
+
+    - a SPECI is never *skipped*, because it is issued precisely when
+      conditions changed significantly — thunderstorm onset, ceiling collapse,
+      visibility crossing a threshold — which is the truth signal the
+      convective and ceiling verification work needs;
+    - a SPECI never *claims* a bucket either. Without that, an early SPECI
+      would block the routine METAR behind it, which is the original bug
+      inverted: the caller would keep one report per bucket as before, just a
+      different one, and the routine baseline every existing score is built on
+      would start disappearing.
+
+    Caller must therefore pass only routine observations here.
     """
     bucket_minute = 0 if obs_time.minute < 30 else 30
     bucket_start = obs_time.replace(minute=bucket_minute, second=0, microsecond=0)
@@ -368,6 +464,7 @@ def _should_skip_for_bucket_dedup(
         .where(VerificationObservationRow.icao == icao)
         .where(VerificationObservationRow.observation_time >= bucket_start)
         .where(VerificationObservationRow.observation_time < bucket_end)
+        .where(routine_observation_filter())
         .limit(1)
     ).scalar_one_or_none()
 
@@ -399,7 +496,10 @@ def store_observations(
             obs_row_id = existing.id
         else:
             # One-per-30-min-bucket filter: keep first arrival per bucket.
-            if _should_skip_for_bucket_dedup(db, obs.icao, obs.observation_time):
+            # SPECIs bypass it entirely — see _should_skip_for_bucket_dedup.
+            if is_routine(obs.report_type) and _should_skip_for_bucket_dedup(
+                db, obs.icao, obs.observation_time,
+            ):
                 continue
 
             row = VerificationObservationRow(
@@ -407,6 +507,7 @@ def store_observations(
                 observation_time=obs.observation_time,
                 collected_at=obs.collected_at,
                 metar_raw=obs.metar_raw,
+                report_type=obs.report_type,
                 flight_category=obs.flight_category,
                 ceiling_ft=obs.ceiling_ft,
                 visibility_m=obs.visibility_m,
@@ -475,8 +576,15 @@ def store_observations(
                 obs_row_id = row.id
                 inserted += 1
 
-        # Link to flights
-        flight_ids = icao_to_flights.get(obs.icao, set())
+        # Link to flights. SPECIs are stored but never linked: score_flight
+        # scores one row per linked observation, so linking them would add
+        # extra, bad-weather-biased scores to every flight. They stay
+        # available to offline analysis through the observation table.
+        flight_ids = (
+            icao_to_flights.get(obs.icao, set())
+            if is_routine(obs.report_type)
+            else set()
+        )
         for flight_id in flight_ids:
             existing_link = db.execute(
                 select(FlightVerificationMapRow)

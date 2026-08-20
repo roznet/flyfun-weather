@@ -536,10 +536,42 @@ class TestVerificationObservationModel:
 # normalise at the parser boundary, and survive it if one slips through.
 
 
-def _fake_metar(observation_time):
+class _FakeReports:
+    """Minimal stand-in for euro_aip's WeatherCollection.
+
+    Only the chain `fetch_observations_batch` actually uses:
+    `.metars().chronological().all()`.
+    """
+
+    def __init__(self, reports):
+        self._reports = list(reports)
+
+    def metars(self):
+        return _FakeReports(self._reports)
+
+    def chronological(self):
+        return _FakeReports(
+            sorted(self._reports, key=lambda r: r.observation_time)
+        )
+
+    def all(self):
+        return list(self._reports)
+
+
+def _fake_airport(icao, metars, taf=None):
+    """Airport stub exposing the `reports` collection the fetch loop reads."""
+    return SimpleNamespace(
+        icao=icao,
+        reports=_FakeReports(metars),
+        latest_taf=taf,
+    )
+
+
+def _fake_metar(observation_time, report_type="METAR", raw_text=None):
     return SimpleNamespace(
         observation_time=observation_time,
-        raw_text="METAR EGTK 011200Z 27010KT 9999 FEW040 12/05 Q1013",
+        report_type=report_type,
+        raw_text=raw_text or "METAR EGTK 011200Z 27010KT 9999 FEW040 12/05 Q1013",
         ceiling_ft=4000,
         visibility_meters=9999,
         wind_direction=270,
@@ -570,7 +602,7 @@ class TestFetchObservationsBatchNormalisesParserTimes:
             observation_time=taf_issue_time,
             raw_text="TAF EGTK 011100Z 0112/0212 27010KT 9999 FEW040",
         )
-        airport = SimpleNamespace(icao="EGTK", latest_metar=metar, latest_taf=taf)
+        airport = _fake_airport("EGTK", [metar], taf=taf)
 
         fake_service = MagicMock()
         fake_service.fetch_route_weather.return_value = SimpleNamespace(
@@ -640,3 +672,184 @@ class TestStoreObservationsSurvivesBadValue:
             select(VerificationObservationRow)
         ).scalars().all()
         assert [r.icao for r in rows] == ["LFPB"]
+
+
+class TestSpeciPreservation:
+    """SPECIs must survive ingest, and must not disturb the routine baseline.
+
+    A SPECI is issued *because* conditions changed significantly — thunderstorm
+    onset, ceiling collapse, visibility crossing a threshold. Two gates used to
+    discard them: the fetch kept only `latest_metar` out of the three hours
+    euro_aip returns, and the 30-min bucket filter then kept whichever report
+    arrived first, which is almost always the routine one (#562).
+    """
+
+    def _fetch(self, metars, taf=None):
+        airport = _fake_airport("EGTK", metars, taf=taf)
+        fake_service = MagicMock()
+        fake_service.fetch_route_weather.return_value = SimpleNamespace(
+            airports=[airport],
+        )
+        with patch(
+            "euro_aip.briefing.weather.route_weather.RouteWeatherService",
+            return_value=fake_service,
+        ), patch(
+            "weatherbrief.airports._load_airport_model", return_value=object(),
+        ):
+            return fetch_observations_batch(["EGTK"], "unused.db")
+
+    def test_every_report_in_the_window_is_returned(self):
+        """Not just the latest — that was the first of the two gates."""
+        now = datetime.now(timezone.utc)
+        metars = [
+            _fake_metar(now - timedelta(minutes=90)),
+            _fake_metar(now - timedelta(minutes=60)),
+            _fake_metar(now - timedelta(minutes=30)),
+        ]
+
+        observations = self._fetch(metars)
+
+        assert len(observations) == 3
+        assert all(o.report_type == "METAR" for o in observations)
+
+    def test_speci_report_type_is_carried_through(self):
+        now = datetime.now(timezone.utc)
+        metars = [
+            _fake_metar(now - timedelta(minutes=30)),
+            _fake_metar(
+                now - timedelta(minutes=13),
+                report_type="SPECI",
+                raw_text="SPECI EGTK 011213Z 27025G40KT 3000 TSRA BKN008CB 12/11 Q1005",
+            ),
+        ]
+
+        observations = self._fetch(metars)
+
+        by_type = {o.report_type for o in observations}
+        assert by_type == {"METAR", "SPECI"}
+
+    def test_speci_survives_a_bucket_already_claimed_by_a_metar(self, db_session):
+        """The original bug: routine report arrives first and blocks the SPECI."""
+        bucket = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+        routine = _make_observation(observation_time=bucket)
+        speci = _make_observation(
+            observation_time=bucket + timedelta(minutes=13),
+            report_type="SPECI",
+            metar_raw="SPECI EGTK 011213Z 27025G40KT 3000 TSRA BKN008CB 12/11 Q1005",
+        )
+
+        stored = store_observations([routine, speci], {}, db_session)
+        db_session.flush()
+
+        assert stored == 2
+        rows = db_session.execute(
+            select(VerificationObservationRow).order_by(
+                VerificationObservationRow.observation_time
+            )
+        ).scalars().all()
+        assert [r.report_type for r in rows] == ["METAR", "SPECI"]
+
+    def test_a_speci_does_not_claim_the_bucket(self, db_session):
+        """The same bug inverted — an early SPECI must not block the METAR.
+
+        Without this, the filter would still keep one report per bucket, just a
+        different one, and the routine baseline every existing score is built
+        on would start disappearing.
+        """
+        bucket = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+        speci = _make_observation(
+            observation_time=bucket + timedelta(minutes=3),
+            report_type="SPECI",
+            metar_raw="SPECI EGTK 011203Z 27025G40KT 3000 TSRA BKN008CB 12/11 Q1005",
+        )
+        routine = _make_observation(observation_time=bucket + timedelta(minutes=20))
+
+        # SPECI first, so a surviving METAR proves the bucket was never claimed.
+        stored = store_observations([speci], {}, db_session)
+        db_session.flush()
+        assert stored == 1
+
+        assert not _should_skip_for_bucket_dedup(
+            db_session, "EGTK", bucket + timedelta(minutes=20),
+        ), "a SPECI alone in a bucket must leave it open for the routine report"
+
+        assert store_observations([routine], {}, db_session) == 1
+
+    def test_routine_reports_still_dedup_within_a_bucket(self, db_session):
+        """The volume guard the filter exists for is unchanged."""
+        bucket = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+        first = _make_observation(observation_time=bucket)
+        second = _make_observation(observation_time=bucket + timedelta(minutes=20))
+
+        stored = store_observations([first, second], {}, db_session)
+        db_session.flush()
+
+        assert stored == 1
+
+    def test_speci_is_not_linked_to_flights(self, db_session, dev_user):
+        """score_flight scores one row per linked observation.
+
+        Linking SPECIs would add extra, bad-weather-biased scores to every
+        flight — the artefact this whole design exists to avoid.
+        """
+        flight = _make_flight(db_session, dev_user, verification_status="collecting")
+        icao_map = {"EGTK": {flight.id}}
+        bucket = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+
+        routine = _make_observation(observation_time=bucket)
+        speci = _make_observation(
+            observation_time=bucket + timedelta(minutes=13),
+            report_type="SPECI",
+            metar_raw="SPECI EGTK 011213Z 27025G40KT 3000 TSRA BKN008CB 12/11 Q1005",
+        )
+
+        store_observations([routine, speci], icao_map, db_session)
+        db_session.flush()
+
+        links = db_session.execute(
+            select(FlightVerificationMapRow).where(
+                FlightVerificationMapRow.observation_id.isnot(None)
+            )
+        ).scalars().all()
+        linked_ids = {link.observation_id for link in links}
+
+        rows = {
+            r.report_type: r.id
+            for r in db_session.execute(
+                select(VerificationObservationRow)
+            ).scalars().all()
+        }
+        assert rows["METAR"] in linked_ids
+        assert rows["SPECI"] not in linked_ids
+
+
+class TestRoutineObservationFilter:
+    """NULL report_type reads as routine — what makes 091 behaviour-preserving."""
+
+    def test_null_and_metar_are_routine_speci_is_not(self, db_session):
+        from weatherbrief.tasks.verification import (
+            is_routine,
+            routine_observation_filter,
+        )
+
+        assert is_routine(None)
+        assert is_routine("METAR")
+        assert not is_routine("SPECI")
+
+        base = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+        for i, report_type in enumerate((None, "METAR", "SPECI")):
+            db_session.add(
+                VerificationObservationRow(
+                    icao="EGTK",
+                    observation_time=base + timedelta(hours=i),
+                    collected_at=base,
+                    report_type=report_type,
+                )
+            )
+        db_session.flush()
+
+        kept = db_session.execute(
+            select(VerificationObservationRow).where(routine_observation_filter())
+        ).scalars().all()
+
+        assert sorted(r.report_type or "NULL" for r in kept) == ["METAR", "NULL"]

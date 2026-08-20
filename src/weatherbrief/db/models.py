@@ -617,6 +617,10 @@ class VerificationObservationRow(Base):
 
     # METAR fields
     metar_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 'METAR' (routine) or 'SPECI' (special, issued off-cycle on significant
+    # change). NULL means "written before this column existed" and is treated
+    # as routine everywhere — see `is_routine_observation`.
+    report_type: Mapped[str | None] = mapped_column(String(6), nullable=True)
     flight_category: Mapped[str | None] = mapped_column(String(4), nullable=True)
     ceiling_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
     visibility_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
