@@ -146,3 +146,65 @@ class TestDiagnosticsReachTheSnapshot:
         assert carried.convective_precip_mm_h == pytest.approx(3.6)
         assert carried.convective_top_ft is not None
         assert carried.nwp_ceiling_ft is not None
+
+
+class TestNothingDecodedIsSilentlyDropped:
+    """Structural guard against the failure mode this PR exists to fix.
+
+    Every convective field carried by `AirportGribDiagnostics` costs bytes to
+    download and CPU to decode. If one is not copied onto the snapshot dict it
+    is discarded at the last hop, exactly as GFS's convective cover/base/top
+    were before this change — and as `ml_cin_jkg` was in the first version of
+    this very commit, decoded and converted and then dropped.
+
+    Asserting the wiring structurally is what makes that class of omission fail
+    loudly instead of showing up as a NULL column months later.
+    """
+
+    #: DTO fields that are ceiling/cloud rather than convective ingredients;
+    #: they take a different route onto the snapshot.
+    _NON_CONVECTIVE = {"nwp_ceiling_ft", "cloud_base_ft"}
+
+    def _enrich_loop_pairs(self) -> dict[str, str]:
+        import re
+        from pathlib import Path
+        import weatherbrief.tasks.standalone_verification as sv
+
+        src = Path(sv.__file__).read_text()
+        start = src.index("for key, attr in (")
+        body = src[start:src.index("if value is not None:", start)]
+        return dict(re.findall(r'\("(\w+)",\s*"(\w+)"\)', body))
+
+    def test_every_convective_dto_field_is_copied_to_the_snapshot(self):
+        import dataclasses
+
+        from weatherbrief.tasks.standalone_grib import AirportGribDiagnostics
+
+        dto_fields = {
+            f.name for f in dataclasses.fields(AirportGribDiagnostics)
+        } - self._NON_CONVECTIVE
+        copied = set(self._enrich_loop_pairs().values())
+
+        assert dto_fields <= copied, (
+            "decoded but never written to the snapshot: "
+            f"{sorted(dto_fields - copied)}"
+        )
+
+    def test_every_copied_key_has_a_snapshot_column(self):
+        from weatherbrief.db.models import AirportForecastSnapshotRow
+
+        columns = {c.name for c in AirportForecastSnapshotRow.__table__.columns}
+        keys = set(self._enrich_loop_pairs())
+
+        assert keys <= columns, f"no column to store: {sorted(keys - columns)}"
+
+    def test_ml_cin_is_carried_through_the_dto(self):
+        from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
+        from weatherbrief.tasks.standalone_grib import _diagnostics_from
+
+        diag = build_cloud_diagnostics({
+            "ceiling_gpm": 500.0,
+            "ml_cape_jkg": 900.0,
+            "ml_cin_jkg": -35.0,
+        })
+        assert _diagnostics_from(diag).ml_cin_jkg == pytest.approx(-35.0)

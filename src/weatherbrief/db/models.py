@@ -929,6 +929,11 @@ class AirportForecastSnapshotRow(Base):
     nwp_conv_top_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     nwp_conv_precip_mm_h: Mapped[float | None] = mapped_column(Float, nullable=True)
     nwp_ml_cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Mixed-layer CIN from GRIB. Distinct from `nwp_cin_jkg`, which is the
+    # model's raw value via Open-Meteo (surface-based for GFS, absent for
+    # ICON) — collapsing the two would repeat the `cape_jkg` mistake of
+    # stacking different parcels in one column.
+    nwp_ml_cin_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Which parcel the model's own `cape_jkg` represents — GFS surface-based,
     # ECMWF most-unstable, ICON mixed-layer (`NWP_CAPE_TYPE`). Without it the
     # single cape_jkg column is three different quantities stacked together,

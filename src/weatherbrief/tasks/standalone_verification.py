@@ -816,6 +816,7 @@ def _enrich_with_grib(
                     ("nwp_conv_top_ft", "convective_top_ft"),
                     ("nwp_conv_precip_mm_h", "convective_precip_mm_h"),
                     ("nwp_ml_cape_jkg", "ml_cape_jkg"),
+                    ("nwp_ml_cin_jkg", "ml_cin_jkg"),
                 ):
                     value = getattr(cd, attr, None)
                     if value is not None:
@@ -1267,6 +1268,7 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "nwp_conv_top_ft": snap.get("nwp_conv_top_ft"),
             "nwp_conv_precip_mm_h": snap.get("nwp_conv_precip_mm_h"),
             "nwp_ml_cape_jkg": snap.get("nwp_ml_cape_jkg"),
+            "nwp_ml_cin_jkg": snap.get("nwp_ml_cin_jkg"),
             "nwp_cape_type": snap.get("nwp_cape_type"),
             "nwp_cin_jkg": snap.get("nwp_cin_jkg"),
             "nwp_lifted_index": snap.get("nwp_lifted_index"),

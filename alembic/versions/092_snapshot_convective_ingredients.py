@@ -72,6 +72,7 @@ _FLOAT_COLUMNS = (
     "nwp_conv_top_ft",
     "nwp_conv_precip_mm_h",
     "nwp_ml_cape_jkg",
+    "nwp_ml_cin_jkg",
     "nwp_cin_jkg",
     "nwp_lifted_index",
     "nwp_k_index",
