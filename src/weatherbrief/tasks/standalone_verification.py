@@ -797,6 +797,30 @@ def _enrich_with_grib(
                 snap["nwp_ceiling_ft"] = cd.nwp_ceiling_ft
                 snap["cloud_base_ft"] = cd.cloud_base_ft
 
+                # Convective ingredients (#565/#566). Written only when the
+                # GRIB actually carried a value: this runs *after* the sounding
+                # pass, so an unconditional assignment would overwrite the
+                # model-native values the ECMWF path already resolved, and blank
+                # them with None on any hour the cloud-diag fetch missed.
+                #
+                # This is also why `nwp_conv_method` stays NULL for GFS/ICON:
+                # the convective *assessment* ran inside the Open-Meteo fetch,
+                # before these diagnostics existed. The ingredients are recorded
+                # here; grading them natively needs the fetch reordered, which
+                # is a separate change.
+                # `getattr` defaults, not direct access: this loop must not
+                # raise on a DTO that predates these fields.
+                for key, attr in (
+                    ("nwp_conv_cover_pct", "convective_cover_pct"),
+                    ("nwp_conv_base_ft", "convective_base_ft"),
+                    ("nwp_conv_top_ft", "convective_top_ft"),
+                    ("nwp_conv_precip_mm_h", "convective_precip_mm_h"),
+                    ("nwp_ml_cape_jkg", "ml_cape_jkg"),
+                ):
+                    value = getattr(cd, attr, None)
+                    if value is not None:
+                        snap[key] = value
+
 
 # ---------------------------------------------------------------------------
 # Phase A (ECMWF GRIB-first): decode local a1+a2 files into snapshot dicts

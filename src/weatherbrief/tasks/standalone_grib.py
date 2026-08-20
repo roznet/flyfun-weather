@@ -34,11 +34,50 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class AirportCeilingData:
-    """Ceiling and cloud base extracted from GRIB for one airport at one hour."""
+class AirportGribDiagnostics:
+    """GRIB diagnostics extracted for one airport at one forecast hour.
+
+    Carries the subset of :class:`NWPCloudDiagnostics` that the standalone
+    snapshot persists. It used to hold ceiling and cloud base *only*, which
+    made it the narrowest point in the pipeline: the GFS and ICON cloud-diag
+    decode already produced convective cover, base, top, precipitation rate and
+    mixed-layer CAPE/CIN, and every one of them was thrown away here — after
+    being downloaded and decoded (#565/#566).
+    """
 
     nwp_ceiling_ft: float | None = None
     cloud_base_ft: float | None = None
+    convective_cover_pct: float | None = None
+    convective_base_ft: float | None = None
+    convective_top_ft: float | None = None
+    convective_precip_mm_h: float | None = None
+    ml_cape_jkg: float | None = None
+    ml_cin_jkg: float | None = None
+
+
+#: Historical name. The class outgrew "ceiling" once it started carrying the
+#: convective ingredients, but it is referenced widely enough that renaming in
+#: place is the smaller change than a sweep.
+AirportCeilingData = AirportGribDiagnostics
+
+
+def _diagnostics_from(diag) -> AirportGribDiagnostics:
+    """Project an ``NWPCloudDiagnostics`` onto the persisted subset.
+
+    Shared by the GFS and ICON fetchers so the two cannot drift — they build
+    their diagnostics through different decoders but persist the same fields.
+    """
+    return AirportGribDiagnostics(
+        nwp_ceiling_ft=diag.ceiling_ft,
+        # Lowest available cloud base (low layer).
+        cloud_base_ft=diag.low.base_ft if diag.low else None,
+        convective_cover_pct=diag.convective_cover_pct,
+        convective_base_ft=diag.convective_base_ft,
+        convective_top_ft=diag.convective_top_ft,
+        convective_precip_mm_h=diag.convective_precip_mm_h,
+        ml_cape_jkg=diag.ml_cape_jkg,
+        ml_cin_jkg=diag.ml_cin_jkg,
+    )
 
 
 def fetch_gfs_cloud_diag(
@@ -50,7 +89,7 @@ def fetch_gfs_cloud_diag(
     data_dir: Path | None = None,
     session: requests.Session | None = None,
     priority: "int | DecodePriority | None" = None,
-) -> dict[int, list[AirportCeilingData]]:
+) -> dict[int, list[AirportGribDiagnostics]]:
     """Fetch GFS cloud diagnostics for airports at specified forecast hours.
 
     Args:
@@ -75,7 +114,7 @@ def fetch_gfs_cloud_diag(
         session = requests.Session()
 
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
-    result: dict[int, list[AirportCeilingData]] = {}
+    result: dict[int, list[AirportGribDiagnostics]] = {}
 
     # Phase 1: ensure each hour is cached (sequential network I/O), collecting
     # the decode jobs to fan out. Decode is GIL-bound and was walked one
@@ -128,18 +167,13 @@ def fetch_gfs_cloud_diag(
         if not decoded:
             continue
 
-        airport_data: list[AirportCeilingData] = []
+        airport_data: list[AirportGribDiagnostics] = []
         for raw in decoded:
             diag = build_cloud_diagnostics(raw)
             if diag is None:
-                airport_data.append(AirportCeilingData())
+                airport_data.append(AirportGribDiagnostics())
             else:
-                # cloud_base_ft: use lowest available cloud base (low layer)
-                cloud_base = diag.low.base_ft if diag.low else None
-                airport_data.append(AirportCeilingData(
-                    nwp_ceiling_ft=diag.ceiling_ft,
-                    cloud_base_ft=cloud_base,
-                ))
+                airport_data.append(_diagnostics_from(diag))
         result[fhour] = airport_data
 
     return result
@@ -154,7 +188,7 @@ def fetch_icon_cloud_diag(
     data_dir: Path | None = None,
     session: requests.Session | None = None,
     priority: "int | DecodePriority | None" = None,
-) -> dict[int, list[AirportCeilingData]]:
+) -> dict[int, list[AirportGribDiagnostics]]:
     """Fetch ICON-EU cloud diagnostics for airports at specified forecast hours.
 
     Same interface as fetch_gfs_cloud_diag (incl. the ``priority`` pass-through)
@@ -173,7 +207,7 @@ def fetch_icon_cloud_diag(
         session = requests.Session()
 
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
-    result: dict[int, list[AirportCeilingData]] = {}
+    result: dict[int, list[AirportGribDiagnostics]] = {}
 
     # Phase 1: ensure each hour is cached (sequential network I/O), collecting
     # decode jobs to fan out — see fetch_gfs_cloud_diag for the rationale (#459).
@@ -219,17 +253,13 @@ def fetch_icon_cloud_diag(
         if not decoded:
             continue
 
-        airport_data: list[AirportCeilingData] = []
+        airport_data: list[AirportGribDiagnostics] = []
         for raw in decoded:
             diag = build_icon_cloud_diagnostics(raw)
             if diag is None:
-                airport_data.append(AirportCeilingData())
+                airport_data.append(AirportGribDiagnostics())
             else:
-                cloud_base = diag.low.base_ft if diag.low else None
-                airport_data.append(AirportCeilingData(
-                    nwp_ceiling_ft=diag.ceiling_ft,
-                    cloud_base_ft=cloud_base,
-                ))
+                airport_data.append(_diagnostics_from(diag))
         result[fhour] = airport_data
 
     return result
