@@ -645,6 +645,10 @@ Everything reaching observations *through* `verification_scores` or `flight_veri
 
 `map_queries` shows the most recent observation per airport and **does** now surface a SPECI when one is the latest report. That is a display surface, not a metric, and the freshest actual observation is the correct thing to show.
 
+**Flight linkage is bounded by the flight's own window.** `fetch_observations_batch` is shared by the flight and standalone paths and returns every report in euro_aip's ~3 h window, so `store_observations` links a routine observation to a flight only when its time falls inside `[departure - 1h, departure + duration + 1h]` — the same bounds `find_verifiable_flights` and `finalize_completed_flights` use. Without it a flight's first collection cycle would link METARs from before its window opened, and two flights whose corridors share an airport would each pick up the other's earlier observations; `score_flight` scores one row per linked observation and applies no window filter of its own. Observations outside the window are still **stored** — they are ground truth for the standalone dataset and for offline analysis — just not attributed to a flight.
+
+Measured, the feed returns a mean of **1.4–1.9 reports per airport per fetch** (400 watchlist airports, 2026-08-20), not the six a 30-minute cadence over a 3 h window would suggest, so the exact-dedup lookup per stored observation grows by roughly half again rather than sixfold. Each is an indexed hit on `uq_verif_obs_icao_time`.
+
 ### Scoring Window Limitations
 
 `route_analyses.json` stores soundings for the **flight window hours** only (departure through arrival). Observations collected in the 1h buffer before departure or after arrival may not have a matching sounding hour. In this case:

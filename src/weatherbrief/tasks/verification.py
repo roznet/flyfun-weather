@@ -471,6 +471,38 @@ def _should_skip_for_bucket_dedup(
     return existing is not None
 
 
+def _flight_windows(
+    db: Session, flight_ids: set[str],
+) -> dict[str, tuple[datetime, datetime]]:
+    """Observation window per flight: departure-1h .. departure+duration+1h.
+
+    The same bounds :func:`find_verifiable_flights` and
+    :func:`finalize_completed_flights` use, so linkage cannot outlive
+    eligibility.
+
+    ``flights.departure_time`` is NOT NULL, so every live flight gets an
+    entry. A missing one therefore means the flight row itself is gone, and
+    the caller declines to link rather than guessing.
+    """
+    if not flight_ids:
+        return {}
+
+    rows = db.execute(
+        select(FlightRow).where(FlightRow.id.in_(flight_ids))
+    ).scalars().all()
+
+    windows: dict[str, tuple[datetime, datetime]] = {}
+    for row in rows:
+        dep = row.departure_time
+        if dep is None:
+            continue
+        if dep.tzinfo is None:
+            dep = dep.replace(tzinfo=timezone.utc)
+        end = dep + timedelta(hours=row.flight_duration_hours or 0)
+        windows[row.id] = (dep - timedelta(hours=1), end + timedelta(hours=1))
+    return windows
+
+
 def store_observations(
     observations: list[VerificationObservation],
     icao_to_flights: dict[str, set[str]],
@@ -486,6 +518,9 @@ def store_observations(
     observation. Returns count of newly inserted observations.
     """
     inserted = 0
+    windows = _flight_windows(
+        db, {fid for fids in icao_to_flights.values() for fid in fids},
+    )
 
     for obs in observations:
         # Exact dedup: check if this METAR already stored
@@ -579,16 +614,28 @@ def store_observations(
                 obs_row_id = row.id
                 inserted += 1
 
-        # Link to flights. SPECIs are stored but never linked: score_flight
-        # scores one row per linked observation, so linking them would add
-        # extra, bad-weather-biased scores to every flight. They stay
-        # available to offline analysis through the observation table.
+        # Link to flights. Two filters, for two different reasons.
+        #
+        # SPECIs are stored but never linked: score_flight scores one row per
+        # linked observation, so linking them would add extra,
+        # bad-weather-biased scores to every flight. They stay available to
+        # offline analysis through the observation table.
+        #
+        # Routine reports are linked only inside the flight's own window. The
+        # fetch returns euro_aip's full ~3-hour history, so without this a
+        # flight's first cycle would link METARs from before its window even
+        # opened, and two flights with overlapping corridors would each pick
+        # up the other's earlier observations — scored in Phase D against
+        # forecast hours that have nothing to do with them.
         flight_ids = (
             icao_to_flights.get(obs.icao, set())
             if is_routine(obs.report_type)
             else set()
         )
         for flight_id in flight_ids:
+            window = windows.get(flight_id)
+            if window is None or not (window[0] <= obs.observation_time <= window[1]):
+                continue
             existing_link = db.execute(
                 select(FlightVerificationMapRow)
                 .where(FlightVerificationMapRow.flight_id == flight_id)
