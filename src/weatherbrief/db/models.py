@@ -475,10 +475,16 @@ class PirepRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     client_uuid: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
+    # TZDateTime, not DateTime(timezone=True) (#520): the latter is a no-op on
+    # MySQL, so reads came back naive and the API serialised them with no UTC
+    # offset. The web reads these as an *age* ("2h ago") and iOS parses them
+    # with a strict ISO8601DateFormatter, so an offset-less string made fresh
+    # reports look stale on one client and fail to parse on the other. Same DDL,
+    # so no migration.
     submitted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        TZDateTime(), default=lambda: datetime.now(timezone.utc)
     )
-    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    observed_at: Mapped[datetime] = mapped_column(TZDateTime())
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
     gps_altitude_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)

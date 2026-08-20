@@ -507,3 +507,62 @@ import Foundation
         #expect(await reopened.pendingCount == 0)
     }
 }
+
+// MARK: - PIREP timestamp parsing
+
+/// `PirepResponse.observedDate` must parse what the server actually sends.
+///
+/// It used a bare `ISO8601DateFormatter()`, whose default options omit
+/// `.withFractionalSeconds`. The server serialises `observed_at` straight from
+/// a DB datetime that carries microseconds, so every real response parsed to
+/// nil and `PirepListView` fell back to printing the raw ISO string.
+@Suite struct PirepTimestampParsingTests {
+
+    private func pirep(observedAt: String) -> PirepResponse {
+        PirepResponse(
+            id: 1, clientUuid: nil, submittedAt: observedAt, observedAt: observedAt,
+            latitude: 48.0, longitude: 2.0, gpsAltitudeFt: nil, reportedAltitudeFt: nil,
+            inCloud: nil, icingIntensity: nil, icingType: nil, turbulenceIntensity: nil,
+            ceilingMslFt: nil, topsMslFt: nil, topsBasis: nil, tempC: nil,
+            windDir: nil, windSpeedKt: nil, remarks: nil, aircraftType: nil,
+            packId: nil, source: "inflight", isOwn: true
+        )
+    }
+
+    /// The real server shape: microseconds plus a +00:00 offset.
+    @Test func parsesFractionalSecondsWithOffset() {
+        let date = pirep(observedAt: "2026-08-20T06:52:19.906944+00:00").observedDate
+        #expect(date != nil, "fractional-second timestamps must parse")
+        // Tolerance, not equality: the parser resolves fractional seconds to
+        // milliseconds, so the microsecond tail is expected to be dropped. What
+        // matters is that it lands on the right second, not that it round-trips
+        // the tail exactly.
+        let expected = Date(timeIntervalSince1970: 1787208739.906944)
+        #expect(abs((date ?? .distantPast).timeIntervalSince(expected)) < 1.0)
+    }
+
+    /// Whole-second `Z` form must keep working — the plain fallback path.
+    @Test func parsesWholeSecondsZuluForm() {
+        let date = pirep(observedAt: "2026-08-20T06:52:19Z").observedDate
+        #expect(date != nil)
+        #expect(date == Date(timeIntervalSince1970: 1787208739))
+    }
+
+    /// Both spellings of the same instant must agree — the server has emitted
+    /// `Z` and `+00:00` from different endpoints.
+    @Test func zuluAndExplicitOffsetAgree() {
+        #expect(pirep(observedAt: "2026-08-20T06:52:19Z").observedDate
+                == pirep(observedAt: "2026-08-20T06:52:19+00:00").observedDate)
+    }
+
+    /// An offset-less string is what the *old* server sent. Whatever it parses
+    /// to, it must never be read as a different instant than the qualified form
+    /// — this is the bug that showed 06:52Z as 04:52 elsewhere in the app.
+    @Test func offsetLessStringIsNotSilentlyShifted() {
+        let naive = pirep(observedAt: "2026-08-20T06:52:19").observedDate
+        let qualified = pirep(observedAt: "2026-08-20T06:52:19Z").observedDate
+        if let naive {
+            #expect(naive == qualified, "offset-less input must not shift the instant")
+        }
+    }
+}

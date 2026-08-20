@@ -103,6 +103,95 @@ def _pirep_payload(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 
+class TestTimestampSerialization:
+    """``observed_at``/``submitted_at`` must round-trip as UTC-qualified ISO.
+
+    The columns were ``DateTime(timezone=True)`` — a no-op on MySQL — so reads
+    came back naive and the API emitted "2026-04-11T08:14:19" with no offset.
+    The web turns these into an *age* ("2h ago") and a staleness tag, so a fresh
+    report read ~2 h old for a UTC+2 pilot; iOS parses them with a strict
+    ``ISO8601DateFormatter()``, which returns nil outright for an offset-less
+    string. Both columns are ``TZDateTime`` now (#520).
+
+    These all read back through ``GET /api/pireps`` on purpose. The POST
+    response is serialised from the still-in-session object, whose in-memory
+    value is the aware datetime that was just assigned — so it looked correct
+    even while the bug was live. Only a fresh read of the persisted row exposes
+    it, which is also the path the map and the age labels actually use.
+    """
+
+    @staticmethod
+    def _only_listed(client) -> dict:
+        r = client.get("/api/pireps?hours=24")
+        assert r.status_code == 200, r.text
+        items = r.json()["items"]
+        assert len(items) == 1, f"expected exactly one PIREP, got {len(items)}"
+        return items[0]
+
+    def test_roundtrip_preserves_the_instant(self, client):
+        observed = datetime.now(timezone.utc) - timedelta(minutes=10)
+        assert client.post(
+            "/api/pireps", json=_pirep_payload(observed_at=observed.isoformat())
+        ).status_code == 201
+
+        listed = self._only_listed(client)
+        for field in ("observed_at", "submitted_at"):
+            raw = listed[field]
+            parsed = datetime.fromisoformat(raw)
+            assert parsed.tzinfo is not None, f"naive {field} leaked to the client: {raw!r}"
+
+        assert datetime.fromisoformat(listed["observed_at"]) == observed
+
+    def test_offset_input_is_normalised_not_shifted(self, client):
+        """A client sending +02:00 local must land on the same instant.
+
+        iOS/web send the pilot's own offset; the stored value is UTC, so this
+        must read back as 06:52Z, never 08:52Z.
+        """
+        assert client.post("/api/pireps", json=_pirep_payload(
+            observed_at="2026-08-20T08:52:00+02:00",
+        )).status_code == 201
+
+        parsed = datetime.fromisoformat(self._only_listed(client)["observed_at"])
+        assert parsed == datetime(2026, 8, 20, 6, 52, tzinfo=timezone.utc)
+        assert parsed.astimezone(timezone.utc).strftime("%H:%M") == "06:52"
+
+    def test_fresh_pirep_is_not_aged_by_the_utc_offset(self, client):
+        """The symptom a pilot would actually see: a report filed a minute ago
+        must read as ~0 minutes old, not one UTC offset old.
+
+        This is what drives the web's "2h ago" label and its staleness tag.
+        """
+        observed = datetime.now(timezone.utc) - timedelta(minutes=1)
+        assert client.post(
+            "/api/pireps", json=_pirep_payload(observed_at=observed.isoformat())
+        ).status_code == 201
+
+        parsed = datetime.fromisoformat(self._only_listed(client)["observed_at"])
+        age_minutes = (datetime.now(timezone.utc) - parsed).total_seconds() / 60
+        assert 0 <= age_minutes < 5, f"fresh PIREP aged {age_minutes:.0f} min by a tz bug"
+
+    def test_flight_window_query_accepts_a_naive_flightrow(self, client, app_db):
+        """``observed_at`` is TZDateTime, which *raises* on a naive bind.
+
+        The flight-scoped query derives its window from a raw ``FlightRow``,
+        whose ``departure_time`` is still ``DateTime(timezone=True)`` and so
+        reads back naive — that bind has to be promoted or this 500s.
+        """
+        session = app_db()
+        session.add(FlightRow(
+            id="tz-window", user_id=DEV_USER_ID, route_name="r",
+            waypoints_json=json.dumps(["LFPG", "EGLL"]),
+            departure_time=datetime.now(timezone.utc) + timedelta(hours=1),
+            cruise_altitude_ft=8000, flight_duration_hours=2.0, private=False,
+        ))
+        session.commit()
+        session.close()
+
+        r = client.get("/api/pireps?flight_id=tz-window")
+        assert r.status_code == 200, r.text
+
+
 class TestSubmitPirep:
     def test_submit_basic(self, client):
         r = client.post("/api/pireps", json=_pirep_payload(

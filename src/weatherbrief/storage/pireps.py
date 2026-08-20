@@ -17,6 +17,7 @@ from weatherbrief.db.models import (
     ICING_INTENSITIES,
     TURBULENCE_INTENSITIES,
 )
+from weatherbrief.storage.flights import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +124,13 @@ def list_pireps(
         )
         flight = session.get(FlightRow, flight_id)
         if flight is not None:
-            window_start = flight.departure_time - timedelta(hours=2)
-            window_end = flight.departure_time + timedelta(
+            # ensure_utc: ``flight`` is a raw FlightRow, whose departure_time is
+            # still DateTime(timezone=True) and so reads back naive. observed_at
+            # is TZDateTime, which rejects a naive bind outright — and every
+            # other bind against this column (cutoff, from_dt, to_dt) is aware.
+            departure = ensure_utc(flight.departure_time)
+            window_start = departure - timedelta(hours=2)
+            window_end = departure + timedelta(
                 hours=flight.flight_duration_hours + 2
             )
             stmt = stmt.where(

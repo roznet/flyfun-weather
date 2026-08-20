@@ -29,8 +29,14 @@ struct PirepResponse: Codable, Identifiable, Sendable {
     var altitude: Int? { reportedAltitudeFt ?? gpsAltitudeFt }
 
     /// Parsed observation date.
+    ///
+    /// Uses the shared `Date.parseISO8601`, not a bare `ISO8601DateFormatter()`:
+    /// the default format options omit `.withFractionalSeconds`, and the server
+    /// serialises these straight from a DB datetime that carries microseconds
+    /// ("...T08:14:19.906944+00:00"), so the plain parser returned nil and the
+    /// list fell back to printing the raw ISO string.
     var observedDate: Date? {
-        ISO8601DateFormatter().date(from: observedAt)
+        Date.parseISO8601(observedAt)
     }
 
     /// Sentinel for offline-queued PIREPs.
