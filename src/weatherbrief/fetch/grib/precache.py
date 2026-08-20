@@ -414,10 +414,20 @@ def precache_icon_d2_flights(
 
     db = SessionLocal()
     try:
+        # Soonest departure first. A pass is not instantaneous — it warms one
+        # flight at a time on a single outer unit, and the yield gate can defer
+        # it repeatedly while briefing traffic is heavy (the 09z run on
+        # 2026-08-20 took six attempts, 11:03Z-11:29Z, to complete). So there
+        # is a window of tens of minutes after a run publishes during which
+        # only *part* of the flight set is warm, and unordered rows put an
+        # arbitrary flight in that prefix. Departure order puts the flights
+        # being briefed right now — today's, the ones whose briefing being
+        # cold matters most — at the front of it.
         rows = db.execute(
             select(FlightRow)
             .where(FlightRow.departure_time >= reference)
             .where(FlightRow.departure_time <= horizon_end)
+            .order_by(FlightRow.departure_time)
         ).scalars().all()
     finally:
         db.close()

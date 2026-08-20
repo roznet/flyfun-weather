@@ -289,8 +289,10 @@ class _FakeDB:
     def __init__(self, rows):
         self._rows = rows
         self.closed = False
+        self.stmt = None
 
     def execute(self, _stmt):
+        self.stmt = _stmt
         return _FakeResult(self._rows)
 
     def close(self):
@@ -360,6 +362,26 @@ class TestIconD2FlightWarming:
         with patch("flyfun_common.db.SessionLocal", return_value=_FakeDB([])):
             stats = precache_icon_d2_flights(_utc(2026, 7, 21, 0), db_path="/db")
         assert stats["flights_considered"] == 0  # no rows, but no NameError
+
+    def test_flights_warmed_soonest_departure_first(self):
+        """The warm order is departure order, not arbitrary DB order.
+
+        A pass warms one flight at a time and can be deferred repeatedly by
+        interactive traffic, so for tens of minutes after a run publishes only
+        the prefix of the flight set is warm. Departure order puts today's
+        flights in that prefix instead of whichever row the DB returned first.
+        """
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        db = _FakeDB([])
+        with patch("flyfun_common.db.SessionLocal", return_value=db):
+            precache_icon_d2_flights(_utc(2026, 7, 21, 0), db_path="/db")
+
+        compiled = str(db.stmt).lower()
+        assert "order by" in compiled
+        order_clause = compiled.split("order by", 1)[1]
+        assert "departure_time" in order_clause
+        assert "desc" not in order_clause
 
     def test_only_d2_eligible_flights_warmed(self):
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
