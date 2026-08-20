@@ -164,6 +164,8 @@ Full column definitions live in `db/models.py` (+ Alembic migrations). This sect
 ### `verification_observations` — ground-truth archive
 METAR + active-TAF fields as fetched. Natural key `UNIQUE(icao, observation_time)` — the same METAR is never stored twice. Indexed on `icao` and `observation_time`.
 
+`report_type` (migration 091) is `'METAR'` (routine) or `'SPECI'` (special, issued off-cycle on significant change), and **NULL on every row written before 091**. NULL reads as routine everywhere — that is what made 091 behaviour-preserving, since pre-091 rows are whatever `latest_metar` returned. Reclassifying history is a deliberate act: `verify backfill-report-type` (`--dry-run` surveys and reports the SPECI rate without writing). Read through `routine_observation_filter()` rather than comparing the column directly, so the NULL case cannot be got wrong.
+
 ### `verification_scores` — model vs reality
 One row per `(icao, observation_time, model, model_init_time, source)`. The `source` column distinguishes flight-based from standalone scores — **all queries filter by source** to prevent mixing. Only two stored values: `'flight'` and `'standalone'` (the `standalone_full`/`standalone_light`/`standalone_forecast` distinction lives only on `verification_cycles.source`, for per-cycle metrics, never on the scores themselves). Migration 055 adds a composite `(source, days_out, observation_time)` index to keep dashboard queries off full table scans.
 
@@ -625,9 +627,23 @@ Gust accuracy is the one metric where a single averaged number is actively misle
 
 The two select different, mostly non-overlapping samples. Collapsing them into one average is what made the first ad-hoc pass (EGLL/LFPG/EDDF, Apr–Jul 2026) look self-contradictory.
 
-### Observation Frequency: One Per Airport Per Hour
+### Observation Frequency: One Routine Report Per 30-Minute Bucket
 
-METARs are issued every 30-60 minutes, and SPECIs can be more frequent. To avoid inflating the dataset with near-duplicate observations, **keep at most one observation per airport per clock hour**. If multiple METARs exist for the same (icao, hour), keep the one closest to the top of the hour (e.g., for 14:00-14:59, prefer the METAR at 14:20 over 14:50). The UNIQUE(icao, observation_time) constraint handles exact dedup; the hourly filtering is applied during collection before insertion.
+METARs are issued every 30-60 minutes. To avoid inflating the dataset with near-duplicate observations, **keep at most one routine observation per airport per 30-minute bucket** (`[HH:00, HH:30)` and `[HH:30, HH+1:00)`). The `UNIQUE(icao, observation_time)` constraint handles exact dedup; the bucket filter is applied during collection, before insertion, and keeps the first arrival — a stored observation is never replaced, since scores and FK references may already point at it.
+
+**SPECIs are exempt at both ends** (#562). A SPECI is issued precisely when conditions changed significantly — thunderstorm onset, ceiling collapse, visibility crossing a threshold, CB appearing — so it is the observation class the convective and ceiling verification work most needs. It is never skipped by the bucket filter, and it never *claims* a bucket either; without that second half an early SPECI would block the routine METAR behind it, keeping one report per bucket as before but the wrong one.
+
+Storing SPECIs must not move any existing metric, and three consumers read the observation table directly enough to be affected. Each is handled deliberately:
+
+| consumer | exposure | resolution |
+|---|---|---|
+| `score_flight` | one score per linked observation | SPECIs are stored but **never linked** into `flight_verification_map` |
+| `_score_cycle` (standalone) | keeps the observation *closest* to cycle time from a ±90 min window, so a SPECI can displace the routine report | reads through `routine_observation_filter()` |
+| `airport_summary` climatology | percentiles and threshold counts assume a sample regular in time | reads through `routine_observation_filter()` |
+
+Everything reaching observations *through* `verification_scores` or `flight_verification_map` (`verification_stats`, `verification_gust`, the daily rollups) is protected structurally — SPECIs never enter either. `archive` and `retention` deliberately see every row.
+
+`map_queries` shows the most recent observation per airport and **does** now surface a SPECI when one is the latest report. That is a display surface, not a metric, and the freshest actual observation is the correct thing to show.
 
 ### Scoring Window Limitations
 

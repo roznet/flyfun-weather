@@ -1103,7 +1103,6 @@ def main():
              "scores have no recoverable forecast gust)",
     )
 
-    # stats
     p_report_type = subparsers.add_parser(
         "backfill-report-type",
         help="Classify observations as METAR or SPECI (migration 091, #562)",
@@ -1117,6 +1116,7 @@ def main():
         help="Primary-key window per batch (default 20000)",
     )
 
+    # stats
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
     p_stats.add_argument(
         "--source", choices=["flight", "standalone"],
