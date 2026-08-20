@@ -121,6 +121,14 @@ _CLOUD_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
     ("avg_tcc", "atmosphere"): "total_cover_pct",
     ("avg_tcc", "convectiveCloudLayer"): "convective_cover_pct",
     ("avg_tcc", "boundaryLayerCloudLayer"): "boundary_cover_pct",
+    # Convective ingredients (#566). `pressureFromGroundLayer` is the same
+    # typeOfLevel HRRR's CAPE/CIN already decode under, so the two models now
+    # agree on both the parcel and the key.
+    ("cape", "pressureFromGroundLayer"): "ml_cape_jkg",
+    ("cin", "pressureFromGroundLayer"): "ml_cin_jkg",
+    # kg/m2/s, instantaneous — converted to mm/h by _kg_m2_s_to_mm_h.
+    ("cprat", "surface"): "conv_precip_rate_kg_m2_s",
+    ("avg_cprat", "surface"): "conv_precip_rate_kg_m2_s",
     # Cloud boundary pressures (Pa) — mostly time-averaged in GFS
     ("pres", "convectiveCloudBottom"): "convective_base_pa",
     ("pres", "convectiveCloudTop"): "convective_top_pa",
@@ -1479,6 +1487,18 @@ def decode_icon_eu_per_point(
         tmp_path.unlink(missing_ok=True)
 
 
+def _kg_m2_s_to_mm_h(value: float | None) -> float | None:
+    """Precipitation rate kg/m2/s -> mm/h (#566).
+
+    1 kg/m2 of water is 1 mm depth, so the conversion is only the time base.
+    GFS publishes CPRAT as an instantaneous rate, unlike ECMWF `cp` and ICON
+    `crr` which are accumulated since init and need de-accumulation first.
+    """
+    if value is None:
+        return None
+    return round(value * 3600.0, 3)
+
+
 def build_cloud_diagnostics(
     raw: dict[str, float],
 ) -> "NWPCloudDiagnostics | None":
@@ -1548,6 +1568,11 @@ def build_cloud_diagnostics(
         convective_cover_pct=_pct("convective_cover_pct"),
         convective_base_ft=_pa_to_ft("convective_base_pa"),
         convective_top_ft=_pa_to_ft("convective_top_pa"),
+        convective_precip_mm_h=_kg_m2_s_to_mm_h(
+            raw.get("conv_precip_rate_kg_m2_s")
+        ),
+        ml_cape_jkg=raw.get("ml_cape_jkg"),
+        ml_cin_jkg=raw.get("ml_cin_jkg"),
         total_cover_pct=_pct("total_cover_pct"),
         boundary_cover_pct=_pct("boundary_cover_pct"),
         ceiling_ft=_gpm_to_ft("ceiling_gpm"),

@@ -45,6 +45,34 @@ CLOUD_DIAG_VARIABLES: dict[str, set[str]] = {
     "TMP": {"low cloud top level", "middle cloud top level",
             "high cloud top level"},
     "HGT": {"cloud ceiling"},
+    # Convective ingredients (#566). GFS was the only model with no CAPE, CIN
+    # or convective precipitation from GRIB, so it alone fell back to
+    # Open-Meteo's *surface-based* CAPE while ECMWF and ICON supply
+    # mixed-layer values natively — a cross-model comparison was partly
+    # comparing parcel definitions rather than skill.
+    #
+    # Level strings verified against a live index (gfs.20260820/06z f006), not
+    # assumed: the ICON `crr` episode is the precedent for a plausible-looking
+    # key silently matching nothing.
+    #
+    #   CAPE:180-0 mb above ground:6 hour fcst    <- mixed layer, instantaneous
+    #   CIN:180-0 mb above ground:6 hour fcst
+    #   CPRAT:surface:6 hour fcst                 <- instantaneous rate
+    #   CPRAT:surface:0-6 hour ave fcst           <- averaged twin
+    #
+    # `parse_cloud_diag_idx` keeps the instantaneous entry for anything not in
+    # `_PREFER_AVERAGED_PAIRS`, so CPRAT's duplicate resolves correctly without
+    # further work (#441 finding #5). Instantaneous is what we want: unlike
+    # ECMWF `cp` and ICON `crr` — both accumulated since init — CPRAT needs no
+    # de-accumulation, only kg/m2/s -> mm/h.
+    #
+    # 180-0 mb is GFS's mixed-layer parcel; ECMWF's `mlcape100` is the lowest
+    # 100 hPa and ICON's `cape_ml` its own. All three are mixed-layer, but the
+    # depths differ — far closer than surface-vs-most-unstable, yet not
+    # identical, which `nwp_cape_type` exists to record.
+    "CAPE": {"180-0 mb above ground"},
+    "CIN": {"180-0 mb above ground"},
+    "CPRAT": {"surface"},
 }
 
 # Build a flat set of (variable, level_str) tuples for fast lookup
