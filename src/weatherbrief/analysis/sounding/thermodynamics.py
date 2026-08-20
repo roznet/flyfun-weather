@@ -23,11 +23,32 @@ M_TO_FT = 3.28084
 
 
 def _mag(quantity) -> float | None:
-    """Extract magnitude from a pint Quantity, or return None."""
+    """Extract magnitude from a pint Quantity, or return None.
+
+    Size-1 arrays are unwrapped. MetPy returns several indices as a
+    one-element array rather than a scalar — ``lifted_index`` is the one that
+    bit us — and NumPy 2 refuses ``float()`` on any array with ``ndim > 0``.
+    That raised inside the caller's ``round()``, was swallowed by its
+    ``except Exception``, and left ``sounding_lifted_index`` NULL on *every*
+    profile ever written: 110,801 of 110,801 rows on a sampled day, across all
+    three models, with nothing in the logs above DEBUG.
+
+    Unwrapping is unambiguous only for size 1 — anything larger is a genuine
+    profile and must not be silently collapsed to its first element.
+    """
     if quantity is None:
         return None
     try:
-        return float(quantity.magnitude)
+        magnitude = quantity.magnitude
+    except AttributeError:
+        return None
+    try:
+        size = getattr(magnitude, "size", None)
+        if size is not None and getattr(magnitude, "ndim", 0) > 0:
+            if size != 1:
+                return None
+            magnitude = magnitude.reshape(())[()]
+        return float(magnitude)
     except Exception:
         return None
 

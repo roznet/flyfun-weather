@@ -110,3 +110,89 @@ def test_bulk_shear_same_level_returns_none():
     v = np.array([0.0, 40.0]) * units("m/s")
     heights_m = np.array([0.0, 5000.0])
     assert _compute_bulk_shear(u, v, heights_m, 100.0, 200.0) is None
+
+
+class TestMagUnwrapsSizeOneArrays:
+    """`_mag` must survive MetPy returning a one-element array (#565).
+
+    MetPy returns several indices as a size-1 array rather than a scalar, and
+    NumPy 2 refuses `float()` on any array with ndim > 0. The old
+    `float(quantity.magnitude)` therefore returned None, the caller's
+    `round(None, 1)` raised TypeError, and the surrounding `except Exception`
+    swallowed it — leaving `sounding_lifted_index` NULL on every profile ever
+    written, silently, for years.
+    """
+
+    def test_scalar_quantity(self):
+        from weatherbrief.analysis.sounding.thermodynamics import _mag
+        assert _mag(3.5 * units.degC) == pytest.approx(3.5)
+
+    def test_size_one_array_is_unwrapped(self):
+        from weatherbrief.analysis.sounding.thermodynamics import _mag
+        assert _mag(np.array([-2.5]) * units.delta_degC) == pytest.approx(-2.5)
+
+    def test_multi_element_array_returns_none(self):
+        """A real profile must never be silently collapsed to its first value."""
+        from weatherbrief.analysis.sounding.thermodynamics import _mag
+        assert _mag(np.array([1.0, 2.0, 3.0]) * units.degC) is None
+
+    def test_none_and_non_quantity(self):
+        from weatherbrief.analysis.sounding.thermodynamics import _mag
+        assert _mag(None) is None
+        assert _mag("not a quantity") is None
+
+
+class TestLiftedIndexIsActuallyComputed:
+    """Regression for the bug above, at the level that matters.
+
+    `compute_indices_core` claims lifted index among the indices it computes,
+    and `snapshot_fields` persists it to `sounding_lifted_index`. It was None
+    on 110,801 of 110,801 rows on a sampled archive day, across all three
+    models.
+    """
+
+    def _indices(self):
+        from weatherbrief.analysis.sounding.prepare import prepare_profile
+        from weatherbrief.analysis.sounding.thermodynamics import (
+            compute_indices_core,
+        )
+        from weatherbrief.models.analysis import PressureLevelData
+
+        levels = [
+            PressureLevelData(
+                pressure_hpa=hpa, temperature_c=t, relative_humidity_pct=rh,
+                wind_speed_kt=20, wind_direction_deg=270,
+            )
+            for hpa, t, rh in [
+                (1000, 20, 80), (925, 15, 75), (850, 11, 70), (700, 3, 60),
+                (600, -4, 55), (500, -13, 50), (400, -25, 40), (300, -40, 30),
+                (250, -50, 25), (200, -56, 20), (150, -58, 15), (100, -60, 10),
+            ]
+        ]
+        profile = prepare_profile(levels, None)
+        assert profile is not None
+        return compute_indices_core(profile).indices
+
+    def test_lifted_index_is_not_none(self):
+        li = self._indices().lifted_index
+        assert li is not None, (
+            "lifted index is None again — _mag has probably stopped unwrapping "
+            "MetPy's size-1 array, and the caller's except swallows the error"
+        )
+        assert -20.0 < li < 20.0
+
+    def test_lfc_and_el_are_available_in_the_core_path(self):
+        """Both are persisted by #565, so they must come from *core*, not extended."""
+        idx = self._indices()
+        assert idx.lfc_altitude_ft is not None
+        assert idx.el_altitude_ft is not None
+
+    def test_bulk_shear_is_not_in_the_core_path(self):
+        """Pins why no bulk-shear snapshot column exists (#565).
+
+        It is computed by `compute_indices_extended`, which
+        `analyze_sounding_lite` skips — a column for it would be NULL on every
+        standalone row. If this ever starts passing a non-None value, the
+        column becomes worth adding.
+        """
+        assert self._indices().bulk_shear_0_6km_kt is None

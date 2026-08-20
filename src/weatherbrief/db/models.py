@@ -913,7 +913,31 @@ class AirportForecastSnapshotRow(Base):
     sounding_cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_cin_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_lifted_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_lfc_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_el_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_convective_risk: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # Convective ingredients (#565). One column per physical quantity, shared
+    # by every model; `nwp_conv_method` says which pathway produced them, the
+    # way `nwp_layer_source` does for the ceiling. Storing the ingredients
+    # rather than only the verdict is what lets a *future* grading scheme be
+    # scored over this history — a verdict answers only the question already
+    # asked, and snapshots prune at 10 days so nothing here is backfillable.
+    nwp_conv_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    nwp_conv_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_conv_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_conv_top_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_conv_precip_mm_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_ml_cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Which parcel the model's own `cape_jkg` represents — GFS surface-based,
+    # ECMWF most-unstable, ICON mixed-layer (`NWP_CAPE_TYPE`). Without it the
+    # single cape_jkg column is three different quantities stacked together,
+    # and a cross-model comparison compares parcel definitions, not skill.
+    nwp_cape_type: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    nwp_cin_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_lifted_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_k_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_total_totals: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 def snapshot_natural_key(
