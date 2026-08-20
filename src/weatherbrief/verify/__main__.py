@@ -369,6 +369,44 @@ def cmd_backfill_gust(args):
         db.close()
 
 
+def cmd_backfill_report_type(args):
+    """Classify pre-091 observations as routine METAR or SPECI (#562).
+
+    ``--dry-run`` surveys without writing and reports the SPECI rate — how much
+    convective truth the pre-091 ingest was discarding.
+    """
+    SessionLocal = _init_db()
+    db = SessionLocal()
+
+    try:
+        from weatherbrief.tasks.verification_report_type import (
+            backfill_report_type,
+            survey_report_types,
+        )
+
+        survey = survey_report_types(db, batch_size=args.batch_size)
+        print("Observation report types:")
+        print(survey.render())
+
+        if args.dry_run:
+            print("\nDry run — nothing written.")
+            return
+
+        pending = survey.classifiable - survey.already_classified
+        if pending <= 0:
+            print("\nNothing to backfill.")
+            return
+
+        n = backfill_report_type(db, batch_size=args.batch_size)
+        print(f"\nClassified {n:,} rows.")
+        print(
+            "Scoring treats NULL and 'METAR' alike, so existing metrics are "
+            "unchanged; a future re-score will now skip the SPECIs."
+        )
+    finally:
+        db.close()
+
+
 def cmd_stats(args):
     """Show verification statistics."""
     SessionLocal = _init_db()
@@ -1066,6 +1104,19 @@ def main():
     )
 
     # stats
+    p_report_type = subparsers.add_parser(
+        "backfill-report-type",
+        help="Classify observations as METAR or SPECI (migration 091, #562)",
+    )
+    p_report_type.add_argument(
+        "--dry-run", action="store_true",
+        help="Survey only — report the SPECI rate without writing",
+    )
+    p_report_type.add_argument(
+        "--batch-size", type=int, default=20_000,
+        help="Primary-key window per batch (default 20000)",
+    )
+
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
     p_stats.add_argument(
         "--source", choices=["flight", "standalone"],
@@ -1279,6 +1330,8 @@ def main():
         cmd_backfill(args)
     elif args.command == "backfill-gust":
         cmd_backfill_gust(args)
+    elif args.command == "backfill-report-type":
+        cmd_backfill_report_type(args)
     elif args.command == "stats":
         cmd_stats(args)
     elif args.command == "discover":

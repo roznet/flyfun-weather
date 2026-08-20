@@ -42,6 +42,10 @@ class VerificationObservation(BaseModel):
 
     # METAR fields
     metar_raw: str | None = None
+    # 'METAR' (routine) or 'SPECI' (special, issued off-cycle on significant
+    # change). Defaults to routine so callers that predate SPECI handling —
+    # and tests constructing observations by hand — keep their old meaning.
+    report_type: str = "METAR"
     flight_category: str | None = None  # VFR/MVFR/IFR/LIFR
     ceiling_ft: int | None = None
     visibility_m: int | None = None
