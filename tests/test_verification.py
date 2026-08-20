@@ -794,7 +794,7 @@ class TestSpeciPreservation:
         """
         flight = _make_flight(db_session, dev_user, verification_status="collecting")
         icao_map = {"EGTK": {flight.id}}
-        bucket = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+        bucket = NOW  # inside the flight window, so linkage is what is tested
 
         routine = _make_observation(observation_time=bucket)
         speci = _make_observation(
@@ -853,3 +853,65 @@ class TestRoutineObservationFilter:
         ).scalars().all()
 
         assert sorted(r.report_type or "NULL" for r in kept) == ["METAR", "NULL"]
+
+
+class TestFlightLinkageStaysInsideTheWindow:
+    """The fetch returns ~3 h of history; linkage must not.
+
+    `fetch_observations_batch` is shared by the flight and standalone paths.
+    Once it returns every report in euro_aip's window rather than only
+    `latest_metar`, linking whatever comes back would attach observations
+    from before a flight's window ever opened — and, where two flights'
+    corridors share an airport, attach one flight's earlier observations to
+    the other. `score_flight` scores one row per linked observation and
+    applies no window filter of its own, so those would be scored against
+    forecast hours that have nothing to do with the flight.
+    """
+
+    def test_observation_before_the_window_is_stored_but_not_linked(
+        self, db_session, dev_user,
+    ):
+        # Flight departs NOW-1h, runs 2h → window [NOW-2h, NOW+3h].
+        flight = _make_flight(db_session, dev_user, verification_status="collecting")
+        icao_map = {"EGTK": {flight.id}}
+
+        stale = _make_observation(observation_time=NOW - timedelta(hours=3))
+        inside = _make_observation(observation_time=NOW)
+
+        store_observations([stale, inside], icao_map, db_session)
+        db_session.flush()
+
+        stored = {
+            r.observation_time: r.id
+            for r in db_session.execute(
+                select(VerificationObservationRow)
+            ).scalars().all()
+        }
+        assert len(stored) == 2, "both observations must still be stored"
+
+        linked = {
+            link.observation_id
+            for link in db_session.execute(
+                select(FlightVerificationMapRow).where(
+                    FlightVerificationMapRow.observation_id.isnot(None)
+                )
+            ).scalars().all()
+        }
+        assert stored[NOW] in linked
+        assert stored[NOW - timedelta(hours=3)] not in linked
+
+    def test_observation_after_the_window_is_not_linked(self, db_session, dev_user):
+        flight = _make_flight(db_session, dev_user, verification_status="collecting")
+        icao_map = {"EGTK": {flight.id}}
+
+        late = _make_observation(observation_time=NOW + timedelta(hours=5))
+
+        store_observations([late], icao_map, db_session)
+        db_session.flush()
+
+        links = db_session.execute(
+            select(FlightVerificationMapRow).where(
+                FlightVerificationMapRow.observation_id.isnot(None)
+            )
+        ).scalars().all()
+        assert links == []
