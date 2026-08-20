@@ -66,6 +66,12 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var flightsCallCount = 0
     private(set) var submitPirepsBatchCallCount = 0
     private(set) var interpretRouteCallCount = 0
+    /// One per `updateFlight` call — the post-move residual PATCH retries, so a
+    /// test needs to see how many attempts a given failure bought.
+    private(set) var updateFlightCallCount = 0
+    /// One per `packs` call, so the pack-count load can be shown to de-duplicate
+    /// across the editor's `.task` and the Save-time await.
+    private(set) var packsCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
     private(set) var lastMoveRequest: MoveFlightRequest?
     private(set) var lastMovedFlightId: String?
@@ -101,6 +107,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         return try createFlightResult.get()
     }
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
+        updateFlightCallCount += 1
         lastUpdateRequest = request
         return try updateFlightResult.get()
     }
@@ -146,7 +153,15 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
-    func packs(flightId: String) async throws -> [PackMetaResponse] { try packsResult.get() }
+    /// Awaited *inside* `packs` before it returns — lets a test hold the pack
+    /// count suspended and observe the copy the editor shows meanwhile.
+    var beforePacksReturn: (@Sendable () async -> Void)?
+
+    func packs(flightId: String) async throws -> [PackMetaResponse] {
+        packsCallCount += 1
+        if let hook = beforePacksReturn { await hook() }
+        return try packsResult.get()
+    }
     func flightByShareCode(_ code: String) async throws -> FlightResponse { throw MockError.notStubbed("flightByShareCode") }
     func subscribeFlight(id: String) async throws { throw MockError.notStubbed("subscribeFlight") }
     func unsubscribeFlight(id: String) async throws { throw MockError.notStubbed("unsubscribeFlight") }
@@ -208,6 +223,7 @@ func makeFlight(
     isSubscribed: Bool? = nil,
     flexibility: FlexibilityMode? = nil,
     altDepartureTime: String? = nil,
+    rawRoute: String? = nil,
     latestBriefing: BriefingStatusInfo? = nil
 ) -> FlightResponse {
     FlightResponse(
@@ -235,6 +251,7 @@ func makeFlight(
         altDepartureTime: altDepartureTime,
         shareCode: shareCode,
         ownerDisplayName: ownerDisplayName,
+        rawRoute: rawRoute,
         isSubscribed: isSubscribed
     )
 }
@@ -262,6 +279,27 @@ func makeBriefingStatus(
         fetchTimestamp: fetchTimestamp,
         unseen: unseen
     )
+}
+
+/// Build a minimal `PackMetaResponse` fixture. Decoded from JSON rather than
+/// constructed, because the type has no memberwise init in scope and this keeps
+/// it honest about the wire shape (snake_case keys, optionals absent).
+func makePackMeta(
+    flightId: String = "flt-1",
+    fetchTimestamp: String = "2026-06-24T09:00:00Z",
+    daysOut: Int = 3
+) throws -> PackMetaResponse {
+    let json = """
+    {
+      "flight_id": "\(flightId)",
+      "fetch_timestamp": "\(fetchTimestamp)",
+      "days_out": \(daysOut),
+      "is_historical": false,
+      "has_gramet": true, "has_skewt": true, "has_digest": true, "has_advisories": true,
+      "model_init_times": {}, "grib_init_times": {}, "models_skipped_region": []
+    }
+    """
+    return try JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: Data(json.utf8))
 }
 
 /// Build an `UpdateFlightResponse` fixture (Decodable-only, so assembled via

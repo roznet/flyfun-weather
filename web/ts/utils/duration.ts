@@ -1,7 +1,15 @@
 /** Shared helpers for the flight-duration hour/minute dropdown controls used on
  *  the flight setup form (index.html) and the flight-detail edit form. The model
  *  stores ``flight_duration_hours`` as decimal hours; the UI presents it as a
- *  whole-hour select (0–12) plus a 15-minute select. */
+ *  whole-hour select (0–12) plus a 15-minute select.
+ *
+ *  SYNC: the iOS app mirrors these options, the ceiling, the ceil-to-quarter
+ *  rounding (epsilon included) and the label format in
+ *  `app/flyfun-weather/flyfun-weather/Models/Domain/FlightDuration.swift`.
+ *  A drift is silent and pilot-visible — the same stored value renders as a
+ *  different flight window on the two clients. Registered as a surface in
+ *  `/sync-ios-web`. iOS additionally has `clampToPickerRange`, which the web
+ *  gets for free from its dropdown markup; that asymmetry is expected. */
 
 /** Selectable minute values — quarter-hour granularity. */
 export const DURATION_MINUTE_OPTIONS = [0, 15, 30, 45] as const;

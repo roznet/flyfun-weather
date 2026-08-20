@@ -2,8 +2,9 @@ import Foundation
 
 /// Hour + 15-minute split of a flight duration.
 ///
-/// Swift mirror of `web/ts/utils/duration.ts` — a hand-copied surface, so keep
-/// the two in step (`/sync-ios-web` exists to catch drift). The model stores
+/// SYNC: Swift mirror of `web/ts/utils/duration.ts` — a hand-copied surface, so
+/// keep the two in step (both files carry the reciprocal SYNC comment, and the
+/// pairing is registered as a surface in `/sync-ios-web`). The model stores
 /// `flight_duration_hours` as decimal hours; both clients present it as a
 /// whole-hour picker plus a quarter-hour picker, so a 1h15 flight round-trips as
 /// 1.25 rather than being coerced to the nearest half hour.

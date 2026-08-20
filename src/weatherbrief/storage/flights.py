@@ -10,12 +10,13 @@ import os
 import re
 import secrets
 import shutil
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, event, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -626,19 +627,55 @@ def is_subscribed(session: Session, flight_id: str, user_id: str) -> bool:
     ).first() is not None
 
 
-def delete_flight(session: Session, flight_id: str) -> None:
-    """Delete a flight and all its packs. Raises KeyError if not found."""
+def delete_flight(
+    session: Session, flight_id: str, *, remove_artifacts: bool = True
+) -> list[str]:
+    """Delete a flight and all its packs. Raises KeyError if not found.
+
+    Returns the pack artifact directories that belonged to the flight. With
+    ``remove_artifacts`` (the default) they are already gone by the time this
+    returns — the historical behaviour, fine for a caller whose delete is the
+    last thing in its transaction.
+
+    Pass ``remove_artifacts=False`` when the delete is followed by more work in
+    the same transaction (``move_flight``): the directories come back untouched
+    so the caller can hand them to :func:`remove_artifacts_after_commit`, which
+    is the only ordering under which a rollback cannot leave restored rows
+    pointing at files that no longer exist.
+    """
     row = session.get(FlightRow, flight_id)
     if row is None:
         raise KeyError(f"Flight not found: {flight_id}")
 
-    # Remove artifact directories for all packs
-    for pack in row.packs:
-        if pack.artifact_path:
-            _rmtree(Path(pack.artifact_path))
+    artifact_paths = [pack.artifact_path for pack in row.packs if pack.artifact_path]
+    if remove_artifacts:
+        for path in artifact_paths:
+            _rmtree(Path(path))
 
     session.delete(row)  # cascades to briefing_packs
     session.flush()
+    return artifact_paths
+
+
+def remove_artifacts_after_commit(session: Session, paths: Sequence[str]) -> None:
+    """Delete pack artifact directories once ``session``'s transaction commits.
+
+    Artifacts live on disk, outside the transaction: unlinking them before the
+    commit means a later failure rolls the rows back onto files that are already
+    gone. Deferring to ``after_commit`` ties the two together in the only
+    direction that degrades safely — a rollback keeps the files, a commit
+    removes them, and the worst case is an orphaned directory rather than a
+    restored pack row that can no longer be read.
+    """
+    if not paths:
+        return
+    targets = [Path(p) for p in paths]
+
+    def _cleanup(_session: Session) -> None:
+        for path in targets:
+            _rmtree(path)
+
+    event.listen(session, "after_commit", _cleanup, once=True)
 
 
 def bulk_delete_flights(
