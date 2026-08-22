@@ -72,7 +72,8 @@ All models share the same computation pipeline; inputs vary by what the raw data
 | **high.cover_pct** | GRIB (HCDC) | GRIB (HCDC) | GRIB (`hcc`) | GRIB (`clch`) |
 | **total_cover_pct** | GRIB (TCDC) | GRIB (TCDC) | GRIB (`tcc`) | GRIB (`clct`) |
 | **convective base/top** | GRIB | — | Top only (`hcct`); base = LCL proxy | GRIB (`hbas_con`, `htop_con`) |
-| **ml_cape/ml_cin (J/kg)** | — | GRIB (CAPE/CIN 90-0 mb; CIN already negative) | GRIB (`mlcape100`/`mlcin100`) | GRIB (`cape_ml`/`cin_ml`) |
+| **convective precip rate** | GRIB (`CPRAT`, instantaneous — no de-accumulation) | — | GRIB (`cp`, accumulated → de-accumulated) | GRIB (`crr`, accumulated → de-accumulated) |
+| **ml_cape/ml_cin (J/kg)** | GRIB (CAPE/CIN 180-0 mb; CIN already negative, shares HRRR's `_ncep_cin_jkg`) | GRIB (CAPE/CIN 90-0 mb; CIN already negative) | GRIB (`mlcape100`/`mlcin100`) | GRIB (`cape_ml`/`cin_ml`) |
 | **freezing_level_ft** | — | — | GRIB (`deg0l`) → overwrites `hourly.freezing_level_m` | — |
 | **boundary_cover_pct** | GRIB | — | — | — |
 
