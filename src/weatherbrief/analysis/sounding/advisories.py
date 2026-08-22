@@ -30,6 +30,7 @@ _TERRAIN_CLEARANCE_FT = 1000
 from weatherbrief.analysis.sounding.clouds import (  # noqa: E402
     _CLOUD_LOW_CEILING_FT,
     _CLOUD_MID_CEILING_FT,
+    cloud_cover_band_pct,
 )
 
 
@@ -343,14 +344,17 @@ def _nwp_cloud_cover_at(
             return 0.0
         # No usable geometry (ECMWF, HRRR, partial ICON-EU) — ICAO bands.
 
-    # Fallback to ICAO bands with Open-Meteo cloud cover
+    # Fallback to ICAO bands with Open-Meteo cloud cover. The low-band check is
+    # a "does this model publish bulk cover at all?" gate, not a band pick —
+    # keep it ahead of the shared band lookup.
     if analysis.cloud_cover_low_pct is None:
         return None
-    if altitude_ft < _CLOUD_LOW_CEILING_FT:
-        return analysis.cloud_cover_low_pct
-    if altitude_ft < _CLOUD_MID_CEILING_FT:
-        return analysis.cloud_cover_mid_pct
-    return analysis.cloud_cover_high_pct
+    return cloud_cover_band_pct(
+        altitude_ft,
+        analysis.cloud_cover_low_pct,
+        analysis.cloud_cover_mid_pct,
+        analysis.cloud_cover_high_pct,
+    )
 
 
 def _regime_label(

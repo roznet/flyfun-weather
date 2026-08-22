@@ -3515,6 +3515,19 @@ DD tower: cap the graded tier at MODERATE, count the point into
 never reach RED on thermodynamics alone. The invariant §18 states — *DD alone
 never reds* — now holds whether the scheme is quiet or missing.
 
+**The cap is about severity, not about admission.** Whether the point qualifies
+under `min_risk` is decided on the tier the model actually produced, and only
+*then* is the cap applied. Ordering it the other way round is a second silent
+drop, not a side effect of the first fix: `min_risk` is a catalog parameter with
+range 1–4, so a pilot may raise the floor above MODERATE, and a thermo-HIGH
+fallback point capped to MODERATE then falls below their own floor. The
+`dd_trigger` branch cannot catch what is left, either — it keys on
+`dd_not_corroborated`, and the cross-check is `None` when there is no track to
+compare — so the point disappears from the ribbon, `dd_trigger_count` *and* the
+absence note, and a route that graded RED before this fix grades GREEN after it.
+The complement still holds: a fallback point whose own tier does not reach the
+pilot's floor is still dropped, because the floor is theirs to set.
+
 **The discriminator matters, and neither obvious candidate works.**
 
 - `convective_nwp is None` is **wrong**: under an explicit `convective_method=

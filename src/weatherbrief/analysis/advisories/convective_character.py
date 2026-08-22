@@ -21,10 +21,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, showers_at_point
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
-from weatherbrief.analysis.sounding.clouds import (
-    _CLOUD_LOW_CEILING_FT,
-    _CLOUD_MID_CEILING_FT,
-)
+from weatherbrief.analysis.sounding.clouds import cloud_cover_band_pct
 from weatherbrief.analysis.sounding.convective import (
     CHAR_COVER_REALIZED_PCT,
     CHAR_EMBED_MIN_NM,
@@ -130,17 +127,18 @@ def resolve_character_params(ctx: RouteContext) -> dict[str, float]:
 def _bulk_cover_at(sounding: SoundingAnalysis, altitude_ft: float) -> float | None:
     """Bulk NWP cloud cover (%) for the ICAO band *containing* ``altitude_ft``.
 
-    Band boundaries are imported from ``sounding.clouds`` — the same constants
-    ``sounding/advisories.py`` reads — so the split cannot drift into a third
-    copy of 6500/20000. ``None`` when the model publishes no bulk cover for that
-    band (ECMWF via Open-Meteo), which callers read as "no corroboration
-    available", never as "clear".
+    Thin adapter over ``clouds.cloud_cover_band_pct`` — the band split lives
+    there, with the boundary constants, so it cannot drift. ``None`` when the
+    model publishes no bulk cover for that band (ECMWF via Open-Meteo), which
+    :func:`_point_embedded` reads as "no corroboration available", never as
+    "clear".
     """
-    if altitude_ft < _CLOUD_LOW_CEILING_FT:
-        return sounding.cloud_cover_low_pct
-    if altitude_ft < _CLOUD_MID_CEILING_FT:
-        return sounding.cloud_cover_mid_pct
-    return sounding.cloud_cover_high_pct
+    return cloud_cover_band_pct(
+        altitude_ft,
+        sounding.cloud_cover_low_pct,
+        sounding.cloud_cover_mid_pct,
+        sounding.cloud_cover_high_pct,
+    )
 
 
 def _point_embedded(

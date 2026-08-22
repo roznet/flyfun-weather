@@ -31,6 +31,36 @@ _M_TO_FT = 3.28084
 _CLOUD_LOW_CEILING_FT = 6500
 _CLOUD_MID_CEILING_FT = 20000
 
+
+def cloud_band_index(altitude_ft: float) -> int:
+    """ICAO band an altitude falls in: 0 = low, 1 = mid, 2 = high."""
+    if altitude_ft < _CLOUD_LOW_CEILING_FT:
+        return 0
+    if altitude_ft < _CLOUD_MID_CEILING_FT:
+        return 1
+    return 2
+
+
+def cloud_cover_band_pct(
+    altitude_ft: float,
+    low_pct: float | None,
+    mid_pct: float | None,
+    high_pct: float | None,
+) -> float | None:
+    """Bulk cloud cover (%) for the ICAO band *containing* ``altitude_ft``.
+
+    The one place the three-way low/mid/high pick lives. It was written out
+    longhand in three modules (this one's band splitter, ``sounding/advisories
+    .py``'s ``_nwp_cloud_cover_at`` tail, and the #568 convective-character deck
+    test), which is how the boundaries drift: importing the constants but
+    re-implementing the ladder around them only moves the duplication one level
+    down.
+
+    ``None`` in means ``None`` out for that band — "the model publishes no bulk
+    cover here", which callers must read as *unknown*, never as *clear*.
+    """
+    return (low_pct, mid_pct, high_pct)[cloud_band_index(altitude_ft)]
+
 # Dewpoint depression threshold for "in cloud" (degrees C)
 IN_CLOUD_DD_THRESHOLD = 3.0
 
@@ -681,12 +711,7 @@ def build_nwp_cloud_layers_from_condensate(
             if lv.pressure_hpa > _NCEP_MID_BAND_FLOOR_HPA:
                 return 1
             return 2
-        alt_ft = (lv.geopotential_height_m or 0.0) * _M_TO_FT
-        if alt_ft < _CLOUD_LOW_CEILING_FT:
-            return 0
-        if alt_ft < _CLOUD_MID_CEILING_FT:
-            return 1
-        return 2
+        return cloud_band_index((lv.geopotential_height_m or 0.0) * _M_TO_FT)
 
     band_eff = (low_eff, mid_eff, high_eff)
 
@@ -897,9 +922,12 @@ def _build_grib_layers(
 # ── ICAO band constants used by apply_nwp_coverage ─────────────────
 
 
-# ICAO altitude band boundaries (ft)
-_LOW_TOP_FT = 6500
-_MID_TOP_FT = 20000
+# ICAO altitude band boundaries (ft). Aliases of the module-level constants
+# above rather than a second pair of literals — they were independent copies of
+# 6500/20000 in this same file, which is exactly the drift the shared
+# ``cloud_band_index`` exists to prevent.
+_LOW_TOP_FT = _CLOUD_LOW_CEILING_FT
+_MID_TOP_FT = _CLOUD_MID_CEILING_FT
 _HIGH_TOP_FT = 45000
 
 # Minimum NWP cloud cover (%) below which a band segment is treated as clear.
