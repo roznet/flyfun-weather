@@ -145,16 +145,25 @@ class TestTimestampSerialization:
     def test_offset_input_is_normalised_not_shifted(self, client):
         """A client sending +02:00 local must land on the same instant.
 
-        iOS/web send the pilot's own offset; the stored value is UTC, so this
-        must read back as 06:52Z, never 08:52Z.
+        iOS/web send the pilot's own offset; the stored value is UTC, so a
+        report filed at 08:52+02:00 must read back as 06:52Z, never 08:52Z.
+
+        The instant is derived from *now* rather than written as a fixed date:
+        ``_only_listed`` reads through ``?hours=24``, so a hardcoded wall-clock
+        date passes on the day it is written and drops out of the window for
+        good the next day.
         """
+        local = (datetime.now(timezone.utc) - timedelta(minutes=10)).astimezone(
+            timezone(timedelta(hours=2))
+        )
         assert client.post("/api/pireps", json=_pirep_payload(
-            observed_at="2026-08-20T08:52:00+02:00",
+            observed_at=local.isoformat(),
         )).status_code == 201
 
         parsed = datetime.fromisoformat(self._only_listed(client)["observed_at"])
-        assert parsed == datetime(2026, 8, 20, 6, 52, tzinfo=timezone.utc)
-        assert parsed.astimezone(timezone.utc).strftime("%H:%M") == "06:52"
+        assert parsed == local.astimezone(timezone.utc)
+        # The bug echoed the pilot's local wall clock back as if it were UTC.
+        assert parsed.replace(tzinfo=None) != local.replace(tzinfo=None)
 
     def test_fresh_pirep_is_not_aged_by_the_utc_offset(self, client):
         """The symptom a pilot would actually see: a report filed a minute ago
