@@ -798,10 +798,11 @@ def _enrich_with_grib(
                 snap["cloud_base_ft"] = cd.cloud_base_ft
 
                 # Convective ingredients (#565/#566). Written only when the
-                # GRIB actually carried a value: this runs *after* the sounding
-                # pass, so an unconditional assignment would overwrite the
-                # model-native values the ECMWF path already resolved, and blank
-                # them with None on any hour the cloud-diag fetch missed.
+                # GRIB actually carried a value, so an hour the cloud-diag
+                # fetch missed leaves the field alone instead of blanking it
+                # with None. (This loop never sees ECMWF — `_enrich_with_grib`
+                # returns at the top for it, since its diagnostics arrive
+                # inline from the GRIB-first path.)
                 #
                 # This is also why `nwp_conv_method` stays NULL for GFS/ICON:
                 # the convective *assessment* ran inside the Open-Meteo fetch,
