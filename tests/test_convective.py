@@ -1,5 +1,7 @@
 """Tests for convective risk assessment (sounding/convective.py)."""
 
+import pytest
+
 from weatherbrief.analysis.sounding.convective import (
     ConvectiveCrossCheck,
     _effective_cape,
@@ -1510,26 +1512,46 @@ def test_threshold_boundaries_exclusive_inclusive():
 from weatherbrief.analysis.sounding.convective import (  # noqa: E402
     ConvCharPoint,
     classify_convective_character,
+    longest_embedded_run_nm,
 )
 from weatherbrief.models import ConvectiveCharacter  # noqa: E402
 
+# Uniform point spacing for the character tests. Distances sit at cell centres
+# ((i + 0.5) * SPACING over a total of n * SPACING), so each point owns exactly
+# SPACING nm under the midpoint-owned-cell convention and a run of k contiguous
+# points measures exactly k * SPACING.
+_SPACING_NM = 10.0
 
-def _pts(n_total, *, conv=0, realized=0, embedded=0, k=None, tt=None):
+
+def _pts(
+    n_total, *, conv=0, realized=0, embedded=0, k=None, tt=None, embedded_idx=None
+):
     """Build n_total points; the first `conv` are convective, of which
-    `realized` are realized and `embedded` are embedded."""
+    `realized` are realized and `embedded` are embedded.
+
+    `embedded_idx` overrides the "first N" rule with an explicit index set, for
+    the scattered-vs-contiguous extent cases (#568).
+    """
     points = []
     for i in range(n_total):
         is_conv = i < conv
+        is_embedded = i in embedded_idx if embedded_idx is not None else i < embedded
         points.append(
             ConvCharPoint(
                 is_convective=is_conv,
                 realized=is_conv and i < realized,
-                embedded=is_conv and i < embedded,
+                embedded=is_conv and is_embedded,
                 k_index=k if is_conv else None,
                 total_totals=tt if is_conv else None,
+                distance_nm=(i + 0.5) * _SPACING_NM,
             )
         )
     return points
+
+
+def _route_nm(points):
+    """Total route length matching `_pts`'s uniform spacing."""
+    return len(points) * _SPACING_NM
 
 
 def test_character_none_when_no_points():
@@ -1590,9 +1612,112 @@ def test_character_numerosity_cannot_resurrect_unrealized_air():
 
 
 def test_character_embedded_takes_priority():
-    # Even with few realized cells, a majority embedded → embedded.
-    pts = _pts(20, conv=4, realized=2, embedded=3)
-    assert classify_convective_character(pts) is ConvectiveCharacter.EMBEDDED
+    """A long enough contiguous run of realized embedded cells → EMBEDDED.
+
+    Six contiguous 10 nm cells = 60 nm, over the 50 nm default, so this beats the
+    ISOLATED coverage band (6 realized of 40 points = 15 %) it would otherwise get.
+    """
+    pts = _pts(40, conv=6, realized=6, embedded=6)
+    assert (
+        classify_convective_character(pts, total_distance_nm=_route_nm(pts))
+        is ConvectiveCharacter.EMBEDDED
+    )
+
+
+# --- #568: the embedded gate is a contiguous EXTENT, not a fraction -----------
+#
+# ``embedded / len(conv) >= 50 %`` had no population floor, so ONE convective
+# point under a deck scored 100 % and turned a whole route RED "embedded — VFR
+# impractical". Live on ECMWF for a 582 nm route graded off a single 9 nm point
+# (2 % of the route). Same failure as the ``realized == 0`` short-circuit: a
+# colour and a route-wide claim over an extent of nothing. The replacement is the
+# longest *contiguous* run of realized embedded cells, because EMBEDDED is RED
+# for "you cannot get around it" — scattered cells are what the coverage band
+# already grades.
+
+
+def test_character_single_embedded_cell_is_not_an_embedded_route():
+    """The production case: one 10 nm cell on a 600 nm route → ISOLATED, not RED."""
+    pts = _pts(60, conv=1, realized=1, embedded=1)
+    assert (
+        classify_convective_character(pts, total_distance_nm=_route_nm(pts))
+        is ConvectiveCharacter.ISOLATED
+    )
+
+
+def test_character_contiguous_run_just_under_the_floor():
+    """4 contiguous cells = 40 nm < 50 nm → not embedded."""
+    pts = _pts(40, conv=4, realized=4, embedded=4)
+    assert (
+        classify_convective_character(pts, total_distance_nm=_route_nm(pts))
+        is not ConvectiveCharacter.EMBEDDED
+    )
+
+
+def test_character_contiguous_run_at_the_floor():
+    """5 contiguous cells = 50 nm, exactly the floor → embedded (the test is >=)."""
+    pts = _pts(40, conv=5, realized=5, embedded=5)
+    assert (
+        classify_convective_character(pts, total_distance_nm=_route_nm(pts))
+        is ConvectiveCharacter.EMBEDDED
+    )
+
+
+def test_character_scattered_embedded_points_are_not_a_barrier():
+    """80 nm of embedded cells that are never adjacent → not EMBEDDED.
+
+    A total that clears the floor without a single unbroken stretch is not a wall
+    — it is cells with gaps, which the coverage band grades.
+    """
+    idx = {0, 2, 4, 6, 8, 10, 12, 14}  # 8 cells, 80 nm total, never adjacent
+    pts = _pts(40, conv=15, realized=15, embedded=0, embedded_idx=idx)
+    assert (
+        classify_convective_character(pts, total_distance_nm=_route_nm(pts))
+        is not ConvectiveCharacter.EMBEDDED
+    )
+
+
+def test_character_embedded_requires_realized_cells():
+    """A point must have a *realized* cell to count as hiding one.
+
+    Same premise as the ``realized == 0`` short-circuit: "cells hidden in a deck"
+    presupposes cells. Here one cell realizes (so the route is not short-circuited
+    to NONE) but the other eight under the deck do not.
+    """
+    pts = _pts(40, conv=9, realized=1, embedded=9)
+    assert (
+        classify_convective_character(pts, total_distance_nm=_route_nm(pts))
+        is not ConvectiveCharacter.EMBEDDED
+    )
+
+
+def test_character_without_route_length_cannot_assert_embedded():
+    """No route length → no measurable extent → fall through to the band."""
+    pts = _pts(40, conv=8, realized=8, embedded=8)
+    assert classify_convective_character(pts) is not ConvectiveCharacter.EMBEDDED
+
+
+def test_longest_embedded_run_measures_the_contiguous_extent():
+    pts = _pts(20, conv=10, realized=10, embedded=0, embedded_idx={1, 2, 3, 7, 8})
+    # Longest run is points 1-3 = 3 cells x 10 nm; the 7-8 pair is shorter.
+    assert longest_embedded_run_nm(pts, _route_nm(pts)) == pytest.approx(30.0)
+
+
+def test_embed_min_nm_of_zero_does_not_embed_a_route_with_no_embedded_points():
+    """``embed_min_nm`` is tunable to 0 — a `>= 0` test alone would red everything."""
+    pts = _pts(40, conv=8, realized=8, embedded=0)
+    assert (
+        classify_convective_character(
+            pts, total_distance_nm=_route_nm(pts), embed_min_nm=0
+        )
+        is not ConvectiveCharacter.EMBEDDED
+    )
+
+
+def test_longest_embedded_run_is_zero_without_a_route_length():
+    pts = _pts(20, conv=10, realized=10, embedded=5)
+    assert longest_embedded_run_nm(pts, None) == 0.0
+    assert longest_embedded_run_nm(pts, 0.0) == 0.0
 
 
 def test_character_organized_widespread_with_front():
@@ -1663,6 +1788,7 @@ from types import SimpleNamespace  # noqa: E402
 
 from weatherbrief.analysis.advisories.convective_character import (  # noqa: E402
     _below_base_geometry,
+    _point_embedded,
     _vmc_below_base,
 )
 from weatherbrief.models import CloudCoverage, EnhancedCloudLayer  # noqa: E402
@@ -1685,13 +1811,64 @@ def _geo_pt(base_ft, *, top_ft=25_000.0, vmc=True, realized=True, is_conv=True):
     )
 
 
-def _sounding(layers, *, low=None, mid=None):
-    """Minimal stand-in exposing the fields _vmc_below_base reads."""
+def _sounding(layers, *, low=None, mid=None, high=None):
+    """Minimal stand-in exposing the fields _vmc_below_base / _point_embedded read."""
     return SimpleNamespace(
         cloud_layers=layers,
         cloud_cover_low_pct=low,
         cloud_cover_mid_pct=mid,
+        cloud_cover_high_pct=high,
     )
+
+
+def _layer(base, top, coverage=CloudCoverage.OVC):
+    return EnhancedCloudLayer(base_ft=base, top_ft=top, coverage=coverage)
+
+
+# --- _point_embedded: the deck has to REACH cruise (#568) --------------------
+
+
+def test_point_embedded_false_when_deck_is_entirely_below_cruise():
+    """The bug: only the deck's BASE was tested, never its top.
+
+    36 of ICON's 39 "embedded" points on the pack behind #568 were decks the
+    aircraft was thousands of feet above — a 697-1,942 ft stratocumulus sheet
+    scored as "cells hidden in cloud" for an aircraft at FL180.
+    """
+    snd = _sounding([_layer(700, 1_950)], low=100.0, mid=100.0)
+    assert _point_embedded(snd, 18_000.0) is False
+
+
+def test_point_embedded_true_when_the_deck_spans_cruise():
+    snd = _sounding([_layer(12_000, 24_000)], mid=90.0)
+    assert _point_embedded(snd, 18_000.0) is True
+
+
+def test_point_embedded_true_within_the_cruise_buffer():
+    """Model levels are ~1,000-2,000 ft apart up there — exact containment is
+    falsely precise, so a deck topping just under cruise still counts."""
+    snd = _sounding([_layer(9_000, 17_500)], mid=90.0)
+    assert _point_embedded(snd, 18_000.0, buffer_ft=1000.0) is True
+    assert _point_embedded(snd, 18_000.0, buffer_ft=0.0) is False
+
+
+def test_point_embedded_cover_comes_from_the_band_containing_cruise():
+    """A 100 %-covered LOW deck must not corroborate a deck at FL180.
+
+    The old test read ``max(low, mid)`` regardless of cruise altitude. Here the
+    layer does span cruise, so only the band-matched cover decides.
+    """
+    snd = _sounding([_layer(12_000, 24_000)], low=100.0, mid=10.0)
+    assert _point_embedded(snd, 18_000.0) is False
+    assert _point_embedded(snd, 18_000.0, deck_cover_pct=5.0) is True
+
+
+def test_point_embedded_falls_back_to_ovc_without_bulk_cover():
+    """ECMWF via Open-Meteo publishes no bulk cover — OVC is the standalone evidence."""
+    ovc = _sounding([_layer(12_000, 24_000, CloudCoverage.OVC)])
+    bkn = _sounding([_layer(12_000, 24_000, CloudCoverage.BKN)])
+    assert _point_embedded(ovc, 18_000.0) is True
+    assert _point_embedded(bkn, 18_000.0) is False
 
 
 # --- _vmc_below_base ---------------------------------------------------------

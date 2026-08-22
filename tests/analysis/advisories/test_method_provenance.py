@@ -21,6 +21,9 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import driving_method_id
 from weatherbrief.analysis.advisories.cloud_top import CloudTopEvaluator
 from weatherbrief.analysis.advisories.convective import ConvectiveEvaluator
+from weatherbrief.analysis.advisories.convective_character import (
+    ConvectiveCharacterEvaluator,
+)
 from weatherbrief.analysis.advisories.enroute_precip import EnroutePrecipEvaluator
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
@@ -437,14 +440,19 @@ class TestIcingEvaluatorsBadgeEffective:
         """
         envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]
         zone = IcingZone(base_ft=6500, top_ft=9500, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME)
+        # On the model's own NWP track: since #568 a model with no native
+        # convective forecast is capped at AMBER, so a bare ``convective=`` HIGH
+        # would no longer drive the composite RED this test is about.
         high_conv = ConvectiveAssessment(risk_level=ConvectiveRisk.HIGH, cape_jkg=2600)
         iced = SoundingAnalysis(
             indices=ThermodynamicIndices(freezing_level_ft=6000),
-            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[zone], convective=high_conv,
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[zone],
+            convective_nwp=high_conv,
         )
         clear = SoundingAnalysis(
             indices=ThermodynamicIndices(freezing_level_ft=6000),
-            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[], convective=high_conv,
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[],
+            convective_nwp=high_conv,
         )
         # 2 iced of 6 → icing_pct ~33% (AMBER band, below RED 50); HIGH conv → RED.
         ctx = _ctx([iced, iced, clear, clear, clear, clear], icing_method="ogimet_nwp")
@@ -605,6 +613,64 @@ class TestConvectiveEvaluatorBadgesEffective:
         result = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id == "thermo"
+
+
+class TestConvectiveCharacterBadgesEffective:
+    """The character card badges its track too (#568).
+
+    ``ConvectiveCharacterEvaluator`` built every ``ModelAdvisoryResult`` without
+    ``primary_method_id``, so all models reported ``None``. The severity card
+    badges it (and correctly showed "thermo" for the model with no native
+    track) — but the **character card is the one that renders the EMBEDDED
+    red**, and it gave the pilot no indication that one model was graded on a
+    different track from the other two. ``driving_method_id`` cannot be reused:
+    it sources from ``AdvisoryHighlights``, which this evaluator does not
+    produce, so the method travels out of ``build_character_points`` instead.
+    """
+
+    @staticmethod
+    def _cell(*, nwp: bool) -> SoundingAnalysis:
+        """A MODERATE cell with resolved geometry — realized, so it makes a band."""
+        thermo = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.MODERATE, cape_jkg=1200,
+            base_ft=6000, top_ft=28000,
+        )
+        return SoundingAnalysis(
+            convective=thermo,
+            convective_thermo=thermo,
+            convective_nwp=(
+                ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.MODERATE, cape_jkg=1200,
+                    base_ft=6000, top_ft=28000, convective_precip_mm_h=1.5,
+                )
+                if nwp else None
+            ),
+        )
+
+    @staticmethod
+    def _badge(ctx) -> str | None:
+        result = ConvectiveCharacterEvaluator.evaluate(
+            ctx, _defaults(ConvectiveCharacterEvaluator)
+        )
+        return next(m for m in result.per_model if m.model == "gfs").primary_method_id
+
+    def test_native_track_badges_nwp(self):
+        ctx = _ctx([self._cell(nwp=True) for _ in range(6)], convective_method="nwp")
+        assert self._badge(ctx) == "nwp"
+
+    def test_absent_native_track_badges_thermo(self):
+        """The outlier model on the motivating pack: graded on thermodynamics."""
+        ctx = _ctx([self._cell(nwp=False) for _ in range(6)], convective_method="nwp")
+        assert self._badge(ctx) == "thermo"
+
+    def test_a_single_fallback_point_is_not_averaged_away(self):
+        """A mixed route badges the fallback: it is the fact the badge carries."""
+        soundings = [self._cell(nwp=True) for _ in range(5)] + [self._cell(nwp=False)]
+        assert self._badge(_ctx(soundings, convective_method="nwp")) == "thermo"
+
+    def test_explicit_thermo_request_badges_thermo(self):
+        ctx = _ctx([self._cell(nwp=True) for _ in range(6)], convective_method="thermo")
+        assert self._badge(ctx) == "thermo"
 
 
 class TestCompositeRegionProvenance:

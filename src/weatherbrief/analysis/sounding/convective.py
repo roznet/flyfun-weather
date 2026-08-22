@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal, NamedTuple
 
+from weatherbrief.analysis.route_geometry import cell_edges
 from weatherbrief.models import (
     ConvectiveAssessment,
     ConvectiveCharacter,
@@ -1453,8 +1454,19 @@ def convective_cross_check(
 # Realized-coverage bands: % of *all* route points with realized convection.
 CHAR_ISOLATED_MAX_PCT = 15.0   # ≤ ⇒ isolated (discrete cells, wide gaps)
 CHAR_SCATTERED_MAX_PCT = 40.0  # ≤ ⇒ scattered; above ⇒ widespread
-# Fraction of *convective* points sitting under a BKN/OVC deck ⇒ embedded.
-CHAR_EMBED_PCT = 50.0
+# Longest *contiguous* run of embedded cells (nm) at/above which the route is
+# EMBEDDED (#568). Replaces the old ``CHAR_EMBED_PCT`` fraction of convective
+# points, which had no population floor: one convective point under a deck
+# scored 100 % and turned a 582 nm route RED "embedded — VFR impractical" off
+# 9 nm of it.
+#
+# Contiguous rather than total, because EMBEDDED is RED for *"you cannot get
+# around it"*. Scattered embedded points summing to 50 nm are not a barrier —
+# they are cells with gaps between them, which is what the coverage band below
+# already grades. Measured with the midpoint-owned-cell convention
+# (``route_geometry.cell_edges``), the same one ``format_extent`` uses, so the
+# extent this gate fires on and the "(Xnm/Ynm)" the card prints agree.
+CHAR_EMBED_MIN_NM = 50.0
 # 0–6 km bulk shear (kt) at/above which a *widespread* band is called ORGANIZED.
 CHAR_ORGANIZED_SHEAR_KT = 35.0
 # K-index / Total Totals "numerous storms" thresholds — bump the band up one.
@@ -1469,7 +1481,7 @@ class ConvCharPoint(NamedTuple):
 
     is_convective: bool       # severity ≥ the min risk that counts (MODERATE+)
     realized: bool            # model realizes convection here (showers/cover/geom)
-    embedded: bool            # convective point sits under a BKN/OVC deck
+    embedded: bool            # a BKN/OVC deck contains cruise here (cells hidden)
     k_index: float | None     # native preferred, else MetPy
     total_totals: float | None
     # Below-base avoidability geometry (#298) — consumed only by the annotate-only
@@ -1477,6 +1489,10 @@ class ConvCharPoint(NamedTuple):
     convective_base_ft: float | None = None  # model-native cell base; None = depth/base unresolved
     convective_top_ft: float | None = None   # model-native cell top; None = no diagnosed tower
     vmc_below_base: bool = True               # layer cruise→base free of a BKN/OVC deck (VMC see-and-avoid)
+    # Along-route position (nm from origin), for the contiguous-extent embedded
+    # gate (#568). ``None`` on hand-built points in tests; the classifier then
+    # falls back to even spacing over ``total_distance_nm``.
+    distance_nm: float | None = None
 
 
 _CHAR_BAND_ORDER = (
@@ -1495,6 +1511,50 @@ def _char_up_one(band: ConvectiveCharacter) -> ConvectiveCharacter:
     return _CHAR_BAND_ORDER[min(i + 1, len(_CHAR_BAND_ORDER) - 1)]
 
 
+def longest_embedded_run_nm(
+    points: Sequence[ConvCharPoint], total_distance_nm: float | None
+) -> float:
+    """Longest *contiguous* along-route run of embedded cells, in nm (#568).
+
+    A point counts only when it is a **realized** cell whose cruise level sits
+    inside a deck (``is_convective and realized and embedded``). Realization is
+    part of the predicate for the same reason the ``realized == 0`` short-circuit
+    exists below: "cells hidden in a deck" presupposes cells, and the old gate
+    counted merely-thermodynamically-flagged points.
+
+    Extent uses the midpoint-owned-cell convention (``cell_edges``): a run from
+    point *i* to point *j* spans ``rights[j] - lefts[i]``, so the number agrees
+    with the ``(Xnm/Ynm)`` extent the advisory card prints. Points with no
+    ``distance_nm`` (hand-built test points) are treated as evenly spaced over
+    ``total_distance_nm``.
+
+    Returns 0.0 when the route length is unknown or non-positive — without a
+    distance there is no extent to gate on, and the caller falls through to the
+    coverage band rather than asserting an unmeasurable barrier.
+    """
+    n = len(points)
+    if n == 0 or total_distance_nm is None or total_distance_nm <= 0:
+        return 0.0
+    distances = [
+        p.distance_nm
+        if p.distance_nm is not None
+        else (total_distance_nm * i / (n - 1) if n > 1 else 0.0)
+        for i, p in enumerate(points)
+    ]
+    lefts, rights = cell_edges(distances, total_distance_nm)
+
+    best = 0.0
+    run_start: int | None = None
+    for i, pt in enumerate(points):
+        if pt.is_convective and pt.realized and pt.embedded:
+            if run_start is None:
+                run_start = i
+            best = max(best, rights[i] - lefts[run_start])
+        else:
+            run_start = None
+    return best
+
+
 def classify_convective_character(
     points: Sequence[ConvCharPoint],
     *,
@@ -1503,7 +1563,8 @@ def classify_convective_character(
     synoptic_ascent: bool = False,
     isolated_max_pct: float = CHAR_ISOLATED_MAX_PCT,
     scattered_max_pct: float = CHAR_SCATTERED_MAX_PCT,
-    embed_pct: float = CHAR_EMBED_PCT,
+    embed_min_nm: float = CHAR_EMBED_MIN_NM,
+    total_distance_nm: float | None = None,
     organized_shear_kt: float = CHAR_ORGANIZED_SHEAR_KT,
     k_numerous: float = CHAR_K_NUMEROUS,
     tt_numerous: float = CHAR_TT_NUMEROUS,
@@ -1516,7 +1577,13 @@ def classify_convective_character(
     *widespread* band as ORGANIZED. This ordering is deliberate — forcing with
     only a few realized cells (a capped loaded gun strung along a trough) stays
     avoidable, matching the EDQT→EDDS 2026-06-16 "few but nasty" ground truth
-    (issue #294). EMBEDDED (cells hidden in a deck) is checked first.
+    (issue #294).
+
+    EMBEDDED (cells hidden in a deck) is checked first, and fires on the longest
+    *contiguous* run of realized embedded points reaching ``embed_min_nm`` —
+    a route extent, not a fraction of convective points (#568). ``points`` must
+    therefore carry ``distance_nm`` and the caller must pass ``total_distance_nm``;
+    without a route length the gate cannot fire at all.
 
     Severity owns the colour; this never downgrades it. Bands map to the
     advisory colour in the evaluator (ISOLATED/SCATTERED→AMBER, the rest→RED).
@@ -1548,8 +1615,26 @@ def classify_convective_character(
         return ConvectiveCharacter.NONE
 
     # 1. Embedded — cells you cannot see to avoid because a deck hides them.
-    embedded = sum(1 for p in conv if p.embedded)
-    if 100.0 * embedded / len(conv) >= embed_pct:
+    #
+    # Gated on CONTIGUOUS ALONG-ROUTE EXTENT, not on a fraction of convective
+    # points (#568). The old fraction had ``len(conv)`` as its denominator and no
+    # population floor, so a single flagged point under a deck scored 100 % and
+    # called a 582 nm route EMBEDDED/RED off 9 nm of it — the same "a colour over
+    # an extent of nothing" failure the ``realized == 0`` short-circuit above
+    # exists to prevent.
+    #
+    # Contiguous, because EMBEDDED is RED for "you cannot get around it": cells
+    # with gaps between them are exactly what the coverage band below grades, and
+    # scattered embedded points summing to the threshold are not a barrier.
+    # Below the threshold we fall through to that band, which grades the cells on
+    # their realized extent. Severity is untouched — a dangerous single cell
+    # still owns its own colour there.
+    #
+    # ``run > 0`` is load-bearing at the parameter's own minimum: ``embed_min_nm``
+    # is tunable down to 0, and without it a route with NO embedded points would
+    # satisfy ``0 >= 0`` and grade EMBEDDED. A run has to exist to be measured.
+    embedded_run_nm = longest_embedded_run_nm(points, total_distance_nm)
+    if embedded_run_nm > 0 and embedded_run_nm >= embed_min_nm:
         return ConvectiveCharacter.EMBEDDED
 
     # 2. Realized-coverage band (% of all route points with realized convection).

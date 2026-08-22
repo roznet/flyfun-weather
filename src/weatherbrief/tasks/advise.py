@@ -246,10 +246,21 @@ def _resolve_analyses(
                 # convective grades on thermo wherever ``convective_nwp`` is None,
                 # and until now nothing recorded that it happened.
                 updates["convective_method_effective"] = "nwp" if nwp is not None else "thermo"
+                # Dedicated fallback marker (#568). ``convective_method_effective``
+                # cannot carry this: "thermo" there means *either* silent fallback
+                # or an explicit thermo request, and the §18 DD-amber cap must
+                # apply to the first and never to the second. This is the only
+                # place that knows the requested method was "nwp", so the marker
+                # is set here. Set on BOTH branches (like the method badge) so a
+                # stale True can never survive ``model_copy(update=updates)``.
+                updates["convective_nwp_fallback"] = nwp is None
             else:
                 # Explicit "thermo": ``convective`` already holds the thermo
                 # assessment — no swap, but badge the method that produced it.
                 updates["convective_method_effective"] = "thermo"
+                # The user asked for thermo and got thermo — not a fallback, so
+                # the §18 cap must not fire and silently override their choice.
+                updates["convective_nwp_fallback"] = False
 
             if updates:
                 new_soundings[key] = sounding.model_copy(update=updates)
