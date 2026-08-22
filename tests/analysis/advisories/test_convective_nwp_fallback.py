@@ -28,6 +28,7 @@ from datetime import datetime
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.convective_grading import (
+    CONVECTIVE_PARAM_DEFAULTS,
     grade_convective_model,
     resolve_convective_params,
 )
@@ -254,3 +255,62 @@ def test_a_firing_native_scheme_still_grades_red():
     assert grade.status == AdvisoryStatus.RED
     assert grade.dd_trigger_count == 0
     assert grade.worst_risk == ConvectiveRisk.HIGH
+
+
+# ---------------------------------------------------------------------------
+# The cap must not become a second silent-drop path (review round 1)
+# ---------------------------------------------------------------------------
+#
+# The cap exists to stop DD alone reaching RED. It must not also suppress a point
+# the pilot's own floor admits. ``min_risk`` is a catalog parameter with range
+# 1-4, so a pilot can raise the floor above MODERATE — and capping BEFORE the
+# floor test made a thermo-HIGH/EXTREME fallback point fall below it. The
+# ``dd_trigger`` branch cannot catch the leftovers either: ``xc`` is None for an
+# absent track, so there is no ``dd_not_corroborated`` to key on. The point
+# vanished from the ribbon, ``dd_trigger_count`` and the absence note, and a
+# route that graded RED before the fix graded GREEN after it.
+
+
+def _grade_at(ctx: RouteContext, min_risk: int):
+    return grade_convective_model(
+        ctx, _MODEL, {**CONVECTIVE_PARAM_DEFAULTS, "min_risk": min_risk}
+    )
+
+
+def test_cap_does_not_silently_drop_a_point_above_a_raised_floor():
+    """min_risk=HIGH + thermo EXTREME on an absent track → AMBER, not GREEN."""
+    ctx = _ctx([_no_native_track(ConvectiveRisk.EXTREME)] * 6)
+    grade = _grade_at(ctx, min_risk=4)
+
+    assert grade.status == AdvisoryStatus.AMBER
+    assert grade.affected == 6
+    assert grade.dd_trigger_count == 6
+    assert grade.worst_risk == ConvectiveRisk.MODERATE  # still capped
+    assert grade.cross_check is not None  # the absence is still told
+    reasons = {c.reason_code for _, c in grade.region_cells if c is not None}
+    assert reasons == {"dd_fallback"}
+
+
+def test_a_raised_floor_still_excludes_a_fallback_point_below_it():
+    """The floor keeps working: MODERATE thermo under a HIGH floor stays GREEN.
+
+    The complement of the test above — qualification is decided on the tier the
+    model actually produced, so a point that genuinely does not reach the pilot's
+    floor is still dropped. Without this the fix would flag every fallback point
+    regardless of the floor.
+    """
+    ctx = _ctx([_no_native_track(ConvectiveRisk.MODERATE)] * 6)
+    grade = _grade_at(ctx, min_risk=4)
+
+    assert grade.status == AdvisoryStatus.GREEN
+    assert grade.affected == 0
+    assert grade.dd_trigger_count == 0
+
+
+def test_the_cap_still_holds_at_a_raised_floor():
+    """Capped to MODERATE, so a raised floor can never turn a fallback point RED."""
+    ctx = _ctx([_no_native_track(ConvectiveRisk.EXTREME)] * 6)
+    for min_risk in (2, 3, 4):
+        grade = _grade_at(ctx, min_risk)
+        assert grade.status == AdvisoryStatus.AMBER, min_risk
+        assert grade.worst_risk == ConvectiveRisk.MODERATE, min_risk

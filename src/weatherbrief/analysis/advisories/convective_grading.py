@@ -283,13 +283,27 @@ def grade_convective_model(
         # override the user's choice) and NOT on
         # ``convective_method_effective == "thermo"`` (ambiguous between the two).
         nwp_fallback = sounding.convective_nwp_fallback
+        # Qualification is decided on the tier the model actually produced, and
+        # only THEN is the cap applied. Capping first and re-testing against
+        # ``min_risk`` silently drops the point when the pilot has raised the
+        # floor above MODERATE (the catalog allows up to 4/HIGH): a thermo-HIGH
+        # fallback point capped to MODERATE falls below a HIGH floor, and the
+        # ``dd_trigger`` branch below cannot catch it either — ``xc`` is None for
+        # an absent track, so there is no ``dd_not_corroborated`` to key on. The
+        # point then vanishes from the ribbon, ``dd_trigger_count`` AND the
+        # absence note, and a route that graded RED before this fix grades GREEN
+        # after it. That is the same silent mishandling this fix exists to close,
+        # not an acceptable side effect of it: the cap exists to stop DD alone
+        # reaching RED, not to suppress a point the pilot's own floor admits.
+        fallback_flagged = False
         if nwp_fallback:
+            fallback_flagged = RISK_ORDER.index(graded_risk) >= min_risk_index
             if RISK_ORDER.index(graded_risk) > MOD_IDX:
                 graded_risk = ConvectiveRisk.MODERATE
             reason = "dd_fallback"
 
         risk_idx = RISK_ORDER.index(graded_risk)
-        if risk_idx < min_risk_index:
+        if risk_idx < min_risk_index and not fallback_flagged:
             # NWP is GREEN here. DD-trigger AMBER cap: when the DD-vs-model
             # cross-check flags an uncorroborated DD MODERATE+ tower (the
             # thermodynamics are loaded but the model's own scheme is quiet),
