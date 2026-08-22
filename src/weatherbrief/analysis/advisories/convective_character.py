@@ -248,15 +248,54 @@ def _format_below_base(res: _BelowBase, loc: str) -> str | None:
     )
 
 
+class CharacterInputs(NamedTuple):
+    """Everything one model's character classification is built from.
+
+    ``method_id`` is the #568 addition: the convective track that actually
+    graded this model's cells, so the character card can badge it the way the
+    severity card already does. It is NOT derivable from
+    ``driving_method_id`` — that reads ``AdvisoryHighlights``, which this
+    evaluator does not produce — so the method travels out of the builder that
+    already visits every sounding.
+    """
+
+    points: list[ConvCharPoint]
+    shear_max: float | None
+    synoptic_ascent: bool
+    method_id: str | None
+
+
+def _character_method_id(
+    methods: list[str | None], any_fallback: bool
+) -> str | None:
+    """The convective track to badge on this model's character result (#568).
+
+    ``methods`` are the ``convective_method_effective`` values of the points
+    that count as cells (or, when no point does, of every point with a
+    sounding). A fallback anywhere wins outright: "some of this model's cells
+    were graded on thermodynamics because the model had no native forecast
+    there" is exactly the fact the badge exists to carry, and it must not be
+    averaged away by the points that did have one. Otherwise a single distinct
+    method is the answer; a mix without a fallback (which resolution cannot
+    currently produce — an explicit thermo request is route-wide) badges
+    nothing rather than picking arbitrarily.
+    """
+    if any_fallback:
+        return "thermo"
+    distinct = {m for m in methods if m is not None}
+    return distinct.pop() if len(distinct) == 1 else None
+
+
 def build_character_points(
     ctx: RouteContext, model: str, params: dict[str, float]
-) -> tuple[list[ConvCharPoint], float | None, bool]:
+) -> CharacterInputs:
     """Build one model's character points — extracted so consumers can reuse it.
 
-    Returns ``(points, shear_max, synoptic_ascent)``: everything
-    ``classify_convective_character`` needs. ``ConvectiveCharacterEvaluator``
-    calls it for its own grade; ``ifr_feasibility`` reaches it through
-    ``classify_route_character`` below (§22).
+    Returns everything ``classify_convective_character`` needs, plus the
+    effective convective method for the badge (#568).
+    ``ConvectiveCharacterEvaluator`` calls it for its own grade;
+    ``ifr_feasibility`` reaches it through ``classify_route_character`` below
+    (§22).
     """
     min_risk_idx = int(params.get("min_risk", CHARACTER_PARAM_DEFAULTS["min_risk"]))
     showers_mm = params.get("showers_mm", CHARACTER_PARAM_DEFAULTS["showers_mm"])
@@ -265,6 +304,13 @@ def build_character_points(
     points: list[ConvCharPoint] = []
     shear_max: float | None = None
     synoptic_ascent = False
+    # Effective-method provenance for the badge (#568). Collected over the
+    # points that count as cells — the ones the band is built from — with the
+    # all-points list as the fallback for a model with no cells at all.
+    cell_methods: list[str | None] = []
+    all_methods: list[str | None] = []
+    cell_fallback = False
+    any_fallback = False
 
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
@@ -276,6 +322,12 @@ def build_character_points(
             conv is not None
             and _RISK_ORDER.index(conv.risk_level) >= min_risk_idx
         )
+
+        all_methods.append(sounding.convective_method_effective)
+        any_fallback = any_fallback or sounding.convective_nwp_fallback
+        if is_conv:
+            cell_methods.append(sounding.convective_method_effective)
+            cell_fallback = cell_fallback or sounding.convective_nwp_fallback
 
         realized = False
         embedded = False
@@ -356,7 +408,12 @@ def build_character_points(
             )
         )
 
-    return points, shear_max, synoptic_ascent
+    method_id = (
+        _character_method_id(cell_methods, cell_fallback)
+        if cell_methods
+        else _character_method_id(all_methods, any_fallback)
+    )
+    return CharacterInputs(points, shear_max, synoptic_ascent, method_id)
 
 
 def classify_route_character(
@@ -370,14 +427,14 @@ def classify_route_character(
     ``resolve_character_params(ctx)`` so the band they read is the band this
     advisory would show.
     """
-    points, shear_max, synoptic_ascent = build_character_points(ctx, model, params)
-    if not points:
+    inputs = build_character_points(ctx, model, params)
+    if not inputs.points:
         return None
     return classify_convective_character(
-        points,
-        shear_kt=shear_max,
+        inputs.points,
+        shear_kt=inputs.shear_max,
         front_present=_front_present(ctx, model),
-        synoptic_ascent=synoptic_ascent,
+        synoptic_ascent=inputs.synoptic_ascent,
         isolated_max_pct=params.get(
             "isolated_max_pct", CHARACTER_PARAM_DEFAULTS["isolated_max_pct"]
         ),
@@ -504,7 +561,7 @@ class ConvectiveCharacterEvaluator:
         for model in ctx.models:
             # Same builder the composites reach through classify_route_character
             # (§22) — the band this card shows is the band they act on.
-            points, shear_max, synoptic_ascent = build_character_points(
+            points, shear_max, synoptic_ascent, method_id = build_character_points(
                 ctx, model, params
             )
 
@@ -556,6 +613,14 @@ class ConvectiveCharacterEvaluator:
                     affected=realized_count,
                     total=total,
                     total_distance_nm=ctx.total_distance_nm,
+                    # #568: the character card is the one that renders the
+                    # EMBEDDED/WIDESPREAD red, and until now it badged nothing —
+                    # so a model graded on thermodynamics for lack of a native
+                    # track sat beside two graded on their own schemes with no
+                    # visible difference, and its outlier verdict read as
+                    # meteorological disagreement. The severity card has badged
+                    # this since #408; this is the same fact on the other axis.
+                    primary_method_id=method_id,
                 )
             )
 

@@ -1129,6 +1129,23 @@ class SoundingAnalysis(BaseModel):
     # "explicit track unavailable" distinguishable from "Open-Meteo-only model"
     # for details/UI. Sibling of ``active_icing_available`` (#391 pattern).
     convective_explicit_unavailable: bool = False
+    # NWP-convective fallback marker (#568). True when the model-native NWP
+    # convective track was REQUESTED (``convective_method == "nwp"``) but absent
+    # for this model at this point, so grading silently fell back to thermo. Set
+    # in ``_resolve_analyses``, the only place that knows the *requested* method.
+    #
+    # Deliberately distinct from ``convective_method_effective == "thermo"``,
+    # which is ambiguous by construction: that value also means "the user
+    # explicitly asked for thermo". And distinct from ``convective_nwp is None``,
+    # which is False under an explicit-thermo request (the NWP assessment is
+    # always computed and stored, it is just not swapped in).
+    #
+    # ``grade_convective_model`` keys the §18 DD-amber cap on this: a model with
+    # no native track is graded on MetPy parcel CAPE while its siblings are
+    # graded on their own convective schemes, so it must not be red-eligible on
+    # that thermodynamic signal alone. Sibling of ``active_icing_available``
+    # (#391) and ``convective_explicit_unavailable`` (#462).
+    convective_nwp_fallback: bool = False
     precipitation: Optional[PrecipitationAssessment] = None
     vertical_motion: Optional[VerticalMotionAssessment] = None
     # Bulk Open-Meteo 3-level cloud-cover summary. NOT the native NWP cloud

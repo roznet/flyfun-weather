@@ -1972,7 +1972,10 @@ consistency test).
 
 **Date:** 2026-07-16
 **Status:** Implemented (#442). Supersedes the §4/§14 advisory-level DD-floor
-behaviour.
+behaviour. **Extended by §26a (#568):** the cap keys on the DD-vs-NWP
+cross-check, which needs an NWP assessment to compare against — so it did not
+fire for a model with *no* native track at all, and that model's DD tier went
+uncapped to RED. §26a closes that hole.
 **Context:** Follow-up to the ICON `rain_con` firing-gate fix (decoded under
 cfgrib shortName `crr`, not `rain_con`, commit `60f7036b`). That fix is what
 finally makes ICON's model-native convective tier trustworthy enough to grade on
@@ -3448,3 +3451,151 @@ of the catalog (web and iOS) are updated.
   shifts the effective ramp down by half a layer aloft).
 - A pilot debrief on a moderate-coverage day — does AMBER-with-detail read
   right where RED used to cry wolf?
+
+---
+
+## 26. An absent NWP convective track is capped like a quiet one, and the embedded fraction needs a population
+
+**Date:** 2026-08-22
+**Status:** Implemented (#568). Extends §18 (DD-trigger AMBER cap) and §15/§22
+(convective character).
+**Context:** A production briefing (LFMD→EGTF 2026-08-27, pack
+`2026-08-22T14-41-23`) rendered a route-level RED *"Embedded convection — cells
+hidden in cloud, VFR impractical (236 nm/582 nm, 41 %)"* on ICON while GFS was
+green, ECMWF flagged a single point, and both the GRAMET and the cross-section
+showed benign layered cloud. Investigation found three independent false-alarm
+paths; two of them are meteorological decisions and are recorded here.
+
+### 26a. The §18 cap had a hole for an *absent* track, not just a quiet one
+
+§18 grades the convective colour from the model's own NWP tier and raises a
+*green* NWP point to AMBER — never RED — when the DD-vs-scheme cross-check reads
+`dd_not_corroborated`. That rule keys on a comparison, so it needs an NWP
+assessment to compare against. Where there is **none**, nothing fires:
+
+1. `nwp_cloud_diagnostics is None` at every route point (ICON-EU's model-level
+   horizon is 120 h behind a 3 h publish delay, so effective reach oscillates
+   between 111 h and 117 h; at 14:41Z the newest publishable main cycle covered
+   the ~113 h flight to 06:00Z, an hour short of a 07:00Z departure — the pack
+   missed the window by 20 minutes).
+2. `assess_convective_nwp()` returns `None` on `None` diagnostics, so
+   `convective_nwp is None` everywhere.
+3. `_resolve_analyses` falls back to thermo (badged, since #408).
+4. `grade_convective_model` reads `sounding.convective` — now the **thermo**
+   assessment — at MODERATE, i.e. already at/above `min_risk`, so the green-NWP
+   branch holding the cap is never entered. The point grades `active_track`,
+   uncapped and red-eligible.
+
+Net effect: **ICON was graded on MetPy parcel CAPE while GFS and ECMWF were
+graded on their own convective schemes** — and the fallback method is
+systematically hotter on this profile (MetPy ML-CAPE ÷ ICON's own ML-CAPE had
+median 1.37, p90 3.49, with `cape_raw_vs_calc_divergent=True`; at 152 nm MetPy
+read 774 J/kg where ICON's own field said 200).
+
+The fingerprint is unmistakable in `dd_trigger_count`:
+
+| model | status | affected | dd_trigger | cross-check |
+|---|---|---|---|---|
+| ecmwf | amber | 42/64 | **38** | "the model's own NWP Convective forecast is quiet here" |
+| gfs | amber | 15/64 | **15** | "the model's own NWP Convective forecast is quiet here" |
+| icon | **red** | 59/64 | **0** | *(none)* |
+
+On GFS *every* flagged point is a DD-only trigger that §18 caps at AMBER. On ICON
+the identical thermodynamic signal went uncapped to RED — not because ICON
+disagreed, but because there was no NWP assessment for the cap to key on. A
+refresh 80 minutes later, once ICON's GRIB run came back into horizon, dropped
+its character from RED "Embedded" 41 % to AMBER "Scattered" 17 % with no code
+change.
+
+**The decision.** Treat an absent track exactly as §18 treats an uncorroborated
+DD tower: cap the graded tier at MODERATE, count the point into
+`dd_trigger_count` (so the existing red-coverage exclusion applies), and mark it
+`reason_code="dd_fallback"`. A fallback-graded model can reach AMBER; it can
+never reach RED on thermodynamics alone. The invariant §18 states — *DD alone
+never reds* — now holds whether the scheme is quiet or missing.
+
+**The discriminator matters, and neither obvious candidate works.**
+
+- `convective_nwp is None` is **wrong**: under an explicit `convective_method=
+  "thermo"` request `convective_nwp` is still populated (it is always computed
+  and stored in `analysis/sounding/__init__.py`, just not swapped in) — so the
+  test reads False there, correctly. But it fires for a user who explicitly chose
+  thermo *and* is on a model with no NWP track, where capping would silently
+  override their choice.
+- `convective_method_effective == "thermo"` is **ambiguous by construction** —
+  its own docstring says it means "thermo" both on silent fallback and on
+  explicit request.
+
+So a dedicated marker, `SoundingAnalysis.convective_nwp_fallback`, is set in
+`_resolve_analyses` — the only layer that knows the *requested* method — mirroring
+`convective_explicit_unavailable` (#462) and `active_icing_available` (#391).
+
+**The card must say so.** `convective_cross_check` returning `None` for an absent
+NWP track is right at its own layer (there is nothing to compare), so the note is
+emitted from `_peak_cross_check` instead: *"No NWP Convective forecast from this
+model here — graded on Thermo Convective (thermodynamics) alone, which on its own
+can never grade red"*. Without it the card was silent about the one fact that
+explained the outlier, and its grade read as meteorological disagreement.
+
+**Scope, accepted.** The marker is per point and keys on the requested method, so
+this also caps the models that *never* have a native track (UKMO, Météo-France,
+GEM — no GRIB convective diagnostics at all). That is the same case, not a wider
+one: those models are graded on MetPy CAPE beside siblings graded on their own
+schemes, and §18's rule applies for the same reason. It also covers a
+detection-incomplete ICON-D2 hour (#462), where "unknown" must not become a red.
+
+**A firing scheme is untouched.** The cap only ever applies where there is no NWP
+assessment. The refreshed pack's ICON — a real deep cluster over the Bourbonnais
+at 08–09Z with tops to FL389 and 1.3–2.1 mm/h convective rain, which GFS and
+ECMWF entirely lack — still grades RED. That is the regression guard.
+
+### 26b. The embedded fraction needs a minimum cell population
+
+`classify_convective_character` returns EMBEDDED when
+`embedded / len(conv) ≥ embed_pct` (50 %). The denominator is the convective-point
+count with **no population floor**, so a single convective point that happens to
+sit under a BKN/OVC deck scores 100 % and turns the whole route RED "embedded —
+VFR impractical". This is independent of 26a and survives it: on the *refreshed*
+pack ECMWF grades the route RED off exactly one point — 9 nm of a 582 nm route,
+2 %.
+
+This is the same failure as the `realized == 0` short-circuit directly above it in
+the same function (§22), which exists because a zero-extent band was rendering a
+colour and "a promise of cells over an extent of nothing". A fraction over a
+population of one describes nothing about the *route*.
+
+**The decision.** Gate the embedded test on `len(conv) >= CHAR_EMBED_MIN_CELLS`
+(3). Below the floor, classification falls through to the realized-coverage
+band — for the ECMWF case `realized_pct = 1/64 = 1.6 % ≤ isolated_max_pct` →
+ISOLATED → AMBER, which is the right answer: severity still owns that cell's own
+colour, and a 2 %-extent route descriptor should not be RED.
+
+**Absolute count, not route-extent fraction.** Point spacing varies by pack
+(~9 nm here, 64 points over 582 nm), so 3 points is ~27 nm on this route and
+something else elsewhere. An extent floor would be more portable, but the
+classifier does not receive a distance and it would trade one arbitrary constant
+for another; the count is the simpler starting point. Kept a bare module constant
+alongside `CHAR_EMBED_PCT` rather than a catalog parameter — the bands a pilot
+actually tunes are the coverage ones. Promote it if calibration shows it needs
+per-user tuning.
+
+### 26c. The character card now badges its method (not a meteorological decision)
+
+`ConvectiveCharacterEvaluator` built every `ModelAdvisoryResult` without
+`primary_method_id`, so all three models reported `None`. The severity card does
+badge it (via `driving_method_id`) and correctly showed "thermo" for ICON — but
+**the character card is the one that rendered the RED**, and it gave the pilot no
+indication that ICON was graded on a different track from the other two.
+`driving_method_id` sources from `AdvisoryHighlights`, which this evaluator does
+not produce, so the effective method travels out of `build_character_points`
+(which already visits every sounding) instead. A fallback anywhere on the route
+wins the badge outright: "some of this model's cells were graded on
+thermodynamics" is exactly what the badge exists to carry, and averaging it away
+would restore the silence.
+
+### Real-world validation needed
+
+Both 26a and 26b change advisory colours on real routes. Replay a corpus of packs
+old-vs-new under the *same* config before drawing conclusions from any single
+flight — dev and prod differ in how often models are missing, so a dev-only sample
+overstates the fallback path's frequency.

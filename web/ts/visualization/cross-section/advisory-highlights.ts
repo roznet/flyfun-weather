@@ -54,6 +54,13 @@ const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> =
   fiki_icing: 'icing',
   ifr_feasibility: 'icing',    // composite; icing is the axis it badges
   convective: 'convection',
+  // #568: the character card grades off the same resolved convective track as
+  // the severity card, so focusing it must show the layer it was graded on —
+  // Thermo Convective where the model had no native forecast to grade with.
+  // `deriveGradedMethods`' first-wins scan is unaffected: it walks the manifest,
+  // where `convective` precedes `convective_character` (registration order), so
+  // the profile-level convection layer still comes from the severity advisory.
+  convective_character: 'convection',
 };
 
 /**
@@ -70,6 +77,11 @@ const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> =
  * keeps the user's preference. An advisory with no `primary_method_id` (GREEN —
  * `driving_method_id` only fires on a flagged grade) changes nothing: there is
  * no highlight to explain, so the user's own view is the right one.
+ * `convective_character` (#568) is the exception that proves the rule: it emits
+ * no highlights at all, so it badges the track it graded on regardless of
+ * colour. Focusing it therefore always shows the layer behind its band — which
+ * is the user's own preference anyway, except under the fallback this exists to
+ * make visible.
  *
  * Clouds carry only a bare *source* (`dd` / `nwp` / `nwp_synthesized`) here —
  * the render style lives entirely in `vizSettings.cloudStyle` and is fused with

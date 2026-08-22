@@ -1590,8 +1590,42 @@ def test_character_numerosity_cannot_resurrect_unrealized_air():
 
 
 def test_character_embedded_takes_priority():
-    # Even with few realized cells, a majority embedded → embedded.
+    # Even with few realized cells, a majority embedded → embedded. Four cells,
+    # so the #568 minimum-population floor is satisfied and the fraction rules.
     pts = _pts(20, conv=4, realized=2, embedded=3)
+    assert classify_convective_character(pts) is ConvectiveCharacter.EMBEDDED
+
+
+# --- #568: the embedded fraction needs a population to be a fraction of -------
+#
+# ``embedded / len(conv)`` had no minimum denominator, so ONE convective point
+# under a deck scored 100 % and turned a whole route RED "embedded — VFR
+# impractical". Live on ECMWF for a 582 nm route graded off a single 9 nm point
+# (2 % of the route). Same failure as the ``realized == 0`` short-circuit: a
+# colour and a route-wide claim over an extent of nothing.
+
+
+def test_character_single_embedded_cell_is_not_an_embedded_route():
+    """The production case: 1 cell of 20 points, under a deck → ISOLATED, not RED."""
+    pts = _pts(20, conv=1, realized=1, embedded=1)
+    assert classify_convective_character(pts) is ConvectiveCharacter.ISOLATED
+
+
+def test_character_two_embedded_cells_still_below_the_floor():
+    """Two of two is still 100 % of a population too small to describe a route."""
+    pts = _pts(20, conv=2, realized=2, embedded=2)
+    assert classify_convective_character(pts) is ConvectiveCharacter.ISOLATED
+
+
+def test_character_three_embedded_cells_satisfy_the_floor():
+    """At the floor the fraction is meaningful again and EMBEDDED fires."""
+    pts = _pts(20, conv=3, realized=3, embedded=3)
+    assert classify_convective_character(pts) is ConvectiveCharacter.EMBEDDED
+
+
+def test_character_floor_does_not_suppress_a_populated_minority():
+    """The floor gates the *population*, not the fraction: 3 of 6 still embeds."""
+    pts = _pts(20, conv=6, realized=6, embedded=3)
     assert classify_convective_character(pts) is ConvectiveCharacter.EMBEDDED
 
 

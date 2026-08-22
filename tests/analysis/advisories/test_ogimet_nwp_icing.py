@@ -114,11 +114,17 @@ def test_ifr_icing_axis_unavailable_but_convective_still_drives_grade():
     still grade RED — the icing axis is unassessable (not clear), and the
     convective axis drives the composite.
     """
+    # The HIGH must sit on the model's OWN convective track: since #568 a model
+    # with no native track at all is graded on thermodynamics and capped at
+    # AMBER (§18's DD-never-reds rule, extended to the absent-track case), so a
+    # bare ``convective=`` HIGH no longer expresses "the scheme fired".
     conv = SoundingAnalysis(
         indices=ThermodynamicIndices(freezing_level_ft=5000),
         nwp_cloud_layers=None,
         icing_ogimet_nwp_zones=[],
-        convective=ConvectiveAssessment(risk_level=ConvectiveRisk.HIGH, cape_jkg=2500),
+        convective_nwp=ConvectiveAssessment(
+            risk_level=ConvectiveRisk.HIGH, cape_jkg=2500
+        ),
     )
     ctx = _ctx([conv for _ in range(10)], icing_method="ogimet_nwp")
     result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))

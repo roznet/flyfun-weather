@@ -1455,6 +1455,25 @@ CHAR_ISOLATED_MAX_PCT = 15.0   # ≤ ⇒ isolated (discrete cells, wide gaps)
 CHAR_SCATTERED_MAX_PCT = 40.0  # ≤ ⇒ scattered; above ⇒ widespread
 # Fraction of *convective* points sitting under a BKN/OVC deck ⇒ embedded.
 CHAR_EMBED_PCT = 50.0
+# Minimum number of convective points before that fraction is meaningful (#568).
+# The embedded test divides by ``len(conv)`` with no population floor, so ONE
+# convective point that happens to sit under a deck scores 100 % and turns the
+# whole route RED "embedded — VFR impractical". Observed on a 582 nm route where
+# ECMWF's single flagged point (9 nm, 2 % of the route) did exactly that.
+#
+# Same reasoning as the ``realized == 0`` short-circuit below: a fraction over a
+# population of one or two describes nothing about the *route*. Severity still
+# owns that cell's own colour; below the floor the classification falls through
+# to the realized-coverage band, which for a 2 %-extent cell is ISOLATED.
+#
+# An absolute count, not a route-extent fraction: point spacing varies by pack
+# (~9 nm on that route), so 3 points means ~27 nm here and something else
+# elsewhere — but an extent floor needs a distance the classifier does not
+# currently receive, and would trade one arbitrary constant for another. Kept a
+# bare module constant like ``CHAR_EMBED_PCT`` (not a catalog parameter) — the
+# band thresholds a pilot actually tunes are the coverage ones; promote it if
+# calibration shows it needs per-user tuning.
+CHAR_EMBED_MIN_CELLS = 3
 # 0–6 km bulk shear (kt) at/above which a *widespread* band is called ORGANIZED.
 CHAR_ORGANIZED_SHEAR_KT = 35.0
 # K-index / Total Totals "numerous storms" thresholds — bump the band up one.
@@ -1504,6 +1523,7 @@ def classify_convective_character(
     isolated_max_pct: float = CHAR_ISOLATED_MAX_PCT,
     scattered_max_pct: float = CHAR_SCATTERED_MAX_PCT,
     embed_pct: float = CHAR_EMBED_PCT,
+    embed_min_cells: int = CHAR_EMBED_MIN_CELLS,
     organized_shear_kt: float = CHAR_ORGANIZED_SHEAR_KT,
     k_numerous: float = CHAR_K_NUMEROUS,
     tt_numerous: float = CHAR_TT_NUMEROUS,
@@ -1548,9 +1568,19 @@ def classify_convective_character(
         return ConvectiveCharacter.NONE
 
     # 1. Embedded — cells you cannot see to avoid because a deck hides them.
-    embedded = sum(1 for p in conv if p.embedded)
-    if 100.0 * embedded / len(conv) >= embed_pct:
-        return ConvectiveCharacter.EMBEDDED
+    #
+    # Gated on a minimum cell population (#568): the fraction below has
+    # ``len(conv)`` as its denominator, so one or two cells under a deck score
+    # 100 % and call the whole route embedded off an extent of almost nothing —
+    # the same "a colour over an extent of nothing" failure the ``realized == 0``
+    # short-circuit above exists to prevent. Below the floor we fall through to
+    # the realized-coverage band, which grades the cell on its actual extent
+    # (ISOLATED for a 2 %-of-route cell → AMBER). Severity is untouched: a
+    # dangerous single cell still owns its own colour there.
+    if len(conv) >= embed_min_cells:
+        embedded = sum(1 for p in conv if p.embedded)
+        if 100.0 * embedded / len(conv) >= embed_pct:
+            return ConvectiveCharacter.EMBEDDED
 
     # 2. Realized-coverage band (% of all route points with realized convection).
     realized_pct = 100.0 * realized / total

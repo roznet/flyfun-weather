@@ -294,9 +294,12 @@ def test_embedded_escalates_amber_convective_to_red_ifr():
     """Cells you cannot see, in cloud, without radar: worse under IFR than VFR."""
     from weatherbrief.models import ConvectiveCharacter
 
-    # One cell in six points: MODERATE, so convective floors at AMBER rather
-    # than crossing the 50 % red coverage threshold.
-    ctx = _ctx([_cell_under_deck()] + [_quiet()] * 5)
+    # Three cells in sixteen points: MODERATE, so convective floors at AMBER
+    # (18.75 % is under the 20 % amber coverage threshold) rather than crossing
+    # the 50 % red one. Three is the minimum cell population the embedded
+    # fraction is evaluated over (#568, ``CHAR_EMBED_MIN_CELLS``) — below it the
+    # 100 %-embedded fraction describes an extent too small to call the route.
+    ctx = _ctx([_cell_under_deck()] * 3 + [_quiet()] * 13)
     assert _character(ctx) is ConvectiveCharacter.EMBEDDED
     assert _conv_status(ctx) == AdvisoryStatus.AMBER
     assert _ifr_status(ctx) == AdvisoryStatus.RED
@@ -330,7 +333,7 @@ def test_embedded_does_not_lift_a_green_convective_axis():
 def test_embedded_escalation_is_named_in_the_detail():
     """A red the convective card does not show must say why."""
     res = IFRFeasibilityEvaluator.evaluate(
-        _ctx([_cell_under_deck()] + [_quiet()] * 5),
+        _ctx([_cell_under_deck()] * 3 + [_quiet()] * 13),
         _defaults(IFRFeasibilityEvaluator),
     )
     detail = next(m for m in res.per_model if m.model == "gfs").detail
