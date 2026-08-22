@@ -601,7 +601,7 @@ cursor's x, not just its colour: advisory name + verdict + — when the flagged
 region under the cursor carries one — the human phrasing of `reason_code`. Only
 `icing_escape` / `fiki_icing` / `convective` emit a code (their colour+shape
 genuinely can't disambiguate `no_escape` vs `warm_escape`, `sld` vs
-`thick_transit`, `active_track` vs `thermo_floor`); every other region carries
+`thick_transit`, `active_track` vs `dd_trigger` vs `dd_fallback`); every other region carries
 `None`, so the tooltip shows just the verdict — a reason that restates the
 advisory's definition would be noise. The lookup is web-side and geometry-free:
 the ribbon (`RibbonSegment`) owns the verdict at a distance, the flagged regions

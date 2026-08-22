@@ -262,8 +262,10 @@ const RIBBON_REASON_CODES = new Set<string>([
   'no_escape', 'no_escape_unknown', 'tight_margin', 'warm_escape',
   // fiki_icing
   'sld', 'severe_icing', 'thick_transit', 'icing_at_cruise', 'transit_exposure',
-  // convective
-  'active_track', 'thermo_floor',
+  // convective — `dd_trigger` was renamed from `thermo_floor` in #442 and this
+  // set was never updated, so the tooltip has shown no reason on a DD-raised
+  // point since. `dd_fallback` is the #568 sibling: no native track at all.
+  'active_track', 'dd_trigger', 'dd_fallback',
 ]);
 
 /**

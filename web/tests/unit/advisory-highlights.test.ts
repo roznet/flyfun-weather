@@ -486,7 +486,7 @@ describe('reasonLabelKey', () => {
     for (const code of [
       'no_escape', 'no_escape_unknown', 'tight_margin', 'warm_escape',
       'sld', 'severe_icing', 'thick_transit', 'icing_at_cruise', 'transit_exposure',
-      'active_track', 'thermo_floor',
+      'active_track', 'dd_trigger', 'dd_fallback',
     ]) {
       expect(reasonLabelKey(code)).toBe(`advisories.reason.${code}`);
     }
