@@ -146,24 +146,32 @@ class TestTimestampSerialization:
         """A client sending +02:00 local must land on the same instant.
 
         iOS/web send the pilot's own offset; the stored value is UTC, so a
-        report filed at 08:52+02:00 must read back as 06:52Z, never 08:52Z.
+        08:52+02:00 report must read back as 06:52Z, never 08:52Z.
 
-        The instant is derived from *now* rather than written as a fixed date:
-        ``_only_listed`` reads through ``?hours=24``, so a hardcoded wall-clock
-        date passes on the day it is written and drops out of the window for
-        good the next day.
+        The instant is relative to now, deliberately. A fixed calendar date is
+        a time bomb here: `_only_listed` queries `?hours=24`, so the report
+        ages out of the listing window a day after the date was written and the
+        test starts failing with "got 0" — which says nothing about offsets.
+        The offset is what is under test, not the date.
         """
-        local = (datetime.now(timezone.utc) - timedelta(minutes=10)).astimezone(
-            timezone(timedelta(hours=2))
-        )
+        local_tz = timezone(timedelta(hours=2))
+        observed_utc = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).replace(microsecond=0)
+        local = observed_utc.astimezone(local_tz)
+        assert local.utcoffset() == timedelta(hours=2), "fixture must send +02:00"
+
         assert client.post("/api/pireps", json=_pirep_payload(
             observed_at=local.isoformat(),
         )).status_code == 201
 
         parsed = datetime.fromisoformat(self._only_listed(client)["observed_at"])
-        assert parsed == local.astimezone(timezone.utc)
-        # The bug echoed the pilot's local wall clock back as if it were UTC.
-        assert parsed.replace(tzinfo=None) != local.replace(tzinfo=None)
+        assert parsed == observed_utc
+        # The wall-clock hour must be the UTC one, not the +02:00 one.
+        assert parsed.astimezone(timezone.utc).strftime("%H:%M") == (
+            observed_utc.strftime("%H:%M")
+        )
+        assert parsed.astimezone(local_tz).hour == (observed_utc.hour + 2) % 24
 
     def test_fresh_pirep_is_not_aged_by_the_utc_offset(self, client):
         """The symptom a pilot would actually see: a report filed a minute ago

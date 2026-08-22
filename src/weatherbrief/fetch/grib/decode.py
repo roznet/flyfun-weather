@@ -1572,7 +1572,9 @@ def build_cloud_diagnostics(
             raw.get("conv_precip_rate_kg_m2_s")
         ),
         ml_cape_jkg=raw.get("ml_cape_jkg"),
-        ml_cin_jkg=raw.get("ml_cin_jkg"),
+        # NOT a raw pass-through: GFS shares HRRR's negative-CIN convention and
+        # its packing noise. See _ncep_cin_jkg.
+        ml_cin_jkg=_ncep_cin_jkg(raw),
         total_cover_pct=_pct("total_cover_pct"),
         boundary_cover_pct=_pct("boundary_cover_pct"),
         ceiling_ft=_gpm_to_ft("ceiling_gpm"),
@@ -2473,6 +2475,34 @@ def decode_hrrr_cloud_diag_per_point(
 # magnitude convention and the number is unusable as-is (→ None, unknown).
 _HRRR_CIN_POSITIVE_NOISE_JKG = 5.0
 
+#: GFS shares HRRR's convention and its exact GRIB key, so it shares the
+#: threshold. Verified live against gfs.20260822/06z f006 CIN at
+#: ``180-0 mb above ground``: units J/kg, range **-1027.9 … +0.1**, 33.5% of
+#: points negative and 66.5% barely positive — i.e. real inhibition is
+#: negative and "no inhibition" packs to a hair above zero. Floor the noise,
+#: drop anything clearly positive.
+_NCEP_CIN_POSITIVE_NOISE_JKG = _HRRR_CIN_POSITIVE_NOISE_JKG
+
+
+def _ncep_cin_jkg(raw: dict[str, float], key: str = "ml_cin_jkg") -> float | None:
+    """Normalise an NCEP (GFS/HRRR) CIN value to the app's negative convention.
+
+    NCEP delivers CIN already negative, unlike ECMWF and ICON whose magnitudes
+    go through :func:`_normalize_model_cin`. Small positives are packing noise
+    and floor to 0. A clearly positive value means the provider flipped to
+    magnitude convention upstream: return None (unknown) rather than a number,
+    because flooring it would turn a strong cap into "no inhibition" — and CIN
+    gates the convective assessment (``eff_cin < -200``), so a silent sign flip
+    is the most damaging error this field can carry.
+    """
+    value = raw.get(key)
+    if value is None:
+        return None
+    value = float(value)
+    if value > _NCEP_CIN_POSITIVE_NOISE_JKG:
+        return None
+    return min(0.0, value)
+
 
 def build_hrrr_cloud_diagnostics(
     raw: dict[str, float],
@@ -2525,15 +2555,8 @@ def build_hrrr_cloud_diagnostics(
     high_cover = raw.get("high_cover_pct")
     total_cover = raw.get("total_cover_pct")
     ml_cape = _opt_float(raw, "ml_cape_jkg")
-    ml_cin_raw = raw.get("ml_cin_jkg")
-    if ml_cin_raw is None:
-        ml_cin = None
-    elif float(ml_cin_raw) > _HRRR_CIN_POSITIVE_NOISE_JKG:
-        # Implausible under the verified negative convention — most likely a
-        # provider-side flip to positive magnitudes. Unknown, never "no cap".
-        ml_cin = None
-    else:
-        ml_cin = min(0.0, float(ml_cin_raw))
+    # Shared with GFS — same NCEP convention, same key, same threshold.
+    ml_cin = _ncep_cin_jkg(raw)
 
     has_any = any(
         v is not None

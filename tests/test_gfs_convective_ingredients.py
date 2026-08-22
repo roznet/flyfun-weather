@@ -208,3 +208,61 @@ class TestNothingDecodedIsSilentlyDropped:
             "ml_cin_jkg": -35.0,
         })
         assert _diagnostics_from(diag).ml_cin_jkg == pytest.approx(-35.0)
+
+
+class TestNcepCinSignConvention:
+    """GFS CIN is negative J/kg, verified live — not assumed (#566).
+
+    Decoded from gfs.20260822/06z f006, CIN at `180-0 mb above ground`:
+    units J/kg, range **-1027.9 … +0.1**, 33.5% of points negative and 66.5%
+    barely positive. So real inhibition is negative and "no inhibition" packs
+    to a hair above zero — the same convention HRRR was verified to use on the
+    identical GRIB key, and the opposite of ECMWF/ICON, whose magnitudes go
+    through `_normalize_model_cin`.
+
+    Getting this wrong is the most damaging error the field can carry: CIN
+    gates the convective assessment (`eff_cin < -200`), so a silent sign flip
+    turns a strong cap into "no inhibition".
+    """
+
+    def _cin(self, value):
+        from weatherbrief.fetch.grib.decode import _ncep_cin_jkg
+        return _ncep_cin_jkg({"ml_cin_jkg": value})
+
+    def test_negative_values_pass_through(self):
+        assert self._cin(-250.0) == pytest.approx(-250.0)
+        assert self._cin(-1027.9) == pytest.approx(-1027.9)
+
+    def test_packing_noise_floors_to_zero(self):
+        """The observed maximum was +0.1 — noise, not positive inhibition."""
+        assert self._cin(0.1) == pytest.approx(0.0)
+        assert self._cin(4.9) == pytest.approx(0.0)
+
+    def test_clearly_positive_is_unknown_not_zero(self):
+        """A provider-side flip to magnitudes must never read as 'no cap'."""
+        assert self._cin(250.0) is None
+
+    def test_none_passes_through(self):
+        assert self._cin(None) is None
+
+    def test_gfs_and_hrrr_share_the_treatment(self):
+        """Same NCEP key, same convention — they must not drift apart."""
+        from weatherbrief.fetch.grib.decode import (
+            build_cloud_diagnostics,
+            build_hrrr_cloud_diagnostics,
+        )
+
+        raw = {"ceiling_gpm": 500.0, "ml_cape_jkg": 800.0, "ml_cin_jkg": 3.0}
+        gfs = build_cloud_diagnostics(dict(raw))
+        hrrr = build_hrrr_cloud_diagnostics(dict(raw))
+        assert gfs.ml_cin_jkg == hrrr.ml_cin_jkg == pytest.approx(0.0)
+
+    def test_builder_applies_it(self):
+        from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
+
+        diag = build_cloud_diagnostics({
+            "ceiling_gpm": 500.0, "ml_cape_jkg": 800.0, "ml_cin_jkg": 0.1,
+        })
+        assert diag.ml_cin_jkg == pytest.approx(0.0), (
+            "raw pass-through — packing noise reached the snapshot as positive CIN"
+        )
