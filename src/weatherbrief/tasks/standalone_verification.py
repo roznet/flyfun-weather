@@ -704,7 +704,6 @@ def _enrich_with_grib(
     ``DecodePriority.BACKGROUND`` explicitly.
     """
     from weatherbrief.tasks.standalone_grib import (
-        AirportCeilingData,
         datetime_to_init_parts,
         fetch_gfs_cloud_diag,
         fetch_icon_cloud_diag,
