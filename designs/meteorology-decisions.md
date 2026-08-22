@@ -1783,7 +1783,8 @@ reasons.
 - EDQT→EDDS 2026-06-16 should read ISOLATED/SCATTERED (AMBER); a documented
   squall-line/MCS day should read WIDESPREAD/ORGANIZED (RED); an embedded-CB-in-
   stratiform day EMBEDDED (RED). Tune `isolated_max_pct` / `scattered_max_pct` /
-  `embed_pct` / `organized_shear_kt` and the `showers` point threshold against
+  `embed_min_nm` (`embed_pct` until #568 / §26b) / `organized_shear_kt` and the
+  `showers` point threshold against
   radar/lightning/PIREPs.
 - ECMWF native `kx` is delivered in Kelvin (per §14 / #283) and is normalized to
   °C via `_k_index_to_c` before use; `totalx` is offset-immune and used as-is.
@@ -1972,7 +1973,10 @@ consistency test).
 
 **Date:** 2026-07-16
 **Status:** Implemented (#442). Supersedes the §4/§14 advisory-level DD-floor
-behaviour.
+behaviour. **Extended by §26a (#568):** the cap keys on the DD-vs-NWP
+cross-check, which needs an NWP assessment to compare against — so it did not
+fire for a model with *no* native track at all, and that model's DD tier went
+uncapped to RED. §26a closes that hole.
 **Context:** Follow-up to the ICON `rain_con` firing-gate fix (decoded under
 cfgrib shortName `crr`, not `rain_con`, commit `60f7036b`). That fix is what
 finally makes ICON's model-native convective tier trustworthy enough to grade on
@@ -3448,3 +3452,299 @@ of the catalog (web and iOS) are updated.
   shifts the effective ramp down by half a layer aloft).
 - A pilot debrief on a moderate-coverage day — does AMBER-with-detail read
   right where RED used to cry wolf?
+
+---
+
+## 26. An absent NWP convective track is capped like a quiet one; embedded means a deck that reaches cruise, over an extent
+
+**Date:** 2026-08-22
+**Status:** Implemented (#568). Extends §18 (DD-trigger AMBER cap) and §15/§22
+(convective character).
+**Context:** A production briefing (LFMD→EGTF 2026-08-27, pack
+`2026-08-22T14-41-23`) rendered a route-level RED *"Embedded convection — cells
+hidden in cloud, VFR impractical (236 nm/582 nm, 41 %)"* on ICON while GFS was
+green, ECMWF flagged a single point, and both the GRAMET and the cross-section
+showed benign layered cloud. Investigation found three independent false-alarm
+paths plus one missing capability; the meteorological ones are recorded here.
+
+### 26a. The §18 cap had a hole for an *absent* track, not just a quiet one
+
+§18 grades the convective colour from the model's own NWP tier and raises a
+*green* NWP point to AMBER — never RED — when the DD-vs-scheme cross-check reads
+`dd_not_corroborated`. That rule keys on a comparison, so it needs an NWP
+assessment to compare against. Where there is **none**, nothing fires:
+
+1. `nwp_cloud_diagnostics is None` at every route point (ICON-EU's model-level
+   horizon is 120 h behind a 3 h publish delay, so effective reach oscillates
+   between 111 h and 117 h; at 14:41Z the newest publishable main cycle covered
+   the ~113 h flight to 06:00Z, an hour short of a 07:00Z departure — the pack
+   missed the window by 20 minutes).
+2. `assess_convective_nwp()` returns `None` on `None` diagnostics, so
+   `convective_nwp is None` everywhere.
+3. `_resolve_analyses` falls back to thermo (badged, since #408).
+4. `grade_convective_model` reads `sounding.convective` — now the **thermo**
+   assessment — at MODERATE, i.e. already at/above `min_risk`, so the green-NWP
+   branch holding the cap is never entered. The point grades `active_track`,
+   uncapped and red-eligible.
+
+Net effect: **ICON was graded on MetPy parcel CAPE while GFS and ECMWF were
+graded on their own convective schemes** — and the fallback method is
+systematically hotter on this profile (MetPy ML-CAPE ÷ ICON's own ML-CAPE had
+median 1.37, p90 3.49, with `cape_raw_vs_calc_divergent=True`; at 152 nm MetPy
+read 774 J/kg where ICON's own field said 200).
+
+The fingerprint is unmistakable in `dd_trigger_count`:
+
+| model | status | affected | dd_trigger | cross-check |
+|---|---|---|---|---|
+| ecmwf | amber | 42/64 | **38** | "the model's own NWP Convective forecast is quiet here" |
+| gfs | amber | 15/64 | **15** | "the model's own NWP Convective forecast is quiet here" |
+| icon | **red** | 59/64 | **0** | *(none)* |
+
+On GFS *every* flagged point is a DD-only trigger that §18 caps at AMBER. On ICON
+the identical thermodynamic signal went uncapped to RED — not because ICON
+disagreed, but because there was no NWP assessment for the cap to key on. A
+refresh 80 minutes later, once ICON's GRIB run came back into horizon, dropped
+its character from RED "Embedded" 41 % to AMBER "Scattered" 17 % with no code
+change.
+
+**The decision.** Treat an absent track exactly as §18 treats an uncorroborated
+DD tower: cap the graded tier at MODERATE, count the point into
+`dd_trigger_count` (so the existing red-coverage exclusion applies), and mark it
+`reason_code="dd_fallback"`. A fallback-graded model can reach AMBER; it can
+never reach RED on thermodynamics alone. The invariant §18 states — *DD alone
+never reds* — now holds whether the scheme is quiet or missing.
+
+**The discriminator matters, and neither obvious candidate works.**
+
+- `convective_nwp is None` is **wrong**: under an explicit `convective_method=
+  "thermo"` request `convective_nwp` is still populated (it is always computed
+  and stored in `analysis/sounding/__init__.py`, just not swapped in) — so the
+  test reads False there, correctly. But it fires for a user who explicitly chose
+  thermo *and* is on a model with no NWP track, where capping would silently
+  override their choice.
+- `convective_method_effective == "thermo"` is **ambiguous by construction** —
+  its own docstring says it means "thermo" both on silent fallback and on
+  explicit request.
+
+So a dedicated marker, `SoundingAnalysis.convective_nwp_fallback`, is set in
+`_resolve_analyses` — the only layer that knows the *requested* method — mirroring
+`convective_explicit_unavailable` (#462) and `active_icing_available` (#391).
+
+**The card must say so.** `convective_cross_check` returning `None` for an absent
+NWP track is right at its own layer (there is nothing to compare), so the note is
+emitted from `_peak_cross_check` instead: *"No NWP Convective forecast from this
+model here — graded on Thermo Convective (thermodynamics) alone, which on its own
+can never grade red"*. Without it the card was silent about the one fact that
+explained the outlier, and its grade read as meteorological disagreement.
+
+**Scope, accepted.** The marker is per point and keys on the requested method, so
+this also caps the models that *never* have a native track (UKMO, Météo-France,
+GEM — no GRIB convective diagnostics at all). That is the same case, not a wider
+one: those models are graded on MetPy CAPE beside siblings graded on their own
+schemes, and §18's rule applies for the same reason. It also covers a
+detection-incomplete ICON-D2 hour (#462), where "unknown" must not become a red.
+
+**A firing scheme is untouched.** The cap only ever applies where there is no NWP
+assessment. The refreshed pack's ICON — a real deep cluster over the Bourbonnais
+at 08–09Z with tops to FL389 and 1.3–2.1 mm/h convective rain, which GFS and
+ECMWF entirely lack — still grades RED. That is the regression guard.
+
+### 26b. Embedded means a deck that reaches cruise, measured over a contiguous extent
+
+The embedded gate was wrong in three independent ways, and any one of them alone
+produced a spurious route RED.
+
+**(i) The deck's top was never tested.** `_point_embedded` accepted any BKN/OVC
+layer whose *base* was below cruise:
+
+```python
+cl.coverage in (BKN, OVC) and cl.base_ft < cruise_ft
+```
+
+so a deck whose top sits far below cruise counted as hiding cells. Measured on
+the affected packs at cruise FL180:
+
+| pack | model | `_point_embedded` True | deck **spans** cruise | deck entirely **below** cruise |
+|---|---|---|---|---|
+| old | icon | 39 | 3 | **36** |
+| old | ecmwf | 2 | 0 | **2** |
+| new | icon | 10 | 1 | **9** |
+| new | ecmwf | 2 | 0 | **2** |
+
+Concrete: a 697–1,942 ft stratocumulus deck near EGTF, and a 6,135–7,041 ft layer
+at 132 nm, both scored as "cells hidden in cloud" for an aircraft 11–16,000 ft
+above them in clear air with a perfect view of any buildup. **The same file
+already got this right eleven lines down**: `_vmc_below_base` tests
+`cl.base_ft < base_ft and cl.top_ft > cruise_ft`, i.e. genuine overlap. The two
+functions were mutually inconsistent.
+
+**(ii) The corroborating cover band did not match cruise.**
+`max(cloud_cover_low_pct, cloud_cover_mid_pct)` was used regardless of altitude,
+so at FL180 a 100 %-covered *low* stratocumulus deck corroborated a "deck" the
+aircraft was nowhere near.
+
+**(iii) The route-level test was a fraction with no floor.**
+`100 * embedded / len(conv) >= 50` has the convective-point count as its
+denominator, so `len(conv) == 1` scores 100 %. Live on the refreshed pack: **ECMWF
+graded the route RED off exactly one point — 9 nm of 582 nm, 2 %.** Same failure
+as the `realized == 0` short-circuit directly above it in the same function
+(§22): a colour and a route-wide claim over an extent of nothing.
+
+**The decision — per point.** A point is embedded when all three hold:
+
+1. **It has a realized cell.** The fraction used to count `is_convective` points
+   regardless of realization; "cells hidden in a deck" presupposes cells, which
+   is the same premise the `realized == 0` guard already encodes.
+2. **A BKN/OVC layer contains cruise:**
+   `base_ft − embed_cruise_buffer_ft ≤ cruise_ft ≤ top_ft + embed_cruise_buffer_ft`.
+   The buffer (1,000 ft default) exists because model vertical resolution near
+   FL180 is ~1,000–2,000 ft per level, so exact containment is falsely precise.
+3. **The deck is stratiform, not the cell's own cumulus** — bulk cover ≥
+   `embed_deck_cover_pct` **in the ICAO band containing cruise** (boundaries
+   imported from `sounding/clouds.py`, not re-typed). The existing OVC-only
+   fallback is kept for models that publish no bulk cover (ECMWF via Open-Meteo).
+
+**The decision — route level.** EMBEDDED fires iff the longest **contiguous** run
+of embedded points spans ≥ `embed_min_nm` (50 nm default), measured with the
+midpoint-owned-cell convention (`route_geometry.cell_edges`) so the number agrees
+with the `(Xnm/Ynm)` the card itself prints. Contiguous rather than total, because
+EMBEDDED is RED for *"you cannot get around it"* — scattered points summing to
+50 nm are cells with gaps, which is exactly what the coverage band grades. Points
+failing the gate fall through to ISOLATED/SCATTERED/WIDESPREAD as before, and the
+`realized == 0 → NONE` guard still runs first.
+
+Simulated outcome:
+
+| pack | model | conv | realized | embedded pts | longest contiguous | EMBEDDED? |
+|---|---|---|---|---|---|---|
+| old | icon | 53 | 26 | 1 | 10 nm | **no** (was RED, 41 %) |
+| old | ecmwf | 1 | 1 | 0 | 0 nm | **no** (was RED) |
+| new | icon | 11 | 11 | 1 | 10 nm | no |
+| new | ecmwf | 1 | 1 | 0 | 0 nm | **no** (RED today) |
+
+Both spurious REDs go and fall through to the coverage band → AMBER. ICON's
+genuine *severity* RED on the refreshed pack is a different advisory and is
+untouched.
+
+**Rejected: a minimum cell count.** An earlier attempt (PR #569) read the false
+alarm as a small-population artefact and added `CHAR_EMBED_MIN_CELLS = 3`. That
+is not the bug — the deck never had to reach cruise — and a count is not portable
+across packs anyway (point spacing was ~9 nm here and is something else
+elsewhere). The contiguous-extent gate subsumes it; the constant is deleted.
+
+**Rejected: a minimum deck depth.** Once containment is enforced it does almost
+no work — of the 3 old-pack ICON points where a deck genuinely spanned cruise,
+only 1 was thinner than 5,000 ft. And it cuts the wrong way: inside a 2,500 ft
+layer at FL180 you are IMC and the cells *are* hidden, but a 5,000 ft floor would
+call that avoidable. A thin layer is *escapable* (climb or descend 1,000 ft) —
+which is a mitigation (26d), not evidence the cells are visible. If sliver layers
+from the layer-builder turn out to fire in replay, add a ~1,000 ft floor for noise
+rejection only.
+
+**Promoted to catalog parameters.** `embed_min_nm` (50 nm, replacing the bare
+`CHAR_EMBED_PCT`), `embed_cruise_buffer_ft` (1,000 ft, new) and
+`embed_deck_cover_pct` (60 %, replacing the bare `_EMBED_DECK_COVER_PCT`) are all
+user-tunable, resolved through `resolve_character_params` like the existing six —
+so a consumer reaching the band through `classify_route_character` (§22) cannot
+grade it with different thresholds than the card shows.
+
+### 26c. The character card now badges its method (not a meteorological decision)
+
+`ConvectiveCharacterEvaluator` built every `ModelAdvisoryResult` without
+`primary_method_id`, so all three models reported `None`. The severity card does
+badge it (via `driving_method_id`) and correctly showed "thermo" for ICON — but
+**the character card is the one that rendered the RED**, and it gave the pilot no
+indication that ICON was graded on a different track from the other two.
+`driving_method_id` sources from `AdvisoryHighlights`, which this evaluator does
+not produce, so the effective method travels out of `build_character_points`
+(which already visits every sounding) instead. A fallback anywhere on the route
+wins the badge outright: "some of this model's cells were graded on
+thermodynamics" is exactly what the badge exists to carry, and averaging it away
+would restore the silence.
+
+### 26d. Embedded convection gains an altitude mitigation
+
+EMBEDDED is RED because a deck hides the cells: no see-and-avoid, nothing to
+circumnavigate around. A different cruise level is often exactly what restores it,
+and until now the card offered nothing — the "lightbulb" was absent on the one
+band where altitude is most likely to be the answer.
+
+**Both directions are valid and read differently.** *Descend below the deck*
+restores see-and-avoid underneath the cells, and stays consistent with the
+existing `_vmc_below_base` / `base_clearance_ft` geometry (§15/#298) rather than
+becoming a competing second answer to the same question. *Climb above the deck* is
+VFR on top: buildups penetrating the layer are visible and can be circumnavigated.
+Climbing is legitimate **even when tops are far above the candidate altitude** —
+seeing them is the point, not out-topping them.
+
+**Mechanics.** `build_character_points` takes a `cruise_ft` override, and the
+evaluator re-derives the **full band** at each candidate on the shared
+`MITIGATION_BIN_STEP_FT` (500 ft) ladder between the terrain floor
+(`mitigation_min_base_agl_ft` above `ctx.elevation.max_elevation_ft`) and
+`ctx.flight_ceiling_ft`, taking the level nearest planned cruise that is no longer
+EMBEDDED. Recomputing the whole band rather than just `_point_embedded` is what
+stops the tip offering an altitude that merely moves you into a different deck,
+and it is what supplies an honest `mitigated_status` — the band you would
+*actually* get there, typically SCATTERED/ISOLATED → AMBER, rarely GREEN. Per the
+`Mitigation` contract that is the status of the addressed sub-issue, never the
+advisory overall, and it never changes the grade.
+
+**v1 is level-altitude only, deliberately.** The ≥ `embed_min_nm` contiguous test
+is route-level and non-additive, so it **cannot** be expressed as a per-point cost
+in `vertical_profile.solve()`'s cost field. A varying profile would have to be
+two-step — the solver proposes a profile from a per-point "in-deck" cost, then the
+contiguous-extent gate is re-evaluated against that profile — so `Mitigation
+.profile` is left `None` rather than forced.
+
+**Scoping.** Offered for EMBEDDED only, never WIDESPREAD/ORGANIZED: altitude
+cannot fix horizontal extent. `_below_base_geometry` keeps emitting its clearance
+note for ISOLATED/SCATTERED only — EMBEDDED gains the lightbulb *instead*, so one
+card never carries two competing phrasings of the same idea. Per model, because
+the band is per model; promoted to `aggregate_mitigations` only when the same
+altitude clears **every** model currently grading EMBEDDED (reporting the worst
+band any of them would still have there), because advice that helps one model and
+not another is worse than none. This overrides the default representative-model
+aggregation for this advisory alone.
+
+**Its own terrain parameter, not `vfr_feasibility`'s.** `convective_character`
+defines its own `mitigation_min_base_agl_ft` (3,000 ft), duplicating that
+advisory's default. Reuse was considered and rejected:
+
+- **It does not match the one cross-advisory read this codebase has.** The only
+  such reads are `ifr_feasibility.py:344/347`, where a *composite* reads
+  `convective` and `convective_character` params because it re-derives those
+  advisories' grades via `grade_convective_model()` / `classify_route_character()`.
+  §22 exists so one formula cannot be computed two ways with two tunings.
+  `convective_character` does not re-derive `vfr_feasibility`'s grade; the two
+  merely both need a terrain-clearance number. That is coincidental co-need.
+- **The number means different things.** `vfr_feasibility`'s description ends
+  "Doubles as the scud-running margin beneath a deck" — a VFR-under-a-deck margin.
+  The convective use is "how low may a cruise level be offered", an en-route
+  MSA-ish concern. Same default, different reasoning; that description would
+  mislead on the convective card.
+- **Divergence is legitimate.** A pilot may reasonably accept a different margin
+  for scud-running than for picking a cruise level. Coupling forecloses that.
+- **Cost.** `vfr_feasibility` has no `*_PARAM_DEFAULTS` dict and no resolver — it
+  reads the value as an inline literal at `vfr_feasibility.py:858` — so reuse
+  would need an extraction there, buying coupling in exchange for real work. Per
+  the sparse-defaults model (#402/#403) a parameter left at its default costs
+  nothing in storage.
+
+This duplicates a *policy number*, not a *formula* — precisely what §22 does not
+govern. `vfr_feasibility` is left untouched.
+
+### Real-world validation needed
+
+26a, 26b and 26d change advisory colours on real routes. Replay a corpus of packs
+old-vs-new under the *same* config before drawing conclusions from any single
+flight — dev and prod differ in how often models are missing, so a dev-only sample
+overstates the fallback path's frequency.
+
+- Confirm the two spurious REDs above fall to AMBER on the motivating packs, and
+  that ICON's genuine severity RED on the refreshed pack survives all four fixes.
+- Watch for sliver BKN/OVC layers from the layer-builder firing the containment
+  test at cruise — the trigger for the ~1,000 ft noise floor 26b defers.
+- Sanity-check the offered altitudes against real cruise levels on a corpus
+  replay: an out that a pilot would not fly (oxygen, airspace, icing) is worse
+  than no lightbulb.

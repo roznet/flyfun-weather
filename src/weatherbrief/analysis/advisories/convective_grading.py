@@ -122,6 +122,7 @@ def _peak_cross_check(
     peak_has_both: bool,
     peak_nwp_risk: ConvectiveRisk,
     peak_dd_risk: ConvectiveRisk,
+    peak_fallback: bool = False,
 ) -> str | None:
     """DD-vs-NWP divergence note, anchored on the GRADE DRIVER (#442 follow-up).
 
@@ -132,8 +133,23 @@ def _peak_cross_check(
     gap; same-or-one-off is normal method spread, not worth surfacing. Named
     after the cross-section layer toggles ("Thermo Convective" / "NWP
     Convective") so a pilot can pull up exactly these two overlays to compare.
+
+    ``peak_fallback`` is the #568 case: there is no NWP tier to compare because
+    this model has no native convective forecast at this range. ``convective_
+    cross_check`` correctly returns ``None`` at its own layer (nothing to
+    compare), so the note has to be emitted here — otherwise the card is silent
+    about the one fact that explains why this model is the outlier, and its
+    grade reads as meteorological disagreement rather than a missing track.
     """
-    if status == AdvisoryStatus.GREEN or not peak_has_both:
+    if status == AdvisoryStatus.GREEN:
+        return None
+    if peak_fallback:
+        return (
+            "No NWP Convective forecast from this model here "
+            "— graded on Thermo Convective (thermodynamics) alone, "
+            "which on its own can never grade red"
+        )
+    if not peak_has_both:
         return None
     nwp_idx = RISK_ORDER.index(peak_nwp_risk)
     dd_idx = RISK_ORDER.index(peak_dd_risk)
@@ -200,6 +216,7 @@ def grade_convective_model(
     peak_nwp_risk = ConvectiveRisk.NONE  # NWP tier at the driving point
     peak_dd_risk = ConvectiveRisk.NONE   # DD (thermo) tier at that point
     peak_has_both = False  # both signals present at the driving point
+    peak_fallback = False  # driving point graded on thermo for lack of an NWP track
 
     for rpa in ctx.analyses:
         dist = rpa.distance_from_origin_nm or 0.0
@@ -243,6 +260,34 @@ def grade_convective_model(
         graded_risk = conv.risk_level
         reason = "active_track"
 
+        # #568 — the *absent* NWP track, the hole §18 left open. When the user
+        # asked for the NWP track and this model has none at this point (its
+        # GRIB run is out of forecast range, or a D2 detection channel was
+        # incomplete), ``conv`` is the THERMO assessment: MetPy parcel CAPE,
+        # graded here beside siblings that were graded on their own convective
+        # schemes. §18's DD-amber cap never sees it, because the thermo tier is
+        # already at/above ``min_risk`` and the green-NWP branch below is never
+        # entered — so an uncorroborated DD tower goes uncapped to RED on the one
+        # model that had no scheme to corroborate it. (Observed: LFMD→EGTF
+        # 2026-08-27, ICON RED 83 % of route while GFS/ECMWF were AMBER on the
+        # identical thermodynamic signal, every one of their flagged points a
+        # capped ``dd_trigger``.)
+        #
+        # Treat it exactly as §18 treats an uncorroborated DD tower: cap the tier
+        # at MODERATE and count it into ``dd_trigger_count`` so the red-coverage
+        # exclusion applies. A fallback-graded model can reach AMBER, never RED
+        # on DD alone. ``reason`` stays separable for telemetry.
+        #
+        # Keyed on ``convective_nwp_fallback``, NOT on ``convective_nwp is None``
+        # (False under an explicit thermo request, where capping would silently
+        # override the user's choice) and NOT on
+        # ``convective_method_effective == "thermo"`` (ambiguous between the two).
+        nwp_fallback = sounding.convective_nwp_fallback
+        if nwp_fallback:
+            if RISK_ORDER.index(graded_risk) > MOD_IDX:
+                graded_risk = ConvectiveRisk.MODERATE
+            reason = "dd_fallback"
+
         risk_idx = RISK_ORDER.index(graded_risk)
         if risk_idx < min_risk_index:
             # NWP is GREEN here. DD-trigger AMBER cap: when the DD-vs-model
@@ -269,6 +314,13 @@ def grade_convective_model(
                 ribbon_points.append((dist, HighlightSeverity.GREEN))
                 region_cells.append((dist, None))
                 continue
+
+        # A flagged fallback point counts as a DD trigger (#568), tallied here —
+        # the same place, and for the same reason, as the §18 branch above: it
+        # excludes the point from the red-coverage test. ``reason`` can only
+        # still read "dd_fallback" when the branch above did not relabel it.
+        if reason == "dd_fallback":
+            dd_trigger_count += 1
 
         # Skip if convective tops are well below cruise altitude. When the DD
         # floor raised the grade and the active (quiet NWP) track has no
@@ -388,6 +440,10 @@ def grade_convective_model(
                 thermo_conv.risk_level if thermo_conv is not None
                 else ConvectiveRisk.NONE
             )
+            # #568: the driving point had no model-native track at all. There is
+            # nothing to compare, but the *absence* is itself what the pilot
+            # needs told — see ``_peak_cross_check``.
+            peak_fallback = nwp_fallback
 
     # --- colour ---
     if total == 0:
@@ -439,6 +495,6 @@ def grade_convective_model(
         region_cells=region_cells,
         peak_dist_nm=peak_dist,
         cross_check=_peak_cross_check(
-            status, peak_has_both, peak_nwp_risk, peak_dd_risk
+            status, peak_has_both, peak_nwp_risk, peak_dd_risk, peak_fallback
         ),
     )

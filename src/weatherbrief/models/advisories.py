@@ -196,11 +196,18 @@ class HighlightRegion(BaseModel):
     #                         icing_at_cruise | transit_exposure          (AMBER)
     #         (SLD is a certification wall, not a severity; and loitering in ice
     #          is the one thing a FIKI aircraft cannot do)
-    #       ``convective``    active_track | dd_trigger
+    #       ``convective``    active_track | dd_trigger | dd_fallback
     #         (did the model's own scheme see the storm [active_track], or was it
     #          quiet and the loaded thermodynamics raised this point to AMBER
     #          [dd_trigger, #442]? DD never floors the colour to red — only the
-    #          model's own HIGH does. Superseded the old ``thermo_floor`` value.)
+    #          model's own HIGH does. Superseded the old ``thermo_floor`` value.
+    #          ``dd_fallback`` [#568] is the third case: the model had NO native
+    #          convective track here at all — its GRIB run is out of forecast
+    #          range, or a D2 detection channel was incomplete — so the point is
+    #          graded on thermodynamics because there was nothing else to grade
+    #          on. Capped and red-excluded exactly like ``dd_trigger``; kept
+    #          separable because "the scheme was quiet" and "there was no
+    #          scheme" are different facts about the forecast.)
     #     Every other evaluator deliberately emits ``None``: their reason IS the
     #     advisory's definition (cloud_top = "tops above your ceiling"), or it is
     #     already carried by ``kind`` (vfr_feasibility's cruise_imc / climb_deck /

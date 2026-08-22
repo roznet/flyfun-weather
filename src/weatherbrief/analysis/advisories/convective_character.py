@@ -21,8 +21,13 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, showers_at_point
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.analysis.sounding.clouds import (
+    _CLOUD_LOW_CEILING_FT,
+    _CLOUD_MID_CEILING_FT,
+)
 from weatherbrief.analysis.sounding.convective import (
     CHAR_COVER_REALIZED_PCT,
+    CHAR_EMBED_MIN_NM,
     ConvCharPoint,
     classify_convective_character,
 )
@@ -33,6 +38,8 @@ from weatherbrief.models import (
     CloudCoverage,
     ConvectiveCharacter,
     ConvectiveRisk,
+    Mitigation,
+    MitigationKind,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
     SoundingAnalysis,
@@ -61,9 +68,26 @@ _CHAR_STATUS: dict[ConvectiveCharacter, AdvisoryStatus] = {
     ConvectiveCharacter.EMBEDDED: AdvisoryStatus.RED,
 }
 
-# Bulk low/mid cover (%) above which a BKN/OVC layer is treated as a deck the
-# cells hide in (rather than just the cell's own cumulus).
-_EMBED_DECK_COVER_PCT = 60.0
+# Bulk cover (%) in the band containing cruise, above which a BKN/OVC layer is
+# treated as a stratiform deck the cells hide in (rather than just the cell's own
+# cumulus). Promoted to a catalog parameter in #568 (``embed_deck_cover_pct``);
+# this stays the default.
+CHAR_EMBED_DECK_COVER_PCT = 60.0
+
+# Vertical slack (ft) on the "a deck contains cruise" test (#568). Model vertical
+# resolution near FL180 is ~1,000-2,000 ft per level, so demanding exact
+# containment of the cruise level inside the layer bounds is falsely precise.
+CHAR_EMBED_CRUISE_BUFFER_FT = 1000.0
+
+# Terrain clearance (ft AGL) below which the altitude mitigation will not offer a
+# cruise level (#568). Deliberately this advisory's OWN parameter rather than a
+# read of ``vfr_feasibility``'s same-named one: §22 governs one *formula* being
+# computed two ways, and this is not that — character does not re-derive
+# vfr_feasibility's grade, the two advisories merely both need a terrain number.
+# vfr_feasibility's means "the scud-running margin beneath a deck"; this one means
+# "how low may a cruise level be offered", an en-route MSA-ish concern. A pilot
+# may reasonably want different values, and coupling them would foreclose that.
+CHAR_MITIGATION_MIN_BASE_AGL_FT = 3000.0
 
 # Default below-base clearance buffer (#298): mirror of the severity-side overfly
 # filter (`top_clearance_ft`, default 2000). A buffer this far *under* the cell
@@ -83,6 +107,10 @@ CHARACTER_PARAM_DEFAULTS: dict[str, float] = {
     "scattered_max_pct": 40,
     "organized_shear_kt": 35,
     "base_clearance_ft": CHAR_BASE_CLEARANCE_FT,
+    "embed_min_nm": CHAR_EMBED_MIN_NM,
+    "embed_cruise_buffer_ft": CHAR_EMBED_CRUISE_BUFFER_FT,
+    "embed_deck_cover_pct": CHAR_EMBED_DECK_COVER_PCT,
+    "mitigation_min_base_agl_ft": CHAR_MITIGATION_MIN_BASE_AGL_FT,
 }
 
 
@@ -99,28 +127,62 @@ def resolve_character_params(ctx: RouteContext) -> dict[str, float]:
     return {**CHARACTER_PARAM_DEFAULTS, **overrides}
 
 
-def _point_embedded(sounding: SoundingAnalysis, cruise_ft: float) -> bool:
-    """True when a convective point sits under a stratiform deck (can't see cells).
+def _bulk_cover_at(sounding: SoundingAnalysis, altitude_ft: float) -> float | None:
+    """Bulk NWP cloud cover (%) for the ICAO band *containing* ``altitude_ft``.
 
-    Requires a BKN/OVC layer based below cruise, corroborated by high bulk
-    low/mid cover (a deck, not the cell's own cu). When bulk cover is absent
-    (e.g. ECMWF via Open-Meteo), require OVC as the stronger standalone evidence.
+    Band boundaries are imported from ``sounding.clouds`` — the same constants
+    ``sounding/advisories.py`` reads — so the split cannot drift into a third
+    copy of 6500/20000. ``None`` when the model publishes no bulk cover for that
+    band (ECMWF via Open-Meteo), which callers read as "no corroboration
+    available", never as "clear".
     """
-    bkn_ovc_below = [
+    if altitude_ft < _CLOUD_LOW_CEILING_FT:
+        return sounding.cloud_cover_low_pct
+    if altitude_ft < _CLOUD_MID_CEILING_FT:
+        return sounding.cloud_cover_mid_pct
+    return sounding.cloud_cover_high_pct
+
+
+def _point_embedded(
+    sounding: SoundingAnalysis,
+    cruise_ft: float,
+    *,
+    buffer_ft: float = CHAR_EMBED_CRUISE_BUFFER_FT,
+    deck_cover_pct: float = CHAR_EMBED_DECK_COVER_PCT,
+) -> bool:
+    """True when a BKN/OVC deck **contains cruise** here, so cells cannot be seen.
+
+    Two things this deliberately gets right that the pre-#568 version did not:
+
+    1. **The deck's top is tested, not only its base.** The old test accepted any
+       BKN/OVC layer *based* below cruise, so a 697-1,942 ft stratocumulus sheet
+       counted as hiding cells from an aircraft at FL180 — 16,000 ft above it in
+       clear air with a perfect view of any buildup. On the pack that motivated
+       the issue, 36 of ICON's 39 "embedded" points were decks entirely below
+       cruise. Containment is tested with ``buffer_ft`` of slack because model
+       vertical resolution near FL180 is ~1,000-2,000 ft per level, so exact
+       containment of a cruise level inside layer bounds is falsely precise.
+       ``_vmc_below_base`` eleven lines down has always tested genuine overlap;
+       the two are now consistent.
+    2. **Corroborating cover comes from the band containing cruise.** The old
+       ``max(low, mid)`` meant a 100 %-covered *low* deck corroborated a "deck"
+       at FL180, which is in the mid band.
+
+    When the model publishes no bulk cover for that band (ECMWF via Open-Meteo),
+    fall back to requiring OVC as the stronger standalone evidence — unchanged.
+    """
+    containing = [
         cl
         for cl in sounding.cloud_layers
-        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC) and cl.base_ft < cruise_ft
+        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+        and cl.base_ft - buffer_ft <= cruise_ft <= cl.top_ft + buffer_ft
     ]
-    if not bkn_ovc_below:
+    if not containing:
         return False
-    covers = [
-        c
-        for c in (sounding.cloud_cover_low_pct, sounding.cloud_cover_mid_pct)
-        if c is not None
-    ]
-    if covers:
-        return max(covers) >= _EMBED_DECK_COVER_PCT
-    return any(cl.coverage == CloudCoverage.OVC for cl in bkn_ovc_below)
+    cover = _bulk_cover_at(sounding, cruise_ft)
+    if cover is not None:
+        return cover >= deck_cover_pct
+    return any(cl.coverage == CloudCoverage.OVC for cl in containing)
 
 
 def _front_present(ctx: RouteContext, model: str) -> bool:
@@ -248,23 +310,84 @@ def _format_below_base(res: _BelowBase, loc: str) -> str | None:
     )
 
 
+class CharacterInputs(NamedTuple):
+    """Everything one model's character classification is built from.
+
+    ``method_id`` is the #568 addition: the convective track that actually
+    graded this model's cells, so the character card can badge it the way the
+    severity card already does. It is NOT derivable from
+    ``driving_method_id`` — that reads ``AdvisoryHighlights``, which this
+    evaluator does not produce — so the method travels out of the builder that
+    already visits every sounding.
+    """
+
+    points: list[ConvCharPoint]
+    shear_max: float | None
+    synoptic_ascent: bool
+    method_id: str | None
+
+
+def _character_method_id(
+    methods: list[str | None], any_fallback: bool
+) -> str | None:
+    """The convective track to badge on this model's character result (#568).
+
+    ``methods`` are the ``convective_method_effective`` values of the points
+    that count as cells (or, when no point does, of every point with a
+    sounding). A fallback anywhere wins outright: "some of this model's cells
+    were graded on thermodynamics because the model had no native forecast
+    there" is exactly the fact the badge exists to carry, and it must not be
+    averaged away by the points that did have one. Otherwise a single distinct
+    method is the answer; a mix without a fallback (which resolution cannot
+    currently produce — an explicit thermo request is route-wide) badges
+    nothing rather than picking arbitrarily.
+    """
+    if any_fallback:
+        return "thermo"
+    distinct = {m for m in methods if m is not None}
+    return distinct.pop() if len(distinct) == 1 else None
+
+
 def build_character_points(
-    ctx: RouteContext, model: str, params: dict[str, float]
-) -> tuple[list[ConvCharPoint], float | None, bool]:
+    ctx: RouteContext, model: str, params: dict[str, float],
+    cruise_ft: float | None = None,
+) -> CharacterInputs:
     """Build one model's character points — extracted so consumers can reuse it.
 
-    Returns ``(points, shear_max, synoptic_ascent)``: everything
-    ``classify_convective_character`` needs. ``ConvectiveCharacterEvaluator``
-    calls it for its own grade; ``ifr_feasibility`` reaches it through
-    ``classify_route_character`` below (§22).
+    Returns everything ``classify_convective_character`` needs, plus the
+    effective convective method for the badge (#568).
+    ``ConvectiveCharacterEvaluator`` calls it for its own grade;
+    ``ifr_feasibility`` reaches it through ``classify_route_character`` below
+    (§22).
+
+    ``cruise_ft`` overrides ``ctx.cruise_altitude_ft`` — the altitude mitigation
+    (#568 Fix 4) re-derives the whole band at candidate levels, so the two
+    cruise-dependent per-point signals (``embedded`` and ``vmc_below_base``) have
+    to be recomputed against the candidate rather than the planned cruise.
+    Recomputing the whole band, not just ``_point_embedded``, is what stops the
+    mitigation offering an altitude that merely moves you into a different deck.
     """
     min_risk_idx = int(params.get("min_risk", CHARACTER_PARAM_DEFAULTS["min_risk"]))
     showers_mm = params.get("showers_mm", CHARACTER_PARAM_DEFAULTS["showers_mm"])
-    cruise_ft = ctx.cruise_altitude_ft
+    embed_buffer_ft = params.get(
+        "embed_cruise_buffer_ft", CHARACTER_PARAM_DEFAULTS["embed_cruise_buffer_ft"]
+    )
+    embed_deck_cover_pct = params.get(
+        "embed_deck_cover_pct", CHARACTER_PARAM_DEFAULTS["embed_deck_cover_pct"]
+    )
+    if cruise_ft is None:
+        cruise_ft = ctx.cruise_altitude_ft
 
     points: list[ConvCharPoint] = []
     shear_max: float | None = None
     synoptic_ascent = False
+    # Effective-method provenance for the badge (#568). Collected over the
+    # points that count as cells — the ones the band is built from — with the
+    # all-points list as the fallback for a model with no cells at all.
+    cell_methods: list[str | None] = []
+    all_methods: list[str | None] = []
+    cell_fallback = False
+    any_fallback = False
 
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
@@ -276,6 +399,12 @@ def build_character_points(
             conv is not None
             and _RISK_ORDER.index(conv.risk_level) >= min_risk_idx
         )
+
+        all_methods.append(sounding.convective_method_effective)
+        any_fallback = any_fallback or sounding.convective_nwp_fallback
+        if is_conv:
+            cell_methods.append(sounding.convective_method_effective)
+            cell_fallback = cell_fallback or sounding.convective_nwp_fallback
 
         realized = False
         embedded = False
@@ -331,7 +460,12 @@ def build_character_points(
                 or has_geom
                 or explicit_fired
             )
-            embedded = _point_embedded(sounding, cruise_ft)
+            embedded = _point_embedded(
+                sounding,
+                cruise_ft,
+                buffer_ft=embed_buffer_ft,
+                deck_cover_pct=embed_deck_cover_pct,
+            )
             # Below-base avoidability geometry (#298): is the layer from
             # cruise up to the cell base genuinely VMC (no BKN/OVC deck to
             # descend into)? Computed here where the sounding is in scope.
@@ -353,10 +487,46 @@ def build_character_points(
                 convective_base_ft=base_ft,
                 convective_top_ft=top_ft,
                 vmc_below_base=vmc_below,
+                distance_nm=rpa.distance_from_origin_nm,
             )
         )
 
-    return points, shear_max, synoptic_ascent
+    method_id = (
+        _character_method_id(cell_methods, cell_fallback)
+        if cell_methods
+        else _character_method_id(all_methods, any_fallback)
+    )
+    return CharacterInputs(points, shear_max, synoptic_ascent, method_id)
+
+
+def classify_inputs(
+    ctx: RouteContext, model: str, params: dict[str, float], inputs: CharacterInputs
+) -> ConvectiveCharacter:
+    """Classify already-built :class:`CharacterInputs` with this advisory's tuning.
+
+    The one place the classifier's keyword arguments are assembled, so the
+    evaluator, ``classify_route_character`` (§22 consumers) and the altitude
+    mitigation's candidate re-derivation cannot drift apart on a threshold.
+    """
+    return classify_convective_character(
+        inputs.points,
+        shear_kt=inputs.shear_max,
+        front_present=_front_present(ctx, model),
+        synoptic_ascent=inputs.synoptic_ascent,
+        isolated_max_pct=params.get(
+            "isolated_max_pct", CHARACTER_PARAM_DEFAULTS["isolated_max_pct"]
+        ),
+        scattered_max_pct=params.get(
+            "scattered_max_pct", CHARACTER_PARAM_DEFAULTS["scattered_max_pct"]
+        ),
+        organized_shear_kt=params.get(
+            "organized_shear_kt", CHARACTER_PARAM_DEFAULTS["organized_shear_kt"]
+        ),
+        embed_min_nm=params.get(
+            "embed_min_nm", CHARACTER_PARAM_DEFAULTS["embed_min_nm"]
+        ),
+        total_distance_nm=ctx.total_distance_nm,
+    )
 
 
 def classify_route_character(
@@ -370,24 +540,215 @@ def classify_route_character(
     ``resolve_character_params(ctx)`` so the band they read is the band this
     advisory would show.
     """
-    points, shear_max, synoptic_ascent = build_character_points(ctx, model, params)
-    if not points:
+    inputs = build_character_points(ctx, model, params)
+    if not inputs.points:
         return None
-    return classify_convective_character(
-        points,
-        shear_kt=shear_max,
-        front_present=_front_present(ctx, model),
-        synoptic_ascent=synoptic_ascent,
-        isolated_max_pct=params.get(
-            "isolated_max_pct", CHARACTER_PARAM_DEFAULTS["isolated_max_pct"]
-        ),
-        scattered_max_pct=params.get(
-            "scattered_max_pct", CHARACTER_PARAM_DEFAULTS["scattered_max_pct"]
-        ),
-        organized_shear_kt=params.get(
-            "organized_shear_kt", CHARACTER_PARAM_DEFAULTS["organized_shear_kt"]
-        ),
+    return classify_inputs(ctx, model, params, inputs)
+
+
+# --- Altitude mitigation for embedded convection (#568 Fix 4) ---------------
+# EMBEDDED means "cells hidden in a deck, no see-and-avoid". A different cruise
+# level is often exactly what restores it, in BOTH directions:
+#   * descend below the deck — see-and-avoid underneath the cells;
+#   * climb above it — VFR on top, where buildups penetrating the layer are
+#     visible and can be circumnavigated. Legitimate even when tops are far above
+#     the candidate: seeing them is the point, not out-topping them.
+# Advice only, per the ``Mitigation`` contract — it never changes the grade, and
+# ``mitigated_status`` is the status of the addressed sub-issue (the character
+# band you would actually get at that altitude, typically SCATTERED/ISOLATED →
+# AMBER, rarely GREEN), never the advisory overall.
+#
+# Offered ONLY for EMBEDDED, never WIDESPREAD/ORGANIZED — altitude cannot fix
+# horizontal extent. And the ISOLATED/SCATTERED-only below-base clearance note
+# (#298) is deliberately left alone: EMBEDDED gains the lightbulb instead, so one
+# card never carries two competing phrasings of the same idea.
+
+MITIGATION_ADDRESSES = "embedded_deck"
+
+
+def _candidate_altitudes(ctx: RouteContext, params: dict[str, float]) -> list[int]:
+    """Cruise levels the mitigation may offer, nearest to planned cruise first.
+
+    Bounded below by ``mitigation_min_base_agl_ft`` above the route's highest
+    terrain and above by ``ctx.flight_ceiling_ft``; stepped on the shared
+    ``MITIGATION_BIN_STEP_FT`` grid so a tip lands on the same altitudes the
+    other advisories' mitigations use. Planned cruise is excluded — it is the
+    altitude that produced the EMBEDDED verdict.
+    """
+    from weatherbrief.analysis.advisories.vertical_profile import MITIGATION_BIN_STEP_FT
+
+    min_base_agl = params.get(
+        "mitigation_min_base_agl_ft",
+        CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
     )
+    max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
+    floor = (max_terrain or 0.0) + min_base_agl
+    ceiling = ctx.flight_ceiling_ft
+    cruise = ctx.cruise_altitude_ft
+    step = MITIGATION_BIN_STEP_FT
+    lo = int(math.ceil(floor / step) * step)
+    hi = int(math.floor(ceiling / step) * step)
+    if hi < lo:
+        return []
+    cands = [a for a in range(lo, hi + step, step) if a != int(cruise)]
+    # Nearest-to-cruise first, ties broken low→high so the ladder is stable.
+    cands.sort(key=lambda a: (abs(a - cruise), a))
+    return cands
+
+
+def _bands_at_candidates(
+    ctx: RouteContext,
+    model: str,
+    params: dict[str, float],
+    candidates: list[int],
+    *,
+    stop_when_cleared: bool = False,
+) -> dict[int, ConvectiveCharacter]:
+    """This model's character band at each candidate altitude, nearest cruise first.
+
+    The **full** band is re-derived at each level rather than just
+    ``_point_embedded`` — that is what stops the mitigation from offering an
+    altitude that merely moves you into a different deck, and it is what supplies
+    the honest ``mitigated_status``.
+
+    ``stop_when_cleared`` returns as soon as one candidate is no longer EMBEDDED.
+    Safe only when a single model is embedded: ``candidates`` is ordered
+    nearest-to-cruise, so the first cleared level is the one that would be picked
+    anyway, and the truncated map cannot change a per-model answer. With two or
+    more embedded models the aggregate has to intersect the full ladders.
+    """
+    bands: dict[int, ConvectiveCharacter] = {}
+    for alt in candidates:
+        inputs = build_character_points(ctx, model, params, cruise_ft=float(alt))
+        if not inputs.points:
+            continue
+        bands[alt] = classify_inputs(ctx, model, params, inputs)
+        if stop_when_cleared and bands[alt] is not ConvectiveCharacter.EMBEDDED:
+            break
+    return bands
+
+
+def _first_cleared(
+    candidates: list[int], bands: dict[int, ConvectiveCharacter]
+) -> int | None:
+    """Nearest-to-cruise candidate whose band is known and no longer EMBEDDED.
+
+    An altitude missing from ``bands`` (no soundings there, or a scan truncated by
+    ``stop_when_cleared``) is not an answer — never read as "cleared".
+    """
+    return next(
+        (
+            a
+            for a in candidates
+            if bands.get(a) not in (None, ConvectiveCharacter.EMBEDDED)
+        ),
+        None,
+    )
+
+
+def _altitude_mitigation(
+    alt: int, cruise_ft: float, mitigated_status: AdvisoryStatus, loc: str
+) -> Mitigation:
+    """Build the climb/descend tip for a candidate that clears the deck."""
+    key = (
+        "convective_character.mitigation.climb"
+        if alt > cruise_ft
+        else "convective_character.mitigation.descend"
+    )
+    return Mitigation(
+        kind=MitigationKind.ALTITUDE,
+        addresses=MITIGATION_ADDRESSES,
+        detail=adv_t(key, loc, alt=alt),
+        mitigated_status=mitigated_status,
+        altitude_ft=alt,
+        # v1 is level-altitude only. The >= embed_min_nm contiguous test is
+        # route-level and non-additive, so it cannot be expressed as a per-point
+        # cost in ``vertical_profile.solve()`` — a varying profile would need the
+        # solver to propose one from a per-point "in-deck" cost and the contiguous
+        # gate to be re-evaluated against it. Until then, no ``profile``.
+        profile=None,
+    )
+
+
+def _attach_mitigations(
+    ctx: RouteContext,
+    params: dict[str, float],
+    per_model: list[ModelAdvisoryResult],
+    embedded_models: list[str],
+    loc: str,
+) -> RouteAdvisoryResult:
+    """Add the EMBEDDED altitude tips to the per-model results and the aggregate.
+
+    Run after the per-model loop, not inside it, so the number of embedded models
+    is known: with one, each ladder scan can stop at the first cleared level; with
+    two or more the aggregate needs the full ladders to intersect them.
+    """
+    cruise_ft = ctx.cruise_altitude_ft
+    if not embedded_models:
+        return RouteAdvisoryResult.from_per_model(
+            "convective_character", per_model, params
+        )
+
+    candidates = _candidate_altitudes(ctx, params)
+    single = len(embedded_models) == 1
+    bands_by_model = {
+        m: _bands_at_candidates(
+            ctx, m, params, candidates, stop_when_cleared=single
+        )
+        for m in embedded_models
+    }
+
+    resolved: list[ModelAdvisoryResult] = []
+    for res in per_model:
+        model_bands = bands_by_model.get(res.model)
+        cleared = (
+            _first_cleared(candidates, model_bands) if model_bands is not None else None
+        )
+        if cleared is None:
+            resolved.append(res)
+            continue
+        tip = _altitude_mitigation(
+            cleared,
+            cruise_ft,
+            _CHAR_STATUS.get(model_bands[cleared], AdvisoryStatus.GREEN),
+            loc,
+        )
+        resolved.append(res.model_copy(update={"mitigations": [tip]}))
+
+    result = RouteAdvisoryResult.from_per_model(
+        "convective_character", resolved, params
+    )
+
+    # The default representative-model policy would hand the aggregate whichever
+    # EMBEDDED model happened to be first, and its altitude may leave another
+    # EMBEDDED model still embedded — advice that helps one model and not another.
+    # Promote only an altitude that clears EVERY model currently grading EMBEDDED,
+    # and report the WORST band any of them would still have there.
+    common = next(
+        (
+            a
+            for a in candidates
+            if all(
+                b.get(a) not in (None, ConvectiveCharacter.EMBEDDED)
+                for b in bands_by_model.values()
+            )
+        ),
+        None,
+    )
+    aggregate: list[Mitigation] = []
+    if common is not None:
+        aggregate.append(
+            _altitude_mitigation(
+                common,
+                cruise_ft,
+                AdvisoryStatus.worst([
+                    _CHAR_STATUS.get(b[common], AdvisoryStatus.GREEN)
+                    for b in bands_by_model.values()
+                ]),
+                loc,
+            )
+        )
+    return result.model_copy(update={"aggregate_mitigations": aggregate})
 
 
 @register
@@ -477,22 +838,69 @@ class ConvectiveCharacterEvaluator:
                     max=5000,
                     step=500,
                 ),
+                AdvisoryParameterDef(
+                    key="embed_min_nm",
+                    label="Embedded min extent (nm)",
+                    description=(
+                        "Longest unbroken stretch of cells hidden in a deck at/above "
+                        "which the route counts as embedded"
+                    ),
+                    type="number",
+                    unit="nm",
+                    default=CHARACTER_PARAM_DEFAULTS["embed_min_nm"],
+                    min=0,
+                    max=200,
+                    step=10,
+                ),
+                AdvisoryParameterDef(
+                    key="embed_cruise_buffer_ft",
+                    label="Embedded cruise buffer (ft)",
+                    description=(
+                        "Slack on \"the deck contains cruise\" — model levels are "
+                        "1,000-2,000 ft apart near the flight levels"
+                    ),
+                    type="altitude",
+                    unit="ft",
+                    default=CHARACTER_PARAM_DEFAULTS["embed_cruise_buffer_ft"],
+                    min=0,
+                    max=3000,
+                    step=250,
+                ),
+                AdvisoryParameterDef(
+                    key="embed_deck_cover_pct",
+                    label="Embedded deck cover %",
+                    description=(
+                        "Bulk cloud cover in the band at cruise above which the layer "
+                        "is a stratiform deck, not the cells' own cumulus"
+                    ),
+                    type="percent",
+                    unit="%",
+                    default=CHARACTER_PARAM_DEFAULTS["embed_deck_cover_pct"],
+                    min=30,
+                    max=100,
+                    step=5,
+                ),
+                AdvisoryParameterDef(
+                    key="mitigation_min_base_agl_ft",
+                    label="Lowest cruise offered (ft AGL)",
+                    description=(
+                        "Terrain clearance below which the climb/descend tip will not "
+                        "suggest a cruise level"
+                    ),
+                    type="altitude",
+                    unit="ft",
+                    default=CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
+                    min=1000,
+                    max=6000,
+                    step=500,
+                ),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        # min_risk / showers_mm are consumed inside build_character_points; the
-        # band thresholds are applied at classification below.
-        isolated_max_pct = params.get(
-            "isolated_max_pct", CHARACTER_PARAM_DEFAULTS["isolated_max_pct"]
-        )
-        scattered_max_pct = params.get(
-            "scattered_max_pct", CHARACTER_PARAM_DEFAULTS["scattered_max_pct"]
-        )
-        organized_shear_kt = params.get(
-            "organized_shear_kt", CHARACTER_PARAM_DEFAULTS["organized_shear_kt"]
-        )
+        # min_risk / showers_mm / the embedded gate's tuning are consumed inside
+        # build_character_points and classify_inputs.
         base_clearance_ft = params.get(
             "base_clearance_ft", CHARACTER_PARAM_DEFAULTS["base_clearance_ft"]
         )
@@ -500,13 +908,15 @@ class ConvectiveCharacterEvaluator:
         loc = ctx.locale
 
         per_model: list[ModelAdvisoryResult] = []
+        # Models the altitude mitigation applies to (#568 Fix 4) — EMBEDDED only,
+        # collected here and scanned after the loop, where the count is known.
+        embedded_models: list[str] = []
 
         for model in ctx.models:
             # Same builder the composites reach through classify_route_character
             # (§22) — the band this card shows is the band they act on.
-            points, shear_max, synoptic_ascent = build_character_points(
-                ctx, model, params
-            )
+            inputs = build_character_points(ctx, model, params)
+            points = inputs.points
 
             if not points:
                 per_model.append(
@@ -521,15 +931,7 @@ class ConvectiveCharacterEvaluator:
                 )
                 continue
 
-            character = classify_convective_character(
-                points,
-                shear_kt=shear_max,
-                front_present=_front_present(ctx, model),
-                synoptic_ascent=synoptic_ascent,
-                isolated_max_pct=isolated_max_pct,
-                scattered_max_pct=scattered_max_pct,
-                organized_shear_kt=organized_shear_kt,
-            )
+            character = classify_inputs(ctx, model, params, inputs)
 
             status = _CHAR_STATUS.get(character, AdvisoryStatus.GREEN)
             total = len(points)
@@ -548,6 +950,9 @@ class ConvectiveCharacterEvaluator:
                 if note:
                     detail += f" — {note}"
 
+            if character is ConvectiveCharacter.EMBEDDED:
+                embedded_models.append(model)
+
             per_model.append(
                 ModelAdvisoryResult.build(
                     model=model,
@@ -556,7 +961,15 @@ class ConvectiveCharacterEvaluator:
                     affected=realized_count,
                     total=total,
                     total_distance_nm=ctx.total_distance_nm,
+                    # #568: the character card is the one that renders the
+                    # EMBEDDED/WIDESPREAD red, and until now it badged nothing —
+                    # so a model graded on thermodynamics for lack of a native
+                    # track sat beside two graded on their own schemes with no
+                    # visible difference, and its outlier verdict read as
+                    # meteorological disagreement. The severity card has badged
+                    # this since #408; this is the same fact on the other axis.
+                    primary_method_id=inputs.method_id,
                 )
             )
 
-        return RouteAdvisoryResult.from_per_model("convective_character", per_model, params)
+        return _attach_mitigations(ctx, params, per_model, embedded_models, loc)

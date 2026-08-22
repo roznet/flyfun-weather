@@ -187,6 +187,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Konvektionscharakter unbestimmt",
         "es": "Carácter convectivo indeterminado",
     },
+    # --- convective_character altitude mitigation (#568) ---
+    # Advice only — never changes the grade. Both directions restore see-and-avoid
+    # and must read differently: below the deck you see the cells from underneath,
+    # above it you see the buildups that penetrate the layer. Climbing is
+    # legitimate even when tops are far above the offered level — seeing them is
+    # the point, not out-topping them.
+    "convective_character.mitigation.climb": {
+        "en": "Climbing to {alt:,} ft would put you on top of the deck — buildups visible and circumnavigable",
+        "fr": "Monter à {alt:,} ft placerait au-dessus de la couche — bourgeonnements visibles et contournables",
+        "de": "Ein Steigflug auf {alt:,} ft läge über der Schicht — Aufquellungen sichtbar und umfliegbar",
+        "es": "Ascender a {alt:,} ft situaría sobre la capa — desarrollos visibles y sorteables",
+    },
+    "convective_character.mitigation.descend": {
+        "en": "Descending to {alt:,} ft would put you below the deck — see-and-avoid under the cells",
+        "fr": "Descendre à {alt:,} ft placerait sous la couche — vol à vue sous les cellules",
+        "de": "Ein Sinkflug auf {alt:,} ft läge unter der Schicht — Sicht auf die Zellen von unten",
+        "es": "Descender a {alt:,} ft situaría bajo la capa — ver-y-evitar bajo las células",
+    },
     # --- convective_character below-base clearance (#298) ---
     # Annotate-only notes appended to ISOLATED/SCATTERED. Below-base is "more
     # circumnavigable" (see-and-avoid under the cells in VMC), NOT a vertical out

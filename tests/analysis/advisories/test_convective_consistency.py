@@ -243,11 +243,14 @@ def test_grade_geometry_is_index_aligned_with_analyses():
 def _cell_under_deck(
     nwp_risk: ConvectiveRisk = ConvectiveRisk.MODERATE,
 ) -> SoundingAnalysis:
-    """A realized cell with an OVC deck beneath cruise — the embedded geometry.
+    """A realized cell with an OVC deck *containing* cruise — the embedded geometry.
 
     ``realized`` needs a firing signal: the native convective-precip channel
-    supplies it (and resolved base/top geometry would too). The OVC layer based
-    below cruise, with high bulk low cover, is what ``_point_embedded`` reads.
+    supplies it (and resolved base/top geometry would too). What
+    ``_point_embedded`` reads is a BKN/OVC layer whose base/top bracket the 8,000
+    ft cruise, corroborated by bulk cover in the band cruise sits in — the mid
+    band here (#568). The low-band cover is deliberately *low*: a deck the
+    aircraft is nowhere near must not corroborate one it is inside.
     """
     return SoundingAnalysis(
         convective_nwp=ConvectiveAssessment(
@@ -258,9 +261,10 @@ def _cell_under_deck(
             risk_level=nwp_risk, cape_jkg=1200, base_ft=6000, top_ft=28000,
         ),
         cloud_layers=[
-            EnhancedCloudLayer(base_ft=2000, top_ft=7000, coverage=CloudCoverage.OVC),
+            EnhancedCloudLayer(base_ft=5000, top_ft=14000, coverage=CloudCoverage.OVC),
         ],
-        cloud_cover_low_pct=90.0,
+        cloud_cover_low_pct=10.0,
+        cloud_cover_mid_pct=90.0,
         nwp_cloud_diagnostics=NWPCloudDiagnostics(convective_precip_mm_h=1.5),
     )
 
@@ -294,9 +298,12 @@ def test_embedded_escalates_amber_convective_to_red_ifr():
     """Cells you cannot see, in cloud, without radar: worse under IFR than VFR."""
     from weatherbrief.models import ConvectiveCharacter
 
-    # One cell in six points: MODERATE, so convective floors at AMBER rather
-    # than crossing the 50 % red coverage threshold.
-    ctx = _ctx([_cell_under_deck()] + [_quiet()] * 5)
+    # Four contiguous cells in sixteen points: MODERATE, so convective grades
+    # AMBER (25 % clears the 20 % amber coverage threshold but not the 50 % red
+    # one). Points are 20 nm apart, so four adjacent cells span 70 nm under the
+    # midpoint-owned-cell convention — over the 50 nm ``embed_min_nm`` floor the
+    # embedded gate now measures (#568), with margin rather than on the knife edge.
+    ctx = _ctx([_cell_under_deck()] * 4 + [_quiet()] * 12)
     assert _character(ctx) is ConvectiveCharacter.EMBEDDED
     assert _conv_status(ctx) == AdvisoryStatus.AMBER
     assert _ifr_status(ctx) == AdvisoryStatus.RED
@@ -330,7 +337,7 @@ def test_embedded_does_not_lift_a_green_convective_axis():
 def test_embedded_escalation_is_named_in_the_detail():
     """A red the convective card does not show must say why."""
     res = IFRFeasibilityEvaluator.evaluate(
-        _ctx([_cell_under_deck()] + [_quiet()] * 5),
+        _ctx([_cell_under_deck()] * 4 + [_quiet()] * 12),
         _defaults(IFRFeasibilityEvaluator),
     )
     detail = next(m for m in res.per_model if m.model == "gfs").detail

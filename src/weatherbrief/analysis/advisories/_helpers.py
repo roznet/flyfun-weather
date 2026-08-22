@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from collections.abc import Callable
 
+from weatherbrief.analysis.route_geometry import cell_edges
 from weatherbrief.models import (
     AdvisoryHighlights,
     AdvisoryStatus,
@@ -151,25 +152,6 @@ class FlaggedCell(NamedTuple):
     method_id: str | None = None
 
 
-def _cell_edges(distances: list[float], total_nm: float) -> tuple[list[float], list[float]]:
-    """Per-point cell boundaries: each point owns ``[left, right]`` midway to its neighbours.
-
-    First point's cell starts at 0, last point's ends at ``total_nm`` — so the
-    per-point cells tile ``[0, total_nm]`` exactly. Boundaries fall midway
-    between adjacent points, matching the ribbon/region convention.
-    """
-    n = len(distances)
-    lefts = [
-        0.0 if i == 0 else (distances[i - 1] + distances[i]) / 2.0
-        for i in range(n)
-    ]
-    rights = [
-        total_nm if i == n - 1 else (distances[i] + distances[i + 1]) / 2.0
-        for i in range(n)
-    ]
-    return lefts, rights
-
-
 def build_ribbon(
     per_point: list[tuple[float, HighlightSeverity]],
     total_nm: float,
@@ -189,7 +171,7 @@ def build_ribbon(
     pts = sorted(per_point, key=lambda t: t[0])
     distances = [d for d, _ in pts]
     severities = [s for _, s in pts]
-    lefts, rights = _cell_edges(distances, total_nm)
+    lefts, rights = cell_edges(distances, total_nm)
 
     segments: list[RibbonSegment] = []
     run_start = 0
@@ -223,7 +205,7 @@ def build_regions(
     pts = sorted(per_point, key=lambda t: t[0])
     distances = [d for d, _ in pts]
     cells = [c for _, c in pts]
-    lefts, rights = _cell_edges(distances, total_nm)
+    lefts, rights = cell_edges(distances, total_nm)
 
     regions: list[HighlightRegion] = []
     n = len(pts)
@@ -599,7 +581,7 @@ def summarize_evidence(
     # the ribbon uses, so extent and ribbon share one geometry.
     affected_nm = 0.0
     if pts:
-        lefts, rights = _cell_edges(distances, total_nm)
+        lefts, rights = cell_edges(distances, total_nm)
         affected_nm = sum(
             rights[i] - lefts[i] for i, s in enumerate(pts) if _sample_affected(s)
         )
