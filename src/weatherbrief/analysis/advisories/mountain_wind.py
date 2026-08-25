@@ -300,7 +300,15 @@ class MountainWindEvaluator:
             affected = summary.affected
 
             loc = ctx.locale
-            ext = format_extent(affected, total, ctx.total_distance_nm)
+            # D3 (#571): this advisory's domain is the *mountain* points, so its
+            # denominator is mountain miles — not the route length it used to be
+            # multiplied by (ICON printed "543nm/582nm (93%)" for a 131.8 nm
+            # footprint, a ~4x overstatement). ``summary.extent`` carries
+            # ``domain_nm`` from the in-domain samples, and the sentence names
+            # that denominator the way ``sun`` names "of the sunlit route".
+            ext = format_extent(
+                summary.extent, domain_label=adv_t("mountain_wind.of_terrain", loc),
+            )
             sig_text = " + ".join(
                 adv_t(f"mountain_wind.sig_{s}", loc)
                 for s in sorted(wave_sigs)
@@ -373,6 +381,11 @@ class MountainWindEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 affected_nm=summary.affected_nm,
+                # The published denominator is mountain miles, not route miles
+                # — and it is named, so no consumer can re-derive the ~4x
+                # overstatement from ``affected_nm / total_nm`` (#571 D3).
+                domain_nm=summary.extent.domain_nm,
+                affected_domain=adv_t("mountain_wind.of_terrain", ctx.locale),
                 highlights=highlights,
             ))
 

@@ -24,7 +24,9 @@ from weatherbrief.analysis.advisories._helpers import (
     build_regions,
     build_ribbon,
     driving_method_id,
+    RouteExtent,
     format_extent,
+    route_extent,
     ribbon_peak,
     to_mitigation_profile,
     worst_severity,
@@ -160,23 +162,29 @@ def _check_enroute_vfr(
     model: str,
     cloud_clearance_ft: float,
     altitude_ft: float,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, RouteExtent]:
     """Check en-route cloud clearance for VFR at ``altitude_ft``.
 
     Takes the evaluated altitude explicitly (rather than reading
     ``ctx.cruise_altitude_ft``) so it can be re-run at candidate altitudes when
     searching for a lower-altitude mitigation.
 
-    Returns (total, imc_count, marginal_count, clear_count).
+    Returns (total, imc_count, marginal_count, clear_count, extent).
     - imc_count: points where the altitude is inside BKN/OVC cloud
     - marginal_count: points where cloud clearance < threshold (but not in cloud)
+    - extent: geometry-accurate coverage of the imc+marginal union (#571), so
+      the sentence prints the miles it actually measured
     """
     total = 0
     imc_count = 0
     marginal_count = 0
     clear_count = 0
+    dists: list[float] = []
+    affected_flags: list[bool] = []
 
     for rpa in ctx.analyses:
+        dists.append(rpa.distance_from_origin_nm or 0.0)
+        affected_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
@@ -185,12 +193,15 @@ def _check_enroute_vfr(
         cls, _, _ = _point_enroute_vfr(sounding, altitude_ft, cloud_clearance_ft)
         if cls == "imc":
             imc_count += 1
+            affected_flags[-1] = True
         elif cls == "marginal":
             marginal_count += 1
+            affected_flags[-1] = True
         else:
             clear_count += 1
 
-    return total, imc_count, marginal_count, clear_count
+    extent = route_extent(dists, ctx.total_distance_nm, affected_flags)
+    return total, imc_count, marginal_count, clear_count, extent
 
 
 def _enroute_vfr_status(
@@ -671,7 +682,7 @@ def _solver_mitigations(
         best_status: AdvisoryStatus | None = None
         alt = cruise - MITIGATION_BIN_STEP_FT
         while alt >= floor:
-            tot, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
+            tot, imc, marg, _, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
             cand = _enroute_vfr_status(tot, imc, marg, imc_pct_amber, imc_pct_red)
             if _SEVERITY[cand] < _SEVERITY[enroute_status]:
                 if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
@@ -867,7 +878,7 @@ class VFRFeasibilityEvaluator:
             )
 
             # 2. En-route cloud clearance
-            total, imc_count, marginal_count, _ = _check_enroute_vfr(
+            total, imc_count, marginal_count, _, enroute_extent = _check_enroute_vfr(
                 ctx, model, cloud_clearance_ft, ctx.cruise_altitude_ft
             )
 
@@ -905,7 +916,7 @@ class VFRFeasibilityEvaluator:
             enroute_detail = ""
 
             if total > 0 and affected > 0:
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                ext = format_extent(enroute_extent)
                 if enroute_status == AdvisoryStatus.RED:
                     enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
                 elif enroute_status == AdvisoryStatus.AMBER:
@@ -1006,6 +1017,7 @@ class VFRFeasibilityEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=enroute_extent.nm,
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=primary_method_id,

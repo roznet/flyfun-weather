@@ -118,6 +118,9 @@ class TurbulenceEvaluator:
 
                 point_affected = False
                 point_significant = False
+                # Free-atmosphere SEVERE at cruise — the tier that forces RED
+                # and the one the "Severe CAT over …" sentence must quote.
+                point_severe = False
                 strong_w_here = False
                 severe_layers: list = []
                 moderate_cruise_layers: list = []
@@ -141,6 +144,7 @@ class TurbulenceEvaluator:
                                 has_bl_severe = True
                             else:
                                 has_severe = True
+                                point_severe = True
                     # Highlight geometry: severe counts anywhere in the
                     # column, moderate only when it overlaps cruise.
                     if layer.risk == CATRiskLevel.SEVERE:
@@ -182,22 +186,41 @@ class TurbulenceEvaluator:
                     )
                 # ``affected`` (grade) keys on the cruise band; ``severity``
                 # (ribbon) on severe-anywhere — deliberately decoupled (#393).
+                # The tiers are tagged so each sentence can quote the extent of
+                # the tier it *names* (#571 D1): "Severe CAT over 146nm (25%)"
+                # was the light-and-above coverage while severe held one point.
+                tags = set()
+                if point_significant:
+                    tags.add("significant")
+                if point_severe:
+                    tags.add("severe")
                 samples.append(EvidenceSample(
                     distance_nm=dist, assessed=True, severity=severity,
                     affected=point_affected, region=region,
+                    tags=frozenset(tags),
                 ))
 
             summary = summarize_evidence(samples, ctx.total_distance_nm)
             total = summary.assessed
             affected = summary.affected
-            ext = format_extent(affected, total, ctx.total_distance_nm)
+            # One extent per severity tier (#571 D1). The severity word and the
+            # coverage beside it must describe the same points: a single
+            # free-atmosphere severe layer is a real hazard and still forces RED,
+            # but it is "Severe CAT over 9nm", not over the light-and-above 146nm.
+            ext = format_extent(summary.extent)
+            ext_severe = format_extent(
+                summary.extent_of(lambda s: "severe" in s.tags)
+            )
+            ext_significant = format_extent(
+                summary.extent_of(lambda s: "significant" in s.tags)
+            )
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             elif has_severe:
                 status = AdvisoryStatus.RED
-                detail = adv_t("turbulence.severe_over", loc, extent=ext)
+                detail = adv_t("turbulence.severe_over", loc, extent=ext_severe)
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("turbulence.smooth", loc)
@@ -219,7 +242,16 @@ class TurbulenceEvaluator:
                 if has_bl_severe and status == AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.AMBER
                 risk_label = worst_cat.value.upper() if worst_cat != CATRiskLevel.NONE else "Turbulence"
-                detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=ext)
+                # MODERATE-or-worse is a tier of its own: naming it and then
+                # quoting the any-risk union describes two different populations
+                # in one sentence. LIGHT (and the no-CAT strong-updraft case)
+                # legitimately quotes the any-risk extent — that IS its tier.
+                tier_ext = (
+                    ext_significant
+                    if worst_cat not in (CATRiskLevel.NONE, CATRiskLevel.LIGHT)
+                    else ext
+                )
+                detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=tier_ext)
 
             # Coverage tolerance (#391): a smooth verdict from soundings-with-vm at
             # too small a share of the route cannot vouch for the unassessed rest.

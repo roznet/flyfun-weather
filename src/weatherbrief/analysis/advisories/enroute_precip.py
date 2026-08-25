@@ -32,6 +32,7 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     below_coverage,
     format_extent,
+    route_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -121,8 +122,20 @@ def classify_enroute_precip(
     sig_rain_pts = 0       # rain moderate+ — and FZRA/PL (vis extent only)
     light_pts = 0          # light rain — comfort, not a hazard
     has_signal = False
+    # Per-point flags for the geometry-accurate extents (#571). The three
+    # sentences below each name a DIFFERENT population (snow / significant rain
+    # / light rain), so each needs its own reduction over the route's cell
+    # edges — a share of the union's nm would describe the wrong points.
+    dists: list[float] = []
+    snow_flags: list[bool] = []
+    sig_flags: list[bool] = []
+    light_flags: list[bool] = []
 
     for rpa in ctx.analyses:
+        dists.append(rpa.distance_from_origin_nm or 0.0)
+        snow_flags.append(False)
+        sig_flags.append(False)
+        light_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
@@ -140,12 +153,15 @@ def classify_enroute_precip(
             continue
         if cls in ("snow", "snow_moderate"):
             snow_pts += 1
+            snow_flags[-1] = True
             if cls == "snow_moderate":
                 snow_moderate_pts += 1
         elif cls == "sig":
             sig_rain_pts += 1
+            sig_flags[-1] = True
         else:
             light_pts += 1
+            light_flags[-1] = True
 
     if total == 0 or not has_signal:
         return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), 0, total, has_signal
@@ -159,12 +175,16 @@ def classify_enroute_precip(
     if snow_pts:
         parts.append(adv_t(
             "enroute_precip.snow", loc,
-            extent=format_extent(snow_pts, total, ctx.total_distance_nm),
+            extent=format_extent(
+                route_extent(dists, ctx.total_distance_nm, snow_flags)
+            ),
         ))
     if sig_rain_pts:
         parts.append(adv_t(
             "enroute_precip.rain", loc,
-            extent=format_extent(sig_rain_pts, total, ctx.total_distance_nm),
+            extent=format_extent(
+                route_extent(dists, ctx.total_distance_nm, sig_flags)
+            ),
         ))
 
     if snow_moderate_pct >= snow_moderate_pct_red:
@@ -176,7 +196,9 @@ def classify_enroute_precip(
         if not parts and light_pts:
             parts.append(adv_t(
                 "enroute_precip.light", loc,
-                extent=format_extent(light_pts, total, ctx.total_distance_nm),
+                extent=format_extent(
+                    route_extent(dists, ctx.total_distance_nm, light_flags)
+                ),
             ))
         if not parts:
             parts.append(adv_t("enroute_precip.clear", loc))

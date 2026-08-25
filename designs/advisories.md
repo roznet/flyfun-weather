@@ -718,7 +718,7 @@ longer come from two loops that drift (the class of bug #391 kept hitting).
   affected). `in_domain=False` drops a point from the coverage denominator
   (mountain_wind measures coverage over mountain points only). `region` is the
   `FlaggedCell` scrim cutout.
-- **`summarize_evidence(samples, total_nm, peak_dist_nm=None)`** → `EvidenceSummary(affected, assessed, domain, affected_nm, highlights, data_state)`.
+- **`summarize_evidence(samples, total_nm, peak_dist_nm=None)`** → `EvidenceSummary(affected, assessed, domain, affected_nm, highlights, data_state, domain_nm, samples, total_nm)`.
   `affected_nm` is the **midpoint-owned-cell** distance of the affected points (the
   #391 geometry fix, landed here): each point owns the interval to its neighbours'
   midpoints, and the affected cells are summed — so extent and ribbon share one
@@ -727,12 +727,49 @@ longer come from two loops that drift (the class of bug #391 kept hitting).
   for exactly this. `data_state` is complete/partial/unavailable; `.below_coverage`
   is the existing `below_coverage(assessed, domain)` predicate, applied **only to a
   would-be-GREEN** verdict — never #389's binary `partial→UNAVAILABLE`, so a
-  flagged verdict on thin coverage always stands. Evaluators keep their own
-  extent-threshold sub-counts (e.g. vmc_cruise's OVC-only red bar) locally.
+  flagged verdict on thin coverage always stands.
+  `.extent` is the affected population as a `RouteExtent` and `.extent_of(pred)`
+  reduces any **sub-population** over the same geometry — that is how an evaluator
+  whose message names a narrower population than its grade (turbulence's SEVERE
+  tier, vmc_cruise's OVC bar, enroute_precip's snow split) gets a real nm for it
+  instead of a scaled share of the union's (#571). Tag samples via
+  `EvidenceSample.tags` when the population is not derivable from `severity`.
+
+### The extent contract (#571)
+
+Every route advisory answers *"how much of the flight is affected?"*, and there
+is exactly **one** way to answer it: build a `RouteExtent` and format it.
+
+- **`RouteExtent(points, domain_points, nm, domain_nm, longest_run_nm, minutes)`**
+  with `pct = 100 × nm / domain_nm`. `nm` is the midpoint-owned-cell sum of the
+  affected points (`route_geometry.cell_edges`) — the same geometry the ribbon
+  and the convective-character contiguity gate use.
+- **The percentage is distance-based, never a point ratio.** `interpolate_route`
+  fills at a fixed 10 nm but inserts extra points at waypoints, so a point ratio
+  and a distance ratio never agree; keying the percentage off the nm the message
+  prints makes them consistent by construction.
+- **`domain_nm` travels with the extent.** A domain-scoped advisory
+  (`mountain_wind`: mountain points only) measures coverage against *its own*
+  denominator. There is deliberately no route length available to multiply a
+  domain fraction by — that was the ~4x overstatement. Such an advisory must
+  also **name** its denominator in the sentence (`format_extent(ext,
+  domain_label=…)`, "132nm/190nm of high terrain") and publish
+  `affected_domain` so the digest prompt and the MCP views can qualify the
+  percentage.
+- **One extent per severity tier.** The severity word and the coverage beside it
+  describe the same points: "Severe CAT over …" quotes the SEVERE extent, not
+  light-and-above coverage.
+- **Contiguity is a reducer on the same geometry**, not a separate function:
+  `longest_run_nm` for barrier-type hazards ("you cannot get around it") sits on
+  the same object as the union `nm`.
+- **`format_extent` takes the `RouteExtent`**, never counts. This is what makes
+  the sentence and the published `affected_nm` one number rather than two
+  derivations of it.
 
 ## Shared Helpers (`_helpers.py`)
 
-- **`format_extent(affected, total, total_distance_nm)`** → `"30nm/55nm (55%)"` — human-readable spatial extent
+- **`route_extent(distances, total_nm, affected, in_domain=None)`** → `RouteExtent` — reduce per-point flags to an extent over the route's cell edges. The lower-level entry point for evaluators that don't build an `EvidenceSample` list (`convective_grading`, `enroute_precip`, the two feasibility composites)
+- **`format_extent(ext, domain_label=None)`** → `"30nm/55nm (55%)"` — human-readable spatial extent, taken from the `RouteExtent` itself. `domain_label` names a denominator that is not the whole route (`"of high terrain"`)
 - **`build_ribbon(per_point, total_nm)`** → `list[RibbonSegment]` — merge consecutive same-severity route points into runs; boundaries fall midway between adjacent points; tiles `[0, total_nm]` exactly (sorted/non-overlapping/gapless invariants tested). No-sounding points → `UNAVAILABLE` (#373)
 - **`build_regions(per_point, total_nm)`** → `list[HighlightRegion]` — merge consecutive same-`kind`/`severity` flagged points (a `FlaggedCell` per flagged point, `None` otherwise) into one cutout using the **envelope** (min `base_ft` / max `top_ft`); all-`None` run stays a full column. Same cell-midpoint x-boundaries as the ribbon (#373)
 - **`ribbon_peak(segments)`** → center of the longest RED run, else longest AMBER run, else `None` — generic worst-point for evaluators whose peak is pure ribbon extent (`vmc_cruise`); richer peaks (convective's highest-CAPE) are computed in the evaluator (#373)
@@ -898,7 +935,8 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 
 - Evaluator exceptions are caught and logged — one failure doesn't break the whole advisory set. The failed evaluator is not dropped: the registry appends an explicit UNAVAILABLE `RouteAdvisoryResult` with a localized diagnostic `aggregate_detail` (via `adv_t("evaluation_failed", …)`), so a crash reads as "could not assess", never as a silently-absent "not a concern" (#391)
 - `ModelAgreementEvaluator` has `per_model=["all"]` (not actual model names) since it's cross-model
-- `format_extent` falls back to percentage-only if route has too few points for meaningful distance
+- `format_extent` renders `"0nm"` when the extent has no domain (nothing measurable)
+- The percentage `format_extent` prints is **distance-based**, while `ModelAdvisoryResult.affected_pct` is still the **point** ratio — they differ by a point or two on an unevenly spaced route. Aggregate lines that summarise several models must therefore use `coverage_pct` / `coverage_mod_pct` (the distance form) so a headline and the per-model sentences under it stay one measurement
 - `wind_at_altitude` picks the level via `pick_wind_at_pressure` and the hour via `at_time` — don't reintroduce a "first hourly" shortcut, it lags the route point's valid time on long legs
 
 ## References

@@ -147,8 +147,11 @@ class ConvectiveEvaluator:
             status = grade.status
             cross_check = grade.cross_check
 
-            ext = format_extent(affected, total, ctx.total_distance_nm)
-            ext_mod = format_extent(affected_mod, total, ctx.total_distance_nm)
+            # Each string quotes the extent of the population it names (#571
+            # D1): ``ext_mod`` is the MODERATE+ geometry, not a share of the
+            # any-risk union scaled to look like one.
+            ext = format_extent(grade.extent)
+            ext_mod = format_extent(grade.extent_mod)
             loc = ctx.locale
             cover_suffix = _coverage_suffix(max_cover_pct)
             # Wording only — the colour was decided by ``grade_convective_model``.
@@ -207,6 +210,9 @@ class ConvectiveEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 affected_mod=affected_mod,
+                affected_nm=grade.extent.nm,
+                affected_mod_nm=grade.extent_mod.nm,
+                domain_nm=grade.extent.domain_nm,
                 cross_check=cross_check,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),
@@ -233,7 +239,8 @@ class ConvectiveEvaluator:
                     (peak_by_model[m.model] for m in mod_models),
                     key=lambda r: _RISK_ORDER.index(r),
                 ).value.upper()
-                pcts = sorted(round(m.affected_mod_pct) for m in mod_models)
+                # Distance-based, matching the per-model sentences (#571).
+                pcts = sorted(round(m.coverage_mod_pct) for m in mod_models)
                 lo, hi = pcts[0], pcts[-1]
                 if lo == hi:
                     result.aggregate_detail = adv_t(
@@ -246,7 +253,7 @@ class ConvectiveEvaluator:
             else:
                 # LOW-only across every supporting model — favorability range.
                 pcts = sorted(
-                    round(m.affected_pct) for m in matching if m.total_points > 0
+                    round(m.coverage_pct) for m in matching if m.total_points > 0
                 )
                 if pcts:
                     lo, hi = pcts[0], pcts[-1]

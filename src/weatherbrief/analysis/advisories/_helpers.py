@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, NamedTuple
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from weatherbrief.analysis.route_geometry import cell_edges
 from weatherbrief.models import (
@@ -109,23 +109,119 @@ def to_mitigation_profile(profile: Profile) -> MitigationProfile:
     )
 
 
-def format_extent(
-    affected: int,
-    total: int,
-    total_distance_nm: float,
-) -> str:
-    """Format affected/total as a distance string, e.g. '30nm/55nm (55%)'.
+class RouteExtent(NamedTuple):
+    """How much of a domain one advisory×model×severity-tier actually covers (#571).
 
-    Converts point counts to nautical miles using the actual route distance
-    and number of analysis points. When there are too few points to compute
-    spacing, falls back to the percentage only.
+    The single answer to *"how much of the flight is affected?"*. Before this
+    existed the codebase carried four incompatible conventions for it — a
+    proportional ``total_nm × affected/total`` in every message, a
+    geometry-accurate midpoint-cell sum in the JSON, a contiguous-run measure in
+    the convective-character gate and a gap-including ``max−min`` span in the VFR
+    mitigation tip — and the message and the structured field routinely
+    disagreed by up to 4×. One value object, produced once from the same
+    ``cell_edges`` geometry the ribbon uses, makes that unrepeatable.
+
+    Fields:
+        ``points`` — affected point count.
+        ``domain_points`` — the denominator in points (in-domain samples).
+        ``nm`` — Σ midpoint-owned cells of the affected points.
+        ``domain_nm`` — the DENOMINATOR's own nm: route miles for most
+            evaluators, *mountain* miles for ``mountain_wind``. Travelling with
+            the extent is what makes "a restricted domain multiplied by the whole
+            route length" (the ~4× ``mountain_wind`` overstatement) impossible to
+            write: there is no route length lying around to multiply by.
+        ``longest_run_nm`` — longest *contiguous* affected run, for barrier-type
+            hazards ("you cannot get around it") as opposed to union coverage.
+        ``minutes`` — ``nm`` at the flight's groundspeed, when a speed is known.
     """
-    if total <= 0:
+
+    points: int
+    domain_points: int
+    nm: float
+    domain_nm: float
+    longest_run_nm: float = 0.0
+    minutes: float | None = None
+
+    @property
+    def pct(self) -> float:
+        """Coverage as a percentage of the domain, measured in distance.
+
+        Distance-based, not point-based: ``interpolate_route`` spaces points
+        evenly at 10 nm but inserts extras at waypoints, so a point ratio and a
+        distance ratio never agree. Keying the percentage off the same ``nm``
+        the message prints makes them consistent by construction.
+        """
+        return 100.0 * self.nm / self.domain_nm if self.domain_nm else 0.0
+
+
+EMPTY_EXTENT = RouteExtent(points=0, domain_points=0, nm=0.0, domain_nm=0.0)
+
+
+def route_extent(
+    distances: Sequence[float],
+    total_nm: float,
+    affected: Sequence[bool],
+    in_domain: Sequence[bool] | None = None,
+) -> RouteExtent:
+    """Reduce per-point flags to a :class:`RouteExtent` over the route geometry.
+
+    ``distances`` must be in along-route order and index-aligned with
+    ``affected`` (and ``in_domain``, which defaults to all-True). Each point owns
+    the interval to the midpoints of its neighbours (``cell_edges``) — the same
+    geometry the ribbon and the convective-character contiguity gate use, so an
+    extent, a highlight and a gate can never describe different pictures.
+
+    ``domain_nm`` sums the cells of the **in-domain** points, which is the whole
+    route for every evaluator except ``mountain_wind``. Note this is deliberately
+    *not* the assessed subset: the denominator is the universe the advisory
+    speaks for, not the part of it the model happened to resolve — thin coverage
+    is reported by ``below_coverage``/UNAVAILABLE, not by silently shrinking the
+    denominator until a small footprint reads large.
+    """
+    n = len(distances)
+    if n == 0 or total_nm <= 0:
+        return EMPTY_EXTENT
+    dom = list(in_domain) if in_domain is not None else [True] * n
+    lefts, rights = cell_edges(list(distances), total_nm)
+
+    nm = 0.0
+    domain_nm = 0.0
+    longest = 0.0
+    run_start: int | None = None
+    for i in range(n):
+        width = rights[i] - lefts[i]
+        if dom[i]:
+            domain_nm += width
+        if affected[i]:
+            nm += width
+            if run_start is None:
+                run_start = i
+            longest = max(longest, rights[i] - lefts[run_start])
+        else:
+            run_start = None
+
+    return RouteExtent(
+        points=sum(1 for a in affected if a),
+        domain_points=sum(1 for d in dom if d),
+        nm=round(nm, 1),
+        domain_nm=round(domain_nm, 1),
+        longest_run_nm=round(longest, 1),
+    )
+
+
+def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
+    """Format a :class:`RouteExtent` as '30nm/55nm (55%)'.
+
+    Takes the extent, never counts — that is what keeps the sentence and the
+    structured ``affected_nm`` the same number rather than two derivations of it
+    (#571 D2). ``domain_label`` names a denominator that is *not* the whole
+    route ("of high terrain"), which the domain-scoped evaluators must pass:
+    "543nm/582nm" for a mountain-point fraction was the ~4× overstatement.
+    """
+    if ext.domain_nm <= 0:
         return "0nm"
-    affected_nm = round(total_distance_nm * affected / total)
-    total_nm = round(total_distance_nm)
-    pct = 100 * affected / total
-    return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"
+    label = f" {domain_label}" if domain_label else ""
+    return f"{round(ext.nm)}nm/{round(ext.domain_nm)}nm{label} ({ext.pct:.0f}%)"
 
 
 class FlaggedCell(NamedTuple):
@@ -503,6 +599,15 @@ class EvidenceSample(NamedTuple):
         ``region`` — the scrim cutout (:class:`FlaggedCell`) for a flagged point,
             or ``None``. Carries the region kind/altitude band plus the #393
             provenance tokens.
+        ``tags`` — free-form markers for *sub-populations* this point belongs to
+            (#571). An evaluator whose message names a narrower population than
+            the one that produced the grade — turbulence's SEVERE tier,
+            model_agreement's moderate-only points — tags them here and asks
+            :meth:`EvidenceSummary.extent_of` for that population's own extent.
+            Reducing the predicate over the same ``cell_edges`` is what keeps the
+            severity word and the extent beside it describing the same points;
+            the alternative (scaling the whole-population nm proportionally) is
+            the defect this replaces.
     """
 
     distance_nm: float
@@ -511,6 +616,7 @@ class EvidenceSample(NamedTuple):
     affected: bool | None = None
     in_domain: bool = True
     region: FlaggedCell | None = None
+    tags: frozenset[str] = frozenset()
 
 
 def _sample_affected(sample: EvidenceSample) -> bool:
@@ -528,7 +634,11 @@ class EvidenceSummary(NamedTuple):
     ``affected_nm`` is the geometry-accurate extent (midpoint-owned cells of the
     affected points) to pass to ``build``. ``highlights`` is the ribbon + scrim
     geometry. ``data_state`` is complete / partial / unavailable.
-    """
+
+    ``extent`` is the same measurement as a :class:`RouteExtent` — what messages
+    format and what a gate reads — and ``extent_of`` reduces any sub-population
+    predicate over the *same* geometry (#571).
+"""
 
     affected: int
     assessed: int
@@ -536,6 +646,11 @@ class EvidenceSummary(NamedTuple):
     affected_nm: float
     highlights: AdvisoryHighlights
     data_state: str  # "complete" | "partial" | "unavailable"
+    # Geometry the extents are reduced over. Defaulted so an old-style
+    # positional construction still works; ``summarize_evidence`` always sets it.
+    domain_nm: float = 0.0
+    samples: tuple[EvidenceSample, ...] = ()
+    total_nm: float = 0.0
 
     @property
     def below_coverage(self) -> bool:
@@ -546,6 +661,29 @@ class EvidenceSummary(NamedTuple):
         a flagged verdict on thin coverage is never diluted.
         """
         return below_coverage(self.assessed, self.domain)
+
+    @property
+    def extent(self) -> RouteExtent:
+        """The affected population's extent — what the message must format."""
+        return self.extent_of(_sample_affected)
+
+    def extent_of(
+        self, predicate: Callable[[EvidenceSample], bool]
+    ) -> RouteExtent:
+        """Extent of an arbitrary sub-population, over the same route geometry.
+
+        For evaluators whose message names a narrower population than the grade
+        (turbulence's SEVERE tier, enroute_precip's snow split, vmc_cruise's
+        OVC): reduce the predicate here rather than scaling the whole-population
+        nm proportionally, which is what made the printed number disagree with
+        the object it shipped in (#571 D1/D2).
+        """
+        return route_extent(
+            [s.distance_nm for s in self.samples],
+            self.total_nm,
+            [bool(predicate(s)) for s in self.samples],
+            [s.in_domain for s in self.samples],
+        )
 
 
 def summarize_evidence(
@@ -578,13 +716,15 @@ def summarize_evidence(
     # Geometry-accurate extent: each affected point owns the interval to the
     # midpoints of its neighbours; union (here, sum — cells are disjoint by
     # construction) the qualifying intervals. Falls out of the same cell edges
-    # the ribbon uses, so extent and ribbon share one geometry.
-    affected_nm = 0.0
-    if pts:
-        lefts, rights = cell_edges(distances, total_nm)
-        affected_nm = sum(
-            rights[i] - lefts[i] for i, s in enumerate(pts) if _sample_affected(s)
-        )
+    # the ribbon uses, so extent and ribbon share one geometry. ``domain_nm``
+    # comes out of the same reduction, so a domain-scoped evaluator carries its
+    # own denominator instead of borrowing the route's (#571 D3).
+    extent = route_extent(
+        distances,
+        total_nm,
+        [_sample_affected(s) for s in pts],
+        [s.in_domain for s in pts],
+    )
 
     ribbon = build_ribbon([(s.distance_nm, s.severity) for s in pts], total_nm)
     highlights = AdvisoryHighlights(
@@ -604,9 +744,12 @@ def summarize_evidence(
         affected=affected,
         assessed=assessed,
         domain=domain,
-        affected_nm=round(affected_nm, 1),
+        affected_nm=extent.nm,
         highlights=highlights,
         data_state=data_state,
+        domain_nm=extent.domain_nm,
+        samples=tuple(pts),
+        total_nm=total_nm,
     )
 
 

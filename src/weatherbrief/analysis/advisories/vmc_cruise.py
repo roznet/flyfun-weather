@@ -137,6 +137,12 @@ class VMCCruiseEvaluator:
             summary = summarize_evidence(samples, ctx.total_distance_nm)
             total = summary.assessed
             affected = summary.affected  # bkn + ovc
+            # The OVC message names a narrower population than the grade's
+            # bkn+ovc union, so it quotes that population's own geometry rather
+            # than a scaled share of the union's (#571 D1).
+            ovc_extent = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.RED
+            )
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -146,13 +152,13 @@ class VMCCruiseEvaluator:
 
                 if ovc_pct >= ovc_pct_red:
                     status = AdvisoryStatus.RED
-                    detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_count, total, ctx.total_distance_nm))
+                    detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_extent))
                 elif 100 * affected / total >= bkn_pct_amber:
                     status = AdvisoryStatus.AMBER
-                    detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
+                    detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(summary.extent))
                 elif affected > 0:
                     status = AdvisoryStatus.GREEN
-                    detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
+                    detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(summary.extent))
                 else:
                     status = AdvisoryStatus.GREEN
                     detail = adv_t("vmc_cruise.clear", loc)

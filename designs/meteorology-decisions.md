@@ -3761,3 +3761,91 @@ overstates the fallback path's frequency.
 - Sanity-check the offered altitudes against real cruise levels on a corpus
   replay: an out that a pilot would not fly (oxygen, airspace, icing) is worse
   than no lightbulb.
+
+---
+
+## 27. Route extent is one measurement: distance-based, domain-scoped, per-tier
+
+**Date:** 2026-08-25 · **Issue:** #571 · **Stage 1 (no grade changes)**
+
+Every route advisory answers *"how much of the flight is affected?"*. Fourteen
+evaluators answered it fourteen ways, with **four incompatible geometry
+conventions** shipping in the same object, and three of the differences produced
+numbers that were simply wrong — numbers that reached the pilot, the LLM prompt
+and the MCP/agent API.
+
+The census, the per-model evidence and the staged plan are in
+`designs/future/advisory-extent-consolidation.md`. What follows is the
+convention that replaced them.
+
+### The four conventions
+
+| # | Convention | Where it lived | What it fed |
+|---|---|---|---|
+| 1 | `total_nm × affected/total` (proportional) | `format_extent` | **every message** |
+| 2 | Σ midpoint-owned cells of affected points | `summarize_evidence.affected_nm` | the JSON `affected_nm` |
+| 3 | Midpoint cells over the longest **contiguous** run | `longest_embedded_run_nm` | the character EMBEDDED gate |
+| 4 | `max(d) − min(d)` — raw span **including gaps** | `_terminal_deck_extent` | the VFR mitigation tip |
+
+Plus `affected_pct` as a **point** ratio, a fifth answer. Route points are not
+evenly spaced — `interpolate_route` fills at a fixed 10 nm and inserts extra
+points at waypoints — so 1 and 2 never agree. On the trigger pack:
+turbulence/gfs printed 164 nm beside an `affected_nm` of 173.3;
+enroute_precip/ecmwf printed 55 nm beside 45.5.
+
+### The decision
+
+One value object per *advisory × model × severity tier*, `RouteExtent`, built
+once from the same `cell_edges` geometry the ribbon uses, and formatted directly.
+
+1. **The percentage denominator is distance, not point count.** Uneven spacing
+   stops mattering, and the nm and the percentage become consistent by
+   construction rather than by discipline.
+
+2. **`domain_nm` travels with the extent.** `mountain_wind` restricts its domain
+   to the route's mountain points and then multiplied that point fraction by the
+   *whole route length*: ICON printed "543nm/582nm (93%)" for a footprint of
+   131.8 nm — a ~4x overstatement, which the digest promoted to a watch item and
+   narrated as a day-to-day swing between two fractions whose denominator was
+   itself moving. Carrying the denominator on the extent removes the route length
+   the code had lying around to multiply by, so the defect is structurally
+   unavailable rather than merely fixed. Such an advisory must then **name** its
+   denominator in the sentence — "132nm of 190nm of high terrain" — following
+   `sun`, the one advisory that already said "of the sunlit route".
+
+3. **One extent per severity tier.** "Severe CAT over 146nm (25%)" meant severe
+   at *one* point, moderate at two and light at thirteen. The RED itself was
+   correct and deliberate — a single free-atmosphere severe layer at cruise is a
+   real hazard, and the bypass stays (`test_free_atmosphere_severe_still_forces_red`)
+   — but a bypassed grade must **describe itself honestly** rather than borrow a
+   coverage number that describes a different population. `convective` had fixed
+   the phrasing half of this in #300 while its structured fields still carried
+   the any-risk population (ecmwf printing 45% beside an `affected_pct` of 68.8);
+   both now come from the tier's own extent.
+
+4. **Contiguity is a reducer on the same geometry**, not a separate function.
+   `longest_run_nm` sits beside `nm` on one object, so a barrier-type hazard
+   ("you cannot get around it", #568's EMBEDDED gate) and a union-coverage gate
+   measure the same picture.
+
+5. **`format_extent` takes the extent, not counts.** This is the part that makes
+   the defect unrepeatable: there is no signature left that can recompute a
+   different answer from the same inputs.
+
+### What this stage deliberately did NOT change
+
+No threshold, gate, denominator or status. `affected_pct` remains a point ratio
+here and the gates still key on point counts — making the *grade* distance-based
+moves colours and belongs with the minimum-extent floor, measured together
+against a pack replay. The visible change is that every printed number is now
+the number the object ships.
+
+### Rejected
+
+- **Fixing the messages without the value object.** #300 had already done that
+  for `convective`'s string alone; the structured fields drifted straight back
+  out of agreement. A shared primitive that owns both is what closes it.
+- **Shrinking the denominator to the assessed subset.** Tempting (it is the
+  grading denominator) but it makes a small footprint read large exactly when
+  data is thin. Thin coverage is reported by `below_coverage` → UNAVAILABLE, not
+  by quietly moving the goalposts.

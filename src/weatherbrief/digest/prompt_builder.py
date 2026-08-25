@@ -975,7 +975,17 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
                 for m in outliers:
                     m_status = m.status.value.upper()
                     if m.affected_pct > 0:
-                        parts.append(f"{m.model} sees {m_status} ({m.affected_pct:.0f}% affected)")
+                        # Name the denominator when it is not the whole route
+                        # (#571 D3). Unqualified, mountain_wind's "% of the
+                        # route's mountain points" read as route coverage: the
+                        # digest published "the ICON outlier grades this RED at
+                        # 93% coverage" for a 131.8 nm footprint on a 582 nm
+                        # route, and made it a watch item.
+                        scope = f" of {m.affected_domain}" if m.affected_domain else ""
+                        parts.append(
+                            f"{m.model} sees {m_status} "
+                            f"({m.affected_pct:.0f}%{scope} affected)"
+                        )
                     else:
                         parts.append(f"{m.model} sees {m_status}")
                 lines.append(f"  (outlier: {'; '.join(parts)})")

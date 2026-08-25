@@ -14,7 +14,9 @@ from weatherbrief.analysis.advisories._helpers import (
     build_regions,
     build_ribbon,
     driving_method_id,
+    RouteExtent,
     format_extent,
+    route_extent,
     hazardous_icing_zones,
     min_icing_clearance,
     ribbon_peak,
@@ -127,9 +129,11 @@ def _check_enroute_hazards(
     cruise_altitude_ft: float,
     icing_altitude_buffer_ft: float,
 ) -> tuple[
-    int, int, int, int,
+    int, int, int,
     list[tuple[float, HighlightSeverity]],
     list[tuple[float, FlaggedCell | None]],
+    RouteExtent,
+    RouteExtent,
 ]:
     """Check en-route icing, and merge it with the already-graded convection.
 
@@ -144,7 +148,8 @@ def _check_enroute_hazards(
     counts as "icing affected" only when an icing zone is within
     *icing_altitude_buffer_ft* of cruise altitude.
 
-    Returns (icing_total, affected, icing_count, ribbon_points, icing_cells).
+    Returns (icing_total, affected, icing_count, ribbon_points, icing_cells,
+    icing_extent, affected_extent).
     - icing_total: points where the active icing method could run (the icing
       denominator) — a point on Ogimet-NWP with no native cloud envelope cannot
       assess icing and is excluded so absent icing is not graded clear (#391)
@@ -155,6 +160,12 @@ def _check_enroute_hazards(
       exactly the points it increments ``affected`` on, in the same block after
       every filter — so re-counting the cells here would be a second walk over
       a number the grade already carries.
+    - icing_extent: the geometry-accurate extent of the icing-affected points
+      (#571). The icing sentence prints this rather than the route length scaled
+      by ``icing_count / icing_total``, which described neither the points nor
+      the miles it claimed.
+    - affected_extent: the same geometry over the icing-OR-convective union, so
+      the published ``affected_nm`` measures the points ``affected`` counts.
     - ribbon_points: per-point worst of the two axes (#375). The convective
       cutouts come straight off ``conv_grade.region_cells``, which is
       index-aligned with ``ctx.analyses``, so the geometry the composite draws is
@@ -165,9 +176,13 @@ def _check_enroute_hazards(
     icing_count = 0
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
     icing_cells: list[tuple[float, FlaggedCell | None]] = []
+    icing_flags: list[bool] = []
+    union_flags: list[bool] = []
 
     for idx, rpa in enumerate(ctx.analyses):
         dist = rpa.distance_from_origin_nm or 0.0
+        icing_flags.append(False)
+        union_flags.append(False)
         # Index-aligned with the grade (both walk ctx.analyses in order and
         # always append exactly one entry per point).
         conv_cell = conv_grade.region_cells[idx][1]
@@ -202,6 +217,7 @@ def _check_enroute_hazards(
 
         if has_icing:
             icing_count += 1
+            icing_flags[-1] = True
             # The triggering zones: those within the buffer of cruise.
             band = [
                 z for z in icing_zones
@@ -226,6 +242,7 @@ def _check_enroute_hazards(
 
         if has_icing or has_convective:
             affected += 1
+            union_flags[-1] = True
 
         if not icing_available:
             icing_sev = HighlightSeverity.UNAVAILABLE
@@ -235,7 +252,13 @@ def _check_enroute_hazards(
             icing_sev = HighlightSeverity.GREEN
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
-    return (icing_total, affected, icing_count, ribbon_points, icing_cells)
+    dists = [rpa.distance_from_origin_nm or 0.0 for rpa in ctx.analyses]
+    icing_extent = route_extent(dists, ctx.total_distance_nm, icing_flags)
+    affected_extent = route_extent(dists, ctx.total_distance_nm, union_flags)
+    return (
+        icing_total, affected, icing_count, ribbon_points, icing_cells,
+        icing_extent, affected_extent,
+    )
 
 
 @register
@@ -366,7 +389,7 @@ class IFRFeasibilityEvaluator:
             # composite's per-point highlight geometry (#375).
             (
                 icing_total, affected, icing_count,
-                ribbon_points, icing_cells,
+                ribbon_points, icing_cells, icing_extent, affected_extent,
             ) = _check_enroute_hazards(
                 ctx, model, conv_grade,
                 ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
@@ -402,7 +425,7 @@ class IFRFeasibilityEvaluator:
                 if icing_status != AdvisoryStatus.GREEN:
                     icing_detail = adv_t(
                         "ifr.icing_over", loc,
-                        extent=format_extent(icing_count, icing_total, ctx.total_distance_nm),
+                        extent=format_extent(icing_extent),
                     )
 
             # Coverage tolerance (#391): a no-icing verdict from icing-assessable
@@ -448,10 +471,12 @@ class IFRFeasibilityEvaluator:
                 conv_detail = adv_t(
                     "ifr.conv_embedded" if escalated else "ifr.conv_over", loc,
                     risk=conv_grade.worst_risk.value.upper(),
+                    # Same rule as the convective card: quote the extent of
+                    # the tier the sentence names (#571 D1).
                     extent=format_extent(
-                        conv_grade.affected_mod or conv_grade.affected,
-                        total,
-                        ctx.total_distance_nm,
+                        conv_grade.extent_mod
+                        if conv_grade.affected_mod
+                        else conv_grade.extent
                     ),
                 )
 
@@ -525,6 +550,7 @@ class IFRFeasibilityEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=affected_extent.nm,
                 highlights=highlights,
                 primary_method_id=primary_method_id,
             ))

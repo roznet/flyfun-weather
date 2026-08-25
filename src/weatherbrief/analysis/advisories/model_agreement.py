@@ -112,11 +112,16 @@ class ModelAgreementEvaluator:
             has_poor = n_poor >= min_poor_vars
             has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in real)
 
-            if not has_poor and has_moderate:
+            moderate_only = has_moderate and not has_poor
+            if moderate_only:
                 moderate_count += 1
             samples.append(EvidenceSample(
                 distance_nm=dist, assessed=True, affected=has_poor,
                 severity=HighlightSeverity.AMBER if has_poor else HighlightSeverity.GREEN,
+                # The "mostly good" sentence quotes the moderate-only points, a
+                # different population from the grade's poor points — tagged so
+                # it can measure its own geometry (#571 D1).
+                tags=frozenset({"moderate"}) if moderate_only else frozenset(),
             ))
 
         summary = summarize_evidence(samples, ctx.total_distance_nm)
@@ -132,9 +137,14 @@ class ModelAgreementEvaluator:
         else:
             status = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
-                detail = adv_t("model_agreement.mostly_good", loc, extent=format_extent(moderate_count, total, ctx.total_distance_nm))
+                detail = adv_t(
+                "model_agreement.mostly_good", loc,
+                extent=format_extent(summary.extent_of(lambda s: "moderate" in s.tags)),
+            )
             else:
-                detail = adv_t("model_agreement.poor", loc, extent=format_extent(poor_count, total, ctx.total_distance_nm))
+                detail = adv_t(
+                "model_agreement.poor", loc, extent=format_extent(summary.extent),
+            )
 
         # Coverage tolerance (#391): a "good agreement" verdict resting on real
         # comparisons at too few route points cannot vouch for the rest.
