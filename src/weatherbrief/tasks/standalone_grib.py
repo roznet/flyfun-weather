@@ -55,12 +55,6 @@ class AirportGribDiagnostics:
     ml_cin_jkg: float | None = None
 
 
-#: Historical name. The class outgrew "ceiling" once it started carrying the
-#: convective ingredients, but it is referenced widely enough that renaming in
-#: place is the smaller change than a sweep.
-AirportCeilingData = AirportGribDiagnostics
-
-
 def _diagnostics_from(diag) -> AirportGribDiagnostics:
     """Project an ``NWPCloudDiagnostics`` onto the persisted subset.
 
@@ -100,7 +94,8 @@ def fetch_gfs_cloud_diag(
             passes ``DecodePriority.BACKGROUND`` explicitly.
 
     Returns:
-        Dict mapping forecast_hour → list of AirportCeilingData (same order as lats/lons).
+        Dict mapping forecast_hour → list of AirportGribDiagnostics (same order
+        as lats/lons).
         Missing hours are omitted from the dict.
     """
     from weatherbrief.fetch.grib import _dispatch_decode_parallel

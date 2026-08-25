@@ -140,9 +140,14 @@ from weatherbrief.tasks.verification_tiering import archive_root
 logger = logging.getLogger(__name__)
 
 # Rows pulled per keyset page. Sized so a page of the widest table
-# (airport_forecast_snapshots, 27 columns) stays a few tens of MB in Python
-# objects — the whole point of paginating is that a month of scores (~1.5M
-# rows) never exists in memory at once.
+# (``airport_forecast_snapshots``) stays a few tens of MB in Python objects —
+# the whole point of paginating is that a month of scores (~1.5M rows) never
+# exists in memory at once.
+#
+# No column count here on purpose: it read "27" while the table had 31, and
+# migration 092 then took it to 45. A number nobody updates is worse than no
+# number — ``AirportForecastSnapshotRow`` is the source of truth, and this
+# page size has ~2x of headroom against the growth it has actually seen.
 _PAGE_ROWS = 50_000
 
 # Monthly tables become final this many days into the following month. Ties

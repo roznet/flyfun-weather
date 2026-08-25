@@ -33,6 +33,8 @@ Convective assessment flows through four stages: **fetch** (Open-Meteo API + GRI
 
 **Key issue:** Open-Meteo's single `cape` field is a **different CAPE type per model** (SB / MU / ML as marked above; UKMO's type is unknown). Tracked in the `NWP_CAPE_TYPE` dict (`variables.py:84`, keyed only for gfs/ecmwf/icon), stored as `nwp_cape_type` on `ThermodynamicIndices`. This is the root of bug #5.
 
+The GFS `✓ SB` above is the *Open-Meteo* column and still reads SB — but since #566 GFS also carries a GRIB-native mixed-layer pair (next table), so the Open-Meteo value is no longer the only CAPE available for that model.
+
 ### GRIB2 Enrichment (GFS, ICON-EU, and ECMWF)
 
 | Field | GFS | ICON-EU | ECMWF | Others |
@@ -40,9 +42,18 @@ Convective assessment flows through four stages: **fetch** (Open-Meteo API + GRI
 | **Convective cloud cover %** | ✓ (TCDC on convectiveCloudLayer) | ✗ | ✗ | ✗ |
 | **Convective cloud base** | ✓ (PRES → ft via std atm) | ✓ (hbas_con, m → ft) | ✗ | ✗ |
 | **Convective cloud top** | ✓ (PRES → ft via std atm) | ✓ (htop_con, m → ft) | ✓ (hcct, m → ft) | ✗ |
-| **Convective precip rate** | ✗ | ✓ (rain_con, mm, de-accum) | ✓ (cp, m we ×1000, de-accum) | ✗ |
+| **Convective precip rate** | ✓ (CPRAT, kg/m²/s, instantaneous) | ✓ (`crr`, kg/m², de-accum) | ✓ (cp, m we ×1000, de-accum) | ✗ |
+| **ML CAPE / ML CIN** | ✓ (CAPE/CIN `180-0 mb above ground`) | ✓ (cape_ml / cin_ml) | ✓ (mlcape100 / mlcin100) | ✗ |
 
-Stored in `NWPCloudDiagnostics.convective_{cover_pct,base_ft,top_ft}` and `convective_precip_mm_h`. ICON `rain_con` is already mm (kg/m² ≡ mm) so it is **not** ×1000, unlike ECMWF `cp` (m water equivalent); both are accumulated since init and de-accumulated in the enrichment loop.
+Stored in `NWPCloudDiagnostics.convective_{cover_pct,base_ft,top_ft}`, `convective_precip_mm_h` and `ml_{cape,cin}_jkg`.
+
+**Three traps in that precip row, each of which has bitten once:**
+
+- **DWD's RAIN_CON decodes under cfgrib shortName `crr`, not `rain_con`** (paramId 228218). Despite the "rate" in the name it is *accumulated since init*, in kg/m² ≡ mm, so it is de-accumulated and **not** ×1000 — unlike ECMWF `cp`, which is metres water equivalent. A plausible key matching nothing fails silently, which is exactly what `rain_con` did.
+- **GFS `CPRAT` is an instantaneous rate in kg/m²/s** — alone among the three it needs no de-accumulation, only `_kg_m2_s_to_mm_h`. It has an averaged twin at the same level (`CPRAT:surface:0-6 hour ave fcst`); `parse_cloud_diag_idx`'s `_PREFER_AVERAGED_PAIRS` resolves the pair.
+- **GFS/HRRR CIN packs negative** (verified live on `gfs.20260822/06z f006`: −1027.9…+0.1, 33.5% negative and 66.5% barely positive). Both route through the shared `_ncep_cin_jkg`, which floors packing noise to 0 and returns `None` for a clearly positive value rather than trusting a flipped sign — CIN gates `eff_cin < -200`, so a silent flip would turn a strong cap into "no inhibition". ICON and ECMWF use the opposite (non-negative-magnitude) convention and go through `_normalize_model_cin`.
+
+GFS's mixed-layer pair (#566) closed the last gap where a model with GRIB enrichment still fell back to Open-Meteo's surface-based CAPE. `180-0 mb above ground` is GFS's mixed-layer parcel; ECMWF's `mlcape100` is the lowest 100 hPa — related but not identical parcels, which is why `nwp_cape_type` records provenance rather than assuming.
 
 **Two slot-substituting variants change what the table above means** (see [analysis-metrics.md](./analysis-metrics.md)):
 - **ICON-D2** (#456/#462) serves the `icon` slot when the whole route fits its domain. D2 runs **no** deep-convection parameterization, so every parameterized field above is structurally `None`; instead the hour carries `HourlyForecast.explicit_convective_diagnostics: NWPExplicitConvectiveDiagnostics` (`dbz_ctmax`, `echotop`, `lpi_max`, `w_ctmax`, `uh_max`) — corridor extrema over a ~10 NM route buffer, never centreline bilinear. Its **presence is the mode signal** for the explicit track.
@@ -144,7 +155,7 @@ The **DD/thermo track** always runs. The **NWP track** is filled by exactly one 
 | Model | NWP Convective Result | Notes |
 |-------|----------------------|-------|
 | **GFS** | `method="nwp"` — risk from tower top + cover modifier; cover/base/top from GRIB | Only model with convective cover % |
-| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` + `rain_con`→conv-precip native | Firing gate + native corroboration now evaluate ICON (#421). ICON stays `nwp_hybrid` in practice: it emits `htop_con` whenever its scheme fires, so a firing point always has tower geometry and never falls through to the geometry-absent `nwp_precip` ladder (that branch is generic on field presence, not reachable for ICON when `rain_con` > 0). |
+| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` + `crr`→conv-precip native | Firing gate + native corroboration now evaluate ICON (#421). ICON stays `nwp_hybrid` in practice: it emits `htop_con` whenever its scheme fires, so a firing point always has tower geometry and never falls through to the geometry-absent `nwp_precip` ladder (that branch is generic on field presence, not reachable for ICON when `crr` > 0). |
 | **ECMWF** | `method="nwp_lcl_top"` when `hcct` present; `method="nwp_precip"` (Phase 3) when `hcct` sentinel but `cp` fires — risk from the precip-rate ladder; `cp`/`kx`/`totalx`/`mlcape`/`mlcin` native | `hcct` is sparsely delivered (sentinel over marine/elevated convection), so `cp` is often the only firing signal |
 | **HRRR** (`gfs` slot, CONUS) | `method="nwp_cape_fallback"` — `convective_scheme_absent=True`, graded on HRRR's own ML-CAPE/CIN | No realization channel ingested; NOT a quiet scheme (#457) |
 | **ICON-D2** (`icon` slot, in-domain) | `method="nwp_explicit"` — see Method 3 | Parameterized fields structurally None |
@@ -292,8 +303,8 @@ One row per model: what feeds the DD/thermo track, what feeds the NWP track, and
 
 | Model | Open-Meteo | GRIB native | NWP track outcome |
 |-------|-----------|-------------|-------------------|
-| **GFS / Best Match** | `cape` (SB), CIN, LI | conv cover + base/top | `nwp` — tower-top tier + cover modifier + firing gate |
-| **ICON-EU** | `cape` (ML) | `hbas_con`/`htop_con`, `rain_con`→conv precip, `cape_ml`/`cin_ml` | `nwp_hybrid` — tower-top tier, GRIB bounds, gate/corroboration from `rain_con` (#421) |
+| **GFS / Best Match** | `cape` (SB), CIN, LI | conv cover + base/top, `CAPE`/`CIN` 180-0 mb → ml pair, `CPRAT`→conv precip (#566) | `nwp` — tower-top tier + cover modifier + firing gate |
+| **ICON-EU** | `cape` (ML) | `hbas_con`/`htop_con`, `crr`→conv precip, `cape_ml`/`cin_ml` | `nwp_hybrid` — tower-top tier, GRIB bounds, gate/corroboration from `crr` (#421) |
 | **ICON-D2** (in-domain) | `cape` (ML) | explicit storm fields only (`dbz_ctmax`, `echotop`, `lpi_max`, `w_ctmax`, `uh_max`); parameterized fields structurally None | `nwp_explicit` (#462) — reflectivity × corroborators; `top_ft` always None |
 | **ECMWF** | `cape` (MU); pressure levels replaced by IFS GRIB | `hcct`, `cp`, `kx`/`totalx`, `mlcape100`/`mlcin100` | `nwp_lcl_top` when `hcct` present, else `nwp_precip` when `cp` fires — `hcct` is sparsely delivered, so `cp` is often the only firing signal |
 | **HRRR** (`gfs` slot, CONUS) | — (GRIB sounding replacement) | band covers only; `convective_scheme_absent=True`, own ML-CAPE/CIN | `nwp_cape_fallback` (#457) |
