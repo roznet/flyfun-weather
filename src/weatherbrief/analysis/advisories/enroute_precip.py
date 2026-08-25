@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     below_coverage,
@@ -54,8 +56,9 @@ _FREEZING_PHASES = (PrecipPhase.FREEZING_RAIN, PrecipPhase.ICE_PELLETS)
 _SIGNIFICANT = (PrecipIntensity.MODERATE, PrecipIntensity.HEAVY)
 
 _DEFAULTS = {
-    "snow_pct_amber": 5.0,
-    "snow_moderate_pct_red": 25.0,
+    "extent_pct_amber": 5.0,
+    "extent_pct_red": 25.0,
+    "extent_min_nm": EXTENT_MIN_NM,
     "rain_pct_amber": 30.0,
 }
 
@@ -112,8 +115,9 @@ def classify_enroute_precip(
     (old pack) — callers must treat that as UNAVAILABLE, not GREEN.
     """
     p = {**_DEFAULTS, **(params or {})}
-    snow_pct_amber = p["snow_pct_amber"]
-    snow_moderate_pct_red = p["snow_moderate_pct_red"]
+    extent_pct_amber = p["extent_pct_amber"]
+    extent_pct_red = p["extent_pct_red"]
+    extent_min_nm = p["extent_min_nm"]
     rain_pct_amber = p["rain_pct_amber"]
     loc = ctx.locale
 
@@ -178,7 +182,7 @@ def classify_enroute_precip(
     affected = snow_pts + sig_rain_pts + light_pts
     # Each axis grades on its own population's geometry, through the shared gate
     # with the shared minimum-extent floor (#571 Stage 2). The old point ratios
-    # made `snow_pct_amber=5` fire off a single point on a short route.
+    # made `extent_pct_amber=5` fire off a single point on a short route.
     def _ext(flags: list[bool]):
         return route_extent(dists, ctx.total_distance_nm, flags, assessed_flags)
 
@@ -198,12 +202,16 @@ def classify_enroute_precip(
         ))
 
     if grade_extent(
-        snow_mod_ext, amber_pct=snow_moderate_pct_red,
+        snow_mod_ext, amber_pct=extent_pct_red, min_nm=extent_min_nm,
     ) != AdvisoryStatus.GREEN:
         status = AdvisoryStatus.RED
     elif (
-        grade_extent(snow_ext, amber_pct=snow_pct_amber) != AdvisoryStatus.GREEN
-        or grade_extent(sig_ext, amber_pct=rain_pct_amber) != AdvisoryStatus.GREEN
+        grade_extent(
+            snow_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
+        ) != AdvisoryStatus.GREEN
+        or grade_extent(
+            sig_ext, amber_pct=rain_pct_amber, min_nm=extent_min_nm,
+        ) != AdvisoryStatus.GREEN
     ):
         status = AdvisoryStatus.AMBER
     else:
@@ -253,8 +261,8 @@ class EnroutePrecipEvaluator:
             category="precipitation",
             parameters=[
                 AdvisoryParameterDef(
-                    key="snow_pct_amber",
-                    label="Snow % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in snow (amber)",
                     description="Route percentage with any snow for amber",
                     type="percent",
                     unit="%",
@@ -264,8 +272,8 @@ class EnroutePrecipEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="snow_moderate_pct_red",
-                    label="Moderate snow % (red)",
+                    key="extent_pct_red",
+                    label="% of route in moderate+ snow (red)",
                     description="Route percentage with moderate+ snow for red",
                     type="percent",
                     unit="%",
@@ -274,6 +282,7 @@ class EnroutePrecipEvaluator:
                     max=80,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="rain_pct_amber",
                     label="Rain % (amber)",

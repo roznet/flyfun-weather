@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     format_extent,
     grade_extent,
@@ -52,8 +54,8 @@ class ModelAgreementEvaluator:
                     step=1,
                 ),
                 AdvisoryParameterDef(
-                    key="poor_pct_amber",
-                    label="Poor % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route with poor agreement (amber)",
                     description="Route percentage with POOR agreement for amber",
                     type="percent",
                     unit="%",
@@ -63,8 +65,8 @@ class ModelAgreementEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="poor_pct_red",
-                    label="Poor % (red)",
+                    key="extent_pct_red",
+                    label="% of route with poor agreement (red)",
                     description="Route percentage with POOR agreement for red",
                     type="percent",
                     unit="%",
@@ -73,14 +75,16 @@ class ModelAgreementEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         min_poor_vars = int(params.get("min_poor_vars", 3))
-        poor_pct_amber = params.get("poor_pct_amber", 25)
-        poor_pct_red = params.get("poor_pct_red", 50)
+        extent_pct_amber = params.get("extent_pct_amber", 25)
+        extent_pct_red = params.get("extent_pct_red", 50)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         # Model agreement is cross-model — evaluated once, not per-model. One
         # evidence sample per route point (#393): ``affected`` = a POOR-agreement
@@ -137,7 +141,8 @@ class ModelAgreementEvaluator:
         else:
             status = grade_extent(
                 summary.extent,
-                amber_pct=poor_pct_amber, red_pct=poor_pct_red,
+                amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                min_nm=extent_min_nm,
             )
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
                 detail = adv_t(

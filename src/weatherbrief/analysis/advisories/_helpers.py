@@ -15,6 +15,7 @@ from weatherbrief.analysis.route_geometry import (
 )
 from weatherbrief.models import (
     AdvisoryHighlights,
+    AdvisoryParameterDef,
     AdvisoryStatus,
     ElevationProfile,
     HighlightRegion,
@@ -687,6 +688,45 @@ _EXTENT_MIN_NM_DOMAIN_CAP = 0.5
 def effective_min_nm(ext: RouteExtent, min_nm: float) -> float:
     """The minimum-extent floor actually applied to ``ext`` — see :data:`EXTENT_MIN_NM`."""
     return min(min_nm, _EXTENT_MIN_NM_DOMAIN_CAP * ext.domain_nm)
+
+
+# The three consolidated extent keys (#571 Stage 3). Every coverage-driven
+# advisory declares these SAME keys with ITS OWN defaults — the consolidation is
+# of shape and semantics, not of values: `vfr_feasibility` stays at 15/30,
+# `convective` at 20/50, `enroute_precip`'s snow axis at 5. What is bought is
+# that they become the same parameter, with the same meaning and the same
+# geometry behind it, so the approach can be tuned generically in one place —
+# and that the amber/red pair finally shares a base key, so the settings UI
+# pairs them onto one row for free (`bkn_pct_amber` / `ovc_pct_red` did not).
+EXTENT_PCT_AMBER = "extent_pct_amber"
+EXTENT_PCT_RED = "extent_pct_red"
+EXTENT_MIN_NM_KEY = "extent_min_nm"
+
+
+def extent_min_nm_param(
+    default: float = EXTENT_MIN_NM,
+) -> AdvisoryParameterDef:
+    """The shared minimum-extent floor as a tunable catalog parameter.
+
+    One definition rather than twelve copies: the floor is a property of the
+    shared gate, and an advisory that declares a different default is making a
+    deliberate statement rather than restating boilerplate.
+    """
+    return AdvisoryParameterDef(
+        key=EXTENT_MIN_NM_KEY,
+        label="Minimum extent",
+        description=(
+            "Coverage shorter than this never promotes the grade on its own — "
+            "a lone flagged point is a sliver of a long route but a large share "
+            "of a short one"
+        ),
+        type="distance",
+        unit="nm",
+        default=default,
+        min=0,
+        max=100,
+        step=5,
+    )
 
 
 def grade_extent(

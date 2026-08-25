@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     build_cost_model,
@@ -215,8 +217,8 @@ class IcingEscapeEvaluator:
                     step=500,
                 ),
                 AdvisoryParameterDef(
-                    key="icing_coverage_pct_amber",
-                    label="Icing extent (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in icing (amber)",
                     description=(
                         "Percentage of route with icing (but escape available) "
                         "to trigger amber. Only applies when warm-air descent "
@@ -230,8 +232,8 @@ class IcingEscapeEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="no_escape_pct_red",
-                    label="No escape (red)",
+                    key="extent_pct_red",
+                    label="% of route with no escape (red)",
                     description=(
                         "Percentage of route where icing exists but descending "
                         "to warm air is blocked by terrain. Any no-escape point "
@@ -244,6 +246,7 @@ class IcingEscapeEvaluator:
                     max=50,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
@@ -252,15 +255,13 @@ class IcingEscapeEvaluator:
         terrain_margin = params.get("terrain_margin_ft", 1000)
         tight_margin = params.get("tight_margin_ft", 2000)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
-        # Accept both new and legacy param names for backwards compatibility
-        icing_coverage_pct_amber = params.get(
-            "icing_coverage_pct_amber",
-            params.get("route_pct_amber", 20),
-        )
-        no_escape_pct_red = params.get(
-            "no_escape_pct_red",
-            params.get("min_route_pct", 15),
-        )
+        # The legacy read-path fallbacks (``route_pct_amber`` and the
+        # never-a-catalog-key ``min_route_pct``) are gone: migration 093
+        # actively rewrites them into the consolidated keys, so a fallback here
+        # could only hide a profile the migration failed to reach (#571 Stage 3).
+        extent_pct_amber = params.get("extent_pct_amber", 20)
+        extent_pct_red = params.get("extent_pct_red", 15)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -364,7 +365,8 @@ class IcingEscapeEvaluator:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             elif no_escape_count > 0 and grade_extent(
-                no_escape_extent, amber_pct=no_escape_pct_red,
+                no_escape_extent, amber_pct=extent_pct_red,
+                min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(summary.extent)
@@ -378,7 +380,8 @@ class IcingEscapeEvaluator:
                 detail = adv_t("icing_escape.no_icing", loc)
             else:
                 status = grade_extent(
-                    summary.extent, amber_pct=icing_coverage_pct_amber,
+                    summary.extent, amber_pct=extent_pct_amber,
+                    min_nm=extent_min_nm,
                 )
                 ext = format_extent(summary.extent)
                 if status == AdvisoryStatus.GREEN and has_tight_margin:

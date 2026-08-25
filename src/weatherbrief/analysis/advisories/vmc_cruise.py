@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     driving_method_id,
@@ -43,8 +45,8 @@ class VMCCruiseEvaluator:
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
-                    key="bkn_pct_amber",
-                    label="BKN % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in cloud at cruise (amber)",
                     description="Route percentage with BKN at cruise for amber",
                     type="percent",
                     unit="%",
@@ -54,8 +56,8 @@ class VMCCruiseEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="ovc_pct_red",
-                    label="OVC % (red)",
+                    key="extent_pct_red",
+                    label="% of route overcast at cruise (red)",
                     description="Route percentage with OVC at cruise for red",
                     type="percent",
                     unit="%",
@@ -64,13 +66,15 @@ class VMCCruiseEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        bkn_pct_amber = params.get("bkn_pct_amber", 25)
-        ovc_pct_red = params.get("ovc_pct_red", 50)
+        extent_pct_amber = params.get("extent_pct_amber", 25)
+        extent_pct_red = params.get("extent_pct_red", 50)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         cruise = ctx.cruise_altitude_ft
 
         per_model: list[ModelAdvisoryResult] = []
@@ -150,12 +154,13 @@ class VMCCruiseEvaluator:
                 detail = adv_t("no_data", loc)
             else:
                 if grade_extent(
-                    ovc_extent, amber_pct=ovc_pct_red,
+                    ovc_extent, amber_pct=extent_pct_red, min_nm=extent_min_nm,
                 ) != AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.RED
                     detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_extent))
                 elif grade_extent(
-                    summary.extent, amber_pct=bkn_pct_amber,
+                    summary.extent, amber_pct=extent_pct_amber,
+                    min_nm=extent_min_nm,
                 ) != AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.AMBER
                     detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(summary.extent))

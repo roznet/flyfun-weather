@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     FlaggedCell,
     apply_airport_endpoints,
     below_coverage,
@@ -329,8 +331,8 @@ class IFRFeasibilityEvaluator:
                     audience="pilot",
                 ),
                 AdvisoryParameterDef(
-                    key="icing_pct_amber",
-                    label="Icing % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route with icing near cruise (amber)",
                     description="Route percentage with icing near cruise for amber",
                     type="percent",
                     unit="%",
@@ -340,8 +342,8 @@ class IFRFeasibilityEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="icing_pct_red",
-                    label="Icing % (red)",
+                    key="extent_pct_red",
+                    label="% of route with icing near cruise (red)",
                     description="Route percentage with icing near cruise for red",
                     type="percent",
                     unit="%",
@@ -350,6 +352,7 @@ class IFRFeasibilityEvaluator:
                     max=80,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="icing_altitude_buffer_ft",
                     label="Icing alt buffer",
@@ -371,8 +374,9 @@ class IFRFeasibilityEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         min_dep_ceiling_ft = params.get("min_dep_ceiling_ft", 200)
         min_arr_ceiling_ft = params.get("min_arr_ceiling_ft", 400)
-        icing_pct_amber = params.get("icing_pct_amber", _ICING_PCT_AMBER_DEFAULT)
-        icing_pct_red = params.get("icing_pct_red", _ICING_PCT_RED_DEFAULT)
+        extent_pct_amber = params.get("extent_pct_amber", _ICING_PCT_AMBER_DEFAULT)
+        extent_pct_red = params.get("extent_pct_red", _ICING_PCT_RED_DEFAULT)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
         # The convective axis is graded by the Convective Activity advisory's
         # own parameters, not by a second set here (§22). Resolved once per
@@ -433,7 +437,8 @@ class IFRFeasibilityEvaluator:
             elif icing_total > 0 and icing_count > 0:
                 icing_status = grade_extent(
                     icing_extent,
-                    amber_pct=icing_pct_amber, red_pct=icing_pct_red,
+                    amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                    min_nm=extent_min_nm,
                 )
                 if icing_status != AdvisoryStatus.GREEN:
                     icing_detail = adv_t(

@@ -28,7 +28,7 @@ ADVISORIES = {
             "advisory_id": "convective",
             "aggregate_status": "red",
             "aggregate_detail": "EXTREME over 57%",
-            "parameters_used": {"min_risk": 2, "affected_pct_red": 50},
+            "parameters_used": {"min_risk": 2, "extent_pct_red": 50},
             "per_model": [
                 {"model": "gfs", "status": "amber", "detail": "MODERATE over 20%",
                  "affected_pct": 20.0, "affected_nm": 30.0, "total_nm": 150.0,
@@ -167,7 +167,7 @@ def test_summarize_retains_per_model_and_cross_check():
     assert "cross_check" not in models["gfs"]
 
     # parameters_used retained
-    assert conv["parameters_used"]["affected_pct_red"] == 50
+    assert conv["parameters_used"]["extent_pct_red"] == 50
 
 
 def test_summarize_emits_discoverability_hints():

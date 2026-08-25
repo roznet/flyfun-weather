@@ -120,7 +120,7 @@ def test_resave_dense_profile_shrinks(client, app_db):
         "convective_method": "nwp",
         "advisories": {
             "enabled": {"airport_wind": True},
-            "params": {"airport_wind": {"crosswind_red_kt": 25}, "vmc_cruise": {"ovc_pct_red": 50}},
+            "params": {"airport_wind": {"crosswind_red_kt": 25}, "vmc_cruise": {"extent_pct_red": 50}},
         },
     }
     pid = _create(client, dense)

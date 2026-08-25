@@ -3874,6 +3874,38 @@ messages had already moved to distance. Stage 2 collapses the two.
 - **Turbulence's `red_pct = 50`** was hardcoded inside the gate and invisible in
   the catalog. It is now `route_pct_red`, a real parameter.
 
+### Stage 3 — one set of keys, and an active rewrite of stored profiles
+
+Twenty-four catalog keys across thirteen advisories expressed one idea, including
+a generic pair in either word order (`amber_pct` and `pct_amber`, in *different*
+advisories) and one pair of inverted polarity. They are now
+`extent_pct_amber` / `extent_pct_red` / `extent_min_nm`.
+
+**Consolidation is of shape and semantics, not of values.** Each advisory keeps
+declaring its own default — `vfr_feasibility` at 15/30, `convective` at 20/50,
+`enroute_precip`'s snow axis at 5 — and the per-advisory *label* carries the
+domain word ("% of route in IMC", "% of route with poor agreement"). Collapsing
+the defaults would have been a calibration change wearing a refactor's clothes.
+
+`fiki_icing`'s pair flips to affected polarity, so every gate now reads the same
+direction. A pilot who set "amber below 70% clear" meant "amber at or above 30%
+affected", so the migration inverts the stored *value* along with the name.
+
+**The trap this had to avoid.** `profile_sparsify` deliberately keeps any key it
+cannot prove is a default — *"we never delete a value we cannot prove is a
+default"*. After a rename the old keys are simply unknown keys, so they would
+linger in every profile forever, doing nothing, while the pilot believed their
+tuning was live. The migration therefore **actively rewrites** old key → new key
+(093, with a real `downgrade()`), and the TypeScript sibling does the same on load
+so an unmigrated or cached profile still renders the pilot's numbers.
+
+**Two advisories deliberately stay out.** `convective_character`'s
+`isolated_max_pct` / `scattered_max_pct` are three-way band boundaries, not an
+amber/red pair, and `embed_min_nm` is a *contiguous-run* floor rather than the
+union floor `extent_min_nm`; renaming either would assert an equivalence that is
+not true. `mountain_wind` grades on wind speed and has no coverage gate to
+consolidate.
+
 ### The denominator: assessed, not aspirational
 
 `domain_nm` counts the miles the model could actually grade — in-domain **and**

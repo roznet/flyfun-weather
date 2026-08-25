@@ -33,6 +33,7 @@ from weatherbrief.analysis.advisories._helpers import (
     EMPTY_EXTENT,
     FlaggedCell,
     RouteExtent,
+    EXTENT_MIN_NM,
     grade_extent,
     route_extent,
 )
@@ -60,7 +61,7 @@ MOD_IDX = RISK_ORDER.index(ConvectiveRisk.MODERATE)
 
 # The advisory id whose parameters govern this grading. Consumers resolve the
 # user's tuning through ``resolve_convective_params`` so a pilot who raises
-# ``affected_pct_red`` moves the convective colour everywhere it is used, not
+# ``extent_pct_red`` moves the convective colour everywhere it is used, not
 # just on the convective card.
 CONVECTIVE_ADVISORY_ID = "convective"
 
@@ -71,8 +72,9 @@ CONVECTIVE_ADVISORY_ID = "convective"
 # the 15/30-vs-20/50 icing bug in ifr_feasibility).
 CONVECTIVE_PARAM_DEFAULTS: dict[str, float] = {
     "min_risk": 2,
-    "affected_pct_amber": 20,
-    "affected_pct_red": 50,
+    "extent_pct_amber": 20,
+    "extent_pct_red": 50,
+    "extent_min_nm": EXTENT_MIN_NM,
     "top_clearance_ft": 2000,
 }
 
@@ -189,11 +191,14 @@ def grade_convective_model(
     here rather than re-reading ``sounding.convective`` with its own thresholds.
     """
     min_risk_idx = int(params.get("min_risk", CONVECTIVE_PARAM_DEFAULTS["min_risk"]))
-    affected_pct_amber = params.get(
-        "affected_pct_amber", CONVECTIVE_PARAM_DEFAULTS["affected_pct_amber"]
+    extent_pct_amber = params.get(
+        "extent_pct_amber", CONVECTIVE_PARAM_DEFAULTS["extent_pct_amber"]
     )
-    affected_pct_red = params.get(
-        "affected_pct_red", CONVECTIVE_PARAM_DEFAULTS["affected_pct_red"]
+    extent_min_nm = params.get(
+        "extent_min_nm", CONVECTIVE_PARAM_DEFAULTS["extent_min_nm"]
+    )
+    extent_pct_red = params.get(
+        "extent_pct_red", CONVECTIVE_PARAM_DEFAULTS["extent_pct_red"]
     )
     top_clearance_ft = params.get(
         "top_clearance_ft", CONVECTIVE_PARAM_DEFAULTS["top_clearance_ft"]
@@ -517,7 +522,8 @@ def grade_convective_model(
         status = AdvisoryStatus.RED
     else:
         status = grade_extent(
-            extent, amber_pct=affected_pct_amber, red_pct=affected_pct_red,
+            extent, amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+            min_nm=extent_min_nm,
         )
         if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
             status = AdvisoryStatus.AMBER
@@ -535,14 +541,15 @@ def grade_convective_model(
             )
             if grade_extent(
                 native_extent,
-                amber_pct=affected_pct_amber, red_pct=affected_pct_red,
+                amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                min_nm=extent_min_nm,
             ) != AdvisoryStatus.RED:
                 status = AdvisoryStatus.AMBER
         # #442: any MODERATE+ convection that reaches cruise is at least a
         # WATCH. The coverage thresholds were calibrated with the old DD floor
         # inflating the LOW-floor extent; without it an isolated-but-real
         # MODERATE tower (or a dd_trigger amber) can fall below
-        # affected_pct_amber and read GREEN despite the "MODERATE+ peak"
+        # extent_pct_amber and read GREEN despite the "MODERATE+ peak"
         # headline — colour contradicting text, and the DD divergence note going
         # unsurfaced. Floor a MODERATE+ point at AMBER.
         if affected_mod > 0 and status == AdvisoryStatus.GREEN:

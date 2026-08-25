@@ -98,7 +98,7 @@ def test_primed_profile_is_amber():
 
 def test_primed_below_threshold_is_green():
     ctx = _ctx([_dry()] * 8 + [_primed()] * 2)
-    result = FreezingPrecipEvaluator.evaluate(ctx, {"primed_pct_amber": 30})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {"extent_pct_amber": 30})
     assert result.aggregate_status == AdvisoryStatus.GREEN
 
 

@@ -76,8 +76,8 @@ def _vfr_only_dense():
             "enabled": {"fronts": False, "ifr_feasibility": False},
             "params": {
                 # real template overrides — differ from catalog default → KEEP
-                "vmc_cruise": {"bkn_pct_amber": 5, "ovc_pct_red": 10},
-                "vfr_feasibility": {"imc_pct_amber": 5, "imc_pct_red": 10},
+                "vmc_cruise": {"extent_pct_amber": 5, "extent_pct_red": 10},
+                "vfr_feasibility": {"extent_pct_amber": 5, "extent_pct_red": 10},
             },
             "aggregation": "majority",
         },
