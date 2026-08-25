@@ -30,10 +30,14 @@ from __future__ import annotations
 import math
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import wind_at_altitude
+from weatherbrief.analysis.advisories._helpers import (
+    DEFAULT_CRUISE_TAS_KT,
+    MIN_GROUNDSPEED_KT,
+    resolve_cruise_tas,
+    wind_at_altitude,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
-from weatherbrief.atmo import ias_to_tas_isa
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -43,12 +47,13 @@ from weatherbrief.models import (
 )
 
 # Floor on per-point groundspeed for the time integral — keeps the estimate
-# finite if winds put the headwind near TAS.
-_MIN_GS_KT = 30.0
+# finite if winds put the headwind near TAS. Shared with the extent time axis
+# (#571), which floors the same way for the same reason.
+_MIN_GS_KT = MIN_GROUNDSPEED_KT
 
 # Last-resort cruise TAS when a flight has neither an aircraft/profile speed nor
-# a usable planned duration (see _resolve_cruise_tas). A generic light-GA cruise.
-_DEFAULT_TAS_KT = 110.0
+# a usable planned duration (see resolve_cruise_tas). A generic light-GA cruise.
+_DEFAULT_TAS_KT = DEFAULT_CRUISE_TAS_KT
 
 
 def _headwind_component(speed_kt: float, direction_deg: float, track_deg: float) -> float:
@@ -56,19 +61,9 @@ def _headwind_component(speed_kt: float, direction_deg: float, track_deg: float)
     return speed_kt * math.cos(math.radians(direction_deg - track_deg))
 
 
-def _resolve_cruise_tas(ctx: RouteContext) -> float:
-    """Cruise TAS (kt) for the trip-time estimate — always returns a value.
-
-    Precedence: the flight's aircraft/profile cruise speed (IAS → TAS at the
-    *evaluated* cruise altitude, so the altitude table reflects TAS rising with
-    height) → the flight's own planned speed (distance ÷ duration, already a
-    TAS) → a generic fallback.
-    """
-    if ctx.cruise_speed_ias_kt:
-        return ias_to_tas_isa(ctx.cruise_speed_ias_kt, ctx.cruise_altitude_ft)
-    if ctx.flight_duration_hours and ctx.flight_duration_hours > 0 and ctx.total_distance_nm > 0:
-        return ctx.total_distance_nm / ctx.flight_duration_hours
-    return _DEFAULT_TAS_KT
+# Moved to ``_helpers`` in #571 so the extent time axis resolves the speed the
+# same way this advisory does; kept as a module alias for readability here.
+_resolve_cruise_tas = resolve_cruise_tas
 
 
 @register

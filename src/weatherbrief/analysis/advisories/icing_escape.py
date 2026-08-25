@@ -350,7 +350,10 @@ class IcingEscapeEvaluator:
                     ),
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             affected = summary.affected
             # The no-escape RED gate keys on a narrower population than the

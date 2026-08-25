@@ -265,11 +265,14 @@ def _check_enroute_hazards(
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
     dists = [rpa.distance_from_origin_nm or 0.0 for rpa in ctx.analyses]
+    speed_kt = ctx.cruise_groundspeed_kt
     icing_extent = route_extent(
         dists, ctx.total_distance_nm, icing_flags, icing_assessed,
+        speed_kt=speed_kt,
     )
     affected_extent = route_extent(
         dists, ctx.total_distance_nm, union_flags, sounding_flags,
+        speed_kt=speed_kt,
     )
     return (
         icing_total, affected, icing_count, ribbon_points, icing_cells,

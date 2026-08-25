@@ -718,7 +718,7 @@ longer come from two loops that drift (the class of bug #391 kept hitting).
   affected). `in_domain=False` drops a point from the coverage denominator
   (mountain_wind measures coverage over mountain points only). `region` is the
   `FlaggedCell` scrim cutout.
-- **`summarize_evidence(samples, total_nm, peak_dist_nm=None)`** → `EvidenceSummary(affected, assessed, domain, affected_nm, highlights, data_state, domain_nm, samples, total_nm)`.
+- **`summarize_evidence(samples, total_nm, peak_dist_nm=None, speed_kt=None)`** → `EvidenceSummary(affected, assessed, domain, affected_nm, highlights, data_state, domain_nm, samples, total_nm)`.
   `affected_nm` is the **midpoint-owned-cell** distance of the affected points (the
   #391 geometry fix, landed here): each point owns the interval to its neighbours'
   midpoints, and the affected cells are summed — so extent and ribbon share one
@@ -776,6 +776,14 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
 - **`format_extent` takes the `RouteExtent`**, never counts. This is what makes
   the sentence and the published `affected_nm` one number rather than two
   derivations of it.
+- **Time is a display axis, not a gate.** `RouteExtent.minutes` is `nm` at
+  `ctx.cruise_groundspeed_kt` (cruise TAS less the route-average headwind, from
+  the wind components the pack already carries), appended to the message as
+  "about 8 min in it" and suppressed below three minutes. `grade_extent` accepts
+  `min_minutes` but it is **opt-in and unused**: a large share of flights fall
+  back to a profile-default speed, so gating on minutes would grade one aircraft
+  differently from another for reasons the pilot never set. Promote it only
+  after measuring real `cruise_speed_ias_kt` coverage in prod.
 
 ### The parameter contract (#571 Stage 3)
 
@@ -813,8 +821,9 @@ generically in one place.
 
 ## Shared Helpers (`_helpers.py`)
 
-- **`route_extent(distances, total_nm, affected, in_domain=None)`** → `RouteExtent` — reduce per-point flags to an extent over the route's cell edges. The lower-level entry point for evaluators that don't build an `EvidenceSample` list (`convective_grading`, `enroute_precip`, the two feasibility composites)
-- **`format_extent(ext, domain_label=None)`** → `"30nm/55nm (55%)"` — human-readable spatial extent, taken from the `RouteExtent` itself. `domain_label` names a denominator that is not the whole route (`"of high terrain"`)
+- **`route_extent(distances, total_nm, affected, in_domain=None, speed_kt=None)`** → `RouteExtent` — reduce per-point flags to an extent over the route's cell edges. The lower-level entry point for evaluators that don't build an `EvidenceSample` list (`convective_grading`, `enroute_precip`, the two feasibility composites)
+- **`format_extent(ext, domain_label=None)`** → `"30nm/55nm (55%), about 15 min in it"` — human-readable spatial extent, taken from the `RouteExtent` itself. `domain_label` names a denominator that is not the whole route (`"of high terrain"`); the time clause appears only when the extent carries `minutes` and they exceed three
+- **`resolve_cruise_tas(ctx)`** → cruise TAS (kt), always a value: aircraft/profile speed (IAS→TAS at the evaluated altitude) → the flight's own planned speed → a generic light-GA fallback. Shared by the headwind advisory and the extent time axis so both resolve the same speed the same way
 - **`build_ribbon(per_point, total_nm)`** → `list[RibbonSegment]` — merge consecutive same-severity route points into runs; boundaries fall midway between adjacent points; tiles `[0, total_nm]` exactly (sorted/non-overlapping/gapless invariants tested). No-sounding points → `UNAVAILABLE` (#373)
 - **`build_regions(per_point, total_nm)`** → `list[HighlightRegion]` — merge consecutive same-`kind`/`severity` flagged points (a `FlaggedCell` per flagged point, `None` otherwise) into one cutout using the **envelope** (min `base_ft` / max `top_ft`); all-`None` run stays a full column. Same cell-midpoint x-boundaries as the ribbon (#373)
 - **`ribbon_peak(segments)`** → center of the longest RED run, else longest AMBER run, else `None` — generic worst-point for evaluators whose peak is pure ribbon extent (`vmc_cruise`); richer peaks (convective's highest-CAPE) are computed in the evaluator (#373)

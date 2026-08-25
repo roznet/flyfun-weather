@@ -220,7 +220,10 @@ class TurbulenceEvaluator:
                     tags=frozenset(tags),
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             affected = summary.affected
             # One extent per severity tier (#571 D1). The severity word and the

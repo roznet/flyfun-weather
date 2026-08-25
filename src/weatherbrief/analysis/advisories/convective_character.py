@@ -304,7 +304,9 @@ def _below_base_geometry(
 
 
 def _realized_extent(
-    points: Sequence[ConvCharPoint], total_distance_nm: float
+    points: Sequence[ConvCharPoint],
+    total_distance_nm: float,
+    speed_kt: float | None = None,
 ) -> RouteExtent:
     """Geometry-accurate extent of the realized convective cells (#571).
 
@@ -325,6 +327,7 @@ def _realized_extent(
         distances,
         total_distance_nm,
         [p.is_convective and p.realized for p in points],
+        speed_kt=speed_kt,
     )
 
 
@@ -969,7 +972,10 @@ class ConvectiveCharacterEvaluator:
             # Extent of the realized cells, over the same cell edges the
             # EMBEDDED contiguity gate measures its run on (#571) — the card's
             # "(Xnm/Ynm)" and the gate can no longer describe different geometry.
-            extent = _realized_extent(points, ctx.total_distance_nm)
+            extent = _realized_extent(
+                points, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             detail = adv_t(f"convective_character.{character.value}", loc)
             if character not in (ConvectiveCharacter.NONE, ConvectiveCharacter.UNKNOWN):
                 detail += f" ({format_extent(extent)})"

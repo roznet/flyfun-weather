@@ -244,6 +244,7 @@ class DDvsNWPAgreementEvaluator:
 
             extent = route_extent(
                 dists, ctx.total_distance_nm, disagree_flags, comparable_flags,
+                speed_kt=ctx.cruise_groundspeed_kt,
             )
 
             if total == 0:

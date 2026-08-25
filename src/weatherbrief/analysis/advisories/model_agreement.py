@@ -128,7 +128,10 @@ class ModelAgreementEvaluator:
                 tags=frozenset({"moderate"}) if moderate_only else frozenset(),
             ))
 
-        summary = summarize_evidence(samples, ctx.total_distance_nm)
+        summary = summarize_evidence(
+            samples, ctx.total_distance_nm,
+            speed_kt=ctx.cruise_groundspeed_kt,
+        )
         total = summary.assessed
         poor_count = summary.affected
         loc = ctx.locale

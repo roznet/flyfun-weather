@@ -115,6 +115,43 @@ def to_mitigation_profile(profile: Profile) -> MitigationProfile:
     )
 
 
+# Floor on the groundspeed used for any time estimate — keeps a figure finite
+# when winds put the headwind near TAS.
+MIN_GROUNDSPEED_KT = 30.0
+
+# Last-resort cruise TAS when a flight has neither an aircraft/profile speed nor
+# a usable planned duration. A generic light-GA cruise.
+DEFAULT_CRUISE_TAS_KT = 110.0
+
+# Below this an extent's time figure is noise rather than information: "about
+# 1 min in it" tells a pilot nothing they did not get from "9nm".
+_MIN_REPORTABLE_MINUTES = 3.0
+
+
+def resolve_cruise_tas(ctx: RouteContext) -> float:
+    """Cruise TAS (kt) for a time estimate — always returns a value.
+
+    Precedence: the flight's aircraft/profile cruise speed (IAS → TAS at the
+    *evaluated* cruise altitude, so an altitude table reflects TAS rising with
+    height) → the flight's own planned speed (distance ÷ duration, already a
+    TAS) → a generic fallback.
+
+    Lives here rather than in ``headwind`` (where it started) so the extent time
+    axis and the trip-time advisory resolve the same speed the same way (#571).
+    """
+    from weatherbrief.atmo import ias_to_tas_isa
+
+    if ctx.cruise_speed_ias_kt:
+        return ias_to_tas_isa(ctx.cruise_speed_ias_kt, ctx.cruise_altitude_ft)
+    if (
+        ctx.flight_duration_hours
+        and ctx.flight_duration_hours > 0
+        and ctx.total_distance_nm > 0
+    ):
+        return ctx.total_distance_nm / ctx.flight_duration_hours
+    return DEFAULT_CRUISE_TAS_KT
+
+
 def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
     """Format a :class:`RouteExtent` as '30nm/55nm (55%)'.
 
@@ -127,7 +164,17 @@ def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
     if ext.domain_nm <= 0:
         return "0nm"
     label = f" {domain_label}" if domain_label else ""
-    return f"{round(ext.nm)}nm/{round(ext.domain_nm)}nm{label} ({ext.pct:.0f}%)"
+    out = f"{round(ext.nm)}nm/{round(ext.domain_nm)}nm{label} ({ext.pct:.0f}%)"
+    # Time axis (#571 Stage 4), display only. Miles are what the weather covers;
+    # minutes are what the pilot actually spends in it, and the two diverge on a
+    # slow aircraft or into a strong headwind. Suppressed below a few minutes,
+    # where the figure is noise rather than information, and NEVER gated on —
+    # a large share of flights fall back to a profile-default speed, so a
+    # minutes gate would grade one aircraft differently from another for reasons
+    # the pilot never set.
+    if ext.minutes is not None and ext.minutes >= _MIN_REPORTABLE_MINUTES:
+        out += f", about {round(ext.minutes)} min in it"
+    return out
 
 
 class FlaggedCell(NamedTuple):
@@ -557,6 +604,9 @@ class EvidenceSummary(NamedTuple):
     domain_nm: float = 0.0
     samples: tuple[EvidenceSample, ...] = ()
     total_nm: float = 0.0
+    # Groundspeed for the display-only ``minutes`` axis (#571 Stage 4); None
+    # when the caller did not supply one.
+    speed_kt: float | None = None
 
     @property
     def below_coverage(self) -> bool:
@@ -589,6 +639,7 @@ class EvidenceSummary(NamedTuple):
             self.total_nm,
             [bool(predicate(s)) for s in self.samples],
             [s.in_domain and s.assessed for s in self.samples],
+            speed_kt=self.speed_kt,
         )
 
 
@@ -597,6 +648,7 @@ def summarize_evidence(
     total_nm: float,
     *,
     peak_dist_nm: float | None = None,
+    speed_kt: float | None = None,
 ) -> EvidenceSummary:
     """Derive grade counts, geometry-accurate extent, highlights and coverage (#393).
 
@@ -606,6 +658,9 @@ def summarize_evidence(
     midpoint-owned-cell distance of the *affected* points — stays consistent with
     ``affected_pct`` (both count the same points). This is the #391 geometry fix,
     landed here where it belongs rather than as a second pass over the route.
+
+    ``speed_kt`` (typically ``ctx.cruise_groundspeed_kt``) fills the extents'
+    display-only ``minutes`` axis; omit it and ``minutes`` stays ``None``.
 
     ``peak_dist_nm`` overrides the highlight's jump-to-worst point; when ``None``
     it defaults to :func:`ribbon_peak` (longest red run, else amber). The caller
@@ -634,6 +689,7 @@ def summarize_evidence(
         # exactly the way #391 exists to prevent, and ``domain_nm`` still equals
         # the route length whenever the model resolved the whole route.
         [s.in_domain and s.assessed for s in pts],
+        speed_kt=speed_kt,
     )
 
     ribbon = build_ribbon([(s.distance_nm, s.severity) for s in pts], total_nm)
@@ -660,6 +716,7 @@ def summarize_evidence(
         domain_nm=extent.domain_nm,
         samples=tuple(pts),
         total_nm=total_nm,
+        speed_kt=speed_kt,
     )
 
 

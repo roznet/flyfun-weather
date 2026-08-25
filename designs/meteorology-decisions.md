@@ -3906,6 +3906,31 @@ union floor `extent_min_nm`; renaming either would assert an equivalence that is
 not true. `mountain_wind` grades on wind speed and has no coverage gate to
 consolidate.
 
+### Stage 4 — time as a display axis
+
+`RouteExtent.minutes` is `nm` at `ctx.cruise_groundspeed_kt` — cruise TAS
+(`resolve_cruise_tas`: aircraft/profile speed → the flight's own planned speed →
+a generic light-GA fallback) less the route-average headwind, taken from the
+per-point wind components the pack already carries. No new wind lookups, and the
+same numbers the headwind advisory reports.
+
+Miles are what the weather covers; minutes are what the pilot spends in it, and
+the two diverge sharply on a slow aircraft or into a strong headwind. The figure
+is appended to the message ("about 8 min in it") and suppressed below three
+minutes, where it is noise rather than information.
+
+**It does not gate.** `grade_extent` accepts `min_minutes`, but nothing passes
+it. A large share of flights fall back to a profile-default cruise speed, so a
+minutes gate would grade one aircraft differently from another for reasons the
+pilot never set — a colour that moves on a number nobody entered. Promoting it
+to a gate is a follow-up that starts by measuring real `cruise_speed_ias_kt`
+coverage in prod, not a design choice available today.
+
+The groundspeed is deliberately route-average and model-agnostic. Per-model,
+per-point precision would be spurious for a figure whose input is often a
+default, and it would make the same extent print different minutes on three
+cards for the same flight.
+
 ### The denominator: assessed, not aspirational
 
 `domain_nm` counts the miles the model could actually grade — in-domain **and**

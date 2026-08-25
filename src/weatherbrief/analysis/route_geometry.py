@@ -115,6 +115,7 @@ def route_extent(
     total_nm: float,
     affected: Sequence[bool],
     in_domain: Sequence[bool] | None = None,
+    speed_kt: float | None = None,
 ) -> RouteExtent:
     """Reduce per-point flags to a :class:`RouteExtent` over the route geometry.
 
@@ -133,6 +134,9 @@ def route_extent(
     20% of a route the model never saw — and it is why a fully-assessed
     evaluator's ``domain_nm`` equals its route length while a partially-assessed
     one honestly prints the span it graded.
+
+    ``speed_kt`` is a groundspeed for the display-only ``minutes`` axis; omit it
+    and ``minutes`` stays ``None``.
     """
     n = len(distances)
     if n == 0 or total_nm <= 0:
@@ -156,10 +160,12 @@ def route_extent(
         else:
             run_start = None
 
+    nm = round(nm, 1)
     return RouteExtent(
         points=sum(1 for a in affected if a),
         domain_points=sum(1 for d in dom if d),
-        nm=round(nm, 1),
+        nm=nm,
         domain_nm=round(domain_nm, 1),
         longest_run_nm=round(longest, 1),
+        minutes=round(60.0 * nm / speed_kt, 1) if speed_kt and speed_kt > 0 else None,
     )
