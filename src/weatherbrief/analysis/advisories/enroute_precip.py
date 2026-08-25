@@ -32,6 +32,7 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     below_coverage,
     format_extent,
+    grade_extent,
     route_extent,
     summarize_evidence,
 )
@@ -127,13 +128,19 @@ def classify_enroute_precip(
     # / light rain), so each needs its own reduction over the route's cell
     # edges — a share of the union's nm would describe the wrong points.
     dists: list[float] = []
+    # Assessable points only in the denominator (#391): a sounding with no
+    # precipitation assessment must not dilute the snow share.
+    assessed_flags: list[bool] = []
     snow_flags: list[bool] = []
+    snow_mod_flags: list[bool] = []
     sig_flags: list[bool] = []
     light_flags: list[bool] = []
 
     for rpa in ctx.analyses:
         dists.append(rpa.distance_from_origin_nm or 0.0)
+        assessed_flags.append(False)
         snow_flags.append(False)
+        snow_mod_flags.append(False)
         sig_flags.append(False)
         light_flags.append(False)
         sounding = rpa.sounding.get(model)
@@ -147,6 +154,7 @@ def classify_enroute_precip(
             # would read 20%, not 100%) — #391.
             continue
         total += 1
+        assessed_flags[-1] = True
         has_signal = True
         cls = classify_precip_point(precip)
         if cls is None:
@@ -156,6 +164,7 @@ def classify_enroute_precip(
             snow_flags[-1] = True
             if cls == "snow_moderate":
                 snow_moderate_pts += 1
+                snow_mod_flags[-1] = True
         elif cls == "sig":
             sig_rain_pts += 1
             sig_flags[-1] = True
@@ -167,38 +176,41 @@ def classify_enroute_precip(
         return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), 0, total, has_signal
 
     affected = snow_pts + sig_rain_pts + light_pts
-    snow_pct = 100.0 * snow_pts / total
-    snow_moderate_pct = 100.0 * snow_moderate_pts / total
-    sig_rain_pct = 100.0 * sig_rain_pts / total
+    # Each axis grades on its own population's geometry, through the shared gate
+    # with the shared minimum-extent floor (#571 Stage 2). The old point ratios
+    # made `snow_pct_amber=5` fire off a single point on a short route.
+    def _ext(flags: list[bool]):
+        return route_extent(dists, ctx.total_distance_nm, flags, assessed_flags)
+
+    snow_ext = _ext(snow_flags)
+    snow_mod_ext = _ext(snow_mod_flags)
+    sig_ext = _ext(sig_flags)
+    light_ext = _ext(light_flags)
 
     parts: list[str] = []
     if snow_pts:
         parts.append(adv_t(
-            "enroute_precip.snow", loc,
-            extent=format_extent(
-                route_extent(dists, ctx.total_distance_nm, snow_flags)
-            ),
+            "enroute_precip.snow", loc, extent=format_extent(snow_ext),
         ))
     if sig_rain_pts:
         parts.append(adv_t(
-            "enroute_precip.rain", loc,
-            extent=format_extent(
-                route_extent(dists, ctx.total_distance_nm, sig_flags)
-            ),
+            "enroute_precip.rain", loc, extent=format_extent(sig_ext),
         ))
 
-    if snow_moderate_pct >= snow_moderate_pct_red:
+    if grade_extent(
+        snow_mod_ext, amber_pct=snow_moderate_pct_red,
+    ) != AdvisoryStatus.GREEN:
         status = AdvisoryStatus.RED
-    elif snow_pct >= snow_pct_amber or sig_rain_pct >= rain_pct_amber:
+    elif (
+        grade_extent(snow_ext, amber_pct=snow_pct_amber) != AdvisoryStatus.GREEN
+        or grade_extent(sig_ext, amber_pct=rain_pct_amber) != AdvisoryStatus.GREEN
+    ):
         status = AdvisoryStatus.AMBER
     else:
         status = AdvisoryStatus.GREEN
         if not parts and light_pts:
             parts.append(adv_t(
-                "enroute_precip.light", loc,
-                extent=format_extent(
-                    route_extent(dists, ctx.total_distance_nm, light_flags)
-                ),
+                "enroute_precip.light", loc, extent=format_extent(light_ext),
             ))
         if not parts:
             parts.append(adv_t("enroute_precip.clear", loc))

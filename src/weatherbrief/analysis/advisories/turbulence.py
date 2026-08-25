@@ -7,7 +7,7 @@ from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
     format_extent,
-    pct_above_threshold,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -55,6 +55,19 @@ class TurbulenceEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
+                    key="route_pct_red",
+                    label="Route % (red)",
+                    description=(
+                        "Route percentage with moderate-or-worse turbulence for red"
+                    ),
+                    type="percent",
+                    unit="%",
+                    default=50,
+                    min=10,
+                    max=100,
+                    step=5,
+                ),
+                AdvisoryParameterDef(
                     key="strong_w_fpm",
                     label="Strong w threshold",
                     description="Vertical velocity above this is significant",
@@ -71,6 +84,9 @@ class TurbulenceEvaluator:
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         route_pct_amber = params.get("route_pct_amber", 20)
+        # Was a hardcoded ``red_pct=50`` inside the gate, invisible in the
+        # catalog and therefore untunable (#571 Stage 2).
+        route_pct_red = params.get("route_pct_red", 50)
         strong_w_fpm = params.get("strong_w_fpm", 200)
         cruise = ctx.cruise_altitude_ft
 
@@ -207,13 +223,12 @@ class TurbulenceEvaluator:
             # coverage beside it must describe the same points: a single
             # free-atmosphere severe layer is a real hazard and still forces RED,
             # but it is "Severe CAT over 9nm", not over the light-and-above 146nm.
+            significant_extent = summary.extent_of(lambda s: "significant" in s.tags)
             ext = format_extent(summary.extent)
             ext_severe = format_extent(
                 summary.extent_of(lambda s: "severe" in s.tags)
             )
-            ext_significant = format_extent(
-                summary.extent_of(lambda s: "significant" in s.tags)
-            )
+            ext_significant = format_extent(significant_extent)
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -229,9 +244,12 @@ class TurbulenceEvaluator:
                 # moderate-or-worse count to clear the 50% bar. Light-only
                 # coverage over most of the route is a ride-quality note, not
                 # a RED hazard.
-                status = pct_above_threshold(affected, total, route_pct_amber)
+                status = grade_extent(summary.extent, amber_pct=route_pct_amber)
                 if (
-                    pct_above_threshold(significant_points, total, route_pct_amber, red_pct=50)
+                    grade_extent(
+                        significant_extent,
+                        amber_pct=route_pct_amber, red_pct=route_pct_red,
+                    )
                     == AdvisoryStatus.RED
                 ):
                     status = AdvisoryStatus.RED

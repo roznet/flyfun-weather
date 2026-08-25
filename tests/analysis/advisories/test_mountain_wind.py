@@ -263,5 +263,5 @@ class TestMountainWindExtentDomain:
 
     def test_coverage_is_a_share_of_the_domain_not_the_route(self):
         m = self._red_result()
-        assert round(m.coverage_pct) == 100      # all mountain miles flagged
+        assert round(m.affected_pct) == 100      # all mountain miles flagged
         assert round(100.0 * m.affected_nm / m.total_nm) == 33  # NOT what we print

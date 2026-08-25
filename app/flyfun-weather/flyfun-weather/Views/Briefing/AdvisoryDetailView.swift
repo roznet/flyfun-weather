@@ -104,7 +104,9 @@ struct AdvisoryDetailView: View {
                 Text(m.model.uppercased()).font(.caption.bold()).foregroundStyle(Theme.text)
                 Spacer()
                 if let pct = m.affectedPct {
-                    Text("\(Int(pct))% affected").font(.tabularData(.caption2)).foregroundStyle(Theme.textMuted)
+                    // Same denominator qualification as the card (#571 D3).
+                    Text(AdvisoryCardView.coverageLabel(pct: pct, domain: m.affectedDomain))
+                        .font(.tabularData(.caption2)).foregroundStyle(Theme.textMuted)
                 }
             }
             if !m.detail.isEmpty {

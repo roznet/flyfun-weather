@@ -3766,7 +3766,7 @@ overstates the fallback path's frequency.
 
 ## 27. Route extent is one measurement: distance-based, domain-scoped, per-tier
 
-**Date:** 2026-08-25 · **Issue:** #571 · **Stage 1 (no grade changes)**
+**Date:** 2026-08-25 · **Issue:** #571
 
 Every route advisory answers *"how much of the flight is affected?"*. Fourteen
 evaluators answered it fourteen ways, with **four incompatible geometry
@@ -3832,13 +3832,58 @@ once from the same `cell_edges` geometry the ribbon uses, and formatted directly
    the defect unrepeatable: there is no signature left that can recompute a
    different answer from the same inputs.
 
-### What this stage deliberately did NOT change
+### What Stage 1 deliberately did NOT change
 
-No threshold, gate, denominator or status. `affected_pct` remains a point ratio
-here and the gates still key on point counts — making the *grade* distance-based
+No threshold, gate, denominator or status. `affected_pct` stayed a point ratio
+and the gates still keyed on point counts — making the *grade* distance-based
 moves colours and belongs with the minimum-extent floor, measured together
-against a pack replay. The visible change is that every printed number is now
+against a pack replay. Stage 1's visible change is that every printed number is
 the number the object ships.
+
+### Stage 2 — the grade follows the geometry, and gets a floor
+
+Stage 1 changed no colour: the gates still keyed on point counts while the
+messages had already moved to distance. Stage 2 collapses the two.
+
+- **`grade_extent` is the single gate**, keyed on `ext.pct`. `pct_above_threshold`
+  is deleted rather than kept as a trap. `affected_pct` becomes
+  `100 x affected_nm / domain_nm`, so the number that decided the colour, the
+  number the sentence prints and the number the API publishes are one number.
+
+- **A minimum-extent floor on every coverage-driven promotion**, `EXTENT_MIN_NM
+  = 30` — "about three points" at `interpolate_route`'s fixed 10 nm spacing,
+  expressed in the unit that survives a change of route length. The point count
+  scales with distance, so the *weight of one point* scales inversely: on a
+  582 nm route one point is 1.6% and harmless against a 20% gate; on a 120 nm
+  route (~13 points) one point is 7.7% and two are 15%, clearing
+  `imc_pct_amber`/`no_escape_pct_red` outright — and short flights are exactly
+  where a 20 nm band of weather is most likely to be avoidable.
+
+  The floor is capped at **half the domain**. Without that, a route shorter than
+  the floor itself would grade GREEN however completely the hazard covered it —
+  the #391 false-GREEN failure mode returning through the back door. At the cap
+  any coverage of half the domain or more always reaches the percentage gate, so
+  the floor only ever bites the partial-coverage case it was written for.
+
+- **`min_run_nm`** folds the two contiguity measures into the same object.
+  #568's EMBEDDED gate becomes a read of `longest_run_nm`, and the VFR
+  terminal-deck tip stops measuring `max(d) - min(d)`: that span counts the
+  *gaps*, so two field clouds 20 nm apart with clear air between them scored a
+  20 nm "deck" and earned a corridor tip for something that is not there.
+
+- **Turbulence's `red_pct = 50`** was hardcoded inside the gate and invisible in
+  the catalog. It is now `route_pct_red`, a real parameter.
+
+### The denominator: assessed, not aspirational
+
+`domain_nm` counts the miles the model could actually grade — in-domain **and**
+assessed — not every mile of the route. The alternative (always the full route)
+was considered and rejected: it silently reintroduces the dilution #391 exists
+to prevent, where two snowing points among eight blanks read as 20% coverage of
+a route the model never saw and fall under the amber gate. Thin coverage is
+reported by `below_coverage` → UNAVAILABLE, which abstains; it must not be
+reported by quietly diluting real evidence into a GREEN. In the common
+fully-assessed case `domain_nm` is the route length, so this costs nothing.
 
 ### Rejected
 

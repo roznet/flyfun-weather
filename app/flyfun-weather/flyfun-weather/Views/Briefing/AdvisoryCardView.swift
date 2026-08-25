@@ -24,6 +24,13 @@ private struct ModelStatusBadge: View {
 /// matching per-hazard digest narrative (when one maps to this advisory) is
 /// shown in the expanded body so Discussion stays big-picture.
 struct AdvisoryCardView: View {
+    /// "40% affected", or "40% of high terrain affected" when the advisory's
+    /// coverage denominator is not the whole route (#571 D3).
+    static func coverageLabel(pct: Double, domain: String?) -> String {
+        guard let domain, !domain.isEmpty else { return "\(Int(pct))% affected" }
+        return "\(Int(pct))% \(domain) affected"
+    }
+
     let advisory: RouteAdvisoryResult
     let catalog: [AdvisoryCatalogEntry]
     /// Per-hazard digest narrative attached to this advisory (#310). nil = none.
@@ -176,7 +183,15 @@ struct AdvisoryCardView: View {
                             Text(modelResult.model.uppercased())
                                 .font(.caption.bold())
                             Spacer()
-                            Text("\(Int(modelResult.affectedPct))% affected")
+                            // Qualify a denominator that is not the whole
+                            // route (#571): Mountain Wind measures coverage
+                            // over the route's mountain points, and an
+                            // unqualified "93% affected" reads as route
+                            // coverage for a footprint a quarter that size.
+                            Text(Self.coverageLabel(
+                                pct: modelResult.affectedPct,
+                                domain: modelResult.affectedDomain,
+                            ))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

@@ -8,6 +8,7 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     driving_method_id,
     format_extent,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -148,12 +149,14 @@ class VMCCruiseEvaluator:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             else:
-                ovc_pct = 100 * ovc_count / total
-
-                if ovc_pct >= ovc_pct_red:
+                if grade_extent(
+                    ovc_extent, amber_pct=ovc_pct_red,
+                ) != AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.RED
                     detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_extent))
-                elif 100 * affected / total >= bkn_pct_amber:
+                elif grade_extent(
+                    summary.extent, amber_pct=bkn_pct_amber,
+                ) != AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.AMBER
                     detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(summary.extent))
                 elif affected > 0:

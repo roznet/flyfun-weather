@@ -12,7 +12,7 @@ from weatherbrief.analysis.advisories._helpers import (
     hazardous_icing_zones,
     icing_zones_in_altitude_range,
     max_terrain_near_point,
-    pct_above_threshold,
+    grade_extent,
     summarize_evidence,
     to_mitigation_profile,
 )
@@ -352,14 +352,19 @@ class IcingEscapeEvaluator:
             summary = summarize_evidence(samples, ctx.total_distance_nm)
             total = summary.assessed
             affected = summary.affected
+            # The no-escape RED gate keys on a narrower population than the
+            # icing-coverage AMBER gate, so it measures its own geometry (#571).
+            no_escape_extent = summary.extent_of(
+                lambda x: x.severity == HighlightSeverity.RED
+            )
 
             # Determine model status
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
-            elif no_escape_count > 0 and pct_above_threshold(
-                no_escape_count, total, no_escape_pct_red,
+            elif no_escape_count > 0 and grade_extent(
+                no_escape_extent, amber_pct=no_escape_pct_red,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(summary.extent)
@@ -372,7 +377,9 @@ class IcingEscapeEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("icing_escape.no_icing", loc)
             else:
-                status = pct_above_threshold(affected, total, icing_coverage_pct_amber)
+                status = grade_extent(
+                    summary.extent, amber_pct=icing_coverage_pct_amber,
+                )
                 ext = format_extent(summary.extent)
                 if status == AdvisoryStatus.GREEN and has_tight_margin:
                     status = AdvisoryStatus.AMBER

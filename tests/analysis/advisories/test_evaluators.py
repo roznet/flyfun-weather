@@ -928,20 +928,20 @@ class TestConvectiveHeadline:
 
         Percentages are distance-based (#571): with 8 points over 200 nm the
         leading point owns a half-width cell, so 2/4/6 leading points cover
-        42.9 / 100.0 / 157.1 nm — 21 / 50 / 79%.
+        42.9 / 100.0 / 157.1 nm — 21 / 50 / 78.5%.
         """
         ctx = _conv_route(
             {
                 "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 21%
                 "icon": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
-                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 79%
+                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 78%
             }
         )
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
 
         assert res.aggregate_status == AdvisoryStatus.RED
         assert "MODERATE+" in res.aggregate_detail
-        assert "21–79%" in res.aggregate_detail
+        assert "21–78%" in res.aggregate_detail
         assert "across models" in res.aggregate_detail
         assert "peak HIGH" in res.aggregate_detail
 
@@ -1280,6 +1280,77 @@ _VFR_DEFAULTS = {
     "imc_pct_red": 30,
     "terminal_corridor_nm": 5,
 }
+
+
+class TestShortRouteExtentFloor:
+    """The #571 D4 acceptance case, end to end.
+
+    ``interpolate_route`` fills at a fixed 10 nm regardless of route length, so
+    the point count scales with distance and the weight of one point scales
+    inversely. Two flagged points are 1.6% of a 582 nm route and 15% of a 120 nm
+    one — enough to clear ``imc_pct_amber=15`` outright. The gate was silently
+    ~5x more sensitive on a short flight than a long one; the minimum-extent
+    floor makes it scale-invariant in the unit that matters, miles of weather.
+    """
+
+    def _ctx(self, total_nm: float, imc_idx: set[int]):
+        """A 10 nm-spaced route of ``total_nm``, IMC at the given point indices."""
+        from weatherbrief.models import CloudCoverage, EnhancedCloudLayer
+
+        deck = [
+            EnhancedCloudLayer(
+                base_ft=6000, top_ft=10000, coverage=CloudCoverage.OVC,
+            )
+        ]
+        n = int(total_nm / 10) + 1
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    cloud_layers=deck if i in imc_idx else [],
+                )},
+            )
+            for i in range(n)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=total_nm,
+        )
+
+    def test_two_points_on_a_short_route_no_longer_promote(self):
+        # 20 nm of IMC on a 120 nm route: 17% of the flight, under the 30 nm
+        # floor. It used to clear imc_pct_amber=15 (and imc_pct_red=15 for a
+        # user who had tuned it down) on two points alone.
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(120.0, {5, 6}), _VFR_DEFAULTS,
+        )
+        m = res.per_model[0]
+        assert m.affected_pct > 15          # the old gate would have fired
+        assert m.status == AdvisoryStatus.GREEN
+
+    def test_three_points_clear_the_floor_and_grade(self):
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(120.0, {5, 6, 7}), _VFR_DEFAULTS,
+        )
+        assert res.per_model[0].status != AdvisoryStatus.GREEN
+
+    def test_the_same_two_points_never_mattered_on_a_long_route(self):
+        # Unchanged behaviour on a long route — the floor is inert at 5%.
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(600.0, {5, 6}), _VFR_DEFAULTS,
+        )
+        assert res.per_model[0].status == AdvisoryStatus.GREEN
+
+    def test_a_short_route_mostly_in_cloud_still_grades(self):
+        """The floor may never suppress a flight that is largely in the hazard."""
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(60.0, {1, 2, 3, 4, 5, 6}), _VFR_DEFAULTS,
+        )
+        assert res.per_model[0].status == AdvisoryStatus.RED
 
 
 class TestVFRFeasibility:

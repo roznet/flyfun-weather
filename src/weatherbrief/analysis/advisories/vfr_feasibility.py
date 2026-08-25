@@ -26,6 +26,7 @@ from weatherbrief.analysis.advisories._helpers import (
     driving_method_id,
     RouteExtent,
     format_extent,
+    grade_extent,
     route_extent,
     ribbon_peak,
     to_mitigation_profile,
@@ -162,37 +163,45 @@ def _check_enroute_vfr(
     model: str,
     cloud_clearance_ft: float,
     altitude_ft: float,
-) -> tuple[int, int, int, int, RouteExtent]:
+) -> tuple[int, int, int, int, RouteExtent, RouteExtent]:
     """Check en-route cloud clearance for VFR at ``altitude_ft``.
 
     Takes the evaluated altitude explicitly (rather than reading
     ``ctx.cruise_altitude_ft``) so it can be re-run at candidate altitudes when
     searching for a lower-altitude mitigation.
 
-    Returns (total, imc_count, marginal_count, clear_count, extent).
+    Returns (total, imc_count, marginal_count, clear_count, imc_extent, extent).
     - imc_count: points where the altitude is inside BKN/OVC cloud
     - marginal_count: points where cloud clearance < threshold (but not in cloud)
-    - extent: geometry-accurate coverage of the imc+marginal union (#571), so
-      the sentence prints the miles it actually measured
+    - imc_extent: geometry-accurate coverage of the in-cloud points — the RED
+      axis grades on this population, so it measures it (#571)
+    - extent: the same for the imc+marginal union, which the AMBER axis grades on
+      and the sentence prints
     """
     total = 0
     imc_count = 0
     marginal_count = 0
     clear_count = 0
     dists: list[float] = []
+    assessed_flags: list[bool] = []
+    imc_flags: list[bool] = []
     affected_flags: list[bool] = []
 
     for rpa in ctx.analyses:
         dists.append(rpa.distance_from_origin_nm or 0.0)
+        assessed_flags.append(False)
+        imc_flags.append(False)
         affected_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
         total += 1
+        assessed_flags[-1] = True
 
         cls, _, _ = _point_enroute_vfr(sounding, altitude_ft, cloud_clearance_ft)
         if cls == "imc":
             imc_count += 1
+            imc_flags[-1] = True
             affected_flags[-1] = True
         elif cls == "marginal":
             marginal_count += 1
@@ -200,32 +209,36 @@ def _check_enroute_vfr(
         else:
             clear_count += 1
 
-    extent = route_extent(dists, ctx.total_distance_nm, affected_flags)
-    return total, imc_count, marginal_count, clear_count, extent
+    imc_extent = route_extent(
+        dists, ctx.total_distance_nm, imc_flags, assessed_flags,
+    )
+    extent = route_extent(
+        dists, ctx.total_distance_nm, affected_flags, assessed_flags,
+    )
+    return total, imc_count, marginal_count, clear_count, imc_extent, extent
 
 
 def _enroute_vfr_status(
     total: int,
-    imc_count: int,
-    marginal_count: int,
+    imc_extent: RouteExtent,
+    affected_extent: RouteExtent,
     imc_pct_amber: float,
     imc_pct_red: float,
 ) -> AdvisoryStatus:
-    """Grade the en-route cloud-clearance axis from point counts.
+    """Grade the en-route cloud-clearance axis from the two extents.
 
     Shared by ``evaluate`` and the vertical-mitigation scan so a candidate
     altitude is graded with exactly the same thresholds as cruise.
+
+    Distance-based, through the shared gate and its minimum-extent floor (#571
+    Stage 2). This axis is where the floor matters most: at ``imc_pct_red=15``
+    two flagged points on a ~120 nm route used to clear RED outright.
     """
     if total <= 0:
         return AdvisoryStatus.GREEN
-    affected = imc_count + marginal_count
-    imc_pct = 100.0 * imc_count / total
-    affected_pct = 100.0 * affected / total
-    if imc_pct >= imc_pct_red:
+    if grade_extent(imc_extent, amber_pct=imc_pct_red) != AdvisoryStatus.GREEN:
         return AdvisoryStatus.RED
-    if affected_pct >= imc_pct_amber:
-        return AdvisoryStatus.AMBER
-    return AdvisoryStatus.GREEN
+    return grade_extent(affected_extent, amber_pct=imc_pct_amber)
 
 
 def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
@@ -578,11 +591,20 @@ def _terminal_deck_span(
     ordinary sub-cruise deck (the *primary* ``climb_deck`` case), so the band test is used
     instead — it covers both while still keying on the same "not a single point" rule.
 
-    Returns ``(point_count, span_nm)`` over the qualifying points.
+    Returns ``(point_count, run_nm)`` over the qualifying points, where
+    ``run_nm`` is the longest **contiguous** along-track run measured with the
+    shared midpoint-owned-cell convention. It used to be ``max(d) - min(d)``,
+    which includes the gaps: two field clouds 20 nm apart with clear air between
+    them scored a 20 nm "run" and offered a corridor tip for a deck that is not
+    there (#571 D-geometry-4).
     """
-    dists: list[float] = []
+    all_dists: list[float] = []
+    flags: list[bool] = []
+    count = 0
     for rpa in ctx.analyses:
         d = rpa.distance_from_origin_nm or 0.0
+        all_dists.append(d)
+        flags.append(False)
         if not (lo_nm <= d <= hi_nm):
             continue
         sounding = rpa.sounding.get(model)
@@ -593,20 +615,24 @@ def _terminal_deck_span(
             if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
                 continue
             if cl.top_ft > floor and cl.base_ft < cruise:
-                dists.append(d)
+                flags[-1] = True
+                count += 1
                 break
-    if not dists:
+    if not count:
         return 0, 0.0
-    return len(dists), max(dists) - min(dists)
+    return count, route_extent(
+        all_dists, ctx.total_distance_nm, flags,
+    ).longest_run_nm
 
 
-def _is_real_terminal_deck(count: int, span_nm: float) -> bool:
+def _is_real_terminal_deck(count: int, run_nm: float) -> bool:
     """A terminal deck earns a corridor tip only when it spans more than one point.
 
-    ``>= 2`` route points OR ``>= 15`` nm of along-track run (#342 Bug A). A single
-    terminal point — the departure/arrival field's own cloud — never qualifies.
+    ``>= 2`` route points OR ``>= 15`` nm of *contiguous* along-track run (#342
+    Bug A, geometry corrected in #571). A single terminal point — the
+    departure/arrival field's own cloud — never qualifies.
     """
-    return count >= _TERMINAL_DECK_MIN_POINTS or span_nm >= _TERMINAL_DECK_MIN_RUN_NM
+    return count >= _TERMINAL_DECK_MIN_POINTS or run_nm >= _TERMINAL_DECK_MIN_RUN_NM
 
 
 def _solver_mitigations(
@@ -682,8 +708,12 @@ def _solver_mitigations(
         best_status: AdvisoryStatus | None = None
         alt = cruise - MITIGATION_BIN_STEP_FT
         while alt >= floor:
-            tot, imc, marg, _, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
-            cand = _enroute_vfr_status(tot, imc, marg, imc_pct_amber, imc_pct_red)
+            tot, _imc, _marg, _, cand_imc_ext, cand_ext = _check_enroute_vfr(
+                ctx, model, cloud_clearance_ft, alt,
+            )
+            cand = _enroute_vfr_status(
+                tot, cand_imc_ext, cand_ext, imc_pct_amber, imc_pct_red,
+            )
             if _SEVERITY[cand] < _SEVERITY[enroute_status]:
                 if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
                     best_alt, best_status = int(alt), cand
@@ -878,7 +908,10 @@ class VFRFeasibilityEvaluator:
             )
 
             # 2. En-route cloud clearance
-            total, imc_count, marginal_count, _, enroute_extent = _check_enroute_vfr(
+            (
+                total, imc_count, marginal_count, _,
+                imc_extent, enroute_extent,
+            ) = _check_enroute_vfr(
                 ctx, model, cloud_clearance_ft, ctx.cruise_altitude_ft
             )
 
@@ -904,7 +937,7 @@ class VFRFeasibilityEvaluator:
             # 4. Determine en-route status
             affected = imc_count + marginal_count
             enroute_status = _enroute_vfr_status(
-                total, imc_count, marginal_count, imc_pct_amber, imc_pct_red
+                total, imc_extent, enroute_extent, imc_pct_amber, imc_pct_red
             )
             # Coverage tolerance (#391): a clear en-route cloud verdict from
             # soundings at too small a share of the route is UNAVAILABLE, not

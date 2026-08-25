@@ -340,6 +340,11 @@ class Interview(BaseModel):
     questions: list[InterviewQuestion] = Field(default_factory=list)
 
 
+def _pct(nm: float, domain_nm: float) -> float:
+    """Distance-based coverage, rounded like the rest of the published numbers."""
+    return round(100.0 * nm / domain_nm, 1) if domain_nm > 0 else 0.0
+
+
 class ModelAdvisoryResult(BaseModel):
     """Result of one advisory evaluated against one model's data."""
 
@@ -389,31 +394,6 @@ class ModelAdvisoryResult(BaseModel):
     # no selectable method, and on old packs (legacy-safe).
     primary_method_id: str | None = None
 
-    @property
-    def coverage_pct(self) -> float:
-        """Distance-based coverage of this extent's own domain (#571).
-
-        The figure the detail sentence prints, keyed off the same ``affected_nm``
-        it quotes — as opposed to ``affected_pct``, which is still the *point*
-        ratio at this stage (uneven point spacing makes the two differ by a few
-        points; Stage 2 collapses them). Aggregate lines that summarise several
-        models must use this so the headline and the per-model sentences below it
-        are one measurement.
-
-        Falls back to ``total_nm`` on packs written before ``domain_nm`` existed,
-        and to the point ratio when there is no geometry at all.
-        """
-        denom = self.domain_nm or self.total_nm
-        return 100.0 * self.affected_nm / denom if denom else self.affected_pct
-
-    @property
-    def coverage_mod_pct(self) -> float:
-        """:attr:`coverage_pct` for the higher-threshold extent (convective MODERATE+)."""
-        denom = self.domain_nm or self.total_nm
-        return (
-            100.0 * self.affected_mod_nm / denom if denom else self.affected_mod_pct
-        )
-
     @classmethod
     def build(
         cls,
@@ -446,6 +426,12 @@ class ModelAdvisoryResult(BaseModel):
         ``affected_domain`` names it when it is not the whole route. Both default
         to the route.
 
+        ``affected_pct`` is derived from the geometry, not from the point counts
+        (#571 Stage 2): ``100 x affected_nm / domain_nm``. Route points are not
+        evenly spaced, so a point ratio graded the same weather differently
+        depending on where ``interpolate_route`` inserted waypoints, and it could
+        not agree with the nm published beside it.
+
         ``affected_nm`` is an optional geometry-accurate extent (#393): when the
         evaluator derives grade and geometry from one ``EvidenceSample`` list, it
         passes the midpoint-owned-cell distance of the *affected* points here. It
@@ -468,24 +454,29 @@ class ModelAdvisoryResult(BaseModel):
         proportional_mod_nm = (
             round(total_distance_nm * mod / total, 1) if total > 0 else 0
         )
+        resolved_nm = (
+            round(affected_nm, 1) if affected_nm is not None else proportional_nm
+        )
+        resolved_mod_nm = (
+            round(affected_mod_nm, 1) if affected_mod_nm is not None
+            else proportional_mod_nm
+        )
+        resolved_domain_nm = round(
+            domain_nm if domain_nm is not None else total_distance_nm, 1,
+        )
         return cls(
             model=model,
             status=status,
             detail=detail,
             affected_points=affected,
             total_points=total,
-            affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
-            affected_nm=round(affected_nm, 1) if affected_nm is not None else proportional_nm,
+            affected_pct=_pct(resolved_nm, resolved_domain_nm),
+            affected_nm=resolved_nm,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
-            affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,
-            affected_mod_nm=(
-                round(affected_mod_nm, 1) if affected_mod_nm is not None
-                else proportional_mod_nm
-            ),
-            domain_nm=round(
-                domain_nm if domain_nm is not None else total_distance_nm, 1,
-            ),
+            affected_mod_pct=_pct(resolved_mod_nm, resolved_domain_nm),
+            affected_mod_nm=resolved_mod_nm,
+            domain_nm=resolved_domain_nm,
             affected_domain=affected_domain,
             cross_check=cross_check,
             mitigations=mitigations if mitigations is not None else [],

@@ -25,6 +25,7 @@ from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
     format_extent,
+    grade_extent,
     summarize_evidence,
     terrain_at_distance,
 )
@@ -199,8 +200,6 @@ class FreezingPrecipEvaluator:
                 ))
                 continue
 
-            primed_pct = 100 * primed_pts / total if total else 0
-
             if active_pts > 0:
                 status = AdvisoryStatus.RED
                 detail = (
@@ -212,7 +211,9 @@ class FreezingPrecipEvaluator:
                         f"; primed profile "
                         f"{format_extent(primed_ext)}"
                     )
-            elif primed_pts > 0 and primed_pct >= primed_pct_amber:
+            elif primed_pts > 0 and grade_extent(
+                primed_ext, amber_pct=primed_pct_amber,
+            ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
                 detail = (
                     "Freezing-rain profile (no active precip) "

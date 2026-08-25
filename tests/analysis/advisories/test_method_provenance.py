@@ -81,9 +81,14 @@ def _ctx(
         cloud_source=cloud_source,
         convective_method=convective_method,
     )
+    # The route length must match where the points actually are: they sit at
+    # 20 nm intervals from the origin, so a hardcoded 180 nm left the final
+    # point owning a 90 nm cell and made every distance-based coverage figure
+    # (#571) a fixture artefact rather than a property of the weather.
+    total_nm = max((len(soundings) - 1) * 20.0, 20.0)
     return RouteContext(
         analyses=resolved, cross_sections=[], elevation=None, models=["gfs"],
-        cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=180,
+        cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=total_nm,
     )
 
 

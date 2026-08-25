@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from collections.abc import Callable, Sequence
 
-from weatherbrief.analysis.route_geometry import cell_edges
+from weatherbrief.analysis.route_geometry import (
+    EMPTY_EXTENT,
+    RouteExtent,
+    cell_edges,
+    route_extent,
+)
 from weatherbrief.models import (
     AdvisoryHighlights,
     AdvisoryStatus,
@@ -106,106 +111,6 @@ def to_mitigation_profile(profile: Profile) -> MitigationProfile:
             )
             for t in profile.transitions
         ],
-    )
-
-
-class RouteExtent(NamedTuple):
-    """How much of a domain one advisory×model×severity-tier actually covers (#571).
-
-    The single answer to *"how much of the flight is affected?"*. Before this
-    existed the codebase carried four incompatible conventions for it — a
-    proportional ``total_nm × affected/total`` in every message, a
-    geometry-accurate midpoint-cell sum in the JSON, a contiguous-run measure in
-    the convective-character gate and a gap-including ``max−min`` span in the VFR
-    mitigation tip — and the message and the structured field routinely
-    disagreed by up to 4×. One value object, produced once from the same
-    ``cell_edges`` geometry the ribbon uses, makes that unrepeatable.
-
-    Fields:
-        ``points`` — affected point count.
-        ``domain_points`` — the denominator in points (in-domain samples).
-        ``nm`` — Σ midpoint-owned cells of the affected points.
-        ``domain_nm`` — the DENOMINATOR's own nm: route miles for most
-            evaluators, *mountain* miles for ``mountain_wind``. Travelling with
-            the extent is what makes "a restricted domain multiplied by the whole
-            route length" (the ~4× ``mountain_wind`` overstatement) impossible to
-            write: there is no route length lying around to multiply by.
-        ``longest_run_nm`` — longest *contiguous* affected run, for barrier-type
-            hazards ("you cannot get around it") as opposed to union coverage.
-        ``minutes`` — ``nm`` at the flight's groundspeed, when a speed is known.
-    """
-
-    points: int
-    domain_points: int
-    nm: float
-    domain_nm: float
-    longest_run_nm: float = 0.0
-    minutes: float | None = None
-
-    @property
-    def pct(self) -> float:
-        """Coverage as a percentage of the domain, measured in distance.
-
-        Distance-based, not point-based: ``interpolate_route`` spaces points
-        evenly at 10 nm but inserts extras at waypoints, so a point ratio and a
-        distance ratio never agree. Keying the percentage off the same ``nm``
-        the message prints makes them consistent by construction.
-        """
-        return 100.0 * self.nm / self.domain_nm if self.domain_nm else 0.0
-
-
-EMPTY_EXTENT = RouteExtent(points=0, domain_points=0, nm=0.0, domain_nm=0.0)
-
-
-def route_extent(
-    distances: Sequence[float],
-    total_nm: float,
-    affected: Sequence[bool],
-    in_domain: Sequence[bool] | None = None,
-) -> RouteExtent:
-    """Reduce per-point flags to a :class:`RouteExtent` over the route geometry.
-
-    ``distances`` must be in along-route order and index-aligned with
-    ``affected`` (and ``in_domain``, which defaults to all-True). Each point owns
-    the interval to the midpoints of its neighbours (``cell_edges``) — the same
-    geometry the ribbon and the convective-character contiguity gate use, so an
-    extent, a highlight and a gate can never describe different pictures.
-
-    ``domain_nm`` sums the cells of the **in-domain** points, which is the whole
-    route for every evaluator except ``mountain_wind``. Note this is deliberately
-    *not* the assessed subset: the denominator is the universe the advisory
-    speaks for, not the part of it the model happened to resolve — thin coverage
-    is reported by ``below_coverage``/UNAVAILABLE, not by silently shrinking the
-    denominator until a small footprint reads large.
-    """
-    n = len(distances)
-    if n == 0 or total_nm <= 0:
-        return EMPTY_EXTENT
-    dom = list(in_domain) if in_domain is not None else [True] * n
-    lefts, rights = cell_edges(list(distances), total_nm)
-
-    nm = 0.0
-    domain_nm = 0.0
-    longest = 0.0
-    run_start: int | None = None
-    for i in range(n):
-        width = rights[i] - lefts[i]
-        if dom[i]:
-            domain_nm += width
-        if affected[i]:
-            nm += width
-            if run_start is None:
-                run_start = i
-            longest = max(longest, rights[i] - lefts[run_start])
-        else:
-            run_start = None
-
-    return RouteExtent(
-        points=sum(1 for a in affected if a),
-        domain_points=sum(1 for d in dom if d),
-        nm=round(nm, 1),
-        domain_nm=round(domain_nm, 1),
-        longest_run_nm=round(longest, 1),
     )
 
 
@@ -682,7 +587,7 @@ class EvidenceSummary(NamedTuple):
             [s.distance_nm for s in self.samples],
             self.total_nm,
             [bool(predicate(s)) for s in self.samples],
-            [s.in_domain for s in self.samples],
+            [s.in_domain and s.assessed for s in self.samples],
         )
 
 
@@ -723,7 +628,11 @@ def summarize_evidence(
         distances,
         total_nm,
         [_sample_affected(s) for s in pts],
-        [s.in_domain for s in pts],
+        # The denominator is what this model could grade: in-domain AND
+        # assessed. Counting unassessable points would dilute a real signal
+        # exactly the way #391 exists to prevent, and ``domain_nm`` still equals
+        # the route length whenever the model resolved the whole route.
+        [s.in_domain and s.assessed for s in pts],
     )
 
     ribbon = build_ribbon([(s.distance_nm, s.severity) for s in pts], total_nm)
@@ -753,16 +662,74 @@ def summarize_evidence(
     )
 
 
-def pct_above_threshold(
-    affected: int,
-    total: int,
+# The shared minimum-extent floor for a coverage-driven promotion (#571 D4).
+# 30 nm is "about three points" at ``interpolate_route``'s fixed 10 nm spacing,
+# expressed in the unit that survives a change of route length or spacing.
+#
+# Why a floor at all: the point count scales with distance, so the *weight of one
+# point* scales inversely. On a 582 nm route one point is 1.6% — harmless against
+# a 20% gate. On a 120 nm route (~13 points) one point is 7.7% and two are 15%,
+# which clears ``imc_pct_amber``/``no_escape_pct_red`` outright. The percentage
+# gate was silently ~5x more sensitive on a short flight than a long one — and a
+# short flight is exactly where a 20 nm band of weather is most avoidable.
+EXTENT_MIN_NM = 30.0
+
+# A floor can never exceed half the domain it measures. Without this a route
+# shorter than the floor itself would grade GREEN however completely the hazard
+# covered it — the false-GREEN failure mode (#391) reintroduced through the back
+# door. At this cap any coverage of half the domain or more always reaches the
+# percentage gate, so the floor only ever bites the partial-coverage case it was
+# written for; on a 582 nm route it is inert (30 nm is 5%), on a 120 nm route it
+# raises the effective bar to 25%, which is the intended tightening.
+_EXTENT_MIN_NM_DOMAIN_CAP = 0.5
+
+
+def effective_min_nm(ext: RouteExtent, min_nm: float) -> float:
+    """The minimum-extent floor actually applied to ``ext`` — see :data:`EXTENT_MIN_NM`."""
+    return min(min_nm, _EXTENT_MIN_NM_DOMAIN_CAP * ext.domain_nm)
+
+
+def grade_extent(
+    ext: RouteExtent,
+    *,
     amber_pct: float,
     red_pct: float | None = None,
+    min_nm: float = EXTENT_MIN_NM,
+    min_run_nm: float | None = None,
+    min_minutes: float | None = None,
 ) -> AdvisoryStatus:
-    """Common pattern: GREEN below amber threshold, AMBER between, RED above red threshold."""
-    if total == 0:
+    """The single coverage gate: GREEN / AMBER / RED from one :class:`RouteExtent`.
+
+    Replaces ``pct_above_threshold``'s point ratio (#571). Two differences that
+    matter:
+
+    - **The percentage is distance-based** (``ext.pct``), so an unevenly spaced
+      route no longer grades differently from an evenly spaced one carrying the
+      same weather, and the number that decided the colour is the number the
+      message prints.
+    - **A minimum-extent floor** (``min_nm``, see :data:`EXTENT_MIN_NM`) must be
+      cleared before coverage may promote anything. Deliberate severe-hazard
+      bypasses live in the evaluators and are unaffected — turbulence's
+      free-atmosphere severe rule still forces RED off a single point — but a
+      bypassed grade must then describe itself honestly rather than borrow a
+      coverage number.
+
+    ``min_run_nm`` gates on the longest *contiguous* run instead of the union,
+    for barrier-type hazards ("you cannot get around it" — the EMBEDDED case).
+    ``min_minutes`` is accepted for symmetry and is opt-in only; see the time
+    axis in ``designs/meteorology-decisions.md`` §27 for why it does not gate by
+    default.
+    """
+    if ext.domain_nm <= 0 or ext.nm <= 0:
         return AdvisoryStatus.GREEN
-    pct = 100.0 * affected / total
+    if min_nm and ext.nm < effective_min_nm(ext, min_nm):
+        return AdvisoryStatus.GREEN
+    if min_run_nm is not None and ext.longest_run_nm < min_run_nm:
+        return AdvisoryStatus.GREEN
+    if min_minutes is not None and (ext.minutes is None or ext.minutes < min_minutes):
+        return AdvisoryStatus.GREEN
+
+    pct = ext.pct
     if red_pct is not None and pct >= red_pct:
         return AdvisoryStatus.RED
     if pct >= amber_pct:

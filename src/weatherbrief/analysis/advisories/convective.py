@@ -239,8 +239,7 @@ class ConvectiveEvaluator:
                     (peak_by_model[m.model] for m in mod_models),
                     key=lambda r: _RISK_ORDER.index(r),
                 ).value.upper()
-                # Distance-based, matching the per-model sentences (#571).
-                pcts = sorted(round(m.coverage_mod_pct) for m in mod_models)
+                pcts = sorted(round(m.affected_mod_pct) for m in mod_models)
                 lo, hi = pcts[0], pcts[-1]
                 if lo == hi:
                     result.aggregate_detail = adv_t(
@@ -253,7 +252,7 @@ class ConvectiveEvaluator:
             else:
                 # LOW-only across every supporting model — favorability range.
                 pcts = sorted(
-                    round(m.coverage_pct) for m in matching if m.total_points > 0
+                    round(m.affected_pct) for m in matching if m.total_points > 0
                 )
                 if pcts:
                     lo, hi = pcts[0], pcts[-1]
