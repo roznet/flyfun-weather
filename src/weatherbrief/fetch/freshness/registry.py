@@ -65,6 +65,8 @@ class SourceConfig:
             Mutually exclusive with ``cycles``.
         env_gate: Name of an environment variable that must be truthy for the
             source to appear in the freshness loop and the public catalog.
+        subset_env: Name of a comma-separated allowlist variable which, when
+            set, must contain this source's key prefix for it to be active.
         model_label: Display label for the underlying NWP model
             (e.g. "ICON-EU", "ICON-Global", "ECMWF IFS").  Distinct from
             the pack-model name in the key prefix — the same pack-model
@@ -112,6 +114,10 @@ class SourceConfig:
     # credentials does not show a permanently-red row for a feature it never
     # turned on.
     env_gate: str = ""
+    # Optional comma-separated allowlist variable.  When set and non-empty,
+    # this source only counts as active if the key's prefix appears in it —
+    # so a partial deployment does not advertise the sources it left off.
+    subset_env: str = ""
 
     model_label: str = ""
     provider_label: str = ""
@@ -165,10 +171,35 @@ class SourceConfig:
 
     @property
     def is_active(self) -> bool:
-        """False when an ``env_gate`` is configured and switched off."""
+        """False when this source is not switched on for the deployment.
+
+        Two axes, both of which have to say yes:
+
+        1. ``env_gate`` — the feature is enabled at all.
+        2. ``subset_env`` — this *particular* source is in the enabled subset.
+
+        The second is not decoration.  A deployment that runs radar without
+        EUMETSAT credentials (``WB_OBSERVED_SOURCES=opera_dbzh,opera_rate``)
+        is the documented half-a-feature case, and without this check the two
+        satellite rows would stay active, be probed by the freshness loop
+        against a frame store that will never hold them, and show permanently
+        red on the help page — the exact outcome ``env_gate`` was added to
+        prevent, reached by the subset axis instead of the all-off one.
+        """
         if not self.env_gate:
             return True
-        return os.environ.get(self.env_gate, "").strip() in ("1", "true", "yes")
+        if os.environ.get(self.env_gate, "").strip() not in ("1", "true", "yes"):
+            return False
+        if not self.subset_env:
+            return True
+        subset = os.environ.get(self.subset_env, "").strip()
+        if not subset:
+            # Unset means "all of them", matching enabled_sources().
+            return True
+        wanted = {item.strip() for item in subset.split(",") if item.strip()}
+        # The registry key is "{frame_source}:{provider}"; the frame source is
+        # what WB_OBSERVED_SOURCES names.
+        return self.key.split(":", 1)[0] in wanted
 
     def slip_bump(self, slip_count: int) -> timedelta:
         """Return the next-expected bump for the ``slip_count``-th slip.
@@ -522,6 +553,7 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OPERA_DELIVERY_OFFSET,
         readiness_check="observed_frames",
         env_gate="WB_OBSERVED_ENABLED",
+        subset_env="WB_OBSERVED_SOURCES",
         retry_interval=timedelta(minutes=2),
         max_retry_interval=timedelta(minutes=15),
         model_label="OPERA composite",
@@ -544,6 +576,7 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OPERA_DELIVERY_OFFSET,
         readiness_check="observed_frames",
         env_gate="WB_OBSERVED_ENABLED",
+        subset_env="WB_OBSERVED_SOURCES",
         retry_interval=timedelta(minutes=3),
         max_retry_interval=timedelta(minutes=30),
         model_label="OPERA composite",
@@ -564,6 +597,7 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_EUMETSAT_DELIVERY_OFFSET,
         readiness_check="observed_frames",
         env_gate="WB_OBSERVED_ENABLED",
+        subset_env="WB_OBSERVED_SOURCES",
         retry_interval=timedelta(minutes=3),
         max_retry_interval=timedelta(minutes=30),
         model_label="MTG Lightning Imager",
@@ -584,6 +618,7 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_EUMETSAT_DELIVERY_OFFSET,
         readiness_check="observed_frames",
         env_gate="WB_OBSERVED_ENABLED",
+        subset_env="WB_OBSERVED_SOURCES",
         retry_interval=timedelta(minutes=3),
         max_retry_interval=timedelta(minutes=30),
         model_label="MTG FCI L2 CTTH",

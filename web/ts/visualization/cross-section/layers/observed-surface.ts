@@ -25,9 +25,16 @@ const MARK_HALF_WIDTH_NM = 4;
 const FLASH_TICK_HEIGHT_PX = 9;
 const MAX_FLASH_TICKS = 4;
 
-/** dBZ → strip colour. Matches the server's overlay palette so the map and
- *  the cross-section cannot disagree about what 45 dBZ looks like. */
+/** dBZ → strip colour.
+ *
+ * Mirrors `_DBZ_STOPS` in `observed/imagery.py` stop for stop, so the map
+ * overlay and the cross-section strip cannot disagree about what a given
+ * reflectivity looks like. The 65 dBZ magenta was missing here while the
+ * server had it, so the most intense echo on the map rendered as ordinary red
+ * on the cross-section — the one case where the difference matters most.
+ * Keep the two lists in step. */
 export function echoColor(dbz: number): string {
+  if (dbz >= 65) return '#be3cbe';
   if (dbz >= 55) return '#e13c3c';
   if (dbz >= 45) return '#f08c28';
   if (dbz >= 35) return '#f0d23c';

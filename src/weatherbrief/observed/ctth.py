@@ -309,8 +309,8 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
 
         height, height_missing = _read_raw(dataset, "cloud_top_height", rows, cols)
         quality, quality_missing = _read_raw(dataset, "quality_method", rows, cols)
-        dlat, _ = _read_raw(dataset, "delta_latitude", rows, cols)
-        dlon, _ = _read_raw(dataset, "delta_longitude", rows, cols)
+        dlat, dlat_missing = _read_raw(dataset, "delta_latitude", rows, cols)
+        dlon, dlon_missing = _read_raw(dataset, "delta_longitude", rows, cols)
 
         valid = _valid_time(dataset, path)
         attribution = _attribution(dataset)
@@ -323,6 +323,15 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
     # failed retrieval — is `nodata`: the retrieval did not answer.
     clear = np.isclose(quality, 0.0) & ~quality_missing
     detected = ~np.isnan(height) & ~height_missing & ~clear
+    # A cloud top we cannot place is not a usable cloud top.  Parallax is not
+    # a refinement on this product — the uncorrected position is tens of km
+    # from the cloud — so a detection whose correction is missing would be
+    # drawn and sampled at a location it is not at.  Demote it to `nodata`:
+    # the retrieval did not give us an answer we can put on a map.  (Fill
+    # values are already NaN by this point; this covers the pixel where the
+    # height retrieval succeeded but the geometry correction did not.)
+    unplaceable = detected & (dlat_missing | dlon_missing | np.isnan(dlat) | np.isnan(dlon))
+    detected = detected & ~unplaceable
     nodata = ~clear & ~detected
     undetect = clear
 

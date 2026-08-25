@@ -48,6 +48,8 @@ class TestStaticFields:
         """An observed stream nobody enabled is absent, not shown as broken."""
         gated = [k for k, c in registry.SOURCE_REGISTRY.items() if c.env_gate]
         assert gated, "expected at least one env-gated source in the registry"
+        # Control BOTH axes — see the sibling test in test_freshness_sources.
+        monkeypatch.delenv("WB_OBSERVED_SOURCES", raising=False)
         monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
         assert not ({e.key for e in catalog.build(store=fresh_store)} & set(gated))
         monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")

@@ -156,7 +156,9 @@ def render_overlay(
 
     if stops is not None and not has_parallax:
         # Ground-projected product (radar): the pixel is already where it says
-        # it is, so a straight gather is correct.
+        # it is, so a straight gather is correct.  Skipped entirely on a
+        # parallax product — the scatter below supersedes it, and colourising
+        # the whole raster first would be pure waste.
         rgb = _colourise(np.nan_to_num(values, nan=-9999.0), stops)
         rgba[detected, :3] = rgb[detected]
         rgba[detected, 3] = DETECTION_ALPHA
@@ -228,19 +230,30 @@ def _scatter_parallax_detections(
         return
     out_rows, out_cols, values = out_rows[keep], out_cols[keep], values[keep]
 
-    # Lowest first, so where two tops land on the same output pixel the higher
-    # one wins — that is the answer the "can I get on top?" question needs.
-    order = np.argsort(values, kind="stable")
-    out_rows, out_cols, values = out_rows[order], out_cols[order], values[order]
-
-    rgb = _colourise(values, stops)
+    # Resolve overlaps by VALUE, into a max-buffer, rather than by paint order.
+    #
+    # Sorting the points and letting the last write win only settles two
+    # detections that land on the same *base* pixel.  Each detection also
+    # paints a block the size of its source pixel, and parallax displacement
+    # is height-dependent — so a low cloud and a high one land different
+    # distances apart and their blocks can overlap at different offsets.
+    # Painting those in loop order let whichever offset came last win,
+    # regardless of which cloud was higher, exactly where it matters most:
+    # the edge of a cell. `np.maximum.at` makes the highest top win every
+    # overlap by construction.
+    best = np.full((height, width), -np.inf, dtype=np.float64)
     block_rows, block_cols = _source_pixel_block(frame, bounds, height, width)
     for dr in range(block_rows):
         rows_d = np.clip(out_rows + dr, 0, height - 1)
         for dc in range(block_cols):
             cols_d = np.clip(out_cols + dc, 0, width - 1)
-            rgba[rows_d, cols_d, :3] = rgb
-            rgba[rows_d, cols_d, 3] = DETECTION_ALPHA
+            np.maximum.at(best, (rows_d, cols_d), values)
+
+    painted = np.isfinite(best)
+    if not painted.any():
+        return
+    rgba[painted, :3] = _colourise(best, stops)[painted]
+    rgba[painted, 3] = DETECTION_ALPHA
 
 
 def _source_pixel_block(

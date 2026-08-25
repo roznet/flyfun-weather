@@ -299,10 +299,34 @@ def test_all_tracked_sources_matches_registry():
         assert src.startswith(model + ":")
 
 
+def test_a_partial_deployment_does_not_track_the_sources_it_left_off(monkeypatch):
+    """The subset axis has to gate too, not just the all-off axis.
+
+    Radar without EUMETSAT credentials is the documented half-a-feature case.
+    Without this, the two satellite rows stay active, the loop probes a frame
+    store that will never hold them, and the help page shows a permanently red
+    row for a source nobody enabled — exactly what env_gate exists to prevent.
+    """
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_SOURCES", "opera_dbzh,opera_rate")
+    tracked = {s for s, _ in sources.all_tracked_sources()}
+    assert "opera_dbzh:eumetnet" in tracked
+    assert "opera_rate:eumetnet" in tracked
+    assert "eumetsat_li:eumetsat" not in tracked
+    assert "eumetsat_ctth:eumetsat" not in tracked
+
+    # Unset means "all of them", matching enabled_sources().
+    monkeypatch.delenv("WB_OBSERVED_SOURCES", raising=False)
+    assert "eumetsat_ctth:eumetsat" in {s for s, _ in sources.all_tracked_sources()}
+
+
 def test_env_gated_sources_are_not_tracked_until_enabled(monkeypatch):
     """The loop must not probe a collector the deployment never started."""
     gated = {k for k, c in SOURCE_REGISTRY.items() if c.env_gate}
     assert gated
+    # Control BOTH axes: a subset left in the ambient environment would keep
+    # some gated sources off and make this assert for the wrong reason.
+    monkeypatch.delenv("WB_OBSERVED_SOURCES", raising=False)
     monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
     assert not ({s for s, _ in sources.all_tracked_sources()} & gated)
     monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")

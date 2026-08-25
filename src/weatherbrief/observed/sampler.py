@@ -191,6 +191,13 @@ def sample(
         quality = None
         if is_tops:
             quality, _ = _gather(frame.aux["quality_method"], local_rows, local_cols, readable)
+            # A pixel can carry a method code and still have no usable height
+            # (or no usable parallax), in which case it is `nodata` and must
+            # not appear in the histogram — the counts would then exceed
+            # `detected_px` and stop adding up.  Clear-sky (code 0) is kept:
+            # it is `undetect`, a real observation, and the histogram is where
+            # "62% of this disc had no cloud" is legible.
+            quality = np.where(detected_px | undetect_px, quality, -1)
 
         annuli: list[ObservedAnnulus] = []
         for radius_nm in radii:

@@ -530,3 +530,25 @@ describe('observed layers actually draw', () => {
     expect(ctx.calls).toEqual([]);
   });
 });
+
+describe('echo palette', () => {
+  it('covers every server stop, including 65 dBZ', () => {
+    // The server's _DBZ_STOPS has six stops; the client had five, so the most
+    // intense echo on the map rendered as ordinary red on the cross-section.
+    const stops = [5, 20, 35, 45, 55, 65];
+    const colours = stops.map((dbz) => echoColor(dbz));
+    expect(new Set(colours).size).toBe(stops.length);
+    expect(echoColor(70)).toBe(echoColor(65));
+    expect(echoColor(65)).not.toBe(echoColor(55));
+  });
+
+  it('matches the server palette values', () => {
+    // Mirrors observed/imagery.py::_DBZ_STOPS exactly.
+    expect(echoColor(5)).toBe('#5aa0dc');
+    expect(echoColor(20)).toBe('#3cbe5a');
+    expect(echoColor(35)).toBe('#f0d23c');
+    expect(echoColor(45)).toBe('#f08c28');
+    expect(echoColor(55)).toBe('#e13c3c');
+    expect(echoColor(65)).toBe('#be3cbe');
+  });
+});

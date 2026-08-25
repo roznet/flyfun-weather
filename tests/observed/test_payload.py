@@ -269,3 +269,43 @@ def test_lightning_absence_is_stated_as_an_observation(tmp_path, li_path):
         quiet, store=store, now=NOW, sources=(SOURCE_EUMETSAT_LI,)
     )
     assert "Lightning: none within 20 NM" in conditions.summary
+
+
+def test_no_echo_is_never_asserted_from_mostly_blind_data(stocked_store):
+    """"No echo along the route" needs the coverage to back it.
+
+    The westbound leg runs into the fixture's no-radar half, so most of it is
+    unseen. Claiming the whole route is echo-free off the handful of covered
+    points would be the clear-versus-unknown conflation the payload exists to
+    prevent; the claim is scoped to what the radar can actually see.
+    """
+    westbound = RouteConfig(
+        name="LFAT-BLIND",
+        waypoints=[
+            Waypoint(icao="LFAT", name="Le Touquet", lat=50.517, lon=1.627),
+            Waypoint(icao="BLIND", name="Offshore", lat=50.517, lon=0.55),
+        ],
+    )
+    conditions = build_observed_conditions(
+        westbound, store=stocked_store, now=NOW, sources=(SOURCE_OPERA_DBZH,)
+    )
+    unscoped = [
+        line for line in conditions.summary_lines
+        if "no echo" in line and "along the route" in line
+    ]
+    assert not unscoped, conditions.summary_lines
+
+
+def test_a_detection_is_reported_even_from_a_poorly_covered_disc(stocked_store):
+    """A detection is positive evidence and must not be suppressed.
+
+    Coverage bounds what an ABSENCE can claim; it does not make a real echo
+    less real. Hiding a measured cell because the surrounding disc is patchy
+    would be strictly more dangerous than reporting it with a caveat.
+    """
+    conditions = build_observed_conditions(
+        ROUTE, store=stocked_store, now=NOW, sources=(SOURCE_OPERA_DBZH,)
+    )
+    peak = [line for line in conditions.summary_lines if "peak" in line]
+    assert peak, conditions.summary_lines
+    assert "dBZ" in peak[0]

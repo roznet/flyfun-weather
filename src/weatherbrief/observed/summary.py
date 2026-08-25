@@ -65,18 +65,42 @@ def build_summary(conditions: ObservedConditions) -> list[str]:
 
 
 def _reflectivity_clause(field: ObservedField | None, by_station, widest) -> str:
+    """Peak echo, or a coverage-scoped statement that there is none.
+
+    The two halves are asymmetric on purpose, because the evidence is:
+
+    * A **detection** is positive evidence and is reported wherever it is
+      found, including from a disc that is mostly ``nodata``.  The radar
+      genuinely saw that echo in the part it could see; suppressing it because
+      the surrounding disc is poorly covered would hide a real cell, which is
+      strictly more dangerous than reporting it.
+    * An **absence** is only as good as the coverage behind it.  "No echo
+      along the route" asserted off one covered point in fifty is the
+      clear-versus-unknown conflation this whole payload exists to prevent, so
+      the claim is scoped to the part of the route the radar can actually see.
+    """
     if field is None:
         return ""
     best = _peak(field, widest)
     if best is None or best[1].max_value is None or best[1].max_value < ECHO_MENTION_DBZ:
         looked = _stations_with_coverage(field, widest)
+        total = _station_count(field, widest)
         if looked == 0:
             return ""
-        return f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ along the route ({_age(field)})."
+        if looked == total:
+            return (
+                f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ along the "
+                f"route ({_age(field)})."
+            )
+        return (
+            f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ where the radar "
+            f"covers the route ({looked} of {total} points, {_age(field)})."
+        )
     station_id, annulus = best
+    caveat = " (partial radar coverage there)" if annulus.insufficient_coverage else ""
     return (
         f"Radar: peak {annulus.max_value:.0f} dBZ within {widest:.0f} NM of "
-        f"{_where(station_id, by_station)} ({_age(field)})."
+        f"{_where(station_id, by_station)}{caveat} ({_age(field)})."
     )
 
 
@@ -201,6 +225,15 @@ def _stations_with_coverage(field: ObservedField, widest: float) -> int:
         for station in field.stations
         for annulus in station.annuli
         if annulus.radius_nm == widest and not annulus.insufficient_coverage
+    )
+
+
+def _station_count(field: ObservedField, widest: float) -> int:
+    return sum(
+        1
+        for station in field.stations
+        for annulus in station.annuli
+        if annulus.radius_nm == widest
     )
 
 
