@@ -415,6 +415,30 @@ class TestMalformedValues:
         assert stats.inverted == 1
         assert stats.uninvertible == 0
 
+    def test_an_already_empty_entry_is_passed_through_not_deleted(self):
+        """The transform may only remove an entry IT emptied.
+
+        Both callers gate on ``stats.touched`` today, so the difference is
+        invisible — but "everything else is passed through untouched" is the
+        contract the migration's losslessness argument rests on, and a future
+        unconditional consumer would inherit a silent deletion (#571 review
+        round 9).
+        """
+        out, stats = rename_extent_params(
+            {"advisories": {"params": {"vmc_cruise": {}, "turbulence": {}}}}
+        )
+        assert out["advisories"]["params"] == {"vmc_cruise": {}, "turbulence": {}}
+        assert not stats.touched
+
+    def test_an_entry_this_pass_empties_is_still_removed(self):
+        """The other half of the rule: a fully-renamed entry leaves no husk."""
+        out, stats = rename_extent_params(
+            {"advisories": {"params": {"turbulence": {"route_pct_amber": 20}}}}
+        )
+        assert out["advisories"]["params"] == {
+            "turbulence": {"extent_pct_amber": 20}
+        }
+
     def test_a_non_dict_params_entry_is_left_alone(self):
         out, stats = rename_extent_params(
             {"advisories": {"params": {"vmc_cruise": "not-a-dict"}}}
