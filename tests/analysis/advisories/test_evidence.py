@@ -12,10 +12,13 @@ from weatherbrief.analysis.advisories._helpers import (
     EMPTY_EXTENT,
     EvidenceSample,
     FlaggedCell,
+    RouteExtent,
     format_extent,
+    grade_extent,
     route_extent,
     summarize_evidence,
 )
+from weatherbrief.models import AdvisoryStatus
 from weatherbrief.models import HighlightSeverity as S
 
 
@@ -275,3 +278,71 @@ class TestRouteExtent:
         assert route_extent([0.0], 0.0, [True]) == EMPTY_EXTENT
         assert format_extent(EMPTY_EXTENT) == "0nm"
         assert EMPTY_EXTENT.pct == 0.0
+
+
+class TestGradeExtent:
+    """The single coverage gate and its minimum-extent floor (#571 Stage 2)."""
+
+    def _ext(self, nm, domain_nm, longest_run_nm=None):
+        return RouteExtent(
+            points=0, domain_points=0, nm=nm, domain_nm=domain_nm,
+            longest_run_nm=longest_run_nm if longest_run_nm is not None else nm,
+        )
+
+    def test_bands_on_distance_share(self):
+        long_route = 600.0
+        assert grade_extent(self._ext(60.0, long_route), amber_pct=15) is AdvisoryStatus.GREEN
+        assert grade_extent(self._ext(100.0, long_route), amber_pct=15) is AdvisoryStatus.AMBER
+        assert grade_extent(
+            self._ext(200.0, long_route), amber_pct=15, red_pct=30,
+        ) is AdvisoryStatus.RED
+
+    def test_floor_is_inert_on_a_long_route(self):
+        # 30nm of 600 is 5% — the floor never gets a say; the gate does.
+        assert grade_extent(self._ext(30.0, 600.0), amber_pct=15) is AdvisoryStatus.GREEN
+        assert grade_extent(self._ext(30.0, 600.0), amber_pct=4) is AdvisoryStatus.AMBER
+
+    def test_floor_bites_on_a_short_route(self):
+        """The D4 case, in the units it was reported in.
+
+        Two flagged points on a ~120 nm route are 20 nm and clear a 15% gate
+        outright — the gate is ~5x more sensitive on a short flight than on a
+        long one, and a short flight is where a 20 nm band is most avoidable.
+        """
+        two_points = self._ext(20.0, 120.0)
+        assert two_points.pct > 15                     # would have promoted
+        assert grade_extent(two_points, amber_pct=15) is AdvisoryStatus.GREEN
+        # Three points clear the 30 nm floor and grade normally again.
+        assert grade_extent(self._ext(30.0, 120.0), amber_pct=15) is AdvisoryStatus.AMBER
+
+    def test_floor_never_suppresses_a_route_mostly_in_the_hazard(self):
+        """A floor may not exceed half the domain it measures.
+
+        Without the cap an absolute-nm gate would grade a 40 nm flight GREEN
+        however completely the weather covered it — the false-GREEN failure mode
+        (#391) coming back through the back door.
+        """
+        assert grade_extent(self._ext(40.0, 40.0), amber_pct=15) is AdvisoryStatus.AMBER
+        assert grade_extent(self._ext(20.0, 40.0), amber_pct=15) is AdvisoryStatus.AMBER
+        # Below half the domain the floor still bites on such a short route.
+        assert grade_extent(self._ext(8.0, 40.0), amber_pct=15) is AdvisoryStatus.GREEN
+
+    def test_min_run_gates_on_contiguity_not_the_union(self):
+        # 60nm of scattered cells, longest run 20nm: not a barrier.
+        scattered = self._ext(60.0, 600.0, longest_run_nm=20.0)
+        assert grade_extent(
+            scattered, amber_pct=5, min_run_nm=50,
+        ) is AdvisoryStatus.GREEN
+        barrier = self._ext(60.0, 600.0, longest_run_nm=60.0)
+        assert grade_extent(
+            barrier, amber_pct=5, min_run_nm=50,
+        ) is AdvisoryStatus.AMBER
+
+    def test_nothing_affected_is_green(self):
+        assert grade_extent(self._ext(0.0, 600.0), amber_pct=0) is AdvisoryStatus.GREEN
+        assert grade_extent(EMPTY_EXTENT, amber_pct=0) is AdvisoryStatus.GREEN
+
+    def test_floor_can_be_disabled(self):
+        assert grade_extent(
+            self._ext(20.0, 120.0), amber_pct=15, min_nm=0,
+        ) is AdvisoryStatus.AMBER

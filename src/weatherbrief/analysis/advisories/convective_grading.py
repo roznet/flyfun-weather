@@ -33,7 +33,7 @@ from weatherbrief.analysis.advisories._helpers import (
     EMPTY_EXTENT,
     FlaggedCell,
     RouteExtent,
-    pct_above_threshold,
+    grade_extent,
     route_extent,
 )
 from weatherbrief.analysis.sounding.convective import convective_cross_check
@@ -226,6 +226,15 @@ def grade_convective_model(
     # split this removes.
     affected_dists: list[float] = []
     affected_mod_dists: list[float] = []
+    # DD-trigger points, located rather than counted (#571). The #442 cap tests
+    # the coverage the model's OWN scheme produced, and subtracting a count from
+    # a count could only ever approximate that: the two populations are not
+    # interchangeable once the extent is measured in miles.
+    dd_trigger_dists: list[float] = []
+    # The grading denominator is points carrying a sounding (``total``), not the
+    # whole route — a model with no data at a point must not dilute the coverage
+    # of the points it does resolve (#391).
+    graded_dists: list[float] = []
     # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
     peak_key: tuple[int, float] | None = None
     peak_dist: float | None = None
@@ -242,6 +251,7 @@ def grade_convective_model(
             region_cells.append((dist, None))
             continue
         total += 1
+        graded_dists.append(dist)
 
         # Independent of the grade filters below: compare the chosen thermo
         # (CAPE-derived) risk against the model's own convective scheme. Use
@@ -338,6 +348,7 @@ def grade_convective_model(
                 risk_idx = MOD_IDX
                 reason = "dd_trigger"
                 dd_trigger_count += 1
+                dd_trigger_dists.append(dist)
             else:
                 # Below the min risk floor → GREEN on the ribbon (checked,
                 # nothing worth flagging here).
@@ -351,6 +362,7 @@ def grade_convective_model(
         # still read "dd_fallback" when the branch above did not relabel it.
         if reason == "dd_fallback":
             dd_trigger_count += 1
+            dd_trigger_dists.append(dist)
 
         # Skip if convective tops are well below cruise altitude. When the DD
         # floor raised the grade and the active (quiet NWP) track has no
@@ -477,6 +489,24 @@ def grade_convective_model(
             # needs told — see ``_peak_cross_check``.
             peak_fallback = nwp_fallback
 
+    # Both extents reduce over the SAME cell edges as the ribbon this grade
+    # carries, so the card's sentence, its highlight, the gate that set the
+    # colour and the published ``affected_nm`` are one measurement (#571).
+    all_dists = [d for d, _ in ribbon_points]
+    aff_set = set(affected_dists)
+    mod_set = set(affected_mod_dists)
+    dd_set = set(dd_trigger_dists)
+    graded_set = set(graded_dists)
+    graded_flags = [d in graded_set for d in all_dists]
+    extent = route_extent(
+        all_dists, ctx.total_distance_nm,
+        [d in aff_set for d in all_dists], graded_flags,
+    )
+    extent_mod = route_extent(
+        all_dists, ctx.total_distance_nm,
+        [d in mod_set for d in all_dists], graded_flags,
+    )
+
     # --- colour ---
     if total == 0:
         status = AdvisoryStatus.UNAVAILABLE
@@ -486,8 +516,8 @@ def grade_convective_model(
         # HIGH/EXTREME anywhere → RED.
         status = AdvisoryStatus.RED
     else:
-        status = pct_above_threshold(
-            affected, total, affected_pct_amber, affected_pct_red
+        status = grade_extent(
+            extent, amber_pct=affected_pct_amber, red_pct=affected_pct_red,
         )
         if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
             status = AdvisoryStatus.AMBER
@@ -497,9 +527,15 @@ def grade_convective_model(
         # crossing the red threshold). If the red is crossed only because of
         # DD-trigger extent, cap AMBER.
         if status == AdvisoryStatus.RED and dd_trigger_count > 0:
-            real_mod = affected - dd_trigger_count
-            if pct_above_threshold(
-                real_mod, total, affected_pct_amber, affected_pct_red
+            native_extent = route_extent(
+                all_dists,
+                ctx.total_distance_nm,
+                [d in aff_set and d not in dd_set for d in all_dists],
+                graded_flags,
+            )
+            if grade_extent(
+                native_extent,
+                amber_pct=affected_pct_amber, red_pct=affected_pct_red,
             ) != AdvisoryStatus.RED:
                 status = AdvisoryStatus.AMBER
         # #442: any MODERATE+ convection that reaches cruise is at least a
@@ -511,19 +547,6 @@ def grade_convective_model(
         # unsurfaced. Floor a MODERATE+ point at AMBER.
         if affected_mod > 0 and status == AdvisoryStatus.GREEN:
             status = AdvisoryStatus.AMBER
-
-    # Both extents reduce over the SAME cell edges as the ribbon this grade
-    # carries, so the card's sentence, its highlight and the published
-    # ``affected_nm`` are one measurement (#571).
-    all_dists = [d for d, _ in ribbon_points]
-    aff_set = set(affected_dists)
-    mod_set = set(affected_mod_dists)
-    extent = route_extent(
-        all_dists, ctx.total_distance_nm, [d in aff_set for d in all_dists],
-    )
-    extent_mod = route_extent(
-        all_dists, ctx.total_distance_nm, [d in mod_set for d in all_dists],
-    )
 
     return ConvectiveModelGrade(
         model=model,

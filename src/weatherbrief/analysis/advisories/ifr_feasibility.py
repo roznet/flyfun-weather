@@ -16,6 +16,7 @@ from weatherbrief.analysis.advisories._helpers import (
     driving_method_id,
     RouteExtent,
     format_extent,
+    grade_extent,
     route_extent,
     hazardous_icing_zones,
     min_icing_clearance,
@@ -178,11 +179,18 @@ def _check_enroute_hazards(
     icing_cells: list[tuple[float, FlaggedCell | None]] = []
     icing_flags: list[bool] = []
     union_flags: list[bool] = []
+    # Denominators (#391): the icing axis speaks only for points where the
+    # active icing method could run; the composite's union axis for points with
+    # a sounding.
+    icing_assessed: list[bool] = []
+    sounding_flags: list[bool] = []
 
     for idx, rpa in enumerate(ctx.analyses):
         dist = rpa.distance_from_origin_nm or 0.0
         icing_flags.append(False)
         union_flags.append(False)
+        icing_assessed.append(False)
+        sounding_flags.append(False)
         # Index-aligned with the grade (both walk ctx.analyses in order and
         # always append exactly one entry per point).
         conv_cell = conv_grade.region_cells[idx][1]
@@ -201,9 +209,11 @@ def _check_enroute_hazards(
         # native cloud envelope): then its empty icing_zones is absent data, not
         # "no icing". Assess icing only when it could run, and keep a separate
         # denominator so absent icing never dilutes toward a clear grade (#391).
+        sounding_flags[-1] = True
         icing_available = sounding.active_icing_available
         if icing_available:
             icing_total += 1
+            icing_assessed[-1] = True
         # Only zones the pilot would actually meet: an Ogimet zone at risk NONE
         # is the method reporting "assessed, no icing", and counting it made this
         # composite flag — and go RED on — icing that does not exist.
@@ -253,8 +263,12 @@ def _check_enroute_hazards(
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
     dists = [rpa.distance_from_origin_nm or 0.0 for rpa in ctx.analyses]
-    icing_extent = route_extent(dists, ctx.total_distance_nm, icing_flags)
-    affected_extent = route_extent(dists, ctx.total_distance_nm, union_flags)
+    icing_extent = route_extent(
+        dists, ctx.total_distance_nm, icing_flags, icing_assessed,
+    )
+    affected_extent = route_extent(
+        dists, ctx.total_distance_nm, union_flags, sounding_flags,
+    )
     return (
         icing_total, affected, icing_count, ribbon_points, icing_cells,
         icing_extent, affected_extent,
@@ -417,11 +431,10 @@ class IFRFeasibilityEvaluator:
                 # contributes UNAVAILABLE (ignored by `worst`) instead of GREEN.
                 icing_status = AdvisoryStatus.UNAVAILABLE
             elif icing_total > 0 and icing_count > 0:
-                icing_pct = 100.0 * icing_count / icing_total
-                if icing_pct >= icing_pct_red:
-                    icing_status = AdvisoryStatus.RED
-                elif icing_pct >= icing_pct_amber:
-                    icing_status = AdvisoryStatus.AMBER
+                icing_status = grade_extent(
+                    icing_extent,
+                    amber_pct=icing_pct_amber, red_pct=icing_pct_red,
+                )
                 if icing_status != AdvisoryStatus.GREEN:
                     icing_detail = adv_t(
                         "ifr.icing_over", loc,

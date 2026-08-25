@@ -16,7 +16,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     format_extent,
-    pct_above_threshold,
+    grade_extent,
     route_extent,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -176,10 +176,12 @@ class DDvsNWPAgreementEvaluator:
             # the midpoint-owned-cell sum of the disagreeing points, not the
             # route length scaled by a point ratio.
             dists: list[float] = []
+            comparable_flags: list[bool] = []
             disagree_flags: list[bool] = []
 
             for rpa in ctx.analyses:
                 dists.append(rpa.distance_from_origin_nm or 0.0)
+                comparable_flags.append(False)
                 disagree_flags.append(False)
                 sounding = rpa.sounding.get(model)
                 if sounding is None or sounding.indices is None:
@@ -229,13 +231,16 @@ class DDvsNWPAgreementEvaluator:
                     continue
 
                 total += 1
+                comparable_flags[-1] = True
                 if disagreements:
                     disagree_points += 1
                     disagree_flags[-1] = True
                     for cat in disagreements:
                         categories_triggered[cat] = categories_triggered.get(cat, 0) + 1
 
-            extent = route_extent(dists, ctx.total_distance_nm, disagree_flags)
+            extent = route_extent(
+                dists, ctx.total_distance_nm, disagree_flags, comparable_flags,
+            )
 
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -244,8 +249,8 @@ class DDvsNWPAgreementEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = "DD and NWP tracks agree"
             else:
-                status = pct_above_threshold(
-                    disagree_points, total, amber_pct, red_pct,
+                status = grade_extent(
+                    extent, amber_pct=amber_pct, red_pct=red_pct,
                 )
                 top_cat = max(categories_triggered, key=categories_triggered.get)
                 detail = f"{top_cat} track diverges over {format_extent(extent)}"

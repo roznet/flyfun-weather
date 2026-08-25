@@ -761,7 +761,18 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
   light-and-above coverage.
 - **Contiguity is a reducer on the same geometry**, not a separate function:
   `longest_run_nm` for barrier-type hazards ("you cannot get around it") sits on
-  the same object as the union `nm`.
+  the same object as the union `nm`. Both the convective-character EMBEDDED gate
+  (`embed_min_nm`) and the VFR terminal-deck corridor tip read it.
+- **Coverage may not promote below the minimum-extent floor** (`EXTENT_MIN_NM`,
+  30 nm — about three points at `interpolate_route`'s fixed 10 nm spacing,
+  expressed in the unit that survives a change of route length). Deliberate
+  severe-hazard bypasses live in the evaluators and are unaffected. The floor is
+  capped at half the domain so it can never suppress a short route that is
+  largely in the hazard.
+- **The denominator is what the model could grade** — in-domain *and* assessed.
+  Unassessable points are excluded (#391: two snowing points among eight blanks
+  read as snow, not as 20% of a route the model never saw), and thinness is
+  reported separately by `below_coverage` → UNAVAILABLE.
 - **`format_extent` takes the `RouteExtent`**, never counts. This is what makes
   the sentence and the published `affected_nm` one number rather than two
   derivations of it.
@@ -778,7 +789,7 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
 - **`icing_zones_in_altitude_range(zones, floor_ft, ceiling_ft)`** → filter zones overlapping an altitude band. Called with `[0, cruise + buffer]` by IFR feasibility, icing escape, and FIKI to ignore icing far above cruise altitude
 - **`apply_airport_endpoints(ribbon_points, dep_status, arr_status)`** → worst-merge the departure/arrival airport status into the first/last ribbon point, in place. The airport axis of a composite has no en-route extent, so it colours only the endpoints; GREEN/UNAVAILABLE leave the ribbon alone. Shared by both feasibility composites (#375)
 - **`min_icing_clearance(zones, cruise_altitude_ft)`** → minimum vertical distance (ft) from cruise to nearest icing zone. Used by FIKI evaluator
-- **`pct_above_threshold(affected, total, amber_pct, red_pct)`** → common GREEN/AMBER/RED from percentage
+- **`grade_extent(ext, amber_pct=, red_pct=None, min_nm=EXTENT_MIN_NM, min_run_nm=None, min_minutes=None)`** → the single coverage gate. Distance-based, and it applies the **minimum-extent floor** (30 nm, capped at half the domain) before coverage may promote anything. `min_run_nm` gates on `longest_run_nm` instead of the union, for barrier-type hazards. Replaced `pct_above_threshold`, which is gone rather than kept as a trap
 - **`terrain_at_distance(elevation, distance_nm)`** → binary search + linear interpolation for terrain altitude
 - **`max_terrain_near_point(elevation, distance_nm, radius_nm=5)`** → peak elevation within radius
 - **`wind_at_altitude(cross_sections, model, point_index, target_alt_ft, target_time)`** → wind at the pressure level nearest a target altitude, for the hourly forecast nearest `target_time` (not the first hour — matters on multi-hour legs). Delegates the level pick to `analysis/wind.py:pick_wind_at_pressure`
@@ -936,7 +947,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - Evaluator exceptions are caught and logged — one failure doesn't break the whole advisory set. The failed evaluator is not dropped: the registry appends an explicit UNAVAILABLE `RouteAdvisoryResult` with a localized diagnostic `aggregate_detail` (via `adv_t("evaluation_failed", …)`), so a crash reads as "could not assess", never as a silently-absent "not a concern" (#391)
 - `ModelAgreementEvaluator` has `per_model=["all"]` (not actual model names) since it's cross-model
 - `format_extent` renders `"0nm"` when the extent has no domain (nothing measurable)
-- The percentage `format_extent` prints is **distance-based**, while `ModelAdvisoryResult.affected_pct` is still the **point** ratio — they differ by a point or two on an unevenly spaced route. Aggregate lines that summarise several models must therefore use `coverage_pct` / `coverage_mod_pct` (the distance form) so a headline and the per-model sentences under it stay one measurement
+- Every percentage in the system is **distance-based** — `format_extent`'s, `grade_extent`'s and `ModelAdvisoryResult.affected_pct` — and they are the same number by construction. A point ratio anywhere is a bug
 - `wind_at_altitude` picks the level via `pick_wind_at_pressure` and the hour via `at_time` — don't reintroduce a "first hourly" shortcut, it lags the route point's valid time on long legs
 
 ## References

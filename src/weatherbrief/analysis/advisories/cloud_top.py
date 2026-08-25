@@ -8,7 +8,7 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     driving_method_id,
     format_extent,
-    pct_above_threshold,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -155,7 +155,9 @@ class CloudTopEvaluator:
                 else:
                     detail = adv_t("cloud_top.no_layers", loc)
             else:
-                status = pct_above_threshold(above_ceiling, total, pct_amber, red_pct=60)
+                status = grade_extent(
+                    summary.extent, amber_pct=pct_amber, red_pct=60,
+                )
                 ext = format_extent(summary.extent)
                 detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
 

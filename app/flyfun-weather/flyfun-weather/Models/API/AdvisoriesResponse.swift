@@ -35,6 +35,15 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     let affectedPct: Double
     let affectedNm: Double
     let totalNm: Double
+    /// The extent's own denominator in nm (#571). Equals `totalNm` for every
+    /// advisory whose domain is the whole route. Optional so old packs decode.
+    let domainNm: Double?
+    /// Names a denominator that is NOT the whole route ("of high terrain"); nil
+    /// means the route. Any UI showing `affectedPct` MUST qualify it with this
+    /// — Mountain Wind measures coverage over the route's mountain points, and
+    /// an unqualified "93% affected" read as route coverage for a 132 nm
+    /// footprint on a 582 nm route.
+    let affectedDomain: String?
     /// Display-only context explaining a grade (e.g. high CAPE while NWP scheme is
     /// quiet). Present mainly for convective; nil otherwise. Per `CROSS_CHECK_NOTE`
     /// this is an EXPLAINER, never an alert — render in neutral chrome, never amber/red.

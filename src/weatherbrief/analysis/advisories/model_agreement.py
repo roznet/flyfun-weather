@@ -6,7 +6,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     format_extent,
-    pct_above_threshold,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -135,7 +135,10 @@ class ModelAgreementEvaluator:
             status = AdvisoryStatus.GREEN
             detail = adv_t("model_agreement.good", loc)
         else:
-            status = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
+            status = grade_extent(
+                summary.extent,
+                amber_pct=poor_pct_amber, red_pct=poor_pct_red,
+            )
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
                 detail = adv_t(
                 "model_agreement.mostly_good", loc,
