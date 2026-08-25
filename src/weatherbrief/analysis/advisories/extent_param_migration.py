@@ -158,7 +158,7 @@ def rename_extent_params(settings: dict) -> tuple[dict, RenameStats]:
                 stats.dropped_shadowed += 1
                 continue
             if old in inverted:
-                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                if not _invertible(value):
                     # ``ProfileSettings.advisories`` is an untyped dict, so a
                     # non-numeric value can reach here. Carry it across under the
                     # new name rather than raising: an unconvertible value is one
@@ -180,6 +180,65 @@ def rename_extent_params(settings: dict) -> tuple[dict, RenameStats]:
             stats.per_advisory[adv_id] = stats.per_advisory.get(adv_id, 0) + 1
         if not params:
             adv["params"].pop(adv_id, None)
+
+    return out, stats
+
+
+def _invertible(value: object) -> bool:
+    """True when a stored value can take the ``100 - value`` polarity flip.
+
+    ``bool`` is excluded deliberately: ``isinstance(True, int)`` is True in
+    Python, so ``100 - True`` would store a plausible-looking 99.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def revert_extent_params(settings: dict) -> tuple[dict, RenameStats]:
+    """Inverse of :func:`rename_extent_params` — what migration 093 downgrades to.
+
+    Lives here beside the forward transform, and is what the migration's
+    ``downgrade()`` calls, so the two directions cannot drift and the tests
+    exercise the real code rather than a hand-copied mirror of it (#571 review).
+
+    Carries the same non-numeric guard as the forward direction: an unconvertible
+    value is carried across un-inverted rather than raising, because a raise
+    would roll back the downgrade for every profile in the table, not just the
+    offending one.
+
+    Two edges, neither of which loses a graded value. A profile that held both an
+    old and a new key had the old one dropped as shadowed on upgrade, so a single
+    key comes back rather than the redundant pair. And ``icing_escape`` maps two
+    old names onto one new one, so a profile that stored only a secondary alias
+    returns under the primary name — the value round-trips exactly, but a DB diff
+    shows a key rename rather than a pure revert.
+    """
+    out = copy.deepcopy(settings)
+    stats = RenameStats()
+
+    adv = out.get("advisories")
+    if not isinstance(adv, dict) or not isinstance(adv.get("params"), dict):
+        return out, stats
+
+    for adv_id, renames in EXTENT_KEY_RENAMES.items():
+        params = adv["params"].get(adv_id)
+        if not isinstance(params, dict):
+            continue
+        inverted = INVERTED_PCT_KEYS.get(adv_id, set())
+        secondary = SECONDARY_ALIASES.get(adv_id, set())
+        for old, new in renames.items():
+            # Only the primary old name can be restored; see the docstring.
+            if old in secondary or new not in params:
+                continue
+            value = params.pop(new)
+            if old in inverted:
+                if _invertible(value):
+                    value = 100.0 - value
+                    stats.inverted += 1
+                else:
+                    stats.uninvertible += 1
+            params[old] = value
+            stats.renamed += 1
+            stats.per_advisory[adv_id] = stats.per_advisory.get(adv_id, 0) + 1
 
     return out, stats
 

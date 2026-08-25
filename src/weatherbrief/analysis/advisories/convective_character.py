@@ -20,7 +20,6 @@ from typing import NamedTuple
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
-    EMPTY_EXTENT,
     RouteExtent,
     format_extent,
     route_extent,
