@@ -198,7 +198,7 @@ class VMCCruiseEvaluator:
                 # branch grades and prints rides the higher-threshold field, so
                 # the published object and the sentence agree.
                 affected_mod=ovc_count,
-                affected_mod_nm=ovc_extent.nm,
+                extent_mod=ovc_extent,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),
             ))

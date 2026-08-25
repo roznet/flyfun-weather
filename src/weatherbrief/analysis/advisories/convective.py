@@ -213,7 +213,7 @@ class ConvectiveEvaluator:
                 total_distance_nm=ctx.total_distance_nm,
                 affected_mod=affected_mod,
                 extent=grade.extent,
-                affected_mod_nm=grade.extent_mod.nm,
+                extent_mod=grade.extent_mod,
                 cross_check=cross_check,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),

@@ -22,7 +22,6 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     RouteExtent,
     format_extent,
-    route_extent,
     showers_at_point,
 )
 from weatherbrief.analysis.advisories.registry import register
