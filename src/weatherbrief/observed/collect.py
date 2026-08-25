@@ -30,7 +30,6 @@ import os
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import requests
 
@@ -38,7 +37,6 @@ from .ctth import CTTH_COLLECTION, LI_COLLECTION
 from .frames import (
     ALL_SOURCES,
     SOURCE_EUMETSAT_CTTH,
-    SOURCE_EUMETSAT_LI,
     SOURCE_OPERA_DBZH,
     SOURCE_OPERA_RATE,
     SOURCE_SPECS,

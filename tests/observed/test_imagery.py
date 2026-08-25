@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
 
 import numpy as np
-import pytest
 
 from weatherbrief.observed import ctth, opera
 from weatherbrief.observed.grid import GridWindow

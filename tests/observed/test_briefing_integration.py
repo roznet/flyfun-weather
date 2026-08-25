@@ -12,8 +12,6 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-import pytest
-
 from weatherbrief.models.analysis import RouteConfig, Waypoint
 from weatherbrief.models.observations import RouteObservations
 from weatherbrief.models.observed import (

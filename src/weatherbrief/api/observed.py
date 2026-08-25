@@ -27,7 +27,7 @@ user.  Nothing here is user-specific, but none of it is public either.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -44,7 +44,7 @@ from weatherbrief.observed.frames import (
     SOURCE_SPECS,
     FrameStore,
 )
-from weatherbrief.observed.grid import GridWindow, compute_window
+from weatherbrief.observed.grid import compute_window
 from weatherbrief.observed.imagery import OverlayBounds, legend_for, render_overlay
 
 logger = logging.getLogger(__name__)
