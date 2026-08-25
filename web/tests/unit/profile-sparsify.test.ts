@@ -147,3 +147,18 @@ describe('renameExtentParams', () => {
     expect(renameExtentParams(raw)).toEqual(raw);
   });
 });
+
+describe('renameExtentParams — malformed values', () => {
+  it('carries a non-numeric fiki value across instead of producing NaN', () => {
+    // The server-side migration preserves an unconvertible value verbatim; the
+    // client must not diverge into NaN on the one path both sides exist to
+    // handle (#571 review).
+    expect(renameExtentParams({ fiki_icing: { clear_cruise_amber_pct: 'eighty' as unknown as number } }))
+      .toEqual({ fiki_icing: { extent_pct_amber: 'eighty' } });
+  });
+
+  it('still inverts a normal numeric value', () => {
+    expect(renameExtentParams({ fiki_icing: { clear_cruise_amber_pct: 70 } }))
+      .toEqual({ fiki_icing: { extent_pct_amber: 30 } });
+  });
+});

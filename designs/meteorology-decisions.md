@@ -3879,7 +3879,9 @@ messages had already moved to distance. Stage 2 collapses the two.
 Twenty-four catalog keys across thirteen advisories expressed one idea, including
 a generic pair in either word order (`amber_pct` and `pct_amber`, in *different*
 advisories) and one pair of inverted polarity. They are now
-`extent_pct_amber` / `extent_pct_red` / `extent_min_nm`.
+`extent_pct_amber` / `extent_pct_red` / `extent_min_nm`. That census counts the
+problem; the rename map covers twelve advisories, `convective_character`'s three
+keys being deliberately excluded (see below).
 
 **Consolidation is of shape and semantics, not of values.** Each advisory keeps
 declaring its own default — `vfr_feasibility` at 15/30, `convective` at 20/50,

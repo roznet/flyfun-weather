@@ -5,6 +5,11 @@ much of the route counts as a lot" — and became ``extent_pct_amber`` /
 ``extent_pct_red`` / ``extent_min_nm``, each advisory still declaring its own
 default. Stored profiles key on the OLD names, so they must be rewritten.
 
+(The census counts the *problem*: thirteen advisories, twenty-four keys.
+``EXTENT_KEY_RENAMES`` below covers twelve — ``convective_character``'s three
+are deliberately excluded, being band boundaries and a contiguous-run floor
+rather than an amber/red pair.)
+
 **Why this cannot be left to sparsify.** ``profile_sparsify`` deliberately keeps
 any key it cannot prove is a default (*"we never delete a value we cannot prove
 is a default"*). After the rename the old keys are simply *unknown* keys, so the
