@@ -468,6 +468,7 @@ class ModelAdvisoryResult(BaseModel):
         # geometry-accurate ``affected_nm`` (midpoint-owned cells of the affected
         # points); it stays consistent because it counts the same samples that
         # produced ``affected``. Absent it, we fall back to the proportion.
+        degenerate_pct: float | None = None
         proportional_nm = round(total_distance_nm * affected / total, 1) if total > 0 else 0
         proportional_mod_nm = (
             round(total_distance_nm * mod / total, 1) if total > 0 else 0
@@ -475,10 +476,21 @@ class ModelAdvisoryResult(BaseModel):
         # ``extent`` fills both halves at once; explicit kwargs still win so a
         # composite can publish a different population deliberately.
         if extent is not None:
-            if affected_nm is None:
-                affected_nm = extent.nm
-            if domain_nm is None:
-                domain_nm = extent.domain_nm
+            if not extent.distance_known:
+                # A zero-length route's nm figures are synthetic scaffolding
+                # that exists only to keep the RATIO measurable. Publishing them
+                # would put `domain_nm: 400` beside `total_nm: 0` on the MCP and
+                # LLM surfaces — actively misleading rather than imprecise
+                # (#571 review round 6). Publish no miles; the percentage below
+                # is still the real one, taken from the extent.
+                affected_nm = 0.0 if affected_nm is None else affected_nm
+                domain_nm = 0.0 if domain_nm is None else domain_nm
+                degenerate_pct = extent.pct
+            else:
+                if affected_nm is None:
+                    affected_nm = extent.nm
+                if domain_nm is None:
+                    domain_nm = extent.domain_nm
         resolved_nm = (
             round(affected_nm, 1) if affected_nm is not None else proportional_nm
         )
@@ -495,7 +507,10 @@ class ModelAdvisoryResult(BaseModel):
             detail=detail,
             affected_points=affected,
             total_points=total,
-            affected_pct=_pct(resolved_nm, resolved_domain_nm),
+            affected_pct=(
+                round(degenerate_pct, 1) if degenerate_pct is not None
+                else _pct(resolved_nm, resolved_domain_nm)
+            ),
             affected_nm=resolved_nm,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,

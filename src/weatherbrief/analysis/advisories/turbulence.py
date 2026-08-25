@@ -161,11 +161,21 @@ class TurbulenceEvaluator:
                             # hazard. It still floors the advisory at AMBER
                             # below, and still goes RED once it covers enough
                             # of the route.
+                            # ``point_severe`` tags the point for the SEVERE
+                            # *extent*, which must cover every severe-at-cruise
+                            # point — boundary-layer included, since ``worst_cat``
+                            # counts those too and the sentence therefore says
+                            # "SEVERE". Tagging only free-atmosphere severe made
+                            # a BL-severe route read "SEVERE over <MODERATE+
+                            # extent>", the D1 defect in a second path (#571
+                            # review round 6). Only the RED *bypass* is
+                            # free-atmosphere-only (#533), and that is
+                            # ``has_severe``, which is unchanged.
+                            point_severe = True
                             if layer.boundary_layer:
                                 has_bl_severe = True
                             else:
                                 has_severe = True
-                                point_severe = True
                     # Highlight geometry: severe counts anywhere in the
                     # column, moderate only when it overlaps cruise.
                     if layer.risk == CATRiskLevel.SEVERE:
@@ -283,16 +293,20 @@ class TurbulenceEvaluator:
                 # quoting the any-risk union describes two different populations
                 # in one sentence. LIGHT (and the no-CAT strong-updraft case)
                 # legitimately quotes the any-risk extent — that IS its tier.
-                names_a_higher_tier = worst_cat not in (
-                    CATRiskLevel.NONE, CATRiskLevel.LIGHT,
-                )
-                tier_ext = ext_significant if names_a_higher_tier else ext
-                # LIGHT (and the no-CAT strong-updraft case) names the any-risk
-                # union, which IS ``affected_nm`` — there is no narrower tier to
-                # publish, so the higher-threshold field stays empty rather than
-                # duplicating the primary extent.
-                if names_a_higher_tier:
+                # Quote the extent of the tier the label names, exactly. A
+                # SEVERE label must not borrow the MODERATE+ union's number.
+                if worst_cat == CATRiskLevel.SEVERE:
+                    tier_extent = severe_extent
+                    tier_ext = ext_severe
+                elif worst_cat not in (CATRiskLevel.NONE, CATRiskLevel.LIGHT):
                     tier_extent = significant_extent
+                    tier_ext = ext_significant
+                else:
+                    # LIGHT (and the no-CAT strong-updraft case) names the
+                    # any-risk union, which IS ``affected_nm`` — no narrower tier
+                    # to publish, so the higher-threshold field stays empty
+                    # rather than duplicating the primary extent.
+                    tier_ext = ext
                 detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=tier_ext)
 
             # Coverage tolerance (#391): a smooth verdict from soundings-with-vm at

@@ -58,6 +58,20 @@ class TestBuildCallShape:
             f"silently defaults to the whole route: {offenders}"
         )
 
+    def test_no_evaluator_publishes_a_mod_nm_without_a_mod_count(self):
+        """The higher-threshold pair travels together too.
+
+        `affected_mod_nm` has the same failure shape the primary extent had:
+        published alone it becomes a percentage over a denominator nothing
+        measured. All callers pass both today; this keeps it that way.
+        """
+        offenders = [
+            f"{name}:{line}"
+            for name, line, kw in _build_calls()
+            if "affected_mod_nm" in kw and "affected_mod" not in kw
+        ]
+        assert not offenders, offenders
+
     def test_the_advisory_package_still_has_build_calls_to_check(self):
         """Guards the guard: a refactor that renamed `build` would make the
         audit above vacuously pass."""

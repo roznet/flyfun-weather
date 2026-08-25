@@ -175,9 +175,7 @@ def downgrade() -> None:
       will show it as a key rename rather than a pure revert.
     """
     from weatherbrief.analysis.advisories.extent_param_migration import (
-        EXTENT_KEY_RENAMES,
-        INVERTED_PCT_KEYS,
-        SECONDARY_ALIASES,
+        revert_extent_params,
     )
 
     conn = op.get_bind()
@@ -186,36 +184,25 @@ def downgrade() -> None:
     ).fetchall()
 
     restored = 0
+    skipped: list[int] = []
     for row_id, raw in rows:
-        settings = json.loads(raw) if raw else {}
-        adv = settings.get("advisories")
-        if not isinstance(adv, dict) or not isinstance(adv.get("params"), dict):
+        # Same per-row isolation and non-numeric guard as upgrade(): one
+        # malformed profile must not roll back the reversal for every other one
+        # (#571 review).
+        try:
+            settings = json.loads(raw) if raw else {}
+            new_settings, stats = revert_extent_params(settings)
+        except Exception as exc:  # noqa: BLE001 - one bad row must not fail the rest
+            skipped.append(row_id)
+            print(f"[093] downgrade SKIPPED profile {row_id}: {type(exc).__name__}: {exc}")
             continue
-        changed = False
-        for adv_id, renames in EXTENT_KEY_RENAMES.items():
-            params = adv["params"].get(adv_id)
-            if not isinstance(params, dict):
-                continue
-            inverted = INVERTED_PCT_KEYS.get(adv_id, set())
-            secondary = SECONDARY_ALIASES.get(adv_id, set())
-            # Reverse map, skipping the secondary aliases: an advisory maps two
-            # old names onto one new one, and only the primary can be restored.
-            # Scoped by advisory — ``route_pct_amber`` is a secondary alias for
-            # icing_escape and the primary for turbulence.
-            for old, new in renames.items():
-                if old in secondary:
-                    continue
-                if new not in params:
-                    continue
-                value = params.pop(new)
-                params[old] = 100.0 - value if old in inverted else value
-                changed = True
-                restored += 1
-        if changed:
-            conn.execute(
-                sa.text(
-                    "UPDATE flight_profiles SET settings_json = :s WHERE id = :id"
-                ),
-                {"s": json.dumps(settings), "id": row_id},
-            )
+        if not stats.touched:
+            continue
+        restored += stats.renamed
+        conn.execute(
+            sa.text("UPDATE flight_profiles SET settings_json = :s WHERE id = :id"),
+            {"s": json.dumps(new_settings), "id": row_id},
+        )
+    if skipped:
+        print(f"[093] downgrade: {len(skipped)} profile(s) SKIPPED: {skipped}")
     print(f"[093] downgrade restored {restored} pre-consolidation keys")
