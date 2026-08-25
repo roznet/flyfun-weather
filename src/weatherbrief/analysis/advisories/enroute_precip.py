@@ -123,7 +123,6 @@ def classify_enroute_precip(
 
     total = 0
     snow_pts = 0           # any snow/mixed, any intensity
-    snow_moderate_pts = 0  # snow/mixed at moderate+
     sig_rain_pts = 0       # rain moderate+ — and FZRA/PL (vis extent only)
     light_pts = 0          # light rain — comfort, not a hazard
     has_signal = False
@@ -167,7 +166,6 @@ def classify_enroute_precip(
             snow_pts += 1
             snow_flags[-1] = True
             if cls == "snow_moderate":
-                snow_moderate_pts += 1
                 snow_mod_flags[-1] = True
         elif cls == "sig":
             sig_rain_pts += 1
@@ -364,7 +362,7 @@ class EnroutePrecipEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
                 highlights=highlights,
             ))
 

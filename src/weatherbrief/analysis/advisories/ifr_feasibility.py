@@ -571,7 +571,7 @@ class IFRFeasibilityEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=affected_extent.nm,
+                extent=affected_extent,
                 highlights=highlights,
                 primary_method_id=primary_method_id,
             ))

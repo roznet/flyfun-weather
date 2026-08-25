@@ -128,6 +128,19 @@ DEFAULT_CRUISE_TAS_KT = 110.0
 _MIN_REPORTABLE_MINUTES = 3.0
 
 
+def headwind_component(
+    speed_kt: float, direction_deg: float, track_deg: float
+) -> float:
+    """Along-track wind component: positive = headwind, negative = tailwind.
+
+    Shared by the trip-time advisory and the extent time axis (#571) so both
+    resolve the same component the same way.
+    """
+    import math
+
+    return speed_kt * math.cos(math.radians(direction_deg - track_deg))
+
+
 def resolve_cruise_tas(ctx: RouteContext) -> float:
     """Cruise TAS (kt) for a time estimate — always returns a value.
 

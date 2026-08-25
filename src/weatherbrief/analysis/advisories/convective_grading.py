@@ -229,17 +229,23 @@ def grade_convective_model(
     # needs its own midpoint-cell reduction — deriving the MODERATE+ nm as a
     # share of the union's is exactly the "45% in the string, 68.8% in the JSON"
     # split this removes.
-    affected_dists: list[float] = []
-    affected_mod_dists: list[float] = []
+    # Index-aligned with ``ribbon_points`` (one entry per route point), the same
+    # shape every other evaluator in #571 uses. Deliberately NOT sets of raw
+    # distance floats: two route points can share a distance (a repeated
+    # waypoint), and membership-testing by value would then mark a clean point
+    # affected because its twin was — silently overstating the extent instead of
+    # measuring the point (#571 review).
+    affected_flags: list[bool] = []
+    mod_flags: list[bool] = []
     # DD-trigger points, located rather than counted (#571). The #442 cap tests
     # the coverage the model's OWN scheme produced, and subtracting a count from
     # a count could only ever approximate that: the two populations are not
     # interchangeable once the extent is measured in miles.
-    dd_trigger_dists: list[float] = []
+    dd_flags: list[bool] = []
     # The grading denominator is points carrying a sounding (``total``), not the
     # whole route — a model with no data at a point must not dilute the coverage
     # of the points it does resolve (#391).
-    graded_dists: list[float] = []
+    graded_flags: list[bool] = []
     # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
     peak_key: tuple[int, float] | None = None
     peak_dist: float | None = None
@@ -250,13 +256,19 @@ def grade_convective_model(
 
     for rpa in ctx.analyses:
         dist = rpa.distance_from_origin_nm or 0.0
+        # One entry per point, appended before any `continue`, so these stay
+        # index-aligned with ``ribbon_points`` on every path through the loop.
+        affected_flags.append(False)
+        mod_flags.append(False)
+        dd_flags.append(False)
+        graded_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
             region_cells.append((dist, None))
             continue
         total += 1
-        graded_dists.append(dist)
+        graded_flags[-1] = True
 
         # Independent of the grade filters below: compare the chosen thermo
         # (CAPE-derived) risk against the model's own convective scheme. Use
@@ -353,7 +365,7 @@ def grade_convective_model(
                 risk_idx = MOD_IDX
                 reason = "dd_trigger"
                 dd_trigger_count += 1
-                dd_trigger_dists.append(dist)
+                dd_flags[-1] = True
             else:
                 # Below the min risk floor → GREEN on the ribbon (checked,
                 # nothing worth flagging here).
@@ -367,7 +379,7 @@ def grade_convective_model(
         # still read "dd_fallback" when the branch above did not relabel it.
         if reason == "dd_fallback":
             dd_trigger_count += 1
-            dd_trigger_dists.append(dist)
+            dd_flags[-1] = True
 
         # Skip if convective tops are well below cruise altitude. When the DD
         # floor raised the grade and the active (quiet NWP) track has no
@@ -397,10 +409,10 @@ def grade_convective_model(
             continue
 
         affected += 1
-        affected_dists.append(dist)
+        affected_flags[-1] = True
         if risk_idx >= MOD_IDX:
             affected_mod += 1
-            affected_mod_dists.append(dist)
+            mod_flags[-1] = True
         if risk_idx > RISK_ORDER.index(worst_risk):
             worst_risk = graded_risk
 
@@ -497,20 +509,21 @@ def grade_convective_model(
     # Both extents reduce over the SAME cell edges as the ribbon this grade
     # carries, so the card's sentence, its highlight, the gate that set the
     # colour and the published ``affected_nm`` are one measurement (#571).
-    all_dists = [d for d, _ in ribbon_points]
-    aff_set = set(affected_dists)
-    mod_set = set(affected_mod_dists)
-    dd_set = set(dd_trigger_dists)
-    graded_set = set(graded_dists)
-    graded_flags = [d in graded_set for d in all_dists]
+    # Taken from ``ctx.analyses`` directly, not from ``ribbon_points``: the flag
+    # lists are appended once per analysis at the top of the loop, so this is
+    # aligned with them by construction. Reading the distances back out of
+    # ``ribbon_points`` would instead depend on its five branch-local appends
+    # staying exactly one-per-point — true today, but an assumption rather than
+    # a guarantee.
+    all_dists = [rpa.distance_from_origin_nm or 0.0 for rpa in ctx.analyses]
     speed_kt = ctx.cruise_groundspeed_kt
     extent = route_extent(
-        all_dists, ctx.total_distance_nm,
-        [d in aff_set for d in all_dists], graded_flags, speed_kt=speed_kt,
+        all_dists, ctx.total_distance_nm, affected_flags, graded_flags,
+        speed_kt=speed_kt,
     )
     extent_mod = route_extent(
-        all_dists, ctx.total_distance_nm,
-        [d in mod_set for d in all_dists], graded_flags, speed_kt=speed_kt,
+        all_dists, ctx.total_distance_nm, mod_flags, graded_flags,
+        speed_kt=speed_kt,
     )
 
     # --- colour ---
@@ -537,7 +550,7 @@ def grade_convective_model(
             native_extent = route_extent(
                 all_dists,
                 ctx.total_distance_nm,
-                [d in aff_set and d not in dd_set for d in all_dists],
+                [a and not d for a, d in zip(affected_flags, dd_flags)],
                 graded_flags,
             )
             if grade_extent(

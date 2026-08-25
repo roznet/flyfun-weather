@@ -381,11 +381,10 @@ class MountainWindEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
-                # The published denominator is mountain miles, not route miles
-                # — and it is named, so no consumer can re-derive the ~4x
+                # The published denominator is mountain miles, not route
+                # miles — and it is named, so no consumer can re-derive the ~4x
                 # overstatement from ``affected_nm / total_nm`` (#571 D3).
-                domain_nm=summary.extent.domain_nm,
+                extent=summary.extent,
                 affected_domain=adv_t("mountain_wind.of_terrain", ctx.locale),
                 highlights=highlights,
             ))

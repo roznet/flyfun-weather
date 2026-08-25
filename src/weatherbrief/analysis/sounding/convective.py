@@ -1536,6 +1536,7 @@ def character_extent(
     points: Sequence[ConvCharPoint],
     total_distance_nm: float | None,
     predicate: Callable[[ConvCharPoint], bool],
+    speed_kt: float | None = None,
 ) -> RouteExtent:
     """Extent of a character sub-population over the shared route geometry (#571).
 
@@ -1563,6 +1564,7 @@ def character_extent(
         _char_distances(points, total_distance_nm),
         total_distance_nm,
         [predicate(p) for p in points],
+        speed_kt=speed_kt,
     )
 
 

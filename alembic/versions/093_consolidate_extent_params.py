@@ -137,11 +137,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Reverse the rename, restoring the pre-consolidation keys and polarity.
 
-    Genuinely reversible, unlike 079: nothing was deleted. The only lossy edge is
-    a profile that already carried BOTH an old and a new key for the same
-    threshold — upgrade dropped the old one as shadowed, and the downgrade
-    restores a single key rather than the redundant pair. That loses no graded
-    value, since the new key was the one the engine would read either way.
+    Genuinely reversible, unlike 079: nothing was deleted. Two edges are worth
+    stating, neither of which loses a graded value:
+
+    * A profile that already carried BOTH an old and a new key for one threshold
+      had the old one dropped as shadowed on upgrade, so the downgrade restores a
+      single key rather than the redundant pair. The new key was the one the
+      engine would read either way.
+    * ``icing_escape`` maps two old names onto one new one (the primary plus the
+      read-path aliases ``route_pct_amber`` / ``min_route_pct``). Only the
+      primary can be restored, so a profile that stored *only* an alias comes
+      back under the primary name — the value round-trips exactly, but a DB diff
+      will show it as a key rename rather than a pure revert.
     """
     from weatherbrief.analysis.advisories.extent_param_migration import (
         EXTENT_KEY_RENAMES,

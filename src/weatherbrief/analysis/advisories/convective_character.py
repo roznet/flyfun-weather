@@ -30,6 +30,7 @@ from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.clouds import cloud_cover_band_pct
 from weatherbrief.analysis.sounding.convective import (
+    character_extent,
     CHAR_COVER_REALIZED_PCT,
     CHAR_EMBED_MIN_NM,
     ConvCharPoint,
@@ -310,23 +311,16 @@ def _realized_extent(
 ) -> RouteExtent:
     """Geometry-accurate extent of the realized convective cells (#571).
 
-    Mirrors ``longest_embedded_run_nm``'s treatment of hand-built test points
-    with no ``distance_nm`` (evenly spaced over the route) so the card's printed
-    extent and the EMBEDDED contiguity gate measure the same geometry.
+    A thin call into ``character_extent`` — the classifier's own single reducer,
+    which the coverage band and the EMBEDDED contiguity gate also go through — so
+    the number this card prints is measured by the same code that graded it,
+    including its treatment of hand-built test points with no ``distance_nm``.
+    Re-implementing that fallback here was how the two could have drifted.
     """
-    n = len(points)
-    if n == 0:
-        return EMPTY_EXTENT
-    distances = [
-        p.distance_nm
-        if p.distance_nm is not None
-        else (total_distance_nm * i / (n - 1) if n > 1 else 0.0)
-        for i, p in enumerate(points)
-    ]
-    return route_extent(
-        distances,
+    return character_extent(
+        points,
         total_distance_nm,
-        [p.is_convective and p.realized for p in points],
+        lambda p: p.is_convective and p.realized,
         speed_kt=speed_kt,
     )
 
@@ -999,7 +993,7 @@ class ConvectiveCharacterEvaluator:
                     status=status,
                     detail=detail,
                     affected=realized_count,
-                    affected_nm=extent.nm,
+                    extent=extent,
                     total=total,
                     total_distance_nm=ctx.total_distance_nm,
                     # #568: the character card is the one that renders the
