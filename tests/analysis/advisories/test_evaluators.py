@@ -624,6 +624,11 @@ class TestTurbulence:
         # 85 nm.
         assert "5nm/170nm (3%)" in m.detail
         assert "85nm" not in m.detail
+        # The published higher-threshold pair must describe the tier the
+        # sentence NAMED — the severe bypass used to publish the MODERATE+
+        # extent beside a "Severe CAT" sentence (#571 review round 5).
+        assert m.affected_mod_points == 1
+        assert m.affected_mod_nm == 5.0
 
 
 class TestConvective:

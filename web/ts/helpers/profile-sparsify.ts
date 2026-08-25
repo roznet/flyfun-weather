@@ -145,7 +145,13 @@ export function renameExtentParams(
       const value = params[old];
       delete params[old];
       if (next in params) continue;  // a newer write under the new key wins
-      params[next] = inverted.has(old) ? 100 - value : value;
+      // Mirror the Python guard: `advisories` is an untyped dict server-side,
+      // so a stored value can be a string or null. `100 - value` would make it
+      // NaN here while the server-side migration preserves it verbatim — the
+      // one defensive path both sides exist to handle, diverging (#571 review).
+      const invertible =
+        inverted.has(old) && typeof value === 'number' && Number.isFinite(value);
+      params[next] = invertible ? 100 - value : value;
     }
     if (Object.keys(params).length === 0) delete out[advId];
   }

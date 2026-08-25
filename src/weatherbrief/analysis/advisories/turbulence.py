@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
     EXTENT_MIN_NM,
     extent_min_nm_param,
     EvidenceSample,
@@ -231,11 +232,17 @@ class TurbulenceEvaluator:
             # free-atmosphere severe layer is a real hazard and still forces RED,
             # but it is "Severe CAT over 9nm", not over the light-and-above 146nm.
             significant_extent = summary.extent_of(lambda s: "significant" in s.tags)
+            severe_extent = summary.extent_of(lambda s: "severe" in s.tags)
             ext = format_extent(summary.extent)
-            ext_severe = format_extent(
-                summary.extent_of(lambda s: "severe" in s.tags)
-            )
+            ext_severe = format_extent(severe_extent)
             ext_significant = format_extent(significant_extent)
+            # The extent of whichever tier the detail sentence ends up naming.
+            # Published as the higher-threshold field so the sentence and the
+            # structured pair always describe the SAME population — the severe
+            # bypass branch quoted "Severe CAT over 9nm" while publishing the
+            # MODERATE+ 139nm, which is the D2 disagreement in the one branch
+            # whose comment claimed to have fixed it (#571 review round 5).
+            tier_extent = EMPTY_EXTENT
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -243,6 +250,7 @@ class TurbulenceEvaluator:
             elif has_severe:
                 status = AdvisoryStatus.RED
                 detail = adv_t("turbulence.severe_over", loc, extent=ext_severe)
+                tier_extent = severe_extent
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("turbulence.smooth", loc)
@@ -275,11 +283,16 @@ class TurbulenceEvaluator:
                 # quoting the any-risk union describes two different populations
                 # in one sentence. LIGHT (and the no-CAT strong-updraft case)
                 # legitimately quotes the any-risk extent — that IS its tier.
-                tier_ext = (
-                    ext_significant
-                    if worst_cat not in (CATRiskLevel.NONE, CATRiskLevel.LIGHT)
-                    else ext
+                names_a_higher_tier = worst_cat not in (
+                    CATRiskLevel.NONE, CATRiskLevel.LIGHT,
                 )
+                tier_ext = ext_significant if names_a_higher_tier else ext
+                # LIGHT (and the no-CAT strong-updraft case) names the any-risk
+                # union, which IS ``affected_nm`` — there is no narrower tier to
+                # publish, so the higher-threshold field stays empty rather than
+                # duplicating the primary extent.
+                if names_a_higher_tier:
+                    tier_extent = significant_extent
                 detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=tier_ext)
 
             # Coverage tolerance (#391): a smooth verdict from soundings-with-vm at
@@ -297,14 +310,14 @@ class TurbulenceEvaluator:
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
                 # The sentence quotes the tier it names, so the object publishes
-                # that tier too — otherwise "Severe CAT over 9nm" ships beside an
-                # affected_nm of 146, which is the D2 disagreement in miniature
-                # (#571 review). ``affected_nm`` stays the any-risk union, the
-                # population ``affected_points`` counts; the MODERATE-or-worse
-                # extent rides the higher-threshold field, exactly as convective
+                # that tier too — otherwise "Severe CAT over 9nm" ships beside a
+                # much larger number, which is the D2 disagreement in miniature.
+                # ``affected_nm`` stays the any-risk union that
+                # ``affected_points`` counts; the extent of the tier the sentence
+                # NAMED rides the higher-threshold field, exactly as convective
                 # publishes its MODERATE+ subset.
-                affected_mod=significant_points,
-                affected_mod_nm=significant_extent.nm,
+                affected_mod=tier_extent.points,
+                affected_mod_nm=tier_extent.nm,
                 highlights=highlights,
             ))
 
