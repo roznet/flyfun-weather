@@ -419,6 +419,14 @@ def build_character_points(
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
         if sounding is None:
+            # Keep the point, marked unassessed. Dropping it left ``cell_edges``
+            # tiling the whole route over only the covered points, so the last
+            # covered point's cell swallowed every uncovered mile (#571 review).
+            points.append(ConvCharPoint(
+                is_convective=False, realized=False, embedded=False,
+                k_index=None, total_totals=None,
+                distance_nm=rpa.distance_from_origin_nm, assessed=False,
+            ))
             continue
 
         conv = sounding.convective
@@ -961,7 +969,7 @@ class ConvectiveCharacterEvaluator:
             character = classify_inputs(ctx, model, params, inputs)
 
             status = _CHAR_STATUS.get(character, AdvisoryStatus.GREEN)
-            total = len(points)
+            total = sum(1 for p in points if p.assessed)
             realized_count = sum(1 for p in points if p.is_convective and p.realized)
             # Extent of the realized cells, over the same cell edges the
             # EMBEDDED contiguity gate measures its run on (#571) — the card's

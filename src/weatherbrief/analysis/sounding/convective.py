@@ -1497,6 +1497,13 @@ class ConvCharPoint(NamedTuple):
     # gate (#568). ``None`` on hand-built points in tests; the classifier then
     # falls back to even spacing over ``total_distance_nm``.
     distance_nm: float | None = None
+    # Could this model be graded here at all? False for a route point where the
+    # model has no sounding. Such a point must still be PRESENT so the midpoint
+    # cell edges tile the real route — dropping it donates its miles to the
+    # nearest survivor, which let one realized cell at 40 nm of a 200 nm route
+    # claim 82% coverage and force WIDESPREAD/RED (#571 review) — but it is
+    # excluded from the denominator, the #391 rule every other evaluator follows.
+    assessed: bool = True
 
 
 _CHAR_BAND_ORDER = (
@@ -1560,6 +1567,7 @@ def character_extent(
         _char_distances(points, total_distance_nm or 0.0),
         total_distance_nm or 0.0,
         [predicate(p) for p in points],
+        [p.assessed for p in points],
         speed_kt=speed_kt,
     )
 
@@ -1625,7 +1633,9 @@ def classify_convective_character(
     Severity owns the colour; this never downgrades it. Bands map to the
     advisory colour in the evaluator (ISOLATED/SCATTERED→AMBER, the rest→RED).
     """
-    total = len(points)
+    # Assessed points only: a route point this model cannot grade is present for
+    # the geometry but is not part of the population being described.
+    total = sum(1 for p in points if p.assessed)
     if total == 0:
         return ConvectiveCharacter.NONE
     conv = [p for p in points if p.is_convective]

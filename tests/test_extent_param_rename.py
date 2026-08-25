@@ -366,3 +366,60 @@ class TestMapCompleteness:
     def test_the_census_and_the_kept_set_are_disjoint(self):
         for adv_id, keys in _DELIBERATELY_KEPT.items():
             assert not keys & _ISSUE_CENSUS.get(adv_id, set())
+
+
+class TestMalformedValues:
+    """One bad profile must not cost every other profile its tuning (#571 review).
+
+    ``ProfileSettings.advisories`` is an untyped dict, so a non-numeric value can
+    reach the rename. Alembic runs the whole `upgrade` in one transaction, and
+    this PR removes the evaluators' legacy old-key read path — so a migration
+    that raises on row 7, behind already-deployed code, leaves every pilot's
+    non-default tuning silently ignored fleet-wide. Carrying the value across
+    under the new name is strictly better: the evaluator's own `params.get`
+    default handles junk exactly as it did before.
+    """
+
+    def test_a_non_numeric_inverted_value_is_carried_not_raised(self):
+        out, stats = rename_extent_params(
+            {"advisories": {"params": {"fiki_icing": {
+                "clear_cruise_amber_pct": "eighty",
+            }}}}
+        )
+        assert out["advisories"]["params"]["fiki_icing"] == {
+            "extent_pct_amber": "eighty"
+        }
+        assert stats.uninvertible == 1
+        assert stats.inverted == 0
+
+    def test_a_bool_is_not_treated_as_a_number(self):
+        """`isinstance(True, int)` is True in Python; `100 - True` would store
+        99 and look like a real threshold."""
+        out, stats = rename_extent_params(
+            {"advisories": {"params": {"fiki_icing": {
+                "clear_cruise_red_pct": True,
+            }}}}
+        )
+        assert out["advisories"]["params"]["fiki_icing"] == {
+            "extent_pct_red": True
+        }
+        assert stats.uninvertible == 1
+
+    def test_a_normal_numeric_value_still_inverts(self):
+        out, stats = rename_extent_params(
+            {"advisories": {"params": {"fiki_icing": {
+                "clear_cruise_amber_pct": 70,
+            }}}}
+        )
+        assert out["advisories"]["params"]["fiki_icing"] == {
+            "extent_pct_amber": 30.0
+        }
+        assert stats.inverted == 1
+        assert stats.uninvertible == 0
+
+    def test_a_non_dict_params_entry_is_left_alone(self):
+        out, stats = rename_extent_params(
+            {"advisories": {"params": {"vmc_cruise": "not-a-dict"}}}
+        )
+        assert out["advisories"]["params"]["vmc_cruise"] == "not-a-dict"
+        assert not stats.touched

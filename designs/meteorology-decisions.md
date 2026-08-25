@@ -3947,7 +3947,12 @@ fully-assessed case `domain_nm` is the route length, so this costs nothing.
 - **Fixing the messages without the value object.** #300 had already done that
   for `convective`'s string alone; the structured fields drifted straight back
   out of agreement. A shared primitive that owns both is what closes it.
-- **Shrinking the denominator to the assessed subset.** Tempting (it is the
-  grading denominator) but it makes a small footprint read large exactly when
-  data is thin. Thin coverage is reported by `below_coverage` → UNAVAILABLE, not
-  by quietly moving the goalposts.
+- **Always using the whole route as the denominator**, regardless of what the
+  model resolved. Tempting — it keeps every advisory's percentage comparable —
+  but it silently reintroduces the dilution #391 exists to prevent: two snowing
+  points among eight blanks would read as 20% of a route the model never saw and
+  fall under the amber gate. The denominator is what the model could grade, and
+  thin coverage is reported by `below_coverage` → UNAVAILABLE, which abstains
+  rather than diluting real evidence into a GREEN. (An earlier draft of this
+  section listed the *opposite* choice as rejected, contradicting both the
+  paragraph above and the shipped code — #571 review.)

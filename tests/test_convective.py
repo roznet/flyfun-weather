@@ -1511,6 +1511,7 @@ def test_threshold_boundaries_exclusive_inclusive():
 
 from weatherbrief.analysis.sounding.convective import (  # noqa: E402
     ConvCharPoint,
+    character_extent,
     classify_convective_character,
     longest_embedded_run_nm,
 )
@@ -1974,3 +1975,75 @@ def test_below_base_unresolved_dominates_mixed_route():
 def test_below_base_within_layer_dominates_deck_and_unresolved():
     pts = [_geo_pt(9_500.0), _geo_pt(12_000.0, vmc=False), _geo_pt(None)]
     assert _below_base_geometry(pts, _CRUISE, _BUFFER).kind == "within_layer"
+
+
+class TestCharacterPartialCoverage:
+    """A model that covers only part of the route must not claim all of it.
+
+    `build_character_points` used to `continue` past a route point with no
+    sounding, leaving `cell_edges` to tile the WHOLE route over only the covered
+    points — so the last covered point's cell swallowed every uncovered mile. One
+    realized cell at 40 nm of a 200 nm route then measured 165 nm (82%) and
+    forced WIDESPREAD/RED, where the pre-distance point ratio said 20%
+    (ISOLATED). The uncovered points are kept now, present for the geometry and
+    excluded from the denominator (#571 review).
+    """
+
+    def _pts(self, n_total=21, covered_through=4, realized_at=4, spacing=10.0):
+        return [
+            ConvCharPoint(
+                is_convective=(i == realized_at),
+                realized=(i == realized_at),
+                embedded=False,
+                k_index=None,
+                total_totals=None,
+                distance_nm=i * spacing,
+                assessed=i <= covered_through,
+            )
+            for i in range(n_total)
+        ]
+
+    def test_uncovered_miles_are_not_donated_to_the_last_covered_cell(self):
+        ext = character_extent(
+            self._pts(), 200.0, lambda p: p.is_convective and p.realized,
+        )
+        assert ext.nm == 10.0            # the cell the point actually owns
+        assert ext.domain_nm == 45.0     # the five covered points' cells
+        assert 20.0 < ext.pct < 25.0     # not the 82.5% of the dropped-point era
+
+    def test_the_band_does_not_go_widespread_on_uncovered_miles(self):
+        """22% lands in SCATTERED — and so did the pre-distance point ratio
+        (1 realized of 5 covered = 20%). 82.5% would have been WIDESPREAD, i.e.
+        RED, off a single cell."""
+        band = classify_convective_character(
+            self._pts(), total_distance_nm=200.0,
+        )
+        assert band is ConvectiveCharacter.SCATTERED
+        assert band is not ConvectiveCharacter.WIDESPREAD
+
+    def test_full_coverage_is_unchanged(self):
+        """The fix must not move the fully-assessed case, which is every
+        production model with complete route data."""
+        pts = [
+            ConvCharPoint(
+                is_convective=(i < 2), realized=(i < 2), embedded=False,
+                k_index=None, total_totals=None, distance_nm=i * 10.0,
+            )
+            for i in range(21)
+        ]
+        ext = character_extent(pts, 200.0, lambda p: p.is_convective and p.realized)
+        assert ext.domain_nm == 200.0
+        assert ext.nm == 15.0            # [0,5] + [5,15]
+
+    def test_an_entirely_unassessed_model_has_no_character(self):
+        pts = [
+            ConvCharPoint(
+                is_convective=False, realized=False, embedded=False,
+                k_index=None, total_totals=None, distance_nm=i * 10.0,
+                assessed=False,
+            )
+            for i in range(5)
+        ]
+        assert classify_convective_character(
+            pts, total_distance_nm=40.0,
+        ) is ConvectiveCharacter.NONE
