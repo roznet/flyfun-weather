@@ -1,6 +1,7 @@
 /** Route map renderer — Leaflet-based geographic visualization of weather along the route. */
 
 import * as L from 'leaflet';
+import { renderObservedOverlay, type ObservedFlashPoint } from './observed-overlay';
 import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
@@ -47,6 +48,13 @@ export class RouteMapRenderer {
   private waypointGroup: L.LayerGroup | null = null;
   private frontsGroup: L.LayerGroup | null = null;
   private airportForecastGroup: L.LayerGroup | null = null;
+  // Observed conditions (#574): the newest frame, the corridor it describes,
+  // and age-faded lightning. Nothing here animates and there is no time
+  // slider — deliberately out of scope, not a first cut.
+  private observedGroup: L.LayerGroup | null = null;
+  private observedBadgeEl: HTMLElement | null = null;
+  private observedSource: string | null = null;
+  private observedFlashes: ObservedFlashPoint[] = [];
   private highlightMarker: L.CircleMarker | null = null;
   private forecastLegendEl: HTMLElement | null = null;
   private forecastZoomHandler: (() => void) | null = null;
@@ -113,6 +121,23 @@ export class RouteMapRenderer {
     this.renderFronts();
   }
 
+  /** Which observed source to draw as imagery (#574), or `null` for none.
+   *  Lightning is drawn as points regardless — it is not a raster. */
+  setObservedSource(source: string | null): void {
+    this.observedSource = source;
+  }
+
+  /** Lightning points for the corridor, fetched async by briefing-main.
+   *  Each carries its own time so the overlay can fade the trail by age. */
+  setObservedFlashes(flashes: ObservedFlashPoint[]): void {
+    this.observedFlashes = flashes;
+  }
+
+  /** Redraw just the observed overlay, after new flashes or a source change. */
+  refreshObserved(): void {
+    this.renderObserved();
+  }
+
   /** Toggle the airport forecast overlay (#424). */
   setShowForecastOverlay(show: boolean): void {
     this.showForecastOverlay = show;
@@ -157,6 +182,7 @@ export class RouteMapRenderer {
     if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
 
     this.ensureMap();
+    this.renderObserved();
     this.renderForecastOverlay();
     this.renderSegments();
     this.renderFronts();
@@ -214,6 +240,9 @@ export class RouteMapRenderer {
       this.map.remove();
       this.map = null;
     }
+    if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
+    this.observedGroup = null;
+    this.observedFlashes = [];
     this.segmentGroup = null;
     this.frontsGroup = null;
     this.airportForecastGroup = null;
@@ -246,6 +275,9 @@ export class RouteMapRenderer {
       this.updateTiles(e.detail === 'dark');
     }) as EventListener);
 
+    // Observed imagery is the backdrop: it is a picture of the sky, and
+    // everything the briefing computed must stay legible over it.
+    this.observedGroup = L.layerGroup().addTo(this.map);
     // Airport forecast overlay sits at the bottom of the stack so the route
     // segments, fronts and waypoints always draw on top of the airport dots.
     this.airportForecastGroup = L.layerGroup().addTo(this.map);
@@ -319,6 +351,36 @@ export class RouteMapRenderer {
   /** Experimental Hewson front overlay (#196): a marker per on-track crossing
    *  (colored by kind, sized by intensity) plus an off-track marker for the
    *  nearest closing front. Advisory-only, free-atmosphere boundaries. */
+  private renderObserved(): void {
+    if (!this.observedGroup || !this.map || !this.data) return;
+    const badge = renderObservedOverlay(
+      this.observedGroup,
+      this.map,
+      this.data,
+      {
+        imagerySource: this.observedSource,
+        radiusNm: this.data.observed?.radiusNm ?? 20,
+      },
+      this.observedFlashes,
+    );
+    this.updateObservedBadge(badge);
+  }
+
+  /** The age badge rides on the map itself, not in a side panel: it labels a
+   *  specific picture, and the picture is what the pilot is looking at. */
+  private updateObservedBadge(text: string): void {
+    if (!text) {
+      if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
+      return;
+    }
+    if (!this.observedBadgeEl) {
+      this.observedBadgeEl = document.createElement('div');
+      this.observedBadgeEl.className = 'map-observed-badge';
+      this.container.appendChild(this.observedBadgeEl);
+    }
+    this.observedBadgeEl.textContent = text;
+  }
+
   private renderFronts(): void {
     if (!this.frontsGroup || !this.map) return;
     this.frontsGroup.clearLayers();

@@ -161,16 +161,42 @@ describe('getLayerGroups', () => {
     }
   });
 
-  it("'fronts' and 'conditions' stay single-layer (HIDE_GROUP_WHEN_UNAVAILABLE assumption)", () => {
-    // panel.ts hides these whole groups when their lone layer is unavailable,
-    // assuming each has exactly ONE layer. If a second layer is added here it
-    // would be silently hidden — gate per-layer in panel.ts instead.
+  it("'fronts' and 'conditions' are registered and non-empty", () => {
+    // panel.ts hides these whole groups only when EVERY layer in them is
+    // unavailable (HIDE_GROUP_WHEN_ALL_UNAVAILABLE). They used to be assumed
+    // single-layer; adding observed-surface to 'conditions' (#574) broke that
+    // and would have hidden a working radar layer whenever METAR was absent.
     const groups = getLayerGroups();
     for (const id of ['fronts', 'conditions'] as const) {
       const grp = groups.find((g) => g.group === id);
       expect(grp, `group ${id} not registered`).toBeDefined();
-      expect(grp!.layers.length, `group ${id} must stay single-layer`).toBe(1);
+      expect(grp!.layers.length, `group ${id} must have layers`).toBeGreaterThan(0);
     }
+  });
+
+  it("registers both observed layers with their intended groups and defaults", () => {
+    const layers = getAllLayers();
+    const tops = layers.find((l) => l.id === 'observed-tops');
+    const surface = layers.find((l) => l.id === 'observed-surface');
+    expect(tops, 'observed-tops must be registered').toBeDefined();
+    expect(surface, 'observed-surface must be registered').toBeDefined();
+    // Cloud tops render over the NWP cloud bands — that overlap IS the
+    // cross-check (#574), so they live in the same group and ship on.
+    expect(tops!.group).toBe('clouds');
+    expect(tops!.defaultEnabled).toBe(true);
+    expect(surface!.group).toBe('conditions');
+    expect(surface!.defaultEnabled).toBe(false);
+    // The pre-existing current-conditions layer is untouched: these are
+    // siblings, not a replacement.
+    expect(layers.some((l) => l.id === 'current-conditions')).toBe(true);
+  });
+
+  it('draws observed cloud tops above the NWP cloud bands', () => {
+    // Render order is the cross-check: "model says FL120, satellite saw
+    // FL280" is only legible if the measured line sits over the modelled band.
+    const ids = getAllLayers().map((l) => l.id);
+    expect(ids.indexOf('observed-tops')).toBeGreaterThan(ids.indexOf('nwp-cloud-bands'));
+    expect(ids.indexOf('observed-tops')).toBeGreaterThan(ids.indexOf('cloud-bands'));
   });
 });
 

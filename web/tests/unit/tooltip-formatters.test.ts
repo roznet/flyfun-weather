@@ -59,6 +59,11 @@ describe('LAYER_TOOLTIPS registry — structural integrity', () => {
       // (distance-space, not per-VizPoint zones — like current-conditions), so
       // it is not a LAYER_TOOLTIPS row and stays exempt here.
       'advisory-highlight',
+      // Observed layers (#574): both are distance-space overlays keyed by
+      // route point, not per-VizPoint altitude zones — same shape as
+      // current-conditions, so they are handled the same way.
+      'observed-tops',
+      'observed-surface',
     ]);
 
     const layerIds = getAllLayers()

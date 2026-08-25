@@ -165,7 +165,95 @@ def test_all_expected_sources_registered():
         "ukmo:openmeteo",
         "gem:openmeteo",
     }
-    assert set(SOURCE_REGISTRY.keys()) == expected
+    # Observed streams (#574) are interval-scheduled measurements, not NWP
+    # runs — asserted separately below so this list stays a roll-call of the
+    # forecast models.
+    observed = {
+        "opera_dbzh:eumetnet",
+        "opera_rate:eumetnet",
+        "eumetsat_li:eumetsat",
+        "eumetsat_ctth:eumetsat",
+    }
+    assert set(SOURCE_REGISTRY.keys()) == expected | observed
+
+
+def test_observed_streams_are_interval_scheduled():
+    """An observed stream publishes on a period and forecasts nothing."""
+    observed = [c for c in SOURCE_REGISTRY.values() if c.schedule_kind == "interval"]
+    assert len(observed) == 4
+    for cfg in observed:
+        assert cfg.cycles == ()
+        assert cfg.interval is not None and cfg.interval <= timedelta(minutes=15)
+        assert cfg.horizon == timedelta(0)
+        # Gated so a deployment without the collector shows nothing at all.
+        assert cfg.env_gate == "WB_OBSERVED_ENABLED"
+
+
+def test_a_source_cannot_be_both_schedule_kinds():
+    from weatherbrief.fetch.freshness.registry import SourceConfig
+
+    with pytest.raises(ValueError, match="exactly one of cycles"):
+        SourceConfig(key="bad:both", cycles=(0, 12), interval=timedelta(minutes=5))
+    with pytest.raises(ValueError, match="exactly one of cycles"):
+        SourceConfig(key="bad:neither")
+
+
+def test_an_interval_source_cannot_carry_a_per_cycle_horizon():
+    from weatherbrief.fetch.freshness.registry import SourceConfig
+
+    with pytest.raises(ValueError, match="no cycles to key"):
+        SourceConfig(
+            key="bad:percycle",
+            interval=timedelta(minutes=5),
+            horizon={0: timedelta(hours=1)},
+        )
+
+
+class TestIntervalSchedule:
+    """Slot arithmetic for interval sources (#574)."""
+
+    def test_slots_are_anchored_on_midnight(self):
+        from weatherbrief.fetch.freshness.registry import cycle_init_for
+
+        when = datetime(2026, 8, 25, 14, 7, 41, tzinfo=timezone.utc)
+        # OPERA composites are named T1405, not T1407 — the store and the
+        # provider must agree on the slot.
+        assert cycle_init_for("opera_dbzh:eumetnet", when) == datetime(
+            2026, 8, 25, 14, 5, tzinfo=timezone.utc
+        )
+
+    def test_next_slot_is_one_interval_on(self):
+        from weatherbrief.fetch.freshness.registry import next_cycle_init_after
+
+        init = datetime(2026, 8, 25, 14, 5, tzinfo=timezone.utc)
+        assert next_cycle_init_after("opera_dbzh:eumetnet", init) == datetime(
+            2026, 8, 25, 14, 10, tzinfo=timezone.utc
+        )
+
+    def test_next_run_adds_the_delivery_lag(self):
+        from weatherbrief.fetch.freshness.registry import next_run_after
+
+        init = datetime(2026, 8, 25, 14, 5, tzinfo=timezone.utc)
+        assert next_run_after("opera_dbzh:eumetnet", init) == datetime(
+            2026, 8, 25, 14, 14, tzinfo=timezone.utc
+        )
+
+    def test_slots_roll_over_midnight(self):
+        from weatherbrief.fetch.freshness.registry import next_cycle_init_after
+
+        init = datetime(2026, 8, 25, 23, 55, tzinfo=timezone.utc)
+        assert next_cycle_init_after("opera_dbzh:eumetnet", init) == datetime(
+            2026, 8, 26, 0, 0, tzinfo=timezone.utc
+        )
+
+    def test_bootstrap_picks_a_delivered_slot(self):
+        from weatherbrief.fetch.freshness.registry import initial_marker_for
+
+        now = datetime(2026, 8, 25, 14, 7, tzinfo=timezone.utc)
+        init, next_expected = initial_marker_for("opera_dbzh:eumetnet", now)
+        assert init <= now
+        assert init + timedelta(minutes=4) <= now  # already past its delivery lag
+        assert next_expected > now
 
 
 @pytest.mark.parametrize("key", list(SOURCE_REGISTRY.keys()))
@@ -173,7 +261,9 @@ def test_each_source_has_sane_offsets(key):
     cfg = SOURCE_REGISTRY[key]
     assert cfg.retry_interval > timedelta(0)
     assert cfg.max_slip_retries > 0
-    # Offset should be at least 30 min and at most 12 h for any reasonable source.
+    # Offset should be at least 30 min and at most 12 h for any reasonable
+    # NWP source.  Interval sources have no cycles: their delivery lag is
+    # minutes, not hours, and their horizon is zero by construction.
     for cycle in cfg.cycles:
         off = cfg.offset_for(cycle)
         assert timedelta(minutes=30) <= off <= timedelta(hours=12)

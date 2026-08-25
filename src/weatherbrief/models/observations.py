@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, computed_field
 
+from weatherbrief.models.observed import ObservedConditions
+
 
 class AirportObservation(BaseModel):
     """METAR/TAF data for one airport along the route."""
@@ -160,8 +162,15 @@ class RefreshDelta(BaseModel):
 
 class RealtimeRefreshResult(BaseModel):
     """Combined output of the cheap D-0 real-time refresh seam: fresh
-    METAR/TAF observations plus route SIGMETs (issue #167 seam, #168 SIGMET)."""
+    METAR/TAF observations plus route SIGMETs (issue #167 seam, #168 SIGMET)
+    and re-sampled observed conditions (#574).
+
+    ``observed`` re-reads locally-held radar/lightning/satellite frames rather
+    than fetching, which is what lets it ride along on the cheap path.  It is
+    ``None`` where the observed collector is not enabled.
+    """
 
     observations: RouteObservations
     sigmets: RouteSigmets | None = None
     delta: RefreshDelta | None = None
+    observed: ObservedConditions | None = None

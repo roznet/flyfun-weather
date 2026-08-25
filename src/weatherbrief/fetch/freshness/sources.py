@@ -74,6 +74,13 @@ VIA_HTTP_LAST_MODIFIED = "http_last_modified"
 #: own record of when it finished ingesting the run.
 VIA_OM_META = "om_meta"
 
+#: Valid time of the newest frame in the local observed-frame store (#574).
+#: Unlike the three above, this is not a measurement of when a provider
+#: published: the collector has already fetched the frame, so the marker
+#: reports what we *hold*, and the delivery lag is implicit in how far behind
+#: wallclock that valid time sits.
+VIA_OBSERVED_STORE = "observed_store"
+
 
 # ---------------------------------------------------------------------------
 # Per-source dispatch
@@ -259,6 +266,45 @@ def _check_om_meta(model: str) -> Observation | None:
     )
 
 
+def _check_observed_frames(model: str) -> Observation | None:
+    """Return the newest locally-held frame for an observed stream (#574).
+
+    The other dispatches probe a provider; this one reads the frame store,
+    because for observed data the question a pilot has is "how old is the
+    picture I am being shown?" — and that is the valid time of the frame we
+    actually hold, not the moment the provider published something we may
+    not have fetched.
+
+    ``model`` is the registry key's prefix, which is also the frame-store
+    source name (``opera_dbzh``, ``eumetsat_ctth``, ...).
+    """
+    from weatherbrief.observed.frames import SOURCE_SPECS, FrameStore
+
+    if model not in SOURCE_SPECS:
+        logger.warning("observed_frames: unknown frame source %r", model)
+        return None
+    newest = FrameStore().latest(model)
+    if newest is None:
+        return None
+    return Observation(
+        init=newest.valid_time,
+        # The frame is on our disk, so we know when it became usable here.
+        published_at=_received_at(newest),
+        observed_via=VIA_OBSERVED_STORE,
+    )
+
+
+def _received_at(frame) -> datetime | None:
+    raw = frame.meta.get("received_at")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 _DISPATCH = {
     "ecmwf_direct": _check_ecmwf_direct,
     "gfs_noaa": _check_gfs_noaa,
@@ -266,6 +312,7 @@ _DISPATCH = {
     "icon_eu_dwd": _check_icon_eu_dwd,
     "icon_d2_dwd": _check_icon_d2_dwd,
     "om_meta": _check_om_meta,
+    "observed_frames": _check_observed_frames,
 }
 
 
@@ -327,7 +374,13 @@ def all_tracked_sources() -> list[tuple[str, str]]:
     from .registry import SOURCE_REGISTRY
 
     pairs: list[tuple[str, str]] = []
-    for key in SOURCE_REGISTRY:
+    for key, cfg in SOURCE_REGISTRY.items():
+        # An env-gated source (observed streams) is described by the registry
+        # but not tracked unless the deployment turned it on — otherwise the
+        # loop would probe a collector that is not running and the help page
+        # would show a red row for a feature nobody enabled.
+        if not cfg.is_active:
+            continue
         model = key.split(":", 1)[0]
         # icon_eu_dwd is a separate logical model from icon:openmeteo;
         # keep the explicit mapping rather than collapsing.

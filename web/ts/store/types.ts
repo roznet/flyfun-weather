@@ -624,6 +624,140 @@ export interface RouteSigmets {
   count: number;
 }
 
+// --- Observed conditions (#574) --------------------------------------------
+//
+// What a pilot can SEE along the corridor right now — radar, lightning and
+// satellite cloud tops — sampled in concentric discs around each route point.
+// Phase 1 displays observations only: nothing here carries a verdict and no
+// advisory reads it. The cross-check is visual, with the observed-tops layer
+// drawn over the NWP cloud bands.
+//
+// Two invariants the shapes below exist to preserve, and that any consumer
+// must respect:
+//
+//   1. Absence is three-state, per source. `nodata_px` (the sensor does not
+//      look here — about half the OPERA grid) is never the same thing as
+//      `undetect_px` (it looked and saw nothing). Rendering a `nodata` disc as
+//      clear sky is the single worst bug this layer can have, which is what
+//      `insufficient_coverage` is for.
+//   2. There is no shared timestamp. Each field carries its own frame's
+//      `valid_time` and `age_minutes`; a radar composite is a rolling
+//      10-minute maximum plus delivery lag, so an echo on screen can be ~15
+//      minutes old — about 30 NM of own-ship at 120 kt.
+
+export interface ObservedAttribution {
+  producer: string | null;
+  license: string | null;
+  url: string | null;
+  /** Ready-to-render provenance line — use this rather than recomposing. */
+  text: string;
+}
+
+/** One station × one radius × one field. Cumulative disc, not a ring. */
+export interface ObservedAnnulus {
+  radius_nm: number;
+  total_px: number;
+  valid_px: number;
+  /** Pixels the sensor does not cover. NOT "nothing there". */
+  nodata_px: number;
+  /** Pixels the sensor covered and found empty — a real observation. */
+  undetect_px: number;
+  detected_px: number;
+  max_value: number | null;
+  mean_value: number | null;
+  p90_value: number | null;
+  coverage_fraction: number;
+  /** `null` when nothing was looked at — deliberately not 0, which reads as clear. */
+  detected_fraction: number | null;
+  /** True → render "no coverage", never a value and never "clear". */
+  insufficient_coverage: boolean;
+}
+
+/** Cloud-top disc: adds the histograms a single top-per-pixel value destroys. */
+export interface ObservedTopsAnnulus extends ObservedAnnulus {
+  /** Pixel counts per FL band — the multi-layer picture. */
+  fl_bins: Record<string, number>;
+  /** Per-method pixel counts. "0" = no cloud (a positive observation);
+   *  "9" = the retrieval's own multi-layer-suspect flag. */
+  quality_method: Record<string, number>;
+  highest_fl: number | null;
+}
+
+/** Lightning disc. No coverage split: the imager sees the whole disc, so an
+ *  absence of flashes is an observation rather than a gap. */
+export interface ObservedFlashAnnulus {
+  radius_nm: number;
+  flash_count: number;
+  area_km2: number;
+  window_minutes: number;
+  nearest_flash_nm: number | null;
+  latest_flash_time: string | null;
+  flashes_per_1000km2_per_min: number | null;
+}
+
+export interface ObservedStationRef {
+  id: string;
+  name: string | null;
+  lat: number;
+  lon: number;
+  enroute_distance_nm: number | null;
+  distance_from_route_nm: number | null;
+}
+
+export interface ObservedStationSamples<A> {
+  station_id: string;
+  annuli: A[];
+}
+
+interface ObservedFieldMeta {
+  source: string;
+  quantity: string;
+  units: string;
+  valid_time: string;
+  age_minutes: number;
+  /** Width of the product's own accumulation / rolling-maximum window.
+   *  0 for an instantaneous retrieval. */
+  window_minutes: number;
+  attribution: ObservedAttribution;
+}
+
+export interface ObservedField extends ObservedFieldMeta {
+  stations: Array<ObservedStationSamples<ObservedAnnulus>>;
+}
+
+export interface ObservedTopsField extends ObservedFieldMeta {
+  stations: Array<ObservedStationSamples<ObservedTopsAnnulus>>;
+}
+
+export interface ObservedFlashField extends ObservedFieldMeta {
+  stations: Array<ObservedStationSamples<ObservedFlashAnnulus>>;
+}
+
+export interface ObservedSourceStatus {
+  source: string;
+  available: boolean;
+  reason: string | null;
+  latest_valid_time: string | null;
+}
+
+export interface ObservedConditions {
+  computed_at: string;
+  corridor_nm: number;
+  /** All radii ship together, so the corridor selector is a client-side pick
+   *  with no re-fetch. */
+  radii_nm: number[];
+  stations: ObservedStationRef[];
+  reflectivity: ObservedField | null;
+  rain_rate: ObservedField | null;
+  cloud_tops: ObservedTopsField | null;
+  lightning: ObservedFlashField | null;
+  /** Deterministic "Observed now" readout — no LLM. */
+  summary: string;
+  summary_lines: string[];
+  sources: ObservedSourceStatus[];
+  has_any_field: boolean;
+}
+
 /** What got worse since the previous real-time refresh (deterministic, no LLM). */
 export interface RefreshDelta {
   worsened: boolean;
@@ -636,6 +770,9 @@ export interface RealtimeRefreshResult {
   observations: RouteObservations;
   sigmets: RouteSigmets | null;
   delta?: RefreshDelta | null;
+  /** Re-sampled from locally-held frames, which is why the refresh button
+   *  updates the observed panel without any provider fetch. */
+  observed?: ObservedConditions | null;
 }
 
 /** One weather-based divert candidate (issue #210). */
@@ -781,6 +918,9 @@ export interface ForecastSnapshot {
   analyses: WaypointAnalysis[];
   route_observations?: RouteObservations | null;
   route_sigmets?: RouteSigmets | null;
+  /** Observed radar / lightning / cloud tops along the corridor (#574).
+   *  D-0 only, and only where the observed collector is enabled. */
+  observed_conditions?: ObservedConditions | null;
   alternates?: RouteAlternates | null;
   last_refresh_delta?: RefreshDelta | null;
 }

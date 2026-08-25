@@ -970,5 +970,16 @@
   "settings.declaredApproaches.label": "Airports (ICAO)",
   "settings.declaredApproaches.fieldHint": "Separate codes with spaces or commas.",
   "settings.declaredApproaches.scope": "Used only by the Approach Feasibility advisory: at a destination with no published instrument approach, an IFR arrival reads amber rather than red — never green, and never in LIFR, where there are no published minima to fly to. It never affects alternate-minima calculations or whether a field qualifies as a filed alternate.",
-  "settings.declaredApproaches.unknown": "Not recognised as airport codes: {codes}. Nothing was saved — check the spelling."
+  "settings.declaredApproaches.unknown": "Not recognised as airport codes: {codes}. Nothing was saved — check the spelling.",
+  "graph.observed-rain-rate": "Observed Rain Rate (radar)",
+  "graph.observed-flash-rate": "Observed Lightning (flash rate)",
+  "graph.noCoverage": "No coverage",
+  "observed.title": "Observed now",
+  "observed.corridor": "Corridor",
+  "observed.noCoverage": "No coverage",
+  "observed.unavailable": "Not collected",
+  "observed.sources": "Sources",
+  "viz.layer.observed-tops": "Observed cloud tops",
+  "viz.layer.observed-surface": "Observed radar & lightning",
+  "dataSources.role.observed": "observed"
 }

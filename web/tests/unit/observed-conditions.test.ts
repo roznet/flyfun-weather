@@ -1,0 +1,435 @@
+/** Client-side observed-conditions behaviour (#574).
+ *
+ * The invariant that matters most here is the one a renderer can quietly
+ * violate: **a coverage hole is not a clear sky**. About half the OPERA grid
+ * has no radar over it, so a client that folds `nodata` into "no echo" paints
+ * half of Europe dry. Several of these tests exist only to pin that.
+ */
+
+import { describe, it, expect } from 'vitest';
+
+import { extractVizData, getUnavailableLayers } from '../../ts/visualization/data-extract';
+import {
+  drawablePoints, significantBins, isNoCoverage, ageBadgeText, observedTopsLayer,
+} from '../../ts/visualization/cross-section/layers/observed-tops';
+import {
+  echoColor, flashTickCount, observedSurfaceLayer,
+} from '../../ts/visualization/cross-section/layers/observed-surface';
+// Imported from the Leaflet-free geometry module: Leaflet touches `window` at
+// module load, which the node test environment does not provide.
+import {
+  corridorBox, flashOpacity, formatBadge, overlayUrl,
+} from '../../ts/visualization/route-map/observed-overlay-geometry';
+import { getMetricById, sampleMetric } from '../../ts/visualization/route-graph/metrics';
+import type {
+  ElevationProfile, ObservedConditions, RouteAnalysesManifest,
+} from '../../ts/store/types';
+import type { VizPoint } from '../../ts/visualization/types';
+
+function makeManifest(): RouteAnalysesManifest {
+  return {
+    route_name: 'TEST',
+    target_date: '2026-08-25',
+    departure_time: '2026-08-25T14:00:00Z',
+    flight_duration_hours: 2,
+    total_distance_nm: 100,
+    cruise_altitude_ft: 8000,
+    models: ['gfs'],
+    analyses: [],
+  } as RouteAnalysesManifest;
+}
+
+const elevation: ElevationProfile = {
+  route_name: 'TEST',
+  points: [
+    { distance_nm: 0, elevation_ft: 0, lat: 50.0, lon: 1.0 },
+    { distance_nm: 100, elevation_ft: 500, lat: 51.0, lon: 2.0 },
+  ],
+  max_elevation_ft: 500,
+  total_distance_nm: 100,
+};
+
+function annulus(radius: number, over: Record<string, unknown> = {}) {
+  return {
+    radius_nm: radius,
+    total_px: 100, valid_px: 100, nodata_px: 0, undetect_px: 60, detected_px: 40,
+    max_value: 45, mean_value: 30, p90_value: 42,
+    coverage_fraction: 1, detected_fraction: 0.4, insufficient_coverage: false,
+    ...over,
+  } as never;
+}
+
+function topsAnnulus(radius: number, over: Record<string, unknown> = {}) {
+  return {
+    ...(annulus(radius) as object),
+    max_value: 10668,
+    fl_bins: { 'FL000-050': 10, 'FL050-150': 0, 'FL150-250': 0, 'FL250-400': 30, 'FL400+': 0 },
+    quality_method: { '0': 60, '1': 10, '6': 30 },
+    highest_fl: 350,
+    ...over,
+  } as never;
+}
+
+function meta(source: string, over: Record<string, unknown> = {}) {
+  return {
+    source,
+    quantity: source,
+    units: 'dBZ',
+    valid_time: '2026-08-25T14:05:00Z',
+    age_minutes: 12,
+    window_minutes: 10,
+    attribution: { producer: 'Météo-France', license: 'OPERA policy', url: null, text: 'EUMETNET OPERA · Météo-France' },
+    ...over,
+  };
+}
+
+function makeObserved(over: Partial<ObservedConditions> = {}): ObservedConditions {
+  return {
+    computed_at: '2026-08-25T14:10:00Z',
+    corridor_nm: 20,
+    radii_nm: [5, 10, 20],
+    stations: [
+      { id: 'P000', name: 'LFAT', lat: 50.0, lon: 1.0, enroute_distance_nm: 0, distance_from_route_nm: 0 },
+      { id: 'P001', name: null, lat: 50.5, lon: 1.5, enroute_distance_nm: 50, distance_from_route_nm: 0 },
+    ],
+    reflectivity: {
+      ...meta('opera_dbzh'),
+      stations: [
+        { station_id: 'P000', annuli: [annulus(5), annulus(10), annulus(20, { max_value: 52 })] },
+        // Second point sits in a coverage hole: it must NEVER read as clear.
+        {
+          station_id: 'P001',
+          annuli: [5, 10, 20].map((r) => annulus(r, {
+            valid_px: 0, nodata_px: 100, undetect_px: 0, detected_px: 0,
+            max_value: null, mean_value: null, p90_value: null,
+            coverage_fraction: 0, detected_fraction: null, insufficient_coverage: true,
+          })),
+        },
+      ],
+    } as never,
+    rain_rate: {
+      ...meta('opera_rate', { units: 'mm/h', window_minutes: 15 }),
+      stations: [
+        { station_id: 'P000', annuli: [5, 10, 20].map((r) => annulus(r, { max_value: 6.5 })) },
+        {
+          station_id: 'P001',
+          annuli: [5, 10, 20].map((r) => annulus(r, {
+            valid_px: 0, nodata_px: 100, detected_px: 0, undetect_px: 0,
+            max_value: null, coverage_fraction: 0, detected_fraction: null,
+            insufficient_coverage: true,
+          })),
+        },
+      ],
+    } as never,
+    cloud_tops: {
+      ...meta('eumetsat_ctth', { units: 'm', window_minutes: 0, valid_time: '2026-08-25T14:00:00Z', age_minutes: 17 }),
+      stations: [
+        { station_id: 'P000', annuli: [topsAnnulus(5), topsAnnulus(10), topsAnnulus(20)] },
+        {
+          station_id: 'P001',
+          annuli: [5, 10, 20].map((r) => topsAnnulus(r, {
+            insufficient_coverage: true, detected_px: 0, highest_fl: null,
+            fl_bins: {}, quality_method: {},
+          })),
+        },
+      ],
+    } as never,
+    lightning: {
+      ...meta('eumetsat_li', { units: 'count' }),
+      stations: [
+        {
+          station_id: 'P000',
+          annuli: [5, 10, 20].map((r) => ({
+            radius_nm: r, flash_count: r, area_km2: 1000, window_minutes: 10,
+            nearest_flash_nm: 4, latest_flash_time: '2026-08-25T14:04:00Z',
+            flashes_per_1000km2_per_min: r / 10,
+          })),
+        },
+      ],
+    } as never,
+    summary: 'Radar: peak 52 dBZ within 20 NM of LFAT (observed 12 min ago).',
+    summary_lines: ['Radar: peak 52 dBZ within 20 NM of LFAT (observed 12 min ago).'],
+    sources: [
+      { source: 'opera_dbzh', available: true, reason: null, latest_valid_time: '2026-08-25T14:05:00Z' },
+    ],
+    has_any_field: true,
+    ...over,
+  } as ObservedConditions;
+}
+
+function extract(observed: ObservedConditions | null, radiusNm: number | null = null) {
+  return extractVizData(makeManifest(), 'gfs', 12000, elevation, {
+    observedConditions: observed,
+    observedRadiusNm: radiusNm,
+  });
+}
+
+// --- Extraction ------------------------------------------------------------
+
+describe('observed extraction', () => {
+  it('resolves to the widest sampled radius by default', () => {
+    const data = extract(makeObserved());
+    expect(data.observed).not.toBeNull();
+    expect(data.observed!.radiusNm).toBe(20);
+    expect(data.observed!.radiiNm).toEqual([5, 10, 20]);
+    expect(data.observed!.points[0].dbz).toBe(52);
+  });
+
+  it('honours a corridor pick without any re-fetch', () => {
+    // Every radius already rides in the payload; picking one is a re-extract.
+    const observed = makeObserved();
+    expect(extract(observed, 5).observed!.points[0].dbz).toBe(45);
+    expect(extract(observed, 20).observed!.points[0].dbz).toBe(52);
+  });
+
+  it('never interpolates between sampled radii', () => {
+    // The discs are pixel counts over real areas; a value between two of them
+    // was not measured. An unsampled radius snaps to the nearest one.
+    const data = extract(makeObserved(), 13 as never);
+    expect(data.observed!.radiusNm).toBe(20);
+  });
+
+  it('distinguishes a coverage hole from a clear sky', () => {
+    const points = extract(makeObserved()).observed!.points;
+    const covered = points.find((p) => p.distanceNm === 0)!;
+    const hole = points.find((p) => p.distanceNm === 50)!;
+
+    expect(covered.radarNoCoverage).toBe(false);
+    expect(covered.dbz).toBe(52);
+
+    expect(hole.radarNoCoverage).toBe(true);
+    expect(hole.dbz).toBeNull();
+    // And the flag is what tells them apart — the null alone does not.
+    expect(hole.topsNoCoverage).toBe(true);
+    expect(hole.topsHighestFt).toBeNull();
+  });
+
+  it('converts cloud tops from flight level to feet', () => {
+    const point = extract(makeObserved()).observed!.points[0];
+    expect(point.topsHighestFt).toBe(35000);
+  });
+
+  it('exposes the FL histogram as fractions of the detected pixels', () => {
+    const point = extract(makeObserved()).observed!.points[0];
+    const high = point.topsBins.find((b) => b.label === 'FL250-400')!;
+    const low = point.topsBins.find((b) => b.label === 'FL000-050')!;
+    // 30 of 40 cloudy pixels high, 10 low — a bimodal scene, which is exactly
+    // the multi-layer structure one cloud-top number would have destroyed.
+    expect(high.fraction).toBeCloseTo(0.75);
+    expect(low.fraction).toBeCloseTo(0.25);
+  });
+
+  it('carries each source own valid time and age', () => {
+    const observed = extract(makeObserved()).observed!;
+    // The four streams are minutes apart; nothing here synthesises a shared
+    // instant, and the client must not either.
+    expect(observed.reflectivity!.validTime).toBe('2026-08-25T14:05:00Z');
+    expect(observed.cloudTops!.validTime).toBe('2026-08-25T14:00:00Z');
+    expect(observed.reflectivity!.ageMinutes).toBe(12);
+    expect(observed.cloudTops!.ageMinutes).toBe(17);
+  });
+
+  it('keeps the rolling-window width alongside the age', () => {
+    const observed = extract(makeObserved()).observed!;
+    // A 10-minute rolling maximum is not an instantaneous observation.
+    expect(observed.reflectivity!.windowMinutes).toBe(10);
+    expect(observed.cloudTops!.windowMinutes).toBe(0);
+  });
+
+  it('carries the frame own attribution through', () => {
+    const observed = extract(makeObserved()).observed!;
+    expect(observed.reflectivity!.attribution).toContain('Météo-France');
+  });
+
+  it('returns null when nothing was collected', () => {
+    expect(extract(null).observed).toBeNull();
+  });
+});
+
+// --- Layer availability ----------------------------------------------------
+
+describe('observed layer availability', () => {
+  it('grays each layer out on its own source, not on the payload', () => {
+    // Radar without EUMETSAT credentials is half the feature working.
+    const radarOnly = makeObserved({ cloud_tops: null, lightning: null });
+    const unavailable = getUnavailableLayers(extract(radarOnly));
+    expect(unavailable.has('observed-tops')).toBe(true);
+    expect(unavailable.has('observed-surface')).toBe(false);
+  });
+
+  it('grays both out with no observed data at all', () => {
+    const unavailable = getUnavailableLayers(extract(null));
+    expect(unavailable.has('observed-tops')).toBe(true);
+    expect(unavailable.has('observed-surface')).toBe(true);
+  });
+
+  it('leaves the pre-existing current-conditions layer alone', () => {
+    // These are siblings of that layer, not a replacement for it.
+    const unavailable = getUnavailableLayers(extract(makeObserved()));
+    expect(unavailable.has('current-conditions')).toBe(true); // no METAR in this fixture
+  });
+});
+
+// --- Cross-section layers --------------------------------------------------
+
+describe('observed-tops layer', () => {
+  it('is on by default and lives with the cloud bands it cross-checks', () => {
+    expect(observedTopsLayer.defaultEnabled).toBe(true);
+    expect(observedTopsLayer.group).toBe('clouds');
+  });
+
+  it('draws a mark for a no-coverage point rather than skipping it', () => {
+    // A skipped point leaves a gap, and a gap reads as "nothing up there".
+    const observed = extract(makeObserved()).observed!;
+    const hole = observed.points.find((p) => p.distanceNm === 50)!;
+    expect(isNoCoverage(hole)).toBe(true);
+    expect(drawablePoints(observed)).toContain(hole);
+  });
+
+  it('filters out negligible FL bands', () => {
+    const point = extract(makeObserved()).observed!.points[0];
+    const bins = significantBins(point);
+    expect(bins.map((b) => b.label)).toEqual(['FL000-050', 'FL250-400']);
+  });
+
+  it('renders nothing in the time-axis airport view', () => {
+    const calls: string[] = [];
+    const ctx = new Proxy({}, { get: (_t, prop) => { calls.push(String(prop)); return () => {}; } });
+    const data = { ...extract(makeObserved()), timeAxisMode: true };
+    observedTopsLayer.render(ctx as never, {} as never, data as never);
+    expect(calls).toEqual([]);
+  });
+
+  it('formats an age badge from the frame own valid time', () => {
+    expect(ageBadgeText('2026-08-25T14:05:00Z', 12, 'Satellite')).toBe('Satellite 14:05Z · 12 min old');
+    expect(ageBadgeText('2026-08-25T14:05:00Z', 0.4, 'Satellite')).toBe('Satellite 14:05Z · just now');
+  });
+});
+
+describe('observed-surface layer', () => {
+  it('is off by default and sits with the other surface overlays', () => {
+    expect(observedSurfaceLayer.defaultEnabled).toBe(false);
+    expect(observedSurfaceLayer.group).toBe('conditions');
+  });
+
+  it('ramps echo colour with intensity', () => {
+    expect(echoColor(10)).not.toBe(echoColor(30));
+    expect(echoColor(30)).not.toBe(echoColor(50));
+    expect(echoColor(60)).toBe('#e13c3c');
+  });
+
+  it('scales flash ticks sub-linearly and draws none for zero', () => {
+    expect(flashTickCount(0)).toBe(0);
+    expect(flashTickCount(1)).toBe(1);
+    expect(flashTickCount(200)).toBeLessThanOrEqual(4);
+    expect(flashTickCount(8)).toBeGreaterThan(flashTickCount(2));
+  });
+});
+
+// --- Route graph -----------------------------------------------------------
+
+describe('observed route-graph metrics', () => {
+  const point = (over: Partial<VizPoint>) => ({
+    observedRateMmH: null, observedFlashRate: null, observedRadarNoCoverage: false,
+    ...over,
+  }) as VizPoint;
+
+  it('registers both observed metrics', () => {
+    expect(getMetricById('observed-rain-rate')).toBeDefined();
+    expect(getMetricById('observed-flash-rate')).toBeDefined();
+  });
+
+  it('reports a coverage hole as its own state, not as unavailable or zero', () => {
+    // A gap in the graph reads as "no rain"; this is "we cannot see".
+    const metric = getMetricById('observed-rain-rate')!;
+    const sample = sampleMetric(metric, point({ observedRadarNoCoverage: true, observedRateMmH: null }));
+    expect(sample.kind).toBe('no-coverage');
+  });
+
+  it('reports a covered dry point as a real absence', () => {
+    const metric = getMetricById('observed-rain-rate')!;
+    const sample = sampleMetric(metric, point({ observedRateMmH: null }));
+    expect(sample.kind).toBe('unavailable');
+  });
+
+  it('plots a measured rate', () => {
+    const metric = getMetricById('observed-rain-rate')!;
+    const sample = sampleMetric(metric, point({ observedRateMmH: 6.5 }));
+    expect(sample).toEqual({ kind: 'value', value: 6.5 });
+  });
+
+  it('gives lightning no coverage state — the imager sees the whole disc', () => {
+    const metric = getMetricById('observed-flash-rate')!;
+    expect(metric.isNoCoverage).toBeUndefined();
+    const sample = sampleMetric(metric, point({ observedFlashRate: 0, observedRadarNoCoverage: true }));
+    expect(sample).toEqual({ kind: 'value', value: 0 });
+  });
+
+  it('folds observed values onto the route points', () => {
+    const data = extract(makeObserved());
+    // The fixture manifest has no analyses, so there are no points to fold
+    // onto — the merge must not throw on that.
+    expect(data.points).toEqual([]);
+  });
+});
+
+// --- Map overlay -----------------------------------------------------------
+
+describe('observed map overlay', () => {
+  const routePoints = [
+    { lat: 50.0, lon: 1.0 },
+    { lat: 51.0, lon: 2.0 },
+  ];
+
+  it('pads the route bbox by the corridor width', () => {
+    const box = corridorBox(routePoints, 20)!;
+    expect(box.south).toBeLessThan(50.0);
+    expect(box.north).toBeGreaterThan(51.0);
+    // 20 NM ≈ 37 km ≈ 0.33° of latitude.
+    expect(box.north - 51.0).toBeCloseTo(0.333, 2);
+  });
+
+  it('pads longitude more than latitude away from the equator', () => {
+    const box = corridorBox(routePoints, 20)!;
+    expect(box.east - 2.0).toBeGreaterThan(box.north - 51.0);
+  });
+
+  it('returns nothing for an empty route', () => {
+    expect(corridorBox([], 20)).toBeNull();
+  });
+
+  it('builds an overlay URL from the box', () => {
+    const url = overlayUrl('opera_dbzh', corridorBox(routePoints, 20)!);
+    expect(url).toContain('/api/observed/overlay/opera_dbzh.png');
+    expect(url).toContain('south=');
+    expect(url).toContain('east=');
+  });
+
+  it('fades lightning by age and drops the tail', () => {
+    expect(flashOpacity(0)).toBeGreaterThan(flashOpacity(30));
+    expect(flashOpacity(30)).toBeGreaterThan(0);
+    expect(flashOpacity(90)).toBe(0);
+  });
+
+  it('badges the frame with its own age and rolling window', () => {
+    const observed = extract(makeObserved()).observed!;
+    const text = formatBadge(observed.reflectivity);
+    expect(text).toContain('14:05Z');
+    expect(text).toContain('12 min old');
+    // A rolling maximum is not a snapshot and the badge says so.
+    expect(text).toContain('10 min rolling max');
+    expect(text).toContain('Météo-France');
+  });
+
+  it('badges the cloud-top frame with ITS age, not the radar one', () => {
+    const observed = extract(makeObserved()).observed!;
+    const text = formatBadge(observed.cloudTops);
+    expect(text).toContain('17 min old');
+    // An instantaneous retrieval carries no rolling-window note.
+    expect(text).not.toContain('rolling max');
+  });
+
+  it('says nothing when there is no frame to label', () => {
+    expect(formatBadge(null)).toBe('');
+  });
+});

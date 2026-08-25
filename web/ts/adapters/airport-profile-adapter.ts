@@ -270,6 +270,7 @@ export function snapshotToVizData(
     timeAxisMode: true,
     // No route-distance overlay in the single-airport, time-axis view.
     currentConditions: null,
+    observed: null,
     fronts: null,
     nightIntervals: [],
     sunSide: null,
@@ -424,6 +425,11 @@ function synthesizeVizPoint(
     temperatureCruiseC: null,
     isaDevC: null,
     precipitationMm: surface?.precipitation_mm ?? null,
+    // The airport-profile view is a single point on a time axis; the observed
+    // corridor sampler works along a route, so there is nothing to fold in.
+    observedRateMmH: null,
+    observedFlashRate: null,
+    observedRadarNoCoverage: false,
     // MSL pressure is not part of the airport-profile surface payload, so QNH
     // has no source here — the route-graph metric renders empty for profiles.
     qnhHpa: null,

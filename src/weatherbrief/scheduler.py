@@ -1653,6 +1653,83 @@ async def _run_freshness_check_once() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Observed-frame collector loop (#574)
+# ---------------------------------------------------------------------------
+#
+# One loop for four streams on three different cadences (radar 5 min, rain
+# rate 15 min, lightning and cloud tops 10 min).  It ticks every minute and
+# asks ``due_sources`` which streams should have published a frame we do not
+# hold — so a 5-minute stream and a 15-minute one share a loop without either
+# polling blind.
+#
+# Deliberately *not* aligned to :00: the CTTH pull moves ~71 MB every ten
+# minutes and inbound peaks at ~34× the mean during the GRIB decode cycle.
+# Nothing is network-bound at current levels, but there is no reason to stack
+# them on the same second.
+
+_OBSERVED_TICK_SECONDS = 60
+_OBSERVED_STARTUP_DELAY_SECONDS = 45
+
+
+async def run_observed_collect_loop(app_state) -> None:
+    """Keep the observed-frame store current.
+
+    Off unless ``WB_OBSERVED_ENABLED`` is set — the collector needs EUMETSAT
+    credentials and a few hundred MB of disk, so a deployment opts in.
+    ``WB_OBSERVED_SOURCES`` narrows the set (radar-only is a perfectly good
+    half of the feature).
+    """
+    from weatherbrief.observed.collect import (
+        collect_once,
+        due_sources,
+        enabled_sources,
+        observed_enabled,
+    )
+    from weatherbrief.observed.frames import FrameStore
+
+    if not observed_enabled():
+        logger.info("Observed-frame collection disabled (WB_OBSERVED_ENABLED unset)")
+        return
+
+    try:
+        sources = enabled_sources()
+    except ValueError:
+        logger.error("Observed-frame collection not started", exc_info=True)
+        return
+
+    store = FrameStore()
+    logger.info(
+        "Observed-frame collector started (sources: %s, tick %ds)",
+        ", ".join(sources), _OBSERVED_TICK_SECONDS,
+    )
+    await asyncio.sleep(_OBSERVED_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            due = await asyncio.to_thread(due_sources, store, sources=sources)
+            if due:
+                results = await asyncio.to_thread(
+                    collect_once, store, sources=tuple(due)
+                )
+                for result in results:
+                    if result.fetched or result.failed:
+                        logger.info(
+                            "Observed %s: %d fetched (%.1f MB), %d skipped, "
+                            "%d not published, %d failed, %d purged%s",
+                            result.source, result.fetched,
+                            result.bytes_in / 1_000_000, result.skipped,
+                            result.missing, result.failed, result.purged,
+                            f" — {result.errors[0]}" if result.errors else "",
+                        )
+            await asyncio.sleep(_OBSERVED_TICK_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.error("Observed-frame collection cycle failed", exc_info=True)
+            await asyncio.sleep(300)
+
+
+# ---------------------------------------------------------------------------
 # Hewson precompute loop
 # ---------------------------------------------------------------------------
 

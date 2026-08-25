@@ -870,5 +870,16 @@
   "settings.declaredApproaches.label": "Aérodromes (OACI)",
   "settings.declaredApproaches.fieldHint": "Séparez les codes par des espaces ou des virgules.",
   "settings.declaredApproaches.scope": "Utilisé uniquement par l'avis Faisabilité de l'approche : à une destination sans approche aux instruments publiée, une arrivée IFR passe en orange plutôt qu'en rouge — jamais en vert, et jamais en LIFR, faute de minima publiés. N'affecte jamais le calcul des minima de dégagement ni l'éligibilité d'un terrain comme dégagement déposé.",
-  "settings.declaredApproaches.unknown": "Codes d'aérodrome non reconnus : {codes}. Rien n'a été enregistré — vérifiez l'orthographe."
+  "settings.declaredApproaches.unknown": "Codes d'aérodrome non reconnus : {codes}. Rien n'a été enregistré — vérifiez l'orthographe.",
+  "graph.observed-rain-rate": "Précipitations observées (radar)",
+  "graph.observed-flash-rate": "Foudre observée (taux d'éclairs)",
+  "graph.noCoverage": "Hors couverture",
+  "observed.title": "Observations actuelles",
+  "observed.corridor": "Couloir",
+  "observed.noCoverage": "Hors couverture",
+  "observed.unavailable": "Non collecté",
+  "observed.sources": "Sources",
+  "viz.layer.observed-tops": "Sommets de nuages observés",
+  "viz.layer.observed-surface": "Radar et foudre observés",
+  "dataSources.role.observed": "observé"
 }

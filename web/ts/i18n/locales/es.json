@@ -870,5 +870,16 @@
   "settings.declaredApproaches.label": "Aeródromos (OACI)",
   "settings.declaredApproaches.fieldHint": "Separe los códigos con espacios o comas.",
   "settings.declaredApproaches.scope": "Solo lo usa el aviso de Viabilidad de la aproximación: en un destino sin aproximación instrumental publicada, una llegada IFR pasa a ámbar en lugar de rojo — nunca verde, y nunca en LIFR, donde no hay mínimos publicados. Nunca afecta al cálculo de mínimos de alternativo ni a si un aeródromo puede declararse como alternativo.",
-  "settings.declaredApproaches.unknown": "No se reconocen como códigos de aeródromo: {codes}. No se guardó nada — revise la ortografía."
+  "settings.declaredApproaches.unknown": "No se reconocen como códigos de aeródromo: {codes}. No se guardó nada — revise la ortografía.",
+  "graph.observed-rain-rate": "Precipitación observada (radar)",
+  "graph.observed-flash-rate": "Rayos observados (tasa de descargas)",
+  "graph.noCoverage": "Sin cobertura",
+  "observed.title": "Observaciones actuales",
+  "observed.corridor": "Corredor",
+  "observed.noCoverage": "Sin cobertura",
+  "observed.unavailable": "No recopilado",
+  "observed.sources": "Fuentes",
+  "viz.layer.observed-tops": "Topes de nubes observados",
+  "viz.layer.observed-surface": "Radar y rayos observados",
+  "dataSources.role.observed": "observado"
 }

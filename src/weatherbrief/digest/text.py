@@ -69,6 +69,12 @@ def format_digest(
     if snapshot.route_observations:
         lines.extend(_format_route_observations(snapshot.route_observations))
 
+    # Observed conditions (D-0 only, #574) — the deterministic summary the
+    # server computed, rendered verbatim so the text digest, the PDF and the
+    # web section all quote one string rather than three paraphrases.
+    if snapshot.observed_conditions and snapshot.observed_conditions.has_any_field:
+        lines.extend(_format_observed_conditions(snapshot.observed_conditions))
+
     # Route SIGMETs (D-0 only)
     if snapshot.route_sigmets and snapshot.route_sigmets.count:
         lines.extend(_format_route_sigmets(snapshot.route_sigmets))
@@ -529,4 +535,29 @@ def _format_model_agreement(snapshot: ForecastSnapshot) -> list[str]:
     if not has_data:
         lines.append("  No multi-model comparison available")
 
+    return lines
+
+
+def _format_observed_conditions(observed) -> list[str]:
+    """Render the "Observed now" block for the text digest."""
+    lines = ["OBSERVED NOW", "-" * 40]
+    lines.extend(observed.summary_lines)
+    if not observed.summary_lines:
+        lines.append("No observed data available along the route.")
+    missing = [s.source for s in observed.sources if not s.available]
+    if missing:
+        lines.append(f"Not collected: {', '.join(missing)}.")
+    attributions: list[str] = []
+    for field in (
+        observed.reflectivity,
+        observed.rain_rate,
+        observed.cloud_tops,
+        observed.lightning,
+    ):
+        text = getattr(getattr(field, "attribution", None), "text", "")
+        if text and text not in attributions:
+            attributions.append(text)
+    if attributions:
+        lines.append(" · ".join(attributions))
+    lines.append("")
     return lines

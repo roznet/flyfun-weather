@@ -10,6 +10,38 @@ Related: [ios-app-roadmap.md](../ios-app-roadmap.md) (phase plan + open question
 
 ---
 
+## No observed conditions on iOS
+
+**Added:** 2026-08-25
+**Web location:** the `observed-tops` / `observed-surface` cross-section layers
+(`web/ts/visualization/cross-section/layers/observed-*.ts`), the map overlay
+(`web/ts/visualization/route-map/observed-overlay.ts`), the two route-graph
+metrics, and the "Observed now" briefing section
+(`renderObservedConditions` in `web/ts/managers/briefing-ui.ts`). Payload:
+`observed_conditions` on `briefing.json`; imagery from `/api/observed`.
+
+**Context.** Issue #574 scopes the iOS `/observed` endpoint out of phase 1
+explicitly. The sampled payload already rides inline on `briefing.json`, so an
+iOS client gets it for free the moment it decodes the field — it is the
+*imagery* that has no iOS story yet, and that is where the work is: the
+overlay is a server-rendered plate-carrée PNG sized to a corridor bbox, which
+means a per-request render rather than a cacheable tile, and the offline pack
+would either have to bundle a frame that is stale by definition or leave the
+layer blank in the air.
+
+**Why the gap is safe today.** The Swift decoders ignore unknown keys, so
+adding `observed_conditions` to the snapshot breaks nothing. An iOS build that
+wants the numbers can decode them without any server change.
+
+**When to close it.** Together with phase 2, not before: phase 1 deliberately
+computes no verdict, and the cross-check it offers is *visual* — cloud tops
+drawn over the NWP cloud bands. Porting a visual cross-check to a second
+renderer costs the same work twice and produces two things to keep in step
+(`sync-ios-web`). Once phase 2 computes `echo_match` / `intensity_match` as
+data, iOS can show the result without reimplementing the picture.
+
+---
+
 ## No advisory recalculate on iOS
 
 **Added:** 2026-07-07

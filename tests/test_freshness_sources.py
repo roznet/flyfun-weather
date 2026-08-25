@@ -292,7 +292,18 @@ class TestParseLastModified:
 
 def test_all_tracked_sources_matches_registry():
     pairs = sources.all_tracked_sources()
-    assert len(pairs) == len(SOURCE_REGISTRY)
+    active = {k for k, c in SOURCE_REGISTRY.items() if c.is_active}
+    assert len(pairs) == len(active)
     for src, model in pairs:
-        assert src in SOURCE_REGISTRY
+        assert src in active
         assert src.startswith(model + ":")
+
+
+def test_env_gated_sources_are_not_tracked_until_enabled(monkeypatch):
+    """The loop must not probe a collector the deployment never started."""
+    gated = {k for k, c in SOURCE_REGISTRY.items() if c.env_gate}
+    assert gated
+    monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+    assert not ({s for s, _ in sources.all_tracked_sources()} & gated)
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    assert gated <= {s for s, _ in sources.all_tracked_sources()}

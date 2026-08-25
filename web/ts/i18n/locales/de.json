@@ -870,5 +870,16 @@
   "settings.declaredApproaches.label": "Flugplätze (ICAO)",
   "settings.declaredApproaches.fieldHint": "Codes durch Leerzeichen oder Kommas trennen.",
   "settings.declaredApproaches.scope": "Wird nur vom Hinweis „Anflugbarkeit“ verwendet: an einem Ziel ohne veröffentlichten Instrumentenanflug wird eine IFR-Ankunft gelb statt rot — nie grün und nie bei LIFR, wo es keine veröffentlichten Minima gibt. Hat nie Einfluss auf die Ausweich-Minima oder darauf, ob ein Platz als Ausweichflugplatz gilt.",
-  "settings.declaredApproaches.unknown": "Nicht als Flugplatzcodes erkannt: {codes}. Es wurde nichts gespeichert — bitte Schreibweise prüfen."
+  "settings.declaredApproaches.unknown": "Nicht als Flugplatzcodes erkannt: {codes}. Es wurde nichts gespeichert — bitte Schreibweise prüfen.",
+  "graph.observed-rain-rate": "Beobachtete Niederschlagsrate (Radar)",
+  "graph.observed-flash-rate": "Beobachtete Blitze (Blitzrate)",
+  "graph.noCoverage": "Keine Abdeckung",
+  "observed.title": "Aktuelle Beobachtungen",
+  "observed.corridor": "Korridor",
+  "observed.noCoverage": "Keine Abdeckung",
+  "observed.unavailable": "Nicht erfasst",
+  "observed.sources": "Quellen",
+  "viz.layer.observed-tops": "Beobachtete Wolkenobergrenzen",
+  "viz.layer.observed-surface": "Beobachtetes Radar & Blitze",
+  "dataSources.role.observed": "beobachtet"
 }

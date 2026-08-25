@@ -52,6 +52,8 @@ function loadVizSettings(): VizSettings {
     mapAltitudeFt: null,
     routeGraphVisible: true,
     routeGraphLeftMetric: 'headwind',
+    // null = widest sampled corridor (#574).
+    observedRadiusNm: null,
     routeGraphRightMetric: 'temperature',
     compareLayer: 'icing-bands',
     compareModels: {},
@@ -195,6 +197,10 @@ export interface BriefingState {
   setMapForecastMetric: (metricId: string) => void;
   setRouteGraphVisible: (visible: boolean) => void;
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
+  /** Pick the corridor width the observed layers resolve at (#574). All
+   *  sampled radii are already in the payload, so this re-extracts from
+   *  memory — it never re-fetches. */
+  setObservedRadius: (radiusNm: number | null) => void;
   setCompareLayer: (layerId: string) => void;
   setCompareModel: (model: string, enabled: boolean) => void;
   setCompareBandMode: (mode: import('../visualization/types').CompareBandMode) => void;
@@ -1083,6 +1089,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setRouteGraphVisible: (visible: boolean) => {
     const updated = { ...get().vizSettings, routeGraphVisible: visible };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setObservedRadius: (radiusNm: number | null) => {
+    const updated = { ...get().vizSettings, observedRadiusNm: radiusNm };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

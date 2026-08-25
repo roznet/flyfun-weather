@@ -14,10 +14,20 @@ cut-off 06/18 cycles reach 144h; ICON-EU main cycles 120h vs intermediate 78h).
 Note that a cycle's *horizon* is not where its hourly step cadence ends — for
 ECMWF that is init+90h, after which the manifest thins to 3-hourly and then
 6-hourly, all still within the same run.
+
+**Two schedule kinds.**  Everything above describes a *cycle* source: a
+forecast model that runs at fixed hours of the day and reaches some horizon
+into the future.  Observed streams (#574) are neither — OPERA radar publishes
+a composite every five minutes and it describes the past, not the future.
+A ``cycles`` tuple cannot express "every five minutes" (it is hours-of-day),
+so :class:`SourceConfig` carries an optional ``interval`` instead, and the
+scheduling functions below branch on which one is set.  An interval source's
+``horizon`` is zero by construction: an observation forecasts nothing.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -50,6 +60,11 @@ class SourceConfig:
             backoff schedule, 8 slips ≈ 6 h before cycle-jump.
         readiness_check: Symbolic name of the check_source dispatch target.
             Resolved by :mod:`sources`.
+        interval: Publication cadence for an *interval* source — an observed
+            stream that publishes every N minutes rather than at fixed hours.
+            Mutually exclusive with ``cycles``.
+        env_gate: Name of an environment variable that must be truthy for the
+            source to appear in the freshness loop and the public catalog.
         model_label: Display label for the underlying NWP model
             (e.g. "ICON-EU", "ICON-Global", "ECMWF IFS").  Distinct from
             the pack-model name in the key prefix — the same pack-model
@@ -79,13 +94,24 @@ class SourceConfig:
     """
 
     key: str
-    cycles: tuple[int, ...]
-    delivery_offset: timedelta | dict[int, timedelta]
-    horizon: timedelta | dict[int, timedelta]
+    cycles: tuple[int, ...] = ()
+    delivery_offset: timedelta | dict[int, timedelta] = timedelta(0)
+    horizon: timedelta | dict[int, timedelta] = timedelta(0)
     retry_interval: timedelta = timedelta(minutes=10)
     max_retry_interval: timedelta = timedelta(hours=1)
     max_slip_retries: int = 8
     readiness_check: str = ""
+
+    # Publication cadence for an *interval* source (observed streams).
+    # Mutually exclusive with ``cycles``: a source publishes either at fixed
+    # hours of the day or on a fixed period, never both.
+    interval: timedelta | None = None
+    # Optional environment gate.  A source named here is described by the
+    # registry but only takes part in the freshness loop and the public
+    # catalog while the variable is truthy — so a deployment without EUMETSAT
+    # credentials does not show a permanently-red row for a feature it never
+    # turned on.
+    env_gate: str = ""
 
     model_label: str = ""
     provider_label: str = ""
@@ -97,13 +123,28 @@ class SourceConfig:
     description: str = ""
 
     def __post_init__(self) -> None:
-        """Catch partial-dict horizons/offsets at registry-construction time.
+        """Catch malformed schedules at registry-construction time.
 
         A dict-shaped ``horizon`` or ``delivery_offset`` must cover *every*
         configured cycle hour — otherwise consumers like
         ``catalog._per_cycle_hours`` would ``KeyError`` and surface as an
         opaque 500 from ``/api/data-sources``.  Fail loudly at import.
         """
+        if bool(self.cycles) == bool(self.interval):
+            raise ValueError(
+                f"SourceConfig({self.key!r}): set exactly one of cycles "
+                f"(hours-of-day) or interval (fixed period)"
+            )
+        if self.interval is not None:
+            if self.interval <= timedelta(0):
+                raise ValueError(
+                    f"SourceConfig({self.key!r}): interval must be positive"
+                )
+            if isinstance(self.horizon, dict) or isinstance(self.delivery_offset, dict):
+                raise ValueError(
+                    f"SourceConfig({self.key!r}): an interval source has no "
+                    f"cycles to key a per-cycle horizon/offset on"
+                )
         for field_name, value in (
             ("horizon", self.horizon),
             ("delivery_offset", self.delivery_offset),
@@ -116,6 +157,18 @@ class SourceConfig:
                         f"missing cycle hours {missing} "
                         f"(cycles={list(self.cycles)})"
                     )
+
+    @property
+    def schedule_kind(self) -> str:
+        """``"interval"`` for observed streams, ``"cycle"`` for NWP runs."""
+        return "interval" if self.interval is not None else "cycle"
+
+    @property
+    def is_active(self) -> bool:
+        """False when an ``env_gate`` is configured and switched off."""
+        if not self.env_gate:
+            return True
+        return os.environ.get(self.env_gate, "").strip() in ("1", "true", "yes")
 
     def slip_bump(self, slip_count: int) -> timedelta:
         """Return the next-expected bump for the ``slip_count``-th slip.
@@ -209,6 +262,13 @@ _OM_UKMO_OFFSET = timedelta(hours=8, minutes=30)     # observed 8h19m
 # margin lets us avoid slip storms.  Recalibrate from /admin/freshness/markers
 # once we have a few days of observations.
 _OM_GEM_OFFSET = timedelta(hours=8)
+
+# Observed streams (#574).  These are delivery lags from a frame's nominal
+# valid time to its appearance in the cache, not forecast cut-offs — kept in
+# step with weatherbrief.observed.collect, which uses the same figures to
+# decide when a frame is worth asking for.
+_OPERA_DELIVERY_OFFSET = timedelta(minutes=4)
+_EUMETSAT_DELIVERY_OFFSET = timedelta(minutes=5)
 
 
 # The full-resolution ECMWF GRIB feed. Its 168h horizon marks the boundary
@@ -449,6 +509,96 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "containing a North-American (K/C/P…) ICAO."
         ),
     ),
+    # --- Observed streams (#574) -------------------------------------------
+    # Interval-scheduled, zero horizon: these describe the past.  They are
+    # here so the same freshness display and the same data-sources table cover
+    # observations as well as forecasts — a pilot reading "radar 6 min old"
+    # next to "ECMWF 12Z" is reading one surface, not two.  Each is gated on
+    # WB_OBSERVED_ENABLED so a deployment without the collector shows nothing
+    # rather than a permanently-red row.
+    "opera_dbzh:eumetnet": SourceConfig(
+        key="opera_dbzh:eumetnet",
+        interval=timedelta(minutes=5),
+        delivery_offset=_OPERA_DELIVERY_OFFSET,
+        readiness_check="observed_frames",
+        env_gate="WB_OBSERVED_ENABLED",
+        retry_interval=timedelta(minutes=2),
+        max_retry_interval=timedelta(minutes=15),
+        model_label="OPERA composite",
+        provider_label="EUMETNET OPERA",
+        provider_url="https://www.eumetnet.eu/activities/observations-programme/current-activities/opera/",
+        role="observed",
+        resolution="2 km",
+        coverage="Europe (radar network footprint; ~half the grid has no coverage)",
+        description=(
+            "Pan-European weather-radar composite reflectivity (DBZH), "
+            "published every 5 minutes. Each frame is a rolling 10-minute "
+            "maximum, so an echo on screen can be ~15 minutes old once "
+            "delivery is counted. Roughly half the grid carries no radar "
+            "coverage at all — reported distinctly from 'looked, saw nothing'."
+        ),
+    ),
+    "opera_rate:eumetnet": SourceConfig(
+        key="opera_rate:eumetnet",
+        interval=timedelta(minutes=15),
+        delivery_offset=_OPERA_DELIVERY_OFFSET,
+        readiness_check="observed_frames",
+        env_gate="WB_OBSERVED_ENABLED",
+        retry_interval=timedelta(minutes=3),
+        max_retry_interval=timedelta(minutes=30),
+        model_label="OPERA composite",
+        provider_label="EUMETNET OPERA",
+        provider_url="https://www.eumetnet.eu/activities/observations-programme/current-activities/opera/",
+        role="observed",
+        resolution="2 km",
+        coverage="Europe (radar network footprint)",
+        description=(
+            "Pan-European radar surface rain rate (RATE) in mm/h, published "
+            "every 15 minutes. Same coverage caveat as the reflectivity "
+            "composite."
+        ),
+    ),
+    "eumetsat_li:eumetsat": SourceConfig(
+        key="eumetsat_li:eumetsat",
+        interval=timedelta(minutes=10),
+        delivery_offset=_EUMETSAT_DELIVERY_OFFSET,
+        readiness_check="observed_frames",
+        env_gate="WB_OBSERVED_ENABLED",
+        retry_interval=timedelta(minutes=3),
+        max_retry_interval=timedelta(minutes=30),
+        model_label="MTG Lightning Imager",
+        provider_label="EUMETSAT",
+        provider_url="https://navigator.eumetsat.int/product/EO:EUM:DAT:0691",
+        role="observed",
+        resolution="~4.5 km",
+        coverage="MTG full disc (Europe, Africa, Atlantic)",
+        description=(
+            "Total lightning (intra-cloud and cloud-to-ground) as detected "
+            "flashes, every 10 minutes. A point product: the imager sees the "
+            "whole disc, so 'no flashes' is an observation rather than a gap."
+        ),
+    ),
+    "eumetsat_ctth:eumetsat": SourceConfig(
+        key="eumetsat_ctth:eumetsat",
+        interval=timedelta(minutes=10),
+        delivery_offset=_EUMETSAT_DELIVERY_OFFSET,
+        readiness_check="observed_frames",
+        env_gate="WB_OBSERVED_ENABLED",
+        retry_interval=timedelta(minutes=3),
+        max_retry_interval=timedelta(minutes=30),
+        model_label="MTG FCI L2 CTTH",
+        provider_label="EUMETSAT",
+        provider_url="https://navigator.eumetsat.int/product/EO:EUM:DAT:0681",
+        role="observed",
+        resolution="~2 km",
+        coverage="MTG full disc (Europe, Africa, Atlantic)",
+        description=(
+            "Satellite cloud-top height, every 10 minutes. Committed to one "
+            "top per pixel, so it is sampled as a histogram over the corridor "
+            "rather than a single value, and each pixel is placed by its own "
+            "parallax correction (~52 km median at European latitudes)."
+        ),
+    ),
 }
 
 
@@ -457,19 +607,31 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
 # ---------------------------------------------------------------------------
 
 
-def _floor_to_cycle(dt: datetime, cycles: tuple[int, ...]) -> datetime:
-    """Return the most recent cycle init at-or-before ``dt``."""
+def _floor_to_cycle(dt: datetime, cfg: SourceConfig) -> datetime:
+    """Return the most recent publication slot at-or-before ``dt``.
+
+    For a cycle source that is the latest configured hour-of-day; for an
+    interval source it is ``dt`` floored to the cadence, anchored on midnight
+    so slots line up with the provider's own naming (OPERA composites are
+    named ``T1405``, not ``T1403``).
+    """
     midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    candidates = [midnight + timedelta(hours=h) for h in cycles]
+    if cfg.interval is not None:
+        elapsed = dt - midnight
+        slots = int(elapsed // cfg.interval)
+        return midnight + cfg.interval * slots
+    candidates = [midnight + timedelta(hours=h) for h in cfg.cycles]
     candidates += [c - timedelta(days=1) for c in candidates]
     valid = [c for c in candidates if c <= dt]
     return max(valid)
 
 
-def _next_cycle_init(dt: datetime, cycles: tuple[int, ...]) -> datetime:
-    """Return the earliest cycle init strictly after ``dt``."""
+def _next_cycle_init(dt: datetime, cfg: SourceConfig) -> datetime:
+    """Return the earliest publication slot strictly after ``dt``."""
+    if cfg.interval is not None:
+        return _floor_to_cycle(dt, cfg) + cfg.interval
     midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    candidates = [midnight + timedelta(hours=h) for h in cycles]
+    candidates = [midnight + timedelta(hours=h) for h in cfg.cycles]
     candidates += [c + timedelta(days=1) for c in candidates]
     future = [c for c in candidates if c > dt]
     return min(future)
@@ -482,7 +644,7 @@ def next_run_after(source: str, current_init: datetime) -> datetime:
     is the next cycle's init time plus that cycle's delivery offset.
     """
     cfg = SOURCE_REGISTRY[source]
-    next_init = _next_cycle_init(current_init, cfg.cycles)
+    next_init = _next_cycle_init(current_init, cfg)
     return next_init + cfg.offset_for(next_init.hour)
 
 
@@ -494,7 +656,7 @@ def next_cycle_init_after(source: str, init: datetime) -> datetime:
     marker store's slip-cap path to identify the cycle being skipped.
     """
     cfg = SOURCE_REGISTRY[source]
-    return _next_cycle_init(init, cfg.cycles)
+    return _next_cycle_init(init, cfg)
 
 
 def run_horizon(source: str, init: datetime) -> timedelta:
@@ -587,7 +749,7 @@ def first_full_coverage(source: str, target: datetime) -> tuple[datetime, dateti
 def cycle_init_for(source: str, dt: datetime) -> datetime:
     """Return the latest cycle init at-or-before ``dt`` for ``source``."""
     cfg = SOURCE_REGISTRY[source]
-    return _floor_to_cycle(dt, cfg.cycles)
+    return _floor_to_cycle(dt, cfg)
 
 
 def expected_delivery_for_init(source: str, init: datetime) -> datetime:
@@ -606,9 +768,9 @@ def initial_marker_for(source: str, now: datetime | None = None) -> tuple[dateti
     """
     now = now or datetime.now(timezone.utc)
     cfg = SOURCE_REGISTRY[source]
-    init = _floor_to_cycle(now, cfg.cycles)
+    init = _floor_to_cycle(now, cfg)
     if init + cfg.offset_for(init.hour) > now:
         # current cycle not yet expected to be ready — use prior cycle
-        init = _floor_to_cycle(init - timedelta(seconds=1), cfg.cycles)
+        init = _floor_to_cycle(init - timedelta(seconds=1), cfg)
     next_expected = next_run_after(source, init)
     return init, next_expected

@@ -20,7 +20,7 @@ import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
-import type { LayerGroup } from './visualization/types';
+import type { LayerGroup, VizRouteData } from './visualization/types';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
 import {
@@ -40,6 +40,7 @@ import {
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
+import { corridorBounds, fetchObservedFlashes, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -264,6 +265,59 @@ function patchForecastTimeLabel(label: string): void {
  *  nearest snapshot time. Sets the model/metric every call (cheap recolour);
  *  only a new day/hour slice triggers a request. `requestRerender` fires once,
  *  when the day grid first lands, so the overlay + its controls appear. */
+// --- Observed overlay (#574) ---
+//
+// Flashes are fetched once per corridor and cached: the payload changes only
+// when a new frame lands, and re-requesting on every map re-render (altitude
+// slider drags, model switches) would spend a request per frame of a drag.
+let observedFlashCache: ObservedFlashPoint[] | null = null;
+let observedFlashKey: string | null = null;
+let observedFlashPending = false;
+
+function updateObservedOverlay(
+  data: VizRouteData,
+  renderer: RouteMapRenderer,
+  requestRerender: () => void,
+): void {
+  const observed = data.observed;
+  if (!observed) {
+    renderer.setObservedSource(null);
+    renderer.setObservedFlashes([]);
+    renderer.refreshObserved();
+    return;
+  }
+
+  // Reflectivity is the frame worth drawing when we have it: it is the
+  // highest-cadence source and the one that answers "is that cell on my
+  // route". Rain rate is the fallback when only it was collected.
+  renderer.setObservedSource(
+    observed.reflectivity ? 'opera_dbzh' : observed.rainRate ? 'opera_rate' : null,
+  );
+
+  const bounds = corridorBounds(data, observed.radiusNm);
+  if (!observed.lightning || !bounds) {
+    renderer.setObservedFlashes(observedFlashCache ?? []);
+    renderer.refreshObserved();
+    return;
+  }
+
+  const key = `${observed.lightning.validTime}|${bounds.toBBoxString()}`;
+  if (key !== observedFlashKey && !observedFlashPending) {
+    observedFlashPending = true;
+    fetchObservedFlashes(bounds)
+      .then((flashes) => {
+        observedFlashCache = flashes;
+        observedFlashKey = key;
+      })
+      // A flash-fetch failure costs the lightning points, not the overlay:
+      // the imagery and its age badge still draw.
+      .catch(() => { observedFlashCache = []; })
+      .finally(() => { observedFlashPending = false; requestRerender(); });
+  }
+  renderer.setObservedFlashes(observedFlashCache ?? []);
+  renderer.refreshObserved();
+}
+
 function updateForecastOverlay(
   state: BriefingState,
   renderer: RouteMapRenderer,
@@ -1595,6 +1649,11 @@ async function init(): Promise<void> {
       routeObservations: state.snapshot?.route_observations,
       routeSigmets: state.snapshot?.route_sigmets,
       routeFronts: state.routeFronts,
+      // Observed radar / lightning / cloud tops (#574). All sampled corridor
+      // widths ride in the payload, so switching width re-extracts from the
+      // snapshot already in memory rather than asking the server again.
+      observedConditions: state.snapshot?.observed_conditions,
+      observedRadiusNm: state.vizSettings.observedRadiusNm ?? null,
     };
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     // Advisory highlight geometry (#373): derived reactively from the tracked
@@ -1836,6 +1895,10 @@ async function init(): Promise<void> {
       // Airport forecast overlay for the flight time (async; cached by slice).
       // Re-render once when the day grid first lands so the overlay + controls appear.
       updateForecastOverlay(state, mapRenderer, () => renderVisualization(store.getState()));
+      // Observed conditions overlay (#574): the newest radar frame under the
+      // route plus age-faded lightning. Imagery is served, never carried in
+      // the briefing payload, so it is requested here when the layer is drawn.
+      updateObservedOverlay(data, mapRenderer, () => renderVisualization(store.getState()));
 
       // Attach or update map interaction
       if (mapInteraction) {
@@ -1919,10 +1982,17 @@ async function init(): Promise<void> {
 
       // Render route graph controls (below graph)
       if (routeGraphControlsContainer && showCrossSection) {
-        renderRouteGraphControls(routeGraphControlsContainer, state.vizSettings, {
-          onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
-          onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
-        });
+        renderRouteGraphControls(
+          routeGraphControlsContainer,
+          state.vizSettings,
+          {
+            onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
+            onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
+            onObservedRadiusChange: (radiusNm) => store.getState().setObservedRadius(radiusNm),
+          },
+          data.observed?.radiiNm ?? [],
+          data.observed?.radiusNm ?? null,
+        );
       }
     }
   }
@@ -2070,6 +2140,7 @@ async function init(): Promise<void> {
       ui.togglePackSections(!!state.currentPack);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
       ui.renderRefreshDelta(state.snapshot);
+      ui.renderObservedConditions(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderRouteAlternates(state.snapshot);
@@ -2584,6 +2655,7 @@ async function init(): Promise<void> {
     ui.togglePackSections(!!s.currentPack);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
     ui.renderRefreshDelta(s.snapshot);
+    ui.renderObservedConditions(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderRouteAlternates(s.snapshot);

@@ -158,6 +158,18 @@ from weatherbrief.models.observations import (  # noqa: F401
     RouteSigmets,
     SigmetAlongRoute,
 )
+from weatherbrief.models.observed import (  # noqa: F401
+    ObservedAnnulus,
+    ObservedAttribution,
+    ObservedConditions,
+    ObservedField,
+    ObservedFlashAnnulus,
+    ObservedFlashField,
+    ObservedSourceStatus,
+    ObservedStationRef,
+    ObservedTopsAnnulus,
+    ObservedTopsField,
+)
 from weatherbrief.models.storage import (  # noqa: F401
     AdvisoryChip,
     AdvisorySummary,
