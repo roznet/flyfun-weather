@@ -27,12 +27,11 @@ are model truth regardless of the TAS used.
 
 from __future__ import annotations
 
-import math
-
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     DEFAULT_CRUISE_TAS_KT,
     MIN_GROUNDSPEED_KT,
+    headwind_component,
     resolve_cruise_tas,
     wind_at_altitude,
 )
@@ -56,9 +55,9 @@ _MIN_GS_KT = MIN_GROUNDSPEED_KT
 _DEFAULT_TAS_KT = DEFAULT_CRUISE_TAS_KT
 
 
-def _headwind_component(speed_kt: float, direction_deg: float, track_deg: float) -> float:
-    """Along-track wind component: positive = headwind, negative = tailwind."""
-    return speed_kt * math.cos(math.radians(direction_deg - track_deg))
+# Moved to ``_helpers`` in #571 so the extent time axis resolves the same
+# component the same way; kept as a module alias for readability here.
+_headwind_component = headwind_component
 
 
 # Moved to ``_helpers`` in #571 so the extent time axis resolves the speed the

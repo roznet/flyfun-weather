@@ -295,7 +295,7 @@ class TurbulenceEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
                 highlights=highlights,
             ))
 

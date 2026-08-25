@@ -246,7 +246,7 @@ class FreezingPrecipEvaluator:
                 model=model, status=status, detail=detail,
                 affected=active_pts + primed_pts, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
                 highlights=summary.highlights,
             ))
 

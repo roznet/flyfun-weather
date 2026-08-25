@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Protocol, runtime_checkable
 
 from weatherbrief.models import (
@@ -79,35 +80,59 @@ class RouteContext:
     # ``convective_grading.resolve_convective_params``).
     advisory_params: dict[str, dict[str, float]] = field(default_factory=dict)
 
-    @property
+    @cached_property
     def cruise_groundspeed_kt(self) -> float:
         """Route-average groundspeed at cruise (kt), for the extent time axis (#571).
 
         Cruise TAS (``resolve_cruise_tas``: aircraft/profile speed → the flight's
         own planned speed → a generic light-GA fallback) less the route-average
-        headwind, from the per-point wind components the pack already carries —
-        no new wind lookups, and the same numbers the headwind advisory reports.
-        Floored at ``MIN_GROUNDSPEED_KT`` so a headwind near TAS cannot turn a
-        20 nm band into hours.
+        headwind. Floored at ``MIN_GROUNDSPEED_KT`` so a headwind near TAS cannot
+        turn a 20 nm band into hours.
 
-        Deliberately model-agnostic and route-average: this feeds a **display**
-        figure ("about 8 min in it"), never a gate. A large share of flights fall
-        back to a profile-default speed, so gating on minutes would grade one
-        aircraft differently from another for reasons the pilot never set — see
-        ``designs/meteorology-decisions.md`` §27.
+        The headwind is resolved with the **same precedence the headwind advisory
+        uses**: the cross-section wind at the *evaluated* ``cruise_altitude_ft``
+        first, falling back to the per-point component baked into the pack. That
+        matters because the altitude table re-evaluates the whole advisory set at
+        other levels — reading only the baked component would quietly keep the
+        wind from the pack's original cruise altitude and report the same minutes
+        at every level (#571 review).
+
+        Restricted to ``self.models``: the pack can carry components for slots
+        this run excludes, and averaging those in would report a groundspeed for
+        models the advisory never graded.
+
+        Route-average and model-agnostic by choice: this feeds a **display**
+        figure ("about 8 min in it"), never a gate. Per-model precision would be
+        spurious for a number whose input is often a profile default, and would
+        print three different minutes for one flight across three cards. Cached
+        because ~13 evaluators read it per run and the lookup walks every point.
         """
         from weatherbrief.analysis.advisories._helpers import (
             MIN_GROUNDSPEED_KT,
             resolve_cruise_tas,
+            wind_at_altitude,
+            headwind_component,
         )
 
         tas = resolve_cruise_tas(self)
-        headwinds = [
-            wc.headwind_kt
-            for rpa in self.analyses
-            for wc in rpa.wind_components.values()
-            if wc is not None and wc.headwind_kt is not None
-        ]
+        headwinds: list[float] = []
+        for rpa in self.analyses:
+            for model in self.models:
+                wind = wind_at_altitude(
+                    self.cross_sections, model, rpa.point_index,
+                    self.cruise_altitude_ft, rpa.forecast_hour,
+                )
+                if wind is not None:
+                    speed_kt, direction_deg = wind
+                    headwinds.append(
+                        headwind_component(speed_kt, direction_deg, rpa.track_deg)
+                    )
+                    continue
+                # Pack without cross-section winds: the precomputed component at
+                # the pack's original cruise level, same fallback as ``headwind``.
+                wc = rpa.wind_components.get(model)
+                if wc is not None and wc.headwind_kt is not None:
+                    headwinds.append(wc.headwind_kt)
         if not headwinds:
             return tas
         return max(tas - sum(headwinds) / len(headwinds), MIN_GROUNDSPEED_KT)

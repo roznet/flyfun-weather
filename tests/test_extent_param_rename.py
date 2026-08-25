@@ -214,3 +214,83 @@ class TestLossless:
                 if key in touched or key in renames:
                     continue
                 assert res_after[adv_id][key] == val
+
+
+class TestDowngrade:
+    """The reverse direction, exercised directly (#571 review).
+
+    ``downgrade()`` is the highest-scrutiny path in migration 093 — it rewrites
+    live profile data and un-inverts ``fiki_icing``'s stored value — and the
+    round-trip tests above only prove ``upgrade()``. These drive the same
+    reversal logic the migration runs, so a change to the rename map that breaks
+    the way back is caught here rather than in production.
+    """
+
+    def _downgrade(self, params: dict) -> dict:
+        """The reversal migration 093's ``downgrade()`` performs, over one dict.
+
+        Mirrors the migration body deliberately rather than importing it: the
+        migration reads and writes rows, and the logic under test is the
+        per-profile transform.
+        """
+        from weatherbrief.analysis.advisories.extent_param_migration import (
+            EXTENT_KEY_RENAMES,
+            INVERTED_PCT_KEYS,
+            SECONDARY_ALIASES,
+        )
+
+        out = copy.deepcopy(params)
+        for adv_id, renames in EXTENT_KEY_RENAMES.items():
+            stored = out.get(adv_id)
+            if not isinstance(stored, dict):
+                continue
+            inverted = INVERTED_PCT_KEYS.get(adv_id, set())
+            secondary = SECONDARY_ALIASES.get(adv_id, set())
+            for old, new in renames.items():
+                if old in secondary or new not in stored:
+                    continue
+                value = stored.pop(new)
+                stored[old] = 100.0 - value if old in inverted else value
+        return out
+
+    def test_restores_the_original_keys(self):
+        before = {"vmc_cruise": {"bkn_pct_amber": 35, "ovc_pct_red": 60}}
+        migrated, _ = rename_extent_params({"advisories": {"params": before}})
+        restored = self._downgrade(migrated["advisories"]["params"])
+        assert restored == before
+
+    def test_un_inverts_fiki_so_the_value_round_trips(self):
+        before = {"fiki_icing": {"clear_cruise_amber_pct": 70}}
+        migrated, _ = rename_extent_params({"advisories": {"params": before}})
+        assert migrated["advisories"]["params"]["fiki_icing"] == {
+            "extent_pct_amber": 30.0
+        }
+        restored = self._downgrade(migrated["advisories"]["params"])
+        assert restored == {"fiki_icing": {"clear_cruise_amber_pct": 70.0}}
+
+    def test_secondary_alias_comes_back_under_the_primary_name(self):
+        """Documented edge: two old names map onto one new one, so only the
+        primary can be restored. The VALUE must still round-trip exactly."""
+        before = {"icing_escape": {"min_route_pct": 8}}
+        migrated, _ = rename_extent_params({"advisories": {"params": before}})
+        restored = self._downgrade(migrated["advisories"]["params"])
+        assert restored == {"icing_escape": {"no_escape_pct_red": 8}}
+
+    def test_turbulence_is_not_treated_as_an_alias(self):
+        """`route_pct_amber` is a secondary alias for icing_escape and the
+        PRIMARY (only) old name for turbulence. A bare key-name check would skip
+        turbulence and silently leave it un-downgraded."""
+        before = {"turbulence": {"route_pct_amber": 40}}
+        migrated, _ = rename_extent_params({"advisories": {"params": before}})
+        restored = self._downgrade(migrated["advisories"]["params"])
+        assert restored == before
+
+    def test_round_trips_a_profile_carrying_every_key(self):
+        dense = TestLossless()._dense_legacy_profile()["advisories"]["params"]
+        migrated, _ = rename_extent_params({"advisories": {"params": dense}})
+        restored = self._downgrade(migrated["advisories"]["params"])
+        assert restored == dense
+
+    def test_leaves_unrelated_params_untouched(self):
+        params = {"airport_wind": {"crosswind_red_kt": 25}}
+        assert self._downgrade(params) == params

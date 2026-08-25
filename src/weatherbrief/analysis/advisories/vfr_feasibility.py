@@ -1065,7 +1065,7 @@ class VFRFeasibilityEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=enroute_extent.nm,
+                extent=enroute_extent,
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=primary_method_id,

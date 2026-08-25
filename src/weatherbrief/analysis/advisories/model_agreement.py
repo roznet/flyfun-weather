@@ -167,7 +167,7 @@ class ModelAgreementEvaluator:
             model="all", status=status, detail=detail,
             affected=poor_count, total=total,
             total_distance_nm=ctx.total_distance_nm,
-            affected_nm=summary.affected_nm,
+            extent=summary.extent,
         )]
 
         return RouteAdvisoryResult.from_per_model("model_agreement", per_model, params)

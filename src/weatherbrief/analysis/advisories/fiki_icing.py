@@ -440,8 +440,7 @@ class FIKIIcingEvaluator:
                     affected=affected,
                     total=cruise_total,
                     total_distance_nm=total_dist,
-                    affected_nm=summary.affected_nm,
-                    domain_nm=summary.domain_nm,
+                    extent=summary.extent,
                     highlights=summary.highlights,  # model has data here (total > 0)
                     primary_method_id=driving_method_id(summary.highlights, status),
                 )

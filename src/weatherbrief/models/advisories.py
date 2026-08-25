@@ -7,9 +7,16 @@ deterministic GREEN/AMBER/RED assessments per advisory per model.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    # Type-only: ``route_geometry`` imports from ``models``, so a runtime
+    # import here would close the cycle. ``build`` only reads ``.nm`` /
+    # ``.domain_nm`` off it, and ``from __future__ import annotations``
+    # keeps the annotation a string.
+    from weatherbrief.analysis.route_geometry import RouteExtent
 
 from weatherbrief.models.airport_conditions import AirportConditions  # noqa: F401
 
@@ -406,6 +413,7 @@ class ModelAdvisoryResult(BaseModel):
         total_distance_nm: float,
         affected_mod: int | None = None,
         affected_mod_nm: float | None = None,
+        extent: RouteExtent | None = None,
         domain_nm: float | None = None,
         affected_domain: str | None = None,
         cross_check: str | None = None,
@@ -421,6 +429,16 @@ class ModelAdvisoryResult(BaseModel):
         only be derived proportionally, and the evaluator's own message quotes
         the geometry-accurate figure — which is how ecmwf came to print
         "MODERATE+ over 264nm (45%)" beside an ``affected_pct`` of 68.8 (#571).
+
+        ``extent`` is the preferred way to publish the geometry: pass the same
+        :class:`RouteExtent` the message formatted and the gate graded, and
+        ``affected_nm`` and ``domain_nm`` are taken from it **together**. Passing
+        them separately is still supported for the composites that measure two
+        populations, but it is a footgun — an ``affected_nm`` supplied without
+        its ``domain_nm`` silently falls back to the whole route, so a
+        partially-assessed model publishes an ``affected_pct`` computed against
+        a denominator neither the gate nor the sentence used. That is the D2
+        defect this class exists to prevent, reachable by omission (#571 review).
 
         ``domain_nm`` is the denominator the extent was measured against, and
         ``affected_domain`` names it when it is not the whole route. Both default
@@ -454,6 +472,13 @@ class ModelAdvisoryResult(BaseModel):
         proportional_mod_nm = (
             round(total_distance_nm * mod / total, 1) if total > 0 else 0
         )
+        # ``extent`` fills both halves at once; explicit kwargs still win so a
+        # composite can publish a different population deliberately.
+        if extent is not None:
+            if affected_nm is None:
+                affected_nm = extent.nm
+            if domain_nm is None:
+                domain_nm = extent.domain_nm
         resolved_nm = (
             round(affected_nm, 1) if affected_nm is not None else proportional_nm
         )

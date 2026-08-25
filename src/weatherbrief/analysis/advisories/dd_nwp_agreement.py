@@ -268,7 +268,7 @@ class DDvsNWPAgreementEvaluator:
                 affected=disagree_points,
                 total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=extent.nm,
+                extent=extent,
             ))
 
         return RouteAdvisoryResult.from_per_model(

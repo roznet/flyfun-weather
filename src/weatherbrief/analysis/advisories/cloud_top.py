@@ -199,7 +199,7 @@ class CloudTopEvaluator:
                 model=model, status=status, detail=detail,
                 affected=above_ceiling, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),
             ))
