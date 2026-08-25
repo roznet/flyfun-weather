@@ -31,8 +31,8 @@ _ICING_DEFAULTS = {
     "terrain_margin_ft": 1000,
     "tight_margin_ft": 2000,
     "icing_altitude_buffer_ft": 2000,
-    "icing_coverage_pct_amber": 20,
-    "no_escape_pct_red": 15,
+    "extent_pct_amber": 20,
+    "extent_pct_red": 15,
 }
 
 

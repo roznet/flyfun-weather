@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     build_regions,
     build_ribbon,
     driving_method_id,
@@ -87,27 +89,28 @@ class ConvectiveEvaluator:
                     step=1,
                 ),
                 AdvisoryParameterDef(
-                    key="affected_pct_amber",
-                    label="Route % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route with convection (amber)",
                     description="Route percentage affected for amber",
                     type="percent",
                     unit="%",
-                    default=CONVECTIVE_PARAM_DEFAULTS["affected_pct_amber"],
+                    default=CONVECTIVE_PARAM_DEFAULTS["extent_pct_amber"],
                     min=5,
                     max=80,
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="affected_pct_red",
-                    label="Route % (red)",
+                    key="extent_pct_red",
+                    label="% of route with convection (red)",
                     description="Route percentage affected for red",
                     type="percent",
                     unit="%",
-                    default=CONVECTIVE_PARAM_DEFAULTS["affected_pct_red"],
+                    default=CONVECTIVE_PARAM_DEFAULTS["extent_pct_red"],
                     min=10,
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="top_clearance_ft",
                     label="Top clearance (ft)",

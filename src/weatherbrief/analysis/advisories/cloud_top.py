@@ -8,6 +8,8 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     driving_method_id,
     format_extent,
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     grade_extent,
     summarize_evidence,
 )
@@ -57,8 +59,8 @@ class CloudTopEvaluator:
                     audience="pilot",
                 ),
                 AdvisoryParameterDef(
-                    key="pct_amber",
-                    label="Route % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route above ceiling (amber)",
                     description="Route percentage with tops above ceiling for amber",
                     type="percent",
                     unit="%",
@@ -67,13 +69,29 @@ class CloudTopEvaluator:
                     max=80,
                     step=5,
                 ),
+                # Was a hardcoded ``red_pct=60`` in the gate, invisible in the
+                # catalog and untunable (#571 Stage 3).
+                AdvisoryParameterDef(
+                    key="extent_pct_red",
+                    label="% of route above ceiling (red)",
+                    description="Route percentage with tops above ceiling for red",
+                    type="percent",
+                    unit="%",
+                    default=60,
+                    min=10,
+                    max=100,
+                    step=5,
+                ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         margin_ft = params.get("margin_ft", 1000)
-        pct_amber = params.get("pct_amber", 25)
+        extent_pct_amber = params.get("extent_pct_amber", 25)
+        extent_pct_red = params.get("extent_pct_red", 60)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         ceiling = ctx.flight_ceiling_ft
 
         per_model: list[ModelAdvisoryResult] = []
@@ -156,7 +174,9 @@ class CloudTopEvaluator:
                     detail = adv_t("cloud_top.no_layers", loc)
             else:
                 status = grade_extent(
-                    summary.extent, amber_pct=pct_amber, red_pct=60,
+                    summary.extent,
+                    amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                    min_nm=extent_min_nm,
                 )
                 ext = format_extent(summary.extent)
                 detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")

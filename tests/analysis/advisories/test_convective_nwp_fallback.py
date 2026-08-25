@@ -179,7 +179,7 @@ def test_absent_track_caps_at_amber_and_counts_as_a_dd_trigger():
 def test_absent_track_does_not_red_on_coverage_either():
     """The other route to RED: MODERATE+ extent crossing the 50 % threshold.
 
-    All six points are affected (100 % ≥ ``affected_pct_red``), so coverage
+    All six points are affected (100 % ≥ ``extent_pct_red``), so coverage
     alone would red it. The red-coverage exclusion — ``affected -
     dd_trigger_count`` — is what holds it at AMBER.
     """

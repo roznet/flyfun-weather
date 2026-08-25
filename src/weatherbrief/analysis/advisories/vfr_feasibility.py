@@ -17,6 +17,8 @@ from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     FlaggedCell,
     apply_airport_endpoints,
     below_coverage,
@@ -222,8 +224,9 @@ def _enroute_vfr_status(
     total: int,
     imc_extent: RouteExtent,
     affected_extent: RouteExtent,
-    imc_pct_amber: float,
-    imc_pct_red: float,
+    extent_pct_amber: float,
+    extent_pct_red: float,
+    extent_min_nm: float = EXTENT_MIN_NM,
 ) -> AdvisoryStatus:
     """Grade the en-route cloud-clearance axis from the two extents.
 
@@ -231,14 +234,18 @@ def _enroute_vfr_status(
     altitude is graded with exactly the same thresholds as cruise.
 
     Distance-based, through the shared gate and its minimum-extent floor (#571
-    Stage 2). This axis is where the floor matters most: at ``imc_pct_red=15``
+    Stage 2). This axis is where the floor matters most: at ``extent_pct_red=15``
     two flagged points on a ~120 nm route used to clear RED outright.
     """
     if total <= 0:
         return AdvisoryStatus.GREEN
-    if grade_extent(imc_extent, amber_pct=imc_pct_red) != AdvisoryStatus.GREEN:
+    if grade_extent(
+        imc_extent, amber_pct=extent_pct_red, min_nm=extent_min_nm,
+    ) != AdvisoryStatus.GREEN:
         return AdvisoryStatus.RED
-    return grade_extent(affected_extent, amber_pct=imc_pct_amber)
+    return grade_extent(
+        affected_extent, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
+    )
 
 
 def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
@@ -639,8 +646,9 @@ def _solver_mitigations(
     ctx: RouteContext,
     model: str,
     cloud_clearance_ft: float,
-    imc_pct_amber: float,
-    imc_pct_red: float,
+    extent_pct_amber: float,
+    extent_pct_red: float,
+    extent_min_nm: float,
     floor_margin_ft: float,
     max_reposition_nm: float,
     enroute_status: AdvisoryStatus,
@@ -712,7 +720,8 @@ def _solver_mitigations(
                 ctx, model, cloud_clearance_ft, alt,
             )
             cand = _enroute_vfr_status(
-                tot, cand_imc_ext, cand_ext, imc_pct_amber, imc_pct_red,
+                tot, cand_imc_ext, cand_ext,
+                extent_pct_amber, extent_pct_red, extent_min_nm,
             )
             if _SEVERITY[cand] < _SEVERITY[enroute_status]:
                 if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
@@ -833,8 +842,8 @@ class VFRFeasibilityEvaluator:
                     audience="pilot",
                 ),
                 AdvisoryParameterDef(
-                    key="imc_pct_amber",
-                    label="IMC % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in IMC (amber)",
                     description="Route percentage in IMC or marginal clearance for amber",
                     type="percent",
                     unit="%",
@@ -844,8 +853,8 @@ class VFRFeasibilityEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="imc_pct_red",
-                    label="IMC % (red)",
+                    key="extent_pct_red",
+                    label="% of route in IMC (red)",
                     description="Route percentage in IMC for red",
                     type="percent",
                     unit="%",
@@ -854,6 +863,7 @@ class VFRFeasibilityEvaluator:
                     max=80,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="terminal_corridor_nm",
                     label="Terminal corridor",
@@ -893,8 +903,9 @@ class VFRFeasibilityEvaluator:
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         cloud_clearance_ft = params.get("cloud_clearance_ft", 1000)
-        imc_pct_amber = params.get("imc_pct_amber", 15)
-        imc_pct_red = params.get("imc_pct_red", 30)
+        extent_pct_amber = params.get("extent_pct_amber", 15)
+        extent_pct_red = params.get("extent_pct_red", 30)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         corridor_nm = params.get("terminal_corridor_nm", 5)
         mitigation_min_base_agl_ft = params.get("mitigation_min_base_agl_ft", 3000)
         mitigation_max_reposition_nm = params.get("mitigation_max_reposition_nm", 25)
@@ -937,7 +948,8 @@ class VFRFeasibilityEvaluator:
             # 4. Determine en-route status
             affected = imc_count + marginal_count
             enroute_status = _enroute_vfr_status(
-                total, imc_extent, enroute_extent, imc_pct_amber, imc_pct_red
+                total, imc_extent, enroute_extent,
+                extent_pct_amber, extent_pct_red, extent_min_nm,
             )
             # Coverage tolerance (#391): a clear en-route cloud verdict from
             # soundings at too small a share of the route is UNAVAILABLE, not
@@ -1020,7 +1032,7 @@ class VFRFeasibilityEvaluator:
             # descent_deck) when a terminal deck forces the climb/descent low.
             mitigations: list[Mitigation] = _solver_mitigations(
                 ctx, model, cloud_clearance_ft,
-                imc_pct_amber, imc_pct_red,
+                extent_pct_amber, extent_pct_red, extent_min_nm,
                 mitigation_min_base_agl_ft, mitigation_max_reposition_nm,
                 enroute_status, loc,
             )

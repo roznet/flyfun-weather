@@ -128,7 +128,7 @@ class TestEnroutePrecipEvaluator:
             _sounding(PrecipPhase.SNOW, PrecipIntensity.LIGHT) if i < 2 else _sounding()
             for i in range(10)
         ]
-        result = _evaluate(_ctx(per_point), params={"snow_pct_amber": 30})
+        result = _evaluate(_ctx(per_point), params={"extent_pct_amber": 30})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_clear_verdict_low_coverage_is_unavailable(self):

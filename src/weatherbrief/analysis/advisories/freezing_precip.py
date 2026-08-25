@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     format_extent,
@@ -80,8 +82,8 @@ class FreezingPrecipEvaluator:
             timing_class="scan",
             parameters=[
                 AdvisoryParameterDef(
-                    key="primed_pct_amber",
-                    label="Primed profile amber",
+                    key="extent_pct_amber",
+                    label="% of route with a primed profile (amber)",
                     description=(
                         "Percent of route with a freezing-rain-shaped profile "
                         "(no active precip) that triggers amber"
@@ -93,12 +95,14 @@ class FreezingPrecipEvaluator:
                     max=50,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        primed_pct_amber = params.get("primed_pct_amber", 5)
+        extent_pct_amber = params.get("extent_pct_amber", 5)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -212,7 +216,7 @@ class FreezingPrecipEvaluator:
                         f"{format_extent(primed_ext)}"
                     )
             elif primed_pts > 0 and grade_extent(
-                primed_ext, amber_pct=primed_pct_amber,
+                primed_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
                 detail = (

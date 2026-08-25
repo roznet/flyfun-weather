@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     format_extent,
     grade_extent,
     route_extent,
@@ -133,8 +135,8 @@ class DDvsNWPAgreementEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="amber_pct",
-                    label="Route % disagreeing for amber",
+                    key="extent_pct_amber",
+                    label="% of route disagreeing (amber)",
                     description="Minimum route percentage with disagreement to flag amber",
                     type="percent",
                     unit="%",
@@ -144,8 +146,8 @@ class DDvsNWPAgreementEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="red_pct",
-                    label="Route % disagreeing for red",
+                    key="extent_pct_red",
+                    label="% of route disagreeing (red)",
                     description="Minimum route percentage with disagreement to flag red",
                     type="percent",
                     unit="%",
@@ -154,6 +156,7 @@ class DDvsNWPAgreementEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
@@ -161,8 +164,9 @@ class DDvsNWPAgreementEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         freezing_delta_ft = params.get("freezing_delta_ft", 2000)
         cloud_overlap_min = params.get("cloud_overlap_min", 30) / 100.0
-        amber_pct = params.get("amber_pct", 30)
-        red_pct = params.get("red_pct", 60)
+        extent_pct_amber = params.get("extent_pct_amber", 30)
+        extent_pct_red = params.get("extent_pct_red", 60)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -250,7 +254,8 @@ class DDvsNWPAgreementEvaluator:
                 detail = "DD and NWP tracks agree"
             else:
                 status = grade_extent(
-                    extent, amber_pct=amber_pct, red_pct=red_pct,
+                    extent, amber_pct=extent_pct_amber,
+                    red_pct=extent_pct_red, min_nm=extent_min_nm,
                 )
                 top_cat = max(categories_triggered, key=categories_triggered.get)
                 detail = f"{top_cat} track diverges over {format_extent(extent)}"

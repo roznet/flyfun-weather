@@ -43,7 +43,7 @@ _ADVISORIES = {
                     "cross_check": None,
                 }
             ],
-            "parameters_used": {"affected_pct_amber": 20.0},
+            "parameters_used": {"extent_pct_amber": 20.0},
         },
         {
             "advisory_id": "convective",
@@ -186,7 +186,7 @@ def test_generic_advisory_detail(client, app_db):
     assert body["name"] == "Icing"  # catalog enrichment
     assert "cross_check_note" in body  # always present (the explainer, never an alert)
     assert len(body["per_model"]) == 1
-    assert body["parameters_used"]["affected_pct_amber"] == 20.0
+    assert body["parameters_used"]["extent_pct_amber"] == 20.0
     # Non-convective → no convective reconciliation block.
     assert "convective" not in body
 

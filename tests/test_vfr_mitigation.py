@@ -29,8 +29,8 @@ from weatherbrief.models import (
 # Default VFR params (mirror the catalog defaults).
 _VFR_DEFAULTS = {
     "cloud_clearance_ft": 1000,
-    "imc_pct_amber": 15,
-    "imc_pct_red": 30,
+    "extent_pct_amber": 15,
+    "extent_pct_red": 30,
     "terminal_corridor_nm": 5,
     "mitigation_min_base_agl_ft": 3000,
     "mitigation_max_reposition_nm": 25,
