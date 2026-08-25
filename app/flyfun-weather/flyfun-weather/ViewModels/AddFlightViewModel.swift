@@ -607,10 +607,17 @@ final class AddFlightViewModel {
             await packCountTask.value
             return
         }
-        // Inherits the MainActor context; `Task` allows the implicit `self`.
-        let task = Task {
+        // Inherits the MainActor context. `[weak self]` because the task is
+        // stored *on* the view model: a strong capture would keep the editor's
+        // view model alive until the request resolves even after the pilot has
+        // dismissed it. The count only sharpens copy, so a vanished editor has
+        // nothing left to tell.
+        let task = Task { [weak self] in
+            guard let self else { return }
             do {
-                existingPackCount = try await repository.packs(flightId: editingFlight.id).count
+                self.existingPackCount = try await self.repository.packs(
+                    flightId: editingFlight.id
+                ).count
             } catch {
                 Self.logger.debug("Pack count unavailable: \(error)")
             }

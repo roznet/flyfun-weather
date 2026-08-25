@@ -756,6 +756,39 @@ class TestFlightsAPI:
         assert pack_dir.exists()
         assert (pack_dir / "briefing.json").exists()
 
+    def test_move_flight_keeps_pack_artifacts_when_it_fails_after_registration(
+        self, client, app_db, tmp_path, sample_flight,
+    ):
+        """A failure *after* the cleanup is registered must still keep the files.
+
+        The sibling test above throws from ``save_flight``, i.e. before
+        ``remove_artifacts_after_commit`` is ever reached — so it proves the
+        reordering but not the deferral. This one throws from
+        ``_flight_to_response``, the only statement left between the
+        registration and the request's commit. The listener is installed and
+        the transaction then rolls back, so this is the case that actually
+        pins ``after_commit`` (rather than ``after_flush`` or an inline
+        unlink) as what ties the on-disk half to the database half.
+        """
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+
+        from weatherbrief.api import flights as flights_api
+
+        with patch.object(
+            flights_api, "_flight_to_response", side_effect=RuntimeError("boom"),
+        ):
+            resp = client.post(
+                f"/api/flights/{sample_flight.id}/move",
+                json={"departure_time": (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()},
+            )
+        assert resp.status_code == 500
+
+        # The rollback restored the flight, and the artifacts it points at
+        # were never unlinked because the commit never happened.
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
+        assert pack_dir.exists()
+        assert (pack_dir / "briefing.json").exists()
+
     def test_move_flight_not_owner(self, client, app_db):
         """Cannot move someone else's flight."""
         session = app_db()
