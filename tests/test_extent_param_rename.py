@@ -294,3 +294,75 @@ class TestDowngrade:
     def test_leaves_unrelated_params_untouched(self):
         params = {"airport_wind": {"crosswind_red_kt": 25}}
         assert self._downgrade(params) == params
+
+
+# The pre-consolidation key census, transcribed from issue #571's D5 section —
+# NOT derived from EXTENT_KEY_RENAMES. That independence is the point: the
+# lossless tests above build their fixture *from* the map, so a key the map
+# forgot is invisible to them. That is exactly how `turbulence.route_pct_red`
+# survived a "no old key survives" assertion while being silently unmigrated
+# (#571 review).
+_ISSUE_CENSUS: dict[str, set[str]] = {
+    "cloud_top": {"pct_amber"},
+    "convective": {"affected_pct_amber", "affected_pct_red"},
+    "dd_nwp_agreement": {"amber_pct", "red_pct"},
+    "enroute_precip": {"snow_pct_amber", "snow_moderate_pct_red"},
+    "fiki_icing": {"clear_cruise_amber_pct", "clear_cruise_red_pct"},
+    "freezing_precip": {"primed_pct_amber"},
+    "icing_escape": {
+        "icing_coverage_pct_amber", "no_escape_pct_red",
+        "route_pct_amber", "min_route_pct",
+    },
+    "ifr_feasibility": {"icing_pct_amber", "icing_pct_red"},
+    "model_agreement": {"poor_pct_amber", "poor_pct_red"},
+    "turbulence": {"route_pct_amber", "route_pct_red"},
+    "vfr_feasibility": {"imc_pct_amber", "imc_pct_red"},
+    "vmc_cruise": {"bkn_pct_amber", "ovc_pct_red"},
+}
+
+# Deliberately NOT consolidated, with the reason. `enroute_precip`'s rain axis
+# is a second amber axis an advisory can only have one common key for;
+# `convective_character`'s are three-way band boundaries and a contiguous-run
+# floor, not an amber/red pair.
+_DELIBERATELY_KEPT: dict[str, set[str]] = {
+    "enroute_precip": {"rain_pct_amber"},
+    "convective_character": {
+        "isolated_max_pct", "scattered_max_pct", "embed_min_nm",
+    },
+}
+
+
+class TestMapCompleteness:
+    """The rename map against an independent census, not against itself."""
+
+    def test_every_censused_key_is_migrated(self):
+        missing = {
+            adv_id: sorted(keys - set(EXTENT_KEY_RENAMES.get(adv_id, {})))
+            for adv_id, keys in _ISSUE_CENSUS.items()
+            if keys - set(EXTENT_KEY_RENAMES.get(adv_id, {}))
+        }
+        assert not missing, (
+            "these pre-consolidation keys would linger in stored profiles, "
+            f"inert, while the pilot believes their tuning is live: {missing}"
+        )
+
+    def test_the_map_invents_nothing(self):
+        """The reverse direction: no rename for a key the census never had."""
+        extra = {
+            adv_id: sorted(set(renames) - _ISSUE_CENSUS.get(adv_id, set()))
+            for adv_id, renames in EXTENT_KEY_RENAMES.items()
+            if set(renames) - _ISSUE_CENSUS.get(adv_id, set())
+        }
+        assert not extra, f"renames for keys not in the census: {extra}"
+
+    def test_deliberately_kept_keys_are_still_declared(self):
+        """A key we chose not to consolidate must still exist in the catalog —
+        otherwise it was silently dropped rather than deliberately kept."""
+        catalog = _catalog_keys()
+        for adv_id, keys in _DELIBERATELY_KEPT.items():
+            for key in keys:
+                assert key in catalog[adv_id], f"{adv_id}:{key} vanished"
+
+    def test_the_census_and_the_kept_set_are_disjoint(self):
+        for adv_id, keys in _DELIBERATELY_KEPT.items():
+            assert not keys & _ISSUE_CENSUS.get(adv_id, set())

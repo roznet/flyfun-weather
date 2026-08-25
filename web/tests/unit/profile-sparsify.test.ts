@@ -125,6 +125,23 @@ describe('renameExtentParams', () => {
     expect(raw).toEqual(snapshot);
   });
 
+  it('uses the secondary alias when no primary key is present', () => {
+    // The precedence path the Python side tests but this suite did not: with
+    // no primary key stored, icing_escape's read-path aliases must still
+    // migrate, or the pilot's tuning is silently dropped (#571 review).
+    expect(renameExtentParams({ icing_escape: { min_route_pct: 8 } }))
+      .toEqual({ icing_escape: { extent_pct_red: 8 } });
+    expect(renameExtentParams({ icing_escape: { route_pct_amber: 25 } }))
+      .toEqual({ icing_escape: { extent_pct_amber: 25 } });
+  });
+
+  it('migrates turbulence\'s red threshold, not just its amber one', () => {
+    // `route_pct_red` was missing from the rename map on both sides (#571
+    // review) — the key existed, so a stored value would have gone inert.
+    expect(renameExtentParams({ turbulence: { route_pct_red: 65 } }))
+      .toEqual({ turbulence: { extent_pct_red: 65 } });
+  });
+
   it('is a no-op on an already-migrated profile', () => {
     const raw = { vmc_cruise: { extent_pct_amber: 30 } };
     expect(renameExtentParams(raw)).toEqual(raw);

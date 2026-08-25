@@ -275,9 +275,40 @@ class TestRouteExtent:
 
     def test_empty_and_degenerate(self):
         assert route_extent([], 100.0, []) == EMPTY_EXTENT
-        assert route_extent([0.0], 0.0, [True]) == EMPTY_EXTENT
         assert format_extent(EMPTY_EXTENT) == "0nm"
         assert EMPTY_EXTENT.pct == 0.0
+
+    def test_a_zero_length_route_still_measures_coverage(self):
+        """#571 review — the false-GREEN a zero-length route used to produce.
+
+        ``total_distance_nm`` is 0 for a pattern or sightseeing flight whose
+        origin and destination are the same point (waypoint *count* is
+        validated, distinctness is not). Returning an empty extent there made
+        every coverage gate answer GREEN however completely the weather covered
+        the route — while the pre-primitive point ratio graded it correctly.
+        """
+        ext = route_extent([0.0, 0.0, 0.0, 0.0], 0.0, [True, True, True, False])
+        assert ext.points == 3
+        assert ext.pct == 75.0            # the point ratio, which is the truth
+        assert ext.distance_known is False
+        assert grade_extent(ext, amber_pct=15) is not AdvisoryStatus.GREEN
+
+    def test_a_zero_length_route_prints_a_percentage_not_invented_miles(self):
+        ext = route_extent([0.0, 0.0], 0.0, [True, True])
+        assert format_extent(ext) == "100%"
+        assert format_extent(ext, domain_label="of high terrain") == (
+            "100% of high terrain"
+        )
+
+    def test_out_of_order_distances_are_sorted_before_reducing(self):
+        """``cell_edges`` assumes along-route order; unsorted input would make
+        cell widths negative and net out to a false GREEN."""
+        shuffled = route_extent(
+            [100.0, 0.0, 50.0], 100.0, [False, True, False],
+        )
+        in_order = route_extent([0.0, 50.0, 100.0], 100.0, [True, False, False])
+        assert shuffled == in_order
+        assert shuffled.nm > 0
 
 
 class TestGradeExtent:

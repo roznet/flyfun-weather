@@ -64,7 +64,15 @@ EXTENT_KEY_RENAMES: dict[str, dict[str, str]] = {
         "poor_pct_amber": "extent_pct_amber",
         "poor_pct_red": "extent_pct_red",
     },
-    "turbulence": {"route_pct_amber": "extent_pct_amber"},
+    "turbulence": {
+        "route_pct_amber": "extent_pct_amber",
+        # Added by Stage 2 as a real catalog key (the previously hardcoded
+        # ``red_pct=50``) and renamed by Stage 3 in the same PR, so no deployed
+        # profile can carry it — but a dev profile saved between the two stages
+        # can, and a rename map that is complete only by accident of deployment
+        # order is not complete (#571 review).
+        "route_pct_red": "extent_pct_red",
+    },
     "vfr_feasibility": {
         "imc_pct_amber": "extent_pct_amber",
         "imc_pct_red": "extent_pct_red",

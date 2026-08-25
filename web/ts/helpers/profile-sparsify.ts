@@ -84,7 +84,10 @@ export const EXTENT_KEY_RENAMES: Record<string, Record<string, string>> = {
     poor_pct_amber: 'extent_pct_amber',
     poor_pct_red: 'extent_pct_red',
   },
-  turbulence: { route_pct_amber: 'extent_pct_amber' },
+  turbulence: {
+    route_pct_amber: 'extent_pct_amber',
+    route_pct_red: 'extent_pct_red',
+  },
   vfr_feasibility: {
     imc_pct_amber: 'extent_pct_amber',
     imc_pct_red: 'extent_pct_red',

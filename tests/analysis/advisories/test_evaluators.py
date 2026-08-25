@@ -330,14 +330,28 @@ class TestTurbulence:
 
     def test_turbulent_route(self, turbulent_context: RouteContext):
         """CAT at cruise along full route → AMBER or RED."""
-        # ``extent_pct_amber`` is turbulence's coverage key; this test used to
-        # pass ``extent_pct_amber`` (copy-pasted from icing_escape), so
-        # the override never landed and the assertion held vacuously on the
-        # default (#571, testing-accuracy-review Bug #10).
+        # This test used to pass ``icing_coverage_pct_amber`` (copy-pasted from
+        # icing_escape) where turbulence reads its own coverage key, so the
+        # override never landed (#571, testing-accuracy-review Bug #10). The
+        # Stage 3 key rename then rewrote that name inside this very comment,
+        # which is why it read as a tautology until now.
+        #
+        # Fixing the NAME alone left the test vacuous: the value passed equals
+        # the catalog default, and the fixture's full coverage clears any
+        # sane threshold, so the result was identical whether the override
+        # applied or was silently dropped. Drive the grade from both sides of
+        # the threshold instead, which only passes if the override is read.
         result = TurbulenceEvaluator.evaluate(
             turbulent_context, {"extent_pct_amber": 20, "strong_w_fpm": 200},
         )
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+
+        # A threshold above full coverage can never be met.
+        quiet = TurbulenceEvaluator.evaluate(
+            turbulent_context,
+            {"extent_pct_amber": 101, "extent_pct_red": 101, "strong_w_fpm": 200},
+        )
+        assert quiet.aggregate_status == AdvisoryStatus.GREEN
 
     def test_clear_low_coverage_is_unavailable(self):
         """A smooth verdict from vm at too few route points → UNAVAILABLE (#391 review).
@@ -1077,8 +1091,13 @@ _FIKI_DEFAULTS = {
     "cruise_icing_buffer_ft": 2000,
     "transit_thickness_amber_ft": 3000,
     "transit_thickness_red_ft": 5000,
-    "clear_cruise_amber_pct": 80,
-    "clear_cruise_red_pct": 50,
+    # Consolidated keys, in AFFECTED polarity (#571 Stage 3). These were still
+    # the pre-consolidation `clear_cruise_*` names, which `FIKIIcingEvaluator`
+    # no longer reads — so every case here silently ran on the evaluator's own
+    # defaults and passed only because 100-80 == 20 and 50 is self-complementary
+    # (#571 review).
+    "extent_pct_amber": 20,
+    "extent_pct_red": 50,
     "severe_is_red": 1,
 }
 

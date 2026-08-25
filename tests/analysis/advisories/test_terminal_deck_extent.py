@@ -72,3 +72,59 @@ class TestTerminalDeckRun:
         count, run_nm = _terminal_deck_span(_ctx({0, 1}), "gfs", 8000.0, 0.0, 40.0)
         assert count == 2
         assert _is_real_terminal_deck(count, run_nm)
+
+
+class TestLonePointOnSparseSpacing:
+    """A lone field cloud never qualifies, whatever the route sampling (#571 review).
+
+    The refactor from `max(d) - min(d)` to a midpoint-owned run changed this:
+    the old span was 0 for one point by construction, so the run arm could never
+    fire alone. A single point's *cell* is 20 nm on a 40 nm-spaced leg, which
+    clears the 15 nm bar — and `_is_real_terminal_deck`'s own docstring says a
+    lone departure-field cloud must never qualify.
+    """
+
+    def _sparse_ctx(self, deck_idx: set[int]):
+        from datetime import datetime
+
+        from weatherbrief.analysis.advisories import RouteContext
+        from weatherbrief.models import (
+            CloudCoverage, EnhancedCloudLayer, RoutePointAnalysis,
+            SoundingAnalysis, ThermodynamicIndices,
+        )
+
+        deck = [
+            EnhancedCloudLayer(base_ft=2000, top_ft=5000, coverage=CloudCoverage.BKN)
+        ]
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 40.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=9000),
+                    cloud_layers=deck if i in deck_idx else [],
+                )},
+            )
+            for i in range(5)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=160.0,
+        )
+
+    def test_a_lone_point_never_qualifies_however_sparse_the_sampling(self):
+        count, run_nm = _terminal_deck_span(
+            self._sparse_ctx({0}), "gfs", 8000.0, 0.0, 100.0,
+        )
+        assert count == 1
+        assert run_nm == 0.0
+        assert not _is_real_terminal_deck(count, run_nm)
+
+    def test_two_sparse_points_still_qualify_on_the_count_arm(self):
+        count, run_nm = _terminal_deck_span(
+            self._sparse_ctx({0, 1}), "gfs", 8000.0, 0.0, 100.0,
+        )
+        assert count == 2
+        assert _is_real_terminal_deck(count, run_nm)

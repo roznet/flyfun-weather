@@ -628,8 +628,14 @@ def _terminal_deck_span(
                 flags[-1] = True
                 count += 1
                 break
-    if not count:
-        return 0, 0.0
+    if count < _TERMINAL_DECK_MIN_POINTS:
+        # A single point has no *run* — it has a cell. Under the old
+        # ``max(d) - min(d)`` a lone point scored 0 by construction, so the
+        # run arm could never fire alone; measuring its midpoint-owned cell
+        # instead let one point clear the 15 nm bar wherever route sampling is
+        # sparse (20 nm on a 40 nm-spaced leg), contradicting this function's
+        # own rule that a lone field cloud never qualifies (#571 review).
+        return count, 0.0
     return count, route_extent(
         all_dists, ctx.total_distance_nm, flags,
     ).longest_run_nm
