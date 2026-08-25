@@ -177,6 +177,12 @@ def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
     if ext.domain_nm <= 0:
         return "0nm"
     label = f" {domain_label}" if domain_label else ""
+    if not ext.distance_known:
+        # Zero-length route: the ratio is real, the miles are not. Print the
+        # percentage alone rather than invent a distance — the same
+        # percentage-only fallback this function has always had for degenerate
+        # geometry, now driven by the extent instead of a point count.
+        return f"{ext.pct:.0f}%{label}"
     out = f"{round(ext.nm)}nm/{round(ext.domain_nm)}nm{label} ({ext.pct:.0f}%)"
     # Time axis (#571 Stage 4), display only. Miles are what the weather covers;
     # minutes are what the pilot actually spends in it, and the two diverge on a

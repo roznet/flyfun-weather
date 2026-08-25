@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
-    EXTENT_MIN_NM,
     extent_min_nm_param,
     build_regions,
     build_ribbon,

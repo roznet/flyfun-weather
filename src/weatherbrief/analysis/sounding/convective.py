@@ -1544,25 +1544,21 @@ def character_extent(
     gate, so the band, the gate and the ``(Xnm/Ynm)`` the card prints are the
     same measurement.
 
-    With no route length the points are treated as evenly spaced over a **unit**
-    route, so the coverage *share* stays measurable — and under even spacing a
-    distance ratio is exactly the point ratio, which is what the band used to be.
-    The resulting ``nm`` / ``longest_run_nm`` are unitless and must not be gated
-    on; that is why :func:`longest_embedded_run_nm` keeps its own explicit guard
-    and returns 0.0, so an unmeasurable barrier is never asserted.
+    With no route length ``route_extent`` treats the points as evenly spaced over
+    a **unit** route, so the coverage *share* stays measurable — under even
+    spacing a distance ratio is exactly the point ratio, which is what the band
+    used to be — and marks the result ``distance_known=False``. The resulting
+    ``nm`` / ``longest_run_nm`` are then unitless and must not be gated on; that
+    is why :func:`longest_embedded_run_nm` keeps its own explicit guard and
+    returns 0.0, so an unmeasurable barrier is never asserted.
     """
     if not points:
         return EMPTY_EXTENT
-    if total_distance_nm is None or total_distance_nm <= 0:
-        n = len(points)
-        return route_extent(
-            [(i + 0.5) / n for i in range(n)],
-            1.0,
-            [predicate(p) for p in points],
-        )
+    # ``total_distance_nm or 0.0`` hands the degenerate case to route_extent's
+    # own unit fallback rather than repeating it here (#571 review).
     return route_extent(
-        _char_distances(points, total_distance_nm),
-        total_distance_nm,
+        _char_distances(points, total_distance_nm or 0.0),
+        total_distance_nm or 0.0,
         [predicate(p) for p in points],
         speed_kt=speed_kt,
     )

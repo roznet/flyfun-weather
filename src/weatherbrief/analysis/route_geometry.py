@@ -86,6 +86,8 @@ class RouteExtent(NamedTuple):
         ``longest_run_nm`` — longest *contiguous* affected run, for barrier-type
             hazards ("you cannot get around it") as opposed to union coverage.
         ``minutes`` — ``nm`` at the flight's groundspeed, when a speed is known.
+        ``distance_known`` — False on the degenerate zero-length route; the
+            percentage still means what it says, the miles do not.
     """
 
     points: int
@@ -94,6 +96,11 @@ class RouteExtent(NamedTuple):
     domain_nm: float
     longest_run_nm: float = 0.0
     minutes: float | None = None
+    # False when the route carried no usable length and the geometry fell back
+    # to even spacing over a unit route (see :func:`route_extent`). The ratios
+    # are then real but the absolute figures are unitless, so a message must
+    # print the percentage alone rather than invent miles.
+    distance_known: bool = True
 
     @property
     def pct(self) -> float:
@@ -106,6 +113,11 @@ class RouteExtent(NamedTuple):
         """
         return 100.0 * self.nm / self.domain_nm if self.domain_nm else 0.0
 
+
+# Cell width for the zero-length-route fallback (see :func:`route_extent`).
+# Any value works — only ratios are read — but a whole number well above the
+# 0.1 rounding granularity keeps the percentage exact.
+_SYNTHETIC_CELL_NM = 100.0
 
 EMPTY_EXTENT = RouteExtent(points=0, domain_points=0, nm=0.0, domain_nm=0.0)
 
@@ -139,9 +151,40 @@ def route_extent(
     and ``minutes`` stays ``None``.
     """
     n = len(distances)
-    if n == 0 or total_nm <= 0:
+    if n == 0:
         return EMPTY_EXTENT
     dom = list(in_domain) if in_domain is not None else [True] * n
+    aff = list(affected)
+
+    # A zero-length route is not a reason to stop measuring. ``total_nm`` can be
+    # 0 for a pattern or sightseeing flight whose origin and destination are the
+    # same point — waypoint *count* is validated, distinctness is not — and
+    # returning an empty extent there made ``grade_extent`` answer GREEN however
+    # completely the weather covered the route. That is the #391 false-GREEN
+    # failure mode: before this primitive existed these evaluators graded on a
+    # point ratio, which has no dependency on route length. Fall back to even
+    # spacing over a UNIT route, where a distance ratio is exactly the point
+    # ratio, and flag the absolute figures as unitless (#571 review).
+    known = total_nm > 0
+    if not known:
+        # Synthetic geometry at a scale where each point owns exactly one whole
+        # cell, so the ratio survives the 0.1 rounding below intact. A unit
+        # route would not: three of four points is 0.75, which rounds to 0.8 and
+        # reports 80% instead of 75%.
+        distances = [(i + 0.5) * _SYNTHETIC_CELL_NM for i in range(n)]
+        total_nm = n * _SYNTHETIC_CELL_NM
+
+    # ``cell_edges`` assumes along-route order, and its siblings ``build_ribbon``
+    # / ``build_regions`` sort before reducing. Sort here too rather than trusting
+    # every caller: an unsorted list produces negative cell widths, which would
+    # net out to a small or zero ``nm`` and grade GREEN — the same false-GREEN
+    # class, arriving through the one primitive documented as the single answer.
+    order = sorted(range(n), key=lambda i: distances[i])
+    if order != list(range(n)):
+        distances = [distances[i] for i in order]
+        aff = [aff[i] for i in order]
+        dom = [dom[i] for i in order]
+
     lefts, rights = cell_edges(list(distances), total_nm)
 
     nm = 0.0
@@ -152,7 +195,7 @@ def route_extent(
         width = rights[i] - lefts[i]
         if dom[i]:
             domain_nm += width
-        if affected[i]:
+        if aff[i]:
             nm += width
             if run_start is None:
                 run_start = i
@@ -162,10 +205,14 @@ def route_extent(
 
     nm = round(nm, 1)
     return RouteExtent(
-        points=sum(1 for a in affected if a),
+        points=sum(1 for a in aff if a),
         domain_points=sum(1 for d in dom if d),
         nm=nm,
         domain_nm=round(domain_nm, 1),
         longest_run_nm=round(longest, 1),
-        minutes=round(60.0 * nm / speed_kt, 1) if speed_kt and speed_kt > 0 else None,
+        minutes=(
+            round(60.0 * nm / speed_kt, 1)
+            if known and speed_kt and speed_kt > 0 else None
+        ),
+        distance_known=known,
     )

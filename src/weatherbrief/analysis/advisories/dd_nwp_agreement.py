@@ -182,11 +182,18 @@ class DDvsNWPAgreementEvaluator:
             dists: list[float] = []
             comparable_flags: list[bool] = []
             disagree_flags: list[bool] = []
+            # Per-category flags, so the message can quote the extent of the
+            # category it names rather than the union's (#571 review).
+            category_flags: dict[str, list[bool]] = {
+                "freezing": [], "clouds": [],
+            }
 
             for rpa in ctx.analyses:
                 dists.append(rpa.distance_from_origin_nm or 0.0)
                 comparable_flags.append(False)
                 disagree_flags.append(False)
+                for flags in category_flags.values():
+                    flags.append(False)
                 sounding = rpa.sounding.get(model)
                 if sounding is None or sounding.indices is None:
                     continue
@@ -241,6 +248,7 @@ class DDvsNWPAgreementEvaluator:
                     disagree_flags[-1] = True
                     for cat in disagreements:
                         categories_triggered[cat] = categories_triggered.get(cat, 0) + 1
+                        category_flags[cat][-1] = True
 
             extent = route_extent(
                 dists, ctx.total_distance_nm, disagree_flags, comparable_flags,
@@ -259,7 +267,19 @@ class DDvsNWPAgreementEvaluator:
                     red_pct=extent_pct_red, min_nm=extent_min_nm,
                 )
                 top_cat = max(categories_triggered, key=categories_triggered.get)
-                detail = f"{top_cat} track diverges over {format_extent(extent)}"
+                # The sentence names ONE category, so it quotes that category's
+                # own extent — quoting the union of all disagreeing categories
+                # beside a named one is the D1 defect this PR removes elsewhere
+                # (#571 review). The grade still keys on the union: any category
+                # diverging is a divergence.
+                cat_extent = route_extent(
+                    dists, ctx.total_distance_nm,
+                    category_flags[top_cat], comparable_flags,
+                    speed_kt=ctx.cruise_groundspeed_kt,
+                )
+                detail = (
+                    f"{top_cat} track diverges over {format_extent(cat_extent)}"
+                )
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model,

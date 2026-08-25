@@ -296,6 +296,15 @@ class TurbulenceEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
+                # The sentence quotes the tier it names, so the object publishes
+                # that tier too — otherwise "Severe CAT over 9nm" ships beside an
+                # affected_nm of 146, which is the D2 disagreement in miniature
+                # (#571 review). ``affected_nm`` stays the any-risk union, the
+                # population ``affected_points`` counts; the MODERATE-or-worse
+                # extent rides the higher-threshold field, exactly as convective
+                # publishes its MODERATE+ subset.
+                affected_mod=significant_points,
+                affected_mod_nm=significant_extent.nm,
                 highlights=highlights,
             ))
 

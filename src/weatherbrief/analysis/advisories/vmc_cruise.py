@@ -83,9 +83,11 @@ class VMCCruiseEvaluator:
             ovc_count = 0
             # One evidence sample per route point (#393) — grade counts and the
             # highlight geometry both derive from this single list, so the BKN/OVC
-            # verdict and the ribbon cannot drift. ``ovc_count`` is the one
-            # sub-count the shared summary can't infer (the OVC-only red
-            # threshold), tracked alongside.
+            # verdict and the ribbon cannot drift. ``ovc_count`` is the OVC-only
+            # sub-population's point count — the RED threshold grades on that
+            # population's extent (``ovc_extent``, reduced from these same
+            # samples) and the result publishes the pair as the higher-threshold
+            # field, so the printed sentence and the structured field agree.
             samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
@@ -191,6 +193,12 @@ class VMCCruiseEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
+                # Same rule as turbulence (#571 review): ``affected_nm`` is the
+                # BKN+OVC union the grade counts, and the OVC-only extent the RED
+                # branch grades and prints rides the higher-threshold field, so
+                # the published object and the sentence agree.
+                affected_mod=ovc_count,
+                affected_mod_nm=ovc_extent.nm,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),
             ))
