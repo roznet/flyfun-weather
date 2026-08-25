@@ -67,10 +67,32 @@ uncorrected sample is not slightly wrong — it describes a different place.
 
 The product ships per-pixel `delta_latitude` / `delta_longitude`; the sampler
 applies them *before* deciding which pixels belong to a station, and the read
-window is padded by `PARALLAX_PAD_KM` (75 km) so the pixels it is about to
-look for are inside the block that was read. A pad smaller than the
-displacement silently truncates the high-cloud tail — exactly the signal the
-"can I get on top?" question depends on.
+window is padded so the pixels it is about to look for are inside the block
+that was read. A pad smaller than the displacement silently truncates the
+high-cloud tail — exactly the signal the "can I get on top?" question depends
+on.
+
+**The pad scales with latitude.** The 75 km figure (`PARALLAX_PAD_KM`) is a
+50°N measurement, and displacement grows with the satellite zenith angle: by
+65°N the same FL400 cirrus is thrown more than twice as far, so a Scandinavian
+route padded to the constant would quietly lose its high cloud.
+`parallax_pad_km(lat)` scales the measured figure by the zenith-tangent ratio
+and clamps at 70°N, where the geometry degenerates and the retrieval is
+unusable anyway. It is the geometry's *ratio* that is used, never its absolute
+value — the naive `h × tan(zenith)` formula underestimates real dlat by
+roughly a factor of four, which is why the product ships a correction field at
+all.
+
+**The map overlay applies it too.** This is not automatic: the overlay
+resamples a frame into a plate-carrée raster, and gathering each output pixel
+from its nominal source pixel would draw the cloud where the line of sight
+hits the ground rather than where the cloud is. The same briefing would then
+show a cell ~60 km from the position its own annuli reported. `render_overlay`
+therefore *scatters* detections to their corrected positions for a
+parallax-carrying frame (a gather for a ground-projected one, which needs no
+correction), painting lowest-first so the highest top wins an overlap.
+`nodata` and `undetect` keep their nominal positions — neither carries a cloud
+to displace.
 
 `tests/observed/test_sampler.py::test_parallax_is_load_bearing_for_cloud_tops`
 pins this: the fixture's FL350 cirrus vanishes entirely when the correction is
@@ -98,8 +120,14 @@ threshold.
 ### 4. Never a synthetic common timestamp
 
 Each source carries its own frame's `valid_time` and `age_minutes`, badged on
-the layer. There is no payload-level "as of" anywhere — not on
+the layer. There is no payload-level *observation* time anywhere — not on
 `ObservedConditions`, not on `/api/observed/status`.
+
+The one payload-level timestamp is `ObservedConditions.computed_at`, and it is
+deliberately not an observation time: it records when the payload was
+assembled. No surface renders it as an age, and a test asserts that, because a
+single rendered timestamp over four sources that are minutes apart is exactly
+the conflation this rule exists to prevent.
 
 DBZH is a **rolling 10-minute maximum** plus delivery lag, so an on-screen
 echo can be ~15 min old: about 30 NM of own-ship at 120 kt. `window_minutes`
@@ -223,8 +251,17 @@ load pay for a layer most of them never draw.
 
 Stations are the route's own interpolated cross-section points, so an observed
 value and the model column above it describe the same place. All three radii
-(5 / 10 / 20 NM) ship together, so the corridor selector is a client-side pick
-with no re-fetch.
+(5 / 10 / 20 NM) ship together, so changing the corridor re-resolves the
+**sampled annuli** from data already in memory — the cross-section layers and
+the route-graph metrics update with no request.
+
+That is a claim about the annuli, not about the whole screen. The map's
+corridor box tracks the same setting (it should: the box is meant to show what
+you picked), and the box is part of the overlay and flash query strings — so
+in `split` layout, where map and graph are both visible, changing the corridor
+does re-request the imagery. Imagery is served rather than bundled precisely
+because it is too big to ship every radius of, so that request is the design
+working, not a leak in it.
 
 Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 
@@ -331,6 +368,17 @@ expensive thing than the question this layer answers.
   depth was below threshold. L1 IR brightness temperature is the right product
   for that, and is gated behind a separate EUMETSAT licence — see
   `designs/future/satellite-cloud-top-validation.md`.
+- **Coverage-hatch rendering is implemented three times** with different
+  geometry (`observed-tops.ts`, `observed-surface.ts`,
+  `route-graph/renderer.ts::drawNoCoverageMarks`), and the codebase has shared
+  hatch helpers elsewhere. Consolidating them would stop the three renderings
+  drifting apart visually; deferred rather than done here because the three
+  geometries genuinely differ (a band, a terrain-hugging strip, a baseline
+  tick) and the refactor is wider than this change.
+- **`opera.py` and `ctth.py` duplicate** grid-loading, time-parsing and
+  attribution structure between `read_metadata` and `read_window`. A shared
+  helper is possible; the two products' metadata layouts have little actually
+  in common, so it was left alone.
 - **The OPERA delivery lag (4 min) is an estimate**, not a measurement across
   many days. Too short and every tick spends a 404; too long and the briefing
   shows an older frame than the provider has. `test_collect_live.py` has a

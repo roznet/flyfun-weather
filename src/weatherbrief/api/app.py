@@ -259,7 +259,9 @@ async def lifespan(app: FastAPI):
     # Opt-in: the observed-frame collector needs EUMETSAT credentials and a
     # few hundred MB of frame storage, so a deployment turns it on explicitly
     # rather than inheriting it (#574).
-    if os.environ.get("WB_OBSERVED_ENABLED", "").strip() in ("1", "true", "yes"):
+    from weatherbrief.observed.collect import observed_enabled
+
+    if observed_enabled():
         from weatherbrief.scheduler import run_observed_collect_loop
 
         observed_collect_task = asyncio.create_task(

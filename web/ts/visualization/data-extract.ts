@@ -250,8 +250,6 @@ function buildCurrentConditions(
   return { airports, sigmets: zones };
 }
 
-const FEET_PER_METRE = 1 / 0.3048;
-
 /** FL-band edges in feet, mirroring CLOUD_TOP_FL_BINS on the server. */
 const OBSERVED_TOP_BANDS: Array<{ label: string; loFt: number; hiFt: number }> = [
   { label: 'FL000-050', loFt: 0, hiFt: 5000 },

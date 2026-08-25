@@ -139,11 +139,24 @@ function drawPoint(
   ctx.restore();
 }
 
-/** Age badge, top-right of the plot. Each observed source carries its own. */
+/** Height of one badge row, including its gap. */
+export const BADGE_ROW_HEIGHT_PX = 15;
+
+/**
+ * Age badge, top-right of the plot. Each observed source carries its own.
+ *
+ * `row` stacks them: with both observed layers enabled, drawing at one fixed
+ * position let whichever layer rendered last paint over the other, hiding one
+ * source's age entirely. That is the same "one age for four sources" outcome
+ * the design rules out, reached by z-order instead of by string concatenation
+ * — and the layers really are minutes apart, so the hidden number was never
+ * the one on top.
+ */
 export function drawBadge(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
   text: string,
+  row = 0,
 ): void {
   const { plotArea } = transform;
   ctx.save();
@@ -151,10 +164,10 @@ export function drawBadge(
   ctx.textBaseline = 'top';
   ctx.textAlign = 'right';
   const x = plotArea.left + plotArea.width - 6;
-  const y = plotArea.top + 4;
+  const y = plotArea.top + 4 + row * BADGE_ROW_HEIGHT_PX;
   const width = ctx.measureText(text).width;
   ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
-  ctx.fillRect(x - width - 5, y - 2, width + 10, 15);
+  ctx.fillRect(x - width - 5, y - 2, width + 10, BADGE_ROW_HEIGHT_PX);
   ctx.fillStyle = '#374151';
   ctx.fillText(text, x, y);
   ctx.restore();

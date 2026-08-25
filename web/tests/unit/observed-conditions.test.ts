@@ -433,3 +433,100 @@ describe('observed map overlay', () => {
     expect(formatBadge(null)).toBe('');
   });
 });
+
+// --- Canvas rendering ------------------------------------------------------
+//
+// The tests above pin the DATA classification (hole vs clear vs value). These
+// pin that the classification actually reaches the canvas: a regression that
+// dropped the no-coverage hatch — collapsing it back to a blank gap, the exact
+// bug the whole three-state design exists to prevent — would have passed every
+// test above untouched.
+
+interface DrawCall { op: string; args: number[] }
+
+function recordingCtx() {
+  const calls: DrawCall[] = [];
+  const record = (op: string) => (...args: number[]) => { calls.push({ op, args }); };
+  const ctx = {
+    calls,
+    save: record('save'), restore: record('restore'),
+    beginPath: record('beginPath'), stroke: record('stroke'), fill: record('fill'),
+    moveTo: record('moveTo'), lineTo: record('lineTo'),
+    fillRect: record('fillRect'), strokeRect: record('strokeRect'),
+    fillText: record('fillText'), strokeText: record('strokeText'),
+    arc: record('arc'), closePath: record('closePath'), setLineDash: record('setLineDash'),
+    measureText: () => ({ width: 60 }),
+    globalAlpha: 1, fillStyle: '', strokeStyle: '', lineWidth: 1,
+    font: '', textBaseline: '', textAlign: '',
+  };
+  return ctx as unknown as CanvasRenderingContext2D & { calls: DrawCall[] };
+}
+
+const transform = {
+  plotArea: { left: 0, top: 0, width: 800, height: 400 },
+  distanceToX: (d: number) => d * 4,
+  altitudeToY: (ft: number) => 400 - ft / 100,
+} as never;
+
+describe('observed layers actually draw', () => {
+  it('draws a hatch for a radar coverage hole rather than leaving a gap', () => {
+    const data = extract(makeObserved());
+    const ctx = recordingCtx();
+    observedSurfaceLayer.render(ctx, transform, data);
+    // The hole point is drawn with stroked hatch segments; a blank gap would
+    // produce no stroke at all for it.
+    const strokes = ctx.calls.filter((c) => c.op === 'stroke').length;
+    expect(strokes).toBeGreaterThan(0);
+  });
+
+  it('stops drawing the hatch if the point is no longer flagged', () => {
+    // Same scene with coverage restored: strictly fewer strokes, proving the
+    // strokes above really came from the no-coverage branch.
+    const withHole = extract(makeObserved());
+    const ctxHole = recordingCtx();
+    observedSurfaceLayer.render(ctxHole, transform, withHole);
+
+    const patched = extract(makeObserved());
+    for (const p of patched.observed!.points) { p.radarNoCoverage = false; p.dbz = 30; }
+    const ctxClear = recordingCtx();
+    observedSurfaceLayer.render(ctxClear, transform, patched);
+
+    const holeStrokes = ctxHole.calls.filter((c) => c.op === 'stroke').length;
+    const clearStrokes = ctxClear.calls.filter((c) => c.op === 'stroke').length;
+    expect(holeStrokes).toBeGreaterThan(clearStrokes);
+  });
+
+  it('draws a hatch for a cloud-top no-coverage point', () => {
+    const data = extract(makeObserved());
+    const ctx = recordingCtx();
+    observedTopsLayer.render(ctx, transform, data);
+    expect(ctx.calls.some((c) => c.op === 'stroke')).toBe(true);
+    // And the FL-band ticks are filled rects.
+    expect(ctx.calls.some((c) => c.op === 'fillRect')).toBe(true);
+  });
+
+  it('gives each observed source its own badge row', () => {
+    // Both layers on: the radar badge must not paint over the satellite one,
+    // which is the "one age for two sources" outcome the design rules out.
+    const data = extract(makeObserved());
+    const tops = recordingCtx();
+    observedTopsLayer.render(tops, transform, data);
+    const surface = recordingCtx();
+    observedSurfaceLayer.render(surface, transform, data);
+
+    const badgeY = (ctx: typeof tops) =>
+      ctx.calls.filter((c) => c.op === 'fillText').map((c) => c.args[2]);
+    const topsY = badgeY(tops);
+    const surfaceY = badgeY(surface);
+    expect(topsY.length).toBeGreaterThan(0);
+    expect(surfaceY.length).toBeGreaterThan(0);
+    expect(surfaceY[surfaceY.length - 1]).not.toBe(topsY[topsY.length - 1]);
+  });
+
+  it('draws nothing at all when there is no observed data', () => {
+    const ctx = recordingCtx();
+    observedTopsLayer.render(ctx, transform, extract(null));
+    observedSurfaceLayer.render(ctx, transform, extract(null));
+    expect(ctx.calls).toEqual([]);
+  });
+});

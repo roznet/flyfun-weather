@@ -152,16 +152,110 @@ def render_overlay(
 
     rgba = np.zeros((height, width, 4), dtype=np.uint8)
     stops = _STOPS_BY_SOURCE.get(frame.source)
-    if stops is not None:
+    has_parallax = "delta_latitude" in frame.aux and "delta_longitude" in frame.aux
+
+    if stops is not None and not has_parallax:
+        # Ground-projected product (radar): the pixel is already where it says
+        # it is, so a straight gather is correct.
         rgb = _colourise(np.nan_to_num(values, nan=-9999.0), stops)
         rgba[detected, :3] = rgb[detected]
         rgba[detected, 3] = DETECTION_ALPHA
-    # Coverage holes are drawn; "looked, saw nothing" stays transparent.
+
+    # Coverage holes are drawn; "looked, saw nothing" stays transparent. Both
+    # are gathered by nominal position even on a parallax product: neither
+    # carries a cloud, so neither is displaced.
     rgba[nodata] = NODATA_RGBA
+
+    if stops is not None and has_parallax:
+        # A cloud-top pixel's nominal position is where the satellite's line of
+        # sight hits the GROUND, not where the cloud is — up to ~70 km away at
+        # European latitudes. Gathering it there would draw the cloud tens of
+        # kilometres from the place the sampled annuli say it is, so the map
+        # and the numbers in the same briefing would disagree about whether a
+        # cell is on the route. Scatter each detection to its own corrected
+        # position instead, which is the same correction `sampler.sample`
+        # applies before deciding corridor membership.
+        _scatter_parallax_detections(frame, rgba, bounds, stops, height, width)
 
     buffer = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(buffer, format="PNG", optimize=True)
     return buffer.getvalue(), bounds
+
+
+def _scatter_parallax_detections(
+    frame: GridFrame,
+    rgba: np.ndarray,
+    bounds: OverlayBounds,
+    stops,
+    height: int,
+    width: int,
+) -> None:
+    """Paint detected pixels at their parallax-corrected ground position.
+
+    A scatter rather than a gather: the correction is per-pixel and not
+    invertible in closed form, so we walk the source pixels and place each one
+    where it belongs. Each writes a block sized to its own footprint in output
+    pixels, so an overlay finer than the 2 km source grid does not come out
+    stippled.
+    """
+    detected = frame.detected
+    if not detected.any():
+        return
+    src_rows, src_cols = np.nonzero(detected)
+    grid = frame.grid
+    lon, lat = grid.colrow_to_lonlat(
+        src_cols + frame.window.col0, src_rows + frame.window.row0
+    )
+    lon = np.asarray(lon, dtype=float) + frame.aux["delta_longitude"][src_rows, src_cols]
+    lat = np.asarray(lat, dtype=float) + frame.aux["delta_latitude"][src_rows, src_cols]
+
+    lat_span = max(1e-6, bounds.north - bounds.south)
+    lon_span = max(1e-6, bounds.east - bounds.west)
+    out_rows = np.floor((bounds.north - lat) / lat_span * height).astype(int)
+    out_cols = np.floor((lon - bounds.west) / lon_span * width).astype(int)
+
+    values = np.asarray(frame.values)[src_rows, src_cols]
+    keep = (
+        np.isfinite(values)
+        & np.isfinite(lat)
+        & np.isfinite(lon)
+        & (out_rows >= 0)
+        & (out_rows < height)
+        & (out_cols >= 0)
+        & (out_cols < width)
+    )
+    if not keep.any():
+        return
+    out_rows, out_cols, values = out_rows[keep], out_cols[keep], values[keep]
+
+    # Lowest first, so where two tops land on the same output pixel the higher
+    # one wins — that is the answer the "can I get on top?" question needs.
+    order = np.argsort(values, kind="stable")
+    out_rows, out_cols, values = out_rows[order], out_cols[order], values[order]
+
+    rgb = _colourise(values, stops)
+    block_rows, block_cols = _source_pixel_block(frame, bounds, height, width)
+    for dr in range(block_rows):
+        rows_d = np.clip(out_rows + dr, 0, height - 1)
+        for dc in range(block_cols):
+            cols_d = np.clip(out_cols + dc, 0, width - 1)
+            rgba[rows_d, cols_d, :3] = rgb
+            rgba[rows_d, cols_d, 3] = DETECTION_ALPHA
+
+
+def _source_pixel_block(
+    frame: GridFrame, bounds: OverlayBounds, height: int, width: int
+) -> tuple[int, int]:
+    """How many output pixels one source pixel covers, at least 1 in each axis."""
+    lat_span = max(1e-6, bounds.north - bounds.south)
+    lon_span = max(1e-6, bounds.east - bounds.west)
+    source_deg_lat = abs(frame.grid.dy) / 1000.0 / 111.0
+    source_deg_lon = abs(frame.grid.dx) / 1000.0 / 111.0
+    block_rows = int(np.ceil(source_deg_lat / (lat_span / height)))
+    block_cols = int(np.ceil(source_deg_lon / (lon_span / width)))
+    # Bounded so a pathologically small bbox cannot turn one pixel into a
+    # thousand-iteration paint loop.
+    return max(1, min(block_rows, 16)), max(1, min(block_cols, 16))
 
 
 def _project_to_grid(frame: GridFrame, lon_mesh, lat_mesh):

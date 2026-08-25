@@ -29,6 +29,7 @@ empirical method-code table this reading rests on.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,13 +45,61 @@ logger = logging.getLogger(__name__)
 CTTH_COLLECTION = "EO:EUM:DAT:0681"
 LI_COLLECTION = "EO:EUM:DAT:0691"
 
-# Widest parallax displacement the product produces at European latitudes:
-# dlat reaches ~-0.65° for FL400 cirrus at 50°N, i.e. ~72 km.  The sampler
-# pads its read window by this much so the pixels whose *corrected* position
-# lands on a station are actually inside the block that was read.  A pad
-# smaller than the displacement silently truncates the high-cloud tail — the
-# exact signal "can I get on top?" depends on.
+# Widest parallax displacement the product produces at the latitude the CTTH
+# investigation measured: dlat reaches ~-0.65° for FL400 cirrus at 50°N, i.e.
+# ~72 km.  The sampler pads its read window by this much so the pixels whose
+# *corrected* position lands on a station are actually inside the block that
+# was read.  A pad smaller than the displacement silently truncates the
+# high-cloud tail — the exact signal "can I get on top?" depends on, and it
+# fails with no error, just missing cloud.
+#
+# This is the 50°N figure and the floor for `parallax_pad_km`, which scales it
+# with latitude.  Use that function rather than this constant for any window
+# that has to reach real displacements; the constant alone is only safe for a
+# route no further north than the reference.
 PARALLAX_PAD_KM = 75.0
+
+# Reference latitude the 75 km figure was measured at.
+_PARALLAX_REFERENCE_LAT = 50.0
+# Beyond this the viewing geometry degenerates (the limb), displacement grows
+# without bound and the retrieval is unusable anyway — clamp rather than pad a
+# window to the size of a continent.
+_PARALLAX_MAX_LAT = 70.0
+
+_EARTH_RADIUS_KM = 6371.0
+_GEO_ORBIT_RADIUS_KM = 42157.0
+
+
+def _satellite_zenith_tangent(latitude_deg: float) -> float:
+    """``tan`` of the satellite zenith angle at a given latitude.
+
+    Not used to compute the displacement — the CTTH design notes record that
+    the naive ``h × tan(zenith)`` formula *underestimates* the real dlat by
+    roughly a factor of four, which is why the product ships a per-pixel
+    correction field at all.  It is used only for its *ratio* between two
+    latitudes, to scale an empirically-measured displacement to a latitude it
+    was not measured at.
+    """
+    psi = math.radians(min(abs(latitude_deg), _PARALLAX_MAX_LAT))
+    numerator = _GEO_ORBIT_RADIUS_KM * math.sin(psi)
+    denominator = _GEO_ORBIT_RADIUS_KM * math.cos(psi) - _EARTH_RADIUS_KM
+    if denominator <= 0:
+        return math.tan(math.radians(89.0))
+    return numerator / denominator
+
+
+def parallax_pad_km(max_abs_latitude_deg: float) -> float:
+    """Window pad (km) big enough to reach the displaced pixels at this latitude.
+
+    The 75 km constant was measured at 50°N.  Displacement grows with the
+    satellite zenith angle and so with latitude: by 65°N the same FL400 cirrus
+    is thrown more than twice as far, and a route into Scandinavia padded to
+    75 km would quietly lose its high cloud.  Scales the measured figure by the
+    zenith-tangent ratio and never returns less than it.
+    """
+    reference = _satellite_zenith_tangent(_PARALLAX_REFERENCE_LAT)
+    at_latitude = _satellite_zenith_tangent(max_abs_latitude_deg)
+    return max(PARALLAX_PAD_KM, PARALLAX_PAD_KM * at_latitude / reference)
 
 # Empirically-verified FCI L2 height-assignment methods (full-disc sample,
 # 2026-05-04 08:00Z).  Kept as labels so the UI need not embed the table.

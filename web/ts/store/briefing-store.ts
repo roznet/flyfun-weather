@@ -834,6 +834,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           ...snapshot,
           route_observations: result.observations,
           ...(result.sigmets != null ? { route_sigmets: result.sigmets } : {}),
+          // Re-sampled observed conditions (#574). Same null-guard reasoning as
+          // SIGMETs: null means the server has the collector switched off (or
+          // the re-sample failed), so keep what the pack loaded with rather
+          // than blanking the panel. Dropping this field entirely was the bug
+          // — the server recomputes it precisely so ↻ refreshes the radar /
+          // lightning / cloud-top picture, and the client was discarding it.
+          ...(result.observed != null ? { observed_conditions: result.observed } : {}),
           last_refresh_delta: result.delta ?? null,
         },
       });

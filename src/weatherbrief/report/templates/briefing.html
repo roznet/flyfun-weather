@@ -235,7 +235,13 @@
   <!-- Observed conditions (#574): radar, lightning, satellite cloud tops.
        Deliberately no verdict — phase 1 reports what was measured, where, and
        how long ago, and leaves the comparison with the forecast to the reader. -->
-  {% if observed_conditions and observed_conditions.summary_lines %}
+  {# Gated on has_any_field, matching digest/text.py and prompt_builder.py.
+     summary_lines is never empty — build_summary() returns a placeholder
+     line when nothing was collected — so gating on it here made the PDF
+     show an empty 'Observed Now' heading on a deployment with the
+     collector on but no frames yet, while the other two surfaces
+     correctly showed nothing. #}
+  {% if observed_conditions and observed_conditions.has_any_field %}
   <h2>Observed Now</h2>
   <ul style="margin:0 0 0.5em 1.1em; padding:0;">
     {% for line in observed_conditions.summary_lines %}

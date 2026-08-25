@@ -271,10 +271,10 @@ def _read_bbox(source: str, path, bounds: OverlayBounds):
         radius_km=0.0,
         # Enough slack to include the pixels whose parallax-corrected position
         # falls inside the rectangle even though their imagery position does
-        # not.  The overlay draws them where the image puts them (it is an
-        # image of the sky, not the ground), but clipping them out would leave
-        # a bare strip along the northern edge.
-        pad_km=ctth.PARALLAX_PAD_KM,
+        # not — the overlay scatters each detection to its corrected position,
+        # so those pixels are exactly the ones that end up drawn inside the
+        # box.  Scaled to the rectangle's own latitude.
+        pad_km=ctth.parallax_pad_km(max(abs(bounds.north), abs(bounds.south))),
         full_width=True,
     )
     if window.is_empty():

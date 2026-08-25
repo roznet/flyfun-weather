@@ -211,6 +211,26 @@ def test_sampler_reads_no_files(dbzh_path, monkeypatch):
     sample(frame, window, [STATION, STATION_NO_COVERAGE])
 
 
+def test_tops_sampler_reads_no_files(ctth_path, monkeypatch):
+    """Same guard for the CTTH path, which opens netCDF4 rather than h5py.
+
+    The radar guard above says nothing about this path, and CTTH is the
+    expensive one — full-width strips off a 5568-wide granule, ~90–130 ms even
+    done right.  A per-station reopen here would be the costliest version of
+    the regression the invariant exists to prevent.
+    """
+    import netCDF4
+
+    frame, window = _tops_frame(ctth_path)
+
+    def _forbidden(*args, **kwargs):  # pragma: no cover - only runs on failure
+        raise AssertionError("sampler opened a netCDF file")
+
+    monkeypatch.setattr(netCDF4, "Dataset", _forbidden)
+    result = sample(frame, window, [STATION, STATION_NO_COVERAGE])
+    assert len(result) == 2
+
+
 # --- Lightning -------------------------------------------------------------
 
 

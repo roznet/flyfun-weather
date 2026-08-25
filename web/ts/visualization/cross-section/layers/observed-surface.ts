@@ -63,10 +63,14 @@ export const observedSurfaceLayer: CrossSectionLayer = {
     // whichever is on screen says so for itself.
     const source = observed.reflectivity ?? observed.lightning;
     if (source) {
+      // Second row whenever the cloud-top layer is also drawing a badge, so
+      // neither source's age is hidden behind the other.
+      const row = observed.cloudTops ? 1 : 0;
       drawBadge(
         ctx,
         transform,
         ageBadgeText(source.validTime, source.ageMinutes, 'Radar'),
+        row,
       );
     }
   },

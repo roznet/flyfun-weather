@@ -228,14 +228,37 @@ def test_pdf_template_renders_the_summary_and_attribution():
 
 
 def test_field_meta_has_no_shared_timestamp():
-    """There is deliberately no payload-level "as of"."""
+    """There is deliberately no payload-level *observation* time.
+
+    ``computed_at`` is the one payload-level timestamp and is deliberately
+    kept: it records when the payload was ASSEMBLED, which is a different
+    thing from when anything was observed, and it is never rendered as an
+    observation time.  Naming it here pins the real rule — no shared
+    *observation* instant — rather than an absolute the model does not
+    actually satisfy.
+    """
     fields = set(ObservedConditions.model_fields)
-    assert "observed_at" not in fields
-    assert "as_of" not in fields
-    assert "valid_time" not in fields
-    # It lives on each field instead.
+    for forbidden in ("observed_at", "as_of", "valid_time", "age_minutes"):
+        assert forbidden not in fields, (
+            f"{forbidden} on ObservedConditions would be a shared observation "
+            f"time across four sources that are minutes apart"
+        )
+    assert "computed_at" in fields
+    # The observation times live on each field instead.
     assert "valid_time" in ObservedFieldMeta.model_fields
     assert "age_minutes" in ObservedFieldMeta.model_fields
+
+
+def test_computed_at_is_not_rendered_as_an_observation_time():
+    """It is assembly bookkeeping, so no surface may present it as an age."""
+    from weatherbrief.digest.prompt_builder import _format_observed_context
+    from weatherbrief.digest.text import _format_observed_conditions
+
+    conditions = _conditions()
+    stamp = conditions.computed_at.isoformat()
+    assert stamp not in "\n".join(_format_observed_conditions(conditions))
+    assert stamp not in _format_observed_context(conditions)
+    assert stamp not in conditions.summary
 
 
 def test_conditions_reports_when_it_has_nothing():

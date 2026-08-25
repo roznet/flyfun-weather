@@ -146,14 +146,61 @@ def test_payload_serialises_to_json(stocked_store):
 
 
 def test_no_network_during_payload_assembly(stocked_store, monkeypatch):
-    """The acceptance criterion, asserted rather than assumed."""
+    """The acceptance criterion, asserted rather than assumed.
+
+    Asserting on the RESULT, not merely that the call returns.  Every source's
+    sampling is wrapped in ``except Exception`` so one malformed frame cannot
+    take the other three down — which also swallows the ``AssertionError`` this
+    test injects.  Calling the function and checking nothing therefore passed
+    happily while a socket was being opened.  A network call now shows up as a
+    source that went unavailable, and that is what fails the test.
+    """
     import socket
 
     def _forbidden(*args, **kwargs):  # pragma: no cover - only on failure
         raise AssertionError("payload assembly opened a socket")
 
     monkeypatch.setattr(socket.socket, "connect", _forbidden)
-    build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+
+    unavailable = [s for s in conditions.sources if not s.available]
+    assert not unavailable, (
+        "a source went unavailable during assembly — most likely a network "
+        f"call swallowed by the per-source guard: {unavailable}"
+    )
+    assert conditions.reflectivity is not None
+    assert conditions.cloud_tops is not None
+    assert conditions.lightning is not None
+
+
+def test_no_network_test_can_actually_fail(stocked_store, monkeypatch):
+    """Guard the guard: prove the assertion above detects a real regression.
+
+    A test that cannot fail is worse than no test, because it gets cited as
+    evidence.  This injects the regression the previous test exists to catch
+    and confirms it is caught.
+    """
+    import socket
+
+    from weatherbrief.observed import payload as payload_module
+
+    real_grid_field = payload_module._grid_field
+
+    def _leaky(*args, **kwargs):
+        socket.socket().connect(("example.invalid", 80))
+        return real_grid_field(*args, **kwargs)
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("payload assembly opened a socket")
+
+    monkeypatch.setattr(socket.socket, "connect", _forbidden)
+    monkeypatch.setattr(payload_module, "_grid_field", _leaky)
+
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    assert [s for s in conditions.sources if not s.available], (
+        "the injected socket call was not visible in the result — the "
+        "no-network test would pass through a real regression"
+    )
 
 
 # --- Summary ---------------------------------------------------------------

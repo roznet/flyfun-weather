@@ -123,3 +123,95 @@ def test_lightning_has_no_legend():
     from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
 
     assert legend_for(SOURCE_EUMETSAT_LI) == []
+
+
+# --- Parallax in the overlay -----------------------------------------------
+
+
+def _ctth_frame(path):
+    import netCDF4
+
+    with netCDF4.Dataset(str(path)) as dataset:
+        grid = ctth.read_grid(dataset)
+    return ctth.read_window(
+        path,
+        GridWindow(0, grid.ny, 0, grid.nx, full_width=True),
+        source=SOURCE_EUMETSAT_CTTH,
+    )
+
+
+# The fixture station, and a box wide enough to hold both its true position and
+# the uncorrected position 0.5° north.
+STATION_LAT = 50.517
+TALL_BOUNDS = OverlayBounds(south=50.0, west=1.0, north=51.4, east=2.3)
+# The FL250-400 stop, i.e. the fixture's FL350 cirrus.
+CIRRUS_RGB = (235, 235, 245)
+
+
+def _painted_latitudes(png: bytes, bounds: OverlayBounds, rgb) -> tuple[float, float]:
+    """(southernmost, northernmost) latitude painted in ``rgb``."""
+    image = _decode(png)
+    height = image.shape[0]
+    match = np.all(image[:, :, :3] == np.array(rgb, dtype=np.uint8), axis=-1)
+    match &= image[:, :, 3] == DETECTION_ALPHA
+    rows = np.nonzero(match.any(axis=1))[0]
+    assert rows.size, "expected some cirrus to be painted"
+    span = bounds.north - bounds.south
+
+    def lat_of(row):
+        return bounds.north - (row + 0.5) * span / height
+
+    return lat_of(rows.max()), lat_of(rows.min())
+
+
+def test_overlay_draws_cloud_tops_where_the_sampler_says_they_are(ctth_path):
+    """The map and the numbers must agree about where a cloud is.
+
+    The overlay used to gather each output pixel from its NOMINAL source pixel,
+    which for a cloud-top product is where the satellite's line of sight hits
+    the ground — not where the cloud is. The sampler corrects for that before
+    deciding corridor membership; the overlay did not, so the same briefing
+    could show a cell ~60 km from the position its own annuli reported.
+    """
+    frame = _ctth_frame(ctth_path)
+    south, north = _painted_latitudes(
+        render_overlay(frame, TALL_BOUNDS)[0], TALL_BOUNDS, CIRRUS_RGB
+    )
+    assert south <= STATION_LAT <= north, (
+        f"cirrus painted at {south:.3f}..{north:.3f}, which does not cover the "
+        f"station at {STATION_LAT} — the overlay is not applying parallax"
+    )
+
+
+def test_dropping_parallax_moves_the_overlay_cloud_far_north(ctth_path):
+    """Pin the size of the error, so the fix cannot be quietly reverted."""
+    frame = _ctth_frame(ctth_path)
+    frame.aux.pop("delta_latitude")
+    frame.aux.pop("delta_longitude")
+    south, _north = _painted_latitudes(
+        render_overlay(frame, TALL_BOUNDS)[0], TALL_BOUNDS, CIRRUS_RGB
+    )
+    displacement_km = (south - STATION_LAT) * 111.0
+    assert displacement_km > 40, (
+        f"expected the uncorrected overlay to sit far north of the station; "
+        f"got {displacement_km:.0f} km"
+    )
+
+
+def test_radar_overlay_is_unaffected_by_the_parallax_path(dbzh_path):
+    """A ground-projected product has nothing to correct and must not move."""
+    frame = _full_frame(dbzh_path)
+    assert "delta_latitude" not in frame.aux
+    image = _decode(render_overlay(frame, BOUNDS)[0])
+    assert (image[:, :, 3] == DETECTION_ALPHA).any()
+
+
+def test_parallax_pad_grows_with_latitude():
+    """The 75 km figure is a 50°N measurement, not a constant of nature."""
+    assert ctth.parallax_pad_km(45.0) == ctth.PARALLAX_PAD_KM
+    assert ctth.parallax_pad_km(50.0) == ctth.PARALLAX_PAD_KM
+    # A Scandinavian route needs materially more, or its high cloud is
+    # truncated with no error — just missing cirrus.
+    assert ctth.parallax_pad_km(65.0) > 2 * ctth.PARALLAX_PAD_KM
+    # And it is clamped rather than running away at the limb.
+    assert ctth.parallax_pad_km(85.0) == ctth.parallax_pad_km(70.0)

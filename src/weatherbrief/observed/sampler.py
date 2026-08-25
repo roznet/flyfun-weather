@@ -113,7 +113,16 @@ def sample(
     histograms filled in.
     """
     window = window or frame.window
-    if (window.row0, window.col0) != (frame.window.row0, frame.window.col0):
+    # Compare the full extent, not just the origin: a window with the right
+    # corner but the wrong size would offset nothing yet describe a different
+    # block, which is exactly the "silently sampling the wrong pixels" case
+    # this check exists to prevent.
+    if (window.row0, window.row1, window.col0, window.col1) != (
+        frame.window.row0,
+        frame.window.row1,
+        frame.window.col0,
+        frame.window.col1,
+    ):
         raise ValueError(
             f"window {window} does not match the frame's own window {frame.window}"
         )
@@ -122,10 +131,13 @@ def sample(
     has_parallax = "delta_latitude" in frame.aux and "delta_longitude" in frame.aux
     radii = sorted(float(r) for r in radii_nm)
     max_reach_km = nm_to_km(max(radii)) if radii else 0.0
-    if has_parallax:
-        from .ctth import PARALLAX_PAD_KM
+    if has_parallax and stations:
+        from .ctth import parallax_pad_km
 
-        max_reach_km += PARALLAX_PAD_KM
+        # Scaled to the northernmost station: displacement grows with the
+        # satellite zenith angle, so a fixed pad that works over France loses
+        # high cloud over Norway.
+        max_reach_km += parallax_pad_km(max(abs(s.lat) for s in stations))
 
     grid = frame.grid
     results: dict[str, list[ObservedAnnulus]] = {}
@@ -262,8 +274,13 @@ def sample_flashes(
                     flash_count=count,
                     area_km2=float(np.pi * radius_km**2),
                     window_minutes=frame.window_minutes,
+                    # Scoped to THIS disc, not to the frame. Reporting the
+                    # nearest flash anywhere would put a number outside the
+                    # annulus on an annulus-scoped field — a 5 NM disc with no
+                    # flashes in it reading "nearest 7.6 NM". The widest disc
+                    # already answers "how far away is the nearest lightning".
                     nearest_flash_nm=(
-                        float(km_to_nm(distances.min())) if has_flashes and distances.size else None
+                        float(km_to_nm(distances[inside].min())) if count else None
                     ),
                     latest_flash_time=latest,
                 )
