@@ -329,7 +329,9 @@ class FIKIIcingEvaluator:
                     affected=not point_clear, region=region,
                 ))
 
-            summary = summarize_evidence(samples, total_dist)
+            summary = summarize_evidence(
+                samples, total_dist, speed_kt=ctx.cruise_groundspeed_kt,
+            )
 
             # --- derive severity from the three metrics ---
             # The complement of the same extent the gate reads (#571): the

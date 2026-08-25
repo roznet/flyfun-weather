@@ -184,7 +184,10 @@ def classify_enroute_precip(
     # with the shared minimum-extent floor (#571 Stage 2). The old point ratios
     # made `extent_pct_amber=5` fire off a single point on a short route.
     def _ext(flags: list[bool]):
-        return route_extent(dists, ctx.total_distance_nm, flags, assessed_flags)
+        return route_extent(
+            dists, ctx.total_distance_nm, flags, assessed_flags,
+            speed_kt=ctx.cruise_groundspeed_kt,
+        )
 
     snow_ext = _ext(snow_flags)
     snow_mod_ext = _ext(snow_mod_flags)
@@ -345,7 +348,10 @@ class EnroutePrecipEvaluator:
                     affected=cls is not None, region=region,
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
 
             # Highlights only when the model has a precipitation signal (the
             # no-signal case grades UNAVAILABLE). ``affected``/``total`` stay the

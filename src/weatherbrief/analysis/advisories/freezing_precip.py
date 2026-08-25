@@ -185,7 +185,10 @@ class FreezingPrecipEvaluator:
                     distance_nm=dist, assessed=True, severity=severity, region=region,
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             # Active (RED) and primed (AMBER) are two populations inside one
             # grade; each sentence quotes its own geometry (#571 D1).

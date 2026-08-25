@@ -294,6 +294,7 @@ class MountainWindEvaluator:
 
             summary = summarize_evidence(
                 samples, ctx.total_distance_nm, peak_dist_nm=peak_dist,
+                speed_kt=ctx.cruise_groundspeed_kt,
             )
             mountain_pts = summary.domain   # points where terrain exceeds threshold
             total = summary.assessed        # mountain points with wind data

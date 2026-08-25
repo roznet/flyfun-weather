@@ -139,7 +139,10 @@ class VMCCruiseEvaluator:
                     distance_nm=dist, assessed=True, severity=severity, region=region,
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             affected = summary.affected  # bkn + ovc
             # The OVC message names a narrower population than the grade's

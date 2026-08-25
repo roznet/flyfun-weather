@@ -503,13 +503,14 @@ def grade_convective_model(
     dd_set = set(dd_trigger_dists)
     graded_set = set(graded_dists)
     graded_flags = [d in graded_set for d in all_dists]
+    speed_kt = ctx.cruise_groundspeed_kt
     extent = route_extent(
         all_dists, ctx.total_distance_nm,
-        [d in aff_set for d in all_dists], graded_flags,
+        [d in aff_set for d in all_dists], graded_flags, speed_kt=speed_kt,
     )
     extent_mod = route_extent(
         all_dists, ctx.total_distance_nm,
-        [d in mod_set for d in all_dists], graded_flags,
+        [d in mod_set for d in all_dists], graded_flags, speed_kt=speed_kt,
     )
 
     # --- colour ---

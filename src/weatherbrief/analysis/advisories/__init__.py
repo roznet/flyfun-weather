@@ -79,6 +79,39 @@ class RouteContext:
     # ``convective_grading.resolve_convective_params``).
     advisory_params: dict[str, dict[str, float]] = field(default_factory=dict)
 
+    @property
+    def cruise_groundspeed_kt(self) -> float:
+        """Route-average groundspeed at cruise (kt), for the extent time axis (#571).
+
+        Cruise TAS (``resolve_cruise_tas``: aircraft/profile speed → the flight's
+        own planned speed → a generic light-GA fallback) less the route-average
+        headwind, from the per-point wind components the pack already carries —
+        no new wind lookups, and the same numbers the headwind advisory reports.
+        Floored at ``MIN_GROUNDSPEED_KT`` so a headwind near TAS cannot turn a
+        20 nm band into hours.
+
+        Deliberately model-agnostic and route-average: this feeds a **display**
+        figure ("about 8 min in it"), never a gate. A large share of flights fall
+        back to a profile-default speed, so gating on minutes would grade one
+        aircraft differently from another for reasons the pilot never set — see
+        ``designs/meteorology-decisions.md`` §27.
+        """
+        from weatherbrief.analysis.advisories._helpers import (
+            MIN_GROUNDSPEED_KT,
+            resolve_cruise_tas,
+        )
+
+        tas = resolve_cruise_tas(self)
+        headwinds = [
+            wc.headwind_kt
+            for rpa in self.analyses
+            for wc in rpa.wind_components.values()
+            if wc is not None and wc.headwind_kt is not None
+        ]
+        if not headwinds:
+            return tas
+        return max(tas - sum(headwinds) / len(headwinds), MIN_GROUNDSPEED_KT)
+
 
 @runtime_checkable
 class AdvisoryEvaluator(Protocol):

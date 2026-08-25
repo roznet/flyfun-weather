@@ -211,11 +211,14 @@ def _check_enroute_vfr(
         else:
             clear_count += 1
 
+    speed_kt = ctx.cruise_groundspeed_kt
     imc_extent = route_extent(
         dists, ctx.total_distance_nm, imc_flags, assessed_flags,
+        speed_kt=speed_kt,
     )
     extent = route_extent(
         dists, ctx.total_distance_nm, affected_flags, assessed_flags,
+        speed_kt=speed_kt,
     )
     return total, imc_count, marginal_count, clear_count, imc_extent, extent
 

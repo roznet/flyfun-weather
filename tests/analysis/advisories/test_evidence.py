@@ -346,3 +346,57 @@ class TestGradeExtent:
         assert grade_extent(
             self._ext(20.0, 120.0), amber_pct=15, min_nm=0,
         ) is AdvisoryStatus.AMBER
+
+
+class TestTimeAxis:
+    """`minutes` on the extent — display only, never a gate (#571 Stage 4)."""
+
+    def test_minutes_from_nm_and_groundspeed(self):
+        ext = route_extent([0.0, 50.0, 100.0], 100.0, [False, True, True], speed_kt=120.0)
+        # Cells: [0,25] [25,75] [75,100] → affected 50 + 25 = 75nm at 120kt.
+        assert ext.nm == 75.0
+        assert ext.minutes == 37.5
+
+    def test_minutes_is_none_without_a_speed(self):
+        ext = route_extent([0.0, 100.0], 100.0, [True, True])
+        assert ext.minutes is None
+
+    def test_format_appends_the_time_when_it_is_worth_saying(self):
+        ext = route_extent([0.0, 50.0, 100.0], 100.0, [False, True, True], speed_kt=120.0)
+        assert format_extent(ext) == "75nm/100nm (75%), about 38 min in it"
+
+    def test_format_stays_quiet_for_a_sliver(self):
+        # One point tightly bracketed by neighbours owns 4nm; at 120kt that is
+        # two minutes, and the figure adds nothing the nm did not already say.
+        ext = route_extent(
+            [0.0, 48.0, 52.0, 56.0, 100.0], 100.0,
+            [False, False, True, False, False], speed_kt=120.0,
+        )
+        assert ext.nm == 4.0
+        assert ext.minutes == 2.0
+        assert "min" not in format_extent(ext)
+
+    def test_the_gate_never_reads_minutes_unless_asked(self):
+        """A minutes floor is opt-in. A large share of flights fall back to a
+        profile-default speed, so gating on it by default would grade one
+        aircraft differently from another for reasons the pilot never set."""
+        slow = RouteExtent(
+            points=3, domain_points=10, nm=60.0, domain_nm=100.0,
+            longest_run_nm=60.0, minutes=1.0,
+        )
+        assert grade_extent(slow, amber_pct=15) is AdvisoryStatus.AMBER
+        assert grade_extent(
+            slow, amber_pct=15, min_minutes=10,
+        ) is AdvisoryStatus.GREEN
+
+    def test_summary_extents_inherit_the_speed(self):
+        samples = [
+            _sample(0.0, S.GREEN),
+            _sample(50.0, S.RED),
+            _sample(100.0, S.RED),
+        ]
+        summ = summarize_evidence(samples, 100.0, speed_kt=60.0)
+        assert summ.extent.minutes == 75.0          # 75nm at 60kt
+        sub = summ.extent_of(lambda s: s.distance_nm == 100.0)
+        assert sub.nm == 25.0
+        assert sub.minutes == 25.0

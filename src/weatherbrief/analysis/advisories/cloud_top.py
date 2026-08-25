@@ -159,7 +159,10 @@ class CloudTopEvaluator:
                         severity=HighlightSeverity.GREEN,
                     ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             above_ceiling = summary.affected
             loc = ctx.locale
