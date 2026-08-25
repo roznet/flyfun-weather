@@ -370,8 +370,14 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
   await page.waitForURL(/briefing\.html/);
 
 
-  // Verify route info is visible
-  await expect(page.getByText('EGTF')).toBeVisible();
+  // Verify route info is visible. Match the route summary specifically, the way
+  // briefing.spec.ts already does: a bare `getByText('EGTF')` is a substring
+  // match, and the briefing page grows more elements containing "EGTF" as its
+  // async sections arrive (airport cards, advisory details, the skew-T point
+  // hint, the sounding and comparison headings). Whether this assertion saw one
+  // element or seven was a race against that rendering, and under CI load it
+  // lost — resolving to 7 and failing Playwright's strict-mode check.
+  await expect(page.getByText('EGTF → EGLF')).toBeVisible();
 
   // Wait for advisories to render
   await expect(page.locator('#advisories-wrapper')).toBeVisible();
