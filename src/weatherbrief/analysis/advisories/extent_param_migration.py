@@ -108,6 +108,7 @@ class RenameStats:
     renamed: int = 0
     inverted: int = 0
     dropped_shadowed: int = 0  # old key discarded because the new one already existed
+    uninvertible: int = 0  # non-numeric value carried across without inversion
     per_advisory: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -152,6 +153,21 @@ def rename_extent_params(settings: dict) -> tuple[dict, RenameStats]:
                 stats.dropped_shadowed += 1
                 continue
             if old in inverted:
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    # ``ProfileSettings.advisories`` is an untyped dict, so a
+                    # non-numeric value can reach here. Carry it across under the
+                    # new name rather than raising: an unconvertible value is one
+                    # profile's problem, and raising would roll back the rewrite
+                    # for EVERY profile in the same Alembic invocation (#571
+                    # review). The evaluator's own ``params.get(...)`` default
+                    # handles the junk value exactly as it did before.
+                    stats.uninvertible += 1
+                    params[new] = value
+                    stats.renamed += 1
+                    stats.per_advisory[adv_id] = (
+                        stats.per_advisory.get(adv_id, 0) + 1
+                    )
+                    continue
                 value = 100.0 - value
                 stats.inverted += 1
             params[new] = value

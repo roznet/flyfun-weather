@@ -9,7 +9,9 @@ from a single predicate so they cannot drift.
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories._helpers import (
+    DEFAULT_CRUISE_TAS_KT,
     EMPTY_EXTENT,
+    MIN_GROUNDSPEED_KT,
     EvidenceSample,
     FlaggedCell,
     RouteExtent,
@@ -431,3 +433,85 @@ class TestTimeAxis:
         sub = summ.extent_of(lambda s: s.distance_nm == 100.0)
         assert sub.nm == 25.0
         assert sub.minutes == 25.0
+
+
+class TestCruiseGroundspeed:
+    """`RouteContext.cruise_groundspeed_kt` — the real path feeding the time axis.
+
+    Every `TestTimeAxis` case hands `speed_kt` in by hand, so the fallback chain
+    that actually runs in production (cross-section wind at the evaluated cruise
+    altitude → the pack's baked component → the TAS floor) had no direct
+    coverage and could have broken silently (#571 review).
+    """
+
+    def _ctx(self, *, wind_components=None, cruise_speed_ias_kt=None,
+             flight_duration_hours=0.0, models=("gfs",)):
+        from datetime import datetime
+
+        from weatherbrief.analysis.advisories import RouteContext
+        from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 50.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=90.0,
+                sounding={"gfs": SoundingAnalysis()},
+                wind_components=dict(wind_components or {}),
+            )
+            for i in range(3)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None,
+            models=list(models), cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=100.0,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            flight_duration_hours=flight_duration_hours,
+        )
+
+    def _wc(self, headwind_kt):
+        from weatherbrief.models import WindComponent
+
+        return WindComponent(
+            wind_speed_kt=abs(headwind_kt), wind_direction_deg=90.0,
+            track_deg=90.0, headwind_kt=headwind_kt, crosswind_kt=0.0,
+        )
+
+    def test_falls_back_to_the_generic_tas_with_no_speed_and_no_wind(self):
+        assert self._ctx().cruise_groundspeed_kt == DEFAULT_CRUISE_TAS_KT
+
+    def test_uses_the_planned_speed_when_there_is_no_aircraft_speed(self):
+        # 100nm in 1h is a 100kt groundspeed, already a TAS.
+        ctx = self._ctx(flight_duration_hours=1.0)
+        assert ctx.cruise_groundspeed_kt == 100.0
+
+    def test_subtracts_the_route_average_headwind(self):
+        ctx = self._ctx(
+            wind_components={"gfs": self._wc(20.0)}, flight_duration_hours=1.0,
+        )
+        assert ctx.cruise_groundspeed_kt == 80.0
+
+    def test_a_tailwind_raises_the_groundspeed(self):
+        ctx = self._ctx(
+            wind_components={"gfs": self._wc(-25.0)}, flight_duration_hours=1.0,
+        )
+        assert ctx.cruise_groundspeed_kt == 125.0
+
+    def test_is_floored_so_a_headwind_near_tas_cannot_stop_the_clock(self):
+        ctx = self._ctx(
+            wind_components={"gfs": self._wc(500.0)}, flight_duration_hours=1.0,
+        )
+        assert ctx.cruise_groundspeed_kt == MIN_GROUNDSPEED_KT
+
+    def test_ignores_models_this_run_does_not_grade(self):
+        """The pack can carry components for slots the run excludes; averaging
+        those in reports a groundspeed for a model never graded."""
+        ctx = self._ctx(
+            wind_components={"gfs": self._wc(20.0), "best_match": self._wc(200.0)},
+            flight_duration_hours=1.0, models=("gfs",),
+        )
+        assert ctx.cruise_groundspeed_kt == 80.0
+
+    def test_is_cached_across_reads(self):
+        ctx = self._ctx(flight_duration_hours=1.0)
+        assert ctx.cruise_groundspeed_kt is ctx.cruise_groundspeed_kt

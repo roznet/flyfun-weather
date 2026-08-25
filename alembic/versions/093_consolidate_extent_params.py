@@ -91,9 +91,21 @@ def upgrade() -> None:
 
     profiles_touched = 0
     totals = {"renamed": 0, "inverted": 0, "dropped_shadowed": 0}
+    skipped: list[int] = []
     for row_id, raw in rows:
-        settings = json.loads(raw) if raw else {}
-        new_settings, stats = rename_extent_params(settings)
+        # Per-row isolation. ``settings_json`` is written from an untyped dict,
+        # so one malformed row must not roll back the rewrite for every other
+        # profile: env.py runs the whole invocation in a single transaction, and
+        # this PR removes the evaluators' legacy old-key read path, so a
+        # rolled-back migration behind already-deployed code means every pilot's
+        # tuning is ignored fleet-wide until it is fixed (#571 review).
+        try:
+            settings = json.loads(raw) if raw else {}
+            new_settings, stats = rename_extent_params(settings)
+        except Exception as exc:  # noqa: BLE001 - one bad row must not fail the rest
+            skipped.append(row_id)
+            print(f"[093] SKIPPED profile {row_id}: {type(exc).__name__}: {exc}")
+            continue
         if not stats.touched:
             continue
         profiles_touched += 1
@@ -119,6 +131,13 @@ def upgrade() -> None:
 
     # Alembic captures stdout in the migration log — record the blast radius so
     # the deploy log can be compared against the pre-write dry-run numbers.
+    if skipped:
+        # Loud, and enumerated: these profiles still hold pre-consolidation keys
+        # and need a follow-up. Not raising is deliberate (see the try above).
+        print(
+            f"[093] {len(skipped)} profile(s) SKIPPED and still hold old keys: "
+            f"{skipped}"
+        )
     print(
         f"[093] rewrote extent params on {profiles_touched} profiles "
         f"({totals['renamed']} keys renamed, {totals['inverted']} values "
