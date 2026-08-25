@@ -529,6 +529,71 @@ class TestTurbulence:
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    @staticmethod
+    def _bl_mixed_ctx(n_severe: int, n_moderate: int, n: int = 17) -> RouteContext:
+        """BL-severe on the first points, BL-moderate on the next, clear after.
+
+        The all-severe fixture above cannot exercise the tier split: with every
+        flagged point severe, the SEVERE extent and the MODERATE+ union are the
+        same number, so an evaluator quoting the wrong one still passes.
+        """
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        def vm(risk) -> VerticalMotionAssessment:
+            return VerticalMotionAssessment(
+                classification=VerticalMotionClass.QUIESCENT,
+                cat_risk_layers=[CATRiskLayer(
+                    base_ft=2000, top_ft=3000, risk=risk, boundary_layer=True,
+                )],
+            )
+
+        clear = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT, cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"icon_eu": SoundingAnalysis(vertical_motion=(
+                    vm(CATRiskLevel.SEVERE) if i < n_severe
+                    else vm(CATRiskLevel.MODERATE) if i < n_severe + n_moderate
+                    else clear
+                ))},
+            )
+            for i in range(n)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None,
+            models=["icon_eu"], cruise_altitude_ft=2500, flight_ceiling_ft=18000,
+            total_distance_nm=(n - 1) * 10.0,
+        )
+
+    def test_bl_severe_red_quotes_the_severe_tier_not_the_union(self):
+        """The coverage-graded BL branch is where round 6's fix lives.
+
+        ``worst_cat`` is set by any severe layer at cruise including
+        boundary-layer, so ``risk_label`` reads SEVERE — and before round 6 only
+        free-atmosphere severe carried the ``"severe"`` tag, so this branch
+        printed the MODERATE+ union beside the word SEVERE. It is the one
+        turbulence branch reached without the free-atmosphere bypass, and the
+        only one that was asserting status alone (#571 review round 9).
+        """
+        m = TurbulenceEvaluator.evaluate(
+            self._bl_mixed_ctx(5, 10),
+            {"extent_pct_amber": 20, "strong_w_fpm": 200},
+        ).per_model[0]
+        assert m.status == AdvisoryStatus.RED
+        assert (m.affected_points, m.affected_nm) == (15, 145.0)   # MODERATE+ union
+        assert (m.affected_mod_points, m.affected_mod_nm) == (5, 45.0)  # SEVERE
+        assert "SEVERE over 45nm/160nm" in m.detail
+        assert "145nm" not in m.detail
+
     def test_free_atmosphere_severe_still_forces_red(self):
         """A severe layer above the boundary layer keeps the severe-anywhere bypass."""
         from weatherbrief.models import (

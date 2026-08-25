@@ -351,6 +351,23 @@ class CharacterInputs(NamedTuple):
     synoptic_ascent: bool
     method_id: str | None
 
+    @property
+    def any_assessed(self) -> bool:
+        """Whether this model graded ANY route point.
+
+        ``points`` is no longer the right question. Since the round-3 fix, a
+        point this model has no sounding for is kept as an unassessed
+        placeholder so ``cell_edges`` tiles the true route — which means
+        ``points`` is non-empty whenever the route has points at all, including
+        for a model with no sounding data anywhere. The callers that used to
+        read ``if not points`` as "no data" were silently answering "there is a
+        route", and a model with nothing to say fell through to
+        ``ConvectiveCharacter.NONE`` → GREEN: the #391 false-GREEN class this
+        PR exists to eliminate, reintroduced by one of its own fixes (#571
+        review round 9).
+        """
+        return any(p.assessed for p in self.points)
+
 
 def _character_method_id(
     methods: list[str | None], any_fallback: bool
@@ -574,7 +591,7 @@ def classify_route_character(
     advisory would show.
     """
     inputs = build_character_points(ctx, model, params)
-    if not inputs.points:
+    if not inputs.any_assessed:
         return None
     return classify_inputs(ctx, model, params, inputs)
 
@@ -653,7 +670,7 @@ def _bands_at_candidates(
     bands: dict[int, ConvectiveCharacter] = {}
     for alt in candidates:
         inputs = build_character_points(ctx, model, params, cruise_ft=float(alt))
-        if not inputs.points:
+        if not inputs.any_assessed:
             continue
         bands[alt] = classify_inputs(ctx, model, params, inputs)
         if stop_when_cleared and bands[alt] is not ConvectiveCharacter.EMBEDDED:
@@ -951,7 +968,7 @@ class ConvectiveCharacterEvaluator:
             inputs = build_character_points(ctx, model, params)
             points = inputs.points
 
-            if not points:
+            if not inputs.any_assessed:
                 per_model.append(
                     ModelAdvisoryResult.build(
                         model=model,

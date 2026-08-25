@@ -781,6 +781,19 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
   severe-hazard bypasses live in the evaluators and are unaffected. The floor is
   capped at half the domain so it can never suppress a short route that is
   largely in the hazard.
+- **An unassessed point is geometry, not evidence.** Route points a model cannot
+  grade are kept in the point list so `cell_edges` tiles the true route — drop
+  them and the last covered point's cell swallows every uncovered mile. But that
+  makes the list non-empty for a model with *no* data at all, so `if not points`
+  no longer means "nothing to grade": ask `any(p.assessed …)`. Getting this
+  wrong turns a model with zero soundings into a confident GREEN, which is the
+  #391 false-GREEN class wearing the fix's clothes (#571 review round 9).
+- **No geometry and no route length still reports the point ratio.** An advisory
+  that builds without an `extent` (the airport-scoped ones: a verdict about a
+  point, not a span) has `affected_pct` derived from distance — which on a
+  zero-length route is `0/0`. It falls back to `affected/total`, the answer it
+  gave before the percentage became distance-based. A RED verdict publishing
+  `affected_pct: 0.0` reads as "nothing wrong" to the digest and the API.
 - **The denominator is what the model could grade** — in-domain *and* assessed.
   Unassessable points are excluded (#391: two snowing points among eight blanks
   read as snow, not as 20% of a route the model never saw), and thinness is

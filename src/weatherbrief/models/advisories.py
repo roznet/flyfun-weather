@@ -478,6 +478,19 @@ class ModelAdvisoryResult(BaseModel):
         proportional_mod_nm = (
             round(total_distance_nm * mod / total, 1) if total > 0 else 0
         )
+        if extent is None and total_distance_nm <= 0 and total > 0:
+            # No extent AND no route length: the pct below would be
+            # ``_pct(0.0, 0.0)`` → 0.0 whatever the status, so a RED airport
+            # verdict on a zero-length route published ``affected_pct: 0.0``
+            # beside ``affected_points: 1``. The airport-scoped advisories
+            # (airport_wind, density_altitude, llws, flight_category) build with
+            # ``affected=1, total=1`` and no geometry, so the point ratio is the
+            # only answer they have — and the one they gave before this PR
+            # derived the percentage from distance (#571 review round 9). Same
+            # rule ``route_extent`` applies to the same degenerate route.
+            degenerate_pct = 100.0 * affected / total
+            if mod:
+                degenerate_mod_pct = 100.0 * mod / total
         # A zero-length route's nm figures are synthetic scaffolding that exists
         # only to keep the RATIO measurable. Publishing them would put
         # `domain_nm: 400` beside `total_nm: 0` on the MCP and LLM surfaces —

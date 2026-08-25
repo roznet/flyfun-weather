@@ -148,6 +148,7 @@ def rename_extent_params(settings: dict) -> tuple[dict, RenameStats]:
             continue
         secondary = SECONDARY_ALIASES.get(adv_id, set())
         inverted = INVERTED_PCT_KEYS.get(adv_id, set())
+        was_empty = not params
         # Primaries first, so a secondary alias can never shadow a real value.
         for old in sorted(renames, key=lambda k: (k in secondary, k)):
             if old not in params:
@@ -178,7 +179,12 @@ def rename_extent_params(settings: dict) -> tuple[dict, RenameStats]:
             params[new] = value
             stats.renamed += 1
             stats.per_advisory[adv_id] = stats.per_advisory.get(adv_id, 0) + 1
-        if not params:
+        # Drop the advisory entry only if THIS pass emptied it. An entry that
+        # arrived empty is passed through untouched, as the docstring promises:
+        # today both callers gate on ``stats.touched`` so the difference is
+        # invisible, but a future unconditional consumer would see a silent
+        # deletion it never asked for (#571 review round 9).
+        if not params and not was_empty:
             adv["params"].pop(adv_id, None)
 
     return out, stats

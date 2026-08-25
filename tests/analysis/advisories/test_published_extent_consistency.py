@@ -271,3 +271,52 @@ class TestDegenerateRoute:
         assert m.affected_mod_pct == pytest.approx(
             100.0 * ext_mod.nm / ext.domain_nm, abs=0.1,
         )
+
+
+class TestNoGeometryNoRoute:
+    """An advisory with no extent AND no route length still reports honestly.
+
+    The airport-scoped advisories (airport_wind, density_altitude, llws,
+    flight_category) build with `affected=1, total=1` and no `extent=`: their
+    verdict is about a point, not a span. Stage 2 derived `affected_pct` from
+    distance, so on a zero-length route the numerator and the denominator were
+    both 0 and every one of them published `affected_pct: 0.0` beside a RED
+    status — worse than imprecise, since 0% reads as "nothing wrong" to the
+    digest and the API (#571 review round 9). The point ratio is the only
+    answer they have, and it is the one they gave before Stage 2.
+    """
+
+    def _airport_shaped(self, status, affected, total_distance_nm):
+        return ModelAdvisoryResult.build(
+            model="icon", status=status, detail="test",
+            affected=affected, total=1, total_distance_nm=total_distance_nm,
+        )
+
+    def test_a_red_verdict_on_a_zero_length_route_is_not_zero_percent(self):
+        m = self._airport_shaped(AdvisoryStatus.RED, 1, 0.0)
+        assert m.affected_pct == 100.0
+        assert m.affected_points == 1
+        assert m.affected_nm == 0.0, "no route means no miles to claim"
+        assert m.total_nm == 0.0
+
+    def test_a_green_verdict_is_still_zero_percent(self):
+        m = self._airport_shaped(AdvisoryStatus.GREEN, 0, 0.0)
+        assert m.affected_pct == 0.0
+
+    def test_a_normal_route_is_unchanged(self):
+        """The fallback keys on `total_distance_nm <= 0`, not on the absent extent."""
+        m = self._airport_shaped(AdvisoryStatus.RED, 1, 300.0)
+        assert m.affected_pct == 100.0
+        assert m.affected_nm == 300.0
+
+    def test_the_four_airport_advisories_still_build_this_way(self):
+        """Guards the guard: if they gain an `extent=` this class is vacuous and
+        should be replaced, not left passing."""
+        legacy = {
+            name for name, _, kw in _build_calls()
+            if "extent" not in kw and "affected_nm" not in kw
+        }
+        assert {
+            "airport_wind.py", "density_altitude.py",
+            "llws.py", "flight_category.py",
+        } <= legacy
