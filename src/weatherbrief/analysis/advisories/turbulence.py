@@ -102,12 +102,6 @@ class TurbulenceEvaluator:
             has_severe = False
             has_bl_severe = False
             # Points with MODERATE-or-worse at cruise (or a strong updraft).
-            # The RED tier of the percentage gate keys on this count, not on
-            # any-risk coverage: LIGHT chop over half the route is an AMBER
-            # ride-quality note, not a RED hazard (#533 follow-up — with the
-            # corrected layer geometry, light/moderate coverage is what an
-            # honest Ri read of a sheared low-level day produces).
-            significant_points = 0
             worst_cat = CATRiskLevel.NONE
             # One evidence sample per route point (#393). The ribbon and the grade
             # key on DIFFERENT predicates here, so each sample carries both: the
@@ -189,9 +183,6 @@ class TurbulenceEvaluator:
                         point_significant = True
                         strong_w_here = True
 
-                if point_significant:
-                    significant_points += 1
-
                 # Per-point ribbon verdict + CAT-layer cutout (#375). Strong-w is
                 # resolved to a single level (max_w_level_ft), not a band — it
                 # contributes amber to the ribbon but no strong_updraft cutout
@@ -222,6 +213,13 @@ class TurbulenceEvaluator:
                 # was the light-and-above coverage while severe held one point.
                 tags = set()
                 if point_significant:
+                    # The RED tier of the coverage gate keys on THIS population,
+                    # not on any-risk coverage: LIGHT chop over half the route is
+                    # an AMBER ride-quality note, not a RED hazard (#533
+                    # follow-up — with the corrected layer geometry, light/
+                    # moderate coverage is what an honest Ri read of a sheared
+                    # low-level day produces). The tag is what carries it; the
+                    # count the percentage gate used is gone with the gate.
                     tags.add("significant")
                 if point_severe:
                     tags.add("severe")
@@ -331,7 +329,7 @@ class TurbulenceEvaluator:
                 # NAMED rides the higher-threshold field, exactly as convective
                 # publishes its MODERATE+ subset.
                 affected_mod=tier_extent.points,
-                affected_mod_nm=tier_extent.nm,
+                extent_mod=tier_extent,
                 highlights=highlights,
             ))
 

@@ -32,6 +32,7 @@ from weatherbrief.analysis.advisories._helpers import (
     extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
+    RouteExtent,
     below_coverage,
     format_extent,
     grade_extent,
@@ -181,7 +182,7 @@ def classify_enroute_precip(
     # Each axis grades on its own population's geometry, through the shared gate
     # with the shared minimum-extent floor (#571 Stage 2). The old point ratios
     # made `extent_pct_amber=5` fire off a single point on a short route.
-    def _ext(flags: list[bool]):
+    def _ext(flags: list[bool]) -> RouteExtent:
         return route_extent(
             dists, ctx.total_distance_nm, flags, assessed_flags,
             speed_kt=ctx.cruise_groundspeed_kt,

@@ -758,7 +758,9 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
   percentage.
 - **One extent per severity tier.** The severity word and the coverage beside it
   describe the same points: "Severe CAT over …" quotes the SEVERE extent, not
-  light-and-above coverage.
+  light-and-above coverage. The tier reaches `build()` as `extent_mod=<extent>`,
+  never as a bare `nm` float — a lone numerator carries neither its denominator
+  nor its `distance_known`, and both omissions shipped as bugs (#571 rounds 6-7).
 - **Contiguity is a reducer on the same geometry**, not a separate function:
   `longest_run_nm` for barrier-type hazards ("you cannot get around it") sits on
   the same object as the union `nm`. Both the convective-character EMBEDDED gate
@@ -776,6 +778,16 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
 - **`format_extent` takes the `RouteExtent`**, never counts. This is what makes
   the sentence and the published `affected_nm` one number rather than two
   derivations of it.
+- **A zero-length route publishes a percentage and no miles.** Origin == destination
+  is a supported flight (pattern work, sightseeing); `route_extent` substitutes
+  equal synthetic cells so the *ratio* stays measurable and sets
+  `distance_known=False`. That flag is a publishing gate, not a formatting hint:
+  `format_extent` prints "75%" with no nm, and `build()` zeroes **every** mile
+  field — `affected_nm`, `domain_nm`, `total_nm`, `affected_mod_nm` — while
+  taking both percentages from the extents, which are real. Missing it on one
+  field put `domain_nm: 400` beside `total_nm: 0` on the MCP surface; missing it
+  on the sibling field a round later published synthetic tier mileage beside a
+  correctly suppressed primary.
 - **Time is a display axis, not a gate.** `RouteExtent.minutes` is `nm` at
   `ctx.cruise_groundspeed_kt` (cruise TAS less the route-average headwind, from
   the wind components the pack already carries), appended to the message as

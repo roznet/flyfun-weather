@@ -412,7 +412,7 @@ class ModelAdvisoryResult(BaseModel):
         total: int,
         total_distance_nm: float,
         affected_mod: int | None = None,
-        affected_mod_nm: float | None = None,
+        extent_mod: RouteExtent | None = None,
         extent: RouteExtent | None = None,
         domain_nm: float | None = None,
         affected_domain: str | None = None,
@@ -425,10 +425,14 @@ class ModelAdvisoryResult(BaseModel):
         """Build a result, computing pct and nm from point counts.
 
         ``affected_mod`` is an optional higher-threshold count (e.g. convective
-        MODERATE+). Pass ``affected_mod_nm`` with it: without one, its nm can
-        only be derived proportionally, and the evaluator's own message quotes
-        the geometry-accurate figure — which is how ecmwf came to print
+        MODERATE+). Pass ``extent_mod`` with it — the same ``RouteExtent`` the
+        message formatted for that tier. Without one its nm can only be derived
+        proportionally, and the evaluator's own message quotes the
+        geometry-accurate figure — which is how ecmwf came to print
         "MODERATE+ over 264nm (45%)" beside an ``affected_pct`` of 68.8 (#571).
+        It is an extent rather than a bare nm for the same reason ``extent`` is:
+        a lone numerator cannot carry its own denominator, nor say whether its
+        miles are real (see ``distance_known`` below).
 
         ``extent`` is the preferred way to publish the geometry: pass the same
         :class:`RouteExtent` the message formatted and the gate graded, and
@@ -469,28 +473,45 @@ class ModelAdvisoryResult(BaseModel):
         # points); it stays consistent because it counts the same samples that
         # produced ``affected``. Absent it, we fall back to the proportion.
         degenerate_pct: float | None = None
+        degenerate_mod_pct: float | None = None
         proportional_nm = round(total_distance_nm * affected / total, 1) if total > 0 else 0
         proportional_mod_nm = (
             round(total_distance_nm * mod / total, 1) if total > 0 else 0
         )
-        # ``extent`` fills both halves at once; explicit kwargs still win so a
-        # composite can publish a different population deliberately.
+        # A zero-length route's nm figures are synthetic scaffolding that exists
+        # only to keep the RATIO measurable. Publishing them would put
+        # `domain_nm: 400` beside `total_nm: 0` on the MCP and LLM surfaces —
+        # actively misleading rather than imprecise (#571 review round 6).
+        # Publish no miles; the percentages below are still the real ones, taken
+        # from the extents. The zeroing is unconditional: once the extent says
+        # its miles are not real, no mile field measured against that same
+        # geometry is publishable either, whoever supplied it.
+        #
+        # ``extent`` fills numerator and denominator at once; explicit kwargs
+        # otherwise win, so a composite can publish a different population
+        # deliberately.
         if extent is not None:
             if not extent.distance_known:
-                # A zero-length route's nm figures are synthetic scaffolding
-                # that exists only to keep the RATIO measurable. Publishing them
-                # would put `domain_nm: 400` beside `total_nm: 0` on the MCP and
-                # LLM surfaces — actively misleading rather than imprecise
-                # (#571 review round 6). Publish no miles; the percentage below
-                # is still the real one, taken from the extent.
-                affected_nm = 0.0 if affected_nm is None else affected_nm
-                domain_nm = 0.0 if domain_nm is None else domain_nm
+                affected_nm = 0.0
+                domain_nm = 0.0
                 degenerate_pct = extent.pct
             else:
                 if affected_nm is None:
                     affected_nm = extent.nm
                 if domain_nm is None:
                     domain_nm = extent.domain_nm
+        # Same treatment for the higher-threshold tier. It needs its own branch
+        # rather than riding ``extent``'s: the mod extent carries its own
+        # ``pct``, and on a degenerate route that ratio is the only honest
+        # answer — ``_pct`` below would divide by a domain of 0 and publish
+        # ``affected_mod_pct: 0.0`` beside a non-zero ``affected_mod_points``.
+        affected_mod_nm: float | None = None
+        if extent_mod is not None:
+            if not extent_mod.distance_known:
+                affected_mod_nm = 0.0
+                degenerate_mod_pct = extent_mod.pct
+            else:
+                affected_mod_nm = extent_mod.nm
         resolved_nm = (
             round(affected_nm, 1) if affected_nm is not None else proportional_nm
         )
@@ -514,7 +535,10 @@ class ModelAdvisoryResult(BaseModel):
             affected_nm=resolved_nm,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
-            affected_mod_pct=_pct(resolved_mod_nm, resolved_domain_nm),
+            affected_mod_pct=(
+                round(degenerate_mod_pct, 1) if degenerate_mod_pct is not None
+                else _pct(resolved_mod_nm, resolved_domain_nm)
+            ),
             affected_mod_nm=resolved_mod_nm,
             domain_nm=resolved_domain_nm,
             affected_domain=affected_domain,

@@ -22,6 +22,8 @@ import re
 import pytest
 
 from weatherbrief.analysis.advisories.registry import get_catalog
+from weatherbrief.analysis.route_geometry import route_extent
+from weatherbrief.models.advisories import AdvisoryStatus, ModelAdvisoryResult
 
 _ADVISORY_DIR = pathlib.Path(
     "src/weatherbrief/analysis/advisories"
@@ -58,17 +60,33 @@ class TestBuildCallShape:
             f"silently defaults to the whole route: {offenders}"
         )
 
-    def test_no_evaluator_publishes_a_mod_nm_without_a_mod_count(self):
+    def test_no_evaluator_publishes_a_mod_extent_without_a_mod_count(self):
         """The higher-threshold pair travels together too.
 
-        `affected_mod_nm` has the same failure shape the primary extent had:
+        `extent_mod` has the same failure shape the primary extent had:
         published alone it becomes a percentage over a denominator nothing
         measured. All callers pass both today; this keeps it that way.
         """
         offenders = [
             f"{name}:{line}"
             for name, line, kw in _build_calls()
-            if "affected_mod_nm" in kw and "affected_mod" not in kw
+            if "extent_mod" in kw and "affected_mod" not in kw
+        ]
+        assert not offenders, offenders
+
+    def test_no_evaluator_passes_a_bare_mod_nm(self):
+        """The higher-threshold tier goes through an extent, not a lone float.
+
+        `affected_mod_nm=` was the last surviving bare-numerator kwarg on
+        `build()`. It could not carry its own denominator, and — the way it
+        actually failed — it could not say whether its miles were real, so a
+        zero-length route published synthetic tier mileage beside a suppressed
+        `affected_nm` (#571 review round 7). It is gone; this keeps it gone.
+        """
+        offenders = [
+            f"{name}:{line}"
+            for name, line, kw in _build_calls()
+            if "affected_mod_nm" in kw
         ]
         assert not offenders, offenders
 
@@ -186,3 +204,68 @@ class TestPublishedNumbersAgree:
     def test_the_catalog_is_non_empty(self):
         """The generic sweeps above are only meaningful over a real registry."""
         assert len(get_catalog()) > 10
+
+
+class TestDegenerateRoute:
+    """A zero-length route publishes no miles — on *every* mile field.
+
+    Round 6 suppressed the synthetic scaffolding on `affected_nm`/`domain_nm`
+    but not on the higher-threshold tier beside them, and nothing here exercised
+    `build()` directly, so the sibling field kept publishing invented mileage for
+    another round (#571 review round 7). These assert the whole published
+    object, not one field of it.
+    """
+
+    def _degenerate(self, **kw):
+        """A pattern flight: four coincident points, three affected."""
+        ext = route_extent([0.0] * 4, 0.0, [True, True, True, False])
+        assert ext.distance_known is False
+        return ext, ModelAdvisoryResult.build(
+            model="icon",
+            status=AdvisoryStatus.AMBER,
+            detail="test",
+            affected=3,
+            total=4,
+            total_distance_nm=0.0,
+            extent=ext,
+            **kw,
+        )
+
+    def test_no_field_publishes_synthetic_miles(self):
+        ext_mod = route_extent([0.0] * 4, 0.0, [True, False, False, False])
+        assert ext_mod.nm > 0, "the synthetic geometry is what we are suppressing"
+        _, m = self._degenerate(affected_mod=1, extent_mod=ext_mod)
+        assert (m.affected_nm, m.domain_nm, m.total_nm, m.affected_mod_nm) == (
+            0.0, 0.0, 0.0, 0.0,
+        )
+
+    def test_both_percentages_are_the_real_ratio(self):
+        """Suppressing the miles must not zero the coverage with them.
+
+        `affected_mod_pct` is `_pct(nm, domain_nm)` on a normal route; with both
+        zeroed that would publish 0% beside `affected_mod_points: 1`.
+        """
+        ext_mod = route_extent([0.0] * 4, 0.0, [True, False, False, False])
+        _, m = self._degenerate(affected_mod=1, extent_mod=ext_mod)
+        assert m.affected_pct == 75.0
+        assert m.affected_mod_pct == 25.0
+        assert m.affected_points == 3
+        assert m.affected_mod_points == 1
+
+    def test_a_real_route_is_untouched_by_the_guard(self):
+        """The guard keys on `distance_known`, not on a zero somewhere."""
+        ext = route_extent([0.0, 100.0, 200.0, 300.0], 300.0, [True, True, True, False])
+        ext_mod = route_extent(
+            [0.0, 100.0, 200.0, 300.0], 300.0, [True, False, False, False],
+        )
+        m = ModelAdvisoryResult.build(
+            model="icon", status=AdvisoryStatus.AMBER, detail="test",
+            affected=3, total=4, total_distance_nm=300.0,
+            extent=ext, affected_mod=1, extent_mod=ext_mod,
+        )
+        assert m.affected_nm == round(ext.nm, 1)
+        assert m.affected_mod_nm == round(ext_mod.nm, 1)
+        assert m.domain_nm == round(ext.domain_nm, 1)
+        assert m.affected_mod_pct == pytest.approx(
+            100.0 * ext_mod.nm / ext.domain_nm, abs=0.1,
+        )
