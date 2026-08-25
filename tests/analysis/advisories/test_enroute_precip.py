@@ -162,6 +162,55 @@ class TestEnroutePrecipEvaluator:
         assert result.per_model[0].total_points == 2
 
 
+class TestSentenceAndFieldNameTheSamePopulation:
+    """The detail names a subset; the published object must carry that subset.
+
+    Light rain is counted in ``affected`` but only *mentioned* when nothing
+    worse queued a sentence. Publishing only the union left "snow over 10nm"
+    beside an ``affected_pct`` covering the light points too — the D1 defect
+    this PR exists to remove, in the one advisory where the sentence
+    deliberately says less than the count (#571 review round 8).
+    """
+
+    def _snow_plus_light(self):
+        # 2 snow points (0-1) and 3 light-rain points (4-6) of 10, 20 nm apart.
+        per_point = []
+        for i in range(10):
+            if i < 2:
+                per_point.append(_sounding(PrecipPhase.SNOW, PrecipIntensity.LIGHT))
+            elif 4 <= i < 7:
+                per_point.append(_sounding(PrecipPhase.RAIN, PrecipIntensity.LIGHT))
+            else:
+                per_point.append(_sounding())
+        return _evaluate(_ctx(per_point))
+
+    def test_light_rain_is_counted_but_not_named(self):
+        """Guards the guard: without both populations present this proves nothing."""
+        m = self._snow_plus_light().per_model[0]
+        assert "Snow" in m.detail
+        assert "light" not in m.detail.lower()
+        assert m.affected_points == 5      # snow + light together
+        assert m.affected_mod_points == 2  # what the sentence named
+
+    def test_the_named_miles_are_published(self):
+        m = self._snow_plus_light().per_model[0]
+        assert f"{round(m.affected_mod_nm)}nm" in m.detail
+        assert m.affected_mod_nm < m.affected_nm, (
+            "the light-rain points must widen the union but not the sentence"
+        )
+
+    def test_a_light_only_route_names_what_it_counts(self):
+        """When light rain *is* the sentence, the two populations coincide."""
+        per_point = [
+            _sounding(PrecipPhase.RAIN, PrecipIntensity.LIGHT) if i < 4 else _sounding()
+            for i in range(10)
+        ]
+        m = _evaluate(_ctx(per_point)).per_model[0]
+        assert m.status == AdvisoryStatus.GREEN
+        assert m.affected_mod_nm == m.affected_nm
+        assert m.affected_mod_points == m.affected_points
+
+
 class TestVFRPrecipFeed:
 
     def test_vfr_composite_capped_at_amber_on_snow(self):
@@ -173,7 +222,7 @@ class TestVFRPrecipFeed:
         ]
         ctx = _ctx(per_point)
 
-        status, _, _, _, signal = classify_enroute_precip(ctx, "gfs")
+        status, _, _, _, signal, _ = classify_enroute_precip(ctx, "gfs")
         assert signal and status == AdvisoryStatus.RED
 
         entry = VFRFeasibilityEvaluator.catalog_entry()

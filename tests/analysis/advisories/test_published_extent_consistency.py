@@ -32,7 +32,9 @@ _ADVISORY_DIR = pathlib.Path(
 
 def _build_calls():
     """Every ``ModelAdvisoryResult.build(...)`` call in the advisory package."""
-    for path in sorted(_ADVISORY_DIR.glob("*.py")):
+    # rglob, not glob: a future subpackage would otherwise drop out of the
+    # audit silently, which is the failure mode these sweeps exist to prevent.
+    for path in sorted(_ADVISORY_DIR.rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text())):
             if (
                 isinstance(node, ast.Call)

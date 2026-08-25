@@ -761,6 +761,16 @@ is exactly **one** way to answer it: build a `RouteExtent` and format it.
   light-and-above coverage. The tier reaches `build()` as `extent_mod=<extent>`,
   never as a bare `nm` float — a lone numerator carries neither its denominator
   nor its `distance_known`, and both omissions shipped as bugs (#571 rounds 6-7).
+- **Whatever the sentence names, the object publishes.** The rule above is not
+  only about severity words. Wherever a detail describes a *narrower* population
+  than `affected` counts — `vfr_feasibility`'s RED, graded off IMC alone but
+  counting IMC+marginal; `dd_nwp_agreement` naming its top category out of a
+  union; `enroute_precip` suppressing light rain when snow queued a sentence —
+  that population rides `extent_mod`/`affected_mod` so the miles a pilot reads
+  are miles the API carries. The union stays on `affected_nm`, because the union
+  is what the grade keys on. Three evaluators still had the mismatch after the
+  primitive landed (#571 review round 8): consolidating the geometry did not by
+  itself make the sentence and the field agree.
 - **Contiguity is a reducer on the same geometry**, not a separate function:
   `longest_run_nm` for barrier-type hazards ("you cannot get around it") sits on
   the same object as the union `nm`. Both the convective-character EMBEDDED gate

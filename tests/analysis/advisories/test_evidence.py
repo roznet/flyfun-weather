@@ -302,6 +302,43 @@ class TestRouteExtent:
             "100% of high terrain"
         )
 
+    def test_a_single_point_route_owns_the_whole_route(self):
+        """One assessed point is the degenerate case of midpoint-owned cells.
+
+        With no neighbours there are no midpoints, so the one cell must span
+        ``[0, total_nm]`` — the tiling property the whole primitive rests on.
+        A route this short is rare but reachable (a very short hop, or a model
+        that returned one usable sounding).
+        """
+        ext = route_extent([0.0], 120.0, [True])
+        assert ext.nm == 120.0
+        assert ext.domain_nm == 120.0
+        assert ext.pct == 100.0
+        assert ext.longest_run_nm == 120.0
+        assert ext.distance_known is True
+
+    def test_a_single_unaffected_point_owns_the_denominator_only(self):
+        ext = route_extent([0.0], 120.0, [False])
+        assert ext.nm == 0.0
+        assert ext.domain_nm == 120.0
+        assert ext.pct == 0.0
+
+    def test_no_in_domain_points_is_zero_not_a_zero_division(self):
+        """``pct`` divides by ``domain_nm``; an empty domain must not raise.
+
+        Distinct from the zero-*length*-route path above: here the route has
+        real miles, but no point was assessable, so the denominator is empty
+        while ``total_nm`` is not.
+        """
+        ext = route_extent(
+            [0.0, 50.0, 100.0], 100.0, [False, False, False],
+            in_domain=[False, False, False],
+        )
+        assert ext.domain_points == 0
+        assert ext.domain_nm == 0.0
+        assert ext.pct == 0.0
+        assert grade_extent(ext, amber_pct=1) is AdvisoryStatus.GREEN
+
     def test_out_of_order_distances_are_sorted_before_reducing(self):
         """``cell_edges`` assumes along-route order; unsorted input would make
         cell widths negative and net out to a false GREEN."""

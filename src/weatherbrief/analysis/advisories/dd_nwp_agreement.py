@@ -255,6 +255,7 @@ class DDvsNWPAgreementEvaluator:
                 speed_kt=ctx.cruise_groundspeed_kt,
             )
 
+            named_extent = extent
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "no comparable DD/NWP data"
@@ -272,13 +273,13 @@ class DDvsNWPAgreementEvaluator:
                 # beside a named one is the D1 defect this PR removes elsewhere
                 # (#571 review). The grade still keys on the union: any category
                 # diverging is a divergence.
-                cat_extent = route_extent(
+                named_extent = route_extent(
                     dists, ctx.total_distance_nm,
                     category_flags[top_cat], comparable_flags,
                     speed_kt=ctx.cruise_groundspeed_kt,
                 )
                 detail = (
-                    f"{top_cat} track diverges over {format_extent(cat_extent)}"
+                    f"{top_cat} track diverges over {format_extent(named_extent)}"
                 )
 
             per_model.append(ModelAdvisoryResult.build(
@@ -289,6 +290,11 @@ class DDvsNWPAgreementEvaluator:
                 total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=extent,
+                # ...and publishes it, so the named category's miles are a field
+                # and not only a sentence. Writing the comment above was not the
+                # same as closing the defect (#571 review round 8).
+                affected_mod=named_extent.points,
+                extent_mod=named_extent,
             ))
 
         return RouteAdvisoryResult.from_per_model(

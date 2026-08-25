@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
     EXTENT_MIN_NM,
     extent_min_nm_param,
     EvidenceSample,
@@ -108,12 +109,18 @@ def classify_enroute_precip(
     ctx: RouteContext,
     model: str,
     params: dict[str, float] | None = None,
-) -> tuple[AdvisoryStatus, str, int, int, bool]:
+) -> tuple[AdvisoryStatus, str, int, int, bool, RouteExtent]:
     """Classify en-route precipitation for one model.
 
-    Returns ``(status, detail, affected, total, has_signal)``.
+    Returns ``(status, detail, affected, total, has_signal, named_extent)``.
     ``has_signal`` is False when no point carries a precipitation assessment
     (old pack) — callers must treat that as UNAVAILABLE, not GREEN.
+
+    ``named_extent`` is the geometry of the population the *detail sentence*
+    describes, which is a subset of ``affected`` whenever light rain is present
+    alongside something worse: the sentence suppresses light rain there but
+    ``affected`` counts it, so publishing only the union printed "snow over
+    30nm/200nm (15%)" beside an ``affected_pct`` of 45 (#571 review round 8).
     """
     p = {**_DEFAULTS, **(params or {})}
     extent_pct_amber = p["extent_pct_amber"]
@@ -176,7 +183,10 @@ def classify_enroute_precip(
             light_flags[-1] = True
 
     if total == 0 or not has_signal:
-        return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), 0, total, has_signal
+        return (
+            AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc),
+            0, total, has_signal, EMPTY_EXTENT,
+        )
 
     affected = snow_pts + sig_rain_pts + light_pts
     # Each axis grades on its own population's geometry, through the shared gate
@@ -192,8 +202,12 @@ def classify_enroute_precip(
     snow_mod_ext = _ext(snow_mod_flags)
     sig_ext = _ext(sig_flags)
     light_ext = _ext(light_flags)
+    # The hazardous union is what the sentence names whenever it names anything
+    # at all; light rain gets a sentence only when nothing worse queued one.
+    hazard_ext = _ext([sn or sg for sn, sg in zip(snow_flags, sig_flags)])
 
     parts: list[str] = []
+    named_ext = hazard_ext
     if snow_pts:
         parts.append(adv_t(
             "enroute_precip.snow", loc, extent=format_extent(snow_ext),
@@ -219,6 +233,7 @@ def classify_enroute_precip(
     else:
         status = AdvisoryStatus.GREEN
         if not parts and light_pts:
+            named_ext = light_ext
             parts.append(adv_t(
                 "enroute_precip.light", loc, extent=format_extent(light_ext),
             ))
@@ -230,9 +245,12 @@ def classify_enroute_precip(
     # A flagged snow/rain verdict always stands. (The VFR composite maps this
     # UNAVAILABLE back to GREEN, so the composite is unaffected.)
     if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
-        return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), affected, total, has_signal
+        return (
+            AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc),
+            affected, total, has_signal, EMPTY_EXTENT,
+        )
 
-    return status, " | ".join(parts), affected, total, has_signal
+    return status, " | ".join(parts), affected, total, has_signal, named_ext
 
 
 @register
@@ -309,7 +327,7 @@ class EnroutePrecipEvaluator:
             # list drives the geometry-accurate affected_nm and the highlight, and
             # keys off the SAME per-point predicate (``classify_precip_point``), so
             # the grade's ``affected`` and the ribbon cannot drift (#393).
-            status, detail, affected, total, has_signal = classify_enroute_precip(
+            status, detail, affected, total, has_signal, named_ext = classify_enroute_precip(
                 ctx, model, params,
             )
 
@@ -364,6 +382,10 @@ class EnroutePrecipEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
+                # The sentence's own population, published beside the union it
+                # counts, so "snow over 30nm" is a field and not only prose.
+                affected_mod=named_ext.points,
+                extent_mod=named_ext,
                 highlights=highlights,
             ))
 
