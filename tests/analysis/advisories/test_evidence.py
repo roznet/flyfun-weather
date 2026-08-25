@@ -9,8 +9,11 @@ from a single predicate so they cannot drift.
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
     EvidenceSample,
     FlaggedCell,
+    format_extent,
+    route_extent,
     summarize_evidence,
 )
 from weatherbrief.models import HighlightSeverity as S
@@ -165,3 +168,110 @@ class TestDataStateAndCoverage:
         # 1 assessed of 3 domain < 0.5*3=1.5 → below coverage. The two flat
         # points do not dilute the mountain-only coverage denominator.
         assert summ.below_coverage is True
+
+
+class TestRouteExtent:
+    """The shared extent primitive (#571).
+
+    Every fixture here uses **deliberately uneven** point spacing — the real
+    ``interpolate_route`` output, which fills at a fixed 10 nm but inserts extra
+    points at waypoints. An evenly spaced fixture cannot catch the defect this
+    replaces: with even spacing the proportional ``total_nm × affected/total``
+    happens to agree with the geometry, so a proportional regression would pass.
+    """
+
+    # 0, 10, 20, 22, 24, 100: two waypoint-tight gaps inside a long route.
+    UNEVEN = (0.0, 10.0, 20.0, 22.0, 24.0, 100.0)
+
+    def _uneven(self, affected_idx, **kw):
+        return [
+            _sample(d, S.RED if i in affected_idx else S.GREEN, **kw)
+            for i, d in enumerate(self.UNEVEN)
+        ]
+
+    def test_nm_is_geometry_not_a_point_ratio(self):
+        # The three tight points (20, 22, 24) own [15,21], [21,23], [23,62] =
+        # 6 + 2 + 39 = 47nm. A point ratio would claim 3/6 × 100 = 50nm.
+        summ = summarize_evidence(self._uneven({2, 3, 4}), 100.0)
+        assert summ.extent.nm == 47.0
+        assert summ.extent.points == 3
+        assert summ.extent.nm != round(100.0 * 3 / 6)
+
+    def test_pct_is_distance_based(self):
+        summ = summarize_evidence(self._uneven({2, 3, 4}), 100.0)
+        # 47 / 100, not the 50% point ratio.
+        assert summ.extent.pct == 47.0
+
+    def test_message_and_field_are_one_number(self):
+        # The #571 D2 invariant: what the sentence prints IS ``affected_nm``.
+        summ = summarize_evidence(self._uneven({2, 3, 4}), 100.0)
+        assert format_extent(summ.extent) == "47nm/100nm (47%)"
+        assert summ.affected_nm == summ.extent.nm
+
+    def test_domain_nm_is_the_whole_route_by_default(self):
+        summ = summarize_evidence(self._uneven({0}), 100.0)
+        assert summ.extent.domain_nm == 100.0
+        assert summ.extent.domain_points == 6
+
+    def test_domain_nm_is_the_restricted_domain(self):
+        # mountain_wind's shape: only the tight cluster is in-domain, and the
+        # affected point's percentage is a share of THAT, not of the route.
+        samples = [
+            _sample(d, S.RED if i == 3 else S.GREEN, in_domain=i in (2, 3, 4))
+            for i, d in enumerate(self.UNEVEN)
+        ]
+        summ = summarize_evidence(samples, 100.0)
+        assert summ.extent.domain_nm == 47.0     # 6 + 2 + 39
+        assert summ.extent.nm == 2.0             # the point at 22 owns [21,23]
+        assert round(summ.extent.pct) == 4
+        # D3: never the route length multiplied by a domain fraction.
+        assert format_extent(summ.extent, domain_label="of high terrain") == (
+            "2nm/47nm of high terrain (4%)"
+        )
+
+    def test_longest_run_is_contiguous_not_the_union(self):
+        # Affected at 0 and at the tight cluster: union 6+2+39+? but the longest
+        # contiguous run is the cluster's 47nm, not the union.
+        summ = summarize_evidence(self._uneven({0, 2, 3, 4}), 100.0)
+        assert summ.extent.nm == 52.0            # +5 for the point at 0
+        assert summ.extent.longest_run_nm == 47.0
+
+    def test_extent_of_measures_a_sub_population(self):
+        # Severity tiers: RED at one point, AMBER at two. The RED sentence must
+        # quote the RED geometry, not the flagged union's (#571 D1).
+        samples = [
+            _sample(0.0, S.GREEN),
+            _sample(10.0, S.AMBER),
+            _sample(20.0, S.AMBER),
+            _sample(22.0, S.RED),
+            _sample(24.0, S.GREEN),
+            _sample(100.0, S.GREEN),
+        ]
+        summ = summarize_evidence(samples, 100.0)
+        assert summ.extent.nm == 18.0            # [5,15] + [15,21] + [21,23]
+        red = summ.extent_of(lambda s: s.severity == S.RED)
+        assert red.nm == 2.0
+        assert red.points == 1
+
+    def test_extent_of_reads_tags(self):
+        samples = [
+            _sample(0.0, S.RED),
+            _sample(10.0, S.RED),
+            _sample(20.0, S.RED),
+            _sample(22.0, S.RED),
+            _sample(24.0, S.RED),
+            _sample(100.0, S.RED),
+        ]
+        samples[3] = EvidenceSample(
+            distance_nm=22.0, assessed=True, severity=S.RED,
+            tags=frozenset({"severe"}),
+        )
+        summ = summarize_evidence(samples, 100.0)
+        assert summ.extent.nm == 100.0
+        assert summ.extent_of(lambda s: "severe" in s.tags).nm == 2.0
+
+    def test_empty_and_degenerate(self):
+        assert route_extent([], 100.0, []) == EMPTY_EXTENT
+        assert route_extent([0.0], 0.0, [True]) == EMPTY_EXTENT
+        assert format_extent(EMPTY_EXTENT) == "0nm"
+        assert EMPTY_EXTENT.pct == 0.0

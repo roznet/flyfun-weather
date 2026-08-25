@@ -156,7 +156,7 @@ class CloudTopEvaluator:
                     detail = adv_t("cloud_top.no_layers", loc)
             else:
                 status = pct_above_threshold(above_ceiling, total, pct_amber, red_pct=60)
-                ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
+                ext = format_extent(summary.extent)
                 detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
 
             # Coverage tolerance (#391): a clear verdict on a sounding subset that

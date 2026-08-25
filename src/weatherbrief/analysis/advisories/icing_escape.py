@@ -362,18 +362,18 @@ class IcingEscapeEvaluator:
                 no_escape_count, total, no_escape_pct_red,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                ext = format_extent(summary.extent)
                 detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
             elif no_escape_count > 0:
                 status = AdvisoryStatus.AMBER
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                ext = format_extent(summary.extent)
                 detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("icing_escape.no_icing", loc)
             else:
                 status = pct_above_threshold(affected, total, icing_coverage_pct_amber)
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                ext = format_extent(summary.extent)
                 if status == AdvisoryStatus.GREEN and has_tight_margin:
                     status = AdvisoryStatus.AMBER
                     detail = adv_t("icing_escape.tight_margin", loc, extent=ext)

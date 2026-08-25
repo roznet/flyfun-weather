@@ -330,7 +330,13 @@ class TestTurbulence:
 
     def test_turbulent_route(self, turbulent_context: RouteContext):
         """CAT at cruise along full route → AMBER or RED."""
-        result = TurbulenceEvaluator.evaluate(turbulent_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
+        # ``route_pct_amber`` is turbulence's coverage key; this test used to
+        # pass ``icing_coverage_pct_amber`` (copy-pasted from icing_escape), so
+        # the override never landed and the assertion held vacuously on the
+        # default (#571, testing-accuracy-review Bug #10).
+        result = TurbulenceEvaluator.evaluate(
+            turbulent_context, {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
 
     def test_clear_low_coverage_is_unavailable(self):
@@ -545,6 +551,65 @@ class TestTurbulence:
         )
         result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_severe_sentence_quotes_the_severe_extent_not_the_union(self):
+        """#571 D1 — the severity word and the extent name the same population.
+
+        Severe at one point, light at eight more. The RED is correct and
+        deliberate (the free-atmosphere bypass above), but the sentence read
+        "Severe CAT over 90nm (53%)" — the light-and-above coverage — for a
+        hazard that held 10 nm. The bypassed grade must describe itself honestly
+        rather than borrow a number that describes different points.
+        """
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        def _vm(risk):
+            return VerticalMotionAssessment(
+                classification=VerticalMotionClass.QUIESCENT,
+                cat_risk_layers=(
+                    [] if risk is None
+                    else [CATRiskLayer(
+                        base_ft=7000, top_ft=10000, risk=risk, boundary_layer=False,
+                    )]
+                ),
+            )
+
+        # Point 0 severe; points 1-8 light; 9-16 clean. Even 10 nm spacing, so
+        # the point at 0 owns a half cell: [0, 5].
+        risks = (
+            [CATRiskLevel.SEVERE]
+            + [CATRiskLevel.LIGHT] * 8
+            + [None] * 8
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(vertical_motion=_vm(risks[i]))},
+            )
+            for i in range(17)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=170,
+        )
+        result = TurbulenceEvaluator.evaluate(
+            ctx, {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
+        m = result.per_model[0]
+        assert m.status == AdvisoryStatus.RED          # bypass unchanged
+        assert m.affected_points == 9                  # the any-risk union
+        assert "Severe CAT" in m.detail
+        # The severe tier holds one point = the [0,5] half cell, not the union's
+        # 85 nm.
+        assert "5nm/170nm (3%)" in m.detail
+        assert "85nm" not in m.detail
 
 
 class TestConvective:
@@ -828,8 +893,15 @@ class TestConvectiveHeadline:
 
     def test_moderate_plus_anchoring_not_low_union(self):
         """6 HIGH + 18 LOW of 24 points: every point clears the LOW floor (100%)
-        but only 25% reaches MODERATE+. The headline extent must reflect the
-        MODERATE+ 25%, not the 100% LOW union, with the peak named separately."""
+        but only the first 6 reach MODERATE+. The headline extent must reflect
+        the MODERATE+ subset, not the 100% LOW union, with the peak named
+        separately.
+
+        The printed figure is the *distance* share (#571), not the 25% point
+        ratio: the first and last points own half-width cells, so 6 leading
+        points of 24 evenly spaced over 200 nm cover 47.8 nm — 24%, and that is
+        the number both the sentence and ``affected_mod_nm`` carry.
+        """
         risks = [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 18
         ctx = _conv_route({"gfs": risks})
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
@@ -838,38 +910,46 @@ class TestConvectiveHeadline:
         m = res.per_model[0]
         assert m.affected_points == 24
         assert m.affected_mod_points == 6
-        # Per-model detail anchors on the MODERATE+ extent (25%) + peak HIGH.
+        # Per-model detail anchors on the MODERATE+ extent + peak HIGH.
         assert "MODERATE+" in m.detail
-        assert "25%" in m.detail
+        assert "24%" in m.detail
         assert "peak HIGH" in m.detail
         assert "100%" not in m.detail  # the LOW union must not be the headline
+        # The sentence and the structured field are one number (#571 D1/D2).
+        assert f"{round(m.affected_mod_nm)}nm" in m.detail
         # Single model → aggregate collapses to a single % (no range).
-        assert "25%" in res.aggregate_detail
+        assert "24%" in res.aggregate_detail
         assert "peak HIGH" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
 
     def test_cross_model_range(self):
-        """Three RED models with differing MODERATE+ coverage (25/50/75%) →
-        aggregate shows the range across the supporting models + peak."""
+        """Three RED models with differing MODERATE+ coverage → aggregate shows
+        the range across the supporting models + peak.
+
+        Percentages are distance-based (#571): with 8 points over 200 nm the
+        leading point owns a half-width cell, so 2/4/6 leading points cover
+        42.9 / 100.0 / 157.1 nm — 21 / 50 / 79%.
+        """
         ctx = _conv_route(
             {
-                "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 25%
+                "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 21%
                 "icon": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
-                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 75%
+                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 79%
             }
         )
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
 
         assert res.aggregate_status == AdvisoryStatus.RED
         assert "MODERATE+" in res.aggregate_detail
-        assert "25–75%" in res.aggregate_detail
+        assert "21–79%" in res.aggregate_detail
         assert "across models" in res.aggregate_detail
         assert "peak HIGH" in res.aggregate_detail
 
     def test_low_only_favorability_fallback(self):
-        """4 LOW + 6 NONE of 10: 40% clears the LOW floor (AMBER) but nothing
+        """4 LOW + 6 NONE of 10: the LOW floor is cleared (AMBER) but nothing
         reaches MODERATE. Wording must be 'primed, not firing' favorability —
-        never 'MODERATE+ over 0%'."""
+        never 'MODERATE+ over 0%'. The printed share is distance-based (#571):
+        4 leading points of 10 over 200 nm cover 77.8 nm, i.e. 39%."""
         risks = [ConvectiveRisk.LOW] * 4 + [ConvectiveRisk.NONE] * 6
         ctx = _conv_route({"gfs": risks})
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
@@ -880,10 +960,10 @@ class TestConvectiveHeadline:
         assert m.affected_mod_points == 0
         assert "primed" in m.detail.lower()
         assert "MODERATE+" not in m.detail
-        assert "40%" in m.detail
+        assert "39%" in m.detail
         # Aggregate (single model) → favorability single %, no range/peak.
         assert "primed" in res.aggregate_detail.lower()
-        assert "40%" in res.aggregate_detail
+        assert "39%" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
         assert "peak" not in res.aggregate_detail.lower()
 

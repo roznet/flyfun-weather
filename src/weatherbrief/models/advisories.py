@@ -358,6 +358,17 @@ class ModelAdvisoryResult(BaseModel):
     affected_mod_points: int = 0
     affected_mod_pct: float = 0.0
     affected_mod_nm: float = 0.0
+    # The extent's DENOMINATOR in nm (#571). Equal to ``total_nm`` for every
+    # evaluator whose domain is the whole route; ``mountain_wind``'s domain is
+    # the route's mountain points, so its coverage is a share of mountain miles
+    # and a consumer dividing ``affected_nm`` by ``total_nm`` would understate it
+    # as badly as the old message overstated it. 0.0 on old packs.
+    domain_nm: float = 0.0
+    # Human-readable name of a denominator that is NOT the whole route ("high
+    # terrain"). None means the route, which is the common case. Consumers that
+    # print a percentage (the digest prompt, the MCP views) must qualify it with
+    # this rather than presenting a domain fraction as route coverage.
+    affected_domain: str | None = None
     # Optional details-only metadata: divergence between the chosen method and
     # an independent second derivation (e.g. convective DD-vs-model scheme).
     # Never affects the grade; surfaced only in the info popup and LLM digest.
@@ -378,6 +389,31 @@ class ModelAdvisoryResult(BaseModel):
     # no selectable method, and on old packs (legacy-safe).
     primary_method_id: str | None = None
 
+    @property
+    def coverage_pct(self) -> float:
+        """Distance-based coverage of this extent's own domain (#571).
+
+        The figure the detail sentence prints, keyed off the same ``affected_nm``
+        it quotes — as opposed to ``affected_pct``, which is still the *point*
+        ratio at this stage (uneven point spacing makes the two differ by a few
+        points; Stage 2 collapses them). Aggregate lines that summarise several
+        models must use this so the headline and the per-model sentences below it
+        are one measurement.
+
+        Falls back to ``total_nm`` on packs written before ``domain_nm`` existed,
+        and to the point ratio when there is no geometry at all.
+        """
+        denom = self.domain_nm or self.total_nm
+        return 100.0 * self.affected_nm / denom if denom else self.affected_pct
+
+    @property
+    def coverage_mod_pct(self) -> float:
+        """:attr:`coverage_pct` for the higher-threshold extent (convective MODERATE+)."""
+        denom = self.domain_nm or self.total_nm
+        return (
+            100.0 * self.affected_mod_nm / denom if denom else self.affected_mod_pct
+        )
+
     @classmethod
     def build(
         cls,
@@ -389,6 +425,9 @@ class ModelAdvisoryResult(BaseModel):
         total: int,
         total_distance_nm: float,
         affected_mod: int | None = None,
+        affected_mod_nm: float | None = None,
+        domain_nm: float | None = None,
+        affected_domain: str | None = None,
         cross_check: str | None = None,
         mitigations: list[Mitigation] | None = None,
         highlights: AdvisoryHighlights | None = None,
@@ -398,7 +437,14 @@ class ModelAdvisoryResult(BaseModel):
         """Build a result, computing pct and nm from point counts.
 
         ``affected_mod`` is an optional higher-threshold count (e.g. convective
-        MODERATE+); its pct/nm are derived the same way as the primary extent.
+        MODERATE+). Pass ``affected_mod_nm`` with it: without one, its nm can
+        only be derived proportionally, and the evaluator's own message quotes
+        the geometry-accurate figure — which is how ecmwf came to print
+        "MODERATE+ over 264nm (45%)" beside an ``affected_pct`` of 68.8 (#571).
+
+        ``domain_nm`` is the denominator the extent was measured against, and
+        ``affected_domain`` names it when it is not the whole route. Both default
+        to the route.
 
         ``affected_nm`` is an optional geometry-accurate extent (#393): when the
         evaluator derives grade and geometry from one ``EvidenceSample`` list, it
@@ -419,6 +465,9 @@ class ModelAdvisoryResult(BaseModel):
         # points); it stays consistent because it counts the same samples that
         # produced ``affected``. Absent it, we fall back to the proportion.
         proportional_nm = round(total_distance_nm * affected / total, 1) if total > 0 else 0
+        proportional_mod_nm = (
+            round(total_distance_nm * mod / total, 1) if total > 0 else 0
+        )
         return cls(
             model=model,
             status=status,
@@ -430,7 +479,14 @@ class ModelAdvisoryResult(BaseModel):
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
             affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,
-            affected_mod_nm=round(total_distance_nm * mod / total, 1) if total > 0 else 0,
+            affected_mod_nm=(
+                round(affected_mod_nm, 1) if affected_mod_nm is not None
+                else proportional_mod_nm
+            ),
+            domain_nm=round(
+                domain_nm if domain_nm is not None else total_distance_nm, 1,
+            ),
+            affected_domain=affected_domain,
             cross_check=cross_check,
             mitigations=mitigations if mitigations is not None else [],
             highlights=highlights,

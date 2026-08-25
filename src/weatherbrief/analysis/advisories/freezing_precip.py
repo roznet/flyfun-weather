@@ -182,6 +182,14 @@ class FreezingPrecipEvaluator:
 
             summary = summarize_evidence(samples, ctx.total_distance_nm)
             total = summary.assessed
+            # Active (RED) and primed (AMBER) are two populations inside one
+            # grade; each sentence quotes its own geometry (#571 D1).
+            active_ext = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.RED
+            )
+            primed_ext = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.AMBER
+            )
 
             if total == 0:
                 per_model.append(ModelAdvisoryResult.build(
@@ -197,18 +205,18 @@ class FreezingPrecipEvaluator:
                 status = AdvisoryStatus.RED
                 detail = (
                     "Freezing precipitation "
-                    f"{format_extent(active_pts, total, ctx.total_distance_nm)}"
+                    f"{format_extent(active_ext)}"
                 )
                 if primed_pts:
                     detail += (
                         f"; primed profile "
-                        f"{format_extent(primed_pts, total, ctx.total_distance_nm)}"
+                        f"{format_extent(primed_ext)}"
                     )
             elif primed_pts > 0 and primed_pct >= primed_pct_amber:
                 status = AdvisoryStatus.AMBER
                 detail = (
                     "Freezing-rain profile (no active precip) "
-                    f"{format_extent(primed_pts, total, ctx.total_distance_nm)}"
+                    f"{format_extent(primed_ext)}"
                 )
             else:
                 status = AdvisoryStatus.GREEN

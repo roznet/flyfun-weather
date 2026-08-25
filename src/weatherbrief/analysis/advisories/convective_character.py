@@ -15,10 +15,17 @@ disagreement on avoidability is itself signal.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, showers_at_point
+from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
+    RouteExtent,
+    format_extent,
+    route_extent,
+    showers_at_point,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.clouds import cloud_cover_band_pct
@@ -294,6 +301,31 @@ def _below_base_geometry(
         return _BelowBase("clear", base_fl=base_fl, margin_ft=margin_ft)
     drop_ft = int(math.ceil((base_clearance_ft - min_margin) / 500.0) * 500)
     return _BelowBase("marginal", base_fl=base_fl, margin_ft=margin_ft, drop_ft=drop_ft)
+
+
+def _realized_extent(
+    points: Sequence[ConvCharPoint], total_distance_nm: float
+) -> RouteExtent:
+    """Geometry-accurate extent of the realized convective cells (#571).
+
+    Mirrors ``longest_embedded_run_nm``'s treatment of hand-built test points
+    with no ``distance_nm`` (evenly spaced over the route) so the card's printed
+    extent and the EMBEDDED contiguity gate measure the same geometry.
+    """
+    n = len(points)
+    if n == 0:
+        return EMPTY_EXTENT
+    distances = [
+        p.distance_nm
+        if p.distance_nm is not None
+        else (total_distance_nm * i / (n - 1) if n > 1 else 0.0)
+        for i, p in enumerate(points)
+    ]
+    return route_extent(
+        distances,
+        total_distance_nm,
+        [p.is_convective and p.realized for p in points],
+    )
 
 
 def _format_below_base(res: _BelowBase, loc: str) -> str | None:
@@ -934,9 +966,13 @@ class ConvectiveCharacterEvaluator:
             status = _CHAR_STATUS.get(character, AdvisoryStatus.GREEN)
             total = len(points)
             realized_count = sum(1 for p in points if p.is_convective and p.realized)
+            # Extent of the realized cells, over the same cell edges the
+            # EMBEDDED contiguity gate measures its run on (#571) — the card's
+            # "(Xnm/Ynm)" and the gate can no longer describe different geometry.
+            extent = _realized_extent(points, ctx.total_distance_nm)
             detail = adv_t(f"convective_character.{character.value}", loc)
             if character not in (ConvectiveCharacter.NONE, ConvectiveCharacter.UNKNOWN):
-                detail += f" ({format_extent(realized_count, total, ctx.total_distance_nm)})"
+                detail += f" ({format_extent(extent)})"
             # Below-base clearance note (#298) — annotate-only, low bands only. The
             # band/colour is already set; this adds the avoidance geometry vs cruise
             # (and a per-altitude hint). Never on EMBEDDED/WIDESPREAD/ORGANIZED —
@@ -957,6 +993,7 @@ class ConvectiveCharacterEvaluator:
                     status=status,
                     detail=detail,
                     affected=realized_count,
+                    affected_nm=extent.nm,
                     total=total,
                     total_distance_nm=ctx.total_distance_nm,
                     # #568: the character card is the one that renders the

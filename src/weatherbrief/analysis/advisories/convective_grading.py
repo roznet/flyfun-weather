@@ -30,8 +30,11 @@ from dataclasses import dataclass
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
     FlaggedCell,
+    RouteExtent,
     pct_above_threshold,
+    route_extent,
 )
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.models import (
@@ -98,6 +101,11 @@ class ConvectiveModelGrade:
     region_cells: list[tuple[float, FlaggedCell | None]]
     peak_dist_nm: float | None
     cross_check: str | None
+    # Geometry-accurate extents of the two populations above (#571). ``extent``
+    # measures ``affected``, ``extent_mod`` measures ``affected_mod``; both carry
+    # their own ``domain_nm`` so a consumer never has to scale a point ratio.
+    extent: RouteExtent = EMPTY_EXTENT
+    extent_mod: RouteExtent = EMPTY_EXTENT
 
 
 def resolve_convective_params(ctx: RouteContext) -> dict[str, float]:
@@ -210,6 +218,14 @@ def grade_convective_model(
     max_precip_mm_h: float | None = None
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
     region_cells: list[tuple[float, FlaggedCell | None]] = []
+    # Along-route positions of the two graded populations, for the
+    # geometry-accurate extents (#571 D1/D2). ``affected`` (the LOW-floor union)
+    # drives the colour; ``affected_mod`` (MODERATE+) anchors the headline. Each
+    # needs its own midpoint-cell reduction — deriving the MODERATE+ nm as a
+    # share of the union's is exactly the "45% in the string, 68.8% in the JSON"
+    # split this removes.
+    affected_dists: list[float] = []
+    affected_mod_dists: list[float] = []
     # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
     peak_key: tuple[int, float] | None = None
     peak_dist: float | None = None
@@ -364,8 +380,10 @@ def grade_convective_model(
             continue
 
         affected += 1
+        affected_dists.append(dist)
         if risk_idx >= MOD_IDX:
             affected_mod += 1
+            affected_mod_dists.append(dist)
         if risk_idx > RISK_ORDER.index(worst_risk):
             worst_risk = graded_risk
 
@@ -494,6 +512,19 @@ def grade_convective_model(
         if affected_mod > 0 and status == AdvisoryStatus.GREEN:
             status = AdvisoryStatus.AMBER
 
+    # Both extents reduce over the SAME cell edges as the ribbon this grade
+    # carries, so the card's sentence, its highlight and the published
+    # ``affected_nm`` are one measurement (#571).
+    all_dists = [d for d, _ in ribbon_points]
+    aff_set = set(affected_dists)
+    mod_set = set(affected_mod_dists)
+    extent = route_extent(
+        all_dists, ctx.total_distance_nm, [d in aff_set for d in all_dists],
+    )
+    extent_mod = route_extent(
+        all_dists, ctx.total_distance_nm, [d in mod_set for d in all_dists],
+    )
+
     return ConvectiveModelGrade(
         model=model,
         status=status,
@@ -511,4 +542,6 @@ def grade_convective_model(
         cross_check=_peak_cross_check(
             status, peak_has_both, peak_nwp_risk, peak_dd_risk, peak_fallback
         ),
+        extent=extent,
+        extent_mod=extent_mod,
     )

@@ -17,6 +17,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     format_extent,
     pct_above_threshold,
+    route_extent,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
@@ -171,8 +172,15 @@ class DDvsNWPAgreementEvaluator:
             categories_triggered: dict[str, int] = {
                 "freezing": 0, "clouds": 0,
             }
+            # Per-point geometry for the extent (#571 D2): the printed nm is
+            # the midpoint-owned-cell sum of the disagreeing points, not the
+            # route length scaled by a point ratio.
+            dists: list[float] = []
+            disagree_flags: list[bool] = []
 
             for rpa in ctx.analyses:
+                dists.append(rpa.distance_from_origin_nm or 0.0)
+                disagree_flags.append(False)
                 sounding = rpa.sounding.get(model)
                 if sounding is None or sounding.indices is None:
                     continue
@@ -223,8 +231,11 @@ class DDvsNWPAgreementEvaluator:
                 total += 1
                 if disagreements:
                     disagree_points += 1
+                    disagree_flags[-1] = True
                     for cat in disagreements:
                         categories_triggered[cat] = categories_triggered.get(cat, 0) + 1
+
+            extent = route_extent(dists, ctx.total_distance_nm, disagree_flags)
 
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -236,9 +247,8 @@ class DDvsNWPAgreementEvaluator:
                 status = pct_above_threshold(
                     disagree_points, total, amber_pct, red_pct,
                 )
-                ext = format_extent(disagree_points, total, ctx.total_distance_nm)
                 top_cat = max(categories_triggered, key=categories_triggered.get)
-                detail = f"{top_cat} track diverges over {ext}"
+                detail = f"{top_cat} track diverges over {format_extent(extent)}"
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model,
@@ -247,6 +257,7 @@ class DDvsNWPAgreementEvaluator:
                 affected=disagree_points,
                 total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=extent.nm,
             ))
 
         return RouteAdvisoryResult.from_per_model(

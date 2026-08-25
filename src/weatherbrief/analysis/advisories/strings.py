@@ -279,6 +279,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Gebirgswellenbedingungen ({speed}kt nahe Gelände, {signature}) über {extent}",
         "es": "Condiciones de onda de montaña ({speed}kt cerca del terreno, {signature}) sobre {extent}",
     },
+    # Names the extent's denominator: this advisory measures coverage over the
+    # route's mountain points, not the whole route (#571 D3).
+    "mountain_wind.of_terrain": {
+        "en": "of high terrain",
+        "fr": "de relief élevé",
+        "de": "des Hochgeländes",
+        "es": "de relieve elevado",
+    },
     # Inline suffix listing the wave signature(s) seen at strong-wind points.
     "mountain_wind.sig_suffix": {
         "en": " — {signature}",
