@@ -1380,6 +1380,79 @@ class TestShortRouteExtentFloor:
         assert res.per_model[0].status == AdvisoryStatus.RED
 
 
+class TestVFRRedNamesTheIMCPopulation:
+    """"IMC over X" must quote the IMC miles, not IMC+marginal.
+
+    ``_enroute_vfr_status`` grades RED off ``imc_extent`` alone, but the RED
+    sentence quoted the union and the object published it — so a route with four
+    solid-IMC points among five marginal-clearance ones said "IMC over 170nm
+    (94%)" when 70nm was IMC. This is the composite go/no-go advisory a pilot
+    reads first, which is what made it the worst instance of the D1 defect left
+    in the PR (#571 review round 8).
+    """
+
+    def _ctx(self, imc_idx: set[int], marginal_idx: set[int], n: int = 10):
+        from weatherbrief.models import CloudCoverage, EnhancedCloudLayer
+
+        imc = [EnhancedCloudLayer(
+            base_ft=6000, top_ft=12000, coverage=CloudCoverage.OVC,
+        )]
+        marginal = [EnhancedCloudLayer(
+            base_ft=8800, top_ft=12000, coverage=CloudCoverage.BKN,
+        )]
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    cloud_layers=(
+                        imc if i in imc_idx
+                        else marginal if i in marginal_idx
+                        else []
+                    ),
+                )},
+            )
+            for i in range(n)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=(n - 1) * 20.0,
+        )
+
+    def _red(self):
+        ctx = self._ctx({0, 1, 2, 3}, set(range(4, 9)))
+        m = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS).per_model[0]
+        assert m.status == AdvisoryStatus.RED, "fixture must reach the RED branch"
+        return m
+
+    def test_the_red_sentence_quotes_the_imc_miles(self):
+        m = self._red()
+        assert "IMC over 70nm/180nm" in m.detail
+        assert "170nm" not in m.detail, (
+            "the marginal points must not inflate the miles beside the word IMC"
+        )
+
+    def test_the_object_publishes_both_populations(self):
+        """The union stays the counted population; the named tier rides mod."""
+        m = self._red()
+        assert (m.affected_points, m.affected_nm) == (9, 170.0)
+        assert (m.affected_mod_points, m.affected_mod_nm) == (4, 70.0)
+
+    def test_a_mixed_amber_still_quotes_the_union(self):
+        """The one sentence that names BOTH populations keeps the union.
+
+        Guards against over-correcting the RED fix into always narrowing.
+        """
+        ctx = self._ctx({0, 1, 2}, set(range(3, 9)))
+        m = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS).per_model[0]
+        assert m.status == AdvisoryStatus.AMBER
+        assert "IMC/marginal clearance over 170nm/180nm" in m.detail
+        assert m.affected_mod_nm == m.affected_nm == 170.0
+
+
 class TestVFRFeasibility:
     def test_green_clear_vfr(self, vfr_clear_context: RouteContext):
         """VFR at airports + clear en-route → GREEN."""

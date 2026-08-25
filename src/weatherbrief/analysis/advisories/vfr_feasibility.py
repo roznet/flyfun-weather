@@ -969,19 +969,40 @@ class VFRFeasibilityEvaluator:
                 enroute_status = AdvisoryStatus.UNAVAILABLE
             enroute_detail = ""
 
+            # Each sentence quotes the extent of the population it NAMES, which
+            # is not always the union ``affected`` counts (#571 review round 8).
+            # RED is graded off ``imc_extent`` alone and says "IMC over …", so it
+            # must quote the IMC miles: on a route with one solid-IMC point and
+            # several marginal-clearance ones, the union inflates the number
+            # beside the word "IMC" — the D1 defect on the composite that
+            # actually reaches the pilot. Only the sentence naming *both*
+            # populations quotes the union.
+            named_extent = enroute_extent
             if total > 0 and affected > 0:
-                ext = format_extent(enroute_extent)
                 if enroute_status == AdvisoryStatus.RED:
-                    enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
+                    named_extent = imc_extent
+                    enroute_detail = adv_t(
+                        "vfr.imc_over", loc, extent=format_extent(imc_extent),
+                    )
                 elif enroute_status == AdvisoryStatus.AMBER:
                     if marginal_count > 0 and imc_count > 0:
-                        enroute_detail = adv_t("vfr.imc_marginal", loc, extent=ext)
+                        enroute_detail = adv_t(
+                            "vfr.imc_marginal", loc,
+                            extent=format_extent(enroute_extent),
+                        )
                     elif imc_count > 0:
-                        enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
+                        named_extent = imc_extent
+                        enroute_detail = adv_t(
+                            "vfr.imc_over", loc, extent=format_extent(imc_extent),
+                        )
                     else:
-                        enroute_detail = adv_t("vfr.marginal", loc, extent=ext)
+                        enroute_detail = adv_t(
+                            "vfr.marginal", loc, extent=format_extent(enroute_extent),
+                        )
                 else:  # GREEN status but some points affected → minor clearance issues
-                    enroute_detail = adv_t("vfr.minor", loc, extent=ext)
+                    enroute_detail = adv_t(
+                        "vfr.minor", loc, extent=format_extent(enroute_extent),
+                    )
 
             # 5. En-route precipitation (visibility proxy) — capped at AMBER
             # in the composite; the standalone advisory grades it fully.
@@ -991,7 +1012,7 @@ class VFRFeasibilityEvaluator:
             # only VFR keys, so the two can grade differently if a user tunes
             # the standalone — that divergence is intentional; the composite is
             # a fixed-threshold sanity floor, not a mirror of the standalone.
-            precip_status, precip_detail, _, _, precip_signal = (
+            precip_status, precip_detail, _, _, precip_signal, _ = (
                 classify_enroute_precip(ctx, model)
             )
             # Old pack without precip data (no signal / UNAVAILABLE) → treat as
@@ -1072,6 +1093,10 @@ class VFRFeasibilityEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=enroute_extent,
+                # The tier the sentence named rides the higher-threshold field,
+                # so the number a pilot reads is one the object also publishes.
+                affected_mod=named_extent.points,
+                extent_mod=named_extent,
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=primary_method_id,
