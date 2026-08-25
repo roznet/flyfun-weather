@@ -190,8 +190,7 @@ struct AdvisoryCardView: View {
                             // coverage for a footprint a quarter that size.
                             Text(Self.coverageLabel(
                                 pct: modelResult.affectedPct,
-                                domain: modelResult.affectedDomain,
-                            ))
+                                domain: modelResult.affectedDomain))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
