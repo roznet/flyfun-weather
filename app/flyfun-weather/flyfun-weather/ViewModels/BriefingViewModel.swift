@@ -533,6 +533,13 @@ final class BriefingViewModel {
                     if let newPack = event.pack {
                         await applyPack(newPack)
                     }
+                    // AFTER `applyPack`, deliberately. A gated realtime refresh
+                    // reuses the pack timestamp, so `applyPack`'s reload serves
+                    // the snapshot from cache when the pack is downloaded — the
+                    // stale copy the press was meant to replace. Overwriting it
+                    // here with what the server just computed is what makes ↻
+                    // move the METAR/TAF and observed picture in flight.
+                    applyRealtimeRefresh(event)
                     // Clear the transient banner after a delay.
                     try? await Task.sleep(for: .seconds(10))
                     switch refreshState {
@@ -557,6 +564,34 @@ final class BriefingViewModel {
             refreshState = .error(error.localizedDescription)
             Self.logger.error("Refresh stream error: \(error)")
         }
+    }
+
+    /// Fold a gated `realtime` refresh's fresh D-0 data into the loaded snapshot.
+    ///
+    /// No-op unless the server actually ran the cheap path and returned
+    /// something. Each field is applied only when present: a nil means that
+    /// fetch failed server-side (or, for `observed`, that the deployment has the
+    /// collector switched off), and keeping what the pack loaded with beats
+    /// blanking a panel — the observed ages on screen stay honest either way,
+    /// because every source carries its own.
+    private func applyRealtimeRefresh(_ event: RefreshEvent) {
+        guard event.refreshDecision?.mode == "realtime" else { return }
+        guard case .loaded(var snapshot) = snapshotState else { return }
+        var changed = false
+        if let observations = event.observations {
+            snapshot.routeObservations = observations
+            changed = true
+        }
+        if let sigmets = event.sigmets {
+            snapshot.routeSigmets = sigmets
+            changed = true
+        }
+        if let observed = event.observed {
+            snapshot.observedConditions = observed
+            changed = true
+        }
+        guard changed else { return }
+        snapshotState = .loaded(snapshot)
     }
 
     /// Build the user-facing message for a gated no-op refresh. Prefer the

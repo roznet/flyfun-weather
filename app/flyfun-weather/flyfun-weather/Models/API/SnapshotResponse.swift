@@ -2,16 +2,26 @@ import Foundation
 
 /// Briefing snapshot — route info, waypoint analyses, observations.
 /// We decode only the fields needed for display.
+/// The three D-0 fields are `var` because a gated realtime refresh replaces them
+/// in place on an otherwise-unchanged pack — see
+/// `BriefingViewModel.applyRealtimeRefresh`. Everything else is fixed at pack
+/// build and stays `let`.
 struct SnapshotResponse: Codable, Sendable {
     let route: RouteConfig
     let targetDate: String
     let daysOut: Int
     let departureTime: String?
     let analyses: [WaypointAnalysis]?
-    let routeObservations: RouteObservations?
+    var routeObservations: RouteObservations?
     /// D-0 area hazards (SIGMETs) intersecting the route corridor — the sibling
     /// of `routeObservations` on the same fetch/refresh seam. Nil on D-1+ packs.
-    let routeSigmets: RouteSigmets?
+    var routeSigmets: RouteSigmets?
+    /// Observed radar / lightning / satellite-cloud-top samples along the route
+    /// corridor (#574). Present on D-0 packs where the deployment runs the
+    /// observed collector (`WB_OBSERVED_ENABLED`); nil otherwise — and nil is not
+    /// "clear", it is "we did not look". Recomputed by every gated D-0 refresh,
+    /// so the ↻ button moves it.
+    var observedConditions: ObservedConditions?
     /// Weather-based divert candidates (D-2 inward, `compute_alternates` pref).
     /// Present only on marginal D-0/D-1/D-2 packs; nil otherwise. Mirrors
     /// `models/alternates.py` / `designs/future/alternates.md`.

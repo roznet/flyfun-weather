@@ -1359,6 +1359,58 @@ class TestRefreshEndpoint:
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
     @patch("weatherbrief.api.packs.list_packs")
+    def test_refresh_gate_realtime_carries_observed(
+        self, mock_list, mock_status, mock_decide, mock_rt, client, sample_flight,
+    ):
+        """The gated response carries the re-sampled observed conditions (#574).
+
+        ``run_realtime_refresh`` recomputes them on every D-0 press and writes
+        them to ``briefing.json``, but the response used to drop the field —
+        which mattered on iOS, where the pack timestamp is unchanged and the
+        client cache is read-first, so re-fetching the snapshot handed back the
+        very copy the press was meant to replace.
+        """
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models.observations import RealtimeRefreshResult, RouteObservations
+        from weatherbrief.models.observed import ObservedConditions, ObservedStationRef
+
+        mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="D-0 live METAR/TAF",
+            needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+        mock_rt.return_value = RealtimeRefreshResult(
+            observations=RouteObservations(
+                corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
+                airports_found=1, airports_with_metar=1, airports_with_taf=0, airports=[],
+            ),
+            observed=ObservedConditions(
+                computed_at=datetime.now(timezone.utc),
+                corridor_nm=30.0,
+                radii_nm=[5.0, 10.0, 20.0],
+                stations=[ObservedStationRef(id="p0", lat=49.0, lon=2.0, enroute_distance_nm=0.0)],
+                summary_lines=["Radar: peak 42 dBZ."],
+            ),
+        )
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "realtime"
+            assert data["observed"]["radii_nm"] == [5.0, 10.0, 20.0]
+            assert data["observed"]["stations"][0]["id"] == "p0"
+            # No payload-level observation time: `computed_at` is an ASSEMBLY
+            # stamp, and the per-source ages live on each field.
+            assert "observed_at" not in data["observed"]
+        finally:
+            client.app.state.db_path = ""
+
+    @patch("weatherbrief.api.packs.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
     def test_refresh_gate_realtime_failure_degrades_to_noop(
         self, mock_list, mock_status, mock_decide, mock_rt, client, sample_flight,
     ):

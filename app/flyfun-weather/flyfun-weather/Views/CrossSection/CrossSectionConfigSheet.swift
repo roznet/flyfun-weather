@@ -13,6 +13,10 @@ struct CrossSectionConfigSheet: View {
     /// dead control. Captured at presentation; it can't change while the sheet
     /// is up (the model selector lives in the chart chrome, not here).
     var highlightAvailable: Bool = false
+    /// The loaded snapshot, so the corridor picker can re-resolve the observed
+    /// discs without a request (every sampled radius already shipped with the
+    /// pack). nil → the observed section hides itself.
+    var snapshot: SnapshotResponse? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var showMore = false
 
@@ -24,6 +28,7 @@ struct CrossSectionConfigSheet: View {
                 advisoryLensSection
                 highlightSection
                 methodSection
+                observedSection
                 referenceSection
                 if showMore { moreSection }
                 moreToggleRow
@@ -249,6 +254,71 @@ struct CrossSectionConfigSheet: View {
         }
     }
 
+    // MARK: Observed conditions (#574)
+
+    /// Hidden entirely when the pack carries no observed payload — a D-1+ pack,
+    /// a deployment with the collector off, or a pack built before #574. Mirrors
+    /// the web panel, which hides a group only when *every* layer in it is
+    /// unavailable rather than showing dead toggles.
+    @ViewBuilder
+    private var observedSection: some View {
+        if let observed = csVM.vizData?.observed {
+            Section {
+                ForEach(observedLayers, id: \.id) { layer in
+                    Toggle(isOn: Binding(
+                        get: { csVM.enabledLayers[layer.id] ?? false },
+                        set: { _ in csVM.toggleLayer(layer.id) }
+                    )) {
+                        HStack {
+                            swatch(LegendColors.color(forLayerId: layer.id))
+                            Text(layer.name)
+                        }
+                    }
+                }
+                if observed.radiiNm.count > 1 {
+                    Picker("Corridor", selection: Binding(
+                        get: { observed.radiusNm },
+                        set: { csVM.setObservedRadius($0, snapshot: snapshot) }
+                    )) {
+                        // Discs are cumulative, not rings: "within 10 NM" is the
+                        // question a pilot asks.
+                        ForEach(observed.radiiNm, id: \.self) { r in
+                            Text("\(Int(r)) NM").tag(r)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                // Per-source ages, never blended. Four streams that are minutes
+                // apart share no instant, so each says so for itself — the same
+                // rule the chart badges follow.
+                ForEach(observedSources(observed), id: \.source) { source in
+                    HStack {
+                        Text(source.label)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textMuted)
+                        Spacer()
+                        Text(ObservedBadge.ageText(source.validTime, source.ageMinutes, ""))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(Theme.textMuted)
+                    }
+                }
+            } header: {
+                Text("Observed conditions")
+            } footer: {
+                Text("Measured, not forecast. Radar and satellite frames are minutes old and each carries its own time. Cloud-top bands under 5% of the sky aren't drawn, so a point with no band is not a point with no cloud.")
+            }
+        }
+    }
+
+    private var observedLayers: [any CrossSectionLayerProtocol] {
+        CrossSectionLayer.allLayers.filter { $0.group == .conditions }
+    }
+
+    private func observedSources(_ observed: VizObserved) -> [VizObservedSource] {
+        [observed.cloudTops, observed.reflectivity, observed.rainRate, observed.lightning]
+            .compactMap { $0 }
+    }
+
     // MARK: Reference toggles (independent on/off chips)
 
     private var referenceSection: some View {
@@ -335,6 +405,10 @@ private enum LegendColors {
         case "freezing-level": return ColorScales.freezingLevelColor
         case "minus-10c": return ColorScales.minus10cColor
         case "minus-20c": return ColorScales.minus20cColor
+        case "observed-tops": return CrossSectionTheme.active.observed.capColor
+        // Mid-ramp green: the strip's colours span the dBZ scale, and a single
+        // swatch has to stand for the whole ramp rather than its worst end.
+        case "observed-surface": return ObservedSurfaceLayer.echoColor(25)
         case "lcl": return ColorScales.lclColor
         case "lfc": return ColorScales.lfcColor
         case "el": return ColorScales.elColor

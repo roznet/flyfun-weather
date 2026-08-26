@@ -52,12 +52,21 @@ struct CrossSectionView: View {
         .onChange(of: viewModel.selectedModel) { updateVizData() }
         .onChange(of: viewModel.routeAnalysesState.isLoaded) { updateVizData() }
         .onChange(of: viewModel.elevationState.isLoaded) { updateVizData() }
+        // The observed payload rides on the snapshot, and a gated D-0 refresh
+        // replaces it in place without minting a new pack — so the chart has to
+        // rebuild on a snapshot change, not only on a pack change (#574).
+        .onChange(of: viewModel.snapshotState.isLoaded) { updateVizData() }
+        .onChange(of: observedComputedAt) { updateVizData() }
         .onChange(of: viewModel.focusIntent) { applyFocusIntent() }
         .task { updateVizData(); applyFocusIntent() }
         .sheet(isPresented: $showingConfig) {
             // The Highlight visibility toggle shows only while a highlight is
             // active AND the selected model has geometry for it (#374).
-            CrossSectionConfigSheet(csVM: csVM, highlightAvailable: derivedHighlights != nil)
+            CrossSectionConfigSheet(
+                csVM: csVM,
+                highlightAvailable: derivedHighlights != nil,
+                snapshot: snapshot
+            )
         }
         // Gate the cross-section tips on this tab being on screen so they never
         // fire from the Advisory/Map tabs (#312).
@@ -399,6 +408,20 @@ struct CrossSectionView: View {
                                                totalDistanceNm: 1, waypointMarkers: [], departureTime: "",
                                                flightDurationHours: 0, terrainProfile: nil)
 
+    /// The loaded snapshot, or nil while it is still in flight.
+    private var snapshot: SnapshotResponse? {
+        if case .loaded(let s) = viewModel.snapshotState { return s }
+        return nil
+    }
+
+    /// Identity for the observed payload, so a re-sample that leaves the pack
+    /// timestamp alone still triggers a rebuild. `computedAt` is the payload's
+    /// *assembly* time — used here only as a change token, never rendered as an
+    /// observation age (each source carries its own).
+    private var observedComputedAt: String? {
+        snapshot?.observedConditions?.computedAt
+    }
+
     private func updateVizData() {
         switch viewModel.routeAnalysesState {
         case .idle, .loading, .error:
@@ -406,7 +429,11 @@ struct CrossSectionView: View {
         case .loaded(let analyses):
             var elevation: ElevationResponse? = nil
             if case .loaded(let elev) = viewModel.elevationState { elevation = elev }
-            csVM.update(routeAnalyses: analyses, elevation: elevation, model: viewModel.selectedModel)
+            csVM.update(
+                routeAnalyses: analyses, elevation: elevation,
+                model: viewModel.selectedModel,
+                observed: snapshot?.observedConditions
+            )
         }
     }
 }

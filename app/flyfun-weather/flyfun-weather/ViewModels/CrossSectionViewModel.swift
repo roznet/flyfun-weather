@@ -72,6 +72,10 @@ final class CrossSectionViewModel {
             }
             enabledLayers = merged
         }
+        // A stored 0 means "absent" here: `double(forKey:)` cannot distinguish a
+        // missing key from a stored zero, and zero is not a sampled radius.
+        let storedRadius = UserDefaults.standard.double(forKey: Self.observedRadiusDefaultsKey)
+        observedRadiusNm = storedRadius > 0 ? storedRadius : nil
         activeAdvisoryPreset = UserDefaults.standard.string(forKey: Self.advisoryPresetDefaultsKey)
         activeHighlightAdvisoryId = UserDefaults.standard.string(forKey: Self.highlightAdvisoryDefaultsKey)
         recomputeEffectiveLayers()
@@ -106,8 +110,44 @@ final class CrossSectionViewModel {
         recomputeEffectiveLayers()
     }
 
-    func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {
-        vizData = Self.extractVizData(from: routeAnalyses, model: model, elevation: elevation)
+    /// Corridor width the observed discs are resolved at, in NM. Persisted, and
+    /// applied only when the pack actually sampled that radius (all three ship
+    /// together, so switching is a client-side re-resolve with no request).
+    /// nil → the widest sampled disc, matching the web's default.
+    private(set) var observedRadiusNm: Double?
+
+    private static let observedRadiusDefaultsKey = "crossSectionObservedRadiusNm"
+
+    /// Re-resolve the observed discs at a new corridor width. Cheap: every radius
+    /// is already in the payload, so this touches no network. Deliberately NOT a
+    /// layer edit — it must not flip the preset to Custom.
+    func setObservedRadius(_ radiusNm: Double?, snapshot: SnapshotResponse?) {
+        observedRadiusNm = radiusNm
+        if let radiusNm {
+            UserDefaults.standard.set(radiusNm, forKey: Self.observedRadiusDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.observedRadiusDefaultsKey)
+        }
+        guard let vizData else { return }
+        var updated = vizData
+        let observed = ObservedResolver.resolve(
+            snapshot?.observedConditions, radiusOverrideNm: radiusNm)
+        updated.observed = observed
+        ObservedResolver.merge(into: &updated.points, observed: observed)
+        self.vizData = updated
+        dataVersion += 1
+    }
+
+    func update(
+        routeAnalyses: RouteAnalysesResponse,
+        elevation: ElevationResponse?,
+        model: String,
+        observed: ObservedConditions? = nil
+    ) {
+        vizData = Self.extractVizData(
+            from: routeAnalyses, model: model, elevation: elevation,
+            observed: observed, observedRadiusNm: observedRadiusNm
+        )
         dataVersion += 1
         recomputeEffectiveLayers()  // model/route/elevation changed → refresh the cache
     }
@@ -351,7 +391,9 @@ final class CrossSectionViewModel {
     static func extractVizData(
         from manifest: RouteAnalysesResponse,
         model: String,
-        elevation: ElevationResponse?
+        elevation: ElevationResponse?,
+        observed observedConditions: ObservedConditions? = nil,
+        observedRadiusNm: Double? = nil
     ) -> VizRouteData {
         var points: [VizPoint] = []
         var waypointMarkers: [WaypointMarker] = []
@@ -376,6 +418,12 @@ final class CrossSectionViewModel {
             TerrainPoint(distanceNm: $0.distanceNm, elevationFt: $0.elevationFt)
         }
 
+        // Observed discs (#574) resolve to the same route the analyses walk, so
+        // an observed value and the model column above it describe one place.
+        let observed = ObservedResolver.resolve(
+            observedConditions, radiusOverrideNm: observedRadiusNm)
+        ObservedResolver.merge(into: &points, observed: observed)
+
         return VizRouteData(
             points: points,
             cruiseAltitudeFt: Double(manifest.cruiseAltitudeFt),
@@ -385,7 +433,8 @@ final class CrossSectionViewModel {
             waypointMarkers: waypointMarkers,
             departureTime: manifest.departureTime,
             flightDurationHours: manifest.flightDurationHours,
-            terrainProfile: terrainProfile
+            terrainProfile: terrainProfile,
+            observed: observed
         )
     }
 

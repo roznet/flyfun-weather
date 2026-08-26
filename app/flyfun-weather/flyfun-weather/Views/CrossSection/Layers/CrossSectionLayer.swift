@@ -21,6 +21,13 @@ enum LayerGroup: String, CaseIterable {
     case turbulence
     case convection
     case reference
+    /// Observed (remotely-sensed) conditions — radar, lightning, satellite cloud
+    /// tops (#574). A toggle group, not a method group: the two layers show
+    /// different things (a vertical histogram vs a surface strip) and are meant
+    /// to be on together, not chosen between. Deliberately absent from
+    /// `CrossSectionPresets.resetGroups`, mirroring the web's `RESET_GROUPS` —
+    /// applying an advisory lens must not silently drop the measured picture.
+    case conditions
     /// Advisory highlight (scrim + verdict ribbon, #374). Not a toggleable data
     /// layer: its visibility is driven by the active advisory highlight, so it
     /// never appears in the method/reference sections of the config sheet.
@@ -49,6 +56,7 @@ extension LayerGroup {
         case .turbulence: "Turbulence"
         case .convection: "Convection"
         case .reference: "Reference"
+        case .conditions: "Observed conditions"
         case .highlight: "Highlight"
         }
     }
@@ -65,6 +73,10 @@ enum CrossSectionLayer {
         NaturalCloudBandsLayer(source: .dd),
         SquareCloudBandsLayer(source: .nwp),
         SquareCloudBandsLayer(source: .dd),
+        // Observed cloud tops draw over the NWP cloud bands on purpose: that
+        // overlap IS the cross-check (#574). Nothing computes the comparison in
+        // phase 1 — it is read off the picture.
+        ObservedTopsLayer(),
         ThermoConvectiveBgLayer(),
         NwpConvectiveBgLayer(),
         IcingBandsLayer(),
@@ -73,6 +85,10 @@ enum CrossSectionLayer {
         CATBandsLayer(),
         InversionBandsLayer(),
         TerrainLayer(),
+        // Observed radar/lightning hugs the terrain, so it sits with the other
+        // surface-referenced overlays rather than in the cloud stack — and above
+        // the terrain fill, which would otherwise mask the strip.
+        ObservedSurfaceLayer(),
         TemperatureLinesLayer(metric: .freezingLevel),
         TemperatureLinesLayer(metric: .minus10c),
         TemperatureLinesLayer(metric: .minus20c),

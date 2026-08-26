@@ -61,6 +61,8 @@ from weatherbrief.storage.sounding_profiles import (
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
+from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.observed.collect import observed_enabled
 from weatherbrief.models import (
     AdvisorySummary,
     BriefingPackMeta,
@@ -969,7 +971,14 @@ def pending_coverage_date(flight: Flight, as_of: datetime | None = None) -> date
     return coverage_start_date(flight.departure_time.date())
 
 
-def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
+def _realtime_what(observed: bool) -> str:
+    """What a gated D-0 press actually refreshes, for the reason line."""
+    return "METAR/TAF and observed conditions" if observed else "METAR/TAF"
+
+
+def decide_refresh(
+    status: DataStatus, days_out: int, *, observed: bool = False
+) -> RefreshDecision:
     """Decide whether a manual refresh runs the full pipeline, a cheap
     real-time observations refresh, or nothing.
 
@@ -986,6 +995,13 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
       pulls fresh METAR/TAF (the caller runs ``run_realtime_refresh``).
     - ``none`` otherwise — a no-op carrying a reason and the ETA of the next
       useful update.
+
+    ``observed`` says whether this deployment collects observed conditions
+    (#574), and changes only the wording: the same cheap path re-samples radar,
+    lightning and cloud tops from local frames, so a reason that named METAR/TAF
+    alone would under-report what the press actually did.  It is a parameter
+    rather than an ``observed_enabled()`` call so this stays a pure function of
+    its arguments.
 
     The ``min(..., n_eligible)`` cap means small model selections still work:
     2 models selected -> D-2/D-1 both need both; 1 model -> every press runs.
@@ -1005,7 +1021,10 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
         if days_out <= 0:
             return RefreshDecision(
                 mode="realtime",
-                reason="D-0: refreshing live METAR/TAF (no model run covers the flight horizon)",
+                reason=(
+                    f"D-0: refreshing live {_realtime_what(observed)} "
+                    "(no model run covers the flight horizon)"
+                ),
                 needed=threshold, n_eligible=0, n_updated=0, days_out=days_out,
             )
         return RefreshDecision(
@@ -1047,7 +1066,7 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
             mode="realtime",
             reason=(
                 f"D-0: only {n_updated} of {needed} covering model(s) updated "
-                f"— refreshing live METAR/TAF"
+                f"— refreshing live {_realtime_what(observed)}"
             ),
             needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
             eta_useful=eta_useful, pending_models=pending_models,
@@ -1150,7 +1169,9 @@ def gated_data_status(
     pack itself afterwards, and "no pack at all" is not a question for the gate.
     """
     status = _build_data_status(latest, flight)
-    decision = decide_refresh(status, _days_out_now(flight, now))
+    decision = decide_refresh(
+        status, _days_out_now(flight, now), observed=observed_enabled()
+    )
     if params_override:
         decision = apply_params_change_override(decision, latest, flight)
     status.refresh_decision = decision
@@ -1994,6 +2015,12 @@ class RefreshAccepted(BaseModel):
     observations: RouteObservations | None = None  # updated obs (realtime mode)
     sigmets: RouteSigmets | None = None  # updated SIGMETs (realtime mode)
     delta: RefreshDelta | None = None  # worsening summary (realtime mode)
+    # Re-sampled observed conditions (#574).  ``run_realtime_refresh`` computes
+    # this on every gated D-0 press and writes it to ``briefing.json``; carrying
+    # it here is what lets a client update the radar / lightning / cloud-top
+    # picture from the refresh response instead of re-fetching the snapshot —
+    # which, on iOS, a cached pack would have served stale anyway.
+    observed: ObservedConditions | None = None
 
 
 def _profile_cloud_source(db, flight, user_id: str) -> str | None:
@@ -2121,6 +2148,7 @@ async def refresh_briefing(
                 observations = None
                 sigmets = None
                 delta = None
+                observed = None
                 resp_status = "already_fresh"
                 resp_mode = decision.mode
                 if decision.mode == "realtime":
@@ -2132,6 +2160,7 @@ async def refresh_briefing(
                         observations = result.observations
                         sigmets = result.sigmets
                         delta = result.delta
+                        observed = result.observed
                         resp_status = "realtime"
                     except Exception:
                         # Degrade to a no-op so status and mode agree.
@@ -2151,6 +2180,7 @@ async def refresh_briefing(
                         observations=observations,
                         sigmets=sigmets,
                         delta=delta,
+                        observed=observed,
                     ).model_dump_json(),
                     status_code=200,
                     media_type="application/json",
@@ -2356,6 +2386,7 @@ async def refresh_briefing_stream(
                     obs_payload = None
                     sigmets_payload = None
                     delta_payload = None
+                    observed_payload = None
                     effective_mode = decision.mode
                     if decision.mode == "realtime":
                         try:
@@ -2368,6 +2399,8 @@ async def refresh_briefing_stream(
                                 sigmets_payload = result.sigmets.model_dump(mode="json")
                             if result.delta is not None:
                                 delta_payload = result.delta.model_dump(mode="json")
+                            if result.observed is not None:
+                                observed_payload = result.observed.model_dump(mode="json")
                         except Exception:
                             # Degrade to a no-op so consumers don't treat the
                             # null observations as a successful realtime refresh.
@@ -2396,6 +2429,7 @@ async def refresh_briefing_stream(
                             "observations": obs_payload,
                             "sigmets": sigmets_payload,
                             "delta": delta_payload,
+                            "observed": observed_payload,
                         }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 

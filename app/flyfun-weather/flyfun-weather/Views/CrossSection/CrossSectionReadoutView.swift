@@ -133,6 +133,74 @@ struct CrossSectionReadoutView: View {
                 out.append("Convective: \(pt.nwpConvectiveRisk)")
             }
         }
+        out += observedChips(pt)
+        return out
+    }
+
+    /// Measured values at this point (#574), kept visibly separate from the
+    /// forecast chips above by their "Obs" prefix — the whole point of the layer
+    /// is that a pilot can tell measured from modelled at a glance.
+    ///
+    /// SYNC — the same facts the web's `observedSurface` / `observedTops` tooltip
+    /// definitions report, condensed to the chip idiom.
+    private func observedChips(_ pt: VizPoint) -> [String] {
+        guard let o = pt.observed else { return [] }
+        var out: [String] = []
+
+        // Radar. Three states, never two: "does not see here" is not "clear".
+        if o.radarNoCoverage {
+            out.append("Obs radar: no coverage")
+        } else if let dbz = o.dbz {
+            var s = "Obs radar: \(Int(dbz.rounded())) dBZ"
+            if !o.rateNoCoverage, let rate = o.rateMmH {
+                s += " · \(String(format: "%.1f", rate)) mm/h"
+            }
+            out.append(s)
+        } else {
+            out.append("Obs radar: no echo")
+        }
+
+        if o.flashCount > 0 {
+            let rate = o.flashRate.map { " (\(String(format: "%.1f", $0))/1000km²/min)" } ?? ""
+            out.append("Obs \(o.flashCount) flash\(o.flashCount == 1 ? "" : "es")\(rate)")
+        }
+
+        // Cloud tops.
+        if o.topsNoCoverage {
+            out.append("Obs tops: no retrieval")
+        } else {
+            if let highest = o.topsHighestFt {
+                var s = "Obs top \(ObservedBadge.flLabel(highest))"
+                // The number that separates "cannot get on top" from "wispy" —
+                // height alone renders a solid deck and thin cirrus identically.
+                if let opacity = o.topsHighestCloudiness {
+                    let pct = Int((opacity * 100).rounded())
+                    let how = pct >= 90 ? "solid" : pct >= 50 ? "broken" : "thin"
+                    s += " · \(pct)% opaque (\(how))"
+                }
+                out.append(s)
+            }
+            if let coldest = o.topsColdestC {
+                out.append("Obs coldest \(Int(coldest.rounded()))°C")
+            }
+            // Which band the cursor is sitting in, with share AND count: 4% of
+            // 201 pixels and 4% of 3 are very different evidence, and only one of
+            // them is worth acting on. The share is of the SKY the retrieval
+            // could see, so it reads as coverage — "4% of the area around here
+            // had its cloud top in FL180-190" — and the bands at a point sum to
+            // how cloudy the disc was, not to 100%.
+            if let alt = scrubAltitudeFt,
+               let bin = o.topsBins.first(where: { alt >= $0.loFt && alt < $0.hiFt && $0.count > 0 }) {
+                let pct = bin.fraction * 100
+                let share = pct >= 1 ? "\(Int(pct.rounded()))%" : "<1%"
+                out.append("Obs \(bin.label): \(share) of sky (\(bin.count) px)")
+            }
+            // The retrieval's own multi-layer-suspect flag — the case where
+            // committing to one cloud top is least trustworthy.
+            if o.topsMultiLayerFraction > 0.1 {
+                out.append("Obs \(Int((o.topsMultiLayerFraction * 100).rounded()))% multi-layer suspect")
+            }
+        }
         return out
     }
 }
