@@ -212,6 +212,60 @@ function lineLegends(theme: CrossSectionTheme): Record<string, LegendEntry[]> {
 }
 
 /** Get the visual legend entries for a cross-section layer. */
+
+/** Observed cloud tops (#574): the temperature ramp, plus the two states that
+ *  are not temperatures at all.
+ *
+ *  Reads warm-to-cold like the enhanced-IR scale on satellite imagery, so the
+ *  colours mean what a pilot already expects them to mean. Every stop is
+ *  labelled in °C because temperature is the measurement; the FL a bar sits at
+ *  is derived from it. */
+function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
+  const stops = theme.observed.tempStops;
+  const pick = (c: number) => stops.reduce(
+    (best, s) => (Math.abs(s[0] - c) < Math.abs(best[0] - c) ? s : best), stops[0],
+  );
+  const entries: LegendEntry[] = [0, -30, -40, -50, -60, -70].map((c) => ({
+    label: `${c > 0 ? '+' : ''}${c}°C`,
+    color: pick(c)[1],
+    meaning: c >= 0
+      ? 'low cloud top'
+      : c <= -60
+        ? 'very cold top — deep convection'
+        : 'high cloud top',
+  }));
+  entries.push({
+    label: 'depth unknown',
+    color: theme.observed.hatchColor,
+    meaning: 'the satellite measures the TOP only — there is no cloud base in this data',
+    hatchStyle: `repeating-linear-gradient(-45deg, ${theme.observed.hatchColor} 0 1px, transparent 1px 4px)`,
+  });
+  entries.push({
+    label: 'no retrieval',
+    color: theme.observed.noCoverageColor,
+    meaning: 'the retrieval could not answer here — NOT a clear sky',
+    hatchStyle: `repeating-linear-gradient(45deg, ${theme.observed.noCoverageColor} 0 1px, transparent 1px 4px)`,
+  });
+  return entries;
+}
+
+/** Observed radar & lightning (#574). */
+function observedSurfaceLegend(theme: CrossSectionTheme): LegendEntry[] {
+  return [
+    { label: '20 dBZ', color: '#3cbe5a', meaning: 'light echo' },
+    { label: '35 dBZ', color: '#f0d23c', meaning: 'moderate' },
+    { label: '45 dBZ', color: '#f08c28', meaning: 'heavy' },
+    { label: '55 dBZ', color: '#e13c3c', meaning: 'very heavy' },
+    { label: '65 dBZ', color: '#be3cbe', meaning: 'extreme' },
+    {
+      label: 'no coverage',
+      color: theme.observed.noCoverageColor,
+      meaning: 'the radar does not look here — roughly half the OPERA grid. NOT "no rain"',
+      hatchStyle: `repeating-linear-gradient(45deg, ${theme.observed.noCoverageColor} 0 1px, transparent 1px 4px)`,
+    },
+  ];
+}
+
 export function getLayerLegend(
   layerId: string,
   theme: CrossSectionTheme = getActiveTheme(),
@@ -242,6 +296,8 @@ export function getLayerLegend(
     'surface-obscuration-bands': () => obscurationLegend(theme),
     'current-conditions': currentConditionsLegend,
     'night-shading': () => nightShadingLegend(theme),
+    'observed-tops': () => observedTopsLegend(theme),
+    'observed-surface': () => observedSurfaceLegend(theme),
   };
 
   const bandBuilder = bandLegends[layerId];

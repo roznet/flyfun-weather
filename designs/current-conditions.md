@@ -131,6 +131,28 @@ removed. A companion test checks that low cloud survives both ways, so the
 first test cannot pass for the trivial reason that the correction moves
 everything out of range.
 
+### Colour carries temperature, not height
+
+Cloud tops are coloured by **cloud-top temperature**, following the
+enhanced-IR ramp pilots already read on satellite imagery (warm → cold: blue,
+cyan, green, yellow, orange, red).
+
+Temperature rather than height because temperature is what the instrument
+*measures* — height is derived from it against a model profile, so colouring by
+height would put a modelled quantity in the place of the observation.
+
+One deliberate departure from the convention: its warm end is grayscale, and
+gray is indistinguishable from the NWP cloud bands this layer exists to be
+compared against. Warm tops use a **desaturated blue** instead. The `light`
+theme darkens those warm stops further, since a pale blue vanishes on a white
+sky; the cold half is identical on every theme, because those hues carry the
+meaning and a pilot switching themes must not have to relearn them.
+
+Stops are picked by nearest value, never interpolated — a blended intermediate
+colour would imply a precision the 2 km retrieval does not have.
+`tests/unit/observed-theme.test.ts` pins both properties across all four
+themes: same hue for the same °C, and nothing gray anywhere.
+
 ### 3. Never per-station file access, never a full-grid read
 
 The reader pulls **one** window off disk; everything after that is numpy on

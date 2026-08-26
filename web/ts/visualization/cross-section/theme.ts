@@ -135,9 +135,53 @@ export interface CrossSectionTheme {
 
   coverageOpacity: Record<string, number>;
 
+  /** Observed layers (#574): measured data, drawn so it can never be mistaken
+   *  for the forecast bands beside it.
+   *
+   *  Cloud tops are coloured by **temperature**, because temperature is what
+   *  the instrument actually measures — height is derived from it against a
+   *  model profile. The ramp follows the enhanced-IR convention pilots already
+   *  read on satellite imagery (warm → cold: blue, cyan, green, yellow,
+   *  orange, red), with one deliberate departure: the conventional warm end is
+   *  grayscale, and gray here is indistinguishable from the NWP cloud bands.
+   *  Warm tops use a desaturated blue instead.
+   *
+   *  `tempStops` are [°C, cssColor], warmest first. Interpolation is nearest-
+   *  stop, not blended: an invented intermediate colour would imply a
+   *  precision the 2 km retrieval does not have. */
+  observed: {
+    tempStops: Array<[number, string]>;
+    /** Fallback when a top carries no temperature (older cached frame). */
+    tempUnknown: string;
+    /** Hatching that says "depth unknown" below a top, and the off-scale box. */
+    hatchColor: string;
+    /** Outline of the highest-top cap, and the off-scale arrow. */
+    capColor: string;
+    /** Cap outline when the retrieval flags the disc multi-layer-suspect. */
+    capMultiLayerColor: string;
+    /** "The sensor does not look here" — never the same as "saw nothing". */
+    noCoverageColor: string;
+  };
+
   /** Distinct colors assigned to models in consensus-outline mode. */
   compareModelColors: string[];
 }
+
+/** Enhanced-IR ramp, warmest first. Shared starting point for the themes that
+ *  do not need to diverge; see `CrossSectionTheme.observed` for why the warm
+ *  end is blue rather than the conventional grayscale. */
+export const IR_TEMP_STOPS: Array<[number, string]> = [
+  [15, '#8fa8c8'],   // desaturated blue — warm, low cloud
+  [0, '#7f9dc4'],
+  [-15, '#6b8fc0'],
+  [-30, '#4a7fd0'],  // conventional ramp starts here
+  [-40, '#3fb7d8'],
+  [-50, '#4cc76a'],
+  [-55, '#e0d84a'],
+  [-60, '#e8a33c'],
+  [-70, '#d94f3d'],
+  [-80, '#a3243a'],
+];
 
 // --- Theme IDs ---
 
@@ -303,6 +347,15 @@ const STANDARD_THEME: CrossSectionTheme = {
     ovc: 0.75,
   },
 
+  observed: {
+    tempStops: IR_TEMP_STOPS,
+    tempUnknown: 'rgba(143, 168, 200, 0.75)',
+    hatchColor: 'rgba(190, 210, 235, 0.55)',
+    capColor: '#e8eef8',
+    capMultiLayerColor: '#f0a94c',
+    noCoverageColor: 'rgba(150, 160, 175, 0.75)',
+  },
+
   compareModelColors: [
     '#e6194b', // red
     '#3cb44b', // green
@@ -465,6 +518,19 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     hatchSpacingPx: 8,
     hatchLineWidth: 1.5,
   },
+
+  // Same temperature ramp — the enhanced-IR convention is the point, and
+  // changing hues per theme would mean a pilot reads the same colour as two
+  // different temperatures. Only the surrounding strokes go pure, so the
+  // marker survives the deep navy sky and the heavier bands around it.
+  observed: {
+    tempStops: IR_TEMP_STOPS,
+    tempUnknown: 'rgba(170, 195, 230, 0.9)',
+    hatchColor: 'rgba(255, 255, 255, 0.8)',
+    capColor: '#ffffff',
+    capMultiLayerColor: '#ffc046',
+    noCoverageColor: 'rgba(255, 255, 255, 0.85)',
+  },
 };
 
 // --- GRAMET theme (CloudPath-inspired, optimized for soft cloud overlays) ---
@@ -569,9 +635,32 @@ const GRAMET_THEME: CrossSectionTheme = {
 
 // --- Light theme (Windy-inspired: white sky, gray clouds) ---
 
+/** Light-theme temperature ramp.
+ *
+ *  The cold half is untouched — those hues carry the meaning and must read the
+ *  same on every theme. Only the warm end changes: a desaturated blue that
+ *  works on the dark sky is nearly invisible on white, so the warm stops move
+ *  to a deeper slate-blue. Still blue rather than the conventional grayscale,
+ *  for the same reason: gray collides with the cloud bands. */
+const LIGHT_IR_TEMP_STOPS: Array<[number, string]> = [
+  [15, '#5c7899'],
+  [0, '#4e6e94'],
+  [-15, '#42648f'],
+  [-30, '#2f66b8'],
+  ...IR_TEMP_STOPS.filter(([c]) => c <= -40),
+];
+
 const LIGHT_THEME: CrossSectionTheme = {
   ...STANDARD_THEME,
   id: 'light' as ThemeId,
+  observed: {
+    tempStops: LIGHT_IR_TEMP_STOPS,
+    tempUnknown: 'rgba(92, 120, 153, 0.8)',
+    hatchColor: 'rgba(70, 95, 130, 0.6)',
+    capColor: '#1f2937',
+    capMultiLayerColor: '#b45309',
+    noCoverageColor: 'rgba(107, 114, 128, 0.8)',
+  },
   nightShading: {
     twilight: 'rgba(60, 60, 110, 0.15)',
     night: 'rgba(30, 30, 70, 0.32)',

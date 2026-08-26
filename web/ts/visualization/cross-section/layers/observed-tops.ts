@@ -22,6 +22,7 @@
  */
 
 import type { CrossSectionLayer, CoordTransform, VizObserved, VizObservedPoint } from '../../types';
+import { getActiveTheme } from '../theme';
 
 /** Half-width of a point's mark on the X axis, in nm. */
 const MARK_HALF_WIDTH_NM = 4;
@@ -38,10 +39,28 @@ const ABOVE_SCALE_BOX_PX = 14;
 /** Half-width of the up arrow inside that box, px. */
 const ARROW_PX = 4;
 
-const TOP_COLOR = '#111827';
-const BIN_COLOR = 'rgba(17, 24, 39, 0.55)';
-const MULTILAYER_COLOR = '#b45309';
-const NO_COVERAGE_COLOR = 'rgba(107, 114, 128, 0.75)';
+/** Colour for a cloud-top temperature, from the active theme's ramp.
+ *
+ *  Temperature — not height — because temperature is what the instrument
+ *  measures; height is derived from it against a model profile. The ramp
+ *  follows the enhanced-IR convention pilots already read on satellite
+ *  imagery, except at the warm end, where the conventional grayscale is
+ *  replaced by a desaturated blue: gray here is indistinguishable from the
+ *  NWP cloud bands this layer exists to be compared against.
+ *
+ *  Nearest stop, never interpolated. A blended intermediate colour would imply
+ *  a precision the 2 km retrieval does not have. */
+export function tempColor(celsius: number | null): string {
+  const theme = getActiveTheme();
+  if (celsius == null) return theme.observed.tempUnknown;
+  let best = theme.observed.tempStops[0];
+  let bestGap = Infinity;
+  for (const stop of theme.observed.tempStops) {
+    const gap = Math.abs(stop[0] - celsius);
+    if (gap < bestGap) { bestGap = gap; best = stop; }
+  }
+  return best[1];
+}
 
 /** Bands worth drawing at this point, strongest-signal filter applied. */
 export function significantBins(point: VizObservedPoint) {
@@ -116,7 +135,7 @@ function drawPoint(
     // Hatched mark at the top of the column: the satellite could not answer
     // here. Drawn rather than skipped — a gap reads as "nothing up there".
     ctx.save();
-    ctx.strokeStyle = NO_COVERAGE_COLOR;
+    ctx.strokeStyle = getActiveTheme().observed.noCoverageColor;
     ctx.lineWidth = 1;
     const y = plotArea.top + 6;
     for (let offset = 0; offset < width; offset += 4) {
@@ -135,6 +154,12 @@ function drawPoint(
   // somewhere in FL150-250". Drawn as a capped bar with a few short hatch
   // strokes hanging below it — the cap is what we measured, the hatching is
   // the depth we cannot see.
+  const theme = getActiveTheme();
+  // One colour for the whole point's markers: the temperature we have is the
+  // coldest top in the disc, which belongs to the highest band. Colouring the
+  // lower bands with it too would claim a temperature they did not report.
+  const bandColor = tempColor(point.topsColdestC);
+
   ctx.save();
   for (const bin of significantBins(point)) {
     const yLo = transform.altitudeToY(bin.loFt);
@@ -144,12 +169,12 @@ function drawPoint(
 
     // The band the tops sit in.
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = BIN_COLOR;
+    ctx.fillStyle = bandColor;
     ctx.fillRect(x0, Math.max(yHi, plotArea.top), width, Math.max(2, yLo - Math.max(yHi, plotArea.top)));
 
     // Unknown depth below it, deliberately short so it cannot be read as extent.
     ctx.globalAlpha = alpha * 0.7;
-    ctx.strokeStyle = BIN_COLOR;
+    ctx.strokeStyle = theme.observed.hatchColor;
     ctx.lineWidth = 1;
     for (let offset = 0; offset < width; offset += 4) {
       ctx.beginPath();
@@ -162,7 +187,9 @@ function drawPoint(
 
   if (point.topsHighestFt == null) return;
 
-  const color = point.topsMultiLayerFraction > 0.1 ? MULTILAYER_COLOR : TOP_COLOR;
+  const color = point.topsMultiLayerFraction > 0.1
+    ? theme.observed.capMultiLayerColor
+    : theme.observed.capColor;
   const yTop = transform.altitudeToY(point.topsHighestFt);
 
   // Above the chart's ceiling the cap line has nowhere to go. A GA
