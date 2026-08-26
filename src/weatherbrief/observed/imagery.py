@@ -117,6 +117,15 @@ _STOPS_BY_SOURCE = {
 NODATA_RGBA = (120, 120, 128, 46)
 DETECTION_ALPHA = 190
 
+# Below this, a radar detection is cloud, drizzle or ground clutter — the same
+# floor the summary prose uses (`ECHO_MENTION_DBZ`), which calls it "returns a
+# pilot would not route around". It is still a real detection and is still
+# drawn, but faintly: painting it at full strength made a France that Windy
+# renders dry read as widely wet, because 93% of detections in a sample box
+# were below this line.
+FAINT_ECHO_DBZ = 20.0
+FAINT_ALPHA = 70
+
 
 @dataclass(frozen=True)
 class OverlayBounds:
@@ -137,8 +146,19 @@ class OverlayBounds:
 
 
 def _colourise(values: np.ndarray, stops) -> np.ndarray:
-    """Map physical values to RGB by highest reached stop."""
+    """Map physical values to RGB by highest reached stop.
+
+    Values below the lowest stop take the lowest stop's colour rather than
+    falling through. They used to keep the zero-initialised RGB and then get
+    painted at full detection alpha — a quarter of every radar overlay was
+    opaque BLACK dots, because OPERA reports plenty of detections below the
+    5 dBZ floor of the ramp.
+    """
     rgb = np.zeros(values.shape + (3,), dtype=np.uint8)
+    if not len(stops):
+        return rgb
+    lowest = stops[0]
+    rgb[:] = (lowest[1], lowest[2], lowest[3])
     for threshold, r, g, b in stops:
         hit = values >= threshold
         rgb[hit] = (r, g, b)
@@ -207,6 +227,7 @@ def render_overlay(
         rgb = _colourise(np.nan_to_num(values, nan=-9999.0), stops)
         rgba[detected, :3] = rgb[detected]
         rgba[detected, 3] = DETECTION_ALPHA
+        _recede_faint_echo(rgba, values, detected, frame.source, field)
 
     # Coverage holes are drawn; "looked, saw nothing" stays transparent. Both
     # are gathered by nominal position even on a parallax product: neither
@@ -227,6 +248,19 @@ def render_overlay(
     buffer = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(buffer, format="PNG", optimize=True)
     return buffer.getvalue(), bounds
+
+
+def _recede_faint_echo(rgba, values, detected, source: str, field: str | None) -> None:
+    """Drop the alpha of sub-threshold radar returns.
+
+    Reflectivity only, and only when drawing reflectivity itself: a rain RATE
+    or a cloud top has no equivalent "not worth routing around" floor, and
+    dimming those would hide real signal.
+    """
+    if field is not None or source != SOURCE_OPERA_DBZH:
+        return
+    faint = detected & (values < FAINT_ECHO_DBZ)
+    rgba[faint, 3] = FAINT_ALPHA
 
 
 def _plane_for(frame: GridFrame, field: str | None) -> np.ndarray:

@@ -90,7 +90,11 @@ def write_opera(path: Path, quantity: str) -> None:
         gain, offset = 0.1, 0.0
         physical = np.clip(12.0 - dist_px * 0.8, 0.1, 40.0)
     encoded = np.clip(np.round((physical - offset) / gain), 1, 254).astype(np.uint8)
-    echo = dist_px <= 8
+    # Wide enough that the fringe decays BELOW 20 dBZ (45 - 14*2 = 17), so the
+    # fixture contains the drizzle/clutter band that dominates real frames —
+    # 93% of detections in a sampled box were under 20 dBZ — and the rendering
+    # rules that treat it differently are actually exercised.
+    echo = dist_px <= 14
     raw = np.where(echo & (raw != 255), encoded, raw)
 
     with h5py.File(str(path), "w") as handle:

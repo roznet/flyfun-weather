@@ -286,3 +286,55 @@ def test_a_missing_aux_field_draws_nothing_rather_than_the_wrong_thing(ctth_path
     assert not (image[:, :, 3] == DETECTION_ALPHA).any(), (
         "drew detections from a plane the granule does not carry"
     )
+
+
+# --- Echo thresholds --------------------------------------------------------
+
+
+def test_a_detection_below_the_lowest_stop_is_not_painted_black(dbzh_path):
+    """The ramp's floor is 5 dBZ and OPERA reports plenty of returns below it.
+
+    `_colourise` used to leave those at the zero-initialised RGB and then paint
+    them at full detection alpha, so a quarter of every radar overlay was
+    opaque BLACK dots. Measured on a real frame: 39,996 of 151,147 drawn
+    pixels.
+    """
+    from weatherbrief.observed.imagery import _DBZ_STOPS, _colourise
+
+    below = np.array([-30.0, -5.0, 0.0, 4.9])
+    rgb = _colourise(below, _DBZ_STOPS)
+    assert not (rgb == 0).all(axis=-1).any(), "value below the lowest stop rendered black"
+    # It takes the lowest stop's colour, not an invented one.
+    lowest = tuple(_DBZ_STOPS[0][1:])
+    assert all(tuple(row) == lowest for row in rgb)
+
+
+def test_light_echo_is_drawn_faintly_not_at_full_strength(dbzh_path):
+    """93% of detections in a sampled box were below 20 dBZ.
+
+    That is cloud, drizzle and ground clutter — the same floor the summary
+    prose uses, which calls it "returns a pilot would not route around".
+    Painting it at full strength made a France that Windy renders dry read as
+    widely wet. It is still drawn, because it is still a real detection.
+    """
+    from weatherbrief.observed.imagery import FAINT_ALPHA
+
+    frame = _full_frame(dbzh_path)
+    alpha = _decode(render_overlay(frame, BOUNDS)[0])[:, :, 3]
+    assert (alpha == FAINT_ALPHA).any(), "no faint echo drawn at all"
+    assert (alpha == DETECTION_ALPHA).any(), "no full-strength echo drawn"
+    assert FAINT_ALPHA < DETECTION_ALPHA
+
+
+def test_rain_rate_and_cloud_tops_are_not_dimmed(rate_path, ctth_path):
+    """The faint floor is reflectivity-specific.
+
+    A rain RATE or a cloud top has no equivalent "not worth routing around"
+    line, so dimming them by the same rule would hide real signal.
+    """
+    from weatherbrief.observed.frames import SOURCE_OPERA_RATE
+    from weatherbrief.observed.imagery import FAINT_ALPHA
+
+    rate = _full_frame(rate_path, quantity="RATE", source=SOURCE_OPERA_RATE)
+    alpha = _decode(render_overlay(rate, BOUNDS)[0])[:, :, 3]
+    assert not (alpha == FAINT_ALPHA).any(), "rain rate was dimmed like reflectivity"

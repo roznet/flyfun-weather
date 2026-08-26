@@ -6180,6 +6180,18 @@ html {
   flex-wrap: wrap;
 }
 
+/* Observed layer selector: pushed to the right and set off by a rule, because
+   it is a different kind of setting from Color/Width. Those two style the
+   FORECAST route line; this chooses a MEASUREMENT of the real sky. Sitting them
+   together read as three knobs on one thing. */
+.map-controls-observed {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border);
+}
+
 .map-control-label {
   display: inline-flex;
   align-items: center;

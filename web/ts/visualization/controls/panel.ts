@@ -705,22 +705,6 @@ export function renderMapControls(
   html += '</select>';
   html += '</label>';
 
-  // Observed layer, one at a time. These are different measurements of the
-  // same sky and stacking them would make it impossible to say which
-  // measurement a colour came from.
-  if (observed && (observed.reflectivity || observed.rainRate || observed.cloudTops || observed.lightning)) {
-    html += '<label class="map-control-label">';
-    html += `<span class="viz-toggle-label">${t('viz.observed.label')}</span>`;
-    html += '<select id="map-observed-overlay" class="map-control-select">';
-    for (const opt of OBSERVED_OVERLAY_OPTIONS) {
-      if (opt.needs && !observed[opt.needs]) continue;
-      const selected = opt.id === settings.observedOverlay ? ' selected' : '';
-      html += `<option value="${opt.id}"${selected}>${escapeHtml(t(opt.labelKey))}</option>`;
-    }
-    html += '</select>';
-    html += '</label>';
-  }
-
   html += '<label class="map-control-label">';
   html += `<span class="viz-toggle-label">${t('viz.width')}</span>`;
   html += '<select id="map-width-metric" class="map-control-select">';
@@ -772,7 +756,28 @@ export function renderMapControls(
       const openLabel = escapeHtml(t('viz.airports.openMap'));
       html += `<a class="map-forecast-open" id="map-forecast-open" href="${escapeHtml(fo.fullMapUrl)}" target="_blank" rel="noopener" title="${openLabel}" aria-label="${openLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></a>`;
     }
+    // Observed layer sits apart from Color/Width, and to the right. Those two
+  // style the FORECAST route line; this picks a MEASUREMENT of the real sky.
+  // Grouping them reads as three settings of one thing, which they are not.
+  // One at a time. These are different measurements of the
+  // same sky and stacking them would make it impossible to say which
+  // measurement a colour came from.
+  if (observed && (observed.reflectivity || observed.rainRate || observed.cloudTops || observed.lightning)) {
+    html += '<div class="map-controls-observed">';
+    html += '<label class="map-control-label">';
+    html += `<span class="viz-toggle-label">${t('viz.observed.label')}</span>`;
+    html += '<select id="map-observed-overlay" class="map-control-select">';
+    for (const opt of OBSERVED_OVERLAY_OPTIONS) {
+      if (opt.needs && !observed[opt.needs]) continue;
+      const selected = opt.id === settings.observedOverlay ? ' selected' : '';
+      html += `<option value="${opt.id}"${selected}>${escapeHtml(t(opt.labelKey))}</option>`;
+    }
+    html += '</select>';
+    html += '</label>';
     html += '</div>';
+  }
+
+  html += '</div>';
   }
 
   html += '</div>';
