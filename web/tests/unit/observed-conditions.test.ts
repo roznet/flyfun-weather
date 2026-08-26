@@ -217,7 +217,7 @@ describe('observed extraction', () => {
     expect(point.topsHighestFt).toBe(35000);
   });
 
-  it('exposes the FL histogram as a share of the sky, and of the cloud', () => {
+  it('exposes the FL histogram as a share of the looked-at sky', () => {
     const point = extract(makeObserved()).observed!.points[0];
     const high = point.topsBins.find((b) => b.label === 'FL250-400')!;
     const low = point.topsBins.find((b) => b.label === 'FL000-050')!;
@@ -233,9 +233,6 @@ describe('observed extraction', () => {
     expect(high.fraction).toBeCloseTo(0.30);
     expect(low.fraction).toBeCloseTo(0.10);
     expect(high.fraction + low.fraction).toBeCloseTo(40 / 100);
-    // `cloudFraction` keeps the other denominator for the noise floor alone.
-    expect(high.cloudFraction).toBeCloseTo(0.75);
-    expect(low.cloudFraction).toBeCloseTo(0.25);
   });
 
   it('carries each source own valid time and age', () => {
@@ -738,28 +735,21 @@ describe('cloud-top deck grouping', () => {
     expect(bandRuns([band(350, 1)]).length).toBe(1);
   });
 
-  it('drops bands below 1% of the CLOUD — a stray pixel is not a deck', () => {
-    const tiny = {
-      label: 'FL350', loFt: 35000, hiFt: 36000,
-      fraction: 0.002, cloudFraction: 0.004, count: 1,
-    };
-    const real = {
-      label: 'FL300', loFt: 30000, hiFt: 31000,
-      fraction: 0.1, cloudFraction: 0.2, count: 40,
-    };
-    expect(significantBins({ topsBins: [tiny, real] } as never)).toEqual([real]);
+  it('drops bands at or below 5% of the sky — a sliver is not a deck', () => {
+    // The fine 10-FL bands split a deck into a dozen slivers, and under a
+    // twentieth of the sky a band is stray retrievals drawn with the weight of
+    // something you could fly into.
+    const sliver = { label: 'FL350', loFt: 35000, hiFt: 36000, fraction: 0.05, count: 6 };
+    const real = { label: 'FL300', loFt: 30000, hiFt: 31000, fraction: 0.2, count: 40 };
+    expect(significantBins({ topsBins: [sliver, real] } as never)).toEqual([real]);
   });
 
-  it('does not raise the floor just because the sky around was clear', () => {
-    // The reason the floor reads `cloudFraction` and not the drawn share: a
-    // real deck in a mostly-clear disc holds a small share of the SKY, and
-    // filtering on that would erase the bands of exactly the scattered scenes
-    // where knowing the tops matters most.
-    const scattered = {
-      label: 'FL300', loFt: 30000, hiFt: 31000,
-      fraction: 0.006, cloudFraction: 0.3, count: 12,
-    };
-    expect(significantBins({ topsBins: [scattered] } as never)).toEqual([scattered]);
+  it('measures the floor against the same sky the band is drawn as', () => {
+    // The floor moved to the drawn share when the share became a share of the
+    // sky: a band that colours as 5.1% of the area must not be kept (or
+    // dropped) on some other number the legend never shows.
+    const justOver = { label: 'FL300', loFt: 30000, hiFt: 31000, fraction: 0.051, count: 7 };
+    expect(significantBins({ topsBins: [justOver] } as never)).toEqual([justOver]);
   });
 
   it('still marks the highest top when its own band is too thin to draw', () => {

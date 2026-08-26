@@ -231,14 +231,16 @@ function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
   );
   // Sampled at the ramp's own breakpoints, and labelled as what the number
   // is: the share of the SKY around the point, not of the cloud found in it.
-  // The bands at a point therefore add up to how cloudy the disc was.
-  const entries: LegendEntry[] = [0.01, 0.04, 0.15, 0.50].map((f) => ({
+  // The bands at a point therefore add up to how cloudy the disc was. The
+  // first swatch is the drawing floor, so the legend also says where the
+  // bands stop — a chart with no band is not a chart with no thin cloud.
+  const entries: LegendEntry[] = [0.05, 0.10, 0.22, 0.55].map((f) => ({
     label: `${Math.round(f * 100)}%`,
     color: pick(f)[1],
-    meaning: f <= 0.01
-      ? 'a sliver of the sky around the point had its cloud top in this band'
-      : f >= 0.5
-        ? 'half the sky around the point had its cloud top in this band'
+    meaning: f <= 0.05
+      ? 'the faintest band drawn — under 5% of the sky nothing is drawn at all'
+      : f >= 0.55
+        ? 'over half the sky around the point had its cloud top in this band'
         : 'share of the sky around the point with cloud tops in this band',
   }));
   entries.push({

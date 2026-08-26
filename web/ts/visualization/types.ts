@@ -305,13 +305,11 @@ export interface VizObservedTopBin {
    *  as "this much of the sky around the point", the bands sum to how cloudy
    *  the disc was, and a thin deck in an otherwise clear sky can no longer
    *  draw as bright as a solid overcast simply for being most of the little
-   *  cloud there was. */
+   *  cloud there was.
+   *
+   *  It is also what the drawing floor is measured against, so "5% of the sky"
+   *  means the same thing in the filter, in the colour ramp and in the legend. */
   fraction: number;
-  /** Share of the disc's CLOUDY pixels, 0–1. Not drawn: it is the noise floor
-   *  (`MIN_BIN_FRACTION`), which asks "is this band real signal or two stray
-   *  retrievals?" — a question about the cloud that was found, not about how
-   *  much sky it covered. */
-  cloudFraction: number;
   /** Pixels in this band, so a hover can say "12 of 201" rather than only a
    *  percentage — 4% of 201 and 4% of 3 are very different evidence. */
   count: number;

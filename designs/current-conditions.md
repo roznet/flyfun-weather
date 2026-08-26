@@ -339,7 +339,7 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 
-### Two denominators behind one band
+### What a cloud-top band is a share of, and when it is drawn
 
 A drawn band carries `fraction` — its count over `valid_px`, the pixels the
 retrieval could answer for, cloudy *and* clear. So a band reads as coverage
@@ -350,14 +350,22 @@ much topped out here?", which inflates as the sky clears: a measured 10 NM
 disc holding two cloudy pixels out of 131 drew both bands mid-ramp, as loud
 as a solid deck, because each was 50% of the cloud.
 
-The 1% noise floor keeps the `detected_px` denominator, carried separately as
-`cloudFraction`. Whether a band is real signal or two stray retrievals is a
-question about the retrieval; filtering on the drawn share would raise the
-bar on every band of exactly the scattered scenes where the tops matter most.
+The drawing floor is measured against that same sky: bands at or under **5%**
+are not drawn. The fine 10-FL bands split a deck into a dozen slivers, and
+under a twentieth of the sky a band is stray retrievals carrying the weight of
+something you could fly into. Measured over local packs the cut removes 60% of
+the bands at 20 NM while the survivors still account for 87% of the disc's
+cloud cover, and 2 route points in 96 lost every band they had — it takes
+the noise, not the picture. Those points keep their highest-top cap, which is
+drawn from `topsHighestFt` and never passes the filter.
 
-Colour stops are cut for the sky denominator over fine 10-FL bands: a 20 NM
-disc splits its cloud across a dozen of them, so measured over real packs
-half of all drawn bands sit under 4% and none reached 55%.
+The consequence has to stay visible in the copy: a point with no band is not a
+point with no cloud, and the drawn shares sum to most of the cloud cover, not
+all of it. The help card and the legend both say so.
+
+Colour stops start at the floor — a stop below it would be spent on bands
+that are never drawn — and run to about half the sky, which is where the
+surviving bands top out.
 
 The existing `current-conditions` layer (METAR columns + SIGMET zones) is
 untouched — these are siblings, not a replacement. Adding a second layer to

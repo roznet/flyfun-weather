@@ -376,13 +376,10 @@ function buildObserved(
     if (annulus.insufficient_coverage) continue;
     point.topsHighestFt = annulus.highest_fl != null ? annulus.highest_fl * 100 : null;
     const detected = annulus.detected_px || 0;
-    // Two denominators, on purpose. `fraction` is of the LOOKED-AT SKY, which
-    // is what the chart draws and the hover quotes: a band then means "this
-    // much of the sky around the point had its top here", and the bands sum
-    // to the disc's cloud cover instead of always summing to 100%.
-    // `cloudFraction` is of the cloudy pixels and never leaves the noise
-    // floor — whether a band is real signal does not depend on how much clear
-    // sky happened to surround it.
+    // `fraction` is of the LOOKED-AT SKY, not of the cloudy pixels: a band then
+    // means "this much of the sky around the point had its top here", the
+    // bands sum to the disc's cloud cover instead of always summing to 100%,
+    // and the drawing floor can be stated in the same terms the legend uses.
     const lookedAt = annulus.valid_px || 0;
     // Prefer the sparse fine histogram; fall back to the coarse bands for a
     // pack built before it existed. The coarse bands are kept for prose, not
@@ -403,7 +400,6 @@ function buildObserved(
               loFt: fl * 100,
               hiFt: (fl + OBSERVED_FINE_FL_STEP) * 100,
               fraction: lookedAt > 0 ? count / lookedAt : 0,
-              cloudFraction: detected > 0 ? count / detected : 0,
               count,
             };
           })
@@ -414,7 +410,6 @@ function buildObserved(
             loFt: band.loFt,
             hiFt: band.hiFt,
             fraction: lookedAt > 0 ? count / lookedAt : 0,
-            cloudFraction: detected > 0 ? count / detected : 0,
             count,
           };
         });
