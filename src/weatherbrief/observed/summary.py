@@ -28,6 +28,7 @@ from weatherbrief.models.observed import (
     ObservedConditions,
     ObservedField,
     ObservedFlashField,
+    ObservedSummaryEntry,
     ObservedTopsField,
 )
 
@@ -37,28 +38,58 @@ from weatherbrief.models.observed import (
 ECHO_MENTION_DBZ = 20.0
 
 
-def build_summary(conditions: ObservedConditions) -> list[str]:
-    """One clause per available source, in order of operational bite."""
-    lines: list[str] = []
+#: Which metric-catalog card explains each clause kind.  Radar, rain rate and
+#: lightning all sit on the one "Observed Radar & Lightning" card; cloud tops
+#: have their own.  Coverage qualifies the radar clauses, so it points at the
+#: same card (whose `limitations` is where the 49.4%-nodata fact lives).
+_METRIC_FOR_KIND = {
+    "lightning": "observed_surface",
+    "reflectivity": "observed_surface",
+    "rain_rate": "observed_surface",
+    "coverage": "observed_surface",
+    "cloud_tops": "observed_tops",
+}
+
+
+def build_summary_entries(conditions: ObservedConditions) -> list[ObservedSummaryEntry]:
+    """One clause per available source, in order of operational bite.
+
+    Structured rather than plain strings because the clauses are not uniformly
+    shaped — "Radar: peak 38 dBZ…" against "Rain rate to 1.8 mm/h…" — so a
+    client rendering them as per-source rows cannot recover the source from the
+    prose without guessing.
+    """
     by_station = {s.id: s for s in conditions.stations}
     widest = max(conditions.radii_nm) if conditions.radii_nm else 0.0
 
-    for clause in (
-        _lightning_clause(conditions.lightning, by_station, widest),
-        _reflectivity_clause(conditions.reflectivity, by_station, widest),
-        _rain_rate_clause(conditions.rain_rate, by_station, widest),
-        _tops_clause(conditions.cloud_tops, by_station, widest),
-        _coverage_clause(conditions.reflectivity, widest),
-    ):
-        if clause:
-            lines.append(clause)
+    clauses = (
+        ("lightning", _lightning_clause(conditions.lightning, by_station, widest)),
+        ("reflectivity", _reflectivity_clause(conditions.reflectivity, by_station, widest)),
+        ("rain_rate", _rain_rate_clause(conditions.rain_rate, by_station, widest)),
+        ("cloud_tops", _tops_clause(conditions.cloud_tops, by_station, widest)),
+        ("coverage", _coverage_clause(conditions.reflectivity, widest)),
+    )
+    entries = [
+        ObservedSummaryEntry(kind=kind, text=text, metric_id=_METRIC_FOR_KIND.get(kind, ""))
+        for kind, text in clauses
+        if text
+    ]
 
-    if not lines:
+    if not entries:
         missing = [s.source for s in conditions.sources if not s.available]
         if missing:
-            return ["No observed data available along the route."]
-        return []
-    return lines
+            return [
+                ObservedSummaryEntry(
+                    kind="unavailable",
+                    text="No observed data available along the route.",
+                )
+            ]
+    return entries
+
+
+def build_summary(conditions: ObservedConditions) -> list[str]:
+    """Plain-string form of :func:`build_summary_entries`, for PDF and digest."""
+    return [entry.text for entry in build_summary_entries(conditions)]
 
 
 # --- per-source clauses ----------------------------------------------------

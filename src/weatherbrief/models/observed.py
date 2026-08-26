@@ -228,6 +228,24 @@ class ObservedFlashField(ObservedFieldMeta):
     stations: list[ObservedFlashStationSamples] = Field(default_factory=list)
 
 
+class ObservedSummaryEntry(BaseModel):
+    """One clause of the "Observed now" readout, with its provenance.
+
+    ``kind`` names the source the clause came from so a client can pair it with
+    that source's own frame age — which must never be blended across sources —
+    and ``metric_id`` points at the metric-catalog card that explains it, so
+    the row can carry the same (i) affordance as everything else on the page.
+
+    ``coverage`` is the one kind that belongs to no single source: it reports
+    how much of the corridor the radar could see at all, which qualifies every
+    radar clause above it.
+    """
+
+    kind: str  # lightning | reflectivity | rain_rate | cloud_tops | coverage
+    text: str
+    metric_id: str = ""
+
+
 class ObservedSourceStatus(BaseModel):
     """Why a source is missing, when it is.
 
@@ -260,11 +278,18 @@ class ObservedConditions(BaseModel):
     cloud_tops: ObservedTopsField | None = None
     lightning: ObservedFlashField | None = None
 
-    # Deterministic "Observed now" readout — no LLM.  ``summary_lines`` is
-    # one clause per source for the briefing section; ``summary`` is the same
-    # content joined for the PDF and the digest context, which want a
-    # paragraph rather than a list.
+    # Deterministic "Observed now" readout — no LLM.  ``summary_entries`` is
+    # the structured form: one clause per source, tagged with which source it
+    # came from and which metric-catalog card explains it.  ``summary_lines``
+    # is the same content as plain strings for the PDF and the digest, and
+    # ``summary`` is those joined into a paragraph.
+    #
+    # The clauses are deliberately not uniformly shaped ("Radar: peak 38 dBZ…"
+    # but "Rain rate to 1.8 mm/h…"), so a client that wants to render them as
+    # per-source rows must not recover the source by parsing the prose.  That
+    # is what the entries are for.
     summary: str = ""
+    summary_entries: list[ObservedSummaryEntry] = Field(default_factory=list)
     summary_lines: list[str] = Field(default_factory=list)
     sources: list[ObservedSourceStatus] = Field(default_factory=list)
 

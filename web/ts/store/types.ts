@@ -757,9 +757,22 @@ export interface ObservedConditions {
   lightning: ObservedFlashField | null;
   /** Deterministic "Observed now" readout — no LLM. */
   summary: string;
+  /** Structured form of the readout: one entry per clause, tagged with the
+   *  source it came from and the metric-catalog card that explains it. The
+   *  clauses are not uniformly shaped ("Radar: peak 38 dBZ…" vs "Rain rate to
+   *  1.8 mm/h…"), so never recover the source by parsing the prose. */
+  summary_entries: ObservedSummaryEntry[];
   summary_lines: string[];
   sources: ObservedSourceStatus[];
   has_any_field: boolean;
+}
+
+export interface ObservedSummaryEntry {
+  /** lightning | reflectivity | rain_rate | cloud_tops | coverage | unavailable */
+  kind: string;
+  text: string;
+  /** Metric-catalog id for the (i) popup; empty when no card explains it. */
+  metric_id: string;
 }
 
 /** What got worse since the previous real-time refresh (deterministic, no LLM). */

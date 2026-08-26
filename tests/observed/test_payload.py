@@ -206,6 +206,40 @@ def test_no_network_test_can_actually_fail(stocked_store, monkeypatch):
 # --- Summary ---------------------------------------------------------------
 
 
+def test_summary_entries_tag_each_clause_with_its_source(stocked_store):
+    """The client renders these as per-source rows and must not parse the prose.
+
+    The clauses are deliberately not uniformly shaped — "Radar: peak 38 dBZ…"
+    against "Rain rate to 1.8 mm/h…" — so recovering the source from the text
+    would mean guessing, and pairing a clause with the wrong source's frame age
+    is exactly the cross-source age blending the design forbids.
+    """
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    entries = conditions.summary_entries
+    assert entries, "expected a structured readout"
+
+    by_kind = {e.kind: e for e in entries}
+    # Every clause names a kind the client knows how to pair with a field.
+    assert set(by_kind) <= {
+        "lightning", "reflectivity", "rain_rate", "cloud_tops", "coverage", "unavailable",
+    }
+    # …and points at a metric-catalog card, so the row can carry the (i) popup.
+    for entry in entries:
+        if entry.kind != "unavailable":
+            assert entry.metric_id in ("observed_surface", "observed_tops"), entry
+    if "cloud_tops" in by_kind:
+        assert by_kind["cloud_tops"].metric_id == "observed_tops"
+    if "reflectivity" in by_kind:
+        assert by_kind["reflectivity"].metric_id == "observed_surface"
+
+
+def test_summary_lines_stay_derived_from_the_entries(stocked_store):
+    """The PDF and the digest read the plain strings; they must not drift."""
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    assert conditions.summary_lines == [e.text for e in conditions.summary_entries]
+    assert conditions.summary == " ".join(conditions.summary_lines)
+
+
 def test_summary_names_the_echo_and_its_age(stocked_store):
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     radar = next(line for line in conditions.summary_lines if line.startswith("Radar: peak"))

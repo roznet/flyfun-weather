@@ -6331,22 +6331,105 @@ html {
 }
 
 /* "Observed now" briefing section (#574). */
-.observed-now-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* --- Observed Now (#574) ---------------------------------------------------
+   Styled to match .advisory-card so the briefing reads as one page. The one
+   deliberate difference: NO severity colour. Phase 1 computes no verdict, and
+   a red/amber stripe would assert a grade the payload does not make. The
+   accent is a neutral "measured" blue-grey, distinct from the forecast cards
+   without ranking anything. */
+
+.observed-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
-.observed-now-list li {
-  padding: 3px 0;
+.observed-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--observed-accent, #64748b);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+}
+
+.observed-card-body {
+  flex: 1 1 auto;
+  font-size: 0.8rem;
   line-height: 1.45;
+  color: var(--text);
+}
+
+.observed-card-meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Each source's own frame time. The prose carries the relative age; this is
+   the absolute one, and it is per-card because the sources are minutes apart
+   and must never share a clock. */
+.observed-stamp {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+
+.observed-info-btn {
+  margin-left: 0;
+}
+
+/* Cloud tops get a slightly warmer accent than the surface sources, matching
+   the cross-section where the tops layer sits with the cloud bands. */
+.observed-card--cloud_tops { border-left-color: #b45309; }
+
+/* An absent source must never look like a source that saw nothing — the same
+   three-state discipline as the pixel counts, one level up. Dashed, dimmed,
+   visibly a hole rather than a reading. */
+.observed-cards--unavailable { margin-top: 0.4rem; }
+
+.observed-card--unavailable {
+  border-style: dashed;
+  border-left-style: dashed;
+  border-left-color: var(--text-muted, #6b7280);
+  background: transparent;
+}
+
+.observed-card--unavailable .observed-card-body {
+  color: var(--text-muted, #6b7280);
+  font-size: 0.75rem;
 }
 
 .observed-now-sources {
-  margin-top: 8px;
-  font-size: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
   color: var(--text-muted, #6b7280);
 }
+
+.observed-corridor { font-weight: 600; }
+
+.observed-sources-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+}
+
+.observed-source { white-space: normal; }
+
+.observed-source-age { margin-left: 0.25rem; opacity: 0.8; }
+
+.observed-source a { color: inherit; text-decoration: underline dotted; }
+.observed-source a:hover { color: var(--text); }
 
 /* Map waypoint tooltip styling */
 .map-waypoint-tooltip {

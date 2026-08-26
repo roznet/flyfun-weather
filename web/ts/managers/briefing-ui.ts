@@ -1903,12 +1903,54 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
   }
   if (wrapper) wrapper.style.display = '';
 
-  const lines = observed.summary_lines.length > 0
-    ? observed.summary_lines
-    : [observed.summary].filter(Boolean);
-  const summaryHtml = lines.length
-    ? `<ul class="observed-now-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+  // One card per clause, styled like the advisory cards so the page reads as
+  // one thing. Deliberately NOT colour-coded by severity: phase 1 computes no
+  // verdict, and a red/amber stripe here would assert a grade the payload does
+  // not make (D2 — observations are annotate-only, permanently).
+  const entries = observed.summary_entries?.length
+    ? observed.summary_entries
+    : observed.summary_lines.map((text) => ({ kind: '', text, metric_id: '' }));
+
+  // Each clause pairs with its OWN source's frame time. The prose already
+  // carries a relative age ("observed 8 min ago"); the chip adds the absolute
+  // valid time, which the panel otherwise never shows. Never a shared clock.
+  const fieldFor: Record<string, { valid_time: string } | null | undefined> = {
+    reflectivity: observed.reflectivity,
+    rain_rate: observed.rain_rate,
+    cloud_tops: observed.cloud_tops,
+    lightning: observed.lightning,
+    coverage: observed.reflectivity,
+  };
+
+  const cardsHtml = entries.length
+    ? `<div class="observed-cards">${entries.map((entry) => {
+        const field = fieldFor[entry.kind];
+        const stamp = field ? observedStampHtml(field.valid_time) : '';
+        const info = entry.metric_id
+          ? `<button class="metric-info-btn observed-info-btn" data-metric="${escapeHtml(entry.metric_id)}"`
+            + ` title="${escapeHtml(t('viz.moreInfo'))}" aria-label="${escapeHtml(t('viz.moreInfo'))}">ⓘ</button>`
+          : '';
+        return `<div class="observed-card observed-card--${escapeHtml(entry.kind || 'plain')}">`
+          + `<div class="observed-card-body">${escapeHtml(entry.text)}</div>`
+          + `<div class="observed-card-meta">${stamp}${info}</div>`
+          + `</div>`;
+      }).join('')}</div>`
     : '';
+
+  // A source that is absent must never look like a source that saw nothing —
+  // the same three-state discipline as the pixel counts, one level up.
+  const unavailableHtml = observed.sources.filter((s) => !s.available).length
+    ? `<div class="observed-cards observed-cards--unavailable">${
+        observed.sources.filter((s) => !s.available).map((s) =>
+          `<div class="observed-card observed-card--unavailable">`
+          + `<div class="observed-card-body">${escapeHtml(observedSourceLabel(s.source))} — `
+          + `${escapeHtml(s.reason ?? t('observed.unavailable'))}</div>`
+          + `</div>`,
+        ).join('')
+      }</div>`
+    : '';
+
+  const summaryHtml = `${cardsHtml}${unavailableHtml}`;
 
   // One row per source with its OWN valid time: the four streams are minutes
   // apart and none of them is an instant, so there is no combined "as of".
@@ -1918,26 +1960,56 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
     observed.cloud_tops,
     observed.lightning,
   ].filter((f) => f != null);
+  // Attribution is a licence obligation (CC BY for OPERA), so it stays — but as
+  // named links rather than the wall of raw URLs it used to print. The producer
+  // varies per frame (one sampled frame was built by Météo-France, not EUMETNET
+  // centrally), so the text comes from the data and is never hardcoded.
   const present = fields.map((f) => {
     const rolling = f!.window_minutes > 0
       ? `, ${Math.round(f!.window_minutes)} min window`
       : '';
     const age = f!.age_minutes < 1 ? 'just now' : `${Math.round(f!.age_minutes)} min ago`;
-    return `${escapeHtml(f!.attribution.text || f!.source)} (${age}${rolling})`;
+    return `<span class="observed-source">${attributionHtml(f!.attribution)}`
+      + `<span class="observed-source-age">${escapeHtml(age)}${escapeHtml(rolling)}</span></span>`;
   });
-  const missing = observed.sources
-    .filter((sourceStatus) => !sourceStatus.available)
-    .map((sourceStatus) => `${escapeHtml(sourceStatus.source)} — ${escapeHtml(sourceStatus.reason ?? t('observed.unavailable'))}`);
 
   const sourcesHtml = `
     <div class="observed-now-sources">
-      <div>${t('observed.sources')}: ${present.join(' · ') || '—'}</div>
-      ${missing.length ? `<div>${escapeHtml(t('observed.unavailable'))}: ${missing.join(' · ')}</div>` : ''}
-      <div>${t('observed.corridor')}: ${Math.round(observed.corridor_nm)} NM</div>
+      <span class="observed-corridor">${escapeHtml(t('observed.corridor'))} ${Math.round(observed.corridor_nm)} NM</span>
+      <span class="observed-sources-list">${present.join('') || '—'}</span>
     </div>
   `;
 
   el.innerHTML = `${summaryHtml}${sourcesHtml}`;
+}
+
+/** "10:20Z" — a frame's own valid time, per source. Never a shared clock. */
+function observedStampHtml(validTime: string): string {
+  const d = new Date(validTime);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `<span class="observed-stamp" title="${escapeHtml(t('observed.frameValidTime'))}">${hh}:${mm}Z</span>`;
+}
+
+/** Human label for a raw source key, so a missing source does not read as a
+ *  code dump (`eumetsat_li — no frames collected`). */
+function observedSourceLabel(source: string): string {
+  const key = `observed.source.${source}`;
+  const label = t(key);
+  return label === key ? source : label;
+}
+
+/** Licence text as a link where the attribution carries a URL. */
+function attributionHtml(
+  attr: { text?: string | null; url?: string | null } | null | undefined,
+): string {
+  const text = attr?.text ?? '';
+  if (!text) return '';
+  const url = attr?.url ?? '';
+  if (!url) return escapeHtml(text);
+  const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
 }
 
 /** SYNC: the iOS app renders the same route-SIGMET shape in

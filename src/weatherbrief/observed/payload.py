@@ -47,7 +47,7 @@ from .frames import (
 )
 from .grid import compute_window, nm_to_km
 from .sampler import DEFAULT_RADII_NM, SampleStation, sample, sample_flashes
-from .summary import build_summary
+from .summary import build_summary_entries
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +273,7 @@ def build_observed_conditions(
         lightning=fields.get(SOURCE_EUMETSAT_LI),
         sources=statuses,
     )
-    conditions.summary_lines = build_summary(conditions)
+    conditions.summary_entries = build_summary_entries(conditions)
+    conditions.summary_lines = [e.text for e in conditions.summary_entries]
     conditions.summary = " ".join(conditions.summary_lines)
     return conditions
