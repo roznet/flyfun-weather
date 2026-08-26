@@ -11,14 +11,41 @@ The cross-check still happens — `observed-tops` renders directly over the NWP
 cloud bands, so "model says FL120, satellite saw FL280" is visible to the eye.
 **Computing** that comparison is phase 2 (see [Out of scope](#out-of-scope)).
 
-> **Note on provenance.** Issue #574 cites `designs/future/current-conditions.md`
-> and `designs/future/current-conditions-review.md` (decisions D1–D12,
-> committed in `af6dafae`). Neither file, nor that commit, exists in this
-> repository — they are absent from every branch. This document was written
-> from the issue body, which carries the measurements and the non-negotiables,
-> plus `designs/future/satellite-cloud-top-validation.md`, which is the
-> surviving record of the CTTH investigation. Where a decision below has no
-> stated source, it was made here and is marked as such.
+> **Note on provenance.** This was written before
+> `designs/future/current-conditions.md` and
+> `designs/future/current-conditions-review.md` were on any branch — issue #574
+> cited them, but neither file (nor the commit `af6dafae` it named) existed here
+> at the time. The source material was the issue body, which carries the
+> measurements and the non-negotiables, plus
+> `designs/future/satellite-cloud-top-validation.md`.
+>
+> Both docs landed on `main` in `8c06ebb2` while this branch was open, and the
+> implementation was checked against them after merging. **Decisions D1–D12 all
+> hold as built** — including the ones most easily got wrong: the two sibling
+> layers and their groups and defaults (D3), inline placement on `briefing.json`
+> (D4), the collector on the droplet mirroring `run_metar_ingest_loop` (D5),
+> `h5py` with no GDAL or rasterio (D6), per-source retention in hours (D7), CTTH
+> at the full 10-minute cadence (D10), three-state absence per source (D11), and
+> attribution read from each frame's own `how/license` (D12). D8, D9 and the
+> time-alignment fork are phase 2 and untouched here, as that plan intends.
+>
+> Two display rules from §3 of the review doc are **not** implemented as written,
+> and are recorded here rather than quietly skipped:
+>
+> - **Paired route-graph axis.** The rule asks for observed precipitation to
+>   share the *model* `precipitation` metric's axis and scale via a paired
+>   render type, on the grounds that independent scales make agreement and
+>   disagreement look alike. This ships two ordinary registry entries instead;
+>   the paired render type does not exist yet. The two also carry genuinely
+>   different units — the model metric is accumulation (mm), the observed one a
+>   rate (mm/h) — so a shared scale needs that reconciled first.
+> - **Age-fade past ~15 minutes.** The cross-section layers badge the frame's age
+>   but do not fade with it. The map's lightning trail does fade; the radar and
+>   tops layers do not.
+>
+> Neither is a correctness gap — the age is always on screen and coverage is
+> never implied — but both are real divergences from a rule that was written
+> down, and belong in phase 2's display pass.
 
 ## Why this shape
 
