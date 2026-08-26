@@ -330,6 +330,10 @@ function buildObserved(
         topsBins: [],
         topsMultiLayerFraction: 0,
         topsNoCoverage: false,
+        topsColdestC: null,
+        topsHighestCloudiness: null,
+        topsMedianCloudiness: null,
+        topsHighestAviationFl: null,
       };
       byId.set(stationId, point);
     }
@@ -377,6 +381,11 @@ function buildObserved(
     // quality_method 9 is the retrieval's own multi-layer-suspect flag — the
     // case where committing to one cloud top is least trustworthy.
     point.topsMultiLayerFraction = detected > 0 ? (annulus.quality_method?.['9'] ?? 0) / detected : 0;
+    // Kelvin on the wire (the granule's own unit); °C for anything a pilot reads.
+    point.topsColdestC = annulus.coldest_top_k != null ? annulus.coldest_top_k - 273.15 : null;
+    point.topsHighestCloudiness = annulus.highest_cloudiness ?? null;
+    point.topsMedianCloudiness = annulus.median_cloudiness ?? null;
+    point.topsHighestAviationFl = annulus.highest_aviation_fl ?? null;
   }
 
   const points = [...byId.values()].sort((a, b) => a.distanceNm - b.distanceNm);
@@ -414,6 +423,11 @@ function mergeObserved(points: VizPoint[], observed: VizObserved | null): void {
       }
     }
     if (!best || bestGap > OBSERVED_MATCH_TOLERANCE_NM) continue;
+    // The whole matched sample, so the hover rows can report everything this
+    // point measured without re-deriving the match. The flattened fields below
+    // stay for the route-graph metric registry, which reads scalars off the
+    // point directly.
+    point.observed = best;
     point.observedRateMmH = best.rateMmH;
     point.observedFlashRate = best.flashRate;
     point.observedRadarNoCoverage = best.radarNoCoverage || best.rateNoCoverage;

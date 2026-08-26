@@ -22,6 +22,7 @@ import {
   corridorBox, flashOpacity, formatBadge, overlayUrl,
 } from '../../ts/visualization/route-map/observed-overlay-geometry';
 import { getMetricById, sampleMetric } from '../../ts/visualization/route-graph/metrics';
+import { LAYER_TOOLTIPS } from '../../ts/visualization/cross-section/tooltip-formatters';
 import type {
   ElevationProfile, ObservedConditions, RouteAnalysesManifest,
 } from '../../ts/store/types';
@@ -67,6 +68,12 @@ function topsAnnulus(radius: number, over: Record<string, unknown> = {}) {
     fl_bins: { 'FL000-050': 10, 'FL050-150': 0, 'FL150-250': 0, 'FL250-400': 30, 'FL400+': 0 },
     quality_method: { '0': 60, '1': 10, '6': 30 },
     highest_fl: 350,
+    // -50C, thin and semi-transparent: the case where height alone would be
+    // misleading, since FL350 sounds impenetrable and 35% opacity is not.
+    coldest_top_k: 223.15,
+    highest_cloudiness: 0.35,
+    median_cloudiness: 0.6,
+    highest_aviation_fl: 340,
     ...over,
   } as never;
 }
@@ -631,5 +638,58 @@ describe('echo palette', () => {
     expect(echoColor(45)).toBe('#f08c28');
     expect(echoColor(55)).toBe('#e13c3c');
     expect(echoColor(65)).toBe('#be3cbe');
+  });
+});
+
+// --- Hover rows ------------------------------------------------------------
+
+describe('observed hover rows', () => {
+  /** A route point carrying the observed sample, which is all these defs read.
+   *  (The distance-match that populates `.observed` in real extraction is
+   *  `mergeObserved`; this manifest has no analyses, so there are no route
+   *  points to merge onto.) */
+  function pointWithObserved(index = 0) {
+    const observed = extract(makeObserved()).observed!;
+    const sample = observed.points[index];
+    expect(sample, 'fixture produced no observed points').toBeDefined();
+    return { distanceNm: sample.distanceNm, observed: sample } as never;
+  }
+
+  function rowFor(layerId: string, altFt: number): string | null {
+    const def = LAYER_TOOLTIPS.find((d) => d.id === layerId)!;
+    expect(def, `no tooltip registered for ${layerId}`).toBeDefined();
+    const zones = def.getZones(pointWithObserved());
+    if (zones.length === 0) return null;
+    const match = zones.find((z) => altFt >= z.baseFt && altFt <= z.topFt) ?? zones[0];
+    return def.formatLine(match, altFt);
+  }
+
+  it('reports radar, rain rate and lightning at any altitude', () => {
+    // The composite is a column MAXIMUM with no height, so the row must show
+    // wherever the cursor is — pinning it to an altitude would invent one.
+    for (const alt of [1000, 8000, 20000]) {
+      const line = rowFor('observed-surface', alt);
+      expect(line, `nothing at ${alt} ft`).toBeTruthy();
+      expect(line).toMatch(/dBZ|no echo|no radar coverage/);
+    }
+  });
+
+  it('says "no radar coverage" rather than reporting a clear sky', () => {
+    const def = LAYER_TOOLTIPS.find((d) => d.id === 'observed-surface')!;
+    const observed = extract(makeObserved()).observed!;
+    const holeIndex = observed.points.findIndex((p) => p.radarNoCoverage);
+    expect(holeIndex, 'fixture must contain a coverage hole').toBeGreaterThanOrEqual(0);
+    const zones = def.getZones(pointWithObserved(holeIndex));
+    expect(def.formatLine(zones[0], 8000)).toContain('no radar coverage');
+  });
+
+  it('reports the top with its temperature and opacity', () => {
+    const line = rowFor('observed-tops', 35000);
+    expect(line).toBeTruthy();
+    expect(line).toMatch(/FL\d+/);
+    // Opacity is what separates "cannot get on top" from "wispy cirrus";
+    // height alone draws both identically.
+    expect(line).toMatch(/opaque \((solid|broken|thin)\)/);
+    expect(line).toMatch(/-?\d+°C/);
   });
 });

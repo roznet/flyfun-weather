@@ -312,6 +312,17 @@ export interface VizObservedPoint {
   /** Share of cloudy pixels the retrieval flagged multi-layer-suspect (qm 9). */
   topsMultiLayerFraction: number;
   topsNoCoverage: boolean;
+  /** Coldest top in the disc (°C). Deepest convection, not an average. */
+  topsColdestC: number | null;
+  /** Effective cloudiness at the highest top, 0-1. Separates a solid deck from
+   *  wispy cirrus — height alone renders both identically. */
+  topsHighestCloudiness: number | null;
+  /** Median opacity across the disc's cloudy pixels. */
+  topsMedianCloudiness: number | null;
+  /** Pressure-based FL of the highest top, what an altimeter agrees with.
+   *  Coarse (10 FL steps) and can diverge from the geometric height, so it is
+   *  secondary to `topsHighestFt`, never a replacement. */
+  topsHighestAviationFl: number | null;
 }
 
 /** Per-source identity and age. There is no combined timestamp on purpose. */
@@ -360,6 +371,10 @@ export interface VizCloudDiag {
 
 export interface VizPoint {
   distanceNm: number;
+  /** The observed sample matched to this route point (#574), or null when no
+   *  observed frame covered it. Carries every measured field so hover rows do
+   *  not have to re-derive the distance match. */
+  observed?: VizObservedPoint | null;
   lat: number;
   lon: number;
   time: string;

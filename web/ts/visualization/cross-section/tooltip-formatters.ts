@@ -7,7 +7,7 @@
  * registry instead of carrying one if-block per layer.
  */
 
-import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
+import type { VizPoint, VizObservedPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
 import { formatVisibility, formatHeading } from '../../units';
 import { getActiveTheme } from './theme';
@@ -328,6 +328,119 @@ const sunAtPoint: LayerTooltipDef = {
 };
 
 /** All band/zone-style tooltip definitions, in display order. */
+
+/** Observed radar + lightning (#574).
+ *
+ *  Not altitude-bound, and that is a data property rather than a convenience:
+ *  the OPERA composite is a column MAXIMUM with no height information at all,
+ *  so its value applies to the whole column and the row must show wherever the
+ *  cursor sits. Same synthesized full-height zone as the sun row.
+ *
+ *  Coverage is reported explicitly. "No echo" and "the radar does not look
+ *  here" are different answers, and roughly half the OPERA grid is the latter. */
+interface ObservedSurfaceZone {
+  baseFt: number;
+  topFt: number;
+  point: VizObservedPoint;
+}
+
+const observedSurface: LayerTooltipDef = {
+  id: 'observed-surface',
+  header: 'Observed radar & lightning',
+  getZones: (p): ObservedSurfaceZone[] => {
+    const o = p.observed;
+    if (!o) return [];
+    const hasAnything =
+      o.radarNoCoverage || o.dbz != null || o.rateMmH != null || o.flashCount > 0;
+    return hasAnything ? [{ baseFt: -1e6, topFt: 1e6, point: o }] : [];
+  },
+  formatLine: (z: ObservedSurfaceZone) => {
+    const p = z.point;
+    const parts: string[] = [];
+    if (p.radarNoCoverage) {
+      parts.push('no radar coverage');
+    } else if (p.dbz != null) {
+      parts.push(`${p.dbz.toFixed(0)} dBZ`);
+    } else {
+      parts.push('no echo');
+    }
+    if (!p.rateNoCoverage && p.rateMmH != null) parts.push(`${p.rateMmH.toFixed(1)} mm/h`);
+    if (p.flashCount > 0) {
+      const rate = p.flashRate != null ? ` (${p.flashRate.toFixed(1)}/1000km²/min)` : '';
+      parts.push(`${p.flashCount} flash${p.flashCount === 1 ? '' : 'es'}${rate}`);
+    } else {
+      parts.push('no flashes');
+    }
+    return parts.join(' · ');
+  },
+};
+
+/** Observed cloud tops (#574).
+ *
+ *  Zones are the populated FL bands plus, when the highest top is off the top
+ *  of the chart, a zone reaching upward so hovering the off-scale box answers
+ *  with the number the box cannot draw. */
+interface ObservedTopsZone {
+  baseFt: number;
+  topFt: number;
+  point: VizObservedPoint;
+  label: string;
+}
+
+const observedTops: LayerTooltipDef = {
+  id: 'observed-tops',
+  header: 'Observed cloud tops',
+  getZones: (p): ObservedTopsZone[] => {
+    const o = p.observed;
+    if (!o) return [];
+    if (o.topsNoCoverage) {
+      return [{ baseFt: -1e6, topFt: 1e6, point: o, label: 'no retrieval here' }];
+    }
+    const zones: ObservedTopsZone[] = [];
+    for (const bin of o.topsBins) {
+      if (bin.fraction < 0.05) continue;
+      zones.push({
+        baseFt: bin.loFt - 2000,   // a little slack so the hatching is hoverable
+        topFt: bin.hiFt,
+        point: o,
+        label: `${Math.round(bin.fraction * 100)}% of tops in FL${Math.round(bin.loFt / 100)}-${Math.round(bin.hiFt / 100)}`,
+      });
+    }
+    if (o.topsHighestFt != null) {
+      // Reaches to the sky so the off-scale box is hoverable whatever the
+      // chart ceiling is; the tooltip machinery picks the narrowest match.
+      zones.push({
+        baseFt: o.topsHighestFt,
+        topFt: 1e6,
+        point: o,
+        label: `highest top ${formatFl(o.topsHighestFt)}`,
+      });
+    }
+    return zones;
+  },
+  formatLine: (z: ObservedTopsZone) => {
+    const p = z.point;
+    const parts: string[] = [z.label];
+    if (p.topsColdestC != null) parts.push(`coldest ${p.topsColdestC.toFixed(0)}°C`);
+    if (p.topsHighestCloudiness != null) {
+      // The number that separates "cannot get on top" from "wispy".
+      const pct = Math.round(p.topsHighestCloudiness * 100);
+      const how = pct >= 90 ? 'solid' : pct >= 50 ? 'broken' : 'thin';
+      parts.push(`${pct}% opaque (${how})`);
+    }
+    if (p.topsHighestAviationFl != null) parts.push(`≈FL${Math.round(p.topsHighestAviationFl)} pressure`);
+    if (p.topsMultiLayerFraction > 0.1) {
+      parts.push(`${Math.round(p.topsMultiLayerFraction * 100)}% multi-layer suspect`);
+    }
+    return parts.join(' · ');
+  },
+};
+
+/** "FL350" from feet. */
+function formatFl(ft: number): string {
+  return `FL${Math.round(ft / 100)}`;
+}
+
 export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   cloudDD,
   cloudNWP,
@@ -343,4 +456,6 @@ export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   inversion,
   surfaceObscuration,
   sunAtPoint,
+  observedSurface,
+  observedTops,
 ];

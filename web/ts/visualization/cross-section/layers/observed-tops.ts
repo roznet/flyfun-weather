@@ -27,8 +27,16 @@ import type { CrossSectionLayer, CoordTransform, VizObserved, VizObservedPoint }
 const MARK_HALF_WIDTH_NM = 4;
 /** A band has to hold this share of the disc's cloudy pixels to be drawn. */
 const MIN_BIN_FRACTION = 0.05;
-/** Half-width/height of the above-scale chevron, px. */
-const ABOVE_SCALE_CHEVRON_PX = 4;
+/** How far the "depth unknown" hatching hangs below a top marker, px.
+ *  Deliberately short: long enough to read as "there is cloud under this",
+ *  short enough that it cannot be mistaken for measured vertical extent. */
+const HATCH_DEPTH_PX = 9;
+/** Fixed height of the off-scale box at the chart ceiling, px. Fixed because
+ *  the real value has no position on this chart — the badge and the hover
+ *  carry the number instead. */
+const ABOVE_SCALE_BOX_PX = 14;
+/** Half-width of the up arrow inside that box, px. */
+const ARROW_PX = 4;
 
 const TOP_COLOR = '#111827';
 const BIN_COLOR = 'rgba(17, 24, 39, 0.55)';
@@ -121,14 +129,34 @@ function drawPoint(
     return;
   }
 
-  // Stacked band ticks: the multi-layer structure a single top would hide.
+  // One marker per populated FL band. NOT a filled band: this product carries
+  // no cloud base at all, so a solid rect spanning the bin reads as "cloud
+  // occupies FL150-250" when the data only says "this share of the TOPS is
+  // somewhere in FL150-250". Drawn as a capped bar with a few short hatch
+  // strokes hanging below it — the cap is what we measured, the hatching is
+  // the depth we cannot see.
   ctx.save();
   for (const bin of significantBins(point)) {
     const yLo = transform.altitudeToY(bin.loFt);
     const yHi = transform.altitudeToY(bin.hiFt);
-    ctx.globalAlpha = 0.25 + 0.55 * Math.min(1, bin.fraction);
+    if (yLo < plotArea.top) continue;  // wholly above the chart; the arrow says so
+    const alpha = 0.3 + 0.5 * Math.min(1, bin.fraction);
+
+    // The band the tops sit in.
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = BIN_COLOR;
-    ctx.fillRect(x0, yHi, width, Math.max(2, yLo - yHi));
+    ctx.fillRect(x0, Math.max(yHi, plotArea.top), width, Math.max(2, yLo - Math.max(yHi, plotArea.top)));
+
+    // Unknown depth below it, deliberately short so it cannot be read as extent.
+    ctx.globalAlpha = alpha * 0.7;
+    ctx.strokeStyle = BIN_COLOR;
+    ctx.lineWidth = 1;
+    for (let offset = 0; offset < width; offset += 4) {
+      ctx.beginPath();
+      ctx.moveTo(x0 + offset, yLo);
+      ctx.lineTo(x0 + offset - HATCH_DEPTH_PX * 0.5, yLo + HATCH_DEPTH_PX);
+      ctx.stroke();
+    }
   }
   ctx.restore();
 
@@ -145,14 +173,33 @@ function drawPoint(
   // which reads as "tops are around FL200" when they are nowhere near it.
   // Draw an explicit above-scale chevron instead; the badge carries the value.
   if (yTop < plotArea.top) {
+    // A fixed-height hatched box pinned to the chart ceiling, with an arrow:
+    // "the top is above this chart". The height is fixed and meaningless on
+    // purpose — scaling it to the real value would invent a position for
+    // something that has none here. Hover carries the number.
     ctx.save();
-    ctx.fillStyle = color;
+    const yBox = plotArea.top + 1;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    for (let offset = 0; offset < width + ABOVE_SCALE_BOX_PX; offset += 4) {
+      const sx = x0 + offset;
+      ctx.beginPath();
+      ctx.moveTo(Math.min(sx, x1), yBox);
+      ctx.lineTo(Math.max(x0, sx - ABOVE_SCALE_BOX_PX), yBox + ABOVE_SCALE_BOX_PX);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = color;
+    ctx.strokeRect(x0, yBox, width, ABOVE_SCALE_BOX_PX);
+
+    // Up arrow, centred.
     const cx = (x0 + x1) / 2;
-    const y = plotArea.top + 1;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.moveTo(cx, y);
-    ctx.lineTo(cx - ABOVE_SCALE_CHEVRON_PX, y + ABOVE_SCALE_CHEVRON_PX);
-    ctx.lineTo(cx + ABOVE_SCALE_CHEVRON_PX, y + ABOVE_SCALE_CHEVRON_PX);
+    ctx.moveTo(cx, yBox + 2);
+    ctx.lineTo(cx - ARROW_PX, yBox + 2 + ARROW_PX);
+    ctx.lineTo(cx + ARROW_PX, yBox + 2 + ARROW_PX);
     ctx.closePath();
     ctx.fill();
     ctx.restore();

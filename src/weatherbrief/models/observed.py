@@ -139,6 +139,23 @@ class ObservedTopsAnnulus(ObservedAnnulus):
     quality_method: dict[str, int] = Field(default_factory=dict)
     highest_fl: float | None = None
 
+    # Coldest top in the disc (K).  Reported rather than a mean because the
+    # coldest pixel is the deepest convection, and a mean over a disc that is
+    # mostly low stratus would hide it.
+    coldest_top_k: float | None = None
+
+    # Effective cloudiness at the highest top, 0-1.  Height alone draws a
+    # solid deck and wispy cirrus identically; this is what separates "you
+    # cannot get on top" from "you can see stars through it".
+    highest_cloudiness: float | None = None
+    # Median opacity across the disc's cloudy pixels, for the overall picture.
+    median_cloudiness: float | None = None
+
+    # Pressure-based flight level of the highest top — what an altimeter
+    # agrees with, unlike the geometric `highest_fl`.  Both are carried
+    # because they answer different questions and can differ materially.
+    highest_aviation_fl: float | None = None
+
 
 class ObservedFlashAnnulus(BaseModel):
     """Lightning annulus.

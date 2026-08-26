@@ -193,8 +193,24 @@ def sample(
         distance = np.where(detected_px, dist_detected, dist_nominal)
 
         quality = None
+        temperature = cloudiness = aviation = None
         if is_tops:
             quality, _ = _gather(frame.aux["quality_method"], local_rows, local_cols, readable)
+            # Optional so a fixture or an older cached frame without them still
+            # samples; the fields simply come back None.
+            for name, target in (
+                ("cloud_top_temperature", "temperature"),
+                ("effective_cloudiness", "cloudiness"),
+                ("cloud_top_aviation_height", "aviation"),
+            ):
+                if name in frame.aux:
+                    gathered, _ = _gather(frame.aux[name], local_rows, local_cols, readable)
+                    if target == "temperature":
+                        temperature = gathered
+                    elif target == "cloudiness":
+                        cloudiness = gathered
+                    else:
+                        aviation = gathered
             # A pixel can carry a method code and still have no usable height
             # (or no usable parallax), in which case it is `nodata` and must
             # not appear in the histogram — the counts would then exceed
@@ -231,6 +247,10 @@ def sample(
                 **stats,
             )
             if is_tops:
+                cloudy = counted & detected_px
+                # Everything below is reported over DETECTED pixels only: an
+                # opacity or a temperature averaged across clear-sky pixels
+                # would describe a cloud that is not there.
                 annuli.append(
                     ObservedTopsAnnulus(
                         **common,
@@ -240,6 +260,9 @@ def sample(
                             float(metres_to_fl(sample_values.max()))
                             if sample_values.size
                             else None
+                        ),
+                        **_tops_extras(
+                            cloudy, values, temperature, cloudiness, aviation
                         ),
                     )
                 )
@@ -357,3 +380,46 @@ def _empty_annuli(radii: list[float], is_tops: bool) -> list[ObservedAnnulus]:
     """
     factory = ObservedTopsAnnulus if is_tops else ObservedAnnulus
     return [factory(radius_nm=r) for r in radii]
+
+
+def _tops_extras(cloudy, values, temperature, cloudiness, aviation) -> dict:
+    """Temperature / opacity / pressure-FL stats over an annulus' cloudy pixels.
+
+    Each is keyed to the *highest* top rather than averaged where the question
+    is about that top specifically: the opacity of the highest cloud is what
+    decides whether a pilot can get above it, and a disc-wide mean over a low
+    stratus deck would report it as solid regardless.
+    """
+    out: dict[str, float | None] = {
+        "coldest_top_k": None,
+        "highest_cloudiness": None,
+        "median_cloudiness": None,
+        "highest_aviation_fl": None,
+    }
+    if not cloudy.any():
+        return out
+
+    heights = np.where(cloudy, values, np.nan)
+    if not np.isfinite(heights).any():
+        return out
+    peak = np.unravel_index(np.nanargmax(heights), heights.shape)
+
+    if temperature is not None:
+        temps = temperature[cloudy]
+        temps = temps[np.isfinite(temps)]
+        if temps.size:
+            out["coldest_top_k"] = round(float(temps.min()), 2)
+    if cloudiness is not None:
+        opac = cloudiness[cloudy]
+        opac = opac[np.isfinite(opac)]
+        if opac.size:
+            out["median_cloudiness"] = round(float(np.median(opac)), 3)
+        at_peak = cloudiness[peak]
+        if np.isfinite(at_peak):
+            out["highest_cloudiness"] = round(float(at_peak), 3)
+    if aviation is not None:
+        at_peak = aviation[peak]
+        if np.isfinite(at_peak):
+            # The granule stores FL/10.
+            out["highest_aviation_fl"] = round(float(at_peak) * 10.0, 1)
+    return out

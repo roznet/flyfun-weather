@@ -160,6 +160,13 @@ def write_ctth(path: Path) -> None:
     quality = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.int8)  # 0 = no cloud
     dlat = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.float32)
     dlon = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.float32)
+    # The three optional planes. Values are chosen so the two decks are
+    # distinguishable in a test: the cirrus is COLD and SEMI-TRANSPARENT, the
+    # stratus is warm and solid. That contrast is the point of carrying
+    # opacity at all — height alone renders both identically.
+    temperature = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
+    cloudiness = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
+    aviation = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
 
     # Cirrus at FL350 whose imagery position sits 0.5° NORTH of the station:
     # the satellite's line of sight to it strikes the ground north of where
@@ -170,6 +177,9 @@ def write_ctth(path: Path) -> None:
     quality[cirrus] = 6  # opaque IR, cold cloud
     dlat[cirrus] = -0.5
     dlon[cirrus] = 0.0
+    temperature[cirrus] = 223.15  # -50C
+    cloudiness[cirrus] = 0.35     # thin: you can see through this
+    aviation[cirrus] = 34.0       # FL/10 -> FL340, below the geometric FL350
 
     # Low stratus sitting directly over the station: barely displaced, so it
     # is found with or without the correction.
@@ -180,6 +190,9 @@ def write_ctth(path: Path) -> None:
     height[stratus] = 1219.0  # FL040
     quality[stratus] = 1
     dlat[stratus] = -0.03
+    temperature[stratus] = 281.15  # +8C
+    cloudiness[stratus] = 0.98     # solid
+    aviation[stratus] = 4.0        # FL040
 
     # A strip with no retrieval at all (off-swath / failed) in the far south.
     failed = lat < STATION_LAT - 0.35
@@ -213,6 +226,15 @@ def write_ctth(path: Path) -> None:
 
         qv = ds.createVariable("quality_method", "i1", ("y", "x"), fill_value=np.int8(-128))
         qv[:] = quality
+
+        for name, values, units in (
+            ("cloud_top_temperature", temperature, "K"),
+            ("effective_cloudiness", cloudiness, "1"),
+            ("cloud_top_aviation_height", aviation, "FL/10"),
+        ):
+            var = ds.createVariable(name, "f4", ("y", "x"), fill_value=np.float32(np.nan))
+            var.units = units
+            var[:] = values
 
         for name, values in (("delta_latitude", dlat), ("delta_longitude", dlon)):
             var = ds.createVariable(name, "i1", ("y", "x"), fill_value=np.int8(-128))

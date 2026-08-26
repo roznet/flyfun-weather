@@ -685,6 +685,14 @@ export interface ObservedTopsAnnulus extends ObservedAnnulus {
    *  "9" = the retrieval's own multi-layer-suspect flag. */
   quality_method: Record<string, number>;
   highest_fl: number | null;
+  /** Coldest top in the disc (K) — the deepest convection, not an average. */
+  coldest_top_k: number | null;
+  /** Effective cloudiness at the highest top, and the disc median (0-1). */
+  highest_cloudiness: number | null;
+  median_cloudiness: number | null;
+  /** Pressure-based FL of the highest top. Coarse (10 FL steps) and can
+   *  diverge from the geometric height; secondary, never a replacement. */
+  highest_aviation_fl: number | null;
 }
 
 /** Lightning disc. No coverage split: the imager sees the whole disc, so an

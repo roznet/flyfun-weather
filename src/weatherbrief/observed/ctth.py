@@ -149,12 +149,16 @@ def metres_to_fl(height_m):
     """Geometric height in metres → flight level.
 
     Deliberately geometric, not pressure altitude.  The product also ships
-    ``cloud_top_aviation_height``, which is the pressure-based quantity a
-    pilot's altimeter would agree with, but its documented units (``FL/10``)
-    have not been verified against a real granule; adopting it is a phase-2
-    change once that is checked.  Until then the histogram bins are honest
-    geometric heights labelled FL, matching the analysis scripts this reader
-    descends from.
+    ``cloud_top_aviation_height``, the pressure-based quantity a pilot's
+    altimeter agrees with.  Its ``FL/10`` units are now **confirmed** against a
+    real granule (123k cloudy pixels, 2026-08-26): geometric tops span
+    FL0.3–442 and ``aviation × 10`` spans FL10–440, correlation 0.83.
+
+    It is carried alongside rather than instead of this, because it is coarse
+    (``int8``, so 10 FL steps) and diverges from the geometric height by a
+    median +15 FL with p90 +91 FL.  Two answers to two different questions:
+    the histogram bins stay geometric, and the pressure figure is reported as
+    a secondary number where a pilot wants what the altimeter will read.
     """
     return np.asarray(height_m, dtype=float) * FEET_PER_METRE / 100.0
 
@@ -338,6 +342,28 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
         quality, quality_missing = _read_raw(dataset, "quality_method", rows, cols)
         dlat, dlat_missing = _read_raw(dataset, "delta_latitude", rows, cols)
         dlon, dlon_missing = _read_raw(dataset, "delta_longitude", rows, cols)
+        # Three more variables over the SAME rows. The granule chunks are
+        # [23, 5568] full-width strips, so the expensive part — seeking and
+        # decompressing that row band — is already paid; each extra variable
+        # measured ~6 ms on a route-sized window, about 10% of a payload build.
+        #
+        # `effective_cloudiness` earns its place more than the other two: it
+        # separates a solid deck from wispy cirrus, which is the difference
+        # between "you cannot get on top" and "you can see stars through it" —
+        # and height alone draws both identically.
+        # Optional: a granule that does not carry one of these still decodes,
+        # and the sampler reports the corresponding field as None. Height,
+        # quality and the parallax pair are the only hard requirements —
+        # without those the product cannot be placed or believed at all.
+        optional = {
+            name: _read_raw(dataset, name, rows, cols)
+            for name in (
+                "cloud_top_temperature",
+                "effective_cloudiness",
+                "cloud_top_aviation_height",
+            )
+            if name in dataset.variables
+        }
 
         valid = _valid_time(dataset, path)
         attribution = _attribution(dataset)
@@ -380,5 +406,13 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
             "quality_method": np.where(quality_missing, -1, quality).astype(np.int16),
             "delta_latitude": np.nan_to_num(dlat, nan=0.0).astype(np.float32),
             "delta_longitude": np.nan_to_num(dlon, nan=0.0).astype(np.float32),
+            # NaN where absent rather than a sentinel: these are sampled with
+            # nan-aware reductions, and a -1 would quietly drag a mean down.
+            # `cloud_top_aviation_height` is the pressure-based flight level an
+            # altimeter agrees with, unlike our geometric metres, in FL/10.
+            **{
+                name: np.where(miss, np.nan, vals).astype(np.float32)
+                for name, (vals, miss) in optional.items()
+            },
         },
     )
