@@ -78,6 +78,60 @@ def test_lookback_bounds_the_backfill():
     assert min(times) == datetime(2026, 8, 25, 13, 30, tzinfo=timezone.utc)
 
 
+# --- Product unwrapping ----------------------------------------------------
+
+
+def _zip_members(*members: tuple[str, bytes]) -> bytes:
+    import io as _io
+    import zipfile as _zip
+
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w") as z:
+        for name, payload in members:
+            z.writestr(name, payload)
+    return buf.getvalue()
+
+
+BODY_NC = "W_XX-...LI-2-LFL--FD--CHK-BODY--ARC-NC4E_C_EUMT_1.nc"
+TRAIL_NC = "W_XX-...LI-2-LFL--FD--CHK-TRAIL--ARC-NC4E_C_EUMT_2.nc"
+
+
+def test_unwrap_prefers_the_body_granule_over_the_trailer():
+    """An LI LFL zip holds two netCDFs and their order is not stable.
+
+    `CHK-TRAIL` is a statistics/histogram granule with no flash positions at
+    all, so drawing it makes the flash reader raise "no recognised flash
+    position variables" on a perfectly good product — intermittently, since
+    which one comes first varies between granules.
+    """
+    # Trailer listed FIRST, which is the case that used to break.
+    raw = _zip_members((TRAIL_NC, b"trailer"), (BODY_NC, b"flashes"), ("EOPMetadata.xml", b"x"))
+    assert collect._unwrap_product(raw) == b"flashes"
+
+    # And body-first still works.
+    raw = _zip_members((BODY_NC, b"flashes"), (TRAIL_NC, b"trailer"))
+    assert collect._unwrap_product(raw) == b"flashes"
+
+
+def test_unwrap_keeps_working_for_a_single_granule_product():
+    """CTTH ships one netCDF plus quicklooks — unaffected by the body rule."""
+    raw = _zip_members(("something_CTTH.nc", b"ctth"), ("quicklooks/x.png", b"img"))
+    assert collect._unwrap_product(raw) == b"ctth"
+
+
+def test_unwrap_never_picks_positionally_when_it_is_ambiguous(caplog):
+    """No CHK-BODY marker and several granules: say so rather than guess quietly."""
+    raw = _zip_members(("a_one.nc", b"aa"), ("b_two.nc", b"bbbbbb"))
+    with caplog.at_level("WARNING"):
+        got = collect._unwrap_product(raw)
+    assert got == b"bbbbbb"  # largest, deterministically
+    assert any("granules" in r.message for r in caplog.records)
+
+
+def test_unwrap_passes_through_a_bare_granule():
+    assert collect._unwrap_product(b"\x89HDF\r\n\x1a\n rest") == b"\x89HDF\r\n\x1a\n rest"
+
+
 # --- OPERA endpoint --------------------------------------------------------
 
 

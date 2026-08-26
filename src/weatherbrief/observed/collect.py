@@ -256,12 +256,25 @@ def _open_datastore():
     return eumdac.DataStore(eumdac.AccessToken(credentials))
 
 
+# An LI LFL product zip carries *two* netCDFs: `CHK-BODY`, the flash list we
+# want, and `CHK-TRAIL`, a statistics/histogram trailer with no flash positions
+# at all.  Their order in the archive is not stable, so taking the first `.nc`
+# is a coin flip — and drawing the trailer makes the flash reader raise "no
+# recognised flash position variables" on a perfectly good product.  CTTH ships
+# a single granule and is unaffected either way.
+_ZIP_BODY_MARKER = "CHK-BODY"
+_ZIP_TRAIL_MARKER = "CHK-TRAIL"
+
+
 def _unwrap_product(raw: bytes) -> bytes:
     """Return the netCDF payload from a EUMETSAT product download.
 
     Products arrive as a zip holding the granule alongside quicklook PNGs and
     EOPMetadata.xml.  We keep only the netCDF: the quicklooks are a quarter of
     the bytes and nothing reads them.
+
+    Where a product ships more than one granule, the body is chosen explicitly
+    rather than positionally — see :data:`_ZIP_BODY_MARKER`.
     """
     if not raw[:2] == b"PK":
         return raw
@@ -269,7 +282,27 @@ def _unwrap_product(raw: bytes) -> bytes:
         names = [n for n in archive.namelist() if n.endswith(".nc")]
         if not names:
             raise ValueError("EUMETSAT product zip contains no .nc granule")
-        return archive.read(names[0])
+
+        body = [n for n in names if _ZIP_BODY_MARKER in n]
+        if body:
+            return archive.read(body[0])
+
+        candidates = [n for n in names if _ZIP_TRAIL_MARKER not in n] or names
+        if len(candidates) > 1:
+            # Never silently positional: say which was taken and what else was
+            # on offer, so an unfamiliar product shape is visible in the log
+            # rather than showing up later as an unreadable granule.
+            chosen = max(candidates, key=lambda n: archive.getinfo(n).file_size)
+            logger.warning(
+                "EUMETSAT product zip holds %d granules and none is marked %s; "
+                "taking the largest (%s) of %s",
+                len(candidates),
+                _ZIP_BODY_MARKER,
+                chosen,
+                candidates,
+            )
+            return archive.read(chosen)
+        return archive.read(candidates[0])
 
 
 def _product_time(product) -> datetime | None:
