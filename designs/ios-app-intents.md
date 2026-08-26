@@ -214,6 +214,12 @@ the other consumers have since added `.forecastMap(MapDeepLink)` (#420) and
 - `PendingNavigationStore` (UserDefaults.standard) is the **cold-launch-safe** hand-off — a
   foregrounding intent may run *before* `AppState` exists, so it writes there and returns
   with `openAppWhenRun`. `OpenBriefingIntent` / `OpenFlightListIntent` call `…Store.set(...)`.
+  The store is a struct over an **injectable `UserDefaults`** (`init(defaults: = .standard)`),
+  with the static `set`/`take` the app calls forwarding to the standard suite. Two reasons:
+  it is the one place that moves to a shared App Group when an out-of-process consumer lands
+  (Decision 1), and its single key plus destructive `take()` made two swift-testing suites
+  driving `.standard` in parallel steal each other's target — tests now use their own suite
+  (`PendingNavigationStore.testStore()`, #578).
 - `AppState.consumePendingNavigation()` runs on every scene `.active` (covers cold launch +
   warm foreground), `take()`s from the store into the observable `pendingNavigation`
   property, and `FlightListView` routes then calls `clearPendingNavigation()`.

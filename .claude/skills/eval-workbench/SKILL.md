@@ -67,8 +67,15 @@ python scripts/rerun_advisories_diff.py --area staging [--id <corpus_id>]
 python scripts/rerun_advisories_diff.py --area staging --deep
 # Target a debrief cohort (e.g. the convective over-warn set):
 python scripts/rerun_advisories_diff.py --area staging --deep --debrief-outcome TS=better
+# Also check the published-extent invariants + count aggregates that read calmer
+# than a flagged model (real-pack sweep of the #578 predicates, ~70s/200 packs):
+python scripts/rerun_advisories_diff.py --area staging --check-invariants
+# Just the cruise-altitude profile of a selection, no replay:
+python scripts/rerun_advisories_diff.py --area staging --altitude-profile
 ```
 Read the `convective` / `convective_character` rows. Caveat: the diff is a change-detector (uses default params, skips DB airport-conditions recompute → those rows are noise/flagged); the saved-vs-rerun *detail headline* can also drift from unrelated code evolution — the aggregate-status diff is the clean signal. Needs `cross_section` (+ `route_points` for `--deep`); stale label-only packs error cleanly.
+
+Every run ends with the **cruise-altitude profile** of the packs it replayed. Read it before believing a clean sweep: 71% of staging flies below 10,000 ft, and of the packs at/above 16,000 ft most already read "Smooth ride expected", so an altitude-scaled change is measured mostly on its low half (#578; designs/eval-digest-workbench.md, "What a clean replay does not cover").
 
 ## Recipe: regenerate the derived cache (after a fresh clone)
 

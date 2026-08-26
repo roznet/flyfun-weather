@@ -3958,6 +3958,19 @@ reported by `below_coverage` → UNAVAILABLE, which abstains; it must not be
 reported by quietly diluting real evidence into a GREEN. In the common
 fully-assessed case `domain_nm` is the route length, so this costs nothing.
 
+### A real extent never publishes 0.0% (#578)
+
+`published_pct` floors a non-zero extent at `0.1`. A sliver of a long route —
+one flagged point among tightly-spaced arrival points, 0.15nm of 1000 — is
+0.015% by arithmetic and rounds to `0.0` at the published precision. The
+arithmetic is right and the publication is a lie: every consumer reads 0% as
+"nothing wrong", so a RED verdict shipped with `affected_pct: 0.0` beside a
+non-zero `affected_points`. That is the same false-report shape as #571 review
+round 9 (the airport-scoped RED on a zero-length route), reachable by rounding
+rather than by a missing denominator. The general predicate — flagged implies
+non-zero published coverage — is asserted over every advisory × model in
+`analysis/advisories/invariants.py`.
+
 ### Rejected
 
 - **Fixing the messages without the value object.** #300 had already done that

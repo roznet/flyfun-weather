@@ -48,24 +48,47 @@ struct MapDeepLink: Equatable, Sendable {
 ///
 /// Backed by `UserDefaults.standard`: App Intents defined in the main app target
 /// run **in-process**, so no App Group container is needed to share this. (When
-/// Widgets/Live Activities later run in a separate process, this suite is the one
-/// place that would move to a shared App Group — see the App-Group note in
-/// `designs/ios-app-intents.md`.)
-enum PendingNavigationStore {
+/// Widgets/Live Activities later run in a separate process, the default `init`
+/// argument is the one place that would move to a shared App Group — see the
+/// App-Group note in `designs/ios-app-intents.md`.)
+///
+/// The `UserDefaults` instance is injectable for exactly that reason, and one
+/// other: the store is process-global with a single key and a *destructive*
+/// `take()`, so two swift-testing suites driving `.standard` in parallel
+/// interleave as `set → set → take → take` and hand one test the other's value
+/// (#578). Tests build their own instance over a private suite; the app keeps
+/// calling the static methods, which use `UserDefaults.standard`.
+struct PendingNavigationStore {
     private static let key = "pendingNavigation"
-    private static var defaults: UserDefaults { .standard }
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     /// Record a target for the app to consume on next activation. Overwrites any
     /// earlier unconsumed target — the most recent user request wins.
-    static func set(_ nav: PendingNavigation) {
-        defaults.set(encode(nav), forKey: key)
+    func set(_ nav: PendingNavigation) {
+        defaults.set(Self.encode(nav), forKey: Self.key)
     }
 
     /// Read and clear the pending target, if any.
+    func take() -> PendingNavigation? {
+        guard let raw = defaults.string(forKey: Self.key) else { return nil }
+        defaults.removeObject(forKey: Self.key)
+        return Self.decode(raw)
+    }
+
+    /// Record a target on the app's store. The call sites are intents, push
+    /// handling and `onOpenURL` — all of which mean "the app's store".
+    static func set(_ nav: PendingNavigation) {
+        PendingNavigationStore().set(nav)
+    }
+
+    /// Read and clear the app's store.
     static func take() -> PendingNavigation? {
-        guard let raw = defaults.string(forKey: key) else { return nil }
-        defaults.removeObject(forKey: key)
-        return decode(raw)
+        PendingNavigationStore().take()
     }
 
     // Compact string encoding (no Codable ceremony for a few cases).

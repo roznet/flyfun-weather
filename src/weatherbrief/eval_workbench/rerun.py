@@ -156,6 +156,7 @@ def rerun_manifest_deep(
     from weatherbrief.eval_workbench.situations import load_snapshot_from_pack
     from weatherbrief.tasks.advise import run_advisories_from_pack
     from weatherbrief.tasks.analyze import run_analysis_from_pack
+    from weatherbrief.tasks.artifacts import save_route_analyses
 
     has_cs = (pack_dir / "cross_section.json").exists() or (
         pack_dir / "cross_section.json.gz"
@@ -170,8 +171,18 @@ def rerun_manifest_deep(
     try:
         dst = tmp / "pack"
         shutil.copytree(pack_dir, dst)
-        # Recompute soundings with current code (overwrites dst/route_analyses.json).
-        run_analysis_from_pack(dst, snap.route, snap.departure_time)
+        # Recompute the soundings with current code AND write them back, because
+        # ``run_advisories_from_pack`` below re-reads ``route_analyses.json`` off
+        # disk. ``run_analysis_from_pack`` only *returns* the manifest — it
+        # writes nothing — so for two years this call recomputed 4,000+ soundings
+        # and threw every one away, and ``--deep`` reported "no change" for
+        # exactly the sounding-layer changes it exists to validate (#578).
+        analysis = run_analysis_from_pack(dst, snap.route, snap.departure_time)
+        if analysis.route_analyses_manifest is None:
+            raise RuntimeError("deep re-run recomputed no analyses")
+        # No sidecar: nothing downstream of here reads it, and it costs a gzip
+        # of every profile in the pack.
+        save_route_analyses(dst, analysis.route_analyses_manifest, sidecar=False)
         aggregation = (
             AdvisoryAggregation(baseline.aggregation)
             if baseline and baseline.aggregation
@@ -192,19 +203,38 @@ def rerun_manifest_deep(
     return result.manifest
 
 
-def rerun_diff(pack_dir: Path, deep: bool = False) -> dict:
+def rerun_diff(
+    pack_dir: Path, deep: bool = False, check_invariants: bool = False
+) -> dict:
     """Full re-run + diff for one pack. Returns a JSON-serialisable summary.
 
     ``deep=True`` recomputes the soundings first (for sounding/analysis-layer
     changes); otherwise only the advisory evaluators are re-run.
+
+    ``check_invariants=True`` also runs the published-extent invariants
+    (``analysis/advisories/invariants.py``) over the re-run manifest and counts
+    the aggregates that mask a flagged model. A diff answers "did this change
+    move a rating?"; the invariants answer "is what we publish self-consistent
+    at all?" — and only real packs carry the geometry that breaks it (#578).
     """
+    from weatherbrief.analysis.advisories import invariants
+
     saved = load_saved_manifest(pack_dir)
     candidate = (
         rerun_manifest_deep(pack_dir, saved) if deep else rerun_manifest(pack_dir, saved)
     )
     changes = diff_manifests(saved, candidate)
-    return {
+    out = {
         "had_baseline": saved is not None,
         "changed_count": len(changes),
         "changes": changes,
     }
+    if check_invariants:
+        out["invariant_violations"] = [
+            str(v) for v in invariants.check_manifest(candidate)
+        ]
+        out["masked_flagged"] = [
+            f"{advisory_id}/{m.model} {m.status.value} at {m.affected_pct}%"
+            for advisory_id, m in invariants.masked_pairs(candidate.advisories)
+        ]
+    return out

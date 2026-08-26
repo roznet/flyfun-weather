@@ -116,8 +116,12 @@ struct UniversalLinkRoutingTests {
     @Test func pendingNavigationRoundTripsShare() {
         // The cold-launch-safe store must round-trip a share target so a link
         // that arrives before AppState/list exists (or across a sign-in) resumes.
-        PendingNavigationStore.set(.share(code: "aB3xy7Q9"))
-        #expect(PendingNavigationStore.take() == .share(code: "aB3xy7Q9"))
+        // Own defaults suite — see the note in ForecastMapTests (#578).
+        let store = PendingNavigationStore.testStore(#function)
+        defer { PendingNavigationStore.removeTestStore(#function) }
+        store.set(.share(code: "aB3xy7Q9"))
+        #expect(store.take() == .share(code: "aB3xy7Q9"))
+        #expect(store.take() == nil, "take() consumes the target")
     }
 
     @Test func shareCodeShapeValidation() {
