@@ -45,7 +45,12 @@ from weatherbrief.observed.frames import (
     FrameStore,
 )
 from weatherbrief.observed.grid import compute_window
-from weatherbrief.observed.imagery import OverlayBounds, legend_for, render_overlay
+from weatherbrief.observed.imagery import (
+    AUX_FIELDS,
+    OverlayBounds,
+    legend_for,
+    render_overlay,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +68,24 @@ MAX_SPAN_DEG = 25.0
 _CACHE_CONTROL = "private, max-age=240"
 
 IMAGE_SOURCES = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE, SOURCE_EUMETSAT_CTTH)
+
+# Pseudo-sources: a different QUANTITY off a frame we already collect, exposed
+# under its own id so the URL shape and the client's single "which overlay"
+# string stay unchanged.  `eumetsat_ctth_temp` draws the CTTH granule's
+# cloud-top temperature rather than its height — on a map there is no altitude
+# axis, so temperature is genuinely new information rather than a restatement
+# of position, which is exactly the opposite of the cross-section's case.
+IMAGE_PSEUDO_SOURCES = dict(AUX_FIELDS)  # pseudo id -> (real source, field, stops)
+
+
+def _resolve_imagery(source: str) -> tuple[str, str | None]:
+    """(real source, aux field) for an imagery id, or raise 404."""
+    if source in IMAGE_SOURCES:
+        return source, None
+    entry = IMAGE_PSEUDO_SOURCES.get(source)
+    if entry is not None:
+        return entry[0], entry[1]
+    raise HTTPException(status_code=404, detail="Unknown imagery source")
 
 
 def _require_enabled() -> None:
@@ -127,8 +150,7 @@ def observed_overlay(
 ) -> Response:
     """Newest frame for ``source``, clipped to the rectangle, as one PNG."""
     _require_enabled()
-    if source not in IMAGE_SOURCES:
-        raise HTTPException(status_code=404, detail="Unknown imagery source")
+    source, field = _resolve_imagery(source)
     bounds = _bounds(south, west, north, east)
 
     store = FrameStore()
@@ -145,7 +167,7 @@ def observed_overlay(
         logger.warning("Observed overlay render failed for %s", source, exc_info=True)
         raise HTTPException(status_code=500, detail="Frame unreadable") from exc
 
-    png, _ = render_overlay(frame, bounds)
+    png, _ = render_overlay(frame, bounds, field=field)
     return Response(
         content=png,
         media_type="image/png",

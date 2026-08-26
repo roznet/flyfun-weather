@@ -248,3 +248,41 @@ def test_sub_satellite_angle_exceeds_latitude_off_the_meridian():
     assert ctth.sub_satellite_angle_deg(50.0, 25.0) > 50.0
     # And on the equator the angle is just the longitude offset.
     assert ctth.sub_satellite_angle_deg(0.0, 30.0) == pytest.approx(30.0)
+
+
+# --- Aux-field overlays (map layer selector, #574) --------------------------
+
+
+def test_temperature_overlay_draws_a_different_quantity(ctth_path):
+    """The map can colour the CTTH granule by temperature, not just height.
+
+    Worth having on a map precisely because there is no altitude axis there —
+    temperature is new information. On the cross-section the opposite is true,
+    which is why that one colours by share instead.
+    """
+    from weatherbrief.observed.imagery import AUX_FIELDS
+
+    frame = _ctth_frame(ctth_path)
+    height_png, _ = render_overlay(frame, BOUNDS)
+    temp_png, _ = render_overlay(frame, BOUNDS, field="cloud_top_temperature")
+
+    assert temp_png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert temp_png != height_png, "temperature render is identical to height"
+    # The fixture's two decks differ in temperature (cirrus -50C, stratus +8C),
+    # so the render must use more than one colour.
+    drawn = {tuple(row[:3]) for row in _decode(temp_png)[_decode(temp_png)[:, :, 3] == DETECTION_ALPHA]}
+    assert len(drawn) >= 2
+
+    # And the pseudo-source is wired to that field.
+    assert AUX_FIELDS["eumetsat_ctth_temp"][1] == "cloud_top_temperature"
+
+
+def test_a_missing_aux_field_draws_nothing_rather_than_the_wrong_thing(ctth_path):
+    """An older cached frame without the plane must not fall back to height."""
+    frame = _ctth_frame(ctth_path)
+    frame.aux.pop("cloud_top_temperature", None)
+    png, _ = render_overlay(frame, BOUNDS, field="cloud_top_temperature")
+    image = _decode(png)
+    assert not (image[:, :, 3] == DETECTION_ALPHA).any(), (
+        "drew detections from a plane the granule does not carry"
+    )

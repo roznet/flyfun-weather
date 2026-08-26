@@ -98,3 +98,33 @@ export function formatBadge(field: ObservedBadgeField | null): string {
   const attribution = field.attribution ? ` · ${field.attribution}` : '';
   return `${field.label} ${hhmm} · ${age}${rolling}${attribution}`;
 }
+
+/** The observed layers the map can draw, in menu order.
+ *
+ *  One at a time by design: these are different measurements of the same sky
+ *  (echo, intensity, top height, top temperature, discharges) and stacking
+ *  them would make it impossible to say which measurement a colour came from.
+ *
+ *  `needs` names the payload field that has to be present for the option to be
+ *  offered — an option that would render an empty PNG is worse than an absent
+ *  one, because the pilot cannot tell "nothing there" from "not collected".
+ */
+export const OBSERVED_OVERLAY_OPTIONS: Array<{
+  id: string;
+  labelKey: string;
+  needs: 'reflectivity' | 'rainRate' | 'cloudTops' | 'lightning' | null;
+  /** Points rather than a raster. */
+  points?: boolean;
+}> = [
+  { id: '', labelKey: 'viz.observed.none', needs: null },
+  { id: 'opera_dbzh', labelKey: 'viz.observed.reflectivity', needs: 'reflectivity' },
+  { id: 'opera_rate', labelKey: 'viz.observed.rainRate', needs: 'rainRate' },
+  { id: 'eumetsat_ctth', labelKey: 'viz.observed.cloudTops', needs: 'cloudTops' },
+  { id: 'eumetsat_ctth_temp', labelKey: 'viz.observed.cloudTemp', needs: 'cloudTops' },
+  { id: 'eumetsat_li', labelKey: 'viz.observed.lightning', needs: 'lightning', points: true },
+];
+
+/** True when this selection  draws lightning points instead of a raster. */
+export function isPointsOverlay(id: string): boolean {
+  return OBSERVED_OVERLAY_OPTIONS.some((o) => o.id === id && o.points === true);
+}

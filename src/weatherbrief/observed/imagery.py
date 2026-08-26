@@ -67,6 +67,45 @@ _CTTH_STOPS: tuple[tuple[float, int, int, int], ...] = (
     (12192.0, 255, 255, 255),  # FL400+
 )
 
+# Cloud-top TEMPERATURE, in kelvin, warmest first.  Mirrors the client's
+# enhanced-IR ramp stop for stop (see `IR_TEMP_STOPS` in theme.ts) so the map
+# and the cross-section's hover cannot disagree about what a temperature looks
+# like.  Warm end is a desaturated blue rather than the conventional grayscale:
+# gray is what the forecast cloud bands are.
+_CTTH_TEMP_STOPS: tuple[tuple[float, int, int, int], ...] = (
+    # ASCENDING in kelvin: `_colourise` applies `values >= threshold` in order,
+    # so the last stop a value reaches wins. Written coldest-first, each entry
+    # is "the colour for temperatures at or above this". A descending list
+    # silently paints every pixel with the final stop — which is exactly what
+    # the first version of this table did.
+    #
+    # The floor is deliberately far below any real cloud top: a value colder
+    # than the first threshold matches nothing and renders black.
+    (150.00, 163, 36, 58),     # colder than -123C — floor, never reached
+    (193.15, 163, 36, 58),     # -80C
+    (203.15, 217, 79, 61),     # -70C
+    (213.15, 232, 163, 60),    # -60C
+    (218.15, 224, 216, 74),    # -55C
+    (223.15, 76, 199, 106),    # -50C
+    (233.15, 63, 183, 216),    # -40C
+    (243.15, 74, 127, 208),    # -30C  conventional ramp ends here
+    (258.15, 107, 143, 192),   # -15C
+    (273.15, 127, 157, 196),   #   0C
+    (288.15, 143, 168, 200),   # +15C — desaturated blue, not the
+                               # conventional grayscale: gray is what the
+                               # forecast cloud bands are.
+)
+
+#: Fields renderable from a frame's `aux` rather than its own `values`, with
+#: the ramp each uses.  Keyed by the pseudo-source the API exposes.
+AUX_FIELDS: dict[str, tuple[str, str, tuple]] = {
+    "eumetsat_ctth_temp": (
+        SOURCE_EUMETSAT_CTTH,
+        "cloud_top_temperature",
+        _CTTH_TEMP_STOPS,
+    ),
+}
+
 _STOPS_BY_SOURCE = {
     SOURCE_OPERA_DBZH: _DBZ_STOPS,
     SOURCE_OPERA_RATE: _RATE_STOPS,
@@ -111,6 +150,7 @@ def render_overlay(
     bounds: OverlayBounds,
     *,
     max_pixels: int = MAX_OVERLAY_PIXELS,
+    field: str | None = None,
 ) -> tuple[bytes, OverlayBounds]:
     """Render ``frame`` into a plate-carrée RGBA PNG covering ``bounds``.
 
@@ -146,12 +186,17 @@ def render_overlay(
     safe_rows = np.clip(local_rows, 0, frame.values.shape[0] - 1)
     safe_cols = np.clip(local_cols, 0, frame.values.shape[1] - 1)
 
-    values = np.asarray(frame.values)[safe_rows, safe_cols]
+    # `field` renders an auxiliary plane instead of the frame's own values —
+    # cloud-top TEMPERATURE rather than height. The detection and coverage
+    # masks are unchanged: they describe which pixels the retrieval answered
+    # for, which is the same question whichever quantity is being drawn.
+    plane = _plane_for(frame, field)
+    values = plane[safe_rows, safe_cols]
     detected = frame.detected[safe_rows, safe_cols] & inside
     nodata = (frame.nodata[safe_rows, safe_cols] & inside) | ~inside
 
     rgba = np.zeros((height, width, 4), dtype=np.uint8)
-    stops = _STOPS_BY_SOURCE.get(frame.source)
+    stops = _stops_for(frame.source, field)
     has_parallax = "delta_latitude" in frame.aux and "delta_longitude" in frame.aux
 
     if stops is not None and not has_parallax:
@@ -177,11 +222,33 @@ def render_overlay(
         # cell is on the route. Scatter each detection to its own corrected
         # position instead, which is the same correction `sampler.sample`
         # applies before deciding corridor membership.
-        _scatter_parallax_detections(frame, rgba, bounds, stops, height, width)
+        _scatter_parallax_detections(frame, rgba, bounds, stops, height, width, field)
 
     buffer = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(buffer, format="PNG", optimize=True)
     return buffer.getvalue(), bounds
+
+
+def _plane_for(frame: GridFrame, field: str | None) -> np.ndarray:
+    """The array to colourise: the frame's own values, or an aux plane."""
+    if not field:
+        return np.asarray(frame.values)
+    plane = frame.aux.get(field)
+    if plane is None:
+        # The granule did not carry it. Better an empty overlay than one drawn
+        # from the wrong quantity.
+        return np.full(np.asarray(frame.values).shape, np.nan, dtype=np.float32)
+    return np.asarray(plane)
+
+
+def _stops_for(source: str, field: str | None):
+    """Ramp for a (source, field) pair."""
+    if field:
+        for _pseudo, (real, aux_field, stops) in AUX_FIELDS.items():
+            if real == source and aux_field == field:
+                return stops
+        return None
+    return _STOPS_BY_SOURCE.get(source)
 
 
 def _scatter_parallax_detections(
@@ -191,6 +258,7 @@ def _scatter_parallax_detections(
     stops,
     height: int,
     width: int,
+    field: str | None = None,
 ) -> None:
     """Paint detected pixels at their parallax-corrected ground position.
 
@@ -216,7 +284,7 @@ def _scatter_parallax_detections(
     out_rows = np.floor((bounds.north - lat) / lat_span * height).astype(int)
     out_cols = np.floor((lon - bounds.west) / lon_span * width).astype(int)
 
-    values = np.asarray(frame.values)[src_rows, src_cols]
+    values = _plane_for(frame, field)[src_rows, src_cols]
     keep = (
         np.isfinite(values)
         & np.isfinite(lat)

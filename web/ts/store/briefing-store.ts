@@ -48,6 +48,10 @@ function loadVizSettings(): VizSettings {
     layout: 'cross-section',
     enabledLayers: getDefaultEnabled(),
     mapColorMetric: 'icing-risk-at-level',
+    // Radar reflectivity by default: highest cadence, and the one that answers
+    // "is that cell on my route". Falls back at render time to whatever was
+    // actually collected.
+    observedOverlay: 'opera_dbzh',
     mapWidthMetric: 'cloud-cover-total',
     mapAltitudeFt: null,
     routeGraphVisible: true,
@@ -190,6 +194,8 @@ export interface BriefingState {
   unsubscribe: () => Promise<void>;
   setLayout: (layout: VizLayout) => void;
   setMapColorMetric: (metricId: string) => void;
+  /** Which observed layer the map draws (#574), or '' for none. */
+  setObservedOverlay: (source: string) => void;
   setMapWidthMetric: (metricId: string) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
   setMapFrontsVisible: (visible: boolean) => void;
@@ -1060,6 +1066,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setMapColorMetric: (metricId: string) => {
     const updated = { ...get().vizSettings, mapColorMetric: metricId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setObservedOverlay: (source: string) => {
+    const updated = { ...get().vizSettings, observedOverlay: source };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

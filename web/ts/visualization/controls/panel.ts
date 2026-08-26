@@ -16,6 +16,7 @@ import { renderFrontsInfo } from '../../helpers/fronts-info';
 import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
+import { OBSERVED_OVERLAY_OPTIONS } from '../route-map/observed-overlay-geometry';
 import { FORECAST_METRICS, METRIC_LABEL } from '../weather-map-format';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
 import { showThemePreview } from '../cross-section/theme-preview';
@@ -357,6 +358,19 @@ export interface MapControlCallbacks {
   onForecastOverlayToggle?: (visible: boolean) => void;
   /** Change the metric the airport forecast overlay colours by (#424). */
   onForecastMetricChange?: (metricId: string) => void;
+  /** Pick which observed layer the map draws (#574), '' for none. */
+  onObservedOverlayChange?: (source: string) => void;
+}
+
+/** Which observed sources the current briefing actually carries. Options for
+ *  anything absent are not offered: an overlay that renders an empty PNG is
+ *  worse than a missing menu entry, because the pilot cannot tell "nothing
+ *  there" from "not collected". */
+export interface ObservedAvailability {
+  reflectivity: boolean;
+  rainRate: boolean;
+  cloudTops: boolean;
+  lightning: boolean;
 }
 
 /** Airport forecast overlay control state (#424). Present (and the cluster
@@ -674,6 +688,7 @@ export function renderMapControls(
   callbacks: MapControlCallbacks,
   frontsAvailable = false,
   forecastOverlay?: MapForecastOverlayControls,
+  observed?: ObservedAvailability,
 ): void {
   const colorOptions = getMapMetricOptions(false);
   const widthOptions = getMapMetricOptions(true);
@@ -689,6 +704,22 @@ export function renderMapControls(
   }
   html += '</select>';
   html += '</label>';
+
+  // Observed layer, one at a time. These are different measurements of the
+  // same sky and stacking them would make it impossible to say which
+  // measurement a colour came from.
+  if (observed && (observed.reflectivity || observed.rainRate || observed.cloudTops || observed.lightning)) {
+    html += '<label class="map-control-label">';
+    html += `<span class="viz-toggle-label">${t('viz.observed.label')}</span>`;
+    html += '<select id="map-observed-overlay" class="map-control-select">';
+    for (const opt of OBSERVED_OVERLAY_OPTIONS) {
+      if (opt.needs && !observed[opt.needs]) continue;
+      const selected = opt.id === settings.observedOverlay ? ' selected' : '';
+      html += `<option value="${opt.id}"${selected}>${escapeHtml(t(opt.labelKey))}</option>`;
+    }
+    html += '</select>';
+    html += '</label>';
+  }
 
   html += '<label class="map-control-label">';
   html += `<span class="viz-toggle-label">${t('viz.width')}</span>`;
@@ -769,6 +800,13 @@ export function renderMapControls(
   }
 
   // Wire metric dropdowns
+  const observedSelect = container.querySelector('#map-observed-overlay') as HTMLSelectElement | null;
+  if (observedSelect && callbacks.onObservedOverlayChange) {
+    observedSelect.addEventListener('change', () => {
+      callbacks.onObservedOverlayChange!(observedSelect.value);
+    });
+  }
+
   const colorSelect = container.querySelector('#map-color-metric') as HTMLSelectElement | null;
   if (colorSelect) {
     colorSelect.addEventListener('change', () => {

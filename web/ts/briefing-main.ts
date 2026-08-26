@@ -287,16 +287,29 @@ function updateObservedOverlay(
     return;
   }
 
-  // Reflectivity is the frame worth drawing when we have it: it is the
-  // highest-cadence source and the one that answers "is that cell on my
-  // route". Rain rate is the fallback when only it was collected.
-  renderer.setObservedSource(
-    observed.reflectivity ? 'opera_dbzh' : observed.rainRate ? 'opera_rate' : null,
+  // The pilot's pick, falling back only when the chosen source is not in this
+  // briefing. Reflectivity is the default elsewhere: highest cadence, and the
+  // one that answers "is that cell on my route".
+  const chosen = briefingStore.getState().vizSettings.observedOverlay;
+  const availableFor: Record<string, boolean> = {
+    opera_dbzh: !!observed.reflectivity,
+    opera_rate: !!observed.rainRate,
+    eumetsat_ctth: !!observed.cloudTops,
+    eumetsat_ctth_temp: !!observed.cloudTops,
+    eumetsat_li: !!observed.lightning,
+  };
+  const wanted = chosen && availableFor[chosen] ? chosen : (
+    observed.reflectivity ? 'opera_dbzh' : observed.rainRate ? 'opera_rate' : ''
   );
+  // Lightning is points, not a raster: selecting it draws no imagery at all.
+  const showFlashes = wanted === 'eumetsat_li';
+  renderer.setObservedSource(showFlashes || !wanted ? null : wanted);
 
   const bounds = corridorBounds(data, observed.radiusNm);
-  if (!observed.lightning || !bounds) {
-    renderer.setObservedFlashes(observedFlashCache ?? []);
+  if (!showFlashes || !observed.lightning || !bounds) {
+    // One measurement at a time: with a raster selected, lightning points on
+    // top would leave a colour on the map whose source is ambiguous.
+    renderer.setObservedFlashes([]);
     renderer.refreshObserved();
     return;
   }
@@ -1936,7 +1949,16 @@ async function init(): Promise<void> {
           onFrontsToggle: (visible) => store.getState().setMapFrontsVisible(visible),
           onForecastOverlayToggle: (visible) => store.getState().setMapForecastOverlayVisible(visible),
           onForecastMetricChange: (metricId) => store.getState().setMapForecastMetric(metricId),
-        }, data.fronts != null, forecastOverlayControls(state));
+          onObservedOverlayChange: (source) => store.getState().setObservedOverlay(source),
+        }, data.fronts != null, forecastOverlayControls(state), {
+          // Only offer what this briefing actually carries: an overlay that
+          // renders an empty PNG is worse than an absent menu entry, because
+          // the pilot cannot tell "nothing there" from "not collected".
+          reflectivity: !!data.observed?.reflectivity,
+          rainRate: !!data.observed?.rainRate,
+          cloudTops: !!data.observed?.cloudTops,
+          lightning: !!data.observed?.lightning,
+        });
       }
 
       // Legend

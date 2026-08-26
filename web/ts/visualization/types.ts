@@ -14,6 +14,11 @@ export interface VizSettings {
   mapColorMetric: string;
   mapWidthMetric: string;
   mapAltitudeFt: number | null;  // altitude for level-dependent map metrics (null = cruise)
+  /** Which observed layer the map draws (#574). One at a time: these are
+   *  different measurements of the same sky and stacking them would make it
+   *  impossible to say which one a colour came from. `''` draws none.
+   *  `eumetsat_li` is points rather than a raster; everything else is imagery. */
+  observedOverlay: string;
   routeGraphVisible: boolean;
   routeGraphLeftMetric: string;
   routeGraphRightMetric: string;  // 'none' to disable right axis
