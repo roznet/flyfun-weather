@@ -130,7 +130,10 @@ def test_endpoints_are_absent_unless_the_collector_is_enabled(
     app_db, observed_env, monkeypatch
 ):
     """A deployment without the collector must not advertise the feature."""
-    monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+    # Set falsy rather than delete: create_app() calls load_dotenv(), which
+    # would repopulate a deleted var from a dev .env but never overrides one
+    # that is already set.
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "0")
     app = _build_app(app_db)
     app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
     client = TestClient(app, raise_server_exceptions=False)
@@ -145,6 +148,9 @@ def test_status_lists_every_source_with_its_own_age(client, stocked):
     by_source = {s["source"]: s for s in payload["sources"]}
     assert set(by_source) == {
         "opera_dbzh", "opera_rate", "eumetsat_li", "eumetsat_ctth",
+        # Pseudo-source: the client cannot draw a legend for a layer it can
+        # select unless status lists it alongside the collected streams.
+        "eumetsat_ctth_temp",
     }
     assert by_source["opera_dbzh"]["available"] is True
     assert by_source["opera_dbzh"]["age_minutes"] < 5
