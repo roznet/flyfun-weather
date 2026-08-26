@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { extractVizData, getUnavailableLayers } from '../../ts/visualization/data-extract';
 import {
   drawablePoints, significantBins, isNoCoverage, ageBadgeText, observedTopsLayer,
-  highestTopFt, topsAboveScale, flLabel,
+  highestTopFt, topsAboveScale, flLabel, bandRuns,
 } from '../../ts/visualization/cross-section/layers/observed-tops';
 import {
   echoColor, flashTickCount, observedSurfaceLayer,
@@ -691,5 +691,42 @@ describe('observed hover rows', () => {
     // height alone draws both identically.
     expect(line).toMatch(/opaque \((solid|broken|thin)\)/);
     expect(line).toMatch(/-?\d+°C/);
+  });
+});
+
+// --- Deck structure --------------------------------------------------------
+
+describe('cloud-top deck grouping', () => {
+  const band = (fl: number, count = 5) => ({
+    label: `FL${fl}`, loFt: fl * 100, hiFt: (fl + 10) * 100, fraction: 0.1, count,
+  });
+
+  it('groups contiguous bands and keeps the gaps between decks', () => {
+    // The structure coarse buckets destroyed. One real station measured decks
+    // at FL7-31, FL60-92 and FL302-370 with nothing in between; the old
+    // rendering painted slabs implying continuous cloud from the surface to
+    // FL150.
+    const runs = bandRuns([band(0), band(10), band(20), band(60), band(70), band(300)]);
+    expect(runs.map((r) => r.length)).toEqual([3, 2, 1]);
+    expect(runs[0][0].loFt).toBe(0);
+    expect(runs[1][0].loFt).toBe(6000);
+    expect(runs[2][0].loFt).toBe(30000);
+  });
+
+  it('does not care what order the bands arrive in', () => {
+    const runs = bandRuns([band(70), band(0), band(60), band(10)]);
+    expect(runs.map((r) => r.map((b) => b.loFt))).toEqual([[0, 1000], [6000, 7000]]);
+  });
+
+  it('keeps a single isolated band as its own deck', () => {
+    // Often the coldest top on the chart, and the one worth seeing.
+    expect(bandRuns([band(350, 1)]).length).toBe(1);
+  });
+
+  it('draws every populated band, however small its share', () => {
+    // The old 5% floor was sized for 10,000-ft buckets. Against 1,000-ft
+    // bands it would delete the tail — including that single coldest pixel.
+    const tiny = { label: 'FL350', loFt: 35000, hiFt: 36000, fraction: 0.004, count: 1 };
+    expect(significantBins({ topsBins: [tiny] } as never)).toHaveLength(1);
   });
 });

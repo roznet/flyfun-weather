@@ -37,6 +37,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from weatherbrief.models.observed import (
+    CLOUD_TOP_FINE_FL_STEP,
     CLOUD_TOP_FL_BINS,
     ObservedAnnulus,
     ObservedFlashAnnulus,
@@ -255,6 +256,7 @@ def sample(
                     ObservedTopsAnnulus(
                         **common,
                         fl_bins=_fl_histogram(sample_values),
+                        fl_fine=_fl_fine_histogram(sample_values),
                         quality_method=_quality_histogram(quality, counted),
                         highest_fl=(
                             float(metres_to_fl(sample_values.max()))
@@ -422,4 +424,27 @@ def _tops_extras(cloudy, values, temperature, cloudiness, aviation) -> dict:
         if np.isfinite(at_peak):
             # The granule stores FL/10.
             out["highest_aviation_fl"] = round(float(at_peak) * 10.0, 1)
+    return out
+
+
+def _fl_fine_histogram(height_m: np.ndarray) -> dict[str, int]:
+    """Sparse fine-resolution histogram of cloud-top flight levels.
+
+    Keyed by the band's lower edge in FL, as a string, with only non-empty
+    bands present.  The coarse :data:`CLOUD_TOP_FL_BINS` stay for prose; this
+    is what a renderer should draw, because a bar spanning a coarse bucket
+    claims cloud through air where none was measured — 68% of the drawn height
+    at one sampled station — and erases the clear gaps between decks, which is
+    the multi-layer structure the histogram exists to reveal.
+    """
+    if height_m.size == 0:
+        return {}
+    fls = np.asarray(metres_to_fl(height_m), dtype=float)
+    fls = fls[np.isfinite(fls)]
+    if fls.size == 0:
+        return {}
+    edges = (np.floor(fls / CLOUD_TOP_FINE_FL_STEP) * CLOUD_TOP_FINE_FL_STEP).astype(int)
+    out: dict[str, int] = {}
+    for edge, count in zip(*np.unique(edges, return_counts=True)):
+        out[str(int(edge))] = int(count)
     return out

@@ -398,12 +398,16 @@ const observedTops: LayerTooltipDef = {
     }
     const zones: ObservedTopsZone[] = [];
     for (const bin of o.topsBins) {
-      if (bin.fraction < 0.05) continue;
+      if (bin.count <= 0) continue;
+      // Share AND count: 4% of 201 pixels and 4% of 3 are very different
+      // evidence, and only one of them is worth acting on.
+      const pct = bin.fraction * 100;
+      const share = pct >= 1 ? `${Math.round(pct)}%` : '<1%';
       zones.push({
-        baseFt: bin.loFt - 2000,   // a little slack so the hatching is hoverable
+        baseFt: bin.loFt,
         topFt: bin.hiFt,
         point: o,
-        label: `${Math.round(bin.fraction * 100)}% of tops in FL${Math.round(bin.loFt / 100)}-${Math.round(bin.hiFt / 100)}`,
+        label: `${bin.label} · ${share} of tops (${bin.count} px)`,
       });
     }
     if (o.topsHighestFt != null) {

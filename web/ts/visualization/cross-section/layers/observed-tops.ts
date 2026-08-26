@@ -21,13 +21,18 @@
  *    contemporaneous.
  */
 
-import type { CrossSectionLayer, CoordTransform, VizObserved, VizObservedPoint } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizObserved, VizObservedPoint, VizObservedTopBin } from '../../types';
 import { getActiveTheme } from '../theme';
 
 /** Half-width of a point's mark on the X axis, in nm. */
 const MARK_HALF_WIDTH_NM = 4;
-/** A band has to hold this share of the disc's cloudy pixels to be drawn. */
-const MIN_BIN_FRACTION = 0.05;
+/** A band has to hold this share of the disc's cloudy pixels to be drawn.
+ *
+ *  Near zero on purpose. The bands are now 10 FL wide and arrive sparse, so
+ *  every one present is a real measurement — and the single coldest pixel is
+ *  often the most interesting one on the chart. The old 5% floor made sense
+ *  against 10,000-ft buckets; against 1,000-ft bands it would delete the tail. */
+const MIN_BIN_FRACTION = 0.001;
 /** How far the "depth unknown" hatching hangs below a top marker, px.
  *  Deliberately short: long enough to read as "there is cloud under this",
  *  short enough that it cannot be mistaken for measured vertical extent. */
@@ -38,6 +43,12 @@ const HATCH_DEPTH_PX = 9;
 const ABOVE_SCALE_BOX_PX = 14;
 /** Half-width of the up arrow inside that box, px. */
 const ARROW_PX = 4;
+/** Spacing of the horizontal rules that fill a band, px. Closer together the
+ *  bigger that band's share of the disc — density is a second, redundant
+ *  encoding of the same number the opacity carries, because a chart read in a
+ *  cockpit at a glance should not depend on judging one faint alpha. */
+const RULE_SPACING_MIN_PX = 2.5;
+const RULE_SPACING_MAX_PX = 7;
 
 /** Colour for a cloud-top temperature, from the active theme's ramp.
  *
@@ -65,6 +76,26 @@ export function tempColor(celsius: number | null): string {
 /** Bands worth drawing at this point, strongest-signal filter applied. */
 export function significantBins(point: VizObservedPoint) {
   return point.topsBins.filter((b) => b.fraction >= MIN_BIN_FRACTION);
+}
+
+/** Contiguous runs of populated bands — the decks.
+ *
+ *  A gap between runs is a real, measured absence of cloud top, and it is the
+ *  thing coarse bins destroyed: one station had decks at FL7-31, FL60-92 and
+ *  FL302-370 with nothing between, rendered as slabs implying continuous cloud
+ *  from the surface to FL150. Only the BASE of each run gets the "depth
+ *  unknown" hatching, because that is the one edge where cloud genuinely
+ *  continues below into air the satellite cannot see. */
+export function bandRuns(bins: VizObservedTopBin[]): VizObservedTopBin[][] {
+  const sorted = [...bins].sort((a, b) => a.loFt - b.loFt);
+  const runs: VizObservedTopBin[][] = [];
+  for (const bin of sorted) {
+    const current = runs[runs.length - 1];
+    const previous = current?.[current.length - 1];
+    if (previous && Math.abs(bin.loFt - previous.hiFt) < 1) current.push(bin);
+    else runs.push([bin]);
+  }
+  return runs;
 }
 
 /** True when this point's mark should read "we could not see", not "clear". */
@@ -160,27 +191,64 @@ function drawPoint(
   // lower bands with it too would claim a temperature they did not report.
   const bandColor = tempColor(point.topsColdestC);
 
+  const bins = significantBins(point);
+  // Normalised against this point's own busiest band, so the dominant deck
+  // reads strongest whatever the absolute counts are. Fine bands hold a much
+  // smaller share each than the old buckets did, and an absolute scale would
+  // render every one of them uniformly faint.
+  const peakFraction = bins.reduce((m, b) => Math.max(m, b.fraction), 0) || 1;
+
   ctx.save();
-  for (const bin of significantBins(point)) {
-    const yLo = transform.altitudeToY(bin.loFt);
-    const yHi = transform.altitudeToY(bin.hiFt);
-    if (yLo < plotArea.top) continue;  // wholly above the chart; the arrow says so
-    const alpha = 0.3 + 0.5 * Math.min(1, bin.fraction);
+  for (const run of bandRuns(bins)) {
+    for (const bin of run) {
+      const yLo = transform.altitudeToY(bin.loFt);
+      const yHi = transform.altitudeToY(bin.hiFt);
+      if (yLo < plotArea.top) continue;  // above the chart; the arrow says so
+      const top = Math.max(yHi, plotArea.top);
+      const height = Math.max(1.5, yLo - top);
+      const share = bin.fraction / peakFraction;
 
-    // The band the tops sit in.
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = bandColor;
-    ctx.fillRect(x0, Math.max(yHi, plotArea.top), width, Math.max(2, yLo - Math.max(yHi, plotArea.top)));
+      // Filled with HORIZONTAL RULES, not a solid block. A solid fill at an
+      // altitude reads as a physical layer sitting there; this is a tally —
+      // "this share of the tops in the disc fell in this band". Rules say
+      // "counted" the way a solid says "substance", and they cannot be
+      // confused with the diagonal hatching, which everywhere in this layer
+      // means "unknown" (depth below a deck, or no retrieval at all).
+      //
+      // Density carries the share as well as opacity: a band holding most of
+      // the pixels is closely ruled, a band holding a handful is sparse.
+      ctx.globalAlpha = 0.35 + 0.5 * share;
+      ctx.strokeStyle = bandColor;
+      ctx.lineWidth = 1;
+      const spacing = RULE_SPACING_MAX_PX - (RULE_SPACING_MAX_PX - RULE_SPACING_MIN_PX) * share;
+      // Always at least one rule, so a single-pixel band is still visible —
+      // it is often the coldest top on the chart.
+      for (let y = top + 0.5; y < top + height; y += spacing) {
+        ctx.beginPath();
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x0 + width, y);
+        ctx.stroke();
+      }
+      // A light edge so the band's extent stays legible when rules are sparse.
+      ctx.globalAlpha = 0.25 + 0.35 * share;
+      ctx.strokeRect(x0, top, width, height);
+    }
 
-    // Unknown depth below it, deliberately short so it cannot be read as extent.
-    ctx.globalAlpha = alpha * 0.7;
-    ctx.strokeStyle = theme.observed.hatchColor;
-    ctx.lineWidth = 1;
-    for (let offset = 0; offset < width; offset += 4) {
-      ctx.beginPath();
-      ctx.moveTo(x0 + offset, yLo);
-      ctx.lineTo(x0 + offset - HATCH_DEPTH_PX * 0.5, yLo + HATCH_DEPTH_PX);
-      ctx.stroke();
+    // Only under the base of the deck: that is the one edge where cloud really
+    // does continue down into air the satellite cannot see. Hatching under
+    // every band would re-imply the continuous slab this change removes.
+    const base = run[run.length - 1];
+    const yBase = transform.altitudeToY(base.loFt);
+    if (yBase >= plotArea.top) {
+      ctx.globalAlpha = 0.45;
+      ctx.strokeStyle = theme.observed.hatchColor;
+      ctx.lineWidth = 1;
+      for (let offset = 0; offset < width; offset += 4) {
+        ctx.beginPath();
+        ctx.moveTo(x0 + offset, yBase);
+        ctx.lineTo(x0 + offset - HATCH_DEPTH_PX * 0.5, yBase + HATCH_DEPTH_PX);
+        ctx.stroke();
+      }
     }
   }
   ctx.restore();

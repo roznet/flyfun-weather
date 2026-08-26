@@ -51,6 +51,15 @@ CLOUD_TOP_FL_BINS: tuple[tuple[str, float, float], ...] = (
 # coverage boundary can be "clear" on 8% of its area and unknown on the rest.
 MIN_COVERAGE_FRACTION = 0.35
 
+# Resolution of the *fine* cloud-top histogram, in flight levels.  The coarse
+# CLOUD_TOP_FL_BINS above are right for prose ("87% of tops above FL250") and
+# actively misleading as geometry: measured at one real station, the FL050-150
+# bucket held 9 pixels spanning FL60-FL92, so a bar drawn across the bucket was
+# 68% empty air — and the gap between that deck and the next (FL92 to FL302)
+# vanished entirely.  A pilot reading it saw near-continuous cloud where there
+# were three thin layers.
+CLOUD_TOP_FINE_FL_STEP = 10
+
 
 class ObservedAttribution(BaseModel):
     """Provenance for one observed field, read from the frame itself.
@@ -136,6 +145,12 @@ class ObservedTopsAnnulus(ObservedAnnulus):
     """
 
     fl_bins: dict[str, int] = Field(default_factory=dict)
+    # Sparse: only non-empty bins are present, keyed by the band's lower edge
+    # in FL ("60" == FL060-070, step CLOUD_TOP_FINE_FL_STEP).  Sparse because
+    # empty air is most of the column and should cost nothing to transmit —
+    # and because "absent" and "zero" mean the same thing here, unlike
+    # everywhere else in this payload.
+    fl_fine: dict[str, int] = Field(default_factory=dict)
     quality_method: dict[str, int] = Field(default_factory=dict)
     highest_fl: float | None = None
 

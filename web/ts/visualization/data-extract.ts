@@ -251,6 +251,10 @@ function buildCurrentConditions(
 }
 
 /** FL-band edges in feet, mirroring CLOUD_TOP_FL_BINS on the server. */
+/** Width of one fine band, in FL. Must match `CLOUD_TOP_FINE_FL_STEP`. */
+const OBSERVED_FINE_FL_STEP = 10;
+
+/** Coarse bands, kept only as a fallback for packs built before `fl_fine`. */
 const OBSERVED_TOP_BANDS: Array<{ label: string; loFt: number; hiFt: number }> = [
   { label: 'FL000-050', loFt: 0, hiFt: 5000 },
   { label: 'FL050-150', loFt: 5000, hiFt: 15000 },
@@ -372,12 +376,38 @@ function buildObserved(
     if (annulus.insufficient_coverage) continue;
     point.topsHighestFt = annulus.highest_fl != null ? annulus.highest_fl * 100 : null;
     const detected = annulus.detected_px || 0;
-    point.topsBins = OBSERVED_TOP_BANDS.map((band): VizObservedTopBin => ({
-      label: band.label,
-      loFt: band.loFt,
-      hiFt: band.hiFt,
-      fraction: detected > 0 ? (annulus.fl_bins?.[band.label] ?? 0) / detected : 0,
-    }));
+    // Prefer the sparse fine histogram; fall back to the coarse bands for a
+    // pack built before it existed. The coarse bands are kept for prose, not
+    // for drawing: at one measured station the FL050-150 bucket held pixels
+    // spanning only FL60-FL92, so 68% of the drawn bar was empty air, and the
+    // clear gap above it disappeared entirely.
+    const fine = annulus.fl_fine ?? {};
+    const fineKeys = Object.keys(fine);
+    point.topsBins = fineKeys.length > 0
+      ? fineKeys
+          .map((k) => Number(k))
+          .filter((fl) => Number.isFinite(fl))
+          .sort((a, b) => a - b)
+          .map((fl): VizObservedTopBin => {
+            const count = fine[String(fl)] ?? 0;
+            return {
+              label: `FL${String(fl).padStart(3, '0')}-${String(fl + OBSERVED_FINE_FL_STEP).padStart(3, '0')}`,
+              loFt: fl * 100,
+              hiFt: (fl + OBSERVED_FINE_FL_STEP) * 100,
+              fraction: detected > 0 ? count / detected : 0,
+              count,
+            };
+          })
+      : OBSERVED_TOP_BANDS.map((band): VizObservedTopBin => {
+          const count = annulus.fl_bins?.[band.label] ?? 0;
+          return {
+            label: band.label,
+            loFt: band.loFt,
+            hiFt: band.hiFt,
+            fraction: detected > 0 ? count / detected : 0,
+            count,
+          };
+        });
     // quality_method 9 is the retrieval's own multi-layer-suspect flag — the
     // case where committing to one cloud top is least trustworthy.
     point.topsMultiLayerFraction = detected > 0 ? (annulus.quality_method?.['9'] ?? 0) / detected : 0;

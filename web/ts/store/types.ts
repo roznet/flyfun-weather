@@ -679,8 +679,14 @@ export interface ObservedAnnulus {
 
 /** Cloud-top disc: adds the histograms a single top-per-pixel value destroys. */
 export interface ObservedTopsAnnulus extends ObservedAnnulus {
-  /** Pixel counts per FL band — the multi-layer picture. */
+  /** Pixel counts per coarse FL band. Right for prose ("87% above FL250"),
+   *  misleading as geometry — see `fl_fine`. */
   fl_bins: Record<string, number>;
+  /** Sparse fine histogram: only non-empty 10-FL bands, keyed by the band's
+   *  lower edge in FL ("60" == FL060-070). This is what a renderer should
+   *  draw: a bar spanning a coarse bucket claims cloud through air where none
+   *  was measured, and erases the gaps between decks. */
+  fl_fine: Record<string, number>;
   /** Per-method pixel counts. "0" = no cloud (a positive observation);
    *  "9" = the retrieval's own multi-layer-suspect flag. */
   quality_method: Record<string, number>;

@@ -290,6 +290,9 @@ export interface VizObservedTopBin {
   hiFt: number;
   /** Share of the disc's DETECTED pixels, 0–1. */
   fraction: number;
+  /** Pixels in this band, so a hover can say "12 of 201" rather than only a
+   *  percentage — 4% of 201 and 4% of 3 are very different evidence. */
+  count: number;
 }
 
 /** Every observed quantity at one route point, for the selected corridor. */

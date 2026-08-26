@@ -14,6 +14,10 @@ from weatherbrief.observed.frames import (
     SOURCE_OPERA_RATE,
     FrameStore,
 )
+from weatherbrief.models.observed import (
+    CLOUD_TOP_FINE_FL_STEP,
+    CLOUD_TOP_FL_BINS,
+)
 from weatherbrief.observed.payload import build_observed_conditions
 
 # A short leg through the fixture scene: Le Touquet to Calais, both inside the
@@ -200,6 +204,51 @@ def test_no_network_test_can_actually_fail(stocked_store, monkeypatch):
     assert [s for s in conditions.sources if not s.available], (
         "the injected socket call was not visible in the result — the "
         "no-network test would pass through a real regression"
+    )
+
+
+# --- Fine cloud-top histogram ----------------------------------------------
+
+
+def test_fine_bins_are_sparse_and_narrower_than_the_coarse_ones(stocked_store):
+    """The coarse buckets are right for prose and wrong as geometry.
+
+    Measured at a real station, the FL050-150 bucket held 9 pixels spanning
+    FL60-FL92: a bar drawn across the bucket was 68% empty air, and the clear
+    gap between that deck and the next vanished entirely. A pilot reading it
+    saw continuous cloud where there were three thin layers.
+    """
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    tops = conditions.cloud_tops
+    assert tops is not None
+    annuli = [a for s in tops.stations for a in s.annuli if a.fl_fine]
+    assert annuli, "expected at least one annulus with cloud tops"
+
+    for a in annuli:
+        # Sparse: every key present carries a real count. "Absent" and "zero"
+        # mean the same thing here, unlike everywhere else in this payload.
+        assert all(v > 0 for v in a.fl_fine.values()), a.fl_fine
+        # Keys are the band's lower edge in FL, on the documented step.
+        for key in a.fl_fine:
+            assert int(key) % CLOUD_TOP_FINE_FL_STEP == 0, key
+        # The fine counts partition the same pixels the coarse ones do.
+        assert sum(a.fl_fine.values()) == sum(a.fl_bins.values())
+
+    # The point of the change, measured as drawn ink: the FL height a renderer
+    # would paint. Fine bands paint only where pixels were actually measured;
+    # coarse buckets paint a whole bucket for a single pixel in it. Comparing
+    # min-to-max extent would be the wrong test — that includes the gaps, and
+    # preserving the gaps is exactly what this buys.
+    a = max(annuli, key=lambda x: sum(x.fl_fine.values()))
+    fine_ink = len(a.fl_fine) * CLOUD_TOP_FINE_FL_STEP
+    coarse_ink = sum(
+        (hi - lo) for label, lo, hi in CLOUD_TOP_FL_BINS
+        if a.fl_bins.get(label, 0) > 0 and hi != float("inf")
+    )
+    assert fine_ink < coarse_ink, (
+        f"fine bands would paint {fine_ink} FL of the column, coarse buckets "
+        f"{coarse_ink} FL — the fine histogram must paint less, or it is not "
+        "buying anything"
     )
 
 
