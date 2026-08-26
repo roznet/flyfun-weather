@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { extractVizData, getUnavailableLayers } from '../../ts/visualization/data-extract';
 import {
   drawablePoints, significantBins, isNoCoverage, ageBadgeText, observedTopsLayer,
+  highestTopFt, topsAboveScale, flLabel,
 } from '../../ts/visualization/cross-section/layers/observed-tops';
 import {
   echoColor, flashTickCount, observedSurfaceLayer,
@@ -298,6 +299,54 @@ describe('observed-tops layer', () => {
     const data = { ...extract(makeObserved()), timeAxisMode: true };
     observedTopsLayer.render(ctx as never, {} as never, data as never);
     expect(calls).toEqual([]);
+  });
+
+  it('reports the highest top and whether it is above the chart', () => {
+    const observed = extract(makeObserved()).observed!;
+    const highest = highestTopFt(observed);
+    expect(highest).not.toBeNull();
+
+    // A GA chart scaled to 20,000 ft cannot reach FL350 cirrus: the cap line
+    // has nowhere to draw, and clipping it silently would leave only the
+    // minority FL bands visible — reading as "tops around FL200".
+    const gaChart = {
+      plotArea: { left: 0, top: 0, width: 100, height: 200 },
+      altitudeToY: (ft: number) => 200 - (ft / 20000) * 200,
+    };
+    expect(topsAboveScale(observed, gaChart as never)).toBe(true);
+
+    // A chart that does reach them draws the line normally.
+    const tallChart = {
+      plotArea: { left: 0, top: 0, width: 100, height: 200 },
+      altitudeToY: (ft: number) => 200 - (ft / 60000) * 200,
+    };
+    expect(topsAboveScale(observed, tallChart as never)).toBe(false);
+  });
+
+  it('puts the off-scale top in the badge, since the line cannot be drawn', () => {
+    const texts: string[] = [];
+    const ctx = new Proxy({}, {
+      get: (_t, prop) => {
+        if (prop === 'fillText') return (text: string) => { texts.push(text); };
+        if (prop === 'measureText') return () => ({ width: 10 });
+        return () => {};
+      },
+      set: () => true,
+    });
+    const gaChart = {
+      plotArea: { left: 0, top: 0, width: 100, height: 200 },
+      distanceToX: (nm: number) => nm,
+      altitudeToY: (ft: number) => 200 - (ft / 20000) * 200,
+    };
+    observedTopsLayer.render(ctx as never, gaChart as never, extract(makeObserved()) as never);
+    const badge = texts.find((t) => t.includes('Satellite'));
+    expect(badge).toBeDefined();
+    expect(badge).toMatch(/tops to FL\d+/);
+  });
+
+  it('formats FL labels from feet', () => {
+    expect(flLabel(38100)).toBe('FL381');
+    expect(flLabel(5000)).toBe('FL50');
   });
 
   it('formats an age badge from the frame own valid time', () => {

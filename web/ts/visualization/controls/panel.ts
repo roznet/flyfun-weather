@@ -130,7 +130,11 @@ function cloudCompoundHtml(
 /** Build the `<div class="viz-layer-toggles">...</div>` block for a set of
  *  enabled-layer states. Used inline by the main toolbar and by
  *  {@link renderLayerToggles} for callers that only want this section. */
-function layerTogglesHtml(
+/** Pure HTML builder for the layer panel. Exported so the group-composition
+ *  rules can be tested without a DOM — notably that a group with a bespoke
+ *  compound control still renders checkboxes for the layers that control does
+ *  not own. */
+export function layerTogglesHtml(
   enabledLayers: Record<string, boolean>,
   opts: LayerTogglesOptions = {},
 ): string {
@@ -168,12 +172,22 @@ function layerTogglesHtml(
       html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">ⓘ</button>`;
     }
     // Clouds group in non-compact mode: compound source-toggles + style dropdown.
+    //
+    // The compound control owns ONLY the NWP/DD cloud-band ids. Any other
+    // layer that lives in this group still needs its own checkbox, so fall
+    // through to the normal loop for the remainder rather than `continue`ing
+    // past it — which is how `observed-tops` (#574) ended up rendering with no
+    // way to switch it off at all.
+    let layersForGroup = layersToRender;
     if (group.group === 'clouds' && !isCompactCollapse) {
       html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle, substitutedLayers);
-      html += '</div>';
-      continue;
+      layersForGroup = layersToRender.filter((l) => !ALL_CLOUD_LAYER_IDS.includes(l.id));
+      if (layersForGroup.length === 0) {
+        html += '</div>';
+        continue;
+      }
     }
-    for (const layer of layersToRender) {
+    for (const layer of layersForGroup) {
       const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
       // In compact mode the group collapses to its preferred layer; if that's
       // an NWP layer being served by a DD substitute, show the substitute state

@@ -27,6 +27,8 @@ import type { CrossSectionLayer, CoordTransform, VizObserved, VizObservedPoint }
 const MARK_HALF_WIDTH_NM = 4;
 /** A band has to hold this share of the disc's cloudy pixels to be drawn. */
 const MIN_BIN_FRACTION = 0.05;
+/** Half-width/height of the above-scale chevron, px. */
+const ABOVE_SCALE_CHEVRON_PX = 4;
 
 const TOP_COLOR = '#111827';
 const BIN_COLOR = 'rgba(17, 24, 39, 0.55)';
@@ -78,10 +80,16 @@ export const observedTopsLayer: CrossSectionLayer = {
     for (const point of drawablePoints(observed)) {
       drawPoint(ctx, transform, point);
     }
+    // When the cap line is off-scale the badge is the only place the number
+    // survives, so carry it there rather than leaving the pilot to infer
+    // "higher than the chart" from a row of chevrons.
+    const highest = highestTopFt(observed);
+    const aboveScale = topsAboveScale(observed, transform);
+    const suffix = aboveScale && highest != null ? ` \u00b7 tops to ${flLabel(highest)}` : '';
     drawBadge(
       ctx,
       transform,
-      ageBadgeText(observed.cloudTops.validTime, observed.cloudTops.ageMinutes, 'Satellite'),
+      ageBadgeText(observed.cloudTops.validTime, observed.cloudTops.ageMinutes, 'Satellite') + suffix,
     );
   },
 };
@@ -126,17 +134,66 @@ function drawPoint(
 
   if (point.topsHighestFt == null) return;
 
+  const color = point.topsMultiLayerFraction > 0.1 ? MULTILAYER_COLOR : TOP_COLOR;
+  const yTop = transform.altitudeToY(point.topsHighestFt);
+
+  // Above the chart's ceiling the cap line has nowhere to go. A GA
+  // cross-section is scaled to the aircraft's flight ceiling — 18,000 ft is
+  // typical — while satellite tops routinely sit at FL350+, so on a normal
+  // piston briefing the single most important number this layer produces is
+  // off-scale. Clipping it silently leaves only the minority FL bands visible,
+  // which reads as "tops are around FL200" when they are nowhere near it.
+  // Draw an explicit above-scale chevron instead; the badge carries the value.
+  if (yTop < plotArea.top) {
+    ctx.save();
+    ctx.fillStyle = color;
+    const cx = (x0 + x1) / 2;
+    const y = plotArea.top + 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, y);
+    ctx.lineTo(cx - ABOVE_SCALE_CHEVRON_PX, y + ABOVE_SCALE_CHEVRON_PX);
+    ctx.lineTo(cx + ABOVE_SCALE_CHEVRON_PX, y + ABOVE_SCALE_CHEVRON_PX);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
   // The highest observed top: a solid cap, visually distinct from the soft
   // NWP cloud bands underneath so measured and modelled never blur together.
   ctx.save();
-  ctx.strokeStyle = point.topsMultiLayerFraction > 0.1 ? MULTILAYER_COLOR : TOP_COLOR;
+  ctx.strokeStyle = color;
   ctx.lineWidth = 2;
-  const yTop = transform.altitudeToY(point.topsHighestFt);
   ctx.beginPath();
   ctx.moveTo(x0, yTop);
   ctx.lineTo(x1, yTop);
   ctx.stroke();
   ctx.restore();
+}
+
+/** Highest observed top anywhere on the route, in ft. `null` when nothing was
+ *  retrieved — used to put the number in the badge when the cap line itself is
+ *  above the chart. */
+export function highestTopFt(observed: VizObserved): number | null {
+  let best: number | null = null;
+  for (const p of observed.points) {
+    if (p.topsHighestFt != null && (best == null || p.topsHighestFt > best)) {
+      best = p.topsHighestFt;
+    }
+  }
+  return best;
+}
+
+/** True when that highest top sits above the plotted altitude range. */
+export function topsAboveScale(observed: VizObserved, transform: CoordTransform): boolean {
+  const highest = highestTopFt(observed);
+  if (highest == null) return false;
+  return transform.altitudeToY(highest) < transform.plotArea.top;
+}
+
+/** "FL381" for a height in feet. */
+export function flLabel(ft: number): string {
+  return `FL${Math.round(ft / 100)}`;
 }
 
 /** Height of one badge row, including its gap. */
