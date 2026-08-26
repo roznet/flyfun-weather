@@ -339,6 +339,26 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 
+### Two denominators behind one band
+
+A drawn band carries `fraction` — its count over `valid_px`, the pixels the
+retrieval could answer for, cloudy *and* clear. So a band reads as coverage
+("a tenth of the sky around this point had its top in FL180-190") and the
+bands at a point sum to the disc's cloud cover rather than always to 100%.
+Dividing by `detected_px` instead answers "of the cloud that was found, how
+much topped out here?", which inflates as the sky clears: a measured 10 NM
+disc holding two cloudy pixels out of 131 drew both bands mid-ramp, as loud
+as a solid deck, because each was 50% of the cloud.
+
+The 1% noise floor keeps the `detected_px` denominator, carried separately as
+`cloudFraction`. Whether a band is real signal or two stray retrievals is a
+question about the retrieval; filtering on the drawn share would raise the
+bar on every band of exactly the scattered scenes where the tops matter most.
+
+Colour stops are cut for the sky denominator over fine 10-FL bands: a 20 NM
+disc splits its cloud across a dozen of them, so measured over real packs
+half of all drawn bands sit under 4% and none reached 55%.
+
 The existing `current-conditions` layer (METAR columns + SIGMET zones) is
 untouched — these are siblings, not a replacement. Adding a second layer to
 the `conditions` group did require fixing `panel.ts`, which used to hide the
