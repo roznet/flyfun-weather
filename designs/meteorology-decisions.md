@@ -4115,3 +4115,143 @@ Before trusting the behaviour changes:
 - Check a GFS mid-troposphere (12,000–18,000 ft) turbulence case for the
   tightening called out above — that is the one direction this change can lose a
   detection §25 would have made.
+
+---
+
+## 29. The boundary layer is measured from the model's ground, not from the lowest delivered level
+
+**Date:** 2026-08-26 · **Issue:** #541 · **Refines:** §25(c)
+
+§25(c) tags a CAT layer `boundary_layer` when it sits below the higher of the
+detected mixed-layer top and **5,000 ft AGL**. The AGL half was computed as
+`derived_levels[0].altitude_ft + 5,000 ft`. `derived_levels[0]` is the lowest
+*delivered pressure level*, which is not the ground.
+
+### What the fetch actually delivers over terrain
+
+The first scope question of #541 was whether anything clips sub-surface levels.
+Nothing does, at any stage:
+
+| stage | behaviour over high terrain |
+|---|---|
+| Open-Meteo (`fetch/open_meteo.py`) | every level in the model's list is requested and returned; sub-surface levels carry the model's own downward extrapolation. No surface-pressure filter exists in the request or the parse. |
+| GRIB enrichment (`fetch/grib/`) | replaces delivered levels one for one. `surface_pressure_hpa` is decoded (`sp`) and used as a *thermodynamic anchor*, never as a level filter. |
+| `prepare_profile` | filters on missing temperature and dewpoint only. |
+| `compute_derived_levels_core` | `altitude_ft` is geopotential height, i.e. **MSL**, falling back to a standard-atmosphere pressure→height map. Never AGL. |
+
+So an Alpine crossing at 8,000 ft terrain (surface pressure ≈ 755 hPa) still
+produces a column starting at 1000 hPa / ~364 ft MSL, with the seven lowest
+levels inside the mountain. `derived_levels[0].altitude_ft + 5,000 ft` put the
+"AGL" boundary-layer ceiling at 5,364 ft MSL — roughly 2,600 ft *below the
+ground it claims to be 5,000 ft above*.
+
+Both failure directions the issue anticipated are real, and they compound:
+
+- **Ridge-level shear reads as free atmosphere.** A shear sheet at 9,000 ft
+  MSL is ~1,000 ft AGL over that terrain — squarely the entrainment/capping
+  band the fallback exists for — but sat above the mis-placed ceiling, so it
+  was tagged free-atmosphere and took §25(c)'s RED bypass. One point of a
+  mountain crossing could RED the advisory, which is the #533 cry-wolf shape
+  the fallback was introduced to prevent.
+- **Sub-surface levels generate layers at all.** A Richardson number
+  differenced across two below-ground levels describes the model's
+  extrapolation, not air. It painted bands *inside the mountain* into the
+  cross-section and fed them to the route-percentage gate.
+
+### The anchor: model surface pressure, read against the column's own heights
+
+`ground_altitude_ft()` locates the ground by log-pressure interpolation of
+`surface_pressure_hpa` against the profile's own `altitude_ft` values,
+extrapolating from the two lowest levels where the ground sits below them
+(the flat-terrain case). Log-pressure is where the hypsometric relation is
+linear, so the bracketing pair contributes its own mean layer temperature and
+no standard atmosphere is assumed.
+
+**Why not SRTM terrain**, which the issue offered as the alternative and which
+`_run_point_analysis` already carries as `terrain_elevation_ft`:
+
+- **Datum.** Every altitude the ground is compared against is the *model's*
+  geopotential height. Mixing in a true-terrain number would put "ground"
+  above levels the model itself treats as free atmosphere — the same
+  wrong-datum class of bug as §21 and §20.
+- **Physics.** The shear being tagged was integrated by the model over the
+  model's smoothed orography. In an Alpine valley that orography can differ
+  from the real ridge by thousands of feet; the boundary layer the model
+  produced belongs to the surface the model has.
+- **Reach.** `surface_pressure_hpa` rides on `HourlyForecast`, so it is
+  available in every `analyze_sounding()` caller — the airport profile and
+  the on-the-fly sounding paths included — while SRTM terrain exists only at
+  route points.
+- It is available on **every model**: `surface_pressure` is in
+  `SURFACE_VARIABLES` and appears in no model's `unavailable_surface` list,
+  and the GRIB decoders write it from `sp`.
+
+SRTM stays the right input for *terrain clearance* (`_descend_below_icing`),
+which is a question about the aircraft and the rock, not about the model's
+column.
+
+### What the ground datum is used for
+
+One quantity, three uses, so the column has a single notion of "surface":
+
+1. **The BL fallback ceiling** — `ground + 5,000 ft`, still max()'d with the
+   detected mixed-layer top exactly as §25(c) specifies.
+2. **The mixed-layer walk's surface parcel** (`mixed_layer_top_index(...,
+   start_idx=)`). Below-ground levels are a dry-adiabatic downward
+   extrapolation by construction, so θv is near-constant through them: started
+   at level 0 over the Alps the detector reads the inside of the mountain as a
+   ~6,900 ft deep "mixed layer" and suppresses every real layer beneath its
+   top. Fixing the ceiling while leaving the detector reading rock would have
+   traded one datum error for another.
+3. **A cut for CAT levels.** Levels at or below the ground index are excluded.
+   The level *at* the ground goes too: its Ri is differenced against the last
+   below-ground level, so it is half-fictitious. The §8(c) negative-Ri
+   surface-layer guard moves with it (`idx <= ground_idx + 1`).
+
+### Deliberately unchanged
+
+- **Flat routes.** There the ground is at or just below the lowest delivered
+  level, so the ground index is 0 and nothing is suppressed. The only movement
+  is the BL ceiling dropping by the ~80 ft between a sea-level field and the
+  1000 hPa level — genuinely more correct, and too small to move a tag.
+  `test_flat_route_grading_is_unchanged_by_the_ground_anchor` pins the #533
+  EGNY→EGKB geometry.
+- **The 5,000 ft depth itself.** §25(c)'s constant is not re-litigated here;
+  only what it is measured from.
+- **The tag is still not a mute.** A BL-tagged severe layer is floored at
+  AMBER and still REDs past the route-percentage threshold (§25(c), §27).
+- **No surface pressure → pre-#541 behaviour.** `ground_altitude_ft` returns
+  None for a missing or out-of-range (≤300 / >1100 hPa) value, and every
+  consumer falls back to the lowest delivered level. Old packs replay
+  unchanged.
+
+### Files changed
+
+- `analysis/sounding/vertical_motion.py` — `ground_altitude_ft`,
+  `ground_level_index`; `mixed_layer_top_index` /
+  `_mixed_layer_top_index_lapse` take `start_idx`; `_build_cat_layers` takes
+  `ground_idx` / `ground_ft`; `assess_vertical_motion` takes
+  `surface_pressure_hpa`.
+- `analysis/sounding/__init__.py` — passes `hourly.surface_pressure_hpa`
+  through.
+- `models/analysis.py` — `VerticalMotionAssessment.model_surface_altitude_ft`,
+  published for the same reason as `mixed_layer_top_ft`: so the suppression is
+  inspectable rather than a silent swallow. Mirrored in
+  `web/ts/store/types.ts` and `RouteAnalysesResponse.swift`.
+- Tests: `tests/test_vertical_motion.py` — the mountain-route case the issue
+  asked for (sub-surface suppression, ridge-level BL tagging, free atmosphere
+  above the raised ceiling, the ground-anchored mixed-layer walk) plus the
+  flat-route no-change pin.
+
+### Real-world validation needed
+
+As with §28, this branch has no pack store, so the numbers above are column
+geometry rather than a replay. Before trusting the behaviour change:
+
+- Replay an Alps crossing (e.g. LFMD→LSGG or LSZS→LIMC) and confirm the
+  cross-section no longer paints CAT bands below terrain, and that ridge-level
+  severe now grades through the coverage gate instead of RED-ing outright.
+- Confirm a flat UK/North-Sea route grades bit-identically to before.
+- Spot-check a model whose `surface_pressure` comes from GRIB rather than
+  Open-Meteo (ICON-D2, ECMWF a1) that the anchor lands in the same datum as
+  the reconstructed geopotential heights of §20.

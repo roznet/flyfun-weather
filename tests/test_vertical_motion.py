@@ -954,3 +954,194 @@ def test_stability_indicators_store_negative_ri():
     compute_stability_indicators(profile, levels)
     assert levels[2].richardson_number is not None
     assert levels[2].richardson_number < 0
+
+
+# --- Terrain-anchored ground datum (#541) ---------------------------------
+#
+# Nothing in the fetch or the analysis path clips sub-surface pressure
+# levels, so over an Alpine crossing a column still starts at 1000 hPa —
+# several thousand feet inside the mountain. Everything that used
+# ``derived_levels[0]`` as "the surface" was therefore MSL-anchored there.
+
+
+def _alpine_profile() -> list[DerivedLevel]:
+    """A column over ~8,000 ft terrain (surface pressure ≈ 755 hPa).
+
+    Heights are the standard-atmosphere MSL values a model publishes for
+    these levels; the seven lowest sit inside the mountain and carry the
+    model's downward extrapolation, not air.
+    """
+    return [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=364),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1773),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2500),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3243),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4781),
+        DerivedLevel(pressure_hpa=800, altitude_ft=6394),
+        DerivedLevel(pressure_hpa=775, altitude_ft=7230),
+        DerivedLevel(pressure_hpa=750, altitude_ft=8091),   # lowest above ground
+        DerivedLevel(pressure_hpa=725, altitude_ft=8974),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9882),
+        DerivedLevel(pressure_hpa=650, altitude_ft=11780),
+        DerivedLevel(pressure_hpa=600, altitude_ft=13801),
+    ]
+
+
+_ALPINE_SURFACE_HPA = 755.0
+
+
+def test_ground_altitude_interpolates_the_columns_own_heights():
+    """Surface pressure is read against the profile's heights, not ISA.
+
+    Log-pressure interpolation between the bracketing levels is the
+    hypsometric relation, so the answer carries those levels' own mean layer
+    temperature and lands in the same datum as every altitude it will be
+    compared against.
+    """
+    from weatherbrief.analysis.sounding.vertical_motion import ground_altitude_ft
+
+    ground = ground_altitude_ft(_alpine_profile(), _ALPINE_SURFACE_HPA)
+
+    assert ground is not None
+    assert 7900 < ground < 7935  # between the 775 and 750 hPa levels
+    # The pre-#541 datum — the lowest delivered level — is 7,500 ft too low.
+    assert ground - 364 > 7000
+
+
+def test_ground_altitude_extrapolates_below_the_lowest_level_on_flat_terrain():
+    """A sea-level field sits *below* the 1000 hPa level, not on it."""
+    from weatherbrief.analysis.sounding.vertical_motion import ground_altitude_ft
+
+    ground = ground_altitude_ft(_alpine_profile(), 1003.0)
+
+    assert ground is not None
+    assert -100 < ground < 364
+
+
+def test_ground_altitude_is_none_without_a_usable_surface_pressure():
+    """No surface pressure, or a decode artefact, leaves the datum unset —
+    callers then keep the pre-#541 lowest-delivered-level behaviour."""
+    from weatherbrief.analysis.sounding.vertical_motion import ground_altitude_ft
+
+    levels = _alpine_profile()
+    assert ground_altitude_ft(levels, None) is None
+    assert ground_altitude_ft(levels, 0.0) is None
+    assert ground_altitude_ft(levels, 5000.0) is None
+
+
+def test_subsurface_shear_is_not_a_cat_layer():
+    """A low Ri on a below-ground level describes nothing that exists.
+
+    The model's temperature and wind there are a downward continuation of the
+    free atmosphere; differencing across them can produce any Ri at all. Before
+    #541 this painted a "severe shear layer" at 2,500–3,243 ft over 8,000 ft
+    terrain — inside the mountain — and fed it to the route-percentage gate.
+    """
+    levels = _alpine_profile()
+    levels[3].richardson_number = 0.15  # 900 hPa, 3,243 ft — inside the rock
+
+    assert assess_vertical_motion(levels).cat_risk_layers  # ... without the ground
+    assessment = assess_vertical_motion(
+        levels, surface_pressure_hpa=_ALPINE_SURFACE_HPA,
+    )
+
+    assert assessment.cat_risk_layers == []
+    assert assessment.model_surface_altitude_ft == 7917
+
+
+def test_bl_fallback_is_agl_over_terrain():
+    """Ridge-level shear over the Alps is boundary layer, not free atmosphere.
+
+    8,974 ft MSL is ~1,050 ft above 8,000 ft terrain — the entrainment/capping
+    band the fallback exists for. Anchored at the lowest delivered level the
+    BL ceiling was 364 + 5,000 = 5,364 ft, so the layer read as *free
+    atmosphere* severe CAT and took the route-percentage gate's bypass: one
+    point of a mountain crossing could RED the whole advisory.
+    """
+    levels = _alpine_profile()
+    levels[8].richardson_number = 0.15  # 725 hPa, 8,974 ft — just above ridge
+
+    unanchored = assess_vertical_motion(levels).cat_risk_layers[0]
+    assert unanchored.boundary_layer is False  # the #541 defect
+
+    layer = assess_vertical_motion(
+        levels, surface_pressure_hpa=_ALPINE_SURFACE_HPA,
+    ).cat_risk_layers[0]
+
+    assert (layer.base_ft, layer.top_ft) == (8091, 8974)
+    assert layer.risk == CATRiskLevel.SEVERE
+    assert layer.boundary_layer is True
+
+
+def test_free_atmosphere_above_the_terrain_bl_keeps_its_tag_off():
+    """The anchor raises the ceiling with the terrain — it does not remove it.
+
+    13,801 ft is above 7,917 + 5,000, so this layer stays free-atmosphere and
+    keeps the RED bypass. Tagging everything over a mountain as boundary layer
+    would be the opposite failure.
+    """
+    levels = _alpine_profile()
+    levels[11].richardson_number = 0.15  # 600 hPa, 13,801 ft
+
+    layer = assess_vertical_motion(
+        levels, surface_pressure_hpa=_ALPINE_SURFACE_HPA,
+    ).cat_risk_layers[0]
+
+    assert layer.top_ft == 13801
+    assert layer.boundary_layer is False
+
+
+def test_mixed_layer_walk_starts_at_the_model_ground():
+    """The surface parcel is the lowest above-ground level, not level 0.
+
+    Below-ground levels are a dry-adiabatic downward extrapolation by
+    construction, so θv is near-constant through them: walked from level 0 the
+    detector reads the inside of the mountain as a 6,900 ft deep "mixed
+    layer" and suppresses every real layer under its top.
+    """
+    from weatherbrief.analysis.sounding.vertical_motion import (
+        ground_altitude_ft,
+        ground_level_index,
+        mixed_layer_top_index,
+    )
+
+    levels = _alpine_profile()
+    # θ = 300 K through the sub-surface column, then stable above ground.
+    for lv, temp_c in zip(levels, [26.85, 22.49, 20.25, 17.96, 13.25, 8.34, 5.80,
+                                   4.12, 3.28]):
+        lv.temperature_c = temp_c
+
+    ground_idx = ground_level_index(
+        levels, ground_altitude_ft(levels, _ALPINE_SURFACE_HPA),
+    )
+    assert ground_idx == 7  # the 750 hPa level
+
+    assert mixed_layer_top_index(levels) == 6           # into the mountain
+    assert mixed_layer_top_index(levels, start_idx=ground_idx) == ground_idx
+
+
+def test_flat_route_grading_is_unchanged_by_the_ground_anchor():
+    """The #533 low-level case is flat, and stays exactly as it graded.
+
+    Surface pressure only moves the datum by the ~80 ft between the field and
+    the 1000 hPa level there, which changes no tag and no layer.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=292),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1765, richardson_number=2.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2523, richardson_number=0.24),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3296, richardson_number=5.0),
+    ]
+
+    def _shape(assessment):
+        return [
+            (la.base_ft, la.top_ft, la.risk, la.boundary_layer)
+            for la in assessment.cat_risk_layers
+        ]
+
+    assert _shape(assess_vertical_motion(levels, surface_pressure_hpa=1003.0)) == (
+        _shape(assess_vertical_motion(levels))
+    )
+    assert _shape(assess_vertical_motion(levels))[0][:3] == (
+        1765, 2523, CATRiskLevel.SEVERE,
+    )

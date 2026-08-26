@@ -1100,6 +1100,13 @@ class VerticalMotionAssessment(BaseModel):
     # layers below it are suppressed — reported so that suppression is
     # inspectable. None when the surface layer is not well mixed.
     mixed_layer_top_ft: Optional[float] = None
+    # The MODEL's ground at this point, in the column's own height datum
+    # (#541) — resolved from its surface pressure, not from terrain data.
+    # It is the AGL datum for the boundary-layer tag and the cut below which
+    # levels are sub-surface extrapolation; reported for the same reason as
+    # `mixed_layer_top_ft`, so that suppression is inspectable. None on old
+    # packs and wherever the model published no usable surface pressure.
+    model_surface_altitude_ft: Optional[float] = None
 
 
 class SoundingAnalysis(BaseModel):

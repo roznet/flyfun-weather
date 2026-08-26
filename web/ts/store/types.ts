@@ -390,6 +390,10 @@ export interface VerticalMotionAssessment {
   /** Top of the surface well-mixed layer, when detected (#533). CAT layers
    *  below it are suppressed as boundary-layer roughness, not KH shear. */
   mixed_layer_top_ft?: number | null;
+  /** The model's own ground in the column's height datum (#541), from its
+   *  surface pressure. The AGL datum for `boundary_layer`, and the cut below
+   *  which levels are sub-surface extrapolation. Absent on older packs. */
+  model_surface_altitude_ft?: number | null;
 }
 
 export interface InversionLayer {
