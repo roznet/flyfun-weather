@@ -11,6 +11,7 @@ from weatherbrief.analysis.advisories._helpers import (
     build_cost_model,
     driving_method_id,
     format_extent,
+    format_extent_nm,
     hazardous_icing_zones,
     icing_zones_in_altitude_range,
     max_terrain_near_point,
@@ -373,11 +374,17 @@ class IcingEscapeEvaluator:
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(summary.extent)
-                detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
+                detail = adv_t(
+                    "icing_escape.no_escape", loc, extent=ext,
+                    no_escape=format_extent_nm(no_escape_extent),
+                )
             elif no_escape_count > 0:
                 status = AdvisoryStatus.AMBER
                 ext = format_extent(summary.extent)
-                detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
+                detail = adv_t(
+                    "icing_escape.no_escape", loc, extent=ext,
+                    no_escape=format_extent_nm(no_escape_extent),
+                )
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("icing_escape.no_icing", loc)
@@ -416,6 +423,14 @@ class IcingEscapeEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
+                # Publish the no-escape geometry too: it is the population the
+                # RED gate grades on and the one the sentence now names, so it
+                # must reach the API/MCP surface rather than only the card
+                # (#571 D1 — "whatever the sentence names, the object
+                # publishes"). Zero when nothing is trapped, which is a real
+                # measurement, not a missing one.
+                affected_mod=no_escape_extent.points,
+                extent_mod=no_escape_extent,
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),

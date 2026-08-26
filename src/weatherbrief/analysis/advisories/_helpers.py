@@ -196,6 +196,22 @@ def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
     return out
 
 
+def format_extent_nm(ext: RouteExtent) -> str:
+    """Format a :class:`RouteExtent` as bare miles — '6nm'.
+
+    For a *second* extent inside a sentence that already states its denominator,
+    where repeating "6nm/46nm (12%)" would be noise. Same degenerate-geometry
+    fallback as :func:`format_extent` — a zero-length route prints the ratio
+    rather than inventing miles — and deliberately no minutes: the time axis
+    belongs on the sentence's primary extent, not on every clause of it.
+    """
+    if ext.domain_nm <= 0:
+        return "0nm"
+    if not ext.distance_known:
+        return f"{ext.pct:.0f}%"
+    return f"{round(ext.nm)}nm"
+
+
 class FlaggedCell(NamedTuple):
     """A flagged route point's scrim geometry, for :func:`build_regions`.
 
