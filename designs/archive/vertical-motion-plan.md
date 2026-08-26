@@ -12,8 +12,9 @@
 > **The numbers below are the original guesses and several were superseded in
 > implementation — do not port them back.** In particular: the convective omega
 > threshold is 1 Pa/s, not 10; contamination is |ω| > 0.5 Pa/s over 700–400 hPa;
-> Richardson CAT tiers keep the classical 0.25/0.5/1.0 base but are **altitude-ramped**
-> (×1 → ×2 between 10,000 and 20,000 ft) to offset the NWP positive-Ri bias; and ICON,
+> Richardson CAT tiers keep the classical 0.25/0.5/1.0 base but are **scaled by each
+> layer's own thickness** (`clamp(Δz / 1,000 ft, 1, 2)`) to offset the NWP positive-Ri
+> bias — #533 first did this as an altitude ramp, #539 replaced it; and ICON,
 > listed here as having no omega, now gets it derived from ICON-EU GRIB `w` inside the
 > EU domain. A second, stability-free turbulence index (E-Shear) was added later and has
 > no counterpart in this plan.

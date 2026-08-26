@@ -591,6 +591,29 @@ def test_thickness_law_reproduces_the_altitude_ramps_own_knees():
     assert _ri_threshold_scale(2524) == 2.0
 
 
+def test_gfs_mid_troposphere_tiers_tighten_versus_the_old_altitude_ramp():
+    """The one direction #539 is STRICTER than #533 — pinned deliberately.
+
+    GFS keeps 25 hPa spacing to 500 hPa, so its layers around 15,000 ft are
+    only ~1,100 ft thick — barely past the shear-sheet reference. The altitude
+    ramp loosened them anyway on altitude alone (×1.54 at a 15,411 ft
+    midpoint); the thickness law gives ×1.10.
+
+    Ri = 0.30 sits between the two severe cuts: 0.25 × 1.54 = 0.385 (SEVERE
+    under the ramp) vs 0.25 × 1.10 = 0.275 (not severe now), so it demotes to
+    MODERATE. §28 records this as a deliberate move toward the classical
+    tiers — the under-detection direction §25 already called fail-safe — and
+    it is the only case where this change can lose a detection #533 would
+    have made, so it gets a regression test of its own.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=575, altitude_ft=14862),
+        DerivedLevel(pressure_hpa=550, altitude_ft=15961, richardson_number=0.30),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert [la.risk for la in assessment.cat_risk_layers] == [CATRiskLevel.MODERATE]
+
+
 def test_thickness_comes_from_the_ri_pair_not_the_painted_layer():
     """A sparse column scales on the gap the Ri crossed, not the drawn band.
 

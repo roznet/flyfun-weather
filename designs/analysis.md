@@ -313,20 +313,22 @@ vm = assess_vertical_motion(derived_levels)
 - `classify_vertical_motion(derived_levels)` — classifies omega profile into `VerticalMotionClass` (QUIESCENT, SYNOPTIC_ASCENT/SUBSIDENCE, CONVECTIVE, OSCILLATING)
 - `assess_vertical_motion(derived_levels)` — combines classification with CAT risk layer identification
 
-**CAT layer geometry:** `richardson_number` on a level describes the layer *below* it, so each CAT layer spans from the level below the first flagged level up to the last flagged level (a lone flagged level still yields a layer with real thickness, not a zero-thickness line at its upper bound). The base is only extended when the level below is within 100 hPa; threshold scaling is evaluated at the layer midpoint. See [meteorology-decisions §25(d)](./meteorology-decisions.md).
+**CAT layer geometry:** `richardson_number` on a level describes the layer *below* it, so each CAT layer spans from the level below the first flagged level up to the last flagged level (a lone flagged level still yields a layer with real thickness, not a zero-thickness line at its upper bound). The base is only extended when the level below is within 100 hPa. Note that the base-extension rule and the threshold scaling read the level pair for *different* purposes: extension decides where to paint the band, while the scaling (below) always uses the Ri's own `idx-1 → idx` pair, extended or not. See [meteorology-decisions §25(d)](./meteorology-decisions.md) for the geometry and [§28](./meteorology-decisions.md) for the split.
 
 **CAT layer merging:** `_build_cat_layers()` groups adjacent low-Ri levels using dual-gap adjacency: BOTH pressure gap ≤ 100 hPa AND original-index gap ≤ 2. Prevents chaining scattered low-Ri levels across large stable gaps (e.g., GFS 25 hPa spacing where stable levels are simply skipped).
 
 **Mixed-layer suppression:** `mixed_layer_top_index()` finds the surface well-mixed layer with the θv parcel criterion — walk up while virtual potential temperature stays within 0.5 K of the surface value — capped at 10,000 ft deep, with a per-layer lapse-rate walk (≥ 8.8 °C/km) as fallback when temperatures are missing. Levels inside that layer are excluded from CAT entirely — shear there is convective-BL roughness, not a KH shear sheet. The top is reported as `mixed_layer_top_ft`. Surviving layers that lie wholly inside the boundary layer (the higher of the mixed-layer top and 5,000 ft AGL) are tagged `boundary_layer` for the advisory gate: a severe one is amber-floored and coverage-gated instead of forcing RED, and RED-via-coverage requires moderate-or-worse. See [meteorology-decisions §25](./meteorology-decisions.md).
 
-**CAT risk from Richardson number** — classical Miles-Howard tiers, scaled by altitude. The NWP positive-Ri bias (model layers too thick to resolve the 100–300 m shear sheet) scales with layer thickness, which scales with altitude: 25 hPa is ~230 m at 950 hPa but ~800 m at 300 hPa. So the correction is applied aloft only, ramping ×1 → ×2 between 10,000 and 20,000 ft:
+**CAT risk from Richardson number** — classical Miles-Howard tiers, scaled by **the thickness of the layer each Ri was differenced over** (`_ri_threshold_scale`, `_layer_thickness_ft`). The NWP positive-Ri bias (model layers too thick to resolve the 100–300 m shear sheet) is a function of that thickness and nothing else, so `scale = clamp(Δz / 1,000 ft, 1.0, 2.0)`. It is **not** a function of altitude: #533 used an altitude ramp as a proxy, which gave a GFS 25 hPa layer and an ECMWF 75 hPa layer at the same altitude the same multiplier. See [meteorology-decisions §28](./meteorology-decisions.md) (superseding §25(a)):
 
-| Ri range (≤ 10,000 ft) | Ri range (≥ 20,000 ft) | CAT Risk |
+| Ri range (Δz ≤ 1,000 ft) | Ri range (Δz ≥ 2,000 ft) | CAT Risk |
 |----------|----------|----------|
 | < 0.25 | < 0.5 | SEVERE (Kelvin-Helmholtz instability) |
 | 0.25-0.5 | 0.5-1.0 | MODERATE |
 | 0.5-1.0 | 1.0-2.0 | LIGHT |
 | > 1.0 | > 2.0 | NONE |
+
+Between those thicknesses the multiplier is proportional. Because spacing varies per model (and with whether GRIB enrichment fired), two models can grade the same Ri at the same altitude differently — that is the intended self-correction, not a bug.
 
 **Vertical motion magnitude reference** — a *physical* reference for interpreting values, NOT the classifier's cut points. `classify_vertical_motion()` keys on max |ω| with its own constants: `_OMEGA_QUIESCENT = 0.1`, `_OMEGA_CONVECTIVE = 1.0`, `_OMEGA_SIGNIFICANT = 0.05` (for sign-change counting → OSCILLATING); in between, the sign of mean omega picks SYNOPTIC_ASCENT vs SYNOPTIC_SUBSIDENCE. No omega at all → UNAVAILABLE.
 

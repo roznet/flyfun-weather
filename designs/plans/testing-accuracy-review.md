@@ -310,8 +310,10 @@ analytic fields or round-trip the code's own output.
     are **dead code** (never called) — their thresholds must not be counted as live logic;
     and `test_ogimet_nwp_scales_by_cloud_pct` asserts zone *count*, not scaling.
 15. **`vertical_motion.py` N² uses dry θ, not θv** — overestimates stability in moist layers
-    → Ri biased high → CAT under-warned. Partially offset by the deliberately loosened
-    0.5/1.0/2.0 Ri thresholds, but that interplay is undocumented. Ratify (one decisions-log
+    → Ri biased high → CAT under-warned. Partially offset by the deliberately loosened Ri
+    thresholds, but that interplay is undocumented — and the offset is now **thickness-
+    dependent** (#539: `clamp(Δz/1,000 ft, 1, 2)`, decisions §28), so on a fine-level model
+    at low altitude there is no loosening left to offset it at all. Ratify (one decisions-log
     line) or switch to virtual potential temperature.
 16. ~~**`prepare.py` wind gating is all-or-nothing**~~ **wind + omega RESOLVED (#478,
     2026-07-22)** — both NaN-fill per level (`prepare.py:110`/`:133`), pinned by
