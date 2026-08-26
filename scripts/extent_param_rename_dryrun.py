@@ -65,6 +65,7 @@ def main() -> None:
 
     profiles_total = 0
     profiles_touched = 0
+    skipped: list = []
     totals = {"renamed": 0, "inverted": 0, "dropped_shadowed": 0}
     by_advisory: Counter[str] = Counter()
     with engine.connect() as conn:
@@ -73,8 +74,19 @@ def main() -> None:
         ).fetchall()
         for row_id, raw in rows:
             profiles_total += 1
-            settings = json.loads(raw) if raw else {}
-            _, stats = rename_extent_params(settings)
+            # One unparseable row must not take the whole preview down with it:
+            # this script exists to be pointed at a prod-shaped snapshot before
+            # migration 093 runs, and a report that aborts on the first bad row
+            # gives zero visibility into the other 99 % — the opposite of its
+            # job. Mirrors the same guard in 093's ``upgrade()``/``downgrade()``
+            # (#571 review round 10).
+            try:
+                settings = json.loads(raw) if raw else {}
+                _, stats = rename_extent_params(settings)
+            except Exception as exc:  # noqa: BLE001 - one bad row must not fail the rest
+                skipped.append(row_id)
+                print(f"  SKIPPED profile {row_id}: {type(exc).__name__}: {exc}")
+                continue
             if not stats.touched:
                 continue
             profiles_touched += 1
@@ -91,6 +103,8 @@ def main() -> None:
                     f"{stats.inverted} inverted, {stats.dropped_shadowed} shadowed"
                 )
 
+    if skipped:
+        print(f"\n!! {len(skipped)} profile(s) skipped (unparseable settings_json): {skipped}")
     print(f"\nprofiles scanned : {profiles_total}")
     print(f"profiles touched : {profiles_touched}")
     print(f"keys renamed     : {totals['renamed']}")

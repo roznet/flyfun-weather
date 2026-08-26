@@ -133,6 +133,7 @@ export function renameExtentParams(
     const renames = EXTENT_KEY_RENAMES[advId];
     const secondary = SECONDARY[advId] ?? new Set<string>();
     const inverted = INVERTED_PCT_KEYS[advId] ?? new Set<string>();
+    const wasEmpty = Object.keys(params).length === 0;
     // Primaries first, so a secondary alias can never shadow a real value.
     const ordered = Object.keys(renames).sort((a, b) => {
       const sa = secondary.has(a) ? 1 : 0;
@@ -153,7 +154,11 @@ export function renameExtentParams(
         inverted.has(old) && typeof value === 'number' && Number.isFinite(value);
       params[next] = invertible ? 100 - value : value;
     }
-    if (Object.keys(params).length === 0) delete out[advId];
+    // An entry that ARRIVED empty is passed through untouched, matching the
+    // Python sibling's `was_empty` guard — the two are required to move in
+    // lockstep, and without this the TS side silently deletes a `params` entry
+    // it never modified (#571 review round 10).
+    if (!wasEmpty && Object.keys(params).length === 0) delete out[advId];
   }
   return out;
 }
