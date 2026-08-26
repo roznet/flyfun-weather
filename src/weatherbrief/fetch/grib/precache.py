@@ -195,6 +195,27 @@ def airport_profile_forecast_hours(init: datetime) -> list[int]:
     return sorted(hours)
 
 
+def icon_eu_profile_forecast_hours(init: datetime) -> list[int]:
+    """``airport_profile_forecast_hours`` snapped to ICON-EU's publication grid.
+
+    The raw offsets come from wall-clock target hours (06-21 Z per day), which
+    are hourly by construction. ICON-EU only publishes hourly to 78 h and
+    3-hourly beyond, so feeding the raw list to the fetcher asks DWD for files
+    that do not exist — every off-grid hour 404s on all 40 levels, is never
+    cached, and is therefore retried on every subsequent tick.
+
+    Snapping is not just a noise fix: it shrinks the day-3 span from 16 hourly
+    offsets to the 6 coarse steps that exist, and those are exactly the hours
+    a briefing asks for (the briefing path snaps via
+    :func:`~weatherbrief.fetch.grib.icon_eu_fetch.bracket_icon_eu_forecast_hours`
+    before fetching). GFS is hourly to 120 h, so its precache keeps the raw
+    list — this is why the snap lives here and not in the shared helper.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_snap_forecast_hours
+
+    return icon_eu_snap_forecast_hours(airport_profile_forecast_hours(init))
+
+
 def _data_dir() -> Path:
     return Path(os.environ.get("DATA_DIR", "data"))
 
@@ -228,7 +249,7 @@ def precache_icon_eu_run(
 
     init_date = init.strftime("%Y%m%d")
     init_hour = init.hour
-    forecast_hours = airport_profile_forecast_hours(init)
+    forecast_hours = icon_eu_profile_forecast_hours(init)
     levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
 
     data_dir = _data_dir()

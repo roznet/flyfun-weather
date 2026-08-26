@@ -30,6 +30,7 @@ import bz2
 import logging
 import math
 import os
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -833,6 +834,24 @@ def _snap_to_icon_eu_grid_floor(fhour: float, variant: IconVariant = ICON_EU) ->
     step = variant.coarse_step_h
     base = variant.hourly_to_h + int((fhour - variant.hourly_to_h) / step) * step
     return min(base, variant.horizon_main_h)
+
+
+def icon_eu_snap_forecast_hours(
+    hours: Iterable[float],
+    variant: IconVariant = ICON_EU,
+) -> list[int]:
+    """Snap arbitrary forecast-hour offsets onto *variant*'s publication grid.
+
+    ICON publishes hourly to ``variant.hourly_to_h`` and every
+    ``variant.coarse_step_h`` hours beyond it, so an offset like 80 h has no
+    file on opendata.dwd.de at all. Callers that derive forecast hours from
+    wall-clock targets (rather than from the grid itself) must pass them
+    through here first, or every off-grid hour becomes a guaranteed 404.
+
+    Snapping also deduplicates: 79/80 both land on 78/81, so a contiguous
+    hourly span collapses to the coarse steps that actually exist.
+    """
+    return sorted({_snap_to_icon_eu_grid(h, variant) for h in hours})
 
 
 def icon_eu_previous_step(fhour: int, variant: IconVariant = ICON_EU) -> int | None:

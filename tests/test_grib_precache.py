@@ -6,7 +6,7 @@ functions' integration with the cache + freshness markers (mocked HTTP).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +17,7 @@ from weatherbrief.fetch.grib.precache import (
     PRECACHE_FORECAST_HOURS_PER_DAY,
     PRECACHE_MAX_FORECAST_HOUR,
     airport_profile_forecast_hours,
+    icon_eu_profile_forecast_hours,
     precache_gfs_run,
     precache_icon_eu_run,
 )
@@ -116,6 +117,77 @@ class TestAirportProfileForecastHours:
 # ---------------------------------------------------------------------------
 
 
+class TestIconEuProfileForecastHours:
+    """The precache hour list must lie on ICON-EU's publication grid.
+
+    ICON-EU publishes hourly to 78 h and 3-hourly beyond. The raw
+    ``airport_profile_forecast_hours`` list is hourly throughout (it is built
+    from wall-clock target hours), so feeding it straight to the fetcher asked
+    DWD for ~10 files per run that can never exist: each 404'd on all 40
+    levels, was never cached, and was retried on every tick.
+    """
+
+    def test_every_hour_is_on_the_publication_grid(self):
+        for init_hour in (0, 6, 12, 18):
+            hours = icon_eu_profile_forecast_hours(_utc(2026, 5, 8, init_hour))
+            off_grid = [h for h in hours if h > 78 and h % 3 != 0]
+            assert off_grid == [], (
+                f"{init_hour:02d}z precache would request unpublished hours: "
+                f"{off_grid}"
+            )
+
+    def test_coarse_region_collapses_to_three_hourly(self):
+        """Snapping dedupes the day-3 span rather than merely filtering it."""
+        init = _utc(2026, 5, 8, 0)
+        raw = [h for h in airport_profile_forecast_hours(init) if h >= 78]
+        snapped = [h for h in icon_eu_profile_forecast_hours(init) if h >= 78]
+
+        assert raw == list(range(78, 94))          # hourly, as built
+        assert snapped == [78, 81, 84, 87, 90, 93]  # only what DWD publishes
+
+    def test_hourly_region_is_untouched(self):
+        """At or below 78 h ICON-EU is hourly, so nothing may be dropped."""
+        init = _utc(2026, 5, 8, 0)
+        raw = [h for h in airport_profile_forecast_hours(init) if h <= 78]
+        snapped = [h for h in icon_eu_profile_forecast_hours(init) if h <= 78]
+
+        assert snapped == raw
+
+    def test_snapped_hours_cover_what_a_briefing_requests(self):
+        """A briefing snaps before fetching, so its hours must be warmed.
+
+        This is the property that makes the fix safe: dropping f079/f080 costs
+        nothing because no consumer ever asks for them — `bracket_*` maps any
+        target in that span onto f078/f081, which the precache still fetches.
+        """
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            bracket_icon_eu_forecast_hours,
+        )
+
+        init = _utc(2026, 5, 8, 0)
+        warmed = set(icon_eu_profile_forecast_hours(init))
+
+        # Stop one coarse step below the top of the span: the last hour the
+        # 06-21 Z window yields from a 00 z init is 93, whose upper bracket is
+        # 96 — outside the precache horizon by construction, both before and
+        # after this change (the raw hourly list ended at 93 too). That edge is
+        # a pre-existing warm-path gap, not something snapping introduced.
+        for offset in range(79, 93):
+            target = init + timedelta(hours=offset)
+            f_prev, f_next = bracket_icon_eu_forecast_hours(
+                "20260508", 0, target,
+            )
+            assert f_prev in warmed, f"+{offset}h brackets to un-warmed {f_prev}"
+            assert f_next in warmed, f"+{offset}h brackets to un-warmed {f_next}"
+
+    def test_gfs_precache_keeps_the_hourly_list(self):
+        """GFS publishes hourly to 120 h — snapping it would drop real hours."""
+        init = _utc(2026, 5, 8, 0)
+        assert len(airport_profile_forecast_hours(init)) > len(
+            icon_eu_profile_forecast_hours(init)
+        )
+
+
 @pytest.mark.usefixtures("no_interactive_refresh")
 class TestPrecacheIconEuRun:
 
@@ -138,7 +210,7 @@ class TestPrecacheIconEuRun:
             tmp_path, init.strftime("%Y%m%d"), init.hour, model="icon-eu",
         )
 
-        forecast_hours = airport_profile_forecast_hours(init)
+        forecast_hours = icon_eu_profile_forecast_hours(init)
         for fhour in forecast_hours:
             for var in ICON_EU_VARIABLES:
                 put_cached(
@@ -186,7 +258,7 @@ class TestPrecacheIconEuRun:
         ) as mock_single:
             stats = precache_icon_eu_run(init)
 
-        forecast_hours = airport_profile_forecast_hours(init)
+        forecast_hours = icon_eu_profile_forecast_hours(init)
         # 9 ICON-EU pressure-level vars per fhour
         assert mock_var.call_count == len(forecast_hours) * 9
         assert mock_single.call_count == len(forecast_hours)
@@ -656,7 +728,7 @@ class TestWarmYielding:
 
         init = _utc(2026, 5, 8, 0)
         run_dir = cache_dir_for_run(tmp_path, "20260508", 0, model="icon-eu")
-        for fhour in airport_profile_forecast_hours(init):
+        for fhour in icon_eu_profile_forecast_hours(init):
             put_cached(run_dir, cache_key(fhour, "ICON_EU_QC_QI_P"), b"x")
 
         with patch(
