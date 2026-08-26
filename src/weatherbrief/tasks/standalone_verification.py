@@ -877,10 +877,19 @@ def fetch_ecmwf_grib_snapshots(
     values for all ``airports``. Sounding-derived columns come from
     ``analyze_sounding_lite`` on the GRIB-native pressure-level profile.
 
-    ``tp`` and ``sf`` arrive accumulated from init in the a1 GRIB, so this
-    fetcher also decodes the preceding *delivered* step and stores the delta,
-    together with the window that delta covers (``precip_period_h``): 1 h in
-    the hourly region, 3 h or 6 h further out where ECMWF thins its cadence.
+    ``tp``, ``sf`` and ``cp`` arrive accumulated from init in the a1 GRIB, so
+    this fetcher also decodes the preceding *delivered* step and stores the
+    delta, together with the window that delta covers (``precip_period_h``):
+    1 h in the hourly region, 3 h or 6 h further out where ECMWF thins its
+    cadence.
+
+    The a1 fields are also assembled into ``NWPCloudDiagnostics`` and attached
+    to the ``HourlyForecast`` the sounding pass runs on (#581). ECMWF takes
+    this GRIB-first path instead of ``_enrich_with_grib``, so this is the only
+    place the model-native convective ingredients — ML-CAPE/CIN, K-index,
+    Total Totals, the ``hcct`` tower, the ``cp`` rate — can reach a snapshot
+    row. Both builders were correct in isolation before #581; the hand-off
+    between them was where every one of those columns was lost.
 
     Args:
         run_files: ECMWFFileInfo list scoped to one run (single base_time).
@@ -905,8 +914,10 @@ def fetch_ecmwf_grib_snapshots(
         _dispatch_decode_parallel,
     )
     from weatherbrief.fetch.grib.decode import (
+        build_ecmwf_cloud_diagnostics,
         build_ecmwf_surface_snapshot,
         build_pressure_levels_from_grib,
+        model_surface_height_m,
     )
     from weatherbrief.models.analysis import HourlyForecast
 
@@ -1063,9 +1074,15 @@ def fetch_ecmwf_grib_snapshots(
             cur_raw = cur_a1[i] if i < len(cur_a1) else {}
             snap_fields = build_ecmwf_surface_snapshot(cur_raw)
 
+            prev_raw = (
+                prev_a1[i]
+                if prev_a1 is not None and i < len(prev_a1)
+                else None
+            )
+
             # Step-diff for accumulated fields (precipitation, snowfall)
-            if prev_a1 is not None and i < len(prev_a1):
-                prev_fields = build_ecmwf_surface_snapshot(prev_a1[i])
+            if prev_raw is not None:
+                prev_fields = build_ecmwf_surface_snapshot(prev_raw)
                 cur_pp = snap_fields.get("precipitation_mm")
                 prev_pp = prev_fields.get("precipitation_mm")
                 if cur_pp is not None and prev_pp is not None:
@@ -1075,6 +1092,20 @@ def fetch_ecmwf_grib_snapshots(
                 if cur_sf is not None and prev_sf is not None:
                     snap_fields["snowfall_cm"] = max(0.0, cur_sf - prev_sf)
 
+            # Convective precip rate (#283/#581): ``cp`` is accumulated since
+            # init, like tp/sf above, so difference it over the same delivered
+            # window. Mirrors the briefing path's injection onto the
+            # diagnostics (see ``_enrich_ecmwf``) so both feed
+            # ``assess_convective_nwp`` the same mm/h.
+            conv_precip_mm_h: float | None = None
+            if prev_raw is not None and precip_period_h:
+                cur_cp = cur_raw.get("conv_precip_m")
+                prev_cp = prev_raw.get("conv_precip_m")
+                if cur_cp is not None and prev_cp is not None:
+                    conv_precip_mm_h = (
+                        max(0.0, (cur_cp - prev_cp) / precip_period_h) * 1000.0
+                    )
+
             # LCL from T-Td spread
             t = snap_fields.get("temperature_2m_c")
             d = snap_fields.get("dewpoint_2m_c")
@@ -1083,6 +1114,43 @@ def fetch_ecmwf_grib_snapshots(
                 spread = t - d
                 if spread >= 0:
                     lcl_ft = _LCL_CONSTANT_FT * spread
+
+            # Pressure levels first: the model's own orography is read off the
+            # geopotential column, and the cloud diagnostics below need it to
+            # put ECMWF's AGL ``deg0l`` on the MSL datum every other writer of
+            # ``freezing_level_ft`` uses (#487).
+            levels: list = []
+            if pl_data is not None and i < len(pl_data) and pl_data[i]:
+                try:
+                    levels = build_pressure_levels_from_grib(pl_data[i])
+                except Exception:
+                    logger.warning(
+                        "ECMWF pressure-level build failed for %s step %dh",
+                        airport.icao, step_h, exc_info=True,
+                    )
+                    levels = []
+
+            # Model-native cloud + convective diagnostics (#581). ECMWF takes
+            # the GRIB-first path, so nothing else builds these for the
+            # standalone cycle: without them ``analyze_sounding_lite`` sees no
+            # diagnostics, ``assess_convective_nwp`` returns None, and every
+            # model-native ingredient column (nwp_ml_cape_jkg, nwp_conv_*)
+            # stores NULL on the one model whose GRIB actually carries them.
+            sp_hpa = snap_fields.get("surface_pressure_hpa")
+            terrain_m = (
+                model_surface_height_m(levels, sp_hpa)
+                if levels and sp_hpa is not None
+                else None
+            )
+            diag = build_ecmwf_cloud_diagnostics(
+                cur_raw, terrain_elevation_m=terrain_m,
+            )
+            if diag is not None and conv_precip_mm_h is not None:
+                # Rebuild rather than mutate, matching the briefing path's
+                # immutability contract for NWPCloudDiagnostics.
+                diag = diag.model_copy(
+                    update={"convective_precip_mm_h": conv_precip_mm_h}
+                )
 
             snap = {
                 "icao": airport.icao,
@@ -1104,41 +1172,68 @@ def fetch_ecmwf_grib_snapshots(
                 "nwp_ceiling_ft": snap_fields.get("nwp_ceiling_ft"),
                 "cloud_base_ft": snap_fields.get("cloud_base_ft"),
                 "lcl_ft": lcl_ft,
+                # Model-native stability indices (#294). The builder emits
+                # these from the same kx/totalx the diagnostics read; before
+                # #581 the snap dict simply did not copy them across.
+                "nwp_k_index": snap_fields.get("nwp_k_index"),
+                "nwp_total_totals": snap_fields.get("nwp_total_totals"),
+                # NOTE: `nwp_cin_jkg` and `nwp_lifted_index` stay NULL for
+                # ECMWF on purpose. Both pair with the model's own `cape_jkg`,
+                # which here is `mucape` (nwp_cape_type='mu'), and ECMWF's a1
+                # carries neither an MU CIN nor a lifted index — only the
+                # mixed-layer pair, which lands in nwp_ml_cape/cin_jkg below.
+                # Filling them from mlcin100 would mix parcel types, the exact
+                # confusion nwp_cape_type exists to prevent.
             }
 
-            # Sounding analysis on a2 pressure levels for sounding-derived columns
-            if pl_data is not None and i < len(pl_data) and pl_data[i]:
-                try:
-                    levels = build_pressure_levels_from_grib(pl_data[i])
-                except Exception:
-                    logger.warning(
-                        "ECMWF pressure-level build failed for %s step %dh",
-                        airport.icao, step_h, exc_info=True,
-                    )
-                    levels = []
-                if levels:
-                    hourly = HourlyForecast(
-                        time=target_dt,
-                        temperature_2m_c=snap_fields.get("temperature_2m_c"),
-                        dewpoint_2m_c=snap_fields.get("dewpoint_2m_c"),
-                        surface_pressure_hpa=snap_fields.get("surface_pressure_hpa"),
-                        wind_speed_10m_kt=snap_fields.get("wind_speed_10m_kt"),
-                        wind_direction_10m_deg=snap_fields.get("wind_direction_10m_deg"),
-                        cape_jkg=snap_fields.get("cape_jkg"),
-                        cloud_cover_pct=snap_fields.get("cloud_cover_pct"),
-                        cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
-                        pressure_levels=levels,
-                    )
-                    if pooled:
-                        from weatherbrief.analysis.sounding.snapshot_fields import (
-                            build_sounding_payload,
-                        )
+            # Ingredient columns straight off the diagnostics, so a row whose
+            # a2 file is missing (no pressure levels → no sounding pass) still
+            # records what the a1 GRIB delivered. Written only where the GRIB
+            # carried a value, mirroring `_enrich_with_grib` for GFS/ICON; the
+            # sounding pass below re-derives the same numbers from the same
+            # diagnostics when it does run.
+            if diag is not None:
+                for key, value in (
+                    ("nwp_ml_cape_jkg", diag.ml_cape_jkg),
+                    ("nwp_ml_cin_jkg", diag.ml_cin_jkg),
+                ):
+                    if value is not None:
+                        snap[key] = value
 
-                        step_pending.append(
-                            (len(snapshots), build_sounding_payload(hourly, "ecmwf"))
-                        )
-                    else:
-                        _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
+            # Sounding analysis on a2 pressure levels for sounding-derived columns
+            if levels:
+                hourly = HourlyForecast(
+                    time=target_dt,
+                    temperature_2m_c=snap_fields.get("temperature_2m_c"),
+                    dewpoint_2m_c=snap_fields.get("dewpoint_2m_c"),
+                    surface_pressure_hpa=sp_hpa,
+                    wind_speed_10m_kt=snap_fields.get("wind_speed_10m_kt"),
+                    wind_direction_10m_deg=snap_fields.get("wind_direction_10m_deg"),
+                    cape_jkg=snap_fields.get("cape_jkg"),
+                    cloud_cover_pct=snap_fields.get("cloud_cover_pct"),
+                    cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
+                    # Read by analyze_sounding_lite onto
+                    # ThermodynamicIndices.nwp_k_index / nwp_total_totals.
+                    nwp_k_index=snap_fields.get("nwp_k_index"),
+                    nwp_total_totals=snap_fields.get("nwp_total_totals"),
+                    pressure_levels=levels,
+                )
+                if diag is not None:
+                    # Via attach, never direct assignment: it mirrors the MSL
+                    # freezing level onto `freezing_level_m`, which is what
+                    # feeds indices.nwp_freezing_level_ft and the convective
+                    # tower assessment.
+                    hourly.attach_nwp_diagnostics(diag)
+                if pooled:
+                    from weatherbrief.analysis.sounding.snapshot_fields import (
+                        build_sounding_payload,
+                    )
+
+                    step_pending.append(
+                        (len(snapshots), build_sounding_payload(hourly, "ecmwf"))
+                    )
+                else:
+                    _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
 
             snapshots.append(snap)
 
