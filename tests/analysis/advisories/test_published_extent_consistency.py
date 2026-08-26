@@ -396,6 +396,78 @@ class TestFlaggedImpliesCoverage:
             "flagged_has_coverage",
         ]
 
+    def test_an_evaluator_that_publishes_no_extent_is_not_flagged(self):
+        """`fronts` grades a distance to a boundary, not a span of route.
+
+        It is the one evaluator that builds its result directly rather than
+        through `build()` (fronts.py:344), so every extent field stays at its
+        zero default even on a graded AMBER. Reading that as "flagged with no
+        coverage" would put a false violation on essentially every staging pack
+        with active frontal weather — the same broken-signal failure this module
+        exists to prevent, merely inverted (#583 review).
+        """
+        fronts_shaped = ModelAdvisoryResult(
+            model="gfs", status=AdvisoryStatus.AMBER,
+            detail="Front closing on the route, 120km away",
+        )
+        assert not invariants.check_model_result("fronts", fronts_shaped)
+
+    def test_but_publishing_a_population_brings_it_back_under_the_rule(self):
+        """The boundary of that exemption, so it can't quietly widen.
+
+        Nothing published ⇒ nothing to contradict. A published population with
+        no affected share behind a flagged verdict is the false report itself.
+        """
+        measured = ModelAdvisoryResult(
+            model="gfs", status=AdvisoryStatus.AMBER, detail="test",
+            affected_points=0, total_points=8, total_nm=300.0,
+        )
+        assert [v.rule for v in invariants.check_model_result("test", measured)] == [
+            "flagged_has_coverage",
+        ]
+
+    def test_the_real_fronts_evaluator_satisfies_the_invariants(self):
+        """End-to-end over the evaluator itself, not a hand-built lookalike.
+
+        None of the other fixtures populate `route_fronts`, so `fronts` graded
+        UNAVAILABLE everywhere and its shape went unexercised — which is how the
+        false positive above reached review in the first place.
+        """
+        from datetime import datetime, timezone
+
+        from weatherbrief.analysis.advisories import RouteContext
+        from weatherbrief.analysis.advisories.registry import evaluate_all
+        from weatherbrief.models import (
+            FrontProximityModel,
+            RouteFrontAnalysisModel,
+            RouteFrontsManifest,
+        )
+
+        # A closing off-track front inside the default 300km window — the AMBER
+        # branch of the evaluator that publishes no extent.
+        nearest = FrontProximityModel(
+            distance_km=120.0, lat=48.0, lon=2.0, gradient=9.0,
+            delta_theta_e=8.0, on_track=False, trend="closing",
+        )
+        manifest = RouteFrontsManifest(
+            generated_at=datetime(2026, 5, 31, tzinfo=timezone.utc),
+            primary_level_hPa=850, levels=[850], models=["gfs"],
+            per_model={"gfs": [RouteFrontAnalysisModel(
+                model="gfs", level_hPa=850, hour=12.0, crossings=[], nearest=nearest,
+            )]},
+        )
+        ctx = RouteContext(
+            analyses=[], cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=200.0, route_fronts=manifest,
+        )
+        results = evaluate_all(ctx, enabled_ids={"fronts"})
+        assert [a.aggregate_status for a in results] == [AdvisoryStatus.AMBER], (
+            "fixture no longer produces the flagged, extent-less result it pins"
+        )
+        violations = invariants.check_advisories(results)
+        assert not violations, [str(v) for v in violations]
+
 
 class TestTheAggregateLayer:
     """The layer above `per_model` — where the reassuring text is published.
