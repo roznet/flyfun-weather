@@ -104,7 +104,21 @@ _MIXED_LAYER_MAX_DEPTH_FT = 10000.0
 # lying wholly below this are still real — low-level wind shear on a frontal
 # day is a genuine GA hazard — but they do not bypass the route-percentage
 # gate the way free-atmosphere severe CAT does.
+#
+# "AGL" is measured from the MODEL's own ground, resolved from its surface
+# pressure against the column's own heights (#541). Before that it was
+# measured from ``derived_levels[0]`` — the lowest *delivered* pressure level,
+# which is not the ground: nothing in the fetch or the analysis path clips
+# sub-surface levels, so over an Alpine crossing the column still starts at
+# 1000 hPa several thousand feet inside the mountain and the "AGL" fallback
+# was effectively MSL-anchored. See meteorology-decisions §29.
 _BL_FALLBACK_DEPTH_FT = 5000.0
+
+# Bounds for a usable surface pressure. Outside these the value is a decode
+# artefact rather than a surface, and the ground datum falls back to the
+# lowest delivered level (i.e. the pre-#541 behaviour).
+_SURFACE_PRESSURE_MIN_HPA = 300.0
+_SURFACE_PRESSURE_MAX_HPA = 1100.0
 
 # Omega thresholds (Pa/s) for classification
 # Typical synoptic omega: ±0.1–1.0 Pa/s; convective: >1 Pa/s
@@ -309,37 +323,141 @@ def _theta_v_k(lv: DerivedLevel) -> float | None:
     return theta * (1.0 + 0.61 * r)
 
 
-def mixed_layer_top_index(derived_levels: list[DerivedLevel]) -> int:
+def ground_altitude_ft(
+    derived_levels: list[DerivedLevel],
+    surface_pressure_hpa: float | None,
+) -> float | None:
+    """Altitude (ft) of the model's own ground, in the column's height datum.
+
+    The sounding path never clips sub-surface levels: Open-Meteo serves every
+    requested pressure level whatever the terrain, the GRIB decoders replace
+    levels one for one, and ``prepare_profile`` filters only on missing
+    temperature. So ``derived_levels[0]`` is the lowest *delivered* level, not
+    the surface — over the Alps it can sit thousands of feet inside the
+    mountain (#541).
+
+    The model's surface pressure is the anchor, read against the column's own
+    geopotential heights by log-pressure interpolation. That keeps the answer
+    in the *same datum as the levels it is compared against*, which is the
+    whole point: SRTM terrain would be truer ground but a different surface
+    from the one the model integrated its shear over, and mixing the two would
+    put "ground" above levels the model considers free atmosphere. See
+    meteorology-decisions §29.
+
+    Returns None when there is no usable surface pressure or fewer than two
+    levels carry an altitude — callers then keep the pre-#541 behaviour of
+    treating the lowest delivered level as the surface.
+    """
+    if surface_pressure_hpa is None:
+        return None
+    if not (
+        _SURFACE_PRESSURE_MIN_HPA
+        <= surface_pressure_hpa
+        <= _SURFACE_PRESSURE_MAX_HPA
+    ):
+        return None
+
+    # Sorted rather than assumed: prepare_profile emits descending pressure,
+    # but this helper is public and a caller could hand it any column.
+    pts = sorted(
+        (
+            (float(lv.pressure_hpa), float(lv.altitude_ft))
+            for lv in derived_levels
+            if lv.altitude_ft is not None and lv.pressure_hpa > 0
+        ),
+        key=lambda pt: -pt[0],
+    )
+    if len(pts) < 2:
+        return None
+
+    # Interpolate on log-pressure — the hypsometric relation is linear there,
+    # so the bracketing pair carries its own mean layer temperature and no
+    # standard atmosphere is assumed. Outside the column the same pair is
+    # extrapolated from the nearest end: below the lowest level that is the
+    # ordinary flat-terrain case (a sea-level field sits under 1000 hPa),
+    # while above the highest is unreachable for any real surface pressure
+    # and just avoids reading the wrong end of the profile.
+    if surface_pressure_hpa >= pts[0][0]:
+        lo, hi = pts[0], pts[1]
+    elif surface_pressure_hpa <= pts[-1][0]:
+        lo, hi = pts[-2], pts[-1]
+    else:
+        lo, hi = pts[0], pts[1]
+        for below, above in zip(pts, pts[1:]):
+            if below[0] >= surface_pressure_hpa >= above[0]:
+                lo, hi = below, above
+                break
+    if lo[0] == hi[0]:
+        return lo[1]
+    frac = math.log(lo[0] / surface_pressure_hpa) / math.log(lo[0] / hi[0])
+    return lo[1] + frac * (hi[1] - lo[1])
+
+
+def ground_level_index(
+    derived_levels: list[DerivedLevel],
+    ground_ft: float | None,
+) -> int:
+    """Index of the lowest level at or above *ground_ft*.
+
+    Levels below it are the model's own below-ground extrapolation: their
+    temperature and wind are a downward continuation of the free atmosphere,
+    so a Richardson number differenced across them describes nothing that
+    exists. Returns 0 when the ground is unknown or already at/below the
+    lowest delivered level, which is the flat-route case and leaves the
+    pre-#541 behaviour untouched.
+    """
+    if ground_ft is None:
+        return 0
+    for idx, lv in enumerate(derived_levels):
+        if lv.altitude_ft is not None and lv.altitude_ft >= ground_ft:
+            return idx
+    # Every delivered level is below ground — pathological, but returning the
+    # last index would silently suppress the whole column. Keep index 0 and
+    # let the ordinary suppression rules apply.
+    return 0
+
+
+def mixed_layer_top_index(
+    derived_levels: list[DerivedLevel],
+    start_idx: int = 0,
+) -> int:
     """Index of the highest level still inside the surface well-mixed layer.
 
     Parcel criterion: walks up from the surface while each level's virtual
     potential temperature stays within ``_MIXED_LAYER_THETA_V_EXCESS_K`` of
     the surface value (θv is near-constant in a mixed layer and climbs
     through the capping stable air), stopping at the first exceedance or once
-    the layer would exceed ``_MIXED_LAYER_MAX_DEPTH_FT`` above the lowest
+    the layer would exceed ``_MIXED_LAYER_MAX_DEPTH_FT`` above the surface
     level. Falls back to the per-layer lapse-rate walk when temperatures are
     unavailable.
 
-    Returns 0 when the surface layer is not well mixed — nothing is suppressed
-    in that case, since Ri is only ever stored from index 1 upwards.
+    *start_idx* is the lowest level at or above the model's ground
+    (``ground_level_index``); it is the surface parcel and the depth datum.
+    It defaults to 0 — the lowest delivered level — which is right only where
+    that level is above ground. Over high terrain the surface parcel would
+    otherwise be a below-ground extrapolation, warm and moist by construction,
+    and the θv walk would read the whole sub-surface column as "mixed" (#541).
+
+    Returns *start_idx* when the surface layer is not well mixed — nothing is
+    suppressed in that case beyond the sub-surface levels themselves.
 
     Index convention: ``richardson_number`` on level *i* describes the layer
-    below it (*i-1* → *i*), so a returned index of *n* means levels 1…*n*
-    carry the Ri of well-mixed layers.
+    below it (*i-1* → *i*), so a returned index of *n* means levels
+    *start_idx*+1…*n* carry the Ri of well-mixed layers.
     """
-    if not derived_levels:
-        return 0
+    if start_idx >= len(derived_levels):
+        return start_idx
 
-    surface_ft = derived_levels[0].altitude_ft
+    surface_ft = derived_levels[start_idx].altitude_ft
     if surface_ft is None:
-        return 0
+        return start_idx
 
-    theta_v0 = _theta_v_k(derived_levels[0])
+    theta_v0 = _theta_v_k(derived_levels[start_idx])
     if theta_v0 is None:
-        return _mixed_layer_top_index_lapse(derived_levels)
+        return _mixed_layer_top_index_lapse(derived_levels, start_idx)
 
-    top = 0
-    for i in range(1, len(derived_levels)):
+    top = start_idx
+    for i in range(start_idx + 1, len(derived_levels)):
         lv = derived_levels[i]
         if lv.altitude_ft is None or (lv.altitude_ft - surface_ft) > _MIXED_LAYER_MAX_DEPTH_FT:
             break
@@ -350,18 +468,25 @@ def mixed_layer_top_index(derived_levels: list[DerivedLevel]) -> int:
     return top
 
 
-def _mixed_layer_top_index_lapse(derived_levels: list[DerivedLevel]) -> int:
+def _mixed_layer_top_index_lapse(
+    derived_levels: list[DerivedLevel],
+    start_idx: int = 0,
+) -> int:
     """Fallback detector: per-layer lapse-rate walk (used when θv can't be
     computed). Brittle — a single sub-adiabatic kink truncates it — which is
     why it is no longer the primary method (#534 follow-up review)."""
-    surface_ft = derived_levels[0].altitude_ft
-    top = 0
-    for i in range(len(derived_levels) - 1):
+    if start_idx >= len(derived_levels):
+        return start_idx
+    surface_ft = derived_levels[start_idx].altitude_ft
+    top = start_idx
+    for i in range(start_idx, len(derived_levels) - 1):
         lapse = derived_levels[i].lapse_rate_c_per_km
         if lapse is None or lapse < _MIXED_LAYER_LAPSE_C_PER_KM:
             break
         next_ft = derived_levels[i + 1].altitude_ft
-        if next_ft is None or (next_ft - surface_ft) > _MIXED_LAYER_MAX_DEPTH_FT:
+        if next_ft is None or surface_ft is None or (
+            next_ft - surface_ft
+        ) > _MIXED_LAYER_MAX_DEPTH_FT:
             break
         top = i + 1
     return top
@@ -370,6 +495,8 @@ def _mixed_layer_top_index_lapse(derived_levels: list[DerivedLevel]) -> int:
 def _build_cat_layers(
     derived_levels: list[DerivedLevel],
     ml_top_idx: int,
+    ground_idx: int = 0,
+    ground_ft: float | None = None,
     max_index_gap: int = 2,
 ) -> list[CATRiskLayer]:
     """Group adjacent low-Ri levels into CAT risk layers, split by severity.
@@ -389,10 +516,20 @@ def _build_cat_layers(
     ``mixed_layer_top_index``) are excluded entirely (#533), and the layers
     that survive are tagged ``boundary_layer`` when they lie wholly within
     the boundary layer.
+
+    *ground_idx* / *ground_ft* locate the model's own surface (#541). Levels
+    at or below *ground_idx* are excluded: their Ri is differenced against a
+    below-ground extrapolation, and a "shear layer" painted inside a mountain
+    is neither a hazard nor a thing. *ground_ft* is the AGL datum for the
+    boundary-layer ceiling. Both default to the lowest delivered level, which
+    is the pre-#541 behaviour and stays right wherever that level is above
+    ground — i.e. every flat route.
     """
-    surface_ft = derived_levels[0].altitude_ft if derived_levels else None
+    surface_ft = ground_ft
+    if surface_ft is None and derived_levels:
+        surface_ft = derived_levels[ground_idx].altitude_ft
     ml_top_ft = (
-        derived_levels[ml_top_idx].altitude_ft if ml_top_idx > 0 else None
+        derived_levels[ml_top_idx].altitude_ft if ml_top_idx > ground_idx else None
     )
     # Boundary-layer ceiling, used only for tagging the layers that survive
     # suppression. Deliberately the HIGHER of the detected mixed-layer top and
@@ -429,15 +566,23 @@ def _build_cat_layers(
     for idx, lv in enumerate(derived_levels):
         if lv.richardson_number is None or lv.altitude_ft is None:
             continue
-        # Inside the surface well-mixed layer: convective boundary-layer
-        # roughness, not KH instability. Suppressed regardless of Ri sign.
-        if ml_top_idx > 0 and idx <= ml_top_idx:
+        # At or below the model's ground, or inside the surface well-mixed
+        # layer: the first is a below-ground extrapolation and the second is
+        # convective boundary-layer roughness rather than KH instability.
+        # Suppressed regardless of Ri sign. ``ml_top_idx >= ground_idx`` by
+        # construction, so the one cut covers both; the level at *ground_idx*
+        # goes too, because its Ri is differenced against the last
+        # below-ground level. The ``cut > 0`` guard keeps index 0 eligible
+        # when neither applies — real columns never store a Ri there, but a
+        # hand-built profile may.
+        cut = max(ml_top_idx, ground_idx)
+        if cut > 0 and idx <= cut:
             continue
         # Negative Ri at the surface-adjacent layer is the daytime
         # superadiabatic surface layer (thermals) — not CAT. Kept as a
         # fallback for profiles with no lapse-rate data to detect a mixed
-        # layer from. Elevated statically-unstable layers (idx > 1) qualify.
-        if lv.richardson_number < 0 and idx <= 1:
+        # layer from. Elevated statically-unstable layers qualify.
+        if lv.richardson_number < 0 and idx <= ground_idx + 1:
             continue
         base_lv = lv
         # Thickness of the layer the Ri was differenced over, used to scale
@@ -551,8 +696,16 @@ def _build_single_cat_layer(
 
 def assess_vertical_motion(
     derived_levels: list[DerivedLevel],
+    surface_pressure_hpa: float | None = None,
 ) -> VerticalMotionAssessment:
-    """Build complete vertical motion assessment from enriched derived levels."""
+    """Build complete vertical motion assessment from enriched derived levels.
+
+    *surface_pressure_hpa* is the model's own surface pressure at this point
+    and hour. It locates the ground inside the column (#541) and is what makes
+    the boundary-layer datum genuinely AGL over terrain; without it the lowest
+    delivered pressure level stands in, which is only right where that level
+    is above ground.
+    """
     classification = classify_vertical_motion(derived_levels)
 
     # Find max omega/w
@@ -569,17 +722,27 @@ def assess_vertical_motion(
                 max_w = lv.w_fpm
                 max_w_level = lv.altitude_ft
 
+    # The model's own ground (#541). Everything below is a sub-surface
+    # extrapolation the fetch never clips, and every "surface" datum in this
+    # function is measured from here rather than from the lowest delivered
+    # pressure level. Falls back to that level when no surface pressure is
+    # available, which is the pre-#541 behaviour.
+    ground_ft = ground_altitude_ft(derived_levels, surface_pressure_hpa)
+    ground_idx = ground_level_index(derived_levels, ground_ft)
+
     # Surface well-mixed layer (#533) — CAT layers inside it are suppressed,
     # and its top is reported so the suppression is inspectable rather than
     # silently swallowing layers. Resolved once and shared with the layer
     # builder rather than walked twice (#534 review).
-    ml_top_idx = mixed_layer_top_index(derived_levels)
+    ml_top_idx = mixed_layer_top_index(derived_levels, start_idx=ground_idx)
     mixed_layer_top_ft = (
-        derived_levels[ml_top_idx].altitude_ft if ml_top_idx > 0 else None
+        derived_levels[ml_top_idx].altitude_ft if ml_top_idx > ground_idx else None
     )
 
     # Build CAT risk layers from Ri
-    cat_layers = _build_cat_layers(derived_levels, ml_top_idx)
+    cat_layers = _build_cat_layers(
+        derived_levels, ml_top_idx, ground_idx=ground_idx, ground_ft=ground_ft,
+    )
 
     # Detect convective contamination: mid-level |omega| > threshold
     convective_contamination = False
@@ -599,5 +762,8 @@ def assess_vertical_motion(
         convective_contamination=convective_contamination,
         mixed_layer_top_ft=(
             round(mixed_layer_top_ft) if mixed_layer_top_ft is not None else None
+        ),
+        model_surface_altitude_ft=(
+            round(ground_ft) if ground_ft is not None else None
         ),
     )

@@ -115,6 +115,11 @@ struct VerticalMotionAssessment: Codable, Sendable {
     /// Top of the detected surface well-mixed layer (#533); CAT layers below
     /// it are suppressed server-side. Optional — absent on pre-#534 packs.
     let mixedLayerTopFt: Double?
+    /// The model's own ground in the column's height datum (#541), resolved
+    /// from its surface pressure. The AGL datum for `boundaryLayer`, and the
+    /// cut below which levels are sub-surface extrapolation. Optional —
+    /// absent on pre-#541 packs.
+    let modelSurfaceAltitudeFt: Double?
 }
 
 struct CATRiskLayer: Codable, Sendable {

@@ -611,7 +611,10 @@ def _analyze_sounding_heavy(
 
     # Vertical motion and turbulence
     compute_stability_indicators(profile, derived_levels)
-    vertical_motion = assess_vertical_motion(derived_levels)
+    vertical_motion = assess_vertical_motion(
+        derived_levels,
+        surface_pressure_hpa=hourly.surface_pressure_hpa if hourly else None,
+    )
 
     # Update result in-place
     result.cloud_layers = cloud_layers
