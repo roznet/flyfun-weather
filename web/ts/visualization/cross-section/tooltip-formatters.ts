@@ -400,14 +400,17 @@ const observedTops: LayerTooltipDef = {
     for (const bin of o.topsBins) {
       if (bin.count <= 0) continue;
       // Share AND count: 4% of 201 pixels and 4% of 3 are very different
-      // evidence, and only one of them is worth acting on.
+      // evidence, and only one of them is worth acting on. The share is of
+      // the SKY the retrieval could see, so it reads as coverage — "4% of the
+      // area around here had its cloud top in FL180-190" — and the bands at
+      // a point sum to how cloudy the disc was, not to 100%.
       const pct = bin.fraction * 100;
       const share = pct >= 1 ? `${Math.round(pct)}%` : '<1%';
       zones.push({
         baseFt: bin.loFt,
         topFt: bin.hiFt,
         point: o,
-        label: `${bin.label} · ${share} of tops (${bin.count} px)`,
+        label: `${bin.label} · ${share} of sky (${bin.count} px)`,
       });
     }
     if (o.topsHighestFt != null) {

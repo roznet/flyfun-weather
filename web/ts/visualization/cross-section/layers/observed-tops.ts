@@ -26,10 +26,16 @@ import { getActiveTheme } from '../theme';
 
 /** Half-width of a point's mark on the X axis, in nm. */
 const MARK_HALF_WIDTH_NM = 4;
-/** A band has to hold this share of the disc's cloudy pixels to be drawn.
+/** A band has to hold this share of the disc's CLOUDY pixels to be drawn.
  *
  *  1%: below that a band is one or two pixels out of hundreds, and drawing it
  *  gives a stray retrieval the same visual weight as a real deck.
+ *
+ *  Deliberately measured against the cloudy pixels and not against the sky the
+ *  bands are *drawn* as a share of: "is this band real signal?" is a question
+ *  about the retrieval, and a scattered-cloud day would otherwise silently
+ *  raise the bar on every band it produced just for having clear sky around
+ *  it.
  *
  *  Safe to discard here only because the HIGHEST top is drawn separately, from
  *  `topsHighestFt`, and never passes through this filter — so a single cold
@@ -57,14 +63,15 @@ const RULE_SPACING_MAX_PX = 7;
  *  third redundant encoding muddies both. */
 const BAND_ALPHA = 0.85;
 
-/** Colour for a cloud-top temperature, from the active theme's ramp.
+/** Colour for a band's share of the looked-at sky, from the active theme's
+ *  ramp.
  *
- *  Temperature — not height — because temperature is what the instrument
- *  measures; height is derived from it against a model profile. The ramp
- *  follows the enhanced-IR convention pilots already read on satellite
- *  imagery, except at the warm end, where the conventional grayscale is
- *  replaced by a desaturated blue: gray here is indistinguishable from the
- *  NWP cloud bands this layer exists to be compared against.
+ *  The share is of the SKY, not of the cloud that was found: a band then says
+ *  "this much of the area around the point had its top here", which is the
+ *  quantity a pilot can act on, and 8 bands over a broken sky no longer colour
+ *  like 8 bands over a solid overcast. The stops are spaced to match what the
+ *  fine 10-FL bands actually produce — a wide disc splits its cloud over a
+ *  dozen of them, so a band holding a fifth of the sky is already a big one.
  *
  *  Nearest stop, never interpolated. A blended intermediate colour would imply
  *  a precision the 2 km retrieval does not have. */
@@ -79,7 +86,14 @@ export function shareColor(fraction: number): string {
 
 /** Colour for a cloud-top temperature. Used by the MAP, where there is no
  *  altitude axis and temperature is genuinely new information. The
- *  cross-section colours by share instead — see `shareColor`. */
+ *  cross-section colours by share instead — see `shareColor`.
+ *
+ *  Temperature — not height — because temperature is what the instrument
+ *  measures; height is derived from it against a model profile. The ramp
+ *  follows the enhanced-IR convention pilots already read on satellite
+ *  imagery, except at the warm end, where the conventional grayscale is
+ *  replaced by a desaturated blue: gray here is indistinguishable from the
+ *  NWP cloud bands this layer exists to be compared against. */
 export function tempColor(celsius: number | null): string {
   const theme = getActiveTheme();
   if (celsius == null) return theme.observed.tempUnknown;
@@ -94,7 +108,7 @@ export function tempColor(celsius: number | null): string {
 
 /** Bands worth drawing at this point, strongest-signal filter applied. */
 export function significantBins(point: VizObservedPoint) {
-  return point.topsBins.filter((b) => b.fraction >= MIN_BIN_FRACTION);
+  return point.topsBins.filter((b) => b.cloudFraction >= MIN_BIN_FRACTION);
 }
 
 /** Contiguous runs of populated bands — the decks.
@@ -301,7 +315,7 @@ function drawPoint(
     const ceilingFt = transform.yToAltitude(plotArea.top);
     const aboveShare = point.topsBins
       .filter((b) => b.loFt >= ceilingFt)
-      .reduce((sum, b) => sum + b.fraction, 0);
+      .reduce((sum, b) => sum + b.fraction, 0);  // share of SKY, as the bands
     const boxColor = aboveShare > 0 ? shareColor(aboveShare) : color;
 
     ctx.save();

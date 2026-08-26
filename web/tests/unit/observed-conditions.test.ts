@@ -217,14 +217,25 @@ describe('observed extraction', () => {
     expect(point.topsHighestFt).toBe(35000);
   });
 
-  it('exposes the FL histogram as fractions of the detected pixels', () => {
+  it('exposes the FL histogram as a share of the sky, and of the cloud', () => {
     const point = extract(makeObserved()).observed!.points[0];
     const high = point.topsBins.find((b) => b.label === 'FL250-400')!;
     const low = point.topsBins.find((b) => b.label === 'FL000-050')!;
-    // 30 of 40 cloudy pixels high, 10 low — a bimodal scene, which is exactly
-    // the multi-layer structure one cloud-top number would have destroyed.
-    expect(high.fraction).toBeCloseTo(0.75);
-    expect(low.fraction).toBeCloseTo(0.25);
+    // The disc: 100 pixels looked at, 40 of them cloudy — 30 topping high,
+    // 10 low. A bimodal scene, the multi-layer structure one cloud-top number
+    // would have destroyed.
+    //
+    // `fraction` is of the LOOKED-AT SKY (100), which is what the chart draws
+    // and the hover quotes: 30% of the area around this point had its top up
+    // high, and the two bands sum to 40% — the disc's cloud cover — not to
+    // 100%. A denominator of the cloudy pixels alone would report the high
+    // band as 75% of a sky that is 60% clear.
+    expect(high.fraction).toBeCloseTo(0.30);
+    expect(low.fraction).toBeCloseTo(0.10);
+    expect(high.fraction + low.fraction).toBeCloseTo(40 / 100);
+    // `cloudFraction` keeps the other denominator for the noise floor alone.
+    expect(high.cloudFraction).toBeCloseTo(0.75);
+    expect(low.cloudFraction).toBeCloseTo(0.25);
   });
 
   it('carries each source own valid time and age', () => {
@@ -727,10 +738,28 @@ describe('cloud-top deck grouping', () => {
     expect(bandRuns([band(350, 1)]).length).toBe(1);
   });
 
-  it('drops bands below 1% — a stray pixel is not a deck', () => {
-    const tiny = { label: 'FL350', loFt: 35000, hiFt: 36000, fraction: 0.004, count: 1 };
-    const real = { label: 'FL300', loFt: 30000, hiFt: 31000, fraction: 0.2, count: 40 };
+  it('drops bands below 1% of the CLOUD — a stray pixel is not a deck', () => {
+    const tiny = {
+      label: 'FL350', loFt: 35000, hiFt: 36000,
+      fraction: 0.002, cloudFraction: 0.004, count: 1,
+    };
+    const real = {
+      label: 'FL300', loFt: 30000, hiFt: 31000,
+      fraction: 0.1, cloudFraction: 0.2, count: 40,
+    };
     expect(significantBins({ topsBins: [tiny, real] } as never)).toEqual([real]);
+  });
+
+  it('does not raise the floor just because the sky around was clear', () => {
+    // The reason the floor reads `cloudFraction` and not the drawn share: a
+    // real deck in a mostly-clear disc holds a small share of the SKY, and
+    // filtering on that would erase the bands of exactly the scattered scenes
+    // where knowing the tops matters most.
+    const scattered = {
+      label: 'FL300', loFt: 30000, hiFt: 31000,
+      fraction: 0.006, cloudFraction: 0.3, count: 12,
+    };
+    expect(significantBins({ topsBins: [scattered] } as never)).toEqual([scattered]);
   });
 
   it('still marks the highest top when its own band is too thin to draw', () => {

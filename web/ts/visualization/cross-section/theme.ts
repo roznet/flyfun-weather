@@ -185,14 +185,20 @@ export interface CrossSectionTheme {
 /** Sequential share ramp, lightest first. A single hue so it reads as one
  *  quantity getting stronger, and blue-violet so it cannot be confused with
  *  the radar ramp (green→red) or the NWP cloud bands (gray/white). */
+/** Band share of the LOOKED-AT SKY → colour. Breakpoints, not the colours,
+ *  carry the calibration: measured against real packs, a 20 NM disc splits its
+ *  cloud across a dozen fine 10-FL bands, so half of all drawn bands sit under
+ *  4% of the sky and none reached 55%. The old 0.02–0.80 ladder was built for
+ *  a share of the CLOUD and left every wide-corridor band in the bottom two
+ *  stops; these spread the same bands over the whole ramp. */
 export const SHARE_STOPS: Array<[number, string]> = [
-  [0.02, '#6377b8'],
-  [0.05, '#576aa8'],
-  [0.10, '#4b5c96'],
-  [0.20, '#3f4e84'],
-  [0.35, '#333f6d'],
-  [0.55, '#282f54'],
-  [0.80, '#1c2039'],
+  [0.01, '#6377b8'],
+  [0.02, '#576aa8'],
+  [0.04, '#4b5c96'],
+  [0.08, '#3f4e84'],
+  [0.15, '#333f6d'],
+  [0.30, '#282f54'],
+  [0.50, '#1c2039'],
 ];
 
 export const IR_TEMP_STOPS: Array<[number, string]> = [
@@ -555,9 +561,9 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     // contrast against the sky, and on a dark sky that means brightening.
     // Same meaning, same direction of emphasis, inverted luminance.
     shareStops: [
-      [0.02, '#3f5590'], [0.05, '#5570ab'], [0.10, '#6d8ac6'],
-      [0.20, '#87a4de'], [0.35, '#a3bdec'], [0.55, '#c2d6f7'],
-      [0.80, '#e6efff'],
+      [0.01, '#3f5590'], [0.02, '#5570ab'], [0.04, '#6d8ac6'],
+      [0.08, '#87a4de'], [0.15, '#a3bdec'], [0.30, '#c2d6f7'],
+      [0.50, '#e6efff'],
     ],
     tempStops: IR_TEMP_STOPS,
     tempUnknown: 'rgba(170, 195, 230, 0.9)',
@@ -580,9 +586,9 @@ const GRAMET_THEME: CrossSectionTheme = {
     // luminance and disappear. Ascends instead, same meaning, same direction
     // of emphasis.
     shareStops: [
-      [0.02, '#5b83c4'], [0.05, '#7599d2'], [0.10, '#8fafdf'],
-      [0.20, '#a9c4ea'], [0.35, '#c3d8f3'], [0.55, '#dae9fa'],
-      [0.80, '#f0f6ff'],
+      [0.01, '#5b83c4'], [0.02, '#7599d2'], [0.04, '#8fafdf'],
+      [0.08, '#a9c4ea'], [0.15, '#c3d8f3'], [0.30, '#dae9fa'],
+      [0.50, '#f0f6ff'],
     ],
   },
   nightShading: {
@@ -704,9 +710,9 @@ const LIGHT_THEME: CrossSectionTheme = {
     // On a white sky the pale end of the standard ramp vanishes, so the whole
     // ramp shifts darker while keeping the same light→dark direction.
     shareStops: [
-      [0.02, '#aab7d6'], [0.05, '#8b9bc7'], [0.10, '#6d7fb6'],
-      [0.20, '#5265a4'], [0.35, '#3e4f8e'], [0.55, '#2e3c74'],
-      [0.80, '#1f2a58'],
+      [0.01, '#aab7d6'], [0.02, '#8b9bc7'], [0.04, '#6d7fb6'],
+      [0.08, '#5265a4'], [0.15, '#3e4f8e'], [0.30, '#2e3c74'],
+      [0.50, '#1f2a58'],
     ],
     tempStops: LIGHT_IR_TEMP_STOPS,
     tempUnknown: 'rgba(92, 120, 153, 0.8)',

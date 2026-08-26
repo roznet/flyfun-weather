@@ -229,14 +229,17 @@ function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
   const pick = (f: number) => stops.reduce(
     (best, s) => (f >= s[0] ? s : best), stops[0],
   );
-  const entries: LegendEntry[] = [0.02, 0.10, 0.35, 0.80].map((f) => ({
+  // Sampled at the ramp's own breakpoints, and labelled as what the number
+  // is: the share of the SKY around the point, not of the cloud found in it.
+  // The bands at a point therefore add up to how cloudy the disc was.
+  const entries: LegendEntry[] = [0.01, 0.04, 0.15, 0.50].map((f) => ({
     label: `${Math.round(f * 100)}%`,
     color: pick(f)[1],
-    meaning: f <= 0.02
-      ? 'a few of the cloudy pixels around the point had tops in this band'
-      : f >= 0.8
-        ? 'most of the cloud around the point had its top in this band'
-        : 'share of the cloud around the point with tops in this band',
+    meaning: f <= 0.01
+      ? 'a sliver of the sky around the point had its cloud top in this band'
+      : f >= 0.5
+        ? 'half the sky around the point had its cloud top in this band'
+        : 'share of the sky around the point with cloud tops in this band',
   }));
   entries.push({
     label: 'depth unknown',
