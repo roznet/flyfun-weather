@@ -69,6 +69,10 @@ dependencies = [
     "h5py>=3.10",
     "netCDF4>=1.6",
     "eumdac>=3.0",
+    # Observed overlays are rendered to PNG with Pillow. Available transitively
+    # via matplotlib today, but imported directly by observed/imagery.py — the
+    # same reason pyproj is pinned explicitly above.
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]

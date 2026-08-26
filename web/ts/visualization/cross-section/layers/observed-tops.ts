@@ -293,10 +293,21 @@ function drawPoint(
     // "the top is above this chart". The height is fixed and meaningless on
     // purpose — scaling it to the real value would invent a position for
     // something that has none here. Hover carries the number.
+    //
+    // Coloured by the SHARE of the disc whose tops are above the ceiling, the
+    // same convention as every other band. It used to take the cap colour,
+    // which put a single-value encoding next to a row of share-encoded bands
+    // and made a box holding 2% of the disc look identical to one holding 90%.
+    const ceilingFt = transform.yToAltitude(plotArea.top);
+    const aboveShare = point.topsBins
+      .filter((b) => b.loFt >= ceilingFt)
+      .reduce((sum, b) => sum + b.fraction, 0);
+    const boxColor = aboveShare > 0 ? shareColor(aboveShare) : color;
+
     ctx.save();
     const yBox = plotArea.top + 1;
     ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = boxColor;
     ctx.lineWidth = 1;
     for (let offset = 0; offset < width + ABOVE_SCALE_BOX_PX; offset += 4) {
       const sx = x0 + offset;
@@ -306,10 +317,12 @@ function drawPoint(
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = boxColor;
     ctx.strokeRect(x0, yBox, width, ABOVE_SCALE_BOX_PX);
 
-    // Up arrow, centred.
+    // Up arrow, centred. Keeps the cap colour: it marks the highest top, which
+    // is a single value, not a share — and it must stay legible against
+    // whatever share colour the box took.
     const cx = (x0 + x1) / 2;
     ctx.fillStyle = color;
     ctx.beginPath();

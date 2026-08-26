@@ -411,10 +411,18 @@ const observedTops: LayerTooltipDef = {
       });
     }
     if (o.topsHighestFt != null) {
-      // Reaches to the sky so the off-scale box is hoverable whatever the
-      // chart ceiling is; the tooltip machinery picks the narrowest match.
+      // Spans the whole column, because the highest top is a property of the
+      // POINT, not of an altitude — the same reasoning that makes the radar
+      // row altitude-independent.
+      //
+      // It also fixes a gap that only appeared when the top was off-scale: the
+      // layer pins its box to the plot ceiling, but this zone used to start at
+      // the true altitude, so a cursor over that box (at FL226 on a chart
+      // topping out there, against a FL361 top) fell between the last drawn
+      // band and the top and matched nothing. The one mark a pilot could see
+      // was the one mark they could not query.
       zones.push({
-        baseFt: o.topsHighestFt,
+        baseFt: -1e6,
         topFt: 1e6,
         point: o,
         label: `highest top ${formatFl(o.topsHighestFt)}`,

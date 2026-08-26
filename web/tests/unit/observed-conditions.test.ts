@@ -323,6 +323,7 @@ describe('observed-tops layer', () => {
     const gaChart = {
       plotArea: { left: 0, top: 0, width: 100, height: 200 },
       altitudeToY: (ft: number) => 200 - (ft / 20000) * 200,
+      yToAltitude: (y: number) => ((200 - y) / 200) * 20000,
     };
     expect(topsAboveScale(observed, gaChart as never)).toBe(true);
 
@@ -330,6 +331,7 @@ describe('observed-tops layer', () => {
     const tallChart = {
       plotArea: { left: 0, top: 0, width: 100, height: 200 },
       altitudeToY: (ft: number) => 200 - (ft / 60000) * 200,
+      yToAltitude: (y: number) => ((200 - y) / 200) * 60000,
     };
     expect(topsAboveScale(observed, tallChart as never)).toBe(false);
   });
@@ -348,6 +350,7 @@ describe('observed-tops layer', () => {
       plotArea: { left: 0, top: 0, width: 100, height: 200 },
       distanceToX: (nm: number) => nm,
       altitudeToY: (ft: number) => 200 - (ft / 20000) * 200,
+      yToAltitude: (y: number) => ((200 - y) / 200) * 20000,
     };
     observedTopsLayer.render(ctx as never, gaChart as never, extract(makeObserved()) as never);
     const badge = texts.find((t) => t.includes('Satellite'));
@@ -396,6 +399,7 @@ describe('observed-surface layer', () => {
       plotArea: { left: 0, top: 0, width: 100, height: 100 },
       distanceToX: (nm: number) => nm,
       altitudeToY: (ft: number) => 100 - ft / 1000,
+      yToAltitude: (y: number) => (100 - y) * 1000,
     };
 
     const lightningOnly = extract(makeObserved({ reflectivity: null, rain_rate: null } as never));
@@ -747,6 +751,7 @@ describe('cloud-top deck grouping', () => {
       plotArea: { left: 0, top: 0, width: 100, height: 200 },
       distanceToX: (nm: number) => nm,
       altitudeToY: (ft: number) => 200 - (ft / 20000) * 200,
+      yToAltitude: (y: number) => ((200 - y) / 200) * 20000,
     };
     const data = extract(makeObserved());
     const observed = data.observed!;
@@ -755,5 +760,43 @@ describe('cloud-top deck grouping', () => {
     expect(observed.points.some((p) => p.topsHighestFt != null)).toBe(true);
     observedTopsLayer.render(ctx as never, chart as never, data as never);
     expect(texts.find((s) => s.includes('Satellite'))).toMatch(/tops to FL\d+/);
+  });
+});
+
+// --- Above-scale marks -----------------------------------------------------
+
+describe('tops above the chart ceiling', () => {
+  const def = () => LAYER_TOOLTIPS.find((d) => d.id === 'observed-tops')!;
+
+  it('is hoverable at the ceiling, where the box is actually drawn', () => {
+    // The box is pinned to the plot ceiling but the top is at FL350+. The
+    // zone used to start at the TRUE altitude, so a cursor over the one mark
+    // a pilot can see fell in the gap between the last drawn band and the
+    // real top, and matched nothing.
+    const observed = extract(makeObserved()).observed!;
+    const sample = observed.points.find((p) => p.topsHighestFt != null)!;
+    const point = { distanceNm: sample.distanceNm, observed: sample } as never;
+
+    const zones = def().getZones(point);
+    const top = zones.find((z) => z.topFt >= 1e6);
+    expect(top, 'no zone reaches above the drawn bands').toBeDefined();
+
+    // A GA chart tops out around FL220; the cursor sits there, far below the
+    // FL350 top, and must still resolve.
+    const atCeiling = 22000;
+    const match = zones.find((z) => atCeiling >= z.baseFt && atCeiling <= z.topFt);
+    expect(match, `nothing matched at ${atCeiling} ft`).toBeDefined();
+    expect(def().formatLine(match, atCeiling)).toMatch(/highest top FL\d+/);
+  });
+
+  it('spans the column when no band is drawn at all', () => {
+    // Every band above the ceiling: there is nothing else to say at this
+    // point, so "the tops here are above this chart" is the honest answer at
+    // any altitude rather than at none.
+    const observed = extract(makeObserved()).observed!;
+    const sample = { ...observed.points.find((p) => p.topsHighestFt != null)!, topsBins: [] };
+    const zones = def().getZones({ distanceNm: 0, observed: sample } as never);
+    const match = zones.find((z) => 5000 >= z.baseFt && 5000 <= z.topFt);
+    expect(match, 'nothing matched with no bands drawn').toBeDefined();
   });
 });
