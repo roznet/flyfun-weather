@@ -155,8 +155,67 @@ toggle, priority/flight-date/debrief columns, Promote button); `web/ts/eval/labe
 
 Scripts (commands → **`eval-workbench` skill**): `export_eval_candidates.py`, `pull_eval_corpus.py`
 (seed from local packs), `pull_prod_complete_packs.py` / `sync_eval_from_prod.py` (pull from prod),
-`pull_debrief_data.py` (attach debriefs), `rerun_advisories_diff.py` (advisory regression, `--deep`),
+`pull_debrief_data.py` (attach debriefs), `rerun_advisories_diff.py` (advisory regression, `--deep`,
+`--check-invariants`, `--altitude-profile`),
 `rehydrate_eval_cache.py` (rebuild derived cache).
+
+## What a clean replay does not cover
+
+A replay's "N packs, no change" is only as broad as the packs in it, and two
+gaps are structural rather than incidental (#578). Both were found while
+validating changes the replay had blessed.
+
+**The corpus is a low-level corpus.** Cruise altitudes in the staging set:
+
+```
+    0- 2000 ft :   1
+ 2000- 4000 ft :  27
+ 4000- 6000 ft :  31
+ 6000- 8000 ft :  37
+ 8000-10000 ft :  49        <- 142 of 205 (71%) below 10,000 ft
+10000-12000 ft :  28
+12000-14000 ft :  16
+16000-18000 ft :   8
+18000-20000 ft :   6
+26000-28000 ft :   2        <- 15 packs at/above 16,000 ft
+```
+
+Two consequences for any altitude-scaled change (turbulence/CAT tiers, icing
+aloft, cloud tops). Below 10,000 ft, a law like #539's `clamp(Δz/1000, 1.0, 2.0)`
+is ≥1.0 by definition, so for 71% of the corpus the comparison is one-way *by
+construction*. And where tightening bites hardest there is nothing to tighten:
+of the 15 packs at/above 16,000 ft, 11 already read "Smooth ride expected" in the
+baseline. #539 accordingly replayed as 8 escalations and 1 de-escalation — which
+reads as "this change only ever raises risk" and is an artifact of the sample,
+not a property of the change (a dev pack at FL180 goes from 9 severe-at-cruise
+layers to 0).
+
+`rerun_advisories_diff.py` therefore **ends every run with the cruise-altitude
+profile of the packs it replayed** (`corpus.altitude_profile` /
+`format_altitude_profile`, `--altitude-profile` to print it alone), including how
+many of the high packs carry a *flagged* turbulence baseline — the only ones on
+which a de-escalation has anything to measure. Growing the corpus at FL150–FL200
+with packs that carry active turbulence is the standing gap; the profile is what
+keeps it visible.
+
+**A check that reports success without running.** `rerun_manifest_deep` called
+`run_analysis_from_pack` and discarded its result — the function returns a
+manifest and writes nothing, while the `run_advisories_from_pack` beside it
+re-reads `route_analyses.json` off disk. `--deep` therefore re-graded the
+*pre-change* soundings and reported "no change" for exactly the sounding-layer
+changes it exists to validate. Fixed by persisting the recomputed manifest
+(`tasks/artifacts.save_route_analyses`, split out of `save_analysis_artifacts`
+for this) and pinned by `tests/eval_workbench/test_rerun_deep.py`, which
+perturbs the sounding layer and requires a diff.
+
+**Invariants, not just diffs.** `--check-invariants` runs the published-extent
+invariants (`analysis/advisories/invariants.py`) over each re-run manifest and
+counts aggregates that read calmer than a flagged model. A diff answers "did this
+change move a rating?"; the invariants answer "is what we publish self-consistent
+at all?", and only real packs carry the geometry that breaks it. The same
+predicates run in CI over synthetic contexts, and over a handful of corpus packs
+when `EVAL_CORPUS_DIR` is present
+(`tests/analysis/advisories/test_extent_invariants_on_corpus.py`).
 
 ## Scoring tie-in — the corpus IS the eval set
 

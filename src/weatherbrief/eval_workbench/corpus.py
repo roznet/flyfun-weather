@@ -288,3 +288,103 @@ def coverage_report(packs: list[CorpusPack] | None = None) -> list[dict]:
             "corpus_ids": [p.corpus_id for p in tagged],
         })
     return rows
+
+
+# --- altitude coverage ------------------------------------------------------
+#
+# A replay's "N packs, no change" is only as broad as the corpus's cruise
+# altitudes, and this corpus is a low-level corpus: 71% of the staging set flies
+# below 10,000 ft. Any turbulence/CAT/icing law whose behaviour depends on
+# altitude is therefore measured mostly on its low half, and a change that badly
+# over-tightened aloft could pass a 201-pack replay clean (#578). These helpers
+# make a replay state its own altitude coverage instead of leaving it folklore.
+
+_ALTITUDE_BAND_FT = 2000
+# Below this the #539-class laws cannot tighten at all (the old ramp was x1.0
+# there), so the comparison is one-way by construction.
+LOW_LEVEL_CEILING_FT = 10000
+# The band where an altitude-scaled change bites hardest.
+ALOFT_FLOOR_FT = 16000
+
+
+def altitude_profile(
+    packs: list[CorpusPack] | None = None, area: str = "corpus"
+) -> dict:
+    """Cruise-altitude distribution of a pack set, plus what it can't measure.
+
+    ``bands`` is ``[(lo_ft, hi_ft, count), ...]`` over the occupied 2000-ft
+    bands. ``aloft_with_flagged_turbulence`` counts the packs at/above
+    :data:`ALOFT_FLOOR_FT` whose *saved* baseline actually flags turbulence —
+    the only ones on which a de-escalating change has anything to de-escalate.
+    """
+    if packs is None:
+        packs = list_corpus(area)
+    altitudes = [p.meta.cruise_altitude_ft for p in packs]
+    bands: list[tuple[int, int, int]] = []
+    if altitudes:
+        top = max(altitudes) // _ALTITUDE_BAND_FT * _ALTITUDE_BAND_FT
+        for lo in range(0, top + _ALTITUDE_BAND_FT, _ALTITUDE_BAND_FT):
+            hi = lo + _ALTITUDE_BAND_FT
+            count = sum(1 for a in altitudes if lo <= a < hi)
+            if count:
+                bands.append((lo, hi, count))
+    aloft = [p for p in packs if p.meta.cruise_altitude_ft >= ALOFT_FLOOR_FT]
+    return {
+        "total": len(packs),
+        "bands": bands,
+        "below_low_level_ceiling": sum(
+            1 for a in altitudes if a < LOW_LEVEL_CEILING_FT
+        ),
+        "aloft": len(aloft),
+        "aloft_with_flagged_turbulence": sum(
+            1 for p in aloft if _baseline_flags(p, area, "turbulence")
+        ),
+    }
+
+
+def _baseline_flags(pack: CorpusPack, area: str, advisory_id: str) -> bool:
+    """True when the pack's saved advisories flag *advisory_id* on any model.
+
+    Reads the stored baseline rather than re-grading: this is a question about
+    what the corpus *contains*, not about the code under test.
+    """
+    path = pack_path(pack.corpus_id, area) / "route_advisories.json"
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    for advisory in data.get("advisories", []):
+        if advisory.get("advisory_id") != advisory_id:
+            continue
+        statuses = {advisory.get("aggregate_status")} | {
+            m.get("status") for m in advisory.get("per_model", [])
+        }
+        return bool(statuses & {"red", "amber"})
+    return False
+
+
+def format_altitude_profile(
+    packs: list[CorpusPack] | None = None, area: str = "corpus"
+) -> str:
+    """The profile as a printable block, with the caveat it exists to carry."""
+    prof = altitude_profile(packs, area)
+    if not prof["total"]:
+        return "Cruise-altitude profile: no packs."
+    lines = [f"Cruise-altitude profile of the {prof['total']} pack(s) replayed:"]
+    widest = max(count for _, _, count in prof["bands"])
+    for lo, hi, count in prof["bands"]:
+        bar = "#" * max(1, round(20 * count / widest))
+        lines.append(f"  {lo:>6}-{hi:>6} ft : {count:>4}  {bar}")
+    pct_low = round(100 * prof["below_low_level_ceiling"] / prof["total"])
+    lines += [
+        f"  {prof['below_low_level_ceiling']} of {prof['total']} ({pct_low}%) below "
+        f"{LOW_LEVEL_CEILING_FT} ft; {prof['aloft']} at/above {ALOFT_FLOOR_FT} ft, "
+        f"of which {prof['aloft_with_flagged_turbulence']} carry a flagged "
+        "turbulence baseline.",
+        "  A clean replay therefore says little about altitude-scaled changes "
+        "aloft — see designs/eval-digest-workbench.md, \"What a clean replay "
+        "does not cover\".",
+    ]
+    return "\n".join(lines)

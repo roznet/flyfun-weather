@@ -217,9 +217,16 @@ struct ForecastMapTests {
     }
 
     @Test func pendingNavigationRoundTripsForecastMap() {
+        // Its own defaults suite, not `.standard`: the store is process-global
+        // with one key and a destructive `take()`, and swift-testing runs suites
+        // in parallel — sharing `.standard` with UniversalLinkRoutingTests'
+        // round-trip let one test consume the other's value (#578).
+        let store = PendingNavigationStore.testStore(#function)
+        defer { PendingNavigationStore.removeTestStore(#function) }
         let dl = MapDeepLink(day: 2, hour: 6, model: "gfs", metric: "ceiling_ft", airport: "EGLL")
-        PendingNavigationStore.set(.forecastMap(dl))
-        #expect(PendingNavigationStore.take() == .forecastMap(dl))
+        store.set(.forecastMap(dl))
+        #expect(store.take() == .forecastMap(dl))
+        #expect(store.take() == nil, "take() consumes the target")
     }
 
     /// The VM applies a `MapDeepLink` at init — the consumption end of the shared

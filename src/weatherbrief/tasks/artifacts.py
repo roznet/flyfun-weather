@@ -120,23 +120,48 @@ def save_analysis_artifacts(
     )
 
     if route_analyses_manifest:
-        ra_path = pack_dir / "route_analyses.json"
-        # Compact JSON — large file with per-point sounding data
-        ra_path.write_text(
-            route_analyses_manifest.model_dump_json(
-                exclude={"analyses": {"__all__": {"sounding": {"__all__": {
-                    "derived_levels",
-                }}}}},
-            )
-        )
+        save_route_analyses(pack_dir, route_analyses_manifest)
 
-        # Sounding-profile sidecar: shaped profiles for every (point, model),
-        # built from the FULL in-memory manifest (derived_levels intact, before
-        # the strip above) plus cross_section.json (already on disk from
-        # save_fetch_artifacts). No added MetPy recompute. Endpoints read this
-        # instead of recomputing, killing the multi-second offline-pack
-        # "Preparing…" stall (issue #188). The online viewer never loads it.
-        _write_sounding_sidecar(pack_dir, route_analyses_manifest)
+
+def save_route_analyses(
+    pack_dir: Path,
+    manifest: RouteAnalysesManifest,
+    *,
+    sidecar: bool = True,
+) -> Path:
+    """Write ``route_analyses.json`` (+ its sounding sidecar) to *pack_dir*.
+
+    Split out of :func:`save_analysis_artifacts` so a caller that recomputed the
+    analyses on their own — the eval workbench's deep re-run — can persist them
+    the same way the pipeline does, instead of holding a manifest in memory
+    while the next stage re-reads the OLD file off disk (#578).
+
+    ``sidecar=False`` skips ``sounding_profiles.json.gz``. It is a viewer
+    convenience (issue #188), not an input to analysis or advisories, so a
+    throwaway pack that will only be re-graded need not pay for it.
+
+    Returns the path written.
+    """
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    ra_path = pack_dir / "route_analyses.json"
+    # Compact JSON — large file with per-point sounding data
+    ra_path.write_text(
+        manifest.model_dump_json(
+            exclude={"analyses": {"__all__": {"sounding": {"__all__": {
+                "derived_levels",
+            }}}}},
+        )
+    )
+
+    # Sounding-profile sidecar: shaped profiles for every (point, model),
+    # built from the FULL in-memory manifest (derived_levels intact, before
+    # the strip above) plus cross_section.json (already on disk from
+    # save_fetch_artifacts). No added MetPy recompute. Endpoints read this
+    # instead of recomputing, killing the multi-second offline-pack
+    # "Preparing…" stall (issue #188). The online viewer never loads it.
+    if sidecar:
+        _write_sounding_sidecar(pack_dir, manifest)
+    return ra_path
 
 
 def _write_sounding_sidecar(pack_dir: Path, manifest: RouteAnalysesManifest) -> None:

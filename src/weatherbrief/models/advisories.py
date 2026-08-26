@@ -347,9 +347,25 @@ class Interview(BaseModel):
     questions: list[InterviewQuestion] = Field(default_factory=list)
 
 
-def _pct(nm: float, domain_nm: float) -> float:
-    """Distance-based coverage, rounded like the rest of the published numbers."""
-    return round(100.0 * nm / domain_nm, 1) if domain_nm > 0 else 0.0
+def published_pct(nm: float, domain_nm: float) -> float:
+    """Distance-based coverage, rounded like the rest of the published numbers.
+
+    Public because it is the *rule*, not a helper: the extent invariants
+    (``analysis/advisories/invariants.py``) recompute the published percentage
+    with this same function, so a field set by a path that bypassed ``build()``
+    is what shows up as a violation.
+
+    A non-zero extent never rounds down to ``0.0``. A sliver of a long route is
+    0.03% by arithmetic, and publishing that as ``0.0`` puts "0%" — which every
+    consumer reads as "nothing wrong" — beside a RED verdict and a non-zero
+    ``affected_points`` (#578, the general form of #571 review round 9). The
+    floor is the smallest number the published precision can carry.
+    """
+    if domain_nm <= 0:
+        return 0.0
+    raw = 100.0 * nm / domain_nm
+    pct = round(raw, 1)
+    return 0.1 if pct == 0.0 and raw > 0 else pct
 
 
 class ModelAdvisoryResult(BaseModel):
@@ -480,7 +496,7 @@ class ModelAdvisoryResult(BaseModel):
         )
         if extent is None and total_distance_nm <= 0 and total > 0:
             # No extent AND no route length: the pct below would be
-            # ``_pct(0.0, 0.0)`` → 0.0 whatever the status, so a RED airport
+            # ``published_pct(0.0, 0.0)`` → 0.0 whatever the status, so a RED airport
             # verdict on a zero-length route published ``affected_pct: 0.0``
             # beside ``affected_points: 1``. The airport-scoped advisories
             # (airport_wind, density_altitude, llws, flight_category) build with
@@ -516,7 +532,7 @@ class ModelAdvisoryResult(BaseModel):
         # Same treatment for the higher-threshold tier. It needs its own branch
         # rather than riding ``extent``'s: the mod extent carries its own
         # ``pct``, and on a degenerate route that ratio is the only honest
-        # answer — ``_pct`` below would divide by a domain of 0 and publish
+        # answer — ``published_pct`` below would divide by a domain of 0 and publish
         # ``affected_mod_pct: 0.0`` beside a non-zero ``affected_mod_points``.
         affected_mod_nm: float | None = None
         if extent_mod is not None:
@@ -543,14 +559,14 @@ class ModelAdvisoryResult(BaseModel):
             total_points=total,
             affected_pct=(
                 round(degenerate_pct, 1) if degenerate_pct is not None
-                else _pct(resolved_nm, resolved_domain_nm)
+                else published_pct(resolved_nm, resolved_domain_nm)
             ),
             affected_nm=resolved_nm,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
             affected_mod_pct=(
                 round(degenerate_mod_pct, 1) if degenerate_mod_pct is not None
-                else _pct(resolved_mod_nm, resolved_domain_nm)
+                else published_pct(resolved_mod_nm, resolved_domain_nm)
             ),
             affected_mod_nm=resolved_mod_nm,
             domain_nm=resolved_domain_nm,

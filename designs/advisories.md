@@ -90,6 +90,30 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
+**A GREEN aggregate may sit above a RED model — deliberately (#578).** That is
+what MAJORITY *means*: a lone dissenting model does not move the aggregate. The
+consequence is worth stating plainly, because it is what a pilot sees: the
+aggregate detail comes from the representative model (the first per-model result
+carrying the aggregate status), so the briefing prints "Smooth ride expected"
+while one model reads RED over 63% of the route. Replaying 201 staging packs
+found 15 such `(pack, advisory)` pairs; a pilot who wants the other behaviour
+sets aggregation to WORST.
+
+This is pinned as a choice, not left as an accident:
+`TestTheAggregateLayer.test_majority_may_publish_green_over_a_red_model`
+asserts it, and `invariants.masked_flagged_models` reports it (never as a
+violation) so `rerun_advisories_diff.py --check-invariants` can count it across
+real packs. Flooring the aggregate at AMBER whenever any model is RED is the
+alternative; it moves grades on live briefings, so it needs its own diff run and
+its own decision — not an edited assertion.
+
+**Invariants over the published result** (`analysis/advisories/invariants.py`):
+one set of predicates — the #571 extent rules, "flagged ⇒ non-zero coverage", and
+the aggregate-layer rules (the aggregate holds a grade some model holds; it names
+the representative it speaks for; any extent it prints is that model's) — shared
+by the unit tests, a real-corpus test and the replay script, so a new evaluator
+is covered without anyone remembering to add it.
+
 ## The 22 Evaluators
 
 ### Icing
