@@ -233,10 +233,10 @@ function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
     label: `${Math.round(f * 100)}%`,
     color: pick(f)[1],
     meaning: f <= 0.02
-      ? 'a few pixels of the disc had tops in this band'
+      ? 'a few of the cloudy pixels around the point had tops in this band'
       : f >= 0.8
-        ? 'most of the disc had tops in this band'
-        : 'share of the disc with tops in this band',
+        ? 'most of the cloud around the point had its top in this band'
+        : 'share of the cloud around the point with tops in this band',
   }));
   entries.push({
     label: 'depth unknown',
