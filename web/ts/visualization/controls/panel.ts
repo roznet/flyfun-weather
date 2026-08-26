@@ -756,12 +756,18 @@ export function renderMapControls(
       const openLabel = escapeHtml(t('viz.airports.openMap'));
       html += `<a class="map-forecast-open" id="map-forecast-open" href="${escapeHtml(fo.fullMapUrl)}" target="_blank" rel="noopener" title="${openLabel}" aria-label="${openLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></a>`;
     }
-    // Observed layer sits apart from Color/Width, and to the right. Those two
-  // style the FORECAST route line; this picks a MEASUREMENT of the real sky.
-  // Grouping them reads as three settings of one thing, which they are not.
-  // One at a time. These are different measurements of the
-  // same sky and stacking them would make it impossible to say which
-  // measurement a colour came from.
+    html += '</div>';
+  }
+
+  // Observed layer sits apart from Color/Width, and to the right: those two
+  // style the FORECAST route line, this picks a MEASUREMENT of the real sky.
+  // Grouped together they read as three knobs on one thing, which they are not.
+  //
+  // Outside the forecast-overlay block on purpose — nesting it there made the
+  // selector appear only while the airport overlay happened to be on.
+  //
+  // One at a time: these are different measurements of the same sky, and
+  // stacking them leaves a colour on the map whose source is ambiguous.
   if (observed && (observed.reflectivity || observed.rainRate || observed.cloudTops || observed.lightning)) {
     html += '<div class="map-controls-observed">';
     html += '<label class="map-control-label">';
@@ -775,9 +781,6 @@ export function renderMapControls(
     html += '</select>';
     html += '</label>';
     html += '</div>';
-  }
-
-  html += '</div>';
   }
 
   html += '</div>';
