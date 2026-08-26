@@ -229,3 +229,39 @@ class TestMountainWindWaveCorroboration:
         ctx = replace(ctx, cross_sections=[trimmed])
         result = _evaluate(ctx)
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+
+class TestMountainWindExtentDomain:
+    """The extent's denominator is mountain miles, and the sentence says so (#571 D3).
+
+    This advisory restricts its domain to the route's mountain points and used to
+    multiply that point fraction by the WHOLE route length: on the trigger pack
+    ICON printed "543nm/582nm (93%)" for a 131.8 nm footprint — a ~4x
+    overstatement that the digest then promoted to a watch item.
+    """
+
+    def _red_result(self):
+        # 60kt everywhere; points 4-6 of 10 are the 5000ft plateau.
+        return _evaluate(_ctx(60.0)).per_model[0]
+
+    def test_extent_denominator_is_the_mountain_domain(self):
+        m = self._red_result()
+        # Points 4-6 at 200/9 nm spacing own [77.8,100], [100,122.2], [122.2,144.4]
+        # → 66.7 nm of high terrain, all of it flagged.
+        assert m.domain_nm == 66.7
+        assert m.affected_nm == 66.7
+        assert m.affected_domain == "of high terrain"
+        # The route length is still published, and is NOT the denominator.
+        assert m.total_nm == 200.0
+
+    def test_sentence_quotes_the_footprint_and_names_the_domain(self):
+        m = self._red_result()
+        assert f"{round(m.affected_nm)}nm/{round(m.domain_nm)}nm" in m.detail
+        assert "of high terrain" in m.detail
+        # The old form multiplied the mountain fraction by the route length.
+        assert "200nm" not in m.detail
+
+    def test_coverage_is_a_share_of_the_domain_not_the_route(self):
+        m = self._red_result()
+        assert round(m.affected_pct) == 100      # all mountain miles flagged
+        assert round(100.0 * m.affected_nm / m.total_nm) == 33  # NOT what we print

@@ -403,7 +403,7 @@ def test_enabled_advisory_params_still_reach_the_composite():
 
     tuned = evaluate_all(
         _ctx(soundings), enabled_ids=ids,
-        user_params={"convective": {**CONVECTIVE_PARAM_DEFAULTS, "affected_pct_red": 95}},
+        user_params={"convective": {**CONVECTIVE_PARAM_DEFAULTS, "extent_pct_red": 95}},
     )
     conv = next(r for r in tuned if r.advisory_id == "convective")
     ifr = next(r for r in tuned if r.advisory_id == "ifr_feasibility")

@@ -17,12 +17,15 @@ import Foundation
 private func modelResult(
     model: String,
     status: String = "amber",
-    highlights: AdvisoryHighlights? = nil
+    highlights: AdvisoryHighlights? = nil,
+    domainNm: Double? = nil,
+    affectedDomain: String? = nil
 ) -> ModelAdvisoryResult {
     ModelAdvisoryResult(
         model: model, status: status, detail: "d",
         affectedPoints: 1, totalPoints: 10, affectedPct: 10,
-        affectedNm: 5, totalNm: 50, crossCheck: nil, mitigations: nil,
+        affectedNm: 5, totalNm: 50, domainNm: domainNm,
+        affectedDomain: affectedDomain, crossCheck: nil, mitigations: nil,
         highlights: highlights)
 }
 

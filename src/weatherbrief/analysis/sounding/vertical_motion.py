@@ -30,24 +30,50 @@ _RI_SEVERE = 0.25
 _RI_MODERATE = 0.5
 _RI_LIGHT = 1.0
 
-# Altitude-dependent loosening of those tiers (#533).
+# Thickness-dependent loosening of those tiers (#533 as an altitude ramp, #539
+# as the thickness law that subsumes it).
 #
 # NWP-derived Ri carries a systematic positive bias: model vertical resolution
 # is too coarse to resolve the thin shear sheets (100–300 m) where KH
-# instability develops, so computed Ri reads too high. That bias is a function
-# of *layer thickness*, which is a function of altitude — 25 hPa spans ~230 m
-# at 950 hPa but ~800 m at 300 hPa. The previous flat 0.5/1.0/2.0 calibration
-# applied the upper-troposphere correction unchanged in the boundary layer,
-# where the levels are already at the shear-layer scale, inflating every tier
-# by one and painting "Severe CAT" across summer-afternoon low-level profiles.
+# instability develops, so a Ri averaged over a thick layer reads too high.
+# The bias is a function of the *layer thickness the Ri was computed over* —
+# nothing else. #533 scaled by altitude as a proxy for it, which is right only
+# for one level set: it gave a GFS 25 hPa layer and an ECMWF 75 hPa layer at
+# the same altitude the same multiplier, and it was calibrated on ICON/GFS/
+# ECMWF over a single route with UKMO and Météo-France never spot-checked.
 #
-# So: classical tiers unchanged at or below _RI_LOOSEN_BASE_FT, ramping to
-# _RI_LOOSEN_MAX× (i.e. the old 0.5/1.0/2.0) at _RI_LOOSEN_TOP_FT and above.
-# The ramp rather than a step avoids a cliff where two adjacent levels either
-# side of a fixed altitude classify differently on the same Ri.
-_RI_LOOSEN_BASE_FT = 10000.0
-_RI_LOOSEN_TOP_FT = 20000.0
-_RI_LOOSEN_MAX = 2.0
+# Since #534 every Ri carries its own physical extent (the level pair it was
+# differenced over), so the correction is applied to the thing it is actually
+# a function of: scale = clamp(Δz / _RI_DZ_REF_FT, 1.0, _RI_DZ_SCALE_MAX).
+#
+# Calibration. _RI_DZ_REF_FT is the thickness at which the classical tiers
+# stand unscaled — the top of the 100–300 m shear-sheet band the correction
+# exists for, i.e. ~1,000 ft. That single constant reproduces both of the
+# altitude ramp's own knees on the level set it was calibrated against
+# (GFS/ICON-EU-GRIB, 25 hPa below 500 hPa then 50 hPa):
+#
+#   - the ramp's 10,000 ft knee is exactly where that spacing passes 1,000 ft
+#     (700→675 hPa spans ~935 ft, mid 10,350 ft — old scale 1.03, new 1.00);
+#   - the ramp's 20,000 ft ceiling is exactly where the spacing steps to
+#     50 hPa (500→450 hPa spans ~2,520 ft, mid 19,550 ft — old 1.96, new 2.00,
+#     the cap).
+#
+# So the ramp was the thickness law all along, read through one model's
+# geometry. Expressing it directly self-corrects per model with no per-model
+# configuration: ECMWF's coarse low-level levels are loosened where the ramp
+# left them classical, GFS's 25 hPa mid-troposphere layers stay near-classical
+# where the ramp loosened them on altitude alone, and UKMO/Météo-France/GEM
+# pick up the correction their 50 hPa spacing warrants without ever having
+# been spot-checked.
+#
+# The floor of 1.0 keeps the tiers from ever going *below* Miles-Howard: the
+# classical value is the physical criterion, and a finer-than-reference layer
+# is no reason to claim turbulence at a Ri the theory calls stable. The cap
+# bounds the other end — a Ri differenced across a 150 hPa gap is a bulk
+# Richardson number of dubious meaning, and it should not be able to loosen
+# the tiers without limit.
+_RI_DZ_REF_FT = 1000.0
+_RI_DZ_SCALE_MAX = 2.0
 
 # Surface well-mixed (convective boundary) layer detection (#533).
 #
@@ -208,26 +234,43 @@ def classify_vertical_motion(
     return VerticalMotionClass.SYNOPTIC_SUBSIDENCE
 
 
-def _ri_threshold_scale(altitude_ft: float) -> float:
-    """Multiplier applied to the classical Ri tiers at *altitude_ft*.
+def _ri_threshold_scale(layer_thickness_ft: float) -> float:
+    """Multiplier applied to the classical Ri tiers for a layer of *Δz*.
 
-    1.0 (classical) at or below 10,000 ft, ramping linearly to 2.0 (the old
-    flat calibration) at 20,000 ft and above. See ``_RI_LOOSEN_BASE_FT``.
+    ``clamp(Δz / 1,000 ft, 1.0, 2.0)``: classical Miles-Howard at and below
+    the shear-sheet reference thickness, loosening in proportion to how much
+    the layer smooths the shear away, capped at the ×2 the #533 altitude ramp
+    reached aloft. See ``_RI_DZ_REF_FT`` for the calibration.
     """
-    if altitude_ft <= _RI_LOOSEN_BASE_FT:
+    scale = layer_thickness_ft / _RI_DZ_REF_FT
+    if scale <= 1.0:
         return 1.0
-    if altitude_ft >= _RI_LOOSEN_TOP_FT:
-        return _RI_LOOSEN_MAX
-    frac = (altitude_ft - _RI_LOOSEN_BASE_FT) / (_RI_LOOSEN_TOP_FT - _RI_LOOSEN_BASE_FT)
-    return 1.0 + frac * (_RI_LOOSEN_MAX - 1.0)
+    return min(scale, _RI_DZ_SCALE_MAX)
 
 
-def _classify_cat_risk(ri: float, altitude_ft: float) -> CATRiskLevel:
-    """Classify CAT risk from Richardson number at a given altitude.
+def _layer_thickness_ft(below: DerivedLevel, level: DerivedLevel) -> float:
+    """Depth (ft) of the layer a level's Richardson number was computed over.
+
+    ``compute_stability_indicators`` differences *below* → *level*, so that
+    pair is the Ri's own physical extent. Falls back to a standard-atmosphere
+    estimate from the pressures when the lower level carries no altitude —
+    a coarse model must not silently read as a fine one, and the thickness is
+    only ever used as a threshold multiplier.
+    """
+    if below.altitude_ft is not None and level.altitude_ft is not None:
+        return level.altitude_ft - below.altitude_ft
+    return _pressure_to_altitude_ft(level.pressure_hpa) - _pressure_to_altitude_ft(
+        below.pressure_hpa
+    )
+
+
+def _classify_cat_risk(ri: float, layer_thickness_ft: float) -> CATRiskLevel:
+    """Classify CAT risk from a Richardson number computed over *Δz*.
 
     Thresholds are the classical 0.25/0.5/1.0 scaled by
-    ``_ri_threshold_scale(altitude_ft)`` — unchanged in the lower troposphere,
-    loosened aloft where model layer thickness genuinely hides the shear sheet.
+    ``_ri_threshold_scale(layer_thickness_ft)`` — unchanged where the model
+    resolves the shear sheet, loosened in proportion to how thick the layer
+    the Ri was averaged over actually is.
 
     Negative Ri means N² < 0 — static (convective) instability rather than
     shear-driven KH instability. Capped at MODERATE: turbulence intensity in
@@ -236,7 +279,7 @@ def _classify_cat_risk(ri: float, altitude_ft: float) -> CATRiskLevel:
     """
     if ri < 0:
         return CATRiskLevel.MODERATE
-    scale = _ri_threshold_scale(altitude_ft)
+    scale = _ri_threshold_scale(layer_thickness_ft)
     if ri < _RI_SEVERE * scale:
         return CATRiskLevel.SEVERE
     if ri < _RI_MODERATE * scale:
@@ -397,8 +440,18 @@ def _build_cat_layers(
         if lv.richardson_number < 0 and idx <= 1:
             continue
         base_lv = lv
+        # Thickness of the layer the Ri was differenced over, used to scale
+        # the tiers (#539). Deliberately read from the Ri's OWN level pair,
+        # not from the emitted layer's geometry below: how much the model
+        # smoothed the shear away is a property of the difference, while the
+        # base extension is a question about where to paint the band. Where
+        # the two disagree — the sparse-column case — the Ri really was taken
+        # across the wide gap, and the cap in ``_ri_threshold_scale`` is what
+        # bounds a bulk Ri of dubious meaning.
+        thickness_ft = _RI_DZ_REF_FT
         if idx > 0:
             below = derived_levels[idx - 1]
+            thickness_ft = _layer_thickness_ft(below, lv)
             # Same 100 hPa adjacency criterion as the grouping below: across a
             # sparse column (missing levels), extending the base would paint a
             # multi-thousand-ft band from one Ri of dubious meaning — keep the
@@ -408,11 +461,7 @@ def _build_cat_layers(
                 and (below.pressure_hpa - lv.pressure_hpa) <= 100
             ):
                 base_lv = below
-        # Classify at the physical layer's midpoint — the Ri characterises the
-        # whole idx-1 → idx layer, so the threshold scale shouldn't be read at
-        # its upper bound.
-        mid_ft = (base_lv.altitude_ft + lv.altitude_ft) / 2.0
-        risk = _classify_cat_risk(lv.richardson_number, mid_ft)
+        risk = _classify_cat_risk(lv.richardson_number, thickness_ft)
         if risk == CATRiskLevel.NONE:
             continue
         cat_levels.append((idx, base_lv, lv, risk, lv.richardson_number))

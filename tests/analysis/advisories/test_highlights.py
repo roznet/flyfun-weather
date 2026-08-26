@@ -32,11 +32,11 @@ from weatherbrief.models import (
 
 S = HighlightSeverity
 
-_VMC_PARAMS = {"bkn_pct_amber": 25, "ovc_pct_red": 50}
+_VMC_PARAMS = {"extent_pct_amber": 25, "extent_pct_red": 50}
 _CONV_PARAMS = {
     "min_risk": 2,
-    "affected_pct_amber": 20,
-    "affected_pct_red": 50,
+    "extent_pct_amber": 20,
+    "extent_pct_red": 50,
     "top_clearance_ft": 2000,
 }
 

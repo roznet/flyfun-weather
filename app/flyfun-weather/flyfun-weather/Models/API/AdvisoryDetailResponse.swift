@@ -30,6 +30,11 @@ struct ModelAdvisoryDetail: Codable, Identifiable, Sendable {
     let affectedPct: Double?
     let affectedNm: Double?
     let totalNm: Double?
+    /// The extent's own denominator in nm (#571); nil on old packs.
+    let domainNm: Double?
+    /// Names a non-route denominator ("of high terrain"); nil means the route.
+    /// Required to qualify `affectedPct` — see `ModelAdvisoryResult`.
+    let affectedDomain: String?
     /// Display-only context; render in neutral/info chrome (see CARDINAL RULE).
     let crossCheck: String?
 

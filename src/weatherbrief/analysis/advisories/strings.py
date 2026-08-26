@@ -279,6 +279,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Gebirgswellenbedingungen ({speed}kt nahe Gelände, {signature}) über {extent}",
         "es": "Condiciones de onda de montaña ({speed}kt cerca del terreno, {signature}) sobre {extent}",
     },
+    # Names the extent's denominator: this advisory measures coverage over the
+    # route's mountain points, not the whole route (#571 D3).
+    "mountain_wind.of_terrain": {
+        "en": "of high terrain",
+        "fr": "de relief élevé",
+        "de": "des Hochgeländes",
+        "es": "de relieve elevado",
+    },
     # Inline suffix listing the wave signature(s) seen at strong-wind points.
     "mountain_wind.sig_suffix": {
         "en": " — {signature}",
@@ -364,11 +372,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
 
     # --- icing_escape ---
+    # The no-escape clause quotes its OWN extent, not a raw point count: under
+    # ``interpolate_route``'s uneven spacing "3 points" is not comparable to a
+    # distance — it can be a sliver or a large midpoint-owned cell — and the
+    # sentence must name the population the RED gate actually graded (#571 D1).
     "icing_escape.no_escape": {
-        "en": "Icing over {extent}; no warm escape at {count} points",
-        "fr": "Givrage sur {extent} ; pas d'échappée chaude à {count} points",
-        "de": "Vereisung über {extent}; kein warmer Ausweg an {count} Punkten",
-        "es": "Engelamiento sobre {extent}; sin escape cálido en {count} puntos",
+        "en": "Icing over {extent}; no warm escape over {no_escape}",
+        "fr": "Givrage sur {extent} ; pas d'échappée chaude sur {no_escape}",
+        "de": "Vereisung über {extent}; kein warmer Ausweg über {no_escape}",
+        "es": "Engelamiento sobre {extent}; sin escape cálido en {no_escape}",
     },
     "icing_escape.no_icing": {
         "en": "No icing along route",

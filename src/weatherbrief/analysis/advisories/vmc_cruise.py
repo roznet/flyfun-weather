@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     driving_method_id,
     format_extent,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -42,8 +45,8 @@ class VMCCruiseEvaluator:
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
-                    key="bkn_pct_amber",
-                    label="BKN % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in cloud at cruise (amber)",
                     description="Route percentage with BKN at cruise for amber",
                     type="percent",
                     unit="%",
@@ -53,8 +56,8 @@ class VMCCruiseEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="ovc_pct_red",
-                    label="OVC % (red)",
+                    key="extent_pct_red",
+                    label="% of route overcast at cruise (red)",
                     description="Route percentage with OVC at cruise for red",
                     type="percent",
                     unit="%",
@@ -63,13 +66,15 @@ class VMCCruiseEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        bkn_pct_amber = params.get("bkn_pct_amber", 25)
-        ovc_pct_red = params.get("ovc_pct_red", 50)
+        extent_pct_amber = params.get("extent_pct_amber", 25)
+        extent_pct_red = params.get("extent_pct_red", 50)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         cruise = ctx.cruise_altitude_ft
 
         per_model: list[ModelAdvisoryResult] = []
@@ -78,9 +83,11 @@ class VMCCruiseEvaluator:
             ovc_count = 0
             # One evidence sample per route point (#393) — grade counts and the
             # highlight geometry both derive from this single list, so the BKN/OVC
-            # verdict and the ribbon cannot drift. ``ovc_count`` is the one
-            # sub-count the shared summary can't infer (the OVC-only red
-            # threshold), tracked alongside.
+            # verdict and the ribbon cannot drift. ``ovc_count`` is the OVC-only
+            # sub-population's point count — the RED threshold grades on that
+            # population's extent (``ovc_extent``, reduced from these same
+            # samples) and the result publishes the pair as the higher-threshold
+            # field, so the printed sentence and the structured field agree.
             samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
@@ -134,25 +141,37 @@ class VMCCruiseEvaluator:
                     distance_nm=dist, assessed=True, severity=severity, region=region,
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             affected = summary.affected  # bkn + ovc
+            # The OVC message names a narrower population than the grade's
+            # bkn+ovc union, so it quotes that population's own geometry rather
+            # than a scaled share of the union's (#571 D1).
+            ovc_extent = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.RED
+            )
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             else:
-                ovc_pct = 100 * ovc_count / total
-
-                if ovc_pct >= ovc_pct_red:
+                if grade_extent(
+                    ovc_extent, amber_pct=extent_pct_red, min_nm=extent_min_nm,
+                ) != AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.RED
-                    detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_count, total, ctx.total_distance_nm))
-                elif 100 * affected / total >= bkn_pct_amber:
+                    detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_extent))
+                elif grade_extent(
+                    summary.extent, amber_pct=extent_pct_amber,
+                    min_nm=extent_min_nm,
+                ) != AdvisoryStatus.GREEN:
                     status = AdvisoryStatus.AMBER
-                    detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
+                    detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(summary.extent))
                 elif affected > 0:
                     status = AdvisoryStatus.GREEN
-                    detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
+                    detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(summary.extent))
                 else:
                     status = AdvisoryStatus.GREEN
                     detail = adv_t("vmc_cruise.clear", loc)
@@ -173,7 +192,13 @@ class VMCCruiseEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
+                # Same rule as turbulence (#571 review): ``affected_nm`` is the
+                # BKN+OVC union the grade counts, and the OVC-only extent the RED
+                # branch grades and prints rides the higher-threshold field, so
+                # the published object and the sentence agree.
+                affected_mod=ovc_count,
+                extent_mod=ovc_extent,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),
             ))

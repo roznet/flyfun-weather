@@ -30,8 +30,12 @@ from dataclasses import dataclass
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
     FlaggedCell,
-    pct_above_threshold,
+    RouteExtent,
+    EXTENT_MIN_NM,
+    grade_extent,
+    route_extent,
 )
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.models import (
@@ -57,7 +61,7 @@ MOD_IDX = RISK_ORDER.index(ConvectiveRisk.MODERATE)
 
 # The advisory id whose parameters govern this grading. Consumers resolve the
 # user's tuning through ``resolve_convective_params`` so a pilot who raises
-# ``affected_pct_red`` moves the convective colour everywhere it is used, not
+# ``extent_pct_red`` moves the convective colour everywhere it is used, not
 # just on the convective card.
 CONVECTIVE_ADVISORY_ID = "convective"
 
@@ -68,8 +72,9 @@ CONVECTIVE_ADVISORY_ID = "convective"
 # the 15/30-vs-20/50 icing bug in ifr_feasibility).
 CONVECTIVE_PARAM_DEFAULTS: dict[str, float] = {
     "min_risk": 2,
-    "affected_pct_amber": 20,
-    "affected_pct_red": 50,
+    "extent_pct_amber": 20,
+    "extent_pct_red": 50,
+    "extent_min_nm": EXTENT_MIN_NM,
     "top_clearance_ft": 2000,
 }
 
@@ -98,6 +103,11 @@ class ConvectiveModelGrade:
     region_cells: list[tuple[float, FlaggedCell | None]]
     peak_dist_nm: float | None
     cross_check: str | None
+    # Geometry-accurate extents of the two populations above (#571). ``extent``
+    # measures ``affected``, ``extent_mod`` measures ``affected_mod``; both carry
+    # their own ``domain_nm`` so a consumer never has to scale a point ratio.
+    extent: RouteExtent = EMPTY_EXTENT
+    extent_mod: RouteExtent = EMPTY_EXTENT
 
 
 def resolve_convective_params(ctx: RouteContext) -> dict[str, float]:
@@ -181,11 +191,14 @@ def grade_convective_model(
     here rather than re-reading ``sounding.convective`` with its own thresholds.
     """
     min_risk_idx = int(params.get("min_risk", CONVECTIVE_PARAM_DEFAULTS["min_risk"]))
-    affected_pct_amber = params.get(
-        "affected_pct_amber", CONVECTIVE_PARAM_DEFAULTS["affected_pct_amber"]
+    extent_pct_amber = params.get(
+        "extent_pct_amber", CONVECTIVE_PARAM_DEFAULTS["extent_pct_amber"]
     )
-    affected_pct_red = params.get(
-        "affected_pct_red", CONVECTIVE_PARAM_DEFAULTS["affected_pct_red"]
+    extent_min_nm = params.get(
+        "extent_min_nm", CONVECTIVE_PARAM_DEFAULTS["extent_min_nm"]
+    )
+    extent_pct_red = params.get(
+        "extent_pct_red", CONVECTIVE_PARAM_DEFAULTS["extent_pct_red"]
     )
     top_clearance_ft = params.get(
         "top_clearance_ft", CONVECTIVE_PARAM_DEFAULTS["top_clearance_ft"]
@@ -210,6 +223,29 @@ def grade_convective_model(
     max_precip_mm_h: float | None = None
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
     region_cells: list[tuple[float, FlaggedCell | None]] = []
+    # Along-route positions of the two graded populations, for the
+    # geometry-accurate extents (#571 D1/D2). ``affected`` (the LOW-floor union)
+    # drives the colour; ``affected_mod`` (MODERATE+) anchors the headline. Each
+    # needs its own midpoint-cell reduction — deriving the MODERATE+ nm as a
+    # share of the union's is exactly the "45% in the string, 68.8% in the JSON"
+    # split this removes.
+    # Index-aligned with ``ribbon_points`` (one entry per route point), the same
+    # shape every other evaluator in #571 uses. Deliberately NOT sets of raw
+    # distance floats: two route points can share a distance (a repeated
+    # waypoint), and membership-testing by value would then mark a clean point
+    # affected because its twin was — silently overstating the extent instead of
+    # measuring the point (#571 review).
+    affected_flags: list[bool] = []
+    mod_flags: list[bool] = []
+    # DD-trigger points, located rather than counted (#571). The #442 cap tests
+    # the coverage the model's OWN scheme produced, and subtracting a count from
+    # a count could only ever approximate that: the two populations are not
+    # interchangeable once the extent is measured in miles.
+    dd_flags: list[bool] = []
+    # The grading denominator is points carrying a sounding (``total``), not the
+    # whole route — a model with no data at a point must not dilute the coverage
+    # of the points it does resolve (#391).
+    graded_flags: list[bool] = []
     # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
     peak_key: tuple[int, float] | None = None
     peak_dist: float | None = None
@@ -220,12 +256,19 @@ def grade_convective_model(
 
     for rpa in ctx.analyses:
         dist = rpa.distance_from_origin_nm or 0.0
+        # One entry per point, appended before any `continue`, so these stay
+        # index-aligned with ``ribbon_points`` on every path through the loop.
+        affected_flags.append(False)
+        mod_flags.append(False)
+        dd_flags.append(False)
+        graded_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
             region_cells.append((dist, None))
             continue
         total += 1
+        graded_flags[-1] = True
 
         # Independent of the grade filters below: compare the chosen thermo
         # (CAPE-derived) risk against the model's own convective scheme. Use
@@ -322,6 +365,7 @@ def grade_convective_model(
                 risk_idx = MOD_IDX
                 reason = "dd_trigger"
                 dd_trigger_count += 1
+                dd_flags[-1] = True
             else:
                 # Below the min risk floor → GREEN on the ribbon (checked,
                 # nothing worth flagging here).
@@ -335,6 +379,7 @@ def grade_convective_model(
         # still read "dd_fallback" when the branch above did not relabel it.
         if reason == "dd_fallback":
             dd_trigger_count += 1
+            dd_flags[-1] = True
 
         # Skip if convective tops are well below cruise altitude. When the DD
         # floor raised the grade and the active (quiet NWP) track has no
@@ -364,8 +409,10 @@ def grade_convective_model(
             continue
 
         affected += 1
+        affected_flags[-1] = True
         if risk_idx >= MOD_IDX:
             affected_mod += 1
+            mod_flags[-1] = True
         if risk_idx > RISK_ORDER.index(worst_risk):
             worst_risk = graded_risk
 
@@ -459,6 +506,26 @@ def grade_convective_model(
             # needs told — see ``_peak_cross_check``.
             peak_fallback = nwp_fallback
 
+    # Both extents reduce over the SAME cell edges as the ribbon this grade
+    # carries, so the card's sentence, its highlight, the gate that set the
+    # colour and the published ``affected_nm`` are one measurement (#571).
+    # Taken from ``ctx.analyses`` directly, not from ``ribbon_points``: the flag
+    # lists are appended once per analysis at the top of the loop, so this is
+    # aligned with them by construction. Reading the distances back out of
+    # ``ribbon_points`` would instead depend on its five branch-local appends
+    # staying exactly one-per-point — true today, but an assumption rather than
+    # a guarantee.
+    all_dists = [rpa.distance_from_origin_nm or 0.0 for rpa in ctx.analyses]
+    speed_kt = ctx.cruise_groundspeed_kt
+    extent = route_extent(
+        all_dists, ctx.total_distance_nm, affected_flags, graded_flags,
+        speed_kt=speed_kt,
+    )
+    extent_mod = route_extent(
+        all_dists, ctx.total_distance_nm, mod_flags, graded_flags,
+        speed_kt=speed_kt,
+    )
+
     # --- colour ---
     if total == 0:
         status = AdvisoryStatus.UNAVAILABLE
@@ -468,8 +535,9 @@ def grade_convective_model(
         # HIGH/EXTREME anywhere → RED.
         status = AdvisoryStatus.RED
     else:
-        status = pct_above_threshold(
-            affected, total, affected_pct_amber, affected_pct_red
+        status = grade_extent(
+            extent, amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+            min_nm=extent_min_nm,
         )
         if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
             status = AdvisoryStatus.AMBER
@@ -479,16 +547,23 @@ def grade_convective_model(
         # crossing the red threshold). If the red is crossed only because of
         # DD-trigger extent, cap AMBER.
         if status == AdvisoryStatus.RED and dd_trigger_count > 0:
-            real_mod = affected - dd_trigger_count
-            if pct_above_threshold(
-                real_mod, total, affected_pct_amber, affected_pct_red
+            native_extent = route_extent(
+                all_dists,
+                ctx.total_distance_nm,
+                [a and not d for a, d in zip(affected_flags, dd_flags)],
+                graded_flags,
+            )
+            if grade_extent(
+                native_extent,
+                amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                min_nm=extent_min_nm,
             ) != AdvisoryStatus.RED:
                 status = AdvisoryStatus.AMBER
         # #442: any MODERATE+ convection that reaches cruise is at least a
         # WATCH. The coverage thresholds were calibrated with the old DD floor
         # inflating the LOW-floor extent; without it an isolated-but-real
         # MODERATE tower (or a dd_trigger amber) can fall below
-        # affected_pct_amber and read GREEN despite the "MODERATE+ peak"
+        # extent_pct_amber and read GREEN despite the "MODERATE+ peak"
         # headline — colour contradicting text, and the DD divergence note going
         # unsurfaced. Floor a MODERATE+ point at AMBER.
         if affected_mod > 0 and status == AdvisoryStatus.GREEN:
@@ -511,4 +586,6 @@ def grade_convective_model(
         cross_check=_peak_cross_check(
             status, peak_has_both, peak_nwp_risk, peak_dd_risk, peak_fallback
         ),
+        extent=extent,
+        extent_mod=extent_mod,
     )

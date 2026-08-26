@@ -57,7 +57,12 @@ import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
 import { setUnitsPreference } from './units';
 import { initInfoPopup, showPopupContent, hideMetricInfo } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
-import { buildParamDefaults, pruneAdvisoryParams, pruneEngineMethod } from './helpers/profile-sparsify';
+import {
+  buildParamDefaults,
+  pruneAdvisoryParams,
+  pruneEngineMethod,
+  renameExtentParams,
+} from './helpers/profile-sparsify';
 import { clearOffered } from './tour/tour-storage';
 
 /** Advisory id of the experimental front advisory (mirrors FRONTS_ADVISORY_ID in the backend). */
@@ -241,8 +246,15 @@ function populateProfileForm(profile: ProfileResponse): void {
   const guidanceSelect = document.getElementById('input-digest-guidance') as HTMLSelectElement;
   if (guidanceSelect) guidanceSelect.value = s.digest_guidance ?? 'balanced';
 
-  // Advisories
-  const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
+  // Advisories. Rewrite any pre-consolidation extent key on the way in (#571
+  // Stage 3) so a profile the 093 migration has not reached — or one restored
+  // from a stale client cache — shows the pilot their tuning under the key the
+  // catalog now declares, instead of appearing to have lost it while the old key
+  // sits in the payload doing nothing.
+  const stored: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
+  const advPrefs: AdvisoryPreferences = stored.params
+    ? { ...stored, params: renameExtentParams(stored.params) }
+    : stored;
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
   if (aggSelect) aggSelect.value = advPrefs.aggregation ?? 'majority';
   // Interview answers travel with the profile so the assistant pre-selects them.

@@ -24,10 +24,10 @@ def test_icing_pct_defaults_are_20_50():
 
 def test_catalog_defaults_match_shared_constants():
     """Catalog parameter defaults are wired to the shared constants."""
-    assert _param_default("icing_pct_amber") == ifr_feasibility._ICING_PCT_AMBER_DEFAULT
-    assert _param_default("icing_pct_red") == ifr_feasibility._ICING_PCT_RED_DEFAULT
+    assert _param_default("extent_pct_amber") == ifr_feasibility._ICING_PCT_AMBER_DEFAULT
+    assert _param_default("extent_pct_red") == ifr_feasibility._ICING_PCT_RED_DEFAULT
 
 
 def test_catalog_amber_below_red():
     """Sanity: amber threshold is strictly below red."""
-    assert _param_default("icing_pct_amber") < _param_default("icing_pct_red")
+    assert _param_default("extent_pct_amber") < _param_default("extent_pct_red")

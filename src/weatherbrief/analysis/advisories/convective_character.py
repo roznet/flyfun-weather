@@ -15,14 +15,20 @@ disagreement on avoidability is itself signal.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, showers_at_point
+from weatherbrief.analysis.advisories._helpers import (
+    RouteExtent,
+    format_extent,
+    showers_at_point,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.clouds import cloud_cover_band_pct
 from weatherbrief.analysis.sounding.convective import (
+    character_extent,
     CHAR_COVER_REALIZED_PCT,
     CHAR_EMBED_MIN_NM,
     ConvCharPoint,
@@ -296,6 +302,27 @@ def _below_base_geometry(
     return _BelowBase("marginal", base_fl=base_fl, margin_ft=margin_ft, drop_ft=drop_ft)
 
 
+def _realized_extent(
+    points: Sequence[ConvCharPoint],
+    total_distance_nm: float,
+    speed_kt: float | None = None,
+) -> RouteExtent:
+    """Geometry-accurate extent of the realized convective cells (#571).
+
+    A thin call into ``character_extent`` — the classifier's own single reducer,
+    which the coverage band and the EMBEDDED contiguity gate also go through — so
+    the number this card prints is measured by the same code that graded it,
+    including its treatment of hand-built test points with no ``distance_nm``.
+    Re-implementing that fallback here was how the two could have drifted.
+    """
+    return character_extent(
+        points,
+        total_distance_nm,
+        lambda p: p.is_convective and p.realized,
+        speed_kt=speed_kt,
+    )
+
+
 def _format_below_base(res: _BelowBase, loc: str) -> str | None:
     """Render the below-base geometry to a localized clearance phrase."""
     if res.kind == "none":
@@ -323,6 +350,23 @@ class CharacterInputs(NamedTuple):
     shear_max: float | None
     synoptic_ascent: bool
     method_id: str | None
+
+    @property
+    def any_assessed(self) -> bool:
+        """Whether this model graded ANY route point.
+
+        ``points`` is no longer the right question. Since the round-3 fix, a
+        point this model has no sounding for is kept as an unassessed
+        placeholder so ``cell_edges`` tiles the true route — which means
+        ``points`` is non-empty whenever the route has points at all, including
+        for a model with no sounding data anywhere. The callers that used to
+        read ``if not points`` as "no data" were silently answering "there is a
+        route", and a model with nothing to say fell through to
+        ``ConvectiveCharacter.NONE`` → GREEN: the #391 false-GREEN class this
+        PR exists to eliminate, reintroduced by one of its own fixes (#571
+        review round 9).
+        """
+        return any(p.assessed for p in self.points)
 
 
 def _character_method_id(
@@ -390,6 +434,14 @@ def build_character_points(
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
         if sounding is None:
+            # Keep the point, marked unassessed. Dropping it left ``cell_edges``
+            # tiling the whole route over only the covered points, so the last
+            # covered point's cell swallowed every uncovered mile (#571 review).
+            points.append(ConvCharPoint(
+                is_convective=False, realized=False, embedded=False,
+                k_index=None, total_totals=None,
+                distance_nm=rpa.distance_from_origin_nm, assessed=False,
+            ))
             continue
 
         conv = sounding.convective
@@ -539,7 +591,7 @@ def classify_route_character(
     advisory would show.
     """
     inputs = build_character_points(ctx, model, params)
-    if not inputs.points:
+    if not inputs.any_assessed:
         return None
     return classify_inputs(ctx, model, params, inputs)
 
@@ -618,7 +670,7 @@ def _bands_at_candidates(
     bands: dict[int, ConvectiveCharacter] = {}
     for alt in candidates:
         inputs = build_character_points(ctx, model, params, cruise_ft=float(alt))
-        if not inputs.points:
+        if not inputs.any_assessed:
             continue
         bands[alt] = classify_inputs(ctx, model, params, inputs)
         if stop_when_cleared and bands[alt] is not ConvectiveCharacter.EMBEDDED:
@@ -916,7 +968,7 @@ class ConvectiveCharacterEvaluator:
             inputs = build_character_points(ctx, model, params)
             points = inputs.points
 
-            if not points:
+            if not inputs.any_assessed:
                 per_model.append(
                     ModelAdvisoryResult.build(
                         model=model,
@@ -932,11 +984,18 @@ class ConvectiveCharacterEvaluator:
             character = classify_inputs(ctx, model, params, inputs)
 
             status = _CHAR_STATUS.get(character, AdvisoryStatus.GREEN)
-            total = len(points)
+            total = sum(1 for p in points if p.assessed)
             realized_count = sum(1 for p in points if p.is_convective and p.realized)
+            # Extent of the realized cells, over the same cell edges the
+            # EMBEDDED contiguity gate measures its run on (#571) — the card's
+            # "(Xnm/Ynm)" and the gate can no longer describe different geometry.
+            extent = _realized_extent(
+                points, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             detail = adv_t(f"convective_character.{character.value}", loc)
             if character not in (ConvectiveCharacter.NONE, ConvectiveCharacter.UNKNOWN):
-                detail += f" ({format_extent(realized_count, total, ctx.total_distance_nm)})"
+                detail += f" ({format_extent(extent)})"
             # Below-base clearance note (#298) — annotate-only, low bands only. The
             # band/colour is already set; this adds the avoidance geometry vs cruise
             # (and a per-altitude hint). Never on EMBEDDED/WIDESPREAD/ORGANIZED —
@@ -957,6 +1016,7 @@ class ConvectiveCharacterEvaluator:
                     status=status,
                     detail=detail,
                     affected=realized_count,
+                    extent=extent,
                     total=total,
                     total_distance_nm=ctx.total_distance_nm,
                     # #568: the character card is the one that renders the

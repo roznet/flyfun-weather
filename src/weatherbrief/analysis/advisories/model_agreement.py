@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     format_extent,
-    pct_above_threshold,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -52,8 +54,8 @@ class ModelAgreementEvaluator:
                     step=1,
                 ),
                 AdvisoryParameterDef(
-                    key="poor_pct_amber",
-                    label="Poor % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route with poor agreement (amber)",
                     description="Route percentage with POOR agreement for amber",
                     type="percent",
                     unit="%",
@@ -63,8 +65,8 @@ class ModelAgreementEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="poor_pct_red",
-                    label="Poor % (red)",
+                    key="extent_pct_red",
+                    label="% of route with poor agreement (red)",
                     description="Route percentage with POOR agreement for red",
                     type="percent",
                     unit="%",
@@ -73,14 +75,16 @@ class ModelAgreementEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         min_poor_vars = int(params.get("min_poor_vars", 3))
-        poor_pct_amber = params.get("poor_pct_amber", 25)
-        poor_pct_red = params.get("poor_pct_red", 50)
+        extent_pct_amber = params.get("extent_pct_amber", 25)
+        extent_pct_red = params.get("extent_pct_red", 50)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         # Model agreement is cross-model — evaluated once, not per-model. One
         # evidence sample per route point (#393): ``affected`` = a POOR-agreement
@@ -112,14 +116,22 @@ class ModelAgreementEvaluator:
             has_poor = n_poor >= min_poor_vars
             has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in real)
 
-            if not has_poor and has_moderate:
+            moderate_only = has_moderate and not has_poor
+            if moderate_only:
                 moderate_count += 1
             samples.append(EvidenceSample(
                 distance_nm=dist, assessed=True, affected=has_poor,
                 severity=HighlightSeverity.AMBER if has_poor else HighlightSeverity.GREEN,
+                # The "mostly good" sentence quotes the moderate-only points, a
+                # different population from the grade's poor points — tagged so
+                # it can measure its own geometry (#571 D1).
+                tags=frozenset({"moderate"}) if moderate_only else frozenset(),
             ))
 
-        summary = summarize_evidence(samples, ctx.total_distance_nm)
+        summary = summarize_evidence(
+            samples, ctx.total_distance_nm,
+            speed_kt=ctx.cruise_groundspeed_kt,
+        )
         total = summary.assessed
         poor_count = summary.affected
         loc = ctx.locale
@@ -130,11 +142,20 @@ class ModelAgreementEvaluator:
             status = AdvisoryStatus.GREEN
             detail = adv_t("model_agreement.good", loc)
         else:
-            status = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
+            status = grade_extent(
+                summary.extent,
+                amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                min_nm=extent_min_nm,
+            )
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
-                detail = adv_t("model_agreement.mostly_good", loc, extent=format_extent(moderate_count, total, ctx.total_distance_nm))
+                detail = adv_t(
+                "model_agreement.mostly_good", loc,
+                extent=format_extent(summary.extent_of(lambda s: "moderate" in s.tags)),
+            )
             else:
-                detail = adv_t("model_agreement.poor", loc, extent=format_extent(poor_count, total, ctx.total_distance_nm))
+                detail = adv_t(
+                "model_agreement.poor", loc, extent=format_extent(summary.extent),
+            )
 
         # Coverage tolerance (#391): a "good agreement" verdict resting on real
         # comparisons at too few route points cannot vouch for the rest.
@@ -146,7 +167,7 @@ class ModelAgreementEvaluator:
             model="all", status=status, detail=detail,
             affected=poor_count, total=total,
             total_distance_nm=ctx.total_distance_nm,
-            affected_nm=summary.affected_nm,
+            extent=summary.extent,
         )]
 
         return RouteAdvisoryResult.from_per_model("model_agreement", per_model, params)

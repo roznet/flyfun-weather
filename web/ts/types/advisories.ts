@@ -146,6 +146,16 @@ export interface ModelAdvisoryResult {
   affected_pct: number;
   affected_nm: number;
   total_nm: number;
+  /** The extent's own denominator in nm (#571). Equals `total_nm` for every
+   *  advisory whose domain is the whole route; `mountain_wind`'s domain is the
+   *  route's mountain points, so `affected_nm / total_nm` would understate it.
+   *  Absent on old packs. */
+  domain_nm?: number | null;
+  /** Names a denominator that is NOT the whole route ("of high terrain").
+   *  Null/absent means the route. Anything rendering `affected_pct` must
+   *  qualify it with this, or it presents a domain fraction as route coverage
+   *  — the #571 D3 defect. */
+  affected_domain?: string | null;
   cross_check?: string | null;
   mitigations?: Mitigation[];
   /** Cross-section highlight geometry (#373). Absent/null on old packs and for

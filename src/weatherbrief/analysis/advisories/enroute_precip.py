@@ -28,10 +28,16 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EMPTY_EXTENT,
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
+    RouteExtent,
     below_coverage,
     format_extent,
+    grade_extent,
+    route_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -52,8 +58,9 @@ _FREEZING_PHASES = (PrecipPhase.FREEZING_RAIN, PrecipPhase.ICE_PELLETS)
 _SIGNIFICANT = (PrecipIntensity.MODERATE, PrecipIntensity.HEAVY)
 
 _DEFAULTS = {
-    "snow_pct_amber": 5.0,
-    "snow_moderate_pct_red": 25.0,
+    "extent_pct_amber": 5.0,
+    "extent_pct_red": 25.0,
+    "extent_min_nm": EXTENT_MIN_NM,
     "rain_pct_amber": 30.0,
 }
 
@@ -102,27 +109,51 @@ def classify_enroute_precip(
     ctx: RouteContext,
     model: str,
     params: dict[str, float] | None = None,
-) -> tuple[AdvisoryStatus, str, int, int, bool]:
+) -> tuple[AdvisoryStatus, str, int, int, bool, RouteExtent]:
     """Classify en-route precipitation for one model.
 
-    Returns ``(status, detail, affected, total, has_signal)``.
+    Returns ``(status, detail, affected, total, has_signal, named_extent)``.
     ``has_signal`` is False when no point carries a precipitation assessment
     (old pack) — callers must treat that as UNAVAILABLE, not GREEN.
+
+    ``named_extent`` is the geometry of the population the *detail sentence*
+    describes, which is a subset of ``affected`` whenever light rain is present
+    alongside something worse: the sentence suppresses light rain there but
+    ``affected`` counts it, so publishing only the union printed "snow over
+    30nm/200nm (15%)" beside an ``affected_pct`` of 45 (#571 review round 8).
     """
     p = {**_DEFAULTS, **(params or {})}
-    snow_pct_amber = p["snow_pct_amber"]
-    snow_moderate_pct_red = p["snow_moderate_pct_red"]
+    extent_pct_amber = p["extent_pct_amber"]
+    extent_pct_red = p["extent_pct_red"]
+    extent_min_nm = p["extent_min_nm"]
     rain_pct_amber = p["rain_pct_amber"]
     loc = ctx.locale
 
     total = 0
     snow_pts = 0           # any snow/mixed, any intensity
-    snow_moderate_pts = 0  # snow/mixed at moderate+
     sig_rain_pts = 0       # rain moderate+ — and FZRA/PL (vis extent only)
     light_pts = 0          # light rain — comfort, not a hazard
     has_signal = False
+    # Per-point flags for the geometry-accurate extents (#571). The three
+    # sentences below each name a DIFFERENT population (snow / significant rain
+    # / light rain), so each needs its own reduction over the route's cell
+    # edges — a share of the union's nm would describe the wrong points.
+    dists: list[float] = []
+    # Assessable points only in the denominator (#391): a sounding with no
+    # precipitation assessment must not dilute the snow share.
+    assessed_flags: list[bool] = []
+    snow_flags: list[bool] = []
+    snow_mod_flags: list[bool] = []
+    sig_flags: list[bool] = []
+    light_flags: list[bool] = []
 
     for rpa in ctx.analyses:
+        dists.append(rpa.distance_from_origin_nm or 0.0)
+        assessed_flags.append(False)
+        snow_flags.append(False)
+        snow_mod_flags.append(False)
+        sig_flags.append(False)
+        light_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
@@ -134,49 +165,77 @@ def classify_enroute_precip(
             # would read 20%, not 100%) — #391.
             continue
         total += 1
+        assessed_flags[-1] = True
         has_signal = True
         cls = classify_precip_point(precip)
         if cls is None:
             continue
         if cls in ("snow", "snow_moderate"):
             snow_pts += 1
+            snow_flags[-1] = True
             if cls == "snow_moderate":
-                snow_moderate_pts += 1
+                snow_mod_flags[-1] = True
         elif cls == "sig":
             sig_rain_pts += 1
+            sig_flags[-1] = True
         else:
             light_pts += 1
+            light_flags[-1] = True
 
     if total == 0 or not has_signal:
-        return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), 0, total, has_signal
+        return (
+            AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc),
+            0, total, has_signal, EMPTY_EXTENT,
+        )
 
     affected = snow_pts + sig_rain_pts + light_pts
-    snow_pct = 100.0 * snow_pts / total
-    snow_moderate_pct = 100.0 * snow_moderate_pts / total
-    sig_rain_pct = 100.0 * sig_rain_pts / total
+    # Each axis grades on its own population's geometry, through the shared gate
+    # with the shared minimum-extent floor (#571 Stage 2). The old point ratios
+    # made `extent_pct_amber=5` fire off a single point on a short route.
+    def _ext(flags: list[bool]) -> RouteExtent:
+        return route_extent(
+            dists, ctx.total_distance_nm, flags, assessed_flags,
+            speed_kt=ctx.cruise_groundspeed_kt,
+        )
+
+    snow_ext = _ext(snow_flags)
+    snow_mod_ext = _ext(snow_mod_flags)
+    sig_ext = _ext(sig_flags)
+    light_ext = _ext(light_flags)
+    # The hazardous union is what the sentence names whenever it names anything
+    # at all; light rain gets a sentence only when nothing worse queued one.
+    hazard_ext = _ext([sn or sg for sn, sg in zip(snow_flags, sig_flags)])
 
     parts: list[str] = []
+    named_ext = hazard_ext
     if snow_pts:
         parts.append(adv_t(
-            "enroute_precip.snow", loc,
-            extent=format_extent(snow_pts, total, ctx.total_distance_nm),
+            "enroute_precip.snow", loc, extent=format_extent(snow_ext),
         ))
     if sig_rain_pts:
         parts.append(adv_t(
-            "enroute_precip.rain", loc,
-            extent=format_extent(sig_rain_pts, total, ctx.total_distance_nm),
+            "enroute_precip.rain", loc, extent=format_extent(sig_ext),
         ))
 
-    if snow_moderate_pct >= snow_moderate_pct_red:
+    if grade_extent(
+        snow_mod_ext, amber_pct=extent_pct_red, min_nm=extent_min_nm,
+    ) != AdvisoryStatus.GREEN:
         status = AdvisoryStatus.RED
-    elif snow_pct >= snow_pct_amber or sig_rain_pct >= rain_pct_amber:
+    elif (
+        grade_extent(
+            snow_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
+        ) != AdvisoryStatus.GREEN
+        or grade_extent(
+            sig_ext, amber_pct=rain_pct_amber, min_nm=extent_min_nm,
+        ) != AdvisoryStatus.GREEN
+    ):
         status = AdvisoryStatus.AMBER
     else:
         status = AdvisoryStatus.GREEN
         if not parts and light_pts:
+            named_ext = light_ext
             parts.append(adv_t(
-                "enroute_precip.light", loc,
-                extent=format_extent(light_pts, total, ctx.total_distance_nm),
+                "enroute_precip.light", loc, extent=format_extent(light_ext),
             ))
         if not parts:
             parts.append(adv_t("enroute_precip.clear", loc))
@@ -186,9 +245,12 @@ def classify_enroute_precip(
     # A flagged snow/rain verdict always stands. (The VFR composite maps this
     # UNAVAILABLE back to GREEN, so the composite is unaffected.)
     if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
-        return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), affected, total, has_signal
+        return (
+            AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc),
+            affected, total, has_signal, EMPTY_EXTENT,
+        )
 
-    return status, " | ".join(parts), affected, total, has_signal
+    return status, " | ".join(parts), affected, total, has_signal, named_ext
 
 
 @register
@@ -219,8 +281,8 @@ class EnroutePrecipEvaluator:
             category="precipitation",
             parameters=[
                 AdvisoryParameterDef(
-                    key="snow_pct_amber",
-                    label="Snow % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in snow (amber)",
                     description="Route percentage with any snow for amber",
                     type="percent",
                     unit="%",
@@ -230,8 +292,8 @@ class EnroutePrecipEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="snow_moderate_pct_red",
-                    label="Moderate snow % (red)",
+                    key="extent_pct_red",
+                    label="% of route in moderate+ snow (red)",
                     description="Route percentage with moderate+ snow for red",
                     type="percent",
                     unit="%",
@@ -240,6 +302,7 @@ class EnroutePrecipEvaluator:
                     max=80,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="rain_pct_amber",
                     label="Rain % (amber)",
@@ -264,7 +327,7 @@ class EnroutePrecipEvaluator:
             # list drives the geometry-accurate affected_nm and the highlight, and
             # keys off the SAME per-point predicate (``classify_precip_point``), so
             # the grade's ``affected`` and the ribbon cannot drift (#393).
-            status, detail, affected, total, has_signal = classify_enroute_precip(
+            status, detail, affected, total, has_signal, named_ext = classify_enroute_precip(
                 ctx, model, params,
             )
 
@@ -302,7 +365,10 @@ class EnroutePrecipEvaluator:
                     affected=cls is not None, region=region,
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
 
             # Highlights only when the model has a precipitation signal (the
             # no-signal case grades UNAVAILABLE). ``affected``/``total`` stay the
@@ -315,7 +381,11 @@ class EnroutePrecipEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
+                # The sentence's own population, published beside the union it
+                # counts, so "snow over 30nm" is a field and not only prose.
+                affected_mod=named_ext.points,
+                extent_mod=named_ext,
                 highlights=highlights,
             ))
 

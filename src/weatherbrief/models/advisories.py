@@ -7,9 +7,16 @@ deterministic GREEN/AMBER/RED assessments per advisory per model.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    # Type-only: ``route_geometry`` imports from ``models``, so a runtime
+    # import here would close the cycle. ``build`` only reads ``.nm`` /
+    # ``.domain_nm`` off it, and ``from __future__ import annotations``
+    # keeps the annotation a string.
+    from weatherbrief.analysis.route_geometry import RouteExtent
 
 from weatherbrief.models.airport_conditions import AirportConditions  # noqa: F401
 
@@ -340,6 +347,11 @@ class Interview(BaseModel):
     questions: list[InterviewQuestion] = Field(default_factory=list)
 
 
+def _pct(nm: float, domain_nm: float) -> float:
+    """Distance-based coverage, rounded like the rest of the published numbers."""
+    return round(100.0 * nm / domain_nm, 1) if domain_nm > 0 else 0.0
+
+
 class ModelAdvisoryResult(BaseModel):
     """Result of one advisory evaluated against one model's data."""
 
@@ -358,6 +370,17 @@ class ModelAdvisoryResult(BaseModel):
     affected_mod_points: int = 0
     affected_mod_pct: float = 0.0
     affected_mod_nm: float = 0.0
+    # The extent's DENOMINATOR in nm (#571). Equal to ``total_nm`` for every
+    # evaluator whose domain is the whole route; ``mountain_wind``'s domain is
+    # the route's mountain points, so its coverage is a share of mountain miles
+    # and a consumer dividing ``affected_nm`` by ``total_nm`` would understate it
+    # as badly as the old message overstated it. 0.0 on old packs.
+    domain_nm: float = 0.0
+    # Human-readable name of a denominator that is NOT the whole route ("high
+    # terrain"). None means the route, which is the common case. Consumers that
+    # print a percentage (the digest prompt, the MCP views) must qualify it with
+    # this rather than presenting a domain fraction as route coverage.
+    affected_domain: str | None = None
     # Optional details-only metadata: divergence between the chosen method and
     # an independent second derivation (e.g. convective DD-vs-model scheme).
     # Never affects the grade; surfaced only in the info popup and LLM digest.
@@ -389,6 +412,10 @@ class ModelAdvisoryResult(BaseModel):
         total: int,
         total_distance_nm: float,
         affected_mod: int | None = None,
+        extent_mod: RouteExtent | None = None,
+        extent: RouteExtent | None = None,
+        domain_nm: float | None = None,
+        affected_domain: str | None = None,
         cross_check: str | None = None,
         mitigations: list[Mitigation] | None = None,
         highlights: AdvisoryHighlights | None = None,
@@ -398,7 +425,34 @@ class ModelAdvisoryResult(BaseModel):
         """Build a result, computing pct and nm from point counts.
 
         ``affected_mod`` is an optional higher-threshold count (e.g. convective
-        MODERATE+); its pct/nm are derived the same way as the primary extent.
+        MODERATE+). Pass ``extent_mod`` with it — the same ``RouteExtent`` the
+        message formatted for that tier. Without one its nm can only be derived
+        proportionally, and the evaluator's own message quotes the
+        geometry-accurate figure — which is how ecmwf came to print
+        "MODERATE+ over 264nm (45%)" beside an ``affected_pct`` of 68.8 (#571).
+        It is an extent rather than a bare nm for the same reason ``extent`` is:
+        a lone numerator cannot carry its own denominator, nor say whether its
+        miles are real (see ``distance_known`` below).
+
+        ``extent`` is the preferred way to publish the geometry: pass the same
+        :class:`RouteExtent` the message formatted and the gate graded, and
+        ``affected_nm`` and ``domain_nm`` are taken from it **together**. Passing
+        them separately is still supported for the composites that measure two
+        populations, but it is a footgun — an ``affected_nm`` supplied without
+        its ``domain_nm`` silently falls back to the whole route, so a
+        partially-assessed model publishes an ``affected_pct`` computed against
+        a denominator neither the gate nor the sentence used. That is the D2
+        defect this class exists to prevent, reachable by omission (#571 review).
+
+        ``domain_nm`` is the denominator the extent was measured against, and
+        ``affected_domain`` names it when it is not the whole route. Both default
+        to the route.
+
+        ``affected_pct`` is derived from the geometry, not from the point counts
+        (#571 Stage 2): ``100 x affected_nm / domain_nm``. Route points are not
+        evenly spaced, so a point ratio graded the same weather differently
+        depending on where ``interpolate_route`` inserted waypoints, and it could
+        not agree with the nm published beside it.
 
         ``affected_nm`` is an optional geometry-accurate extent (#393): when the
         evaluator derives grade and geometry from one ``EvidenceSample`` list, it
@@ -418,19 +472,89 @@ class ModelAdvisoryResult(BaseModel):
         # geometry-accurate ``affected_nm`` (midpoint-owned cells of the affected
         # points); it stays consistent because it counts the same samples that
         # produced ``affected``. Absent it, we fall back to the proportion.
+        degenerate_pct: float | None = None
+        degenerate_mod_pct: float | None = None
         proportional_nm = round(total_distance_nm * affected / total, 1) if total > 0 else 0
+        proportional_mod_nm = (
+            round(total_distance_nm * mod / total, 1) if total > 0 else 0
+        )
+        if extent is None and total_distance_nm <= 0 and total > 0:
+            # No extent AND no route length: the pct below would be
+            # ``_pct(0.0, 0.0)`` → 0.0 whatever the status, so a RED airport
+            # verdict on a zero-length route published ``affected_pct: 0.0``
+            # beside ``affected_points: 1``. The airport-scoped advisories
+            # (airport_wind, density_altitude, llws, flight_category) build with
+            # ``affected=1, total=1`` and no geometry, so the point ratio is the
+            # only answer they have — and the one they gave before this PR
+            # derived the percentage from distance (#571 review round 9). Same
+            # rule ``route_extent`` applies to the same degenerate route.
+            degenerate_pct = 100.0 * affected / total
+            if mod:
+                degenerate_mod_pct = 100.0 * mod / total
+        # A zero-length route's nm figures are synthetic scaffolding that exists
+        # only to keep the RATIO measurable. Publishing them would put
+        # `domain_nm: 400` beside `total_nm: 0` on the MCP and LLM surfaces —
+        # actively misleading rather than imprecise (#571 review round 6).
+        # Publish no miles; the percentages below are still the real ones, taken
+        # from the extents. The zeroing is unconditional: once the extent says
+        # its miles are not real, no mile field measured against that same
+        # geometry is publishable either, whoever supplied it.
+        #
+        # ``extent`` fills numerator and denominator at once; explicit kwargs
+        # otherwise win, so a composite can publish a different population
+        # deliberately.
+        if extent is not None:
+            if not extent.distance_known:
+                affected_nm = 0.0
+                domain_nm = 0.0
+                degenerate_pct = extent.pct
+            else:
+                if affected_nm is None:
+                    affected_nm = extent.nm
+                if domain_nm is None:
+                    domain_nm = extent.domain_nm
+        # Same treatment for the higher-threshold tier. It needs its own branch
+        # rather than riding ``extent``'s: the mod extent carries its own
+        # ``pct``, and on a degenerate route that ratio is the only honest
+        # answer — ``_pct`` below would divide by a domain of 0 and publish
+        # ``affected_mod_pct: 0.0`` beside a non-zero ``affected_mod_points``.
+        affected_mod_nm: float | None = None
+        if extent_mod is not None:
+            if not extent_mod.distance_known:
+                affected_mod_nm = 0.0
+                degenerate_mod_pct = extent_mod.pct
+            else:
+                affected_mod_nm = extent_mod.nm
+        resolved_nm = (
+            round(affected_nm, 1) if affected_nm is not None else proportional_nm
+        )
+        resolved_mod_nm = (
+            round(affected_mod_nm, 1) if affected_mod_nm is not None
+            else proportional_mod_nm
+        )
+        resolved_domain_nm = round(
+            domain_nm if domain_nm is not None else total_distance_nm, 1,
+        )
         return cls(
             model=model,
             status=status,
             detail=detail,
             affected_points=affected,
             total_points=total,
-            affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
-            affected_nm=round(affected_nm, 1) if affected_nm is not None else proportional_nm,
+            affected_pct=(
+                round(degenerate_pct, 1) if degenerate_pct is not None
+                else _pct(resolved_nm, resolved_domain_nm)
+            ),
+            affected_nm=resolved_nm,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
-            affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,
-            affected_mod_nm=round(total_distance_nm * mod / total, 1) if total > 0 else 0,
+            affected_mod_pct=(
+                round(degenerate_mod_pct, 1) if degenerate_mod_pct is not None
+                else _pct(resolved_mod_nm, resolved_domain_nm)
+            ),
+            affected_mod_nm=resolved_mod_nm,
+            domain_nm=resolved_domain_nm,
+            affected_domain=affected_domain,
             cross_check=cross_check,
             mitigations=mitigations if mitigations is not None else [],
             highlights=highlights,

@@ -15,8 +15,11 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     format_extent,
-    pct_above_threshold,
+    grade_extent,
+    route_extent,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
@@ -132,8 +135,8 @@ class DDvsNWPAgreementEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="amber_pct",
-                    label="Route % disagreeing for amber",
+                    key="extent_pct_amber",
+                    label="% of route disagreeing (amber)",
                     description="Minimum route percentage with disagreement to flag amber",
                     type="percent",
                     unit="%",
@@ -143,8 +146,8 @@ class DDvsNWPAgreementEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="red_pct",
-                    label="Route % disagreeing for red",
+                    key="extent_pct_red",
+                    label="% of route disagreeing (red)",
                     description="Minimum route percentage with disagreement to flag red",
                     type="percent",
                     unit="%",
@@ -153,6 +156,7 @@ class DDvsNWPAgreementEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
@@ -160,8 +164,9 @@ class DDvsNWPAgreementEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         freezing_delta_ft = params.get("freezing_delta_ft", 2000)
         cloud_overlap_min = params.get("cloud_overlap_min", 30) / 100.0
-        amber_pct = params.get("amber_pct", 30)
-        red_pct = params.get("red_pct", 60)
+        extent_pct_amber = params.get("extent_pct_amber", 30)
+        extent_pct_red = params.get("extent_pct_red", 60)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -171,8 +176,24 @@ class DDvsNWPAgreementEvaluator:
             categories_triggered: dict[str, int] = {
                 "freezing": 0, "clouds": 0,
             }
+            # Per-point geometry for the extent (#571 D2): the printed nm is
+            # the midpoint-owned-cell sum of the disagreeing points, not the
+            # route length scaled by a point ratio.
+            dists: list[float] = []
+            comparable_flags: list[bool] = []
+            disagree_flags: list[bool] = []
+            # Per-category flags, so the message can quote the extent of the
+            # category it names rather than the union's (#571 review).
+            category_flags: dict[str, list[bool]] = {
+                "freezing": [], "clouds": [],
+            }
 
             for rpa in ctx.analyses:
+                dists.append(rpa.distance_from_origin_nm or 0.0)
+                comparable_flags.append(False)
+                disagree_flags.append(False)
+                for flags in category_flags.values():
+                    flags.append(False)
                 sounding = rpa.sounding.get(model)
                 if sounding is None or sounding.indices is None:
                     continue
@@ -221,11 +242,20 @@ class DDvsNWPAgreementEvaluator:
                     continue
 
                 total += 1
+                comparable_flags[-1] = True
                 if disagreements:
                     disagree_points += 1
+                    disagree_flags[-1] = True
                     for cat in disagreements:
                         categories_triggered[cat] = categories_triggered.get(cat, 0) + 1
+                        category_flags[cat][-1] = True
 
+            extent = route_extent(
+                dists, ctx.total_distance_nm, disagree_flags, comparable_flags,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
+
+            named_extent = extent
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "no comparable DD/NWP data"
@@ -233,12 +263,24 @@ class DDvsNWPAgreementEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = "DD and NWP tracks agree"
             else:
-                status = pct_above_threshold(
-                    disagree_points, total, amber_pct, red_pct,
+                status = grade_extent(
+                    extent, amber_pct=extent_pct_amber,
+                    red_pct=extent_pct_red, min_nm=extent_min_nm,
                 )
-                ext = format_extent(disagree_points, total, ctx.total_distance_nm)
                 top_cat = max(categories_triggered, key=categories_triggered.get)
-                detail = f"{top_cat} track diverges over {ext}"
+                # The sentence names ONE category, so it quotes that category's
+                # own extent — quoting the union of all disagreeing categories
+                # beside a named one is the D1 defect this PR removes elsewhere
+                # (#571 review). The grade still keys on the union: any category
+                # diverging is a divergence.
+                named_extent = route_extent(
+                    dists, ctx.total_distance_nm,
+                    category_flags[top_cat], comparable_flags,
+                    speed_kt=ctx.cruise_groundspeed_kt,
+                )
+                detail = (
+                    f"{top_cat} track diverges over {format_extent(named_extent)}"
+                )
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model,
@@ -247,6 +289,12 @@ class DDvsNWPAgreementEvaluator:
                 affected=disagree_points,
                 total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                extent=extent,
+                # ...and publishes it, so the named category's miles are a field
+                # and not only a sentence. Writing the comment above was not the
+                # same as closing the defect (#571 review round 8).
+                affected_mod=named_extent.points,
+                extent_mod=named_extent,
             ))
 
         return RouteAdvisoryResult.from_per_model(

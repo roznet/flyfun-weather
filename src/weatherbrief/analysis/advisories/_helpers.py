@@ -5,11 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, NamedTuple
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
-from weatherbrief.analysis.route_geometry import cell_edges
+from weatherbrief.analysis.route_geometry import (
+    EMPTY_EXTENT,
+    RouteExtent,
+    cell_edges,
+    route_extent,
+)
 from weatherbrief.models import (
     AdvisoryHighlights,
+    AdvisoryParameterDef,
     AdvisoryStatus,
     ElevationProfile,
     HighlightRegion,
@@ -109,23 +115,101 @@ def to_mitigation_profile(profile: Profile) -> MitigationProfile:
     )
 
 
-def format_extent(
-    affected: int,
-    total: int,
-    total_distance_nm: float,
-) -> str:
-    """Format affected/total as a distance string, e.g. '30nm/55nm (55%)'.
+# Floor on the groundspeed used for any time estimate — keeps a figure finite
+# when winds put the headwind near TAS.
+MIN_GROUNDSPEED_KT = 30.0
 
-    Converts point counts to nautical miles using the actual route distance
-    and number of analysis points. When there are too few points to compute
-    spacing, falls back to the percentage only.
+# Last-resort cruise TAS when a flight has neither an aircraft/profile speed nor
+# a usable planned duration. A generic light-GA cruise.
+DEFAULT_CRUISE_TAS_KT = 110.0
+
+# Below this an extent's time figure is noise rather than information: "about
+# 1 min in it" tells a pilot nothing they did not get from "9nm".
+_MIN_REPORTABLE_MINUTES = 3.0
+
+
+def headwind_component(
+    speed_kt: float, direction_deg: float, track_deg: float
+) -> float:
+    """Along-track wind component: positive = headwind, negative = tailwind.
+
+    Shared by the trip-time advisory and the extent time axis (#571) so both
+    resolve the same component the same way.
     """
-    if total <= 0:
+    import math
+
+    return speed_kt * math.cos(math.radians(direction_deg - track_deg))
+
+
+def resolve_cruise_tas(ctx: RouteContext) -> float:
+    """Cruise TAS (kt) for a time estimate — always returns a value.
+
+    Precedence: the flight's aircraft/profile cruise speed (IAS → TAS at the
+    *evaluated* cruise altitude, so an altitude table reflects TAS rising with
+    height) → the flight's own planned speed (distance ÷ duration, already a
+    TAS) → a generic fallback.
+
+    Lives here rather than in ``headwind`` (where it started) so the extent time
+    axis and the trip-time advisory resolve the same speed the same way (#571).
+    """
+    from weatherbrief.atmo import ias_to_tas_isa
+
+    if ctx.cruise_speed_ias_kt:
+        return ias_to_tas_isa(ctx.cruise_speed_ias_kt, ctx.cruise_altitude_ft)
+    if (
+        ctx.flight_duration_hours
+        and ctx.flight_duration_hours > 0
+        and ctx.total_distance_nm > 0
+    ):
+        return ctx.total_distance_nm / ctx.flight_duration_hours
+    return DEFAULT_CRUISE_TAS_KT
+
+
+def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
+    """Format a :class:`RouteExtent` as '30nm/55nm (55%)'.
+
+    Takes the extent, never counts — that is what keeps the sentence and the
+    structured ``affected_nm`` the same number rather than two derivations of it
+    (#571 D2). ``domain_label`` names a denominator that is *not* the whole
+    route ("of high terrain"), which the domain-scoped evaluators must pass:
+    "543nm/582nm" for a mountain-point fraction was the ~4× overstatement.
+    """
+    if ext.domain_nm <= 0:
         return "0nm"
-    affected_nm = round(total_distance_nm * affected / total)
-    total_nm = round(total_distance_nm)
-    pct = 100 * affected / total
-    return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"
+    label = f" {domain_label}" if domain_label else ""
+    if not ext.distance_known:
+        # Zero-length route: the ratio is real, the miles are not. Print the
+        # percentage alone rather than invent a distance — the same
+        # percentage-only fallback this function has always had for degenerate
+        # geometry, now driven by the extent instead of a point count.
+        return f"{ext.pct:.0f}%{label}"
+    out = f"{round(ext.nm)}nm/{round(ext.domain_nm)}nm{label} ({ext.pct:.0f}%)"
+    # Time axis (#571 Stage 4), display only. Miles are what the weather covers;
+    # minutes are what the pilot actually spends in it, and the two diverge on a
+    # slow aircraft or into a strong headwind. Suppressed below a few minutes,
+    # where the figure is noise rather than information, and NEVER gated on —
+    # a large share of flights fall back to a profile-default speed, so a
+    # minutes gate would grade one aircraft differently from another for reasons
+    # the pilot never set.
+    if ext.minutes is not None and ext.minutes >= _MIN_REPORTABLE_MINUTES:
+        out += f", about {round(ext.minutes)} min in it"
+    return out
+
+
+def format_extent_nm(ext: RouteExtent) -> str:
+    """Format a :class:`RouteExtent` as bare miles — '6nm'.
+
+    For a *second* extent inside a sentence that already states its denominator,
+    where repeating "6nm/46nm (12%)" would be noise. Same degenerate-geometry
+    fallback as :func:`format_extent` — a zero-length route prints the ratio
+    rather than inventing miles — and deliberately no minutes: the time axis
+    belongs on the sentence's primary extent, not on every clause of it.
+    """
+    if ext.domain_nm <= 0:
+        return "0nm"
+    if not ext.distance_known:
+        return f"{ext.pct:.0f}%"
+    return f"{round(ext.nm)}nm"
 
 
 class FlaggedCell(NamedTuple):
@@ -503,6 +587,15 @@ class EvidenceSample(NamedTuple):
         ``region`` — the scrim cutout (:class:`FlaggedCell`) for a flagged point,
             or ``None``. Carries the region kind/altitude band plus the #393
             provenance tokens.
+        ``tags`` — free-form markers for *sub-populations* this point belongs to
+            (#571). An evaluator whose message names a narrower population than
+            the one that produced the grade — turbulence's SEVERE tier,
+            model_agreement's moderate-only points — tags them here and asks
+            :meth:`EvidenceSummary.extent_of` for that population's own extent.
+            Reducing the predicate over the same ``cell_edges`` is what keeps the
+            severity word and the extent beside it describing the same points;
+            the alternative (scaling the whole-population nm proportionally) is
+            the defect this replaces.
     """
 
     distance_nm: float
@@ -511,6 +604,7 @@ class EvidenceSample(NamedTuple):
     affected: bool | None = None
     in_domain: bool = True
     region: FlaggedCell | None = None
+    tags: frozenset[str] = frozenset()
 
 
 def _sample_affected(sample: EvidenceSample) -> bool:
@@ -528,7 +622,11 @@ class EvidenceSummary(NamedTuple):
     ``affected_nm`` is the geometry-accurate extent (midpoint-owned cells of the
     affected points) to pass to ``build``. ``highlights`` is the ribbon + scrim
     geometry. ``data_state`` is complete / partial / unavailable.
-    """
+
+    ``extent`` is the same measurement as a :class:`RouteExtent` — what messages
+    format and what a gate reads — and ``extent_of`` reduces any sub-population
+    predicate over the *same* geometry (#571).
+"""
 
     affected: int
     assessed: int
@@ -536,6 +634,14 @@ class EvidenceSummary(NamedTuple):
     affected_nm: float
     highlights: AdvisoryHighlights
     data_state: str  # "complete" | "partial" | "unavailable"
+    # Geometry the extents are reduced over. Defaulted so an old-style
+    # positional construction still works; ``summarize_evidence`` always sets it.
+    domain_nm: float = 0.0
+    samples: tuple[EvidenceSample, ...] = ()
+    total_nm: float = 0.0
+    # Groundspeed for the display-only ``minutes`` axis (#571 Stage 4); None
+    # when the caller did not supply one.
+    speed_kt: float | None = None
 
     @property
     def below_coverage(self) -> bool:
@@ -547,12 +653,37 @@ class EvidenceSummary(NamedTuple):
         """
         return below_coverage(self.assessed, self.domain)
 
+    @property
+    def extent(self) -> RouteExtent:
+        """The affected population's extent — what the message must format."""
+        return self.extent_of(_sample_affected)
+
+    def extent_of(
+        self, predicate: Callable[[EvidenceSample], bool]
+    ) -> RouteExtent:
+        """Extent of an arbitrary sub-population, over the same route geometry.
+
+        For evaluators whose message names a narrower population than the grade
+        (turbulence's SEVERE tier, enroute_precip's snow split, vmc_cruise's
+        OVC): reduce the predicate here rather than scaling the whole-population
+        nm proportionally, which is what made the printed number disagree with
+        the object it shipped in (#571 D1/D2).
+        """
+        return route_extent(
+            [s.distance_nm for s in self.samples],
+            self.total_nm,
+            [bool(predicate(s)) for s in self.samples],
+            [s.in_domain and s.assessed for s in self.samples],
+            speed_kt=self.speed_kt,
+        )
+
 
 def summarize_evidence(
     samples: list[EvidenceSample],
     total_nm: float,
     *,
     peak_dist_nm: float | None = None,
+    speed_kt: float | None = None,
 ) -> EvidenceSummary:
     """Derive grade counts, geometry-accurate extent, highlights and coverage (#393).
 
@@ -562,6 +693,9 @@ def summarize_evidence(
     midpoint-owned-cell distance of the *affected* points — stays consistent with
     ``affected_pct`` (both count the same points). This is the #391 geometry fix,
     landed here where it belongs rather than as a second pass over the route.
+
+    ``speed_kt`` (typically ``ctx.cruise_groundspeed_kt``) fills the extents'
+    display-only ``minutes`` axis; omit it and ``minutes`` stays ``None``.
 
     ``peak_dist_nm`` overrides the highlight's jump-to-worst point; when ``None``
     it defaults to :func:`ribbon_peak` (longest red run, else amber). The caller
@@ -578,13 +712,20 @@ def summarize_evidence(
     # Geometry-accurate extent: each affected point owns the interval to the
     # midpoints of its neighbours; union (here, sum — cells are disjoint by
     # construction) the qualifying intervals. Falls out of the same cell edges
-    # the ribbon uses, so extent and ribbon share one geometry.
-    affected_nm = 0.0
-    if pts:
-        lefts, rights = cell_edges(distances, total_nm)
-        affected_nm = sum(
-            rights[i] - lefts[i] for i, s in enumerate(pts) if _sample_affected(s)
-        )
+    # the ribbon uses, so extent and ribbon share one geometry. ``domain_nm``
+    # comes out of the same reduction, so a domain-scoped evaluator carries its
+    # own denominator instead of borrowing the route's (#571 D3).
+    extent = route_extent(
+        distances,
+        total_nm,
+        [_sample_affected(s) for s in pts],
+        # The denominator is what this model could grade: in-domain AND
+        # assessed. Counting unassessable points would dilute a real signal
+        # exactly the way #391 exists to prevent, and ``domain_nm`` still equals
+        # the route length whenever the model resolved the whole route.
+        [s.in_domain and s.assessed for s in pts],
+        speed_kt=speed_kt,
+    )
 
     ribbon = build_ribbon([(s.distance_nm, s.severity) for s in pts], total_nm)
     highlights = AdvisoryHighlights(
@@ -604,22 +745,123 @@ def summarize_evidence(
         affected=affected,
         assessed=assessed,
         domain=domain,
-        affected_nm=round(affected_nm, 1),
+        affected_nm=extent.nm,
         highlights=highlights,
         data_state=data_state,
+        domain_nm=extent.domain_nm,
+        samples=tuple(pts),
+        total_nm=total_nm,
+        speed_kt=speed_kt,
     )
 
 
-def pct_above_threshold(
-    affected: int,
-    total: int,
+# The shared minimum-extent floor for a coverage-driven promotion (#571 D4).
+# 30 nm is "about three points" at ``interpolate_route``'s fixed 10 nm spacing,
+# expressed in the unit that survives a change of route length or spacing.
+#
+# Why a floor at all: the point count scales with distance, so the *weight of one
+# point* scales inversely. On a 582 nm route one point is 1.6% — harmless against
+# a 20% gate. On a 120 nm route (~13 points) one point is 7.7% and two are 15%,
+# which clears ``imc_pct_amber``/``no_escape_pct_red`` outright. The percentage
+# gate was silently ~5x more sensitive on a short flight than a long one — and a
+# short flight is exactly where a 20 nm band of weather is most avoidable.
+EXTENT_MIN_NM = 30.0
+
+# A floor can never exceed half the domain it measures. Without this a route
+# shorter than the floor itself would grade GREEN however completely the hazard
+# covered it — the false-GREEN failure mode (#391) reintroduced through the back
+# door. At this cap any coverage of half the domain or more always reaches the
+# percentage gate, so the floor only ever bites the partial-coverage case it was
+# written for; on a 582 nm route it is inert (30 nm is 5%), on a 120 nm route it
+# raises the effective bar to 25%, which is the intended tightening.
+_EXTENT_MIN_NM_DOMAIN_CAP = 0.5
+
+
+def effective_min_nm(ext: RouteExtent, min_nm: float) -> float:
+    """The minimum-extent floor actually applied to ``ext`` — see :data:`EXTENT_MIN_NM`."""
+    return min(min_nm, _EXTENT_MIN_NM_DOMAIN_CAP * ext.domain_nm)
+
+
+# The three consolidated extent keys (#571 Stage 3). Every coverage-driven
+# advisory declares these SAME keys with ITS OWN defaults — the consolidation is
+# of shape and semantics, not of values: `vfr_feasibility` stays at 15/30,
+# `convective` at 20/50, `enroute_precip`'s snow axis at 5. What is bought is
+# that they become the same parameter, with the same meaning and the same
+# geometry behind it, so the approach can be tuned generically in one place —
+# and that the amber/red pair finally shares a base key, so the settings UI
+# pairs them onto one row for free (`bkn_pct_amber` / `ovc_pct_red` did not).
+EXTENT_PCT_AMBER = "extent_pct_amber"
+EXTENT_PCT_RED = "extent_pct_red"
+EXTENT_MIN_NM_KEY = "extent_min_nm"
+
+
+def extent_min_nm_param(
+    default: float = EXTENT_MIN_NM,
+) -> AdvisoryParameterDef:
+    """The shared minimum-extent floor as a tunable catalog parameter.
+
+    One definition rather than twelve copies: the floor is a property of the
+    shared gate, and an advisory that declares a different default is making a
+    deliberate statement rather than restating boilerplate.
+    """
+    return AdvisoryParameterDef(
+        key=EXTENT_MIN_NM_KEY,
+        label="Minimum extent",
+        description=(
+            "Coverage shorter than this never promotes the grade on its own — "
+            "a lone flagged point is a sliver of a long route but a large share "
+            "of a short one"
+        ),
+        type="distance",
+        unit="nm",
+        default=default,
+        min=0,
+        max=100,
+        step=5,
+    )
+
+
+def grade_extent(
+    ext: RouteExtent,
+    *,
     amber_pct: float,
     red_pct: float | None = None,
+    min_nm: float = EXTENT_MIN_NM,
+    min_run_nm: float | None = None,
+    min_minutes: float | None = None,
 ) -> AdvisoryStatus:
-    """Common pattern: GREEN below amber threshold, AMBER between, RED above red threshold."""
-    if total == 0:
+    """The single coverage gate: GREEN / AMBER / RED from one :class:`RouteExtent`.
+
+    Replaces ``pct_above_threshold``'s point ratio (#571). Two differences that
+    matter:
+
+    - **The percentage is distance-based** (``ext.pct``), so an unevenly spaced
+      route no longer grades differently from an evenly spaced one carrying the
+      same weather, and the number that decided the colour is the number the
+      message prints.
+    - **A minimum-extent floor** (``min_nm``, see :data:`EXTENT_MIN_NM`) must be
+      cleared before coverage may promote anything. Deliberate severe-hazard
+      bypasses live in the evaluators and are unaffected — turbulence's
+      free-atmosphere severe rule still forces RED off a single point — but a
+      bypassed grade must then describe itself honestly rather than borrow a
+      coverage number.
+
+    ``min_run_nm`` gates on the longest *contiguous* run instead of the union,
+    for barrier-type hazards ("you cannot get around it" — the EMBEDDED case).
+    ``min_minutes`` is accepted for symmetry and is opt-in only; see the time
+    axis in ``designs/meteorology-decisions.md`` §27 for why it does not gate by
+    default.
+    """
+    if ext.domain_nm <= 0 or ext.nm <= 0:
         return AdvisoryStatus.GREEN
-    pct = 100.0 * affected / total
+    if min_nm and ext.nm < effective_min_nm(ext, min_nm):
+        return AdvisoryStatus.GREEN
+    if min_run_nm is not None and ext.longest_run_nm < min_run_nm:
+        return AdvisoryStatus.GREEN
+    if min_minutes is not None and (ext.minutes is None or ext.minutes < min_minutes):
+        return AdvisoryStatus.GREEN
+
+    pct = ext.pct
     if red_pct is not None and pct >= red_pct:
         return AdvisoryStatus.RED
     if pct >= amber_pct:

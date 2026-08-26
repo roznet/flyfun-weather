@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     build_cost_model,
     driving_method_id,
     format_extent,
+    format_extent_nm,
     hazardous_icing_zones,
     icing_zones_in_altitude_range,
     max_terrain_near_point,
-    pct_above_threshold,
+    grade_extent,
     summarize_evidence,
     to_mitigation_profile,
 )
@@ -215,8 +218,8 @@ class IcingEscapeEvaluator:
                     step=500,
                 ),
                 AdvisoryParameterDef(
-                    key="icing_coverage_pct_amber",
-                    label="Icing extent (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in icing (amber)",
                     description=(
                         "Percentage of route with icing (but escape available) "
                         "to trigger amber. Only applies when warm-air descent "
@@ -230,8 +233,8 @@ class IcingEscapeEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="no_escape_pct_red",
-                    label="No escape (red)",
+                    key="extent_pct_red",
+                    label="% of route with no escape (red)",
                     description=(
                         "Percentage of route where icing exists but descending "
                         "to warm air is blocked by terrain. Any no-escape point "
@@ -244,6 +247,7 @@ class IcingEscapeEvaluator:
                     max=50,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
@@ -252,15 +256,13 @@ class IcingEscapeEvaluator:
         terrain_margin = params.get("terrain_margin_ft", 1000)
         tight_margin = params.get("tight_margin_ft", 2000)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
-        # Accept both new and legacy param names for backwards compatibility
-        icing_coverage_pct_amber = params.get(
-            "icing_coverage_pct_amber",
-            params.get("route_pct_amber", 20),
-        )
-        no_escape_pct_red = params.get(
-            "no_escape_pct_red",
-            params.get("min_route_pct", 15),
-        )
+        # The legacy read-path fallbacks (``route_pct_amber`` and the
+        # never-a-catalog-key ``min_route_pct``) are gone: migration 093
+        # actively rewrites them into the consolidated keys, so a fallback here
+        # could only hide a profile the migration failed to reach (#571 Stage 3).
+        extent_pct_amber = params.get("extent_pct_amber", 20)
+        extent_pct_red = params.get("extent_pct_red", 15)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -349,31 +351,49 @@ class IcingEscapeEvaluator:
                     ),
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
             affected = summary.affected
+            # The no-escape RED gate keys on a narrower population than the
+            # icing-coverage AMBER gate, so it measures its own geometry (#571).
+            no_escape_extent = summary.extent_of(
+                lambda x: x.severity == HighlightSeverity.RED
+            )
 
             # Determine model status
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
-            elif no_escape_count > 0 and pct_above_threshold(
-                no_escape_count, total, no_escape_pct_red,
+            elif no_escape_count > 0 and grade_extent(
+                no_escape_extent, amber_pct=extent_pct_red,
+                min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
-                ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
+                ext = format_extent(summary.extent)
+                detail = adv_t(
+                    "icing_escape.no_escape", loc, extent=ext,
+                    no_escape=format_extent_nm(no_escape_extent),
+                )
             elif no_escape_count > 0:
                 status = AdvisoryStatus.AMBER
-                ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
+                ext = format_extent(summary.extent)
+                detail = adv_t(
+                    "icing_escape.no_escape", loc, extent=ext,
+                    no_escape=format_extent_nm(no_escape_extent),
+                )
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("icing_escape.no_icing", loc)
             else:
-                status = pct_above_threshold(affected, total, icing_coverage_pct_amber)
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                status = grade_extent(
+                    summary.extent, amber_pct=extent_pct_amber,
+                    min_nm=extent_min_nm,
+                )
+                ext = format_extent(summary.extent)
                 if status == AdvisoryStatus.GREEN and has_tight_margin:
                     status = AdvisoryStatus.AMBER
                     detail = adv_t("icing_escape.tight_margin", loc, extent=ext)
@@ -402,7 +422,15 @@ class IcingEscapeEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
+                # Publish the no-escape geometry too: it is the population the
+                # RED gate grades on and the one the sentence now names, so it
+                # must reach the API/MCP surface rather than only the card
+                # (#571 D1 — "whatever the sentence names, the object
+                # publishes"). Zero when nothing is trapped, which is a real
+                # measurement, not a missing one.
+                affected_mod=no_escape_extent.points,
+                extent_mod=no_escape_extent,
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),

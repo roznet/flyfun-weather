@@ -47,3 +47,118 @@ export function pruneAdvisoryParams(
 export function pruneEngineMethod(value: string, dflt: string | undefined): string | null {
   return dflt !== undefined && value === dflt ? null : value;
 }
+
+/** advisoryId → { oldKey: newKey } for the #571 extent-parameter consolidation.
+ *  The lockstep sibling of `weatherbrief/analysis/advisories/extent_param_migration.py`
+ *  — the two MUST move together, or a client would re-save under an old key a
+ *  profile the server just migrated. Kept as a literal because the catalog no
+ *  longer carries the old names: this is the only record of what each key used
+ *  to be called. */
+export const EXTENT_KEY_RENAMES: Record<string, Record<string, string>> = {
+  cloud_top: { pct_amber: 'extent_pct_amber' },
+  convective: {
+    affected_pct_amber: 'extent_pct_amber',
+    affected_pct_red: 'extent_pct_red',
+  },
+  dd_nwp_agreement: { amber_pct: 'extent_pct_amber', red_pct: 'extent_pct_red' },
+  enroute_precip: {
+    snow_pct_amber: 'extent_pct_amber',
+    snow_moderate_pct_red: 'extent_pct_red',
+  },
+  fiki_icing: {
+    clear_cruise_amber_pct: 'extent_pct_amber',
+    clear_cruise_red_pct: 'extent_pct_red',
+  },
+  freezing_precip: { primed_pct_amber: 'extent_pct_amber' },
+  icing_escape: {
+    icing_coverage_pct_amber: 'extent_pct_amber',
+    no_escape_pct_red: 'extent_pct_red',
+    route_pct_amber: 'extent_pct_amber',
+    min_route_pct: 'extent_pct_red',
+  },
+  ifr_feasibility: {
+    icing_pct_amber: 'extent_pct_amber',
+    icing_pct_red: 'extent_pct_red',
+  },
+  model_agreement: {
+    poor_pct_amber: 'extent_pct_amber',
+    poor_pct_red: 'extent_pct_red',
+  },
+  turbulence: {
+    route_pct_amber: 'extent_pct_amber',
+    route_pct_red: 'extent_pct_red',
+  },
+  vfr_feasibility: {
+    imc_pct_amber: 'extent_pct_amber',
+    imc_pct_red: 'extent_pct_red',
+  },
+  vmc_cruise: { bkn_pct_amber: 'extent_pct_amber', ovc_pct_red: 'extent_pct_red' },
+};
+
+/** Keys whose stored VALUE flips with the name. `fiki_icing` expressed its
+ *  thresholds as a percentage of the *clear* cruise, compared with `<` — the one
+ *  gate that read the other way. "Amber below 70% clear" means "amber at or above
+ *  30% affected", so the number must invert or the pilot's tuning would too. */
+const INVERTED_PCT_KEYS: Record<string, Set<string>> = {
+  fiki_icing: new Set(['clear_cruise_amber_pct', 'clear_cruise_red_pct']),
+};
+
+/** Aliases applied only when the primary name is absent, mirroring the read-path
+ *  fallback chain `icing_escape` used to have (`min_route_pct` was never even a
+ *  catalog key). */
+const SECONDARY: Record<string, Set<string>> = {
+  icing_escape: new Set(['route_pct_amber', 'min_route_pct']),
+};
+
+/** Rewrite pre-consolidation extent keys to the consolidated ones (#571 Stage 3).
+ *
+ *  Run this on load, before rendering: a profile the server has not migrated yet
+ *  (or one restored from a stale client cache) would otherwise show the pilot
+ *  their tuning missing while the old key sat in the payload doing nothing.
+ *  `pruneAdvisoryParams` cannot help — it deliberately KEEPS any key it cannot
+ *  prove is a default, so an unknown key lingers forever.
+ *
+ *  Pure: returns a new object, never mutates. A value already under the new key
+ *  wins and the old key is dropped. */
+export function renameExtentParams(
+  rawParams: Record<string, Record<string, number>>,
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const advId of Object.keys(rawParams)) {
+    out[advId] = { ...rawParams[advId] };
+  }
+  for (const advId of Object.keys(EXTENT_KEY_RENAMES)) {
+    const params = out[advId];
+    if (!params) continue;
+    const renames = EXTENT_KEY_RENAMES[advId];
+    const secondary = SECONDARY[advId] ?? new Set<string>();
+    const inverted = INVERTED_PCT_KEYS[advId] ?? new Set<string>();
+    const wasEmpty = Object.keys(params).length === 0;
+    // Primaries first, so a secondary alias can never shadow a real value.
+    const ordered = Object.keys(renames).sort((a, b) => {
+      const sa = secondary.has(a) ? 1 : 0;
+      const sb = secondary.has(b) ? 1 : 0;
+      return sa - sb || a.localeCompare(b);
+    });
+    for (const old of ordered) {
+      if (!(old in params)) continue;
+      const next = renames[old];
+      const value = params[old];
+      delete params[old];
+      if (next in params) continue;  // a newer write under the new key wins
+      // Mirror the Python guard: `advisories` is an untyped dict server-side,
+      // so a stored value can be a string or null. `100 - value` would make it
+      // NaN here while the server-side migration preserves it verbatim — the
+      // one defensive path both sides exist to handle, diverging (#571 review).
+      const invertible =
+        inverted.has(old) && typeof value === 'number' && Number.isFinite(value);
+      params[next] = invertible ? 100 - value : value;
+    }
+    // An entry that ARRIVED empty is passed through untouched, matching the
+    // Python sibling's `was_empty` guard — the two are required to move in
+    // lockstep, and without this the TS side silently deletes a `params` entry
+    // it never modified (#571 review round 10).
+    if (!wasEmpty && Object.keys(params).length === 0) delete out[advId];
+  }
+  return out;
+}

@@ -212,9 +212,11 @@ as SEVERE CAT (or at least MODERATE), not as missing data.
 >   and turbulence still have no absolute-extent floor.
 >
 > Two items have *sharpened* rather than aged out:
-> - **§3.3**: decisions §25 (#533) gave Richardson an altitude-dependent
->   resolution correction. E-Shear still has none, so the two CAT methods are
->   now calibrated asymmetrically as well as being non-independent.
+> - **§3.3**: decisions §25 (#533) gave Richardson a resolution correction,
+>   sharpened by §28 (#539) into a per-layer-thickness one. E-Shear still has
+>   none, so the two CAT methods are now calibrated asymmetrically as well as
+>   being non-independent — and the asymmetry now varies per model, since
+>   Richardson's correction tracks each model's own vertical spacing.
 > - **§5.7's `cloud_cover_low_pct`**: still only an ICAO-band *fallback* in
 >   `sounding/advisories.py:347-353`, not the third ceiling signal §3.4 wants.
 >

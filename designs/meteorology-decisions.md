@@ -3194,10 +3194,14 @@ only a model publishing `qr` can set it, which today means ICON-D2 alone.
 
 ---
 
-## 25. Richardson CAT is calibrated by altitude, and stops at the mixed-layer top
+## 25. Richardson CAT is calibrated by resolution, and stops at the mixed-layer top
 
 **Date:** 2026-08-04
-**Status:** Implemented (#533)
+**Status:** Implemented (#533). **(a) superseded 2026-08-26 by §28** — the
+resolution correction is now scaled by each layer's own thickness Δz rather than
+by the altitude ramp described below, which was a proxy for it. Everything else
+in this section — (b) through (f), and the scope notes — still stands unchanged,
+and §28 leans on them.
 **Context:** A pilot debrief on `egny_egkb-2026-08-03-0d8b` (dep 15:00Z, cruise
 2,500 ft) reported ICON claiming *severe CAT at 2,500 ft* for a week straight
 on an anticyclonic CAVOK August afternoon — "CAT is only modelled from 5,000 ft
@@ -3219,6 +3223,14 @@ is most likely *right* about the shear existing — it is the higher-resolution
 model. The defect is in what we did with it.
 
 ### (a) The resolution correction is a function of altitude, so it is applied as one
+
+> **Superseded by §28 (#539).** The reasoning below is intact and is why §28
+> exists; only the *implementation* changed. The correction is a function of
+> layer thickness, which this section approximated by altitude because thickness
+> grows with altitude **for a fixed level set**. Ours is not fixed — it varies
+> per model and with GRIB enrichment — so §28 scales by Δz directly. Read the
+> ramp described here as the thickness law evaluated on GFS's geometry: §28
+> shows it reproduces both of the knees below.
 
 The original calibration loosened the classical Miles-Howard tiers from
 0.25/0.5/1.0 to **0.5/1.0/2.0**, justified by "model vertical resolution
@@ -3409,7 +3421,9 @@ attention to it, and a week of RED was the defect — not the shear.
   classical tiers err toward under-detection, so the uniform ramp fails safe
   (misses rather than false alarms). The principled follow-up is scaling by
   each layer's actual thickness Δz — available per level pair since (d) — 
-  which subsumes both the altitude ramp and per-model spacing.
+  which subsumes both the altitude ramp and per-model spacing. **Done in §28
+  (#539);** the per-model spot-check it calls for is still outstanding, now
+  tracked there.
 
 `metrics-catalog.json` documented "Below about 0.25 expect clear-air
 turbulence" while the code fired SEVERE at 0.5 — a 2× disagreement between the
@@ -3761,3 +3775,343 @@ overstates the fallback path's frequency.
 - Sanity-check the offered altitudes against real cruise levels on a corpus
   replay: an out that a pilot would not fly (oxygen, airspace, icing) is worse
   than no lightbulb.
+
+---
+
+## 27. Route extent is one measurement: distance-based, domain-scoped, per-tier
+
+**Date:** 2026-08-25 · **Issue:** #571
+
+Every route advisory answers *"how much of the flight is affected?"*. Fourteen
+evaluators answered it fourteen ways, with **four incompatible geometry
+conventions** shipping in the same object, and three of the differences produced
+numbers that were simply wrong — numbers that reached the pilot, the LLM prompt
+and the MCP/agent API.
+
+The census, the per-model evidence and the staged plan are in
+`designs/future/advisory-extent-consolidation.md`. What follows is the
+convention that replaced them.
+
+### The four conventions
+
+| # | Convention | Where it lived | What it fed |
+|---|---|---|---|
+| 1 | `total_nm × affected/total` (proportional) | `format_extent` | **every message** |
+| 2 | Σ midpoint-owned cells of affected points | `summarize_evidence.affected_nm` | the JSON `affected_nm` |
+| 3 | Midpoint cells over the longest **contiguous** run | `longest_embedded_run_nm` | the character EMBEDDED gate |
+| 4 | `max(d) − min(d)` — raw span **including gaps** | `_terminal_deck_extent` | the VFR mitigation tip |
+
+Plus `affected_pct` as a **point** ratio, a fifth answer. Route points are not
+evenly spaced — `interpolate_route` fills at a fixed 10 nm and inserts extra
+points at waypoints — so 1 and 2 never agree. On the trigger pack:
+turbulence/gfs printed 164 nm beside an `affected_nm` of 173.3;
+enroute_precip/ecmwf printed 55 nm beside 45.5.
+
+### The decision
+
+One value object per *advisory × model × severity tier*, `RouteExtent`, built
+once from the same `cell_edges` geometry the ribbon uses, and formatted directly.
+
+1. **The percentage denominator is distance, not point count.** Uneven spacing
+   stops mattering, and the nm and the percentage become consistent by
+   construction rather than by discipline.
+
+2. **`domain_nm` travels with the extent.** `mountain_wind` restricts its domain
+   to the route's mountain points and then multiplied that point fraction by the
+   *whole route length*: ICON printed "543nm/582nm (93%)" for a footprint of
+   131.8 nm — a ~4x overstatement, which the digest promoted to a watch item and
+   narrated as a day-to-day swing between two fractions whose denominator was
+   itself moving. Carrying the denominator on the extent removes the route length
+   the code had lying around to multiply by, so the defect is structurally
+   unavailable rather than merely fixed. Such an advisory must then **name** its
+   denominator in the sentence — "132nm of 190nm of high terrain" — following
+   `sun`, the one advisory that already said "of the sunlit route".
+
+3. **One extent per severity tier.** "Severe CAT over 146nm (25%)" meant severe
+   at *one* point, moderate at two and light at thirteen. The RED itself was
+   correct and deliberate — a single free-atmosphere severe layer at cruise is a
+   real hazard, and the bypass stays (`test_free_atmosphere_severe_still_forces_red`)
+   — but a bypassed grade must **describe itself honestly** rather than borrow a
+   coverage number that describes a different population. `convective` had fixed
+   the phrasing half of this in #300 while its structured fields still carried
+   the any-risk population (ecmwf printing 45% beside an `affected_pct` of 68.8);
+   both now come from the tier's own extent.
+
+4. **Contiguity is a reducer on the same geometry**, not a separate function.
+   `longest_run_nm` sits beside `nm` on one object, so a barrier-type hazard
+   ("you cannot get around it", #568's EMBEDDED gate) and a union-coverage gate
+   measure the same picture.
+
+5. **`format_extent` takes the extent, not counts.** This is the part that makes
+   the defect unrepeatable: there is no signature left that can recompute a
+   different answer from the same inputs.
+
+### What Stage 1 deliberately did NOT change
+
+No threshold, gate, denominator or status. `affected_pct` stayed a point ratio
+and the gates still keyed on point counts — making the *grade* distance-based
+moves colours and belongs with the minimum-extent floor, measured together
+against a pack replay. Stage 1's visible change is that every printed number is
+the number the object ships.
+
+### Stage 2 — the grade follows the geometry, and gets a floor
+
+Stage 1 changed no colour: the gates still keyed on point counts while the
+messages had already moved to distance. Stage 2 collapses the two.
+
+- **`grade_extent` is the single gate**, keyed on `ext.pct`. `pct_above_threshold`
+  is deleted rather than kept as a trap. `affected_pct` becomes
+  `100 x affected_nm / domain_nm`, so the number that decided the colour, the
+  number the sentence prints and the number the API publishes are one number.
+
+- **A minimum-extent floor on every coverage-driven promotion**, `EXTENT_MIN_NM
+  = 30` — "about three points" at `interpolate_route`'s fixed 10 nm spacing,
+  expressed in the unit that survives a change of route length. The point count
+  scales with distance, so the *weight of one point* scales inversely: on a
+  582 nm route one point is 1.6% and harmless against a 20% gate; on a 120 nm
+  route (~13 points) one point is 7.7% and two are 15%, clearing
+  `imc_pct_amber`/`no_escape_pct_red` outright — and short flights are exactly
+  where a 20 nm band of weather is most likely to be avoidable.
+
+  The floor is capped at **half the domain**. Without that, a route shorter than
+  the floor itself would grade GREEN however completely the hazard covered it —
+  the #391 false-GREEN failure mode returning through the back door. At the cap
+  any coverage of half the domain or more always reaches the percentage gate, so
+  the floor only ever bites the partial-coverage case it was written for.
+
+- **`min_run_nm`** folds the two contiguity measures into the same object.
+  #568's EMBEDDED gate becomes a read of `longest_run_nm`, and the VFR
+  terminal-deck tip stops measuring `max(d) - min(d)`: that span counts the
+  *gaps*, so two field clouds 20 nm apart with clear air between them scored a
+  20 nm "deck" and earned a corridor tip for something that is not there.
+
+- **Turbulence's `red_pct = 50`** was hardcoded inside the gate and invisible in
+  the catalog. It is now `route_pct_red`, a real parameter.
+
+### Stage 3 — one set of keys, and an active rewrite of stored profiles
+
+Twenty-four catalog keys across thirteen advisories expressed one idea, including
+a generic pair in either word order (`amber_pct` and `pct_amber`, in *different*
+advisories) and one pair of inverted polarity. They are now
+`extent_pct_amber` / `extent_pct_red` / `extent_min_nm`. That census counts the
+problem; the rename map covers twelve advisories, `convective_character`'s three
+keys being deliberately excluded (see below).
+
+**Consolidation is of shape and semantics, not of values.** Each advisory keeps
+declaring its own default — `vfr_feasibility` at 15/30, `convective` at 20/50,
+`enroute_precip`'s snow axis at 5 — and the per-advisory *label* carries the
+domain word ("% of route in IMC", "% of route with poor agreement"). Collapsing
+the defaults would have been a calibration change wearing a refactor's clothes.
+
+`fiki_icing`'s pair flips to affected polarity, so every gate now reads the same
+direction. A pilot who set "amber below 70% clear" meant "amber at or above 30%
+affected", so the migration inverts the stored *value* along with the name.
+
+**The trap this had to avoid.** `profile_sparsify` deliberately keeps any key it
+cannot prove is a default — *"we never delete a value we cannot prove is a
+default"*. After a rename the old keys are simply unknown keys, so they would
+linger in every profile forever, doing nothing, while the pilot believed their
+tuning was live. The migration therefore **actively rewrites** old key → new key
+(093, with a real `downgrade()`), and the TypeScript sibling does the same on load
+so an unmigrated or cached profile still renders the pilot's numbers.
+
+**Two advisories deliberately stay out.** `convective_character`'s
+`isolated_max_pct` / `scattered_max_pct` are three-way band boundaries, not an
+amber/red pair, and `embed_min_nm` is a *contiguous-run* floor rather than the
+union floor `extent_min_nm`; renaming either would assert an equivalence that is
+not true. `mountain_wind` grades on wind speed and has no coverage gate to
+consolidate.
+
+### Stage 4 — time as a display axis
+
+`RouteExtent.minutes` is `nm` at `ctx.cruise_groundspeed_kt` — cruise TAS
+(`resolve_cruise_tas`: aircraft/profile speed → the flight's own planned speed →
+a generic light-GA fallback) less the route-average headwind, taken from the
+per-point wind components the pack already carries. No new wind lookups, and the
+same numbers the headwind advisory reports.
+
+Miles are what the weather covers; minutes are what the pilot spends in it, and
+the two diverge sharply on a slow aircraft or into a strong headwind. The figure
+is appended to the message ("about 8 min in it") and suppressed below three
+minutes, where it is noise rather than information.
+
+**It does not gate.** `grade_extent` accepts `min_minutes`, but nothing passes
+it. A large share of flights fall back to a profile-default cruise speed, so a
+minutes gate would grade one aircraft differently from another for reasons the
+pilot never set — a colour that moves on a number nobody entered. Promoting it
+to a gate is a follow-up that starts by measuring real `cruise_speed_ias_kt`
+coverage in prod, not a design choice available today.
+
+The groundspeed is deliberately route-average and model-agnostic. Per-model,
+per-point precision would be spurious for a figure whose input is often a
+default, and it would make the same extent print different minutes on three
+cards for the same flight.
+
+### The denominator: assessed, not aspirational
+
+`domain_nm` counts the miles the model could actually grade — in-domain **and**
+assessed — not every mile of the route. The alternative (always the full route)
+was considered and rejected: it silently reintroduces the dilution #391 exists
+to prevent, where two snowing points among eight blanks read as 20% coverage of
+a route the model never saw and fall under the amber gate. Thin coverage is
+reported by `below_coverage` → UNAVAILABLE, which abstains; it must not be
+reported by quietly diluting real evidence into a GREEN. In the common
+fully-assessed case `domain_nm` is the route length, so this costs nothing.
+
+### Rejected
+
+- **Fixing the messages without the value object.** #300 had already done that
+  for `convective`'s string alone; the structured fields drifted straight back
+  out of agreement. A shared primitive that owns both is what closes it.
+- **Always using the whole route as the denominator**, regardless of what the
+  model resolved. Tempting — it keeps every advisory's percentage comparable —
+  but it silently reintroduces the dilution #391 exists to prevent: two snowing
+  points among eight blanks would read as 20% of a route the model never saw and
+  fall under the amber gate. The denominator is what the model could grade, and
+  thin coverage is reported by `below_coverage` → UNAVAILABLE, which abstains
+  rather than diluting real evidence into a GREEN. (An earlier draft of this
+  section listed the *opposite* choice as rejected, contradicting both the
+  paragraph above and the shipped code — #571 review.)
+
+---
+
+## 28. The Richardson CAT tiers scale by the layer's own thickness, not by altitude
+
+**Date:** 2026-08-26 · **Issue:** #539 · **Supersedes:** §25(a)
+
+§25(a) loosened the classical Miles-Howard tiers by a multiplier that was 1.0 at
+and below 10,000 ft and ramped to 2.0 at and above 20,000 ft. The justification
+was explicitly about **layer thickness** — "25 hPa spans ≈230 m at 950 hPa and
+≈800 m at 300 hPa" — and altitude was used as a stand-in for it. §25 said so
+itself, in the scope notes: *"The principled follow-up is scaling by each layer's
+actual thickness Δz — available per level pair since (d) — which subsumes both
+the altitude ramp and per-model spacing."* This is that follow-up.
+
+### Why the proxy leaked
+
+Thickness is a function of altitude only for a **fixed level set**. Ours is not
+fixed — it varies per model, and per model it varies with whether GRIB enrichment
+fired:
+
+| model / source | levels around 2,500 ft | Δz there | old scale | new scale |
+|---|---|---|---|---|
+| GFS (extended), ICON-EU via GRIB | 950 → 925 hPa | ~730 ft | 1.00 | 1.00 |
+| ICON, UKMO (Open-Meteo) | 950 → 925 hPa | ~730 ft | 1.00 | 1.00 |
+| ECMWF (Open-Meteo, 13 levels) | 1000 → 925 hPa | ~2,140 ft | 1.00 | 2.00 |
+
+The bottom row is the defect: an ECMWF layer three times as thick as the GFS one
+at the same altitude got the identical multiplier, so ECMWF's Ri kept its full
+coarse-resolution positive bias with no correction at all. The review bot raised
+this in #534 rounds 2 and 5; UKMO and Météo-France were never spot-checked, and
+they are coarse from 900 hPa up, where the ramp also left them classical.
+
+### The law
+
+```
+scale = clamp(Δz / 1,000 ft, 1.0, 2.0)
+```
+
+`_RI_DZ_REF_FT` = 1,000 ft is the thickness at which the classical tiers stand
+unscaled — the top of the 100–300 m shear-sheet band the whole correction exists
+for. The floor keeps the tiers from ever going *below* Miles-Howard: the
+classical value is the physical criterion, and a finer-than-reference layer is no
+reason to claim turbulence at a Ri the theory calls stable. The cap
+(`_RI_DZ_SCALE_MAX` = 2.0) is §25's ×2, kept: a Ri differenced across a 150 hPa
+gap is a bulk Richardson number of dubious meaning and must not loosen the tiers
+without limit. Bulk-Richardson literature supports depth-dependent critical
+values, which is the same argument from the other direction.
+
+### Calibration: the ramp *was* this law, read through one model's geometry
+
+The two constants were not fitted. Evaluate the thickness law on the level set
+§25 was calibrated against — GFS / ICON-EU-GRIB, 25 hPa below 500 hPa and 50 hPa
+above — and it lands on the ramp's own two knees:
+
+| GFS layer | Δz | midpoint | old ramp | new law |
+|---|---|---|---|---|
+| 950 → 925 hPa | 727 ft | 2,136 ft | 1.00 | 1.00 |
+| 700 → 675 hPa | 935 ft | 10,350 ft | 1.03 | 1.00 |
+| 500 → 450 hPa | 2,524 ft | 19,550 ft | 1.96 | 2.00 |
+| 350 → 300 hPa | 3,434 ft | 28,348 ft | 2.00 | 2.00 |
+
+The ramp's 10,000 ft knee is exactly where that spacing passes 1,000 ft, and its
+20,000 ft ceiling is exactly where the spacing steps from 25 to 50 hPa. So the
+two calibration anchors the issue required — the EGNY→EGKB low-level case and an
+FL300 jet flank — are preserved **by construction** on GFS and on ICON via GRIB,
+not by tuning. `test_thickness_law_reproduces_the_altitude_ramps_own_knees` and
+`test_ri_thresholds_loosened_in_upper_troposphere` pin both.
+
+### What deliberately changes
+
+- **ECMWF, UKMO, Météo-France, GEM at low and mid levels get looser tiers.**
+  Their 50–75 hPa spacing genuinely averages the shear sheet away. This is the
+  self-correction the issue asked for, and it needs no per-model configuration.
+- **GFS between roughly 12,000 and 18,000 ft gets *tighter* tiers** (1.03–1.19
+  where the ramp gave 1.33–1.77). Its 25 hPa layers are ~1,000–1,200 ft thick
+  there — near the reference — and the ramp was loosening them on altitude
+  alone. Erring toward the classical tiers is the under-detection direction,
+  which §25 already recorded as the fail-safe one.
+- **The residual half-layer bias is gone by construction.** §25(d) evaluated the
+  altitude scale at the physical layer's midpoint to reduce it; there is now no
+  altitude to evaluate.
+
+### Why this does not re-open #533
+
+The cry-wolf that motivated #533 was "severe CAT at 2,500 ft for a week", and
+tier loosening was only one of six fixes. The guards that actually bound the
+low-level false-alarm rate — §25(b) mixed-layer suppression, §25(c) BL tagging
+with an AMBER floor and the route-percentage gate, §25(f) moderate-or-worse for
+RED-via-coverage — are all **independent of Δz** and untouched here. And the
+model that produced the complaint, ICON, is on 25 hPa spacing at that altitude
+whether it comes from Open-Meteo or GRIB, so its tiers there are unchanged.
+
+### Δz comes from the Ri's own level pair, not from the painted band
+
+`compute_stability_indicators` differences level *i−1* → *i*, so that pair is the
+Ri's physical extent. §25(d)'s base-extension rule declines to extend a band
+across a gap wider than 100 hPa — but that answers *where to draw the layer*,
+which is a different question from *how much the model smoothed the shear away*.
+Across a sparse column the Ri really was taken over the wide gap, so the bias
+really is that large; `_layer_thickness_ft` reads the pair and the cap bounds the
+result. `test_thickness_comes_from_the_ri_pair_not_the_painted_layer` pins the
+two behaviours together. Where the lower level carries no altitude, Δz falls back
+to a standard-atmosphere estimate from the pressures rather than to the reference
+thickness — a coarse model must not silently borrow a fine model's tiers.
+
+### Files changed
+
+- `analysis/sounding/vertical_motion.py` — `_RI_DZ_REF_FT` / `_RI_DZ_SCALE_MAX`
+  replace `_RI_LOOSEN_BASE_FT` / `_RI_LOOSEN_TOP_FT` / `_RI_LOOSEN_MAX`;
+  `_ri_threshold_scale` takes Δz; new `_layer_thickness_ft`; `_classify_cat_risk`
+  and its `_build_cat_layers` call site take the thickness instead of the
+  midpoint altitude.
+- `web/ts/data/metrics-catalog.json`, `app/…/Resources/metrics-catalog.json` —
+  `richardson_number.best_used_for` reworded from the altitude ramp to the
+  thickness law. Also fixes `cat_risk`, which was **missed by #533/#534**: its
+  `theory` and `thresholds` still published the pre-#533 flat 0.5/1.0/2.0 tiers
+  while `richardson_number` in the same file published the classical ones — the
+  same help-text-vs-code disagreement §25 set out to fix, left in the other
+  entry. Both entries now read 0.25/0.5/1.0 plus the thickness scaling.
+- `designs/analysis-metrics.md` §3.4 — the multiplier table is keyed by Δz.
+- Tests: `tests/test_vertical_motion.py`. The two tier tests were keyed to
+  altitude bands; they are re-keyed to the geometry they claim to reproduce
+  (the low-level one to ICON/GFS's real 25 hPa spacing at the 2,500 ft cruise,
+  not a synthetic 50 hPa column), plus new tests for the floor/cap, the
+  ramp-knee equivalence, the Ri-pair-vs-painted-band split, the
+  standard-atmosphere fallback, and the coarse-model low-level loosening.
+
+### Real-world validation needed
+
+The empirical half of the issue's calibration ask is **not done** — this branch
+has no pack store, so the numbers above are the level-set geometry, not a replay.
+Before trusting the behaviour changes:
+
+- Re-run the EGNY→EGKB pack and confirm ICON AMBER / GFS AMBER / ECMWF GREEN
+  (§25(f)) still holds. ECMWF is the one at risk: its low-level tiers double, so
+  its 3/17 light points could move up a tier.
+- Spot-check UKMO and Météo-France — the models §25 never checked. They gain the
+  most loosening; confirm it surfaces real shear rather than noise.
+- Confirm an FL300 jet-flank case grades identically to §25.
+- Check a GFS mid-troposphere (12,000–18,000 ft) turbulence case for the
+  tightening called out above — that is the one direction this change can lose a
+  detection §25 would have made.

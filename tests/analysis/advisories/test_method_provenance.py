@@ -81,9 +81,14 @@ def _ctx(
         cloud_source=cloud_source,
         convective_method=convective_method,
     )
+    # The route length must match where the points actually are: they sit at
+    # 20 nm intervals from the origin, so a hardcoded 180 nm left the final
+    # point owning a 90 nm cell and made every distance-based coverage figure
+    # (#571) a fixture artefact rather than a property of the weather.
+    total_nm = max((len(soundings) - 1) * 20.0, 20.0)
     return RouteContext(
         analyses=resolved, cross_sections=[], elevation=None, models=["gfs"],
-        cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=180,
+        cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=total_nm,
     )
 
 
@@ -303,7 +308,7 @@ class TestCloudEvaluatorsBadgeEffective:
         assert rep.primary_method_id == "dd"
 
     def test_vmc_cruise_amber_off_red_regions_keeps_badge(self):
-        """AMBER grade (2/6 OVC, below ovc_pct_red) whose only regions are RED (#409 r3).
+        """AMBER grade (2/6 OVC, below extent_pct_red) whose only regions are RED (#409 r3).
 
         The mirror of the cloud_top escalation case: here the grade lands *below*
         the region severity, and the badge must still survive.
@@ -386,7 +391,7 @@ class TestIcingEvaluatorsBadgeEffective:
     def test_icing_escape_amber_off_isolated_no_escape_keeps_badge(self):
         """1/20 no-escape (RED region) on an otherwise clear route → AMBER (#409 r3).
 
-        no_escape_count=1 of 20 = 5% < no_escape_pct_red (15) grades AMBER, but
+        no_escape_count=1 of 20 = 5% < extent_pct_red (15) grades AMBER, but
         the only region present is RED-severity — the badge must survive.
         """
         envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]
@@ -465,7 +470,7 @@ class TestIcingEvaluatorsBadgeEffective:
         """The pooled-region trap (#409 round 2): icing under its own threshold.
 
         1/20 points has in-buffer icing → an AMBER icing_band region IS emitted
-        (geometry is per-point), but icing_pct=5% is below icing_pct_amber (20),
+        (geometry is per-point), but icing_pct=5% is below extent_pct_amber (20),
         so the icing axis grades GREEN and contributes nothing. A single MODERATE
         convective point drives the composite to AMBER. The badge must NOT report
         the icing method just because an AMBER icing region sorts first in the

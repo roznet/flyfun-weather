@@ -17,6 +17,8 @@ from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     FlaggedCell,
     apply_airport_endpoints,
     below_coverage,
@@ -24,7 +26,10 @@ from weatherbrief.analysis.advisories._helpers import (
     build_regions,
     build_ribbon,
     driving_method_id,
+    RouteExtent,
     format_extent,
+    grade_extent,
+    route_extent,
     ribbon_peak,
     to_mitigation_profile,
     worst_severity,
@@ -160,61 +165,90 @@ def _check_enroute_vfr(
     model: str,
     cloud_clearance_ft: float,
     altitude_ft: float,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, RouteExtent, RouteExtent]:
     """Check en-route cloud clearance for VFR at ``altitude_ft``.
 
     Takes the evaluated altitude explicitly (rather than reading
     ``ctx.cruise_altitude_ft``) so it can be re-run at candidate altitudes when
     searching for a lower-altitude mitigation.
 
-    Returns (total, imc_count, marginal_count, clear_count).
+    Returns (total, imc_count, marginal_count, clear_count, imc_extent, extent).
     - imc_count: points where the altitude is inside BKN/OVC cloud
     - marginal_count: points where cloud clearance < threshold (but not in cloud)
+    - imc_extent: geometry-accurate coverage of the in-cloud points — the RED
+      axis grades on this population, so it measures it (#571)
+    - extent: the same for the imc+marginal union, which the AMBER axis grades on
+      and the sentence prints
     """
     total = 0
     imc_count = 0
     marginal_count = 0
     clear_count = 0
+    dists: list[float] = []
+    assessed_flags: list[bool] = []
+    imc_flags: list[bool] = []
+    affected_flags: list[bool] = []
 
     for rpa in ctx.analyses:
+        dists.append(rpa.distance_from_origin_nm or 0.0)
+        assessed_flags.append(False)
+        imc_flags.append(False)
+        affected_flags.append(False)
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
         total += 1
+        assessed_flags[-1] = True
 
         cls, _, _ = _point_enroute_vfr(sounding, altitude_ft, cloud_clearance_ft)
         if cls == "imc":
             imc_count += 1
+            imc_flags[-1] = True
+            affected_flags[-1] = True
         elif cls == "marginal":
             marginal_count += 1
+            affected_flags[-1] = True
         else:
             clear_count += 1
 
-    return total, imc_count, marginal_count, clear_count
+    speed_kt = ctx.cruise_groundspeed_kt
+    imc_extent = route_extent(
+        dists, ctx.total_distance_nm, imc_flags, assessed_flags,
+        speed_kt=speed_kt,
+    )
+    extent = route_extent(
+        dists, ctx.total_distance_nm, affected_flags, assessed_flags,
+        speed_kt=speed_kt,
+    )
+    return total, imc_count, marginal_count, clear_count, imc_extent, extent
 
 
 def _enroute_vfr_status(
     total: int,
-    imc_count: int,
-    marginal_count: int,
-    imc_pct_amber: float,
-    imc_pct_red: float,
+    imc_extent: RouteExtent,
+    affected_extent: RouteExtent,
+    extent_pct_amber: float,
+    extent_pct_red: float,
+    extent_min_nm: float = EXTENT_MIN_NM,
 ) -> AdvisoryStatus:
-    """Grade the en-route cloud-clearance axis from point counts.
+    """Grade the en-route cloud-clearance axis from the two extents.
 
     Shared by ``evaluate`` and the vertical-mitigation scan so a candidate
     altitude is graded with exactly the same thresholds as cruise.
+
+    Distance-based, through the shared gate and its minimum-extent floor (#571
+    Stage 2). This axis is where the floor matters most: at ``extent_pct_red=15``
+    two flagged points on a ~120 nm route used to clear RED outright.
     """
     if total <= 0:
         return AdvisoryStatus.GREEN
-    affected = imc_count + marginal_count
-    imc_pct = 100.0 * imc_count / total
-    affected_pct = 100.0 * affected / total
-    if imc_pct >= imc_pct_red:
+    if grade_extent(
+        imc_extent, amber_pct=extent_pct_red, min_nm=extent_min_nm,
+    ) != AdvisoryStatus.GREEN:
         return AdvisoryStatus.RED
-    if affected_pct >= imc_pct_amber:
-        return AdvisoryStatus.AMBER
-    return AdvisoryStatus.GREEN
+    return grade_extent(
+        affected_extent, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
+    )
 
 
 def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
@@ -567,11 +601,20 @@ def _terminal_deck_span(
     ordinary sub-cruise deck (the *primary* ``climb_deck`` case), so the band test is used
     instead — it covers both while still keying on the same "not a single point" rule.
 
-    Returns ``(point_count, span_nm)`` over the qualifying points.
+    Returns ``(point_count, run_nm)`` over the qualifying points, where
+    ``run_nm`` is the longest **contiguous** along-track run measured with the
+    shared midpoint-owned-cell convention. It used to be ``max(d) - min(d)``,
+    which includes the gaps: two field clouds 20 nm apart with clear air between
+    them scored a 20 nm "run" and offered a corridor tip for a deck that is not
+    there (#571 D-geometry-4).
     """
-    dists: list[float] = []
+    all_dists: list[float] = []
+    flags: list[bool] = []
+    count = 0
     for rpa in ctx.analyses:
         d = rpa.distance_from_origin_nm or 0.0
+        all_dists.append(d)
+        flags.append(False)
         if not (lo_nm <= d <= hi_nm):
             continue
         sounding = rpa.sounding.get(model)
@@ -582,28 +625,39 @@ def _terminal_deck_span(
             if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
                 continue
             if cl.top_ft > floor and cl.base_ft < cruise:
-                dists.append(d)
+                flags[-1] = True
+                count += 1
                 break
-    if not dists:
-        return 0, 0.0
-    return len(dists), max(dists) - min(dists)
+    if count < _TERMINAL_DECK_MIN_POINTS:
+        # A single point has no *run* — it has a cell. Under the old
+        # ``max(d) - min(d)`` a lone point scored 0 by construction, so the
+        # run arm could never fire alone; measuring its midpoint-owned cell
+        # instead let one point clear the 15 nm bar wherever route sampling is
+        # sparse (20 nm on a 40 nm-spaced leg), contradicting this function's
+        # own rule that a lone field cloud never qualifies (#571 review).
+        return count, 0.0
+    return count, route_extent(
+        all_dists, ctx.total_distance_nm, flags,
+    ).longest_run_nm
 
 
-def _is_real_terminal_deck(count: int, span_nm: float) -> bool:
+def _is_real_terminal_deck(count: int, run_nm: float) -> bool:
     """A terminal deck earns a corridor tip only when it spans more than one point.
 
-    ``>= 2`` route points OR ``>= 15`` nm of along-track run (#342 Bug A). A single
-    terminal point — the departure/arrival field's own cloud — never qualifies.
+    ``>= 2`` route points OR ``>= 15`` nm of *contiguous* along-track run (#342
+    Bug A, geometry corrected in #571). A single terminal point — the
+    departure/arrival field's own cloud — never qualifies.
     """
-    return count >= _TERMINAL_DECK_MIN_POINTS or span_nm >= _TERMINAL_DECK_MIN_RUN_NM
+    return count >= _TERMINAL_DECK_MIN_POINTS or run_nm >= _TERMINAL_DECK_MIN_RUN_NM
 
 
 def _solver_mitigations(
     ctx: RouteContext,
     model: str,
     cloud_clearance_ft: float,
-    imc_pct_amber: float,
-    imc_pct_red: float,
+    extent_pct_amber: float,
+    extent_pct_red: float,
+    extent_min_nm: float,
     floor_margin_ft: float,
     max_reposition_nm: float,
     enroute_status: AdvisoryStatus,
@@ -671,8 +725,13 @@ def _solver_mitigations(
         best_status: AdvisoryStatus | None = None
         alt = cruise - MITIGATION_BIN_STEP_FT
         while alt >= floor:
-            tot, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
-            cand = _enroute_vfr_status(tot, imc, marg, imc_pct_amber, imc_pct_red)
+            tot, _imc, _marg, _, cand_imc_ext, cand_ext = _check_enroute_vfr(
+                ctx, model, cloud_clearance_ft, alt,
+            )
+            cand = _enroute_vfr_status(
+                tot, cand_imc_ext, cand_ext,
+                extent_pct_amber, extent_pct_red, extent_min_nm,
+            )
             if _SEVERITY[cand] < _SEVERITY[enroute_status]:
                 if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
                     best_alt, best_status = int(alt), cand
@@ -792,8 +851,8 @@ class VFRFeasibilityEvaluator:
                     audience="pilot",
                 ),
                 AdvisoryParameterDef(
-                    key="imc_pct_amber",
-                    label="IMC % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route in IMC (amber)",
                     description="Route percentage in IMC or marginal clearance for amber",
                     type="percent",
                     unit="%",
@@ -803,8 +862,8 @@ class VFRFeasibilityEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="imc_pct_red",
-                    label="IMC % (red)",
+                    key="extent_pct_red",
+                    label="% of route in IMC (red)",
                     description="Route percentage in IMC for red",
                     type="percent",
                     unit="%",
@@ -813,6 +872,7 @@ class VFRFeasibilityEvaluator:
                     max=80,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="terminal_corridor_nm",
                     label="Terminal corridor",
@@ -852,8 +912,9 @@ class VFRFeasibilityEvaluator:
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         cloud_clearance_ft = params.get("cloud_clearance_ft", 1000)
-        imc_pct_amber = params.get("imc_pct_amber", 15)
-        imc_pct_red = params.get("imc_pct_red", 30)
+        extent_pct_amber = params.get("extent_pct_amber", 15)
+        extent_pct_red = params.get("extent_pct_red", 30)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         corridor_nm = params.get("terminal_corridor_nm", 5)
         mitigation_min_base_agl_ft = params.get("mitigation_min_base_agl_ft", 3000)
         mitigation_max_reposition_nm = params.get("mitigation_max_reposition_nm", 25)
@@ -867,7 +928,10 @@ class VFRFeasibilityEvaluator:
             )
 
             # 2. En-route cloud clearance
-            total, imc_count, marginal_count, _ = _check_enroute_vfr(
+            (
+                total, imc_count, marginal_count, _,
+                imc_extent, enroute_extent,
+            ) = _check_enroute_vfr(
                 ctx, model, cloud_clearance_ft, ctx.cruise_altitude_ft
             )
 
@@ -893,7 +957,8 @@ class VFRFeasibilityEvaluator:
             # 4. Determine en-route status
             affected = imc_count + marginal_count
             enroute_status = _enroute_vfr_status(
-                total, imc_count, marginal_count, imc_pct_amber, imc_pct_red
+                total, imc_extent, enroute_extent,
+                extent_pct_amber, extent_pct_red, extent_min_nm,
             )
             # Coverage tolerance (#391): a clear en-route cloud verdict from
             # soundings at too small a share of the route is UNAVAILABLE, not
@@ -904,19 +969,40 @@ class VFRFeasibilityEvaluator:
                 enroute_status = AdvisoryStatus.UNAVAILABLE
             enroute_detail = ""
 
+            # Each sentence quotes the extent of the population it NAMES, which
+            # is not always the union ``affected`` counts (#571 review round 8).
+            # RED is graded off ``imc_extent`` alone and says "IMC over …", so it
+            # must quote the IMC miles: on a route with one solid-IMC point and
+            # several marginal-clearance ones, the union inflates the number
+            # beside the word "IMC" — the D1 defect on the composite that
+            # actually reaches the pilot. Only the sentence naming *both*
+            # populations quotes the union.
+            named_extent = enroute_extent
             if total > 0 and affected > 0:
-                ext = format_extent(affected, total, ctx.total_distance_nm)
                 if enroute_status == AdvisoryStatus.RED:
-                    enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
+                    named_extent = imc_extent
+                    enroute_detail = adv_t(
+                        "vfr.imc_over", loc, extent=format_extent(imc_extent),
+                    )
                 elif enroute_status == AdvisoryStatus.AMBER:
                     if marginal_count > 0 and imc_count > 0:
-                        enroute_detail = adv_t("vfr.imc_marginal", loc, extent=ext)
+                        enroute_detail = adv_t(
+                            "vfr.imc_marginal", loc,
+                            extent=format_extent(enroute_extent),
+                        )
                     elif imc_count > 0:
-                        enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
+                        named_extent = imc_extent
+                        enroute_detail = adv_t(
+                            "vfr.imc_over", loc, extent=format_extent(imc_extent),
+                        )
                     else:
-                        enroute_detail = adv_t("vfr.marginal", loc, extent=ext)
+                        enroute_detail = adv_t(
+                            "vfr.marginal", loc, extent=format_extent(enroute_extent),
+                        )
                 else:  # GREEN status but some points affected → minor clearance issues
-                    enroute_detail = adv_t("vfr.minor", loc, extent=ext)
+                    enroute_detail = adv_t(
+                        "vfr.minor", loc, extent=format_extent(enroute_extent),
+                    )
 
             # 5. En-route precipitation (visibility proxy) — capped at AMBER
             # in the composite; the standalone advisory grades it fully.
@@ -926,7 +1012,7 @@ class VFRFeasibilityEvaluator:
             # only VFR keys, so the two can grade differently if a user tunes
             # the standalone — that divergence is intentional; the composite is
             # a fixed-threshold sanity floor, not a mirror of the standalone.
-            precip_status, precip_detail, _, _, precip_signal = (
+            precip_status, precip_detail, _, _, precip_signal, _ = (
                 classify_enroute_precip(ctx, model)
             )
             # Old pack without precip data (no signal / UNAVAILABLE) → treat as
@@ -976,7 +1062,7 @@ class VFRFeasibilityEvaluator:
             # descent_deck) when a terminal deck forces the climb/descent low.
             mitigations: list[Mitigation] = _solver_mitigations(
                 ctx, model, cloud_clearance_ft,
-                imc_pct_amber, imc_pct_red,
+                extent_pct_amber, extent_pct_red, extent_min_nm,
                 mitigation_min_base_agl_ft, mitigation_max_reposition_nm,
                 enroute_status, loc,
             )
@@ -1006,6 +1092,11 @@ class VFRFeasibilityEvaluator:
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                extent=enroute_extent,
+                # The tier the sentence named rides the higher-threshold field,
+                # so the number a pilot reads is one the object also publishes.
+                affected_mod=named_extent.points,
+                extent_mod=named_extent,
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=primary_method_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    extent_min_nm_param,
     build_regions,
     build_ribbon,
     driving_method_id,
@@ -87,27 +88,28 @@ class ConvectiveEvaluator:
                     step=1,
                 ),
                 AdvisoryParameterDef(
-                    key="affected_pct_amber",
-                    label="Route % (amber)",
+                    key="extent_pct_amber",
+                    label="% of route with convection (amber)",
                     description="Route percentage affected for amber",
                     type="percent",
                     unit="%",
-                    default=CONVECTIVE_PARAM_DEFAULTS["affected_pct_amber"],
+                    default=CONVECTIVE_PARAM_DEFAULTS["extent_pct_amber"],
                     min=5,
                     max=80,
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="affected_pct_red",
-                    label="Route % (red)",
+                    key="extent_pct_red",
+                    label="% of route with convection (red)",
                     description="Route percentage affected for red",
                     type="percent",
                     unit="%",
-                    default=CONVECTIVE_PARAM_DEFAULTS["affected_pct_red"],
+                    default=CONVECTIVE_PARAM_DEFAULTS["extent_pct_red"],
                     min=10,
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="top_clearance_ft",
                     label="Top clearance (ft)",
@@ -147,8 +149,11 @@ class ConvectiveEvaluator:
             status = grade.status
             cross_check = grade.cross_check
 
-            ext = format_extent(affected, total, ctx.total_distance_nm)
-            ext_mod = format_extent(affected_mod, total, ctx.total_distance_nm)
+            # Each string quotes the extent of the population it names (#571
+            # D1): ``ext_mod`` is the MODERATE+ geometry, not a share of the
+            # any-risk union scaled to look like one.
+            ext = format_extent(grade.extent)
+            ext_mod = format_extent(grade.extent_mod)
             loc = ctx.locale
             cover_suffix = _coverage_suffix(max_cover_pct)
             # Wording only — the colour was decided by ``grade_convective_model``.
@@ -207,6 +212,8 @@ class ConvectiveEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 affected_mod=affected_mod,
+                extent=grade.extent,
+                extent_mod=grade.extent_mod,
                 cross_check=cross_check,
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),

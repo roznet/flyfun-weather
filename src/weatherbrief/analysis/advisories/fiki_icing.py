@@ -16,6 +16,9 @@ from weatherbrief.analysis.advisories._helpers import (
     hazardous_icing_zones,
     icing_zones_in_altitude_range,
     min_icing_clearance,
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
+    grade_extent,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -140,21 +143,30 @@ class FIKIIcingEvaluator:
                     max=10000,
                     step=500,
                 ),
+                # Flipped to AFFECTED polarity in #571 Stage 3. This was the
+                # one gate in the system that read the other way — a percentage
+                # of the *good* thing, compared with ``<`` — so a pilot moving
+                # between advisory cards had to remember which direction each
+                # slider meant. Same measurement, stated like every other.
                 AdvisoryParameterDef(
-                    key="clear_cruise_amber_pct",
-                    label="Clear cruise amber",
-                    description="Below this clear-air percentage triggers amber",
+                    key="extent_pct_amber",
+                    label="% of cruise in icing (amber)",
+                    description=(
+                        "Route percentage where cruise is not in clear air, for amber"
+                    ),
                     type="percent",
                     unit="%",
-                    default=80,
+                    default=20,
                     min=0,
                     max=100,
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="clear_cruise_red_pct",
-                    label="Clear cruise red",
-                    description="Below this clear-air percentage triggers red",
+                    key="extent_pct_red",
+                    label="% of cruise in icing (red)",
+                    description=(
+                        "Route percentage where cruise is not in clear air, for red"
+                    ),
                     type="percent",
                     unit="%",
                     default=50,
@@ -162,6 +174,7 @@ class FIKIIcingEvaluator:
                     max=100,
                     step=5,
                 ),
+                extent_min_nm_param(),
                 AdvisoryParameterDef(
                     key="severe_is_red",
                     label="Severe = RED",
@@ -181,8 +194,9 @@ class FIKIIcingEvaluator:
         cruise_buffer_ft = params.get("cruise_icing_buffer_ft", 2000)
         transit_amber = params.get("transit_thickness_amber_ft", 3000)
         transit_red = params.get("transit_thickness_red_ft", 5000)
-        clear_amber = params.get("clear_cruise_amber_pct", 80)
-        clear_red = params.get("clear_cruise_red_pct", 50)
+        extent_pct_amber = params.get("extent_pct_amber", 20)
+        extent_pct_red = params.get("extent_pct_red", 50)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
         severe_is_red = params.get("severe_is_red", 1) > 0.5
 
         cruise_alt = ctx.cruise_altitude_ft
@@ -315,12 +329,14 @@ class FIKIIcingEvaluator:
                     affected=not point_clear, region=region,
                 ))
 
-            summary = summarize_evidence(samples, total_dist)
+            summary = summarize_evidence(
+                samples, total_dist, speed_kt=ctx.cruise_groundspeed_kt,
+            )
 
             # --- derive severity from the three metrics ---
-            clear_pct = (
-                100.0 * cruise_clear / cruise_total if cruise_total > 0 else 100.0
-            )
+            # The complement of the same extent the gate reads (#571): the
+            # sentence and the colour can no longer quote different numbers.
+            clear_pct = 100.0 - summary.extent.pct
 
             loc = ctx.locale
             if total == 0:
@@ -381,13 +397,17 @@ class FIKIIcingEvaluator:
             if transit_parts:
                 detail_parts.append(adv_t("fiki.transit", loc, parts=", ".join(transit_parts)))
 
-            # Clear cruise
-            if clear_pct < clear_red:
-                statuses.append(AdvisoryStatus.RED)
-            elif clear_pct < clear_amber:
-                statuses.append(AdvisoryStatus.AMBER)
-            else:
-                statuses.append(AdvisoryStatus.GREEN)
+            # Clear cruise — graded through the shared gate on the same
+            # affected-cruise extent every other advisory uses (#571 Stage 3),
+            # so this axis gets the minimum-extent floor and the distance-based
+            # percentage with it. The pilot-facing sentence still reports the
+            # CLEAR share, which is the useful number for a FIKI aircraft.
+            statuses.append(grade_extent(
+                summary.extent,
+                amber_pct=extent_pct_amber,
+                red_pct=extent_pct_red,
+                min_nm=extent_min_nm,
+            ))
             detail_parts.append(adv_t("fiki.cruise_clear", loc, pct=f"{clear_pct:.0f}"))
 
             status = AdvisoryStatus.worst(statuses)
@@ -420,7 +440,7 @@ class FIKIIcingEvaluator:
                     affected=affected,
                     total=cruise_total,
                     total_distance_nm=total_dist,
-                    affected_nm=summary.affected_nm,
+                    extent=summary.extent,
                     highlights=summary.highlights,  # model has data here (total > 0)
                     primary_method_id=driving_method_id(summary.highlights, status),
                 )

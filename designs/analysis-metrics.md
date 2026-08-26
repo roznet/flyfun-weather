@@ -265,7 +265,7 @@ These are computed in `analysis/sounding/thermodynamics.py` (`compute_derived_le
 | **Vertical velocity** (w) | `mpcalc.vertical_velocity(ω, P, T)` — converts ω (Pa/s) to w (m/s) using hydrostatic relation: `w ≈ −ω/(ρ·g)` | ω, P, T | Physical vertical air speed. Negative ω = upward motion. | Strong updrafts (> 200 ft/min) = turbulence/convection. |
 | **Potential temperature** (θ) | `mpcalc.potential_temperature(P, T)` — Poisson equation: `θ = T × (1000/P)^(R/cp)` | P, T | Temperature parcel would have if brought adiabatically to 1000 hPa. Conserved in dry adiabatic processes. | Stability assessment: dθ/dz > 0 = stable, < 0 = unstable. Used for N² and Richardson number. |
 | **Brunt-Väisälä frequency²** (N²) | `N² = (g/θ̄) × (dθ/dz)` | θ at adjacent levels, height | Static stability frequency. Positive = stable (oscillations), negative = convectively unstable, zero = neutral. | N² > 0 = stable stratification. Used in Richardson number for CAT. |
-| **Richardson number** (Ri) | `Ri = N² / S²` where `S² = (du/dz)² + (dv/dz)²` | N², wind shear between levels | Ratio of buoyancy to shear. Determines whether turbulence is suppressed (high Ri) or generated (low Ri). | CAT risk bands are **altitude-ramped**, not flat — see §3.4. |
+| **Richardson number** (Ri) | `Ri = N² / S²` where `S² = (du/dz)² + (dv/dz)²` | N², wind shear between levels | Ratio of buoyancy to shear. Determines whether turbulence is suppressed (high Ri) or generated (low Ri). | CAT risk bands are scaled by the layer's **own thickness Δz**, not flat and not altitude-ramped — see §3.4. |
 | **Cloud liquid water** (g/m³) | `CLWMR × ρ_air` | CLWMR (GRIB2), P, T | Liquid water content in volume units. | Ogimet icing index input. GFS globally, ECMWF (EU+US ≤ 7 days), ICON-EU (Europe ≤ 5 days). |
 | **Cloud liquid water** (g/kg) | `CLWMR × 1000` | CLWMR (GRIB2) | Mixing ratio in g/kg. | SFIP icing index input. GFS globally, ECMWF (EU+US ≤ 7 days), ICON-EU (Europe ≤ 5 days). |
 | **Ice mixing ratio** (g/kg) | `ICMR × 1000` | ICMR (GRIB2) | Ice content mixing ratio. | Glaciation factor: CLW/(CLW+ICE). Reduces SFIP when cloud is glaciated. Available wherever CLW is. |
@@ -541,15 +541,17 @@ Below 50 J/kg there is still a **MARGINAL** tier (not NONE) when CAPE > 0 *and* 
 | Oscillating | ≥ 2 sign changes in ω | Wave activity. Mountain waves, gravity waves. Possible turbulence. |
 | Convective | max \|ω\| > 1 Pa/s | Vigorous vertical motion. Active convection in model. |
 
-**CAT risk** from Richardson number at each layer. Base tiers are the **classical Miles-Howard values** 0.25 / 0.5 / 1.0 (severe / moderate / light), then **loosened by an altitude ramp** — do not re-flatten them:
+**CAT risk** from Richardson number at each layer. Base tiers are the **classical Miles-Howard values** 0.25 / 0.5 / 1.0 (severe / moderate / light), then **loosened in proportion to the layer's own thickness Δz** — do not re-flatten them, and do not re-express them as a function of altitude:
 
-| Layer altitude | Multiplier | Effective Ri tiers |
-|----------------|-----------|--------------------|
-| ≤ 10,000 ft (`_RI_LOOSEN_BASE_FT`) | 1× | 0.25 / 0.5 / 1.0 |
-| 10,000 → 20,000 ft | linear ramp | between the two rows |
-| ≥ 20,000 ft (`_RI_LOOSEN_TOP_FT`) | 2× (`_RI_LOOSEN_MAX`) | 0.5 / 1.0 / 2.0 |
+| Layer thickness Δz | Multiplier | Effective Ri tiers |
+|--------------------|-----------|--------------------|
+| ≤ 1,000 ft (`_RI_DZ_REF_FT`) | 1× (floor) | 0.25 / 0.5 / 1.0 |
+| 1,000 → 2,000 ft | `Δz / _RI_DZ_REF_FT` | between the two rows |
+| ≥ 2,000 ft | 2× (`_RI_DZ_SCALE_MAX`) | 0.5 / 1.0 / 2.0 |
 
-**Why a ramp, not a constant:** NWP-derived Ri carries a systematic positive bias — model levels are too coarse to resolve the 100–300 m shear sheets where KH instability develops — but that bias is a *function of layer thickness*, and a 25 hPa slice is ~200 m at 950 hPa vs ~800 m at 300 hPa. The old flat 0.5/1.0/2.0 over-loosened the low levels. The ramp is continuous so two adjacent layers either side of a fixed altitude can't classify differently on the same Ri.
+**Why thickness, not altitude:** NWP-derived Ri carries a systematic positive bias — model levels are too coarse to resolve the 100–300 m shear sheets where KH instability develops — and that bias is a function of the layer thickness the Ri was differenced over, *only*. #533 scaled by altitude as a proxy (1× ≤ 10,000 ft ramping to 2× ≥ 20,000 ft), which is right for exactly one level set: it gave a GFS 25 hPa layer and an ECMWF 75 hPa layer at the same altitude the same multiplier. #539 applies the correction to the thing it is a function of. Δz comes from the Ri's **own level pair** (`_layer_thickness_ft`), not from the emitted layer's geometry — the sparse-column base-extension rule answers a different question (where to paint the band). The floor keeps the tiers from ever going below Miles-Howard; the cap bounds a bulk Ri differenced across a wide gap.
+
+The thickness law reproduces the altitude ramp's own knees on the level set the ramp was calibrated against (GFS/ICON-EU-GRIB: 25 hPa below 500 hPa, 50 hPa above) — 700→675 hPa spans ~935 ft at a ~10,350 ft midpoint, and 500→450 hPa spans ~2,520 ft at ~19,550 ft. It diverges where the ramp was wrong: ECMWF's coarse low-level levels are loosened where the ramp left them classical, GFS's 25 hPa mid-troposphere layers stay near-classical where the ramp loosened them on altitude alone, and UKMO / Météo-France / GEM pick up the correction their 50 hPa spacing warrants. See decisions §28.
 
 **Boundary-layer suppression (#533):** shear inside a surface well-mixed layer is thermals and mechanical roughness, not sheet-like KH — flagging it paints summer-afternoon noise along the bottom of every cross-section. Depth is detected from the θv parcel criterion (+0.5 K over surface, capped 10,000 ft), with a lapse-rate walk as a brittle fallback; where no mixed layer is found, layers wholly below `_BL_FALLBACK_DEPTH_FT` (5,000 ft AGL) are tagged boundary-layer origin — still real (low-level shear on a frontal day is a genuine GA hazard) but they don't bypass the route-percentage gate the way free-atmosphere severe CAT does.
 

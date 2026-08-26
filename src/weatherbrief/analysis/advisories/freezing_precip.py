@@ -22,9 +22,12 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EXTENT_MIN_NM,
+    extent_min_nm_param,
     EvidenceSample,
     FlaggedCell,
     format_extent,
+    grade_extent,
     summarize_evidence,
     terrain_at_distance,
 )
@@ -79,8 +82,8 @@ class FreezingPrecipEvaluator:
             timing_class="scan",
             parameters=[
                 AdvisoryParameterDef(
-                    key="primed_pct_amber",
-                    label="Primed profile amber",
+                    key="extent_pct_amber",
+                    label="% of route with a primed profile (amber)",
                     description=(
                         "Percent of route with a freezing-rain-shaped profile "
                         "(no active precip) that triggers amber"
@@ -92,12 +95,14 @@ class FreezingPrecipEvaluator:
                     max=50,
                     step=5,
                 ),
+                extent_min_nm_param(),
             ],
         )
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        primed_pct_amber = params.get("primed_pct_amber", 5)
+        extent_pct_amber = params.get("extent_pct_amber", 5)
+        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -180,8 +185,19 @@ class FreezingPrecipEvaluator:
                     distance_nm=dist, assessed=True, severity=severity, region=region,
                 ))
 
-            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm,
+                speed_kt=ctx.cruise_groundspeed_kt,
+            )
             total = summary.assessed
+            # Active (RED) and primed (AMBER) are two populations inside one
+            # grade; each sentence quotes its own geometry (#571 D1).
+            active_ext = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.RED
+            )
+            primed_ext = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.AMBER
+            )
 
             if total == 0:
                 per_model.append(ModelAdvisoryResult.build(
@@ -191,24 +207,24 @@ class FreezingPrecipEvaluator:
                 ))
                 continue
 
-            primed_pct = 100 * primed_pts / total if total else 0
-
             if active_pts > 0:
                 status = AdvisoryStatus.RED
                 detail = (
                     "Freezing precipitation "
-                    f"{format_extent(active_pts, total, ctx.total_distance_nm)}"
+                    f"{format_extent(active_ext)}"
                 )
                 if primed_pts:
                     detail += (
                         f"; primed profile "
-                        f"{format_extent(primed_pts, total, ctx.total_distance_nm)}"
+                        f"{format_extent(primed_ext)}"
                     )
-            elif primed_pts > 0 and primed_pct >= primed_pct_amber:
+            elif primed_pts > 0 and grade_extent(
+                primed_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
+            ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
                 detail = (
                     "Freezing-rain profile (no active precip) "
-                    f"{format_extent(primed_pts, total, ctx.total_distance_nm)}"
+                    f"{format_extent(primed_ext)}"
                 )
             else:
                 status = AdvisoryStatus.GREEN
@@ -230,7 +246,7 @@ class FreezingPrecipEvaluator:
                 model=model, status=status, detail=detail,
                 affected=active_pts + primed_pts, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                affected_nm=summary.affected_nm,
+                extent=summary.extent,
                 highlights=summary.highlights,
             ))
 

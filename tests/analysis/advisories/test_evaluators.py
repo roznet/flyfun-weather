@@ -26,8 +26,8 @@ from weatherbrief.models import (
 # Default convective params (LOW floor drives colour, MODERATE+ anchors headline).
 _CONV_PARAMS = {
     "min_risk": 2,
-    "affected_pct_amber": 20,
-    "affected_pct_red": 50,
+    "extent_pct_amber": 20,
+    "extent_pct_red": 50,
     "top_clearance_ft": 2000,
 }
 
@@ -86,7 +86,7 @@ def _conv_route(
 
 class TestIcingEscape:
     def test_green_no_icing(self, clear_context: RouteContext):
-        result = IcingEscapeEvaluator.evaluate(clear_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
+        result = IcingEscapeEvaluator.evaluate(clear_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20})
         assert result.aggregate_status == AdvisoryStatus.GREEN
         assert result.advisory_id == "icing_escape"
 
@@ -113,13 +113,13 @@ class TestIcingEscape:
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
         result = IcingEscapeEvaluator.evaluate(
-            ctx, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
+            ctx, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20},
         )
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
     def test_icing_with_warm_escape(self, icing_context: RouteContext):
         """Icing present but freezing level above terrain — escape viable."""
-        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
+        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20})
         # All points have icing = 100% > 20% amber threshold
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
 
@@ -127,12 +127,12 @@ class TestIcingEscape:
         """Freezing level at terrain — no warm air escape."""
         result = IcingEscapeEvaluator.evaluate(
             icing_no_escape_context,
-            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
     def test_per_model_results(self, icing_context: RouteContext):
-        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
+        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20})
         assert len(result.per_model) == 2  # gfs + ecmwf
         for m in result.per_model:
             assert m.total_points > 0
@@ -143,7 +143,7 @@ class TestIcingEscape:
         """Icing at 14000ft with cruise 6000ft — above cruise + buffer → GREEN."""
         result = IcingEscapeEvaluator.evaluate(
             ifr_high_altitude_icing_context,
-            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20},
         )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
@@ -151,19 +151,19 @@ class TestIcingEscape:
         """Icing at 4000–10000ft with cruise 8000ft is relevant."""
         result = IcingEscapeEvaluator.evaluate(
             icing_context,
-            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "extent_pct_amber": 20},
         )
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
 
 
 class TestVMCCruise:
     def test_green_clear_sky(self, clear_context: RouteContext):
-        result = VMCCruiseEvaluator.evaluate(clear_context, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
+        result = VMCCruiseEvaluator.evaluate(clear_context, {"extent_pct_amber": 25, "extent_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_red_ovc_at_cruise(self, cloudy_context: RouteContext):
         """OVC at cruise over 50% of route → RED."""
-        result = VMCCruiseEvaluator.evaluate(cloudy_context, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
+        result = VMCCruiseEvaluator.evaluate(cloudy_context, {"extent_pct_amber": 25, "extent_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.RED
 
     def test_clear_subset_below_coverage_is_unavailable(self):
@@ -189,7 +189,7 @@ class TestVMCCruise:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = VMCCruiseEvaluator.evaluate(ctx, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
+        result = VMCCruiseEvaluator.evaluate(ctx, {"extent_pct_amber": 25, "extent_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
     def test_hazard_on_partial_coverage_still_flags(self):
@@ -220,7 +220,7 @@ class TestVMCCruise:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = VMCCruiseEvaluator.evaluate(ctx, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
+        result = VMCCruiseEvaluator.evaluate(ctx, {"extent_pct_amber": 25, "extent_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.RED
 
 
@@ -258,7 +258,7 @@ class TestTurbulence:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_no_vertical_motion_is_unavailable(self):
@@ -284,7 +284,7 @@ class TestTurbulence:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
         assert result.per_model[0].total_points == 0
 
@@ -324,14 +324,34 @@ class TestTurbulence:
             analyses=analyses, cross_sections=[], elevation=None, models=["icon_eu"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
         assert result.per_model[0].total_points == 10
 
     def test_turbulent_route(self, turbulent_context: RouteContext):
         """CAT at cruise along full route → AMBER or RED."""
-        result = TurbulenceEvaluator.evaluate(turbulent_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
+        # This test used to pass ``icing_coverage_pct_amber`` (copy-pasted from
+        # icing_escape) where turbulence reads its own coverage key, so the
+        # override never landed (#571, testing-accuracy-review Bug #10). The
+        # Stage 3 key rename then rewrote that name inside this very comment,
+        # which is why it read as a tautology until now.
+        #
+        # Fixing the NAME alone left the test vacuous: the value passed equals
+        # the catalog default, and the fixture's full coverage clears any
+        # sane threshold, so the result was identical whether the override
+        # applied or was silently dropped. Drive the grade from both sides of
+        # the threshold instead, which only passes if the override is read.
+        result = TurbulenceEvaluator.evaluate(
+            turbulent_context, {"extent_pct_amber": 20, "strong_w_fpm": 200},
+        )
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+
+        # A threshold above full coverage can never be met.
+        quiet = TurbulenceEvaluator.evaluate(
+            turbulent_context,
+            {"extent_pct_amber": 101, "extent_pct_red": 101, "strong_w_fpm": 200},
+        )
+        assert quiet.aggregate_status == AdvisoryStatus.GREEN
 
     def test_clear_low_coverage_is_unavailable(self):
         """A smooth verdict from vm at too few route points → UNAVAILABLE (#391 review).
@@ -357,7 +377,7 @@ class TestTurbulence:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
     def test_hazard_low_coverage_still_flags(self):
@@ -386,7 +406,7 @@ class TestTurbulence:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.RED
 
     @staticmethod
@@ -474,7 +494,7 @@ class TestTurbulence:
 
         result = TurbulenceEvaluator.evaluate(
             self._risk_ctx(15, CATRiskLevel.LIGHT),
-            {"route_pct_amber": 20, "strong_w_fpm": 200},
+            {"extent_pct_amber": 20, "strong_w_fpm": 200},
         )
         assert result.aggregate_status == AdvisoryStatus.AMBER
 
@@ -484,7 +504,7 @@ class TestTurbulence:
 
         result = TurbulenceEvaluator.evaluate(
             self._risk_ctx(15, CATRiskLevel.MODERATE),
-            {"route_pct_amber": 20, "strong_w_fpm": 200},
+            {"extent_pct_amber": 20, "strong_w_fpm": 200},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
@@ -498,16 +518,81 @@ class TestTurbulence:
         AMBER so the SEVERE detail text stays coherent, but not RED.
         """
         result = TurbulenceEvaluator.evaluate(
-            self._bl_severe_ctx(1), {"route_pct_amber": 20, "strong_w_fpm": 200},
+            self._bl_severe_ctx(1), {"extent_pct_amber": 20, "strong_w_fpm": 200},
         )
         assert result.aggregate_status == AdvisoryStatus.AMBER
 
     def test_boundary_layer_severe_reds_when_widespread(self):
         """BL-severe over most of the route still REDs — the gate, not a mute."""
         result = TurbulenceEvaluator.evaluate(
-            self._bl_severe_ctx(15), {"route_pct_amber": 20, "strong_w_fpm": 200},
+            self._bl_severe_ctx(15), {"extent_pct_amber": 20, "strong_w_fpm": 200},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
+
+    @staticmethod
+    def _bl_mixed_ctx(n_severe: int, n_moderate: int, n: int = 17) -> RouteContext:
+        """BL-severe on the first points, BL-moderate on the next, clear after.
+
+        The all-severe fixture above cannot exercise the tier split: with every
+        flagged point severe, the SEVERE extent and the MODERATE+ union are the
+        same number, so an evaluator quoting the wrong one still passes.
+        """
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        def vm(risk) -> VerticalMotionAssessment:
+            return VerticalMotionAssessment(
+                classification=VerticalMotionClass.QUIESCENT,
+                cat_risk_layers=[CATRiskLayer(
+                    base_ft=2000, top_ft=3000, risk=risk, boundary_layer=True,
+                )],
+            )
+
+        clear = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT, cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"icon_eu": SoundingAnalysis(vertical_motion=(
+                    vm(CATRiskLevel.SEVERE) if i < n_severe
+                    else vm(CATRiskLevel.MODERATE) if i < n_severe + n_moderate
+                    else clear
+                ))},
+            )
+            for i in range(n)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None,
+            models=["icon_eu"], cruise_altitude_ft=2500, flight_ceiling_ft=18000,
+            total_distance_nm=(n - 1) * 10.0,
+        )
+
+    def test_bl_severe_red_quotes_the_severe_tier_not_the_union(self):
+        """The coverage-graded BL branch is where round 6's fix lives.
+
+        ``worst_cat`` is set by any severe layer at cruise including
+        boundary-layer, so ``risk_label`` reads SEVERE — and before round 6 only
+        free-atmosphere severe carried the ``"severe"`` tag, so this branch
+        printed the MODERATE+ union beside the word SEVERE. It is the one
+        turbulence branch reached without the free-atmosphere bypass, and the
+        only one that was asserting status alone (#571 review round 9).
+        """
+        m = TurbulenceEvaluator.evaluate(
+            self._bl_mixed_ctx(5, 10),
+            {"extent_pct_amber": 20, "strong_w_fpm": 200},
+        ).per_model[0]
+        assert m.status == AdvisoryStatus.RED
+        assert (m.affected_points, m.affected_nm) == (15, 145.0)   # MODERATE+ union
+        assert (m.affected_mod_points, m.affected_mod_nm) == (5, 45.0)  # SEVERE
+        assert "SEVERE over 45nm/160nm" in m.detail
+        assert "145nm" not in m.detail
 
     def test_free_atmosphere_severe_still_forces_red(self):
         """A severe layer above the boundary layer keeps the severe-anywhere bypass."""
@@ -543,17 +628,81 @@ class TestTurbulence:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=170,
         )
-        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_severe_sentence_quotes_the_severe_extent_not_the_union(self):
+        """#571 D1 — the severity word and the extent name the same population.
+
+        Severe at one point, light at eight more. The RED is correct and
+        deliberate (the free-atmosphere bypass above), but the sentence read
+        "Severe CAT over 90nm (53%)" — the light-and-above coverage — for a
+        hazard that held 10 nm. The bypassed grade must describe itself honestly
+        rather than borrow a number that describes different points.
+        """
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        def _vm(risk):
+            return VerticalMotionAssessment(
+                classification=VerticalMotionClass.QUIESCENT,
+                cat_risk_layers=(
+                    [] if risk is None
+                    else [CATRiskLayer(
+                        base_ft=7000, top_ft=10000, risk=risk, boundary_layer=False,
+                    )]
+                ),
+            )
+
+        # Point 0 severe; points 1-8 light; 9-16 clean. Even 10 nm spacing, so
+        # the point at 0 owns a half cell: [0, 5].
+        risks = (
+            [CATRiskLevel.SEVERE]
+            + [CATRiskLevel.LIGHT] * 8
+            + [None] * 8
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(vertical_motion=_vm(risks[i]))},
+            )
+            for i in range(17)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=170,
+        )
+        result = TurbulenceEvaluator.evaluate(
+            ctx, {"extent_pct_amber": 20, "strong_w_fpm": 200},
+        )
+        m = result.per_model[0]
+        assert m.status == AdvisoryStatus.RED          # bypass unchanged
+        assert m.affected_points == 9                  # the any-risk union
+        assert "Severe CAT" in m.detail
+        # The severe tier holds one point = the [0,5] half cell, not the union's
+        # 85 nm.
+        assert "5nm/170nm (3%)" in m.detail
+        assert "85nm" not in m.detail
+        # The published higher-threshold pair must describe the tier the
+        # sentence NAMED — the severe bypass used to publish the MODERATE+
+        # extent beside a "Severe CAT" sentence (#571 review round 5).
+        assert m.affected_mod_points == 1
+        assert m.affected_mod_nm == 5.0
 
 
 class TestConvective:
     def test_green_no_convection(self, clear_context: RouteContext):
-        result = ConvectiveEvaluator.evaluate(clear_context, {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50})
+        result = ConvectiveEvaluator.evaluate(clear_context, {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_moderate_convection(self, convective_context: RouteContext):
-        result = ConvectiveEvaluator.evaluate(convective_context, {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50})
+        result = ConvectiveEvaluator.evaluate(convective_context, {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50})
         # All 10 points have MODERATE risk → 100% > red threshold
         assert result.aggregate_status == AdvisoryStatus.RED
 
@@ -617,8 +766,8 @@ class TestConvective:
 
         params = {
             "min_risk": 2,
-            "affected_pct_amber": 20,
-            "affected_pct_red": 50,
+            "extent_pct_amber": 20,
+            "extent_pct_red": 50,
             "top_clearance_ft": 2000,
         }
 
@@ -673,7 +822,7 @@ class TestConvective:
         """#442 f/u: NWP fires (HIGH) at the driver while thermo lags (LOW, a
         2-tier gap) → note names the model's own forecast as the driver."""
         from weatherbrief.models import ConvectiveRisk
-        params = {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50, "top_clearance_ft": 2000}
+        params = {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50, "top_clearance_ft": 2000}
         res = ConvectiveEvaluator.evaluate(
             self._driver_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.LOW), params)
         xc = res.per_model[0].cross_check
@@ -684,7 +833,7 @@ class TestConvective:
         """#442 f/u: NWP HIGH + thermo MODERATE (1-tier apart — normal spread) at
         the driver → no note. This is the ICON case that read as contradictory."""
         from weatherbrief.models import ConvectiveRisk
-        params = {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50, "top_clearance_ft": 2000}
+        params = {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50, "top_clearance_ft": 2000}
         res = ConvectiveEvaluator.evaluate(
             self._driver_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.MODERATE), params)
         assert res.per_model[0].status == AdvisoryStatus.RED
@@ -694,7 +843,7 @@ class TestConvective:
         """#442 f/u: green NWP (no tower) + thermo MODERATE → dd_trigger amber, and
         the note names the thermodynamics as the driver."""
         from weatherbrief.models import ConvectiveRisk
-        params = {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50, "top_clearance_ft": 2000}
+        params = {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50, "top_clearance_ft": 2000}
         res = ConvectiveEvaluator.evaluate(
             self._driver_ctx(ConvectiveRisk.NONE, ConvectiveRisk.MODERATE, nwp_top=None), params)
         assert res.per_model[0].status == AdvisoryStatus.AMBER
@@ -754,8 +903,8 @@ class TestConvective:
             )
 
         params = {
-            "min_risk": 2, "affected_pct_amber": 20,
-            "affected_pct_red": 50, "top_clearance_ft": 2000,
+            "min_risk": 2, "extent_pct_amber": 20,
+            "extent_pct_red": 50, "top_clearance_ft": 2000,
         }
         # Active = quiet NWP → dd_trigger raises grade to amber. Thermo EL FL180 +
         # 2000 ft clearance = FL200 <= FL300 cruise → every point skipped → GREEN.
@@ -814,8 +963,8 @@ class TestConvective:
             flight_ceiling_ft=41000, total_distance_nm=200,
         )
         params = {
-            "min_risk": 2, "affected_pct_amber": 20,
-            "affected_pct_red": 50, "top_clearance_ft": 2000,
+            "min_risk": 2, "extent_pct_amber": 20,
+            "extent_pct_red": 50, "top_clearance_ft": 2000,
         }
         res = ConvectiveEvaluator.evaluate(ctx, params)
         # NWP's own MODERATE tops below cruise → GREEN; DD no longer floors (#442).
@@ -828,8 +977,15 @@ class TestConvectiveHeadline:
 
     def test_moderate_plus_anchoring_not_low_union(self):
         """6 HIGH + 18 LOW of 24 points: every point clears the LOW floor (100%)
-        but only 25% reaches MODERATE+. The headline extent must reflect the
-        MODERATE+ 25%, not the 100% LOW union, with the peak named separately."""
+        but only the first 6 reach MODERATE+. The headline extent must reflect
+        the MODERATE+ subset, not the 100% LOW union, with the peak named
+        separately.
+
+        The printed figure is the *distance* share (#571), not the 25% point
+        ratio: the first and last points own half-width cells, so 6 leading
+        points of 24 evenly spaced over 200 nm cover 47.8 nm — 24%, and that is
+        the number both the sentence and ``affected_mod_nm`` carry.
+        """
         risks = [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 18
         ctx = _conv_route({"gfs": risks})
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
@@ -838,38 +994,46 @@ class TestConvectiveHeadline:
         m = res.per_model[0]
         assert m.affected_points == 24
         assert m.affected_mod_points == 6
-        # Per-model detail anchors on the MODERATE+ extent (25%) + peak HIGH.
+        # Per-model detail anchors on the MODERATE+ extent + peak HIGH.
         assert "MODERATE+" in m.detail
-        assert "25%" in m.detail
+        assert "24%" in m.detail
         assert "peak HIGH" in m.detail
         assert "100%" not in m.detail  # the LOW union must not be the headline
+        # The sentence and the structured field are one number (#571 D1/D2).
+        assert f"{round(m.affected_mod_nm)}nm" in m.detail
         # Single model → aggregate collapses to a single % (no range).
-        assert "25%" in res.aggregate_detail
+        assert "24%" in res.aggregate_detail
         assert "peak HIGH" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
 
     def test_cross_model_range(self):
-        """Three RED models with differing MODERATE+ coverage (25/50/75%) →
-        aggregate shows the range across the supporting models + peak."""
+        """Three RED models with differing MODERATE+ coverage → aggregate shows
+        the range across the supporting models + peak.
+
+        Percentages are distance-based (#571): with 8 points over 200 nm the
+        leading point owns a half-width cell, so 2/4/6 leading points cover
+        42.9 / 100.0 / 157.1 nm — 21 / 50 / 78.5%.
+        """
         ctx = _conv_route(
             {
-                "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 25%
+                "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 21%
                 "icon": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
-                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 75%
+                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 78%
             }
         )
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
 
         assert res.aggregate_status == AdvisoryStatus.RED
         assert "MODERATE+" in res.aggregate_detail
-        assert "25–75%" in res.aggregate_detail
+        assert "21–78%" in res.aggregate_detail
         assert "across models" in res.aggregate_detail
         assert "peak HIGH" in res.aggregate_detail
 
     def test_low_only_favorability_fallback(self):
-        """4 LOW + 6 NONE of 10: 40% clears the LOW floor (AMBER) but nothing
+        """4 LOW + 6 NONE of 10: the LOW floor is cleared (AMBER) but nothing
         reaches MODERATE. Wording must be 'primed, not firing' favorability —
-        never 'MODERATE+ over 0%'."""
+        never 'MODERATE+ over 0%'. The printed share is distance-based (#571):
+        4 leading points of 10 over 200 nm cover 77.8 nm, i.e. 39%."""
         risks = [ConvectiveRisk.LOW] * 4 + [ConvectiveRisk.NONE] * 6
         ctx = _conv_route({"gfs": risks})
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
@@ -880,10 +1044,10 @@ class TestConvectiveHeadline:
         assert m.affected_mod_points == 0
         assert "primed" in m.detail.lower()
         assert "MODERATE+" not in m.detail
-        assert "40%" in m.detail
+        assert "39%" in m.detail
         # Aggregate (single model) → favorability single %, no range/peak.
         assert "primed" in res.aggregate_detail.lower()
-        assert "40%" in res.aggregate_detail
+        assert "39%" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
         assert "peak" not in res.aggregate_detail.lower()
 
@@ -942,18 +1106,18 @@ class TestConvectiveHeadline:
 
 class TestCloudTop:
     def test_green_no_clouds(self, clear_context: RouteContext):
-        result = CloudTopEvaluator.evaluate(clear_context, {"margin_ft": 1000, "pct_amber": 25})
+        result = CloudTopEvaluator.evaluate(clear_context, {"margin_ft": 1000, "extent_pct_amber": 25})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_tops_above_ceiling(self, cloudy_context: RouteContext):
         """Cloud tops at 12000ft, ceiling 18000ft — still reachable."""
-        result = CloudTopEvaluator.evaluate(cloudy_context, {"margin_ft": 1000, "pct_amber": 25})
+        result = CloudTopEvaluator.evaluate(cloudy_context, {"margin_ft": 1000, "extent_pct_amber": 25})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_ignores_cirrus_above_ceiling(self, high_cirrus_context: RouteContext):
         """High cirrus (35000-39000ft) above ceiling (18000ft) should be ignored.
         Only lower cloud (6000-10000ft) should be considered — tops well within ceiling."""
-        result = CloudTopEvaluator.evaluate(high_cirrus_context, {"margin_ft": 1000, "pct_amber": 25})
+        result = CloudTopEvaluator.evaluate(high_cirrus_context, {"margin_ft": 1000, "extent_pct_amber": 25})
         assert result.aggregate_status == AdvisoryStatus.GREEN
         # max_top should be 10000 (lower layer), not 39000 (cirrus)
         for m in result.per_model:
@@ -961,7 +1125,7 @@ class TestCloudTop:
 
     def test_only_cirrus_is_green(self, only_cirrus_context: RouteContext):
         """When ALL layers are above ceiling, treat as no significant clouds."""
-        result = CloudTopEvaluator.evaluate(only_cirrus_context, {"margin_ft": 1000, "pct_amber": 25})
+        result = CloudTopEvaluator.evaluate(only_cirrus_context, {"margin_ft": 1000, "extent_pct_amber": 25})
         assert result.aggregate_status == AdvisoryStatus.GREEN
         for m in result.per_model:
             assert "No significant" in m.detail
@@ -988,7 +1152,7 @@ class TestCloudTop:
             analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
             cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
         )
-        result = CloudTopEvaluator.evaluate(ctx, {"margin_ft": 1000, "pct_amber": 25})
+        result = CloudTopEvaluator.evaluate(ctx, {"margin_ft": 1000, "extent_pct_amber": 25})
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
 
@@ -997,8 +1161,13 @@ _FIKI_DEFAULTS = {
     "cruise_icing_buffer_ft": 2000,
     "transit_thickness_amber_ft": 3000,
     "transit_thickness_red_ft": 5000,
-    "clear_cruise_amber_pct": 80,
-    "clear_cruise_red_pct": 50,
+    # Consolidated keys, in AFFECTED polarity (#571 Stage 3). These were still
+    # the pre-consolidation `clear_cruise_*` names, which `FIKIIcingEvaluator`
+    # no longer reads — so every case here silently ran on the evaluator's own
+    # defaults and passed only because 100-80 == 20 and 50 is self-complementary
+    # (#571 review).
+    "extent_pct_amber": 20,
+    "extent_pct_red": 50,
     "severe_is_red": 1,
 }
 
@@ -1032,7 +1201,10 @@ class TestFIKIIcing:
         assert result.aggregate_status == AdvisoryStatus.RED
         for m in result.per_model:
             assert "dep 5000ft" in m.detail
-            assert "cruise 70% clear" in m.detail
+            # 75%, not 70%: the clear share is now the complement of the same
+            # distance-based extent the gate reads, so the sentence and the
+            # colour quote one number (#571).
+            assert "cruise 75% clear" in m.detail
 
     def test_icing_above_cruise_with_margin(
         self, fiki_icing_above_cruise_context: RouteContext,
@@ -1099,7 +1271,7 @@ class TestFIKIIcing:
 
 class TestModelAgreement:
     def test_green_good_agreement(self, clear_context: RouteContext):
-        result = ModelAgreementEvaluator.evaluate(clear_context, {"poor_pct_amber": 25, "poor_pct_red": 50})
+        result = ModelAgreementEvaluator.evaluate(clear_context, {"extent_pct_amber": 25, "extent_pct_red": 50})
         # No model_divergence data → unavailable or green
         assert result.aggregate_status in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE)
 
@@ -1107,7 +1279,7 @@ class TestModelAgreement:
         """100% poor agreement (3+ variables) → RED."""
         result = ModelAgreementEvaluator.evaluate(
             poor_agreement_context,
-            {"min_poor_vars": 3, "poor_pct_amber": 25, "poor_pct_red": 50},
+            {"min_poor_vars": 3, "extent_pct_amber": 25, "extent_pct_red": 50},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
@@ -1115,7 +1287,7 @@ class TestModelAgreement:
         """With high min_poor_vars threshold, few POOR variables → GREEN."""
         result = ModelAgreementEvaluator.evaluate(
             poor_agreement_context,
-            {"min_poor_vars": 5, "poor_pct_amber": 25, "poor_pct_red": 50},
+            {"min_poor_vars": 5, "extent_pct_amber": 25, "extent_pct_red": 50},
         )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
@@ -1155,7 +1327,7 @@ class TestModelAgreement:
             flight_ceiling_ft=18000, total_distance_nm=200,
         )
         result = ModelAgreementEvaluator.evaluate(
-            ctx, {"min_poor_vars": 3, "poor_pct_amber": 25, "poor_pct_red": 50}
+            ctx, {"min_poor_vars": 3, "extent_pct_amber": 25, "extent_pct_red": 50}
         )
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
@@ -1185,7 +1357,7 @@ class TestModelAgreement:
             flight_ceiling_ft=18000, total_distance_nm=200,
         )
         result = ModelAgreementEvaluator.evaluate(
-            ctx, {"min_poor_vars": 3, "poor_pct_amber": 25, "poor_pct_red": 50}
+            ctx, {"min_poor_vars": 3, "extent_pct_amber": 25, "extent_pct_red": 50}
         )
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
@@ -1196,10 +1368,154 @@ class TestModelAgreement:
 
 _VFR_DEFAULTS = {
     "cloud_clearance_ft": 1000,
-    "imc_pct_amber": 15,
-    "imc_pct_red": 30,
+    "extent_pct_amber": 15,
+    "extent_pct_red": 30,
     "terminal_corridor_nm": 5,
 }
+
+
+class TestShortRouteExtentFloor:
+    """The #571 D4 acceptance case, end to end.
+
+    ``interpolate_route`` fills at a fixed 10 nm regardless of route length, so
+    the point count scales with distance and the weight of one point scales
+    inversely. Two flagged points are 1.6% of a 582 nm route and 15% of a 120 nm
+    one — enough to clear ``extent_pct_amber=15`` outright. The gate was silently
+    ~5x more sensitive on a short flight than a long one; the minimum-extent
+    floor makes it scale-invariant in the unit that matters, miles of weather.
+    """
+
+    def _ctx(self, total_nm: float, imc_idx: set[int]):
+        """A 10 nm-spaced route of ``total_nm``, IMC at the given point indices."""
+        from weatherbrief.models import CloudCoverage, EnhancedCloudLayer
+
+        deck = [
+            EnhancedCloudLayer(
+                base_ft=6000, top_ft=10000, coverage=CloudCoverage.OVC,
+            )
+        ]
+        n = int(total_nm / 10) + 1
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 10.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    cloud_layers=deck if i in imc_idx else [],
+                )},
+            )
+            for i in range(n)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=total_nm,
+        )
+
+    def test_two_points_on_a_short_route_no_longer_promote(self):
+        # 20 nm of IMC on a 120 nm route: 17% of the flight, under the 30 nm
+        # floor. It used to clear extent_pct_amber=15 (and extent_pct_red=15 for a
+        # user who had tuned it down) on two points alone.
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(120.0, {5, 6}), _VFR_DEFAULTS,
+        )
+        m = res.per_model[0]
+        assert m.affected_pct > 15          # the old gate would have fired
+        assert m.status == AdvisoryStatus.GREEN
+
+    def test_three_points_clear_the_floor_and_grade(self):
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(120.0, {5, 6, 7}), _VFR_DEFAULTS,
+        )
+        assert res.per_model[0].status != AdvisoryStatus.GREEN
+
+    def test_the_same_two_points_never_mattered_on_a_long_route(self):
+        # Unchanged behaviour on a long route — the floor is inert at 5%.
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(600.0, {5, 6}), _VFR_DEFAULTS,
+        )
+        assert res.per_model[0].status == AdvisoryStatus.GREEN
+
+    def test_a_short_route_mostly_in_cloud_still_grades(self):
+        """The floor may never suppress a flight that is largely in the hazard."""
+        res = VFRFeasibilityEvaluator.evaluate(
+            self._ctx(60.0, {1, 2, 3, 4, 5, 6}), _VFR_DEFAULTS,
+        )
+        assert res.per_model[0].status == AdvisoryStatus.RED
+
+
+class TestVFRRedNamesTheIMCPopulation:
+    """"IMC over X" must quote the IMC miles, not IMC+marginal.
+
+    ``_enroute_vfr_status`` grades RED off ``imc_extent`` alone, but the RED
+    sentence quoted the union and the object published it — so a route with four
+    solid-IMC points among five marginal-clearance ones said "IMC over 170nm
+    (94%)" when 70nm was IMC. This is the composite go/no-go advisory a pilot
+    reads first, which is what made it the worst instance of the D1 defect left
+    in the PR (#571 review round 8).
+    """
+
+    def _ctx(self, imc_idx: set[int], marginal_idx: set[int], n: int = 10):
+        from weatherbrief.models import CloudCoverage, EnhancedCloudLayer
+
+        imc = [EnhancedCloudLayer(
+            base_ft=6000, top_ft=12000, coverage=CloudCoverage.OVC,
+        )]
+        marginal = [EnhancedCloudLayer(
+            base_ft=8800, top_ft=12000, coverage=CloudCoverage.BKN,
+        )]
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    cloud_layers=(
+                        imc if i in imc_idx
+                        else marginal if i in marginal_idx
+                        else []
+                    ),
+                )},
+            )
+            for i in range(n)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            total_distance_nm=(n - 1) * 20.0,
+        )
+
+    def _red(self):
+        ctx = self._ctx({0, 1, 2, 3}, set(range(4, 9)))
+        m = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS).per_model[0]
+        assert m.status == AdvisoryStatus.RED, "fixture must reach the RED branch"
+        return m
+
+    def test_the_red_sentence_quotes_the_imc_miles(self):
+        m = self._red()
+        assert "IMC over 70nm/180nm" in m.detail
+        assert "170nm" not in m.detail, (
+            "the marginal points must not inflate the miles beside the word IMC"
+        )
+
+    def test_the_object_publishes_both_populations(self):
+        """The union stays the counted population; the named tier rides mod."""
+        m = self._red()
+        assert (m.affected_points, m.affected_nm) == (9, 170.0)
+        assert (m.affected_mod_points, m.affected_mod_nm) == (4, 70.0)
+
+    def test_a_mixed_amber_still_quotes_the_union(self):
+        """The one sentence that names BOTH populations keeps the union.
+
+        Guards against over-correcting the RED fix into always narrowing.
+        """
+        ctx = self._ctx({0, 1, 2}, set(range(3, 9)))
+        m = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS).per_model[0]
+        assert m.status == AdvisoryStatus.AMBER
+        assert "IMC/marginal clearance over 170nm/180nm" in m.detail
+        assert m.affected_mod_nm == m.affected_nm == 170.0
 
 
 class TestVFRFeasibility:
@@ -1337,7 +1653,9 @@ class TestVFRFeasibility:
         entry = VFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "vfr_feasibility"
         assert entry.category == "flight_rules"
-        assert len(entry.parameters) == 6
+        # 7: the shared `extent_min_nm` floor joined the two extent thresholds
+        # when the keys were consolidated (#571 Stage 3).
+        assert len(entry.parameters) == 7
 
     def test_tunable_clearance(self, vfr_marginal_clearance_context: RouteContext):
         """With 500ft clearance threshold, 800ft gap is comfortable → GREEN."""
@@ -1390,8 +1708,8 @@ class TestVFRFeasibility:
 _IFR_DEFAULTS = {
     "min_dep_ceiling_ft": 200,
     "min_arr_ceiling_ft": 400,
-    "icing_pct_amber": 15,
-    "icing_pct_red": 30,
+    "extent_pct_amber": 15,
+    "extent_pct_red": 30,
     # No convective keys: §22 retired them. The convective axis is graded by the
     # convective advisory's parameters, resolved off ``ctx.advisory_params``.
 }
@@ -1526,18 +1844,18 @@ class TestIFRFeasibility:
         entry = IFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "ifr_feasibility"
         assert entry.category == "flight_rules"
-        # 5, not 7: `convective_min_risk` and `convective_pct_red` were retired
+        # 6, not 8: `convective_min_risk` and `convective_pct_red` were retired
         # in §22 — the convective axis is now graded by the convective
         # advisory's own parameters, so a second set here could only let the two
-        # diverge again.
-        assert len(entry.parameters) == 5
+        # diverge again. The 6th is the shared `extent_min_nm` floor (#571 S3).
+        assert len(entry.parameters) == 6
         assert not {"convective_min_risk", "convective_pct_red"} & {
             p.key for p in entry.parameters
         }
 
     def test_tunable_icing_threshold(self, ifr_heavy_icing_context: RouteContext):
         """With higher icing threshold, 100% icing should still be RED."""
-        params = {**_IFR_DEFAULTS, "icing_pct_red": 80}
+        params = {**_IFR_DEFAULTS, "extent_pct_red": 80}
         result = IFRFeasibilityEvaluator.evaluate(
             ifr_heavy_icing_context, params,
         )

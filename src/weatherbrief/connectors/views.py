@@ -151,6 +151,12 @@ def summarize_advisories(advisories: dict) -> list[dict]:
                 "detail": m.get("detail"),
                 "affected_pct": m.get("affected_pct"),
             }
+            # Name a denominator that is not the whole route (#571 D3), so an
+            # agent cannot read "% of the route's mountain points" as "% of the
+            # route" the way the digest did.
+            dom = m.get("affected_domain")
+            if dom:
+                entry_m["affected_domain"] = dom
             cc = m.get("cross_check")
             if cc:
                 cross_check_present = True
@@ -378,7 +384,14 @@ def advisory_detail(adv: dict, catalog_entry: dict | None) -> dict[str, Any]:
             "affected_pct": m.get("affected_pct"),
             "affected_nm": m.get("affected_nm"),
             "total_nm": m.get("total_nm"),
+            # The extent's own denominator (#571): for a domain-scoped advisory
+            # such as mountain_wind this is mountain miles, not route miles, and
+            # ``affected_nm / total_nm`` would understate the coverage.
+            "domain_nm": m.get("domain_nm"),
         }
+        dom = m.get("affected_domain")
+        if dom:
+            entry_m["affected_domain"] = dom
         cc = m.get("cross_check")
         if cc:
             entry_m["cross_check"] = cc

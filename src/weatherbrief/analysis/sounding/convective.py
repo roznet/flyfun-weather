@@ -6,10 +6,14 @@ and returns ConvectiveAssessment.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal, NamedTuple
 
-from weatherbrief.analysis.route_geometry import cell_edges
+from weatherbrief.analysis.route_geometry import (
+    EMPTY_EXTENT,
+    RouteExtent,
+    route_extent,
+)
 from weatherbrief.models import (
     ConvectiveAssessment,
     ConvectiveCharacter,
@@ -1493,6 +1497,13 @@ class ConvCharPoint(NamedTuple):
     # gate (#568). ``None`` on hand-built points in tests; the classifier then
     # falls back to even spacing over ``total_distance_nm``.
     distance_nm: float | None = None
+    # Could this model be graded here at all? False for a route point where the
+    # model has no sounding. Such a point must still be PRESENT so the midpoint
+    # cell edges tile the real route — dropping it donates its miles to the
+    # nearest survivor, which let one realized cell at 40 nm of a 200 nm route
+    # claim 82% coverage and force WIDESPREAD/RED (#571 review) — but it is
+    # excluded from the denominator, the #391 rule every other evaluator follows.
+    assessed: bool = True
 
 
 _CHAR_BAND_ORDER = (
@@ -1511,48 +1522,82 @@ def _char_up_one(band: ConvectiveCharacter) -> ConvectiveCharacter:
     return _CHAR_BAND_ORDER[min(i + 1, len(_CHAR_BAND_ORDER) - 1)]
 
 
-def longest_embedded_run_nm(
-    points: Sequence[ConvCharPoint], total_distance_nm: float | None
-) -> float:
-    """Longest *contiguous* along-route run of embedded cells, in nm (#568).
+def _char_distances(
+    points: Sequence[ConvCharPoint], total_distance_nm: float
+) -> list[float]:
+    """Along-route positions of the character points, evenly spaced as a fallback.
 
-    A point counts only when it is a **realized** cell whose cruise level sits
-    inside a deck (``is_convective and realized and embedded``). Realization is
-    part of the predicate for the same reason the ``realized == 0`` short-circuit
-    exists below: "cells hidden in a deck" presupposes cells, and the old gate
-    counted merely-thermodynamically-flagged points.
-
-    Extent uses the midpoint-owned-cell convention (``cell_edges``): a run from
-    point *i* to point *j* spans ``rights[j] - lefts[i]``, so the number agrees
-    with the ``(Xnm/Ynm)`` extent the advisory card prints. Points with no
-    ``distance_nm`` (hand-built test points) are treated as evenly spaced over
-    ``total_distance_nm``.
-
-    Returns 0.0 when the route length is unknown or non-positive — without a
-    distance there is no extent to gate on, and the caller falls through to the
-    coverage band rather than asserting an unmeasurable barrier.
+    Hand-built test points carry no ``distance_nm``; treating them as evenly
+    spaced keeps a fixture graded rather than silently ungradeable.
     """
     n = len(points)
-    if n == 0 or total_distance_nm is None or total_distance_nm <= 0:
-        return 0.0
-    distances = [
+    return [
         p.distance_nm
         if p.distance_nm is not None
         else (total_distance_nm * i / (n - 1) if n > 1 else 0.0)
         for i, p in enumerate(points)
     ]
-    lefts, rights = cell_edges(distances, total_distance_nm)
 
-    best = 0.0
-    run_start: int | None = None
-    for i, pt in enumerate(points):
-        if pt.is_convective and pt.realized and pt.embedded:
-            if run_start is None:
-                run_start = i
-            best = max(best, rights[i] - lefts[run_start])
-        else:
-            run_start = None
-    return best
+
+def character_extent(
+    points: Sequence[ConvCharPoint],
+    total_distance_nm: float | None,
+    predicate: Callable[[ConvCharPoint], bool],
+    speed_kt: float | None = None,
+) -> RouteExtent:
+    """Extent of a character sub-population over the shared route geometry (#571).
+
+    One reducer for both the realized-coverage band and the EMBEDDED contiguity
+    gate, so the band, the gate and the ``(Xnm/Ynm)`` the card prints are the
+    same measurement.
+
+    With no route length ``route_extent`` treats the points as evenly spaced over
+    a **unit** route, so the coverage *share* stays measurable — under even
+    spacing a distance ratio is exactly the point ratio, which is what the band
+    used to be — and marks the result ``distance_known=False``. The resulting
+    ``nm`` / ``longest_run_nm`` are then unitless and must not be gated on; that
+    is why :func:`longest_embedded_run_nm` keeps its own explicit guard and
+    returns 0.0, so an unmeasurable barrier is never asserted.
+    """
+    if not points:
+        return EMPTY_EXTENT
+    # ``total_distance_nm or 0.0`` hands the degenerate case to route_extent's
+    # own unit fallback rather than repeating it here (#571 review).
+    return route_extent(
+        _char_distances(points, total_distance_nm or 0.0),
+        total_distance_nm or 0.0,
+        [predicate(p) for p in points],
+        [p.assessed for p in points],
+        speed_kt=speed_kt,
+    )
+
+
+def _is_embedded_cell(p: ConvCharPoint) -> bool:
+    """A **realized** cell whose cruise level sits inside a deck.
+
+    Realization is part of the predicate for the same reason the
+    ``realized == 0`` short-circuit exists below: "cells hidden in a deck"
+    presupposes cells, and the old gate counted merely-thermodynamically-flagged
+    points.
+    """
+    return p.is_convective and p.realized and p.embedded
+
+
+def longest_embedded_run_nm(
+    points: Sequence[ConvCharPoint], total_distance_nm: float | None
+) -> float:
+    """Longest *contiguous* along-route run of embedded cells, in nm (#568).
+
+    Now a thin read of :func:`character_extent`'s ``longest_run_nm`` (#571):
+    contiguity is a reducer on the shared geometry, not a convention of its own.
+
+    Returns 0.0 when the route length is unknown or non-positive — without a
+    real distance there is no extent to gate on, and the caller falls through to
+    the coverage band rather than asserting an unmeasurable barrier.
+    """
+    if total_distance_nm is None or total_distance_nm <= 0:
+        return 0.0
+    return character_extent(points, total_distance_nm, _is_embedded_cell).longest_run_nm
 
 
 def classify_convective_character(
@@ -1588,7 +1633,9 @@ def classify_convective_character(
     Severity owns the colour; this never downgrades it. Bands map to the
     advisory colour in the evaluator (ISOLATED/SCATTERED→AMBER, the rest→RED).
     """
-    total = len(points)
+    # Assessed points only: a route point this model cannot grade is present for
+    # the geometry but is not part of the population being described.
+    total = sum(1 for p in points if p.assessed)
     if total == 0:
         return ConvectiveCharacter.NONE
     conv = [p for p in points if p.is_convective]
@@ -1637,8 +1684,13 @@ def classify_convective_character(
     if embedded_run_nm > 0 and embedded_run_nm >= embed_min_nm:
         return ConvectiveCharacter.EMBEDDED
 
-    # 2. Realized-coverage band (% of all route points with realized convection).
-    realized_pct = 100.0 * realized / total
+    # 2. Realized-coverage band — the share of the ROUTE, in miles, carrying
+    #    realized convection (#571). It was ``realized / len(points)``, a point
+    #    ratio: on an unevenly spaced route the same weather banded differently
+    #    depending on where ``interpolate_route`` happened to insert waypoints.
+    realized_pct = character_extent(
+        points, total_distance_nm, lambda p: p.is_convective and p.realized,
+    ).pct
     if realized_pct <= isolated_max_pct:
         band = ConvectiveCharacter.ISOLATED
     elif realized_pct <= scattered_max_pct:
