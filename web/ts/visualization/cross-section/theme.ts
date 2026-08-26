@@ -150,6 +150,18 @@ export interface CrossSectionTheme {
    *  stop, not blended: an invented intermediate colour would imply a
    *  precision the 2 km retrieval does not have. */
   observed: {
+    /** Sequential light→dark ramp for a band's SHARE of the disc, [fraction,
+     *  cssColor], lightest first.
+     *
+     *  Share rather than temperature is what the cross-section colour carries,
+     *  because the vertical axis already encodes altitude and cloud-top
+     *  temperature is very nearly a function of it — colouring by temperature
+     *  spends the channel on something the reader can already see. How much of
+     *  the disc a band holds is the thing position cannot show.
+     *
+     *  Temperature keeps the `tempStops` ramp, which the MAP uses: there is no
+     *  altitude axis there, so temperature is genuinely new information. */
+    shareStops: Array<[number, string]>;
     tempStops: Array<[number, string]>;
     /** Fallback when a top carries no temperature (older cached frame). */
     tempUnknown: string;
@@ -170,6 +182,19 @@ export interface CrossSectionTheme {
 /** Enhanced-IR ramp, warmest first. Shared starting point for the themes that
  *  do not need to diverge; see `CrossSectionTheme.observed` for why the warm
  *  end is blue rather than the conventional grayscale. */
+/** Sequential share ramp, lightest first. A single hue so it reads as one
+ *  quantity getting stronger, and blue-violet so it cannot be confused with
+ *  the radar ramp (green→red) or the NWP cloud bands (gray/white). */
+export const SHARE_STOPS: Array<[number, string]> = [
+  [0.02, '#6377b8'],
+  [0.05, '#576aa8'],
+  [0.10, '#4b5c96'],
+  [0.20, '#3f4e84'],
+  [0.35, '#333f6d'],
+  [0.55, '#282f54'],
+  [0.80, '#1c2039'],
+];
+
 export const IR_TEMP_STOPS: Array<[number, string]> = [
   [15, '#8fa8c8'],   // desaturated blue — warm, low cloud
   [0, '#7f9dc4'],
@@ -348,6 +373,7 @@ const STANDARD_THEME: CrossSectionTheme = {
   },
 
   observed: {
+    shareStops: SHARE_STOPS,
     tempStops: IR_TEMP_STOPS,
     tempUnknown: 'rgba(143, 168, 200, 0.75)',
     hatchColor: 'rgba(190, 210, 235, 0.55)',
@@ -524,6 +550,15 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
   // different temperatures. Only the surrounding strokes go pure, so the
   // marker survives the deep navy sky and the heavier bands around it.
   observed: {
+    // Runs the other way: this theme's sky is a deep navy (#1B3060), so a
+    // DARKER band is less visible, not more. What must increase with share is
+    // contrast against the sky, and on a dark sky that means brightening.
+    // Same meaning, same direction of emphasis, inverted luminance.
+    shareStops: [
+      [0.02, '#3f5590'], [0.05, '#5570ab'], [0.10, '#6d8ac6'],
+      [0.20, '#87a4de'], [0.35, '#a3bdec'], [0.55, '#c2d6f7'],
+      [0.80, '#e6efff'],
+    ],
     tempStops: IR_TEMP_STOPS,
     tempUnknown: 'rgba(170, 195, 230, 0.9)',
     hatchColor: 'rgba(255, 255, 255, 0.8)',
@@ -538,6 +573,18 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
 const GRAMET_THEME: CrossSectionTheme = {
   ...STANDARD_THEME,
   id: 'gramet' as ThemeId,
+  observed: {
+    ...STANDARD_THEME.observed,
+    // This sky (#2B5DA8) is darker than standard's, and the standard ramp
+    // descends through it — a mid-share band would sit at almost the sky's own
+    // luminance and disappear. Ascends instead, same meaning, same direction
+    // of emphasis.
+    shareStops: [
+      [0.02, '#5b83c4'], [0.05, '#7599d2'], [0.10, '#8fafdf'],
+      [0.20, '#a9c4ea'], [0.35, '#c3d8f3'], [0.55, '#dae9fa'],
+      [0.80, '#f0f6ff'],
+    ],
+  },
   nightShading: {
     twilight: 'rgba(20, 20, 60, 0.20)',
     night: 'rgba(5, 5, 30, 0.42)',
@@ -654,6 +701,13 @@ const LIGHT_THEME: CrossSectionTheme = {
   ...STANDARD_THEME,
   id: 'light' as ThemeId,
   observed: {
+    // On a white sky the pale end of the standard ramp vanishes, so the whole
+    // ramp shifts darker while keeping the same light→dark direction.
+    shareStops: [
+      [0.02, '#aab7d6'], [0.05, '#8b9bc7'], [0.10, '#6d7fb6'],
+      [0.20, '#5265a4'], [0.35, '#3e4f8e'], [0.55, '#2e3c74'],
+      [0.80, '#1f2a58'],
+    ],
     tempStops: LIGHT_IR_TEMP_STOPS,
     tempUnknown: 'rgba(92, 120, 153, 0.8)',
     hatchColor: 'rgba(70, 95, 130, 0.6)',

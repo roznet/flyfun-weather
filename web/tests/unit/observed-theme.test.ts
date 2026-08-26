@@ -17,7 +17,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 
 import { THEMES, setActiveTheme, getActiveTheme, type ThemeId } from '../../ts/visualization/cross-section/theme';
-import { tempColor } from '../../ts/visualization/cross-section/layers/observed-tops';
+import { tempColor, shareColor } from '../../ts/visualization/cross-section/layers/observed-tops';
 import { getLayerLegend } from '../../ts/visualization/layer-legends';
 
 const THEME_IDS = Object.keys(THEMES) as ThemeId[];
@@ -85,6 +85,44 @@ describe('observed cloud-top temperature ramp', () => {
       // An invented intermediate colour would imply precision the 2 km
       // retrieval does not have.
       expect(palette.has(tempColor(c)), `${c}°C produced an off-palette colour`).toBe(true);
+    }
+  });
+
+  it('gains contrast against its own sky as share rises, on every theme', () => {
+    // The cross-section's colour channel carries SHARE, because the vertical
+    // axis already encodes altitude and temperature is nearly a function of it.
+    //
+    // The invariant is CONTRAST, not darkness. On the light theme a bigger
+    // share is darker; on high-contrast, whose sky is a deep navy, a darker
+    // band vanishes into it and the ramp has to brighten instead. Asserting
+    // "darkens" would have forced one of them to be wrong — as it did: the
+    // first high-contrast ramp written here was non-monotonic and this test
+    // caught it.
+    const luminance = (c: string) => {
+      const [r, g, b] = rgb(c);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    for (const id of THEME_IDS) {
+      setActiveTheme(id);
+      const sky = luminance(THEMES[id].sky.background);
+      const contrast = [0.02, 0.1, 0.35, 0.8]
+        .map((f) => Math.abs(luminance(shareColor(f)) - sky));
+      for (let i = 1; i < contrast.length; i++) {
+        expect(contrast[i], `${id}: share ramp must gain contrast (step ${i})`)
+          .toBeGreaterThan(contrast[i - 1]);
+      }
+    }
+  });
+
+  it('keeps the share ramp distinct from the radar ramp', () => {
+    // Radar runs green→yellow→orange→red on the same chart. A shared palette
+    // would put two different meanings behind one colour.
+    const radar = new Set(['#3cbe5a', '#f0d23c', '#f08c28', '#e13c3c', '#be3cbe']);
+    for (const id of THEME_IDS) {
+      setActiveTheme(id);
+      for (const f of [0.02, 0.1, 0.35, 0.8]) {
+        expect(radar.has(shareColor(f).toLowerCase()), `${id} @ ${f}`).toBe(false);
+      }
     }
   });
 

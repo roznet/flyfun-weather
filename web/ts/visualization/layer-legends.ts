@@ -221,18 +221,22 @@ function lineLegends(theme: CrossSectionTheme): Record<string, LegendEntry[]> {
  *  labelled in °C because temperature is the measurement; the FL a bar sits at
  *  is derived from it. */
 function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
-  const stops = theme.observed.tempStops;
-  const pick = (c: number) => stops.reduce(
-    (best, s) => (Math.abs(s[0] - c) < Math.abs(best[0] - c) ? s : best), stops[0],
+  // The cross-section colours by SHARE, not temperature: the vertical axis
+  // already encodes altitude and cloud-top temperature is nearly a function of
+  // it, so the colour channel would be spent on something already visible. The
+  // map still colours by temperature, where there is no altitude axis.
+  const stops = theme.observed.shareStops;
+  const pick = (f: number) => stops.reduce(
+    (best, s) => (f >= s[0] ? s : best), stops[0],
   );
-  const entries: LegendEntry[] = [0, -30, -40, -50, -60, -70].map((c) => ({
-    label: `${c > 0 ? '+' : ''}${c}°C`,
-    color: pick(c)[1],
-    meaning: c >= 0
-      ? 'low cloud top'
-      : c <= -60
-        ? 'very cold top — deep convection'
-        : 'high cloud top',
+  const entries: LegendEntry[] = [0.02, 0.10, 0.35, 0.80].map((f) => ({
+    label: `${Math.round(f * 100)}%`,
+    color: pick(f)[1],
+    meaning: f <= 0.02
+      ? 'a few pixels of the disc had tops in this band'
+      : f >= 0.8
+        ? 'most of the disc had tops in this band'
+        : 'share of the disc with tops in this band',
   }));
   entries.push({
     label: 'depth unknown',

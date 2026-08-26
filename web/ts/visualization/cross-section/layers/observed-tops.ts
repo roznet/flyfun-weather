@@ -53,6 +53,9 @@ const ARROW_PX = 4;
  *  cockpit at a glance should not depend on judging one faint alpha. */
 const RULE_SPACING_MIN_PX = 2.5;
 const RULE_SPACING_MAX_PX = 7;
+/** Constant: the share is already carried by colour and by rule density, and a
+ *  third redundant encoding muddies both. */
+const BAND_ALPHA = 0.85;
 
 /** Colour for a cloud-top temperature, from the active theme's ramp.
  *
@@ -65,6 +68,18 @@ const RULE_SPACING_MAX_PX = 7;
  *
  *  Nearest stop, never interpolated. A blended intermediate colour would imply
  *  a precision the 2 km retrieval does not have. */
+export function shareColor(fraction: number): string {
+  const stops = getActiveTheme().observed.shareStops;
+  let best = stops[0];
+  for (const stop of stops) {
+    if (fraction >= stop[0]) best = stop;
+  }
+  return best[1];
+}
+
+/** Colour for a cloud-top temperature. Used by the MAP, where there is no
+ *  altitude axis and temperature is genuinely new information. The
+ *  cross-section colours by share instead — see `shareColor`. */
 export function tempColor(celsius: number | null): string {
   const theme = getActiveTheme();
   if (celsius == null) return theme.observed.tempUnknown;
@@ -190,10 +205,6 @@ function drawPoint(
   // strokes hanging below it — the cap is what we measured, the hatching is
   // the depth we cannot see.
   const theme = getActiveTheme();
-  // One colour for the whole point's markers: the temperature we have is the
-  // coldest top in the disc, which belongs to the highest band. Colouring the
-  // lower bands with it too would claim a temperature they did not report.
-  const bandColor = tempColor(point.topsColdestC);
 
   const bins = significantBins(point);
   // Normalised against this point's own busiest band, so the dominant deck
@@ -211,6 +222,12 @@ function drawPoint(
       const top = Math.max(yHi, plotArea.top);
       const height = Math.max(1.5, yLo - top);
       const share = bin.fraction / peakFraction;
+      // Colour carries the band's SHARE of the disc. The vertical axis already
+      // says how high it is, and cloud-top temperature is nearly a function of
+      // height, so colouring by temperature spent the channel on information
+      // the reader already had. Share is what position cannot show. (The map
+      // keeps the temperature ramp — no altitude axis there.)
+      const bandColor = shareColor(bin.fraction);
 
       // Filled with HORIZONTAL RULES, not a solid block. A solid fill at an
       // altitude reads as a physical layer sitting there; this is a tally —
@@ -221,7 +238,7 @@ function drawPoint(
       //
       // Density carries the share as well as opacity: a band holding most of
       // the pixels is closely ruled, a band holding a handful is sparse.
-      ctx.globalAlpha = 0.35 + 0.5 * share;
+      ctx.globalAlpha = BAND_ALPHA;
       ctx.strokeStyle = bandColor;
       ctx.lineWidth = 1;
       const spacing = RULE_SPACING_MAX_PX - (RULE_SPACING_MAX_PX - RULE_SPACING_MIN_PX) * share;
@@ -234,7 +251,7 @@ function drawPoint(
         ctx.stroke();
       }
       // A light edge so the band's extent stays legible when rules are sparse.
-      ctx.globalAlpha = 0.25 + 0.35 * share;
+      ctx.globalAlpha = BAND_ALPHA * 0.6;
       ctx.strokeRect(x0, top, width, height);
     }
 
