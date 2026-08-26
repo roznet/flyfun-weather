@@ -128,8 +128,9 @@ def test_cat_risk_from_low_ri():
     ]
     assessment = assess_vertical_motion(levels)
 
-    # Ri=0.15 at 10,000 ft (classical tiers) → SEVERE; Ri=0.8 at 18,000 ft
-    # (tiers scaled ×1.8) → MODERATE — different severities → 2 layers
+    # Both layers here are thick (150 and 200 hPa, 5,000 and 8,000 ft), so
+    # both read against the ×2-capped 0.5/1.0/2.0 tiers: Ri=0.15 → SEVERE,
+    # Ri=0.8 → MODERATE — different severities → 2 layers
     assert len(assessment.cat_risk_layers) == 2
     assert assessment.cat_risk_layers[0].risk == CATRiskLevel.SEVERE
     assert assessment.cat_risk_layers[0].base_ft == 10000
@@ -155,15 +156,16 @@ def test_cat_layer_grouping_same_severity():
     levels = [
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5,
-                     richardson_number=0.3),
+                     richardson_number=0.6),
         DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-1.2,
-                     richardson_number=0.5),
+                     richardson_number=0.9),
         DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-1.0,
                      richardson_number=5.0),
     ]
     assessment = assess_vertical_motion(levels)
-    # MODERATE at both: 0.3 against the classical 0.25/0.5 tiers at 10,000 ft,
-    # 0.5 against the ×1.4-scaled 0.35/0.7 tiers at 14,000 ft — one layer
+    # MODERATE at both: this column is coarse (100–150 hPa steps, 4,000–5,000 ft
+    # per layer), so both Ri are read against the ×2-capped 0.5/1.0 tiers —
+    # one layer
     assert len(assessment.cat_risk_layers) == 1
     layer = assessment.cat_risk_layers[0]
     assert layer.base_ft == 10000
@@ -491,32 +493,58 @@ def test_negative_ri_surface_layer_skipped():
     assert assessment.cat_risk_layers == []
 
 
-# --- Altitude-dependent Ri calibration (#533) ---
+# --- Thickness-scaled Ri calibration (#533 altitude ramp → #539 Δz law) ---
 
 
-def test_ri_thresholds_classical_in_lower_troposphere():
-    """Below 10,000 ft the classical 0.25/0.5/1.0 tiers apply unchanged.
+def test_ri_thresholds_classical_on_a_resolved_low_level_layer():
+    """A 25 hPa low-level layer resolves the shear sheet → classical tiers.
 
-    Ri = 0.35 at 2,500 ft used to read SEVERE under the flat 0.5/1.0/2.0
-    calibration — the defect behind the EGNY→EGKB "severe CAT at 2,500 ft"
-    reports. It is MODERATE now.
+    The EGNY→EGKB geometry: ICON/GFS 950→925 hPa around the 2,500 ft cruise
+    spans ~740 ft, under the 1,000 ft reference, so the tiers stand unscaled.
+    Ri = 0.35 there used to read SEVERE under the flat 0.5/1.0/2.0
+    calibration — the defect behind the "severe CAT at 2,500 ft" reports. It
+    is MODERATE under #533's altitude ramp and stays MODERATE under #539's
+    thickness law, which is the anchor #539 had to preserve.
     """
     levels = [
-        DerivedLevel(pressure_hpa=1000, altitude_ft=300),
-        DerivedLevel(pressure_hpa=950, altitude_ft=1800, richardson_number=0.35),
-        DerivedLevel(pressure_hpa=900, altitude_ft=3200, richardson_number=1.20),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1420),
+        DerivedLevel(pressure_hpa=950, altitude_ft=2140, richardson_number=0.35),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2870, richardson_number=1.20),
     ]
     assessment = assess_vertical_motion(levels)
     risks = [la.risk for la in assessment.cat_risk_layers]
-    # 0.35 → MODERATE (was SEVERE); 1.20 → NONE (was LIGHT)
+    # 0.35 → MODERATE (was SEVERE pre-#533); 1.20 → NONE
     assert risks == [CATRiskLevel.MODERATE]
 
 
-def test_ri_thresholds_loosened_in_upper_troposphere():
-    """At/above 20,000 ft the tiers are the old loosened 0.5/1.0/2.0.
+def test_ri_thresholds_loosen_on_a_coarse_low_level_layer():
+    """The SAME Ri at the SAME altitude on a coarser model reads SEVERE.
 
-    The resolution argument genuinely holds up there: 25 hPa spans ~800 m at
-    300 hPa, far coarser than the shear sheet it needs to resolve.
+    This is the #539 correction the altitude ramp could not express: a model
+    whose lowest levels are 75 hPa apart (ECMWF on Open-Meteo: 1000→925)
+    averages the shear over ~2,100 ft, so its Ri carries the coarse-resolution
+    positive bias in full and the tiers are loosened to the ×2 cap — while the
+    25 hPa model above, at the same altitude, keeps the classical tiers.
+
+    Cry-wolf at low level is bounded by the guards that actually fixed #533
+    and are untouched here: mixed-layer suppression, BL tagging, the AMBER
+    floor and the route-percentage gate — none of which depend on Δz.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=360),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2500, richardson_number=0.35),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert [la.risk for la in assessment.cat_risk_layers] == [CATRiskLevel.SEVERE]
+
+
+def test_ri_thresholds_loosened_in_upper_troposphere():
+    """At jet level the tiers are the old loosened 0.5/1.0/2.0.
+
+    The resolution argument genuinely holds up there, and now says so
+    directly: 50 hPa spans ~3,400 ft at 350→300 hPa, well past the ×2 cap.
+    Preserving this is #539's second calibration anchor — an FL300 jet-flank
+    case must grade exactly as it did under the altitude ramp.
     """
     levels = [
         DerivedLevel(pressure_hpa=400, altitude_ft=24000),
@@ -530,15 +558,72 @@ def test_ri_thresholds_loosened_in_upper_troposphere():
     assert risks == [CATRiskLevel.SEVERE, CATRiskLevel.MODERATE]
 
 
-def test_ri_threshold_scale_ramps_between_10k_and_20k():
-    """The multiplier ramps rather than stepping — no cliff at a fixed level."""
+def test_ri_threshold_scale_is_thickness_proportional_between_floor_and_cap():
+    """clamp(Δz / 1,000 ft, 1.0, 2.0) — floored, proportional, capped."""
     from weatherbrief.analysis.sounding.vertical_motion import _ri_threshold_scale
 
-    assert _ri_threshold_scale(2500) == 1.0
-    assert _ri_threshold_scale(10000) == 1.0
-    assert _ri_threshold_scale(15000) == pytest.approx(1.5)
-    assert _ri_threshold_scale(20000) == 2.0
-    assert _ri_threshold_scale(35000) == 2.0
+    # Floor: a layer finer than the shear-sheet reference never tightens the
+    # tiers below Miles-Howard.
+    assert _ri_threshold_scale(230) == 1.0
+    assert _ri_threshold_scale(740) == 1.0
+    assert _ri_threshold_scale(1000) == 1.0
+    # Proportional in between.
+    assert _ri_threshold_scale(1500) == pytest.approx(1.5)
+    # Cap: a bulk Ri across a wide gap cannot loosen without limit.
+    assert _ri_threshold_scale(2000) == 2.0
+    assert _ri_threshold_scale(6500) == 2.0
+
+
+def test_thickness_law_reproduces_the_altitude_ramps_own_knees():
+    """#539 subsumes #533 on the level set #533 was calibrated against.
+
+    GFS/ICON-EU-GRIB spacing is 25 hPa below 500 hPa and 50 hPa above. The
+    ramp's 10,000 ft knee is where that spacing passes 1,000 ft, and its
+    20,000 ft ceiling is where the spacing steps to 50 hPa — so the thickness
+    law lands on 1.0 and 2.0 at the same two places, without asking what
+    altitude it is at.
+    """
+    from weatherbrief.analysis.sounding.vertical_motion import _ri_threshold_scale
+
+    # 700→675 hPa: ~935 ft thick, midpoint ~10,350 ft (old ramp 1.03).
+    assert _ri_threshold_scale(935) == 1.0
+    # 500→450 hPa: ~2,524 ft thick, midpoint ~19,550 ft (old ramp 1.96).
+    assert _ri_threshold_scale(2524) == 2.0
+
+
+def test_thickness_comes_from_the_ri_pair_not_the_painted_layer():
+    """A sparse column scales on the gap the Ri crossed, not the drawn band.
+
+    The 100 hPa adjacency rule keeps the emitted layer from painting a
+    several-thousand-ft band off one Ri (#534), but the Ri really was
+    differenced across that gap, so the coarse-resolution bias really is that
+    large — the two questions are answered separately.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, richardson_number=0.45),
+    ]
+    assessment = assess_vertical_motion(levels)
+    layer = assessment.cat_risk_layers[0]
+    # Δz = 5,000 ft → ×2 tiers → 0.45 < 0.5 → SEVERE (classical: MODERATE)...
+    assert layer.risk == CATRiskLevel.SEVERE
+    # ...while the band itself is still not extended down across the 150 hPa
+    # gap: base stays at the flagged level.
+    assert layer.base_ft == 10000
+
+
+def test_thickness_falls_back_to_standard_atmosphere_without_altitudes():
+    """A missing lower altitude estimates Δz from pressure, not ×1.0.
+
+    Reading it as the reference thickness would let a coarse model silently
+    borrow a fine model's tiers.
+    """
+    from weatherbrief.analysis.sounding.vertical_motion import _layer_thickness_ft
+
+    below = DerivedLevel(pressure_hpa=1000, altitude_ft=None)
+    level = DerivedLevel(pressure_hpa=925, altitude_ft=2500)
+    # ~2,100 ft in the standard atmosphere — well past the cap, not 1.0.
+    assert _layer_thickness_ft(below, level) == pytest.approx(2100, abs=200)
 
 
 # --- Well-mixed boundary layer suppression (#533) ---
