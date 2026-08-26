@@ -60,6 +60,12 @@ export interface VizSettings {
    *  changes update the highlight with no stale-copy bugs. No-ops gracefully
    *  when the advisory no longer exists in the manifest. */
   activeHighlightAdvisoryId?: string | null;
+  /** Corridor width (NM) the observed layers and the observed route-graph
+   *  metrics are resolved at (#574). Every sampled radius ships in the
+   *  payload, so changing this is a client-side pick with no re-fetch —
+   *  which is why it lives in view settings rather than triggering a
+   *  request. Undefined → the widest sampled radius. */
+  observedRadiusNm?: number | null;
 }
 
 // --- Coordinate Transform ---
@@ -150,6 +156,13 @@ export interface VizRouteData {
    * whenever the snapshot carries no observations or SIGMETs.
    */
   currentConditions: VizCurrentConditions | null;
+  /**
+   * Observed radar / lightning / satellite cloud tops along the corridor
+   * (#574), from `snapshot.observed_conditions`. `null` on D-1+ and wherever
+   * the observed collector is not enabled — the two observed layers then gray
+   * out, exactly like the fronts overlay does without front data.
+   */
+  observed: VizObserved | null;
   /**
    * Experimental Hewson front overlay (#196), already resolved to the rendered
    * model at its primary (nearest-cruise) level. `null` whenever the "Auto
@@ -263,6 +276,68 @@ export interface VizCurrentConditions {
   sigmets: VizSigmetZone[];
 }
 
+// --- Observed conditions (#574) --------------------------------------------
+//
+// Sibling of `VizCurrentConditions`, deliberately separate: METAR columns and
+// SIGMET zones are point reports and airspace notices, while these are
+// remotely-sensed fields with their own coverage and their own clocks. The
+// existing `current-conditions` layer is untouched by any of this.
+
+/** One FL band's share of the cloud-top pixels in a disc. */
+export interface VizObservedTopBin {
+  label: string;
+  loFt: number;
+  hiFt: number;
+  /** Share of the disc's DETECTED pixels, 0–1. */
+  fraction: number;
+}
+
+/** Every observed quantity at one route point, for the selected corridor. */
+export interface VizObservedPoint {
+  distanceNm: number;
+  /** Peak reflectivity (dBZ), or null when nothing was detected. */
+  dbz: number | null;
+  /** True when the radar does not cover enough of this disc to say anything.
+   *  Renderers MUST distinguish this from `dbz === null`, which means the
+   *  radar looked and found no echo. */
+  radarNoCoverage: boolean;
+  rateMmH: number | null;
+  rateNoCoverage: boolean;
+  flashCount: number;
+  /** Flashes per 1000 km² per minute — comparable between corridor widths. */
+  flashRate: number | null;
+  /** Highest observed cloud top (ft), or null when the disc was clear. */
+  topsHighestFt: number | null;
+  topsBins: VizObservedTopBin[];
+  /** Share of cloudy pixels the retrieval flagged multi-layer-suspect (qm 9). */
+  topsMultiLayerFraction: number;
+  topsNoCoverage: boolean;
+}
+
+/** Per-source identity and age. There is no combined timestamp on purpose. */
+export interface VizObservedSource {
+  source: string;
+  label: string;
+  validTime: string;
+  ageMinutes: number;
+  /** Width of the product's own accumulation / rolling-max window; 0 = instant. */
+  windowMinutes: number;
+  attribution: string;
+}
+
+export interface VizObserved {
+  /** All sampled radii — switching between them is a client-side pick. */
+  radiiNm: number[];
+  /** The radius these `points` were resolved at. */
+  radiusNm: number;
+  points: VizObservedPoint[];
+  reflectivity: VizObservedSource | null;
+  rainRate: VizObservedSource | null;
+  cloudTops: VizObservedSource | null;
+  lightning: VizObservedSource | null;
+  summaryLines: string[];
+}
+
 export interface WaypointMarker {
   distanceNm: number;
   icao: string;
@@ -352,6 +427,23 @@ export interface VizPoint {
    *  performance); negative = colder. `null` when cruise temp is unavailable. */
   isaDevC: number | null;
   precipitationMm: number | null;
+  /**
+   * Observed radar rain rate (mm/h) at this point, for the selected corridor
+   * width (#574). This is a MEASUREMENT, not a forecast — the sibling of
+   * `precipitationMm`, which comes from the model.
+   *
+   * `null` means one of two very different things, disambiguated by
+   * `observedRadarNoCoverage`: either the radar looked and found nothing, or
+   * it does not cover this disc at all. A renderer that treats them alike
+   * would paint about half of Europe as dry.
+   */
+  observedRateMmH: number | null;
+  /** Observed lightning density (flashes per 1000 km² per minute) in the
+   *  selected corridor. Lightning has no coverage caveat — the imager sees
+   *  the whole disc, so zero here is an observation. */
+  observedFlashRate: number | null;
+  /** True when the radar does not cover this point's disc. */
+  observedRadarNoCoverage: boolean;
   /** Mean sea-level pressure (hPa), used as the QNH proxy. Canonical hPa;
    *  display-unit conversion (hPa/inHg) happens at the route-graph edge. */
   qnhHpa: number | null;

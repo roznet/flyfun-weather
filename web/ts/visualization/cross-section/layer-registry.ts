@@ -30,6 +30,8 @@ import { sldBandsLayer } from './layers/sld-bands';
 import { eShearBandsLayer } from './layers/e-shear-bands';
 import { surfaceObscurationBandsLayer } from './layers/surface-obscuration-bands';
 import { currentConditionsLayer } from './layers/current-conditions';
+import { observedTopsLayer } from './layers/observed-tops';
+import { observedSurfaceLayer } from './layers/observed-surface';
 import { frontsMarkersLayer } from './layers/fronts-markers';
 import { nightShadingLayer } from './layers/night-shading';
 import { highlightLayer } from './layers/highlight-layer';
@@ -48,6 +50,10 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   squareCloudBandsLayer,
   nwpCloudBandsLayer,
   cloudBandsLayer,
+  // Observed cloud tops draw over the NWP cloud bands on purpose: that
+  // overlap IS the cross-check (#574). Nothing computes the comparison in
+  // phase 1 — it is read off the picture.
+  observedTopsLayer,
   thermoConvectiveBgLayer,
   nwpConvectiveBgLayer,
   icingBandsLayer,
@@ -62,6 +68,9 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   // Current conditions sits above terrain (columns rest on the surface) but
   // below the temperature/stability/reference lines so those stay readable.
   currentConditionsLayer,
+  // Observed radar/lightning hugs the terrain, so it sits with the other
+  // surface-referenced overlays rather than in the cloud stack.
+  observedSurfaceLayer,
   // Front markers are vertical lines (not bands) — draw above terrain fill so
   // the marker stays visible over mountainous cross-sections.
   frontsMarkersLayer,

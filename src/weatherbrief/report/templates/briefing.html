@@ -232,6 +232,34 @@
   </table>
   {% endif %}
 
+  <!-- Observed conditions (#574): radar, lightning, satellite cloud tops.
+       Deliberately no verdict — phase 1 reports what was measured, where, and
+       how long ago, and leaves the comparison with the forecast to the reader. -->
+  {# Gated on has_any_field, matching digest/text.py and prompt_builder.py.
+     summary_lines is never empty — build_summary() returns a placeholder
+     line when nothing was collected — so gating on it here made the PDF
+     show an empty 'Observed Now' heading on a deployment with the
+     collector on but no frames yet, while the other two surfaces
+     correctly showed nothing. #}
+  {% if observed_conditions and observed_conditions.has_any_field %}
+  <h2>Observed Now</h2>
+  <ul style="margin:0 0 0.5em 1.1em; padding:0;">
+    {% for line in observed_conditions.summary_lines %}
+    <li style="margin:0.15em 0;">{{ line }}</li>
+    {% endfor %}
+  </ul>
+  <p class="header-meta">
+    Sampled within {{ observed_conditions.corridor_nm|int }}nm of the route.
+    Each source carries its own observation time &mdash; they are minutes apart
+    and none is a snapshot.
+  </p>
+  {% if observed_attributions %}
+  <p class="header-meta" style="font-size:8pt;">
+    {% for line in observed_attributions %}{{ line }}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+  {% endif %}
+
   <!-- Route SIGMETs -->
   {% if route_sigmets and route_sigmets.sigmets %}
   <h2>SIGMETs Along Route</h2>

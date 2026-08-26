@@ -58,6 +58,17 @@ dependencies = [
     # lazily inside tasks/archive so a deployment that hasn't enabled the
     # archive still starts if the wheel is missing.
     "pyarrow>=15",
+    # Observed conditions (#574). The OPERA radar composite is ODIM_H5, and
+    # the EUMETSAT MTG products are netCDF fetched through eumdac. All three
+    # were installed ad hoc in the dev venv and in no manifest; declared here
+    # so a fresh environment can run the collector.
+    #
+    # Deliberately NO GDAL/rasterio: pyproj (already a dependency for the HRRR
+    # Lambert grid) plus numpy covers every projection and resampling step
+    # these products need, and the droplet does not gain a C toolchain for it.
+    "h5py>=3.10",
+    "netCDF4>=1.6",
+    "eumdac>=3.0",
 ]
 
 [project.optional-dependencies]

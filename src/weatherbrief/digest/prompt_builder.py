@@ -290,6 +290,14 @@ def _append_shared_sections(
     if snapshot.route_observations:
         sections.append(_format_observations_context(snapshot.route_observations))
 
+    # --- Observed conditions (D-0 only, #574) ---
+    # The deterministic summary is handed over verbatim. It is NOT re-derived
+    # here and the LLM is not asked to compare it with the forecast: phase 1
+    # computes no verdict, and a model invited to reconcile a radar echo with
+    # an NWP field would invent exactly the comparison the design deferred.
+    if snapshot.observed_conditions and snapshot.observed_conditions.has_any_field:
+        sections.append(_format_observed_context(snapshot.observed_conditions))
+
     # --- Route SIGMETs (D-0 only) ---
     if snapshot.route_sigmets and snapshot.route_sigmets.count:
         dep = snapshot.departure_time
@@ -1001,4 +1009,33 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
     if len(lines) == 1:
         lines.append("No route advisories available.")
 
+    return "\n".join(lines)
+
+
+def _format_observed_context(observed) -> str:
+    """Observed radar/lightning/cloud-top summary for the LLM prompt.
+
+    Each source's own age travels with it. Without that the model would read
+    four measurements as one instant, and a radar composite is a rolling
+    10-minute maximum plus delivery lag — up to ~30 NM of own-ship at 120 kt.
+    """
+    lines = ["OBSERVED CONDITIONS ALONG ROUTE (measured, not forecast):"]
+    lines.extend(f"- {line}" for line in observed.summary_lines)
+    ages = []
+    for field in (
+        observed.reflectivity,
+        observed.rain_rate,
+        observed.cloud_tops,
+        observed.lightning,
+    ):
+        if field is None:
+            continue
+        ages.append(f"{field.source} {field.age_minutes:.0f} min old")
+    if ages:
+        lines.append(f"  Frame ages: {'; '.join(ages)}.")
+    missing = [s.source for s in observed.sources if not s.available]
+    if missing:
+        # Named rather than omitted: "no radar collected" and "radar saw
+        # nothing" are different facts, and only one of them is reassuring.
+        lines.append(f"  Not collected: {', '.join(missing)}.")
     return "\n".join(lines)

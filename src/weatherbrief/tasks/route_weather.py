@@ -785,8 +785,25 @@ def run_realtime_refresh(
         new_sigmets=new_sigmets,
     )
 
+    # Re-sample observed conditions from the frames on disk.  This is why the
+    # ↻ button updates the radar/lightning/tops panel: the collector has been
+    # writing frames all along, and re-reading the newest one costs no network
+    # I/O — the same reason the stage is safe inside a request path.
+    new_observed = None
+    try:
+        from weatherbrief.observed.collect import observed_enabled
+
+        if observed_enabled():
+            from weatherbrief.observed.payload import build_observed_conditions
+
+            new_observed = build_observed_conditions(route)
+    except Exception:
+        logger.warning("Observed conditions refresh failed", exc_info=True)
+
     # Patch observations (and SIGMETs, when fetched) back into the briefing.
     briefing_data["route_observations"] = new_obs.model_dump(mode="json")
+    if new_observed is not None:
+        briefing_data["observed_conditions"] = new_observed.model_dump(mode="json")
     if new_sigmets is not None:
         briefing_data["route_sigmets"] = new_sigmets.model_dump(mode="json")
     # Always persist the delta (even when nothing worsened) so a stale banner
@@ -796,4 +813,9 @@ def run_realtime_refresh(
     target_path = briefing_path if briefing_path.exists() else pack_dir / "snapshot.json"
     target_path.write_text(json.dumps(briefing_data, indent=2, default=str))
 
-    return RealtimeRefreshResult(observations=new_obs, sigmets=new_sigmets, delta=delta)
+    return RealtimeRefreshResult(
+        observations=new_obs,
+        sigmets=new_sigmets,
+        delta=delta,
+        observed=new_observed,
+    )

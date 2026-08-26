@@ -59,6 +59,7 @@ from weatherbrief.api.maps import router as maps_router
 from weatherbrief.api.climatology import router as climatology_router
 from weatherbrief.api.airport_profile import router as airport_profile_router
 from weatherbrief.api.hewson_map import router as hewson_map_router
+from weatherbrief.api.observed import router as observed_router
 from weatherbrief.api.synoptic_charts import router as synoptic_charts_router
 from weatherbrief.api.data_sources import router as data_sources_router
 from weatherbrief.api.nav import router as nav_router
@@ -254,6 +255,19 @@ async def lifespan(app: FastAPI):
             run_hewson_precompute_loop(app.state)
         )
 
+    observed_collect_task = None
+    # Opt-in: the observed-frame collector needs EUMETSAT credentials and a
+    # few hundred MB of frame storage, so a deployment turns it on explicitly
+    # rather than inheriting it (#574).
+    from weatherbrief.observed.collect import observed_enabled
+
+    if observed_enabled():
+        from weatherbrief.scheduler import run_observed_collect_loop
+
+        observed_collect_task = asyncio.create_task(
+            run_observed_collect_loop(app.state)
+        )
+
     freshness_task = None
     if os.environ.get("DISABLE_FRESHNESS_LOOP", "").strip() not in ("1", "true"):
         from weatherbrief.scheduler import run_freshness_loop
@@ -294,7 +308,8 @@ async def lifespan(app: FastAPI):
                  verification_task,
                  digest_task, metar_ingest_task, forecast_fetch_task,
                  standalone_task, ecmwf_watcher_task,
-                 hewson_precompute_task, freshness_task,
+                 hewson_precompute_task, observed_collect_task,
+                 freshness_task,
                  analytics_rollup_task, analytics_digest_task,
                  grib_precache_task):
         if task:
@@ -575,6 +590,7 @@ def create_app() -> FastAPI:
     app.include_router(airport_profile_router, prefix="/api")
     app.include_router(hewson_map_router, prefix="/api")
     app.include_router(synoptic_charts_router, prefix="/api")
+    app.include_router(observed_router, prefix="/api")
     app.include_router(tokens_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
     app.include_router(help_router, prefix="/api")

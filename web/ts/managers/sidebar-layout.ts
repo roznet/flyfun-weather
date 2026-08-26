@@ -37,13 +37,14 @@ function setBriefingLayout(layout: BriefingLayout): void {
 // Friendly labels + grouping for the SECTIONS nav. Keys are data-section values.
 const NAV_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Explore', keys: ['cross-section', 'skewt'] },
-  { title: 'Observations', keys: ['observations', 'sigmets', 'pireps', 'alternates'] },
+  { title: 'Observations', keys: ['observed', 'observations', 'sigmets', 'pireps', 'alternates'] },
   { title: 'Discussion', keys: ['synopsis', 'dwd-charts', 'dwd-overview', 'gramet'] },
   { title: 'Detail', keys: ['sounding', 'comparison'] },
 ];
 const NAV_LABELS: Record<string, string> = {
   'cross-section': 'Cross-section & map',
   'skewt': 'Skew-T soundings',
+  'observed': 'Observed now',
   'observations': 'METAR / TAF',
   'sigmets': 'SIGMETs',
   'pireps': 'PIREPs',

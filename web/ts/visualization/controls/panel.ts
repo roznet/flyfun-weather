@@ -135,23 +135,25 @@ function layerTogglesHtml(
   opts: LayerTogglesOptions = {},
 ): string {
   const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers, hiddenGroups } = opts;
-  // Single-layer "feature/context" groups hide entirely when their lone layer is
+  // "Feature/context" groups hide entirely when EVERY layer in them is
   // unavailable — front detection off or no on-track crossing for this model;
-  // current conditions on a non-D-0 flight. A disabled solitary checkbox is just
-  // noise. (Other groups keep their layers visible-but-dimmed so alternative
-  // methods stay discoverable.)
-  // NB: assumes each listed group has exactly ONE layer (the named id) — hiding
-  // the group hides that layer. If a second layer is ever added to 'fronts' or
-  // 'conditions', gate per-layer instead, or it would be silently hidden too.
-  const HIDE_GROUP_WHEN_UNAVAILABLE: Partial<Record<LayerGroup, string>> = {
-    fronts: 'fronts-markers',
-    conditions: 'current-conditions',
-  };
-  const effectiveHidden = new Set<LayerGroup>(hiddenGroups ?? []);
-  for (const [grp, layerId] of Object.entries(HIDE_GROUP_WHEN_UNAVAILABLE)) {
-    if (unavailableLayers?.has(layerId)) effectiveHidden.add(grp as LayerGroup);
-  }
+  // no D-0 observations and no observed frames. A group of disabled checkboxes
+  // is just noise. (Other groups keep their layers visible-but-dimmed so
+  // alternative methods stay discoverable.)
+  //
+  // This used to name one layer per group and hide the group when that layer
+  // was unavailable. Adding the observed-surface layer (#574) to `conditions`
+  // made that wrong: with no METAR the whole group vanished, taking a
+  // perfectly good radar layer with it. Now the group hides only when nothing
+  // in it is available, and individual layers dim as everywhere else.
+  const HIDE_GROUP_WHEN_ALL_UNAVAILABLE: readonly LayerGroup[] = ['fronts', 'conditions'];
   const groups = getLayerGroups();
+  const effectiveHidden = new Set<LayerGroup>(hiddenGroups ?? []);
+  for (const groupId of HIDE_GROUP_WHEN_ALL_UNAVAILABLE) {
+    const group = groups.find((g) => g.group === groupId);
+    if (!group || group.layers.length === 0) continue;
+    if (group.layers.every((l) => unavailableLayers?.has(l.id))) effectiveHidden.add(groupId);
+  }
   let html = '<div class="viz-layer-toggles">';
   for (const group of groups) {
     if (effectiveHidden.has(group.group)) continue;
@@ -327,6 +329,9 @@ export interface VizControlCallbacks {
 export interface RouteGraphControlCallbacks {
   onRouteGraphToggle: (visible: boolean) => void;
   onRouteGraphMetricChange: (axis: 'left' | 'right', metricId: string) => void;
+  /** Corridor width for the observed metrics (#574). Every sampled radius is
+   *  already in the payload, so this is a re-render, never a re-fetch. */
+  onObservedRadiusChange?: (radiusNm: number) => void;
 }
 
 export interface MapControlCallbacks {
@@ -556,6 +561,13 @@ export function renderRouteGraphControls(
   container: HTMLElement,
   settings: VizSettings,
   callbacks: RouteGraphControlCallbacks,
+  /** Sampled corridor widths (NM) from the observed payload. Empty (the
+   *  default) hides the selector entirely — there is nothing to choose
+   *  between when no observed data was collected. */
+  observedRadiiNm: readonly number[] = [],
+  /** The radius currently in effect, so the selector shows what is drawn
+   *  even when settings hold the "widest" default. */
+  activeObservedRadiusNm: number | null = null,
 ): void {
   const leftOptions = getMetricOptions(false);
   const rightOptions = getMetricOptions(true);
@@ -592,6 +604,19 @@ export function renderRouteGraphControls(
     html += '</select>';
     html += '</label>';
 
+    if (observedRadiiNm.length > 1) {
+      const active = activeObservedRadiusNm ?? Math.max(...observedRadiiNm);
+      html += '<label class="route-graph-select-label">';
+      html += `<span class="viz-toggle-label">${t('observed.corridor')}</span>`;
+      html += '<select id="route-graph-observed-radius" class="route-graph-select">';
+      for (const radius of observedRadiiNm) {
+        const selected = radius === active ? ' selected' : '';
+        html += `<option value="${radius}"${selected}>${radius} NM</option>`;
+      }
+      html += '</select>';
+      html += '</label>';
+    }
+
     html += '</div>';
   }
 
@@ -618,6 +643,12 @@ export function renderRouteGraphControls(
   if (rightSelect) {
     rightSelect.addEventListener('change', () => {
       callbacks.onRouteGraphMetricChange('right', rightSelect.value);
+    });
+  }
+  const radiusSelect = container.querySelector('#route-graph-observed-radius') as HTMLSelectElement | null;
+  if (radiusSelect && callbacks.onObservedRadiusChange) {
+    radiusSelect.addEventListener('change', () => {
+      callbacks.onObservedRadiusChange!(Number(radiusSelect.value));
     });
   }
 }

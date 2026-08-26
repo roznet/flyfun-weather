@@ -128,6 +128,11 @@ D-0 METAR/TAF integration: fetch route-corridor observations, compare vs NWP, wi
 Key exports: `run_route_weather`, `run_observation_comparison`, `run_realtime_refresh`, `compute_wind_advisory`, `compute_refresh_delta`, `RefreshDelta`, `RouteObservations`, `AirportObservation`, `run_route_sigmets`, `RouteSigmets`, `SigmetAlongRoute`, `RealtimeRefreshResult`
 → Full doc: metar-taf-route-weather.md
 
+### current-conditions
+Observed conditions along the route (#574, phase 1): OPERA radar reflectivity + rain rate, EUMETSAT MTG total lightning and satellite cloud tops, collected as local frames and sampled in 5/10/20 NM discs around every route point. Displays observations only — no verdict, no advisory wiring; the cross-check is visual, with `observed-tops` drawn over the NWP cloud bands. Load-bearing invariants: `nodata` (half the OPERA grid) never conflated with `undetect`; parallax applied before corridor membership (52 km median displacement vs a 37 km corridor); one windowed read, never per-station file access; no synthetic shared timestamp. Payload inline on `briefing.json`; imagery served from `/api/observed`. Gated on `WB_OBSERVED_ENABLED`.
+Key exports: `build_observed_conditions`, `ObservedConditions`, `FrameStore`, `sample`, `sample_flashes`, `collect_once`, `run_observed_collect_loop`, `render_overlay`, `build_summary`
+→ Full doc: current-conditions.md
+
 ## iOS app
 
 ### ios-app-overview

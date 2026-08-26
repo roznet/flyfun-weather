@@ -163,9 +163,15 @@ def _build_template_context(
     # Route observations (METAR/TAF) + SIGMETs (from D-0 flights)
     route_observations = None
     route_sigmets = None
+    # Observed conditions (#574): radar, lightning and satellite cloud tops.
+    # The PDF carries the deterministic summary and, required by the source
+    # licences, each frame's own attribution — read from the frame itself
+    # rather than stamped from a constant, because the producer varies.
+    observed_conditions = None
     if briefing:
         route_observations = briefing.get("route_observations")
         route_sigmets = briefing.get("route_sigmets")
+        observed_conditions = briefing.get("observed_conditions")
 
     return {
         "flight": flight,
@@ -180,7 +186,30 @@ def _build_template_context(
         "airport_conditions": airport_conditions,
         "route_observations": route_observations,
         "route_sigmets": route_sigmets,
+        "observed_conditions": observed_conditions,
+        "observed_attributions": _observed_attributions(observed_conditions),
     }
+
+
+def _observed_attributions(observed: dict | None) -> list[str]:
+    """Distinct attribution lines across the observed fields present.
+
+    De-duplicated because the two OPERA products usually come from the same
+    producer under the same licence, and repeating the line four times in a
+    footer helps nobody. Kept as the frame's own ``text`` verbatim — the whole
+    point of reading provenance per frame is not to paraphrase it.
+    """
+    if not observed:
+        return []
+    lines: list[str] = []
+    for key in ("reflectivity", "rain_rate", "cloud_tops", "lightning"):
+        field = observed.get(key)
+        if not field:
+            continue
+        text = (field.get("attribution") or {}).get("text")
+        if text and text not in lines:
+            lines.append(text)
+    return lines
 
 
 def _get_template_env() -> Environment:

@@ -229,6 +229,7 @@ export class RouteGraphRenderer {
     const samples = points.map((p) => sampleMetric(metric, p));
     const allDots: Array<{ x: number; y: number }> = [];
     const aboveScaleXs: number[] = [];
+    const noCoverageXs: number[] = [];
 
     ctx.strokeStyle = metric.color;
     ctx.lineWidth = 2;
@@ -249,6 +250,10 @@ export class RouteGraphRenderer {
         // above-scale point gets its own marker below, so the break in the
         // line reads as "off the top", not as "no data".
         if (s.kind === 'above-scale') aboveScaleXs.push(distanceToX(points[i].distanceNm));
+        // A coverage hole gets its own mark on the baseline (#574). Without
+        // it the break in the line is indistinguishable from a stretch where
+        // the sensor looked and measured nothing — i.e. from "no rain".
+        if (s.kind === 'no-coverage') noCoverageXs.push(distanceToX(points[i].distanceNm));
         if (curXs.length > 0) {
           segments.push({ xs: curXs, ys: curYs });
           curXs = [];
@@ -303,6 +308,8 @@ export class RouteGraphRenderer {
       ctx.closePath();
       ctx.fill();
     }
+
+    drawNoCoverageMarks(ctx, noCoverageXs, plotArea);
   }
 
   private renderBars(
@@ -322,6 +329,10 @@ export class RouteGraphRenderer {
       // No bar metric declares `aboveScale` today; if one ever does it needs its
       // own affordance (a clipped bar head), so skip rather than invent one.
       const s = sampleMetric(metric, points[i]);
+      if (s.kind === 'no-coverage') {
+        drawNoCoverageMarks(ctx, [distanceToX(points[i].distanceNm)], plotArea);
+        continue;
+      }
       if (s.kind !== 'value' || s.value === 0) continue;
 
       const x = distanceToX(points[i].distanceNm);
@@ -349,4 +360,34 @@ export class RouteGraphRenderer {
     canvas.width = cssW * dpr;
     canvas.height = cssH * dpr;
   }
+}
+
+/**
+ * Hatched marks on the baseline where the sensor does not look (#574).
+ *
+ * Deliberately neutral-grey and never in the metric's own colour: this is the
+ * absence of a measurement, not a small one. A gap alone would read as "the
+ * radar looked and found nothing", which for a coverage hole is the opposite
+ * of the truth.
+ */
+export function drawNoCoverageMarks(
+  ctx: CanvasRenderingContext2D,
+  xs: readonly number[],
+  plotArea: PlotArea,
+): void {
+  if (xs.length === 0) return;
+  const baseline = plotArea.top + plotArea.height;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(107, 114, 128, 0.85)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  for (const x of xs) {
+    for (let i = -3; i <= 3; i += 3) {
+      ctx.beginPath();
+      ctx.moveTo(x + i, baseline);
+      ctx.lineTo(x + i + 3, baseline - 6);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }

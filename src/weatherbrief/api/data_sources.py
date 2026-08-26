@@ -41,6 +41,8 @@ def _serialise_entry(entry: freshness_catalog.SourceCatalogEntry) -> dict[str, A
         "coverage": entry.coverage,
         "pressure_levels": entry.pressure_levels,
         "description": entry.description,
+        "schedule_kind": entry.schedule_kind,
+        "interval_minutes": entry.interval_minutes,
         "cycles": list(entry.cycles),
         # Stringify int keys so the wire format is unambiguous JSON.
         "horizon_hours": {str(h): v for h, v in entry.horizon_hours.items()},

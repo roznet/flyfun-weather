@@ -1878,6 +1878,68 @@ function renderSigmetPopup(s: RouteSigmets['sigmets'][number]): string {
   `;
 }
 
+/**
+ * "Observed now" (#574) — the deterministic readout the server computed,
+ * plus each source's own age.
+ *
+ * The prose is NOT built here. The server produces `summary_lines` from the
+ * same payload the layers draw, and the PDF and the digest context quote the
+ * same string; a client that re-worded it would give three surfaces three
+ * different accounts of one observation. All this does is render them and
+ * name what is missing.
+ *
+ * An unavailable source is listed, not hidden: a briefing with no radar is
+ * not a briefing with no weather, and the difference is the pilot's to know.
+ */
+export function renderObservedConditions(snapshot: ForecastSnapshot | null): void {
+  const el = $('observed-section');
+  const wrapper = $('observed-wrapper');
+  if (!el) return;
+
+  const observed = snapshot?.observed_conditions;
+  if (!observed || !observed.has_any_field) {
+    if (wrapper) wrapper.style.display = 'none';
+    return;
+  }
+  if (wrapper) wrapper.style.display = '';
+
+  const lines = observed.summary_lines.length > 0
+    ? observed.summary_lines
+    : [observed.summary].filter(Boolean);
+  const summaryHtml = lines.length
+    ? `<ul class="observed-now-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+    : '';
+
+  // One row per source with its OWN valid time: the four streams are minutes
+  // apart and none of them is an instant, so there is no combined "as of".
+  const fields = [
+    observed.reflectivity,
+    observed.rain_rate,
+    observed.cloud_tops,
+    observed.lightning,
+  ].filter((f) => f != null);
+  const present = fields.map((f) => {
+    const rolling = f!.window_minutes > 0
+      ? `, ${Math.round(f!.window_minutes)} min window`
+      : '';
+    const age = f!.age_minutes < 1 ? 'just now' : `${Math.round(f!.age_minutes)} min ago`;
+    return `${escapeHtml(f!.attribution.text || f!.source)} (${age}${rolling})`;
+  });
+  const missing = observed.sources
+    .filter((sourceStatus) => !sourceStatus.available)
+    .map((sourceStatus) => `${escapeHtml(sourceStatus.source)} — ${escapeHtml(sourceStatus.reason ?? t('observed.unavailable'))}`);
+
+  const sourcesHtml = `
+    <div class="observed-now-sources">
+      <div>${t('observed.sources')}: ${present.join(' · ') || '—'}</div>
+      ${missing.length ? `<div>${escapeHtml(t('observed.unavailable'))}: ${missing.join(' · ')}</div>` : ''}
+      <div>${t('observed.corridor')}: ${Math.round(observed.corridor_nm)} NM</div>
+    </div>
+  `;
+
+  el.innerHTML = `${summaryHtml}${sourcesHtml}`;
+}
+
 /** SYNC: the iOS app renders the same route-SIGMET shape in
  *  app/flyfun-weather/flyfun-weather/Views/Briefing/RouteSigmetsView.swift
  *  (decoded by `RouteSigmets` in Models/API/SnapshotResponse.swift). The payload

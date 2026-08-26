@@ -44,6 +44,12 @@ class SourceCatalogEntry:
     description: str
 
     # --- Static schedule --------------------------------------------------
+    # ``"cycle"`` for an NWP run at fixed hours of the day, ``"interval"`` for
+    # an observed stream publishing every N minutes (#574).  A client that
+    # renders "next run expected" for a cycle source should render "frame age"
+    # for an interval one — they are different questions.
+    schedule_kind: str
+    interval_minutes: float | None
     cycles: tuple[int, ...]
     # Per-cycle hours.  Always emitted as a dict so the API shape is
     # stable whether the underlying config used a uniform timedelta or a
@@ -110,6 +116,11 @@ def build(
     store = store if store is not None else get_store()
     out: list[SourceCatalogEntry] = []
     for key, cfg in registry.SOURCE_REGISTRY.items():
+        # Env-gated sources (observed streams) are omitted entirely when the
+        # deployment has not enabled them — a described-but-dead row reads as
+        # a broken data source rather than an unused one.
+        if not cfg.is_active:
+            continue
         model = key.split(":", 1)[0]
         marker = store.get_sync(key, model)
         latest_init = marker.init if marker is not None else None
@@ -120,7 +131,12 @@ def build(
         # config horizon advertises (e.g. ARPEGE config=144h, actual~103h).
         # Direct GRIB sources don't expose this — fall back to the config.
         data_end = marker.data_end if marker is not None else None
-        if data_end is not None:
+        if cfg.schedule_kind == "interval":
+            # An observation forecasts nothing, so it has no horizon end.
+            # Emitting ``latest_init`` here would read as "covered until now",
+            # which is a forecast statement about a measurement.
+            horizon_end = None
+        elif data_end is not None:
             horizon_end = data_end
         elif latest_init is not None:
             horizon_end = latest_init + cfg.horizon_for(latest_init.hour)
@@ -137,6 +153,10 @@ def build(
             coverage=cfg.coverage,
             pressure_levels=cfg.pressure_levels,
             description=cfg.description,
+            schedule_kind=cfg.schedule_kind,
+            interval_minutes=(
+                cfg.interval.total_seconds() / 60.0 if cfg.interval else None
+            ),
             cycles=cfg.cycles,
             horizon_hours=_per_cycle_hours(cfg.horizon, cfg.cycles),
             delivery_offset_hours=_per_cycle_hours(cfg.delivery_offset, cfg.cycles),

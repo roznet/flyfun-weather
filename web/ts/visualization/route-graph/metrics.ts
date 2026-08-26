@@ -35,6 +35,12 @@ export interface RouteGraphMetric {
    * known and is never clipped or rewritten, it just doesn't fit the axis.
    */
   aboveScale?: boolean;
+  /**
+   * Optional: true when the sensor behind this metric does not cover the
+   * point at all (#574). Only observed metrics implement it; forecast metrics
+   * have no such state and leave it undefined.
+   */
+  isNoCoverage?: (point: VizPoint) => boolean;
   /** Draw a reference line at y=0 (useful for head/tailwind). */
   showZeroLine?: boolean;
   /** Labels drawn above/below the zero line: [aboveLabel, belowLabel]. */
@@ -54,6 +60,28 @@ const CEILING_AGL_CAP_FT = 5000;
  * and can be rendered without any changes to the renderer or controls.
  */
 export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
+  // --- Observed (#574) ---
+  // Measurements, not forecasts. They sit alongside their modelled siblings
+  // (`precipitation`) on purpose: putting the two on the same axis is how a
+  // pilot sees where the model and the radar disagree, and phase 1 leaves
+  // that judgement to them rather than computing a verdict.
+  {
+    id: 'observed-rain-rate',
+    unit: 'mm/h',
+    renderType: 'bar',
+    color: '#0891b2',
+    getValue: (p) => p.observedRateMmH,
+    isNoCoverage: (p) => p.observedRadarNoCoverage,
+    formatValue: (v) => `${v.toFixed(1)} mm/h`,
+  },
+  {
+    id: 'observed-flash-rate',
+    unit: '/1000km²/min',
+    renderType: 'bar',
+    color: '#7c3aed',
+    getValue: (p) => p.observedFlashRate,
+    formatValue: (v) => (v === 0 ? 'none' : v.toFixed(2)),
+  },
   {
     id: 'headwind',
     unit: 'kt',
@@ -209,9 +237,15 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
 export type MetricSample =
   | { readonly kind: 'value'; readonly value: number }
   | { readonly kind: 'above-scale'; readonly value: number }
-  | { readonly kind: 'unavailable' };
+  | { readonly kind: 'unavailable' }
+  // The sensor does not look here (#574). Distinct from `unavailable`, which
+  // is "we have no number", and emphatically distinct from `value: 0`: a
+  // radar coverage hole rendered as a gap reads as "no rain", and about half
+  // the OPERA grid is such a hole.
+  | { readonly kind: 'no-coverage' };
 
 const UNAVAILABLE_SAMPLE: MetricSample = { kind: 'unavailable' };
+const NO_COVERAGE_SAMPLE: MetricSample = { kind: 'no-coverage' };
 
 /**
  * Classify a metric's value at a point. The single place the three states are
@@ -219,6 +253,10 @@ const UNAVAILABLE_SAMPLE: MetricSample = { kind: 'unavailable' };
  * the cap, so they cannot drift apart.
  */
 export function sampleMetric(metric: RouteGraphMetric, point: VizPoint): MetricSample {
+  // Checked before the value: for an observed metric a missing number means
+  // "the sensor saw nothing" only when it was looking, and the metric alone
+  // knows which of the two it is.
+  if (metric.isNoCoverage?.(point)) return NO_COVERAGE_SAMPLE;
   const v = metric.getValue(point);
   if (v === null) return UNAVAILABLE_SAMPLE;
   if (metric.aboveScale && metric.suggestedRange && v > metric.suggestedRange[1]) {
@@ -242,6 +280,8 @@ export function formatSample(metric: RouteGraphMetric, sample: MetricSample): st
       return `> ${fmt(metric.suggestedRange![1])}`;
     case 'unavailable':
       return 'N/A';
+    case 'no-coverage':
+      return t('graph.noCoverage');
   }
 }
 

@@ -52,6 +52,8 @@ function loadVizSettings(): VizSettings {
     mapAltitudeFt: null,
     routeGraphVisible: true,
     routeGraphLeftMetric: 'headwind',
+    // null = widest sampled corridor (#574).
+    observedRadiusNm: null,
     routeGraphRightMetric: 'temperature',
     compareLayer: 'icing-bands',
     compareModels: {},
@@ -195,6 +197,10 @@ export interface BriefingState {
   setMapForecastMetric: (metricId: string) => void;
   setRouteGraphVisible: (visible: boolean) => void;
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
+  /** Pick the corridor width the observed layers resolve at (#574). All
+   *  sampled radii are already in the payload, so this re-extracts from
+   *  memory — it never re-fetches. */
+  setObservedRadius: (radiusNm: number | null) => void;
   setCompareLayer: (layerId: string) => void;
   setCompareModel: (model: string, enabled: boolean) => void;
   setCompareBandMode: (mode: import('../visualization/types').CompareBandMode) => void;
@@ -828,6 +834,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           ...snapshot,
           route_observations: result.observations,
           ...(result.sigmets != null ? { route_sigmets: result.sigmets } : {}),
+          // Re-sampled observed conditions (#574). Same null-guard reasoning as
+          // SIGMETs: null means the server has the collector switched off (or
+          // the re-sample failed), so keep what the pack loaded with rather
+          // than blanking the panel. Dropping this field entirely was the bug
+          // — the server recomputes it precisely so ↻ refreshes the radar /
+          // lightning / cloud-top picture, and the client was discarding it.
+          ...(result.observed != null ? { observed_conditions: result.observed } : {}),
           last_refresh_delta: result.delta ?? null,
         },
       });
@@ -1083,6 +1096,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setRouteGraphVisible: (visible: boolean) => {
     const updated = { ...get().vizSettings, routeGraphVisible: visible };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setObservedRadius: (radiusNm: number | null) => {
+    const updated = { ...get().vizSettings, observedRadiusNm: radiusNm };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

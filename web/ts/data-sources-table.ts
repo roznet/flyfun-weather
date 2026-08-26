@@ -102,6 +102,9 @@ function fmtUtc(iso: string | null): string {
 }
 
 function fmtHorizon(entry: DataSourceEntry): string {
+  // An observation forecasts nothing, so there is no horizon to report — and
+  // printing one would dress a measurement up as a prediction (#574).
+  if (entry.schedule_kind === 'interval') return '—';
   const hours = Object.values(entry.horizon_hours);
   if (hours.length === 0) return '—';
   const min = Math.min(...hours);
@@ -118,6 +121,14 @@ function uniformSpacing(cycles: number[]): number | null {
     if (sorted[i] - sorted[i - 1] !== gap) return null;
   }
   return gap;
+}
+
+/** Publication cadence: hours-of-day for a model run, a period for a stream. */
+function fmtSchedule(entry: DataSourceEntry): string {
+  if (entry.schedule_kind === 'interval' && entry.interval_minutes) {
+    return `every ${Math.round(entry.interval_minutes)} min`;
+  }
+  return fmtCycles(entry.cycles);
 }
 
 function fmtCycles(cycles: number[]): string {
@@ -290,7 +301,7 @@ function renderRow(entry: DataSourceEntry, isFirst: boolean, modelLabel: string,
       <td>${stacked2(escapeHtml(fmtHorizon(entry)), fmtUtc(entry.horizon_end))}</td>
       <td class="data-source-live">
         <div class="ds-stack">
-          <div class="ds-stack-primary">${escapeHtml(fmtCycles(entry.cycles))}</div>
+          <div class="ds-stack-primary">${escapeHtml(fmtSchedule(entry))}</div>
           <div class="ds-stack-secondary">${fmtUtc(entry.latest_init)} ${healthDot(entry.marker_health)}</div>
           <div class="ds-stack-tertiary">${fmtUtc(entry.next_expected)}</div>
         </div>
@@ -401,7 +412,7 @@ function buildPopupHtml(entry: DataSourceEntry): string {
         <dt>${escapeHtml(t('dataSources.col.levels'))}</dt>
         <dd>${escapeHtml(fmtLevels(entry.pressure_levels))}</dd>
         <dt>${escapeHtml(t('dataSources.col.cycles'))}</dt>
-        <dd>${escapeHtml(fmtCycles(entry.cycles))}</dd>
+        <dd>${escapeHtml(fmtSchedule(entry))}</dd>
         <dt>${escapeHtml(t('dataSources.col.horizon'))}</dt>
         <dd>${escapeHtml(fmtHorizon(entry))}</dd>
         ${liveRows.join('')}

@@ -963,5 +963,27 @@
     "theory": "QNH is the pressure entered into an altimeter so it reads field elevation on the ground (and altitude above sea level in flight). It is derived by reducing station pressure to mean sea level using the standard atmosphere. We surface the model's pressure_msl field, which is the same mean-sea-level reduction, as the per-model QNH proxy.",
     "wikipedia": "https://en.wikipedia.org/wiki/QNH",
     "thresholds": []
+  },
+  "observed_tops": {
+    "name": "Observed Cloud Tops (satellite)",
+    "unit": "FL",
+    "vibe": "What the satellite actually saw above the route, next to what the model forecast",
+    "primary_goal": "Draw measured cloud-top heights over the NWP cloud bands so the two can be compared by eye.",
+    "best_used_for": "The “can I get on top?” question at D-0, and for catching a forecast that has the cloud deck at the wrong level.",
+    "limitations": "The retrieval commits to ONE cloud top per pixel, so a thin cirrus layer over stratus resolves to whichever wins — adjacent 2 km pixels flip between the two as opacity wobbles. That is why each route point draws the whole flight-level histogram of its disc rather than a single line; a bimodal histogram IS the multi-layer scene. Heights are geometric, not pressure altitude. Where the retrieval could not answer, the point draws a hatched no-data mark, never a gap — a gap would read as clear sky. Nothing here is compared to the model automatically: phase 1 shows the two side by side and leaves the judgement to the pilot.",
+    "theory": "EUMETSAT MTG FCI Level 2 Cloud Top Height, sampled in concentric discs (5/10/20 NM) around each route point every 10 minutes. Each pixel is placed by its OWN parallax correction before corridor membership is decided: the satellite sits over the equator, so its line of sight to a cloud at 50°N strikes the ground well north of where the cloud actually is — a measured median displacement of 52 km against a 37 km corridor. Uncorrected, a sample would describe a location entirely outside the corridor it claims to cover. The per-pixel height-assignment method is carried as a full histogram rather than one confidence number, because method 9 is the retrieval's own multi-layer-suspect flag and method 0 is a positive observation of clear sky.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_top",
+    "thresholds": []
+  },
+  "observed_surface": {
+    "name": "Observed Radar & Lightning",
+    "unit": "dBZ",
+    "vibe": "Where the precipitation and the lightning actually are right now",
+    "primary_goal": "Show measured radar echo and detected lightning along the route corridor at D-0.",
+    "best_used_for": "Confirming (or refuting) a forecast convective picture just before departure, and seeing how far a cell is from the track.",
+    "limitations": "Roughly HALF the OPERA composite grid has no radar coverage at all — sea, mountain shadow, beyond every member radar's range. No coverage is drawn as a hatched mark, deliberately distinct from a blank strip, which means the radar looked and found nothing. Treating the two alike would paint half of Europe as clear. The composite is also a rolling 10-minute maximum plus delivery lag, so an echo on screen can be ~15 minutes old — about 30 NM of own-ship at 120 kt; the age badge on the layer says how old. Echo is drawn along the terrain, not with height: the composite is a 2-D surface product and drawing it vertically would invent structure it does not contain.",
+    "theory": "EUMETNET OPERA composite reflectivity (DBZH, every 5 minutes) and surface rain rate (RATE, every 15 minutes), plus EUMETSAT MTG Lightning Imager total-lightning flashes (every 10 minutes). All are sampled in concentric discs (5/10/20 NM) around each route point, with pixel counts kept in three states — measured, looked-at-and-empty, and not-covered — so a coverage hole can never be rendered as a clear sky. Statistics are computed over detections only: averaging the empty pixels into a rain rate would report drizzle where the radar saw nothing. Lightning carries no coverage caveat, because the imager sees the whole disc — an absence of flashes there is a real observation.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Weather_radar",
+    "thresholds": []
   }
 }

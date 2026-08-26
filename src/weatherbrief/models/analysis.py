@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from weatherbrief.models.alternates import RouteAlternates
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
+from weatherbrief.models.observed import ObservedConditions
 
 
 # euro_aip ``point_type`` values → the abbreviation a pilot reads on a chart.
@@ -1477,6 +1478,11 @@ class ForecastSnapshot(BaseModel):
     cross_sections: list[RouteCrossSection] = Field(default_factory=list)
     route_observations: RouteObservations | None = None
     route_sigmets: RouteSigmets | None = None
+    # Observed conditions along the corridor (#574): radar, lightning and
+    # satellite cloud tops, sampled from locally-collected frames. D-0 only,
+    # and only where the observed collector is enabled — None otherwise, so
+    # the web section stays hidden rather than rendering an empty panel.
+    observed_conditions: ObservedConditions | None = None
     # Weather-based divert candidates (D-2 inward, opt-in via compute_alternates).
     # None outside that window so the web section stays hidden (#210).
     alternates: RouteAlternates | None = None

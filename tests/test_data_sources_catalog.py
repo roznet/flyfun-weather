@@ -39,9 +39,21 @@ def bootstrapped_store():
 
 
 class TestStaticFields:
-    def test_every_registry_source_appears_in_catalog(self, fresh_store):
+    def test_every_active_registry_source_appears_in_catalog(self, fresh_store):
         entries = catalog.build(store=fresh_store)
-        assert {e.key for e in entries} == set(registry.SOURCE_REGISTRY.keys())
+        active = {k for k, c in registry.SOURCE_REGISTRY.items() if c.is_active}
+        assert {e.key for e in entries} == active
+
+    def test_env_gated_sources_are_omitted_until_enabled(self, fresh_store, monkeypatch):
+        """An observed stream nobody enabled is absent, not shown as broken."""
+        gated = [k for k, c in registry.SOURCE_REGISTRY.items() if c.env_gate]
+        assert gated, "expected at least one env-gated source in the registry"
+        # Control BOTH axes — see the sibling test in test_freshness_sources.
+        monkeypatch.delenv("WB_OBSERVED_SOURCES", raising=False)
+        monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+        assert not ({e.key for e in catalog.build(store=fresh_store)} & set(gated))
+        monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+        assert set(gated) <= {e.key for e in catalog.build(store=fresh_store)}
 
     def test_descriptive_fields_populated_for_every_entry(self, fresh_store):
         """Catch drift: every registry entry must have a non-empty
@@ -61,7 +73,11 @@ class TestStaticFields:
 
     def test_role_taxonomy_is_constrained(self, fresh_store):
         """Roles must come from a known set so the UI can style them."""
-        allowed = {"primary-sounding", "cloud-enrichment", "surface-base", "primary"}
+        allowed = {
+            "primary-sounding", "cloud-enrichment", "surface-base", "primary",
+            # Observed streams (#574) — measurements, not forecasts.
+            "observed",
+        }
         entries = catalog.build(store=fresh_store)
         for e in entries:
             assert e.role in allowed, f"{e.key} has unknown role {e.role!r}"
@@ -141,6 +157,10 @@ class TestDynamicFields:
         for e in entries:
             assert e.latest_init is not None
             assert e.next_expected is not None
+            if e.schedule_kind == "interval":
+                # An observation has no forecast horizon to end.
+                assert e.horizon_end is None
+                continue
             assert e.horizon_end is not None
             # Bootstrap fills these fields from the registry alone — no
             # dynamic check has run, so the health must say so rather than
@@ -230,6 +250,7 @@ class TestSerialisation:
         expected = {
             "key", "model", "model_label", "provider_label", "provider_url",
             "role", "resolution", "coverage", "pressure_levels", "description",
+            "schedule_kind", "interval_minutes",
             "cycles", "horizon_hours", "delivery_offset_hours",
             "latest_init", "published_at", "next_expected", "horizon_end",
             "marker_health",

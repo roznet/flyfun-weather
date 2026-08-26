@@ -619,6 +619,26 @@ def _execute_briefing_stages(
         result_usage_metar = False
         result_usage_metar_airports = 0
 
+    # === 3.55 Observed conditions along the corridor (D-0 only) ===
+    # Radar, lightning and satellite cloud tops sampled from frames the
+    # collector already holds on disk — no network I/O in this stage, by
+    # construction (see weatherbrief.observed).  Phase 1 displays only: it
+    # computes no verdict and feeds no advisory, so a failure here costs the
+    # observed panel and nothing else.
+    observed_conditions = None
+    if days_out == 0 and not options.historical_mode:
+        from weatherbrief.observed.collect import observed_enabled
+
+        if observed_enabled():
+            _t0 = perf_counter()
+            try:
+                from weatherbrief.observed.payload import build_observed_conditions
+
+                observed_conditions = build_observed_conditions(route)
+            except Exception:
+                logger.warning("Observed conditions stage failed", exc_info=True)
+            stage_timings["observed_conditions"] = perf_counter() - _t0
+
     # === 3.6 Weather-based alternates (D-2 inward, opt-in) ===
     # Surfaces the closest divert candidates that fix the destination's
     # specific problem (category/wind/crosswind), via the SAME shared assembly
@@ -662,6 +682,7 @@ def _execute_briefing_stages(
         cross_sections=fetch_result.cross_sections,
         route_observations=route_observations,
         route_sigmets=route_sigmets,
+        observed_conditions=observed_conditions,
         alternates=alternates,
     )
 

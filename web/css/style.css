@@ -5414,6 +5414,13 @@ html {
   color: var(--lifr);
 }
 
+/* Observed streams (#574) are measurements, not forecast models — the badge
+   sits apart from the three sounding/enrichment roles for that reason. */
+.data-source-role-observed {
+  border-color: var(--amber, #d97706);
+  color: var(--amber, #d97706);
+}
+
 .data-source-health {
   display: inline-block;
   width: 8px;
@@ -6294,6 +6301,51 @@ html {
   font-family: monospace;
   min-width: 60px;
   color: var(--primary);
+}
+
+/* Observed-conditions age badge (#574).
+ *
+ * Sits on the map itself rather than in a side panel: it labels one specific
+ * picture, and that picture is what the pilot is looking at. A radar
+ * composite is a rolling 10-minute maximum plus delivery lag, so the age here
+ * is operationally load-bearing, not metadata. */
+.map-observed-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 500;
+  max-width: calc(100% - 80px);
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #374151;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.3;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .map-observed-badge {
+  background: rgba(17, 24, 39, 0.86);
+  color: #e5e7eb;
+}
+
+/* "Observed now" briefing section (#574). */
+.observed-now-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.observed-now-list li {
+  padding: 3px 0;
+  line-height: 1.45;
+}
+
+.observed-now-sources {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #6b7280);
 }
 
 /* Map waypoint tooltip styling */

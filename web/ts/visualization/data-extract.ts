@@ -1,8 +1,8 @@
 /** Extract visualization-ready data from a RouteAnalysesManifest for a given model. */
 
-import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
+import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets, ObservedConditions, ObservedAnnulus, ObservedTopsAnnulus, ObservedFlashAnnulus } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts, VizNightInterval, VizSunSide, VizSunAtPoint } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts, VizNightInterval, VizSunSide, VizSunAtPoint, VizObserved, VizObservedPoint, VizObservedSource, VizObservedTopBin } from './types';
 import type { FrontCrossing, FrontProximity, RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
@@ -25,6 +25,13 @@ export interface ExtractVizOptions {
   /** Experimental Hewson front artifact (#196). `null`/absent unless the
    *  "Auto Front Detection" pref was on. Resolved per-model below. */
   routeFronts?: RouteFrontsManifest | null;
+  /** D-0 observed conditions from the snapshot (#574). `null`/absent on D-1+
+   *  and wherever the observed collector is not enabled. */
+  observedConditions?: ObservedConditions | null;
+  /** Which sampled corridor width to resolve `observed.points` at. All radii
+   *  ship in the payload, so changing this needs no re-fetch — the caller
+   *  re-extracts and the graph/layers follow. Defaults to the widest. */
+  observedRadiusNm?: number | null;
 }
 
 export function extractVizData(
@@ -84,6 +91,12 @@ export function extractVizData(
     }
   }
 
+  // Observed values live in their own artifact keyed by route distance; fold
+  // them onto the points so the route-graph metric registry can read them the
+  // same way it reads everything else.
+  const observed = buildObserved(opts?.observedConditions, opts?.observedRadiusNm);
+  mergeObserved(points, observed);
+
   const effectiveCruise = opts?.effectiveCruiseAltitudeFt ?? manifest.cruise_altitude_ft;
   const actualCeiling = flightCeilingFt ?? effectiveCruise;
 
@@ -98,6 +111,7 @@ export function extractVizData(
     flightDurationHours: manifest.flight_duration_hours,
     terrainProfile,
     currentConditions: buildCurrentConditions(opts?.routeObservations, opts?.routeSigmets, terrainProfile),
+    observed,
     fronts: buildFronts(opts?.routeFronts, model),
     nightIntervals: buildNightIntervals(manifest),
     sunSide: buildSunSide(manifest),
@@ -234,6 +248,176 @@ function buildCurrentConditions(
 
   if (airports.length === 0 && zones.length === 0) return null;
   return { airports, sigmets: zones };
+}
+
+/** FL-band edges in feet, mirroring CLOUD_TOP_FL_BINS on the server. */
+const OBSERVED_TOP_BANDS: Array<{ label: string; loFt: number; hiFt: number }> = [
+  { label: 'FL000-050', loFt: 0, hiFt: 5000 },
+  { label: 'FL050-150', loFt: 5000, hiFt: 15000 },
+  { label: 'FL150-250', loFt: 15000, hiFt: 25000 },
+  { label: 'FL250-400', loFt: 25000, hiFt: 40000 },
+  { label: 'FL400+', loFt: 40000, hiFt: 60000 },
+];
+
+function pickAnnulus<A extends { radius_nm: number }>(annuli: A[], radiusNm: number): A | null {
+  if (annuli.length === 0) return null;
+  // Exact match, else the closest sampled radius — never interpolate: the
+  // discs are pixel counts over real areas, and a value between two of them
+  // was not measured.
+  let best = annuli[0];
+  for (const a of annuli) {
+    if (a.radius_nm === radiusNm) return a;
+    if (Math.abs(a.radius_nm - radiusNm) < Math.abs(best.radius_nm - radiusNm)) best = a;
+  }
+  return best;
+}
+
+function observedSource(
+  field: { source: string; valid_time: string; age_minutes: number; window_minutes: number; attribution: { text: string } } | null,
+  label: string,
+): VizObservedSource | null {
+  if (!field) return null;
+  return {
+    source: field.source,
+    label,
+    validTime: field.valid_time,
+    ageMinutes: field.age_minutes,
+    windowMinutes: field.window_minutes,
+    attribution: field.attribution?.text ?? '',
+  };
+}
+
+/**
+ * Resolve the observed payload to one value per route point at one corridor
+ * width.
+ *
+ * The three-state split survives the trip: `dbz === null` with
+ * `radarNoCoverage === false` means the radar looked and found no echo, while
+ * `radarNoCoverage === true` means it does not see there at all. Collapsing
+ * the two would paint about half the OPERA grid as clear sky.
+ */
+function buildObserved(
+  observed: ObservedConditions | null | undefined,
+  radiusOverrideNm: number | null | undefined,
+): VizObserved | null {
+  if (!observed) return null;
+  const radii = observed.radii_nm ?? [];
+  if (radii.length === 0) return null;
+  const radiusNm = radiusOverrideNm != null && radii.includes(radiusOverrideNm)
+    ? radiusOverrideNm
+    : Math.max(...radii);
+
+  const distanceById = new Map<string, number>();
+  for (const station of observed.stations) {
+    if (station.enroute_distance_nm != null) distanceById.set(station.id, station.enroute_distance_nm);
+  }
+
+  const byId = new Map<string, VizObservedPoint>();
+  const pointFor = (stationId: string): VizObservedPoint | null => {
+    const distanceNm = distanceById.get(stationId);
+    if (distanceNm == null) return null;
+    let point = byId.get(stationId);
+    if (!point) {
+      point = {
+        distanceNm,
+        dbz: null,
+        radarNoCoverage: false,
+        rateMmH: null,
+        rateNoCoverage: false,
+        flashCount: 0,
+        flashRate: null,
+        topsHighestFt: null,
+        topsBins: [],
+        topsMultiLayerFraction: 0,
+        topsNoCoverage: false,
+      };
+      byId.set(stationId, point);
+    }
+    return point;
+  };
+
+  for (const station of observed.reflectivity?.stations ?? []) {
+    const point = pointFor(station.station_id);
+    const annulus = pickAnnulus<ObservedAnnulus>(station.annuli, radiusNm);
+    if (!point || !annulus) continue;
+    point.radarNoCoverage = annulus.insufficient_coverage;
+    point.dbz = annulus.insufficient_coverage ? null : annulus.max_value;
+  }
+
+  for (const station of observed.rain_rate?.stations ?? []) {
+    const point = pointFor(station.station_id);
+    const annulus = pickAnnulus<ObservedAnnulus>(station.annuli, radiusNm);
+    if (!point || !annulus) continue;
+    point.rateNoCoverage = annulus.insufficient_coverage;
+    point.rateMmH = annulus.insufficient_coverage ? null : annulus.max_value;
+  }
+
+  for (const station of observed.lightning?.stations ?? []) {
+    const point = pointFor(station.station_id);
+    const annulus = pickAnnulus<ObservedFlashAnnulus>(station.annuli, radiusNm);
+    if (!point || !annulus) continue;
+    point.flashCount = annulus.flash_count;
+    point.flashRate = annulus.flashes_per_1000km2_per_min;
+  }
+
+  for (const station of observed.cloud_tops?.stations ?? []) {
+    const point = pointFor(station.station_id);
+    const annulus = pickAnnulus<ObservedTopsAnnulus>(station.annuli, radiusNm);
+    if (!point || !annulus) continue;
+    point.topsNoCoverage = annulus.insufficient_coverage;
+    if (annulus.insufficient_coverage) continue;
+    point.topsHighestFt = annulus.highest_fl != null ? annulus.highest_fl * 100 : null;
+    const detected = annulus.detected_px || 0;
+    point.topsBins = OBSERVED_TOP_BANDS.map((band): VizObservedTopBin => ({
+      label: band.label,
+      loFt: band.loFt,
+      hiFt: band.hiFt,
+      fraction: detected > 0 ? (annulus.fl_bins?.[band.label] ?? 0) / detected : 0,
+    }));
+    // quality_method 9 is the retrieval's own multi-layer-suspect flag — the
+    // case where committing to one cloud top is least trustworthy.
+    point.topsMultiLayerFraction = detected > 0 ? (annulus.quality_method?.['9'] ?? 0) / detected : 0;
+  }
+
+  const points = [...byId.values()].sort((a, b) => a.distanceNm - b.distanceNm);
+  if (points.length === 0) return null;
+
+  return {
+    radiiNm: [...radii].sort((a, b) => a - b),
+    radiusNm,
+    points,
+    reflectivity: observedSource(observed.reflectivity, 'Radar reflectivity'),
+    rainRate: observedSource(observed.rain_rate, 'Radar rain rate'),
+    cloudTops: observedSource(observed.cloud_tops, 'Satellite cloud tops'),
+    lightning: observedSource(observed.lightning, 'Lightning'),
+    summaryLines: observed.summary_lines ?? [],
+  };
+}
+
+/** Largest gap (nm) between an analysis point and an observed station that
+ *  still counts as the same place. The observed sampler walks the same route
+ *  at the same spacing, so matches are normally exact; this tolerates a
+ *  rounding difference, not a genuinely different point. */
+const OBSERVED_MATCH_TOLERANCE_NM = 6;
+
+/** Fold observed values onto the route points, matched by along-route distance. */
+function mergeObserved(points: VizPoint[], observed: VizObserved | null): void {
+  if (!observed || observed.points.length === 0) return;
+  for (const point of points) {
+    let best: VizObservedPoint | null = null;
+    let bestGap = Infinity;
+    for (const candidate of observed.points) {
+      const gap = Math.abs(candidate.distanceNm - point.distanceNm);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = candidate;
+      }
+    }
+    if (!best || bestGap > OBSERVED_MATCH_TOLERANCE_NM) continue;
+    point.observedRateMmH = best.rateMmH;
+    point.observedFlashRate = best.flashRate;
+    point.observedRadarNoCoverage = best.radarNoCoverage || best.rateNoCoverage;
+  }
 }
 
 /**
@@ -440,6 +624,12 @@ function extractPoint(
     temperatureCruiseC,
     isaDevC,
     precipitationMm,
+    // Observed values are merged in after extraction (see mergeObserved):
+    // they come from a different artifact keyed by route distance, not from
+    // this point's model analysis.
+    observedRateMmH: null,
+    observedFlashRate: null,
+    observedRadarNoCoverage: false,
     qnhHpa,
     surfaceObscuration,
     sun,
@@ -496,6 +686,14 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   // carries on-track front crossings (only ecmwf/gfs/icon do, and only when
   // the "Auto Front Detection" pref was on).
   if (!data.fronts || data.fronts.crossings.length === 0) unavailable.add('fronts-markers');
+
+  // Observed layers (#574): each greys out when ITS OWN source is absent, not
+  // when the payload is. Radar without EUMETSAT credentials is half the
+  // feature working, and the surface layer should stay usable in that case.
+  if (!data.observed?.cloudTops) unavailable.add('observed-tops');
+  if (!data.observed?.reflectivity && !data.observed?.lightning) {
+    unavailable.add('observed-surface');
+  }
 
   return unavailable;
 }
