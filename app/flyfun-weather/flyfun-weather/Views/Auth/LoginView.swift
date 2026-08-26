@@ -2,13 +2,14 @@ import AuthenticationServices
 import FlyFunCommon
 import SwiftUI
 
-/// Sign-in screen with Apple and Google OAuth.
+/// Sign-in screen with Apple, Google, and email (magic-link) sign-in.
 struct LoginView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var isSigningIn = false
     @State private var errorMessage: String?
+    @State private var showEmailSignIn = false
 
     private var authService: FlyFunAuthService {
         FlyFunAuthService(config: .init(
@@ -67,6 +68,23 @@ struct LoginView: View {
                 .buttonStyle(.plain)
                 .disabled(isSigningIn)
 
+                Button {
+                    showEmailSignIn = true
+                } label: {
+                    Label("Sign in with Email", systemImage: "envelope.fill")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 175, height: 40)
+                        .foregroundStyle(.primary)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(isSigningIn)
+
                 #if DEBUG
                 Button {
                     Task { await devLogin() }
@@ -88,6 +106,11 @@ struct LoginView: View {
                 .frame(height: 60)
         }
         .padding()
+        .sheet(isPresented: $showEmailSignIn) {
+            EmailSignInView(authService: authService) { token in
+                appState.signIn(token: token)
+            }
+        }
     }
 
     private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
