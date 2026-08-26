@@ -3194,10 +3194,14 @@ only a model publishing `qr` can set it, which today means ICON-D2 alone.
 
 ---
 
-## 25. Richardson CAT is calibrated by altitude, and stops at the mixed-layer top
+## 25. Richardson CAT is calibrated by resolution, and stops at the mixed-layer top
 
 **Date:** 2026-08-04
-**Status:** Implemented (#533)
+**Status:** Implemented (#533). **(a) superseded 2026-08-26 by §28** — the
+resolution correction is now scaled by each layer's own thickness Δz rather than
+by the altitude ramp described below, which was a proxy for it. Everything else
+in this section — (b) through (f), and the scope notes — still stands unchanged,
+and §28 leans on them.
 **Context:** A pilot debrief on `egny_egkb-2026-08-03-0d8b` (dep 15:00Z, cruise
 2,500 ft) reported ICON claiming *severe CAT at 2,500 ft* for a week straight
 on an anticyclonic CAVOK August afternoon — "CAT is only modelled from 5,000 ft
@@ -3219,6 +3223,14 @@ is most likely *right* about the shear existing — it is the higher-resolution
 model. The defect is in what we did with it.
 
 ### (a) The resolution correction is a function of altitude, so it is applied as one
+
+> **Superseded by §28 (#539).** The reasoning below is intact and is why §28
+> exists; only the *implementation* changed. The correction is a function of
+> layer thickness, which this section approximated by altitude because thickness
+> grows with altitude **for a fixed level set**. Ours is not fixed — it varies
+> per model and with GRIB enrichment — so §28 scales by Δz directly. Read the
+> ramp described here as the thickness law evaluated on GFS's geometry: §28
+> shows it reproduces both of the knees below.
 
 The original calibration loosened the classical Miles-Howard tiers from
 0.25/0.5/1.0 to **0.5/1.0/2.0**, justified by "model vertical resolution
@@ -3409,7 +3421,9 @@ attention to it, and a week of RED was the defect — not the shear.
   classical tiers err toward under-detection, so the uniform ramp fails safe
   (misses rather than false alarms). The principled follow-up is scaling by
   each layer's actual thickness Δz — available per level pair since (d) — 
-  which subsumes both the altitude ramp and per-model spacing.
+  which subsumes both the altitude ramp and per-model spacing. **Done in §28
+  (#539);** the per-model spot-check it calls for is still outstanding, now
+  tracked there.
 
 `metrics-catalog.json` documented "Below about 0.25 expect clear-air
 turbulence" while the code fired SEVERE at 0.5 — a 2× disagreement between the
@@ -3958,3 +3972,146 @@ fully-assessed case `domain_nm` is the route length, so this costs nothing.
   rather than diluting real evidence into a GREEN. (An earlier draft of this
   section listed the *opposite* choice as rejected, contradicting both the
   paragraph above and the shipped code — #571 review.)
+
+---
+
+## 28. The Richardson CAT tiers scale by the layer's own thickness, not by altitude
+
+**Date:** 2026-08-26 · **Issue:** #539 · **Supersedes:** §25(a)
+
+§25(a) loosened the classical Miles-Howard tiers by a multiplier that was 1.0 at
+and below 10,000 ft and ramped to 2.0 at and above 20,000 ft. The justification
+was explicitly about **layer thickness** — "25 hPa spans ≈230 m at 950 hPa and
+≈800 m at 300 hPa" — and altitude was used as a stand-in for it. §25 said so
+itself, in the scope notes: *"The principled follow-up is scaling by each layer's
+actual thickness Δz — available per level pair since (d) — which subsumes both
+the altitude ramp and per-model spacing."* This is that follow-up.
+
+### Why the proxy leaked
+
+Thickness is a function of altitude only for a **fixed level set**. Ours is not
+fixed — it varies per model, and per model it varies with whether GRIB enrichment
+fired:
+
+| model / source | levels around 2,500 ft | Δz there | old scale | new scale |
+|---|---|---|---|---|
+| GFS (extended), ICON-EU via GRIB | 950 → 925 hPa | ~730 ft | 1.00 | 1.00 |
+| ICON, UKMO (Open-Meteo) | 950 → 925 hPa | ~730 ft | 1.00 | 1.00 |
+| ECMWF (Open-Meteo, 13 levels) | 1000 → 925 hPa | ~2,140 ft | 1.00 | 2.00 |
+
+The bottom row is the defect: an ECMWF layer three times as thick as the GFS one
+at the same altitude got the identical multiplier, so ECMWF's Ri kept its full
+coarse-resolution positive bias with no correction at all. The review bot raised
+this in #534 rounds 2 and 5; UKMO and Météo-France were never spot-checked, and
+they are coarse from 900 hPa up, where the ramp also left them classical.
+
+### The law
+
+```
+scale = clamp(Δz / 1,000 ft, 1.0, 2.0)
+```
+
+`_RI_DZ_REF_FT` = 1,000 ft is the thickness at which the classical tiers stand
+unscaled — the top of the 100–300 m shear-sheet band the whole correction exists
+for. The floor keeps the tiers from ever going *below* Miles-Howard: the
+classical value is the physical criterion, and a finer-than-reference layer is no
+reason to claim turbulence at a Ri the theory calls stable. The cap
+(`_RI_DZ_SCALE_MAX` = 2.0) is §25's ×2, kept: a Ri differenced across a 150 hPa
+gap is a bulk Richardson number of dubious meaning and must not loosen the tiers
+without limit. Bulk-Richardson literature supports depth-dependent critical
+values, which is the same argument from the other direction.
+
+### Calibration: the ramp *was* this law, read through one model's geometry
+
+The two constants were not fitted. Evaluate the thickness law on the level set
+§25 was calibrated against — GFS / ICON-EU-GRIB, 25 hPa below 500 hPa and 50 hPa
+above — and it lands on the ramp's own two knees:
+
+| GFS layer | Δz | midpoint | old ramp | new law |
+|---|---|---|---|---|
+| 950 → 925 hPa | 727 ft | 2,136 ft | 1.00 | 1.00 |
+| 700 → 675 hPa | 935 ft | 10,350 ft | 1.03 | 1.00 |
+| 500 → 450 hPa | 2,524 ft | 19,550 ft | 1.96 | 2.00 |
+| 350 → 300 hPa | 3,434 ft | 28,348 ft | 2.00 | 2.00 |
+
+The ramp's 10,000 ft knee is exactly where that spacing passes 1,000 ft, and its
+20,000 ft ceiling is exactly where the spacing steps from 25 to 50 hPa. So the
+two calibration anchors the issue required — the EGNY→EGKB low-level case and an
+FL300 jet flank — are preserved **by construction** on GFS and on ICON via GRIB,
+not by tuning. `test_thickness_law_reproduces_the_altitude_ramps_own_knees` and
+`test_ri_thresholds_loosened_in_upper_troposphere` pin both.
+
+### What deliberately changes
+
+- **ECMWF, UKMO, Météo-France, GEM at low and mid levels get looser tiers.**
+  Their 50–75 hPa spacing genuinely averages the shear sheet away. This is the
+  self-correction the issue asked for, and it needs no per-model configuration.
+- **GFS between roughly 12,000 and 18,000 ft gets *tighter* tiers** (1.03–1.19
+  where the ramp gave 1.33–1.77). Its 25 hPa layers are ~1,000–1,200 ft thick
+  there — near the reference — and the ramp was loosening them on altitude
+  alone. Erring toward the classical tiers is the under-detection direction,
+  which §25 already recorded as the fail-safe one.
+- **The residual half-layer bias is gone by construction.** §25(d) evaluated the
+  altitude scale at the physical layer's midpoint to reduce it; there is now no
+  altitude to evaluate.
+
+### Why this does not re-open #533
+
+The cry-wolf that motivated #533 was "severe CAT at 2,500 ft for a week", and
+tier loosening was only one of six fixes. The guards that actually bound the
+low-level false-alarm rate — §25(b) mixed-layer suppression, §25(c) BL tagging
+with an AMBER floor and the route-percentage gate, §25(f) moderate-or-worse for
+RED-via-coverage — are all **independent of Δz** and untouched here. And the
+model that produced the complaint, ICON, is on 25 hPa spacing at that altitude
+whether it comes from Open-Meteo or GRIB, so its tiers there are unchanged.
+
+### Δz comes from the Ri's own level pair, not from the painted band
+
+`compute_stability_indicators` differences level *i−1* → *i*, so that pair is the
+Ri's physical extent. §25(d)'s base-extension rule declines to extend a band
+across a gap wider than 100 hPa — but that answers *where to draw the layer*,
+which is a different question from *how much the model smoothed the shear away*.
+Across a sparse column the Ri really was taken over the wide gap, so the bias
+really is that large; `_layer_thickness_ft` reads the pair and the cap bounds the
+result. `test_thickness_comes_from_the_ri_pair_not_the_painted_layer` pins the
+two behaviours together. Where the lower level carries no altitude, Δz falls back
+to a standard-atmosphere estimate from the pressures rather than to the reference
+thickness — a coarse model must not silently borrow a fine model's tiers.
+
+### Files changed
+
+- `analysis/sounding/vertical_motion.py` — `_RI_DZ_REF_FT` / `_RI_DZ_SCALE_MAX`
+  replace `_RI_LOOSEN_BASE_FT` / `_RI_LOOSEN_TOP_FT` / `_RI_LOOSEN_MAX`;
+  `_ri_threshold_scale` takes Δz; new `_layer_thickness_ft`; `_classify_cat_risk`
+  and its `_build_cat_layers` call site take the thickness instead of the
+  midpoint altitude.
+- `web/ts/data/metrics-catalog.json`, `app/…/Resources/metrics-catalog.json` —
+  `richardson_number.best_used_for` reworded from the altitude ramp to the
+  thickness law. Also fixes `cat_risk`, which was **missed by #533/#534**: its
+  `theory` and `thresholds` still published the pre-#533 flat 0.5/1.0/2.0 tiers
+  while `richardson_number` in the same file published the classical ones — the
+  same help-text-vs-code disagreement §25 set out to fix, left in the other
+  entry. Both entries now read 0.25/0.5/1.0 plus the thickness scaling.
+- `designs/analysis-metrics.md` §3.4 — the multiplier table is keyed by Δz.
+- Tests: `tests/test_vertical_motion.py`. The two tier tests were keyed to
+  altitude bands; they are re-keyed to the geometry they claim to reproduce
+  (the low-level one to ICON/GFS's real 25 hPa spacing at the 2,500 ft cruise,
+  not a synthetic 50 hPa column), plus new tests for the floor/cap, the
+  ramp-knee equivalence, the Ri-pair-vs-painted-band split, the
+  standard-atmosphere fallback, and the coarse-model low-level loosening.
+
+### Real-world validation needed
+
+The empirical half of the issue's calibration ask is **not done** — this branch
+has no pack store, so the numbers above are the level-set geometry, not a replay.
+Before trusting the behaviour changes:
+
+- Re-run the EGNY→EGKB pack and confirm ICON AMBER / GFS AMBER / ECMWF GREEN
+  (§25(f)) still holds. ECMWF is the one at risk: its low-level tiers double, so
+  its 3/17 light points could move up a tier.
+- Spot-check UKMO and Météo-France — the models §25 never checked. They gain the
+  most loosening; confirm it surfaces real shear rather than noise.
+- Confirm an FL300 jet-flank case grades identically to §25.
+- Check a GFS mid-troposphere (12,000–18,000 ft) turbulence case for the
+  tightening called out above — that is the one direction this change can lose a
+  detection §25 would have made.
