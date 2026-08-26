@@ -292,6 +292,11 @@ def precache_icon_eu_run(
                     init_date, init_hour, fhour,
                     levels=levels, variables=[var], session=session,
                     max_workers=5,
+                    # This pass runs ahead of DWD's publication frontier by
+                    # design, so an all-404 hour means "not landed yet" and is
+                    # retried next tick. Only 404s are quieted; a 500 or a
+                    # timeout still warns.
+                    expect_missing=True,
                 )
                 data = per_var.get(var)
                 if data:
@@ -324,6 +329,7 @@ def precache_icon_eu_run(
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour], session=session,
                     max_workers=5,
+                    expect_missing=True,
                 )
                 grib_bytes = fetched.get(fhour)
                 if grib_bytes:

@@ -6,6 +6,7 @@ functions' integration with the cache + freshness markers (mocked HTTP).
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -242,11 +243,11 @@ class TestPrecacheIconEuRun:
         init = _utc(2026, 5, 8, 0)
 
         def fake_fetch_per_var(init_date, init_hour, fhour, levels, variables, session,
-                               max_workers=None):
+                               max_workers=None, expect_missing=False):
             return {variables[0]: b"GRIB" + variables[0].encode()}
 
         def fake_fetch_single(init_date, init_hour, fhours, session=None,
-                              max_workers=None):
+                              max_workers=None, expect_missing=False):
             return {fhours[0]: b"DIAG"}
 
         with patch(
@@ -271,6 +272,56 @@ class TestPrecacheIconEuRun:
         )
         sample_path = run_dir / cache_key(6, "ICON_EU_QC")
         assert sample_path.exists()
+
+
+@pytest.mark.usefixtures("no_interactive_refresh")
+class TestPrecacheLogSeverity:
+    """A pass over a not-yet-published run must not touch the warning channel.
+
+    The precache walks ahead of DWD's publication frontier by design, so its
+    404s are routine. Before `expect_missing` they were 68% of every WARNING
+    the app emitted, which buried everything that mattered.
+    """
+
+    def test_unpublished_run_emits_no_warnings(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        from weatherbrief.fetch.grib import icon_eu_fetch as icon_fetch_mod
+
+        # Nothing published yet: every file 404s, as on a freshly-detected run.
+        monkeypatch.setattr(
+            icon_fetch_mod, "_download_one_file", lambda url, session: (None, 404),
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            precache_icon_eu_run(_utc(2026, 5, 8, 0))
+
+        icon_warnings = [
+            r.getMessage() for r in caplog.records
+            if r.name == "weatherbrief.fetch.grib.icon_eu_fetch"
+            and r.levelno >= logging.WARNING
+        ]
+        assert icon_warnings == []
+
+    def test_a_real_upstream_error_still_warns(self, tmp_path, monkeypatch, caplog):
+        """Opting in must not silence a 500 — only absence is routine."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        from weatherbrief.fetch.grib import icon_eu_fetch as icon_fetch_mod
+
+        monkeypatch.setattr(
+            icon_fetch_mod, "_download_one_file", lambda url, session: (None, 500),
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            precache_icon_eu_run(_utc(2026, 5, 8, 0))
+
+        icon_warnings = [
+            r.getMessage() for r in caplog.records
+            if r.name == "weatherbrief.fetch.grib.icon_eu_fetch"
+            and r.levelno >= logging.WARNING
+        ]
+        assert icon_warnings, "a 500 must not be swallowed by expect_missing"
 
 
 @pytest.mark.usefixtures("no_interactive_refresh")

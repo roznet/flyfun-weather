@@ -619,6 +619,7 @@ def fetch_icon_eu_single_level(
     session: requests.Session | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
     variant: IconVariant = ICON_EU,
+    expect_missing: bool = False,
 ) -> dict[int, bytes]:
     """Download ICON single-level GRIB2 fields and return concatenated bytes per fhour.
 
@@ -678,7 +679,12 @@ def fetch_icon_eu_single_level(
                 len(buf) / 1024, _format_failure_summary(failures),
             )
         elif total_failed:
-            logger.warning(
+            log = (
+                logger.debug
+                if _missing_is_expected(failures, expect_missing)
+                else logger.warning
+            )
+            log(
                 "%s single-level f%03d: all %d files failed%s",
                 variant.slug, fhour, total_failed, _format_failure_summary(failures),
             )
@@ -948,6 +954,30 @@ def _format_failure_summary(failures: dict[int | str, int]) -> str:
     return " (" + ",".join(parts) + ")"
 
 
+def _missing_is_expected(
+    failures: dict[int | str, int],
+    expect_missing: bool,
+) -> bool:
+    """True when a wholesale fetch failure is just "not published yet".
+
+    DWD publishes a run progressively, so a warm/precache pass that runs ahead
+    of the publication frontier asks for files that exist only later. That is
+    routine and self-healing on the next tick, and at ~670 lines/day it was
+    drowning the warning channel (68% of all WARNINGs).
+
+    Two conditions, both required. The caller must opt in via *expect_missing*
+    — on a briefing path a wholesale 404 is a real signal, not noise. And every
+    failure must be a 404: a mixed or non-404 set (500s, timeouts, decode
+    errors) is a genuine problem and keeps its WARNING even on a warm path.
+
+    Keying on the caller rather than the status alone is deliberate. If DWD
+    ever changes the URL scheme, that presents as 100% 404 everywhere; a
+    blanket status-only downgrade would make us silently blind to it, and
+    quiet reads as healthy.
+    """
+    return expect_missing and bool(failures) and set(failures) == {404}
+
+
 def _download_one_file(
     url: str,
     session: requests.Session,
@@ -1041,6 +1071,7 @@ def fetch_icon_eu_per_variable(
     session: requests.Session | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
     variant: IconVariant = ICON_EU,
+    expect_missing: bool = False,
 ) -> dict[str, bytes]:
     """Download ICON model-level GRIB2 fields per variable for chunked decode.
 
@@ -1097,14 +1128,26 @@ def fetch_icon_eu_per_variable(
                 len(buf) / 1024, _format_failure_summary(failures),
             )
         elif buf:
-            logger.warning(
+            # A column half-published is the same "run still landing" case as
+            # a wholly absent one — the levels arrive together shortly after.
+            log = (
+                logger.debug
+                if _missing_is_expected(failures, expect_missing)
+                else logger.warning
+            )
+            log(
                 "%s f%03d %s: incomplete column (%d/%d levels) — discarding, "
                 "not caching a partial blob%s",
                 variant.slug, forecast_hour, var, downloaded, len(levels),
                 _format_failure_summary(failures),
             )
         else:
-            logger.warning(
+            log = (
+                logger.debug
+                if _missing_is_expected(failures, expect_missing)
+                else logger.warning
+            )
+            log(
                 "%s f%03d %s: all %d files failed%s",
                 variant.slug, forecast_hour, var, total_failed,
                 _format_failure_summary(failures),
@@ -1122,6 +1165,7 @@ def fetch_icon_eu_per_level(
     session: requests.Session | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
     variant: IconVariant = ICON_EU,
+    expect_missing: bool = False,
 ) -> dict[tuple[str, int], bytes]:
     """Download ICON model-level files individually, keyed by (variable, level).
 
@@ -1172,7 +1216,12 @@ def fetch_icon_eu_per_level(
             total_bytes / 1024, _format_failure_summary(failures),
         )
     elif total_failed:
-        logger.warning(
+        log = (
+            logger.debug
+            if _missing_is_expected(failures, expect_missing)
+            else logger.warning
+        )
+        log(
             "%s f%03d per-level: all %d files failed%s",
             variant.slug, forecast_hour, total_failed,
             _format_failure_summary(failures),
