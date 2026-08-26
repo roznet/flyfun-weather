@@ -388,8 +388,17 @@ def _project_to_grid(frame: GridFrame, lon_mesh, lat_mesh):
 
 
 def legend_for(source: str) -> list[dict[str, object]]:
-    """Colour stops for the client's legend, so it cannot drift from the render."""
-    stops = _STOPS_BY_SOURCE.get(source)
+    """Colour stops for the client's legend, so it cannot drift from the render.
+
+    Accepts a pseudo-source too (``eumetsat_ctth_temp``), because the map's
+    legend has to describe whichever quantity is actually being drawn — and a
+    temperature ramp labelled in metres would be worse than no legend at all.
+    """
+    entry = AUX_FIELDS.get(source)
+    if entry is not None:
+        stops = entry[2]
+    else:
+        stops = _STOPS_BY_SOURCE.get(source)
     if stops is None:
         return []
     return [

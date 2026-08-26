@@ -360,6 +360,8 @@ export interface MapControlCallbacks {
   onForecastMetricChange?: (metricId: string) => void;
   /** Pick which observed layer the map draws (#574), '' for none. */
   onObservedOverlayChange?: (source: string) => void;
+  /** Set the observed imagery opacity, 0–1. */
+  onObservedOpacityChange?: (opacity: number) => void;
 }
 
 /** Which observed sources the current briefing actually carries. Options for
@@ -780,6 +782,18 @@ export function renderMapControls(
     }
     html += '</select>';
     html += '</label>';
+    // Opacity, like the synoptic grid layer's. These rasters cover the whole
+    // corridor, so a fixed value either buries the basemap or washes the data
+    // out depending on the product — and the pilot needs to read place names
+    // through it.
+    if (settings.observedOverlay && settings.observedOverlay !== 'eumetsat_li') {
+      const pct = Math.round((settings.observedOverlayOpacity ?? 0.75) * 100);
+      html += '<label class="map-control-label map-observed-opacity">';
+      html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.opacity'))}</span>`;
+      html += `<input type="range" id="map-observed-opacity" min="10" max="100" step="5" value="${pct}">`;
+      html += `<span class="map-observed-opacity-value" id="map-observed-opacity-value">${pct}%</span>`;
+      html += '</label>';
+    }
     html += '</div>';
   }
 
@@ -808,6 +822,16 @@ export function renderMapControls(
   }
 
   // Wire metric dropdowns
+  const observedOpacity = container.querySelector('#map-observed-opacity') as HTMLInputElement | null;
+  if (observedOpacity && callbacks.onObservedOpacityChange) {
+    const readout = container.querySelector('#map-observed-opacity-value') as HTMLElement | null;
+    observedOpacity.addEventListener('input', () => {
+      const pct = Number(observedOpacity.value);
+      if (readout) readout.textContent = `${pct}%`;
+      callbacks.onObservedOpacityChange!(pct / 100);
+    });
+  }
+
   const observedSelect = container.querySelector('#map-observed-overlay') as HTMLSelectElement | null;
   if (observedSelect && callbacks.onObservedOverlayChange) {
     observedSelect.addEventListener('change', () => {

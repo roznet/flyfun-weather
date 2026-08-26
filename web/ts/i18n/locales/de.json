@@ -877,6 +877,7 @@
   "observed.title": "Aktuelle Beobachtungen",
   "observed.corridor": "Korridor",
   "viz.observed.label": "Beobachtet",
+  "viz.observed.opacity": "Deckkraft",
   "viz.observed.none": "Keine",
   "viz.observed.reflectivity": "Radar-Reflektivität",
   "viz.observed.rainRate": "Regenrate",

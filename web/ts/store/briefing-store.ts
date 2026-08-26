@@ -52,6 +52,7 @@ function loadVizSettings(): VizSettings {
     // "is that cell on my route". Falls back at render time to whatever was
     // actually collected.
     observedOverlay: 'opera_dbzh',
+    observedOverlayOpacity: 0.75,
     mapWidthMetric: 'cloud-cover-total',
     mapAltitudeFt: null,
     routeGraphVisible: true,
@@ -196,6 +197,7 @@ export interface BriefingState {
   setMapColorMetric: (metricId: string) => void;
   /** Which observed layer the map draws (#574), or '' for none. */
   setObservedOverlay: (source: string) => void;
+  setObservedOverlayOpacity: (opacity: number) => void;
   setMapWidthMetric: (metricId: string) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
   setMapFrontsVisible: (visible: boolean) => void;
@@ -1072,6 +1074,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setObservedOverlay: (source: string) => {
     const updated = { ...get().vizSettings, observedOverlay: source };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setObservedOverlayOpacity: (opacity: number) => {
+    const clamped = Math.max(0, Math.min(1, opacity));
+    const updated = { ...get().vizSettings, observedOverlayOpacity: clamped };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

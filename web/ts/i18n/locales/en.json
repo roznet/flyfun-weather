@@ -977,6 +977,7 @@
   "observed.title": "Observed now",
   "observed.corridor": "Corridor",
   "viz.observed.label": "Observed",
+  "viz.observed.opacity": "Opacity",
   "viz.observed.none": "None",
   "viz.observed.reflectivity": "Radar reflectivity",
   "viz.observed.rainRate": "Rain rate",

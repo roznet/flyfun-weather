@@ -19,6 +19,11 @@ export interface VizSettings {
    *  impossible to say which one a colour came from. `''` draws none.
    *  `eumetsat_li` is points rather than a raster; everything else is imagery. */
   observedOverlay: string;
+  /** Opacity of the observed imagery, 0–1. User-controlled, like the synoptic
+   *  grid layer: these rasters cover the whole corridor and a fixed opacity
+   *  either buries the basemap or washes the data out, depending on the
+   *  product. */
+  observedOverlayOpacity: number;
   routeGraphVisible: boolean;
   routeGraphLeftMetric: string;
   routeGraphRightMetric: string;  // 'none' to disable right axis

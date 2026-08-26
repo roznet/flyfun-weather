@@ -77,6 +77,10 @@ IMAGE_SOURCES = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE, SOURCE_EUMETSAT_CTTH)
 # of position, which is exactly the opposite of the cross-section's case.
 IMAGE_PSEUDO_SOURCES = dict(AUX_FIELDS)  # pseudo id -> (real source, field, stops)
 
+PSEUDO_LABELS = {"eumetsat_ctth_temp": "Cloud-top temperature"}
+# Kelvin on the wire, as the granule stores it; the client converts for display.
+PSEUDO_UNITS = {"eumetsat_ctth_temp": "K"}
+
 
 def _resolve_imagery(source: str) -> tuple[str, str | None]:
     """(real source, aux field) for an imagery id, or raise 404."""
@@ -135,6 +139,22 @@ def observed_status(_user_id: str = Depends(current_user_id)) -> dict[str, Any]:
                 stale=age > spec.max_display_age.total_seconds() / 60.0,
                 attribution=newest.attribution.model_dump(),
             )
+        sources.append(entry)
+
+    # Pseudo-sources ride alongside, sharing the underlying frame's timing and
+    # attribution but carrying their own units and ramp. The client needs them
+    # in this list or it cannot draw a legend for a layer it can select.
+    for pseudo, (real, _field, _stops) in IMAGE_PSEUDO_SOURCES.items():
+        base = next((s for s in sources if s["source"] == real), None)
+        if base is None:
+            continue
+        entry = dict(base)
+        entry.update(
+            source=pseudo,
+            label=PSEUDO_LABELS.get(pseudo, pseudo),
+            units=PSEUDO_UNITS.get(pseudo, ""),
+            legend=legend_for(pseudo),
+        )
         sources.append(entry)
     return {"sources": sources}
 

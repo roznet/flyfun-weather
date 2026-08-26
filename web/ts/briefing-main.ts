@@ -40,7 +40,7 @@ import {
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
-import { corridorBounds, fetchObservedFlashes, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
+import { corridorBounds, fetchObservedFlashes, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -304,6 +304,12 @@ function updateObservedOverlay(
   // Lightning is points, not a raster: selecting it draws no imagery at all.
   const showFlashes = wanted === 'eumetsat_li';
   renderer.setObservedSource(showFlashes || !wanted ? null : wanted);
+  renderer.setObservedOpacity(briefingStore.getState().vizSettings.observedOverlayOpacity ?? 0.75);
+  // Fetched once and cached; a failure costs the scale, not the overlay.
+  void fetchObservedLegends().then((legends) => {
+    renderer.setObservedLegends(legends);
+    renderer.refreshObserved();
+  });
 
   const bounds = corridorBounds(data, observed.radiusNm);
   if (!showFlashes || !observed.lightning || !bounds) {
@@ -1950,6 +1956,7 @@ async function init(): Promise<void> {
           onForecastOverlayToggle: (visible) => store.getState().setMapForecastOverlayVisible(visible),
           onForecastMetricChange: (metricId) => store.getState().setMapForecastMetric(metricId),
           onObservedOverlayChange: (source) => store.getState().setObservedOverlay(source),
+          onObservedOpacityChange: (o) => store.getState().setObservedOverlayOpacity(o),
         }, data.fronts != null, forecastOverlayControls(state), {
           // Only offer what this briefing actually carries: an overlay that
           // renders an empty PNG is worse than an absent menu entry, because

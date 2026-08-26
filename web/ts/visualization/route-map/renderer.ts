@@ -1,7 +1,13 @@
 /** Route map renderer — Leaflet-based geographic visualization of weather along the route. */
 
 import * as L from 'leaflet';
-import { renderObservedOverlay, type ObservedFlashPoint } from './observed-overlay';
+import {
+  renderObservedOverlay,
+  formatLegendValue,
+  type ObservedFlashPoint,
+  type ObservedSourceStatus,
+} from './observed-overlay';
+import { escapeHtml } from '../../utils';
 import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
@@ -54,6 +60,9 @@ export class RouteMapRenderer {
   private observedGroup: L.LayerGroup | null = null;
   private observedBadgeEl: HTMLElement | null = null;
   private observedSource: string | null = null;
+  private observedOpacity = 0.75;
+  private observedLegendEl: HTMLElement | null = null;
+  private observedLegends: Map<string, ObservedSourceStatus> | null = null;
   private observedFlashes: ObservedFlashPoint[] = [];
   private highlightMarker: L.CircleMarker | null = null;
   private forecastLegendEl: HTMLElement | null = null;
@@ -125,6 +134,16 @@ export class RouteMapRenderer {
    *  Lightning is drawn as points regardless — it is not a raster. */
   setObservedSource(source: string | null): void {
     this.observedSource = source;
+  }
+
+  /** Opacity of the observed imagery, 0–1. */
+  setObservedOpacity(opacity: number): void {
+    this.observedOpacity = Math.max(0, Math.min(1, opacity));
+  }
+
+  /** Per-source colour ramps for the on-map scale, from the server. */
+  setObservedLegends(legends: Map<string, ObservedSourceStatus>): void {
+    this.observedLegends = legends;
   }
 
   /** Lightning points for the corridor, fetched async by briefing-main.
@@ -359,11 +378,13 @@ export class RouteMapRenderer {
       this.data,
       {
         imagerySource: this.observedSource,
+        imageryOpacity: this.observedOpacity,
         radiusNm: this.data.observed?.radiusNm ?? 20,
       },
       this.observedFlashes,
     );
     this.updateObservedBadge(badge);
+    this.updateObservedLegend();
   }
 
   /** The age badge rides on the map itself, not in a side panel: it labels a
@@ -379,6 +400,36 @@ export class RouteMapRenderer {
       this.container.appendChild(this.observedBadgeEl);
     }
     this.observedBadgeEl.textContent = text;
+  }
+
+  /** Colour scale for whatever observed layer is drawn, in the map's corner.
+   *
+   *  The synoptic grid layer carries one and these did not, so a pilot could
+   *  see a green pixel and have no way to learn what value it meant. Built
+   *  from the server's own ramp, never a client copy. */
+  private updateObservedLegend(): void {
+    const status = this.observedSource ? this.observedLegends?.get(this.observedSource) : null;
+    if (!status || !status.legend?.length) {
+      if (this.observedLegendEl) { this.observedLegendEl.remove(); this.observedLegendEl = null; }
+      return;
+    }
+    if (!this.observedLegendEl) {
+      this.observedLegendEl = document.createElement('div');
+      this.observedLegendEl.className = 'map-observed-legend';
+      this.container.appendChild(this.observedLegendEl);
+    }
+    const stops = status.legend;
+    const swatches = stops
+      .map((s) => `<span class="mol-swatch" style="background:${s.color}"></span>`)
+      .join('');
+    // First and last only: a label per stop is unreadable at this size, and
+    // the ends are what set the range.
+    const lo = formatLegendValue(status.source, stops[0].value, status.units);
+    const hi = formatLegendValue(status.source, stops[stops.length - 1].value, status.units);
+    this.observedLegendEl.innerHTML =
+      `<div class="mol-title">${escapeHtml(status.label)}</div>`
+      + `<div class="mol-ramp">${swatches}</div>`
+      + `<div class="mol-ends"><span>${escapeHtml(lo)}</span><span>${escapeHtml(hi)}</span></div>`;
   }
 
   private renderFronts(): void {
