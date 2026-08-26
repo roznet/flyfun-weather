@@ -75,18 +75,30 @@ enum CrossSectionPresets {
     static let gramet = layers(on: [
         "nwp-cloud-bands", "nwp-convective-bg", "icing-ogimet-nwp-bands",
         "cat-bands", "terrain", "freezing-level", "reference-lines",
+        // Default-ON, matching the web: `layers(on:)` resets every layer, while
+        // the web's `setVizPreset` merges over `defaultEnabled`, so this has to
+        // be named in each preset to reach the same state.
+        "observed-tops",
     ])
 
     /// Windy — Natural NWP clouds + SFIP-NWP icing + CAT (Ri) + NWP convective.
     static let windy = layers(on: [
         "nwp-cloud-bands", "nwp-convective-bg", "sfip-bands",
         "cat-bands", "terrain", "freezing-level", "reference-lines",
+        // Default-ON, matching the web: `layers(on:)` resets every layer, while
+        // the web's `setVizPreset` merges over `defaultEnabled`, so this has to
+        // be named in each preset to reach the same state.
+        "observed-tops",
     ])
 
     /// ForeFlight — Square DD clouds + Ogimet-DD icing + CAT (Ri) + NWP convective.
     static let foreflight = layers(on: [
         "square-cloud-bands", "nwp-convective-bg", "icing-bands",
         "cat-bands", "terrain", "freezing-level", "reference-lines",
+        // Default-ON, matching the web: `layers(on:)` resets every layer, while
+        // the web's `setVizPreset` merges over `defaultEnabled`, so this has to
+        // be named in each preset to reach the same state.
+        "observed-tops",
     ])
 
     static let all: [LayerPreset] = [

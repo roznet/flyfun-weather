@@ -105,12 +105,68 @@ struct CrossSectionTheme: Sendable {
     var convStrip: [String: Color]
     var convCBLabel: [String: Color]
 
+    // Observed conditions (#574). Only the cross-section half of the web theme's
+    // `observed` block is ported: `tempStops`/`tempUnknown` colour the MAP
+    // overlay (no altitude axis there, so temperature is new information) and
+    // iOS has no observed map layer yet — add them with that layer.
+    var observed: ObservedPalette
+
     // Inversion band
     var inversionBase: RGB
     var inversionFloor: Double
     var inversionScale: Double
     var inversionMaxStrengthC: Double
     var inversionCap: Double
+}
+
+/// Cross-section colours for the observed layers.
+///
+/// `shareStops` colours a cloud-top band by its share of the LOOKED-AT SKY —
+/// not of the cloud that was found, and not by temperature.
+///
+/// Of the sky, because that reads as coverage a pilot can act on ("a tenth of
+/// the area around here had its top in FL180-190"), and because a share of the
+/// cloud inflates as the sky clears: a disc holding two cloudy pixels out of 131
+/// drew both its bands as loud as a solid deck, each being 50% of the cloud.
+///
+/// Share rather than temperature, because the vertical axis already says how
+/// high the band is and cloud-top temperature is very nearly a function of
+/// height — the MAP keeps the temperature ramp, having no altitude axis to
+/// spend.
+///
+/// The ramp's *direction* is per-theme and deliberate. Standard and Light run
+/// light→dark because their skies are pale; GRAMET and High-Contrast run
+/// dark→light because theirs are deep blue, where a darker band is less visible
+/// rather than more. Same meaning, same direction of emphasis, inverted
+/// luminance — what must increase with share is contrast against the sky.
+struct ObservedPalette: Sendable {
+    /// [fraction, colour], weakest share first. Picked by NEAREST stop, never
+    /// interpolated — a blended intermediate colour would imply a precision the
+    /// 2 km retrieval does not have.
+    ///
+    /// The BREAKPOINTS, not the colours, carry the calibration, and they start at
+    /// the 5% drawing floor (`ObservedTopsLayer.minBinFraction`): a stop below it
+    /// would be spent on bands that are never drawn. Above it, measured over real
+    /// packs, the surviving bands run from the floor to about half the sky — a
+    /// 20 NM disc splits its cloud across a dozen fine 10-FL bands, so a fifth of
+    /// the sky in one of them is already a big band.
+    var shareStops: [(Double, Color)]
+    /// Hatching that means "depth unknown" below a deck, and the off-scale box.
+    var hatchColor: Color
+    /// Outline of the highest-top cap, and the off-scale arrow.
+    var capColor: Color
+    /// Cap outline when the retrieval flags the disc multi-layer-suspect (qm 9).
+    var capMultiLayerColor: Color
+    /// "The sensor does not look here" — never the same as "saw nothing".
+    var noCoverageColor: Color
+
+    /// Colour for a band's share of the disc. Nearest stop at or below the
+    /// value, floored at the weakest stop.
+    func shareColor(_ fraction: Double) -> Color {
+        var best = shareStops[0].1
+        for (threshold, color) in shareStops where fraction >= threshold { best = color }
+        return best
+    }
 }
 
 // MARK: - Theme registry (ported from web theme.ts)
@@ -211,6 +267,21 @@ extension CrossSectionTheme {
             "high": c(200, 40, 40, 0.90),
             "extreme": c(150, 20, 20, 0.95),
         ],
+        observed: ObservedPalette(
+            shareStops: [
+            (0.05, c(99, 119, 184)),
+            (0.07, c(87, 106, 168)),
+            (0.10, c(75, 92, 150)),
+            (0.15, c(63, 78, 132)),
+            (0.22, c(51, 63, 109)),
+            (0.35, c(40, 47, 84)),
+            (0.55, c(28, 32, 57)),
+            ],
+            hatchColor: c(190, 210, 235, 0.55),
+            capColor: c(232, 238, 248),
+            capMultiLayerColor: c(240, 169, 76),
+            noCoverageColor: c(150, 160, 175, 0.75)
+        ),
         inversionBase: RGB(r: 233, g: 30, b: 99),
         inversionFloor: 0.15,
         inversionScale: 0.50,
@@ -304,6 +375,22 @@ extension CrossSectionTheme {
             "high": c(216, 80, 32, 0.92),
             "extreme": c(232, 24, 24, 0.95),
         ]
+        // Runs the other way from Standard: this sky is a deep navy (#1B3060), so
+        // a darker band is less visible, not more. Brightening with share is the
+        // same emphasis, inverted luminance.
+        t.observed.shareStops = [
+            (0.05, c(63, 85, 144)),
+            (0.07, c(85, 112, 171)),
+            (0.10, c(109, 138, 198)),
+            (0.15, c(135, 164, 222)),
+            (0.22, c(163, 189, 236)),
+            (0.35, c(194, 214, 247)),
+            (0.55, c(230, 239, 255)),
+        ]
+        t.observed.hatchColor = c(255, 255, 255, 0.8)
+        t.observed.capColor = c(255, 255, 255)
+        t.observed.capMultiLayerColor = c(255, 192, 70)
+        t.observed.noCoverageColor = c(255, 255, 255, 0.85)
         t.inversionBase = RGB(r: 255, g: 82, b: 82)
         t.inversionFloor = 0.25
         t.inversionScale = 0.55
@@ -351,6 +438,19 @@ extension CrossSectionTheme {
         // Soft clouds inherit Standard's white fill / alphas unchanged — the web
         // gramet `softClouds` block is identical to the factory default, so we
         // don't re-state it here.
+        // This sky (#2B5DA8) is darker than Standard's, and Standard's ramp
+        // descends through it — a mid-share band would sit at almost the sky's
+        // own luminance and disappear. Ascends instead. The other observed
+        // colours inherit Standard unchanged, as on the web.
+        t.observed.shareStops = [
+            (0.05, c(91, 131, 196)),
+            (0.07, c(117, 153, 210)),
+            (0.10, c(143, 175, 223)),
+            (0.15, c(169, 196, 234)),
+            (0.22, c(195, 216, 243)),
+            (0.35, c(218, 233, 250)),
+            (0.55, c(240, 246, 255)),
+        ]
         return t
     }()
 
@@ -442,6 +542,21 @@ extension CrossSectionTheme {
             "high": c(180, 30, 30, 0.95),
             "extreme": c(100, 10, 50, 1.00),
         ]
+        // On a white sky the pale end of Standard's ramp vanishes, so the whole
+        // ramp shifts darker while keeping the same light→dark direction.
+        t.observed.shareStops = [
+            (0.05, c(170, 183, 214)),
+            (0.07, c(139, 155, 199)),
+            (0.10, c(109, 127, 182)),
+            (0.15, c(82, 101, 164)),
+            (0.22, c(62, 79, 142)),
+            (0.35, c(46, 60, 116)),
+            (0.55, c(31, 42, 88)),
+        ]
+        t.observed.hatchColor = c(70, 95, 130, 0.6)
+        t.observed.capColor = c(31, 41, 55)
+        t.observed.capMultiLayerColor = c(180, 83, 9)
+        t.observed.noCoverageColor = c(107, 114, 128, 0.8)
         t.inversionBase = RGB(r: 194, g: 24, b: 91)
         t.inversionFloor = 0.20
         t.inversionScale = 0.55

@@ -333,11 +333,46 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 
 | Surface | What it shows |
 |---|---|
-| Cross-section `observed-tops` (group `clouds`, **default ON**) | FL-band histogram ticks + a solid highest-top cap per route point, over the NWP cloud bands. Hatched mark where the retrieval could not answer. Age badge. |
+| Cross-section `observed-tops` (group `conditions`, **default ON**) | FL-band histogram ticks + a solid highest-top cap per route point, over the NWP cloud bands. Hatched mark where the retrieval could not answer. Age badge. |
 | Cross-section `observed-surface` (group `conditions`, default off) | Echo colour strip along the terrain + lightning ticks. Hatched strip for no coverage. |
 | Route map | Corridor box, newest frame as a single `imageOverlay`, lightning points age-faded, age badge with attribution. |
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
+| iOS cross-section (group `conditions`) | The same two layers, same defaults, same three-state marks. Corridor picker + per-source ages in the Layers sheet; measured values in the scrub readout, prefixed `Obs` so they never read as forecast. |
+
+### The iOS surface needs no endpoint
+
+The payload is inline on `briefing.json`, and `/packs/{ts}/bundle` ships that
+file under its `snapshot` key — so the observed samples already reached the
+phone, in the offline download too, before anything on iOS could read them.
+Adding an `/observed` endpoint would have been a second way to fetch bytes the
+client had.
+
+What iOS *did* need was for a **gated realtime refresh to reach the screen**.
+`decide_refresh` already routes every D-0 press to `realtime`, and
+`run_realtime_refresh` already re-samples the frames and patches
+`briefing.json` — but that path reuses the pack's timestamp, and
+`CachingBriefingRepository` is read-from-cache-first. On a downloaded pack the
+client therefore re-read the snapshot it already had and showed the copy the
+press was meant to replace. (The same staleness had been true of METAR/TAF
+since offline packs shipped; observed only made it visible.)
+
+So `RefreshAccepted` and the SSE gate's `complete` event now carry `observed`
+alongside `observations`/`sigmets` — the server had already computed it and was
+discarding it — and the client folds all three into the loaded snapshot *after*
+the pack reload, rather than fetching anything again. The web is unaffected: it
+has no client cache and reloads the snapshot from the server anyway.
+
+**Refresh stays a button, on both platforms.** No poll loop. The four sources
+update every 5–15 minutes and a re-sample is ~6–12 KB gzipped, so polling would
+be affordable — but a briefing that changes under the pilot without being asked
+is a different product decision, and the age badges make "how old is this?"
+answerable without one.
+
+The ports that have to stay in step are the resolver (`ObservedResolver` ⇄
+`buildObserved`), the two layers, and — most easily got wrong, because all three
+must agree on one denominator — the band share, the drawing floor and the ramp's
+breakpoints. That is the next section.
 
 ### What a cloud-top band is a share of, and when it is drawn
 
@@ -439,7 +474,13 @@ three-state design was calibrated against.
 
 **Phase 2:** model sampling of any kind, `echo_match`/`intensity_match`
 verdicts, per-model comparison, advisory wiring, the ETA-vs-observation-time
-alignment fork, the iOS `/observed` endpoint.
+alignment fork.
+
+The iOS `/observed` endpoint listed here originally is **not needed and not
+built**: the payload already rides the snapshot and the bundle (see [The iOS
+surface needs no endpoint](#the-ios-surface-needs-no-endpoint)). Still absent on
+iOS: the map overlay (which *would* need `/api/observed/overlay`), the route-graph
+metrics, and the "Observed now" summary panel.
 
 **Permanently out:** nowcasting, and a time slider. The map draws one frame,
 not a loop — a tiled animated radar product is a different, much more

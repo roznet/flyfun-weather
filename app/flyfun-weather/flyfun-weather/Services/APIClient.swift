@@ -536,9 +536,14 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
             if let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                let type = obj["type"] as? String,
                type == "complete" || type == "error" {
+                // Salvage frame: the terminal event's own decode failed, so the
+                // fresh D-0 payloads it may have carried are gone too. Nil is the
+                // honest value — the caller keeps what it already had rather than
+                // blanking a panel.
                 continuation.yield(RefreshEvent(
                     type: type, stage: nil, detail: nil, label: nil, progress: nil,
                     pack: nil, elapsedSeconds: nil, refreshDecision: nil,
+                    observations: nil, sigmets: nil, observed: nil,
                     message: obj["message"] as? String))
                 finish(throwing: nil)
             }
