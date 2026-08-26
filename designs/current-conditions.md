@@ -99,12 +99,16 @@ that was read. A pad smaller than the displacement silently truncates the
 high-cloud tail — exactly the signal the "can I get on top?" question depends
 on.
 
-**The pad scales with latitude.** The 75 km figure (`PARALLAX_PAD_KM`) is a
-50°N measurement, and displacement grows with the satellite zenith angle: by
-65°N the same FL400 cirrus is thrown more than twice as far, so a Scandinavian
-route padded to the constant would quietly lose its high cloud.
-`parallax_pad_km(lat)` scales the measured figure by the zenith-tangent ratio
-and clamps at 70°N, where the geometry degenerates and the retrieval is
+**The pad scales with the viewing geometry — latitude *and* longitude.** The
+75 km figure (`PARALLAX_PAD_KM`) was measured at 50°N near the 0° meridian, and
+displacement grows with the satellite zenith angle, which depends on the
+great-circle angle from the sub-satellite point: `cos(psi) = cos(lat)·cos(dlon)`.
+Latitude alone under-reads it everywhere off the meridian, which is most of
+Europe — Warsaw was padded 82 km where it needs 94, Riga 102 against 120,
+Helsinki 121 against 144, while western Europe was unaffected only because the
+75 km floor absorbed the error. `parallax_pad_km(lats, lons)` takes the
+worst-viewed point in the set, scales by the zenith-tangent ratio, and clamps at
+a 70° sub-satellite angle, where the geometry degenerates and the retrieval is
 unusable anyway. It is the geometry's *ratio* that is used, never its absolute
 value — the naive `h × tan(zenith)` formula underestimates real dlat by
 roughly a factor of four, which is why the product ships a correction field at
@@ -241,7 +245,10 @@ retention is worth arguing about.
 ### Collection
 
 OPERA keys are fully deterministic —
-`s3://openradar-24h/YYYY/MM/DD/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@{DBZH,RATE}.h5`
+`https://s3.waw3-1.cloudferro.com/openradar-24h/YYYY/MM/DD/OPERA/COMP/`
+`OPERA@YYYYMMDDTHHMM@0@{DBZH,RATE}.h5` — note the **CloudFerro** endpoint:
+the bucket does not exist on AWS, and a wrong host is invisible because a
+404 reads as "not published yet"
 — so the collector computes the frame times it should have and fetches what is
 missing. No listing, no crawl, and a 404 is simply "not published yet".
 EUMETSAT products are discovered through `eumdac` over a time window and

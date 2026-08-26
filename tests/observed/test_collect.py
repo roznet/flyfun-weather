@@ -78,6 +78,51 @@ def test_lookback_bounds_the_backfill():
     assert min(times) == datetime(2026, 8, 25, 13, 30, tzinfo=timezone.utc)
 
 
+# --- OPERA endpoint --------------------------------------------------------
+
+
+def test_opera_endpoint_is_cloudferro_not_aws():
+    """The ORD open cache is hosted by CloudFerro; the bucket name is not enough.
+
+    `https://openradar-24h.s3.amazonaws.com` answers `NoSuchBucket`, and a 404
+    is deliberately read as "not published yet" — so an AWS-shaped URL makes
+    the entire radar half of the feature collect nothing, forever, without
+    logging anything. Every other collector test injects a fake session, so
+    nothing else in the suite ever looks at the host.
+    """
+    assert "cloudferro" in collect.OPERA_BASE_URL
+    assert "amazonaws" not in collect.OPERA_BASE_URL
+    assert collect.OPERA_BASE_URL.startswith("https://")
+
+
+def test_collect_requests_the_deterministic_key_on_that_endpoint(store, dbzh_path):
+    session = _Session(dbzh_path.read_bytes())
+    collect.collect_opera(
+        SOURCE_OPERA_DBZH, store, now=NOW, max_fetch=1, session=session,
+        lookback=timedelta(minutes=10),
+    )
+    assert session.urls
+    url = session.urls[0]
+    assert url.startswith(collect.OPERA_BASE_URL + "/")
+    # …/YYYY/MM/DD/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@DBZH.h5
+    assert url.endswith("/2026/08/25/OPERA/COMP/OPERA@20260825T1400@0@DBZH.h5")
+
+
+def test_a_wholly_missing_source_is_logged_not_silent(store, caplog):
+    """Every slot 404 with nothing stored is a broken source, not a quiet one."""
+    session = _Session(b"", status=404)
+    with caplog.at_level("WARNING"):
+        result = collect.collect_opera(
+            SOURCE_OPERA_DBZH, store, now=NOW, session=session,
+            lookback=timedelta(minutes=30),
+        )
+    assert result.fetched == 0 and result.missing > 0
+    assert any("all" in r.message and "missing" in r.message for r in caplog.records), (
+        "a totally dead radar path must say so — this is the failure mode that "
+        "let a wrong endpoint ship undetected"
+    )
+
+
 # --- OPERA fetch -----------------------------------------------------------
 
 

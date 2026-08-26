@@ -46,7 +46,13 @@ from .opera import OPERA_S3_BUCKET, opera_key
 
 logger = logging.getLogger(__name__)
 
-OPERA_BASE_URL = f"https://{OPERA_S3_BUCKET}.s3.amazonaws.com"
+# The ORD open cache is hosted by CloudFerro, NOT AWS.  The bucket name alone
+# does not locate it: `https://openradar-24h.s3.amazonaws.com` answers
+# `NoSuchBucket`, and since a 404 is treated below as "not published yet", an
+# AWS-shaped URL makes the radar half of this feature collect nothing at all,
+# forever, without logging a single error.  Keep the host explicit.
+OPERA_S3_ENDPOINT = "https://s3.waw3-1.cloudferro.com"
+OPERA_BASE_URL = f"{OPERA_S3_ENDPOINT}/{OPERA_S3_BUCKET}"
 
 # Observed delivery lag from a frame's nominal time to its appearance in the
 # cache.  Fetching before this has elapsed just spends a 404.
@@ -203,6 +209,22 @@ def collect_opera(
         result.bytes_in += len(payload)
         if result.latest_valid_time is None or valid_time > result.latest_valid_time:
             result.latest_valid_time = valid_time
+
+    # A 404 on the newest slot is ordinary — the frame is not published yet.
+    # Every slot in the whole lookback missing, with nothing already stored, is
+    # not: that is a wrong URL, a renamed bucket, or a dead provider, and it is
+    # indistinguishable from "quiet" unless we say so. This is exactly how an
+    # AWS-shaped base URL hid a totally non-functional radar path.
+    if result.fetched == 0 and result.skipped == 0 and result.missing > 0:
+        logger.warning(
+            "OPERA %s: all %d expected frames missing over the last %s — "
+            "nothing stored either. Check the endpoint (%s) before assuming "
+            "the provider is quiet.",
+            source,
+            result.missing,
+            lookback,
+            OPERA_BASE_URL,
+        )
 
     result.purged = store.purge(source, now=now)
     return result

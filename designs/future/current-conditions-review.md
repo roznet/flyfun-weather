@@ -269,8 +269,16 @@ Everything in this section was run against live APIs and real files, not estimat
 **Better than documented — the S3 keys are derivable:**
 
 ```
-s3://openradar-24h/YYYY/MM/DD/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@{DBZH,RATE,ACRR}.{h5,tiff}
+https://s3.waw3-1.cloudferro.com/openradar-24h/
+    YYYY/MM/DD/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@{DBZH,RATE,ACRR}.{h5,tiff}
 ```
+
+**Always name the endpoint, never just the `s3://` URI.** The ORD cache is
+hosted by CloudFerro, not AWS — `openradar-24h.s3.amazonaws.com` answers
+`NoSuchBucket`. An earlier revision of this doc gave the bucket without the
+host; the implementation read it as AWS, and because a 404 is deliberately
+treated as "not published yet", the whole radar path collected nothing and
+logged nothing until it was caught by hand on first run.
 
 Flat, immutable, no catalogue query, no credentials. The collector is a poller, not
 an MQTT client — **demote MQTT to a later phase**, since it saves seconds of latency
