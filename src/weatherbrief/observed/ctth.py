@@ -53,34 +53,54 @@ LI_COLLECTION = "EO:EUM:DAT:0691"
 # high-cloud tail — the exact signal "can I get on top?" depends on, and it
 # fails with no error, just missing cloud.
 #
-# This is the 50°N figure and the floor for `parallax_pad_km`, which scales it
-# with latitude.  Use that function rather than this constant for any window
-# that has to reach real displacements; the constant alone is only safe for a
-# route no further north than the reference.
+# This is the 50°N-on-the-sub-satellite-meridian figure and the floor for
+# `parallax_pad_km`, which scales it with the viewing geometry.  Use that
+# function rather than this constant for any window that has to reach real
+# displacements; the constant alone is only safe near the reference point.
 PARALLAX_PAD_KM = 75.0
 
-# Reference latitude the 75 km figure was measured at.
-_PARALLAX_REFERENCE_LAT = 50.0
+# Longitude the satellite sits over.  MTG-I1 is at 0°, matching the granule's
+# own `mtg_geos_projection.longitude_of_projection_origin`.
+SUB_SATELLITE_LON = 0.0
+
+# Reference sub-satellite angle the 75 km figure was measured at (a route near
+# 50°N and only a few degrees off the 0° meridian, so the angle ≈ the latitude).
+_PARALLAX_REFERENCE_ANGLE = 50.0
 # Beyond this the viewing geometry degenerates (the limb), displacement grows
 # without bound and the retrieval is unusable anyway — clamp rather than pad a
 # window to the size of a continent.
-_PARALLAX_MAX_LAT = 70.0
+_PARALLAX_MAX_ANGLE = 70.0
 
 _EARTH_RADIUS_KM = 6371.0
 _GEO_ORBIT_RADIUS_KM = 42157.0
 
 
-def _satellite_zenith_tangent(latitude_deg: float) -> float:
-    """``tan`` of the satellite zenith angle at a given latitude.
+def sub_satellite_angle_deg(lat_deg: float, lon_deg: float) -> float:
+    """Great-circle angle from the sub-satellite point to (lat, lon).
+
+    This — not latitude — is what the satellite zenith angle depends on.  A
+    point due south of the satellite at 50°N is 50° away; the same latitude at
+    25°E is 53.6° away, and is viewed more obliquely.  Using latitude alone
+    under-reads the geometry everywhere off the sub-satellite meridian, which
+    is most of Europe.
+    """
+    phi = math.radians(lat_deg)
+    dlon = math.radians(lon_deg - SUB_SATELLITE_LON)
+    cos_psi = math.cos(phi) * math.cos(dlon)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos_psi))))
+
+
+def _satellite_zenith_tangent(sub_satellite_angle: float) -> float:
+    """``tan`` of the satellite zenith angle at a given sub-satellite angle.
 
     Not used to compute the displacement — the CTTH design notes record that
     the naive ``h × tan(zenith)`` formula *underestimates* the real dlat by
     roughly a factor of four, which is why the product ships a per-pixel
     correction field at all.  It is used only for its *ratio* between two
-    latitudes, to scale an empirically-measured displacement to a latitude it
-    was not measured at.
+    geometries, to scale an empirically-measured displacement to a viewing
+    angle it was not measured at.
     """
-    psi = math.radians(min(abs(latitude_deg), _PARALLAX_MAX_LAT))
+    psi = math.radians(min(abs(sub_satellite_angle), _PARALLAX_MAX_ANGLE))
     numerator = _GEO_ORBIT_RADIUS_KM * math.sin(psi)
     denominator = _GEO_ORBIT_RADIUS_KM * math.cos(psi) - _EARTH_RADIUS_KM
     if denominator <= 0:
@@ -88,18 +108,25 @@ def _satellite_zenith_tangent(latitude_deg: float) -> float:
     return numerator / denominator
 
 
-def parallax_pad_km(max_abs_latitude_deg: float) -> float:
-    """Window pad (km) big enough to reach the displaced pixels at this latitude.
+def parallax_pad_km(lats, lons) -> float:
+    """Window pad (km) big enough to reach the displaced pixels anywhere here.
 
-    The 75 km constant was measured at 50°N.  Displacement grows with the
-    satellite zenith angle and so with latitude: by 65°N the same FL400 cirrus
-    is thrown more than twice as far, and a route into Scandinavia padded to
-    75 km would quietly lose its high cloud.  Scales the measured figure by the
-    zenith-tangent ratio and never returns less than it.
+    The 75 km constant was measured at 50°N near the 0° meridian.  Displacement
+    grows with the satellite zenith angle, which depends on angular distance
+    from the sub-satellite point in **both** latitude and longitude — a
+    latitude-only scaling under-pads everywhere east or west of the meridian
+    (Warsaw by ~11 km, Riga ~18, Helsinki ~23), silently truncating exactly the
+    high-cloud tail this pad exists to reach.
+
+    Takes the worst point in the set and scales the measured figure by the
+    zenith-tangent ratio, never returning less than it.
     """
-    reference = _satellite_zenith_tangent(_PARALLAX_REFERENCE_LAT)
-    at_latitude = _satellite_zenith_tangent(max_abs_latitude_deg)
-    return max(PARALLAX_PAD_KM, PARALLAX_PAD_KM * at_latitude / reference)
+    angles = [sub_satellite_angle_deg(la, lo) for la, lo in zip(lats, lons)]
+    if not angles:
+        return PARALLAX_PAD_KM
+    reference = _satellite_zenith_tangent(_PARALLAX_REFERENCE_ANGLE)
+    at_worst = _satellite_zenith_tangent(max(angles))
+    return max(PARALLAX_PAD_KM, PARALLAX_PAD_KM * at_worst / reference)
 
 # Empirically-verified FCI L2 height-assignment methods (full-disc sample,
 # 2026-05-04 08:00Z).  Kept as labels so the UI need not embed the table.

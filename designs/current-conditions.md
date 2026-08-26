@@ -220,15 +220,23 @@ advertised-but-truncated.
 Retention is per source because the products differ by two orders of
 magnitude in size:
 
-| Source | Cadence | Retention | ~size/frame |
-|---|---|---|---|
-| `opera_dbzh` | 5 min | 3 h | 3.5 MB |
-| `opera_rate` | 15 min | 3 h | 3.5 MB |
-| `eumetsat_li` | 10 min | 3 h | 6 MB |
-| `eumetsat_ctth` | 10 min | **1 h** | 95 MB |
+| Source | Cadence | Retention | Frames | ~size/frame | ~total |
+|---|---|---|---:|---:|---:|
+| `opera_dbzh` | 5 min | 3 h | 36 | 2.5 MB | 90 MB |
+| `opera_rate` | 15 min | 3 h | 12 | 1.5 MB | 18 MB |
+| `eumetsat_li` | 10 min | 3 h | 18 | 0.4 MB | 7 MB |
+| `eumetsat_ctth` | 10 min | **1 h** | 6 | 54 MB | 324 MB |
+| | | | | | **≈440 MB** |
 
-≈440 MB total. CTTH keeps one hour only: a cloud-top field older than that
-answers nothing a pilot is asking at D-0.
+Sizes are measured, not estimated: a DBZH `.h5` sampled 2.0–2.7 MB and the CTTH
+`.nc` 53.7 MB (the 71.5 MB download is a zip whose quicklook JPEGs are
+discarded). Two of them vary with the weather rather than being constants —
+DBZH grows with echo coverage and the LI granule with flash count, so an
+actively convective day runs nearer 500 MB than 440. Budget 0.5 GB.
+
+CTTH keeps one hour only: a cloud-top field older than that answers nothing a
+pilot is asking at D-0, and at 74% of the total it is the only source whose
+retention is worth arguing about.
 
 ### Collection
 

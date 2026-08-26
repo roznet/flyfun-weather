@@ -67,7 +67,11 @@ export const observedSurfaceLayer: CrossSectionLayer = {
     }
 
     // Radar and lightning frames are minutes apart and neither is an instant;
-    // whichever is on screen says so for itself.
+    // whichever is on screen says so for itself — including which one it is.
+    // The label must come from the source actually supplying the timestamp: on
+    // a briefing where OPERA is down but lightning is up, a hardcoded 'Radar'
+    // would stamp a radar name on a lightning frame's age, which is exactly
+    // the per-source blending this layer exists to avoid.
     const source = observed.reflectivity ?? observed.lightning;
     if (source) {
       // Second row whenever the cloud-top layer is also drawing a badge, so
@@ -76,7 +80,7 @@ export const observedSurfaceLayer: CrossSectionLayer = {
       drawBadge(
         ctx,
         transform,
-        ageBadgeText(source.validTime, source.ageMinutes, 'Radar'),
+        ageBadgeText(source.validTime, source.ageMinutes, source.label),
         row,
       );
     }

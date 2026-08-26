@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 
 import numpy as np
+import pytest
 
 from weatherbrief.observed import ctth, opera
 from weatherbrief.observed.grid import GridWindow
@@ -207,11 +208,43 @@ def test_radar_overlay_is_unaffected_by_the_parallax_path(dbzh_path):
 
 
 def test_parallax_pad_grows_with_latitude():
-    """The 75 km figure is a 50°N measurement, not a constant of nature."""
-    assert ctth.parallax_pad_km(45.0) == ctth.PARALLAX_PAD_KM
-    assert ctth.parallax_pad_km(50.0) == ctth.PARALLAX_PAD_KM
+    """The 75 km figure is a 50°N-on-the-meridian measurement, not a constant."""
+    assert ctth.parallax_pad_km([45.0], [0.0]) == ctth.PARALLAX_PAD_KM
+    assert ctth.parallax_pad_km([50.0], [0.0]) == ctth.PARALLAX_PAD_KM
     # A Scandinavian route needs materially more, or its high cloud is
     # truncated with no error — just missing cirrus.
-    assert ctth.parallax_pad_km(65.0) > 2 * ctth.PARALLAX_PAD_KM
+    assert ctth.parallax_pad_km([65.0], [0.0]) > 2 * ctth.PARALLAX_PAD_KM
     # And it is clamped rather than running away at the limb.
-    assert ctth.parallax_pad_km(85.0) == ctth.parallax_pad_km(70.0)
+    assert ctth.parallax_pad_km([85.0], [0.0]) == ctth.parallax_pad_km([70.0], [0.0])
+
+
+def test_parallax_pad_grows_with_longitude_too():
+    """Zenith angle depends on distance from the sub-satellite *point*.
+
+    A latitude-only pad under-reads everywhere off the 0° meridian, which is
+    most of Europe.  These are real airfields: at each one the true viewing
+    geometry is more oblique than its latitude alone implies, so a
+    latitude-only pad would silently truncate the high-cloud tail.
+    """
+    for lat, lon in [(52.2, 21.0), (56.9, 24.0), (60.3, 25.0)]:  # EPWA, EVRA, EFHK
+        assert ctth.parallax_pad_km([lat], [lon]) > ctth.parallax_pad_km([lat], [0.0])
+
+    # West of the meridian is symmetric — the angle depends on |Δlon|.
+    assert ctth.parallax_pad_km([52.0], [-25.0]) == pytest.approx(
+        ctth.parallax_pad_km([52.0], [25.0])
+    )
+
+    # The pad is taken from the worst point in the set, not the first or last.
+    worst_alone = ctth.parallax_pad_km([60.3], [25.0])
+    with_mild_neighbours = ctth.parallax_pad_km([43.5, 60.3, 45.0], [7.0, 25.0, 2.0])
+    assert with_mild_neighbours == pytest.approx(worst_alone)
+
+
+def test_sub_satellite_angle_exceeds_latitude_off_the_meridian():
+    """Pin the geometry the pad scaling rests on."""
+    # On the meridian the angle is exactly the latitude.
+    assert ctth.sub_satellite_angle_deg(50.0, 0.0) == pytest.approx(50.0)
+    # Off it, always more — cos(psi) = cos(lat)·cos(dlon).
+    assert ctth.sub_satellite_angle_deg(50.0, 25.0) > 50.0
+    # And on the equator the angle is just the longitude offset.
+    assert ctth.sub_satellite_angle_deg(0.0, 30.0) == pytest.approx(30.0)

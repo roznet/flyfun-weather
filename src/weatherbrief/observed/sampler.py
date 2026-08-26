@@ -134,10 +134,14 @@ def sample(
     if has_parallax and stations:
         from .ctth import parallax_pad_km
 
-        # Scaled to the northernmost station: displacement grows with the
-        # satellite zenith angle, so a fixed pad that works over France loses
-        # high cloud over Norway.
-        max_reach_km += parallax_pad_km(max(abs(s.lat) for s in stations))
+        # Scaled to the most obliquely-viewed station: displacement grows with
+        # the satellite zenith angle, which depends on distance from the
+        # sub-satellite point in latitude *and* longitude, so a fixed pad that
+        # works over France loses high cloud over Norway — and a latitude-only
+        # pad loses it over Poland and the Baltics too.
+        max_reach_km += parallax_pad_km(
+            [s.lat for s in stations], [s.lon for s in stations]
+        )
 
     grid = frame.grid
     results: dict[str, list[ObservedAnnulus]] = {}

@@ -318,6 +318,34 @@ describe('observed-surface layer', () => {
     expect(echoColor(60)).toBe('#e13c3c');
   });
 
+  it('names the source that actually supplied the badge timestamp', () => {
+    // When OPERA is down but EUMETSAT lightning is up, the layer falls back to
+    // the lightning frame for its age. The label must fall back with it — a
+    // hardcoded 'Radar' stamps a radar name on a lightning frame's age, which
+    // is the per-source age blending this feature forbids.
+    const texts: string[] = [];
+    const ctx = new Proxy({}, {
+      get: (_t, prop) => {
+        if (prop === 'fillText') return (text: string) => { texts.push(text); };
+        if (prop === 'measureText') return () => ({ width: 10 });
+        return () => {};
+      },
+      set: () => true,
+    });
+    const transform = {
+      plotArea: { left: 0, top: 0, width: 100, height: 100 },
+      distanceToX: (nm: number) => nm,
+      altitudeToY: (ft: number) => 100 - ft / 1000,
+    };
+
+    const lightningOnly = extract(makeObserved({ reflectivity: null, rain_rate: null } as never));
+    observedSurfaceLayer.render(ctx as never, transform as never, lightningOnly as never);
+    const badge = texts.find((t) => t.includes('Z ·'));
+    expect(badge).toBeDefined();
+    expect(badge).not.toMatch(/Radar/);
+    expect(badge).toMatch(/Lightning/);
+  });
+
   it('scales flash ticks sub-linearly and draws none for zero', () => {
     expect(flashTickCount(0)).toBe(0);
     expect(flashTickCount(1)).toBe(1);

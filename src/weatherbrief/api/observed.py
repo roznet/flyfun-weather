@@ -273,8 +273,13 @@ def _read_bbox(source: str, path, bounds: OverlayBounds):
         # falls inside the rectangle even though their imagery position does
         # not — the overlay scatters each detection to its corrected position,
         # so those pixels are exactly the ones that end up drawn inside the
-        # box.  Scaled to the rectangle's own latitude.
-        pad_km=ctth.parallax_pad_km(max(abs(bounds.north), abs(bounds.south))),
+        # box.  Scaled to the rectangle's own viewing geometry: all four
+        # corners, because the most obliquely-viewed one may be any of them
+        # once longitude counts and not just latitude.
+        pad_km=ctth.parallax_pad_km(
+            [bounds.north, bounds.north, bounds.south, bounds.south],
+            [bounds.west, bounds.east, bounds.west, bounds.east],
+        ),
         full_width=True,
     )
     if window.is_empty():

@@ -282,8 +282,8 @@ class FrameStore:
 
         Split from :meth:`write_sidecar` so the collector can describe a frame
         by *reading the file it just wrote* — the attribution and grid
-        descriptor live inside the payload, and a 95 MB granule should not be
-        buffered twice to get at them.
+        descriptor live inside the payload, and a ~54 MB CTTH granule should
+        not be buffered twice to get at them.
         """
         payload_path = self.payload_path(source, valid_time)
         _atomic_write(payload_path, payload)

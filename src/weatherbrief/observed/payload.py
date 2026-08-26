@@ -143,10 +143,11 @@ def _grid_field(
             radius_km=max_radius_km,
             # Parallax first: the pixels that belong over these stations sit
             # tens of km away in the imagery, so the read must reach them.
-            # Scaled to the route's own latitude — the 75 km figure is a 50°N
-            # measurement, and a Scandinavian route needs twice that or its
-            # high cloud is silently truncated.
-            pad_km=ctth.parallax_pad_km(max(abs(lat) for lat in lats)),
+            # Scaled to the route's own viewing geometry — the 75 km figure is
+            # a 50°N-on-the-meridian measurement, and a Scandinavian or eastern
+            # route needs more than that or its high cloud is silently
+            # truncated.  Latitude alone under-reads it; longitude counts too.
+            pad_km=ctth.parallax_pad_km(lats, lons),
             # Granule chunks are full-width strips; narrowing columns costs a
             # partial-chunk decompression and saves nothing.
             full_width=True,
