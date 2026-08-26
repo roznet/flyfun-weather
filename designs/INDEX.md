@@ -212,6 +212,10 @@ Key exports: `summarize_advisories`, `summarize_altitude_table`, `advisory_detai
 
 ## Infrastructure & operations
 
+### migrations
+Alembic migration rules for the SQLite-dev / MySQL-prod split: `batch_alter_table` for every ALTER (SQLite has no native ALTER), named constraints so downgrades work, `existing_type` on MySQL column renames, dialect branching via `op.get_bind().dialect.name`, canonical patterns (004 create-table+FK, 014/015 dialect-specific), and a pre-merge checklist. Datetime column *type* choice lives in time-alignment-audit.md.
+→ Full doc: migrations.md
+
 ### grib-decode-dispatcher [project]
 Priority-aware, fault-tolerant admission layer in front of the GRIB decode process pool. `DecodePriority` (INTERACTIVE/SCHEDULED/BACKGROUND) propagated via a ContextVar orders jobs and bounds in-flight to worker count; on a pool fault it keeps completed work, reschedules interrupted jobs, and dead-letters poison jobs. Idempotency-only invariant. Bypass via `GRIB_DECODE_WORKERS=0` or `GRIB_DECODE_PRIORITY_ENABLED=0`.
 Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `set_decode_priority`, `enrich_forecasts(priority=...)`, `_dispatch_decode`, `_dispatch_decode_parallel`, `decode_pool_enabled`, `shutdown_decode_pool`, `decode_dead_letter_counts`
