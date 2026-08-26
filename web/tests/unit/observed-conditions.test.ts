@@ -723,10 +723,37 @@ describe('cloud-top deck grouping', () => {
     expect(bandRuns([band(350, 1)]).length).toBe(1);
   });
 
-  it('draws every populated band, however small its share', () => {
-    // The old 5% floor was sized for 10,000-ft buckets. Against 1,000-ft
-    // bands it would delete the tail — including that single coldest pixel.
+  it('drops bands below 1% — a stray pixel is not a deck', () => {
     const tiny = { label: 'FL350', loFt: 35000, hiFt: 36000, fraction: 0.004, count: 1 };
-    expect(significantBins({ topsBins: [tiny] } as never)).toHaveLength(1);
+    const real = { label: 'FL300', loFt: 30000, hiFt: 31000, fraction: 0.2, count: 40 };
+    expect(significantBins({ topsBins: [tiny, real] } as never)).toEqual([real]);
+  });
+
+  it('still marks the highest top when its own band is too thin to draw', () => {
+    // The reason a 1% floor is safe. `topsHighestFt` is drawn from its own
+    // field and never passes through the band filter, so the coldest pixel
+    // keeps its cap line (or its off-scale arrow) even when nothing else at
+    // that level survives. Discarding the band must not discard the top.
+    const texts: string[] = [];
+    const ctx = new Proxy({}, {
+      get: (_t, prop) => {
+        if (prop === 'fillText') return (s: string) => { texts.push(s); };
+        if (prop === 'measureText') return () => ({ width: 10 });
+        return () => {};
+      },
+      set: () => true,
+    });
+    const chart = {
+      plotArea: { left: 0, top: 0, width: 100, height: 200 },
+      distanceToX: (nm: number) => nm,
+      altitudeToY: (ft: number) => 200 - (ft / 20000) * 200,
+    };
+    const data = extract(makeObserved());
+    const observed = data.observed!;
+    // Strip every band, keeping the highest top.
+    for (const p of observed.points) p.topsBins = [];
+    expect(observed.points.some((p) => p.topsHighestFt != null)).toBe(true);
+    observedTopsLayer.render(ctx as never, chart as never, data as never);
+    expect(texts.find((s) => s.includes('Satellite'))).toMatch(/tops to FL\d+/);
   });
 });

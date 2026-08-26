@@ -28,11 +28,15 @@ import { getActiveTheme } from '../theme';
 const MARK_HALF_WIDTH_NM = 4;
 /** A band has to hold this share of the disc's cloudy pixels to be drawn.
  *
- *  Near zero on purpose. The bands are now 10 FL wide and arrive sparse, so
- *  every one present is a real measurement — and the single coldest pixel is
- *  often the most interesting one on the chart. The old 5% floor made sense
- *  against 10,000-ft buckets; against 1,000-ft bands it would delete the tail. */
-const MIN_BIN_FRACTION = 0.001;
+ *  1%: below that a band is one or two pixels out of hundreds, and drawing it
+ *  gives a stray retrieval the same visual weight as a real deck.
+ *
+ *  Safe to discard here only because the HIGHEST top is drawn separately, from
+ *  `topsHighestFt`, and never passes through this filter — so a single cold
+ *  pixel still gets its cap line or its off-scale arrow even when its band is
+ *  too thin to draw. Losing the tail entirely was the objection to a high
+ *  floor; the cap line is what answers it. */
+const MIN_BIN_FRACTION = 0.01;
 /** How far the "depth unknown" hatching hangs below a top marker, px.
  *  Deliberately short: long enough to read as "there is cloud under this",
  *  short enough that it cannot be mistaken for measured vertical extent. */
