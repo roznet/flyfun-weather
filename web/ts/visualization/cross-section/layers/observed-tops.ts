@@ -1,4 +1,4 @@
-/** Observed satellite cloud tops (#574) — group `clouds`, **default ON**.
+/** Observed satellite cloud tops (#574) — group `conditions`, **default ON**.
  *
  * This layer is the whole cross-check. It renders in the same space as the
  * NWP cloud bands, so "model says FL120, satellite saw FL280" is visible to
@@ -65,7 +65,7 @@ export function ageBadgeText(validTime: string, ageMinutes: number, label: strin
 export const observedTopsLayer: CrossSectionLayer = {
   id: 'observed-tops',
   name: 'Observed cloud tops',
-  group: 'clouds',
+  group: 'conditions',
   // On by default: this is the one layer that turns four collected data
   // streams into an answer a pilot can act on, and it is useless if nobody
   // finds it.

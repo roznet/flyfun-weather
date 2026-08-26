@@ -274,9 +274,13 @@ describe('observed layer availability', () => {
 // --- Cross-section layers --------------------------------------------------
 
 describe('observed-tops layer', () => {
-  it('is on by default and lives with the cloud bands it cross-checks', () => {
+  it('is on by default and sits with the other observed layers', () => {
     expect(observedTopsLayer.defaultEnabled).toBe(true);
-    expect(observedTopsLayer.group).toBe('clouds');
+    // Grouped by provenance, not by what it happens to overlap: everything
+    // measured lives under "Observed conditions" so a pilot has one place to
+    // look. Where it DRAWS is a separate concern — see the registry's
+    // PANEL_ORDER note; it still paints before terrain fill.
+    expect(observedTopsLayer.group).toBe('conditions');
   });
 
   it('draws a mark for a no-coverage point rather than skipping it', () => {

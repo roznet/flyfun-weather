@@ -682,7 +682,7 @@
   "viz.layer.el-line": "EL",
   "viz.layer.cruise-altitude": "Cruise / Flight ceiling",
   "viz.layer.surface-obscuration-bands": "Surface obscuration",
-  "viz.layer.current-conditions": "Current conditions",
+  "viz.layer.current-conditions": "Airport",
   "viz.layer.fronts-markers": "Air-mass boundary",
   "viz.layer.night-shading": "Day/Night",
   "viz.group.terrain": "Terrain",
@@ -693,7 +693,7 @@
   "viz.group.turbulence": "Turbulence",
   "viz.group.convection": "Convection",
   "viz.group.obscuration": "Obscuration",
-  "viz.group.conditions": "Current conditions",
+  "viz.group.conditions": "Observed conditions",
   "viz.group.fronts": "Front",
   "viz.group.sun": "Sun",
   "viz.group.highlight": "Highlight",
@@ -984,7 +984,7 @@
   "observed.noCoverage": "No coverage",
   "observed.unavailable": "Not collected",
   "observed.sources": "Sources",
-  "viz.layer.observed-tops": "Observed cloud tops",
-  "viz.layer.observed-surface": "Observed radar & lightning",
+  "viz.layer.observed-tops": "Cloud tops",
+  "viz.layer.observed-surface": "Rain & lightning",
   "dataSources.role.observed": "observed"
 }

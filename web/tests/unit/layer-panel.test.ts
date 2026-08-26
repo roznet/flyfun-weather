@@ -27,16 +27,29 @@ describe('layer panel composition', () => {
   it('offers a toggle for every clouds-group layer the compound control does not own', () => {
     // The clouds group renders a bespoke NWP/DD control plus a style dropdown.
     // That control owns ONLY the cloud-band ids; anything else in the group
-    // still needs its own checkbox. `observed-tops` (#574) landed in this
-    // group and rendered with no way to switch it off — default-on, painting
-    // over the chart, and unreachable from the panel.
+    // still needs its own checkbox. `observed-tops` (#574) landed here and
+    // rendered with no way to switch it off — default-on, painting over the
+    // chart, unreachable from the panel. It has since moved to `conditions`,
+    // so this may hold vacuously today; it is the rule that matters, and the
+    // next layer added to this group must not repeat the bug.
     const html = layerTogglesHtml({});
-    const others = layersInGroup('clouds').filter((id) => !ALL_CLOUD_LAYER_IDS.includes(id));
-
-    expect(others.length).toBeGreaterThan(0);
-    for (const id of others) {
+    for (const id of layersInGroup('clouds').filter((i) => !ALL_CLOUD_LAYER_IDS.includes(i))) {
       expect(hasToggle(html, id), `no toggle rendered for clouds-group layer "${id}"`).toBe(true);
     }
+  });
+
+  it('lists the observed layers together, airport first and tops last', () => {
+    // Grouped by provenance so a pilot has one place to look for everything
+    // measured. The order is deliberate and is NOT the drawing order: tops
+    // must paint before terrain fill (so a top under a mountain is masked)
+    // while reading last in the list.
+    const html = layerTogglesHtml({});
+    const wanted = ['current-conditions', 'observed-surface', 'observed-tops'];
+    for (const id of wanted) {
+      expect(hasToggle(html, id), `no toggle rendered for "${id}"`).toBe(true);
+    }
+    const positions = wanted.map((id) => html.indexOf(`data-layer-id="${id}"`));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
   it('still renders the compound cloud control alongside them', () => {

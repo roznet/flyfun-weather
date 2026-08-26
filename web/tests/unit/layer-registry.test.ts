@@ -180,9 +180,11 @@ describe('getLayerGroups', () => {
     const surface = layers.find((l) => l.id === 'observed-surface');
     expect(tops, 'observed-tops must be registered').toBeDefined();
     expect(surface, 'observed-surface must be registered').toBeDefined();
-    // Cloud tops render over the NWP cloud bands — that overlap IS the
-    // cross-check (#574), so they live in the same group and ship on.
-    expect(tops!.group).toBe('clouds');
+    // Grouped by provenance: every measured layer sits under "Observed
+    // conditions", so there is one place to find them. The cross-check still
+    // works because the tops DRAW over the NWP bands — panel grouping and
+    // z-order are deliberately independent (see PANEL_ORDER).
+    expect(tops!.group).toBe('conditions');
     expect(tops!.defaultEnabled).toBe(true);
     expect(surface!.group).toBe('conditions');
     expect(surface!.defaultEnabled).toBe(false);

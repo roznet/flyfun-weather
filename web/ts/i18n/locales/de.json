@@ -588,7 +588,7 @@
   "viz.layer.el": "EL",
   "viz.layer.cruise-altitude": "Reiseflughöhe / Gipfelhöhe",
   "viz.layer.surface-obscuration-bands": "Bodensichttrübung",
-  "viz.layer.current-conditions": "Aktuelle Bedingungen",
+  "viz.layer.current-conditions": "Flugplatz",
   "viz.layer.fronts-markers": "Luftmassengrenze",
   "viz.layer.night-shading": "Tag/Nacht",
   "viz.group.terrain": "Gelände",
@@ -599,7 +599,7 @@
   "viz.group.turbulence": "Turbulenz",
   "viz.group.convection": "Konvektion",
   "viz.group.obscuration": "Sichttrübung",
-  "viz.group.conditions": "Aktuelle Bedingungen",
+  "viz.group.conditions": "Beobachtete Bedingungen",
   "viz.group.fronts": "Front",
   "viz.group.sun": "Sonne",
   "viz.group.highlight": "Hervorhebung",
@@ -884,7 +884,7 @@
   "observed.noCoverage": "Keine Abdeckung",
   "observed.unavailable": "Nicht erfasst",
   "observed.sources": "Quellen",
-  "viz.layer.observed-tops": "Beobachtete Wolkenobergrenzen",
-  "viz.layer.observed-surface": "Beobachtetes Radar & Blitze",
+  "viz.layer.observed-tops": "Wolkenobergrenzen",
+  "viz.layer.observed-surface": "Regen & Blitze",
   "dataSources.role.observed": "beobachtet"
 }

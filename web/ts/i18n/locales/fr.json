@@ -588,7 +588,7 @@
   "viz.layer.el": "EL",
   "viz.layer.cruise-altitude": "Croisière / Plafond de vol",
   "viz.layer.surface-obscuration-bands": "Obscurcissement de surface",
-  "viz.layer.current-conditions": "Conditions actuelles",
+  "viz.layer.current-conditions": "Aérodrome",
   "viz.layer.fronts-markers": "Limite de masse d'air",
   "viz.layer.night-shading": "Jour/Nuit",
   "viz.group.terrain": "Terrain",
@@ -599,7 +599,7 @@
   "viz.group.turbulence": "Turbulence",
   "viz.group.convection": "Convection",
   "viz.group.obscuration": "Obscurcissement",
-  "viz.group.conditions": "Conditions actuelles",
+  "viz.group.conditions": "Conditions observées",
   "viz.group.fronts": "Front",
   "viz.group.sun": "Soleil",
   "viz.group.highlight": "Surbrillance",
@@ -884,7 +884,7 @@
   "observed.noCoverage": "Hors couverture",
   "observed.unavailable": "Non collecté",
   "observed.sources": "Sources",
-  "viz.layer.observed-tops": "Sommets de nuages observés",
-  "viz.layer.observed-surface": "Radar et foudre observés",
+  "viz.layer.observed-tops": "Sommets nuageux",
+  "viz.layer.observed-surface": "Pluie et foudre",
   "dataSources.role.observed": "observé"
 }

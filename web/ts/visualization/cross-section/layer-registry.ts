@@ -369,6 +369,29 @@ export function getLayerGroups(): LayerGroupInfo[] {
     .map((g) => ({
       group: g,
       label: groupLabels[g],
-      layers: groupMap.get(g)!,
+      layers: panelOrdered(g, groupMap.get(g)!),
     }));
+}
+
+/** Panel order within a group, which is NOT the drawing order.
+ *
+ * `ALL_LAYERS` is a z-stack: a layer's position there decides what it paints
+ * over. The panel is a list a pilot reads. The two coincide for most groups,
+ * but `observed-tops` has to draw early — before `terrainFill`, so a cloud top
+ * below the terrain surface is masked rather than floating over a mountain —
+ * while reading last in a list that runs airport → surface → tops. Encoding
+ * that here keeps the z-stack free to be a z-stack.
+ */
+const PANEL_ORDER: Partial<Record<LayerGroup, string[]>> = {
+  conditions: ['current-conditions', 'observed-surface', 'observed-tops'],
+};
+
+function panelOrdered(group: LayerGroup, layers: CrossSectionLayer[]): CrossSectionLayer[] {
+  const wanted = PANEL_ORDER[group];
+  if (!wanted) return layers;
+  const rank = (id: string) => {
+    const i = wanted.indexOf(id);
+    return i === -1 ? wanted.length : i;  // unlisted layers keep registry order, at the end
+  };
+  return [...layers].sort((a, b) => rank(a.id) - rank(b.id));
 }
