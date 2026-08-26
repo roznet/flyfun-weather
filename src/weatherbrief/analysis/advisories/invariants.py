@@ -16,12 +16,16 @@ packs. So they live here, in the library, and three callers share them:
 That is the difference between "a reviewer finds it at site N" and "every site
 at once".
 
-Two things deliberately are NOT violations:
+Three things deliberately are NOT violations:
 
 * an aggregate reading GREEN while a model reads RED — that is what MAJORITY
   means, and :func:`masked_flagged_models` reports it as an observation so the
   sweep can count it (see ``designs/advisories.md``, "Aggregation");
-* UNAVAILABLE anything — a model with no data publishes no extent.
+* UNAVAILABLE anything — a model with no data publishes no extent;
+* a flagged result that publishes no extent measurement at all (``fronts``,
+  which grades a distance to a boundary rather than a span of route). The rules
+  are about a published extent contradicting itself or its verdict; where there
+  is no extent there is nothing to contradict. See ``check_model_result``.
 """
 
 from __future__ import annotations
@@ -111,7 +115,19 @@ def check_model_result(
     # publish the coverage that flagged it. Round 9's `affected_pct: 0.0` beside
     # `affected_points: 1` on a RED was one instance of it; this is the general
     # predicate rather than the one site a reviewer happened to read.
-    if m.status in FLAGGED:
+    #
+    # Scoped to results that publish an extent *at all*. ``fronts`` is the one
+    # evaluator that builds its result directly rather than through ``build()``
+    # (fronts.py:344), because it grades a point-in-space crossing measured in
+    # km — a distance to a boundary, not a span of route — so every extent field
+    # stays at its zero default even on a graded AMBER/RED. Reading that as "a
+    # RED with no coverage" would put a false violation on essentially every
+    # staging pack with active frontal weather, which is the same broken-signal
+    # failure this module exists to prevent, merely inverted (#583 review).
+    # Publishing no measurement is outside this rule; publishing one and then
+    # contradicting it is what the rule is for — so an evaluator that later
+    # starts publishing an extent comes back under it with no edit here.
+    if m.status in FLAGGED and (m.total_points > 0 or m.total_nm > 0):
         if m.affected_points <= 0 and m.affected_nm <= 0:
             fail(
                 "flagged_has_coverage",

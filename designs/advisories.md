@@ -112,7 +112,12 @@ one set of predicates — the #571 extent rules, "flagged ⇒ non-zero coverage"
 the aggregate-layer rules (the aggregate holds a grade some model holds; it names
 the representative it speaks for; any extent it prints is that model's) — shared
 by the unit tests, a real-corpus test and the replay script, so a new evaluator
-is covered without anyone remembering to add it.
+is covered without anyone remembering to add it. The coverage rule applies only
+to results that publish an extent at all: `fronts` builds its result directly
+rather than through `build()` because it grades a *distance to a boundary* in km,
+not a span of route, so its extent fields stay zero even on a graded AMBER —
+nothing published, nothing to contradict. Publish an extent and it comes back
+under the rule with no edit to the invariants.
 
 ## The 22 Evaluators
 
