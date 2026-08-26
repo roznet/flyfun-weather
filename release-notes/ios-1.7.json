@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-08-26",
+    "title": "iOS 1.7 — Email sign-in and honest advisory extents",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Sign in with your email address. Ask for a link from the login screen and tap it to get in — no password to remember.\n- Route advisories now tell you how much of the route is actually affected, measured as distance flown rather than a count of forecast points, with a minimum floor so a single flagged point can't read as a long stretch.\n- Fewer spurious red convective advisories. Several paths that raised a storm warning for miles the model never actually looked at have been closed.\n- More accurate clear-air turbulence. Thresholds now scale with the depth of the layer the turbulence sits in, and the boundary layer is anchored to the model's own terrain rather than sea level.\n- Special (SPECI) observations are no longer discarded, so airport conditions reflect the latest report rather than only the routine hourly one.\n- Editing a flight's date or route now knows what a Move would discard before it asks you to confirm it."
+  }
+]
