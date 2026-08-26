@@ -613,6 +613,20 @@ def test_gfs_mid_troposphere_tiers_tighten_versus_the_old_altitude_ramp():
     assessment = assess_vertical_motion(levels)
     assert [la.risk for la in assessment.cat_risk_layers] == [CATRiskLevel.MODERATE]
 
+    # The converse, in the same breath: it is the THICKNESS deciding, not the
+    # height. An ECMWF-shaped 600→500 hPa pair spans the same altitudes but is
+    # ~4x thicker, so the identical Ri still grades SEVERE. Without this the
+    # test above is equally satisfied by a law that merely tightened
+    # everything aloft, which is the thing #539 replaced.
+    coarse = [
+        DerivedLevel(pressure_hpa=600, altitude_ft=14677),
+        DerivedLevel(pressure_hpa=500, altitude_ft=19382, richardson_number=0.30),
+    ]
+    coarse_assessment = assess_vertical_motion(coarse)
+    assert [la.risk for la in coarse_assessment.cat_risk_layers] == [
+        CATRiskLevel.SEVERE
+    ]
+
 
 def test_thickness_comes_from_the_ri_pair_not_the_painted_layer():
     """A sparse column scales on the gap the Ri crossed, not the drawn band.
