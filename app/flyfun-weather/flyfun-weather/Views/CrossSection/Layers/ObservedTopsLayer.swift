@@ -323,11 +323,13 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
 enum ObservedBadge {
     static let rowHeightPx: CGFloat = 15
 
-    /// "Satellite 14:00Z · 12 min old".
-    static func ageText(_ validTime: String, _ ageMinutes: Double, _ label: String) -> String {
+    /// "Satellite 14:00Z · 12 min old", or just "14:00Z · 12 min old" where the
+    /// caller already names the source in its own column (the Layers sheet does).
+    static func ageText(_ validTime: String, _ ageMinutes: Double, _ label: String = "") -> String {
         let hhmm = utcHHMM(validTime) ?? "--:--"
         let age = ageMinutes < 1 ? "just now" : "\(Int(ageMinutes.rounded())) min old"
-        return "\(label) \(hhmm)Z · \(age)"
+        let stamp = "\(hhmm)Z · \(age)"
+        return label.isEmpty ? stamp : "\(label) \(stamp)"
     }
 
     /// "FL381" for a height in feet.

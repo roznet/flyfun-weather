@@ -95,6 +95,11 @@ struct ObservedSurfaceLayer: CrossSectionLayerProtocol {
         if point.radarNoCoverage {
             // A hatched strip: the radar does not see here. Distinct from a blank
             // strip, which is the radar looking and finding nothing.
+            //
+            // DEVIATION from observed-surface.ts, which hardcodes one gray: this
+            // takes the theme's `noCoverageColor`, so "the sensor does not look
+            // here" is the same colour in both observed layers and stays legible
+            // on the Light theme's white sky, where the fixed gray is weak.
             var hatch = Path()
             var offset: CGFloat = 0
             while offset < width {

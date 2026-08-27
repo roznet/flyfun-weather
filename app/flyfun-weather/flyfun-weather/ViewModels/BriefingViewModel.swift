@@ -576,7 +576,17 @@ final class BriefingViewModel {
     /// because every source carries its own.
     private func applyRealtimeRefresh(_ event: RefreshEvent) {
         guard event.refreshDecision?.mode == "realtime" else { return }
-        guard case .loaded(var snapshot) = snapshotState else { return }
+        guard case .loaded(var snapshot) = snapshotState else {
+            // The preceding reload failed or is still running, so there is no
+            // snapshot to fold into and this data is lost. Say so: the refresh
+            // banner reports success either way, and a silent drop here looks
+            // exactly like a server that returned nothing.
+            if event.observed != nil || event.observations != nil {
+                Self.logger.warning(
+                    "Realtime refresh returned fresh data but the snapshot is not loaded — discarding")
+            }
+            return
+        }
         var changed = false
         if let observations = event.observations {
             snapshot.routeObservations = observations
