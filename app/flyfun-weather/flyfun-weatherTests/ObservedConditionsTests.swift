@@ -46,13 +46,21 @@ import Foundation
                         "text": "OPERA / EUMETNET"},
         "stations": [
           {"station_id": "p0", "annuli": [
+            {"radius_nm": 5.0, "total_px": 50, "valid_px": 50, "nodata_px": 0,
+             "undetect_px": 44, "detected_px": 6, "max_value": 21.0,
+             "coverage_fraction": 1.0, "detected_fraction": 0.12,
+             "insufficient_coverage": false},
+            {"radius_nm": 10.0, "total_px": 180, "valid_px": 180, "nodata_px": 0,
+             "undetect_px": 150, "detected_px": 30, "max_value": 33.0,
+             "coverage_fraction": 1.0, "detected_fraction": 0.166,
+             "insufficient_coverage": false},
             {"radius_nm": 20.0, "total_px": 700, "valid_px": 700, "nodata_px": 0,
              "undetect_px": 600, "detected_px": 100, "max_value": 42.0,
              "mean_value": 20.0, "p90_value": 38.0,
              "coverage_fraction": 1.0, "detected_fraction": 0.142,
              "insufficient_coverage": false}]},
           {"station_id": "p1", "annuli": [
-            {"radius_nm": 20.0, "total_px": 700, "valid_px": 70, "nodata_px": 630,
+            {"radius_nm": 5.0, "total_px": 700, "valid_px": 70, "nodata_px": 630,
              "undetect_px": 70, "detected_px": 0, "max_value": null,
              "mean_value": null, "p90_value": null,
              "coverage_fraction": 0.1, "detected_fraction": 0.0,
@@ -169,6 +177,38 @@ import Foundation
         #expect(resolved.radiiNm == [5, 10, 20])
         #expect(resolved.points.map(\.distanceNm) == [0, 40])
         #expect(resolved.cloudTops?.label == "Satellite cloud tops")
+        // The 20 NM disc, not one of the two narrower ones it ships beside.
+        #expect(resolved.points[0].dbz == 42)
+    }
+
+    /// The corridor picker: every radius ships with the pack, so switching is a
+    /// client-side re-resolve and must actually land on the disc it names.
+    @Test func resolvesAtEachSampledRadius() throws {
+        let payload = try Self.decoded()
+        for (radius, dbz) in [(5.0, 21.0), (10.0, 33.0), (20.0, 42.0)] {
+            let resolved = try #require(
+                ObservedResolver.resolve(payload, radiusOverrideNm: radius))
+            #expect(resolved.radiusNm == radius)
+            #expect(resolved.points.first { $0.distanceNm == 0 }?.dbz == dbz, "\(radius) NM")
+        }
+    }
+
+    /// A station that did not sample the chosen radius falls back to its NEAREST
+    /// measured disc, never to nothing and never to an interpolation between two
+    /// discs (which would describe an area nobody measured). `p1` carries only
+    /// the 5 NM disc, so at 20 NM it must still report — and report that disc's
+    /// own no-coverage state rather than the 20 NM one it never had.
+    @Test func aStationMissingTheChosenRadiusFallsBackToItsNearestDisc() throws {
+        let resolved = try #require(ObservedResolver.resolve(try Self.decoded()))
+        #expect(resolved.radiusNm == 20)
+        let blind = try #require(resolved.points.first { $0.distanceNm == 40 })
+        #expect(blind.radarNoCoverage)
+
+        // And the nearest choice is by distance, not by list order: asked for
+        // 10 NM against discs at 5 and 20, the 5 wins (gap 5 vs 10).
+        let atTen = try #require(
+            ObservedResolver.resolve(try Self.decoded(), radiusOverrideNm: 10))
+        #expect(atTen.points.first { $0.distanceNm == 40 }?.radarNoCoverage == true)
     }
 
     /// An unsampled radius must not be honoured: the payload only carries discs
@@ -190,6 +230,7 @@ import Foundation
 
         #expect(clearOfDoubt.dbz == 42)
         #expect(clearOfDoubt.radarNoCoverage == false)
+        #expect(clearOfDoubt.rateMmH == nil)  // opera_rate is absent from this payload
 
         // Both have `dbz == nil`-shaped absence in the raw payload; only the flag
         // separates them, which is exactly why renderers must read the flag.
@@ -299,6 +340,15 @@ import Foundation
         #expect(points[0].observed?.dbz == 42)
         // 1 nm off is a rounding difference between two walks of the same route.
         #expect(points[1].observed?.radarNoCoverage == true)
+        // Exactly at the tolerance is IN — the bound is `<=`, and a point landing
+        // on it is still the same place, not a near miss.
+        var boundary = [vizPoint(ObservedResolver.matchToleranceNm)]
+        ObservedResolver.merge(into: &boundary, observed: resolved)
+        #expect(boundary[0].observed?.dbz == 42)
+        // A hair past it is out.
+        var justOver = [vizPoint(ObservedResolver.matchToleranceNm + 0.01)]
+        ObservedResolver.merge(into: &justOver, observed: resolved)
+        #expect(justOver[0].observed == nil)
         // 80 nm off is a genuinely different place — no station, no sample. The
         // alternative (nearest-wins with no ceiling) would report a Paris echo
         // over the Alps.
@@ -328,6 +378,35 @@ import Foundation
 
     @Test func flLabelRounds() {
         #expect(ObservedBadge.flLabel(37_093) == "FL371")
+    }
+
+    /// Without a label the badge is just the stamp — no stray leading space. The
+    /// Layers sheet names the source in its own column and passes none.
+    @Test func badgeOmitsAnEmptyLabelCleanly() throws {
+        let radar = try #require(try Self.decoded().reflectivity)
+        #expect(ObservedBadge.ageText(radar.validTime, radar.ageMinutes) == "13:00Z · 5 min old")
+    }
+
+    /// Invariant 2, enforced rather than asserted in a comment: `computed_at` is
+    /// when the payload was ASSEMBLED (13:05 here) and must never reach a surface
+    /// as an observation age. Every rendered time is its own source's frame time
+    /// — 13:00, 12:52, 12:50 — and the resolved shape carries no combined
+    /// timestamp for a renderer to reach for by accident.
+    @Test func noSurfaceRendersTheAssemblyTimeAsAnAge() throws {
+        let o = try Self.decoded()
+        #expect(o.computedAt?.hasPrefix("2026-08-26T13:05") == true)
+
+        let resolved = try #require(ObservedResolver.resolve(o))
+        let sources = [resolved.reflectivity, resolved.cloudTops, resolved.lightning]
+            .compactMap { $0 }
+        #expect(sources.count == 3)
+        for source in sources {
+            let badge = ObservedBadge.ageText(source.validTime, source.ageMinutes, source.label)
+            #expect(!badge.contains("13:05"), "\(source.source) badge leaked the assembly time")
+            #expect(badge.contains(ObservedBadge.utcHHMM(source.validTime)!))
+        }
+        // Three sources, three distinct instants — nothing collapsed them to one.
+        #expect(Set(sources.map(\.validTime)).count == 3)
     }
 
     // MARK: - Layer helpers
@@ -374,6 +453,89 @@ import Foundation
         #expect(ObservedSurfaceLayer.flashTickCount(5000) == 4)
     }
 
+    // MARK: - Readout chips
+
+    /// The regression this suite exists for on the text side.
+    ///
+    /// `ObservedResolver` builds a route point from whichever source has a
+    /// station, so on a lightning-only briefing — OPERA down, which
+    /// `ObservedSourceStatus` reports explicitly — the point carries
+    /// `dbz == nil` with `radarNoCoverage == false`. Both drawing layers guard
+    /// on the field and simply draw nothing; the readout has no equivalent to
+    /// "draw nothing", so without an explicit guard it printed "no echo" and
+    /// asserted an empty observation for an instrument that never looked.
+    @Test func anAbsentSourceEmitsNoChipAtAll() {
+        var point = VizObservedPoint(distanceNm: 0)
+        point.flashCount = 3
+        let lightningOnly = VizObserved(
+            radiiNm: [20], radiusNm: 20, points: [point],
+            reflectivity: nil, rainRate: nil, cloudTops: nil,
+            lightning: Self.source("eumetsat_li", "Lightning"),
+            summaryLines: [])
+
+        let chips = CrossSectionReadoutView.observedChips(
+            Self.vizPointWith(point), sources: lightningOnly, scrubAltitudeFt: nil)
+
+        #expect(!chips.contains { $0.contains("radar") })
+        #expect(!chips.contains { $0.contains("no echo") })
+        #expect(!chips.contains { $0.contains("tops") })
+        #expect(chips == ["Obs 3 flashes"])
+    }
+
+    /// A source that reported and saw nothing must still speak — otherwise it is
+    /// indistinguishable from one that never reported.
+    @Test func aReportingSourceThatSawNothingSaysSo() {
+        let point = VizObservedPoint(distanceNm: 0)  // no echo, no flashes
+        let allUp = VizObserved(
+            radiiNm: [20], radiusNm: 20, points: [point],
+            reflectivity: Self.source("opera_dbzh", "Radar reflectivity"),
+            rainRate: nil, cloudTops: nil,
+            lightning: Self.source("eumetsat_li", "Lightning"),
+            summaryLines: [])
+
+        let chips = CrossSectionReadoutView.observedChips(
+            Self.vizPointWith(point), sources: allUp, scrubAltitudeFt: nil)
+        // Lightning is a point product over the whole disc, so an empty window is
+        // a real observation, not a gap.
+        #expect(chips == ["Obs radar: no echo", "Obs no flashes"])
+    }
+
+    /// Rain rate is its own OPERA product on its own cadence: it must survive a
+    /// point with no reflectivity echo, where hanging it off `dbz != nil` used to
+    /// drop it — exactly the marginal case where a measured rate is worth having.
+    @Test func rainRateIsIndependentOfReflectivity() {
+        var point = VizObservedPoint(distanceNm: 0)
+        point.rateMmH = 1.8
+        let bothRadarProducts = VizObserved(
+            radiiNm: [20], radiusNm: 20, points: [point],
+            reflectivity: Self.source("opera_dbzh", "Radar reflectivity"),
+            rainRate: Self.source("opera_rate", "Radar rain rate"),
+            cloudTops: nil, lightning: nil, summaryLines: [])
+
+        let chips = CrossSectionReadoutView.observedChips(
+            Self.vizPointWith(point), sources: bothRadarProducts, scrubAltitudeFt: nil)
+        #expect(chips == ["Obs radar: no echo", "Obs rain 1.8 mm/h"])
+    }
+
+    /// Both cloud-top heights reach the readout: the geometric one the chart
+    /// draws, and the pressure-based one an altimeter agrees with. They can
+    /// differ materially, which is only visible if both are on screen.
+    @Test func topChipsCarryBothHeights() {
+        var point = VizObservedPoint(distanceNm: 0)
+        point.topsHighestFt = 22_600
+        point.topsHighestAviationFl = 226
+        point.topsHighestCloudiness = 0.95
+        let topsOnly = VizObserved(
+            radiiNm: [20], radiusNm: 20, points: [point],
+            reflectivity: nil, rainRate: nil,
+            cloudTops: Self.source("eumetsat_ctth", "Satellite cloud tops"),
+            lightning: nil, summaryLines: [])
+
+        let chips = CrossSectionReadoutView.observedChips(
+            Self.vizPointWith(point), sources: topsOnly, scrubAltitudeFt: nil)
+        #expect(chips == ["Obs top FL226 · 95% opaque (solid)", "Obs ≈FL226 pressure"])
+    }
+
     // MARK: - Absent payload
 
     @Test func resolvesToNilWhenThereIsNothingToDraw() {
@@ -385,7 +547,19 @@ import Foundation
 
     // MARK: - Helpers
 
-    private func vizPoint(_ distanceNm: Double) -> VizPoint {
+    private static func source(_ id: String, _ label: String) -> VizObservedSource {
+        VizObservedSource(source: id, label: label, validTime: "2026-08-26T13:00:00Z",
+                          ageMinutes: 5, windowMinutes: 0, attribution: "")
+    }
+
+    /// A route point carrying `observed`, for the chip builder.
+    private static func vizPointWith(_ observed: VizObservedPoint) -> VizPoint {
+        var p = ObservedConditionsTests().vizPoint(observed.distanceNm)
+        p.observed = observed
+        return p
+    }
+
+    fileprivate func vizPoint(_ distanceNm: Double) -> VizPoint {
         VizPoint(
             distanceNm: distanceNm, lat: 49, lon: 2, time: "2026-08-26T13:00:00Z",
             altitudeLines: AltitudeLines(

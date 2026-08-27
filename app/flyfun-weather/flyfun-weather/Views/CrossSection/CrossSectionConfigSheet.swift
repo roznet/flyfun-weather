@@ -297,7 +297,7 @@ struct CrossSectionConfigSheet: View {
                             .font(.caption)
                             .foregroundStyle(Theme.textMuted)
                         Spacer()
-                        Text(ObservedBadge.ageText(source.validTime, source.ageMinutes, ""))
+                        Text(ObservedBadge.ageText(source.validTime, source.ageMinutes))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(Theme.textMuted)
                     }
