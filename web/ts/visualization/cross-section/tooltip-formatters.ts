@@ -7,7 +7,7 @@
  * registry instead of carrying one if-block per layer.
  */
 
-import type { VizPoint, VizObservedPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
+import type { VizPoint, VizRouteData, VizObservedPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
 import { formatVisibility, formatHeading } from '../../units';
 import { getActiveTheme } from './theme';
@@ -22,8 +22,14 @@ export interface LayerTooltipDef {
   enabledBy?: string[];
   /** Optional section header rendered above the lines. */
   header?: string;
-  /** Pull the relevant zones from a point. Empty list → no row. */
-  getZones: (p: VizPoint) => Array<{ baseFt: number; topFt: number }>;
+  /** Pull the relevant zones from a point. Empty list → no row.
+   *
+   *  `data` is the whole route, for the rare definition whose zones depend on
+   *  something the point cannot carry — `observed-surface` needs to know which
+   *  observed streams REPORTED, which lives on the payload rather than on the
+   *  sample (a point's fields cannot distinguish "measured nothing" from "was
+   *  never measured"). Optional so every other definition ignores it. */
+  getZones: (p: VizPoint, data?: VizRouteData) => Array<{ baseFt: number; topFt: number }>;
   /** Format one zone matched at hoverAltFt. Return null to skip. */
   formatLine: (zone: any, hoverAltFt: number) => string | null;
   /** Optional fill colour for a small square swatch keyed to the band's
@@ -342,34 +348,65 @@ interface ObservedSurfaceZone {
   baseFt: number;
   topFt: number;
   point: VizObservedPoint;
+  /** Which streams reported — resolved in `getZones`, where the payload is in
+   *  scope, so `formatLine` cannot accidentally speak for a silent source. */
+  radar: boolean;
+  rain: boolean;
+  lightning: boolean;
 }
 
 const observedSurface: LayerTooltipDef = {
   id: 'observed-surface',
   header: 'Observed radar & lightning',
-  getZones: (p): ObservedSurfaceZone[] => {
+  getZones: (p, data): ObservedSurfaceZone[] => {
     const o = p.observed;
     if (!o) return [];
+    // Which streams actually reported. `buildObserved` mints a route point from
+    // WHICHEVER source has a station there, and initialises the rest to
+    // `dbz: null, radarNoCoverage: false, flashCount: 0` — values indis-
+    // tinguishable from a radar that looked and saw nothing, and from an imager
+    // that saw no lightning. So a clause may only be written for a source the
+    // payload says reported; without that, one live stream speaks for all four.
+    const radar = data?.observed?.reflectivity != null;
+    const rain = data?.observed?.rainRate != null;
+    const lightning = data?.observed?.lightning != null;
     const hasAnything =
-      o.radarNoCoverage || o.dbz != null || o.rateMmH != null || o.flashCount > 0;
-    return hasAnything ? [{ baseFt: -1e6, topFt: 1e6, point: o }] : [];
+      (radar && (o.radarNoCoverage || o.dbz != null)) ||
+      (rain && o.rateMmH != null) ||
+      lightning;
+    return hasAnything ? [{ baseFt: -1e6, topFt: 1e6, point: o, radar, rain, lightning }] : [];
   },
   formatLine: (z: ObservedSurfaceZone) => {
     const p = z.point;
     const parts: string[] = [];
-    if (p.radarNoCoverage) {
-      parts.push('no radar coverage');
-    } else if (p.dbz != null) {
-      parts.push(`${p.dbz.toFixed(0)} dBZ`);
-    } else {
-      parts.push('no echo');
+    // Each `else` below is an ASSERTION about the sky, so it is only reachable
+    // when its source reported. A briefing with OPERA down and EUMETSAT up used
+    // to read "no echo · 7 flashes"; one with EUMETSAT down and OPERA up read
+    // "38 dBZ · no flashes", which is worse — absence of lightning is something
+    // a pilot acts on, and it was manufactured from a struct default.
+    if (z.radar) {
+      if (p.radarNoCoverage) {
+        parts.push('no radar coverage');
+      } else if (p.dbz != null) {
+        parts.push(`${p.dbz.toFixed(0)} dBZ`);
+      } else {
+        parts.push('no echo');
+      }
     }
-    if (!p.rateNoCoverage && p.rateMmH != null) parts.push(`${p.rateMmH.toFixed(1)} mm/h`);
-    if (p.flashCount > 0) {
-      const rate = p.flashRate != null ? ` (${p.flashRate.toFixed(1)}/1000km²/min)` : '';
-      parts.push(`${p.flashCount} flash${p.flashCount === 1 ? '' : 'es'}${rate}`);
-    } else {
-      parts.push('no flashes');
+    // Rain rate is its own OPERA product on its own 15-minute cadence, so it is
+    // gated on its own source rather than on reflectivity's.
+    if (z.rain && !p.rateNoCoverage && p.rateMmH != null) {
+      parts.push(`${p.rateMmH.toFixed(1)} mm/h`);
+    }
+    if (z.lightning) {
+      if (p.flashCount > 0) {
+        const rate = p.flashRate != null ? ` (${p.flashRate.toFixed(1)}/1000km²/min)` : '';
+        parts.push(`${p.flashCount} flash${p.flashCount === 1 ? '' : 'es'}${rate}`);
+      } else {
+        // Lightning is the one source whose absence is a positive observation:
+        // it is a point product and the imager sees the whole disc.
+        parts.push('no flashes');
+      }
     }
     return parts.join(' · ');
   },

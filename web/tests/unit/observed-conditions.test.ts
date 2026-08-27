@@ -26,7 +26,7 @@ import { LAYER_TOOLTIPS } from '../../ts/visualization/cross-section/tooltip-for
 import type {
   ElevationProfile, ObservedConditions, RouteAnalysesManifest,
 } from '../../ts/store/types';
-import type { VizPoint } from '../../ts/visualization/types';
+import type { VizPoint, VizObserved } from '../../ts/visualization/types';
 
 function makeManifest(): RouteAnalysesManifest {
   return {
@@ -667,10 +667,18 @@ describe('observed hover rows', () => {
     return { distanceNm: sample.distanceNm, observed: sample } as never;
   }
 
-  function rowFor(layerId: string, altFt: number): string | null {
+  /** The route data a def sees at hover time. `observed-surface` reads which
+   *  streams REPORTED off it — a point's own fields cannot distinguish
+   *  "measured nothing" from "was never measured". */
+  function routeData(overrides: Partial<VizObserved> = {}): never {
+    const data = extract(makeObserved());
+    return { ...data, observed: { ...data.observed!, ...overrides } } as never;
+  }
+
+  function rowFor(layerId: string, altFt: number, data = routeData()): string | null {
     const def = LAYER_TOOLTIPS.find((d) => d.id === layerId)!;
     expect(def, `no tooltip registered for ${layerId}`).toBeDefined();
-    const zones = def.getZones(pointWithObserved());
+    const zones = def.getZones(pointWithObserved(), data);
     if (zones.length === 0) return null;
     const match = zones.find((z) => altFt >= z.baseFt && altFt <= z.topFt) ?? zones[0];
     return def.formatLine(match, altFt);
@@ -691,8 +699,48 @@ describe('observed hover rows', () => {
     const observed = extract(makeObserved()).observed!;
     const holeIndex = observed.points.findIndex((p) => p.radarNoCoverage);
     expect(holeIndex, 'fixture must contain a coverage hole').toBeGreaterThanOrEqual(0);
-    const zones = def.getZones(pointWithObserved(holeIndex));
+    const zones = def.getZones(pointWithObserved(holeIndex), routeData());
     expect(def.formatLine(zones[0], 8000)).toContain('no radar coverage');
+  });
+
+  // A source that never reported must not get a clause. `buildObserved` mints a
+  // route point from whichever source has a station there and leaves the rest at
+  // `dbz: null, radarNoCoverage: false, flashCount: 0` — values identical to a
+  // radar that looked and saw nothing, and to an imager that saw no lightning.
+  // Reading those defaults as observations lets one live stream speak for all
+  // four, which is the conflation this whole payload is shaped to prevent.
+
+  it('says nothing about radar when the radar never reported', () => {
+    // OPERA down, EUMETSAT up: a real state — `WB_OBSERVED_SOURCES` selects a
+    // subset, and `ObservedSourceStatus` reports a per-source outage explicitly.
+    const line = rowFor('observed-surface', 8000, routeData({ reflectivity: null, rainRate: null }));
+    expect(line).not.toContain('no echo');
+    expect(line).not.toContain('dBZ');
+    expect(line).not.toContain('no radar coverage');
+    // …and the source that IS up still speaks.
+    expect(line).toMatch(/flash|no flashes/);
+  });
+
+  it('says nothing about lightning when lightning never reported', () => {
+    // The worse direction: "no flashes" reads as "no lightning here", which a
+    // pilot acts on, and it would be manufactured from a struct default.
+    const line = rowFor('observed-surface', 8000, routeData({ lightning: null }));
+    expect(line).not.toContain('flash');
+    expect(line).toMatch(/dBZ|no echo|no radar coverage/);
+  });
+
+  it('drops the row entirely when no observed stream reported', () => {
+    expect(rowFor('observed-surface', 8000, routeData({
+      reflectivity: null, rainRate: null, lightning: null,
+    }))).toBeNull();
+  });
+
+  it('reports rain rate independently of reflectivity', () => {
+    // Two OPERA products on two cadences (5 min vs 15 min); either can be the
+    // one that is missing.
+    const line = rowFor('observed-surface', 8000, routeData({ reflectivity: null }));
+    expect(line).not.toContain('dBZ');
+    expect(line).not.toContain('no echo');
   });
 
   it('reports the top with its temperature and opacity', () => {

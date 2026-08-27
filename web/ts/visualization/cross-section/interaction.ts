@@ -201,7 +201,7 @@ export function attachInteraction(
       const enabled = en(def.id) || (def.enabledBy?.some(en) ?? false);
       if (!enabled) continue;
       const lines: string[] = [];
-      for (const z of def.getZones(point)) {
+      for (const z of def.getZones(point, currentData)) {
         if (!altInBand(hoverAltFt, z.baseFt, z.topFt)) continue;
         const line = def.formatLine(z, hoverAltFt);
         if (line === null) continue;
