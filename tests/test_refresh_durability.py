@@ -404,9 +404,13 @@ class TestDecideResume:
             packs_mod, "_build_data_status",
             lambda pack, flight: packs_mod.DataStatus(fresh=True),
         )
+        # `**_` swallows the keyword-only knobs the real gate grows (today
+        # `observed`, which only shapes the reason string): this stub pins the
+        # *decision*, and a signature mirrored argument-for-argument would make
+        # every such addition a failure here rather than at anything under test.
         monkeypatch.setattr(
             packs_mod, "decide_refresh",
-            lambda status, days_out: packs_mod.RefreshDecision(
+            lambda status, days_out, **_: packs_mod.RefreshDecision(
                 mode=mode, reason="because", needed=1, n_eligible=1,
                 n_updated=0, days_out=days_out,
             ),
