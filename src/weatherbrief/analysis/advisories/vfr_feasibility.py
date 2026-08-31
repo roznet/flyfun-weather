@@ -9,6 +9,17 @@ advisory) is capped at AMBER here: a pilot VMC-on-top is not directly
 affected by surface rain below, but widespread snow or heavy rain degrades
 visibility and every descent/divert option, which deserves a composite
 caution. The standalone advisory still grades it fully (snow can RED).
+
+The convective axis follows §22 — the colour is taken verbatim from
+``grade_convective_model``, the same call the Convective Activity card grades
+with — and is then read through ``convective_character``, which is the axis
+built to answer "can a VFR pilot operate *around* this?". Until this was wired
+the composite had no convective input at all, so a route with HIGH convection
+over 47% of its length published VFR Feasibility GREEN beside IFR Feasibility
+RED: the §22 divergence, in the one composite whose name promises the VFR
+answer. Character is re-derived at whatever altitude the composite is evaluated
+at, so the altitude table sweeps it for free — which is how a pilot sees that
+the flight is infeasible at the filed level and available beneath the cells.
 """
 
 from __future__ import annotations
@@ -33,6 +44,16 @@ from weatherbrief.analysis.advisories._helpers import (
     ribbon_peak,
     to_mitigation_profile,
     worst_severity,
+)
+from weatherbrief.analysis.advisories.convective_character import (
+    CHARACTER_STATUS,
+    below_base_escape,
+    classify_route_character,
+    resolve_character_params,
+)
+from weatherbrief.analysis.advisories.convective_grading import (
+    grade_convective_model,
+    resolve_convective_params,
 )
 from weatherbrief.analysis.advisories.enroute_precip import (
     classify_enroute_precip,
@@ -62,6 +83,23 @@ from weatherbrief.models import (
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import FlightCategory
+
+
+#: Stable machine tag for the below-base escape tip. Distinct from the character
+#: card's ``embedded_deck``: that one restores see-and-avoid for an EMBEDDED
+#: deck in either direction, this one answers "could we fly this VFR underneath
+#: the cells at all", and only downward.
+CONV_MITIGATION_ADDRESSES = "convective_below_base"
+
+
+def _least_severe(a: AdvisoryStatus, b: AdvisoryStatus) -> AdvisoryStatus:
+    """The calmer of two statuses — the convective cap's one direction.
+
+    Used so the character band can only ever soften the activity colour it
+    qualifies. Expressed as "take the calmer" rather than a RED→AMBER special
+    case so a future band mapping cannot accidentally escalate through it.
+    """
+    return b if AdvisoryStatus.worst([a, b]) == a else a
 
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
@@ -1022,9 +1060,67 @@ class VFRFeasibilityEvaluator:
             elif precip_status == AdvisoryStatus.RED:
                 precip_status = AdvisoryStatus.AMBER
 
-            # 6. Combine airport + en-route + corridor + precipitation
+            # 5b. Convection (§22): the colour is the Convective Activity card's,
+            # taken verbatim — no second formula, no thresholds of this
+            # composite's own — and then read through the character band, which
+            # is the VFR-avoidability axis. `CHARACTER_STATUS` is that mapping's
+            # single source of truth ("RED = not circumnavigable VFR, AMBER =
+            # avoidable but committing"), so the cap below cannot drift from the
+            # character card beside it.
+            #
+            # The cap is the deterministic twin of the digest's already-pinned
+            # rule (§15/#568): activity RED + ISOLATED/SCATTERED is a localised,
+            # avoidable hazard and reads AMBER here, while WIDESPREAD / ORGANIZED
+            # / EMBEDDED stand RED — no altitude and no see-and-avoid fixes
+            # horizontal extent, and EMBEDDED is by definition "you cannot see
+            # them". The cap only ever *softens*, and never below the character
+            # band's own status: a GREEN convective axis stays GREEN, so this can
+            # add a colour to the composite but never remove one the convective
+            # card is showing.
+            conv_params = resolve_convective_params(ctx)
+            char_params = resolve_character_params(ctx)
+            conv_grade = grade_convective_model(ctx, model, conv_params)
+            conv_status = conv_grade.status
+            character = classify_route_character(ctx, model, char_params)
+            conv_detail = ""
+            if conv_status not in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE):
+                char_status = (
+                    CHARACTER_STATUS.get(character, AdvisoryStatus.RED)
+                    if character is not None
+                    # No soundings to characterise: do NOT soften. An
+                    # uncharacterised cell is not an avoidable one (#391).
+                    else AdvisoryStatus.RED
+                )
+                # Soften to the character's status only when that is *less*
+                # severe, so an ISOLATED band can never raise an AMBER activity
+                # grade to RED.
+                conv_status = _least_severe(conv_status, char_status)
+                conv_detail = adv_t(
+                    "vfr.conv_circumnavigable"
+                    if conv_status == AdvisoryStatus.AMBER
+                    else "vfr.conv_not_circumnavigable",
+                    loc,
+                    risk=conv_grade.worst_risk.value.upper(),
+                    # Quote the extent of the tier the sentence names (#571 D1) —
+                    # same rule the convective and IFR cards follow.
+                    extent=format_extent(
+                        conv_grade.extent_mod
+                        if conv_grade.affected_mod
+                        else conv_grade.extent
+                    ),
+                )
+            # Coverage tolerance (#391), matching the axes above: a clear
+            # convective verdict off soundings covering too little of the route
+            # abstains rather than vouching for the rest. Flagged verdicts stand.
+            if conv_status == AdvisoryStatus.GREEN and below_coverage(
+                conv_grade.total, len(ctx.analyses)
+            ):
+                conv_status = AdvisoryStatus.UNAVAILABLE
+
+            # 6. Combine airport + en-route + corridor + precipitation + convection
             status = _worst_status(
                 airport_status, enroute_status, corridor_status, precip_status,
+                conv_status,
             )
 
             detail_parts = []
@@ -1035,6 +1131,8 @@ class VFRFeasibilityEvaluator:
             detail_parts.extend(corridor_parts)
             if precip_status != AdvisoryStatus.GREEN and precip_detail:
                 detail_parts.append(precip_detail)
+            if conv_detail:
+                detail_parts.append(conv_detail)
 
             if not detail_parts:
                 if total > 0:
@@ -1066,6 +1164,36 @@ class VFRFeasibilityEvaluator:
                 mitigation_min_base_agl_ft, mitigation_max_reposition_nm,
                 enroute_status, loc,
             )
+            # The below-base escape (#298 geometry, altitude-swept). Offered only
+            # when the convective axis is the thing being flagged: a level under
+            # the cells answers convection, not a terminal deck or an airport
+            # category, and a tip that does not address the flagged sub-issue is
+            # noise. Advice only — like every mitigation it never moves the
+            # grade; the *grade* at a lower level is what the altitude table
+            # shows, since character is re-derived at each altitude it sweeps.
+            if conv_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
+                escape = below_base_escape(ctx, model, char_params)
+                if escape is not None:
+                    mitigations.append(Mitigation(
+                        kind=MitigationKind.ALTITUDE,
+                        addresses=CONV_MITIGATION_ADDRESSES,
+                        detail=adv_t(
+                            "vfr.mitigation.below_base", loc,
+                            alt=escape.altitude_ft, fl=escape.base_fl,
+                        ),
+                        # The sub-issue's status at that level — the character
+                        # band actually re-derived there, never the composite's.
+                        mitigated_status=CHARACTER_STATUS.get(
+                            escape.band, AdvisoryStatus.AMBER
+                        ),
+                        altitude_ft=escape.altitude_ft,
+                        # Level-altitude only: the below-base test is route-wide
+                        # (every resolved cell must be cleared), so it cannot be
+                        # expressed as the per-point cost `vertical_profile.solve`
+                        # needs for a varying profile — same limit the character
+                        # card's EMBEDDED tip documents.
+                        profile=None,
+                    ))
 
             # 8. Highlights (#375) only when the model has en-route data. The
             # multi-kind cutouts (cruise IMC + corridor decks) are the point of
