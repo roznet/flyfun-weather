@@ -278,6 +278,19 @@ class BriefingPackRow(Base):
     metoffice_charts_within_horizon: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0",
     )
+    # Météo-France TEMSI. Bytes live in DATA_DIR/meteofrance_charts/<valid>/.
+    # A JSON map of zone slug -> chosen validity rather than the sibling
+    # sources' (run_cycle, default_id) pair: AEROWEB keys charts by absolute
+    # valid time, and the zones don't publish in lockstep.
+    meteofrance_charts_zone_cycles_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}",
+    )
+    meteofrance_charts_in_coverage: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+    )
+    meteofrance_charts_within_horizon: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+    )
     integrity_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Hash of the flight parameters this pack was computed for — route,
     # departure time, altitude, ceiling, duration (see
