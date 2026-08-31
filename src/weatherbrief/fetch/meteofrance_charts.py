@@ -127,25 +127,58 @@ CHART_NATIVE_SIZE: dict[str, tuple[int, int]] = {
 # the polar-stereographic projection spec (consumed by pyproj); ``homography``
 # is an 8-coefficient 2D projective transform.
 #
-# ``homography=None`` means NOT YET CALIBRATED: the chart still renders, and
-# ``build_route_overlay`` simply omits that zone, so the frontend draws the
-# image with no route line rather than a wrong one. Fit these with
-# :mod:`weatherbrief.fetch.metoffice_calibrate` (the module is source-agnostic
-# despite the name) from graticule crossings — both TEMSI zones draw a lon/lat
-# graticule, which the DWD and Met Office charts do not, so control points come
-# from the chart itself rather than guessed coastline features.
+# ``homography=None`` would mean NOT YET CALIBRATED: the chart still renders,
+# and ``build_route_overlay`` simply omits that zone, so the frontend draws the
+# image with no route line rather than a wrong one.
 #
-# Kept as a plain dict (not ChartCalibration objects) so it stays the literal
-# source of truth that ``scripts/dump_chart_calibrations.py`` reads to generate
-# the TypeScript projection constants.
+# Both zones calibrated 2026-08-31 from **graticule crossings**, which the DWD
+# and Met Office charts could not offer — those carry no graticule, so their
+# control points are eyeballed coastline features. TEMSI prints a 5° lon/lat
+# graticule and labels it on the line, so each control point carries an exact
+# lon/lat and the residuals below are correspondingly tight:
+#
+#   france  6 points, max error 0.43 px, rms 0.22 px
+#   euroc   6 points, max error 0.99 px, rms 0.64 px
+#
+# Independent check: the fits put the Greenwich meridian at x=390.0 (france)
+# and x=317.97 (euroc); a separate graticule-overlay search that never saw
+# these points located the euroc Greenwich line at x≈316.
+#
+# Verified independently of the graticule: projecting LFAT/LFQA/LFSD/LFML lands
+# each marker on the chart's *own printed station symbol* for that ICAO, on both
+# zones. See ``scripts/check_temsi_projection.py``.
+#
+# Caveat worth keeping: the control points span only 45–50°N / 5°W–5°E. That
+# covers the whole france chart, but is a small patch of euroc (25–68°N,
+# 30°W–55°E), and euroc's far corners are extrapolation — measured ~30 px off
+# at 30°N/30°E, where 5° of longitude spans ~160 px. That does not affect what
+# we serve, because :func:`route_licence_allows` means every route we draw
+# touches France and so sits inside the calibrated hull; but do not reuse this
+# calibration for eastern-Mediterranean or North-African work without adding
+# control points out there first.
+#
+# Kept as a plain dict (not ChartCalibration objects) to match the shape
+# ``scripts/dump_chart_calibrations.py`` reads from the sibling modules. It is
+# deliberately NOT in that script's export list: those constants exist for the
+# maps page's client-side Hewson overlay, and the licence keeps TEMSI off the
+# flight-independent maps page entirely. The projection is only ever applied
+# server-side, in ``build_route_overlay``.
 _CHART_CALIBRATIONS: dict[str, dict[str, object]] = {
     "france": {
-        "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 60, "lon_0": 0},
-        "homography": None,
+        "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 60.0, "lon_0": 0.0},
+        "homography": (
+            0.0005429365805031022, 1.1359673821422912e-06, 390.0000017211853,
+            7.243473884973492e-13, -0.0005420155336192266, -2266.343409429233,
+            1.1765914420747224e-14, 2.9127354464495822e-09,
+        ),
     },
     "euroc": {
-        "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 60, "lon_0": 0},
-        "homography": None,
+        "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 60.0, "lon_0": 0.0},
+        "homography": (
+            0.00024010579013385435, 7.763342887302246e-06, 317.97099640407873,
+            -4.7357559928237044e-08, -0.00022768841695746541, -525.893505846101,
+            -9.456771768188261e-10, 2.289544191182513e-08,
+        ),
     },
 }
 
