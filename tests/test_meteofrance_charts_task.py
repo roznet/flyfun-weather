@@ -180,3 +180,93 @@ def test_sibling_sources_keep_public_caching(tmp_path: Path):
         tmp_path, SOURCES["dwd"], "2026-08-31T12Z", "ana", immutable=False,
     )
     assert resp.headers["Cache-Control"].startswith("public")
+
+
+# ---------------------------------------------------------------------------
+# Serve-time liveness filtering
+# ---------------------------------------------------------------------------
+
+
+def _meta_with(options, default_id, tmp_path):
+    from weatherbrief.models.storage import BriefingPackMeta
+
+    return BriefingPackMeta(
+        flight_id="f",
+        fetch_timestamp=ETD,
+        days_out=0,
+        artifact_path=str(tmp_path / "pack"),
+        meteofrance_charts_options=options,
+        meteofrance_charts_default_id=default_id,
+        meteofrance_charts_in_coverage=True,
+        meteofrance_charts_within_horizon=True,
+    )
+
+
+def _write_chart(data_dir: Path, run_cycle: str, zone: str) -> None:
+    d = data_dir / "meteofrance_charts" / run_cycle
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{zone}.png").write_bytes(b"\x89PNG stub")
+
+
+def test_evicted_options_are_not_offered(tmp_path: Path, monkeypatch):
+    """A briefing outlives the ~48h TEMSI cache; dead tabs must not be shown."""
+    from weatherbrief.api.packs import _live_meteofrance_options
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    _write_chart(tmp_path, "2026-08-31T15Z", "france")
+
+    options, default = _live_meteofrance_options(_meta_with(
+        [{"zone": "france", "run_cycle": "2026-08-31T15Z"},
+         {"zone": "euroc", "run_cycle": "2026-08-31T15Z"},
+         {"zone": "france", "run_cycle": "2026-08-31T18Z"}],
+        "france|2026-08-31T15Z",
+        tmp_path,
+    ))
+    assert options == [{"zone": "france", "run_cycle": "2026-08-31T15Z"}]
+    assert default == "france|2026-08-31T15Z"
+
+
+def test_default_falls_back_when_its_chart_is_evicted(tmp_path: Path, monkeypatch):
+    """Opening on a dead tab would 410 on first paint."""
+    from weatherbrief.api.packs import _live_meteofrance_options
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    _write_chart(tmp_path, "2026-08-31T18Z", "euroc")
+
+    options, default = _live_meteofrance_options(_meta_with(
+        [{"zone": "france", "run_cycle": "2026-08-31T15Z"},
+         {"zone": "euroc", "run_cycle": "2026-08-31T18Z"}],
+        "france|2026-08-31T15Z",  # evicted
+        tmp_path,
+    ))
+    assert options == [{"zone": "euroc", "run_cycle": "2026-08-31T18Z"}]
+    assert default == "euroc|2026-08-31T18Z"
+
+
+def test_all_evicted_yields_nothing(tmp_path: Path, monkeypatch):
+    from weatherbrief.api.packs import _live_meteofrance_options
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    options, default = _live_meteofrance_options(_meta_with(
+        [{"zone": "france", "run_cycle": "2026-08-31T15Z"}],
+        "france|2026-08-31T15Z",
+        tmp_path,
+    ))
+    assert options == [] and default is None
+
+
+def test_pack_still_records_what_was_offered(tmp_path: Path, monkeypatch):
+    """Filtering happens on the way out — the stored record is untouched."""
+    from weatherbrief.api.packs import _live_meteofrance_options
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    meta = _meta_with(
+        [{"zone": "france", "run_cycle": "2026-08-31T15Z"}],
+        "france|2026-08-31T15Z",
+        tmp_path,
+    )
+    _live_meteofrance_options(meta)
+    assert meta.meteofrance_charts_options == [
+        {"zone": "france", "run_cycle": "2026-08-31T15Z"},
+    ]
+    assert meta.meteofrance_charts_default_id == "france|2026-08-31T15Z"
