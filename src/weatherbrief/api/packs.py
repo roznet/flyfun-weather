@@ -558,6 +558,13 @@ class PackMetaResponse(BaseModel):
     metoffice_charts_in_coverage: bool = False
     metoffice_charts_within_horizon: bool = False
     metoffice_charts_public: bool = False
+    # Météo-France TEMSI. Zone slug -> chosen validity; empty means no chart
+    # (unconfigured, route outside French airspace, or — most often — the
+    # briefing was built beyond TEMSI's ~3h horizon). The frontend keys the
+    # section off this map, not off a run cycle.
+    meteofrance_charts_zone_cycles: dict[str, str] = Field(default_factory=dict)
+    meteofrance_charts_in_coverage: bool = False
+    meteofrance_charts_within_horizon: bool = False
     # Live flight Flexibility mode (timing scenarios). Injected fresh from the
     # flight row at serve time — NOT baked into the stored pack — so clients gate
     # the timing-scenario panel on the CURRENT value even when viewing an old
@@ -604,6 +611,9 @@ def _meta_to_response(
         metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=meta.metoffice_charts_within_horizon,
         metoffice_charts_public=_metoffice_public(),
+        meteofrance_charts_zone_cycles=meta.meteofrance_charts_zone_cycles,
+        meteofrance_charts_in_coverage=meta.meteofrance_charts_in_coverage,
+        meteofrance_charts_within_horizon=meta.meteofrance_charts_within_horizon,
         flexibility=flexibility,
     )
 
@@ -1712,6 +1722,9 @@ def _build_pack_meta(
         metoffice_charts_default_id=result.metoffice_charts_default_id,
         metoffice_charts_in_coverage=result.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=result.metoffice_charts_within_horizon,
+        meteofrance_charts_zone_cycles=result.meteofrance_charts_zone_cycles,
+        meteofrance_charts_in_coverage=result.meteofrance_charts_in_coverage,
+        meteofrance_charts_within_horizon=result.meteofrance_charts_within_horizon,
         # What this briefing was computed *for*. The refresh gate compares it
         # with the flight's current parameters so an edit forces a full re-run
         # even before any new model run lands (#552).
@@ -4558,6 +4571,129 @@ def get_metoffice_chart_overlay(
     return JSONResponse(
         content=overlay,
         headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+def _pack_waypoints(pack_dir) -> list[tuple[str, float, float]]:
+    """Waypoints from the pack's briefing.json, or [] if unreadable."""
+    briefing_path = pack_dir / "briefing.json"
+    if not briefing_path.exists():
+        return []
+    out: list[tuple[str, float, float]] = []
+    try:
+        data = json_mod.loads(briefing_path.read_text())
+        for wp in (data.get("route") or {}).get("waypoints") or []:
+            if "icao" in wp and "lat" in wp and "lon" in wp:
+                out.append((wp["icao"], float(wp["lat"]), float(wp["lon"])))
+    except (json_mod.JSONDecodeError, OSError, TypeError, ValueError):
+        logger.warning("Failed to parse briefing.json for waypoints", exc_info=True)
+    return out
+
+
+def _meteofrance_licence_allows_pack(pack_dir) -> bool:
+    """Re-check the French-airspace licence at serve time, from the pack route.
+
+    The pipeline already applied this gate when it chose the validities, so a
+    pack for a non-French route stores no zone cycles and 404s before reaching
+    here. This is the second lock: the licence governs *redistribution*, so it
+    is worth enforcing where the bytes actually leave the server, not only
+    where they were selected. Fails closed on an unreadable route.
+    """
+    from weatherbrief.fetch.meteofrance_charts import route_licence_allows
+    from weatherbrief.models import RouteConfig, Waypoint
+
+    waypoints = _pack_waypoints(pack_dir)
+    if len(waypoints) < 2:
+        return False
+    route = RouteConfig(
+        name="licence-check",
+        waypoints=[Waypoint(icao=i, name=i, lat=la, lon=lo) for i, la, lo in waypoints],
+    )
+    return route_licence_allows(route)
+
+
+@router.get("/{timestamp}/meteofrance-chart/{zone}")
+def get_meteofrance_chart(
+    flight_id: str,
+    timestamp: str,
+    zone: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Serve a Météo-France TEMSI chart PNG for this pack.
+
+    ``zone`` is ``france`` (SFC-FL150) or ``euroc`` (FL100-FL450) — not a
+    forecast offset, because AEROWEB keys charts by absolute valid time. The
+    validity was chosen per zone when the briefing was built and is stored on
+    the pack, so the URL stays stable while the underlying window rolls.
+
+    404 when this pack has no TEMSI: no access code, route outside French
+    airspace, or — the common case — the briefing was built more than a few
+    hours before departure, since TEMSI only runs ~3h ahead.
+    """
+    from weatherbrief.api._chart_serving import SOURCES, serve_chart_bytes
+
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    meta = _load_pack_meta_or_404(db, flight_id, timestamp)
+
+    run_cycle = (meta.meteofrance_charts_zone_cycles or {}).get(zone)
+    if not run_cycle:
+        raise HTTPException(
+            status_code=404,
+            detail="Météo-France TEMSI not available for this pack",
+        )
+
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    if not _meteofrance_licence_allows_pack(pack_dir):
+        raise HTTPException(
+            status_code=404,
+            detail="Météo-France TEMSI not available for this pack",
+        )
+
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    return serve_chart_bytes(
+        data_dir, SOURCES["meteofrance"], run_cycle, zone, immutable=False,
+    )
+
+
+@router.get("/{timestamp}/meteofrance-chart-overlay")
+def get_meteofrance_chart_overlay(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Route-overlay JSON for the TEMSI section, keyed by zone.
+
+    Mirror of :func:`get_dwd_chart_overlay`, with the same French-airspace
+    gate as the bytes — the overlay reveals the route's geometry against a
+    licensed chart, so it travels with it.
+    """
+    from weatherbrief.fetch.meteofrance_charts import build_route_overlay
+
+    meta = _load_pack_meta_or_404(db, flight_id, timestamp)
+    if not meta.meteofrance_charts_zone_cycles:
+        raise HTTPException(
+            status_code=404,
+            detail="Météo-France TEMSI not available for this pack",
+        )
+
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    if not _meteofrance_licence_allows_pack(pack_dir):
+        raise HTTPException(
+            status_code=404,
+            detail="Météo-France TEMSI not available for this pack",
+        )
+
+    waypoints = _pack_waypoints(pack_dir)
+    if not waypoints:
+        raise HTTPException(
+            status_code=404, detail="No waypoints available for overlay",
+        )
+
+    return JSONResponse(
+        content=build_route_overlay(waypoints),
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

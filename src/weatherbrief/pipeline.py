@@ -38,6 +38,7 @@ from weatherbrief.tasks.fetch import run_fetch
 from weatherbrief.tasks.analyze import run_analysis
 from weatherbrief.tasks.advise import AdvisoryResult, advisories_ungradeable, run_advisories
 from weatherbrief.tasks.dwd_charts import run_dwd_charts
+from weatherbrief.tasks.meteofrance_charts import run_meteofrance_charts
 from weatherbrief.tasks.metoffice_charts import run_metoffice_charts
 from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 
@@ -183,6 +184,12 @@ class BriefingResult:
     metoffice_charts_default_id: str | None = None
     metoffice_charts_in_coverage: bool = False
     metoffice_charts_within_horizon: bool = False
+    # Météo-France TEMSI — one chosen validity per zone rather than a shared
+    # run + offset (AEROWEB has no run/offset split, and the zones don't
+    # publish in lockstep). See BriefingPackMeta for the full note.
+    meteofrance_charts_zone_cycles: dict[str, str] = field(default_factory=dict)
+    meteofrance_charts_in_coverage: bool = False
+    meteofrance_charts_within_horizon: bool = False
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
 
@@ -802,6 +809,21 @@ def _execute_briefing_stages(
     result.metoffice_charts_in_coverage = metoffice_charts_result.in_coverage
     result.metoffice_charts_within_horizon = metoffice_charts_result.within_horizon
     stage_timings["metoffice_charts"] = perf_counter() - _t0
+
+    # === 5d. Météo-France TEMSI (SIGWX) charts ===
+    # Two small downloads at most, and skipped entirely for routes that don't
+    # touch France — the licence limits redistribution to users operating in
+    # French airspace. Eligibility checked inside run_meteofrance_charts.
+    _t0 = perf_counter()
+    meteofrance_charts_result = run_meteofrance_charts(
+        route=route,
+        departure_time=departure_time,
+        data_dir=data_dir,
+    )
+    result.meteofrance_charts_zone_cycles = meteofrance_charts_result.zone_cycles
+    result.meteofrance_charts_in_coverage = meteofrance_charts_result.in_coverage
+    result.meteofrance_charts_within_horizon = meteofrance_charts_result.within_horizon
+    stage_timings["meteofrance_charts"] = perf_counter() - _t0
 
     # === 6. Optional: Skew-T ===
     if options.generate_skewt:

@@ -21,7 +21,7 @@ from fastapi import HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from weatherbrief.fetch import dwd_charts, metoffice_charts
+from weatherbrief.fetch import dwd_charts, meteofrance_charts, metoffice_charts
 from weatherbrief.fetch.chart_cache import parse_run_cycle_dt
 
 # Cache key format: e.g. "2026-05-19T06Z". Validating against this (not just
@@ -41,6 +41,14 @@ class ChartSourceSpec:
     attribution_html: str
     # Met Office reuse is gated until authorisation; DWD is open.
     admin_gated: bool
+    # Whether this source may back the flight-independent Synoptic Forecast
+    # basemap. False for Météo-France: its licence permits redistribution only
+    # to users operating in French airspace, and the maps page has no route to
+    # test that against, so it is served only from flight-scoped endpoints.
+    synoptic_basemap: bool = True
+    # Licence-restricted bytes must not sit in a shared cache where they could
+    # be handed to a user who is not entitled to them.
+    private_cache: bool = False
 
 
 SOURCES: dict[str, ChartSourceSpec] = {
@@ -66,6 +74,21 @@ SOURCES: dict[str, ChartSourceSpec] = {
         ),
         admin_gated=True,
     ),
+    "meteofrance": ChartSourceSpec(
+        slug="meteofrance",
+        label="Météo-France",
+        module=meteofrance_charts,
+        media_type="image/png",
+        attribution_html=(
+            'Source: <a href="https://aviation.meteo.fr/" target="_blank" '
+            'rel="noopener">Météo-France</a> — AEROWEB'
+        ),
+        # Not admin-gated: the gate is per-route (French airspace), applied at
+        # the flight-scoped endpoint where a route exists, not per-user.
+        admin_gated=False,
+        synoptic_basemap=False,
+        private_cache=True,
+    ),
 }
 
 
@@ -87,7 +110,13 @@ def metoffice_charts_allowed(request: Request, db: Session) -> bool:
 
 
 def source_allowed(spec: ChartSourceSpec, request: Request, db: Session) -> bool:
-    """Whether the caller may see this source at all."""
+    """Whether the caller may see this source on the *flight-independent* map.
+
+    Route-gated sources can never answer here: the maps page has no route, so
+    there is nothing to check a licence against and the honest answer is no.
+    """
+    if not spec.synoptic_basemap:
+        return False
     if not spec.admin_gated:
         return True
     return metoffice_charts_allowed(request, db)
@@ -124,7 +153,12 @@ def serve_chart_bytes(
     if path is None:
         raise HTTPException(status_code=410, detail="Chart not available")
 
-    cache_control = _IMMUTABLE_CACHE_CONTROL if immutable else "public, max-age=3600"
+    if spec.private_cache:
+        # Never "public": a shared/CDN cache must not be able to replay these
+        # bytes to a viewer the licence does not cover.
+        cache_control = "private, max-age=3600"
+    else:
+        cache_control = _IMMUTABLE_CACHE_CONTROL if immutable else "public, max-age=3600"
     return FileResponse(
         path,
         media_type=spec.media_type,
