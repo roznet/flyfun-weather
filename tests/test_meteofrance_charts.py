@@ -401,9 +401,46 @@ def test_chart_type_is_the_zone():
     assert [chart_type_for(c) for c in CHART_IDS] == list(CHART_IDS)
 
 
-def test_route_overlay_empty_while_uncalibrated():
-    """Uncalibrated zones are omitted, so no route is ever drawn misplaced."""
-    assert build_route_overlay([("LFPG", 49.010, 2.548)]) == {}
+def test_route_overlay_covers_both_calibrated_zones():
+    overlay = build_route_overlay([("LFPG", 49.010, 2.548), ("LFML", 43.438, 5.213)])
+    assert set(overlay) == set(CHART_IDS)
+    for zone, entry in overlay.items():
+        assert entry["native_size"] == list(CHART_NATIVE_SIZE[zone])
+        w, h = CHART_NATIVE_SIZE[zone]
+        for wp in entry["waypoints"]:
+            assert 0 <= wp["x"] < w and 0 <= wp["y"] < h
+
+
+def test_projection_matches_control_points():
+    """Guards the calibration constants against an accidental edit.
+
+    These are the clicked graticule crossings the homographies were fit from
+    (max residual 0.43 px france / 0.99 px euroc), so a 2 px tolerance catches
+    a swapped or corrupted coefficient without being brittle.
+    """
+    from weatherbrief.fetch.meteofrance_charts import lonlat_to_chart_pixel
+
+    control = {
+        "france": [(-5, 45, 153, 405), (0, 45, 390, 416), (5, 45, 627, 405),
+                   (-5, 50, 182, 78), (0, 50, 390, 87), (5, 50, 598, 78)],
+        "euroc": [(-5, 45, 199, 669), (0, 45, 315, 675), (5, 45, 432, 669),
+                  (-5, 50, 215, 508), (0, 50, 315, 514), (5, 50, 417, 509)],
+    }
+    for zone, points in control.items():
+        for lon, lat, x, y in points:
+            px, py = lonlat_to_chart_pixel(lon, lat, zone)
+            assert abs(px - x) <= 2 and abs(py - y) <= 2, (
+                f"{zone} {lat}N {lon}E: got ({px},{py}) want ({x},{y})"
+            )
+
+
+def test_uncalibrated_zone_would_be_omitted(monkeypatch):
+    """The safety property still holds if a zone is ever added uncalibrated."""
+    from weatherbrief.fetch import meteofrance_charts as mod
+
+    monkeypatch.setattr(mod._cache.calibrations["euroc"], "homography", None)
+    overlay = build_route_overlay([("LFPG", 49.010, 2.548)])
+    assert set(overlay) == {"france"}
 
 
 def test_every_chart_id_has_a_native_size():
