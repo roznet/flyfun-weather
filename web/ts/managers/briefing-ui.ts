@@ -122,6 +122,7 @@ export function renderHeader(
 // --- Stale-pack banner ---
 
 import { computeStalePackBanner } from '../helpers/stale-pack-banner';
+import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel } from '../utils/temsi';
 
 /** Render the stale-pack banner. Owner-only — non-owners can't trigger
  *  a refresh. Uses textContent (not innerHTML) so localized strings
@@ -2608,15 +2609,22 @@ function renderRouteSvg(
 }
 
 interface ChartSource {
-  key: 'dwd' | 'metoffice';
+  key: 'dwd' | 'metoffice' | 'meteofrance';
   label: string;
-  tabs: ReadonlyArray<{ id: string; label: string; offsetH: number }>;
+  tabs: ReadonlyArray<{ id: string; label: string; offsetH: number; title?: string }>;
   runCycle: string;
   defaultId: string;
   chartUrl: (chartId: string) => string;
   overlayUrl: () => string;
   overlayKeyFor: (chartId: string) => string;
   attributionHtml: string;
+  /**
+   * Caption prefix for a given chart, replacing the default "Issued Nh ago".
+   * TEMSI needs this: its charts carry no meaningful issue time (AEROWEB
+   * reports date_run == date_echeance), so what matters — and what the tab
+   * selects — is the validity, not how old the run is.
+   */
+  captionFor?: (chartId: string) => string;
 }
 
 function makeDwdSource(flight: FlightResponse, pack: PackMeta): ChartSource {
@@ -2644,6 +2652,47 @@ function makeMetofficeSource(flight: FlightResponse, pack: PackMeta): ChartSourc
     overlayUrl: () => api.metofficeChartOverlayUrl(flight.id, pack.fetch_timestamp),
     overlayKeyFor: () => 'colour',
     attributionHtml: `Source: <a href="${METOFFICE_PAGE_URL}" target="_blank" rel="noopener">Met Office</a> · &copy; Crown copyright`,
+  };
+}
+
+function makeMeteofranceSource(flight: FlightResponse, pack: PackMeta): ChartSource {
+  const options = pack.meteofrance_charts_options || [];
+  // Validities can straddle midnight UTC for an early-morning flight; only
+  // then is the bare hour ambiguous, so only then pay for the longer label.
+  const showDay = temsiNeedsDay(options.map((o) => o.run_cycle));
+
+  const tabs = options.map((o) => ({
+    id: `${o.zone}|${o.run_cycle}`,
+    label: temsiTabLabel(o.zone, o.run_cycle, showDay),
+    offsetH: 0,
+    title: TEMSI_ZONE_DETAIL[o.zone] || o.zone,
+  }));
+
+  const split = (chartId: string): [string, string] => {
+    const i = chartId.indexOf('|');
+    return i < 0 ? [chartId, ''] : [chartId.slice(0, i), chartId.slice(i + 1)];
+  };
+
+  return {
+    key: 'meteofrance',
+    label: 'Météo-France',
+    tabs,
+    runCycle: options[0]?.run_cycle || '',
+    defaultId: pack.meteofrance_charts_default_id || tabs[0]?.id || '',
+    chartUrl: (id) => {
+      const [zone, runCycle] = split(id);
+      return api.meteofranceChartUrl(flight.id, pack.fetch_timestamp, runCycle, zone);
+    },
+    overlayUrl: () => api.meteofranceChartOverlayUrl(flight.id, pack.fetch_timestamp),
+    // The overlay JSON is keyed by zone — one calibration per zone.
+    overlayKeyFor: (id) => split(id)[0],
+    captionFor: (id) => {
+      const [zone, runCycle] = split(id);
+      const valid = parseRunCycle(runCycle);
+      const detail = TEMSI_ZONE_DETAIL[zone] || zone;
+      return valid ? `${detail} · valid ${formatUtcCaption(valid)} · ` : `${detail} · `;
+    },
+    attributionHtml: `Source: <a href="https://aviation.meteo.fr/" target="_blank" rel="noopener">M&eacute;t&eacute;o-France</a> — AEROWEB`,
   };
 }
 
@@ -2680,8 +2729,21 @@ export function renderDwdCharts(
   ) {
     sources.push(makeMetofficeSource(flight, pack));
   }
+  // Météo-France needs no client-side gate: the licence (route through French
+  // airspace) is decided server-side, so a route that doesn't qualify simply
+  // arrives with no options.
+  if (
+    pack.meteofrance_charts_in_coverage &&
+    pack.meteofrance_charts_within_horizon &&
+    (pack.meteofrance_charts_options || []).length > 0
+  ) {
+    sources.push(makeMeteofranceSource(flight, pack));
+  }
 
-  const inCoverage = pack.dwd_charts_in_coverage || (metofficeAvailable && pack.metoffice_charts_in_coverage);
+  const inCoverage =
+    pack.dwd_charts_in_coverage ||
+    (metofficeAvailable && pack.metoffice_charts_in_coverage) ||
+    !!pack.meteofrance_charts_in_coverage;
   if (sources.length === 0) {
     if (!inCoverage) {
       // Non-Europe route — section silently hidden (matches prior behaviour).
@@ -2720,7 +2782,8 @@ function mountChartPanel(el: HTMLElement, sources: ChartSource[]): void {
     const tabsHtml = src.tabs
       .map((tab) => {
         const cls = tab.id === src.defaultId ? 'btn-toggle active' : 'btn-toggle';
-        return `<button type="button" class="${cls}" data-chart-id="${tab.id}">${escapeHtml(tab.label)}</button>`;
+        const title = tab.title ? ` title="${escapeHtml(tab.title)}"` : '';
+        return `<button type="button" class="${cls}" data-chart-id="${tab.id}"${title}>${escapeHtml(tab.label)}</button>`;
       })
       .join('');
 
@@ -2786,7 +2849,9 @@ function mountChartPanel(el: HTMLElement, sources: ChartSource[]): void {
       };
 
       let issuedCaption = '';
-      if (issuedDate) {
+      if (src.captionFor) {
+        issuedCaption = escapeHtml(src.captionFor(chartId));
+      } else if (issuedDate) {
         const ago = formatHoursAgo(Date.now() - issuedDate.getTime());
         issuedCaption = `Issued ${ago} (${escapeHtml(formatUtcCaption(issuedDate))}) · `;
       }

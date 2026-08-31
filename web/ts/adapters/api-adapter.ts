@@ -899,6 +899,20 @@ export function metofficeChartOverlayUrl(flightId: string, timestamp: string): s
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/metoffice-chart-overlay`;
 }
 
+/** TEMSI bytes are addressed by (validity, zone) — AEROWEB has no run/offset split. */
+export function meteofranceChartUrl(
+  flightId: string,
+  timestamp: string,
+  runCycle: string,
+  zone: string,
+): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/meteofrance-chart/${encodeURIComponent(runCycle)}/${encodeURIComponent(zone)}`;
+}
+
+export function meteofranceChartOverlayUrl(flightId: string, timestamp: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/meteofrance-chart-overlay`;
+}
+
 // --- Report ---
 
 export function reportPdfUrl(flightId: string, timestamp: string): string {

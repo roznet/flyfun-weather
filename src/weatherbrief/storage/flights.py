@@ -268,7 +268,8 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.metoffice_charts_default_id = meta.metoffice_charts_default_id
     row.metoffice_charts_in_coverage = meta.metoffice_charts_in_coverage
     row.metoffice_charts_within_horizon = meta.metoffice_charts_within_horizon
-    row.meteofrance_charts_zone_cycles_json = json.dumps(meta.meteofrance_charts_zone_cycles)
+    row.meteofrance_charts_options_json = json.dumps(meta.meteofrance_charts_options)
+    row.meteofrance_charts_default_id = meta.meteofrance_charts_default_id
     row.meteofrance_charts_in_coverage = meta.meteofrance_charts_in_coverage
     row.meteofrance_charts_within_horizon = meta.meteofrance_charts_within_horizon
     row.flight_params_hash = meta.flight_params_hash
@@ -408,10 +409,11 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         metoffice_charts_default_id=row.metoffice_charts_default_id,
         metoffice_charts_in_coverage=row.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=row.metoffice_charts_within_horizon,
-        meteofrance_charts_zone_cycles=(
-            json.loads(row.meteofrance_charts_zone_cycles_json)
-            if row.meteofrance_charts_zone_cycles_json else {}
+        meteofrance_charts_options=(
+            json.loads(row.meteofrance_charts_options_json)
+            if row.meteofrance_charts_options_json else []
         ),
+        meteofrance_charts_default_id=row.meteofrance_charts_default_id,
         meteofrance_charts_in_coverage=row.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=row.meteofrance_charts_within_horizon,
         flight_params_hash=row.flight_params_hash,

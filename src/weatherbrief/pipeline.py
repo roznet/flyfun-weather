@@ -187,7 +187,8 @@ class BriefingResult:
     # Météo-France TEMSI — one chosen validity per zone rather than a shared
     # run + offset (AEROWEB has no run/offset split, and the zones don't
     # publish in lockstep). See BriefingPackMeta for the full note.
-    meteofrance_charts_zone_cycles: dict[str, str] = field(default_factory=dict)
+    meteofrance_charts_options: list[dict[str, str]] = field(default_factory=list)
+    meteofrance_charts_default_id: str | None = None
     meteofrance_charts_in_coverage: bool = False
     meteofrance_charts_within_horizon: bool = False
     usage: BriefingUsage = field(default_factory=BriefingUsage)
@@ -820,7 +821,8 @@ def _execute_briefing_stages(
         departure_time=departure_time,
         data_dir=data_dir,
     )
-    result.meteofrance_charts_zone_cycles = meteofrance_charts_result.zone_cycles
+    result.meteofrance_charts_options = meteofrance_charts_result.options
+    result.meteofrance_charts_default_id = meteofrance_charts_result.default_id
     result.meteofrance_charts_in_coverage = meteofrance_charts_result.in_coverage
     result.meteofrance_charts_within_horizon = meteofrance_charts_result.within_horizon
     stage_timings["meteofrance_charts"] = perf_counter() - _t0
