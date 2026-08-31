@@ -61,7 +61,9 @@ _RISK_ORDER = [
 
 # Character → advisory status. Severity owns RED for the cell itself; here RED
 # means "not circumnavigable VFR", AMBER means "avoidable but committing".
-_CHAR_STATUS: dict[ConvectiveCharacter, AdvisoryStatus] = {
+# Public because that sentence *is* the VFR-feasibility question: the composite
+# reads this map rather than restating the mapping and drifting from it (§22).
+CHARACTER_STATUS: dict[ConvectiveCharacter, AdvisoryStatus] = {
     ConvectiveCharacter.NONE: AdvisoryStatus.GREEN,
     ConvectiveCharacter.UNKNOWN: AdvisoryStatus.GREEN,
     ConvectiveCharacter.ISOLATED: AdvisoryStatus.AMBER,
@@ -596,6 +598,110 @@ def classify_route_character(
     return classify_inputs(ctx, model, params, inputs)
 
 
+# --- Below-base VFR escape (#298 geometry, reused by vfr_feasibility) --------
+# `_below_base_geometry` answers "at THIS altitude, are we under the cells in
+# VMC?". For the filed IFR cruise that is usually "no" — which says nothing about
+# whether a VFR pilot could fly the same route lower. These two helpers ask the
+# altitude-swept version of the question, which is the one VFR feasibility needs.
+
+#: Character bands a VFR pilot can operate around. NONE/UNKNOWN carry no cells to
+#: avoid; ISOLATED/SCATTERED are the circumnavigable bands by definition. The
+#: RED-mapped bands (WIDESPREAD/ORGANIZED/EMBEDDED) are excluded — no altitude
+#: fixes horizontal extent, and EMBEDDED is precisely "you cannot see them".
+AVOIDABLE_BANDS: frozenset[ConvectiveCharacter] = frozenset({
+    ConvectiveCharacter.NONE,
+    ConvectiveCharacter.UNKNOWN,
+    ConvectiveCharacter.ISOLATED,
+    ConvectiveCharacter.SCATTERED,
+})
+
+
+class BelowBaseEscape(NamedTuple):
+    """A cruise level beneath the cells where see-and-avoid is actually available.
+
+    ``base_fl`` is the tightest modelled cell base the sweep cleared, published
+    alongside the altitude on purpose: pilot-reported ground truth on
+    LFMD→EGTF 2026-08-27 had the modelled bases reading **low** (ICON grossly,
+    GFS less so), so the offered level is conservative. Naming the base the
+    number came from lets a pilot compare it against what they can see, instead
+    of trusting an altitude whose provenance the card hides.
+    """
+
+    altitude_ft: int
+    band: ConvectiveCharacter
+    base_fl: int
+    margin_ft: int
+
+
+def route_below_base(
+    ctx: RouteContext,
+    model: str,
+    params: dict[str, float],
+    cruise_ft: float | None = None,
+) -> _BelowBase:
+    """The below-base avoidability geometry for one model at ``cruise_ft``.
+
+    Public entry point onto the #298 geometry so a consumer gets the same
+    classification the character card annotates with, rather than re-deriving
+    "can we get under the cells" from raw layers.
+    """
+    level = ctx.cruise_altitude_ft if cruise_ft is None else cruise_ft
+    inputs = build_character_points(ctx, model, params, cruise_ft=level)
+    return _below_base_geometry(
+        inputs.points,
+        level,
+        params.get("base_clearance_ft", CHARACTER_PARAM_DEFAULTS["base_clearance_ft"]),
+    )
+
+
+def below_base_escape(
+    ctx: RouteContext, model: str, params: dict[str, float]
+) -> BelowBaseEscape | None:
+    """Highest level BELOW planned cruise that puts this model's route under the cells.
+
+    Sweeps the shared candidate ladder downward, nearest-to-cruise first, and
+    returns the first level that satisfies BOTH halves of the see-and-avoid
+    premise: the below-base geometry reads ``clear`` (under every resolved base,
+    in VMC, with the configured buffer) **and** the character band re-derived at
+    that level is one a pilot can operate around. Requiring both matters — a
+    level can be under the bases while the band there is WIDESPREAD, which is
+    not an escape, and a band can be ISOLATED at a level that is still inside
+    the convective layer.
+
+    ``None`` when no such level exists (or the model has no soundings). Only
+    levels strictly below planned cruise are considered: climbing over
+    convection is not a VFR answer, and the climb-above case already has its own
+    EMBEDDED mitigation on the character card.
+    """
+    cruise = ctx.cruise_altitude_ft
+    clearance = params.get(
+        "base_clearance_ft", CHARACTER_PARAM_DEFAULTS["base_clearance_ft"]
+    )
+    # `_candidate_altitudes` is terrain-bounded (mitigation_min_base_agl_ft) and
+    # already excludes planned cruise; take its below-cruise half, highest first,
+    # so the offered level is the smallest descent that works.
+    candidates = sorted(
+        (a for a in _candidate_altitudes(ctx, params) if a < cruise), reverse=True
+    )
+    for alt in candidates:
+        inputs = build_character_points(ctx, model, params, cruise_ft=float(alt))
+        if not inputs.any_assessed:
+            continue
+        geometry = _below_base_geometry(inputs.points, float(alt), clearance)
+        if geometry.kind != "clear":
+            continue
+        band = classify_inputs(ctx, model, params, inputs)
+        if band not in AVOIDABLE_BANDS:
+            continue
+        return BelowBaseEscape(
+            altitude_ft=alt,
+            band=band,
+            base_fl=geometry.base_fl,
+            margin_ft=geometry.margin_ft,
+        )
+    return None
+
+
 # --- Altitude mitigation for embedded convection (#568 Fix 4) ---------------
 # EMBEDDED means "cells hidden in a deck, no see-and-avoid". A different cruise
 # level is often exactly what restores it, in BOTH directions:
@@ -760,7 +866,7 @@ def _attach_mitigations(
         tip = _altitude_mitigation(
             cleared,
             cruise_ft,
-            _CHAR_STATUS.get(model_bands[cleared], AdvisoryStatus.GREEN),
+            CHARACTER_STATUS.get(model_bands[cleared], AdvisoryStatus.GREEN),
             loc,
         )
         resolved.append(res.model_copy(update={"mitigations": [tip]}))
@@ -792,7 +898,7 @@ def _attach_mitigations(
                 common,
                 cruise_ft,
                 AdvisoryStatus.worst([
-                    _CHAR_STATUS.get(b[common], AdvisoryStatus.GREEN)
+                    CHARACTER_STATUS.get(b[common], AdvisoryStatus.GREEN)
                     for b in bands_by_model.values()
                 ]),
                 loc,
@@ -983,7 +1089,7 @@ class ConvectiveCharacterEvaluator:
 
             character = classify_inputs(ctx, model, params, inputs)
 
-            status = _CHAR_STATUS.get(character, AdvisoryStatus.GREEN)
+            status = CHARACTER_STATUS.get(character, AdvisoryStatus.GREEN)
             total = sum(1 for p in points if p.assessed)
             realized_count = sum(1 for p in points if p.is_convective and p.realized)
             # Extent of the realized cells, over the same cell edges the

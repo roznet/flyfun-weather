@@ -240,6 +240,33 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "bases ~FL{fl}, ~{margin} ft sobre el crucero (marginal) — más sorteable ~{drop} ft más abajo",
     },
 
+    # --- vfr_feasibility convective axis (§22 consumer) ---
+    # The composite grades on the SAME convective colour the Convective Activity
+    # card publishes; these sentences say which VFR-avoidability geometry that
+    # colour is sitting in, because for VFR the band matters as much as the tier.
+    "vfr.conv_circumnavigable": {
+        "en": "{risk} convection over {extent} — circumnavigable with see-and-avoid",
+        "fr": "Convection {risk} sur {extent} — contournable à vue",
+        "de": "{risk} Konvektion über {extent} — mit Sicht umfliegbar",
+        "es": "Convección {risk} sobre {extent} — sorteable a la vista",
+    },
+    "vfr.conv_not_circumnavigable": {
+        "en": "{risk} convection over {extent} — not circumnavigable VFR",
+        "fr": "Convection {risk} sur {extent} — non contournable en VFR",
+        "de": "{risk} Konvektion über {extent} — VFR nicht umfliegbar",
+        "es": "Convección {risk} sobre {extent} — no sorteable en VFR",
+    },
+    # The below-base escape tip. Names the BASE as well as the altitude on
+    # purpose: modelled convective bases read low, so the offered level is
+    # conservative and the pilot needs the number it was derived from to check it
+    # against what they can actually see.
+    "vfr.mitigation.below_base": {
+        "en": "Cruising at {alt:,} ft would keep you below the cells (bases ~FL{fl}) — see-and-avoid underneath",
+        "fr": "Croisière à {alt:,} ft resterait sous les cellules (bases ~FL{fl}) — vol à vue dessous",
+        "de": "Reiseflug auf {alt:,} ft bliebe unter den Zellen (Basen ~FL{fl}) — Sicht-Ausweichen darunter",
+        "es": "Crucero a {alt:,} ft mantendría bajo las células (bases ~FL{fl}) — ver-y-evitar debajo",
+    },
+
     # --- airport_wind ---
     "airport_wind.calm": {
         "en": "calm",
