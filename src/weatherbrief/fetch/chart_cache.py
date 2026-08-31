@@ -1,18 +1,30 @@
-"""Shared surface-chart cache machinery for DWD + Met Office sources.
+"""Shared surface-chart cache machinery for DWD, Met Office + Météo-France.
 
-Both :mod:`weatherbrief.fetch.dwd_charts` and
-:mod:`weatherbrief.fetch.metoffice_charts` fetch a set of surface
-analysis/forecast charts, store them in a shared cross-briefing on-disk cache
-keyed by ``(run_cycle, chart_id)``, georeference WGS84 lon/lat to chart pixels
-via a polar-stereographic projection + 2D homography, and build a route
-overlay for the frontend. The two sources differ only in:
+:mod:`weatherbrief.fetch.dwd_charts`,
+:mod:`weatherbrief.fetch.metoffice_charts` and
+:mod:`weatherbrief.fetch.meteofrance_charts` fetch a set of charts, store them
+in a shared cross-briefing on-disk cache keyed by ``(run_cycle, chart_id)``,
+georeference WGS84 lon/lat to chart pixels via a polar-stereographic
+projection + 2D homography, and build a route overlay for the frontend. The
+sources differ only in:
 
   - **cycle discovery** — DWD rounds an HTTP ``Last-Modified`` down to a
-    synoptic hour; Met Office reads a JSON product index;
+    synoptic hour; Met Office reads a JSON product index; Météo-France parses
+    the AEROWEB ``CARTES`` XML;
   - **chart-id / offset set**, native pixel sizes, calibrations;
   - **file extension** (``png`` vs ``gif``) and **keep-count**;
   - the **chart_type** a given chart-id renders with (DWD ``ana`` ->
-    ``analysis`` else ``icon``; Met Office always ``colour``).
+    ``analysis`` else ``icon``; Met Office always ``colour``;
+    Météo-France one per zone);
+  - an optional **content_transform** applied to downloaded bytes before they
+    hit disk (Météo-France ships each chart as a PDF wrapping one raster).
+
+Note the ``run_cycle`` key means "issue cycle" for DWD/Met Office, which pair
+one run with many forecast offsets. Météo-France publishes no run/offset split
+— AEROWEB offers a rolling two-deep window of absolute validities — so that
+source uses ``run_cycle`` as the *valid time* and ``chart_id`` as the zone,
+with every offset zero. Callers must therefore not assume ``chart_id == "ana"``
+exists, nor that one cycle dir holds a whole forecast sequence.
 
 Everything else — cache paths, meta read/write, atomic writes, conditional
 GETs with retry, eviction, default-chart selection, projection, route overlay
@@ -145,6 +157,7 @@ class ChartCache:
         timeout: float = 30.0,
         max_fetch_attempts: int = 3,
         retry_backoff_seconds: float = 1.0,
+        content_transform: Callable[[bytes], bytes] | None = None,
     ) -> None:
         self.slug = slug
         self.display_name = display_name
@@ -159,6 +172,7 @@ class ChartCache:
         self.timeout = timeout
         self.max_fetch_attempts = max_fetch_attempts
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.content_transform = content_transform
 
     # -- cache paths --------------------------------------------------------
 
@@ -413,7 +427,11 @@ class ChartCache:
     ) -> ChartFetchResult:
         """Conditional GET a single chart with linear-backoff retries.
 
-        On 200: writes bytes atomically to ``target_path``.
+        On 200: writes bytes atomically to ``target_path``, first passing them
+        through ``content_transform`` when the source configured one (used by
+        Météo-France, whose AEROWEB endpoint serves each chart as a PDF
+        wrapping a single raster). A transform that raises is a failed fetch,
+        not a crash: a malformed payload must not take the whole refresh down.
         On 304: leaves the existing file alone.
         """
         if timeout is None:
@@ -454,8 +472,19 @@ class ChartCache:
             logger.warning("%s chart fetch failed (%s): %s", self.display_name, chart_id, msg)
             return ChartFetchResult(chart_id=chart_id, status="failed", error=msg)
 
+        body = resp.content
+        if self.content_transform is not None:
+            try:
+                body = self.content_transform(body)
+            except Exception as e:  # noqa: BLE001 — any decode failure is "this chart failed"
+                logger.warning(
+                    "%s chart transform failed (%s): %s",
+                    self.display_name, chart_id, e, exc_info=True,
+                )
+                return ChartFetchResult(chart_id=chart_id, status="failed", error=str(e))
+
         try:
-            self.atomic_write_bytes(target_path, resp.content)
+            self.atomic_write_bytes(target_path, body)
         except OSError as e:
             logger.warning("%s chart write failed (%s): %s", self.display_name, chart_id, e)
             return ChartFetchResult(chart_id=chart_id, status="failed", error=str(e))
@@ -465,7 +494,7 @@ class ChartCache:
             status="downloaded",
             last_modified=parse_http_datetime(resp.headers.get("Last-Modified")),
             etag=resp.headers.get("ETag"),
-            content_length=len(resp.content),
+            content_length=len(body),
         )
 
     def apply_results_to_meta(
