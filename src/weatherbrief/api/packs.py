@@ -574,12 +574,50 @@ class PackMetaResponse(BaseModel):
     flexibility: FlexibilityMode | None = None
 
 
+def _live_meteofrance_options(
+    meta: BriefingPackMeta,
+) -> tuple[list[dict[str, str]], str | None]:
+    """Stored TEMSI options, minus any whose chart bytes have been evicted.
+
+    The pack *records* what was offered when the briefing was built — the same
+    contract ``dwd_charts_*`` and ``metoffice_charts_*`` keep, and the reason
+    those live in the DB at all. What differs is lifetime: the TEMSI cache
+    holds ~48h of validities while a briefing lives indefinitely, and TEMSI's
+    ~3h horizon means its options go stale far sooner than a +108h DWD
+    forecast's do. Filtering on the way out keeps the record intact on the pack
+    while stopping the picker offering a tab that would 410.
+
+    Returns the surviving options and a default that points at one of them.
+    """
+    stored = meta.meteofrance_charts_options or []
+    if not stored:
+        return [], None
+
+    from weatherbrief.fetch.meteofrance_charts import resolve_chart_path
+
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    live = [
+        o for o in stored
+        if o.get("zone")
+        and o.get("run_cycle")
+        and resolve_chart_path(data_dir, o["run_cycle"], o["zone"]) is not None
+    ]
+
+    default = meta.meteofrance_charts_default_id
+    if default not in {f"{o['zone']}|{o['run_cycle']}" for o in live}:
+        # The chart we meant to open on is gone. Options keep their
+        # nearest-to-ETD order, so the first survivor is the next best.
+        default = f"{live[0]['zone']}|{live[0]['run_cycle']}" if live else None
+    return live, default
+
+
 def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
     flexibility: FlexibilityMode | None = None,
 ) -> PackMetaResponse:
     has_advisories = pack_has_advisories(meta.artifact_path)
+    mf_options, mf_default = _live_meteofrance_options(meta)
 
     return PackMetaResponse(
         flight_id=meta.flight_id,
@@ -612,8 +650,8 @@ def _meta_to_response(
         metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=meta.metoffice_charts_within_horizon,
         metoffice_charts_public=_metoffice_public(),
-        meteofrance_charts_options=meta.meteofrance_charts_options,
-        meteofrance_charts_default_id=meta.meteofrance_charts_default_id,
+        meteofrance_charts_options=mf_options,
+        meteofrance_charts_default_id=mf_default,
         meteofrance_charts_in_coverage=meta.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=meta.meteofrance_charts_within_horizon,
         flexibility=flexibility,
