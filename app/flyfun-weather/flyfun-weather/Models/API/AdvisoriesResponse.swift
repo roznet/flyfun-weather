@@ -22,6 +22,13 @@ struct RouteAdvisoryResult: Codable, Identifiable, Sendable {
     /// changes `aggregateStatus` — same "informs but doesn't grade" contract as
     /// `crossCheck`. Optional so old packs decode cleanly.
     let aggregateMitigations: [Mitigation]?
+    /// The model whose per-model result sources the aggregate view: the entry
+    /// holding `aggregateStatus` with the largest flagged extent. The server
+    /// decides it and ships it here so the app highlights the same run whose
+    /// sentence `aggregateDetail` prints — reimplementing the rule client-side
+    /// is how the two drifted apart. Optional: old packs predate the field, and
+    /// `CrossSectionViewModel.representativeModel(for:)` falls back for them.
+    let representativeModel: String?
 
     var id: String { advisoryId }
 }

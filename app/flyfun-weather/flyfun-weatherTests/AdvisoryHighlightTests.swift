@@ -32,11 +32,13 @@ private func modelResult(
 private func advisory(
     id: String = "vmc_cruise",
     aggregateStatus: String = "amber",
+    representativeModel: String? = nil,
     perModel: [ModelAdvisoryResult]
 ) -> RouteAdvisoryResult {
     RouteAdvisoryResult(
         advisoryId: id, aggregateStatus: aggregateStatus, aggregateDetail: "d",
-        perModel: perModel, parametersUsed: [:], aggregateMitigations: nil)
+        perModel: perModel, parametersUsed: [:], aggregateMitigations: nil,
+        representativeModel: representativeModel)
 }
 
 private func manifest(_ advisories: [RouteAdvisoryResult]) -> AdvisoriesResponse {
@@ -101,12 +103,46 @@ private let sampleHighlights = AdvisoryHighlights(
 
 @MainActor @Suite struct HighlightDeriveTests {
 
+    @Test func representativeModelReadsThePublishedField() {
+        // The server names the model — the app must not re-derive it. Here the
+        // published pick is NOT the first status match, which is what the old
+        // client-side scan would have returned.
+        let adv = advisory(aggregateStatus: "green", representativeModel: "gfs", perModel: [
+            modelResult(model: "ecmwf", status: "green"),
+            modelResult(model: "gfs", status: "green"),
+        ])
+        #expect(CrossSectionViewModel.representativeModel(for: adv) == "gfs")
+    }
+
     @Test func representativeModelPrefersAggregateStatusMatch() {
+        // Old pack: no published field, so the legacy scan still answers.
         let adv = advisory(aggregateStatus: "red", perModel: [
             modelResult(model: "gfs", status: "amber"),
             modelResult(model: "ecmwf", status: "red"),
         ])
         #expect(CrossSectionViewModel.representativeModel(for: adv) == "ecmwf")
+    }
+
+    @Test func advisoryDecodesRepresentativeModelFromSnakeCase() throws {
+        let json = """
+        {"advisory_id":"vmc_cruise","aggregate_status":"green",
+         "aggregate_detail":"Mostly clear at cruise","per_model":[],
+         "parameters_used":{},"representative_model":"gfs"}
+        """
+        let adv = try JSONDecoder.weatherBrief.decode(
+            RouteAdvisoryResult.self, from: Data(json.utf8))
+        #expect(adv.representativeModel == "gfs")
+    }
+
+    @Test func advisoryWithoutRepresentativeModelDecodesToNil() throws {
+        let json = """
+        {"advisory_id":"vmc_cruise","aggregate_status":"green",
+         "aggregate_detail":"Mostly clear at cruise","per_model":[],
+         "parameters_used":{}}
+        """
+        let adv = try JSONDecoder.weatherBrief.decode(
+            RouteAdvisoryResult.self, from: Data(json.utf8))
+        #expect(adv.representativeModel == nil)
     }
 
     @Test func representativeModelFallsBackToFirstEntry() {

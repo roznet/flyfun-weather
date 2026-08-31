@@ -188,6 +188,128 @@ class TestFromPerModelAggregation:
         assert result.representative_model is None
 
 
+class TestRepresentativeIsTheWorstAtTheGradedStatus:
+    """The aggregate speaks for the worst model holding the grade, not the first.
+
+    Registry order decided this before: ``ecmwf`` sorts ahead of ``gfs``, so a
+    unanimously-GREEN ``vmc_cruise`` advertised ECMWF's 13nm of cruise IMC while
+    GFS held 70nm. The card collapses to a compact pill on a unanimous grade —
+    the pill prints ``aggregate_detail`` and nothing else, no per-model badges —
+    so the arbitrary pick was the pilot's only signal.
+    """
+
+    @staticmethod
+    def _model(name, status, pct, *, detail=None, mod_pct=0.0, mitigations=None):
+        return ModelAdvisoryResult(
+            model=name, status=status, detail=detail or f"{name} {pct}%",
+            affected_pct=pct, affected_mod_pct=mod_pct,
+            mitigations=mitigations or [],
+        )
+
+    def test_green_aggregate_speaks_for_the_worst_green(self):
+        """The vmc_cruise shape: three GREENs, the widest extent wins."""
+        per_model = [
+            self._model("ecmwf", AdvisoryStatus.GREEN, 2.3),
+            self._model("gfs", AdvisoryStatus.GREEN, 12.0),
+            self._model("icon", AdvisoryStatus.GREEN, 0.0),
+        ]
+        result = RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, {})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.representative_model == "gfs"
+        assert result.aggregate_detail == "gfs 12.0%"
+
+    def test_only_models_holding_the_grade_are_candidates(self):
+        """A wider AMBER never speaks for a GREEN aggregate — the grade rules.
+
+        Under MAJORITY a lone dissenter does not move the aggregate, and it must
+        not move the sentence either: the detail has to stay true to the grade
+        printed beside it.
+        """
+        per_model = [
+            self._model("ecmwf", AdvisoryStatus.GREEN, 2.0),
+            self._model("gfs", AdvisoryStatus.AMBER, 90.0),
+            self._model("icon", AdvisoryStatus.GREEN, 11.0),
+        ]
+        result = RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, {})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.representative_model == "icon"
+
+    def test_worst_applies_at_every_grade_not_just_green(self):
+        per_model = [
+            self._model("ecmwf", AdvisoryStatus.RED, 30.0),
+            self._model("gfs", AdvisoryStatus.RED, 65.0),
+        ]
+        result = RouteAdvisoryResult.from_per_model("convective", per_model, {})
+        assert result.representative_model == "gfs"
+
+    def test_mod_population_only_breaks_ties(self):
+        """A bigger severe core never outranks a far bigger overall extent.
+
+        ``affected_mod_pct`` is the higher-threshold sub-population (OVC, or
+        convective MODERATE+). The published sentence quotes the union, so the
+        union has to lead — otherwise the representative and its own detail line
+        would disagree about which model is worse.
+        """
+        per_model = [
+            self._model("ecmwf", AdvisoryStatus.GREEN, 5.0, mod_pct=4.0),
+            self._model("gfs", AdvisoryStatus.GREEN, 40.0, mod_pct=1.0),
+        ]
+        assert RouteAdvisoryResult.from_per_model(
+            "vmc_cruise", per_model, {},
+        ).representative_model == "gfs"
+
+        tied = [
+            self._model("ecmwf", AdvisoryStatus.GREEN, 20.0, mod_pct=1.0),
+            self._model("gfs", AdvisoryStatus.GREEN, 20.0, mod_pct=9.0),
+        ]
+        assert RouteAdvisoryResult.from_per_model(
+            "vmc_cruise", tied, {},
+        ).representative_model == "gfs"
+
+    def test_an_exact_tie_keeps_registry_order(self):
+        """Airport checks and unanimous clears publish no extent at all.
+
+        Every candidate scores zero there, so the pick has to stay stable rather
+        than swing on whatever ``max`` happens to see last.
+        """
+        per_model = [
+            self._model("ecmwf", AdvisoryStatus.GREEN, 0.0),
+            self._model("gfs", AdvisoryStatus.GREEN, 0.0),
+            self._model("icon", AdvisoryStatus.GREEN, 0.0),
+        ]
+        result = RouteAdvisoryResult.from_per_model("airport_wind", per_model, {})
+        assert result.representative_model == "ecmwf"
+
+    def test_mitigations_come_from_the_same_model_as_the_detail(self):
+        """Advice and the sentence it qualifies must be one model's picture."""
+        from weatherbrief.models import Mitigation
+
+        tip = Mitigation(
+            kind="altitude", addresses="cruise_imc",
+            detail="Fly 12,000 ft — clears the deck",
+            mitigated_status=AdvisoryStatus.GREEN, altitude_ft=12000,
+        )
+        per_model = [
+            self._model("ecmwf", AdvisoryStatus.GREEN, 2.0),
+            self._model("gfs", AdvisoryStatus.GREEN, 12.0, mitigations=[tip]),
+        ]
+        result = RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, {})
+        assert result.representative_model == "gfs"
+        assert [m.detail for m in result.aggregate_mitigations] == [
+            "Fly 12,000 ft — clears the deck",
+        ]
+
+    def test_no_model_holds_the_grade_publishes_no_mitigations(self):
+        """The fallback representative does not speak for a grade it lacks."""
+        per_model = [
+            ModelAdvisoryResult(
+                model="gfs", status=AdvisoryStatus.UNAVAILABLE, detail="no data",
+            ),
+        ]
+        result = RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, {})
+        assert result.aggregate_mitigations == []
+
+
 # ---------------------------------------------------------------------------
 # evaluate_all() with aggregation parameter
 # ---------------------------------------------------------------------------

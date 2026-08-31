@@ -310,12 +310,21 @@ final class CrossSectionViewModel {
         highlightVisible = visible
     }
 
-    /// The representative model for an advisory: the first `perModel` entry whose
-    /// status equals `aggregateStatus` (the same policy the server uses to choose
-    /// `aggregate_detail`), falling back to the first entry. The chip switches
-    /// the cross-section to this model so the highlight reflects the aggregate
-    /// verdict. Mirrors web `advisory-highlights.ts`.
+    /// The representative model for an advisory — read from the server's
+    /// `representative_model`, which names the model holding `aggregateStatus`
+    /// with the largest flagged extent. The chip switches the cross-section to
+    /// it, so the highlight shows the geometry behind the sentence the card
+    /// prints. Mirrors web `advisory-highlights.ts`.
+    ///
+    /// This used to re-derive the rule here ("first entry matching the aggregate
+    /// status"), which is why it drifted: the server moved off first-match and
+    /// the app kept highlighting whichever model happened to sort first, while
+    /// the card beside it quoted a different one. The scan survives only as the
+    /// old-pack fallback, where the field is absent.
     static func representativeModel(for advisory: RouteAdvisoryResult) -> String? {
+        if let published = advisory.representativeModel {
+            return published
+        }
         if let match = advisory.perModel.first(where: { $0.status == advisory.aggregateStatus }) {
             return match.model
         }

@@ -578,22 +578,62 @@ class ModelAdvisoryResult(BaseModel):
         )
 
 
-def _aggregate_mitigations(
+def _representative(
     per_model: list[ModelAdvisoryResult],
+    agg_status: AdvisoryStatus,
+) -> ModelAdvisoryResult | None:
+    """The per-model result the aggregate view speaks for.
+
+    Among the models that actually hold the aggregate status, the one with the
+    **largest flagged population** — not simply the first in registry order.
+
+    Model order is an implementation detail (whatever ``ctx.models`` happens to
+    list first), so sourcing the aggregate from the first match published an
+    arbitrary model's sentence. That is invisible while the models agree and
+    actively misleading when they do not: on a unanimously-GREEN advisory the
+    card collapses to a compact pill whose only text is ``aggregate_detail``,
+    with no per-model badges to correct it. A route whose GFS run put BKN/OVC
+    through cruise over 70nm/582nm (12%) advertised ECMWF's 13nm (2%) instead,
+    purely because "ecmwf" sorts ahead of "gfs" — the pilot never sees the
+    dissent that the drill-in holds. Speaking for the worst model at the graded
+    status keeps the grade identical (every candidate holds ``agg_status``) and
+    makes the sentence the conservative one.
+
+    ``affected_pct`` leads because it is the population the published sentence
+    quotes; ``affected_mod_pct`` (the higher-threshold sub-population — OVC for
+    ``vmc_cruise``, MODERATE+ for ``convective``) only breaks ties, so a model
+    with a slightly larger severe core can never outrank one with a far larger
+    overall extent. Both are percentages, so a partially-assessed model is
+    compared against its own denominator rather than the whole route.
+
+    ``max`` is stable, so models tied on both keys keep registry order — which
+    is why an all-zero advisory (airport checks, a unanimous clear) still
+    resolves to the same model it always did.
+    """
+    tied = [m for m in per_model if m.status == agg_status]
+    if not tied:
+        return per_model[0] if per_model else None
+    return max(tied, key=lambda m: (m.affected_pct, m.affected_mod_pct))
+
+
+def _aggregate_mitigations(
+    representative: ModelAdvisoryResult | None,
     agg_status: AdvisoryStatus,
 ) -> list[Mitigation]:
     """Aggregate per-model mitigations (representative-model policy).
 
-    Returns the mitigations of the first per-model result whose status equals
-    the aggregate status — the same representative used to choose
-    ``aggregate_detail`` — else an empty list. Kept as a standalone module-level
-    function so the policy can later be swapped for a "conservative,
-    all-or-nothing per kind" merge by editing this one place.
+    Returns the mitigations of the representative chosen by
+    :func:`_representative` — the same model that sources ``aggregate_detail``,
+    so the advice and the sentence it qualifies always come from one run. Empty
+    when there is no representative, or when the fallback representative does
+    not hold the aggregate status (nothing it advises would speak for the
+    published grade). Kept as a standalone module-level function so the policy
+    can later be swapped for a "conservative, all-or-nothing per kind" merge by
+    editing this one place.
     """
-    for m in per_model:
-        if m.status == agg_status:
-            return list(m.mitigations)
-    return []
+    if representative is None or representative.status != agg_status:
+        return []
+    return list(representative.mitigations)
 
 
 class RouteAdvisoryResult(BaseModel):
@@ -609,8 +649,9 @@ class RouteAdvisoryResult(BaseModel):
     # old packs deserialize cleanly.
     aggregate_mitigations: list[Mitigation] = Field(default_factory=list)
     # The model whose per-model result sources the aggregate view (#393): the
-    # first ``per_model`` entry whose status equals ``aggregate_status`` — the
-    # same representative that sets ``aggregate_detail`` / ``aggregate_mitigations``.
+    # ``per_model`` entry holding ``aggregate_status`` with the largest flagged
+    # extent (see ``_representative``) — the same representative that sets
+    # ``aggregate_detail`` / ``aggregate_mitigations``.
     # Emitted so the client reads "which model's geometry do we highlight?" from
     # the backend instead of reimplementing the rule (the deleted TS
     # ``representativeModel()`` copy). None only when there are no per-model
@@ -636,17 +677,14 @@ class RouteAdvisoryResult(BaseModel):
             agg = AdvisoryStatus.majority(statuses)
         else:
             agg = AdvisoryStatus.worst(statuses)
-        representative = next(
-            (m for m in per_model if m.status == agg),
-            per_model[0] if per_model else None,
-        )
+        representative = _representative(per_model, agg)
         return cls(
             advisory_id=advisory_id,
             aggregate_status=agg,
             aggregate_detail=representative.detail if representative else "",
             per_model=per_model,
             parameters_used=params,
-            aggregate_mitigations=_aggregate_mitigations(per_model, agg),
+            aggregate_mitigations=_aggregate_mitigations(representative, agg),
             representative_model=representative.model if representative else None,
         )
 
