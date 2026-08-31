@@ -279,11 +279,14 @@ class BriefingPackRow(Base):
         Boolean, default=False, server_default="0",
     )
     # Météo-France TEMSI. Bytes live in DATA_DIR/meteofrance_charts/<valid>/.
-    # A JSON map of zone slug -> chosen validity rather than the sibling
-    # sources' (run_cycle, default_id) pair: AEROWEB keys charts by absolute
-    # valid time, and the zones don't publish in lockstep.
-    meteofrance_charts_zone_cycles_json: Mapped[str] = mapped_column(
-        Text, default="{}", server_default="{}",
+    # A JSON *list* of {zone, run_cycle} picker options rather than the sibling
+    # sources' single run_cycle: AEROWEB keys charts by absolute valid time, so
+    # a chart is a (zone, validity) pair and the picker lists pairs.
+    meteofrance_charts_options_json: Mapped[str] = mapped_column(
+        Text, default="[]", server_default="[]",
+    )
+    meteofrance_charts_default_id: Mapped[str | None] = mapped_column(
+        String(48), nullable=True,
     )
     meteofrance_charts_in_coverage: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0",

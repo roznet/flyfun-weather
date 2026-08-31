@@ -467,6 +467,47 @@ def evict_cycles_older_than(data_dir: Path, *, max_age_hours: float) -> list[str
 # neighbouring validity than the one asked for.
 MAX_VALIDITY_GAP = timedelta(hours=1, minutes=30)
 
+# How far either side of the ETD the chart *picker* may offer validities.
+# Wider than MAX_VALIDITY_GAP on purpose, and the two answer different
+# questions: MAX_VALIDITY_GAP decides whether we hold a chart that genuinely
+# represents the ETD (and so whether the section appears at all), while this
+# decides how much either side is worth offering once it does. A pilot looking
+# at the 15Z chart wants the 12Z and 18Z next to it to read the trend; they do
+# not want yesterday's.
+OPTION_WINDOW = timedelta(hours=6)
+
+
+def list_options_for_time(
+    data_dir: Path,
+    target: datetime,
+    *,
+    window: timedelta = OPTION_WINDOW,
+) -> list[tuple[str, str]]:
+    """Cached ``(zone, validity)`` pairs within ``window`` of ``target``.
+
+    Ordered by closeness to ``target``, then by :data:`CHART_IDS` order so the
+    low-level France chart wins a tie — it is the one most GA flights are
+    actually flown inside. The first entry is therefore the sensible default
+    for the picker.
+
+    Only pairs whose bytes are on disk are returned, so an option can never
+    point at a chart that would 410.
+    """
+    zone_rank = {zone: i for i, zone in enumerate(CHART_IDS)}
+    found: list[tuple[timedelta, int, str, str]] = []
+    for run_cycle in list_cycles(data_dir):
+        valid = parse_run_cycle_dt(run_cycle)
+        if valid is None:
+            continue
+        gap = abs(valid - target)
+        if gap > window:
+            continue
+        for zone in CHART_IDS:
+            if resolve_chart_path(data_dir, run_cycle, zone) is not None:
+                found.append((gap, zone_rank[zone], zone, run_cycle))
+    found.sort()
+    return [(zone, run_cycle) for _, _, zone, run_cycle in found]
+
 
 def select_cycle_for_time(
     data_dir: Path,

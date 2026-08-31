@@ -11,14 +11,14 @@ redistributed only to users operating in French airspace, so the gate is
 fails closed. A route that never touches France gets no chart even though the
 bytes are sitting in the cache.
 
-**Selection is per zone, not per offset.** DWD and Met Office pick a forecast
-offset inside one run. AEROWEB has no run/offset split — it publishes absolute
-validities — so this picks the *validity* nearest the ETD, separately for each
-zone, because the zones do not publish in lockstep.
+**The picker is (zone x validity), not forecast offsets.** DWD and Met Office
+offer one run's offsets — "+36h", "+48h". AEROWEB has no run/offset split, so
+the options here are pairs: "France 15Z", "France 18Z", "EUROC 18Z". They are
+listed as ``(zone, validity)`` and identified by ``zone|validity``.
 
-Bytes are NOT stored on the pack: the briefing records only the chosen
-validity per zone plus the eligibility flags, and the renderer reads bytes
-from ``DATA_DIR/meteofrance_charts/<validity>/`` at request time.
+Bytes are NOT stored on the pack: the briefing records the offered options,
+which one to open on, and the eligibility flags; the renderer reads bytes from
+``DATA_DIR/meteofrance_charts/<validity>/`` at request time.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from pathlib import Path
 from weatherbrief.fetch.meteofrance_charts import (
     CHART_IDS,
     enabled,
+    list_options_for_time,
     refresh_charts,
     route_licence_allows,
     select_cycle_for_time,
@@ -40,11 +41,19 @@ from weatherbrief.models import RouteConfig
 logger = logging.getLogger(__name__)
 
 
+def option_id(zone: str, run_cycle: str) -> str:
+    """Stable id for one picker entry, e.g. ``"france|2026-08-31T15Z"``."""
+    return f"{zone}|{run_cycle}"
+
+
 @dataclass
 class MeteofranceChartsResult:
     """Per-briefing references that flow onto BriefingPackMeta."""
 
-    zone_cycles: dict[str, str] = field(default_factory=dict)
+    #: Picker entries, nearest-to-ETD first: ``[{"zone", "run_cycle"}, ...]``.
+    options: list[dict[str, str]] = field(default_factory=list)
+    #: Which entry to open on, as ``zone|run_cycle``.
+    default_id: str | None = None
     in_coverage: bool = False
     within_horizon: bool = False
 
@@ -85,11 +94,17 @@ def run_meteofrance_charts(
         logger.info("Météo-France chart refresh failed: %s", report.error)
         return MeteofranceChartsResult(in_coverage=True)
 
-    zone_cycles: dict[str, str] = {}
-    for zone in CHART_IDS:
-        cycle = select_cycle_for_time(data_dir, departure_time, chart_id=zone)
-        if cycle is not None:
-            zone_cycles[zone] = cycle
+    # The section only earns its place if some chart genuinely represents the
+    # ETD; once it does, offer the neighbouring validities as trend context.
+    represents_etd = any(
+        select_cycle_for_time(data_dir, departure_time, chart_id=zone) is not None
+        for zone in CHART_IDS
+    )
+    options = (
+        [{"zone": z, "run_cycle": rc}
+         for z, rc in list_options_for_time(data_dir, departure_time)]
+        if represents_etd else []
+    )
 
     if report.charts_failed:
         logger.info(
@@ -99,7 +114,8 @@ def run_meteofrance_charts(
         )
 
     return MeteofranceChartsResult(
-        zone_cycles=zone_cycles,
+        options=options,
+        default_id=option_id(options[0]["zone"], options[0]["run_cycle"]) if options else None,
         in_coverage=True,
-        within_horizon=bool(zone_cycles),
+        within_horizon=bool(options),
     )

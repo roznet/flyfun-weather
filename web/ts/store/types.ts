@@ -264,6 +264,15 @@ export interface PackMeta {
   metoffice_charts_in_coverage?: boolean;
   metoffice_charts_within_horizon?: boolean;
   metoffice_charts_public?: boolean;
+  // Météo-France TEMSI. A (zone, validity) list rather than a run cycle plus
+  // offsets: AEROWEB keys charts by absolute valid time, so the picker offers
+  // pairs ("France 15Z", "EUROC 18Z"). Nearest-to-ETD first; ids are
+  // `zone|run_cycle`. Empty is the normal case for a briefing built more than
+  // a few hours out — TEMSI only runs ~3h ahead.
+  meteofrance_charts_options?: Array<{ zone: string; run_cycle: string }>;
+  meteofrance_charts_default_id?: string | null;
+  meteofrance_charts_in_coverage?: boolean;
+  meteofrance_charts_within_horizon?: boolean;
 }
 
 export interface ModelDivergence {

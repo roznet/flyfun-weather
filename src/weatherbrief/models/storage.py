@@ -179,13 +179,14 @@ class BriefingPackMeta(BaseModel):
     # Météo-France TEMSI (SIGWX) charts — AEROWEB. Deliberately NOT the
     # (run_cycle, default_chart_id) shape the two front-chart sources use:
     # AEROWEB keys charts by absolute valid time with no run/offset split, so
-    # the selected validity is per *zone*, and the zones do not publish in
-    # lockstep (euroc has been seen a validity ahead of france). Maps zone slug
-    # -> the validity chosen for this flight, e.g. {"france": "2026-08-31T15Z"}.
+    # a chart is identified by a (zone, validity) *pair* and the picker lists
+    # pairs — "France 15Z", "EUROC 18Z" — where the siblings list offsets.
+    # Ordered nearest-to-ETD first; ids are "zone|validity".
     # Empty = unavailable: no access code, route outside French airspace (the
     # licence limit), or no validity near the ETD — TEMSI's horizon is ~3h, so
     # a briefing built the day before a flight legitimately has none.
-    meteofrance_charts_zone_cycles: dict[str, str] = Field(default_factory=dict)
+    meteofrance_charts_options: list[dict[str, str]] = Field(default_factory=list)
+    meteofrance_charts_default_id: Optional[str] = None  # "france|2026-08-31T15Z"
     meteofrance_charts_in_coverage: bool = False
     meteofrance_charts_within_horizon: bool = False
     # Hash of the flight parameters (route, departure time, altitude, ceiling,

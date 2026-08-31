@@ -562,7 +562,8 @@ class PackMetaResponse(BaseModel):
     # (unconfigured, route outside French airspace, or — most often — the
     # briefing was built beyond TEMSI's ~3h horizon). The frontend keys the
     # section off this map, not off a run cycle.
-    meteofrance_charts_zone_cycles: dict[str, str] = Field(default_factory=dict)
+    meteofrance_charts_options: list[dict[str, str]] = Field(default_factory=list)
+    meteofrance_charts_default_id: str | None = None
     meteofrance_charts_in_coverage: bool = False
     meteofrance_charts_within_horizon: bool = False
     # Live flight Flexibility mode (timing scenarios). Injected fresh from the
@@ -611,7 +612,8 @@ def _meta_to_response(
         metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=meta.metoffice_charts_within_horizon,
         metoffice_charts_public=_metoffice_public(),
-        meteofrance_charts_zone_cycles=meta.meteofrance_charts_zone_cycles,
+        meteofrance_charts_options=meta.meteofrance_charts_options,
+        meteofrance_charts_default_id=meta.meteofrance_charts_default_id,
         meteofrance_charts_in_coverage=meta.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=meta.meteofrance_charts_within_horizon,
         flexibility=flexibility,
@@ -1722,7 +1724,8 @@ def _build_pack_meta(
         metoffice_charts_default_id=result.metoffice_charts_default_id,
         metoffice_charts_in_coverage=result.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=result.metoffice_charts_within_horizon,
-        meteofrance_charts_zone_cycles=result.meteofrance_charts_zone_cycles,
+        meteofrance_charts_options=result.meteofrance_charts_options,
+        meteofrance_charts_default_id=result.meteofrance_charts_default_id,
         meteofrance_charts_in_coverage=result.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=result.meteofrance_charts_within_horizon,
         # What this briefing was computed *for*. The refresh gate compares it
@@ -4612,20 +4615,25 @@ def _meteofrance_licence_allows_pack(pack_dir) -> bool:
     return route_licence_allows(route)
 
 
-@router.get("/{timestamp}/meteofrance-chart/{zone}")
+@router.get("/{timestamp}/meteofrance-chart/{run_cycle}/{zone}")
 def get_meteofrance_chart(
     flight_id: str,
     timestamp: str,
+    run_cycle: str,
     zone: str,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
     """Serve a Météo-France TEMSI chart PNG for this pack.
 
-    ``zone`` is ``france`` (SFC-FL150) or ``euroc`` (FL100-FL450) — not a
-    forecast offset, because AEROWEB keys charts by absolute valid time. The
-    validity was chosen per zone when the briefing was built and is stored on
-    the pack, so the URL stays stable while the underlying window rolls.
+    Addressed by ``(run_cycle, zone)`` rather than a forecast offset, because
+    AEROWEB keys charts by absolute valid time: ``run_cycle`` IS the validity
+    and ``zone`` is ``france`` (SFC-FL150) or ``euroc`` (FL100-FL450).
+
+    The pair must be one this pack actually offers. That is not just input
+    validation — the offered set is what the licence and horizon checks were
+    applied to, so honouring an arbitrary cached validity would serve bytes
+    those checks never saw.
 
     404 when this pack has no TEMSI: no access code, route outside French
     airspace, or — the common case — the briefing was built more than a few
@@ -4636,8 +4644,11 @@ def get_meteofrance_chart(
     _load_flight_or_404(db, flight_id, viewer_id=user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
-    run_cycle = (meta.meteofrance_charts_zone_cycles or {}).get(zone)
-    if not run_cycle:
+    offered = {
+        (o.get("zone"), o.get("run_cycle"))
+        for o in (meta.meteofrance_charts_options or [])
+    }
+    if (zone, run_cycle) not in offered:
         raise HTTPException(
             status_code=404,
             detail="Météo-France TEMSI not available for this pack",
@@ -4672,7 +4683,7 @@ def get_meteofrance_chart_overlay(
     from weatherbrief.fetch.meteofrance_charts import build_route_overlay
 
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
-    if not meta.meteofrance_charts_zone_cycles:
+    if not meta.meteofrance_charts_options:
         raise HTTPException(
             status_code=404,
             detail="Météo-France TEMSI not available for this pack",

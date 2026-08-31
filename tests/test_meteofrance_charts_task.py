@@ -44,11 +44,42 @@ def cached(tmp_path: Path, monkeypatch):
     return tmp_path
 
 
-def test_selects_a_validity_per_zone(cached: Path):
+def test_offers_one_option_per_zone(cached: Path):
     res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=cached)
     assert res.in_coverage is True
     assert res.within_horizon is True
-    assert res.zone_cycles == {z: "2026-08-31T15Z" for z in CHART_IDS}
+    assert res.options == [
+        {"zone": z, "run_cycle": "2026-08-31T15Z"} for z in CHART_IDS
+    ]
+    # France first: the low-level chart is the one GA is actually flown inside.
+    assert res.default_id == "france|2026-08-31T15Z"
+
+
+def test_offers_neighbouring_validities_for_trend(cached: Path):
+    """Once a chart represents the ETD, the ones either side are offered too."""
+    root = cached / "meteofrance_charts"
+    for cycle in ("2026-08-31T12Z", "2026-08-31T18Z"):
+        d = root / cycle
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "france.png").write_bytes(b"\x89PNG stub")
+
+    res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=cached)
+    assert [(o["zone"], o["run_cycle"]) for o in res.options] == [
+        ("france", "2026-08-31T15Z"),
+        ("euroc", "2026-08-31T15Z"),
+        ("france", "2026-08-31T12Z"),
+        ("france", "2026-08-31T18Z"),
+    ]
+    assert res.default_id == "france|2026-08-31T15Z"
+
+
+def test_stale_validities_are_not_offered(cached: Path):
+    """A chart from yesterday is not trend context; it is noise."""
+    d = cached / "meteofrance_charts" / "2026-08-30T15Z"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "france.png").write_bytes(b"\x89PNG stub")
+    res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=cached)
+    assert all(o["run_cycle"].startswith("2026-08-31") for o in res.options)
 
 
 def test_non_french_route_gets_nothing(cached: Path, monkeypatch):
@@ -60,7 +91,7 @@ def test_non_french_route_gets_nothing(cached: Path, monkeypatch):
 
     res = run_meteofrance_charts(route=BRITISH, departure_time=ETD, data_dir=cached)
     assert res.in_coverage is False
-    assert res.zone_cycles == {}
+    assert res.options == []
     assert called == []  # never even refreshed
 
 
@@ -71,14 +102,14 @@ def test_beyond_horizon_is_distinct_from_out_of_coverage(cached: Path):
     )
     assert res.in_coverage is True
     assert res.within_horizon is False
-    assert res.zone_cycles == {}
+    assert res.options == []
 
 
 def test_unconfigured_source_is_silent(tmp_path: Path, monkeypatch):
     from weatherbrief.tasks import meteofrance_charts as task_mod
     monkeypatch.setattr(task_mod, "enabled", lambda: False)
     res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=tmp_path)
-    assert (res.in_coverage, res.within_horizon, res.zone_cycles) == (False, False, {})
+    assert (res.in_coverage, res.within_horizon, res.options) == (False, False, [])
 
 
 def test_refresh_failure_keeps_coverage_but_no_charts(cached: Path, monkeypatch):
@@ -87,7 +118,7 @@ def test_refresh_failure_keeps_coverage_but_no_charts(cached: Path, monkeypatch)
     monkeypatch.setattr(task_mod, "refresh_charts",
                         lambda *a, **k: RefreshReport(error="boom"))
     res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=cached)
-    assert res.in_coverage is True and res.zone_cycles == {}
+    assert res.in_coverage is True and res.options == []
 
 
 def test_refresh_raising_does_not_break_the_briefing(cached: Path, monkeypatch):
@@ -98,14 +129,14 @@ def test_refresh_raising_does_not_break_the_briefing(cached: Path, monkeypatch):
 
     monkeypatch.setattr(task_mod, "refresh_charts", boom)
     res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=cached)
-    assert res.in_coverage is True and res.zone_cycles == {}
+    assert res.in_coverage is True and res.options == []
 
 
 def test_zone_missing_from_cache_is_skipped(cached: Path):
     """The zones don't publish in lockstep, so one may have no validity."""
     (cached / "meteofrance_charts" / "2026-08-31T15Z" / "euroc.png").unlink()
     res = run_meteofrance_charts(route=FRENCH, departure_time=ETD, data_dir=cached)
-    assert res.zone_cycles == {"france": "2026-08-31T15Z"}
+    assert res.options == [{"zone": "france", "run_cycle": "2026-08-31T15Z"}]
     assert res.within_horizon is True
 
 
