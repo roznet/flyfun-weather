@@ -465,23 +465,26 @@ def evict_cycles_older_than(data_dir: Path, *, max_age_hours: float) -> list[str
 
 # Half the 3h validity spacing: beyond this a chart is closer to describing a
 # neighbouring validity than the one asked for.
-MAX_VALIDITY_GAP = timedelta(hours=1, minutes=30)
-
-# How far either side of the ETD the chart *picker* may offer validities.
-# Wider than MAX_VALIDITY_GAP on purpose, and the two answer different
-# questions: MAX_VALIDITY_GAP decides whether we hold a chart that genuinely
-# represents the ETD (and so whether the section appears at all), while this
-# decides how much either side is worth offering once it does. A pilot looking
-# at the 15Z chart wants the 12Z and 18Z next to it to read the trend; they do
-# not want yesterday's.
-OPTION_WINDOW = timedelta(hours=6)
+#: How far either side of the ETD a validity may sit and still be worth showing.
+#:
+#: This started at 1h30 — half the 3h spacing, i.e. "do we hold the chart that
+#: *represents* the ETD". That was too strict in practice. AEROWEB publishes
+#: only about two validities ahead of now, so for a flight even three hours out
+#: there is no chart valid at departure and the section vanished entirely,
+#: exactly when a pilot would still find the current TEMSI informative.
+#:
+#: 6h instead, and one window rather than two: what shows the section is the
+#: same test as what fills the picker. The honesty burden moves to the UI, which
+#: labels each chart with its absolute validity and its offset from departure —
+#: better than silently withholding a chart that is merely early.
+MAX_VALIDITY_GAP = timedelta(hours=6)
 
 
 def list_options_for_time(
     data_dir: Path,
     target: datetime,
     *,
-    window: timedelta = OPTION_WINDOW,
+    window: timedelta = MAX_VALIDITY_GAP,
 ) -> list[tuple[str, str]]:
     """Cached ``(zone, validity)`` pairs within ``window`` of ``target``.
 
