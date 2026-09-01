@@ -351,10 +351,11 @@ panel on the donate page at all.**
 The "your usage / N pilots / N briefings" reframing is `choose_translation()`,
 and it only fires when the user *types an amount into the form*
 (`previewAmount`, debounced) — it is prospective, never retrospective, never
-unprompted. Its personal path already consumes `burn_rate_monthly_usd` from
-`user_cost_stats` (`api/credits.py:187`), so the per-user cost is already
-computed and already on the wire. It is simply never shown to the people the
-nudge targets.
+unprompted. Its personal path already consumes a `burn_rate_monthly_usd` from
+`api/credits.py`, so the per-user cost is already computed and already on the
+wire. It is simply never shown to the people the nudge targets. (As built, that
+burn rate comes from `user_usage_stats` on the recomputed basis; the
+ledger-derived `user_cost_stats` it replaced has been deleted.)
 
 ### The fix
 

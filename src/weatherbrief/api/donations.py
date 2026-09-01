@@ -72,7 +72,6 @@ from weatherbrief.notify.donation_email import send_donation_receipt_email
 from weatherbrief.privacy import mask_email
 from weatherbrief.impact import (
     ProgramEconomics,
-    UsageFootprint,
     choose_translation,
     donation_impact,
     economics_from_report,
@@ -423,6 +422,41 @@ def _invoice_metadata(invoice: dict) -> dict:
     return invoice.get("metadata") if isinstance(invoice.get("metadata"), dict) else {}
 
 
+def _invoice_payment_intent(invoice: dict) -> str | None:
+    """The PaymentIntent that paid this invoice, across Stripe API shapes.
+
+    Recent API versions moved it from a top-level ``payment_intent`` to
+    ``payments.data[].payment.payment_intent``, and either can arrive expanded
+    (an object) or as a bare id, so all four shapes are read. ``None`` when the
+    invoice genuinely carries no PaymentIntent.
+    """
+    def _id(value: object) -> str | None:
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict) and isinstance(value.get("id"), str):
+            return value["id"] or None
+        return None
+
+    direct = _id(invoice.get("payment_intent"))
+    if direct:
+        return direct
+    # Every access is shape-guarded: an unexpected payload must degrade to the
+    # invoice-id fallback, never raise. A 500 here is a webhook Stripe retries
+    # for three days and then drops on the floor, taking the donation with it.
+    payments = invoice.get("payments")
+    entries = payments.get("data") if isinstance(payments, dict) else None
+    for payment in entries if isinstance(entries, list) else []:
+        if not isinstance(payment, dict):
+            continue
+        nested = payment.get("payment")
+        if not isinstance(nested, dict):
+            continue
+        inner = _id(nested.get("payment_intent"))
+        if inner:
+            return inner
+    return None
+
+
 def _handle_invoice_paid(db: Session, invoice: dict) -> dict:
     """Record a **recurring** donation's renewal payment (idempotent).
 
@@ -434,8 +468,15 @@ def _handle_invoice_paid(db: Session, invoice: dict) -> dict:
 
     The subscription's *first* invoice is skipped: ``checkout.session.completed``
     already recorded that payment, under a different ``provider_ref``, so
-    handling both would double-count it. ``provider_ref`` is the invoice id,
-    which is stable and unique per billing period.
+    handling both would double-count it.
+
+    ``provider_ref`` is the **PaymentIntent**, falling back to the invoice id
+    only when the invoice carries none. Both are unique per billing period, but
+    only the PaymentIntent is the key the rest of the webhook matches on:
+    ``charge.updated`` backfills the Stripe fee by ``charge.payment_intent``
+    and ``charge.refunded`` marks a refund by the same. Keyed on the invoice id
+    instead, a renewal would keep ``net_usd`` NULL forever *and* survive a
+    refund inside the community total and the donor-suppression gate.
 
     Attribution is best-effort — see :func:`_invoice_metadata`. An unattributed
     renewal is still recorded (it is real money, and it counts toward the
@@ -443,9 +484,9 @@ def _handle_invoice_paid(db: Session, invoice: dict) -> dict:
     the gate additionally treats *any* recurring donation as indefinite
     suppression.
     """
-    provider_ref = invoice.get("id")
+    invoice_id = invoice.get("id")
     amount_minor = invoice.get("amount_paid") or 0
-    if not provider_ref or amount_minor <= 0:
+    if not invoice_id or amount_minor <= 0:
         return {"received": True, "ignored": "empty invoice"}
     if invoice.get("billing_reason") == "subscription_create":
         # The Checkout session that opened the subscription already recorded it.
@@ -464,6 +505,21 @@ def _handle_invoice_paid(db: Session, invoice: dict) -> dict:
         logger.warning("FX unavailable for %s; recording 1:1 USD fallback", currency)
         amount_usd, fx_rate = amount, 1.0
 
+    payment_intent_id = _invoice_payment_intent(invoice)
+    provider_ref = payment_intent_id or invoice_id
+
+    # Same inline fee lookup as the Checkout path: the balance transaction is
+    # usually attached by now on a renewal (unlike a fresh charge), and
+    # charge.updated remains the backstop when it is not.
+    net_usd = None
+    if payment_intent_id:
+        try:
+            ratio = retrieve_net_ratio(payment_intent_id)
+            if ratio is not None:
+                net_usd = round(amount_usd * ratio, 6)
+        except Exception:
+            logger.warning("Could not retrieve Stripe fee for %s", payment_intent_id)
+
     user_id = metadata.get("user_id") or None
     if not user_id:
         logger.warning(
@@ -481,6 +537,7 @@ def _handle_invoice_paid(db: Session, invoice: dict) -> dict:
         amount_usd=round(amount_usd, 6),
         fx_rate=fx_rate,
         user_id=user_id,
+        net_usd=net_usd,
         recurring=True,
     )
     return {"received": True, "created": created}

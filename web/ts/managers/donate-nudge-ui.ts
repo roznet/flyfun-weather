@@ -117,7 +117,8 @@ function render(slot: HTMLElement, nudge: NudgeResponse): void {
     slot.innerHTML = '';
     slot.style.display = 'none';
   });
-  // Let the navigation proceed; the ack is in flight and the page is leaving.
+  // The navigation proceeds; `ackDonateNudge` sends with `keepalive` so the
+  // ack survives the unload it races.
   contribute.addEventListener('click', () => answer('clicked'));
 }
 

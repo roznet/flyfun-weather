@@ -237,10 +237,17 @@ export async function fetchDonateNudge(): Promise<NudgeResponse> {
  * `shown` must only be sent when the chip actually painted — the client also
  * suppresses beside a RED assessment, and acking a suppressed view would burn
  * an impression on something nobody saw.
+ *
+ * `keepalive` because the most important ack of all — `clicked` — is sent as
+ * the page navigates to /donate.html, and a plain fetch is abortable on unload.
+ * A lost `clicked` leaves the ask open on the server, so the pilot who just
+ * went to donate gets the chip again on their next briefing. Same primitive
+ * `analytics/track.ts` uses, and for the same reason.
  */
 export async function ackDonateNudge(action: NudgeAck): Promise<void> {
   await apiFetch('/donations/nudge/ack', {
     method: 'POST',
     body: JSON.stringify({ action }),
+    keepalive: true,
   });
 }
