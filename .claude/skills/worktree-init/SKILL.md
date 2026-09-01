@@ -74,9 +74,9 @@ Run only `install`, not `npm run dev` — the user invokes that via `devserver`.
 cp "$MAIN_DIR/.env" "$WORKTREE_PATH/.env"
 ```
 
-Main's `.env` already pins data paths (`DATA_DIR`, `AIRPORTS_DB`, `ECMWF_GRIB_DIR`, `DATABASE_URL`, etc.) to absolute paths under `$MAIN_DIR/data`, so a verbatim copy is what we want — heavy data + the app DB are shared with main by virtue of the env vars.
+Main's `.env` already pins data paths (`DATA_DIR`, `AIRPORTS_DB`, `ECMWF_GRIB_DIR`, etc.) to absolute paths under `$MAIN_DIR/data`, so a verbatim copy is what we want — heavy data + the app DB are shared with main by virtue of the env vars.
 
-**Do NOT create a `data/` directory or symlink in the worktree.** The whole point is that `DATA_DIR` (and friends) come from `.env`. If something in the codebase tries to read or write `./data` directly, we *want* it to fail loudly so the bug is visible. A stray `data/` dir would silently swallow that signal.
+**Do NOT create a `data/` directory or symlink in the worktree** (unless you are deliberately forking the DB — see below). The whole point is that `DATA_DIR` (and friends) come from `.env`. If something in the codebase tries to read or write `./data` directly, we *want* it to fail loudly so the bug is visible. A stray `data/` dir would silently swallow that signal.
 
 After copying, scan the result for **relative** path values as a sanity check:
 ```bash
@@ -84,11 +84,66 @@ grep -nE '^[A-Z_]+=\.\.?/|^[A-Z_]+=[a-z][a-z0-9_-]*/' "$WORKTREE_PATH/.env" || t
 ```
 If any matches turn up, warn the user — those would resolve relative to the worktree CWD and probably aren't what they want. Don't auto-rewrite; the user owns `.env`.
 
-**DB sharing:** because `.env` pins `DATABASE_URL` to main's DB, the worktree shares it. If this branch introduces alembic migrations, it WILL mutate main's DB. To isolate:
-1. Copy main's DB file: `cp $MAIN_DIR/data/flyfun.db $WORKTREE_PATH/flyfun.db` (or wherever)
-2. Edit `$WORKTREE_PATH/.env` and rewrite `DATABASE_URL` (and any other DB-pointing vars) to the new path.
+### DB sharing — and why `DATABASE_URL` is NOT the knob
 
-The skill does NOT do this automatically — print the recipe in the summary if the user wants it.
+The worktree shares main's app DB, because `.env` pins `DATA_DIR` at `$MAIN_DIR/data`
+and the dev DB is `{DATA_DIR}/flyfun.db`. If this branch adds an alembic migration
+it WILL mutate main's DB — and merely running `pytest` is enough to do it, since the
+suite migrates on the configured DB.
+
+**In dev the DB selector is `DATA_DIR`, not `DATABASE_URL`.** The two consumers
+disagree, and that asymmetry is a live trap:
+
+| Consumer | Resolution |
+|---|---|
+| `flyfun_common.db.get_engine()` | dev (`is_dev_mode()`): **always** `sqlite:///{DATA_DIR}/flyfun.db`. `DATABASE_URL` is read **only** in production. |
+| `alembic/env.py::_get_url()` | `DATABASE_URL` if set, else `sqlite:///{DATA_DIR}/flyfun.db`. |
+
+So setting **only** `DATABASE_URL` in a dev worktree moves alembic onto the copy and
+leaves the app on the shared DB. The migration lands in a file the app never opens.
+The symptom is nasty because both halves look healthy: `alembic current` reports head,
+while the app 500s with `no such column: <table>.<column_the_migration_just_added>`.
+Do not "fix" that by re-running the migration — check which file each side resolved
+first.
+
+**To actually fork the DB**, repoint `DATA_DIR` and symlink the heavy payload back, so
+only the DB is private:
+
+```bash
+mkdir -p "$WORKTREE_PATH/data"
+# Symlink everything in main's data dir EXCEPT the app DB + its WAL sidecars.
+for f in "$MAIN_DIR"/data/*; do
+  case "$(basename "$f")" in
+    flyfun.db|flyfun.db-shm|flyfun.db-wal) continue ;;
+  esac
+  ln -sfn "$f" "$WORKTREE_PATH/data/$(basename "$f")"
+done
+# Copy the DB itself. Use sqlite3 .backup, NOT cp: cp alone can miss a
+# non-checkpointed WAL, and deleting the -wal sidecar silently discards
+# whatever was only committed there.
+sqlite3 "$MAIN_DIR/data/flyfun.db" ".backup '$WORKTREE_PATH/data/flyfun.db'"
+# Point DATA_DIR at the worktree copy. Leave DATABASE_URL unset in dev.
+sed -i '' "s#^DATA_DIR=.*#DATA_DIR=$WORKTREE_PATH/data#" "$WORKTREE_PATH/.env"
+```
+
+This is the one case where a worktree-local `data/` is correct: the `./data` canary
+above is traded away deliberately, in exchange for migrations that cannot reach main.
+
+**Verify the fork took** — this is the check that catches the trap:
+```bash
+cd "$WORKTREE_PATH" && source venv/bin/activate
+python -c "
+from dotenv import load_dotenv; load_dotenv()
+from flyfun_common.db import get_engine
+print('app     :', get_engine().url)
+import os; print('alembic :', os.environ.get('DATABASE_URL') or f\"sqlite:///{os.environ['DATA_DIR']}/flyfun.db\")
+"
+```
+Both lines MUST print the same path, and it MUST be under `$WORKTREE_PATH`. If they
+differ, the fork is half-applied — stop and fix before running anything.
+
+The skill does NOT fork automatically — print the recipe in the summary if the user
+wants it.
 
 ## Step 6 — Print summary
 
@@ -99,6 +154,9 @@ Output a single block with:
 - Editable install path verification result (from Step 3)
 - `.env` copy status; flag any relative-path values found in Step 5
 - One-line note: "DB and heavy data shared with main via `.env` — see skill notes if you need to fork."
+- **If the branch adds an alembic migration**, say so explicitly and offer the fork
+  recipe. Sharing is fine for most branches; a migration is the case where it isn't,
+  because it leaves main's DB stamped at a revision main's checkout can't resolve.
 - Next step: `cd <worktree-path> && /devserver`
 
 Example:
@@ -111,7 +169,8 @@ Worktree ready at <parent>/flyfun-weather/issue-65
   .env:      copied from main (no relative paths found)
 
 Next: cd /.../issue-65 && /devserver
-DB note: shared with main via .env. If this branch adds migrations, see skill Step 5 notes to fork.
+DB note: shared with main via .env (DATA_DIR). If this branch adds migrations, fork
+         it — see Step 5. Setting DATABASE_URL alone does NOT fork it in dev.
 ```
 
 ## Failure handling
