@@ -545,7 +545,7 @@ Check narrow-viewport wrapping of the new `toolbar-feedback-group` when adding
 the chip - `.briefing-toolbar` is `flex-wrap: wrap`, so the wrapper can drop to
 its own line on narrow layouts, where `right: 0` popover anchoring still holds.
 
-## Copy (draft — for review and tweaking)
+## Copy (operator-approved 2026-09-01 — do not rewrite)
 
 Both live as i18n keys (`en`/`fr`/`de`/`es` locale files), not inline strings.
 `{braced}` fields are runtime values; everything else is fixed text. **Neither
@@ -651,7 +651,7 @@ Note this copy makes no claim about the individual pilot, so the low
 `account_age >= 14d` campaign gate is safe: a pilot who joined last month still
 reads it as true.
 
-### Notes for whoever tweaks this
+### Constraints if this is ever revised
 
 - Keep it to ~3 short lines. The popover is a hook, not the pitch — the donate
   page carries the stats trio, community coverage and the amount ladder.
