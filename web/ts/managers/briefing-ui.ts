@@ -122,7 +122,7 @@ export function renderHeader(
 // --- Stale-pack banner ---
 
 import { computeStalePackBanner } from '../helpers/stale-pack-banner';
-import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel } from '../utils/temsi';
+import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel, temsiValidityOffset } from '../utils/temsi';
 
 /** Render the stale-pack banner. Owner-only — non-owners can't trigger
  *  a refresh. Uses textContent (not innerHTML) so localized strings
@@ -2690,7 +2690,15 @@ function makeMeteofranceSource(flight: FlightResponse, pack: PackMeta): ChartSou
       const [zone, runCycle] = split(id);
       const valid = parseRunCycle(runCycle);
       const detail = TEMSI_ZONE_DETAIL[zone] || zone;
-      return valid ? `${detail} · valid ${formatUtcCaption(valid)} · ` : `${detail} · `;
+      if (!valid) return `${detail} · `;
+      // The picker reaches ±6h while TEMSI only publishes ~3h ahead, so the
+      // chart on screen is usually valid before the flight. Name the gap.
+      const etd = Date.parse(flight.departure_time);
+      const offset = Number.isNaN(etd)
+        ? null
+        : temsiValidityOffset(valid.getTime(), etd);
+      const gap = offset ? ` (${offset})` : '';
+      return `${detail} · valid ${formatUtcCaption(valid)}${gap} · `;
     },
     attributionHtml: `Source: <a href="https://aviation.meteo.fr/" target="_blank" rel="noopener">M&eacute;t&eacute;o-France</a> — AEROWEB`,
   };

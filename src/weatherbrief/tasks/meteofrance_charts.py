@@ -29,12 +29,10 @@ from datetime import datetime
 from pathlib import Path
 
 from weatherbrief.fetch.meteofrance_charts import (
-    CHART_IDS,
     enabled,
     list_options_for_time,
     refresh_charts,
     route_licence_allows,
-    select_cycle_for_time,
 )
 from weatherbrief.models import RouteConfig
 
@@ -70,11 +68,11 @@ def run_meteofrance_charts(
     isn't configured, the route falls outside the licence, the refresh fails,
     or no cached validity is near enough to the ETD.
 
-    That last case is normal rather than exceptional: TEMSI runs ~3h ahead, so
-    any briefing built more than a few hours before departure will legitimately
-    have no chart. It is reported as ``within_horizon=False`` (distinct from
-    ``in_coverage=False``) so the UI can say "no TEMSI for this time" rather
-    than implying the route is ineligible.
+    That last case is normal rather than exceptional: AEROWEB offers barely two
+    validities ahead of now, so any briefing built more than ~6h before
+    departure will legitimately have no chart. It is reported as
+    ``within_horizon=False`` (distinct from ``in_coverage=False``) so the UI can
+    say "no TEMSI for this time" rather than implying the route is ineligible.
     """
     if not enabled():
         logger.debug("Météo-France charts not configured; skipping")
@@ -94,17 +92,17 @@ def run_meteofrance_charts(
         logger.info("Météo-France chart refresh failed: %s", report.error)
         return MeteofranceChartsResult(in_coverage=True)
 
-    # The section only earns its place if some chart genuinely represents the
-    # ETD; once it does, offer the neighbouring validities as trend context.
-    represents_etd = any(
-        select_cycle_for_time(data_dir, departure_time, chart_id=zone) is not None
-        for zone in CHART_IDS
-    )
-    options = (
-        [{"zone": z, "run_cycle": rc}
-         for z, rc in list_options_for_time(data_dir, departure_time)]
-        if represents_etd else []
-    )
+    # One window (MAX_VALIDITY_GAP, 6h): every cached validity near the ETD is
+    # offered, and having any at all is what makes the section appear. There
+    # used to be a second, tighter test for "does a chart represent the ETD" —
+    # dropped, because AEROWEB publishes barely two validities ahead, so it hid
+    # the section for any flight more than ~90 min out. A chart that is merely
+    # early is still worth reading; the UI states each one's offset from
+    # departure rather than us withholding it.
+    options = [
+        {"zone": z, "run_cycle": rc}
+        for z, rc in list_options_for_time(data_dir, departure_time)
+    ]
 
     if report.charts_failed:
         logger.info(

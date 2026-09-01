@@ -73,6 +73,34 @@ def test_offers_neighbouring_validities_for_trend(cached: Path):
     assert res.default_id == "france|2026-08-31T15Z"
 
 
+def test_chart_hours_before_departure_is_still_offered(cached: Path):
+    """The gate is 6h, not "does a chart represent the ETD".
+
+    AEROWEB publishes barely two validities ahead, so under the old 1h30 rule
+    a flight even three hours out saw nothing — precisely when the current
+    TEMSI is still worth reading. 15Z cached, 20:00Z departure: 5h early, and
+    it must show.
+    """
+    res = run_meteofrance_charts(
+        route=FRENCH,
+        departure_time=datetime(2026, 8, 31, 20, 0, tzinfo=timezone.utc),
+        data_dir=cached,
+    )
+    assert res.within_horizon is True
+    assert res.default_id == "france|2026-08-31T15Z"
+
+
+def test_gate_stops_at_six_hours(cached: Path):
+    """Past 6h it is no longer context, and the section stays hidden."""
+    res = run_meteofrance_charts(
+        route=FRENCH,
+        departure_time=datetime(2026, 8, 31, 21, 31, tzinfo=timezone.utc),
+        data_dir=cached,
+    )
+    assert res.within_horizon is False
+    assert res.options == []
+
+
 def test_stale_validities_are_not_offered(cached: Path):
     """A chart from yesterday is not trend context; it is noise."""
     d = cached / "meteofrance_charts" / "2026-08-30T15Z"
