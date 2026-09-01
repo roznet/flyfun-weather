@@ -239,3 +239,87 @@ class TestBelowBaseEscape:
         )
         ctx = self._route(cruise_ft=16000, base_ft=1500)
         assert below_base_escape(ctx, "gfs", resolve_character_params(ctx)) is None
+
+
+class TestAnUncharacterisedBandNeverSoftens:
+    """Review round 1, Critical: `NONE`/`UNKNOWN` must not zero a flagged axis.
+
+    The first cut of the cap read `CHARACTER_STATUS`, which is the character
+    *card's own grade* — where NONE → GREEN is correct ("nothing to
+    characterise"). Used as a cap it turned "no answer" into "it's fine":
+    `_least_severe(RED, GREEN)` is GREEN. That is the #391 false-clear, and the
+    §22 divergence this whole axis exists to close, reintroduced through it.
+
+    The live reproduction is a LOW-risk route: the character axis floors at
+    `min_risk` MODERATE while grading floors at LOW, so an AMBER convective card
+    yields character NONE — and the composite published GREEN with a detail line
+    that read "not circumnavigable VFR" beside it.
+    """
+
+    def _low_risk_route(self):
+        return _ctx([_nwp_cell(ConvectiveRisk.LOW)] * 8)
+
+    def test_low_risk_route_keeps_the_convective_colour(self):
+        ctx = self._low_risk_route()
+        assert _status_of(ConvectiveEvaluator, ctx) == AdvisoryStatus.AMBER
+        assert classify_route_character(
+            ctx, "gfs", resolve_character_params(ctx)
+        ) is ConvectiveCharacter.NONE
+        # The bug published GREEN here.
+        assert _vfr(ctx).status == AdvisoryStatus.AMBER
+
+    def test_it_claims_neither_avoidability_nor_its_absence(self):
+        """The sentence tracks what was established, not the colour.
+
+        "circumnavigable" would be the false clear in prose; "not
+        circumnavigable" (what the buggy ternary printed) asserts a judgement the
+        character axis never made.
+        """
+        detail = _vfr(self._low_risk_route()).detail.lower()
+        assert "avoidability not established" in detail
+        assert "circumnavigable" not in detail
+
+    def test_the_cap_still_fires_for_a_band_that_did_establish_it(self):
+        """The guard must not have disabled the softening it guards."""
+        ctx = _ctx([_nwp_cell(ConvectiveRisk.HIGH)] + [_quiet()] * 7)
+        assert _status_of(ConvectiveEvaluator, ctx) == AdvisoryStatus.RED
+        assert classify_route_character(
+            ctx, "gfs", resolve_character_params(ctx)
+        ) is ConvectiveCharacter.ISOLATED
+        result = _vfr(ctx)
+        assert result.status == AdvisoryStatus.AMBER
+        assert "circumnavigable with see-and-avoid" in result.detail.lower()
+
+
+class TestConvectionReachesTheHighlight:
+    """Review round 1, Important: the graded axis must also be drawn.
+
+    Convection can be the sole driver of the composite's colour — the reported
+    LFMD→EGTF shape had airport, cloud, corridor and precip all clear. The
+    highlight built only cloud/corridor geometry, so it returned an empty
+    `regions` list and an all-GREEN ribbon; both renderers skip the scrim on
+    empty regions, so the cross-section drew a spotless chart beside an AMBER
+    badge.
+    """
+
+    def _conv_only_route(self):
+        # Cells based well above cruise so the cloud axes stay quiet and
+        # convection is the only thing flagging.
+        return _ctx(
+            [_nwp_cell(ConvectiveRisk.HIGH, base_ft=14000, top_ft=32000)] * 4
+            + [_quiet()] * 4,
+            cruise_ft=8000,
+        )
+
+    def test_regions_are_not_empty_when_convection_drives_the_grade(self):
+        ctx = self._conv_only_route()
+        result = _vfr(ctx)
+        assert result.status != AdvisoryStatus.GREEN
+        regions = (result.highlights.regions if result.highlights else [])
+        assert regions, "convective grade with no geometry — the scrim would skip"
+        assert any(r.metric_id == "convective_risk" for r in regions)
+
+    def test_the_ribbon_is_not_all_green_under_a_flagged_grade(self):
+        result = _vfr(self._conv_only_route())
+        severities = {s.severity for s in result.highlights.ribbon}
+        assert severities - {"green"}, f"ribbon reads all-green: {severities}"

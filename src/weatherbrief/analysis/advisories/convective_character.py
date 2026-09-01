@@ -633,27 +633,6 @@ class BelowBaseEscape(NamedTuple):
     margin_ft: int
 
 
-def route_below_base(
-    ctx: RouteContext,
-    model: str,
-    params: dict[str, float],
-    cruise_ft: float | None = None,
-) -> _BelowBase:
-    """The below-base avoidability geometry for one model at ``cruise_ft``.
-
-    Public entry point onto the #298 geometry so a consumer gets the same
-    classification the character card annotates with, rather than re-deriving
-    "can we get under the cells" from raw layers.
-    """
-    level = ctx.cruise_altitude_ft if cruise_ft is None else cruise_ft
-    inputs = build_character_points(ctx, model, params, cruise_ft=level)
-    return _below_base_geometry(
-        inputs.points,
-        level,
-        params.get("base_clearance_ft", CHARACTER_PARAM_DEFAULTS["base_clearance_ft"]),
-    )
-
-
 def below_base_escape(
     ctx: RouteContext, model: str, params: dict[str, float]
 ) -> BelowBaseEscape | None:
