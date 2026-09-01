@@ -314,6 +314,11 @@ class TestLifecycle:
         d = nudge.decide(state, _eligible(today=TODAY + timedelta(days=90)))
         assert d.state.open_ask is None
         assert not d.show
+        # Closed, and no replacement opens: at 90 days the floor has just
+        # lapsed, so what actually withholds the next ask is that this pilot's
+        # cost has not reached rung 2. (The floor's own effect is isolated in
+        # test_a_backstopped_ask_still_arms_the_ninety_day_floor.)
+        assert d.reason == nudge.REASON_NO_RUNG_CROSSED
 
     def test_popover_dismissed_without_choosing_does_not_consume_the_ask(self):
         """Esc / click-outside answers nothing; only the impression counted."""
@@ -441,6 +446,38 @@ class TestCampaignGate:
         state = nudge.decide(nudge.NudgeState(), self._inputs()).state
         after = nudge.decide(state, self._inputs(today=self.WINDOW.closes + timedelta(days=1)))
         assert after.state.open_ask is None
+
+    def test_a_donation_mid_campaign_closes_that_campaign_ask(self):
+        """The lookback that refuses to *open* the ask must also close one open.
+
+        Otherwise a pilot who gives during the window keeps being asked for the
+        rest of it — by the very campaign they just answered.
+        """
+        state = nudge.record_shown(
+            nudge.decide(nudge.NudgeState(), self._inputs()).state, TODAY
+        )
+        gave = self.WINDOW.opens + timedelta(days=1)
+        d = nudge.decide(
+            state,
+            self._inputs(today=TODAY + timedelta(days=1), has_donated=True,
+                         last_donation_at=gave),
+        )
+        assert d.state.open_ask is None
+        # Closed *and* marked answered for this campaign, so it cannot reopen
+        # inside the window — which is what the reason reports.
+        assert not d.show and d.reason == nudge.REASON_CAMPAIGN_CLOSED
+        assert d.state.campaign is not None and d.state.campaign.closed
+
+    def test_an_old_donation_does_not_close_a_live_campaign_ask(self):
+        """Last year's campaign donor is exactly who this year's ask is for."""
+        state = nudge.decide(nudge.NudgeState(), self._inputs()).state
+        old_gift = self.WINDOW.opens - timedelta(days=400)
+        d = nudge.decide(
+            state,
+            self._inputs(today=TODAY + timedelta(days=1), has_donated=True,
+                         last_donation_at=old_gift),
+        )
+        assert d.state.open_ask is not None and d.show
 
     def test_campaign_wins_when_both_would_fire(self):
         d = nudge.decide(nudge.NudgeState(), self._inputs(true_lifetime_cost_usd=50.0))

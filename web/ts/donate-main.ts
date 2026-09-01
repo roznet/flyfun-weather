@@ -24,7 +24,8 @@ import {
   resolveInitialCurrency,
   setStoredCurrency,
 } from './currency';
-import { escapeHtml, renderUserInfo } from './utils';
+import { renderUserInfo } from './utils';
+import { boldify, formatMonthName } from './helpers/copy-format';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 
@@ -217,7 +218,7 @@ function renderPersonal(me: DonationMe): void {
  */
 function usageSubHtml(me: DonationMe): string {
   const count = me.usage.briefings.toLocaleString();
-  const month = formatMonth(me.usage.first_briefing_at);
+  const month = formatMonthName(me.usage.first_briefing_at);
   const lead = month
     ? t('donate.usage.sub', { count, month })
     : t('donate.usage.subNoMonth', { count });
@@ -226,18 +227,7 @@ function usageSubHtml(me: DonationMe): string {
   return boldify(lead + extra);
 }
 
-/** Escape first, then honour `**bold**` — the same order the briefing digest
- * uses, so emphasis survives without opening the markup to API content. */
-function boldify(text: string): string {
-  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-}
 
-/** "April" in the viewer's locale; "" when there is no usable date. */
-function formatMonth(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'long' });
-}
 
 /** Populate the expandable per-donation list (date + charged amount) and wire
  * its toggle. Amounts show what was actually charged — a truthful record that

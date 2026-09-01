@@ -409,17 +409,24 @@ def _invoice_metadata(invoice: dict) -> dict:
     and treat "not found" as an anonymous donation rather than dropping the
     money.
     """
-    for candidate in (
-        (invoice.get("subscription_details") or {}).get("metadata"),
+    def _dict(value: object) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    # Shape-guarded at every access, like :func:`_invoice_payment_intent`: a
+    # field arriving as a non-dict must fall through to "no metadata", never
+    # raise. Nothing catches an AttributeError on the way out of
+    # ``_handle_invoice_paid``, and a 500 here is a webhook Stripe retries for
+    # three days and then drops, taking the renewal with it.
+    lines = _dict(invoice.get("lines")).get("data")
+    candidates = [
+        _dict(invoice.get("subscription_details")).get("metadata"),
         invoice.get("metadata"),
-        *[
-            (line or {}).get("metadata")
-            for line in ((invoice.get("lines") or {}).get("data") or [])
-        ],
-    ):
+        *[_dict(line).get("metadata") for line in (lines if isinstance(lines, list) else [])],
+    ]
+    for candidate in candidates:
         if isinstance(candidate, dict) and candidate.get("user_id"):
             return candidate
-    return invoice.get("metadata") if isinstance(invoice.get("metadata"), dict) else {}
+    return _dict(invoice.get("metadata"))
 
 
 def _invoice_payment_intent(invoice: dict) -> str | None:
@@ -973,16 +980,27 @@ def reset_nudge_cache() -> None:
 
 
 def _cached(key: str, build):
-    """Memoize ``build()`` under ``key`` for :data:`_NUDGE_CACHE_TTL_SECONDS`."""
-    now = time.monotonic()
+    """Memoize ``build()`` under ``key`` for :data:`_NUDGE_CACHE_TTL_SECONDS`.
+
+    **Single-flight**: the lock is held across ``build()``, so the concurrent
+    misses that arrive together when the TTL lapses queue behind one rebuild
+    instead of each starting their own. On the briefing page — the hottest page
+    in the app — a stampede of ``build_program_report`` calls is the exact cost
+    this cache exists to avoid, and paying it once an hour on one request beats
+    paying it N times.
+
+    The cache is per-process, so each uvicorn worker keeps its own and rebuilds
+    on its own hourly cadence. Accepted: the deployment runs a single worker
+    today, and the figures are stale-tolerant by design either way.
+    """
     with _nudge_cache_lock:
+        now = time.monotonic()
         entry = _nudge_cache.get(key)
         if entry is not None and now - entry[0] < _NUDGE_CACHE_TTL_SECONDS:
             return entry[1]
-    value = build()
-    with _nudge_cache_lock:
-        _nudge_cache[key] = (now, value)
-    return value
+        value = build()
+        _nudge_cache[key] = (time.monotonic(), value)
+        return value
 
 
 def _cached_report(db: Session) -> ProgramCostReport | None:
@@ -1248,6 +1266,28 @@ def _ledger_cost(db: Session, user_id: str) -> float:
     )
 
 
+def _own_briefing_headline(db: Session, user_id: str) -> tuple[int, datetime | None]:
+    """``(briefing_count, first_briefing_at)`` — two aggregates, no row parse.
+
+    The evergreen copy needs a count and a month, nothing more. Deriving them
+    from :func:`user_usage_stats` would JSON-parse every one of the pilot's
+    breakdown rows on each page view for the life of an open ask, which is the
+    same cost the gate goes out of its way to avoid.
+    """
+    count, first = (
+        db.query(func.count(CostLedgerRow.id), func.min(CostLedgerRow.created_at))
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+        )
+        .one()
+    )
+    if first is not None and first.tzinfo is None:
+        first = first.replace(tzinfo=timezone.utc)
+    return int(count or 0), first
+
+
 def _nudge_summary(db: Session, user_id: str, kind: str, stats) -> NudgeSummary:
     """The substitutions the chosen variant's copy needs — and nothing else."""
     if kind == nudge.KIND_CAMPAIGN:
@@ -1259,13 +1299,15 @@ def _nudge_summary(db: Session, user_id: str, kind: str, stats) -> NudgeSummary:
         )
         return NudgeSummary(pilots_last_year=pilots, briefings_last_year=briefings)
 
-    if stats is None:
-        stats = user_usage_stats(db, user_id, _cached_report(db))
+    # Reuse the footprint when the gate already built one; otherwise take the
+    # cheap route rather than re-deriving it.
+    if stats is not None:
+        count, first = stats.footprint.briefings, stats.first_briefing_at
+    else:
+        count, first = _own_briefing_headline(db, user_id)
     return NudgeSummary(
-        briefing_count=stats.footprint.briefings,
-        first_briefing_at=(
-            stats.first_briefing_at.isoformat() if stats.first_briefing_at else None
-        ),
+        briefing_count=count,
+        first_briefing_at=first.isoformat() if first else None,
     )
 
 

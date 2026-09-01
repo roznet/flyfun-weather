@@ -26,6 +26,7 @@ import {
 import { track } from '../analytics/track';
 import { EVENTS } from '../analytics/events';
 import { t } from '../i18n/i18n';
+import { boldify, formatMonthName } from '../helpers/copy-format';
 import { escapeHtml } from '../utils';
 
 const SLOT_ID = 'donate-nudge-slot';
@@ -33,24 +34,57 @@ const SLOT_ID = 'donate-nudge-slot';
 /** Assessment grades the chip refuses to appear beside. */
 const SUPPRESSED_ASSESSMENTS = new Set(['RED']);
 
-let wired = false;
+// Four separate pieces of state, because they answer four different questions
+// and conflating them is what lets a chip outlive its assessment:
+//   `asked`     — have we opened an ask on the server? At most once per load.
+//   `painted`   — the chip in the DOM, whose visibility must be kept current.
+//   `impressed` — has this ask's one impression been acked? Only on first
+//                 *visible* paint, so a chip that painted hidden and is
+//                 revealed later still counts exactly one.
+//   `answered`  — has the pilot answered? Then nothing paints again this load.
+let asked = false;
+let painted: { slot: HTMLElement; nudge: NudgeResponse } | null = null;
+let impressed = false;
+let answered = false;
+/** The assessment of the most recent render, so a response that lands after a
+ *  pack switch is shown or hidden against the pack actually on screen. */
+let lastAssessment: string | null | undefined;
 
 /**
- * Ask the server whether to offer a donate chip, and paint it if so.
+ * Ask the server whether to offer a donate chip, paint it if so — and keep its
+ * visibility honest as the assessment changes.
  *
- * Safe to call once per briefing page load; a second call is a no-op so a
- * re-render never re-fetches or double-counts an impression. Every failure path
- * is silent — a donation ask is the least important thing on this page, and it
- * must never surface an error or delay anything else.
+ * **Call this on every render that can change the assessment**, not just once
+ * on load. The pilot can swap packs from the history dropdown and a refresh can
+ * land a new one, both in place; a chip painted beside a GREEN pack and never
+ * re-checked would still be sitting there when a RED pack replaced it, which is
+ * exactly the one thing this feature must never do. A first render on RED
+ * likewise must not cost the pilot the chip for the rest of the session.
+ *
+ * Re-entrant by design: only the *first* non-suppressed call opens an ask and
+ * counts an impression. Later calls just re-apply suppression, so no re-render
+ * re-fetches or double-counts.
+ *
+ * Every failure path is silent — a donation ask is the least important thing on
+ * this page, and it must never surface an error or delay anything else.
  */
 export async function initDonateNudge(assessment: string | null | undefined): Promise<void> {
-  if (wired) return;
   const slot = document.getElementById(SLOT_ID);
-  if (!slot) return;
+  if (!slot || answered) return;
 
-  // Bail before the request when we already know we would suppress: no point
-  // opening an ask on the server for a view that cannot render it.
-  if (shouldSuppressNudge(assessment)) return;
+  lastAssessment = assessment;
+
+  // A chip is already up: the assessment is the only thing that can have
+  // changed, so re-apply suppression and stop.
+  if (painted) {
+    applyVisibility();
+    return;
+  }
+
+  // Don't open an ask on the server for a view that cannot render it. `asked`
+  // stays false, so a later non-RED render still gets its chance.
+  if (shouldSuppressNudge(assessment) || asked) return;
+  asked = true;
 
   let nudge: NudgeResponse;
   try {
@@ -60,8 +94,30 @@ export async function initDonateNudge(assessment: string | null | undefined): Pr
   }
   if (!nudge.show) return;
 
-  wired = true;
+  // The pilot can have switched to a RED pack while the request was in flight.
+  // The ask is open server-side either way, so paint the chip — but paint it
+  // against `lastAssessment`, not the assessment this call started with, so it
+  // never flashes onto a briefing that has since gone RED.
   render(slot, nudge);
+}
+
+/**
+ * Show or hide the painted chip for the current assessment, and count the
+ * impression the first time it is actually visible.
+ *
+ * The ack lives here rather than at paint time so the two stay in step: a chip
+ * that painted hidden (a RED pack landed mid-flight) must not burn an
+ * impression, and must still count one if the pilot switches away and sees it.
+ */
+function applyVisibility(): void {
+  if (!painted) return;
+  const { slot, nudge } = painted;
+  const suppressed = shouldSuppressNudge(lastAssessment);
+  slot.style.display = suppressed ? 'none' : '';
+  if (suppressed || impressed) return;
+  impressed = true;
+  void ackDonateNudge('shown').catch(() => {});
+  track(EVENTS.DONATE_NUDGE_SHOWN, { kind: nudge.kind, rung: nudge.rung });
 }
 
 /** Whether the chip refuses to appear beside this assessment.
@@ -76,16 +132,16 @@ export function shouldSuppressNudge(assessment: string | null | undefined): bool
 
 function render(slot: HTMLElement, nudge: NudgeResponse): void {
   slot.innerHTML = chipHtml(nudge);
-  slot.style.display = '';
+  painted = { slot, nudge };
 
   const chip = slot.querySelector<HTMLButtonElement>('.donate-nudge-chip')!;
   const popover = slot.querySelector<HTMLElement>('.donate-nudge-popover')!;
   const later = slot.querySelector<HTMLButtonElement>('.donate-nudge-later')!;
   const contribute = slot.querySelector<HTMLAnchorElement>('.donate-nudge-contribute')!;
 
-  // The chip painted, so the impression is real: ack it and count it.
-  void ackDonateNudge('shown').catch(() => {});
-  track(EVENTS.DONATE_NUDGE_SHOWN, { kind: nudge.kind, rung: nudge.rung });
+  // Visible only if the pack on screen right now allows it; the impression is
+  // acked there, not here.
+  applyVisibility();
 
   const setOpen = (open: boolean): void => {
     popover.hidden = !open;
@@ -103,7 +159,11 @@ function render(slot: HTMLElement, nudge: NudgeResponse): void {
     if (!popover.hidden && !slot.contains(e.target as Node)) setOpen(false);
   });
 
+  // One answer per ask. Guards a double click on Contribute (whose navigation
+  // leaves the chip on screen for a moment) as well as any later re-render.
   const answer = (action: 'clicked' | 'dismissed'): void => {
+    if (answered) return;
+    answered = true;
     void ackDonateNudge(action).catch(() => {});
     track(
       action === 'clicked' ? EVENTS.DONATE_NUDGE_CLICKED : EVENTS.DONATE_NUDGE_DISMISSED,
@@ -114,6 +174,7 @@ function render(slot: HTMLElement, nudge: NudgeResponse): void {
   later.addEventListener('click', () => {
     answer('dismissed');
     setOpen(false);
+    painted = null;
     slot.innerHTML = '';
     slot.style.display = 'none';
   });
@@ -165,7 +226,7 @@ function bodyHtml(nudge: NudgeResponse): string {
   }
 
   const count = nudge.summary.briefing_count.toLocaleString();
-  const month = formatMonth(nudge.summary.first_briefing_at);
+  const month = formatMonthName(nudge.summary.first_briefing_at);
   // No usable first-briefing date → a variant that does not need one, rather
   // than "since ." with a hole in it.
   const lead = month
@@ -174,27 +235,17 @@ function bodyHtml(nudge: NudgeResponse): string {
   return para(lead) + closing;
 }
 
-/** One escaped paragraph, with `**bold**` honoured.
- *
- * Same order as `formatDigestBody`: escape everything first, then inject our
- * own tags — so the emphasis the copy carries survives without opening the
- * markup to whatever came back from the API.
- */
+/** One escaped paragraph, with `**bold**` honoured. */
 function para(text: string): string {
-  const bold = escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  return `<p>${bold}</p>`;
-}
-
-/** "April" in the viewer's locale; "" when there is no usable date. */
-function formatMonth(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { month: 'long' });
+  return `<p>${boldify(text)}</p>`;
 }
 
 
-/** Test seam: forget that a chip was already wired on this page. */
+/** Test seam: forget everything remembered about this page load. */
 export function _resetDonateNudgeForTests(): void {
-  wired = false;
+  asked = false;
+  painted = null;
+  impressed = false;
+  answered = false;
+  lastAssessment = undefined;
 }

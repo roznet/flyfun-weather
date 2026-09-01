@@ -450,11 +450,20 @@ def decide(state: NudgeState, inputs: GateInputs) -> NudgeDecision:
     window = inputs.campaign
     campaign_live = window is not None and window.active(inputs.today)
 
-    # A donation mid-ask closes the open ask: the never-contributed gate has
-    # failed permanently, so the evergreen path is over. A campaign ask
-    # survives only while the campaign's own donor lookback still admits them.
-    if inputs.has_donated and state.open_ask is not None and state.open_ask.kind == KIND_EVERGREEN:
-        state = _close(state, inputs.today)
+    # A donation mid-ask closes the open ask. For evergreen that is permanent:
+    # the never-contributed gate has failed and the path is over. For a
+    # campaign it is this campaign only — "donated since this campaign opened"
+    # means suppressed until next year, and the same donor-lookback that would
+    # refuse to *open* the ask has to be able to close one already open, or a
+    # pilot who donates mid-window keeps being asked for the rest of it.
+    open_ask = state.open_ask
+    if inputs.has_donated and open_ask is not None:
+        if open_ask.kind == KIND_EVERGREEN:
+            state = _close(state, inputs.today)
+        elif window is not None and open_ask.campaign_id == window.id:
+            campaign = _campaign_state_for(state, window)
+            if _campaign_blocked(state, inputs, window, campaign) == REASON_DONATED:
+                state = _close(state, inputs.today)
 
     if inputs.has_recurring_donation:
         return NudgeDecision(state, False, "", 0, REASON_DONATED, state is not original)
