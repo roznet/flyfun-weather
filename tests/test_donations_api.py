@@ -827,6 +827,38 @@ class TestNudgeEndpoint:
             "no_rung_crossed"
         )
 
+    def test_the_rung_is_measured_on_the_true_cost_not_the_ledger(
+        self, make_client, session_factory
+    ):
+        """The whole point of `usage_footprint`, pinned end to end.
+
+        This pilot's *charged* total clears K=1.5 comfortably — it is what the
+        ledger over-recovered — while their recomputed cost does not. The
+        ledger sum is only allowed to be a cheap upper-bound pre-filter; if it
+        ever became the figure the rung is compared against, this pilot would
+        be asked for money on the strength of an amortization artefact.
+        """
+        _seed_nudge_eligible(session_factory, dev_briefings=12)
+        report = None
+        s = session_factory()
+        try:
+            from weatherbrief.api.credits import build_program_report, user_usage_stats
+
+            report = build_program_report(s, 30)
+            stats = user_usage_stats(s, DEV_USER_ID, report)
+            econ = donations.economics_from_report(report)
+        finally:
+            s.close()
+
+        rung1 = 1.5 * econ.cost_per_user_month_usd
+        # The premise: ledger above the rung, recomputed cost below it. If this
+        # ever stops holding the test is not testing what it says it is.
+        assert stats.footprint.ledger_cost_usd > rung1 > stats.footprint.true_cost_usd
+
+        assert make_client().get("/api/donations/nudge").json()["reason"] == (
+            "no_rung_crossed"
+        )
+
     def test_the_get_opens_the_ask_but_never_burns_an_impression(
         self, make_client, session_factory
     ):

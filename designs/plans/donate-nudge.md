@@ -895,6 +895,33 @@ toward the community total. **This is why the gate suppresses any recurring
 donor indefinitely rather than on a window**: it must not depend on
 attribution that may not arrive.
 
+### RED suppression is re-checked on every render, not just on load
+
+The chip is painted once but its visibility is re-evaluated every time the
+assessment re-renders, because the pilot can swap packs from the history
+dropdown and a refresh can land a new one, both in place with no page load. A
+chip painted beside a GREEN pack and never re-checked would still be sitting
+there when a RED pack replaced it — breaking the one rule this feature calls
+non-negotiable. Symmetrically, a first render on RED must not cost the pilot
+the chip for the whole session.
+
+So the client keeps three separate flags rather than one "wired" bit: `asked`
+(an ask is opened at most once per page load), `painted` (a chip is in the DOM
+whose visibility must be kept current), and `answered` (nothing paints again).
+An impression is counted only on the first paint; hiding and re-showing the
+chip as the assessment changes never acks again.
+
+### Accepted tradeoffs in the nudge's caching
+
+- The economics cache is **per-process**, so each uvicorn worker rebuilds on its
+  own hourly cadence. The deployment runs a single worker, and the figures are
+  stale-tolerant by design, so this is noted rather than solved.
+- `_cached` holds its lock across the rebuild (**single-flight**). Concurrent
+  requests arriving as the TTL lapses queue behind one `build_program_report`
+  instead of each starting their own — on the hottest page in the app, a
+  stampede is the exact cost the cache exists to prevent, and paying it once
+  on one request beats paying it N times.
+
 ### A pilot's true lifetime cost drifts with program volume
 
 `true_cost` amortizes *historical* briefings at *current* monthly volume, so the

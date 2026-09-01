@@ -26,10 +26,41 @@ import {
 const mockedFetch = vi.mocked(fetchDonateNudge);
 const mockedAck = vi.mocked(ackDonateNudge);
 
-/** Enough of a slot for the early-return paths; none of these tests reach the
- * render, which needs a real DOM the node test env does not provide. */
+/** A fake element with just the surface `render` touches.
+ *
+ * The node test env has no DOM, and pulling in jsdom for four assertions is not
+ * worth it — but the render path has to be reachable, because "the chip painted
+ * so the impression is real" is one of the rules under test. */
+function fakeEl(): any {
+  return {
+    innerHTML: '',
+    style: {} as Record<string, string>,
+    hidden: true,
+    contains: () => false,
+    setAttribute: () => {},
+    addEventListener: () => {},
+    querySelector: () => fakeEl(),
+  };
+}
+
+let slot: any;
+
+/** Stub `document` with a single slot element, and hand it back for assertions. */
 function stubSlot(): void {
-  vi.stubGlobal('document', { getElementById: () => ({}) });
+  slot = fakeEl();
+  vi.stubGlobal('document', {
+    getElementById: () => slot,
+    addEventListener: () => {},
+  });
+}
+
+/** A server response that would paint a chip. */
+function nudgeShowing() {
+  return {
+    show: true as const, kind: 'evergreen' as const, rung: 1, reason: 'show',
+    summary: { briefing_count: 23, first_briefing_at: null,
+               pilots_last_year: 0, briefings_last_year: 0 },
+  };
 }
 
 describe('shouldSuppressNudge', () => {
@@ -49,6 +80,7 @@ describe('initDonateNudge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetDonateNudgeForTests();
+    mockedAck.mockResolvedValue(undefined);
     stubSlot();
   });
 
@@ -58,14 +90,80 @@ describe('initDonateNudge', () => {
     expect(mockedAck).not.toHaveBeenCalled();
   });
 
-  it('never acks an impression it suppressed', async () => {
+  it('a first render on RED does not cost the chip for the session', async () => {
+    // The pilot can switch away from a RED pack via the history dropdown. If
+    // the RED short-circuit also consumed the one-shot fetch, the chip would
+    // never appear again for the rest of the page load.
+    mockedFetch.mockResolvedValue(nudgeShowing());
+    await initDonateNudge('RED');
+    expect(mockedFetch).not.toHaveBeenCalled();
+
+    await initDonateNudge('GREEN');
+    expect(mockedFetch).toHaveBeenCalledOnce();
+  });
+
+  it('acks the impression once, however many times it re-renders', async () => {
+    mockedFetch.mockResolvedValue(nudgeShowing());
+    await initDonateNudge('GREEN');
+    expect(mockedAck).toHaveBeenCalledExactlyOnceWith('shown');
+
+    await initDonateNudge('AMBER');
+    await initDonateNudge('GREEN');
+    expect(mockedAck).toHaveBeenCalledOnce();
+    expect(mockedFetch).toHaveBeenCalledOnce();
+  });
+
+  it('hides a painted chip when a RED pack replaces the one it painted on', async () => {
+    // The history dropdown swaps packs in place. Without a re-check the chip
+    // would sit there beside a serious-hazard assessment — the one thing this
+    // feature must never do.
+    mockedFetch.mockResolvedValue(nudgeShowing());
+    await initDonateNudge('GREEN');
+    expect(slot.style.display).toBe('');
+
+    await initDonateNudge('RED');
+    expect(slot.style.display).toBe('none');
+
+    // ...and comes back when they switch away again, without a second ack.
+    await initDonateNudge('AMBER');
+    expect(slot.style.display).toBe('');
+    expect(mockedAck).toHaveBeenCalledOnce();
+  });
+
+  it('does not paint onto a pack that went RED while the request was in flight', async () => {
+    // The narrow race the visibility re-check exists to close: the fetch starts
+    // on a GREEN pack, the pilot switches to a RED one before it resolves, and
+    // no further render follows to correct it.
+    let resolve!: (v: ReturnType<typeof nudgeShowing>) => void;
+    mockedFetch.mockReturnValue(new Promise((r) => { resolve = r; }));
+
+    const inFlight = initDonateNudge('GREEN');
+    await initDonateNudge('RED'); // pack switch lands first
+    resolve(nudgeShowing());
+    await inFlight;
+
+    expect(slot.style.display).toBe('none');
+    // ...and no impression was spent on a chip nobody saw.
+    expect(mockedAck).not.toHaveBeenCalled();
+
+    // It counts once when the pilot switches back to a pack that allows it.
+    await initDonateNudge('GREEN');
+    expect(slot.style.display).toBe('');
+    expect(mockedAck).toHaveBeenCalledExactlyOnceWith('shown');
+  });
+
+  it('opens the ask at most once across re-renders', async () => {
+    // The store subscriber calls this on every assessment change; only the
+    // first non-suppressed call may open an ask or count an impression.
     mockedFetch.mockResolvedValue({
-      show: true, kind: 'evergreen', rung: 1, reason: 'show',
-      summary: { briefing_count: 23, first_briefing_at: null,
+      show: false, kind: '', rung: 0, reason: 'asked_recently',
+      summary: { briefing_count: 0, first_briefing_at: null,
                  pilots_last_year: 0, briefings_last_year: 0 },
     });
-    await initDonateNudge('RED');
-    expect(mockedAck).not.toHaveBeenCalled();
+    await initDonateNudge('GREEN');
+    await initDonateNudge('AMBER');
+    await initDonateNudge('GREEN');
+    expect(mockedFetch).toHaveBeenCalledOnce();
   });
 
   it('acks nothing when the server withholds the ask', async () => {

@@ -2166,6 +2166,10 @@ async function init(): Promise<void> {
       state.windOverlay !== prev.windOverlay
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
+      // Re-check here too, not just on first load: the history dropdown swaps
+      // packs in place and a refresh lands one, so a chip painted beside a
+      // GREEN pack would otherwise still be sitting there on a RED one.
+      void initDonateNudge(state.currentPack?.assessment);
       ui.renderDigestAltitudeBanner(state.flight, state.snapshot?.route?.cruise_altitude_ft ?? null);
       ui.togglePackSections(!!state.currentPack);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
@@ -2684,7 +2688,8 @@ async function init(): Promise<void> {
     // Web-only donate chip. Fire-and-forget after the briefing has painted: it
     // is the least important thing on this page and must never delay it. The
     // assessment goes in because RED suppression is the client's call — the
-    // server does not know the grade.
+    // server does not know the grade. Re-entrant: the store subscriber above
+    // calls it again on every assessment change.
     void initDonateNudge(s.currentPack?.assessment);
     ui.renderDigestAltitudeBanner(s.flight, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.togglePackSections(!!s.currentPack);

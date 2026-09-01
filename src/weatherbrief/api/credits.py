@@ -211,8 +211,13 @@ class UserUsageStats:
     first_briefing_at: datetime | None
 
 
-def _briefing_ledger_rows(db: Session, user_id: str) -> list[tuple[str | None, float, datetime | None]]:
-    """A pilot's briefing ledger rows: ``(detail_json, cost, created_at)``."""
+def _briefing_ledger_rows(
+    db: Session, user_id: str,
+) -> list[tuple[str | None, float | None, datetime | None]]:
+    """A pilot's briefing ledger rows: ``(detail_json, cost, created_at)``.
+
+    ``cost`` is nullable in the shared schema, hence the caller's ``or 0.0``.
+    """
     return list(
         db.query(CostLedgerRow.detail_json, CostLedgerRow.cost, CostLedgerRow.created_at)
         .filter(
