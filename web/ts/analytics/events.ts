@@ -41,6 +41,7 @@ export const EVENTS = {
 
   // Donate nudge (web-only; props: {kind, rung})
   DONATE_NUDGE_SHOWN: 'donate.nudge_shown',
+  DONATE_NUDGE_OPENED: 'donate.nudge_opened',
   DONATE_NUDGE_CLICKED: 'donate.nudge_clicked',
   DONATE_NUDGE_DISMISSED: 'donate.nudge_dismissed',
 

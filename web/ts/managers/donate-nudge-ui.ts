@@ -143,9 +143,18 @@ function render(slot: HTMLElement, nudge: NudgeResponse): void {
   // acked there, not here.
   applyVisibility();
 
+  // Counted once per painted chip, not per toggle: a pilot who opens, closes
+  // and reopens has still only shown interest once, and inflating it would
+  // break the shown -> opened -> answered ratio this exists to measure.
+  let opened = false;
+
   const setOpen = (open: boolean): void => {
     popover.hidden = !open;
     chip.setAttribute('aria-expanded', String(open));
+    if (open && !opened) {
+      opened = true;
+      track(EVENTS.DONATE_NUDGE_OPENED, { kind: nudge.kind, rung: nudge.rung });
+    }
   };
 
   chip.addEventListener('click', () => setOpen(popover.hidden));

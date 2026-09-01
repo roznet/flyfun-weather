@@ -80,6 +80,7 @@ CAMPAIGN_DONOR_LOOKBACK_DAYS = 274  # ~9 months
 # and to surface on the endpoint for debugging; never shown to a pilot.
 REASON_SHOW = "show"
 REASON_NOT_CONFIGURED = "stripe_not_configured"
+REASON_DISABLED = "nudge_disabled"
 REASON_DONATED = "already_donated"
 REASON_TOO_FEW_FLIGHTS = "too_few_flights"
 REASON_ACCOUNT_TOO_NEW = "account_too_new"
@@ -332,6 +333,18 @@ def blocked_cheaply(state: NudgeState, inputs: GateInputs) -> str | None:
         return REASON_NOT_CONFIGURED
 
     campaign_live = inputs.campaign is not None and inputs.campaign.active(inputs.today)
+    ask = state.open_ask
+
+    # A fresh donation against an ask that is still open has to reach
+    # :func:`decide` — that is the only place the close is performed and
+    # persisted. Short-circuiting to ``already_donated`` here would leave
+    # ``open_ask`` populated in ``app_prefs_json`` indefinitely: inert while the
+    # donation stands, but a refund flips ``has_donated`` back to False and the
+    # leftover ask (its rung and summary now stale) could paint again. Falling
+    # through costs one pass through the fuller gate, once, and the ask is
+    # closed by the time the next call arrives.
+    if (inputs.has_donated or inputs.has_recurring_donation) and ask is not None:
+        return None
 
     # A donor leaves the evergreen path for good; only campaigns can still ask.
     if inputs.has_donated and not campaign_live:
@@ -339,7 +352,6 @@ def blocked_cheaply(state: NudgeState, inputs: GateInputs) -> str | None:
     if inputs.has_recurring_donation:
         return REASON_DONATED
 
-    ask = state.open_ask
     if ask is not None:
         # An open ask that has already been seen today renders nothing, and
         # nothing about it can change until tomorrow.

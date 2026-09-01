@@ -433,6 +433,17 @@ def update_cost_config(
     db.add(new_row)
     db.flush()
 
+    # The donate nudge memoizes the program cost report for an hour, and its
+    # rung thresholds are multiples of cost_per_user_month_usd — derived from
+    # this rate card. Without this the gate would keep using the old economics
+    # until the TTL lapsed, which is exactly the window in which an operator
+    # who just changed the card looks to see whether it took effect.
+    # Imported here: api.donations imports from this module, so a module-level
+    # import would be circular.
+    from weatherbrief.api.donations import reset_nudge_cache
+
+    reset_nudge_cache()
+
     return _config_to_response(new_row)
 
 

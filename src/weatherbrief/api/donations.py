@@ -963,6 +963,25 @@ def preview_donation(
 # made cheap it returns "no ask" rather than blocking.
 
 _CAMPAIGN_ENV = "WB_DONATE_CAMPAIGN"
+_NUDGE_ENABLED_ENV = "WB_DONATE_NUDGE_ENABLED"
+
+
+def nudge_enabled() -> bool:
+    """Kill switch for the briefing-page nudge. **On by default.**
+
+    Unset means on, so the feature is live on the next deploy without touching
+    env. It exists so the chip can be switched off *without* taking donations
+    down with it: the only other lever is ``STRIPE_SECRET_KEY``, and unsetting
+    that would also hide the donate page and the Settings link.
+
+    Accepts the usual falsey spellings; anything else (including a typo) reads
+    as on, because failing open on a donation ask is far better than a silent
+    outage nobody notices.
+    """
+    raw = os.environ.get(_NUDGE_ENABLED_ENV)
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 # The economics move slowly (a rate card edit or a month of drift), and building
 # them JSON-parses every briefing ledger row in the 30-day window — ~1,632 rows
 # as of 2026-09-01. An hour of staleness costs nothing; doing it per page view
@@ -1170,6 +1189,9 @@ def get_nudge(
     exhausted or expired one closing). Impressions are never recorded by a GET:
     a prefetch must not burn one.
     """
+    if not nudge_enabled():
+        return NudgeResponse(show=False, reason=nudge.REASON_DISABLED)
+
     window = _campaign_window()
     row, prefs, state = _load_nudge_state(db, viewer_id)
     today = nudge.today_utc()
@@ -1208,7 +1230,13 @@ def get_nudge(
     # eligibility date, which only ever feeds the decision to *open* one.
     if state.open_ask is None:
         eligible_since = _eligible_since(db, viewer_id, created_at, distinct_flights)
-        report = _cached_report(db)
+        # No eligibility date means the engagement floor is not met (too few
+        # flights, or an account too new), so no rung can open an ask and
+        # neither the economics nor this pilot's ledger sum can change the
+        # outcome. This is the common case on a briefing page view — most
+        # pilots never clear five distinct flights — so skip both rather than
+        # pay a query per page load for an answer that is already decided.
+        report = _cached_report(db) if eligible_since is not None else None
         cpum = economics_from_report(report).cost_per_user_month_usd if report else 0.0
         # The ledger sum is a cheap SQL aggregate and is always >= the true
         # cost (it amortizes over an estimate at or below actual volume, then
@@ -1329,6 +1357,12 @@ def ack_nudge(
     the ask; a popover opened and shut with Esc sends neither, because the pilot
     answered nothing (the impression already counted, which is what limits it).
     """
+    if not nudge_enabled():
+        # A kill switch has to actually kill: a page loaded before the switch
+        # was thrown can still ack, and recording impressions against an ask
+        # nobody can see would spend a rung invisibly.
+        return NudgeResponse(show=False, reason=nudge.REASON_DISABLED)
+
     row, prefs, state = _load_nudge_state(db, viewer_id)
     if state.open_ask is None:
         return NudgeResponse(show=False, reason="no_open_ask")

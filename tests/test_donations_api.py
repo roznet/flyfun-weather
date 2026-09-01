@@ -872,6 +872,114 @@ class TestNudgeEndpoint:
         assert state["tier_asked"] == 1.5
 
 
+class TestNudgeDonationClosesAsk:
+    """A donation mid-ask must close the ask *through the real endpoint order*.
+
+    ``blocked_cheaply`` runs in front of ``decide`` and used to short-circuit on
+    ``has_donated`` before it ever looked at ``open_ask`` — so the close, which
+    only ``decide`` performs, never ran on the path the endpoint actually takes.
+    The unit test for this calls ``decide`` directly and cannot catch it.
+    """
+
+    def _donate(self, session_factory, *, recurring: bool = False, status: str = "succeeded"):
+        s = session_factory()
+        s.add(DonationRow(
+            user_id=DEV_USER_ID, service="flyfun-weather",
+            amount=25.0, currency="USD", amount_usd=25.0, fx_rate=1.0,
+            recurring=recurring, status=status, provider="stripe",
+            provider_ref=f"pi_test_{status}_{recurring}",
+            created_at=datetime.now(timezone.utc),
+        ))
+        s.commit()
+        s.close()
+
+    def test_a_donation_clears_the_open_ask_from_stored_state(
+        self, make_client, session_factory
+    ):
+        _seed_nudge_eligible(session_factory)
+        client = make_client()
+        assert client.get("/api/donations/nudge").json()["show"] is True
+        assert _nudge_state(session_factory)["open_ask"]["kind"] == "evergreen"
+
+        self._donate(session_factory)
+        body = client.get("/api/donations/nudge").json()
+        assert body["show"] is False
+        assert body["reason"] == "already_donated"
+        # The point of the test: not merely hidden, actually closed and persisted.
+        assert "open_ask" not in _nudge_state(session_factory)
+
+    def test_a_recurring_donation_also_clears_it(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory)
+        client = make_client()
+        assert client.get("/api/donations/nudge").json()["show"] is True
+
+        self._donate(session_factory, recurring=True)
+        assert client.get("/api/donations/nudge").json()["reason"] == "already_donated"
+        assert "open_ask" not in _nudge_state(session_factory)
+
+    def test_a_refund_cannot_resurrect_a_leftover_ask(self, make_client, session_factory):
+        """The failure mode the ordering bug allowed: a refund flips has_donated
+        back to False, and a stale open_ask would paint again on a rung the
+        pilot had already been asked."""
+        _seed_nudge_eligible(session_factory)
+        client = make_client()
+        assert client.get("/api/donations/nudge").json()["show"] is True
+        self._donate(session_factory)
+        assert client.get("/api/donations/nudge").json()["show"] is False
+
+        s = session_factory()
+        s.query(DonationRow).update({DonationRow.status: "refunded"})
+        s.commit()
+        s.close()
+
+        # No open ask survives to be re-rendered; the closed rung stands.
+        body = client.get("/api/donations/nudge").json()
+        assert body["show"] is False
+        assert body["reason"] == "asked_recently"
+        assert "open_ask" not in _nudge_state(session_factory)
+
+
+class TestNudgeKillSwitch:
+    """``WB_DONATE_NUDGE_ENABLED`` is on by default and kills both routes."""
+
+    def test_on_by_default_when_unset(self, make_client, session_factory, monkeypatch):
+        monkeypatch.delenv("WB_DONATE_NUDGE_ENABLED", raising=False)
+        _seed_nudge_eligible(session_factory)
+        assert make_client().get("/api/donations/nudge").json()["show"] is True
+
+    @pytest.mark.parametrize("value", ["0", "false", "no", "off", "OFF", " false "])
+    def test_falsey_values_switch_it_off(
+        self, make_client, session_factory, monkeypatch, value
+    ):
+        monkeypatch.setenv("WB_DONATE_NUDGE_ENABLED", value)
+        _seed_nudge_eligible(session_factory)
+        body = make_client().get("/api/donations/nudge").json()
+        assert body["show"] is False
+        assert body["reason"] == "nudge_disabled"
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "banana"])
+    def test_anything_else_reads_as_on(
+        self, make_client, session_factory, monkeypatch, value
+    ):
+        """Fails open: a typo must not silently disable the ask."""
+        monkeypatch.setenv("WB_DONATE_NUDGE_ENABLED", value)
+        _seed_nudge_eligible(session_factory)
+        assert make_client().get("/api/donations/nudge").json()["show"] is True
+
+    def test_disabling_also_stops_the_ack_spending_a_rung(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """A page loaded before the switch was thrown can still ack; recording
+        an impression against an ask nobody can see would spend it invisibly."""
+        _seed_nudge_eligible(session_factory)
+        client = make_client()
+        assert client.get("/api/donations/nudge").json()["show"] is True
+
+        monkeypatch.setenv("WB_DONATE_NUDGE_ENABLED", "0")
+        client.post("/api/donations/nudge/ack", json={"action": "shown"})
+        assert _nudge_state(session_factory)["open_ask"]["shown"] == 0
+
+
 class TestNudgeAck:
     def _open(self, make_client, session_factory):
         _seed_nudge_eligible(session_factory)

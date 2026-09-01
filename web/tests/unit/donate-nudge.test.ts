@@ -17,6 +17,8 @@ vi.mock('../../ts/analytics/track', () => ({ track: vi.fn() }));
 vi.mock('../../ts/i18n/i18n', () => ({ t: (k: string) => k }));
 
 import { ackDonateNudge, fetchDonateNudge } from '../../ts/adapters/donations-adapter';
+import { track } from '../../ts/analytics/track';
+import { EVENTS } from '../../ts/analytics/events';
 import {
   initDonateNudge,
   shouldSuppressNudge,
@@ -25,6 +27,7 @@ import {
 
 const mockedFetch = vi.mocked(fetchDonateNudge);
 const mockedAck = vi.mocked(ackDonateNudge);
+const mockedTrack = vi.mocked(track);
 
 /** A fake element with just the surface `render` touches.
  *
@@ -62,6 +65,64 @@ function nudgeShowing() {
                pilots_last_year: 0, briefings_last_year: 0 },
   };
 }
+
+/** Stub a slot whose children are distinct, so the chip's click handler can be
+ *  captured and fired. `fakeEl`'s shared `querySelector` returns a fresh node
+ *  every call, which is fine for the render-only tests above but not for one
+ *  that has to toggle the popover the chip owns. */
+function stubInteractiveSlot(): { clickChip: () => void } {
+  const popover = fakeEl();
+  const chip = fakeEl();
+  let onClick: (() => void) | null = null;
+  chip.addEventListener = (ev: string, fn: () => void) => {
+    if (ev === 'click') onClick = fn;
+  };
+  slot = fakeEl();
+  slot.querySelector = (sel: string) => {
+    if (sel === '.donate-nudge-chip') return chip;
+    if (sel === '.donate-nudge-popover') return popover;
+    return fakeEl();
+  };
+  vi.stubGlobal('document', { getElementById: () => slot, addEventListener: () => {} });
+  return { clickChip: () => onClick?.() };
+}
+
+describe('donate nudge analytics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetDonateNudgeForTests();
+    mockedAck.mockResolvedValue(undefined);
+  });
+
+  it('counts opening the popover once per painted chip, not per toggle', async () => {
+    // "How often did a pilot open the ask" is the funnel step between shown and
+    // answered. A pilot who opens, closes and reopens has shown interest once;
+    // counting each toggle would inflate the ratio this exists to measure.
+    const { clickChip } = stubInteractiveSlot();
+    mockedFetch.mockResolvedValue(nudgeShowing());
+    await initDonateNudge('GREEN');
+
+    clickChip(); // open
+    clickChip(); // close
+    clickChip(); // reopen
+
+    const opens = mockedTrack.mock.calls.filter(
+      (c) => c[0] === EVENTS.DONATE_NUDGE_OPENED,
+    );
+    expect(opens).toHaveLength(1);
+    expect(opens[0][1]).toMatchObject({ kind: 'evergreen', rung: 1 });
+  });
+
+  it('records the impression without an open — shown and opened are distinct', async () => {
+    stubInteractiveSlot();
+    mockedFetch.mockResolvedValue(nudgeShowing());
+    await initDonateNudge('GREEN');
+
+    const names = mockedTrack.mock.calls.map((c) => c[0]);
+    expect(names).toContain(EVENTS.DONATE_NUDGE_SHOWN);
+    expect(names).not.toContain(EVENTS.DONATE_NUDGE_OPENED);
+  });
+});
 
 describe('shouldSuppressNudge', () => {
   it.each(['RED', 'red', 'Red'])('suppresses beside %s', (a) => {

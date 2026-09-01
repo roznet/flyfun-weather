@@ -67,6 +67,10 @@ class Event(StrEnum):
     # Keep them low-cardinality — no ids, no amounts. Gating state lives in
     # app_prefs_json, not here: analytics rows get rolled up and pruned.
     DONATE_NUDGE_SHOWN = "donate.nudge_shown"
+    # The chip was clicked and the popover opened. Distinct from _CLICKED,
+    # which is the Contribute link: without this the funnel cannot separate
+    # "never opened it" from "opened it and walked away".
+    DONATE_NUDGE_OPENED = "donate.nudge_opened"
     DONATE_NUDGE_CLICKED = "donate.nudge_clicked"
     DONATE_NUDGE_DISMISSED = "donate.nudge_dismissed"
 
