@@ -1,6 +1,6 @@
 # Donate nudge on the briefing page — logic + rollout plan
 
-> **Status (2026-08-31): design agreed, nothing built.** No issue number yet.
+> **Status (2026-09-01): design agreed, nothing built. Tracked by issue #588.**
 > Read `designs/cost-attribution-design.md` § "Donations (Stripe)" first — that
 > is the architecture. This file is only the *when do we ask* layer plus the
 > briefing-page surface.
