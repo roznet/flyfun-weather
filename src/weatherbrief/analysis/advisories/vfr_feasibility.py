@@ -52,6 +52,7 @@ from weatherbrief.analysis.advisories.convective_character import (
     resolve_character_params,
 )
 from weatherbrief.analysis.advisories.convective_grading import (
+    ConvectiveModelGrade,
     grade_convective_model,
     resolve_convective_params,
 )
@@ -76,6 +77,7 @@ from weatherbrief.models import (
     AdvisoryParameterDef,
     AdvisoryStatus,
     CloudCoverage,
+    ConvectiveCharacter,
     HighlightSeverity,
     Mitigation,
     MitigationKind,
@@ -83,6 +85,37 @@ from weatherbrief.models import (
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import FlightCategory
+
+
+#: Character bands that justify softening the convective colour, and how far.
+#:
+#: Deliberately NOT ``CHARACTER_STATUS``: that map is the character *card's own
+#: grade*, where NONE/UNKNOWN → GREEN is correct ("nothing to characterise").
+#: Reused as a cap it silently converts "no answer" into "it's fine" — the #391
+#: false-GREEN, and the very §22 divergence this axis exists to close. A LOW-risk
+#: route is the live case: the character axis floors at ``min_risk`` MODERATE
+#: while grading floors at LOW, so an AMBER convective card yields character NONE
+#: and the axis softened to GREEN. Cells can also clear the risk floor with no
+#: precip/cover signal to realize them (seen on UKMO/MétéoFrance beside a RED
+#: peak-HIGH), reaching NONE the same way.
+#:
+#: Only the two genuinely circumnavigable bands appear here. Every other band —
+#: the RED-mapped ones, NONE, UNKNOWN, and a model with no soundings — leaves the
+#: convective colour exactly as the Convective Activity card graded it.
+_CIRCUMNAVIGABLE_CAP: dict[ConvectiveCharacter, AdvisoryStatus] = {
+    ConvectiveCharacter.ISOLATED: AdvisoryStatus.AMBER,
+    ConvectiveCharacter.SCATTERED: AdvisoryStatus.AMBER,
+}
+
+#: Bands that positively establish the convection is NOT flyable around, as
+#: opposed to bands that establish nothing. Only these earn the
+#: "not circumnavigable VFR" sentence; the silent bands get a sentence that
+#: claims neither.
+_NOT_CIRCUMNAVIGABLE_BANDS: frozenset[ConvectiveCharacter] = frozenset({
+    ConvectiveCharacter.WIDESPREAD,
+    ConvectiveCharacter.ORGANIZED,
+    ConvectiveCharacter.EMBEDDED,
+})
 
 
 #: Stable machine tag for the below-base escape tip. Distinct from the character
@@ -424,16 +457,34 @@ def _build_vfr_highlights(
     corridor_nm: float,
     dep_status: AdvisoryStatus,
     arr_status: AdvisoryStatus,
+    conv_grade: ConvectiveModelGrade | None = None,
+    conv_capped: bool = False,
 ) -> AdvisoryHighlights:
     """Highlight geometry for the VFR composite (#375).
 
     Regions are the union of the firing sub-axes, each with its own kind:
     ``cruise_imc`` (cloud segments intersecting the cruise line, same geometry
-    as ``vmc_cruise``), and ``climb_deck``/``descent_deck`` (the corridor deck
-    bands near departure/arrival). The ribbon is the worst firing sub-axis at
-    each x — with en-route precipitation contributing per the shared classifier
-    capped at AMBER (matching the composite's cap) — and the airport
-    flight-category axis colouring only the endpoint segments.
+    as ``vmc_cruise``), ``climb_deck``/``descent_deck`` (the corridor deck bands
+    near departure/arrival), and the convective cells of the §22 axis. The
+    ribbon is the worst firing sub-axis at each x — with en-route precipitation
+    contributing per the shared classifier capped at AMBER (matching the
+    composite's cap) — and the airport flight-category axis colouring only the
+    endpoint segments.
+
+    The convective axis MUST be represented here, not merely graded: it can be
+    the sole driver of the composite's colour (the reported LFMD→EGTF shape had
+    airport, cloud, corridor and precip all clear). Without its geometry the
+    highlight came back with an empty ``regions`` list and an all-GREEN ribbon,
+    and an empty region list makes both renderers skip the scrim entirely — so
+    the cross-section drew a spotless chart beside an AMBER badge. Same merge the
+    sibling composite already does (``ifr_feasibility``, which unions
+    ``conv_grade.region_cells`` into its own regions).
+
+    ``conv_capped`` says the circumnavigable cap softened the grade; the
+    convective ribbon contribution is then clamped to AMBER to match. The ribbon
+    is a per-point verdict strip read alongside the badge, so leaving RED cells
+    painted under an AMBER grade would restate the contradiction this merge
+    exists to remove.
     """
     cruise = ctx.cruise_altitude_ft
 
@@ -513,6 +564,18 @@ def _build_vfr_highlights(
 
         ribbon_points.append((dist, worst_severity(cruise_sev, deck_sev, precip_sev)))
 
+    # Fold in the §22 convective axis. `conv_grade.ribbon_points` is index-aligned
+    # with `ctx.analyses` by construction, which is the same order this loop
+    # walked, so the two zip without re-deriving which points were graded.
+    if conv_grade is not None:
+        for i, (_d, conv_sev) in enumerate(conv_grade.ribbon_points):
+            if i >= len(ribbon_points):
+                break
+            if conv_capped and conv_sev == HighlightSeverity.RED:
+                conv_sev = HighlightSeverity.AMBER
+            dist_i, sev_i = ribbon_points[i]
+            ribbon_points[i] = (dist_i, worst_severity(sev_i, conv_sev))
+
     # Airport flight-category axis colours only the endpoint segments.
     apply_airport_endpoints(ribbon_points, dep_status, arr_status)
 
@@ -521,6 +584,10 @@ def _build_vfr_highlights(
         build_regions(cruise_cells, ctx.total_distance_nm)
         + build_regions(climb_cells, ctx.total_distance_nm)
         + build_regions(descent_cells, ctx.total_distance_nm)
+        + (
+            build_regions(conv_grade.region_cells, ctx.total_distance_nm)
+            if conv_grade is not None else []
+        )
     )
     return AdvisoryHighlights(
         ribbon=ribbon,
@@ -1083,22 +1150,30 @@ class VFRFeasibilityEvaluator:
             conv_status = conv_grade.status
             character = classify_route_character(ctx, model, char_params)
             conv_detail = ""
+            cap_applied = False
             if conv_status not in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE):
-                char_status = (
-                    CHARACTER_STATUS.get(character, AdvisoryStatus.RED)
-                    if character is not None
-                    # No soundings to characterise: do NOT soften. An
-                    # uncharacterised cell is not an avoidable one (#391).
-                    else AdvisoryStatus.RED
-                )
-                # Soften to the character's status only when that is *less*
-                # severe, so an ISOLATED band can never raise an AMBER activity
-                # grade to RED.
-                conv_status = _least_severe(conv_status, char_status)
+                # Soften ONLY on a band that positively establishes the cells can
+                # be flown around, and only downward — `_least_severe` keeps an
+                # ISOLATED band from ever raising an AMBER activity grade to RED.
+                # A band that establishes nothing (NONE / UNKNOWN / no soundings)
+                # leaves the graded colour untouched: the composite may not
+                # publish calmer than the Convective Activity card on the
+                # strength of an axis that did not run.
+                cap = _CIRCUMNAVIGABLE_CAP.get(character) if character else None
+                if cap is not None:
+                    conv_status = _least_severe(conv_status, cap)
+                    cap_applied = True
+                # The sentence tracks what was established, not the colour: a
+                # grade that never softened must not assert avoidability either
+                # way, or the card claims a judgement the data does not carry.
+                if cap is not None:
+                    conv_key = "vfr.conv_circumnavigable"
+                elif character in _NOT_CIRCUMNAVIGABLE_BANDS:
+                    conv_key = "vfr.conv_not_circumnavigable"
+                else:
+                    conv_key = "vfr.conv_uncharacterised"
                 conv_detail = adv_t(
-                    "vfr.conv_circumnavigable"
-                    if conv_status == AdvisoryStatus.AMBER
-                    else "vfr.conv_not_circumnavigable",
+                    conv_key,
                     loc,
                     risk=conv_grade.worst_risk.value.upper(),
                     # Quote the extent of the tier the sentence names (#571 D1) —
@@ -1203,6 +1278,8 @@ class VFRFeasibilityEvaluator:
                 highlights = _build_vfr_highlights(
                     ctx, model, cloud_clearance_ft, corridor_nm,
                     dep_status, arr_status,
+                    conv_grade=conv_grade,
+                    conv_capped=cap_applied,
                 )
 
             # primary_method_id: clouds are this composite's only method-bearing

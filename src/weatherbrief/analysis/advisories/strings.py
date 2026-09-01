@@ -250,6 +250,17 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "{risk} Konvektion über {extent} — mit Sicht umfliegbar",
         "es": "Convección {risk} sobre {extent} — sorteable a la vista",
     },
+    # Neither claim. The character axis graded nothing — its own `min_risk`
+    # floor (MODERATE) is stricter than the severity floor (LOW), and a cell can
+    # clear the risk floor with no precip/cover signal to realize it — so we know
+    # there is convection and do NOT know whether it can be flown around.
+    # Saying "circumnavigable" there would be the #391 false-clear in prose.
+    "vfr.conv_uncharacterised": {
+        "en": "{risk} convection over {extent} — avoidability not established",
+        "fr": "Convection {risk} sur {extent} — contournement non établi",
+        "de": "{risk} Konvektion über {extent} — Umfliegbarkeit nicht belegt",
+        "es": "Convección {risk} sobre {extent} — evitabilidad no establecida",
+    },
     "vfr.conv_not_circumnavigable": {
         "en": "{risk} convection over {extent} — not circumnavigable VFR",
         "fr": "Convection {risk} sur {extent} — non contournable en VFR",
