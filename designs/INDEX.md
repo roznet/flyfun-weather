@@ -236,6 +236,6 @@ Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth vi
 → Full doc: multi-user-deployment.md
 
 ### cost-attribution
-Per-briefing cost computation in USD (LLM tokens incl. prompt-cache tiers + infrastructure + storage + margin), program-wide cost report, shared cross-app cost_ledger via flyfun-common, versioned admin rate card, public transparency endpoint, and the Stripe donation + impact-framing layer. No credits abstraction — all values in positive USD.
-Key exports: `compute_cost`, `compute_program_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`, `build_program_report`, `economics_from_report`, `personal_impact`
+Per-briefing cost computation in USD (LLM tokens incl. prompt-cache tiers + infrastructure + storage + margin), program-wide cost report, shared cross-app cost_ledger via flyfun-common, versioned admin rate card, public transparency endpoint, and the Stripe donation + impact-framing layer. No credits abstraction — all values in positive USD. Includes the true-cost basis (`usage_footprint` — the ledger over-recovers, so it is recomputed, never de-margined) and the web-only donate nudge on the briefing page (gate + lifecycle in `donate_nudge.py`; the *when do we ask* reasoning is in `plans/donate-nudge.md`).
+Key exports: `compute_cost`, `compute_program_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`, `build_program_report`, `economics_from_report`, `personal_impact`, `usage_footprint`, `donate_nudge.decide`
 → Full doc: cost-attribution-design.md

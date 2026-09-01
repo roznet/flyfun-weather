@@ -136,9 +136,14 @@
       </div>
 
       <!-- Your impact (logged-in only) -->
+      <!-- Two audiences, one panel: a donor sees what their contribution
+           covers, a pilot who has never given sees what their own usage cost.
+           Both are set from TS so the panel is not hard-coded to donors — it
+           used to render for nobody else, which left a blank section on the
+           very page the briefing-page nudge sends people to. -->
       <div class="section" id="personal-section" style="display:none;">
-        <h3>Your contribution so far</h3>
-        <p class="sub">Thank you so much for your past donation 💙</p>
+        <h3 id="personal-title">Your contribution so far</h3>
+        <p class="sub" id="personal-intro">Thank you so much for your past donation 💙</p>
         <div id="personal-impact" class="impact-card">
           <div class="headline" id="personal-headline">—</div>
           <div class="sub" id="personal-sub"></div>

@@ -12,8 +12,10 @@ All money is USD-canonical. The frontend renders the viewer's currency from the
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from weatherbrief.costs import ProgramCostReport
 
@@ -449,6 +451,135 @@ def personal_to_dict(pi: PersonalImpact) -> dict:
         "band": pi.band,
         "empty": pi.empty,
         "summary": format_personal_coverage(pi),
+    }
+
+
+# ---------------------------------------------------------------------------
+# True usage footprint — what a pilot's briefings actually cost the operator
+# ---------------------------------------------------------------------------
+#
+# ``cost_ledger.cost`` is NOT what the usage cost to run. ``compute_cost``
+# amortizes fixed cost over ``max(estimated_monthly_briefings, 500)`` and then
+# adds margin, so the billed fixed share is whatever the rate card *guessed* the
+# monthly volume would be — not what it turned out to be. Prod ran 1632
+# briefings/month against an estimate of 500 until 2026-08-31, so every row
+# written before then carries a $0.50 fixed share against a true $0.153: a 2.94x
+# over-recovery, of which the 10% margin is the small part.
+#
+# De-margining therefore does not fix it. Worse, the estimate was bumped to 1600
+# (cost_config v4, 2026-08-31), so the ledger is no longer internally consistent
+# over time either: a pilot's lifetime sum now blends two amortization bases,
+# weighted by when they happened to fly, and is not comparable between pilots.
+#
+# The only comparable figure is one recomputed from the real basis:
+#
+#     true_cost = own_variable_usd + (fixed_monthly / briefings_per_month) * own_briefings
+#
+# Both inputs come off the program cost report. This function is pure — the
+# caller does the DB work and hands over already-parsed ``detail_json`` dicts.
+
+
+@dataclass(frozen=True)
+class UsageFootprint:
+    """What one pilot's briefings really cost, on the true amortization basis.
+
+    ``true_cost_usd`` is the comparable figure; ``ledger_cost_usd`` is what the
+    ledger charged, carried alongside so a caller can show the gap. ``empty`` ⇒
+    the pilot has no briefings (or no basis to amortize over) and callers should
+    render a neutral state rather than "$0.00".
+
+    ``unknown_variable_rows`` counts briefings whose stored breakdown could not
+    be read, so their token/storage cost is missing from ``variable_usd``. Those
+    rows still carry their fixed share (the briefing demonstrably ran), so the
+    total only *understates* — the safe direction for a donation ask.
+    """
+
+    briefings: int
+    variable_usd: float
+    fixed_share_usd: float
+    true_cost_usd: float
+    ledger_cost_usd: float
+    unknown_variable_rows: int
+    empty: bool
+
+    @property
+    def complete(self) -> bool:
+        """True when every briefing's variable cost was readable."""
+        return self.unknown_variable_rows == 0
+
+
+def _read_variable_usd(detail: Mapping[str, Any] | None) -> float | None:
+    """Token + storage cost from one stored ``CostBreakdown``, or None.
+
+    A missing key reads as **unknown**, never ``0.0``: a row we cannot price is
+    not a row that cost nothing, and silently folding it in as zero would drag a
+    pilot's true cost down for a reason that has nothing to do with their usage.
+    (This is deliberately stricter than ``_program_variable_and_counts``, which
+    defaults to 0.0 — program-wide, one unreadable row in 1,632 is noise; in a
+    single pilot's history it can be most of the sample.)
+    """
+    if not isinstance(detail, Mapping):
+        return None
+    token = detail.get("token_cost_usd")
+    storage = detail.get("storage_cost_usd")
+    if not isinstance(token, (int, float)) or not isinstance(storage, (int, float)):
+        return None
+    if isinstance(token, bool) or isinstance(storage, bool):
+        return None
+    return float(token) + float(storage)
+
+
+def usage_footprint(
+    details: Sequence[Mapping[str, Any] | None],
+    *,
+    ledger_cost_usd: float,
+    fixed_monthly_usd: float,
+    briefings_per_month: float,
+) -> UsageFootprint:
+    """Recompute a pilot's true lifetime cost from the real amortization basis.
+
+    ``details`` is one entry per briefing ledger row — the parsed ``detail_json``
+    (or ``None`` when it is absent or unparseable). ``briefings_per_month`` is
+    the program's *actual* monthly volume (``num_briefings`` scaled to 30 days),
+    not the rate card's estimate; with no volume there is nothing to amortize
+    over and the fixed share is dropped rather than guessed.
+    """
+    briefings = len(details)
+    variable_usd = 0.0
+    unknown = 0
+    for detail in details:
+        value = _read_variable_usd(detail)
+        if value is None:
+            unknown += 1
+            continue
+        variable_usd += value
+
+    fixed_share = (
+        (fixed_monthly_usd / briefings_per_month) * briefings
+        if briefings_per_month > 0 and fixed_monthly_usd > 0
+        else 0.0
+    )
+    return UsageFootprint(
+        briefings=briefings,
+        variable_usd=round(variable_usd, 6),
+        fixed_share_usd=round(fixed_share, 6),
+        true_cost_usd=round(variable_usd + fixed_share, 6),
+        ledger_cost_usd=round(max(ledger_cost_usd, 0.0), 6),
+        unknown_variable_rows=unknown,
+        empty=briefings <= 0,
+    )
+
+
+def footprint_to_dict(fp: UsageFootprint) -> dict:
+    """Serialize a UsageFootprint for the API."""
+    return {
+        "briefings": fp.briefings,
+        "variable_usd": fp.variable_usd,
+        "fixed_share_usd": fp.fixed_share_usd,
+        "true_cost_usd": fp.true_cost_usd,
+        "ledger_cost_usd": fp.ledger_cost_usd,
+        "unknown_variable_rows": fp.unknown_variable_rows,
+        "empty": fp.empty,
     }
 
 

@@ -24,9 +24,9 @@ import {
   resolveInitialCurrency,
   setStoredCurrency,
 } from './currency';
-import { renderUserInfo } from './utils';
+import { escapeHtml, renderUserInfo } from './utils';
 import { initTheme } from './theme';
-import { initI18n } from './i18n/i18n';
+import { initI18n, t } from './i18n/i18n';
 
 const PRESETS = [10, 25, 50, 100];
 
@@ -174,15 +174,69 @@ function formatWords(words: number): string {
 }
 
 function renderPersonal(me: DonationMe): void {
-  if (me.total_usd <= 0) return; // nothing donated yet — keep the panel hidden
+  const donated = me.total_usd > 0;
+  // A pilot who has never given used to see nothing here at all — on the very
+  // page the briefing-page nudge points them at. Show them what their own usage
+  // cost instead; there is no ask in it beyond the form below.
+  if (!donated && (!me.usage || me.usage.empty)) return;
+
   document.getElementById('personal-section')!.style.display = '';
+  const title = document.getElementById('personal-title')!;
+  const intro = document.getElementById('personal-intro')!;
   const headline = document.getElementById('personal-headline')!;
   const sub = document.getElementById('personal-sub')!;
+
+  if (!donated) {
+    title.textContent = t('donate.usage.title');
+    intro.textContent = t('donate.usage.intro');
+    // The **recomputed** cost, not the ledger figure: the rate card amortized
+    // fixed cost over a volume estimate ~3x below actual until 2026-08-31, so
+    // the charged sum is not what the usage really cost to produce.
+    headline.textContent = formatMoney(me.usage.true_cost_usd, me.fx);
+    sub.innerHTML = usageSubHtml(me);
+    renderDonationHistory(me);
+    return;
+  }
+
+  title.textContent = t('donate.usage.donorTitle');
+  intro.textContent = t('donate.usage.donorIntro');
   headline.textContent = formatMoney(me.total_usd, me.fx);
   // Prefer the retrospective personal panel; fall back to program-average impact.
   const phrase = me.personal && !me.personal.empty ? me.personal.summary : me.impact.summary;
   sub.textContent = phrase ? `Your support ${phrase}.` : 'Thank you for your support.';
   renderDonationHistory(me);
+}
+
+/** The never-donor caption: what their briefings cost, and what a matching
+ * donation would cover.
+ *
+ * The `personal_months` translation is skipped on purpose — for an amount that
+ * *is* the pilot's own usage it reduces to "covers ~N months of your own
+ * usage", which is true but circular. Every other kind says something the
+ * headline does not.
+ */
+function usageSubHtml(me: DonationMe): string {
+  const count = me.usage.briefings.toLocaleString();
+  const month = formatMonth(me.usage.first_briefing_at);
+  const lead = month
+    ? t('donate.usage.sub', { count, month })
+    : t('donate.usage.subNoMonth', { count });
+  const tr = me.usage.translation;
+  const extra = tr && !tr.empty && tr.kind !== 'personal_months' ? ` That ${tr.summary}.` : '';
+  return boldify(lead + extra);
+}
+
+/** Escape first, then honour `**bold**` — the same order the briefing digest
+ * uses, so emphasis survives without opening the markup to API content. */
+function boldify(text: string): string {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+/** "April" in the viewer's locale; "" when there is no usable date. */
+function formatMonth(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'long' });
 }
 
 /** Populate the expandable per-donation list (date + charged amount) and wire

@@ -39,6 +39,11 @@ export const EVENTS = {
   // Help page (no briefing context)
   HELP_WHATS_NEW_OPENED: 'help.whats_new_opened',
 
+  // Donate nudge (web-only; props: {kind, rung})
+  DONATE_NUDGE_SHOWN: 'donate.nudge_shown',
+  DONATE_NUDGE_CLICKED: 'donate.nudge_clicked',
+  DONATE_NUDGE_DISMISSED: 'donate.nudge_dismissed',
+
   // User preferences
   AUTO_REFRESH_ENABLED: 'auto_refresh.enabled',
   AUTO_REFRESH_DISABLED: 'auto_refresh.disabled',

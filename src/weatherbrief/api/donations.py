@@ -16,9 +16,13 @@ and safe to surface in-app later.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+import threading
+import time
+from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -27,7 +31,12 @@ from sqlalchemy.orm import Session
 
 from flyfun_common import fx
 from flyfun_common.db import current_user_id, get_db, optional_user_id
-from flyfun_common.db.models import UserRow
+from flyfun_common.db.models import (
+    CostLedgerRow,
+    DonationRow,
+    UserPreferencesRow,
+    UserRow,
+)
 from flyfun_common.payments import (
     StripeNotConfigured,
     create_checkout_session,
@@ -43,9 +52,13 @@ from flyfun_common.payments import (
     set_net_usd,
     verify_webhook_event,
 )
-from flyfun_common.payments.stripe_client import SignatureVerificationError
+from flyfun_common.payments.stripe_client import (
+    SignatureVerificationError,
+    from_minor_units,
+)
 
-from weatherbrief.api.credits import build_program_report, user_cost_stats
+from weatherbrief import donate_nudge as nudge
+from weatherbrief.api.credits import build_program_report, user_usage_stats
 from weatherbrief.api.preferences import (
     FxBlock,
     fx_block_for_currency,
@@ -53,14 +66,17 @@ from weatherbrief.api.preferences import (
     stripe_configured,
     usd_fx_block,
 )
+from weatherbrief.costs import ProgramCostReport
 from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.notify.donation_email import send_donation_receipt_email
 from weatherbrief.privacy import mask_email
 from weatherbrief.impact import (
     ProgramEconomics,
+    UsageFootprint,
     choose_translation,
     donation_impact,
     economics_from_report,
+    footprint_to_dict,
     format_words_written,
     impact_to_dict,
     personal_impact,
@@ -100,6 +116,19 @@ def _empty_economics() -> ProgramEconomics:
     return ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0, cost_per_user_month_usd=0.0)
 
 
+def _report_and_economics(db: Session) -> tuple[ProgramCostReport | None, ProgramEconomics]:
+    """The cost report **and** its economics, from a single build.
+
+    Anything that needs a pilot's *true* cost needs the report too (it carries
+    the real fixed monthly cost and the actual briefing volume to amortize
+    over), and ``build_program_report`` is the expensive call — so callers that
+    need both take them together rather than building it twice.
+    """
+    report = build_program_report(db, _ECONOMICS_WINDOW_DAYS)
+    econ = economics_from_report(report) if report is not None else _empty_economics()
+    return report, econ
+
+
 def _program_stats(db: Session, *, since: datetime) -> tuple[int, int, int]:
     """``(briefings_all_time, briefings_since, ai_output_tokens)`` for the header.
 
@@ -126,6 +155,34 @@ def _program_stats(db: Session, *, since: datetime) -> tuple[int, int, int]:
         db.query(func.coalesce(func.sum(BriefingUsageRow.llm_output_tokens), 0)).scalar() or 0
     )
     return int(briefings_all), int(briefings_since), int(out_tokens)
+
+
+_YEAR_DAYS = 365
+
+
+def _community_year_stats(db: Session, *, since: datetime) -> tuple[int, int]:
+    """``(distinct_pilots, briefings)`` over a trailing window.
+
+    Counts ``briefing_usage`` — never purged, so history does not shrink —
+    rather than ``briefing_packs`` (deleted by T2 retention) or
+    ``analytics_briefings_dim`` (undercounts ~2x). This is the pair the campaign
+    copy reads; ``/summary`` carries 30-day and all-time figures, which say
+    nothing about a *year*.
+    """
+    pilots = (
+        db.query(func.count(func.distinct(BriefingUsageRow.user_id)))
+        .filter(BriefingUsageRow.timestamp >= since)
+        .scalar()
+        or 0
+    )
+    briefings = (
+        db.query(func.count())
+        .select_from(BriefingUsageRow)
+        .filter(BriefingUsageRow.timestamp >= since)
+        .scalar()
+        or 0
+    )
+    return int(pilots), int(briefings)
 
 
 def _site_covered(total_year_usd: float, econ: ProgramEconomics, *, now: datetime) -> bool:
@@ -267,6 +324,8 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
         return _handle_charge_updated(db, data_object)
     if event_type == "charge.refunded":
         return _handle_charge_refunded(db, data_object)
+    if event_type == "invoice.payment_succeeded":
+        return _handle_invoice_paid(db, data_object)
 
     return {"received": True, "ignored": event_type}
 
@@ -339,6 +398,92 @@ def _handle_charge_updated(db: Session, charge: dict) -> dict:
         return {"received": True, "net_pending": True}
     set_net_usd(db, provider_ref, round(row.amount_usd * ratio, 6))
     return {"received": True, "net_updated": True}
+
+
+def _invoice_metadata(invoice: dict) -> dict:
+    """Best-effort donation metadata for a subscription invoice.
+
+    Checkout puts ``{service, user_id}`` on the *session*, and Stripe does not
+    copy session metadata onto the subscription — so a renewal invoice carries
+    it only if ``subscription_data.metadata`` was set when the subscription was
+    created. We read every place it could legitimately land, newest shape first,
+    and treat "not found" as an anonymous donation rather than dropping the
+    money.
+    """
+    for candidate in (
+        (invoice.get("subscription_details") or {}).get("metadata"),
+        invoice.get("metadata"),
+        *[
+            (line or {}).get("metadata")
+            for line in ((invoice.get("lines") or {}).get("data") or [])
+        ],
+    ):
+        if isinstance(candidate, dict) and candidate.get("user_id"):
+            return candidate
+    return invoice.get("metadata") if isinstance(invoice.get("metadata"), dict) else {}
+
+
+def _handle_invoice_paid(db: Session, invoice: dict) -> dict:
+    """Record a **recurring** donation's renewal payment (idempotent).
+
+    Without this, only the pledge that started a subscription ever reached the
+    ledger: ``checkout.session.completed`` fires once, and every month after it
+    Stripe sends ``invoice.payment_succeeded`` and nothing else. A donor paying
+    every month would have looked, to any time-windowed rule, like someone who
+    gave once and stopped.
+
+    The subscription's *first* invoice is skipped: ``checkout.session.completed``
+    already recorded that payment, under a different ``provider_ref``, so
+    handling both would double-count it. ``provider_ref`` is the invoice id,
+    which is stable and unique per billing period.
+
+    Attribution is best-effort — see :func:`_invoice_metadata`. An unattributed
+    renewal is still recorded (it is real money, and it counts toward the
+    community total); it just cannot suppress that donor's nudge, which is why
+    the gate additionally treats *any* recurring donation as indefinite
+    suppression.
+    """
+    provider_ref = invoice.get("id")
+    amount_minor = invoice.get("amount_paid") or 0
+    if not provider_ref or amount_minor <= 0:
+        return {"received": True, "ignored": "empty invoice"}
+    if invoice.get("billing_reason") == "subscription_create":
+        # The Checkout session that opened the subscription already recorded it.
+        return {"received": True, "ignored": "subscription_create"}
+
+    metadata = _invoice_metadata(invoice)
+    service = metadata.get("service") or SERVICE
+    if service != SERVICE:
+        return {"received": True, "ignored": "other service"}
+
+    currency = (invoice.get("currency") or "usd").upper()
+    amount = from_minor_units(amount_minor, currency)
+    try:
+        amount_usd, fx_rate, _as_of = fx.to_usd(amount, currency)
+    except Exception:
+        logger.warning("FX unavailable for %s; recording 1:1 USD fallback", currency)
+        amount_usd, fx_rate = amount, 1.0
+
+    user_id = metadata.get("user_id") or None
+    if not user_id:
+        logger.warning(
+            "invoice.payment_succeeded %s could not be attributed to a user "
+            "(no user_id in subscription metadata); recording anonymously",
+            provider_ref,
+        )
+
+    _row, created = record_donation(
+        db,
+        provider_ref=provider_ref,
+        service=SERVICE,
+        amount=amount,
+        currency=currency,
+        amount_usd=round(amount_usd, 6),
+        fx_rate=fx_rate,
+        user_id=user_id,
+        recurring=True,
+    )
+    return {"received": True, "created": created}
 
 
 def _handle_charge_refunded(db: Session, charge: dict) -> dict:
@@ -444,6 +589,16 @@ def send_email_receipt(
 # ---------------------------------------------------------------------------
 
 
+class TranslationChoiceResponse(BaseModel):
+    """One chosen prospective-donation translation (mirror of translation_to_dict)."""
+
+    amount_usd: float
+    kind: str
+    value: float
+    summary: str
+    empty: bool
+
+
 class DonationImpactResponse(BaseModel):
     """Per-viewer impact framing (mirror of impact_to_dict)."""
 
@@ -498,10 +653,35 @@ class DonationHistoryItem(BaseModel):
     amount_usd: float
 
 
+class UsageFootprintResponse(BaseModel):
+    """What the viewer's own briefings really cost (mirror of footprint_to_dict).
+
+    ``true_cost_usd`` is recomputed on the program's real amortization basis;
+    ``ledger_cost_usd`` is what ``cost_ledger`` charged, carried alongside
+    because the two genuinely differ (the rate card's volume estimate was ~3x
+    below actual until 2026-08-31). Present for **every** pilot with briefings,
+    donor or not — it is what the donate page shows someone who has never given.
+    """
+
+    briefings: int
+    variable_usd: float
+    fixed_share_usd: float
+    true_cost_usd: float
+    ledger_cost_usd: float
+    unknown_variable_rows: int
+    empty: bool
+    # ISO-8601 timestamp of the viewer's first briefing; null when they have none.
+    first_briefing_at: str | None = None
+    # What a donation matching that cost would cover — the honest ask, phrased
+    # in the vocabulary the donate page already uses.
+    translation: TranslationChoiceResponse
+
+
 class DonationMeResponse(BaseModel):
     total_usd: float
     impact: DonationImpactResponse
     personal: PersonalImpactResponse
+    usage: UsageFootprintResponse
     donations: list[DonationHistoryItem]
     fx: FxBlock
 
@@ -520,14 +700,35 @@ def get_my_donations(
     saved display currency for this response.
     """
     total = get_user_total_usd(db, viewer_id, service=SERVICE)
-    econ = _economics(db) or _empty_economics()
+    report, econ = _report_and_economics(db)
     now = datetime.now(timezone.utc)
     impact = donation_impact(total, econ, now=now)
 
-    _lifetime, _months, burn_rate = user_cost_stats(db, viewer_id)
+    # Lifetime cost and burn rate both come off the **recomputed** basis. The
+    # ledger sum over-recovered by ~2.94x before the 2026-08-31 rate-card bump
+    # and blends two amortization bases after it, so feeding it to
+    # personal_impact told donors they had covered ~3x less of their own usage
+    # than they really had, and held the covers_others / future bands shut.
+    stats = user_usage_stats(db, viewer_id, report)
+    burn_rate = stats.burn_rate_monthly_usd
     year_total = get_year_total_usd(db, now.year, service=SERVICE)
     site_covered = _site_covered(year_total, econ, now=now)
-    personal = personal_impact(total, _lifetime, burn_rate, econ, site_covered=site_covered)
+    personal = personal_impact(
+        total, stats.footprint.true_cost_usd, burn_rate, econ, site_covered=site_covered
+    )
+    usage = footprint_to_dict(stats.footprint) | {
+        "first_briefing_at": (
+            stats.first_briefing_at.isoformat() if stats.first_briefing_at else None
+        ),
+        # A donation equal to what you have used is the honest ask, so the same
+        # ladder that powers the "donate €X" preview also captions the
+        # never-donor panel.
+        "translation": translation_to_dict(
+            choose_translation(
+                stats.footprint.true_cost_usd, econ, burn_rate_monthly_usd=burn_rate
+            )
+        ),
+    }
 
     history = [
         DonationHistoryItem(
@@ -544,6 +745,7 @@ def get_my_donations(
         total_usd=round(total, 2),
         impact=impact_to_dict(impact),
         personal=personal_to_dict(personal),
+        usage=usage,
         donations=history,
         fx=fx_block,
     )
@@ -555,6 +757,10 @@ class StatsResponse(BaseModel):
     active_pilots_30d: int
     briefings_all_time: int
     briefings_last_30d: int
+    # Trailing 365 days — the pair the annual campaign copy quotes. Distinct
+    # from the 30-day and all-time figures beside them.
+    active_pilots_last_year: int = 0
+    briefings_last_year: int = 0
     analysis_words_all_time: int
     analysis_books_equiv: float
     words_summary: str
@@ -598,11 +804,14 @@ def get_summary(
 
     since = now - timedelta(days=_ECONOMICS_WINDOW_DAYS)
     briefings, briefings_recent, out_tokens = _program_stats(db, since=since)
+    pilots_year, briefings_year = _community_year_stats(db, since=now - timedelta(days=_YEAR_DAYS))
     words = tokens_to_words(out_tokens)
     stats = StatsResponse(
         active_pilots_30d=econ.active_users,
         briefings_all_time=briefings,
         briefings_last_30d=briefings_recent,
+        active_pilots_last_year=pilots_year,
+        briefings_last_year=briefings_year,
         analysis_words_all_time=words,
         analysis_books_equiv=words_to_books(words),
         words_summary=format_words_written(out_tokens),
@@ -633,16 +842,6 @@ def get_summary(
 # ---------------------------------------------------------------------------
 
 
-class TranslationChoiceResponse(BaseModel):
-    """One chosen prospective-donation translation (mirror of translation_to_dict)."""
-
-    amount_usd: float
-    kind: str
-    value: float
-    summary: str
-    empty: bool
-
-
 class DonationPreviewResponse(BaseModel):
     amount_usd: float
     translation: TranslationChoiceResponse
@@ -668,13 +867,379 @@ def preview_donation(
     rate = fx_block.rate or 1.0
     amount_usd = amount / rate
 
-    econ = _economics(db) or _empty_economics()
+    report, econ = _report_and_economics(db)
     burn_rate = 0.0
     if viewer_id:
-        _lifetime, _months, burn_rate = user_cost_stats(db, viewer_id)
+        # Same recomputed basis as the personal panel — mixing the ledger burn
+        # rate in here would price "covers ~N months of your own usage" ~3x low
+        # against the figure shown right above it.
+        burn_rate = user_usage_stats(db, viewer_id, report).burn_rate_monthly_usd
     tc = choose_translation(amount_usd, econ, burn_rate_monthly_usd=burn_rate)
     return DonationPreviewResponse(
         amount_usd=round(amount_usd, 2),
         translation=translation_to_dict(tc),
         fx=fx_block,
     )
+
+
+# ---------------------------------------------------------------------------
+# Donate nudge (web-only) — see designs/plans/donate-nudge.md
+# ---------------------------------------------------------------------------
+#
+# Web-only is structural, not stylistic: Apple requires donations from
+# non-registered-nonprofits to go through IAP, so a donate button in the app
+# binary is a review rejection. A separate endpoint that only ``web/ts`` calls
+# makes it impossible for this flag to leak into /api/flights, pack meta, or any
+# DTO iOS consumes — a rule that a field on an existing payload could only ever
+# be *discouraged* from breaking.
+#
+# The gate is ordered cheap-first and the economics are cached, because unlike
+# the donate page this runs on the briefing page — the hottest page in the app.
+# A nudge check must never make a briefing page slower to load; if it cannot be
+# made cheap it returns "no ask" rather than blocking.
+
+_CAMPAIGN_ENV = "WB_DONATE_CAMPAIGN"
+# The economics move slowly (a rate card edit or a month of drift), and building
+# them JSON-parses every briefing ledger row in the 30-day window — ~1,632 rows
+# as of 2026-09-01. An hour of staleness costs nothing; doing it per page view
+# would cost the briefing page.
+_NUDGE_CACHE_TTL_SECONDS = 3600
+
+_nudge_cache_lock = threading.Lock()
+_nudge_cache: dict[str, tuple[float, object]] = {}
+
+
+def reset_nudge_cache() -> None:
+    """Drop the cached report/community stats. For tests and rate-card edits."""
+    with _nudge_cache_lock:
+        _nudge_cache.clear()
+
+
+def _cached(key: str, build):
+    """Memoize ``build()`` under ``key`` for :data:`_NUDGE_CACHE_TTL_SECONDS`."""
+    now = time.monotonic()
+    with _nudge_cache_lock:
+        entry = _nudge_cache.get(key)
+        if entry is not None and now - entry[0] < _NUDGE_CACHE_TTL_SECONDS:
+            return entry[1]
+    value = build()
+    with _nudge_cache_lock:
+        _nudge_cache[key] = (now, value)
+    return value
+
+
+def _cached_report(db: Session) -> ProgramCostReport | None:
+    """The program cost report, memoized for the nudge's hot path.
+
+    ``build_program_report`` JSON-parses every briefing ledger row in the 30-day
+    window — ~1,632 rows as of 2026-09-01. That is fine on a rare donate-page
+    load and not fine on every briefing page view, and the figures move slowly
+    enough that an hour of staleness costs nothing.
+    """
+    return _cached("report", lambda: build_program_report(db, _ECONOMICS_WINDOW_DAYS))
+
+
+def _donor_status(db: Session, user_id: str) -> tuple[bool, bool, date | None]:
+    """``(has_donated, has_recurring, last_donation_at)`` in one indexed query.
+
+    Refunded donations fall out (``status == "succeeded"``), matching the shared
+    aggregation helpers. ``has_recurring`` is *any* recurring pledge, ever:
+    until subscription cancellation is tracked there is no honest way to tell an
+    active subscriber from a lapsed one, and nagging someone who is paying every
+    month is the worse error.
+    """
+    count, last_at, recurring = (
+        db.query(
+            func.count(DonationRow.id),
+            func.max(DonationRow.created_at),
+            func.max(DonationRow.recurring),
+        )
+        .filter(
+            DonationRow.user_id == user_id,
+            DonationRow.service == SERVICE,
+            DonationRow.status == "succeeded",
+        )
+        .one()
+    )
+    return int(count or 0) > 0, bool(recurring), nudge.as_utc_date(last_at)
+
+
+def _distinct_flights(db: Session, user_id: str) -> int:
+    """How many distinct flights the pilot has actually briefed.
+
+    Distinct *flights*, not usage rows: a usage row is written per refresh, so a
+    pilot who hammers refresh on one flight is not a pilot with five briefings.
+    """
+    return int(
+        db.query(func.count(func.distinct(BriefingUsageRow.flight_id)))
+        .filter(BriefingUsageRow.user_id == user_id, BriefingUsageRow.flight_id != "")
+        .scalar()
+        or 0
+    )
+
+
+def _nth_flight_briefed_at(db: Session, user_id: str, n: int) -> datetime | None:
+    """When the pilot's ``n``-th distinct flight was first briefed, or None."""
+    rows = (
+        db.query(func.min(BriefingUsageRow.timestamp))
+        .filter(BriefingUsageRow.user_id == user_id, BriefingUsageRow.flight_id != "")
+        .group_by(BriefingUsageRow.flight_id)
+        .order_by(func.min(BriefingUsageRow.timestamp).asc())
+        .limit(n)
+        .all()
+    )
+    return rows[n - 1][0] if len(rows) >= n else None
+
+
+def _eligible_since(
+    db: Session, user_id: str, created_at: datetime | None, distinct_flights: int
+) -> date | None:
+    """The date the pilot passed the engagement floor (flights **and** age).
+
+    This is what the 12-month fallback clause counts from for a pilot who has
+    never been asked. Reading "never asked" as "infinitely long ago" would fire
+    the fallback for the entire eligible base on rollout day — measured, the
+    difference between 54 and 94 pilots asked in the first days — and make the
+    cost ladder decorative.
+    """
+    if distinct_flights < nudge.MIN_DISTINCT_FLIGHTS:
+        return None
+    age_ok_on = nudge.as_utc_date(created_at)
+    if age_ok_on is None:
+        return None
+    age_ok_on = age_ok_on + timedelta(days=nudge.MIN_ACCOUNT_AGE_DAYS)
+    flights_ok_on = nudge.as_utc_date(
+        _nth_flight_briefed_at(db, user_id, nudge.MIN_DISTINCT_FLIGHTS)
+    )
+    if flights_ok_on is None:
+        return None
+    return max(age_ok_on, flights_ok_on)
+
+
+def _load_nudge_state(db: Session, user_id: str) -> tuple[UserPreferencesRow | None, dict, nudge.NudgeState]:
+    """Read the ``donate_nudge`` key out of ``app_prefs_json``."""
+    row = db.get(UserPreferencesRow, user_id)
+    data: dict = {}
+    if row is not None and row.app_prefs_json:
+        try:
+            loaded = json.loads(row.app_prefs_json)
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            data = loaded
+    return row, data, nudge.load_state(data.get(nudge.PREFS_KEY))
+
+
+def _save_nudge_state(
+    db: Session, user_id: str, row: UserPreferencesRow | None, data: dict, state: nudge.NudgeState
+) -> None:
+    """Merge the nudge state back into ``app_prefs_json``, preserving siblings.
+
+    No explicit commit — ``get_db`` commits the request, as everywhere else in
+    the app.
+    """
+    if row is None:
+        row = UserPreferencesRow(user_id=user_id)
+        db.add(row)
+    data[nudge.PREFS_KEY] = nudge.dump_state(state)
+    row.app_prefs_json = json.dumps(data)
+
+
+def _campaign_window() -> nudge.CampaignWindow | None:
+    """The configured campaign, or None. Env-driven: set + restart, no redeploy."""
+    return nudge.parse_campaign(os.environ.get(_CAMPAIGN_ENV))
+
+
+class NudgeSummary(BaseModel):
+    """The runtime values the popover copy substitutes. **No money figures.**
+
+    Community activity stats are deliberate and fine; a cost or donation amount
+    is not — a euro figure in a donation ask sets an anchor and invites the
+    reader to price their own share. The donate page carries the numbers.
+    """
+
+    # Evergreen: "You've had {briefing_count} briefings since {first_month}."
+    briefing_count: int = 0
+    # ISO-8601 timestamp of the first briefing; the client formats the month so
+    # it lands in the viewer's locale.
+    first_briefing_at: str | None = None
+    # Campaign: "{n_pilots} pilots generated {n_briefings} briefings…". Zero
+    # when unknown — the client suppresses the sentence rather than printing a
+    # number that undercuts the point.
+    pilots_last_year: int = 0
+    briefings_last_year: int = 0
+
+
+class NudgeResponse(BaseModel):
+    show: bool
+    kind: str = ""
+    rung: int = 0
+    # Stable identifier for why nothing is shown — for debugging and logs, never
+    # rendered to a pilot.
+    reason: str = ""
+    summary: NudgeSummary = NudgeSummary()
+
+
+@router.get("/nudge", response_model=NudgeResponse)
+def get_nudge(
+    viewer_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> NudgeResponse:
+    """Should the briefing page offer this pilot a donate chip right now?
+
+    Web-only. The client applies the last render condition — **never beside a
+    RED assessment** — and must withhold the ``shown`` ack when it suppresses,
+    or impressions burn on views that painted nothing.
+
+    Persisting happens here for *lifecycle* transitions only (an ask opening, an
+    exhausted or expired one closing). Impressions are never recorded by a GET:
+    a prefetch must not burn one.
+    """
+    window = _campaign_window()
+    row, prefs, state = _load_nudge_state(db, viewer_id)
+    today = nudge.today_utc()
+
+    # Cheap-first: prefs blob, Stripe config and donation existence settle the
+    # overwhelming majority of page views without touching flight counts or
+    # economics. Measured on prod, only ~112 pilots get past this.
+    has_donated, has_recurring, last_donation_at = _donor_status(db, viewer_id)
+    cheap = nudge.GateInputs(
+        today=today,
+        stripe_configured=stripe_configured(),
+        has_donated=has_donated,
+        has_recurring_donation=has_recurring,
+        last_donation_at=last_donation_at,
+        campaign=window,
+    )
+    blocked = nudge.blocked_cheaply(state, cheap)
+    if blocked is not None:
+        return NudgeResponse(show=False, reason=blocked)
+
+    user = db.get(UserRow, viewer_id)
+    created_at = getattr(user, "created_at", None)
+    account_age_days = 0
+    created_date = nudge.as_utc_date(created_at)
+    if created_date is not None:
+        account_age_days = max((today - created_date).days, 0)
+    distinct_flights = _distinct_flights(db, viewer_id)
+
+    true_cost = 0.0
+    cpum = 0.0
+    stats = None
+    eligible_since = None
+    # An ask that is already open has cleared the cost ladder; re-deriving it
+    # would run the expensive path on every page view for the whole life of the
+    # ask, which is exactly what the design forbids. The same goes for the
+    # eligibility date, which only ever feeds the decision to *open* one.
+    if state.open_ask is None:
+        eligible_since = _eligible_since(db, viewer_id, created_at, distinct_flights)
+        report = _cached_report(db)
+        cpum = economics_from_report(report).cost_per_user_month_usd if report else 0.0
+        # The ledger sum is a cheap SQL aggregate and is always >= the true
+        # cost (it amortizes over an estimate at or below actual volume, then
+        # adds 10% margin), so a pilot whose *ledger* total misses the lowest
+        # rung certainly misses it on the true basis too — and we skip parsing
+        # their breakdown rows entirely.
+        if cpum > 0 and _ledger_cost(db, viewer_id) >= nudge.RUNGS[0] * cpum:
+            stats = user_usage_stats(db, viewer_id, report)
+            true_cost = stats.footprint.true_cost_usd
+
+    inputs = nudge.GateInputs(
+        today=today,
+        stripe_configured=cheap.stripe_configured,
+        has_donated=has_donated,
+        has_recurring_donation=has_recurring,
+        last_donation_at=last_donation_at,
+        distinct_flights=distinct_flights,
+        account_age_days=account_age_days,
+        eligible_since=eligible_since,
+        true_lifetime_cost_usd=true_cost,
+        cost_per_user_month_usd=cpum,
+        campaign=window,
+    )
+    decision = nudge.decide(state, inputs)
+    if decision.changed:
+        _save_nudge_state(db, viewer_id, row, prefs, decision.state)
+    if not decision.show:
+        return NudgeResponse(show=False, reason=decision.reason)
+
+    return NudgeResponse(
+        show=True,
+        kind=decision.kind,
+        rung=decision.rung,
+        reason=decision.reason,
+        summary=_nudge_summary(db, viewer_id, decision.kind, stats),
+    )
+
+
+def _ledger_cost(db: Session, user_id: str) -> float:
+    """The pilot's charged lifetime briefing cost — one SQL SUM, no JSON parse.
+
+    A deliberately cheap **upper bound** on their true cost, used only to skip
+    the per-row breakdown parse for pilots who cannot possibly have crossed the
+    lowest rung.
+    """
+    return float(
+        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+        )
+        .scalar()
+        or 0.0
+    )
+
+
+def _nudge_summary(db: Session, user_id: str, kind: str, stats) -> NudgeSummary:
+    """The substitutions the chosen variant's copy needs — and nothing else."""
+    if kind == nudge.KIND_CAMPAIGN:
+        pilots, briefings = _cached(
+            "community_year",
+            lambda: _community_year_stats(
+                db, since=datetime.now(timezone.utc) - timedelta(days=_YEAR_DAYS)
+            ),
+        )
+        return NudgeSummary(pilots_last_year=pilots, briefings_last_year=briefings)
+
+    if stats is None:
+        stats = user_usage_stats(db, user_id, _cached_report(db))
+    return NudgeSummary(
+        briefing_count=stats.footprint.briefings,
+        first_briefing_at=(
+            stats.first_briefing_at.isoformat() if stats.first_briefing_at else None
+        ),
+    )
+
+
+class NudgeAckRequest(BaseModel):
+    action: Literal["shown", "clicked", "dismissed"]
+
+
+@router.post("/nudge/ack", response_model=NudgeResponse)
+def ack_nudge(
+    body: NudgeAckRequest,
+    viewer_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> NudgeResponse:
+    """Record an impression or an answer against the open ask.
+
+    ``shown`` is idempotent within the calendar day and closes the ask once the
+    four-impression budget is spent — silence is an answer, and it consumes the
+    rung exactly as a dismissal does. ``clicked`` and ``dismissed`` both close
+    the ask; a popover opened and shut with Esc sends neither, because the pilot
+    answered nothing (the impression already counted, which is what limits it).
+    """
+    row, prefs, state = _load_nudge_state(db, viewer_id)
+    if state.open_ask is None:
+        return NudgeResponse(show=False, reason="no_open_ask")
+
+    today = nudge.today_utc()
+    updated = (
+        nudge.record_shown(state, today)
+        if body.action == "shown"
+        else nudge.close_ask(state, today)
+    )
+    if updated is not state:
+        _save_nudge_state(db, viewer_id, row, prefs, updated)
+    return NudgeResponse(show=False, reason=body.action)

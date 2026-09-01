@@ -6,6 +6,7 @@ import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
 import { renderPirepList } from './managers/pirep-ui';
+import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
@@ -2680,6 +2681,11 @@ async function init(): Promise<void> {
       track(EVENTS.XSECTION_VIEWED, buildXsectionSnapshotProps(s));
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
+    // Web-only donate chip. Fire-and-forget after the briefing has painted: it
+    // is the least important thing on this page and must never delay it. The
+    // assessment goes in because RED suppression is the client's call — the
+    // server does not know the grade.
+    void initDonateNudge(s.currentPack?.assessment);
     ui.renderDigestAltitudeBanner(s.flight, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.togglePackSections(!!s.currentPack);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));

@@ -288,8 +288,9 @@ flyfun_common/db/models.py                — DonationRow (+ FxRateRow cache)
 Weather-specific pieces stay in weatherbrief (built):
 
 ```
-weatherbrief/impact.py                    — donation impact math (pure; margin-excluded run cost)
-weatherbrief/api/donations.py             — /checkout, /webhook, /me, /summary
+weatherbrief/impact.py                    — donation impact math + usage_footprint (pure; margin-excluded run cost)
+weatherbrief/donate_nudge.py              — donate-nudge gate + lifecycle (pure) — see plans/donate-nudge.md
+weatherbrief/api/donations.py             — /checkout, /webhook, /me, /summary, /nudge
 weatherbrief/api/credits.py               — build_program_report() (shared), fx block on /user/credits + /transparency
 weatherbrief/api/preferences.py           — display_currency pref + fx_block_for_user() resolver
 web/donate.html / ts/donate-main.ts       — donate page (amount/currency picker, impact, community total)
@@ -408,6 +409,37 @@ below the active base — and caps "your own usage" at a year, spilling the
 overflow into pilots: "covers ~1 year of your own usage + ~N other pilots"
 (`_OWN_USAGE_CAP_MONTHS`).
 
+#### The ledger is not the true cost — `usage_footprint()`
+
+`cost_ledger.cost` is what was *charged*, not what the usage cost to run.
+`compute_cost` amortizes fixed cost over `max(estimated_monthly_briefings, 500)`
+and then adds margin, so the billed fixed share is whatever the rate card
+guessed the monthly volume would be. Prod ran 1632 briefings/month against an
+estimate of 500 until 2026-08-31: every row before that carries a $0.50 fixed
+share against a true $0.153, a **2.94x over-recovery** of which the 10% margin
+is the small part. De-margining does not fix it. Worse, the estimate was bumped
+to 1600 (cost_config v4), so a pilot's lifetime sum now blends two amortization
+bases and is not comparable between pilots.
+
+`impact.usage_footprint()` (pure) recomputes from the real basis:
+
+```python
+true_cost = own_variable_usd + (fixed_monthly / briefings_per_month) * own_briefings
+```
+
+`api/credits.user_usage_stats()` is the DB half: one query for the pilot's
+briefing rows, then the pure call. A row whose `detail_json` cannot be read
+(missing/unparseable/either key absent) counts as **unknown**, never `0.0` — it
+keeps its fixed share and is reported in `unknown_variable_rows`, so the total
+only ever understates.
+
+**This is what `personal_impact()` and the `/preview` burn rate now consume.**
+Before, `coverage_ratio = donation ÷ ledger_cost` told donors they had covered
+~3x less of their own usage than they really had, and held the
+`covers_others` / `future` bands shut. Note the recomputed figure is amortized
+at *current* volume, so a pilot's number falls as the platform grows — the same
+direction the `cost_per_user_month_usd`-relative nudge rungs move.
+
 #### Community panel
 
 `impact.yearly_impact()` → `YearlyImpact`; phrasing flips at full coverage:
@@ -463,10 +495,12 @@ there are no donations or `active_users == 0`.
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
 | `/api/donations/checkout` | POST | User or anon | Create a Stripe Checkout Session (`{amount, currency, recurring}`) → returns redirect URL |
-| `/api/donations/webhook` | POST | Stripe sig | **Source of truth**: record/refund on `checkout.session.completed`, `charge.refunded`; verifies `STRIPE_WEBHOOK_SECRET`; idempotent on `provider_ref` |
+| `/api/donations/webhook` | POST | Stripe sig | **Source of truth**: record/refund on `checkout.session.completed`, `charge.updated`, `charge.refunded`, `invoice.payment_succeeded` (subscription renewals; the first invoice is skipped — Checkout already recorded it); verifies `STRIPE_WEBHOOK_SECRET`; idempotent on `provider_ref` |
 | `/api/donations/email-receipt` | POST | None (opt-in) | Send a one-off confirmation email for a just-completed donation; reads the Checkout `session_id` straight from Stripe (avoids racing the webhook); recipient derived from the donation (account email, else Checkout email) so a forged `session_id` can't spam an inbox |
-| `/api/donations/me` | GET | User | Viewer's donation total + program-average `impact` + retrospective `personal` panel (lifetime cost, "+N pilots"/forward overflow) (USD + `fx`) |
-| `/api/donations/summary` | GET | None | Public: this-year community coverage + `stats` trio (active pilots 30d, briefings all-time, AI words) + `run_cost` block |
+| `/api/donations/me` | GET | User | Viewer's donation total + program-average `impact` + retrospective `personal` panel (lifetime cost, "+N pilots"/forward overflow) + `usage` footprint — what their own briefings really cost, shown to donors *and* never-donors (USD + `fx`) |
+| `/api/donations/summary` | GET | None | Public: this-year community coverage + `stats` trio (active pilots 30d, briefings all-time, AI words) + trailing-365d pilots/briefings pair + `run_cost` block |
+| `/api/donations/nudge` | GET | User | **Web-only.** Should the briefing page offer a donate chip right now: `{show, kind, rung, reason, summary}` |
+| `/api/donations/nudge/ack` | POST | User | **Web-only.** `{action: shown\|clicked\|dismissed}` against the open ask |
 | `/api/donations/preview` | GET | User or anon | Adaptive-ladder translation of a prospective `?amount=&currency=` (personal path when logged-in w/ history, else program average) |
 
 ### Stripe flow
