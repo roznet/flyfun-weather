@@ -65,20 +65,11 @@ struct HighlightLayer: CrossSectionLayerProtocol {
         // Compose the dim wash + cutouts in a transparency layer so
         // `.destinationOut` punches only the wash, not the sky/terrain/weather
         // beneath, then composite the whole layer onto the main context.
-        //
-        // Skipped once the cut-outs cover most of the plot: a scrim says "look
-        // here, not there", and when nearly everything is a cut-out that
-        // sentence inverts — the small *unflagged* remainder becomes the only
-        // dimmed thing, drawing the eye to the one stretch that is fine. The
-        // outlines below still draw, so the geometry is never hidden; only the
-        // spotlight illusion is dropped. SYNC: web `SCRIM_MAX_COVERAGE`.
-        if Self.cutoutCoverage(merged, transform: transform) <= Self.scrimMaxCoverage {
-            context.drawLayer { layer in
-                layer.fill(Path(plotRect), with: .color(CrossSectionTheme.active.scrimWash))
-                layer.blendMode = .destinationOut
-                for region in merged {
-                    layer.fill(Path(rect(for: region, transform: transform)), with: .color(.black))
-                }
+        context.drawLayer { layer in
+            layer.fill(Path(plotRect), with: .color(CrossSectionTheme.active.scrimWash))
+            layer.blendMode = .destinationOut
+            for region in merged {
+                layer.fill(Path(rect(for: region, transform: transform)), with: .color(.black))
             }
         }
 
@@ -91,42 +82,6 @@ struct HighlightLayer: CrossSectionLayerProtocol {
                            with: .color(severityColor(region.severity)),
                            lineWidth: Self.cutoutOutlineWidth)
         }
-    }
-
-    /// Above this share of the plot width covered by cut-outs, the wash is
-    /// dropped. SYNC: web `SCRIM_MAX_COVERAGE` in highlight-layer.ts.
-    static let scrimMaxCoverage: Double = 0.6
-
-    /// Share of the plot width the cut-outs cover, as a 0-1 fraction.
-    ///
-    /// Union, not sum: regions routinely overlap along the route (an icing band
-    /// and a convective tower at the same distance are two regions), and summing
-    /// them would report >100% coverage for a chart that is half clear.
-    static func cutoutCoverage(_ regions: [VizAdvisoryHighlights.Region],
-                               transform: CoordTransform) -> Double {
-        let width = transform.plotArea.width
-        guard width > 0 else { return 0 }
-        let spans = regions
-            .map { region -> (Double, Double) in
-                let a = transform.distanceToX(region.distFromNm)
-                let b = transform.distanceToX(region.distToNm)
-                return a <= b ? (a, b) : (b, a)
-            }
-            .sorted { $0.0 < $1.0 }
-        var covered = 0.0
-        var runStart = -Double.infinity
-        var runEnd = -Double.infinity
-        for (x0, x1) in spans {
-            if x0 > runEnd {
-                if runEnd > runStart { covered += runEnd - runStart }
-                runStart = x0
-                runEnd = x1
-            } else if x1 > runEnd {
-                runEnd = x1
-            }
-        }
-        if runEnd > runStart { covered += runEnd - runStart }
-        return covered / width
     }
 
     /// Pixel rect of a region. base/top nil → terrain-to-top (full column).

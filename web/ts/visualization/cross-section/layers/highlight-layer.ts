@@ -69,57 +69,6 @@ function regionYSpan(region: HighlightRegion, transform: CoordTransform): { yTop
   return { yTop, yBottom };
 }
 
-/** Share of the plot width the cut-outs cover, as a 0-1 fraction.
- *
- *  Union, not sum: regions routinely overlap along the route (an icing band and
- *  a convective tower at the same distance are two regions), and summing them
- *  would report >100% coverage for a chart that is half clear.
- */
-export function cutoutCoverage(
-  transform: CoordTransform,
-  regions: HighlightRegion[],
-): number {
-  const { plotArea } = transform;
-  if (plotArea.width <= 0) return 0;
-  const spans: Array<[number, number]> = regions
-    .map((r): [number, number] => {
-      const a = transform.distanceToX(r.dist_from_nm);
-      const b = transform.distanceToX(r.dist_to_nm);
-      return a <= b ? [a, b] : [b, a];
-    })
-    .sort((a, b) => a[0] - b[0]);
-  let covered = 0;
-  let runStart = -Infinity;
-  let runEnd = -Infinity;
-  for (const [x0, x1] of spans) {
-    if (x0 > runEnd) {
-      if (runEnd > runStart) covered += runEnd - runStart;
-      runStart = x0;
-      runEnd = x1;
-    } else if (x1 > runEnd) {
-      runEnd = x1;
-    }
-  }
-  if (runEnd > runStart) covered += runEnd - runStart;
-  return covered / plotArea.width;
-}
-
-/** Above this share of the plot width covered by cut-outs, the wash is dropped.
- *
- *  A scrim says "look here, not there". Once the cut-outs cover most of the
- *  route that sentence is meaningless — and worse, it inverts: the small
- *  *unflagged* remainder becomes the only dimmed thing, so the eye is drawn to
- *  the one stretch that is fine. Seen on `ifr_feasibility` over a convective
- *  route, where 14 regions (two of them full-column ghosts, one a 110nm x
- *  19,000ft merged tower) covered 71% of the plot and the chart read as blank
- *  white boxes rather than a highlight. Past the threshold the outlines and the
- *  ribbon still draw — the geometry is still shown, it just stops pretending to
- *  be a spotlight.
- *
- *  SYNC: mirrored in iOS `HighlightLayer.swift`.
- */
-export const SCRIM_MAX_COVERAGE = 0.6;
-
 function drawScrim(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
@@ -128,47 +77,41 @@ function drawScrim(
   if (regions.length === 0) return;  // all-green: never dim a clean chart
   const { plotArea } = transform;
 
-  // The wash is skipped when the cut-outs already cover most of the plot; the
-  // outlines below still draw, so the geometry is never hidden — only the
-  // spotlight illusion is dropped. See SCRIM_MAX_COVERAGE.
-  if (cutoutCoverage(transform, regions) <= SCRIM_MAX_COVERAGE) {
-    // Compose the dim wash + cutouts on an offscreen canvas so `destination-out`
-    // punches only the wash, not the sky/axes/weather beneath (compare-mode
-    // precedent). The main ctx is already dpr-scaled (coords in CSS px); mirror
-    // that on the offscreen so geometry lines up 1:1.
-    const devW = ctx.canvas.width;
-    const devH = ctx.canvas.height;
-    const dpr = window.devicePixelRatio || 1;
-    const off = document.createElement('canvas');
-    off.width = devW;
-    off.height = devH;
-    const offCtx = off.getContext('2d');
-    if (offCtx) {
-      offCtx.scale(dpr, dpr);
+  // Compose the dim wash + cutouts on an offscreen canvas so `destination-out`
+  // punches only the wash, not the sky/axes/weather beneath (compare-mode
+  // precedent). The main ctx is already dpr-scaled (coords in CSS px); mirror
+  // that on the offscreen so geometry lines up 1:1.
+  const devW = ctx.canvas.width;
+  const devH = ctx.canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  const off = document.createElement('canvas');
+  off.width = devW;
+  off.height = devH;
+  const offCtx = off.getContext('2d');
+  if (!offCtx) return;
+  offCtx.scale(dpr, dpr);
 
-      // 1. Fill the plot rect with the dim wash.
-      offCtx.fillStyle = scrimWash();
-      offCtx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
+  // 1. Fill the plot rect with the dim wash.
+  offCtx.fillStyle = scrimWash();
+  offCtx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
 
-      // 2. Punch out each region (spotlight cutout). The punch MUST be fully opaque:
-      //    `destination-out` yields outAlpha = destAlpha * (1 - srcAlpha), so punching
-      //    with the wash's own translucent fillStyle would erase only ~a third of it and
-      //    leave the spotlight dimmed (and double-punched overlaps brighter than single
-      //    ones). Mirrors iOS's `.color(.black)`.
-      offCtx.globalCompositeOperation = 'destination-out';
-      offCtx.fillStyle = '#000';
-      for (const region of regions) {
-        const x0 = transform.distanceToX(region.dist_from_nm);
-        const x1 = transform.distanceToX(region.dist_to_nm);
-        const { yTop, yBottom } = regionYSpan(region, transform);
-        offCtx.fillRect(x0, yTop, x1 - x0, yBottom - yTop);
-      }
-      offCtx.globalCompositeOperation = 'source-over';
-
-      // 3. Composite the scrim onto the main canvas.
-      ctx.drawImage(off, 0, 0, devW, devH, 0, 0, devW / dpr, devH / dpr);
-    }
+  // 2. Punch out each region (spotlight cutout). The punch MUST be fully opaque:
+  //    `destination-out` yields outAlpha = destAlpha * (1 - srcAlpha), so punching
+  //    with the wash's own translucent fillStyle would erase only ~a third of it and
+  //    leave the spotlight dimmed (and double-punched overlaps brighter than single
+  //    ones). Mirrors iOS's `.color(.black)`.
+  offCtx.globalCompositeOperation = 'destination-out';
+  offCtx.fillStyle = '#000';
+  for (const region of regions) {
+    const x0 = transform.distanceToX(region.dist_from_nm);
+    const x1 = transform.distanceToX(region.dist_to_nm);
+    const { yTop, yBottom } = regionYSpan(region, transform);
+    offCtx.fillRect(x0, yTop, x1 - x0, yBottom - yTop);
   }
+  offCtx.globalCompositeOperation = 'source-over';
+
+  // 3. Composite the scrim onto the main canvas.
+  ctx.drawImage(off, 0, 0, devW, devH, 0, 0, devW / dpr, devH / dpr);
 
   // 4. Stroke each cutout with a severity-coloured outline (directly on main
   //    canvas, clipped to the plot area so a full-column outline doesn't bleed).
