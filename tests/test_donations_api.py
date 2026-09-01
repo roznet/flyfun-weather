@@ -957,9 +957,21 @@ class TestMeUsageFootprint:
 
 
 class TestInvoicePaymentSucceeded:
+    @pytest.fixture(autouse=True)
+    def _no_stripe_fee_calls(self, monkeypatch):
+        """No test in here may reach Stripe for the fee.
+
+        The handler always looks the fee up now, and the module-level
+        ``_nudge_env`` fixture puts a (fake) ``STRIPE_SECRET_KEY`` in the
+        environment — so without this the lookup is a real network call,
+        ~2s per test and offline-fragile. Individual tests override it.
+        """
+        monkeypatch.setattr(donations, "retrieve_net_ratio", lambda ref: None)
+
     def _invoice(self, **overrides):
         base = {
             "id": "in_test_1",
+            "payment_intent": "pi_renewal_1",
             "amount_paid": 1000,
             "currency": "usd",
             "billing_reason": "subscription_cycle",
@@ -979,12 +991,88 @@ class TestInvoicePaymentSucceeded:
         return make_client().post("/api/donations/webhook", content=b"{}",
                                   headers={"stripe-signature": "t=1,v1=x"})
 
-    def test_records_a_renewal(self, make_client, session_factory, monkeypatch):
+    def test_records_a_renewal_keyed_on_the_payment_intent(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """Not the invoice id: the rest of the webhook matches on the PI.
+
+        ``charge.updated`` backfills the Stripe fee by ``charge.payment_intent``
+        and ``charge.refunded`` marks refunds by the same, so an invoice-keyed
+        row would be unreachable by both.
+        """
         r = self._post(make_client, monkeypatch, self._invoice())
         assert r.json() == {"received": True, "created": True}
         s = session_factory()
-        row = s.query(DonationRow).filter_by(provider_ref="in_test_1").one()
+        row = s.query(DonationRow).filter_by(provider_ref="pi_renewal_1").one()
         assert (row.user_id, row.amount, row.recurring) == (DEV_USER_ID, 10.0, True)
+        s.close()
+
+    def test_falls_back_to_the_invoice_id_without_a_payment_intent(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """Better an unmatched row than a lost donation."""
+        inv = self._invoice()
+        del inv["payment_intent"]
+        self._post(make_client, monkeypatch, inv)
+        s = session_factory()
+        assert s.query(DonationRow).one().provider_ref == "in_test_1"
+        s.close()
+
+    def test_reads_the_payment_intent_from_the_newer_invoice_shape(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """Recent API versions nest it under ``payments.data[].payment``."""
+        inv = self._invoice()
+        del inv["payment_intent"]
+        inv["payments"] = {"data": [{"payment": {"payment_intent": "pi_nested"}}]}
+        self._post(make_client, monkeypatch, inv)
+        s = session_factory()
+        assert s.query(DonationRow).one().provider_ref == "pi_nested"
+        s.close()
+
+    def test_records_the_stripe_fee(self, make_client, session_factory, monkeypatch):
+        """A renewal's balance transaction is usually attached by the time this
+        fires, so net_usd need not wait on charge.updated."""
+        import weatherbrief.api.donations as d
+
+        monkeypatch.setattr(d, "retrieve_net_ratio", lambda ref: 0.95)
+        self._post(make_client, monkeypatch, self._invoice())
+        s = session_factory()
+        assert s.query(DonationRow).one().net_usd == pytest.approx(9.5)
+        s.close()
+
+    def test_a_fee_lookup_failure_never_loses_the_donation(
+        self, make_client, session_factory, monkeypatch
+    ):
+        import weatherbrief.api.donations as d
+
+        def _boom(ref):
+            raise RuntimeError("stripe down")
+
+        monkeypatch.setattr(d, "retrieve_net_ratio", _boom)
+        assert self._post(make_client, monkeypatch, self._invoice()).json()["created"]
+        s = session_factory()
+        assert s.query(DonationRow).one().net_usd is None
+        s.close()
+
+    def test_a_refunded_renewal_falls_out_of_aggregation(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """The reason the PI is the key: charge.refunded has to be able to find it."""
+        import weatherbrief.api.donations as d
+
+        self._post(make_client, monkeypatch, self._invoice())
+        monkeypatch.setattr(
+            d, "verify_webhook_event",
+            lambda payload, sig: _event(
+                "charge.refunded", {"id": "ch_1", "payment_intent": "pi_renewal_1"}
+            ),
+        )
+        r = make_client().post("/api/donations/webhook", content=b"{}",
+                               headers={"stripe-signature": "t=1,v1=x"})
+        assert r.json()["refunded"] is True
+        s = session_factory()
+        assert s.query(DonationRow).one().status == "refunded"
         s.close()
 
     def test_idempotent_on_redelivery(self, make_client, session_factory, monkeypatch):

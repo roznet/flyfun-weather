@@ -373,8 +373,9 @@ cost_per_briefing    = monthly_run_cost_usd / (num_briefings * scale) # margin-e
   (monthly_run_cost_usd * months_elapsed_this_year)` — donations-this-year ÷
   cost-incurred-this-year-so-far. Resets annually.
 - **Personal = lifetime.** The user's whole relationship with the app: lifetime
-  cost from `cost_ledger` (`credits.user_cost_stats`, which also yields the
-  realized **monthly burn rate** = lifetime cost ÷ months active) vs lifetime
+  cost recomputed from `cost_ledger` on the true basis (`credits.user_usage_stats`,
+  which also yields the realized **monthly burn rate** = true lifetime cost ÷
+  months active — see "The ledger is not the true cost" below) vs lifetime
   donations (`get_user_total_usd`).
 
 #### Personal panel — retrospective with forward overflow

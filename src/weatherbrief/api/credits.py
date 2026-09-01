@@ -170,11 +170,13 @@ def _transaction_to_response(row: CostLedgerRow) -> TransactionResponse:
 
 
 def _cost_since(db: Session, user_id: str, since: datetime | None = None) -> float:
-    """Sum of a user's briefing USD costs.
+    """Sum of a user's **charged** briefing USD costs (this-week/this-month).
 
-    With ``since`` it is windowed (this-week/this-month); with ``since=None`` it
-    is the user's **lifetime** briefing cost — the denominator the donation
-    personal panel needs.
+    ``since=None`` gives the lifetime charged total. Note that is what the
+    ledger *billed*, not what the usage cost to run — the two differ by the
+    rate card's volume estimate plus margin. Anything comparing a pilot against
+    the program (coverage, the nudge's cost rungs) wants
+    :func:`user_usage_stats` instead.
     """
     q = db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0)).filter(
         CostLedgerRow.user_id == user_id,
@@ -185,32 +187,6 @@ def _cost_since(db: Session, user_id: str, since: datetime | None = None) -> flo
         q = q.filter(CostLedgerRow.created_at >= since)
     return float(q.scalar())
 
-
-def user_cost_stats(db: Session, user_id: str) -> tuple[float, float, float]:
-    """Return ``(lifetime_cost_usd, months_active, burn_rate_monthly_usd)``.
-
-    ``burn_rate`` is the user's realized lifetime cost ÷ months active (months
-    since their first briefing, floored at half a month so a brand-new user's
-    rate isn't divide-by-tiny). All zero when the user has no briefing history —
-    the donation layer then falls back to the program average.
-    """
-    lifetime = _cost_since(db, user_id)
-    first = (
-        db.query(func.min(CostLedgerRow.created_at))
-        .filter(
-            CostLedgerRow.user_id == user_id,
-            CostLedgerRow.service == SERVICE,
-            CostLedgerRow.category == "briefing",
-        )
-        .scalar()
-    )
-    if first is None or lifetime <= 0:
-        return 0.0, 0.0, 0.0
-    if first.tzinfo is None:
-        first = first.replace(tzinfo=timezone.utc)
-    days = (datetime.now(timezone.utc) - first).total_seconds() / 86400.0
-    months_active = max(days / 30.0, 0.5)
-    return lifetime, months_active, lifetime / months_active
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +199,9 @@ class UserUsageStats:
     """A pilot's usage on the **true** cost basis, not the ledger's.
 
     ``footprint.true_cost_usd`` is the comparable lifetime figure;
-    ``burn_rate_monthly_usd`` is that figure over ``months_active``, so it is on
-    the same basis (the ledger-derived burn rate from :func:`user_cost_stats`
-    over-recovers by the same factor and must not be mixed in).
+    ``burn_rate_monthly_usd`` is that figure over ``months_active``, so both are
+    on the same basis — a burn rate derived from the charged ledger sum
+    over-recovers by the same factor and must never be mixed in.
     ``first_briefing_at`` is what the "since {month}" copy reads.
     """
 
@@ -287,8 +263,8 @@ def user_usage_stats(db: Session, user_id: str, report: ProgramCostReport | None
         return UserUsageStats(footprint=fp, months_active=0.0, burn_rate_monthly_usd=0.0,
                               first_briefing_at=first)
     days = (datetime.now(timezone.utc) - first).total_seconds() / 86400.0
-    # Same floor as user_cost_stats: a brand-new pilot's rate must not divide by
-    # a near-zero window.
+    # Floored at half a month so a brand-new pilot's rate is not divided by a
+    # near-zero window.
     months_active = max(days / 30.0, 0.5)
     return UserUsageStats(
         footprint=fp,
