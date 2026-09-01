@@ -770,6 +770,11 @@ rule for any other client-side reason the chip does not paint.
    pilots/briefings pair the campaign copy needs (`/api/donations/summary`
    currently has 30d and all-time only).
 
-## Open items
+## Settled
 
-- Confirm 60 days + 5 distinct flights matches the intended "used it for a while".
+- **60 days + 5 distinct flights** is the engagement floor (operator confirmed
+  2026-09-01). It was the one threshold picked by judgement rather than
+  measurement; it stands. For scale it admits 94 pilots, of whom 54 also clear
+  the K=1.5 cost rung at rollout.
+
+No open items.
