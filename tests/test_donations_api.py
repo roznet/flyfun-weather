@@ -17,12 +17,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from flyfun_common.db import current_user_id, get_db, optional_user_id, DEV_USER_ID
-from flyfun_common.db.models import CostLedgerRow, DonationRow, UserRow
+from flyfun_common.db.models import (
+    CostLedgerRow,
+    DonationRow,
+    UserPreferencesRow,
+    UserRow,
+)
 from flyfun_common.payments.stripe_client import SignatureVerificationError
 
 import weatherbrief.api.donations as donations
 from weatherbrief.costs import DEFAULT_CONFIG
-from weatherbrief.db.models import CostConfigRow
+from weatherbrief.db.models import BriefingUsageRow, CostConfigRow
 
 SERVICE = "flyfun-weather"
 OTHER_USER = "user-2"
@@ -75,18 +80,31 @@ def make_client(session_factory):
     return _make
 
 
-def _seed_economics(session_factory):
-    """Active cost config + a couple of briefing ledger rows (2 distinct users)."""
+def _seed_economics(session_factory, other_user_briefings: int = 1):
+    """Active cost config + briefing ledger rows (2 distinct users).
+
+    ``other_user_briefings`` sets the program's monthly volume, which is what
+    the fixed monthly cost is amortized over when a pilot's *true* lifetime cost
+    is recomputed (``impact.usage_footprint``). At the default of one briefing
+    each, the whole $56/month lands as $28 on every briefing — arithmetically
+    right but nothing like prod, so tests that care about a realistic per-pilot
+    cost raise it.
+    """
     s = session_factory()
     s.add(CostConfigRow(active_from=datetime.now(timezone.utc),
                         config_json=DEFAULT_CONFIG.to_json()))
     detail = json.dumps({"token_cost_usd": 0.05, "storage_cost_usd": 0.01})
-    for uid in (DEV_USER_ID, OTHER_USER):
-        s.add(CostLedgerRow(
+
+    def _row(uid):
+        return CostLedgerRow(
             user_id=uid, service=SERVICE, action="briefing", cost=0.1,
             category="briefing", description="Briefing", detail_json=detail,
             created_at=datetime.now(timezone.utc),
-        ))
+        )
+
+    s.add(_row(DEV_USER_ID))
+    for _ in range(other_user_briefings):
+        s.add(_row(OTHER_USER))
     s.commit()
     s.close()
 
@@ -644,8 +662,10 @@ class TestMePersonal:
         # $56 dwarfs DEV's tiny lifetime cost AND the 2-pilot active base, so the
         # surplus caps to whole-service months rather than claiming more pilots
         # than exist. (The uncapped "+N pilots" phrasing is unit-tested in
-        # test_impact.py.)
-        _seed_economics(session_factory)
+        # test_impact.py.) The extra volume keeps DEV's own true cost small —
+        # at one briefing each, the fixed monthly would amortize to $28 on DEV's
+        # single row and there would be no surplus to speak of.
+        _seed_economics(session_factory, other_user_briefings=200)
         _record_donation(session_factory, 56.0)
         body = make_client().get("/api/donations/me").json()
         p = body["personal"]
@@ -685,3 +705,343 @@ class TestPreview:
             "/api/donations/preview?amount=20&currency=USD"
         ).json()
         assert body["translation"]["empty"] is True
+
+
+# ---------------------------------------------------------------------------
+# Donate nudge (web-only)
+# ---------------------------------------------------------------------------
+
+
+def _seed_nudge_eligible(
+    session_factory,
+    *,
+    dev_briefings: int = 20,
+    flights: int = 6,
+    account_age_days: int = 200,
+    other_users: int = 19,
+):
+    """A program and a pilot that clear every evergreen gate condition.
+
+    Deliberately proportioned like prod rather than like a unit test: 20 pilots
+    over ~210 briefings a month puts ``cost_per_user_month_usd`` around $3.4
+    (measured: $2.84), which is what makes the K=1.5 rung mean anything. Ledger
+    ``cost`` is set well above the recomputed true cost, as it is in prod — the
+    gate uses the ledger sum as a cheap upper bound before parsing breakdowns.
+    """
+    s = session_factory()
+    s.add(CostConfigRow(active_from=datetime.now(timezone.utc),
+                        config_json=DEFAULT_CONFIG.to_json()))
+    detail = json.dumps({"token_cost_usd": 0.05, "storage_cost_usd": 0.01})
+    now = datetime.now(timezone.utc)
+
+    dev = s.get(UserRow, DEV_USER_ID)
+    dev.created_at = now - timedelta(days=account_age_days)
+
+    def _ledger(uid, when):
+        return CostLedgerRow(
+            user_id=uid, service=SERVICE, action="briefing", cost=0.60,
+            category="briefing", description="Briefing", detail_json=detail,
+            created_at=when,
+        )
+
+    for i in range(dev_briefings):
+        s.add(_ledger(DEV_USER_ID, now - timedelta(days=i)))
+    for u in range(other_users):
+        uid = f"bulk-{u}"
+        s.add(UserRow(id=uid, provider="local", provider_sub=uid,
+                      email=f"{uid}@x", display_name=uid, approved=True))
+        for i in range(10):
+            s.add(_ledger(uid, now - timedelta(days=i)))
+
+    # Distinct flights, with the fifth far enough back that eligibility (age +
+    # flights) is well in the past.
+    for f in range(flights):
+        s.add(BriefingUsageRow(
+            user_id=DEV_USER_ID, flight_id=f"flight-{f}",
+            timestamp=now - timedelta(days=account_age_days - 1),
+        ))
+    s.commit()
+    s.close()
+
+
+def _nudge_state(session_factory) -> dict:
+    """The stored ``donate_nudge`` blob for the dev user."""
+    s = session_factory()
+    row = s.get(UserPreferencesRow, DEV_USER_ID)
+    data = json.loads(row.app_prefs_json) if row and row.app_prefs_json else {}
+    s.close()
+    return data.get("donate_nudge", {})
+
+
+@pytest.fixture(autouse=True)
+def _nudge_env(monkeypatch):
+    """Stripe on, no campaign, caches cold — the evergreen path under test."""
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_nudge")
+    monkeypatch.delenv("WB_DONATE_CAMPAIGN", raising=False)
+    donations.reset_nudge_cache()
+    yield
+    donations.reset_nudge_cache()
+
+
+class TestNudgeEndpoint:
+    def test_opens_an_ask_for_an_eligible_pilot(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory)
+        body = make_client().get("/api/donations/nudge").json()
+        assert body["show"] is True
+        assert body["kind"] == "evergreen"
+        assert body["rung"] == 1
+        assert body["summary"]["briefing_count"] == 20
+        assert body["summary"]["first_briefing_at"]
+        # No money figure crosses the wire — the popover is a hook, and the
+        # donate page carries the numbers.
+        assert not any("usd" in k for k in body["summary"])
+
+    def test_no_ask_without_stripe(self, make_client, session_factory, monkeypatch):
+        monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+        _seed_nudge_eligible(session_factory)
+        body = make_client().get("/api/donations/nudge").json()
+        assert body["show"] is False and body["reason"] == "stripe_not_configured"
+
+    def test_no_ask_below_the_flight_floor(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory, flights=4)
+        assert make_client().get("/api/donations/nudge").json()["reason"] == (
+            "too_few_flights"
+        )
+
+    def test_no_ask_for_a_new_account(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory, account_age_days=30)
+        assert make_client().get("/api/donations/nudge").json()["reason"] == (
+            "account_too_new"
+        )
+
+    def test_no_ask_for_a_donor(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory)
+        _record_donation(session_factory, 10.0)
+        assert make_client().get("/api/donations/nudge").json()["reason"] == (
+            "already_donated"
+        )
+
+    def test_no_ask_below_the_first_cost_rung(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory, dev_briefings=2)
+        assert make_client().get("/api/donations/nudge").json()["reason"] == (
+            "no_rung_crossed"
+        )
+
+    def test_the_get_opens_the_ask_but_never_burns_an_impression(
+        self, make_client, session_factory
+    ):
+        """A prefetch must not consume the budget the client is responsible for."""
+        _seed_nudge_eligible(session_factory)
+        client = make_client()
+        client.get("/api/donations/nudge")
+        state = _nudge_state(session_factory)
+        assert state["open_ask"]["shown"] == 0
+        assert "last_shown" not in state["open_ask"]
+        assert state["tier_asked"] == 1.5
+
+
+class TestNudgeAck:
+    def _open(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory)
+        client = make_client()
+        assert client.get("/api/donations/nudge").json()["show"] is True
+        return client
+
+    def test_shown_records_one_impression_and_arms_the_floor(
+        self, make_client, session_factory
+    ):
+        client = self._open(make_client, session_factory)
+        client.post("/api/donations/nudge/ack", json={"action": "shown"})
+        state = _nudge_state(session_factory)
+        assert state["open_ask"]["shown"] == 1
+        assert state["last_ask_at"]
+
+    def test_shown_is_idempotent_within_the_day(self, make_client, session_factory):
+        client = self._open(make_client, session_factory)
+        for _ in range(3):
+            client.post("/api/donations/nudge/ack", json={"action": "shown"})
+        assert _nudge_state(session_factory)["open_ask"]["shown"] == 1
+        # ...and the chip does not paint again today.
+        assert client.get("/api/donations/nudge").json()["reason"] == "shown_today"
+
+    @pytest.mark.parametrize("action", ["clicked", "dismissed"])
+    def test_an_answer_closes_the_ask(self, make_client, session_factory, action):
+        client = self._open(make_client, session_factory)
+        client.post("/api/donations/nudge/ack", json={"action": action})
+        state = _nudge_state(session_factory)
+        assert "open_ask" not in state
+        # The rung stays consumed: the next ask is the next rung, months out.
+        assert state["tier_asked"] == 1.5
+        assert client.get("/api/donations/nudge").json()["reason"] == "asked_recently"
+
+    def test_rejects_an_unknown_action(self, make_client, session_factory):
+        client = self._open(make_client, session_factory)
+        r = client.post("/api/donations/nudge/ack", json={"action": "snoozed"})
+        assert r.status_code == 422
+
+    def test_ack_without_an_open_ask_is_a_no_op(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory, dev_briefings=2)
+        client = make_client()
+        r = client.post("/api/donations/nudge/ack", json={"action": "shown"})
+        assert r.status_code == 200 and r.json()["reason"] == "no_open_ask"
+
+    def test_preserves_sibling_prefs_keys(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory)
+        s = session_factory()
+        s.add(UserPreferencesRow(
+            user_id=DEV_USER_ID, app_prefs_json=json.dumps({"units_region": "europe"})
+        ))
+        s.commit()
+        s.close()
+        client = make_client()
+        client.get("/api/donations/nudge")
+        client.post("/api/donations/nudge/ack", json={"action": "shown"})
+        s = session_factory()
+        data = json.loads(s.get(UserPreferencesRow, DEV_USER_ID).app_prefs_json)
+        s.close()
+        assert data["units_region"] == "europe"
+        assert data["donate_nudge"]["open_ask"]["shown"] == 1
+
+
+class TestNudgeCampaign:
+    def test_campaign_reaches_a_pilot_the_evergreen_path_would_not(
+        self, make_client, session_factory, monkeypatch
+    ):
+        today = datetime.now(timezone.utc).date()
+        monkeypatch.setenv(
+            "WB_DONATE_CAMPAIGN",
+            f"testwin:{today - timedelta(days=1)}..{today + timedelta(days=7)}",
+        )
+        # Two briefings is nowhere near K=1.5, and the account is only 20 days
+        # old — the evergreen gate refuses on both counts.
+        _seed_nudge_eligible(session_factory, dev_briefings=2, account_age_days=20)
+        body = make_client().get("/api/donations/nudge").json()
+        assert body["show"] is True and body["kind"] == "campaign"
+        assert body["summary"]["pilots_last_year"] >= 1
+        assert body["summary"]["briefings_last_year"] >= 1
+
+    def test_a_malformed_window_simply_disables_the_campaign(
+        self, make_client, session_factory, monkeypatch
+    ):
+        monkeypatch.setenv("WB_DONATE_CAMPAIGN", "not-a-window")
+        _seed_nudge_eligible(session_factory, dev_briefings=2, account_age_days=20)
+        body = make_client().get("/api/donations/nudge").json()
+        assert body["show"] is False
+
+
+class TestMeUsageFootprint:
+    def test_a_never_donor_still_sees_what_their_usage_cost(
+        self, make_client, session_factory
+    ):
+        """The hole the nudge would otherwise point at: a blank personal panel."""
+        _seed_economics(session_factory, other_user_briefings=200)
+        body = make_client().get("/api/donations/me").json()
+        assert body["total_usd"] == 0
+        assert body["personal"]["empty"] is True  # nothing donated to frame
+        usage = body["usage"]
+        assert usage["empty"] is False
+        assert usage["briefings"] == 1
+        assert usage["true_cost_usd"] > 0
+        assert usage["translation"]["summary"]
+
+    def test_true_cost_is_not_the_ledger_cost(self, make_client, session_factory):
+        _seed_nudge_eligible(session_factory)
+        usage = make_client().get("/api/donations/me").json()["usage"]
+        assert usage["ledger_cost_usd"] == pytest.approx(12.0)  # 20 x $0.60
+        assert usage["true_cost_usd"] < usage["ledger_cost_usd"]
+        assert usage["unknown_variable_rows"] == 0
+
+    def test_no_briefings_reads_empty(self, make_client, session_factory):
+        usage = make_client().get("/api/donations/me").json()["usage"]
+        assert usage["empty"] is True and usage["briefings"] == 0
+
+
+class TestInvoicePaymentSucceeded:
+    def _invoice(self, **overrides):
+        base = {
+            "id": "in_test_1",
+            "amount_paid": 1000,
+            "currency": "usd",
+            "billing_reason": "subscription_cycle",
+            "subscription_details": {"metadata": {"service": SERVICE,
+                                                  "user_id": DEV_USER_ID}},
+        }
+        base.update(overrides)
+        return base
+
+    def _post(self, make_client, monkeypatch, invoice):
+        import weatherbrief.api.donations as d
+
+        monkeypatch.setattr(
+            d, "verify_webhook_event",
+            lambda payload, sig: _event("invoice.payment_succeeded", invoice),
+        )
+        return make_client().post("/api/donations/webhook", content=b"{}",
+                                  headers={"stripe-signature": "t=1,v1=x"})
+
+    def test_records_a_renewal(self, make_client, session_factory, monkeypatch):
+        r = self._post(make_client, monkeypatch, self._invoice())
+        assert r.json() == {"received": True, "created": True}
+        s = session_factory()
+        row = s.query(DonationRow).filter_by(provider_ref="in_test_1").one()
+        assert (row.user_id, row.amount, row.recurring) == (DEV_USER_ID, 10.0, True)
+        s.close()
+
+    def test_idempotent_on_redelivery(self, make_client, session_factory, monkeypatch):
+        self._post(make_client, monkeypatch, self._invoice())
+        assert self._post(make_client, monkeypatch, self._invoice()).json()["created"] is False
+        s = session_factory()
+        assert s.query(DonationRow).count() == 1
+        s.close()
+
+    def test_skips_the_first_invoice(self, make_client, session_factory, monkeypatch):
+        """checkout.session.completed already recorded that payment."""
+        r = self._post(make_client, monkeypatch,
+                       self._invoice(billing_reason="subscription_create"))
+        assert r.json()["ignored"] == "subscription_create"
+        s = session_factory()
+        assert s.query(DonationRow).count() == 0
+        s.close()
+
+    def test_records_anonymously_when_unattributable(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """Real money still counts toward the community total.
+
+        The gate does not rely on this: it suppresses *any* recurring donor
+        indefinitely, precisely because a renewal may arrive with no user_id.
+        """
+        r = self._post(make_client, monkeypatch,
+                       self._invoice(subscription_details={"metadata": {}}))
+        assert r.json()["created"] is True
+        s = session_factory()
+        assert s.query(DonationRow).one().user_id is None
+        s.close()
+
+    def test_ignores_another_service(self, make_client, session_factory, monkeypatch):
+        r = self._post(make_client, monkeypatch, self._invoice(
+            subscription_details={"metadata": {"service": "flyfun-maps",
+                                               "user_id": DEV_USER_ID}}))
+        assert r.json()["ignored"] == "other service"
+
+    def test_ignores_a_zero_invoice(self, make_client, session_factory, monkeypatch):
+        r = self._post(make_client, monkeypatch, self._invoice(amount_paid=0))
+        assert r.json()["ignored"] == "empty invoice"
+
+    def test_a_recurring_donor_is_never_nudged(
+        self, make_client, session_factory, monkeypatch
+    ):
+        """The second defence: renewals may not be attributable, but a pledge is."""
+        _seed_nudge_eligible(session_factory)
+        s = session_factory()
+        s.add(DonationRow(
+            user_id=DEV_USER_ID, service=SERVICE, amount=5.0, currency="USD",
+            amount_usd=5.0, fx_rate=1.0, recurring=True, status="succeeded",
+            provider="stripe", provider_ref="sub_pledge",
+            created_at=datetime.now(timezone.utc) - timedelta(days=400),
+        ))
+        s.commit()
+        s.close()
+        assert make_client().get("/api/donations/nudge").json()["reason"] == (
+            "already_donated"
+        )

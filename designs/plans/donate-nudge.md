@@ -1,9 +1,27 @@
 # Donate nudge on the briefing page — logic + rollout plan
 
-> **Status (2026-09-01): design agreed, nothing built. Tracked by issue #588.**
-> Read `designs/cost-attribution-design.md` § "Donations (Stripe)" first — that
-> is the architecture. This file is only the *when do we ask* layer plus the
-> briefing-page surface.
+> **Status (2026-09-01): built (issue #588). All seven build-order steps
+> shipped.** Read `designs/cost-attribution-design.md` § "Donations (Stripe)"
+> first — that is the architecture. This file is only the *when do we ask*
+> layer plus the briefing-page surface.
+>
+> As-built inventory:
+>
+> ```
+> weatherbrief/donate_nudge.py          — gate, lifecycle, campaign window (pure)
+> weatherbrief/impact.py                — usage_footprint(): true-cost basis (pure)
+> weatherbrief/api/credits.py           — user_usage_stats(): the DB half of it
+> weatherbrief/api/donations.py         — GET /nudge, POST /nudge/ack,
+>                                         invoice.payment_succeeded, /me usage block
+> web/ts/managers/donate-nudge-ui.ts    — chip + popover, RED suppression
+> web/ts/donate-main.ts                 — never-donor panel
+> tests/test_donate_nudge.py            — gate truth table, lifecycle, arithmetic
+> web/tests/unit/donate-nudge.test.ts   — the two client-side rules
+> ```
+>
+> Where the build departs from the plan below, it says so in
+> "As built — deviations from this plan" at the foot of the file. Read that
+> section before treating any paragraph here as a description of the code.
 
 ## Why
 
@@ -778,3 +796,109 @@ rule for any other client-side reason the chip does not paint.
   the K=1.5 cost rung at rollout.
 
 No open items.
+
+
+## As built — deviations from this plan
+
+Everything above is the plan as agreed. These are the places the implementation
+deliberately does something else, and why. Each is a decision, not a shortcut.
+
+### The never-donor panel does not come from `personal_impact()`
+
+The plan (and issue #588 step 3) says to drop the `donation_total_usd <= 0`
+early-return in `personal_impact()`. Taken literally that produces "covers ~0%
+of what your usage has cost" for someone who has given nothing — a coverage
+sentence about a donation that does not exist.
+
+So `personal_impact()` keeps its neutral empty state, which is the honest
+answer to "what does your donation cover" when there is no donation. The panel
+is instead driven by a new `usage` block on `/api/donations/me`
+(`UsageFootprint` + a `choose_translation` caption), and `renderPersonal()` in
+`web/ts/donate-main.ts` branches on `total_usd > 0` to pick which of the two it
+renders. The hole the step existed to close — a blank section on the page the
+nudge points at — is closed; the coverage vocabulary just stays reserved for
+actual coverage.
+
+### An unreadable breakdown row is dropped, not imputed
+
+`usage_footprint()` treats a `detail_json` that is missing, unparseable, or
+lacking either of `token_cost_usd` / `storage_cost_usd` as **unknown**, per the
+plan. Concretely it excludes that row from `variable_usd`, still charges it its
+fixed share (the briefing demonstrably ran), and reports the count in
+`unknown_variable_rows`.
+
+The alternative — imputing the mean of the readable rows — is more accurate on
+average but can only *overstate* a particular pilot's cost, which is the wrong
+direction for a donation ask. Dropping understates, and the error is bounded by
+the variable share (~26% of run cost).
+
+### The ledger sum is used as a cheap upper bound before the parse
+
+The plan requires ordering the gate cheap-first. One more short-circuit was
+added between the cheap reads and `usage_footprint()`: a single SQL `SUM` of the
+pilot's `cost_ledger.cost`, compared against `RUNGS[0] * cost_per_user_month`.
+
+The ledger amortizes fixed cost over an estimate at or below actual volume and
+then adds 10% margin, so `ledger_cost >= true_cost` holds for every row ever
+written. A pilot whose ledger total misses the lowest rung therefore cannot
+clear it on the true basis either, and their per-row breakdown is never parsed.
+**If the rate card's `estimated_monthly_briefings` is ever set materially above
+actual volume, that inequality flips and the pre-filter starts hiding eligible
+pilots** — it fails closed (no ask), never open.
+
+### The ladder is climbed from the bottom, not from the highest rung crossed
+
+`tier_asked` records the highest rung consumed, as planned. What fires is the
+**lowest unused rung that has been crossed**, so a pilot who is already past
+K=4 on rollout day still gets K=1.5 first and K=4 no sooner than 90 days later.
+
+Firing the highest crossed rung instead would consume two of the three lifetime
+asks in one go, for exactly the pilots who use the service most. It would also
+make the plan's own justification for the 90-day floor ("stops a heavy user
+tripping K=1.5 and K=4 within weeks") describe something that could not happen.
+
+### A backstopped ask arms the 90-day floor even if it was never shown
+
+The closing-conditions table says the 90-day backstop consumes the rung. It does
+— and it also stamps `last_ask_at`. Without that, an ask that opened on a
+prefetch and expired unseen would consume its rung *and* leave the floor
+unarmed, letting the next rung open on the very next page view: three lifetime
+asks burned in three days by a pilot who never saw one.
+
+### The GET persists lifecycle transitions
+
+"A GET must not write" is implemented as "a GET must not record an impression".
+`GET /api/donations/nudge` does persist an ask *opening* and an expired ask
+*closing*, because `opened` is what the backstop measures from and `tier_asked`
+is what stops the ladder repeating. Impressions come only from
+`POST /nudge/ack`, so a prefetch cannot burn one.
+
+A prefetch can therefore open an ask that is never shown. That is the intended
+reading of "an ask opens when the gate passes": the rung is consumed at open
+regardless of what happens next, and the ask renders on the next non-RED view.
+
+### Recurring donations are still refused at checkout
+
+Step 4's `invoice.payment_succeeded` handler is built and tested, but
+`POST /donations/checkout` still rejects `recurring=true` (422). The handler is
+the *prerequisite* for lifting that, not the whole of it — subscription
+cancellation is still untracked.
+
+Renewal **attribution** also needs a change in flyfun-common that is out of this
+repo's reach: `create_checkout_session` sets `metadata` on the Checkout session,
+and Stripe does not copy session metadata onto the subscription, so a renewal
+invoice carries no `user_id` unless `subscription_data.metadata` is set at
+creation. The handler reads every place the metadata could legitimately land and
+records the donation anonymously when it finds none — real money still counts
+toward the community total. **This is why the gate suppresses any recurring
+donor indefinitely rather than on a window**: it must not depend on
+attribution that may not arrive.
+
+### A pilot's true lifetime cost drifts with program volume
+
+`true_cost` amortizes *historical* briefings at *current* monthly volume, so the
+same pilot's figure falls as the service grows. This is deliberate and matches
+the rungs, which are multiples of `cost_per_user_month_usd` and move the same
+way — but it means the number on the donate page is "what your usage costs to
+run at today's scale", not a frozen historical total. Worth knowing before
+anyone treats it as an invoice.

@@ -894,5 +894,20 @@
   "observed.sources": "Quellen",
   "viz.layer.observed-tops": "Wolkenobergrenzen",
   "viz.layer.observed-surface": "Regen & Blitze",
-  "dataSources.role.observed": "beobachtet"
+  "dataSources.role.observed": "beobachtet",
+  "donate.nudge.chip": "♥ Spenden",
+  "donate.nudge.contribute": "Beitragen",
+  "donate.nudge.later": "Vielleicht später",
+  "donate.nudge.evergreenLead": "Sie haben seit {month} **{count} Briefings** erhalten. Wir hoffen, sie waren nützlich.",
+  "donate.nudge.evergreenLeadNoMonth": "Sie haben bisher **{count} Briefings** erhalten. Wir hoffen, sie waren nützlich.",
+  "donate.nudge.evergreenBody": "Flyfun Weather ist kostenlos und bleibt es. Wenn Sie helfen möchten, die Betriebskosten (KI, Daten, Server) auszugleichen, ist jeder Beitrag willkommen.",
+  "donate.nudge.campaignLead": "Ein weiteres Jahr FlyFun Weather beginnt. **{pilots}** Piloten haben im vergangenen Jahr **{briefings}** Briefings erzeugt.",
+  "donate.nudge.campaignLeadPlain": "Ein weiteres Jahr FlyFun Weather beginnt.",
+  "donate.nudge.campaignBody": "Es ist kostenlos und bleibt es. Der Betrieb kostet echtes Geld: Wetterdaten wie das ECMWF-Abonnement, KI-Modelle und Server. Wenn Sie helfen möchten, das auszugleichen, ist jeder Beitrag willkommen.",
+  "donate.usage.title": "Ihre bisherige Nutzung",
+  "donate.usage.intro": "Was Ihre Briefings in der Erstellung gekostet haben. Keine Verpflichtung — der Dienst ist kostenlos und bleibt es.",
+  "donate.usage.sub": "Ihre **{count} Briefings** seit {month} haben ungefähr so viel gekostet. Wenn Sie helfen möchten, das auszugleichen, ist jeder Beitrag willkommen.",
+  "donate.usage.subNoMonth": "Ihre **{count} Briefings** haben ungefähr so viel gekostet. Wenn Sie helfen möchten, das auszugleichen, ist jeder Beitrag willkommen.",
+  "donate.usage.donorTitle": "Ihr bisheriger Beitrag",
+  "donate.usage.donorIntro": "Vielen Dank für Ihre Spende 💙"
 }

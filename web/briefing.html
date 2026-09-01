@@ -64,7 +64,16 @@
         <div id="notify-override-bar" class="auto-refresh-inline" style="display: none;"></div>
         <div id="privacy-bar" class="auto-refresh-inline" style="display: none;"></div>
       </div>
-      <div id="digest-feedback-slot" class="digest-feedback-slot" style="display: none;"></div>
+      <!-- Right-anchored pair. The wrapper carries the `margin-left: auto` the
+           feedback slot used to own, so the thumbs stay pinned to the toolbar's
+           right edge and the donate chip grows leftward into empty space
+           instead of displacing them. Two independent lifecycles: the feedback
+           slot is rewritten on every digest render and hidden when there is no
+           digest, which has nothing to do with the donation ask. -->
+      <div class="toolbar-feedback-group">
+        <div id="donate-nudge-slot" style="display: none;"></div>
+        <div id="digest-feedback-slot" class="digest-feedback-slot" style="display: none;"></div>
+      </div>
     </div>
     <div id="briefing-shared-by" class="briefing-shared-by" style="display: none;"></div>
 

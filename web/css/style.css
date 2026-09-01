@@ -1686,9 +1686,18 @@ html {
    strip the section divider, and float the shared comment box (thumbs-up and
    thumbs-down both open it) as a right-anchored dropdown so it never reflows
    the toolbar row. */
+/* The wrapper owns the right-anchoring for the pair (donate chip + feedback);
+   the feedback slot keeps `position: relative` only so its own comment popover
+   still anchors to it. */
+.toolbar-feedback-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  position: relative;
+}
 .digest-feedback-slot {
   position: relative;
-  margin-left: auto;
 }
 .digest-feedback-slot .digest-feedback {
   margin-top: 0;
@@ -1720,6 +1729,71 @@ html {
   top: calc(100% + 0.25rem);
   right: 0;
   white-space: nowrap;
+}
+
+/* --- Donate nudge chip (web-only; see designs/plans/donate-nudge.md) --- */
+
+/* Fixed label in every state so the chip never changes width — a chip that
+   grew would reintroduce exactly the layout shift the left placement exists to
+   prevent. The heart is U+2665, not the emoji: a text glyph inherits
+   currentColor and follows the theme, where the emoji is a fixed-colour
+   platform image that matches nothing and differs per OS. */
+.donate-nudge-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--text-muted, #667);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.donate-nudge-chip:hover,
+.donate-nudge-chip[aria-expanded='true'] {
+  color: var(--text, #223);
+  border-color: var(--text-muted, #667);
+}
+
+/* Anchored to the group's right edge, matching the feedback form. Anchoring it
+   to the chip would read as more directly attached, but the chip sits at the
+   *left* edge of a right-anchored group, so a 300px popover could overflow the
+   viewport on narrow layouts. */
+.donate-nudge-popover {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 60;
+  width: 300px;
+  padding: 0.85rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  font-size: 0.85rem;
+  white-space: normal;
+}
+.donate-nudge-popover p {
+  margin: 0 0 0.6rem;
+}
+.donate-nudge-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.donate-nudge-later {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text-muted, #667);
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 /* --- GRAMET --- */

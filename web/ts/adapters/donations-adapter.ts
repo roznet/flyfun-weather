@@ -58,10 +58,30 @@ export interface DonationHistoryItem {
   amount_usd: number;
 }
 
+/** What the viewer's own briefings really cost the operator.
+ *
+ * `true_cost_usd` is recomputed on the program's real amortization basis;
+ * `ledger_cost_usd` is what `cost_ledger` charged and is deliberately higher
+ * (the rate card's volume estimate sat ~3x below actual until 2026-08-31).
+ * Present for every pilot with briefings, donor or not — it is what the page
+ * shows someone who has never given. */
+export interface UsageFootprint {
+  briefings: number;
+  variable_usd: number;
+  fixed_share_usd: number;
+  true_cost_usd: number;
+  ledger_cost_usd: number;
+  unknown_variable_rows: number;
+  empty: boolean;
+  first_briefing_at: string | null;
+  translation: TranslationChoice;
+}
+
 export interface DonationMe {
   total_usd: number;
   impact: DonationImpact;
   personal: PersonalImpact;
+  usage: UsageFootprint;
   donations: DonationHistoryItem[];
   fx: FxBlock;
 }
@@ -71,6 +91,9 @@ export interface DonationStats {
   active_pilots_30d: number;
   briefings_all_time: number;
   briefings_last_30d: number;
+  // Trailing 365 days — what the annual campaign copy quotes.
+  active_pilots_last_year: number;
+  briefings_last_year: number;
   analysis_words_all_time: number;
   analysis_books_equiv: number;
   words_summary: string;
@@ -170,4 +193,54 @@ export function formatMoney(amountUsd: number, fx: FxBlock): string {
     // Unknown currency code → fall back to a plain number + code.
     return `${local.toFixed(2)} ${fx.currency || 'USD'}`;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Donate nudge (web-only)
+// ---------------------------------------------------------------------------
+//
+// This lives on its own endpoint on purpose. Apple requires donations from
+// non-registered-nonprofits to go through IAP, so a donate affordance in the
+// app binary is a review rejection — and a flag riding on /api/flights or pack
+// meta would eventually reach iOS. A separate web-only call makes that
+// structurally impossible rather than merely discouraged.
+
+/** Runtime substitutions the popover copy needs. Deliberately no money figures:
+ * community activity stats give scale, a cost or donation amount sets an anchor
+ * and invites the reader to price their own share. */
+export interface NudgeSummary {
+  briefing_count: number;
+  first_briefing_at: string | null;
+  pilots_last_year: number;
+  briefings_last_year: number;
+}
+
+export interface NudgeResponse {
+  show: boolean;
+  kind: '' | 'evergreen' | 'campaign';
+  rung: number;
+  /** Stable identifier for why nothing is shown — for debugging, never rendered. */
+  reason: string;
+  summary: NudgeSummary;
+}
+
+export type NudgeAck = 'shown' | 'clicked' | 'dismissed';
+
+/** Should we offer this pilot a donate chip right now? Requires auth. */
+export async function fetchDonateNudge(): Promise<NudgeResponse> {
+  return apiFetch<NudgeResponse>('/donations/nudge');
+}
+
+/** Record an impression or an answer against the open ask.
+ *
+ * `shown` must only be sent when the chip actually painted — the client also
+ * suppresses beside a RED assessment, and acking a suppressed view would burn
+ * an impression on something nobody saw.
+ */
+export async function ackDonateNudge(action: NudgeAck): Promise<void> {
+  await apiFetch('/donations/nudge/ack', {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
 }

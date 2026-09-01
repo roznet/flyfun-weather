@@ -894,5 +894,20 @@
   "observed.sources": "Fuentes",
   "viz.layer.observed-tops": "Topes nubosos",
   "viz.layer.observed-surface": "Lluvia y rayos",
-  "dataSources.role.observed": "observado"
+  "dataSources.role.observed": "observado",
+  "donate.nudge.chip": "♥ Donar",
+  "donate.nudge.contribute": "Contribuir",
+  "donate.nudge.later": "Quizás más tarde",
+  "donate.nudge.evergreenLead": "Has recibido **{count} briefings** desde {month}. Esperamos que te hayan resultado útiles.",
+  "donate.nudge.evergreenLeadNoMonth": "Has recibido **{count} briefings** hasta ahora. Esperamos que te hayan resultado útiles.",
+  "donate.nudge.evergreenBody": "Flyfun Weather es gratuito y seguirá siéndolo. Si quieres ayudar a compensar lo que cuesta mantenerlo (IA, datos, servidores), cualquier aportación es bienvenida.",
+  "donate.nudge.campaignLead": "Comienza otro año de FlyFun Weather. **{pilots}** pilotos generaron **{briefings}** briefings durante el último año.",
+  "donate.nudge.campaignLeadPlain": "Comienza otro año de FlyFun Weather.",
+  "donate.nudge.campaignBody": "Es gratuito y seguirá siéndolo. Mantenerlo cuesta dinero real: datos meteorológicos como la suscripción a ECMWF, modelos de IA y servidores. Si quieres ayudar a compensarlo, cualquier aportación es bienvenida.",
+  "donate.usage.title": "Tu uso hasta ahora",
+  "donate.usage.intro": "Lo que ha costado producir tus briefings. Sin ninguna obligación: el servicio es gratuito y seguirá siéndolo.",
+  "donate.usage.sub": "Tus **{count} briefings** desde {month} han costado aproximadamente esto. Si quieres ayudar a compensarlo, cualquier aportación es bienvenida.",
+  "donate.usage.subNoMonth": "Tus **{count} briefings** han costado aproximadamente esto. Si quieres ayudar a compensarlo, cualquier aportación es bienvenida.",
+  "donate.usage.donorTitle": "Tu contribución hasta ahora",
+  "donate.usage.donorIntro": "Muchas gracias por tu donación 💙"
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +31,7 @@ from flyfun_common.db import current_user_id, get_db, optional_user_id
 from flyfun_common.db.models import CostLedgerRow, UserRow
 from weatherbrief.api.preferences import FxBlock, fx_block_for_user, usd_fx_block
 from weatherbrief.db.models import CostConfigRow
+from weatherbrief.impact import UsageFootprint, usage_footprint
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,91 @@ def user_cost_stats(db: Session, user_id: str) -> tuple[float, float, float]:
     days = (datetime.now(timezone.utc) - first).total_seconds() / 86400.0
     months_active = max(days / 30.0, 0.5)
     return lifetime, months_active, lifetime / months_active
+
+
+# ---------------------------------------------------------------------------
+# True usage footprint (recomputed basis — see impact.usage_footprint)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UserUsageStats:
+    """A pilot's usage on the **true** cost basis, not the ledger's.
+
+    ``footprint.true_cost_usd`` is the comparable lifetime figure;
+    ``burn_rate_monthly_usd`` is that figure over ``months_active``, so it is on
+    the same basis (the ledger-derived burn rate from :func:`user_cost_stats`
+    over-recovers by the same factor and must not be mixed in).
+    ``first_briefing_at`` is what the "since {month}" copy reads.
+    """
+
+    footprint: UsageFootprint
+    months_active: float
+    burn_rate_monthly_usd: float
+    first_briefing_at: datetime | None
+
+
+def _briefing_ledger_rows(db: Session, user_id: str) -> list[tuple[str | None, float, datetime | None]]:
+    """A pilot's briefing ledger rows: ``(detail_json, cost, created_at)``."""
+    return list(
+        db.query(CostLedgerRow.detail_json, CostLedgerRow.cost, CostLedgerRow.created_at)
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+        )
+        .all()
+    )
+
+
+def user_usage_stats(db: Session, user_id: str, report: ProgramCostReport | None) -> UserUsageStats:
+    """Recompute a pilot's lifetime cost on the program's real amortization basis.
+
+    ``report`` supplies the true fixed monthly cost and the actual monthly
+    briefing volume; with no report (no rate card yet) only the variable half is
+    known and the footprint degrades to that. One query, then pure math in
+    :func:`weatherbrief.impact.usage_footprint`.
+    """
+    rows = _briefing_ledger_rows(db, user_id)
+    details: list[dict | None] = []
+    ledger_cost = 0.0
+    first: datetime | None = None
+    for detail_json, cost, created_at in rows:
+        ledger_cost += float(cost or 0.0)
+        parsed: dict | None = None
+        if detail_json:
+            try:
+                loaded = json.loads(detail_json)
+            except (json.JSONDecodeError, TypeError):
+                loaded = None
+            if isinstance(loaded, dict):
+                parsed = loaded
+        details.append(parsed)
+        if created_at is not None:
+            at = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+            first = at if first is None else min(first, at)
+
+    scale = 30.0 / report.window_days if report and report.window_days else 0.0
+    fp = usage_footprint(
+        details,
+        ledger_cost_usd=ledger_cost,
+        fixed_monthly_usd=report.fixed_monthly_usd if report else 0.0,
+        briefings_per_month=(report.num_briefings * scale) if report else 0.0,
+    )
+
+    if first is None or fp.true_cost_usd <= 0:
+        return UserUsageStats(footprint=fp, months_active=0.0, burn_rate_monthly_usd=0.0,
+                              first_briefing_at=first)
+    days = (datetime.now(timezone.utc) - first).total_seconds() / 86400.0
+    # Same floor as user_cost_stats: a brand-new pilot's rate must not divide by
+    # a near-zero window.
+    months_active = max(days / 30.0, 0.5)
+    return UserUsageStats(
+        footprint=fp,
+        months_active=months_active,
+        burn_rate_monthly_usd=fp.true_cost_usd / months_active,
+        first_briefing_at=first,
+    )
 
 
 # ---------------------------------------------------------------------------

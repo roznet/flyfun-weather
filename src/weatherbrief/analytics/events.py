@@ -63,6 +63,13 @@ class Event(StrEnum):
     # Help page (no briefing context) ----------------------------------------
     HELP_WHATS_NEW_OPENED = "help.whats_new_opened"  # props: {source}
 
+    # Donate nudge (web-only). props: {kind: evergreen|campaign, rung: 0..3}.
+    # Keep them low-cardinality — no ids, no amounts. Gating state lives in
+    # app_prefs_json, not here: analytics rows get rolled up and pruned.
+    DONATE_NUDGE_SHOWN = "donate.nudge_shown"
+    DONATE_NUDGE_CLICKED = "donate.nudge_clicked"
+    DONATE_NUDGE_DISMISSED = "donate.nudge_dismissed"
+
     # User preferences -------------------------------------------------------
     AUTO_REFRESH_ENABLED = "auto_refresh.enabled"
     AUTO_REFRESH_DISABLED = "auto_refresh.disabled"

@@ -994,5 +994,20 @@
   "observed.sources": "Sources",
   "viz.layer.observed-tops": "Cloud tops",
   "viz.layer.observed-surface": "Rain & lightning",
-  "dataSources.role.observed": "observed"
+  "dataSources.role.observed": "observed",
+  "donate.nudge.chip": "♥ Donate",
+  "donate.nudge.contribute": "Contribute",
+  "donate.nudge.later": "Maybe later",
+  "donate.nudge.evergreenLead": "You've had **{count} briefings** since {month}. We hope you found them useful.",
+  "donate.nudge.evergreenLeadNoMonth": "You've had **{count} briefings** so far. We hope you found them useful.",
+  "donate.nudge.evergreenBody": "Flyfun Weather is free and stays free. If you'd like to help offset what it costs to run (AI, data, servers), anything is welcome.",
+  "donate.nudge.campaignLead": "Another year of FlyFun Weather is starting. **{pilots}** pilots generated **{briefings}** briefings over the last year.",
+  "donate.nudge.campaignLeadPlain": "Another year of FlyFun Weather is starting.",
+  "donate.nudge.campaignBody": "It's free and stays free. Running it costs real money: weather data like the ECMWF subscription, AI models, and servers. If you'd like to help offset that, anything is welcome.",
+  "donate.usage.title": "Your usage so far",
+  "donate.usage.intro": "What your briefings have cost to produce. There is no obligation — the service is free and stays free.",
+  "donate.usage.sub": "Your **{count} briefings** since {month} cost about this much to run. If you'd like to help offset that, anything is welcome.",
+  "donate.usage.subNoMonth": "Your **{count} briefings** cost about this much to run. If you'd like to help offset that, anything is welcome.",
+  "donate.usage.donorTitle": "Your contribution so far",
+  "donate.usage.donorIntro": "Thank you so much for your past donation 💙"
 }
