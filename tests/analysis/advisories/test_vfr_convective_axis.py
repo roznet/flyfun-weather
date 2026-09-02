@@ -314,6 +314,36 @@ class TestBelowBaseEscape:
         assert covered_from == pytest.approx(10.0)
         assert covered_to == pytest.approx(170.0)
 
+    def test_a_cluster_that_never_cleared_is_not_merged_over(self):
+        """Review round 1, Critical: adjacency in the *results* is not adjacency.
+
+        Three clusters, A-B-C. A and C clear at the same level; B (low-based,
+        the arrival-end shape) never clears at any level. B is simply absent
+        from the results, so A and C land next to each other in the list — and
+        a merge keyed off list adjacency folds them into one span that runs
+        straight through B, asserting "you would be below the cells there" over
+        cells that were explicitly never confirmed clear. That is #593's own
+        false assurance, returning for three clusters.
+        """
+        soundings = [_quiet()] * 20
+        for i in (1, 2, 13, 14):
+            soundings[i] = _nwp_cell(
+                ConvectiveRisk.MODERATE, base_ft=12000, top_ft=30000
+            )
+        for i in (7, 8):
+            soundings[i] = _nwp_cell(
+                ConvectiveRisk.MODERATE, base_ft=1500, top_ft=30000
+            )
+        escapes = self._escapes(_ctx(soundings, cruise_ft=16000))
+        assert len(escapes) == 2, "the unresolved middle cluster was merged over"
+        assert (escapes[0].dist_from_nm, escapes[0].dist_to_nm) == (10.0, 50.0)
+        assert (escapes[1].dist_from_nm, escapes[1].dist_to_nm) == (250.0, 290.0)
+        # Nothing offered may span the middle cluster's cells (130-170 nm).
+        assert not any(
+            e.dist_from_nm < 170.0 < e.dist_to_nm or e.dist_from_nm < 130.0 < e.dist_to_nm
+            for e in escapes
+        )
+
     def test_a_widespread_band_is_not_an_escape(self):
         """Both halves are required: under the bases is not enough.
 

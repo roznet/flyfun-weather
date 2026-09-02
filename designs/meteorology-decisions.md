@@ -4323,9 +4323,19 @@ along-track run" rather than two. Bridging a gap would claim miles the geometry
 was never tested over. Fragmenting a system is the conservative direction (each
 fragment must clear on its own), and the fragments are folded back together
 *after* testing, which asserts nothing untested: `_merge_same_level` merges
-neighbouring clusters that resolved to the same altitude, taking the tightest
-base and margin. The band needs no merging — it is route-wide, so two escapes at
-one altitude necessarily share it.
+clusters that resolved to the same altitude, taking the tightest base and
+margin. The band needs no merging — it is route-wide, so two escapes at one
+altitude necessarily share it.
+
+**Merging is keyed on the cluster index, not on list position** (review round 1,
+Critical). A cluster that cleared at no altitude is simply absent from the
+results, so on an A-B-C route where only A and C clear, they sit next to each
+other in the result list with nothing recording that B lies between them.
+Folding on list adjacency produced one span running straight through B —
+"you would be below the cells there" over cells the sweep explicitly never
+confirmed clear, which is this section's own false assurance returning for three
+clusters. Only consecutive cluster indices merge, so the only thing between two
+folded spans is quiet air.
 
 **(b) The terrain floor is per cluster** (open question 1: yes). The route-wide
 `max_elevation_ft` floored the ground-truth flight at 8,000 ft because of the
@@ -4391,7 +4401,7 @@ cruise is one altitude for the whole route.
 
 - `analysis/sounding/convective.py` — `ConvCluster`, `convective_clusters`.
 - `analysis/advisories/convective_character.py` — `below_base_escapes` (replacing
-  `below_base_escape`), `_cluster_floor_ft`, `_merge_same_level`;
+  `below_base_escape`), `_segment_floor_ft`, `_merge_same_level`;
   `BelowBaseEscape` gains `dist_from_nm` / `dist_to_nm`; `_candidate_altitudes`
   gains a `floor_ft` override.
 - `analysis/advisories/_helpers.py` — `max_terrain_between`.
@@ -4401,7 +4411,8 @@ cruise is one altitude for the whole route.
 - Tests: `tests/analysis/advisories/test_vfr_convective_axis.py` —
   `TestBelowBaseEscape` (two clusters where only one escapes, the WIDESPREAD and
   EMBEDDED band refusals, the per-cluster terrain floor, the merge's terrain
-  re-check) and `TestTheEscapeIsAdviceOnly` (grades identical with and without
+  re-check, and the three-cluster case where the unresolved middle one must not
+  be merged over) and `TestTheEscapeIsAdviceOnly` (grades identical with and without
   the tip).
 
 ### Real-world validation needed

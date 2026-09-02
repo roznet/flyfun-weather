@@ -22,6 +22,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     RouteExtent,
     format_extent,
+    max_terrain_between,
     showers_at_point,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -661,8 +662,6 @@ def _segment_floor_ft(
     The merge step below re-checks this over the *combined* span before folding
     two clusters together, because a col between them can be higher than either.
     """
-    from weatherbrief.analysis.advisories._helpers import max_terrain_between
-
     min_base_agl = params.get(
         "mitigation_min_base_agl_ft",
         CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
@@ -673,16 +672,26 @@ def _segment_floor_ft(
 def _merge_same_level(
     ctx: RouteContext,
     params: dict[str, float],
-    escapes: list[BelowBaseEscape],
+    escapes: list[tuple[int, BelowBaseEscape]],
 ) -> list[BelowBaseEscape]:
-    """Fold neighbouring clusters that resolved to the SAME level into one span.
+    """Fold **cluster-adjacent** escapes that resolved to the SAME level into one span.
 
     Answering open question 3: one mitigation per cluster, but a system the
     model fires at all but one of its grid points is one system, not two tips
     with the same altitude 10 nm apart. Merging *after* the sweep asserts
-    nothing untested — both spans cleared the geometry independently, and the
-    gap between them carries no realized cells by construction — which is why
-    :func:`convective_clusters` has no gap tolerance of its own.
+    nothing untested, which is why :func:`convective_clusters` has no gap
+    tolerance of its own.
+
+    ``escapes`` carries each escape's **cluster index**, and two are merged only
+    when those indices are consecutive. Adjacency in the *results* is not
+    adjacency on the route: a cluster that cleared at no altitude is simply
+    absent, so on an A-B-C route where only A and C clear, they sit next to each
+    other in the list with nothing recording that B lies between them. Merging
+    on list position folded them into one span running straight through B —
+    "you would be below the cells there" over cells never confirmed clear,
+    which is #593's own false assurance returning for three clusters (review
+    round 1, Critical). Consecutive indices mean the only thing between the two
+    spans is quiet air.
 
     The band is not combined because it cannot differ: it is re-derived
     route-wide at the candidate altitude, so two escapes sharing a level share
@@ -690,20 +699,24 @@ def _merge_same_level(
     the terrain *between* the two clusters, which can be higher than either.
     """
     merged: list[BelowBaseEscape] = []
-    for esc in escapes:
+    prev_idx: int | None = None
+    for idx, esc in escapes:
         prev = merged[-1] if merged else None
-        if prev is not None and prev.altitude_ft == esc.altitude_ft:
-            floor = _segment_floor_ft(
-                ctx, params, prev.dist_from_nm, esc.dist_to_nm
+        if (
+            prev is not None
+            and prev_idx == idx - 1
+            and prev.altitude_ft == esc.altitude_ft
+            and esc.altitude_ft
+            >= _segment_floor_ft(ctx, params, prev.dist_from_nm, esc.dist_to_nm)
+        ):
+            merged[-1] = prev._replace(
+                dist_to_nm=esc.dist_to_nm,
+                base_fl=min(prev.base_fl, esc.base_fl),
+                margin_ft=min(prev.margin_ft, esc.margin_ft),
             )
-            if esc.altitude_ft >= floor:
-                merged[-1] = prev._replace(
-                    dist_to_nm=esc.dist_to_nm,
-                    base_fl=min(prev.base_fl, esc.base_fl),
-                    margin_ft=min(prev.margin_ft, esc.margin_ft),
-                )
-                continue
-        merged.append(esc)
+        else:
+            merged.append(esc)
+        prev_idx = idx
     return merged
 
 
@@ -805,7 +818,9 @@ def below_base_escapes(
                 dist_from_nm=clusters[i].dist_from_nm,
                 dist_to_nm=clusters[i].dist_to_nm,
             )
-    return _merge_same_level(ctx, params, [found[i] for i in sorted(found)])
+    # The cluster INDEX travels with each escape: the merge needs it to tell a
+    # quiet gap from a cluster that cleared at no altitude (review round 1).
+    return _merge_same_level(ctx, params, [(i, found[i]) for i in sorted(found)])
 
 
 
@@ -843,7 +858,7 @@ def _candidate_altitudes(
     ``floor_ft`` overrides the route-wide terrain floor. The EMBEDDED tip is one
     level for the whole flight, so the route's highest terrain is the right
     bound for it; the below-base sweep is per cluster and passes its own
-    (#593) — see :func:`_cluster_floor_ft` for why a route-wide floor is the
+    (#593) — see :func:`_segment_floor_ft` for why a route-wide floor is the
     wrong answer there.
     """
     from weatherbrief.analysis.advisories.vertical_profile import MITIGATION_BIN_STEP_FT
