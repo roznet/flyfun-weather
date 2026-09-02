@@ -101,6 +101,39 @@ test.describe('Briefing tour — cross-section steps', () => {
     expect(active?.cls).toContain('viz-layer-toggles');
   });
 
+  test('cutout follows the control when a banner pushes the page down', async ({ page }) => {
+    // driver.js recomputes its cutout on resize and scroll only. A banner
+    // inserted ABOVE the highlighted control (the stale-pack "Updates
+    // available" bar arrives asynchronously) shifts the control without either
+    // event, leaving the hole over blank space — the control looks like it
+    // vanished. Reproduced deterministically here rather than racing the
+    // freshness fixture.
+    await advanceTo(page, 'Compact vs. full details');
+
+    const shift = await page.evaluate(() => {
+      const el = document.getElementById('display-mode-toggle')!;
+      const before = el.getBoundingClientRect().top;
+      const banner = document.createElement('div');
+      banner.id = 'test-layout-shim';
+      banner.style.height = '80px';
+      document.querySelector('.briefing-container, body')!.prepend(banner);
+      return before;
+    });
+    expect(shift).toBeGreaterThan(0);
+    await page.waitForTimeout(400);
+
+    const aligned = await page.evaluate(() => {
+      const el = document.getElementById('display-mode-toggle')!;
+      const path = document.querySelector('.driver-overlay path');
+      const d = path?.getAttribute('d') ?? '';
+      const nums = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+      const top = el.getBoundingClientRect().top;
+      // The cutout's top edge must appear among the path's coordinates.
+      return { top, near: nums.some((n) => Math.abs(n - top) < 12) };
+    });
+    expect(aligned.near, `cutout left behind: control now at y=${aligned.top}`).toBe(true);
+  });
+
   /** Re-enter the briefing in FULL display mode and restart the tour.
    *
    *  Compact is the default, and it has no detail row by design — one on/off
