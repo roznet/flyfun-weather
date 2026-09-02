@@ -33,7 +33,7 @@
  */
 
 import type { LayerGroup } from '../types';
-import { getAllLayers, getPreferredLayerForGroup } from './layer-registry';
+import { getAllLayers, getPreferredLayerForGroup, METHOD_GROUPS } from './layer-registry';
 import type { CloudStyle } from './layers/cloud-bands-factory';
 import { SKEWT_OVERLAYS } from '../skewt/overlay-bands';
 import { t } from '../../i18n/i18n';
@@ -106,15 +106,20 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
   basic: {
     id: 'basic',
     label: 'Basic / Learn',
-    caption: 'Temperature, dewpoint, and the parcel path with LCL/LFC/EL — no hazard bands.',
+    caption: 'One of everything — cloud, icing, convection and turbulence, each on its default method.',
     interpretation:
-      'The two solid lines are temperature (right) and dewpoint (left); where they '
-      + 'pinch together the air is near saturation (cloud). The black dashed line is the '
-      + 'parcel — air lifted from the surface. LCL is where it first saturates (cloud base), '
-      + 'LFC where it becomes buoyant, EL where it stops rising. The wider the gap between '
-      + 'temperature and dewpoint, the drier and clearer that layer. Start here, then switch '
-      + 'to a hazard lens (Icing / Clouds / Convective / Turbulence) to shade what matters.',
-    // Cross-section: a clean slate — just terrain + cruise + the 0 °C line for orientation.
+      'The standard view: every hazard family shown once, using the method the '
+      + 'briefing graded on, so nothing is hidden and nothing is doubled up. Cloud bands '
+      + 'sit where the model puts cloud; the icing, convective and turbulence shading each '
+      + 'come from a single index rather than several overlaid. The 0 °C line is there to '
+      + 'read the icing against. Start here to see what is on the route at all, then switch '
+      + 'to a hazard lens (Icing / Clouds / Convective / Turbulence) to strip everything '
+      + 'else away and compare methods within the one that matters.',
+    // Exactly what compact mode resolves to: the preferred layer of each
+    // method group, one of each, nothing doubled. Sharing METHOD_GROUPS with
+    // the compact resolver is what keeps that claim true (#591).
+    groups: [...METHOD_GROUPS],
+    // Plus the 0 °C line, which is what any icing shading is read against.
     lines: ['freezing-level'],
     // Skew-T: no hazard bands; the always-drawn T/Td/parcel + LCL/LFC/EL markers carry it.
     skewtOverlays: [],

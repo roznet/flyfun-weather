@@ -4,7 +4,7 @@ import type { VizLayout, VizSettings, CompareBandMode, LayerGroup } from '../typ
 import type { DisplayMode } from '../../types/metrics';
 import {
   getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset,
-  getLayerFamilies, familySummary, enabledInFamily,
+  getLayerFamilies, familySummary, enabledInFamily, METHOD_GROUPS,
   type LayerFamily, type LayerFamilyInfo,
 } from '../cross-section/layer-registry';
 import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset, advisoryPresetLabel, advisoryPresetCaption, advisoryPresetInterpretation } from '../cross-section/advisory-presets';
@@ -27,8 +27,10 @@ import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
 import { showThemePreview } from '../cross-section/theme-preview';
 import { t } from '../../i18n/i18n';
 
-/** Groups that collapse to a single preferred-method toggle in compact mode. */
-const COMPACT_GROUPS = new Set(['clouds', 'icing', 'turbulence', 'convection']);
+/** Groups that collapse to a single preferred-method toggle in compact mode.
+ *  Shared with the Basic/Learn lens via {@link METHOD_GROUPS} so "Basic shows
+ *  the same as compact" stays true without anyone maintaining two lists. */
+const COMPACT_GROUPS = new Set<string>(METHOD_GROUPS);
 
 /** Explanatory text for layer group info buttons. */
 const GROUP_INFO: Record<string, () => string> = {
