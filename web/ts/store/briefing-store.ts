@@ -233,7 +233,11 @@ export interface BriefingState {
   setCompareBandMode: (mode: import('../visualization/types').CompareBandMode) => void;
   initCompareModels: (models: string[]) => void;
   setVizTheme: (themeId: string) => void;
-  setVizPreset: (presetId: string | null) => void;
+  /** Apply a tool emulation (GRAMET / Windy / ForeFlight), or `null` for
+   *  FlyFun — our own conventions, which the caller resolves into
+   *  `ownMethodOverrides` because the graded methods come from the advisories
+   *  manifest rather than from the store (#591). */
+  setVizPreset: (presetId: string | null, ownMethodOverrides?: Record<string, boolean>) => void;
   /** Apply a pre-resolved advisory preset view (issue #219). The caller
    *  resolves the preset → concrete layer IDs where preferredMethods is in
    *  scope, and hands this a {@link ResolvedView}. Does not touch the theme. */
@@ -1197,7 +1201,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     }
   },
 
-  setVizPreset: (presetId: string | null) => {
+  setVizPreset: (presetId: string | null, ownMethodOverrides?: Record<string, boolean>) => {
     // Tool emulations (GRAMET / Windy / ForeFlight) — they replicate another
     // tool in BOTH style and method set, so they set the theme and the layers
     // together and are recorded in `activeEmulation` rather than
@@ -1206,8 +1210,21 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // theme stay as the user left them.
     const current = get().vizSettings;
     if (!presetId) {
+      // "FlyFun" — our own conventions. Not an absence: it applies the methods
+      // the briefing actually graded with, one layer per family, the same set
+      // compact mode resolves to. The caller passes them already resolved
+      // because `preferredMethods` is derived from the advisories manifest,
+      // which the store does not reach into.
+      const enabled = ownMethodOverrides
+        ? { ...current.enabledLayers, ...ownMethodOverrides }
+        : current.enabledLayers;
       // Dropping the emulation also drops any advisory highlight (#373).
-      const updated = { ...current, activeEmulation: null, activeHighlightAdvisoryId: null };
+      const updated = {
+        ...current,
+        enabledLayers: enabled,
+        activeEmulation: null,
+        activeHighlightAdvisoryId: null,
+      };
       set({ vizSettings: updated });
       saveVizSettings(updated);
       return;
