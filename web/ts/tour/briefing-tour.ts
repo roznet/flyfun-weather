@@ -188,6 +188,39 @@ function buildSteps(): DriveStep[] {
 
 let activeDriver: Driver | null = null;
 let layerToggleUnsub: (() => void) | null = null;
+let layoutShiftObserver: ResizeObserver | null = null;
+
+// driver.js recomputes its cutout on `resize` and `scroll` only. Anything that
+// changes the page's layout WITHOUT either — the stale-pack "Updates
+// available" banner arriving asynchronously above the highlighted control, a
+// section expanding, an advisory list filling in — leaves the hole behind at
+// the old coordinates. The control then looks like it vanished: the popover
+// points at a lit rectangle of empty page.
+//
+// Watching the body's box catches all of them, because every one of them
+// changes the document height. `refresh()` re-measures the element already
+// highlighted; it does not re-resolve the step's element function, which is
+// why the layers step still needs its own `moveTo` for the case where the node
+// is REPLACED rather than moved.
+function watchLayoutShifts(): void {
+  stopWatchingLayoutShifts();
+  if (typeof ResizeObserver === 'undefined') return;
+  let queued = false;
+  layoutShiftObserver = new ResizeObserver(() => {
+    if (queued || !activeDriver) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      activeDriver?.refresh();
+    });
+  });
+  layoutShiftObserver.observe(document.body);
+}
+
+function stopWatchingLayoutShifts(): void {
+  layoutShiftObserver?.disconnect();
+  layoutShiftObserver = null;
+}
 
 // Toggling a layer checkbox rebuilds the controls panel, which detaches the
 // `.viz-layer-toggles` node driver.js highlighted and shifts the freshly
@@ -256,6 +289,7 @@ export function startBriefingTour(): void {
     activeDriver = null;
   }
   stopWatchingLayerToggleStep();
+  stopWatchingLayoutShifts();
   preloadSkewT();
   track(EVENTS.TOUR_STARTED, { tour: 'briefing' });
   activeDriver = driver({
@@ -274,9 +308,11 @@ export function startBriefingTour(): void {
     onDestroyed: () => {
       activeDriver = null;
       stopWatchingLayerToggleStep();
+      stopWatchingLayoutShifts();
     },
   });
   watchLayerToggleStep();
+  watchLayoutShifts();
   activeDriver.drive();
 }
 
