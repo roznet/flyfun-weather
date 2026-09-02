@@ -19,6 +19,7 @@ import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { renderFrontsInfo } from '../../helpers/fronts-info';
 import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
+import { getMetric } from '../../helpers/metrics-helper';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 import { OBSERVED_OVERLAY_OPTIONS } from '../route-map/observed-overlay-geometry';
 import { FORECAST_METRICS, METRIC_LABEL } from '../weather-map-format';
@@ -61,6 +62,10 @@ export interface LayerTogglesOptions {
    *  read back with {@link openFamilyIn} before re-rendering, so a re-render
    *  triggered by toggling a layer does not close the row you are working in. */
   openFamily?: LayerFamily | null;
+  /** Which family's "About …" panel is open, if any. Same read-back reason as
+   *  {@link openFamily}: the panel must survive toggling a layer, because
+   *  reading about a method and then switching it on is the point of it. */
+  aboutFamily?: LayerFamily | null;
 }
 
 /** Source state derived from which cloud layer ids are currently enabled.
@@ -106,28 +111,29 @@ function cloudCompoundHtml(
   // injected by the render-time fallback rather than picked by the user.
   const ddSubstituted = substituted?.has(CLOUD_LAYER_BY_AXES.dd[style]) ?? false;
 
-  const sourceCheckbox = (
+  // A source is a pill like every other layer control: NWP and DD overlaid is
+  // the cross-check, not a mistake, so the shape has to permit both.
+  const sourcePill = (
     source: 'dd' | 'nwp',
     label: string,
     checked: boolean,
     unavail: boolean,
     auto: boolean,
+    hintKey: string,
   ): string => {
     const dimClass = unavail ? ' viz-layer-unavailable' : (auto ? ' viz-layer-substituted' : '');
-    const tooltip = unavail
-      ? ` title="${t('viz.notAvailableModel')}"`
-      : (auto ? ` title="${t('viz.substitutedNwp')}"` : '');
-    const disabled = unavail ? 'disabled' : '';
-    const checkedAttr = (checked || auto) && !unavail ? 'checked' : '';
-    return `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`
-      + `<input type="checkbox" data-cloud-source="${source}" ${checkedAttr} ${disabled}>`
-      + `<span>${label}</span>`
-      + `</label>`;
+    const hint = unavail
+      ? t('viz.notAvailableModel')
+      : (auto ? t('viz.substitutedNwp') : t(hintKey));
+    const on = (checked || auto) && !unavail;
+    return `<button type="button" class="viz-pill${dimClass}" data-cloud-source="${source}"`
+      + ` aria-pressed="${on}"${unavail ? ' disabled' : ''}`
+      + ` data-hint="${escapeHtml(hint)}">${escapeHtml(label)}</button>`;
   };
 
   let html = '';
-  html += sourceCheckbox('nwp', 'NWP', nwpEnabled, nwpUnavail, false);
-  html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail, ddSubstituted);
+  html += sourcePill('nwp', 'NWP', nwpEnabled, nwpUnavail, false, 'viz.cloudSourceHint.nwp');
+  html += sourcePill('dd', 'DD', ddEnabled, ddUnavail, ddSubstituted, 'viz.cloudSourceHint.dd');
   html += `<select class="viz-model-select" data-cloud-style>`;
   html += `<option value="square"${style === 'square' ? ' selected' : ''}>${t('viz.cloudStyle.square')}</option>`;
   html += `<option value="natural"${style === 'natural' ? ' selected' : ''}>${t('viz.cloudStyle.natural')}</option>`;
@@ -146,6 +152,13 @@ function cloudCompoundHtml(
 export function openFamilyIn(container: HTMLElement): LayerFamily | null {
   const el = container.querySelector('.viz-family[aria-expanded="true"]');
   return (el?.getAttribute('data-family') as LayerFamily) ?? null;
+}
+
+/** Which family's "About …" panel is showing, read back the same way and for
+ *  the same reason as {@link openFamilyIn}. */
+export function aboutFamilyIn(container: HTMLElement): LayerFamily | null {
+  const el = container.querySelector('.viz-family-about');
+  return (el?.getAttribute('data-about-family') as LayerFamily) ?? null;
 }
 
 /** Colour the family dot takes — the colour that family paints in, so the bar
@@ -173,10 +186,28 @@ const FAMILY_DOT: Record<LayerFamily, string> = {
  *  available, and individual layers dim as everywhere else. */
 const HIDE_GROUP_WHEN_ALL_UNAVAILABLE: readonly LayerGroup[] = ['fronts', 'conditions'];
 
-/** Render one layer's checkbox, dimmed/disabled/substituted as its
- *  availability requires. Extracted so the detail row and the compact bar can
- *  render the same control without drifting apart. */
-function layerCheckboxHtml(
+/** One-line hint for a layer, shown in the detail row's hint slot on hover or
+ *  focus. Prefers the metrics catalog's own `vibe` — the summary sentence it
+ *  already carries — so this adds no content to write. Layers with no catalog
+ *  entry (the isotherms, the parcel levels, cruise) fall back to an explicit
+ *  `viz.layerHint.*` string, and to their label if even that is missing. */
+function layerHint(layer: { id: string; metricId?: string }): string {
+  if (layer.metricId) {
+    const vibe = getMetric(layer.metricId)?.vibe;
+    if (vibe) return vibe;
+  }
+  const key = `viz.layerHint.${layer.id}`;
+  const s = t(key);
+  return s === key ? t(`viz.layer.${layer.id}`) : s;
+}
+
+/** Render one layer as a pill.
+ *
+ *  Pills are gapped and rounded because every layer family is pick-ANY: two
+ *  icing models overlaid is a legitimate comparison, not an error state. The
+ *  shape carries that — a joined segmented control would say "pick one", which
+ *  is now only true of Lens and Style. */
+function layerPillHtml(
   layer: { id: string; metricId?: string },
   label: string,
   enabledLayers: Record<string, boolean>,
@@ -186,27 +217,30 @@ function layerCheckboxHtml(
   const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
   const isSubstituted = !isUnavailable && (substitutedLayers?.has(layer.id) ?? false);
   const showUnavailable = isUnavailable && !isSubstituted;
-  const checked = isSubstituted || (!showUnavailable && enabledLayers[layer.id] !== false) ? 'checked' : '';
-  const disabled = showUnavailable ? 'disabled' : '';
-  const dimClass = showUnavailable
-    ? ' viz-layer-unavailable'
-    : (isSubstituted ? ' viz-layer-substituted' : '');
-  const tooltip = showUnavailable
-    ? ` title="${t('viz.notAvailableModel')}"`
-    : (isSubstituted ? ` title="${t('viz.substitutedNwp')}"` : '');
+  const on = isSubstituted || (!showUnavailable && enabledLayers[layer.id] !== false);
 
-  let html = `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
-  html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
-  html += `<span>${label}</span>`;
-  html += `</label>`;
-  if (layer.metricId) {
-    html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
-  } else if (layer.id === 'fronts-markers') {
-    // Fronts have no metric registry entry — show the experimental-feature
-    // explainer instead of metric info.
-    html += `<button class="viz-layer-info-btn" data-front-info="1" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
-  }
-  return html;
+  const cls = 'viz-pill'
+    + (showUnavailable ? ' viz-layer-unavailable' : '')
+    + (isSubstituted ? ' viz-layer-substituted' : '');
+  // An unavailable method stays visible and struck through rather than hidden:
+  // knowing SLD exists but needs another model is worth more than a clean row.
+  const hint = showUnavailable
+    ? t('viz.notAvailableModel')
+    : (isSubstituted ? t('viz.substitutedNwp') : layerHint(layer));
+
+  return `<button type="button" class="${cls}" data-layer-id="${layer.id}"`
+    + ` aria-pressed="${on}"${showUnavailable ? ' disabled' : ''}`
+    + ` data-hint="${escapeHtml(hint)}">${escapeHtml(label)}</button>`;
+}
+
+/** The `None` pill that clears a group in one click.
+ *
+ *  Needed precisely because every family is pick-any: without it, switching
+ *  icing off means unticking five things and hoping. It carries the ids it
+ *  clears so the handler needs no lookup. */
+function nonePillHtml(layerIds: string[], anyOn: boolean): string {
+  return `<button type="button" class="viz-pill viz-pill-none" data-none-group="${layerIds.join(' ')}"`
+    + ` aria-pressed="${!anyOn}" data-hint="${escapeHtml(t('viz.noneHint'))}">${escapeHtml(t('viz.none'))}</button>`;
 }
 
 /** The families the bar shows, after dropping those the current briefing has
@@ -229,7 +263,12 @@ function visibleFamilies(opts: LayerTogglesOptions): LayerFamilyInfo[] {
 
 /** The detail row for one family: its groups side by side, each with a faint
  *  sub-label, running ACROSS the width rather than down a column. That is what
- *  keeps the expansion at exactly one row whichever family is open (#591). */
+ *  keeps the expansion at exactly one row whichever family is open (#591).
+ *
+ *  The row ends in a hint slot — one sentence about whatever the pointer is on,
+ *  plus a single labelled "About …" button. That slot is where the panel's
+ *  twenty ⓘ glyphs went: help now lives in the horizontal space that was going
+ *  spare, instead of doubling the number of objects on every row. */
 function familyDetailHtml(
   info: LayerFamilyInfo,
   enabledLayers: Record<string, boolean>,
@@ -245,33 +284,96 @@ function familyDetailHtml(
   for (const group of info.groups) {
     html += `<span class="viz-detail-sub">${escapeHtml(group.label)}</span>`;
 
-    // The clouds group keeps its compound source-toggles + style dropdown: the
-    // control owns ONLY the NWP/DD cloud-band ids, so any other layer in the
-    // group still needs its own checkbox and falls through to the loop below —
-    // which is how `observed-tops` (#574) once rendered with no way to switch
-    // it off at all.
+    // The clouds group's sources are pills over the cloud-band ids, which the
+    // style axis multiplies out. The compound control owns ONLY those ids; any
+    // other layer in the group still needs its own pill and falls through to
+    // the loop below — which is how `observed-tops` (#574) once rendered with
+    // no way to switch it off at all.
     let layers = group.layers;
     if (group.group === 'clouds') {
-      html += `<span class="viz-detail-group">`;
+      html += `<span class="viz-pills">`;
       html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle, substitutedLayers);
       html += `</span>`;
       layers = layers.filter((l) => !ALL_CLOUD_LAYER_IDS.includes(l.id));
       if (layers.length === 0) continue;
     }
 
-    html += `<span class="viz-detail-group">`;
+    const ids = layers.map((l) => l.id);
+    const anyOn = layers.some((l) => enabledLayers[l.id] !== false && !unavailableLayers?.has(l.id));
+    html += `<span class="viz-pills">`;
+    // A single-layer group is already one click from off; a None pill there
+    // would just be a second control doing the same thing.
+    if (layers.length > 1) html += nonePillHtml(ids, anyOn);
     for (const layer of layers) {
-      html += layerCheckboxHtml(layer, t('viz.layer.' + layer.id), enabledLayers, unavailableLayers, substitutedLayers);
+      html += layerPillHtml(layer, t('viz.layer.' + layer.id), enabledLayers, unavailableLayers, substitutedLayers);
     }
     html += `</span>`;
   }
 
-  if (GROUP_INFO[info.family]) {
-    html += `<span class="viz-detail-hint">`;
-    html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${info.family}" title="About ${escapeHtml(info.label)}" aria-label="About ${escapeHtml(info.label)}">ⓘ</button>`;
-    html += `</span>`;
-  }
+  const famHintKey = `viz.familyHint.${info.family}`;
+  const famHint = t(famHintKey) === famHintKey ? '' : t(famHintKey);
+  html += `<span class="viz-detail-hint">`;
+  html += `<span class="viz-hint-text" data-default-hint="${escapeHtml(famHint)}">${escapeHtml(famHint)}</span>`;
+  html += `<button type="button" class="viz-about-btn" data-family-about="${info.family}"`
+    + ` title="${escapeHtml(t('viz.aboutFamily', { family: info.label }))}">`
+    + `<span class="viz-about-i" aria-hidden="true">i</span>`
+    + `${escapeHtml(t('viz.aboutFamily', { family: info.label.toLowerCase() }))}</button>`;
+  html += `</span>`;
 
+  html += `</div>`;
+  return html;
+}
+
+/** The "About …" panel: one summary card per option in the family, side by
+ *  side, with a link into the full metric entry.
+ *
+ *  Per FAMILY, not per layer, because "what is NWP versus DD" is a single
+ *  comparative question rather than two definitions — and a per-family panel
+ *  can say the thing that actually matters, which is when to prefer one over
+ *  the other. Twenty independent popups structurally cannot.
+ *
+ *  Almost none of this is new content: `MetricCatalogEntry` already splits the
+ *  way the two tiers need — `vibe` is the summary line, `primary_goal` the
+ *  goal, `best_used_for` what it is for, and `limitations` / `theory` /
+ *  `thresholds` are the detail behind the button. This renders the first three
+ *  and hands the rest to the existing popup.
+ *
+ *  It renders INLINE, under the detail row, rather than floating over the
+ *  chart. Reading and adjusting are different modes: the no-covering rule
+ *  protects adjusting, and while you are reading what dewpoint depression is
+ *  you are not watching the bands. Displacing the chart needs no positioning
+ *  code, and leaves the bar and the pills live above it — so you can read
+ *  about DD, switch it on, and dismiss to see what changed.
+ */
+function familyAboutHtml(info: LayerFamilyInfo): string {
+  const cards = info.layers
+    .filter((l) => l.metricId && getMetric(l.metricId))
+    .map((l) => {
+      const m = getMetric(l.metricId!)!;
+      let html = `<div class="viz-about-card">`;
+      html += `<h5>${escapeHtml(t('viz.layer.' + l.id))}<span class="viz-about-tag">${escapeHtml(l.metricId!)}</span></h5>`;
+      html += `<p>${escapeHtml(m.vibe)}</p>`;
+      if (m.primary_goal) html += `<p><span class="viz-about-fld">${escapeHtml(t('viz.aboutGoal'))}</span>${escapeHtml(m.primary_goal)}</p>`;
+      if (m.best_used_for) html += `<p><span class="viz-about-fld">${escapeHtml(t('viz.aboutBestFor'))}</span>${escapeHtml(m.best_used_for)}</p>`;
+      html += `<button type="button" class="viz-about-more" data-layer-info="${l.id}" data-metric-id="${l.metricId}">`
+        + `${escapeHtml(t('viz.aboutFullDetail'))}</button>`;
+      html += `</div>`;
+      return html;
+    });
+
+  const introKey = `viz.familyAbout.${info.family}`;
+  const intro = t(introKey) === introKey ? '' : t(introKey);
+
+  let html = `<div class="viz-family-about" data-about-family="${info.family}">`;
+  html += `<div class="viz-about-head"><h4>${escapeHtml(info.label)}</h4>`;
+  html += `<button type="button" class="viz-about-close">${escapeHtml(t('viz.aboutClose'))}</button></div>`;
+  if (intro) html += `<p class="viz-about-intro">${escapeHtml(intro)}</p>`;
+  html += cards.length > 0
+    ? `<div class="viz-about-grid">${cards.join('')}</div>`
+    // The line layers (isotherms, parcel levels, cruise) carry no catalog
+    // entry, so there is nothing to compare. Say so rather than render an
+    // empty grid that reads as a loading failure.
+    : `<p class="viz-about-intro">${escapeHtml(t('viz.aboutNoDetail'))}</p>`;
   html += `</div>`;
   return html;
 }
@@ -328,7 +430,10 @@ export function layerTogglesHtml(
   html += '</div>';
 
   const openInfo = open ? families.find((f) => f.family === open) : undefined;
-  if (openInfo) html += familyDetailHtml(openInfo, enabledLayers, opts);
+  if (openInfo) {
+    html += familyDetailHtml(openInfo, enabledLayers, opts);
+    if (opts.aboutFamily === openInfo.family) html += familyAboutHtml(openInfo);
+  }
 
   html += '</div>';
   return html;
@@ -343,7 +448,7 @@ function wireCloudCompound(
   onToggle: (layerId: string) => void,
   onStyleChange?: (style: 'natural' | 'soft' | 'square') => void,
 ): void {
-  const sourceCbs = container.querySelectorAll<HTMLInputElement>('[data-cloud-source]');
+  const sourceCbs = container.querySelectorAll<HTMLButtonElement>('[data-cloud-source]');
   const styleSel = container.querySelector<HTMLSelectElement>('[data-cloud-style]');
   if (sourceCbs.length === 0 || !styleSel) return;
 
@@ -358,11 +463,17 @@ function wireCloudCompound(
   };
 
   for (const cb of Array.from(sourceCbs)) {
-    cb.addEventListener('change', () => {
+    cb.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (cb.disabled) return;
       const source = cb.dataset.cloudSource as 'dd' | 'nwp';
       const style = styleSel.value as 'natural' | 'soft' | 'square';
       const currentId = enabledIdFor(source);
-      if (cb.checked) {
+      // The pill reports the state it is LEAVING, so invert it to get the
+      // state the click is asking for.
+      const wantOn = cb.getAttribute('aria-pressed') !== 'true';
+      if (wantOn) {
         const targetId = CLOUD_LAYER_BY_AXES[source][style];
         if (currentId && currentId !== targetId) onToggle(currentId);
         if (currentId !== targetId) onToggle(targetId);
@@ -408,7 +519,7 @@ function wireLayerBar(
   onToggle: (layerId: string) => void,
   rewire: (root: HTMLElement) => void,
 ): void {
-  const rerender = (openFamily: LayerFamily | null): void => {
+  const rerender = (openFamily: LayerFamily | null, aboutFamily: LayerFamily | null = null): void => {
     // `container` is the wrapper on first render and the block itself after a
     // re-render, so accept both rather than assuming one.
     const block = container.classList.contains('viz-layer-toggles')
@@ -416,7 +527,7 @@ function wireLayerBar(
       : container.querySelector('.viz-layer-toggles');
     if (!block) return;
     const holder = document.createElement('div');
-    holder.innerHTML = layerTogglesHtml(enabledLayers, { ...opts, openFamily });
+    holder.innerHTML = layerTogglesHtml(enabledLayers, { ...opts, openFamily, aboutFamily });
     const next = holder.firstElementChild;
     if (!next) return;
     block.replaceWith(next);
@@ -429,7 +540,31 @@ function wireLayerBar(
       e.stopPropagation();
       const family = btn.dataset.family as LayerFamily;
       const isOpen = btn.getAttribute('aria-expanded') === 'true';
-      rerender(isOpen ? null : family);
+      // Switching family closes the About panel: it explains the family you
+      // were in, and leaving it up over a different one would just mislead.
+      rerender(isOpen ? null : family, null);
+    });
+  });
+
+  container.querySelectorAll<HTMLButtonElement>('[data-family-about]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const family = btn.dataset.familyAbout as LayerFamily;
+      const showing = aboutFamilyIn(
+        container.classList.contains('viz-layer-toggles') ? container : (container.querySelector('.viz-layer-toggles') as HTMLElement ?? container),
+      );
+      rerender(family, showing === family ? null : family);
+    });
+  });
+
+  container.querySelectorAll<HTMLButtonElement>('.viz-about-close').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      rerender(openFamilyIn(
+        container.classList.contains('viz-layer-toggles') ? container : (container.querySelector('.viz-layer-toggles') as HTMLElement ?? container),
+      ), null);
     });
   });
 
@@ -499,7 +634,11 @@ export function renderLayerToggles(
 ): void {
   // Carry the open family across the re-render this call performs; without it
   // every layer toggle would close the row the user is working in.
-  const withOpen: LayerTogglesOptions = { ...opts, openFamily: opts.openFamily ?? openFamilyIn(container) };
+  const withOpen: LayerTogglesOptions = {
+    ...opts,
+    openFamily: opts.openFamily ?? openFamilyIn(container),
+    aboutFamily: opts.aboutFamily ?? aboutFamilyIn(container),
+  };
   container.innerHTML = layerTogglesHtml(enabledLayers, withOpen);
   wireToggleBlock(container, enabledLayers, withOpen, onToggle);
 }
@@ -513,13 +652,51 @@ function wireToggleBlock(
   opts: LayerTogglesOptions,
   onToggle: (layerId: string) => void,
 ): void {
-  root.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
-    cb.addEventListener('change', () => onToggle(cb.dataset.layerId!));
+  root.querySelectorAll<HTMLButtonElement>('.viz-pill[data-layer-id]').forEach((pill) => {
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!pill.disabled) onToggle(pill.dataset.layerId!);
+    });
   });
+
+  root.querySelectorAll<HTMLButtonElement>('[data-none-group]').forEach((pill) => {
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Clear only what is actually on — `onToggle` flips, so calling it for an
+      // already-off layer would switch it ON, which is the opposite of None.
+      for (const id of (pill.dataset.noneGroup ?? '').split(' ').filter(Boolean)) {
+        if (enabledLayers[id] !== false) onToggle(id);
+      }
+    });
+  });
+
+  wireHintSlot(root);
   wireCloudCompound(root, enabledLayers, onToggle, opts.onCloudStyleChange);
   wireLayerInfoButtons(root);
   wireLayerBar(root, enabledLayers, opts, onToggle, (next) => {
     wireToggleBlock(next, enabledLayers, opts, onToggle);
+  });
+}
+
+/** Point at a control, read what it is. The hint slot is the whole reason the
+ *  panel can carry one ⓘ instead of twenty: help costs no height and no glyph
+ *  because it lives in the horizontal space at the end of the row.
+ *
+ *  Focus writes it as hover does, so tabbing along the pills narrates them. */
+function wireHintSlot(root: HTMLElement): void {
+  const slot = root.querySelector<HTMLElement>('.viz-hint-text');
+  if (!slot) return;
+  const fallback = slot.dataset.defaultHint ?? '';
+
+  root.querySelectorAll<HTMLElement>('[data-hint]').forEach((el) => {
+    const write = (): void => { slot.textContent = el.dataset.hint ?? fallback; };
+    const clear = (): void => { slot.textContent = fallback; };
+    el.addEventListener('mouseenter', write);
+    el.addEventListener('focus', write);
+    el.addEventListener('mouseleave', clear);
+    el.addEventListener('blur', clear);
   });
 }
 
@@ -687,6 +864,7 @@ export function renderVizControls(
     // layer toggle re-renders this whole container, and losing the open family
     // here is what would make the detail row shut on each click (#591).
     openFamily: openFamilyIn(container),
+    aboutFamily: aboutFamilyIn(container),
     onCloudStyleChange: callbacks.onCloudStyleChange,
   };
   if (settings.layout !== 'map') {

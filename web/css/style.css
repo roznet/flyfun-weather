@@ -4138,7 +4138,201 @@ html {
   flex: none;
 }
 
-.viz-detail-hint { margin-left: auto; flex: none; }
+/* Pick-any pills: gapped and rounded, because every layer family is pick-any.
+   Two icing models overlaid is a legitimate comparison, not an error. */
+.viz-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+}
+
+.viz-pill {
+  font: inherit;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.viz-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-muted);
+  box-sizing: border-box;
+  flex: none;
+}
+
+.viz-pill[aria-pressed="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.viz-pill[aria-pressed="true"]::before { background: #fff; border-color: #fff; }
+.viz-pill:hover:not(:disabled) { border-color: var(--text-muted); }
+.viz-pill:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* Unavailable stays visible and struck through: knowing SLD exists but needs
+   another model is worth more than a tidier row. */
+.viz-pill:disabled { opacity: 0.45; cursor: not-allowed; text-decoration: line-through; }
+
+.viz-pill-none { border-style: dashed; }
+.viz-pill-none::before { display: none; }
+.viz-pill-none[aria-pressed="true"] {
+  background: var(--text-muted);
+  border-color: var(--text-muted);
+  border-style: solid;
+  color: var(--surface);
+}
+
+/* Hint slot: where twenty ⓘ glyphs went. Costs no height because it sits in
+   the horizontal space at the end of the row. */
+.viz-detail-hint {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 14rem;
+  justify-content: flex-end;
+}
+
+.viz-hint-text {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-align: right;
+  line-height: 1.3;
+  max-height: 2.6em;
+  overflow: hidden;
+}
+
+.viz-about-btn {
+  flex: none;
+  font: inherit;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem 0.12rem 0.3rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.viz-about-i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.6rem;
+  flex: none;
+}
+
+.viz-about-btn:hover { border-color: var(--primary); color: var(--primary); }
+.viz-about-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* The About panel renders inline, under the detail row, rather than floating
+   over the chart. Reading and adjusting are different modes: displacing the
+   chart while you read costs nothing, needs no positioning code, and keeps the
+   bar and pills live above so you can read about DD and switch it on. */
+.viz-family-about {
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.viz-about-head { display: flex; align-items: baseline; gap: 0.6rem; }
+.viz-about-head h4 { margin: 0; font-size: 0.9rem; font-weight: 600; }
+
+.viz-about-close {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.7rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  padding: 0 0.4rem;
+  cursor: pointer;
+}
+.viz-about-close:hover { border-color: var(--primary); color: var(--primary); }
+
+.viz-about-intro {
+  margin: 0.3rem 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 78ch;
+}
+
+.viz-about-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.6rem 1.3rem;
+}
+
+.viz-about-card { border-left: 2px solid var(--border); padding-left: 0.6rem; }
+.viz-about-card h5 {
+  margin: 0 0 0.15rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.viz-about-tag {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+.viz-about-card p {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.viz-about-fld {
+  display: inline-block;
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-right: 0.35rem;
+}
+
+.viz-about-more {
+  font: inherit;
+  font-size: 0.7rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  padding: 0 0.45rem;
+  cursor: pointer;
+  margin-top: 0.15rem;
+}
+.viz-about-more:hover { border-color: var(--primary); color: var(--primary); }
+.viz-about-more:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 .viz-layer-group {
   display: flex;
