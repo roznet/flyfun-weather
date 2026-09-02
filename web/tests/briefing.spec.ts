@@ -199,3 +199,126 @@ test.describe('Briefing sidebar layout', () => {
     await expect(page.locator('#layout-optin-btn')).toBeVisible();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-section layer bar (#591). The unit tests cover the HTML composition;
+// these cover the parts only a real browser can: that opening a family does
+// not close on the re-render its own toggle triggers, that the hint slot
+// actually fills, and that the panel stays two rows while you work in it.
+// ---------------------------------------------------------------------------
+
+test.describe('Cross-section layer bar', () => {
+
+  /** Open the cross-section section — the controls are not rendered until it
+   *  is expanded (the tour does the same dance in `ensureSectionExpanded`). */
+  async function openCrossSection(page: import('@playwright/test').Page) {
+    const section = page.locator('[data-section="cross-section"]');
+    await expect(section).toBeVisible();
+    if (await section.evaluate((el) => el.classList.contains('collapsed'))) {
+      await section.locator('h3').first().click();
+    }
+    await expect(page.locator('.viz-layer-bar')).toBeVisible();
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await mockBriefingApi(page);
+    // Compact is the DEFAULT display mode, and it deliberately has no detail
+    // row — one on/off per family, method chosen for you. Everything below
+    // except the compact case is about full mode, so seed it before the app
+    // reads localStorage on boot.
+    await page.addInitScript(() => localStorage.setItem('wb_displayMode', 'full'));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await openCrossSection(page);
+  });
+
+  test('rests as one row of families with no controls showing', async ({ page }) => {
+    await expect(page.locator('.viz-family[data-family]').first()).toBeVisible();
+    await expect(page.locator('.viz-layer-detail')).toHaveCount(0);
+    await expect(page.locator('.viz-pill')).toHaveCount(0);
+  });
+
+  test('opens one family at a time, swapping rather than stacking', async ({ page }) => {
+    const families = page.locator('.viz-family[data-family]');
+    await families.first().click();
+    await expect(page.locator('.viz-layer-detail')).toHaveCount(1);
+
+    await families.nth(1).click();
+    // The row is REPLACED, not added to — that is what holds the panel height.
+    await expect(page.locator('.viz-layer-detail')).toHaveCount(1);
+
+    await families.nth(1).click();
+    await expect(page.locator('.viz-layer-detail')).toHaveCount(0);
+  });
+
+  test('stays open while you toggle, so you can compare against the chart', async ({ page }) => {
+    // The regression this pins is the whole reason the open family is read back
+    // off the DOM: toggling a layer re-renders the entire controls container,
+    // and if the open row were not carried across it would slam shut on every
+    // click — making DD-versus-NWP comparison impossible.
+    await page.locator('.viz-family[data-family="clouds"]').click();
+    const pills = page.locator('.viz-layer-detail .viz-pill:not([disabled])');
+    const n = Math.min(3, await pills.count());
+    expect(n).toBeGreaterThan(0);
+
+    for (let i = 0; i < n; i++) {
+      await pills.nth(i).click();
+      await expect(page.locator('.viz-layer-detail[data-detail-family="clouds"]')).toBeVisible();
+    }
+  });
+
+  test('None clears a group and the chip says so', async ({ page }) => {
+    await page.locator('.viz-family[data-family="icing"]').click();
+    const none = page.locator('.viz-layer-detail .viz-pill-none').first();
+    await none.click();
+
+    const group = page.locator('.viz-layer-detail .viz-pills').first();
+    await expect(group.locator('.viz-pill[data-layer-id][aria-pressed="true"]')).toHaveCount(0);
+    await expect(page.locator('.viz-family[data-family="icing"]')).toHaveClass(/is-off/);
+  });
+
+  test('the hint slot fills from whatever you point at', async ({ page }) => {
+    // This is where twenty ⓘ glyphs went, so it has to actually work.
+    await page.locator('.viz-family[data-family="icing"]').click();
+    const hint = page.locator('.viz-hint-text');
+    const atRest = await hint.textContent();
+
+    await page.locator('.viz-layer-detail .viz-pill[data-layer-id]').first().hover();
+    await expect(hint).not.toHaveText(atRest ?? '');
+  });
+
+  test('About opens a comparison and closes again', async ({ page }) => {
+    await page.locator('.viz-family[data-family="icing"]').click();
+    await page.locator('.viz-about-btn').click();
+
+    const about = page.locator('.viz-family-about[data-about-family="icing"]');
+    await expect(about).toBeVisible();
+    // Cards come from the metrics catalog, and each links into the full entry.
+    await expect(about.locator('.viz-about-card').first()).toBeVisible();
+    await expect(about.locator('.viz-about-more').first()).toBeVisible();
+
+    await about.locator('.viz-about-close').click();
+    await expect(about).toHaveCount(0);
+    // ...and the family it explained is still open underneath.
+    await expect(page.locator('.viz-layer-detail[data-detail-family="icing"]')).toBeVisible();
+  });
+
+  test('compact mode is one on/off per family, with nothing to expand', async ({ page, context }) => {
+    // The default a user actually lands on. Compact makes the method decision
+    // for them, so a detail row here would be a bug rather than a feature.
+    await context.clearCookies();
+    await page.addInitScript(() => localStorage.setItem('wb_displayMode', 'compact'));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await openCrossSection(page);
+
+    const toggles = page.locator('.viz-family-toggle[data-family-toggle]');
+    await expect(toggles.first()).toBeVisible();
+    await expect(page.locator('.viz-family[data-family]')).toHaveCount(0);
+
+    const first = toggles.first();
+    const before = await first.getAttribute('aria-pressed');
+    await first.click();
+    await expect(first).not.toHaveAttribute('aria-pressed', before ?? '');
+    // Still nothing to expand.
+    await expect(page.locator('.viz-layer-detail')).toHaveCount(0);
+  });
+});
