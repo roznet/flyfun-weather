@@ -11,7 +11,11 @@ import SwiftUI
 /// Two visual elements, each doing exactly one job:
 ///  - **Scrim** — a translucent dim wash over the plot area with cutouts punched
 ///    out where the hazard physically is, each cutout framed by a thin
-///    severity-colored outline. Dimming means "not the focus", never a verdict.
+///    severity-colored outline (dashed when the region's depth is an estimate
+///    borrowed from another analysis track — `tower_estimated`, #592). A region
+///    whose depth is *unknown* (`tower_unresolved`) is not a spotlight at all:
+///    it draws a short dashed stub on the plot floor and punches nothing.
+///    Dimming means "not the focus", never a verdict.
 ///    Composed in a transparency layer (so `.destinationOut` punches the wash,
 ///    not the sky/terrain beneath). No scrim at all when there are no flagged
 ///    regions (the all-green case — never dim a clean chart).
@@ -39,6 +43,26 @@ struct HighlightLayer: CrossSectionLayerProtocol {
     static let ribbonGap: CGFloat = 2
     private static let cutoutOutlineWidth: CGFloat = 1.5
 
+    /// Region kinds whose depth is UNKNOWN rather than full-column (#592). They
+    /// get no cutout and no box: a terrain-to-top rectangle is the strongest
+    /// possible claim about vertical extent, drawn exactly where we know the
+    /// least, and it read as a rendering bug ("tall empty boxes over clear
+    /// sky"). They draw a short dashed stub off the plot floor instead — "a cell
+    /// is here, depth unknown" — with the verdict ribbon carrying the
+    /// along-route extent. NOT the genuinely full-column kinds
+    /// (`precip_column`, `freezing_precip_column`), where the column IS the
+    /// hazard.
+    static let depthUnknownKinds: Set<String> = ["tower_unresolved"]
+    /// Region kinds at least one of whose bounds was borrowed from another
+    /// analysis track (a convective tower drawn on thermodynamic base/top over
+    /// an NWP-graded point, #592): the box is real, its depth is an estimate, so
+    /// it is outlined dashed rather than solid.
+    static let estimatedKinds: Set<String> = ["tower_estimated"]
+    /// SYNC: mirrored in the web renderer.
+    static let depthUnknownStubHeight: CGFloat = 14
+    private static let depthUnknownDash: [CGFloat] = [3, 3]
+    private static let estimatedDash: [CGFloat] = [4, 3]
+
     @MainActor func render(context: inout GraphicsContext, transform: CoordTransform, data: VizRouteData) {
         guard let highlights = data.advisoryHighlights else { return }
         drawScrim(context: &context, transform: transform, regions: highlights.regions)
@@ -61,30 +85,78 @@ struct HighlightLayer: CrossSectionLayerProtocol {
         let plot = transform.plotArea
         let plotRect = CGRect(x: plot.left, y: plot.top, width: plot.width, height: plot.height)
         let merged = Self.mergedRegions(regions)
+        // Depth-unknown regions are not spotlights — there is no place on the y
+        // axis to point at — so they neither punch nor outline. When they are ALL
+        // a model has, there is nothing to spotlight and the wash is skipped
+        // entirely: dimming the whole chart to highlight nothing is worse than
+        // not dimming it.
+        let cutouts = merged.filter { !Self.isDepthUnknown($0) }
+        let depthUnknown = merged.filter { Self.isDepthUnknown($0) }
 
-        // Compose the dim wash + cutouts in a transparency layer so
-        // `.destinationOut` punches only the wash, not the sky/terrain/weather
-        // beneath, then composite the whole layer onto the main context.
-        context.drawLayer { layer in
-            layer.fill(Path(plotRect), with: .color(CrossSectionTheme.active.scrimWash))
-            layer.blendMode = .destinationOut
-            for region in merged {
-                layer.fill(Path(rect(for: region, transform: transform)), with: .color(.black))
+        if !cutouts.isEmpty {
+            // Compose the dim wash + cutouts in a transparency layer so
+            // `.destinationOut` punches only the wash, not the sky/terrain/weather
+            // beneath, then composite the whole layer onto the main context.
+            context.drawLayer { layer in
+                layer.fill(Path(plotRect), with: .color(CrossSectionTheme.active.scrimWash))
+                layer.blendMode = .destinationOut
+                for region in cutouts {
+                    layer.fill(Path(rect(for: region, transform: transform)), with: .color(.black))
+                }
+            }
+
+            // Stroke each cutout with a severity-coloured outline, clipped to the
+            // plot area so a full-column outline doesn't bleed into the margins.
+            // Dashed = the depth is an estimate borrowed from another track (#592).
+            var clipped = context
+            clipped.clip(to: Path(plotRect))
+            for region in cutouts {
+                clipped.stroke(Path(rect(for: region, transform: transform)),
+                               with: .color(severityColor(region.severity)),
+                               style: StrokeStyle(lineWidth: Self.cutoutOutlineWidth,
+                                                  dash: Self.outlineDash(for: region)))
             }
         }
 
-        // Stroke each cutout with a severity-coloured outline, clipped to the
-        // plot area so a full-column outline doesn't bleed into the margins.
-        var clipped = context
-        clipped.clip(to: Path(plotRect))
-        for region in merged {
-            clipped.stroke(Path(rect(for: region, transform: transform)),
+        // Depth-unknown markers, drawn on the main context (never dimmed by the
+        // wash) and outside the plot clip — they sit on the plot floor.
+        for region in depthUnknown {
+            context.stroke(Self.depthUnknownMarker(for: region, transform: transform),
                            with: .color(severityColor(region.severity)),
-                           lineWidth: Self.cutoutOutlineWidth)
+                           style: StrokeStyle(lineWidth: Self.cutoutOutlineWidth,
+                                              dash: Self.depthUnknownDash))
         }
     }
 
-    /// Pixel rect of a region. base/top nil → terrain-to-top (full column).
+    /// Is this region's depth UNKNOWN (no cutout, no box) rather than genuinely
+    /// full-column? See `depthUnknownKinds`.
+    static func isDepthUnknown(_ region: VizAdvisoryHighlights.Region) -> Bool {
+        depthUnknownKinds.contains(region.kind)
+    }
+
+    /// Outline dash for a bounded region: dashed when its depth is an estimate
+    /// borrowed from another analysis track, solid when the graded track drew it.
+    static func outlineDash(for region: VizAdvisoryHighlights.Region) -> [CGFloat] {
+        estimatedKinds.contains(region.kind) ? estimatedDash : []
+    }
+
+    /// A short stub off the plot floor at the region's mid-x: "flagged here,
+    /// depth unknown" (#592). Stroked dashed by the caller.
+    static func depthUnknownMarker(for region: VizAdvisoryHighlights.Region,
+                                   transform: CoordTransform) -> Path {
+        let plot = transform.plotArea
+        let x0 = transform.distanceToX(region.distFromNm)
+        let x1 = transform.distanceToX(region.distToNm)
+        let xMid = (x0 + x1) / 2
+        var path = Path()
+        path.move(to: CGPoint(x: xMid, y: plot.bottom))
+        path.addLine(to: CGPoint(x: xMid, y: plot.bottom - depthUnknownStubHeight))
+        return path
+    }
+
+    /// Pixel rect of a region. base/top nil → terrain-to-top (full column) —
+    /// only reached by the genuinely full-column kinds, since depth-unknown
+    /// regions never enter the cutout pass (#592).
     private func rect(for region: VizAdvisoryHighlights.Region, transform: CoordTransform) -> CGRect {
         let plot = transform.plotArea
         let x0 = transform.distanceToX(region.distFromNm)

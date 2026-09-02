@@ -3,7 +3,11 @@
  * Two visual elements, each doing exactly one job:
  *  - **Scrim** — a translucent dim wash over the plot area with cutouts punched
  *    out where the hazard physically is, each cutout framed by a thin
- *    severity-colored outline. Dimming means "not the focus", never a verdict.
+ *    severity-colored outline (dashed when the region's depth is an estimate
+ *    borrowed from another analysis track — `tower_estimated`, #592). A region
+ *    whose depth is *unknown* (`tower_unresolved`) is not a spotlight at all: it
+ *    draws a short dashed stub on the plot floor and punches nothing.
+ *    Dimming means "not the focus", never a verdict.
  *    Composed on an offscreen canvas (so `destination-out` punches the wash, not
  *    the sky/axes beneath) then drawn onto the main canvas. No scrim at all when
  *    there are no flagged regions (the all-green case — never dim a clean chart).
@@ -39,6 +43,25 @@ export const RIBBON_HEIGHT = 6;
 export const RIBBON_GAP = 2;      // gap below the plot area before the ribbon
 const CUTOUT_OUTLINE_WIDTH = 1.5;
 
+/** Regions whose depth is UNKNOWN rather than full-column (#592). They get no
+ *  cutout and no box: a terrain-to-top rectangle is the strongest possible claim
+ *  about vertical extent, drawn exactly where we know the least, and it read as
+ *  a rendering bug ("tall empty boxes over clear sky"). They draw as a short
+ *  dashed stub rising off the plot floor instead — "a cell is here, depth
+ *  unknown" — with the verdict ribbon underneath carrying the along-route
+ *  extent. NOT to be confused with the genuinely full-column kinds
+ *  (`precip_column`, `freezing_precip_column`), where the column IS the hazard. */
+const DEPTH_UNKNOWN_KINDS = new Set(['tower_unresolved']);
+/** Regions at least one of whose bounds was borrowed from another analysis
+ *  track (a convective tower drawn on thermodynamic base/top over an NWP-graded
+ *  point, #592). The box is real but its depth is an estimate, so it is outlined
+ *  dashed rather than solid. */
+const ESTIMATED_KINDS = new Set(['tower_estimated']);
+/** Stub height (px) and dash patterns. SYNC: mirrored on iOS. */
+const DEPTH_UNKNOWN_STUB_HEIGHT = 14;
+const DEPTH_UNKNOWN_DASH = [3, 3];
+const ESTIMATED_DASH = [4, 3];
+
 /** Theme-aware severity colour, aligned with the advisory status colours
  *  (`--red` / `--amber` / `--green` CSS vars, which flip in dark mode).
  *  Unavailable = neutral gray. Exported so the ribbon-hover tooltip (#412)
@@ -69,6 +92,30 @@ function regionYSpan(region: HighlightRegion, transform: CoordTransform): { yTop
   return { yTop, yBottom };
 }
 
+/** A short dashed stub off the plot floor at the region's mid-x: "flagged here,
+ *  depth unknown". Drawn on the main canvas (after the scrim composite) so it is
+ *  never dimmed by the wash. */
+function drawDepthUnknownMarker(
+  ctx: CanvasRenderingContext2D,
+  transform: CoordTransform,
+  region: HighlightRegion,
+): void {
+  const { plotArea } = transform;
+  const x0 = transform.distanceToX(region.dist_from_nm);
+  const x1 = transform.distanceToX(region.dist_to_nm);
+  const xMid = (x0 + x1) / 2;
+  const yFloor = plotArea.top + plotArea.height;
+  ctx.save();
+  ctx.strokeStyle = severityColor(region.severity);
+  ctx.lineWidth = CUTOUT_OUTLINE_WIDTH;
+  ctx.setLineDash(DEPTH_UNKNOWN_DASH);
+  ctx.beginPath();
+  ctx.moveTo(xMid, yFloor);
+  ctx.lineTo(xMid, yFloor - DEPTH_UNKNOWN_STUB_HEIGHT);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawScrim(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
@@ -76,6 +123,16 @@ function drawScrim(
 ): void {
   if (regions.length === 0) return;  // all-green: never dim a clean chart
   const { plotArea } = transform;
+  // Depth-unknown regions are not spotlights — there is no place on the y axis
+  // to point at — so they neither punch nor outline. When they are ALL a model
+  // has, there is nothing to spotlight and the wash is skipped entirely: dimming
+  // the whole chart to highlight nothing is worse than not dimming it.
+  const cutouts = regions.filter((r) => !DEPTH_UNKNOWN_KINDS.has(r.kind));
+  const depthUnknown = regions.filter((r) => DEPTH_UNKNOWN_KINDS.has(r.kind));
+  if (cutouts.length === 0) {
+    for (const region of depthUnknown) drawDepthUnknownMarker(ctx, transform, region);
+    return;
+  }
 
   // Compose the dim wash + cutouts on an offscreen canvas so `destination-out`
   // punches only the wash, not the sky/axes/weather beneath (compare-mode
@@ -102,7 +159,7 @@ function drawScrim(
   //    ones). Mirrors iOS's `.color(.black)`.
   offCtx.globalCompositeOperation = 'destination-out';
   offCtx.fillStyle = '#000';
-  for (const region of regions) {
+  for (const region of cutouts) {
     const x0 = transform.distanceToX(region.dist_from_nm);
     const x1 = transform.distanceToX(region.dist_to_nm);
     const { yTop, yBottom } = regionYSpan(region, transform);
@@ -120,14 +177,21 @@ function drawScrim(
   ctx.rect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
   ctx.clip();
   ctx.lineWidth = CUTOUT_OUTLINE_WIDTH;
-  for (const region of regions) {
+  for (const region of cutouts) {
     const x0 = transform.distanceToX(region.dist_from_nm);
     const x1 = transform.distanceToX(region.dist_to_nm);
     const { yTop, yBottom } = regionYSpan(region, transform);
     ctx.strokeStyle = severityColor(region.severity);
+    // Dashed = the depth is an estimate borrowed from another track (#592).
+    ctx.setLineDash(ESTIMATED_KINDS.has(region.kind) ? ESTIMATED_DASH : []);
     ctx.strokeRect(x0, yTop, x1 - x0, yBottom - yTop);
   }
+  ctx.setLineDash([]);
   ctx.restore();
+
+  // 5. Depth-unknown markers, outside the clip (they sit on the plot floor) and
+  //    after the composite so the wash never dims them.
+  for (const region of depthUnknown) drawDepthUnknownMarker(ctx, transform, region);
 }
 
 function drawRibbon(
