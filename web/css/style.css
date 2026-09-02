@@ -8289,6 +8289,22 @@ body.resizing-rail {
   gap: 0.85rem;
   padding: 0.25rem 0.5rem 0.5rem 0.25rem;
 }
+/* The rail scrolls; its children do not shrink.
+ *
+ * Without this a rail child can be squeezed to nothing the moment anything
+ * sets `overflow` on it — because a flex item's `min-height: auto` only
+ * resolves to the content size while `overflow` is `visible`; any other value
+ * makes the automatic minimum 0, and an overflowing column then shrinks it
+ * away. driver.js does exactly that during the product tour
+ * (`:has(> .driver-active-element){overflow:hidden!important}`), which
+ * collapsed `.rail-controls` to 0px and made the Compact/Full Details toggle
+ * vanish the instant the tour highlighted it — but only on briefings tall
+ * enough for the rail to overflow, which is why it looked intermittent.
+ *
+ * Pinning flex-shrink here says what was always meant: overflow is the rail's
+ * job, not its children's. */
+.briefing-rail > * { flex-shrink: 0; }
+
 .briefing-main {
   min-width: 0; /* allow canvases to shrink within the grid track */
 }
