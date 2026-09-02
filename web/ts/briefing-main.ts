@@ -23,7 +23,7 @@ import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import type { LayerGroup, VizRouteData } from './visualization/types';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
-import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
+import { getAllLayers, getCompactLayerOverrides, getPreset, methodsFromPreset } from './visualization/cross-section/layer-registry';
 import {
   isAdvisoryPreset,
   getAdvisoryPreset,
@@ -453,6 +453,23 @@ async function init(): Promise<void> {
   let engineDefaults: EngineMethodDefaults = ENGINE_METHOD_DEFAULTS_FALLBACK;
   let preferredMethods: Record<string, string> = deriveGradedMethods(null, engineDefaults);
 
+  /** The methods a lens should resolve against.
+   *
+   *  Normally the graded profile's, but a tool emulation overrides them: that
+   *  is precisely what an emulation IS — GRAMET means Ogimet-NWP icing and
+   *  natural NWP cloud. So "GRAMET + Icing" gives GRAMET's methods showing
+   *  icing, rather than the two selectors fighting over the same layers (#591).
+   *
+   *  `methodsFromPreset` reads the emulation's flat layer map back as the
+   *  method choices it represents, which is the only reason the composition
+   *  works at all. */
+  function effectiveMethods(): Record<string, string> {
+    const emulation = store.getState().vizSettings.activeEmulation;
+    const preset = emulation ? getPreset(emulation) : undefined;
+    if (!preset) return preferredMethods;
+    return { ...preferredMethods, ...methodsFromPreset(preset).preferredMethods };
+  }
+
   /** Recompute `preferredMethods` from the current manifest + engine defaults,
    *  then (in compact mode) re-apply the preferred-only layer set so a manifest
    *  that loads after compact was entered still collapses correctly. */
@@ -508,7 +525,7 @@ async function init(): Promise<void> {
     if (presetId && isAdvisoryPreset(presetId)) {
       const preset = getAdvisoryPreset(presetId);
       if (preset) {
-        store.getState().applyAdvisoryPreset(presetId, resolveAdvisoryPreset(preset, preferredMethods, store.getState().vizSettings.cloudStyle));
+        store.getState().applyAdvisoryPreset(presetId, resolveAdvisoryPreset(preset, effectiveMethods(), store.getState().vizSettings.cloudStyle));
         return;
       }
     }
@@ -2007,6 +2024,9 @@ async function init(): Promise<void> {
         onModelChange: (model) => store.getState().setSelectedModel(model),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
         onPresetChange: (presetId) => handlePresetChange(presetId),
+        // Emulation applies theme + method set; the focus lens above then
+        // resolves against those methods rather than the graded defaults.
+        onEmulationChange: (presetId) => store.getState().setVizPreset(presetId),
         onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers, hiddenGroups);
 

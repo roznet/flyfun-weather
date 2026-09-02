@@ -38,6 +38,19 @@ export interface VizSettings {
    *  enforcement) deliberately leave it untouched. Persisted with the rest
    *  of vizSettings so the dropdown sticks across reloads. */
   activePreset?: string | null;
+  /** Which tool emulation the cross-section is imitating — GRAMET, Windy,
+   *  ForeFlight — or `null` for our own conventions (#591).
+   *
+   *  Separate from {@link activePreset} because the two answer different
+   *  questions and compose rather than compete: an emulation picks the
+   *  METHODS (Ogimet-NWP icing, natural NWP cloud) and the look, while a lens
+   *  picks WHICH GROUPS are on. A lens asks for "the preferred layer of this
+   *  group", so it resolves through whatever the emulation chose — which is
+   *  why they can both be set at once and mean something sensible.
+   *
+   *  Precedence runs emulation → lens → the user's own toggles, each narrower
+   *  than the last. */
+  activeEmulation?: string | null;
   /** Last cloud style picked from the compound cloud control. Persisted
    *  so re-checking a cloud source after unchecking all keeps the user's
    *  choice instead of snapping back to the default. */

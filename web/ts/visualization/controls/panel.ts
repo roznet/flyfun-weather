@@ -705,7 +705,11 @@ export interface VizControlCallbacks {
   onLayoutChange: (layout: VizLayout) => void;
   onModelChange?: (model: string) => void;
   onThemeChange?: (themeId: string) => void;
+  /** Focus lens — one of the advisory presets, or null for Custom. */
   onPresetChange?: (presetId: string | null) => void;
+  /** Tool emulation — GRAMET / Windy / ForeFlight, or null for our own
+   *  conventions. Separate from the focus lens because they compose (#591). */
+  onEmulationChange?: (presetId: string | null) => void;
   onCloudStyleChange?: (style: 'natural' | 'soft' | 'square') => void;
 }
 
@@ -822,28 +826,42 @@ export function renderVizControls(
     html += `</select>`;
     html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="${t('viz.previewTheme')}">\u{1f441}</button>`;
     html += `</div>`;
-    // Preset selector. Reflection-label model (#219): the dropdown reflects
-    // `settings.activePreset` via `selected`; "Custom" is selected (and is a
-    // non-actionable label for the dirty state) when no preset is active.
-    const presets = getPresets();
-    const advisoryPresets = getAdvisoryPresets();
-    const active = settings.activePreset ?? null;
-    if (presets.length > 0 || advisoryPresets.length > 0) {
-      html += `<div class="viz-theme-selector">`;
-      html += `<span class="viz-toggle-label">${t('viz.preset')}</span>`;
-      html += `<select id="viz-preset-select" class="viz-model-select">`;
-      html += `<option value=""${active === null ? ' selected' : ''}>${t('viz.presetCustom')}</option>`;
-      for (const preset of presets) {
-        html += `<option value="${preset.id}"${preset.id === active ? ' selected' : ''}>${preset.label}</option>`;
-      }
-      if (advisoryPresets.length > 0) {
-        html += `<optgroup label="${t('viz.presetGroupAdvisory')}">`;
-        for (const preset of advisoryPresets) {
-          html += `<option value="${preset.id}"${preset.id === active ? ' selected' : ''}>${advisoryPresetLabel(preset)}</option>`;
+    // Lens: two selectors, because there are two questions (#591).
+    //
+    //   Focus   — what am I looking for  (the advisory lenses)
+    //   Emulate — whose conventions      (GRAMET / Windy / ForeFlight)
+    //
+    // They compose rather than compete: Emulate picks the METHODS and the
+    // look, Focus picks WHICH GROUPS are on, and a lens asking for "the
+    // preferred layer of this group" resolves through whatever Emulate chose.
+    // Splitting them is also what finally gives "Custom" something to be
+    // custom *relative to*.
+    const emulations = getPresets();
+    const focusLenses = getAdvisoryPresets();
+    const activeFocus = settings.activePreset ?? null;
+    const activeEmulation = settings.activeEmulation ?? null;
+    if (focusLenses.length > 0 || emulations.length > 0) {
+      html += `<div class="viz-lens-selector">`;
+      html += `<span class="viz-toggle-label">${t('viz.lens')}</span>`;
+      if (focusLenses.length > 0) {
+        html += `<span class="viz-toggle-sub">${t('viz.lensFocus')}</span>`;
+        html += `<select id="viz-preset-select" class="viz-model-select">`;
+        html += `<option value=""${activeFocus === null ? ' selected' : ''}>${t('viz.presetCustom')}</option>`;
+        for (const preset of focusLenses) {
+          html += `<option value="${preset.id}"${preset.id === activeFocus ? ' selected' : ''}>${escapeHtml(advisoryPresetLabel(preset))}</option>`;
         }
-        html += `</optgroup>`;
+        html += `</select>`;
       }
-      html += `</select></div>`;
+      if (emulations.length > 0) {
+        html += `<span class="viz-toggle-sub">${t('viz.lensEmulate')}</span>`;
+        html += `<select id="viz-emulation-select" class="viz-model-select">`;
+        html += `<option value=""${activeEmulation === null ? ' selected' : ''}>${t('viz.emulateNone')}</option>`;
+        for (const preset of emulations) {
+          html += `<option value="${preset.id}"${preset.id === activeEmulation ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`;
+        }
+        html += `</select>`;
+      }
+      html += `</div>`;
     }
   }
 
@@ -942,12 +960,21 @@ export function renderVizControls(
       showThemePreview(themeId as ThemeId, { cloudStyle: settings.cloudStyle });
     });
   }
-  // Wire preset selector
+  // Wire the two lens selectors. Focus goes through onPresetChange, which
+  // already dispatches advisory presets to the method-resolving path; Emulate
+  // goes through onEmulationChange, which applies theme + methods.
   const vizPresetSelect = container.querySelector('#viz-preset-select') as HTMLSelectElement | null;
   if (vizPresetSelect && callbacks.onPresetChange) {
     const presetCb = callbacks.onPresetChange;
     vizPresetSelect.addEventListener('change', () => {
       presetCb(vizPresetSelect.value || null);
+    });
+  }
+  const vizEmulationSelect = container.querySelector('#viz-emulation-select') as HTMLSelectElement | null;
+  if (vizEmulationSelect && callbacks.onEmulationChange) {
+    const emulationCb = callbacks.onEmulationChange;
+    vizEmulationSelect.addEventListener('change', () => {
+      emulationCb(vizEmulationSelect.value || null);
     });
   }
 

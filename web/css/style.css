@@ -4138,6 +4138,21 @@ html {
   flex: none;
 }
 
+/* Lens: two selectors side by side. Focus is what you are looking for,
+   Emulate is whose conventions you are borrowing — they compose. */
+.viz-lens-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.viz-toggle-sub {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+}
+
 /* Pick-any pills: gapped and rounded, because every layer family is pick-any.
    Two icing models overlaid is a legitimate comparison, not an error. */
 .viz-pills {

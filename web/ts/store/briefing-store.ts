@@ -43,6 +43,24 @@ function loadTierVisibility(): Record<Tier, boolean> {
   return getTierDefaults();
 }
 
+/** Bring a persisted settings blob up to the current shape.
+ *
+ *  `activePreset` used to hold both kinds of preset — the tool emulations
+ *  (GRAMET / Windy / ForeFlight) and the advisory lenses — because there was
+ *  one dropdown for both. Splitting them into Focus and Emulate (#591) means a
+ *  stored emulation has to move to its own field, or every existing user opens
+ *  the page to a Lens reading "Custom" and an Emulate reading "FlyFun" while
+ *  the chart is still drawn GRAMET-style.
+ *
+ *  Exported for test: this runs once per user and is invisible when it fails.
+ */
+export function migrateVizSettings(settings: VizSettings): VizSettings {
+  if (settings.activePreset && getPreset(settings.activePreset)) {
+    return { ...settings, activeEmulation: settings.activePreset, activePreset: null };
+  }
+  return settings;
+}
+
 function loadVizSettings(): VizSettings {
   const defaults: VizSettings = {
     layout: 'cross-section',
@@ -68,18 +86,19 @@ function loadVizSettings(): VizSettings {
     mapForecastOverlayVisible: true,
     mapForecastMetric: 'flight_category',
     activePreset: null,
+    activeEmulation: null,
     activeHighlightAdvisoryId: null,
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
     if (v) {
       const saved = JSON.parse(v);
-      return {
+      return migrateVizSettings({
         ...defaults,
         ...saved,
         enabledLayers: { ...defaults.enabledLayers, ...saved.enabledLayers },
         compareModels: { ...defaults.compareModels, ...saved.compareModels },
-      };
+      });
     }
   } catch { /* ignore */ }
   return defaults;
@@ -655,6 +674,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // manual lens edit, so it drops both the preset label and the highlight.
     const updated = layerId === HIGHLIGHT_LAYER_ID
       ? { ...current, enabledLayers: enabled }
+      // Only the lens goes dirty. The emulation is a look and a method set;
+      // switching one band off does not stop the chart being GRAMET-shaped,
+      // and clearing it here would silently drop the methods the lens
+      // resolves against.
       : { ...current, enabledLayers: enabled, activePreset: null, activeHighlightAdvisoryId: null };
     set({ vizSettings: updated });
     saveVizSettings(updated);
@@ -1175,27 +1198,38 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setVizPreset: (presetId: string | null) => {
-    // Reflection-label model: applying a preset sets activePreset so the
-    // dropdown sticks on it; selecting "Custom" (null) is a no-op label for the
-    // dirty state — it only clears activePreset and leaves layers/theme as-is
-    // (no factory reset).
+    // Tool emulations (GRAMET / Windy / ForeFlight) — they replicate another
+    // tool in BOTH style and method set, so they set the theme and the layers
+    // together and are recorded in `activeEmulation` rather than
+    // `activePreset` (#591). Passing null clears the emulation back to our own
+    // conventions; it is a label change, not a factory reset, so layers and
+    // theme stay as the user left them.
     const current = get().vizSettings;
     if (!presetId) {
-      // Selecting Custom / a bare layer preset drops any advisory highlight (#373).
-      const updated = { ...current, activePreset: null, activeHighlightAdvisoryId: null };
+      // Dropping the emulation also drops any advisory highlight (#373).
+      const updated = { ...current, activeEmulation: null, activeHighlightAdvisoryId: null };
       set({ vizSettings: updated });
       saveVizSettings(updated);
       return;
     }
     const preset = getPreset(presetId);
     if (!preset) return;
-    // Apply preset: override theme + layer enabled state, and record it.
     const themeId = preset.themeId as ThemeId;
     if (themeId in THEMES) {
       setActiveTheme(themeId);
     }
     const enabled = { ...current.enabledLayers, ...preset.enabledLayers };
-    const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId, activePreset: presetId, activeHighlightAdvisoryId: null };
+    // The lens is deliberately left alone: an emulation supplies the methods
+    // and a lens supplies which groups are on, so "GRAMET, focused on icing"
+    // is a view worth having rather than a contradiction. Applying the
+    // emulation first is what makes the lens resolve against its methods.
+    const updated = {
+      ...current,
+      enabledLayers: enabled,
+      vizTheme: preset.themeId,
+      activeEmulation: presetId,
+      activeHighlightAdvisoryId: null,
+    };
     set({ vizSettings: updated });
     saveVizSettings(updated);
     window.dispatchEvent(new Event('theme-changed'));
