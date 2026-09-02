@@ -2,7 +2,11 @@
 
 import type { VizLayout, VizSettings, CompareBandMode, LayerGroup } from '../types';
 import type { DisplayMode } from '../../types/metrics';
-import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
+import {
+  getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset,
+  getLayerFamilies, familySummary, enabledInFamily,
+  type LayerFamily, type LayerFamilyInfo,
+} from '../cross-section/layer-registry';
 import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset, advisoryPresetLabel, advisoryPresetCaption, advisoryPresetInterpretation } from '../cross-section/advisory-presets';
 import {
   CLOUD_LAYER_BY_AXES,
@@ -53,6 +57,10 @@ export interface LayerTogglesOptions {
   /** Layer groups to omit entirely from the toggle list. Used by the
    *  airport-profile drawer to drop the route-only `conditions` group. */
   hiddenGroups?: Set<LayerGroup>;
+  /** Which family's detail row is open, if any. Callers pass the value they
+   *  read back with {@link openFamilyIn} before re-rendering, so a re-render
+   *  triggered by toggling a layer does not close the row you are working in. */
+  openFamily?: LayerFamily | null;
 }
 
 /** Source state derived from which cloud layer ids are currently enabled.
@@ -128,97 +136,200 @@ function cloudCompoundHtml(
   return html;
 }
 
-/** Build the `<div class="viz-layer-toggles">...</div>` block for a set of
- *  enabled-layer states. Used inline by the main toolbar and by
- *  {@link renderLayerToggles} for callers that only want this section. */
-/** Pure HTML builder for the layer panel. Exported so the group-composition
- *  rules can be tested without a DOM — notably that a group with a bespoke
- *  compound control still renders checkboxes for the layers that control does
- *  not own. */
+/** Which family the bar shows expanded, if any. Read back off the DOM rather
+ *  than held in module state: `renderVizControls` replaces the container's
+ *  innerHTML on every settings change, and toggling a layer IS a settings
+ *  change — so without this the detail row would slam shut on every click,
+ *  which is the one thing it must not do. Reading the DOM also keeps the two
+ *  surfaces that render toggles (the briefing toolbar and the airport-profile
+ *  drawer) independent for free. */
+export function openFamilyIn(container: HTMLElement): LayerFamily | null {
+  const el = container.querySelector('.viz-family[aria-expanded="true"]');
+  return (el?.getAttribute('data-family') as LayerFamily) ?? null;
+}
+
+/** Colour the family dot takes — the colour that family paints in, so the bar
+ *  doubles as a key for the chart. Falls back to the ink colour for families
+ *  whose layers are lines of several colours. */
+const FAMILY_DOT: Record<LayerFamily, string> = {
+  clouds: 'var(--xs-dot-cloud)',
+  convection: 'var(--xs-dot-convection)',
+  icing: 'var(--xs-dot-icing)',
+  turbulence: 'var(--xs-dot-turbulence)',
+  levels: 'var(--xs-dot-levels)',
+  stability: 'var(--xs-dot-stability)',
+  observed: 'var(--xs-dot-observed)',
+};
+
+/** Groups that hide entirely when EVERY layer in them is unavailable — front
+ *  detection off or no on-track crossing, no D-0 observations and no observed
+ *  frames. A group of disabled checkboxes is just noise. (Other groups keep
+ *  their layers visible-but-dimmed so alternative methods stay discoverable.)
+ *
+ *  This used to name one layer per group and hide the group when that layer was
+ *  unavailable. Adding the observed-surface layer (#574) to `conditions` made
+ *  that wrong: with no METAR the whole group vanished, taking a perfectly good
+ *  radar layer with it. Now the group hides only when nothing in it is
+ *  available, and individual layers dim as everywhere else. */
+const HIDE_GROUP_WHEN_ALL_UNAVAILABLE: readonly LayerGroup[] = ['fronts', 'conditions'];
+
+/** Render one layer's checkbox, dimmed/disabled/substituted as its
+ *  availability requires. Extracted so the detail row and the compact bar can
+ *  render the same control without drifting apart. */
+function layerCheckboxHtml(
+  layer: { id: string; metricId?: string },
+  label: string,
+  enabledLayers: Record<string, boolean>,
+  unavailableLayers?: Set<string>,
+  substitutedLayers?: Set<string>,
+): string {
+  const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
+  const isSubstituted = !isUnavailable && (substitutedLayers?.has(layer.id) ?? false);
+  const showUnavailable = isUnavailable && !isSubstituted;
+  const checked = isSubstituted || (!showUnavailable && enabledLayers[layer.id] !== false) ? 'checked' : '';
+  const disabled = showUnavailable ? 'disabled' : '';
+  const dimClass = showUnavailable
+    ? ' viz-layer-unavailable'
+    : (isSubstituted ? ' viz-layer-substituted' : '');
+  const tooltip = showUnavailable
+    ? ` title="${t('viz.notAvailableModel')}"`
+    : (isSubstituted ? ` title="${t('viz.substitutedNwp')}"` : '');
+
+  let html = `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
+  html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
+  html += `<span>${label}</span>`;
+  html += `</label>`;
+  if (layer.metricId) {
+    html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
+  } else if (layer.id === 'fronts-markers') {
+    // Fronts have no metric registry entry — show the experimental-feature
+    // explainer instead of metric info.
+    html += `<button class="viz-layer-info-btn" data-front-info="1" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
+  }
+  return html;
+}
+
+/** The families the bar shows, after dropping those the current briefing has
+ *  nothing for. A family whose every group is hidden disappears entirely —
+ *  otherwise the bar offers a chip that opens an empty row. */
+function visibleFamilies(opts: LayerTogglesOptions): LayerFamilyInfo[] {
+  const { unavailableLayers, hiddenGroups } = opts;
+  const hidden = new Set<LayerGroup>(hiddenGroups ?? []);
+  for (const groupId of HIDE_GROUP_WHEN_ALL_UNAVAILABLE) {
+    const group = getLayerGroups().find((g) => g.group === groupId);
+    if (!group || group.layers.length === 0) continue;
+    if (group.layers.every((l) => unavailableLayers?.has(l.id))) hidden.add(groupId);
+  }
+
+  return getLayerFamilies()
+    .map((f) => ({ ...f, groups: f.groups.filter((g) => !hidden.has(g.group)) }))
+    .map((f) => ({ ...f, layers: f.groups.flatMap((g) => g.layers) }))
+    .filter((f) => f.layers.length > 0);
+}
+
+/** The detail row for one family: its groups side by side, each with a faint
+ *  sub-label, running ACROSS the width rather than down a column. That is what
+ *  keeps the expansion at exactly one row whichever family is open (#591). */
+function familyDetailHtml(
+  info: LayerFamilyInfo,
+  enabledLayers: Record<string, boolean>,
+  opts: LayerTogglesOptions,
+): string {
+  const { unavailableLayers, substitutedLayers, cloudStyle } = opts;
+
+  let html = `<div class="viz-layer-detail" data-detail-family="${info.family}">`;
+  html += `<span class="viz-detail-name">`;
+  html += `<span class="viz-family-dot" style="background:${FAMILY_DOT[info.family]}"></span>`;
+  html += `${escapeHtml(info.label)}</span>`;
+
+  for (const group of info.groups) {
+    html += `<span class="viz-detail-sub">${escapeHtml(group.label)}</span>`;
+
+    // The clouds group keeps its compound source-toggles + style dropdown: the
+    // control owns ONLY the NWP/DD cloud-band ids, so any other layer in the
+    // group still needs its own checkbox and falls through to the loop below —
+    // which is how `observed-tops` (#574) once rendered with no way to switch
+    // it off at all.
+    let layers = group.layers;
+    if (group.group === 'clouds') {
+      html += `<span class="viz-detail-group">`;
+      html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle, substitutedLayers);
+      html += `</span>`;
+      layers = layers.filter((l) => !ALL_CLOUD_LAYER_IDS.includes(l.id));
+      if (layers.length === 0) continue;
+    }
+
+    html += `<span class="viz-detail-group">`;
+    for (const layer of layers) {
+      html += layerCheckboxHtml(layer, t('viz.layer.' + layer.id), enabledLayers, unavailableLayers, substitutedLayers);
+    }
+    html += `</span>`;
+  }
+
+  if (GROUP_INFO[info.family]) {
+    html += `<span class="viz-detail-hint">`;
+    html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${info.family}" title="About ${escapeHtml(info.label)}" aria-label="About ${escapeHtml(info.label)}">ⓘ</button>`;
+    html += `</span>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+/** Build the layer bar plus, when a family is open, its detail row.
+ *
+ *  The bar is one line of family chips, each naming what it is currently
+ *  drawing; opening one swaps a single detail row underneath rather than
+ *  stacking a second (#591). In compact mode a chip is a plain on/off and the
+ *  method is the preferred one, which is what `getCompactLayerOverrides()`
+ *  already resolves — there is no detail row at all.
+ *
+ *  Exported so the composition rules can be tested without a DOM.
+ */
 export function layerTogglesHtml(
   enabledLayers: Record<string, boolean>,
   opts: LayerTogglesOptions = {},
 ): string {
-  const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers, hiddenGroups } = opts;
-  // "Feature/context" groups hide entirely when EVERY layer in them is
-  // unavailable — front detection off or no on-track crossing for this model;
-  // no D-0 observations and no observed frames. A group of disabled checkboxes
-  // is just noise. (Other groups keep their layers visible-but-dimmed so
-  // alternative methods stay discoverable.)
-  //
-  // This used to name one layer per group and hide the group when that layer
-  // was unavailable. Adding the observed-surface layer (#574) to `conditions`
-  // made that wrong: with no METAR the whole group vanished, taking a
-  // perfectly good radar layer with it. Now the group hides only when nothing
-  // in it is available, and individual layers dim as everywhere else.
-  const HIDE_GROUP_WHEN_ALL_UNAVAILABLE: readonly LayerGroup[] = ['fronts', 'conditions'];
-  const groups = getLayerGroups();
-  const effectiveHidden = new Set<LayerGroup>(hiddenGroups ?? []);
-  for (const groupId of HIDE_GROUP_WHEN_ALL_UNAVAILABLE) {
-    const group = groups.find((g) => g.group === groupId);
-    if (!group || group.layers.length === 0) continue;
-    if (group.layers.every((l) => unavailableLayers?.has(l.id))) effectiveHidden.add(groupId);
-  }
-  let html = '<div class="viz-layer-toggles">';
-  for (const group of groups) {
-    if (effectiveHidden.has(group.group)) continue;
-    const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
-    const layersToRender = isCompactCollapse
-      ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group], cloudStyle)]
-      : group.layers;
+  const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers } = opts;
+  const compact = displayMode === 'compact';
+  const families = visibleFamilies(opts);
+  const open = compact ? null : (opts.openFamily ?? null);
 
-    html += `<div class="viz-layer-group">`;
-    html += `<span class="viz-group-label">${group.label}:</span>`;
-    if (GROUP_INFO[group.group]) {
-      html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">ⓘ</button>`;
+  let html = '<div class="viz-layer-toggles">';
+  html += '<div class="viz-layer-bar">';
+  html += `<span class="viz-bar-label">${t('viz.layers')}</span>`;
+
+  for (const info of families) {
+    if (compact) {
+      // One on/off per category. The single layer it resolves to is the
+      // group's preferred method, so the decision is already made.
+      const on = enabledInFamily(info, enabledLayers).length > 0;
+      const targets = info.groups
+        .map((g) => getPreferredLayerForGroup(g.group, g.layers, preferredMethods?.[g.group], cloudStyle).id)
+        .join(' ');
+      html += `<button type="button" class="viz-family viz-family-toggle${on ? ' is-on' : ''}"`
+        + ` data-family-toggle="${info.family}" data-family-layers="${targets}" aria-pressed="${on}">`;
+      html += `<span class="viz-family-dot" style="background:${FAMILY_DOT[info.family]}"></span>`;
+      html += `<span class="viz-family-name">${escapeHtml(info.label)}</span>`;
+      html += `</button>`;
+      continue;
     }
-    // Clouds group in non-compact mode: compound source-toggles + style dropdown.
-    //
-    // The compound control owns ONLY the NWP/DD cloud-band ids. Any other
-    // layer that lives in this group still needs its own checkbox, so fall
-    // through to the normal loop for the remainder rather than `continue`ing
-    // past it — which is how `observed-tops` (#574) ended up rendering with no
-    // way to switch it off at all.
-    let layersForGroup = layersToRender;
-    if (group.group === 'clouds' && !isCompactCollapse) {
-      html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle, substitutedLayers);
-      layersForGroup = layersToRender.filter((l) => !ALL_CLOUD_LAYER_IDS.includes(l.id));
-      if (layersForGroup.length === 0) {
-        html += '</div>';
-        continue;
-      }
-    }
-    for (const layer of layersForGroup) {
-      const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
-      // In compact mode the group collapses to its preferred layer; if that's
-      // an NWP layer being served by a DD substitute, show the substitute state
-      // (checked+dimmed) instead of "unavailable" / a plain checkbox.
-      const compactSubId = isCompactCollapse ? getDdSubstituteId(layer.id) : null;
-      const isSubstituted = (compactSubId != null && (substitutedLayers?.has(compactSubId) ?? false))
-        || (!isUnavailable && (substitutedLayers?.has(layer.id) ?? false));
-      const showUnavailable = isUnavailable && !isSubstituted;
-      const checked = isSubstituted || (!showUnavailable && enabledLayers[layer.id] !== false) ? 'checked' : '';
-      const disabled = showUnavailable ? 'disabled' : '';
-      const dimClass = showUnavailable
-        ? ' viz-layer-unavailable'
-        : (isSubstituted ? ' viz-layer-substituted' : '');
-      const tooltip = showUnavailable
-        ? ` title="${t('viz.notAvailableModel')}"`
-        : (isSubstituted ? ` title="${t('viz.substitutedNwp')}"` : '');
-      html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
-      html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
-      html += `<span>${isCompactCollapse ? group.label : t('viz.layer.' + layer.id)}</span>`;
-      html += `</label>`;
-      if (layer.metricId) {
-        html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
-      } else if (layer.id === 'fronts-markers') {
-        // Fronts have no metric registry entry — show the experimental-feature
-        // explainer instead of metric info.
-        html += `<button class="viz-layer-info-btn" data-front-info="1" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
-      }
-    }
-    html += '</div>';
+
+    const summary = familySummary(info, enabledLayers, cloudStyle);
+    const expanded = open === info.family;
+    html += `<button type="button" class="viz-family${summary.off ? ' is-off' : ''}"`
+      + ` data-family="${info.family}" aria-expanded="${expanded}">`;
+    html += `<span class="viz-family-dot" style="background:${FAMILY_DOT[info.family]}"></span>`;
+    html += `<span class="viz-family-name">${escapeHtml(info.label)}</span>`;
+    html += `<span class="viz-family-value">${escapeHtml(summary.text)}</span>`;
+    html += `<span class="viz-family-caret" aria-hidden="true">${expanded ? '⌃' : '⌄'}</span>`;
+    html += `</button>`;
   }
+  html += '</div>';
+
+  const openInfo = open ? families.find((f) => f.family === open) : undefined;
+  if (openInfo) html += familyDetailHtml(openInfo, enabledLayers, opts);
+
   html += '</div>';
   return html;
 }
@@ -281,6 +392,68 @@ function wireCloudCompound(
   });
 }
 
+/** Wire the layer bar: family chips open/close the detail row, compact chips
+ *  toggle a whole family on or off.
+ *
+ *  Opening a family re-renders only the `.viz-layer-toggles` subtree rather
+ *  than asking the caller to re-render everything. Two reasons: the two
+ *  callers pass very different argument sets, and a full re-render would make
+ *  the open row a caller responsibility — which is exactly how it would come
+ *  to slam shut on the next unrelated settings change.
+ */
+function wireLayerBar(
+  container: HTMLElement,
+  enabledLayers: Record<string, boolean>,
+  opts: LayerTogglesOptions,
+  onToggle: (layerId: string) => void,
+  rewire: (root: HTMLElement) => void,
+): void {
+  const rerender = (openFamily: LayerFamily | null): void => {
+    // `container` is the wrapper on first render and the block itself after a
+    // re-render, so accept both rather than assuming one.
+    const block = container.classList.contains('viz-layer-toggles')
+      ? container
+      : container.querySelector('.viz-layer-toggles');
+    if (!block) return;
+    const holder = document.createElement('div');
+    holder.innerHTML = layerTogglesHtml(enabledLayers, { ...opts, openFamily });
+    const next = holder.firstElementChild;
+    if (!next) return;
+    block.replaceWith(next);
+    rewire(next as HTMLElement);
+  };
+
+  container.querySelectorAll<HTMLButtonElement>('[data-family]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const family = btn.dataset.family as LayerFamily;
+      const isOpen = btn.getAttribute('aria-expanded') === 'true';
+      rerender(isOpen ? null : family);
+    });
+  });
+
+  container.querySelectorAll<HTMLButtonElement>('[data-family-toggle]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const family = btn.dataset.familyToggle as LayerFamily;
+      const info = getLayerFamilies().find((f) => f.family === family);
+      if (!info) return;
+
+      if (btn.getAttribute('aria-pressed') === 'true') {
+        // Off: everything currently on in this family goes off.
+        for (const layer of enabledInFamily(info, enabledLayers)) onToggle(layer.id);
+      } else {
+        // On: only the preferred layer of each group, which is the decision
+        // compact mode makes for you.
+        const targets = (btn.dataset.familyLayers ?? '').split(' ').filter(Boolean);
+        for (const id of targets) if (enabledLayers[id] === false) onToggle(id);
+      }
+    });
+  });
+}
+
 /** Wire `data-layer-info` and `data-group-info` buttons inside `container`
  *  to their respective info popups. Used by both the main toolbar and the
  *  standalone {@link renderLayerToggles} so an info ⓘ is interactive
@@ -324,12 +497,30 @@ export function renderLayerToggles(
   onToggle: (layerId: string) => void,
   opts: LayerTogglesOptions = {},
 ): void {
-  container.innerHTML = layerTogglesHtml(enabledLayers, opts);
-  container.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
+  // Carry the open family across the re-render this call performs; without it
+  // every layer toggle would close the row the user is working in.
+  const withOpen: LayerTogglesOptions = { ...opts, openFamily: opts.openFamily ?? openFamilyIn(container) };
+  container.innerHTML = layerTogglesHtml(enabledLayers, withOpen);
+  wireToggleBlock(container, enabledLayers, withOpen, onToggle);
+}
+
+/** Wire everything inside a rendered `.viz-layer-toggles` block: the layer
+ *  checkboxes, the compound clouds control, the ⓘ buttons and the bar itself.
+ *  Called on first render and again after the bar re-renders its own subtree. */
+function wireToggleBlock(
+  root: HTMLElement,
+  enabledLayers: Record<string, boolean>,
+  opts: LayerTogglesOptions,
+  onToggle: (layerId: string) => void,
+): void {
+  root.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
     cb.addEventListener('change', () => onToggle(cb.dataset.layerId!));
   });
-  wireCloudCompound(container, enabledLayers, onToggle, opts.onCloudStyleChange);
-  wireLayerInfoButtons(container);
+  wireCloudCompound(root, enabledLayers, onToggle, opts.onCloudStyleChange);
+  wireLayerInfoButtons(root);
+  wireLayerBar(root, enabledLayers, opts, onToggle, (next) => {
+    wireToggleBlock(next, enabledLayers, opts, onToggle);
+  });
 }
 
 export interface VizControlCallbacks {
@@ -489,11 +680,17 @@ export function renderVizControls(
   // Layer toggles — only when cross-section visible. The HTML is built
   // by `layerTogglesHtml()` (also reused by `renderLayerToggles()` for
   // the airport-profile drawer); change listeners are wired below.
+  const toggleOpts: LayerTogglesOptions = {
+    displayMode, preferredMethods, unavailableLayers, substitutedLayers,
+    cloudStyle: settings.cloudStyle, hiddenGroups,
+    // Read BEFORE the innerHTML assignment below wipes the old markup: every
+    // layer toggle re-renders this whole container, and losing the open family
+    // here is what would make the detail row shut on each click (#591).
+    openFamily: openFamilyIn(container),
+    onCloudStyleChange: callbacks.onCloudStyleChange,
+  };
   if (settings.layout !== 'map') {
-    html += layerTogglesHtml(settings.enabledLayers, {
-      displayMode, preferredMethods, unavailableLayers, substitutedLayers,
-      cloudStyle: settings.cloudStyle, hiddenGroups,
-    });
+    html += layerTogglesHtml(settings.enabledLayers, toggleOpts);
   }
   html += '</div>'; // .viz-toolbar
 
@@ -537,15 +734,9 @@ export function renderVizControls(
     });
   });
 
-  // Wire layer toggles
-  container.querySelectorAll('[data-layer-id]').forEach((checkbox) => {
-    checkbox.addEventListener('change', () => {
-      callbacks.onLayerToggle((checkbox as HTMLInputElement).dataset.layerId!);
-    });
-  });
-
-  // Wire compound clouds control (master + source + style).
-  wireCloudCompound(container, settings.enabledLayers, callbacks.onLayerToggle, callbacks.onCloudStyleChange);
+  // Wire the layer bar, its checkboxes, the compound clouds control and the
+  // ⓘ buttons — all of which re-wire themselves when the bar re-renders.
+  wireToggleBlock(container, settings.enabledLayers, toggleOpts, callbacks.onLayerToggle);
 
   // Wire model selector
   const vizModelSelect = container.querySelector('#viz-model-select') as HTMLSelectElement | null;

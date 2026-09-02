@@ -562,3 +562,60 @@ export function methodsFromPreset(preset: LayerPreset): PresetMethods {
 
   return { preferredMethods, cloudStyle, themeId: preset.themeId };
 }
+
+// --- Bar summaries (#591) ---
+
+/** Short label for the bar, where a family may have to name two layers and a
+ *  render style inside one chip. Falls back to the full panel label, so a
+ *  layer only needs a `viz.layerShort.*` key when its full label is too long
+ *  to sit in a chip ("Cruise / Flight ceiling", "Freezing Level (0°C)"). */
+export function shortLayerLabel(layer: CrossSectionLayer): string {
+  const key = `viz.layerShort.${layer.id}`;
+  const s = t(key);
+  if (s !== key) return s;
+  return t(`viz.layer.${layer.id}`);
+}
+
+/** What a family chip reads on the bar.
+ *
+ *  The rule is the same everywhere: name the answers while they fit — up to
+ *  two, joined with "+" — then fall back to a count. A family with nothing on
+ *  reads `off` rather than an empty chip, so "nothing here" and "I have not
+ *  looked" cannot be confused.
+ *
+ *  Clouds is the one composite: its render style is a qualifier on the source,
+ *  not a third layer, so it reads `NWP + DD · Square` rather than `3 on`. All
+ *  six cloud band ids collapse to their source, since the style is carried
+ *  separately in `vizSettings.cloudStyle`.
+ */
+export function familySummary(
+  info: LayerFamilyInfo,
+  enabledLayers: Record<string, boolean>,
+  cloudStyle?: CloudStyle,
+): { text: string; off: boolean } {
+  const on = enabledInFamily(info, enabledLayers);
+  if (on.length === 0) return { text: t('viz.familyOff'), off: true };
+
+  const names: string[] = [];
+  const sources: string[] = [];
+  for (const layer of on) {
+    const axes = parseCloudLayerId(layer.id);
+    if (axes) {
+      // Collapse the six cloud ids to their source; the style is a qualifier.
+      const src = axes.source.toUpperCase();
+      if (!sources.includes(src)) sources.push(src);
+    } else {
+      names.push(shortLayerLabel(layer));
+    }
+  }
+
+  const parts: string[] = [];
+  if (sources.length > 0) {
+    const style = cloudStyle ?? parseCloudLayerId(on.find((l) => parseCloudLayerId(l.id))!.id)?.style;
+    parts.push(sources.join(' + ') + (style ? ` · ${t(`viz.cloudStyle.${style}`)}` : ''));
+  }
+  if (names.length > 0 && names.length <= 2) parts.push(names.join(' + '));
+  else if (names.length > 2) parts.push(t('viz.familyCount', { n: String(names.length) }));
+
+  return { text: parts.join(' · '), off: false };
+}
