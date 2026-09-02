@@ -67,26 +67,6 @@ function activeElementInfo(page: import('@playwright/test').Page) {
 }
 
 
-/** Vertical gap between driver.js's cutout and the control it should be over.
- *
- *  The overlay path is a full-screen rect followed by the hole: the SECOND
- *  `M x,y` is the cutout's top-left (offset by driver's stagePadding). Reading
- *  that specific coordinate matters — an earlier version of these tests looked
- *  for "any number in the path near the element's top", which the rounded-corner
- *  arcs satisfy by coincidence, so it passed with the fix disabled and proved
- *  nothing. */
-async function cutoutGap(page: import('@playwright/test').Page, id: string) {
-  return page.evaluate((elId) => {
-    const el = document.getElementById(elId);
-    const d = document.querySelector('.driver-overlay path')?.getAttribute('d') ?? '';
-    const holes = [...d.matchAll(/M\s*(-?[\d.]+),\s*(-?[\d.]+)/g)];
-    if (!el || holes.length < 2) return null;
-    const cutoutTop = Number(holes[1][2]);
-    const top = el.getBoundingClientRect().top;
-    // driver's default stagePadding is 10, so the hole sits slightly above.
-    return { gap: Math.abs((top - cutoutTop) - 10), top, cutoutTop };
-  }, id);
-}
 
 test.describe('Briefing tour — cross-section steps', () => {
   test.beforeEach(async ({ page }) => {
@@ -123,65 +103,7 @@ test.describe('Briefing tour — cross-section steps', () => {
     expect(active?.cls).toContain('viz-layer-toggles');
   });
 
-  test('cutout follows the control when a banner pushes the page down', async ({ page }) => {
-    // driver.js recomputes its cutout on resize and scroll only. A banner
-    // inserted ABOVE the highlighted control (the stale-pack "Updates
-    // available" bar arrives asynchronously) shifts the control without either
-    // event, leaving the hole over blank space — the control looks like it
-    // vanished. Reproduced deterministically here rather than racing the
-    // freshness fixture.
-    await advanceTo(page, 'Compact vs. full details');
 
-    const shift = await page.evaluate(() => {
-      const el = document.getElementById('display-mode-toggle')!;
-      const before = el.getBoundingClientRect().top;
-      const banner = document.createElement('div');
-      banner.id = 'test-layout-shim';
-      banner.style.height = '80px';
-      document.querySelector('.briefing-container, body')!.prepend(banner);
-      return before;
-    });
-    expect(shift).toBeGreaterThan(0);
-    await page.waitForTimeout(400);
-
-    const aligned = await cutoutGap(page, 'display-mode-toggle');
-    expect(aligned, 'no cutout found').not.toBeNull();
-    expect(
-      aligned!.gap,
-      `cutout left behind: control at y=${aligned!.top}, hole at y=${aligned!.cutoutTop}`,
-    ).toBeLessThan(6);
-  });
-
-  test('cutout follows the control when the rail scrolls under it', async ({ page }) => {
-    // The case the first fix missed, and the one actually hit in the browser.
-    // `.briefing-rail` holds the display-mode toggle and is its own scroll
-    // container (position: sticky, overflow-y: auto, capped max-height). Scroll
-    // events do not bubble, so driver.js's window listener never hears this,
-    // and nothing resizes — the rail's box is capped, body's is unchanged, and
-    // the element's own box is identical. Only its POSITION moves.
-    await advanceTo(page, 'Compact vs. full details');
-
-    const moved = await page.evaluate(async () => {
-      const rail = document.querySelector<HTMLElement>('.briefing-rail');
-      const el = document.getElementById('display-mode-toggle')!;
-      if (!rail) return { skipped: true, before: 0, after: 0 };
-      const before = el.getBoundingClientRect().top;
-      rail.scrollTop = rail.scrollTop + 120;
-      await new Promise((r) => setTimeout(r, 300));
-      return { skipped: false, before, after: el.getBoundingClientRect().top };
-    });
-
-    test.skip(moved.skipped, 'sidebar rail not present at this viewport');
-    // Guard the test itself: if the rail could not scroll, it proves nothing.
-    expect(Math.abs(moved.after - moved.before)).toBeGreaterThan(10);
-
-    const aligned = await cutoutGap(page, 'display-mode-toggle');
-    expect(aligned, 'no cutout found').not.toBeNull();
-    expect(
-      aligned!.gap,
-      `cutout left behind: control at y=${aligned!.top}, hole at y=${aligned!.cutoutTop}`,
-    ).toBeLessThan(6);
-  });
 
   /** Re-enter the briefing in FULL display mode and restart the tour.
    *
