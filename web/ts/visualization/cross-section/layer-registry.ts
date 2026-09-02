@@ -22,6 +22,7 @@ import {
   squareNwpCloudBandsLayer,
   CLOUD_LAYER_BY_AXES,
   ALL_CLOUD_LAYER_IDS,
+  parseCloudLayerId,
   type CloudSource,
   type CloudStyle,
 } from './layers/cloud-bands-factory';
@@ -501,4 +502,63 @@ export function familyForGroup(group: LayerGroup): LayerFamily | null {
     if (FAMILY_GROUPS[family].includes(group)) return family;
   }
   return null;
+}
+
+// --- Emulation presets read as method choices (#591) ---
+
+/** What an emulation preset (GRAMET / Windy / ForeFlight) actually chooses,
+ *  once you stop reading its layer map as a result and start reading it as an
+ *  intent. */
+export interface PresetMethods {
+  /** Group id → method id, in the vocabulary `getPreferredLayerForGroup` and
+   *  `getCompactLayerOverrides` already take. Clouds carries a bare source. */
+  preferredMethods: Record<string, string>;
+  /** The render style the preset's cloud layer implies, if it enables one. */
+  cloudStyle?: CloudStyle;
+  /** The preset's theme, passed through for convenience. */
+  themeId: string;
+}
+
+/**
+ * Read a preset's explicit `enabledLayers` map back as the method choices it
+ * represents.
+ *
+ * The two lens selectors compose because they answer different questions:
+ * Emulate picks the METHODS (Ogimet-NWP icing, natural NWP cloud, the GRAMET
+ * theme), Focus picks WHICH GROUPS are on. A focus lens never names a method —
+ * it asks for "the preferred layer of this group" — so it resolves through
+ * whatever Emulate chose, and the two cannot contradict each other.
+ *
+ * That only works if an emulation's method choice is legible, and today it is
+ * not: `LayerPreset.enabledLayers` is a flat id→bool map, a *result* rather
+ * than an intent. This derives the intent back out, inverting
+ * `PREFERRED_METHOD_LAYER` rather than restating it so the two can never drift.
+ *
+ * A group the preset leaves entirely off yields no entry — the caller then
+ * falls back to the group's `defaultEnabled`, exactly as
+ * `getPreferredLayerForGroup` already does for a missing preference.
+ */
+export function methodsFromPreset(preset: LayerPreset): PresetMethods {
+  const preferredMethods: Record<string, string> = {};
+
+  for (const [group, methodMap] of Object.entries(PREFERRED_METHOD_LAYER)) {
+    for (const [method, layerId] of Object.entries(methodMap)) {
+      if (preset.enabledLayers[layerId]) {
+        preferredMethods[group] = method;
+        break;   // first enabled wins; presets enable one method per group
+      }
+    }
+  }
+
+  let cloudStyle: CloudStyle | undefined;
+  for (const layerId of ALL_CLOUD_LAYER_IDS) {
+    if (!preset.enabledLayers[layerId]) continue;
+    const axes = parseCloudLayerId(layerId);
+    if (!axes) continue;
+    preferredMethods.clouds = axes.source;
+    cloudStyle = axes.style;
+    break;
+  }
+
+  return { preferredMethods, cloudStyle, themeId: preset.themeId };
 }

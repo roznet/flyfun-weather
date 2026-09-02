@@ -8,6 +8,7 @@ import {
   getPreferredLayerForGroup, getCompactLayerOverrides,
   getPreset, getPresets,
   getLayerFamilies, enabledInFamily, familyForGroup, FAMILYLESS_GROUPS,
+  methodsFromPreset,
 } from '../../ts/visualization/cross-section/layer-registry';
 
 describe('getAllLayers', () => {
@@ -302,5 +303,49 @@ describe('layer families (#591)', () => {
     expect(familyForGroup('sun')).toBe('observed');
     expect(familyForGroup('reference')).toBe('levels');
     for (const g of FAMILYLESS_GROUPS) expect(familyForGroup(g)).toBeNull();
+  });
+});
+
+describe('methodsFromPreset (#591)', () => {
+  it('reads each emulation preset back as the methods it chose', () => {
+    // GRAMET: natural NWP cloud, Ogimet-NWP icing, Ri turbulence, NWP convection.
+    const gramet = methodsFromPreset(getPreset('gramet')!);
+    expect(gramet.preferredMethods).toEqual({
+      clouds: 'nwp', icing: 'ogimet_nwp', turbulence: 'ri', convection: 'nwp',
+    });
+    expect(gramet.cloudStyle).toBe('natural');
+    expect(gramet.themeId).toBe('gramet');
+
+    // Windy differs from GRAMET only in the icing model.
+    const windy = methodsFromPreset(getPreset('windy')!);
+    expect(windy.preferredMethods.icing).toBe('sfip_nwp');
+    expect(windy.preferredMethods.clouds).toBe('nwp');
+
+    // ForeFlight is the all-DD set with square cells.
+    const ff = methodsFromPreset(getPreset('foreflight')!);
+    expect(ff.preferredMethods.clouds).toBe('dd');
+    expect(ff.preferredMethods.icing).toBe('ogimet_dd');
+    expect(ff.cloudStyle).toBe('square');
+  });
+
+  it('feeds straight back into the resolver the focus lens uses', () => {
+    // This is the whole point of the derivation: a focus lens asks for "the
+    // preferred layer of the icing group" and must land on the emulation's
+    // choice, so Emulate and Focus compose instead of fighting.
+    const { preferredMethods, cloudStyle } = methodsFromPreset(getPreset('foreflight')!);
+    const icing = getAllLayers().filter((l) => l.group === 'icing');
+    expect(getPreferredLayerForGroup('icing', icing, preferredMethods.icing).id).toBe('icing-bands');
+
+    const clouds = getAllLayers().filter((l) => l.group === 'clouds');
+    expect(getPreferredLayerForGroup('clouds', clouds, preferredMethods.clouds, cloudStyle).id)
+      .toBe('square-cloud-bands');
+  });
+
+  it('omits a group the preset switches off entirely', () => {
+    // No entry means "no preference" — the resolver then falls back to the
+    // group's defaultEnabled, which is what it already does for a missing key.
+    const stub = { id: 'stub', label: 'Stub', themeId: 'light', enabledLayers: { terrain: true } };
+    expect(methodsFromPreset(stub).preferredMethods).toEqual({});
+    expect(methodsFromPreset(stub).cloudStyle).toBeUndefined();
   });
 });
