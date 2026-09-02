@@ -105,6 +105,49 @@ test.describe('Briefing tour — cross-section steps', () => {
 
 
 
+  test('highlighting a rail control does not collapse it', async ({ page }) => {
+    // The real bug, and the reason it looked intermittent.
+    //
+    // driver.js sets `overflow: hidden !important` on the highlighted
+    // element's parent (`:has(> .driver-active-element)`). A flex item's
+    // `min-height: auto` only resolves to the content size while `overflow` is
+    // `visible` — any other value makes the automatic minimum 0. `.briefing-rail`
+    // is a flex column, so the moment the tour highlighted the Compact/Full
+    // Details toggle its parent `.rail-controls` became shrinkable and an
+    // overflowing rail squeezed it to 0px, clipping the toggle out of sight.
+    //
+    // The precondition is an OVERFLOWING rail, which is why it never showed up
+    // in these tests before: the fixture's rail is short. Force it with a small
+    // viewport.
+    await page.setViewportSize({ width: 1280, height: 500 });
+    await page.waitForTimeout(300);
+
+    const overflowing = await page.evaluate(() => {
+      const rail = document.querySelector('.briefing-rail');
+      return !!rail && rail.scrollHeight > rail.clientHeight;
+    });
+    // Guard the test itself: with a roomy rail it would pass regardless.
+    expect(overflowing, 'rail is not overflowing — test proves nothing').toBe(true);
+
+    await advanceTo(page, 'Compact vs. full details');
+
+    const state = await page.evaluate(() => {
+      const el = document.getElementById('display-mode-toggle')!;
+      const par = el.parentElement!;
+      return {
+        active: el.classList.contains('driver-active-element'),
+        parentH: Math.round(par.getBoundingClientRect().height),
+        elH: Math.round(el.getBoundingClientRect().height),
+      };
+    });
+    expect(state.active, 'toggle is not the highlighted element').toBe(true);
+    expect(state.elH).toBeGreaterThan(0);
+    expect(
+      state.parentH,
+      `.rail-controls collapsed to ${state.parentH}px, clipping the toggle away`,
+    ).toBeGreaterThanOrEqual(state.elH);
+  });
+
   /** Re-enter the briefing in FULL display mode and restart the tour.
    *
    *  Compact is the default, and it has no detail row by design — one on/off
