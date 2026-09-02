@@ -7,6 +7,7 @@ import {
   getAllLayers, getDefaultEnabled, getLayerGroups,
   getPreferredLayerForGroup, getCompactLayerOverrides,
   getPreset, getPresets,
+  getLayerFamilies, enabledInFamily, familyForGroup, FAMILYLESS_GROUPS,
 } from '../../ts/visualization/cross-section/layer-registry';
 
 describe('getAllLayers', () => {
@@ -256,5 +257,50 @@ describe('presets', () => {
     expect(ids).toContain('gramet');
     expect(ids).toContain('windy');
     expect(ids).toContain('foreflight');
+  });
+});
+
+describe('layer families (#591)', () => {
+  it('covers every toggleable group exactly once', () => {
+    // The bar renders families, not groups. A group that belongs to no family
+    // vanishes from the panel with no error at all — which is how a whole
+    // group could ship invisible. Assert coverage rather than trusting review.
+    const owned = getLayerFamilies().flatMap((f) => f.groups.map((g) => g.group));
+    const excluded = new Set<string>(FAMILYLESS_GROUPS);
+
+    for (const g of getLayerGroups()) {
+      if (excluded.has(g.group)) continue;
+      expect(owned, `group '${g.group}' belongs to no family`).toContain(g.group);
+    }
+    expect(new Set(owned).size, 'a group is claimed by two families').toBe(owned.length);
+  });
+
+  it('flattens each family to the layers of the groups it owns', () => {
+    const clouds = getLayerFamilies().find((f) => f.family === 'clouds')!;
+    const ids = clouds.layers.map((l) => l.id);
+    expect(ids).toContain('nwp-cloud-bands');
+    // Obscuration rides with clouds: "is there cloud in the way" is one question.
+    expect(ids).toContain('surface-obscuration-bands');
+    // Cloud tops is an observation, not a cloud source — it stays in Observed.
+    expect(ids).not.toContain('observed-tops');
+
+    const observed = getLayerFamilies().find((f) => f.family === 'observed')!;
+    expect(observed.layers.map((l) => l.id)).toContain('observed-tops');
+  });
+
+  it('reads enabled state the way the checkboxes render it', () => {
+    const levels = getLayerFamilies().find((f) => f.family === 'levels')!;
+    // Absent means ON, matching `enabledLayers[id] !== false` in layerTogglesHtml —
+    // if these two ever disagree the bar's summary lies about the boxes below it.
+    expect(enabledInFamily(levels, {}).map((l) => l.id)).toContain('freezing-level');
+    expect(enabledInFamily(levels, { 'freezing-level': false }).map((l) => l.id))
+      .not.toContain('freezing-level');
+  });
+
+  it('maps a group back to its owning family', () => {
+    expect(familyForGroup('obscuration')).toBe('clouds');
+    expect(familyForGroup('sun')).toBe('observed');
+    expect(familyForGroup('reference')).toBe('levels');
+    for (const g of FAMILYLESS_GROUPS) expect(familyForGroup(g)).toBeNull();
   });
 });

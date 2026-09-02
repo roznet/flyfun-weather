@@ -395,3 +395,110 @@ function panelOrdered(group: LayerGroup, layers: CrossSectionLayer[]): CrossSect
   };
   return [...layers].sort((a, b) => rank(a.id) - rank(b.id));
 }
+
+// --- Families (#591) ---
+
+/**
+ * A family is one control on the layer bar: a question the pilot asks, which
+ * may span more than one registry group. Clouds owns the cloud sources *and*
+ * surface obscuration, because "is there cloud in the way" is one question.
+ * Observed owns the instruments, the sun shading and the front markers,
+ * because they are all "what is actually out there right now".
+ *
+ * `LayerGroup` stays the finer tier — a family renders one sub-heading per
+ * group it owns, in the order listed in {@link FAMILY_GROUPS}.
+ */
+export type LayerFamily =
+  | 'clouds'
+  | 'convection'
+  | 'icing'
+  | 'turbulence'
+  | 'levels'
+  | 'stability'
+  | 'observed';
+
+/** Family → the groups it owns, in detail-row reading order.
+ *
+ *  `terrain` and `highlight` are deliberately absent: terrain force-renders and
+ *  has no toggle at all, and the highlight is driven by an active advisory
+ *  rather than by the user. Every *other* group must appear exactly once — a
+ *  group missing from here would vanish from the bar with no error, so the
+ *  tests assert this map covers them all. */
+const FAMILY_GROUPS: Record<LayerFamily, LayerGroup[]> = {
+  clouds: ['clouds', 'obscuration'],
+  convection: ['convection'],
+  icing: ['icing'],
+  turbulence: ['turbulence'],
+  levels: ['temperature', 'reference'],
+  stability: ['stability'],
+  observed: ['conditions', 'sun', 'fronts'],
+};
+
+/** Groups that intentionally belong to no family. Kept explicit so the
+ *  completeness test can tell "excluded on purpose" from "forgotten". */
+export const FAMILYLESS_GROUPS: readonly LayerGroup[] = ['terrain', 'highlight'];
+
+/** Bar order, left to right. Sky first, then hazards, then the reference lines
+ *  and ground truth — roughly the order a pilot interrogates a cross-section. */
+const FAMILY_ORDER: readonly LayerFamily[] = [
+  'clouds', 'convection', 'icing', 'turbulence', 'levels', 'stability', 'observed',
+];
+
+export interface LayerFamilyInfo {
+  family: LayerFamily;
+  label: string;
+  /** Sub-questions, one per owned group, in detail-row order. Groups with no
+   *  registered layers are dropped rather than rendering an empty heading. */
+  groups: LayerGroupInfo[];
+  /** Every layer in the family, flattened. The bar summarises over this. */
+  layers: CrossSectionLayer[];
+}
+
+/** Localized family label, falling back to the English literal when the
+ *  translation key is absent (mirrors `advisoryPresetLabel`). */
+function familyLabel(family: LayerFamily): string {
+  const key = `viz.family.${family}`;
+  const s = t(key);
+  if (s !== key) return s;
+  return family.charAt(0).toUpperCase() + family.slice(1);
+}
+
+/** The layer bar's model: families in bar order, each carrying its groups. */
+export function getLayerFamilies(): LayerFamilyInfo[] {
+  const groups = getLayerGroups();
+  const byGroup = new Map<LayerGroup, LayerGroupInfo>();
+  for (const g of groups) byGroup.set(g.group, g);
+
+  return FAMILY_ORDER.map((family) => {
+    const owned = FAMILY_GROUPS[family]
+      .map((g) => byGroup.get(g))
+      .filter((g): g is LayerGroupInfo => g != null && g.layers.length > 0);
+    return {
+      family,
+      label: familyLabel(family),
+      groups: owned,
+      layers: owned.reduce<CrossSectionLayer[]>((acc, g) => acc.concat(g.layers), []),
+    };
+  }).filter((f) => f.layers.length > 0);
+}
+
+/** The layers of a family that are currently on.
+ *
+ *  Reads `enabledLayers` exactly the way `layerTogglesHtml` renders its
+ *  checkboxes — absent means ON — so the bar's summary can never disagree with
+ *  the boxes underneath it. `getDefaultEnabled()` populates every id, so the
+ *  sparse case only arises for a layer added since the state was persisted. */
+export function enabledInFamily(
+  info: LayerFamilyInfo,
+  enabledLayers: Record<string, boolean>,
+): CrossSectionLayer[] {
+  return info.layers.filter((l) => enabledLayers[l.id] !== false);
+}
+
+/** Which family owns a group, or null for the deliberately family-less ones. */
+export function familyForGroup(group: LayerGroup): LayerFamily | null {
+  for (const family of FAMILY_ORDER) {
+    if (FAMILY_GROUPS[family].includes(group)) return family;
+  }
+  return null;
+}
