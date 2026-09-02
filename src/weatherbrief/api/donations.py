@@ -1238,12 +1238,17 @@ def get_nudge(
         # pay a query per page load for an answer that is already decided.
         report = _cached_report(db) if eligible_since is not None else None
         cpum = economics_from_report(report).cost_per_user_month_usd if report else 0.0
-        # The ledger sum is a cheap SQL aggregate and is always >= the true
-        # cost (it amortizes over an estimate at or below actual volume, then
-        # adds 10% margin), so a pilot whose *ledger* total misses the lowest
-        # rung certainly misses it on the true basis too — and we skip parsing
-        # their breakdown rows entirely.
-        if cpum > 0 and _ledger_cost(db, viewer_id) >= nudge.RUNGS[0] * cpum:
+        # Skip the per-row breakdown parse for pilots who cannot have crossed
+        # the lowest rung. The test is a true *ceiling* on their cost (see
+        # _true_cost_ceiling) — a bound that holds whatever the rate card says,
+        # rather than the ledger sum alone, which is only above the true cost
+        # while the volume estimate sits under actual volume.
+        if cpum > 0:
+            ledger_cost, ledger_rows = _ledger_cost_and_count(db, viewer_id)
+            ceiling = _true_cost_ceiling(ledger_cost, ledger_rows, report)
+        else:
+            ceiling = 0.0
+        if cpum > 0 and ceiling >= nudge.RUNGS[0] * cpum:
             stats = user_usage_stats(db, viewer_id, report)
             true_cost = stats.footprint.true_cost_usd
 
@@ -1275,23 +1280,60 @@ def get_nudge(
     )
 
 
-def _ledger_cost(db: Session, user_id: str) -> float:
-    """The pilot's charged lifetime briefing cost — one SQL SUM, no JSON parse.
+def _ledger_cost_and_count(db: Session, user_id: str) -> tuple[float, int]:
+    """``(charged lifetime briefing cost, briefing count)`` — one SQL aggregate.
 
-    A deliberately cheap **upper bound** on their true cost, used only to skip
-    the per-row breakdown parse for pilots who cannot possibly have crossed the
-    lowest rung.
+    Both halves feed the cheap upper bound in :func:`_true_cost_ceiling`; the
+    count is what lets the fixed share be computed without parsing a single
+    breakdown row.
     """
-    return float(
-        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
+    total, count = (
+        db.query(
+            func.coalesce(func.sum(CostLedgerRow.cost), 0.0),
+            func.count(CostLedgerRow.id),
+        )
         .filter(
             CostLedgerRow.user_id == user_id,
             CostLedgerRow.service == SERVICE,
             CostLedgerRow.category == "briefing",
         )
-        .scalar()
-        or 0.0
+        .one()
     )
+    return float(total or 0.0), int(count or 0)
+
+
+def _true_cost_ceiling(
+    ledger_cost: float, briefings: int, report: ProgramCostReport | None
+) -> float:
+    """A cheap upper bound on a pilot's true cost, from aggregates only.
+
+    ``true_cost = variable + fixed_share``. The fixed share is computed exactly
+    here (the same ``fixed_monthly / briefings_per_month`` basis
+    :func:`user_usage_stats` uses, times the pilot's briefing count), and
+    ``variable <= ledger_cost`` because the ledger charges variable plus a
+    non-negative amortized fixed share plus a non-negative margin. So
+    ``ledger_cost + fixed_share >= true_cost``, always.
+
+    **This replaces a bound that was not one.** The previous filter compared the
+    ledger sum alone against the rung, on the stated assumption that the ledger
+    "is always >= the true cost". That is not an invariant — it holds only while
+    ``estimated_monthly_briefings`` sits at or below actual volume. Prod runs
+    1600 against ~1632, a 2% margin, and a seasonal ~20% dip in winter flying is
+    enough to invert it: at 1000 briefings/month the ledger charges ~$0.228 per
+    briefing against a true ~$0.301. The filter would then skip pilots who
+    genuinely crossed a rung, and the nudge would quietly under-fire with
+    nothing in the logs. On the dev database (estimate 500, actual ~19/month)
+    the inversion is total: a pilot with a $96 ledger sum and a $2,670 true cost
+    was silently refused.
+    """
+    if report is None or briefings <= 0:
+        return ledger_cost
+    scale = 30.0 / report.window_days if report.window_days else 0.0
+    briefings_per_month = report.num_briefings * scale
+    if briefings_per_month <= 0 or report.fixed_monthly_usd <= 0:
+        return ledger_cost
+    fixed_share = (report.fixed_monthly_usd / briefings_per_month) * briefings
+    return ledger_cost + fixed_share
 
 
 def _own_briefing_headline(db: Session, user_id: str) -> tuple[int, datetime | None]:

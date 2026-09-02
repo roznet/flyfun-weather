@@ -872,6 +872,79 @@ class TestNudgeEndpoint:
         assert state["tier_asked"] == 1.5
 
 
+class TestNudgePrefilterCeiling:
+    """The cheap pre-filter must be a real ceiling, not an assumption.
+
+    The gate skips the per-row breakdown parse for a pilot who cannot have
+    crossed the lowest rung. That skip used to compare the *ledger sum* alone,
+    on the stated premise that the ledger is always above the true cost — true
+    only while ``estimated_monthly_briefings`` sits at or below actual volume.
+    Invert that and the filter silently refuses pilots who genuinely qualify,
+    with nothing in the logs.
+    """
+
+    def _seed_low_volume(self, session_factory):
+        """A rate card estimating far more volume than the program has.
+
+        Proportions chosen so the ledger sum lands *below* the K=1.5 rung while
+        the true cost lands well above it — the exact window the old filter got
+        wrong. 10 pilots, 130 briefings/month against an estimate of 500: the
+        ledger charges $0.16 a briefing (fixed amortized over 500, plus 30%
+        margin) where the true share is $0.43 (fixed over the real 130). Dev
+        pilot: $6.40 charged, $17.67 real, against an $8.61 threshold.
+
+        The dev database is the extreme of the same inversion (estimate 500,
+        ~19 briefings a month: $96 charged against $2,670 real), and prod
+        reaches it from a seasonal dip in flying below the estimate.
+        """
+        s = session_factory()
+        s.add(CostConfigRow(active_from=datetime.now(timezone.utc),
+                            config_json=DEFAULT_CONFIG.to_json()))
+        detail = json.dumps({"token_cost_usd": 0.01, "storage_cost_usd": 0.001})
+        now = datetime.now(timezone.utc)
+        dev = s.get(UserRow, DEV_USER_ID)
+        dev.created_at = now - timedelta(days=200)
+
+        def _ledger(uid, when):
+            return CostLedgerRow(
+                user_id=uid, service=SERVICE, action="briefing", cost=0.16,
+                category="briefing", description="Briefing",
+                detail_json=detail, created_at=when,
+            )
+
+        for i in range(40):
+            s.add(_ledger(DEV_USER_ID, now - timedelta(days=i % 28)))
+        for u in range(9):
+            uid = f"lowvol-{u}"
+            s.add(UserRow(id=uid, provider="local", provider_sub=uid,
+                          email=f"{uid}@x", display_name=uid, approved=True))
+            for i in range(10):
+                s.add(_ledger(uid, now - timedelta(days=i)))
+        for f in range(6):
+            s.add(BriefingUsageRow(
+                user_id=DEV_USER_ID, flight_id=f"flight-{f}",
+                timestamp=now - timedelta(days=199),
+            ))
+        s.commit()
+        s.close()
+
+    def test_a_pilot_whose_ledger_understates_true_cost_still_gets_asked(
+        self, make_client, session_factory
+    ):
+        self._seed_low_volume(session_factory)
+        usage = make_client().get("/api/donations/me").json()["usage"]
+        # The premise: assert it, so the test cannot quietly stop testing this.
+        assert usage["true_cost_usd"] > usage["ledger_cost_usd"], (
+            "seed no longer inverts the bound; the regression is untested"
+        )
+
+        body = make_client().get("/api/donations/nudge").json()
+        assert body["show"] is True, (
+            f"ledger-only pre-filter refused an eligible pilot: {body['reason']}"
+        )
+        assert body["kind"] == "evergreen"
+
+
 class TestNudgeDonationClosesAsk:
     """A donation mid-ask must close the ask *through the real endpoint order*.
 
