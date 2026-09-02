@@ -905,6 +905,41 @@ def terrain_at_distance(
     return p0.elevation_ft + frac * (p1.elevation_ft - p0.elevation_ft)
 
 
+def max_terrain_between(
+    elevation: ElevationProfile | None,
+    from_nm: float,
+    to_nm: float,
+) -> float | None:
+    """Highest terrain (ft) under the along-route span ``[from_nm, to_nm]``.
+
+    The span-scoped sibling of :func:`terrain_at_distance`. Exists because a
+    route-wide ``max_elevation_ft`` is the wrong floor for advice about one
+    stretch of the route: on LFMD→EGTF the Alps at departure floored a
+    below-base descent over flat northern France 300 nm later at 8,000 ft
+    (issue #593). Advice scoped to a segment must be floored by that segment's
+    own terrain.
+
+    Both endpoints are included by interpolation, so a span shorter than the
+    elevation sampling still returns a real number rather than ``None``.
+    Returns ``None`` only when no profile is available at all — the caller
+    decides what an unknown floor means.
+    """
+    if elevation is None or not elevation.points:
+        return None
+    lo, hi = (from_nm, to_nm) if from_nm <= to_nm else (to_nm, from_nm)
+    highest = max(
+        (pt.elevation_ft for pt in elevation.points if lo <= pt.distance_nm <= hi),
+        default=None,
+    )
+    # The endpoints matter as much as the samples between them, and a span
+    # narrower than the sampling interval contains none of them.
+    for edge in (lo, hi):
+        at_edge = terrain_at_distance(elevation, edge)
+        if at_edge is not None:
+            highest = at_edge if highest is None else max(highest, at_edge)
+    return highest
+
+
 def max_terrain_near_point(
     elevation: ElevationProfile | None,
     distance_nm: float,

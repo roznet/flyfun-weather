@@ -12,6 +12,7 @@ from typing import Literal, NamedTuple
 from weatherbrief.analysis.route_geometry import (
     EMPTY_EXTENT,
     RouteExtent,
+    cell_edges,
     route_extent,
 )
 from weatherbrief.models import (
@@ -1570,6 +1571,66 @@ def character_extent(
         [p.assessed for p in points],
         speed_kt=speed_kt,
     )
+
+
+class ConvCluster(NamedTuple):
+    """One contiguous along-track run of realized convective cells (#593).
+
+    A route is not one weather system. On LFMD→EGTF 2026-08-27 a mid-route
+    system was genuinely flyable underneath while a *different* system hours
+    later at the arrival end was not, and any route-wide below-base test
+    answers "no" for the whole flight on account of the second one. A cluster
+    is the unit that question can honestly be asked about.
+
+    ``indices`` index into the ``points`` the cluster was built from (and so,
+    for points built by ``build_character_points``, into ``ctx.analyses``).
+    ``dist_from_nm`` / ``dist_to_nm`` are the run's extent on the shared
+    :func:`cell_edges` geometry — the same convention the coverage band and the
+    EMBEDDED contiguity gate measure on, so the miles a per-cluster mitigation
+    prints cannot describe different geometry from the miles that graded it.
+    """
+
+    indices: tuple[int, ...]
+    dist_from_nm: float
+    dist_to_nm: float
+
+
+def convective_clusters(
+    points: Sequence[ConvCharPoint], total_distance_nm: float | None
+) -> list[ConvCluster]:
+    """Split the realized cells into maximal contiguous along-track runs (#593).
+
+    Contiguity is the *index* run of consecutive realized cells, the same
+    convention :func:`route_extent` measures ``longest_run_nm`` with — one
+    definition of "contiguous along-track run" in this module rather than two.
+    Deliberately no gap tolerance: a bridged gap would be miles the cluster
+    claims but was never tested, and fragmenting a system is the conservative
+    direction (each fragment must clear the below-base geometry on its own).
+    Callers that dislike the fragmentation fold neighbouring runs back together
+    *after* testing them, which asserts nothing untested.
+
+    Returns ``[]`` when nothing realizes, matching the classifier's
+    ``realized == 0`` short-circuit: no cells, no clusters.
+    """
+    if not points:
+        return []
+    lefts, rights = cell_edges(
+        _char_distances(points, total_distance_nm or 0.0), total_distance_nm or 0.0
+    )
+    clusters: list[ConvCluster] = []
+    run: list[int] = []
+    for i, p in enumerate(points):
+        if p.is_convective and p.realized:
+            run.append(i)
+            continue
+        if run:
+            clusters.append(
+                ConvCluster(tuple(run), lefts[run[0]], rights[run[-1]])
+            )
+            run = []
+    if run:
+        clusters.append(ConvCluster(tuple(run), lefts[run[0]], rights[run[-1]]))
+    return clusters
 
 
 def _is_embedded_cell(p: ConvCharPoint) -> bool:

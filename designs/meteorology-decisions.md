@@ -4268,3 +4268,146 @@ geometry rather than a replay. Before trusting the behaviour change:
 - Spot-check a model whose `surface_pressure` comes from GRIB rather than
   Open-Meteo (ICON-D2, ECMWF a1) that the anchor lands in the same datum as
   the reconstructed geopotential heights of §20.
+
+---
+
+## 30. The below-base VFR escape is asked per convective cluster, not per route
+
+**Date:** 2026-09-02
+**Issue:** #593
+**Context:** `below_base_escape` (#298 geometry, swept over altitude and consumed
+by `vfr_feasibility` as an advice-only mitigation) was landed, unit-tested, wired
+in — and never fired on a real route.
+
+### The failure
+
+`_below_base_geometry` took the whole route at once:
+
+```python
+realized = [p for p in points if p.is_convective and p.realized]
+...
+if any(cruise_ft >= p.convective_base_ft for p in resolved):
+    return _BelowBase("within_layer")
+```
+
+To be "below the cells" you had to be below **every** resolved cell base on the
+entire flight. On a long route crossing more than one system that is essentially
+never satisfiable, and the sweep answered `within_layer` at every candidate
+altitude for every model.
+
+Pilot-flown ground truth, LFMD→EGTF 2026-08-27 at FL180 (pack
+`lfmd_…_egtf_2026-08-27_d0_…` in eval staging):
+
+- **200–300 nm:** a large system that was genuinely circumnavigable and flyable
+  underneath — the pilot flew just below the cloud around FL150.
+- **Arrival end:** a *different* system hours later, handled by being ready to
+  divert, with ECMWF towers based at **1,466 ft and 1,963 ft** (ICON 1,732 ft).
+
+The arrival towers condemned every candidate level for the whole flight. Dumping
+the full ladder confirmed it: every altitude, every model, `geom=within_layer`.
+
+### Decision
+
+**A route is not one weather system, so the question is asked per system.**
+`convective_clusters` (in `analysis/sounding/convective.py`, beside the other
+`ConvCharPoint` reducers) splits the realized cells into maximal contiguous
+along-track runs, and `below_base_escapes` runs the below-base geometry over each
+cluster's points instead of over the route.
+
+Four sub-decisions, three of them the issue's own open questions:
+
+**(a) Contiguity has no gap tolerance.** A cluster is the index run of
+consecutive realized cells — the same convention `route_extent` measures
+`longest_run_nm` with, so this module has one definition of "contiguous
+along-track run" rather than two. Bridging a gap would claim miles the geometry
+was never tested over. Fragmenting a system is the conservative direction (each
+fragment must clear on its own), and the fragments are folded back together
+*after* testing, which asserts nothing untested: `_merge_same_level` merges
+neighbouring clusters that resolved to the same altitude, taking the tightest
+base and margin. The band needs no merging — it is route-wide, so two escapes at
+one altitude necessarily share it.
+
+**(b) The terrain floor is per cluster** (open question 1: yes). The route-wide
+`max_elevation_ft` floored the ground-truth flight at 8,000 ft because of the
+Alps *at departure* — a bound that says nothing about how low a pilot may fly
+under a system over flat northern France 300 nm later. The advice is now scoped
+to a stretch of the route, so `mitigation_min_base_agl_ft` is measured above that
+stretch's own terrain (`max_terrain_between`, the span-scoped sibling of
+`terrain_at_distance`). `_merge_same_level` re-checks the combined span before
+folding two clusters together, because a col between them can be higher than
+either. `_candidate_altitudes` keeps the route-wide floor as its default — the
+EMBEDDED tip (§26d) is one level for the whole flight, where that *is* the right
+bound.
+
+**(c) Only `clear` qualifies, never `marginal`** (open question 2: no). The
+buffer is what makes see-and-avoid real. The ladder is stepped at 500 ft, so a
+`marginal` level normally has a `clear` one a step below and loses nothing; where
+it does not, the reason is the terrain floor — and shaving the buffer against the
+ground is precisely the wrong direction, especially given (e) below.
+
+**(d) One mitigation per cluster** (open question 3), each naming the miles it
+applies to, carrying a single-segment `MitigationProfile` over that span. Not a
+whole-route profile: the transitions to and from cruise are the pilot's to plan,
+and the below-base test is not a per-point cost `vertical_profile.solve` could
+propose one from — the same limit §26d documents.
+
+**(e) The offered level still names the base it came from.** Modelled convective
+bases read low — grossly so for ICON on the ground-truth flight, less so for GFS
+— which makes the offered level conservative. A pilot needs the number it was
+derived from to check it against what they can actually see, so `base_fl` stays
+in the rendered string alongside the altitude and the miles.
+
+### What this deliberately does NOT change
+
+**The band half stays route-wide.** An escape still requires both halves: the
+cluster's geometry reads `clear` **and** the character band re-derived at that
+level is in `AVOIDABLE_BANDS`. The band is a property of the whole flight ("are
+there gaps to fly through at all"), it is what the character card publishes, and
+re-deriving it over a cluster alone would be meaningless — a cluster is
+contiguous cells, so its internal realized coverage is 100 % and every cluster
+would read WIDESPREAD. Only `embedded` moves with altitude, which is exactly the
+mechanism that must be allowed to veto a descent into a deck.
+
+The consequence is a residual coupling in the same family as the bug fixed here:
+a *second* cluster whose cells are hidden in a deck makes the route re-derive
+EMBEDDED at the candidate level, and no cluster is offered an escape even though
+the first one's geometry is clear. That is a defensible answer ("you cannot see
+the cells on part of this route"), and it is pinned by
+`test_an_embedded_route_refuses_every_cluster` so a future change to it is a
+decision rather than an accident.
+
+**No mitigation changes any grade.** Unchanged from the `Mitigation` contract:
+the card grades the filed cruise, and the *altitude table* is what shows the
+flight becoming feasible lower down, since `build_character_points` is already
+altitude-parameterised and the table sweeps it.
+
+**The annotate-only clearance note is untouched.** `_below_base_geometry` still
+renders its route-wide `within_layer` / `deck` / `unresolved` / `clear` /
+`marginal` phrase on ISOLATED/SCATTERED cards (§15/#298). It answers a different
+question — "where is your *filed* cruise relative to the cells" — and a filed
+cruise is one altitude for the whole route.
+
+### Where the code is
+
+- `analysis/sounding/convective.py` — `ConvCluster`, `convective_clusters`.
+- `analysis/advisories/convective_character.py` — `below_base_escapes` (replacing
+  `below_base_escape`), `_cluster_floor_ft`, `_merge_same_level`;
+  `BelowBaseEscape` gains `dist_from_nm` / `dist_to_nm`; `_candidate_altitudes`
+  gains a `floor_ft` override.
+- `analysis/advisories/_helpers.py` — `max_terrain_between`.
+- `analysis/advisories/vfr_feasibility.py` — emits one tip per cluster.
+- `analysis/advisories/strings.py` — `vfr.mitigation.below_base` now names the
+  miles as well as the altitude and the base.
+- Tests: `tests/analysis/advisories/test_vfr_convective_axis.py` —
+  `TestBelowBaseEscape` (two clusters where only one escapes, the WIDESPREAD and
+  EMBEDDED band refusals, the per-cluster terrain floor, the merge's terrain
+  re-check) and `TestTheEscapeIsAdviceOnly` (grades identical with and without
+  the tip).
+
+### Real-world validation needed
+
+The unit tests are constructed geometry. Before trusting the behaviour change,
+replay the ground-truth pack and confirm a below-base mitigation is offered for
+the mid-route cluster, is **not** offered for the arrival-end cluster, and that
+the offered level is plausible against the pilot's ~FL150 — remembering that the
+modelled bases read low, so the tip is expected to be conservative.

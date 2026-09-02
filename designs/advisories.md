@@ -556,6 +556,21 @@ to `[]`, so old packs deserialize cleanly.
 `vfr_feasibility.py` emits the cloud/corridor tips below. A consumer builds a
 hazard→cost `CostModel` and reads the returned profile; the same solver backs both.
 
+Two more `ALTITUDE` producers sit outside the solver, because their gates are
+route-level and non-additive so they cannot be expressed as a per-point cost:
+`convective_character.py`'s EMBEDDED climb-or-descend tip (§26d, above) and
+`vfr_feasibility.py`'s `addresses="convective_below_base"` — "could I fly this
+VFR *underneath* the cells?". The latter is emitted **one per convective
+cluster** (`below_base_escapes`, #593/§30): the below-base geometry used to be
+tested over the whole route, so a single low-based cell anywhere condemned every
+altitude and the tip never appeared on a real flight. Each tip names the miles it
+covers, the level, and the modelled base it was derived from (bases read low, so
+the level is conservative and the pilot needs its provenance), is floored by that
+cluster's own terrain rather than the route's highest, and carries a
+single-segment `MitigationProfile` over the cluster span. Offered only when the
+composite's convective axis is the thing being flagged, and only for a level
+strictly below planned cruise — climbing over convection is not a VFR answer.
+
 **Worked example — `vfr_feasibility.py`.** Two generators:
 - `_vertical_mitigation` → `ALTITUDE`, `addresses="cruise_imc"`: scans downward
   from cruise to a terrain floor (`max_terrain + _TERRAIN_CLEARANCE_FT`, 1000 ft),
