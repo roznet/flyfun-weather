@@ -8,7 +8,9 @@ import {
   getAdvisoryPreset, getAdvisoryPresets, isAdvisoryPreset,
   getPresetForAdvisory, resolveAdvisoryPreset, advisoryPresetInterpretation,
 } from '../../ts/visualization/cross-section/advisory-presets';
-import { getAllLayers } from '../../ts/visualization/cross-section/layer-registry';
+import {
+  getAllLayers, getCompactLayerOverrides, METHOD_GROUPS,
+} from '../../ts/visualization/cross-section/layer-registry';
 import { ROUTE_GRAPH_METRICS, METRIC_NONE } from '../../ts/visualization/route-graph/metrics';
 import { MAP_METRICS, MAP_METRIC_NONE } from '../../ts/visualization/route-map/metrics';
 import { SKEWT_OVERLAYS } from '../../ts/visualization/skewt/overlay-bands';
@@ -221,7 +223,42 @@ describe('Skew-T directives (#308)', () => {
     expect(view.skewtOverlays!['convective']).toBe(true);
   });
 
-  it('Basic/Learn resolves to all overlay bands OFF (no hazard shading)', () => {
+  it('Basic/Learn turns on exactly what compact mode resolves to', () => {
+    // "Basic shows one of each" and "compact shows one of each" have to mean
+    // the same thing, or the lens quietly becomes a different view from the
+    // one the compact bar shows. Both read METHOD_GROUPS and both resolve
+    // through getPreferredLayerForGroup, so this pins the equivalence rather
+    // than two lists agreeing by luck.
+    //
+    // Checked across two different method profiles so it cannot pass just
+    // because both happen to land on the defaults.
+    for (const [methods, cloudStyle] of [
+      [{}, 'square'],
+      [{ icing: 'ogimet_dd', turbulence: 'e_shear', convection: 'thermo', clouds: 'dd' }, 'soft'],
+    ] as const) {
+      const compact = getCompactLayerOverrides(methods, cloudStyle);
+      const basic = resolveAdvisoryPreset(getAdvisoryPreset('basic')!, methods, cloudStyle);
+
+      expect(Object.keys(compact).length).toBeGreaterThan(0);
+      for (const [id, on] of Object.entries(compact)) {
+        expect(basic.enabledLayers![id], `"${id}" differs between Basic and compact`).toBe(on);
+      }
+    }
+  });
+
+  it('Basic/Learn shows one method per family, never two', () => {
+    const view = resolveAdvisoryPreset(getAdvisoryPreset('basic')!, {});
+    for (const group of METHOD_GROUPS) {
+      const on = getAllLayers()
+        .filter((l) => l.group === group && view.enabledLayers![l.id])
+        .map((l) => l.id);
+      expect(on, `family "${group}" should show exactly one layer`).toHaveLength(1);
+    }
+    // ...and the 0 °C line it is read against.
+    expect(view.enabledLayers!['freezing-level']).toBe(true);
+  });
+
+  it('Basic/Learn leaves the Skew-T overlay bands off', () => {
     const view = resolveAdvisoryPreset(getAdvisoryPreset('basic')!, {});
     // skewtOverlays is present (empty array → clean slate), every band off
     expect(view.skewtOverlays).toBeDefined();

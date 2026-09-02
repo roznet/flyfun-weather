@@ -130,6 +130,22 @@ const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
   convection: { thermo: 'thermo-convective-bg', nwp: 'nwp-convective-bg' },
 };
 
+/** The groups that are a CHOICE OF METHOD rather than a feature switch: each
+ *  holds several ways of computing the same thing, so exactly one of them is
+ *  "the preferred one" and the rest are alternatives.
+ *
+ *  Derived from {@link PREFERRED_METHOD_LAYER} rather than restated, plus
+ *  clouds — whose preferred value is a bare source composed with the render
+ *  style, so it is keyed separately. Compact mode collapses exactly these, and
+ *  the Basic/Learn lens turns on exactly these; both read this list, so the two
+ *  cannot drift apart into "compact shows one of each, Basic shows something
+ *  slightly different".
+ */
+export const METHOD_GROUPS: readonly LayerGroup[] = [
+  'clouds',
+  ...(Object.keys(PREFERRED_METHOD_LAYER) as LayerGroup[]),
+];
+
 /** Map a preferred clouds value — a bare source (`dd` / `nwp`), including the
  *  backend's `nwp_synthesized` which renders on the NWP band — to a concrete
  *  {@link CloudSource}. Returns null for an empty/unknown value. */
