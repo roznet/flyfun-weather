@@ -58,9 +58,9 @@ Horizon caveat
 --------------
 TEMSI is short-range: the observed window runs from roughly one hour behind to
 three hours ahead of now. A briefing built the day before a flight will have
-**no** TEMSI covering it. :func:`select_cycle_for_time` returns None rather
-than silently handing back a chart valid at the wrong time, and callers must
-render that as "no chart for this window", never as a stale chart.
+**no** TEMSI covering it. :func:`list_options_for_time` returns an empty list
+rather than silently reaching for a chart valid at the wrong time, and callers
+must render that as "no chart for this window", never as a stale chart.
 """
 
 from __future__ import annotations
@@ -463,8 +463,6 @@ def evict_cycles_older_than(data_dir: Path, *, max_age_hours: float) -> list[str
 # Selection
 # ---------------------------------------------------------------------------
 
-# Half the 3h validity spacing: beyond this a chart is closer to describing a
-# neighbouring validity than the one asked for.
 #: How far either side of the ETD a validity may sit and still be worth showing.
 #:
 #: This started at 1h30 — half the 3h spacing, i.e. "do we hold the chart that
@@ -510,42 +508,6 @@ def list_options_for_time(
                 found.append((gap, zone_rank[zone], zone, run_cycle))
     found.sort()
     return [(zone, run_cycle) for _, _, zone, run_cycle in found]
-
-
-def select_cycle_for_time(
-    data_dir: Path,
-    target: datetime,
-    *,
-    chart_id: str | None = None,
-    max_gap: timedelta = MAX_VALIDITY_GAP,
-) -> str | None:
-    """Cached validity closest to ``target``, or None if none is close enough.
-
-    Unlike the DWD/Met Office ``select_default_chart_id`` (which picks a
-    forecast offset *within* a run), Météo-France selection picks the *cycle*,
-    because here the cycle is the valid time.
-
-    Returns None when the nearest cached validity is further than ``max_gap``
-    away. TEMSI's horizon is ~3h, so for most briefing lead times that is the
-    normal answer, not an error — callers must show "no chart for this window"
-    rather than reaching for the closest chart regardless of age.
-
-    ``chart_id`` restricts the search to cycles where that zone's bytes are
-    actually on disk, so a selection never points at a chart that would 410.
-    """
-    best: tuple[timedelta, str] | None = None
-    for run_cycle in list_cycles(data_dir):
-        valid = parse_run_cycle_dt(run_cycle)
-        if valid is None:
-            continue
-        if chart_id is not None and resolve_chart_path(data_dir, run_cycle, chart_id) is None:
-            continue
-        gap = abs(valid - target)
-        if gap > max_gap:
-            continue
-        if best is None or gap < best[0]:
-            best = (gap, run_cycle)
-    return best[1] if best else None
 
 
 # ---------------------------------------------------------------------------

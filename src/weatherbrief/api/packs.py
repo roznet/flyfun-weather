@@ -4493,16 +4493,7 @@ def get_dwd_chart_overlay(
 
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
-    waypoints: list[tuple[str, float, float]] = []
-    briefing_path = pack_dir / "briefing.json"
-    if briefing_path.exists():
-        try:
-            data = json_mod.loads(briefing_path.read_text())
-            for wp in (data.get("route") or {}).get("waypoints") or []:
-                if "icao" in wp and "lat" in wp and "lon" in wp:
-                    waypoints.append((wp["icao"], float(wp["lat"]), float(wp["lon"])))
-        except (json_mod.JSONDecodeError, OSError, TypeError, ValueError):
-            logger.warning("Failed to parse briefing.json for overlay", exc_info=True)
+    waypoints = _pack_waypoints(pack_dir)
 
     if not waypoints:
         # No briefing.json or no waypoints in it — pack predates the
@@ -4592,16 +4583,7 @@ def get_metoffice_chart_overlay(
 
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
-    waypoints: list[tuple[str, float, float]] = []
-    briefing_path = pack_dir / "briefing.json"
-    if briefing_path.exists():
-        try:
-            data = json_mod.loads(briefing_path.read_text())
-            for wp in (data.get("route") or {}).get("waypoints") or []:
-                if "icao" in wp and "lat" in wp and "lon" in wp:
-                    waypoints.append((wp["icao"], float(wp["lat"]), float(wp["lon"])))
-        except (json_mod.JSONDecodeError, OSError, TypeError, ValueError):
-            logger.warning("Failed to parse briefing.json for MO overlay", exc_info=True)
+    waypoints = _pack_waypoints(pack_dir)
 
     if not waypoints:
         raise HTTPException(

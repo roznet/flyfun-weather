@@ -28,7 +28,7 @@ from weatherbrief.fetch.meteofrance_charts import (
     refresh_charts,
     resolve_chart_path,
     route_licence_allows,
-    select_cycle_for_time,
+    list_options_for_time,
 )
 
 _CODE = "TESTCODE00"
@@ -299,46 +299,51 @@ def test_refresh_evicts_beyond_keep(tmp_path: Path):
 
 
 @responses.activate
-def test_select_cycle_picks_nearest_validity(tmp_path: Path):
+def test_options_are_ordered_nearest_first(tmp_path: Path):
+    """The first entry is what the picker opens on, so order is load-bearing."""
     _register(["20260831120000", "20260831150000"])
     refresh_charts(tmp_path)
 
     def at(hour, minute=0):
         return datetime(2026, 8, 31, hour, minute, tzinfo=timezone.utc)
 
-    assert select_cycle_for_time(tmp_path, at(12, 10)) == "2026-08-31T12Z"
-    assert select_cycle_for_time(tmp_path, at(14, 30)) == "2026-08-31T15Z"
+    # 12:10 — the 12Z pair is 10 min away, the 15Z pair 2h50. France leads each
+    # pair: it is the low-level chart most GA flights are actually flown inside.
+    assert list_options_for_time(tmp_path, at(12, 10)) == [
+        ("france", "2026-08-31T12Z"), ("euroc", "2026-08-31T12Z"),
+        ("france", "2026-08-31T15Z"), ("euroc", "2026-08-31T15Z"),
+    ]
+    assert list_options_for_time(tmp_path, at(14, 30))[0] == ("france", "2026-08-31T15Z")
 
 
 @responses.activate
-def test_select_cycle_returns_none_beyond_horizon(tmp_path: Path):
-    """TEMSI's horizon is ~3h; a next-day flight gets no chart, not a stale one."""
+def test_no_options_beyond_the_horizon(tmp_path: Path):
+    """A next-day flight gets no chart rather than a stale one."""
     _register(["20260831120000"])
     refresh_charts(tmp_path)
     tomorrow = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
-    assert select_cycle_for_time(tmp_path, tomorrow) is None
+    assert list_options_for_time(tmp_path, tomorrow) == []
 
 
 @responses.activate
-def test_select_cycle_gap_boundary(tmp_path: Path):
+def test_option_window_boundary(tmp_path: Path):
     _register(["20260831120000"])
     refresh_charts(tmp_path)
     valid = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
-    assert select_cycle_for_time(tmp_path, valid + MAX_VALIDITY_GAP) == "2026-08-31T12Z"
-    assert select_cycle_for_time(
+    assert list_options_for_time(tmp_path, valid + MAX_VALIDITY_GAP) != []
+    assert list_options_for_time(
         tmp_path, valid + MAX_VALIDITY_GAP + timedelta(minutes=1),
-    ) is None
+    ) == []
 
 
 @responses.activate
-def test_select_cycle_skips_cycles_missing_that_zone(tmp_path: Path):
-    """A selection must never point at bytes that would 410."""
+def test_options_skip_zones_whose_bytes_are_gone(tmp_path: Path):
+    """An option must never point at bytes that would 410."""
     _register(["20260831120000"])
     refresh_charts(tmp_path)
     resolve_chart_path(tmp_path, "2026-08-31T12Z", "euroc").unlink()
     at = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
-    assert select_cycle_for_time(tmp_path, at, chart_id="france") == "2026-08-31T12Z"
-    assert select_cycle_for_time(tmp_path, at, chart_id="euroc") is None
+    assert list_options_for_time(tmp_path, at) == [("france", "2026-08-31T12Z")]
 
 
 # ---------------------------------------------------------------------------
