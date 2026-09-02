@@ -733,7 +733,11 @@ class TestCompositeRegionProvenance:
         )
         result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
         towers = [
-            r for r in self._regions(result) if r.kind in ("tower", "tower_unresolved")
+            r for r in self._regions(result)
+            # All three convective geometry kinds (#592): the borrowed-bounds
+            # `tower_estimated` carries the same provenance contract as the
+            # other two, so listing only two would silently stop covering it.
+            if r.kind in ("tower", "tower_estimated", "tower_unresolved")
         ]
         assert towers, "expected flagged convective towers"
         assert all(r.metric_id == "convective_risk" for r in towers)

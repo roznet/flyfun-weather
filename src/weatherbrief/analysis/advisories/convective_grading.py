@@ -390,16 +390,30 @@ def grade_convective_model(
         # both a missing NWP top and a shallow NWP top below the DD EL,
         # otherwise a quiet/shallow NWP top would filter out a point graded by a
         # DD tower that does reach cruise.
-        check_top_ft = conv.top_ft
+        #
+        # #592 — this is the FILTER input, and it is deliberately no longer the
+        # same variable as the geometry drawn below. One value was doing two
+        # jobs: "does this convection reach my cruise level?" is meteorological
+        # grading, "how deep is the drawn box?" is rendering. Widening the
+        # geometry resolution (below) to stop 38 % of flagged points drawing as
+        # full-column ghosts must not move a single grade, so the gate here —
+        # ``graded_risk != conv.risk_level``, i.e. only when the DD floor
+        # modified the grade — stays exactly as it was. Opening THIS gate is a
+        # real policy change ("use the deeper of the model's and the
+        # thermodynamic top when testing whether convection reaches cruise");
+        # it is defensible, it moves ~1.4 % of graded rows, and it belongs in
+        # meteorology-decisions as its own dated decision with the replay
+        # evidence — not smuggled in behind a rendering fix.
+        filter_top_ft = conv.top_ft
         if thermo_conv is not None and graded_risk != conv.risk_level:
             thermo_top = thermo_conv.top_ft
-            if check_top_ft is None or (
-                thermo_top is not None and thermo_top > check_top_ft
+            if filter_top_ft is None or (
+                thermo_top is not None and thermo_top > filter_top_ft
             ):
-                check_top_ft = thermo_top
+                filter_top_ft = thermo_top
         if (
-            check_top_ft is not None
-            and check_top_ft + top_clearance_ft <= cruise_ft
+            filter_top_ft is not None
+            and filter_top_ft + top_clearance_ft <= cruise_ft
         ):
             below_cruise_count += 1
             # Tops below cruise (with clearance) → not a hazard at cruise →
@@ -428,42 +442,71 @@ def grade_convective_model(
                 max_precip_mm_h or 0.0, conv.convective_precip_mm_h
             )
 
-        # Highlight geometry for this flagged point (#373).
+        # Highlight geometry for this flagged point (#373), resolved
+        # INDEPENDENTLY of the filter input above (#592). Each missing bound is
+        # filled from the thermo track whenever the thermo track has it, with no
+        # gate on whether the DD floor moved the grade — the old gate meant a
+        # plain ``active_track`` point (the model says "convection here" without
+        # publishing bounds) drew a terrain-to-top ghost while complete
+        # base+top sat unread two fields away in the same sounding. Measured
+        # over the eval corpus that was 1,666 of 2,413 ghosts (69 %).
+        #
+        # Fill the gap, never override: a bound the model published is the
+        # model's own claim about its own storm and stands. Only the missing
+        # side is borrowed, so this can widen a box from "unknown" to "known",
+        # never contradict the model.
         severity = HighlightSeverity.RED if is_high else HighlightSeverity.AMBER
         ribbon_points.append((dist, severity))
-        # Base from the same resolution as the top (model base, thermo-LFC
-        # fallback when the DD floor raised the grade).
-        check_base_ft = conv.base_ft
-        if (
-            check_base_ft is None
-            and thermo_conv is not None
-            and graded_risk != conv.risk_level
-        ):
-            check_base_ft = thermo_conv.base_ft
-        # A "tower" cutout requires BOTH base and top resolved. A known top with
+        geometry_base_ft = conv.base_ft
+        geometry_top_ft = conv.top_ft
+        # Did any DRAWN bound come from a track other than the graded one? Under
+        # ``dd_fallback`` (and an explicit thermo request) ``conv`` *is* the
+        # thermo assessment, so there is no second source and nothing is ever
+        # borrowed — the flag stays False and the box reads as the plain tower
+        # it is.
+        borrowed_from_thermo = False
+        if thermo_conv is not None:
+            if geometry_base_ft is None and thermo_conv.base_ft is not None:
+                geometry_base_ft = thermo_conv.base_ft
+                borrowed_from_thermo = True
+            if geometry_top_ft is None and thermo_conv.top_ft is not None:
+                geometry_top_ft = thermo_conv.top_ft
+                borrowed_from_thermo = True
+        # A bounded cutout requires BOTH base and top resolved. A known top with
         # an unknown base must NOT render as a solid box down to terrain — the
         # client draws base=None to the ground, which would imply a base the
         # model doesn't have and erase the tower/ghost distinction. So fall back
-        # to the full-column ghost whenever either bound is missing.
-        # The convective track that actually sourced this geometry — "nwp" /
-        # "thermo" under the CAPE fallback (#408). Deliberately NOT compounded
-        # when the thermo floor raised the grade: the floor changes the
-        # severity, not where the evidence came from, so the chip selects the
-        # layer the evidence is drawn from.
+        # to the depth-unknown marker whenever either bound is still missing.
+        # The GRADED convective track — "nwp" / "thermo" under the CAPE fallback
+        # (#408). Deliberately NOT compounded when the thermo floor raised the
+        # grade: the floor changes the severity, not the track. Where the drawn
+        # bounds came from somewhere else, ``kind`` says so (#592) — the two are
+        # read together, and ``method_id`` alone is not the geometry's source.
         conv_method = sounding.convective_method_effective
-        if check_top_ft is not None and check_base_ft is not None:
+        if geometry_top_ft is not None and geometry_base_ft is not None:
+            # ``tower_estimated`` — a box on an NWP-graded point at least one of
+            # whose bounds was borrowed from the thermodynamics. Mixing methods
+            # inside one drawn shape without saying so is the same honesty
+            # problem as an unmarked ``dd_trigger``, so the kind carries it:
+            # the depth is an estimate, and the layer that holds the evidence
+            # for it is Thermo Convective, not the graded track (#592, #593).
             region_cells.append((dist, FlaggedCell(
-                kind="tower",
+                kind="tower_estimated" if borrowed_from_thermo else "tower",
                 severity=severity,
-                base_ft=int(check_base_ft),
-                top_ft=int(check_top_ft),
+                base_ft=int(geometry_base_ft),
+                top_ft=int(geometry_top_ft),
                 reason_code=reason,
                 metric_id="convective_risk",
                 method_id=conv_method,
             )))
         else:
-            # Depth-unresolved (nwp_precip / cover-only, or a resolved top with
-            # unknown base): full-column ghost.
+            # Depth-unknown (nwp_precip / cover-only with no thermo bounds to
+            # borrow, or the ``dd_fallback`` track's own missing EL). Still a
+            # region — the point IS flagged and the pilot must see where — but
+            # base/top stay None and the renderers draw a narrow depth-unknown
+            # marker for it, never a terrain-to-top rectangle: a full-height box
+            # is the strongest possible claim about vertical extent, made
+            # exactly where there is the least information.
             region_cells.append((dist, FlaggedCell(
                 kind="tower_unresolved",
                 severity=severity,

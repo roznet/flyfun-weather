@@ -231,8 +231,20 @@ one job:
 
 - **Scrim (focus, 2D)** — a translucent dim wash over the plot with cutouts punched
   out where the hazard physically is, each framed by a thin severity-colored
-  outline. Dimming means "not the focus", never a verdict. **No scrim at all when
-  nothing is flagged** (the all-green case — never dim a clean chart).
+  outline — dashed when the region's depth is an estimate borrowed from another
+  analysis track (`tower_estimated`, #592). Dimming means "not the focus", never a
+  verdict. **No scrim at all when nothing is flagged** (the all-green case — never
+  dim a clean chart), nor when every region is depth-unknown (see below): dimming
+  the whole chart to spotlight nothing is worse than not dimming it.
+- **Depth-unknown regions (#592)** — a `tower_unresolved` region says "a cell is
+  here, depth unknown", which is *not* "the hazard fills the column". It punches
+  nothing and draws no box; it marks its position with a short dashed stub on the
+  plot floor and lets the ribbon carry the verdict. A terrain-to-top rectangle is
+  the strongest possible claim about vertical extent, made exactly where there is
+  the least information, and it read as a rendering bug (tall empty boxes over
+  clear sky). The genuinely full-column kinds (`precip_column`,
+  `freezing_precip_column` — the rain reaches the ground) still draw
+  terrain-to-top.
 - **Verdict ribbon (judgement, 1D)** — a ~6px strip in the bottom margin (below
   `plotArea.bottom`, above the distance labels) partitioning the whole route into
   green/amber/red/gray(unavailable). Renders even all-green (an explicit "checked:
@@ -265,7 +277,9 @@ the client only renders it. Data path & state:
 - **Rendering** (`layers/highlight-layer.ts`): registered last (top of stack) in a new
   `highlight` `LayerGroup`. The scrim composes on an **offscreen canvas** (fill wash →
   `destination-out` punch cutouts → draw onto main → stroke severity outlines) so
-  `destination-out` never erases the sky/axes beneath (compare-mode precedent). The
+  `destination-out` never erases the sky/axes beneath (compare-mode precedent);
+  depth-unknown stubs are stroked afterwards, on the main canvas, so the wash never
+  dims them. The
   ribbon draws in the bottom margin, so the layer sets `clipToPlot: false` (honored by
   the render loop in `renderer.ts`). Severity colors come from the advisory-status CSS
   vars (`--red`/`--amber`/`--green`, theme-aware); unavailable = neutral gray; the dim

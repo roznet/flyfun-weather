@@ -180,15 +180,36 @@ class HighlightRegion(BaseModel):
 
     A region is a spotlight the scrim punches out of its dim wash, framed by a
     severity-colored outline. Emitted only for flagged (AMBER/RED) areas — a
-    clean chart gets no scrim at all. ``base_ft``/``top_ft`` both ``None`` means
-    a full column (terrain-to-top), e.g. a depth-unresolved convective ghost.
+    clean chart gets no scrim at all.
+
+    ``base_ft``/``top_ft`` both ``None`` means the region has **no vertical
+    extent to draw**, and what the renderers do with it depends on ``kind``:
+
+    - a genuinely full-column hazard (``precip_column``, ``freezing_precip_column``
+      — rain reaches the ground, the column IS the hazard) draws terrain-to-top;
+    - ``tower_unresolved`` means *depth unknown*, not depth infinite: the point
+      is flagged, but neither track published bounds for it. It draws as a
+      narrow depth-unknown marker, never a terrain-to-top rectangle — a
+      full-height box is the strongest possible claim about vertical extent,
+      made exactly where there is the least information (#592).
     """
 
     dist_from_nm: float
     dist_to_nm: float
     base_ft: int | None = None   # None (both) = full column
     top_ft: int | None = None
-    kind: str                    # stable machine token, e.g. "cruise_imc", "tower"
+    # Stable machine token for the geometry class, e.g. "cruise_imc", "tower".
+    # Convective towers split three ways on where the DRAWN bounds came from:
+    #   ``tower``            both bounds are the graded track's own
+    #   ``tower_estimated``  at least one bound was borrowed from the thermo
+    #     track because the graded (NWP) track did not publish it (#592). The
+    #     depth is an estimate and the evidence for it lives on the *Thermo
+    #     Convective* layer, not the graded one — so a chip that routes on
+    #     ``method_id`` alone would send the pilot to a layer that is empty
+    #     here. Rendered with a dashed outline, and the token a dual-layer
+    #     selector keys on (#593).
+    #   ``tower_unresolved`` neither track has both bounds: depth unknown.
+    kind: str
     severity: HighlightSeverity  # amber | red (cutouts are only emitted for flagged areas)
     # Stable, non-localised provenance tokens (#393). All additive and
     # legacy-safe — old packs deserialize with them absent:
@@ -230,7 +251,10 @@ class HighlightRegion(BaseModel):
     #     "ogimet_nwp" / "sfip_nwp", convection "nwp" / "thermo". Never a compound
     #     token: when the convective thermo floor raises a quiet NWP grade it moves
     #     the severity, not the source, so the region still reads "nwp" — the
-    #     geometry a chip draws is the NWP track's. ``None`` for the evaluators
+    #     grade moved, the track did not. Where the *drawn bounds* came from a
+    #     different track than this one names, ``kind`` says so
+    #     (``tower_estimated``, #592) — read the two together rather than taking
+    #     ``method_id`` as the geometry's source. ``None`` for the evaluators
     #     with no user-selectable method axis (turbulence, mountain_wind, precip).
     reason_code: str | None = None
     metric_id: str | None = None

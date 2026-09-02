@@ -10,6 +10,7 @@
 
 import Testing
 import Foundation
+import SwiftUI
 @testable import flyfun_weather
 
 // MARK: - Builders
@@ -295,5 +296,74 @@ private let sampleHighlights = AdvisoryHighlights(
             region(40, 50, kind: "tower"),          // kind break
         ])
         #expect(merged.count == 5)
+    }
+}
+
+// MARK: - Depth-unknown + estimated geometry (#592)
+
+/// A `tower_unresolved` region means "a cell is here, depth unknown", which is
+/// NOT "the hazard fills the column". It used to render as a terrain-to-top
+/// rectangle: the strongest possible claim about vertical extent, drawn exactly
+/// where the least is known, and it read as a rendering bug (tall empty boxes
+/// over clear sky). SYNC: the web renderer's `highlight-layer.test.ts` pins the
+/// same rules — keep the two in lockstep.
+@Suite struct HighlightDepthUnknownTests {
+
+    private let transform = CoordTransform(
+        size: CGSize(width: 800, height: 400), maxDistanceNm: 700, maxAltitudeFt: 30000)
+
+    private func region(
+        _ from: Double, _ to: Double,
+        base: Double? = nil, top: Double? = nil,
+        kind: String, severity: String = "red"
+    ) -> VizAdvisoryHighlights.Region {
+        .init(distFromNm: from, distToNm: to, baseFt: base, topFt: top,
+              kind: kind, severity: severity)
+    }
+
+    @Test func depthUnknownRegionsAreNotSpotlights() {
+        #expect(HighlightLayer.isDepthUnknown(region(100, 200, kind: "tower_unresolved")))
+    }
+
+    @Test func genuinelyFullColumnKindsStillDrawAsRects() {
+        // `precip_column` / `freezing_precip_column` are full-column BY
+        // DEFINITION (rain reaches the ground) — the depth-unknown rule must not
+        // swallow them.
+        #expect(!HighlightLayer.isDepthUnknown(region(100, 200, kind: "precip_column")))
+        #expect(!HighlightLayer.isDepthUnknown(region(100, 200, kind: "freezing_precip_column")))
+        #expect(!HighlightLayer.isDepthUnknown(
+            region(100, 200, base: 3000, top: 9000, kind: "tower")))
+    }
+
+    @Test func markerIsAShortStubRootedOnThePlotFloor() {
+        let box = HighlightLayer.depthUnknownMarker(
+            for: region(100, 200, kind: "tower_unresolved"), transform: transform).boundingRect
+        let plot = transform.plotArea
+        #expect(box.maxY == plot.bottom)                                  // rooted
+        #expect(box.height == HighlightLayer.depthUnknownStubHeight)      // a stub…
+        #expect(box.height < plot.height / 4)                             // …not a column
+        #expect(box.width == 0)                                           // vertical
+        #expect(abs(box.midX - transform.distanceToX(150)) < 0.001)       // at mid-x
+    }
+
+    @Test func estimatedDepthIsOutlinedDashed() {
+        // A tower at least one of whose bounds was borrowed from the thermo
+        // track is an estimate, and says so; the model's own box stays solid.
+        #expect(!HighlightLayer.outlineDash(
+            for: region(0, 10, base: 3000, top: 32000, kind: "tower_estimated")).isEmpty)
+        #expect(HighlightLayer.outlineDash(
+            for: region(0, 10, base: 3000, top: 9000, kind: "tower")).isEmpty)
+        #expect(HighlightLayer.outlineDash(
+            for: region(0, 10, base: 3000, top: 9000, kind: "icing_band")).isEmpty)
+    }
+
+    @Test func mergeKeepsEstimatedAndModelOwnTowersApart() {
+        // `kind` is part of the merge key, so an estimated run abutting a
+        // model-own run cannot be merged into one solid box.
+        let merged = HighlightLayer.mergedRegions([
+            region(0, 10, base: 3000, top: 32000, kind: "tower"),
+            region(10, 20, base: 3000, top: 32000, kind: "tower_estimated"),
+        ])
+        #expect(merged.count == 2)
     }
 }
