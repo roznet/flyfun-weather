@@ -152,6 +152,26 @@ describe('layer bar (#591)', () => {
     expect(html).not.toContain('data-layer-id=');
   });
 
+  it('keeps every default line when a non-method family is switched back on', () => {
+    // Only METHOD groups collapse to one layer. `temperature` (0/−10/−20 °C)
+    // and `stability` (LCL/LFC/EL) are sets of independent lines, all
+    // default-on, so collapsing them to `getPreferredLayerForGroup`'s single
+    // answer meant toggling the chip off and on again silently dropped −10/−20
+    // and LFC/EL — with no detail row in compact to get them back, in the
+    // DEFAULT display mode.
+    const html = layerTogglesHtml({}, { displayMode: 'compact' });
+    const targetsFor = (family: string) => {
+      const at = html.indexOf(`data-family-toggle="${family}"`);
+      const chip = html.slice(at, html.indexOf('</button>', at));
+      return (chip.match(/data-family-layers="([^"]*)"/)?.[1] ?? '').split(' ').filter(Boolean);
+    };
+
+    expect(targetsFor('levels')).toEqual(
+      expect.arrayContaining(['freezing-level', 'minus-10c', 'minus-20c', 'cruise-altitude']),
+    );
+    expect(targetsFor('stability')).toEqual(expect.arrayContaining(['lcl', 'lfc', 'el']));
+  });
+
   it('points a compact chip at the preferred method, not at everything', () => {
     const html = layerTogglesHtml({}, {
       displayMode: 'compact',

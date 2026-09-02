@@ -410,11 +410,22 @@ export function layerTogglesHtml(
 
   for (const info of families) {
     if (compact) {
-      // One on/off per category. The single layer it resolves to is the
-      // group's preferred method, so the decision is already made.
+      // One on/off per category, with the method decision already made.
+      //
+      // Only a METHOD group collapses to a single layer — those hold several
+      // ways of computing the same thing, so exactly one is right. A group
+      // that is a set of independent lines does not: `temperature` has
+      // 0/−10/−20 °C and `stability` has LCL/LFC/EL, all default-on, and
+      // `getPreferredLayerForGroup` returns just the first default-on layer it
+      // finds. Collapsing those the same way meant switching the chip off and
+      // on again silently dropped −10 °C/−20 °C and LFC/EL — unrecoverably,
+      // since compact has no detail row to get them back, and compact is the
+      // default mode.
       const on = enabledInFamily(info, enabledLayers).length > 0;
       const targets = info.groups
-        .map((g) => getPreferredLayerForGroup(g.group, g.layers, preferredMethods?.[g.group], cloudStyle).id)
+        .flatMap((g) => (COMPACT_GROUPS.has(g.group)
+          ? [getPreferredLayerForGroup(g.group, g.layers, preferredMethods?.[g.group], cloudStyle).id]
+          : g.layers.filter((l) => l.defaultEnabled).map((l) => l.id)))
         .join(' ');
       html += `<button type="button" class="viz-family viz-family-toggle${on ? ' is-on' : ''}"`
         + ` data-family-toggle="${info.family}" data-family-layers="${targets}" aria-pressed="${on}">`;
