@@ -529,7 +529,11 @@ async function init(): Promise<void> {
         return;
       }
     }
-    store.getState().setVizPreset(presetId);
+    // Focus → "Custom" clears the LENS label only. It must not touch
+    // `activeEmulation`: picking Custom in one selector silently dropping the
+    // other selector's choice — and with it the methods the lens resolves
+    // against — is exactly the confusion the split was meant to end.
+    store.getState().markVizCustom();
   }
 
   // Advisory-card chip handler: resolve the advisory's preset (with any
@@ -2026,7 +2030,12 @@ async function init(): Promise<void> {
         onPresetChange: (presetId) => handlePresetChange(presetId),
         // Emulation applies theme + method set; the focus lens above then
         // resolves against those methods rather than the graded defaults.
-        onEmulationChange: (presetId) => store.getState().setVizPreset(presetId),
+        // FlyFun (null) is not an absence — it applies OUR conventions, which
+        // are the methods this briefing graded with, one layer per family.
+        onEmulationChange: (presetId) => store.getState().setVizPreset(
+          presetId,
+          presetId ? undefined : getCompactLayerOverrides(preferredMethods, state.vizSettings.cloudStyle),
+        ),
         onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers, hiddenGroups);
 
