@@ -160,6 +160,20 @@ describe('layer bar (#591)', () => {
     expect(html).toContain('data-family-layers="icing-bands"');
   });
 
+  it('keeps a family whose groups are only partly hidden', () => {
+    // The airport-profile drawer hides `conditions` (route-only) but not `sun`
+    // or `fronts`, both of which live in the same family. Dropping Observed
+    // wholesale there would take working toggles with it — the same shape of
+    // bug #574 fixed at group level, one tier up.
+    const html = layerTogglesHtml({}, {
+      hiddenGroups: new Set(['conditions' as const, 'highlight' as const]),
+      openFamily: 'observed',
+    });
+    expect(html).toContain('data-family="observed"');
+    expect(hasToggle(html, 'night-shading')).toBe(true);
+    expect(hasToggle(html, 'current-conditions')).toBe(false);
+  });
+
   it('drops a family whose every group is hidden', () => {
     // Otherwise the bar offers a chip that opens an empty row.
     const stability = layersInGroup('stability');
