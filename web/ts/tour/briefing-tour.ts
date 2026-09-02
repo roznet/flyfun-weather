@@ -188,38 +188,52 @@ function buildSteps(): DriveStep[] {
 
 let activeDriver: Driver | null = null;
 let layerToggleUnsub: (() => void) | null = null;
-let layoutShiftObserver: ResizeObserver | null = null;
+let layoutShiftFrame: number | null = null;
+let lastHighlightRect: string | null = null;
 
-// driver.js recomputes its cutout on `resize` and `scroll` only. Anything that
-// changes the page's layout WITHOUT either — the stale-pack "Updates
-// available" banner arriving asynchronously above the highlighted control, a
-// section expanding, an advisory list filling in — leaves the hole behind at
-// the old coordinates. The control then looks like it vanished: the popover
-// points at a lit rectangle of empty page.
+// driver.js recomputes its cutout on window `resize` and `scroll` only. That
+// misses most of the ways this page moves a highlighted control:
 //
-// Watching the body's box catches all of them, because every one of them
-// changes the document height. `refresh()` re-measures the element already
-// highlighted; it does not re-resolve the step's element function, which is
-// why the layers step still needs its own `moveTo` for the case where the node
-// is REPLACED rather than moved.
+//  - the stale-pack "Updates available" banner arrives asynchronously and
+//    inserts itself ABOVE the display-mode toggle, pushing it down;
+//  - `.briefing-rail` — which holds that toggle — is `position: sticky` with
+//    `overflow-y: auto` and a max-height, so it is its own scroll container.
+//    Scroll events do not bubble, so scrolling the rail never reaches window;
+//  - content growing inside that fixed-height rail (advisories filling in)
+//    moves the toggle while resizing nothing at all: the rail's box is capped,
+//    body's box is unchanged, and the element's own box is the same.
+//
+// The first attempt at this watched `document.body` with a ResizeObserver,
+// which only catches the first case — and even then only because the document
+// happens to grow. Rather than keep enumerating causes, watch the SYMPTOM: has
+// the highlighted element moved? A per-frame rect comparison catches every one
+// of them, costs a `getBoundingClientRect` per frame, and runs only while the
+// tour is open.
 function watchLayoutShifts(): void {
   stopWatchingLayoutShifts();
-  if (typeof ResizeObserver === 'undefined') return;
-  let queued = false;
-  layoutShiftObserver = new ResizeObserver(() => {
-    if (queued || !activeDriver) return;
-    queued = true;
-    requestAnimationFrame(() => {
-      queued = false;
-      activeDriver?.refresh();
-    });
-  });
-  layoutShiftObserver.observe(document.body);
+  lastHighlightRect = null;
+  const tick = (): void => {
+    if (!activeDriver) return;
+    const el = document.querySelector('.driver-active-element');
+    if (el) {
+      const r = el.getBoundingClientRect();
+      // Rounded so sub-pixel jitter during driver's own transition does not
+      // trigger a refresh on every frame.
+      const key = `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`;
+      if (lastHighlightRect !== null && key !== lastHighlightRect) activeDriver.refresh();
+      lastHighlightRect = key;
+    } else {
+      lastHighlightRect = null;
+    }
+    layoutShiftFrame = requestAnimationFrame(tick);
+  };
+  layoutShiftFrame = requestAnimationFrame(tick);
 }
 
 function stopWatchingLayoutShifts(): void {
-  layoutShiftObserver?.disconnect();
-  layoutShiftObserver = null;
+  if (layoutShiftFrame !== null) cancelAnimationFrame(layoutShiftFrame);
+  layoutShiftFrame = null;
+  lastHighlightRect = null;
 }
 
 // Toggling a layer checkbox rebuilds the controls panel, which detaches the
