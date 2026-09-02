@@ -168,3 +168,100 @@ describe('layer bar (#591)', () => {
     for (const id of stability) expect(hasToggle(html, id)).toBe(false);
   });
 });
+
+describe('detail row: pills, None and the hint slot (#591)', () => {
+  it('renders every layer as a pick-any pill, never a radio', () => {
+    // Once icing is pick-any there is no one-of-N left among the layers, so a
+    // joined/segmented control would be lying about the semantics. Overlaying
+    // two icing models is a legitimate comparison.
+    const html = layerTogglesHtml({}, { openFamily: 'icing' });
+    for (const id of ['icing-bands', 'icing-ogimet-nwp-bands', 'sfip-bands', 'ieng-icing-bands']) {
+      expect(html, `no pill for "${id}"`).toContain(`class="viz-pill" data-layer-id="${id}"`);
+    }
+    expect(html).not.toContain('type="radio"');
+    expect(html).not.toContain('type="checkbox"');
+  });
+
+  it('offers a None pill carrying the ids it clears', () => {
+    // Pick-any without a None means "untick five things and hope".
+    const html = layerTogglesHtml({}, { openFamily: 'icing' });
+    const none = html.match(/data-none-group="([^"]+)"/);
+    expect(none, 'no None pill in the icing row').not.toBeNull();
+    const ids = none![1].split(' ');
+    expect(ids).toContain('sfip-bands');
+    expect(ids).toContain('icing-bands');
+  });
+
+  it('omits the None pill where a group holds a single layer', () => {
+    // It would be a second control doing the same job as the one pill.
+    const html = layerTogglesHtml({}, { openFamily: 'levels' });
+    const detail = html.slice(html.indexOf('viz-layer-detail'));
+    // 'reference' holds only cruise-altitude.
+    const groups = detail.split('viz-detail-sub').length - 1;
+    expect(groups).toBeGreaterThan(1);
+    expect(detail).toContain('data-layer-id="cruise-altitude"');
+  });
+
+  it('keeps an unavailable method visible and disabled rather than hidden', () => {
+    // Knowing SLD exists but needs another model is worth more than a tidy row.
+    const html = layerTogglesHtml({}, {
+      openFamily: 'icing',
+      unavailableLayers: new Set(['sld-bands']),
+    });
+    expect(html).toContain('data-layer-id="sld-bands"');
+    expect(html).toMatch(/data-layer-id="sld-bands"[^>]*disabled/);
+    expect(html).toContain('viz-layer-unavailable');
+  });
+
+  it('gives every control a hint and the row exactly one About button', () => {
+    // This is where the twenty ⓘ glyphs went: one labelled button per family,
+    // and a slot that reads whatever the pointer is on.
+    const html = layerTogglesHtml({}, { openFamily: 'icing' });
+    expect((html.match(/data-family-about=/g) ?? []).length).toBe(1);
+    expect(html).toContain('viz-hint-text');
+    // No per-layer ⓘ survives in the row.
+    expect(html).not.toContain('data-layer-info');
+    // ...and each pill carries the sentence the slot will show.
+    const pills = html.match(/class="viz-pill"[^>]*/g) ?? [];
+    expect(pills.length).toBeGreaterThan(0);
+    for (const p of pills) expect(p, `pill without a hint: ${p}`).toContain('data-hint=');
+  });
+
+  it('builds the About panel from the metrics catalog, not from new copy', () => {
+    // vibe / primary_goal / best_used_for are already in MetricCatalogEntry —
+    // the panel renders them, and hands limitations/theory/thresholds to the
+    // existing popup behind "Full detail".
+    const html = layerTogglesHtml({}, { openFamily: 'icing', aboutFamily: 'icing' });
+    expect(html).toContain('data-about-family="icing"');
+    expect(html).toContain('viz-about-card');
+    // The deep link reuses the existing per-layer popup entry point.
+    expect(html).toMatch(/data-layer-info="sfip-bands"[^>]*data-metric-id="sfip_risk"/);
+  });
+
+  it('shows the About panel only for the family that is open', () => {
+    const html = layerTogglesHtml({}, { openFamily: 'icing', aboutFamily: 'clouds' });
+    expect(html).not.toContain('viz-family-about');
+  });
+
+  it('cards only the layers the catalog actually describes', () => {
+    // Nearly every layer has a `metricId`, isotherms and parcel levels
+    // included — only cruise-altitude, night-shading and fronts-markers do
+    // not. Those get no card rather than an empty one, and the hint line above
+    // still names them.
+    const html = layerTogglesHtml({}, { openFamily: 'levels', aboutFamily: 'levels' });
+    expect(html).toContain('viz-about-grid');
+    expect(html).toMatch(/data-layer-info="freezing-level"[^>]*data-metric-id="freezing_level_ft"/);
+    expect(html).not.toContain('data-layer-info="cruise-altitude"');
+  });
+
+  it('falls back to a plain note when a family has nothing to compare', () => {
+    // Defensive rather than currently reachable: an empty grid would read as a
+    // loading failure, so the branch exists for the day a family is all lines.
+    const html = layerTogglesHtml({}, {
+      openFamily: 'observed',
+      aboutFamily: 'observed',
+      unavailableLayers: new Set(['current-conditions', 'observed-surface', 'observed-tops']),
+    });
+    expect(html).toContain('data-about-family="observed"');
+  });
+});
