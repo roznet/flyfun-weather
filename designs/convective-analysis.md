@@ -170,7 +170,7 @@ Selected in `sounding/__init__.py` purely on `hourly.explicit_convective_diagnos
 Grading is a reflectivity × corroborator table: `reflectivity_hour_max_dbz` against `_EXPLICIT_DBZ_{FIRE=35, CONVECTIVE=45, SEVERE=50}`, with a corroborator count |C| from LPI (`_EXPLICIT_LPI_CORROB_JKG=1`, ≥5 counts double), updraft (`_EXPLICIT_UPDRAFT_CORROB_MS=10`) and updraft helicity.
 
 Structural safety properties — do not "clean these up":
-- **`top_ft` is ALWAYS `None`.** The 18 dBZ echo top sits *below* the physical storm top (anvil ice reflects weakly), so letting the overfly-clearance filter consume it would err toward "safe to overfly". It travels only as the character/detail field `echo_top_18dbz_ft`, and flagged cells render as `tower_unresolved` — depth-unknown markers, and never a full-height box (#592).
+- **`top_ft` is ALWAYS `None`.** The 18 dBZ echo top sits *below* the physical storm top (anvil ice reflects weakly), so letting the overfly-clearance filter consume it would err toward "safe to overfly". It travels only as the character/detail field `echo_top_18dbz_ft`, and the advisory's flagged cells (Stage 7) fall back to the thermo track's bounds as a `tower_estimated` cutout or, failing that, to a depth-unknown `tower_unresolved` marker — never a full-height box (#592).
 - **`detection_complete=False` → `None`**, never a quiet `NONE` and never a CAPE fallback dressed as D2's verdict. The caller records `SoundingAnalysis.convective_explicit_unavailable=True` and grading falls back to thermo, truthfully badged. Unknown is not quiet.
 - **No CIN suppression.** A simulated echo *is* realized convection; penalising it on surface/ML CIN is circular (same reasoning as `nwp_precip`).
 - **Never says "hail".** D2's mixed-phase signal is graupel and does not discriminate hail, so `_severity_modifiers`' "hail risk" string is rewritten to graupel / mixed-phase framing here.
@@ -196,7 +196,9 @@ Two independent cross-section layers render convective towers:
 - Moderate+: −20°C or −10°C level
 - Last resort: base + 4000ft
 
-**NWP towers** use model boundaries directly — no estimation needed. On the explicit (`nwp_explicit`) track there are no bounds at all: `top_ft` is None by construction. Such a point borrows the thermo track's bounds if that track has them (drawn as `tower_estimated`, below), and otherwise stays `tower_unresolved` — a depth-unknown marker, not a full-height box (#592).
+**NWP towers** use model boundaries directly — no estimation needed. On the explicit (`nwp_explicit`) track there are no bounds at all: `top_ft` is None by construction. **The two clients diverge here, and always have:** web draws its own depth-unresolved ghost column (`nwp-convective-bg.ts:drawUnresolvedColumn` — a risk-tinted wash with dashed sides and a `?` marker), iOS skips the point entirely (`NwpConvectiveBgLayer.swift`: "drawing full-height columns would be misleading"). Both read `nwpConvectiveBase/TopFt` straight off the point; neither consults the thermo track.
+
+**These two layers are not the advisory highlight scrim.** A third layer (`highlight-layer.ts` / `HighlightLayer.swift`) renders the `tower` / `tower_estimated` / `tower_unresolved` cutouts the *advisory* publishes, and it is the only one of the three that borrows bounds across tracks (#592, Stage 7). Neither convective background layer consults the other's track: each draws its own per-point sounding fields, so a `tower_estimated` cutout can sit over an NWP-layer ghost column on the same point — the scrim is saying "the advisory drew this box from the thermodynamics", not "the NWP layer resolved a tower here".
 
 Both layers share the same color palette (via exports from `thermo-convective-bg.ts`): bgWash, towerFill, hatching, anvil strip, CB labels.
 
