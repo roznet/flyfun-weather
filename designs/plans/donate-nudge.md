@@ -131,7 +131,12 @@ Two floors on top:
 - **90 days minimum between any two asks** — stops a heavy user tripping K=1.5
   and K=4 within weeks.
 - **Engagement floor** (5 flights, 60 days) — stops a week-one burst firing rung 1.
-- **One impression per calendar day**, across flights.
+- **One impression *counted* per calendar day**, across flights — but the chip
+  itself stays rendered for the rest of that day (operator decision,
+  2026-09-02). Counting once a day and *rendering* once a day are different
+  rules; conflating them made the chip vanish under a pilot who simply
+  reloaded, which reads as a glitch rather than as restraint. Hiding it buys no
+  extra restraint either: exposure is capped in days either way.
 - **Max 4 impressions per ask** before it goes quiet — silent ignoring is an answer.
 
 **Why multiples, not dollars.** `cost_per_user_month_usd` is
@@ -220,8 +225,7 @@ All six pass ⇒ one ask **opens**. An open ask does not expire on its own.
 | # | Condition |
 |---|---|
 | 7 | assessment is not RED |
-| 8 | no impression already recorded today |
-| 9 | fewer than 4 impressions used on this ask |
+| 8 | the ask is still open (see below) |
 
 ### Layer 3 — the click
 
@@ -254,7 +258,7 @@ reason no ask ever needs to escalate.
 |---|---|
 | `Contribute` clicked | yes (and a donation ends the evergreen path entirely) |
 | `Maybe later` clicked | yes |
-| 4 impressions used, never clicked | yes |
+| 4 impressions used, never clicked | yes — but not until the day that spent the last one is over, so the chip does not disappear mid-session on its final day |
 | 90-day backstop elapsed | yes |
 | Campaign window closes | yes, for that campaign |
 | Popover opened, then dismissed with Esc / click-outside | **no** - they answered nothing; but the impression already counted, so it self-limits |

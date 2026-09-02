@@ -1074,8 +1074,10 @@ class TestNudgeAck:
         for _ in range(3):
             client.post("/api/donations/nudge/ack", json={"action": "shown"})
         assert _nudge_state(session_factory)["open_ask"]["shown"] == 1
-        # ...and the chip does not paint again today.
-        assert client.get("/api/donations/nudge").json()["reason"] == "shown_today"
+        # ...and the chip *keeps* painting today. Counting once a day and
+        # rendering once a day are different rules: a chip that vanishes on
+        # reload reads as a glitch, and hiding it buys no extra restraint.
+        assert client.get("/api/donations/nudge").json()["show"] is True
 
     @pytest.mark.parametrize("action", ["clicked", "dismissed"])
     def test_an_answer_closes_the_ask(self, make_client, session_factory, action):

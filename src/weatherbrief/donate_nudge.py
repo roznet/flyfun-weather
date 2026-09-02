@@ -87,7 +87,6 @@ REASON_ACCOUNT_TOO_NEW = "account_too_new"
 REASON_NO_RUNG_CROSSED = "no_rung_crossed"
 REASON_RUNGS_EXHAUSTED = "rungs_exhausted"
 REASON_ASKED_RECENTLY = "asked_recently"
-REASON_SHOWN_TODAY = "shown_today"
 REASON_NO_CAMPAIGN = "no_active_campaign"
 REASON_CAMPAIGN_CLOSED = "campaign_answered"
 
@@ -353,10 +352,10 @@ def blocked_cheaply(state: NudgeState, inputs: GateInputs) -> str | None:
         return REASON_DONATED
 
     if ask is not None:
-        # An open ask that has already been seen today renders nothing, and
-        # nothing about it can change until tomorrow.
-        if ask.last_shown == inputs.today:
-            return REASON_SHOWN_TODAY
+        # An open ask renders for the rest of the day once it has appeared —
+        # the impression is counted once per calendar day, but the chip does
+        # not vanish under a pilot who reloads the page. Those are two
+        # different rules and conflating them made the chip look broken.
         return None
 
     if not campaign_live:
@@ -484,7 +483,12 @@ def decide(state: NudgeState, inputs: GateInputs) -> NudgeDecision:
     ask = state.open_ask
     if ask is not None:
         expired = (inputs.today - ask.opened).days >= ASK_BACKSTOP_DAYS
-        exhausted = ask.shown >= MAX_IMPRESSIONS_PER_ASK
+        # Spent, but not until the day that spent it is over: closing the
+        # moment the fourth impression lands would make the chip vanish
+        # mid-session on its last day — the very thing the all-day rule fixes.
+        exhausted = (
+            ask.shown >= MAX_IMPRESSIONS_PER_ASK and ask.last_shown != inputs.today
+        )
         stale_campaign = ask.kind == KIND_CAMPAIGN and (
             window is None or window.id != ask.campaign_id or not window.active(inputs.today)
         )
@@ -502,10 +506,11 @@ def decide(state: NudgeState, inputs: GateInputs) -> NudgeDecision:
     if ask is None:
         return NudgeDecision(state, False, "", 0, reason, state is not original)
 
-    # --- layer 2: does the chip paint on this page view? --------------------
-    if ask.last_shown == inputs.today:
-        return NudgeDecision(state, False, ask.kind, ask.rung, REASON_SHOWN_TODAY, state is not original)
-
+    # --- layer 2: paint --------------------------------------------------
+    # No "already shown today" gate. Exposure is capped in *days* (four
+    # impressions, one countable per calendar day); within a day the chip stays
+    # put. A chip that appears and then disappears on the next page load reads
+    # as a glitch, not as tact, and hiding it buys no extra restraint.
     return NudgeDecision(state, True, ask.kind, ask.rung, REASON_SHOW, state is not original)
 
 
@@ -628,8 +633,9 @@ def record_shown(state: NudgeState, today: date) -> NudgeState:
         campaign=campaign,
         open_ask=replace(ask, shown=shown, last_shown=today),
     )
-    if shown >= MAX_IMPRESSIONS_PER_ASK:
-        state = _close(state, today)
+    # Deliberately does NOT close on the final impression: the ask stays open
+    # for the rest of that day so the chip does not disappear under the pilot,
+    # and :func:`decide` closes it on the next day's first call.
     return state
 
 

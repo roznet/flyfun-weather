@@ -279,24 +279,50 @@ class TestLifecycle:
     def test_one_impression_per_calendar_day(self):
         state = nudge.record_shown(self._open(), TODAY)
         assert state.open_ask.shown == 1
-        # Same day again: idempotent, and the chip does not render.
+        # Same day again: the *count* is idempotent...
         assert nudge.record_shown(state, TODAY) is state
-        assert nudge.decide(state, _eligible()).reason == nudge.REASON_SHOWN_TODAY
-        # Tomorrow it is back.
-        assert nudge.decide(state, _eligible(today=TODAY + timedelta(days=1))).show
+        # Tomorrow it counts again.
+        tomorrow = nudge.record_shown(state, TODAY + timedelta(days=1))
+        assert tomorrow.open_ask.shown == 2
+
+    def test_the_chip_stays_up_for_the_rest_of_the_day(self):
+        """Counting an impression once a day is not the same rule as rendering
+        once a day. Conflating them made the chip vanish under a pilot who
+        reloaded the page, which reads as a glitch rather than as restraint —
+        and hiding it buys no extra restraint, since exposure is capped in days
+        either way."""
+        state = nudge.record_shown(self._open(), TODAY)
+        again = nudge.decide(state, _eligible())
+        assert again.show is True
+        assert again.reason == nudge.REASON_SHOW
+        # ...and it still costs only the one impression.
+        assert nudge.record_shown(again.state, TODAY).open_ask.shown == 1
 
     def test_impression_cap_closes_the_ask(self):
         state = self._open()
+        last = nudge.MAX_IMPRESSIONS_PER_ASK - 1
         for offset in range(nudge.MAX_IMPRESSIONS_PER_ASK):
             state = nudge.record_shown(state, TODAY + timedelta(days=offset))
-        assert state.open_ask is None
-        assert state.tier_asked == 1.5  # rung stays consumed
+        # Budget spent — but the ask survives the day that spent it, so the
+        # chip does not disappear mid-session on its final day.
+        assert state.open_ask is not None
+        assert nudge.decide(state, _eligible(today=TODAY + timedelta(days=last))).show
+
+        # The next day it is closed, and no replacement opens.
+        d = nudge.decide(state, _eligible(today=TODAY + timedelta(days=last + 1)))
+        assert d.state.open_ask is None
+        assert not d.show
+        assert d.state.tier_asked == 1.5  # rung stays consumed
 
     def test_ignoring_consumes_the_rung_exactly_as_a_dismissal_does(self):
         """Silence is an answer — which is why nothing ever escalates."""
         ignored = self._open()
         for offset in range(nudge.MAX_IMPRESSIONS_PER_ASK):
             ignored = nudge.record_shown(ignored, TODAY + timedelta(days=offset))
+        # The exhausted ask closes on the next day's first call.
+        ignored = nudge.decide(
+            ignored, _eligible(today=TODAY + timedelta(days=nudge.MAX_IMPRESSIONS_PER_ASK))
+        ).state
         dismissed = nudge.close_ask(nudge.record_shown(self._open(), TODAY), TODAY)
         assert ignored.tier_asked == dismissed.tier_asked == 1.5
         assert ignored.open_ask is dismissed.open_ask is None
