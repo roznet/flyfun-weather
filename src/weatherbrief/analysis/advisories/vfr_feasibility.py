@@ -47,7 +47,7 @@ from weatherbrief.analysis.advisories._helpers import (
 )
 from weatherbrief.analysis.advisories.convective_character import (
     CHARACTER_STATUS,
-    below_base_escape,
+    below_base_escapes,
     classify_route_character,
     resolve_character_params,
 )
@@ -81,6 +81,8 @@ from weatherbrief.models import (
     HighlightSeverity,
     Mitigation,
     MitigationKind,
+    MitigationProfile,
+    MitigationSegment,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -1247,14 +1249,21 @@ class VFRFeasibilityEvaluator:
             # grade; the *grade* at a lower level is what the altitude table
             # shows, since character is re-derived at each altitude it sweeps.
             if conv_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
-                escape = below_base_escape(ctx, model, char_params)
-                if escape is not None:
+                # One tip per convective cluster (#593). A route crosses more
+                # than one system, and the systems are answered differently: on
+                # LFMD→EGTF 2026-08-27 the mid-route cells were flyable
+                # underneath while the arrival-end cells, hours later, were not.
+                # A cluster with no escape must not silence one that has it, so
+                # each is reported on its own with the miles it applies to.
+                for escape in below_base_escapes(ctx, model, char_params):
                     mitigations.append(Mitigation(
                         kind=MitigationKind.ALTITUDE,
                         addresses=CONV_MITIGATION_ADDRESSES,
                         detail=adv_t(
                             "vfr.mitigation.below_base", loc,
                             alt=escape.altitude_ft, fl=escape.base_fl,
+                            frm=round(escape.dist_from_nm),
+                            to=round(escape.dist_to_nm),
                         ),
                         # The sub-issue's status at that level — the character
                         # band actually re-derived there, never the composite's.
@@ -1262,12 +1271,17 @@ class VFRFeasibilityEvaluator:
                             escape.band, AdvisoryStatus.AMBER
                         ),
                         altitude_ft=escape.altitude_ft,
-                        # Level-altitude only: the below-base test is route-wide
-                        # (every resolved cell must be cleared), so it cannot be
-                        # expressed as the per-point cost `vertical_profile.solve`
-                        # needs for a varying profile — same limit the character
-                        # card's EMBEDDED tip documents.
-                        profile=None,
+                        # The cluster's own band, at the level that clears it.
+                        # Deliberately NOT a whole-route profile: the transitions
+                        # to and from cruise are the pilot's to plan, and the
+                        # below-base test is not a per-point cost
+                        # `vertical_profile.solve` could propose one from — the
+                        # same limit the character card's EMBEDDED tip documents.
+                        profile=MitigationProfile(segments=[MitigationSegment(
+                            dist_from_nm=escape.dist_from_nm,
+                            dist_to_nm=escape.dist_to_nm,
+                            altitude_ft=escape.altitude_ft,
+                        )]),
                     ))
 
             # 8. Highlights (#375) only when the model has en-route data. The

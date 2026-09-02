@@ -33,6 +33,7 @@ from weatherbrief.analysis.sounding.convective import (
     CHAR_EMBED_MIN_NM,
     ConvCharPoint,
     classify_convective_character,
+    convective_clusters,
 )
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -617,7 +618,18 @@ AVOIDABLE_BANDS: frozenset[ConvectiveCharacter] = frozenset({
 
 
 class BelowBaseEscape(NamedTuple):
-    """A cruise level beneath the cells where see-and-avoid is actually available.
+    """A cruise level beneath ONE cluster of cells where see-and-avoid is available.
+
+    Scoped to a cluster, not the route (#593). The route-wide version could not
+    fire: to be "below the cells" you had to be below *every* resolved base on
+    the whole flight, which a long route crossing more than one system never
+    satisfies — on LFMD→EGTF 2026-08-27 towers based at 1,466 ft near the
+    arrival condemned every level over a mid-route system the pilot actually
+    flew underneath at ~FL150.
+
+    ``dist_from_nm`` / ``dist_to_nm`` are the cluster's along-track extent, so
+    the advice names the stretch it is advice about rather than implying the
+    whole flight.
 
     ``base_fl`` is the tightest modelled cell base the sweep cleared, published
     alongside the altitude on purpose: pilot-reported ground truth on
@@ -631,54 +643,170 @@ class BelowBaseEscape(NamedTuple):
     band: ConvectiveCharacter
     base_fl: int
     margin_ft: int
+    dist_from_nm: float
+    dist_to_nm: float
 
 
-def below_base_escape(
+def _segment_floor_ft(
+    ctx: RouteContext, params: dict[str, float], from_nm: float, to_nm: float
+) -> float:
+    """Lowest level the sweep may offer over this cluster — its OWN terrain (#593).
+
+    Answering open question 1 on the issue: yes, the floor is per cluster. The
+    route-wide ``max_elevation_ft`` floored the ground-truth flight at 8,000 ft
+    because of the Alps at *departure*, which say nothing about how low a pilot
+    may fly under a system over flat northern France 300 nm later. The advice is
+    now scoped to a segment, so the terrain that bounds it is that segment's.
+
+    The merge step below re-checks this over the *combined* span before folding
+    two clusters together, because a col between them can be higher than either.
+    """
+    from weatherbrief.analysis.advisories._helpers import max_terrain_between
+
+    min_base_agl = params.get(
+        "mitigation_min_base_agl_ft",
+        CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
+    )
+    return (max_terrain_between(ctx.elevation, from_nm, to_nm) or 0.0) + min_base_agl
+
+
+def _merge_same_level(
+    ctx: RouteContext,
+    params: dict[str, float],
+    escapes: list[BelowBaseEscape],
+) -> list[BelowBaseEscape]:
+    """Fold neighbouring clusters that resolved to the SAME level into one span.
+
+    Answering open question 3: one mitigation per cluster, but a system the
+    model fires at all but one of its grid points is one system, not two tips
+    with the same altitude 10 nm apart. Merging *after* the sweep asserts
+    nothing untested — both spans cleared the geometry independently, and the
+    gap between them carries no realized cells by construction — which is why
+    :func:`convective_clusters` has no gap tolerance of its own.
+
+    The band is not combined because it cannot differ: it is re-derived
+    route-wide at the candidate altitude, so two escapes sharing a level share
+    it. The tightest base and margin win, and the merged span must still clear
+    the terrain *between* the two clusters, which can be higher than either.
+    """
+    merged: list[BelowBaseEscape] = []
+    for esc in escapes:
+        prev = merged[-1] if merged else None
+        if prev is not None and prev.altitude_ft == esc.altitude_ft:
+            floor = _segment_floor_ft(
+                ctx, params, prev.dist_from_nm, esc.dist_to_nm
+            )
+            if esc.altitude_ft >= floor:
+                merged[-1] = prev._replace(
+                    dist_to_nm=esc.dist_to_nm,
+                    base_fl=min(prev.base_fl, esc.base_fl),
+                    margin_ft=min(prev.margin_ft, esc.margin_ft),
+                )
+                continue
+        merged.append(esc)
+    return merged
+
+
+def below_base_escapes(
     ctx: RouteContext, model: str, params: dict[str, float]
-) -> BelowBaseEscape | None:
-    """Highest level BELOW planned cruise that puts this model's route under the cells.
+) -> list[BelowBaseEscape]:
+    """Per convective cluster, the highest level BELOW cruise that gets under it.
 
-    Sweeps the shared candidate ladder downward, nearest-to-cruise first, and
-    returns the first level that satisfies BOTH halves of the see-and-avoid
-    premise: the below-base geometry reads ``clear`` (under every resolved base,
-    in VMC, with the configured buffer) **and** the character band re-derived at
-    that level is one a pilot can operate around. Requiring both matters — a
-    level can be under the bases while the band there is WIDESPREAD, which is
-    not an escape, and a band can be ISOLATED at a level that is still inside
-    the convective layer.
+    Sweeps the candidate ladder downward, nearest-to-cruise first, and takes for
+    each cluster the first level satisfying BOTH halves of the see-and-avoid
+    premise: the below-base geometry over *that cluster* reads ``clear`` (under
+    every resolved base in it, in VMC, with the configured buffer) **and** the
+    character band re-derived at that level is one a pilot can operate around.
+    Requiring both matters — a level can be under the bases while the band there
+    is WIDESPREAD, which is not an escape, and a band can be ISOLATED at a level
+    that is still inside the convective layer.
 
-    ``None`` when no such level exists (or the model has no soundings). Only
-    levels strictly below planned cruise are considered: climbing over
+    The geometry half is per cluster; the band half is **route-wide** and
+    deliberately so. The band is a property of the whole flight ("are there gaps
+    to fly through at all"), it is what the character card publishes, and
+    re-deriving it over a cluster alone would be meaningless: a cluster is
+    contiguous cells, so its internal realized coverage is 100 % and every
+    cluster would read WIDESPREAD. Only ``embedded`` moves with altitude, which
+    is exactly the mechanism that must be allowed to veto a descent into a deck.
+
+    Only levels strictly below planned cruise are considered: climbing over
     convection is not a VFR answer, and the climb-above case already has its own
-    EMBEDDED mitigation on the character card.
+    EMBEDDED mitigation on the character card. Only ``clear`` qualifies, never
+    ``marginal`` (open question 2): the buffer is what makes see-and-avoid real,
+    the ladder is stepped, so a ``marginal`` level normally has a ``clear`` one
+    a step below — and where it does not, the reason is the terrain floor, where
+    shaving the buffer is precisely the wrong direction.
+
+    Returns ``[]`` when no cluster has an escape, or the model has no soundings.
     """
     cruise = ctx.cruise_altitude_ft
     clearance = params.get(
         "base_clearance_ft", CHARACTER_PARAM_DEFAULTS["base_clearance_ft"]
     )
-    # `_candidate_altitudes` is terrain-bounded (mitigation_min_base_agl_ft) and
-    # already excludes planned cruise; take its below-cruise half, highest first,
-    # so the offered level is the smallest descent that works.
+    # Clusters are altitude-invariant — ``is_convective`` and ``realized`` read
+    # risk/precip/cover/geometry, none of which move with cruise — so they are
+    # built once at planned cruise and reused across the whole ladder.
+    inputs = build_character_points(ctx, model, params)
+    if not inputs.any_assessed:
+        return []
+    clusters = convective_clusters(inputs.points, ctx.total_distance_nm)
+    if not clusters:
+        return []
+
+    floors = [
+        _segment_floor_ft(ctx, params, c.dist_from_nm, c.dist_to_nm) for c in clusters
+    ]
+    # One ladder for the whole sweep, floored by the LOWEST cluster floor and
+    # filtered per cluster below — building a ladder per cluster would rebuild
+    # the character points once per (cluster × altitude) instead of once per
+    # altitude, for the same answers.
     candidates = sorted(
-        (a for a in _candidate_altitudes(ctx, params) if a < cruise), reverse=True
+        (
+            a
+            for a in _candidate_altitudes(ctx, params, floor_ft=min(floors))
+            if a < cruise
+        ),
+        reverse=True,
     )
+
+    found: dict[int, BelowBaseEscape] = {}
     for alt in candidates:
-        inputs = build_character_points(ctx, model, params, cruise_ft=float(alt))
-        if not inputs.any_assessed:
+        unresolved = [i for i in range(len(clusters)) if i not in found]
+        if not unresolved:
+            break
+        pending = [i for i in unresolved if alt >= floors[i]]
+        if not pending:
+            # The ladder only descends, so a cluster already floored out here
+            # can never be answered lower down.
+            break
+        alt_inputs = build_character_points(ctx, model, params, cruise_ft=float(alt))
+        if not alt_inputs.any_assessed:
             continue
-        geometry = _below_base_geometry(inputs.points, float(alt), clearance)
-        if geometry.kind != "clear":
-            continue
-        band = classify_inputs(ctx, model, params, inputs)
-        if band not in AVOIDABLE_BANDS:
-            continue
-        return BelowBaseEscape(
-            altitude_ft=alt,
-            band=band,
-            base_fl=geometry.base_fl,
-            margin_ft=geometry.margin_ft,
-        )
-    return None
+        band: ConvectiveCharacter | None = None
+        for i in pending:
+            geometry = _below_base_geometry(
+                [alt_inputs.points[j] for j in clusters[i].indices],
+                float(alt),
+                clearance,
+            )
+            if geometry.kind != "clear":
+                continue
+            if band is None:
+                band = classify_inputs(ctx, model, params, alt_inputs)
+            if band not in AVOIDABLE_BANDS:
+                # Route-level and shared by every cluster at this altitude —
+                # nothing else here can clear, so stop testing the rest.
+                break
+            found[i] = BelowBaseEscape(
+                altitude_ft=alt,
+                band=band,
+                base_fl=geometry.base_fl,
+                margin_ft=geometry.margin_ft,
+                dist_from_nm=clusters[i].dist_from_nm,
+                dist_to_nm=clusters[i].dist_to_nm,
+            )
+    return _merge_same_level(ctx, params, [found[i] for i in sorted(found)])
+
 
 
 # --- Altitude mitigation for embedded convection (#568 Fix 4) ---------------
@@ -701,7 +829,9 @@ def below_base_escape(
 MITIGATION_ADDRESSES = "embedded_deck"
 
 
-def _candidate_altitudes(ctx: RouteContext, params: dict[str, float]) -> list[int]:
+def _candidate_altitudes(
+    ctx: RouteContext, params: dict[str, float], *, floor_ft: float | None = None
+) -> list[int]:
     """Cruise levels the mitigation may offer, nearest to planned cruise first.
 
     Bounded below by ``mitigation_min_base_agl_ft`` above the route's highest
@@ -709,6 +839,12 @@ def _candidate_altitudes(ctx: RouteContext, params: dict[str, float]) -> list[in
     ``MITIGATION_BIN_STEP_FT`` grid so a tip lands on the same altitudes the
     other advisories' mitigations use. Planned cruise is excluded — it is the
     altitude that produced the EMBEDDED verdict.
+
+    ``floor_ft`` overrides the route-wide terrain floor. The EMBEDDED tip is one
+    level for the whole flight, so the route's highest terrain is the right
+    bound for it; the below-base sweep is per cluster and passes its own
+    (#593) — see :func:`_cluster_floor_ft` for why a route-wide floor is the
+    wrong answer there.
     """
     from weatherbrief.analysis.advisories.vertical_profile import MITIGATION_BIN_STEP_FT
 
@@ -717,7 +853,7 @@ def _candidate_altitudes(ctx: RouteContext, params: dict[str, float]) -> list[in
         CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
     )
     max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
-    floor = (max_terrain or 0.0) + min_base_agl
+    floor = (max_terrain or 0.0) + min_base_agl if floor_ft is None else floor_ft
     ceiling = ctx.flight_ceiling_ft
     cruise = ctx.cruise_altitude_ft
     step = MITIGATION_BIN_STEP_FT

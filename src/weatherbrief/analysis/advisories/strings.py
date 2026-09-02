@@ -271,11 +271,16 @@ _STRINGS: dict[str, dict[str, str]] = {
     # purpose: modelled convective bases read low, so the offered level is
     # conservative and the pilot needs the number it was derived from to check it
     # against what they can actually see.
+    #
+    # It also names the MILES (#593). The tip is scoped to one convective
+    # cluster, not the route — a flight crosses more than one system and they are
+    # answered differently — so a level offered without its extent would read as
+    # advice for the whole flight and be wrong about the rest of it.
     "vfr.mitigation.below_base": {
-        "en": "Cruising at {alt:,} ft would keep you below the cells (bases ~FL{fl}) — see-and-avoid underneath",
-        "fr": "Croisière à {alt:,} ft resterait sous les cellules (bases ~FL{fl}) — vol à vue dessous",
-        "de": "Reiseflug auf {alt:,} ft bliebe unter den Zellen (Basen ~FL{fl}) — Sicht-Ausweichen darunter",
-        "es": "Crucero a {alt:,} ft mantendría bajo las células (bases ~FL{fl}) — ver-y-evitar debajo",
+        "en": "Cruising at {alt:,} ft from {frm}-{to} nm would keep you below the cells there (bases ~FL{fl}) — see-and-avoid underneath",
+        "fr": "Croisière à {alt:,} ft de {frm} à {to} nm resterait sous les cellules à cet endroit (bases ~FL{fl}) — vol à vue dessous",
+        "de": "Reiseflug auf {alt:,} ft von {frm}-{to} nm bliebe dort unter den Zellen (Basen ~FL{fl}) — Sicht-Ausweichen darunter",
+        "es": "Crucero a {alt:,} ft de {frm} a {to} nm mantendría bajo las células en ese tramo (bases ~FL{fl}) — ver-y-evitar debajo",
     },
 
     # --- airport_wind ---
