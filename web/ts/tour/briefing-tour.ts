@@ -4,6 +4,7 @@ import { briefingStore } from '../store/briefing-store';
 import { t } from '../i18n/i18n';
 import { markOffered } from './tour-storage';
 import { track, EVENTS } from '../analytics/track';
+import { VIZ_LAYER_BAR_RERENDER } from '../visualization/controls/panel';
 
 function ensureSectionExpanded(sectionAttr: string): void {
   const wrapper = document.querySelector<HTMLElement>(`[data-section="${sectionAttr}"]`);
@@ -52,6 +53,33 @@ function vizElement(selector: string): () => Element {
 
 // Stable reference so watchLayerToggleStep can recognise the layers step.
 const layerTogglesElement = vizElement('.viz-layer-toggles');
+
+// The per-layer ⓘ buttons are gone (#591): help is one labelled "About …"
+// button per family, and it lives in the detail row.
+//
+// Two things have to be true before that button exists, and neither holds by
+// default. Compact is the default display mode, and it deliberately has no
+// detail row at all — it makes the method choice for you, so there is nothing
+// to expand. And even in full mode the row starts closed.
+//
+// So switch to full and open a family, the same way ensureCrossSectionLayout
+// already forces the layout: driver.js resolves `element` BEFORE running
+// onHighlightStarted, so the setup belongs in the resolver, not the hook.
+function ensureFullDisplayMode(): void {
+  const state = briefingStore.getState();
+  if (state.displayMode !== 'full') state.setDisplayMode('full');
+}
+
+function aboutButtonElement(): () => Element {
+  return (() => {
+    ensureCrossSectionView();
+    ensureFullDisplayMode();
+    if (!document.querySelector('.viz-about-btn')) {
+      document.querySelector<HTMLElement>('.viz-family[data-family]')?.click();
+    }
+    return document.querySelector('.viz-about-btn');
+  }) as () => Element;
+}
 
 function buildSteps(): DriveStep[] {
   return [
@@ -122,9 +150,7 @@ function buildSteps(): DriveStep[] {
       },
     },
     {
-      // `[data-layer-info]` excludes the per-group ⓘ buttons (those also carry
-      // `viz-group-info-btn`); we want the first per-layer info button.
-      element: vizElement('[data-layer-info]'),
+      element: aboutButtonElement(),
       popover: {
         title: t('tour.layerInfo.title'),
         description: t('tour.layerInfo.desc'),
@@ -179,16 +205,32 @@ function onLayersStep(): boolean {
   return !!activeDriver && activeDriver.getActiveStep()?.element === layerTogglesElement;
 }
 
+function reHighlightLayersStep(): void {
+  if (!onLayersStep()) return;
+  const idx = activeDriver!.getActiveIndex();
+  if (idx == null) return;
+  requestAnimationFrame(() => {
+    if (onLayersStep()) activeDriver!.moveTo(idx);
+  });
+}
+
 function watchLayerToggleStep(): void {
   layerToggleUnsub?.();
-  layerToggleUnsub = briefingStore.subscribe((state, prev) => {
-    if (state.vizSettings === prev.vizSettings || !onLayersStep()) return;
-    const idx = activeDriver!.getActiveIndex();
-    if (idx == null) return;
-    requestAnimationFrame(() => {
-      if (onLayersStep()) activeDriver!.moveTo(idx);
-    });
+  const onStoreChange = briefingStore.subscribe((state, prev) => {
+    if (state.vizSettings === prev.vizSettings) return;
+    reHighlightLayersStep();
   });
+  // Opening or closing a family swaps the bar's subtree without touching the
+  // store, so the subscription above never fires for it. Without this the
+  // cutout latches onto a detached node and every click after the first lands
+  // on the dimmed overlay.
+  const onBarRerender = (): void => reHighlightLayersStep();
+  window.addEventListener(VIZ_LAYER_BAR_RERENDER, onBarRerender);
+
+  layerToggleUnsub = () => {
+    onStoreChange();
+    window.removeEventListener(VIZ_LAYER_BAR_RERENDER, onBarRerender);
+  };
 }
 
 function stopWatchingLayerToggleStep(): void {

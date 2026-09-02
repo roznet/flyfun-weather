@@ -144,6 +144,11 @@ function cloudCompoundHtml(
   return html;
 }
 
+/** Fired on `window` after the layer bar replaces its own subtree (opening or
+ *  closing a family). The open family is DOM state rather than store state, so
+ *  this is the only signal that the node has been swapped. */
+export const VIZ_LAYER_BAR_RERENDER = 'viz-layer-bar-rerender';
+
 /** Which family the bar shows expanded, if any. Read back off the DOM rather
  *  than held in module state: `renderVizControls` replaces the container's
  *  innerHTML on every settings change, and toggling a layer IS a settings
@@ -534,6 +539,11 @@ function wireLayerBar(
     if (!next) return;
     block.replaceWith(next);
     rewire(next as HTMLElement);
+    // Opening a family replaces this node, which detaches anything holding a
+    // reference to it — notably the product tour's driver.js cutout. Nothing
+    // in the store changed (the open family is DOM state), so a store
+    // subscriber cannot see this. Announce it instead.
+    window.dispatchEvent(new CustomEvent(VIZ_LAYER_BAR_RERENDER));
   };
 
   container.querySelectorAll<HTMLButtonElement>('[data-family]').forEach((btn) => {

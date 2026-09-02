@@ -57,7 +57,12 @@ async function advanceTo(page: import('@playwright/test').Page, title: string) {
 function activeElementInfo(page: import('@playwright/test').Page) {
   return page.evaluate(() => {
     const el = document.querySelector('.driver-active-element');
-    return el ? { tag: el.tagName, id: (el as HTMLElement).id, cls: el.className, dla: el.getAttribute('data-layer-info') } : null;
+    return el ? {
+      tag: el.tagName,
+      id: (el as HTMLElement).id,
+      cls: el.className,
+      about: el.getAttribute('data-family-about'),
+    } : null;
   });
 }
 
@@ -70,17 +75,20 @@ test.describe('Briefing tour — cross-section steps', () => {
     await page.waitForTimeout(550);
   });
 
-  test('info step highlights an ⓘ button after switching to Compare', async ({ page }) => {
+  test('help step opens a family and highlights its About button', async ({ page }) => {
     // Switch to Compare on the model/theme step (its toolbar holds the toggle).
     await advanceTo(page, 'Compare models, themes & Windy');
     await page.locator('[data-layout="compare"]').first().click({ force: true });
     await page.waitForTimeout(400);
-    expect(await page.locator('[data-layer-info]').count()).toBe(0); // compare hides them
+    expect(await page.locator('.viz-about-btn').count()).toBe(0); // compare hides the bar
 
-    await advanceTo(page, 'Info on any metric');
+    // The per-layer ⓘ buttons are gone (#591): help is one "About …" button per
+    // family, living in the detail row — which is CLOSED at rest. The step's
+    // element resolver has to open a family first, or it highlights nothing.
+    await advanceTo(page, 'What each method is');
     const active = await activeElementInfo(page);
     expect(active?.id).not.toBe('driver-dummy-element');
-    expect(active?.dla).toBeTruthy(); // highlighted a real per-layer ⓘ button
+    expect(active?.about).toBeTruthy();
   });
 
   test('layers step highlights toggles after switching to Compare', async ({ page }) => {
@@ -93,13 +101,44 @@ test.describe('Briefing tour — cross-section steps', () => {
     expect(active?.cls).toContain('viz-layer-toggles');
   });
 
-  test('layers step stays highlighted across multiple checkbox toggles', async ({ page }) => {
+  /** Re-enter the briefing in FULL display mode and restart the tour.
+   *
+   *  Compact is the default, and it has no detail row by design — one on/off
+   *  per family, method chosen for you. The two tests below are about the
+   *  detail row surviving a re-render, which only exists in full. */
+  async function restartInFullMode(page: import('@playwright/test').Page) {
+    await page.addInitScript(() => localStorage.setItem('wb_displayMode', 'full'));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await expect(page.getByText('GREEN', { exact: true })).toBeVisible();
+    await page.locator('#tour-btn').click();
+    await page.waitForTimeout(550);
+  }
+
+  test('layers step survives opening a family', async ({ page }) => {
+    await restartInFullMode(page);
+    // Opening a family swaps the bar's whole subtree and changes NO store
+    // state, so the store subscription the tour used to rely on never fires.
+    // Without the re-render event the cutout latches onto a detached node and
+    // every later click lands on the dimmed overlay.
     await advanceTo(page, 'Toggle layers');
-    const boxes = page.locator('.viz-layer-toggles input[type="checkbox"]:not([disabled])');
-    const n = Math.min(3, await boxes.count());
+    await page.locator('.viz-family[data-family]').first().click({ force: true });
+    await page.waitForTimeout(450);
+    const active = await activeElementInfo(page);
+    expect(active?.cls).toContain('viz-layer-toggles');
+    await expect(page.locator('.viz-layer-detail')).toBeVisible();
+  });
+
+  test('layers step stays highlighted across multiple pill toggles', async ({ page }) => {
+    await restartInFullMode(page);
+    await advanceTo(page, 'Toggle layers');
+    await page.locator('.viz-family[data-family]').first().click({ force: true });
+    await page.waitForTimeout(450);
+
+    const pills = page.locator('.viz-layer-detail .viz-pill[data-layer-id]:not([disabled])');
+    const n = Math.min(3, await pills.count());
     expect(n).toBeGreaterThan(0);
     for (let j = 0; j < n; j++) {
-      await boxes.nth(j).click({ force: true });
+      await pills.nth(j).click({ force: true });
       await page.waitForTimeout(450);
       const active = await activeElementInfo(page);
       expect(active?.cls).toContain('viz-layer-toggles');
