@@ -4415,10 +4415,31 @@ cruise is one altitude for the whole route.
   be merged over) and `TestTheEscapeIsAdviceOnly` (grades identical with and without
   the tip).
 
-### Real-world validation needed
+### Real-world validation — done (2026-09-02)
 
-The unit tests are constructed geometry. Before trusting the behaviour change,
-replay the ground-truth pack and confirm a below-base mitigation is offered for
-the mid-route cluster, is **not** offered for the arrival-end cluster, and that
-the offered level is plausible against the pilot's ~FL150 — remembering that the
-modelled bases read low, so the tip is expected to be conservative.
+The unit tests are constructed geometry, so the behaviour was replayed against
+the pilot-flown ground-truth pack (`lfmd_…_egtf-2026-08-27`, FL180) before this
+was trusted. Result:
+
+| model | tip | span | modelled bases |
+|---|---|---|---|
+| gfs | cruise 9,500 ft | 187–207 nm | ~FL116 |
+| icon | cruise 6,000 ft | 237–247 nm | ~FL84 |
+| ecmwf | none | — | — |
+
+All three checks hold. Both tips land on **mid-route** clusters; the arrival-end
+cluster — whose cells are based near 1,500 ft and which the pilot handled by
+being ready to divert rather than by cruise altitude — is offered nothing, which
+is the whole point of scoping to clusters. `vfr_feasibility` stays AMBER with and
+without the tips.
+
+The offered levels are **lower than the FL150 the pilot actually flew**, exactly
+as predicted: the tip clears the *modelled* base by `base_clearance_ft` (2,000 ft),
+and the modelled bases read low. GFS is the useful calibration point — its
+~FL116 matches the pilot's own report that GFS "showed the convection above FL110
+or FL120", so on the model that got bases roughly right the tip is one buffer
+below reality rather than wrong. ICON's ~FL84 reproduces its known low bias on
+this flight (the pilot reported ICON's base as "much higher" in reality), and it
+is why the tip names the base it reasoned from: a pilot can see FL84 is too low
+and discount it. See [[project_lfmd_egtf_20260827_ground_truth]] for the full
+per-model account.
