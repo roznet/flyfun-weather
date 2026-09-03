@@ -228,6 +228,13 @@ class NWPCloudDiagnostics(BaseModel):
     boundary_cover_pct: Optional[float] = None
     ceiling_ft: Optional[float] = None
     freezing_level_ft: Optional[float] = None
+    # Model-diagnosed boundary-layer top, MSL (#540). ECMWF publishes it as
+    # `blh` — a bulk-Richardson depth in metres AGL — and decode normalizes it
+    # against the model's own orography exactly as `deg0l` is (§21/#487),
+    # because the consumer compares it against `DerivedLevel.altitude_ft`.
+    # None for models that publish no PBL height, and wherever terrain was
+    # unknown (a depth with no ground to add is not a level).
+    boundary_layer_top_ft: Optional[float] = None
 
     # Capability marker, not a physical scalar (#457, PR #508 review): True
     # when the SOURCE MODEL exposes no convective-realization channel in this
@@ -1101,6 +1108,13 @@ class VerticalMotionAssessment(BaseModel):
     # layers below it are suppressed — reported so that suppression is
     # inspectable. None when the surface layer is not well mixed.
     mixed_layer_top_ft: Optional[float] = None
+    # Which detector produced `mixed_layer_top_ft` (#540): "model" = the
+    # model's own diagnosed PBL height, "derived" = the θv parcel walk (or its
+    # lapse-rate fallback), None = no mixed layer found. The two disagree by
+    # thousands of feet on stable and nocturnal profiles — θv cannot see a
+    # stable boundary layer at all — so which one spoke is part of reading the
+    # number, not bookkeeping.
+    mixed_layer_top_source: Optional[str] = None
     # The MODEL's ground at this point, in the column's own height datum
     # (#541) — resolved from its surface pressure, not from terrain data.
     # It is the AGL datum for the boundary-layer tag and the cut below which

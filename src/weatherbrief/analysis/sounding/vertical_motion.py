@@ -417,9 +417,54 @@ def ground_level_index(
     return 0
 
 
+def _native_bl_applies(
+    derived_levels: list[DerivedLevel],
+    start_idx: int,
+    native_bl_top_ft: float | None,
+) -> bool:
+    """Whether the model's own PBL top is usable as the mixed-layer top (#540).
+
+    Single source for the guard, so the decision made by
+    ``mixed_layer_top_index`` and the ``mixed_layer_top_source`` label
+    reported alongside it cannot drift apart.
+
+    A native top at or below the surface parcel is a decode artefact, not a
+    very shallow boundary layer: the value is a depth AGL normalized against
+    the model's orography, so "below ground" means the two datums disagree,
+    not that the PBL is thin. Fall through to the parcel walk there.
+    """
+    if native_bl_top_ft is None or start_idx >= len(derived_levels):
+        return False
+    surface_ft = derived_levels[start_idx].altitude_ft
+    return surface_ft is not None and native_bl_top_ft > surface_ft
+
+
+def _index_at_or_below(
+    derived_levels: list[DerivedLevel],
+    ceiling_ft: float,
+    start_idx: int,
+) -> int:
+    """Highest level index at or below *ceiling_ft*, floored at *start_idx*.
+
+    Converts a boundary-layer top expressed as a height into the index
+    convention the rest of this module works in (see ``mixed_layer_top_index``).
+    Returns *start_idx* when no level above the surface parcel fits under the
+    ceiling — the same "nothing suppressed" answer the parcel walk gives when
+    the surface layer is not well mixed.
+    """
+    top = start_idx
+    for i in range(start_idx + 1, len(derived_levels)):
+        alt = derived_levels[i].altitude_ft
+        if alt is None or alt > ceiling_ft:
+            break
+        top = i
+    return top
+
+
 def mixed_layer_top_index(
     derived_levels: list[DerivedLevel],
     start_idx: int = 0,
+    native_bl_top_ft: float | None = None,
 ) -> int:
     """Index of the highest level still inside the surface well-mixed layer.
 
@@ -438,6 +483,15 @@ def mixed_layer_top_index(
     otherwise be a below-ground extrapolation, warm and moist by construction,
     and the θv walk would read the whole sub-surface column as "mixed" (#541).
 
+    *native_bl_top_ft* is the model's own diagnosed PBL top as a height, MSL
+    (ECMWF ``blh`` today). Preferred over the parcel walk whenever the model
+    published one, because the parcel criterion is blind to a stable boundary
+    layer: θv climbs immediately off a stable surface, so the walk reports
+    "not mixed" and the ceiling falls back to the fixed AGL slab — exactly
+    the nocturnal profile where low-level jet shear most needs classifying
+    (#540). ``blh`` is bulk-Richardson based and spans stable, neutral and
+    convective regimes alike. Clamped to the same depth cap as the walk.
+
     Returns *start_idx* when the surface layer is not well mixed — nothing is
     suppressed in that case beyond the sub-surface levels themselves.
 
@@ -451,6 +505,16 @@ def mixed_layer_top_index(
     surface_ft = derived_levels[start_idx].altitude_ft
     if surface_ft is None:
         return start_idx
+
+    # The model's own diagnosis wins where there is one (#540), clamped to the
+    # same depth cap the parcel walk carries so a runaway value can't suppress
+    # the whole column.
+    if _native_bl_applies(derived_levels, start_idx, native_bl_top_ft):
+        return _index_at_or_below(
+            derived_levels,
+            min(native_bl_top_ft, surface_ft + _MIXED_LAYER_MAX_DEPTH_FT),
+            start_idx,
+        )
 
     theta_v0 = _theta_v_k(derived_levels[start_idx])
     if theta_v0 is None:
@@ -697,6 +761,7 @@ def _build_single_cat_layer(
 def assess_vertical_motion(
     derived_levels: list[DerivedLevel],
     surface_pressure_hpa: float | None = None,
+    native_bl_top_ft: float | None = None,
 ) -> VerticalMotionAssessment:
     """Build complete vertical motion assessment from enriched derived levels.
 
@@ -705,6 +770,15 @@ def assess_vertical_motion(
     the boundary-layer datum genuinely AGL over terrain; without it the lowest
     delivered pressure level stands in, which is only right where that level
     is above ground.
+
+    *native_bl_top_ft* is the model's own diagnosed PBL top, MSL, when it
+    published one (ECMWF ``blh`` today). It replaces the θv parcel walk as the
+    mixed-layer top — see ``mixed_layer_top_index`` — and which detector spoke
+    is reported as ``mixed_layer_top_source`` (#540). §25(c)'s max() with the
+    fixed AGL fallback is unchanged: that reasoning is about the tagging
+    ceiling and is independent of how the top was obtained, so on a shallow
+    nocturnal BL what native buys is suppression, and on a deep convective BL
+    it also raises the ceiling.
     """
     classification = classify_vertical_motion(derived_levels)
 
@@ -734,9 +808,19 @@ def assess_vertical_motion(
     # and its top is reported so the suppression is inspectable rather than
     # silently swallowing layers. Resolved once and shared with the layer
     # builder rather than walked twice (#534 review).
-    ml_top_idx = mixed_layer_top_index(derived_levels, start_idx=ground_idx)
+    used_native = _native_bl_applies(derived_levels, ground_idx, native_bl_top_ft)
+    ml_top_idx = mixed_layer_top_index(
+        derived_levels, start_idx=ground_idx, native_bl_top_ft=native_bl_top_ft,
+    )
     mixed_layer_top_ft = (
         derived_levels[ml_top_idx].altitude_ft if ml_top_idx > ground_idx else None
+    )
+    # Label only a top that exists. A native value that cleared the guard but
+    # resolved to no level above the surface parcel leaves both None, exactly
+    # as an unmixed parcel walk does.
+    mixed_layer_top_source = (
+        None if mixed_layer_top_ft is None
+        else ("model" if used_native else "derived")
     )
 
     # Build CAT risk layers from Ri
@@ -763,6 +847,7 @@ def assess_vertical_motion(
         mixed_layer_top_ft=(
             round(mixed_layer_top_ft) if mixed_layer_top_ft is not None else None
         ),
+        mixed_layer_top_source=mixed_layer_top_source,
         model_surface_altitude_ft=(
             round(ground_ft) if ground_ft is not None else None
         ),

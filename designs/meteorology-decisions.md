@@ -4443,3 +4443,128 @@ this flight (the pilot reported ICON's base as "much higher" in reality), and it
 is why the tip names the base it reasoned from: a pilot can see FL84 is too low
 and discount it. See [[project_lfmd_egtf_20260827_ground_truth]] for the full
 per-model account.
+
+## 31. The boundary-layer top is the model's own PBL diagnosis where it publishes one
+
+**Date:** 2026-09-03 · **Issue:** #540 · **Refines:** §25(b), §29
+
+The mixed-layer top behind §25(b)'s CAT suppression and §25(c)'s `boundary_layer`
+tagging came from one detector: a θv parcel walk up from the surface level
+(`mixed_layer_top_index`). That criterion answers "how deep is the well-mixed
+layer", which is the right question on a convective afternoon and the wrong one
+at night.
+
+### The parcel walk cannot see a stable boundary layer
+
+θv is near-constant through a mixed layer and climbs through the capping stable
+air — that gradient is exactly what the walk keys on. Off a *stable* surface θv
+climbs from the very first level, so the walk stops at the surface parcel and
+reports "not mixed". `mixed_layer_top_ft` comes back `None`, nothing is
+suppressed, and the tagging ceiling falls back to §25(c)'s fixed 5,000 ft AGL
+slab.
+
+That is not a rare corner. It is every nocturnal and every stably-stratified
+profile — the same profiles that carry low-level jet shear, which is precisely
+the shear that most needs classifying as boundary-layer rather than free-air.
+§25(b) already recorded the symptom from the other side: the detected top
+swinging ~1,000 ↔ 7,400 ft between adjacent points of one ICON route.
+
+### `blh` answers the question the tagging actually asks
+
+ECMWF diagnoses the PBL top natively as `blh`, from a bulk Richardson number —
+**one definition that spans stable, neutral and convective regimes**. The tag
+does not want "is this air well mixed", it wants "is this layer inside the
+boundary layer", and the bulk-Ri diagnosis answers that in all three regimes
+where the parcel criterion answers it in one.
+
+It was already in the a1 delivery order and simply never decoded, so no
+subscription change was needed. Confirmed against the 2026-09-02 18Z a1 file:
+`blh` is present (alongside `capes`, `msl`, `ptype`, `10fg`, `degm10l`, `fzra`,
+`lsp`, all still undecoded).
+
+`blh` is **metres AGL** and is normalized to MSL with the model's own orography
+at decode — the same treatment `deg0l` gets (§21/#487) and for the same reason:
+the consumer compares it against `DerivedLevel.altitude_ft`, which is MSL.
+Dropped rather than passed through as AGL when terrain is unknown; a depth with
+no ground to add is not a level.
+
+### Two fail-safes on a decoder-sourced value
+
+- **Ignored at or below ground.** A native top under the surface parcel means
+  the two datums disagree, not that the boundary layer is thin — fall through
+  to the parcel walk. Note this reads against §29's ground index, so on an
+  Alpine column "ground" is the model's own surface, not `derived_levels[0]`.
+- **Clamped to the parcel walk's own depth cap** (`_MIXED_LAYER_MAX_DEPTH_FT`),
+  so a runaway value cannot suppress the whole column.
+
+Both guards live in one predicate, `_native_bl_applies`, which is also what the
+published `mixed_layer_top_source` label reads. Deliberate: the guard and the
+label describing it cannot drift apart.
+
+### What this buys, and what it changes
+
+On a shallow nocturnal BL what native buys is **suppression** — shear inside the
+stable layer stops being reported as free-air CAT. On a deep convective BL it
+also raises the tagging ceiling. Worked example, a nocturnal inversion profile
+(surface 300 ft, `blh` → 1,800 ft MSL):
+
+| | mixed-layer top | CAT layers reported |
+|---|---|---|
+| θv walk alone (today) | none | **300–1,750 ft SEVERE**, 1,750–3,300 ft MODERATE, 12,000 ft MODERATE |
+| native `blh` | 1,750 ft (`source="model"`) | 1,750–3,300 ft MODERATE, 12,000 ft MODERATE |
+
+A SEVERE layer disappears. That is the intended effect — it was boundary-layer
+roughness misread as free-atmosphere shear because the detector could not see
+the boundary layer it sat in — but it is a real reduction in what is reported
+and is the thing to watch in validation. The free-atmosphere layer above is
+untouched: this narrows what is reported, it does not blind the detector.
+
+`mixed_layer_top_source` (`"model"` / `"derived"` / `None`) is published for the
+same reason `mixed_layer_top_ft` and `model_surface_altitude_ft` are: the two
+detectors disagree by thousands of feet on stable profiles, so which one spoke
+is part of reading the number.
+
+### Deliberately unchanged
+
+- **§25(c)'s `max()` with the 5,000 ft AGL fallback.** That reasoning is about
+  the tagging *ceiling* and is independent of how the top was obtained. The
+  constant is not re-litigated here.
+- **§29's ground datum.** Native is read against the same model surface; this
+  changes which detector supplies the top, not what it is measured from.
+- **The tag is still not a mute.** A BL-tagged severe layer is floored at AMBER
+  and still REDs past the route-percentage threshold (§25(c), §27).
+- **Every non-ECMWF model.** No PBL height published → `native_bl_top_ft` is
+  `None` → the parcel walk runs exactly as before. Old packs replay unchanged.
+
+### Open-Meteo is deferred, not done
+
+Open-Meteo exposes `boundary_layer_height` for *some* models. Adding it to a
+model endpoint that does not support it makes Open-Meteo **reject the whole
+request**, so that model loses every surface field — a live per-model
+availability probe is a prerequisite. Everything downstream of the decode is
+model-agnostic, so the remaining work is the probe plus per-model
+`unavailable_surface` entries.
+
+### Files changed
+
+- `fetch/grib/decode.py` — `blh` → `boundary_layer_height_m` in
+  `_ECMWF_CLOUD_DIAG_FIELD_MAP`; AGL→MSL normalization in
+  `build_ecmwf_cloud_diagnostics`.
+- `models/analysis.py` — `NWPCloudDiagnostics.boundary_layer_top_ft`,
+  `VerticalMotionAssessment.mixed_layer_top_source`.
+- `analysis/sounding/vertical_motion.py` — `_native_bl_applies`,
+  `_index_at_or_below`; `mixed_layer_top_index` and `assess_vertical_motion`
+  take `native_bl_top_ft`.
+- `analysis/sounding/__init__.py` — passes
+  `hourly.nwp_cloud_diagnostics.boundary_layer_top_ft` through.
+- Tests: `tests/test_grib.py` (decode + the no-terrain drop),
+  `tests/test_ecmwf_sample.py` (field-presence range),
+  `tests/test_vertical_motion.py::TestNativeBoundaryLayerTop`.
+
+### Real-world validation needed
+
+The table above is column geometry, not a replay. Before trusting the behaviour
+change, replay a pack store and measure how often `mixed_layer_top_source` comes
+back `"model"`, and what happens to the low-level SEVERE count on nocturnal
+legs — the change should remove BL-internal severes and leave free-atmosphere
+layers alone. A nocturnal LLJ case is the one to look for.

@@ -115,6 +115,11 @@ struct VerticalMotionAssessment: Codable, Sendable {
     /// Top of the detected surface well-mixed layer (#533); CAT layers below
     /// it are suppressed server-side. Optional — absent on pre-#534 packs.
     let mixedLayerTopFt: Double?
+    /// Which detector produced `mixedLayerTopFt` (#540): "model" = the model's
+    /// own diagnosed PBL height (ECMWF `blh`), "derived" = the θv parcel walk,
+    /// which is blind to a stable boundary layer. Optional — absent on
+    /// pre-#540 packs.
+    let mixedLayerTopSource: String?
     /// The model's own ground in the column's height datum (#541), resolved
     /// from its surface pressure. The AGL datum for `boundaryLayer`, and the
     /// cut below which levels are sub-surface extrapolation. Optional —

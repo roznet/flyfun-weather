@@ -611,9 +611,13 @@ def _analyze_sounding_heavy(
 
     # Vertical motion and turbulence
     compute_stability_indicators(profile, derived_levels)
+    # The model's own PBL top where it published one (#540); the θv parcel
+    # walk stands in otherwise.
+    nwp_diag = hourly.nwp_cloud_diagnostics if hourly else None
     vertical_motion = assess_vertical_motion(
         derived_levels,
         surface_pressure_hpa=hourly.surface_pressure_hpa if hourly else None,
+        native_bl_top_ft=nwp_diag.boundary_layer_top_ft if nwp_diag else None,
     )
 
     # Update result in-place

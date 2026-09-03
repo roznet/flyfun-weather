@@ -399,6 +399,11 @@ export interface VerticalMotionAssessment {
   /** Top of the surface well-mixed layer, when detected (#533). CAT layers
    *  below it are suppressed as boundary-layer roughness, not KH shear. */
   mixed_layer_top_ft?: number | null;
+  /** Which detector produced `mixed_layer_top_ft` (#540): "model" = the
+   *  model's own diagnosed PBL height (ECMWF `blh`), "derived" = the θv
+   *  parcel walk. The two disagree by thousands of feet on stable profiles,
+   *  where the walk is blind. Absent on older packs. */
+  mixed_layer_top_source?: string | null;
   /** The model's own ground in the column's height datum (#541), from its
    *  surface pressure. The AGL datum for `boundary_layer`, and the cut below
    *  which levels are sub-surface extrapolation. Absent on older packs. */

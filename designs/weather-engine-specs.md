@@ -83,7 +83,7 @@ All models share the same computation pipeline; inputs vary by what the raw data
 |-----|-------|--------|
 | `z` on pressure levels | ECMWF | **Closed by the 2026-04-22 amendment**: `gh` is now delivered on all 25 levels and decoded directly. `z` itself is still 1 hPa only (catalogue limitation), and the `z`/g + hypsometric fills survive only as fallbacks for pre-amendment archives. |
 | `geopotential_height_m` | ICON | Not on model levels → derived via hypsometric equation from T+P (the same fallback path). |
-| Remaining a1 surface vars | ECMWF | The ~10 vars in `build_ecmwf_surface_snapshot` are now live on the user-facing forecast too (see B). The rest of the a1 manifest (10fg, blh, capes, degm10l, fzra, lsp, msl, ptype) is still undecoded. |
+| Remaining a1 surface vars | ECMWF | The ~10 vars in `build_ecmwf_surface_snapshot` are now live on the user-facing forecast too (see B). The rest of the a1 manifest (10fg, capes, degm10l, fzra, lsp, msl, ptype) is still undecoded. |
 
 ## What's Implemented
 
@@ -168,10 +168,10 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Publication delay:** ~6–8h after init time
 - **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default. `expver` is absent on prod operational files, and `X0080` on TPREd Release Candidate files (ECMWF_ACCEPT_RCP_EXPVER=1 opt-in for staging).
 - **Pressure-level (a2):** t, r, u, v, z, w, gh, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). Post-amendment (2026-04-22): `d` (divergence) was dropped, `gh` (geopotential height) added at all 25 levels, removing the hypsometric fallback from the decode path. `z` is still delivered only at 1 hPa (catalogue limitation).
-- **Surface (a1) — cloud diagnostics:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l, **kx, totalx, mlcape100, mlcin100, cp** → `NWPCloudDiagnostics` (hcct → `convective_top_ft`; deg0l → `freezing_level_ft` + overwrites `hourly.freezing_level_m`; kx/totalx → `k_index`/`total_totals`; mlcape100/mlcin100 → `ml_cape_jkg`/`ml_cin_jkg`; **cp** is accumulated-since-init, de-accumulated by step-difference in the ECMWF merge loop → `convective_precip_mm_h`). These feed the model-native convective track's firing gate + corroboration (#283).
+- **Surface (a1) — cloud diagnostics:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l, **blh**, **kx, totalx, mlcape100, mlcin100, cp** → `NWPCloudDiagnostics` (hcct → `convective_top_ft`; deg0l → `freezing_level_ft` + overwrites `hourly.freezing_level_m`; **blh** → `boundary_layer_top_ft`, AGL→MSL with the model's own orography exactly as deg0l, feeding the CAT boundary-layer ceiling (#540); kx/totalx → `k_index`/`total_totals`; mlcape100/mlcin100 → `ml_cape_jkg`/`ml_cin_jkg`; **cp** is accumulated-since-init, de-accumulated by step-difference in the ECMWF merge loop → `convective_precip_mm_h`). These feed the model-native convective track's firing gate + corroboration (#283).
 - **Surface (a1) — surface snapshot:** t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp → `build_ecmwf_surface_snapshot` (unit-converted). Consumed by BOTH the standalone verification pipeline and — via `_apply_ecmwf_surface_to_hourly` in `fetch/grib/__init__.py` — the user-facing briefing, which writes them straight onto `HourlyForecast` (ungated, overwriting Open-Meteo per covered point; uncovered points keep Open-Meteo). Two field classes: `_ECMWF_HOURLY_INSTANT_FIELDS` (T/dewpoint, wind/gust, vis, CAPE, surface pressure, nwp_k_index, nwp_total_totals) written only at the matching `valid_utc` and linearly interpolated later in `fill.py`; `_ECMWF_HOURLY_RATE_FIELDS` (`precipitation_mm`, `snowfall_cm`) step-differenced from the prior a1's cumulative value and spread evenly over the window — with no prior step, Open-Meteo's value stands. The surface write is **coupled to the cloud-diag write** at the same valid time: `fill.py` uses `nwp_cloud_diagnostics is not None` as its GRIB-anchor detector, so the two must stay in the same loop iteration.
 - **Surface (a1) — native convective indices:** kx, totalx → `nwp_k_index` / `nwp_total_totals` on `HourlyForecast`, copied onto `ThermodynamicIndices.nwp_k_index/nwp_total_totals` during sounding analysis. The convective character advisory prefers these over the MetPy-derived K/Total-Totals for ECMWF (issue #294). `kx` is delivered in Kelvin and normalized to °C via `_k_index_to_c` (#283); Total Totals is offset-immune and passes through unchanged.
-- **Surface (a1) — delivered but not yet processed:** 10fg, blh, capes, degm10l, fzra, lsp, msl, ptype
+- **Surface (a1) — delivered but not yet processed:** 10fg, capes, degm10l, fzra, lsp, msl, ptype
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
 - **No HTTP, no cache** — local disk I/O, no byte-range download needed
 
@@ -343,7 +343,7 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 
 ### Near-term (high value, moderate effort)
 
-**1. Remaining ECMWF a1 surface variables** — the ~10 vars in `build_ecmwf_surface_snapshot` are DONE (decoded and live on the user-facing forecast, see B). Still undecoded: 10fg, blh, capes, degm10l, fzra, lsp, msl, ptype — the CAPE variants, freezing-level family and precip type are the interesting ones.
+**1. Remaining ECMWF a1 surface variables** — the ~10 vars in `build_ecmwf_surface_snapshot` are DONE (decoded and live on the user-facing forecast, see B). Still undecoded: 10fg, capes, degm10l, fzra, lsp, msl, ptype — the CAPE variants, freezing-level family and precip type are the interesting ones.
 
 **2. ~~ECMWF order: `z` on all 25 pressure levels~~ — DONE.** The 2026-04-22 amendment added `gh` at all 25 levels (dropping `d`), so geopotential height is read directly. `z` itself is still 1 hPa only, and no longer matters.
 
