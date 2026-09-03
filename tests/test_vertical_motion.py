@@ -1145,3 +1145,154 @@ def test_flat_route_grading_is_unchanged_by_the_ground_anchor():
     assert _shape(assess_vertical_motion(levels))[0][:3] == (
         1765, 2523, CATRiskLevel.SEVERE,
     )
+
+
+class TestNativeBoundaryLayerTop:
+    """#540: the model's own diagnosed PBL height replaces the θv parcel walk.
+
+    The parcel criterion is blind to a stable boundary layer — θv climbs
+    immediately off a stable surface, so the walk reports "not mixed", the
+    mixed-layer top comes back None and the tagging ceiling falls back to the
+    fixed 5,000 ft AGL slab. That is exactly the nocturnal profile where
+    low-level-jet shear most needs classifying. ECMWF's ``blh`` is
+    bulk-Richardson based and spans stable, neutral and convective regimes
+    alike.
+    """
+
+    @staticmethod
+    def _stable_profile() -> list[DerivedLevel]:
+        """Nocturnal inversion: θv rises monotonically from the first level,
+        so the parcel walk finds no mixed layer at any height."""
+        return [
+            DerivedLevel(pressure_hpa=1000, altitude_ft=300, temperature_c=5.0),
+            DerivedLevel(pressure_hpa=975, altitude_ft=1000, temperature_c=6.0,
+                         richardson_number=0.2),
+            DerivedLevel(pressure_hpa=950, altitude_ft=1750, temperature_c=7.0,
+                         richardson_number=0.2),
+            DerivedLevel(pressure_hpa=925, altitude_ft=2500, temperature_c=6.0,
+                         richardson_number=0.3),
+            DerivedLevel(pressure_hpa=900, altitude_ft=3300, temperature_c=5.0,
+                         richardson_number=0.4),
+            DerivedLevel(pressure_hpa=700, altitude_ft=12000, temperature_c=-5.0,
+                         richardson_number=0.5),
+        ]
+
+    def test_parcel_walk_is_blind_to_the_stable_layer(self):
+        """Baseline — without a native value there is no mixed-layer top at
+        all, which is the gap this issue is about."""
+        from weatherbrief.analysis.sounding.vertical_motion import (
+            mixed_layer_top_index,
+        )
+
+        levels = self._stable_profile()
+        assert mixed_layer_top_index(levels) == 0
+
+        assessment = assess_vertical_motion(levels)
+        assert assessment.mixed_layer_top_ft is None
+        assert assessment.mixed_layer_top_source is None
+
+    def test_native_top_is_used_where_the_walk_finds_nothing(self):
+        """The model's PBL top resolves to the highest level under it."""
+        levels = self._stable_profile()
+        assessment = assess_vertical_motion(levels, native_bl_top_ft=1800.0)
+
+        # 1,750 ft is the last level at or below 1,800 ft; 2,500 ft is above.
+        assert assessment.mixed_layer_top_ft == 1750
+        assert assessment.mixed_layer_top_source == "model"
+
+    def test_native_top_at_or_below_ground_falls_through_to_the_walk(self):
+        """A native top under the surface parcel means the two datums
+        disagree, not that the boundary layer is thin — ignore it."""
+        levels = self._stable_profile()
+        assessment = assess_vertical_motion(levels, native_bl_top_ft=200.0)
+
+        assert assessment.mixed_layer_top_ft is None
+        assert assessment.mixed_layer_top_source is None
+
+    def test_native_top_below_the_first_level_labels_nothing(self):
+        """Cleared the guard but no level fits under it: the same
+        "nothing suppressed" answer an unmixed parcel walk gives, and no
+        source label for a top that does not exist."""
+        levels = self._stable_profile()
+        assessment = assess_vertical_motion(levels, native_bl_top_ft=500.0)
+
+        assert assessment.mixed_layer_top_ft is None
+        assert assessment.mixed_layer_top_source is None
+
+    def test_native_top_is_clamped_to_the_parcel_walk_depth_cap(self):
+        """A runaway native value must not suppress the whole column: it is
+        held to the same _MIXED_LAYER_MAX_DEPTH_FT the walk carries."""
+        levels = self._stable_profile()
+        assessment = assess_vertical_motion(levels, native_bl_top_ft=50000.0)
+
+        # Cap is surface (300 ft) + 10,000 ft, so the 12,000 ft level is out
+        # and the top lands on 3,300 ft.
+        assert assessment.mixed_layer_top_ft == 3300
+        assert assessment.mixed_layer_top_source == "model"
+
+    def test_derived_walk_still_labels_its_own_top(self):
+        """With no native value the θv walk runs unchanged and says so."""
+        assessment = assess_vertical_motion(_thetav_profile())
+
+        assert assessment.mixed_layer_top_ft == 2500
+        assert assessment.mixed_layer_top_source == "derived"
+
+    def test_native_top_wins_over_a_detected_parcel_top(self):
+        """Where both detectors have an answer the model's is preferred —
+        the whole point is that it is the better-founded one."""
+        levels = _thetav_profile()
+        derived = assess_vertical_motion(levels)
+        native = assess_vertical_motion(levels, native_bl_top_ft=1200.0)
+
+        assert derived.mixed_layer_top_ft == 2500
+        assert derived.mixed_layer_top_source == "derived"
+        assert native.mixed_layer_top_ft == 1000
+        assert native.mixed_layer_top_source == "model"
+
+    def test_the_guard_is_single_sourced(self):
+        """`mixed_layer_top_index` and the reported source must not drift
+        apart — they read the same predicate. Pins that the label never
+        claims "model" for a value the index actually ignored."""
+        from weatherbrief.analysis.sounding.vertical_motion import (
+            _native_bl_applies,
+            mixed_layer_top_index,
+        )
+
+        levels = self._stable_profile()
+        for native in (None, 200.0, 500.0, 1800.0, 50000.0):
+            applies = _native_bl_applies(levels, 0, native)
+            idx = mixed_layer_top_index(levels, native_bl_top_ft=native)
+            source = assess_vertical_motion(
+                levels, native_bl_top_ft=native,
+            ).mixed_layer_top_source
+            if source == "model":
+                assert applies and idx > 0, f"native={native}"
+            elif source == "derived":
+                assert not applies and idx > 0, f"native={native}"
+            else:
+                assert idx == 0, f"native={native}"
+
+    def test_suppression_is_what_native_actually_buys(self):
+        """The behaviour change, end to end.
+
+        On this nocturnal profile the parcel walk finds no mixed layer, so the
+        shear sitting *inside* the stable boundary layer is emitted as a
+        SEVERE CAT layer. With the model's own PBL top the same shear is
+        recognised as boundary-layer roughness and suppressed (#533's rule,
+        now reachable on stable profiles). The free-atmosphere layer at
+        12,000 ft is untouched either way — this narrows what is reported,
+        it does not blind the detector.
+        """
+        levels = self._stable_profile()
+
+        without = assess_vertical_motion(levels)
+        with_native = assess_vertical_motion(levels, native_bl_top_ft=1800.0)
+
+        assert [(L.base_ft, L.top_ft, L.risk) for L in without.cat_risk_layers][0] == (
+            300.0, 1750.0, CATRiskLevel.SEVERE,
+        )
+        # That layer is gone; everything above the PBL top survives unchanged.
+        assert [(L.base_ft, L.top_ft) for L in with_native.cat_risk_layers] == [
+            (1750.0, 3300.0), (12000.0, 12000.0),
+        ]
+        assert with_native.cat_risk_layers[-1].boundary_layer is False

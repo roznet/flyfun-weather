@@ -1270,6 +1270,30 @@ class TestBuildIconCloudDiagnostics:
         assert diag.ml_cape_jkg == 1200.0
         assert diag.ml_cin_jkg == -45.0  # normalized to internal negative
 
+    def test_ecmwf_boundary_layer_height_converted_to_msl(self):
+        """#540: blh is a depth AGL; the diag field is a level, MSL.
+
+        Same normalization as deg0l (#487) and for the same reason: the
+        consumer compares it against `DerivedLevel.altitude_ft`.
+        """
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        # 1200 m AGL over 500 m terrain = 1700 m MSL.
+        diag = build_ecmwf_cloud_diagnostics(
+            {"boundary_layer_height_m": 1200.0}, terrain_elevation_m=500.0,
+        )
+        assert diag is not None
+        assert diag.boundary_layer_top_ft == round(1700.0 * 3.28084)
+
+        # Without terrain there is no MSL value to publish — dropped, not
+        # passed through as AGL.
+        no_terrain = build_ecmwf_cloud_diagnostics(
+            {"boundary_layer_height_m": 1200.0, "total_cover_frac": 0.5},
+        )
+        assert no_terrain is not None
+        assert no_terrain.boundary_layer_top_ft is None
+        assert no_terrain.total_cover_pct == 50.0
+
     def test_ecmwf_freezing_level_converted_to_msl(self):
         """#487: deg0l is AGL; the diag field is MSL everywhere else."""
         from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics

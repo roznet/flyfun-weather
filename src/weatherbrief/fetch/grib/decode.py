@@ -222,6 +222,10 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     # (NWPCloudDiagnostics.freezing_level_ft) that every OTHER writer fills
     # with MSL. build_ecmwf_cloud_diagnostics normalizes it (#487).
     "deg0l": "freezing_level_m",           # meters AGL (geometric height above ground, not MSL)
+    # Native diagnosed boundary-layer height (#540). Metres AGL, bulk-Richardson
+    # based — the same normalization story as deg0l, and normalized the same way
+    # in build_ecmwf_cloud_diagnostics.
+    "blh": "boundary_layer_height_m",      # meters AGL
     # Native convective realization + stability (#283 Phase 2, delivered in a1).
     "cp": "conv_precip_m",                 # m water equiv, ACCUMULATED since init
     "kx": "k_index_c",                     # °C (K-index)
@@ -3104,6 +3108,14 @@ def build_ecmwf_cloud_diagnostics(
         freezing_level_ft = round(
             (freezing_level_agl_m + terrain_elevation_m) * _M_TO_FT
         )
+    # blh is AGL like deg0l, and normalized to MSL for the same reason (#540):
+    # the consumer compares it against `DerivedLevel.altitude_ft`, which is MSL.
+    # A boundary layer of negative depth is not a forecast — unlike a
+    # below-ground freezing level — so the default no-negatives rule applies.
+    bl_agl_m = _agl_m("boundary_layer_height_m")
+    boundary_layer_top_ft: float | None = None
+    if bl_agl_m is not None and terrain_elevation_m is not None:
+        boundary_layer_top_ft = round((bl_agl_m + terrain_elevation_m) * _M_TO_FT)
     low_cover = _frac_to_pct("low_cover_frac")
     mid_cover = _frac_to_pct("mid_cover_frac")
     high_cover = _frac_to_pct("high_cover_frac")
@@ -3132,6 +3144,7 @@ def build_ecmwf_cloud_diagnostics(
         or total_totals is not None
         or ml_cape is not None
         or ml_cin is not None
+        or boundary_layer_top_ft is not None
     )
     if not has_any:
         return None
@@ -3148,6 +3161,7 @@ def build_ecmwf_cloud_diagnostics(
         total_totals=total_totals,
         ml_cape_jkg=ml_cape,
         ml_cin_jkg=ml_cin,
+        boundary_layer_top_ft=boundary_layer_top_ft,
     )
 
 

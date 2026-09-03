@@ -1789,6 +1789,11 @@ class TestFieldPresenceRegression:
             "cloud_base_m": (0.0, 25000.0),
             "convective_cloud_top_m": (0.0, 25000.0),
             "freezing_level_m": (-500.0, 6000.0),
+            # blh: a diagnosed PBL depth AGL. Nocturnal stable BLs go down to
+            # tens of metres; the deepest continental convective BLs reach
+            # ~5 km. Never negative — unlike the freezing level, a boundary
+            # layer below ground is not a forecast (#540).
+            "boundary_layer_height_m": (0.0, 6000.0),
         }
 
         for label, data in (("prod", prod_data), ("test", test_data)):

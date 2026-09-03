@@ -242,7 +242,7 @@ Surface (a1) single-level scalar fields. Stored in `NWPCloudDiagnostics` model.
 
 **Also processed (#283 Phase 2):** `cp` (convective precip, accumulated m → de-accumulated rate, the native realized-convection signal), `mlcape100`/`mlcin100` (mixed-layer CAPE/CIN over the lowest 100 hPa), `mucape`, plus a surface snapshot from `2t`/`2d`, `10u`/`10v`, `10fg`, `vis`, `tp`, `sf`, `sp`. `_ECMWF_*_FIELD_MAP` in `fetch/grib/decode.py` is the live list.
 
-**Still delivered but unprocessed:** `blh` (boundary layer height), `capes` (CAPE-shear), `degm10l` (−10°C level), `fzra` (freezing rain accum), `lsp` (large-scale precip), `msl`, `ptype` (precip type code).
+**Still delivered but unprocessed:** `capes` (CAPE-shear), `degm10l` (−10°C level), `fzra` (freezing rain accum), `lsp` (large-scale precip), `msl`, `ptype` (precip type code).
 
 **ECMWF specifics:** ECPDS push delivery to `ECMWF_GRIB_DIR` (no HTTP, no cache). Coverage is the `ifs-ens-cf` subscription grid: Europe + US at 0.25°. Cycles: 00/12z deliver 0–168h, 06/18z deliver 0–144h (horizon is read from files on disk, not from stream name — robust to the 50r1 `scda`→`oper` merge on 12-May-2026). Publication delay ~6–8h after init. Post-amendment cadence is hourly 0–90h then 3h tail on pressure-level data; surface fields are 3h throughout. Intermediate gap hours within the flight window are filled by per-level **linear time interpolation** (`fetch/grib/fill.py::_linear_interp_pressure_levels` — T, RH, wind, geopotential, omega, CLW/ICMR, cloud cover; dewpoint re-derived via Magnus from interpolated T+RH). Files may contain multiple geographic sub-grids; cfgrib splits them into separate Datasets and the decoder uses first-wins per point.
 
