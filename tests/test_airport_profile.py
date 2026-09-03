@@ -446,3 +446,71 @@ class TestSurfaceCeilingDatum:
         hour = self._insert(db_session, model="gfs")
         rows = _surface_from_cache(db_session, "LSGS", "gfs", [hour])
         assert rows[0]["ceiling_ft"] == pytest.approx(4000.0)
+
+
+class TestStreamDoesNotPinAPooledSession:
+    """The SSE endpoint must not hold a pooled connection for the stream's life.
+
+    ``Depends(get_db)`` teardown is deferred until the response completes, so
+    behind a ``StreamingResponse`` it pins one connection per in-flight stream.
+    ``_MAX_GLOBAL`` admits more concurrent streams than the engine's default
+    pool has connections (``pool_size=5 + max_overflow=10``), so the streams
+    alone can exhaust it and the next checkout blocks for ``pool_timeout``
+    and then 500s. This was item 3 of #532 — the follow-up issue was closed
+    while the fix was still absent, so it gets a test this time.
+    """
+
+    def test_endpoint_declares_no_get_db_dependency(self):
+        import inspect
+
+        from flyfun_common.db import get_db
+
+        from weatherbrief.api.airport_profile import get_airport_profile
+
+        for name, param in inspect.signature(get_airport_profile).parameters.items():
+            assert getattr(param.default, "dependency", None) is not get_db, (
+                f"`{name}` reintroduces Depends(get_db) on a StreamingResponse "
+                "endpoint; the connection would stay checked out for the whole "
+                "stream. Own the session and close it before returning."
+            )
+
+    @pytest.mark.asyncio
+    async def test_session_is_closed_before_the_stream_is_returned(self, monkeypatch):
+        from weatherbrief.api import airport_profile as ap
+
+        events: list[str] = []
+
+        class _RecordingSession:
+            def close(self) -> None:
+                events.append("closed")
+
+        def _fake_surface(db, *args, **kwargs):
+            events.append("read")
+            return []
+
+        monkeypatch.setattr(ap, "SessionLocal", _RecordingSession)
+        monkeypatch.setattr(
+            ap, "_resolve_airport_coords", lambda icao, airports_db: (46.2, 7.3, 1580.0),
+        )
+        monkeypatch.setattr(ap, "_surface_from_cache", _fake_surface)
+
+        response = await ap.get_airport_profile(
+            icao="LSGS",
+            model="ecmwf",
+            start_hour="2026-05-07T12:00:00Z",
+            window_h=0,
+            enrich=False,
+            _user_id="tester",
+            airports_db="/nonexistent.db",
+            data_dir=Path("/tmp"),
+        )
+        try:
+            # Both the read and the close happened before the response object
+            # was handed back — i.e. before a single byte of the stream is
+            # produced, and before the client can hold it open indefinitely.
+            assert events == ["read", "closed"]
+            assert response.media_type == "text/event-stream"
+        finally:
+            # The generator's finally never runs (we never consume it), so
+            # give the limiter its slot back by hand.
+            ap._limiter.release("tester")

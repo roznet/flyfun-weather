@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db import current_user_id, SessionLocal
 
 from weatherbrief.api.deps import airports_db as _airports_db, data_dir as _data_dir
 
@@ -565,7 +565,6 @@ async def get_airport_profile(
     window_h: int = Query(default=_DEFAULT_WINDOW_H, ge=0, le=12),
     enrich: bool = Query(default=True, description="Run local-GRIB enrichment phase"),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
     data_dir: Path = Depends(_data_dir),
 ):
@@ -603,7 +602,24 @@ async def get_airport_profile(
     # Snapshot surface from cache before opening the long-lived stream so
     # any DB error surfaces as a normal HTTP error (cleaner UX than an
     # SSE error mid-stream).
-    surface = _surface_from_cache(db, icao, model, hours, field_elevation_ft=elevation_ft)
+    #
+    # The session is owned here rather than taken from ``Depends(get_db)``:
+    # FastAPI defers generator-dependency teardown until the response is
+    # complete, so behind a StreamingResponse that session would stay checked
+    # out for the whole life of the stream. `_limiter` admits _MAX_GLOBAL
+    # concurrent streams while the engine keeps SQLAlchemy's defaults
+    # (pool_size=5 + max_overflow=10 = 15), so the streams alone can exhaust
+    # the pool and the next checkout blocks for pool_timeout and then 500s.
+    # Same pattern /refresh/stream uses in packs.py. This read is the
+    # endpoint's only DB work and returns plain dicts, so nothing downstream
+    # of here needs a session.
+    db = SessionLocal()
+    try:
+        surface = _surface_from_cache(
+            db, icao, model, hours, field_elevation_ft=elevation_ft,
+        )
+    finally:
+        db.close()
 
     # Acquire the per-user / global concurrency slot before opening the
     # stream. Released in the generator's finally block. Done synchronously
