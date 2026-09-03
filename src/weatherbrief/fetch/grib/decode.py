@@ -211,7 +211,7 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
 # cfgrib shortName → internal raw field name.
 _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     # Cloud diagnostics (used by build_ecmwf_cloud_diagnostics).
-    # DATUM: ECMWF ceil/cbh/hcct/deg0l are all metres ABOVE GROUND (AGL),
+    # DATUM: ECMWF ceil/cbh/hcct/deg0l/blh are all metres ABOVE GROUND (AGL),
     # confirmed against eccodes names + the ECMWF Parameter DB — NOT MSL. See
     # issue #441 finding #3 (datum normalization for airport-vs-en-route use is
     # a separate follow-up; these are AGL as delivered).

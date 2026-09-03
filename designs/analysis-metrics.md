@@ -235,8 +235,9 @@ Surface (a1) single-level scalar fields. Stored in `NWPCloudDiagnostics` model.
 | Total cloud cover | tcc | `total_cover_pct` | 0–1→% | Full-column |
 | Convective cloud top | hcct | `convective_top_ft` | m→ft | Cb top; base falls back to LCL |
 | Freezing level | deg0l | `freezing_level_ft` + overwrites `hourly.freezing_level_m` | m→ft | Model-native 0°C isotherm height |
+| Boundary-layer height | blh | `boundary_layer_top_ft` | m→ft | Model-native (bulk-Ri) PBL top; the boundary-layer ceiling for CAT suppression + tagging (#540) |
 
-**Datum trap (#441 finding 3 / #487):** ECMWF's `ceil`, `cbh`, `hcct` and `deg0l` are all metres **above ground**, not MSL, and `9999` is a no-cloud sentinel. `deg0l` is the dangerous one, because `NWPCloudDiagnostics.freezing_level_ft` is MSL from every other writer — `build_ecmwf_cloud_diagnostics` adds terrain elevation to normalize it, and **drops the value rather than passing it through** when terrain is unknown. Do not "simplify" that to a pass-through.
+**Datum trap (#441 finding 3 / #487 / #540):** ECMWF's `ceil`, `cbh`, `hcct`, `deg0l` and `blh` are all metres **above ground**, not MSL (`9999` is additionally a no-cloud sentinel on the three cloud fields). `deg0l` and `blh` are the dangerous pair: `NWPCloudDiagnostics.freezing_level_ft` is MSL from every other writer, and `boundary_layer_top_ft` is compared against `DerivedLevel.altitude_ft`, which is MSL. `build_ecmwf_cloud_diagnostics` adds terrain elevation to normalize both, and **drops the value rather than passing it through** when terrain is unknown. Do not "simplify" that to a pass-through.
 
 **Native convective indices (processed — issue #294):** `kx` (K-index) and `totalx` (Total Totals) are decoded from the a1 file into `nwp_k_index` / `nwp_total_totals` and copied onto `ThermodynamicIndices` (`kx` normalized from Kelvin via `_k_index_to_c`; `totalx` is offset-immune). They are model-native at full IFS resolution — preferred over the MetPy-derived K/TT (computed from the coarse sounding) by the convective character advisory. These are the fields Windy uses to drive ECMWF thunder icons.
 
