@@ -233,3 +233,48 @@ defaults **off** — reserve it for something you'd genuinely want every user to
 
 Pass the body on stdin (`--body-file -`) so markdown survives SSH without shell-escaping;
 `docker exec -i` and `ssh` both forward stdin.
+
+## §D11 — Rehearsing migrations on real MySQL
+
+**The incident.** Migration 094 added a TEXT column as `NOT NULL` with a `server_default` of
+`[]`. SQLite accepts that; MySQL rejects it outright with error 1101, *"BLOB, TEXT, GEOMETRY or
+JSON column can't have a default value"*. The deploy ran the rebuild first and the migration
+second, so for a few minutes production was serving **new code against the old schema** — every
+`briefing_packs` query returned `Unknown column`, which took out the briefing pages. `/health`
+stayed 200 throughout, because it touches no table. The schema was applied by hand with the
+portable three-step, alembic was stamped to 094, and service came back.
+
+Two things made it possible, and both are structural rather than careless:
+
+1. **The suite cannot see it.** Dev is SQLite. Every test passed on DDL that could never run in
+   production. No amount of local testing would have caught it.
+2. **`/health` is not a smoke test.** It answers 200 while the app's main table is unreadable.
+   After a migration, verify by *querying the table the migration touched*, not by curling
+   health.
+
+**The check.** `.claude/skills/deploy/mysql_migration_check.py` closes gap 1. It creates a
+throwaway MySQL database, upgrades it to the revision production currently reports, seeds a row
+into each table the pending migrations name in a `batch_alter_table`, then runs the pending
+migrations. Seeding matters: it also catches the neighbouring trap of adding a `NOT NULL` column
+with no default to a table that already has rows, which is fine on an empty table and fails on a
+populated one.
+
+Run it whenever `git diff ${SERVER_SHA}..${LOCAL_SHA} -- alembic/versions/` is non-empty.
+
+**Credential gotchas** (all cost real time once):
+
+- `~/.my.cnf` values are frequently **quote-wrapped**. `configparser` keeps the quotes, the
+  `mysql` CLI strips them — so a naive read sends a password two characters too long and gets
+  `1045 Access denied` while the CLI works fine beside it. Strip quotes from every value.
+- Honour the `host` in the file (`127.0.0.1`) rather than assuming a unix socket. Connecting
+  over the socket with TCP credentials gives the same misleading 1045.
+- Never write the resolved URL into the repo, and delete any temp file holding it. The helper
+  reads the credentials in-process and passes them to alembic through `DATABASE_URL` in the
+  child's environment only.
+
+**A `SKIP` is not a pass.** No local MySQL means the check did not run. Report that explicitly
+in the pre-flight summary rather than letting an absent check read as a green one.
+
+**Ordering.** The rebuild lands before `alembic upgrade head`, so any migration failure is an
+outage window, not a safe abort. That is the reason this check is a pre-flight gate: by the time
+the migration fails on the server, the new code is already serving.

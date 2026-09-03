@@ -12,7 +12,7 @@ server's `.env` is a *container* path while `scp` needs the host-side file under
 `HOST_DATA_DIR`; the airport-DB step below resolves both separately for that reason.
 
 Background for anything that deviates from the happy path is in
-`designs/references/deploy-notes.md` (§D1–§D10). Read the section a step points you at; the
+`designs/references/deploy-notes.md` (§D1–§D11). Read the section a step points you at; the
 procedure below is complete on its own for a normal deploy.
 
 ## Pre-flight checks
@@ -108,6 +108,38 @@ source venv/bin/activate && alembic heads | grep -c '(head)'
 ```
 
 Must print `1`.
+
+### Rehearse the migration on real MySQL (§D11)
+
+**Dev is SQLite, prod is MySQL, and the test suite only ever exercises SQLite** — so a
+migration can pass everything locally and still be impossible to run in production. That is
+not hypothetical: migration 094 gave a TEXT column a `server_default`, which MySQL rejects
+(error 1101), and it took the briefing pages down because the code shipped alongside it
+already expected the columns the failed migration never created.
+
+If migration files changed, rehearse them against a real MySQL. The helper builds a throwaway
+database, brings it to the revision **production is currently at**, seeds a row into each
+table the pending migrations touch, and runs them for real:
+
+```bash
+source venv/bin/activate
+python .claude/skills/deploy/mysql_migration_check.py --from-rev "$(
+  ssh <user>@<server> "docker exec weatherbrief alembic current 2>/dev/null" | tail -1 | awk '{print $1}'
+)"
+```
+
+Pass `--from-rev` the server's *current* revision, not `head` — the point is to replay exactly
+the step production is about to take.
+
+- **Exit 0 / `PASS`** — the pending migrations run on MySQL. Proceed.
+- **Exit 1 / `FAIL`** — **stop the deploy.** This is the failure production would hit. Fix the
+  migration, don't work around the check.
+- **`SKIP`** — no local MySQL or no `~/.my.cnf`. Not a failure; the check simply isn't
+  available on this machine. Say so in the pre-flight summary so the gap is visible, and take
+  extra care reading the migration by eye.
+
+Credentials are read from `~/.my.cnf` at run time and never written anywhere; the scratch
+database is dropped on the way out, including when the check fails.
 
 ## Disk usage check
 
@@ -267,6 +299,25 @@ name the nodes left behind.
    ```bash
    ssh <user>@<server> "docker exec weatherbrief alembic upgrade head"
    ```
+   The rebuild has already landed at this point, so a migration failure here is an **outage**,
+   not a safe abort: the new code is serving against the old schema. If it fails, treat it as
+   live — see §D11 — and either apply the schema by hand or roll back.
+
+   Then prove the schema and the code agree, by querying **a table the migration touched**:
+   ```bash
+   ssh <user>@<server> "docker exec weatherbrief python -c \"
+   from weatherbrief.db.models import BriefingPackRow
+   from flyfun_common.db import SessionLocal, get_engine
+   get_engine()   # binds the session; SessionLocal() alone is unbound here
+   db = SessionLocal()
+   try:
+       db.query(BriefingPackRow).limit(1).all(); print('ORM OK')
+   finally:
+       db.close()
+   \""
+   ```
+   `/health` returns 200 even when the app's main table is unreadable, so it cannot stand in
+   for this (§D11).
 4. Verify the health check:
    ```bash
    ssh <user>@<server> "docker inspect --format='{{.State.Health.Status}}' weatherbrief"
