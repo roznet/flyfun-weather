@@ -33,6 +33,42 @@ batch_op.create_foreign_key("fk_flights_aircraft_id", "aircraft", ["aircraft_id"
 Unnamed constraints get dialect-generated names that differ between SQLite and MySQL, which
 makes a portable downgrade impossible to write.
 
+## MySQL rejects `server_default` on TEXT/BLOB/JSON columns
+
+MySQL raises error 1101 — *"BLOB, TEXT, GEOMETRY or JSON column can't have a default value"* —
+for any `server_default` on those types. SQLite accepts it happily, so the migration passes
+every local test and the whole suite goes green on DDL that **cannot run in production**. This
+is the sharpest edge of the dev/prod asymmetry: migration 094 shipped this way and took the
+briefing pages down, because the code deployed alongside it expected columns the failed
+migration never created.
+
+Never write this:
+
+```python
+batch_op.add_column(sa.Column("options_json", sa.Text(),
+                              nullable=False, server_default="[]"))   # 1101 on MySQL
+```
+
+Add it nullable, backfill, then tighten — portable on both dialects:
+
+```python
+with op.batch_alter_table("briefing_packs") as batch_op:
+    batch_op.add_column(sa.Column("options_json", sa.Text(), nullable=True))
+
+op.execute("UPDATE briefing_packs SET options_json = '[]' WHERE options_json IS NULL")
+
+with op.batch_alter_table("briefing_packs") as batch_op:
+    batch_op.alter_column("options_json", existing_type=sa.Text(), nullable=False)
+```
+
+`server_default` on `Boolean`, `Integer` and `String`/`VARCHAR` is fine — the rule is specific
+to the unsized LOB types.
+
+**Verifying it:** SQLite cannot catch this, so render the MySQL DDL without a server —
+`DATABASE_URL="mysql+pymysql://u:p@localhost/db" alembic upgrade <prev>:<new> --sql` — and
+check the emitted `ALTER` for a `DEFAULT` on a TEXT column. Better still, run it against a real
+MySQL if one is available locally.
+
 ## Column renames on MySQL need `existing_type`
 
 MySQL's `CHANGE COLUMN` restates the full column definition, so a rename without
@@ -67,3 +103,5 @@ are documented in **`time-alignment-audit.md`** — read it before adding a date
 5. Datetime columns follow `time-alignment-audit.md`.
 6. Run `alembic upgrade head` then `alembic downgrade -1` locally — SQLite catches the
    batch-mode mistakes, which are the most common failure.
+7. No `server_default` on a `Text`/`LargeBinary`/`JSON` column — MySQL error 1101, and
+   SQLite will not catch it. Render the MySQL DDL with `--sql` to be sure.

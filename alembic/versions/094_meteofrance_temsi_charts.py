@@ -34,13 +34,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # ``meteofrance_charts_options_json`` is added NULLable and tightened to NOT
+    # NULL after a backfill, rather than declared NOT NULL with a
+    # ``server_default`` of ``[]`` up front. MySQL rejects a DEFAULT on a
+    # BLOB/TEXT/JSON column outright (error 1101), and because dev is SQLite --
+    # which accepts it happily -- the whole test suite goes green on a migration
+    # that cannot run in production. The three-step below is portable, so both
+    # dialects end up with the same NOT NULL column and the same ``[]`` for
+    # every pre-existing row.
     with op.batch_alter_table("briefing_packs") as batch_op:
         batch_op.add_column(
             sa.Column(
                 "meteofrance_charts_options_json",
                 sa.Text(),
-                nullable=False,
-                server_default="[]",
+                nullable=True,
             ),
         )
         batch_op.add_column(
@@ -65,6 +72,20 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="0",
             ),
+        )
+
+    # Existing rows predate TEMSI and so never fetched one -- an empty list is
+    # exactly how the renderer spells "unavailable".
+    op.execute(
+        "UPDATE briefing_packs SET meteofrance_charts_options_json = '[]' "
+        "WHERE meteofrance_charts_options_json IS NULL"
+    )
+
+    with op.batch_alter_table("briefing_packs") as batch_op:
+        batch_op.alter_column(
+            "meteofrance_charts_options_json",
+            existing_type=sa.Text(),
+            nullable=False,
         )
 
 
