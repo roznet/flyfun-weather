@@ -1,6 +1,10 @@
-# Local PR draft — not submitted
+# Final local PR package — awaiting user review
 
-Suggested title: **Fix observed-weather validity, freshness, cache durability and map rendering**
+Final title: **Fix observed-weather validity, freshness, cache durability and map rendering**
+
+The submission-ready body is
+[the final PR description](2026-09-05-observed-fix-pr-final.md), aligned with the
+repository's PR template. This file remains the local preparation/checklist record.
 
 Branch: `codex/observed-corrections`
 
@@ -8,10 +12,18 @@ Target: `roznet/flyfun-weather:main`
 
 Base: `b48d9a8ff5831ab44fc3e43253c808578c215277`
 
+Implementation frozen at: `0d4ae47fb63ba596b7e97018278e88404d56002b`
+
+The GitHub `main` head was checked read-only on 2026-09-05 and still matches the
+base above. Later commits in this package finalize documentation only. Recheck
+upstream immediately before an eventual submission; do not silently rebase or
+change the implementation the user reviewed.
+
 Working copy: `/home/qian/flyfun_weather/observed-corrections`
 
 Nothing has been pushed, posted to GitHub, deployed or merged. This file is the
-proposed PR body for the user's review, not an existing GitHub pull request.
+local handoff record, not an existing GitHub pull request. Publication remains
+on hold until the user explicitly approves it.
 
 ## What & why
 
@@ -52,8 +64,10 @@ is automatically closed. A new tracking issue has not been created.
 See [verification and independent-review record](2026-09-05-observed-fix-verification.md)
 for final commands, counts, reviewer dispositions and outstanding checks.
 
-- Full Python: **5,782 passed**, 20 skipped, 23 deselected.
-- Final observed/API regressions: **190 passed**, 6 deselected.
+- Historical full Python, initial correction commit: **5,782 passed**, 20 skipped,
+  23 deselected.
+- Historical observed/API regressions, initial correction commit: **190 passed**,
+  6 deselected. Backend code has not changed since those runs.
 - Full web: **817 passed**; TypeScript typecheck passed.
 - Full-entrypoint browser checks: **10 passed**, including real Leaflet/PNG
   decoding, refresh retries, races/cleanup and 1280/390/320px layouts. Independent
@@ -95,13 +109,55 @@ documented in the verification record.
 
 ## Before submission
 
-- [ ] User reviews this draft and the branch diff.
+- [ ] User reviews the final PR description and the branch diff.
 - [x] Verify map source switching, failure recovery, lightning expiry and responsive
   labels in real Chrome using synthetic fixtures; independently re-review fixes.
 - [ ] iOS unit/UI and on-device checks — deferred by user request, not verified.
 - [ ] Actual-device/cross-browser and live-granule validation remain outstanding.
-- [ ] Confirm the intended upstream base is still current before publishing.
+- [x] Confirm upstream main matches the reviewed base at finalization (2026-09-05).
+- [ ] Recheck that base and the approved branch head immediately before publishing.
+- [ ] Resolve GitHub write access: the current GitHub session reports
+  `permissions.push: false` for `roznet/flyfun-weather`.
 - [ ] Obtain explicit approval to push and create the GitHub PR.
+
+## Submission preparation — commands not executed
+
+After explicit user approval, from the fix worktree, first confirm that the
+working tree and branch are still the reviewed versions:
+
+```bash
+git status --short --branch
+git log -3 --oneline
+gh api repos/roznet/flyfun-weather/commits/main --jq .sha
+```
+
+Stop if the branch has unexpected changes or upstream no longer matches the
+recorded base. Report the difference before changing the reviewed code.
+
+The following commands publish the branch and create a **draft** GitHub PR;
+they are provided for later use, not authorization to run them now. Draft status
+preserves the outstanding validation gates and does not enable auto-merge.
+
+The configured `origin` points to a local mirror, not to the requested GitHub
+repository. No remote configuration was changed. The command below therefore
+names GitHub explicitly; do not substitute `git push origin`. GitHub's repository
+metadata confirms the HTTPS URL below. Publishing requires GitHub write access;
+the current GitHub session reports `permissions.push: false` (checked read-only
+on 2026-09-05). **Submission is blocked until suitable access is provided.**
+Do not execute the publication commands until both access and user approval are
+resolved. Do not create a fork or choose a different destination without direction.
+If authentication or authorization still fails, stop rather than pushing elsewhere.
+
+```bash
+git push https://github.com/roznet/flyfun-weather.git codex/observed-corrections
+gh pr create \
+  --repo roznet/flyfun-weather \
+  --base main \
+  --head codex/observed-corrections \
+  --draft \
+  --title 'Fix observed-weather validity, freshness, cache durability and map rendering' \
+  --body-file designs/reviews/2026-09-05-observed-fix-pr-final.md
+```
 
 Full findings and future options:
 [PR #584 observed review](2026-09-05-pr584-observed-review.md).

@@ -13,6 +13,35 @@ The initial corrections were committed locally as
 adds full-entrypoint browser verification and fixes three more web defects.
 Mac/iOS execution is **deferred at the user's request**, not reported as passed.
 
+## Final submission-package check — 2026-09-05
+
+At the user's request, development stopped and the implementation was frozen at
+`0d4ae47fb63ba596b7e97018278e88404d56002b`. The subsequent finalization changes
+documentation only. The submission-ready body is
+[the final PR description](2026-09-05-observed-fix-pr-final.md); the
+[local preparation record](2026-09-05-observed-fix-pr-draft.md) holds the final
+title, branch/base, approval checklist and unexecuted submission commands.
+
+Fresh checks on the frozen implementation: **817 web unit tests in 50 files**,
+**10 Chrome tests in 8.0 seconds**, application `tsc --noEmit`, help-catalog
+parsing/exact equality and branch-wide `git diff --check` passed. Python results
+below remain historical; backend code is unchanged. A separate document-only
+audit confirmed scope, evidence limits, explicit deferrals and no automatic issue
+closure; its historical-test wording correction was applied.
+
+Read-only GitHub checks confirmed `main` still equals
+`b48d9a8ff5831ab44fc3e43253c808578c215277` and the target repository is
+`roznet/flyfun-weather`. The configured `origin` is a local mirror, so preparation
+uses the explicit GitHub URL rather than silently redirecting `origin`. No remote
+configuration, code, provider state or application data was changed. No push, PR,
+comment, deployment, merge or auto-merge action was performed.
+
+The current GitHub session reports `permissions.push: false` for that repository.
+Submission therefore additionally requires suitable GitHub access; no write was
+attempted to test permissions. The final local review package is complete, but
+publication is blocked pending both user approval and access. No fork or alternate
+publication destination was created.
+
 ## Approach and baseline
 
 Used Superpowers brainstorming to keep future motion/association design separate
