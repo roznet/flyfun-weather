@@ -53,11 +53,11 @@ were redirected to this worktree's existing `venv`.
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
 | Independent feature tracking | Implemented; fractional-lineage boundary fixed at `35c0fb4d` and independently re-reviewed. |
 | Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
-| Time-compatible evidence and bounded payload | Initial implementation at `d854666c`; independent review found eight Important issues; fix round 1 in progress. |
+| Time-compatible evidence and bounded payload | Fix round 1 at `5f0cc743` resolves five review findings; three remain in fix round 2 (projection rim, invalid-route reason, refused-work counts). |
 | Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
-| Full/realtime/legacy/SSE/snapshot/bundle integration | Implemented at `b8d031a2`; fresh 273-test regression passes; independent task review in progress. |
+| Full/realtime/legacy/SSE/snapshot/bundle integration | Implemented and independently approved after fix round 1 at `95941574`; fresh 274-test regression passes. |
 | Web explorer and capability/expiry lifecycle | Implemented and independently approved after fixes at `c7be612c`; final server integration remains separate. |
-| Native explorer and raw-cache/capability lifecycle | Corrected fixture literals pass producer validation; committed at `fd625b9c`; independent static task review in progress. No Mac execution. |
+| Native explorer and raw-cache/capability lifecycle | Implemented and independently statically approved after fix round 1 at `d793698c`. No Mac execution. |
 | Integrated tests and independent final review | Pending. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
@@ -140,6 +140,13 @@ reasons, aggregate limits/counts, and lightning completeness. Each is assigned
 to a test-first fix round and scoped independent re-review. The initial passing
 tests are not approval of those behaviors.
 
+Payload fix round 1 at `5f0cc743` passes **21 focused tests in 28.36s**, freshly
+run by the controller with no warnings. Independent scoped re-review confirms
+five original findings addressed. The remaining three require the projection's
+one-cell support/domain rim, retention of the expected `invalid_route` refusal
+code, and unknown/incomplete counts when route/interval work was refused before
+enumeration. They are assigned to fix round 2, not waived.
+
 Server integration at `b8d031a2` has a fresh controller result of **273 passed,
 21 warnings in 20.70s**. This covers real snapshot/bundle/header/direct/gated/SSE
 paths, disabled-builder replacement, outside-D-0 timing, reused writer
@@ -164,6 +171,16 @@ env -u AIRPORTS_DB -u ECMWF_GRIB_DIR -u ECMWF_PROD_GRIB_DIR \
   tests/test_briefing_ready.py tests/test_pipeline.py --tb=short
 ```
 
+Server review found that gated JSON/SSE refresh could swallow a publication
+lifecycle error as a successful no-op, and a superseded realtime call returned
+current motion alongside its stale local ordinary fields. Fix `95941574` makes
+lifecycle errors explicit (JSON 409/SSE error) with capability/no-store headers
+and returns the helper's current intended refreshed fields. A strengthened
+thread-barrier test distinguishes old/new observation values. Fresh controller
+run of the scope above using `/tmp/flyfun-motion-server-fix1.PB5lVW`: **274 passed,
+21 known warnings in 20.89s**. Independent scoped re-review confirms both findings
+addressed with no new breakage. Real accepted-result integration follows Task4.
+
 An interim isolated broad Python run, before changing existing server writers,
 passed **6,082 tests**, with **20 skipped, 23 deselected and 853 warnings** in
 221.94s. It explicitly excluded the in-progress Task4 association/payload and
@@ -186,7 +203,17 @@ frames, two matching pairs and three advertised times. Native validator checks
 were strengthened, and fictional positive lightning was replaced by explicit
 unavailable evidence. The worker also checked the strict disabled-envelope
 shape; the controller statically inspected that helper. No Swift compilation,
-unit/UI, simulator or device command was run. Independent native review is active.
+unit/UI, simulator or device command was run.
+
+Native review then found required contour/bearing validation gaps, a direct
+snapshot-writer deleted-pack bypass, and loss of an advertised UTC token's exact
+spelling through `Date` conversion. Fix `d793698c` adds the render prerequisites
+and deletion guards and retains the original server time token. Authored native
+regressions cover invalid/missing operator, bearing 400, both direct writer paths,
+and an exact five-minute tick spelled with `.000Z`. Fresh Python producer checks
+accept the positive literals/alternate UTC spelling and reject the invalid
+variants. Independent scoped static re-review marks all three findings addressed
+with no new breakage. These checks do not execute or certify the Swift code.
 
 Worker usage limits interrupted the native final static pass and the initial
 Task4/5 dispatches. No Task4/5 production files existed at that interruption;
@@ -259,6 +286,9 @@ netCDF/NumPy/Starlette deprecations plus the legacy LI timezone conversion.
 - Synthetic software tests do not authorize operational prediction or safe-route claims.
 
 ## Implementation decisions
+
+The complete decision/rationale/consequence record is preserved in
+[implementation decisions](2026-09-05-observed-motion-decisions.md).
 
 - Independent, disjoint file ownership permits parallel work; commits and review
   gates remain serialized. A conflict would require reconciliation and rerunning

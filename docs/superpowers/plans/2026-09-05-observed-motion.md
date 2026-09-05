@@ -144,7 +144,7 @@ def test_ground_speed_is_not_route_closure():
 
 **Interfaces:** `reserve_motion_revision(pack_dir: Path, *, allow_create=False) -> MotionPublicationToken`; token contains public identity/generation/revision. `publish_motion_snapshot(pack_dir, token, motion, *, refreshed_fields, initial_snapshot=None) -> dict`; merges under stable parent lock, validates generation/latest attempt, preserves unrelated JSON and returns current published snapshot for superseded callers. Shared full/legacy writers must pass through the same atomic helper. Deletion invalidates generation while preserving high-water. Helpers return explicit transport errors on invalid lifecycle, never recreate deleted packs. `observed_motion` is the same optional raw-compatible sibling in snapshot/full/direct/gated/SSE response models.
 
-- [ ] Use real temporary files/concurrent barriers for newer-unavailable/older-ready publication, initial creation, reused-pack writer and deletion/recreation races.
+- [x] Use real temporary files/concurrent barriers for newer-unavailable/older-ready publication, initial creation, reused-pack writer and deletion/recreation races.
 
 ```python
 def test_newer_failure_fences_old_success(pack_dir):
@@ -156,12 +156,12 @@ def test_newer_failure_fences_old_success(pack_dir):
     assert result["observed_motion"]["status"] == "unavailable"
 ```
 
-- [ ] Wire task 9's reviewed stable lock/control and atomic helpers into every direct snapshot writer/deletion. Full creation is explicitly distinct from refresh; no bypass restores an older motion block.
-- [ ] Compute from the same snapshot route/timing identity captured at reservation, using task 4's shared `route_identities`. Do not replace those inputs with a later flight-DB route. Verify initial complete snapshot inputs before first publication; storage freezes raw identity fields but does not derive a competing hash algorithm.
-- [ ] Include retention full-pack deletion and account deletion's individual-pack loop in the same generation lock. Keep the generic parent-directory cleanup distinct from the pack-only helper: account deletion also passes the whole user packs directory to `_rmtree`. Reusable public pack identities must retain high-water control/lock state; a fully removed account namespace cannot be reused after that state is lost. Test delayed publication and preservation on ordinary pack/retention deletion.
-- [ ] Call task-4 payload during full/realtime optional stage with captured cutoff. Completed failures/disabled/outside-D-0 publish replacements; transport failure does not claim computation. Preserve ordinary observations.
-- [ ] Add serve-time capability/no-store headers for existing snapshot/bundle/refresh paths; propagate full motion through all return models, including SSE complete and direct observations refresh. Tests exercise actual endpoints and pack bundles, not mock existence.
-- [ ] Run targeted API/storage suites, inspect all changed-writer callers; controller commits/reviews before clients depend on endpoints.
+- [x] Wire task 9's reviewed stable lock/control and atomic helpers into every direct snapshot writer/deletion. Full creation is explicitly distinct from refresh; no bypass restores an older motion block.
+- [x] Compute from the same snapshot route/timing identity captured at reservation, using task 4's shared `route_identities`. Do not replace those inputs with a later flight-DB route. Verify initial complete snapshot inputs before first publication; storage freezes raw identity fields but does not derive a competing hash algorithm.
+- [x] Include retention full-pack deletion and account deletion's individual-pack loop in the same generation lock. Keep the generic parent-directory cleanup distinct from the pack-only helper: account deletion also passes the whole user packs directory to `_rmtree`. Reusable public pack identities must retain high-water control/lock state; a fully removed account namespace cannot be reused after that state is lost. Test delayed publication and preservation on ordinary pack/retention deletion.
+- [x] Call task-4 payload during full/realtime optional stage with captured cutoff. Completed failures/disabled/outside-D-0 publish replacements; transport failure does not claim computation. Preserve ordinary observations.
+- [x] Add serve-time capability/no-store headers for existing snapshot/bundle/refresh paths; propagate full motion through all return models, including SSE complete and direct observations refresh. Tests exercise actual endpoints and pack bundles, not mock existence.
+- [x] Run targeted API/storage suites, inspect all changed-writer callers; controller commits/reviews before clients depend on endpoints.
 
 ### Task 6: Web explorer, tolerant ordering and lifecycle
 
@@ -191,7 +191,7 @@ it('does not resurrect ready data after a failed newer run', () => {
 
 **Interfaces:** Tolerant raw-motion value preserves JSON spelling/unknown fields from original bytes, with typed validated view access. Snapshot/refresh `observedMotion` optional sibling does not fail the whole briefing on malformed data. `ObservedMotionState` mirrors web identity/revision/capability/expiry rules; MapKit weather ownership is independent of route overlays. Shared cache actor merges raw motion on both patches and full snapshot/bundle writes.
 
-- [ ] Write Swift fixture tests before production changes: raw unknown key round trip, newer-unavailable/older-bundle ordering, same-revision conflict, missing/unsupported block, deleted pack and save failure. These tests are authored/statically reviewed here, not reported as executed.
+- [x] Write Swift fixture tests before production changes: raw unknown key round trip, newer-unavailable/older-bundle ordering, same-revision conflict, missing/unsupported block, deleted pack and save failure. These tests are authored/statically reviewed here, not reported as executed.
 
 ```swift
 func testUnknownCapabilityDoesNotAuthorizeCachedPrediction() {
@@ -201,10 +201,10 @@ func testUnknownCapabilityDoesNotAuthorizeCachedPrediction() {
 }
 ```
 
-- [ ] Decode raw motion from original JSON bytes or an explicitly raw-preserving boundary; never rebuild cache JSON from lossy typed DTOs or mutate identifier keys through global snake-case conversion. Make patch/full-download writes revision-aware, preserve root keys, byte accounting/protection, initiating pack binding and errors in Siri/in-app callers.
-- [ ] Implement the same source/time controls/cards/relationships/evidence as web, MapKit polygons with holes, observed vs projected line styles and selected association highlighting. Existing route recolor/aircraft updates must retain weather overlays. Cards work without basemap tiles.
-- [ ] Wire the fresh capability snapshot read on lifecycle entry/foreground/reconnect with cancellation/generation/deadline and stored-only fallback. No clock/time-toggle fetches. Add tests for source expiry, invalid clock, UTC dates, navigation callbacks and overlay ownership; static compile/API review here, Mac compile/unit/UI deferred.
-- [ ] Controller commits native files and dispatches independent Swift contract/lifecycle review; do not claim DTO-only work as native completion.
+- [x] Decode raw motion from original JSON bytes or an explicitly raw-preserving boundary; never rebuild cache JSON from lossy typed DTOs or mutate identifier keys through global snake-case conversion. Make patch/full-download writes revision-aware, preserve root keys, byte accounting/protection, initiating pack binding and errors in Siri/in-app callers.
+- [x] Implement the same source/time controls/cards/relationships/evidence as web, MapKit polygons with holes, observed vs projected line styles and selected association highlighting. Existing route recolor/aircraft updates must retain weather overlays. Cards work without basemap tiles.
+- [x] Wire the fresh capability snapshot read on lifecycle entry/foreground/reconnect with cancellation/generation/deadline and stored-only fallback. No clock/time-toggle fetches. Add tests for source expiry, invalid clock, UTC dates, navigation callbacks and overlay ownership; static compile/API review here, Mac compile/unit/UI deferred.
+- [x] Controller commits native files and dispatches independent Swift contract/lifecycle review; do not claim DTO-only work as native completion.
 
 ### Task 8: Integrated verification, findings and PR update
 
