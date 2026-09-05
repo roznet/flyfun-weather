@@ -51,13 +51,13 @@ were redirected to this worktree's existing `venv`.
 |---|---|
 | Strict shared producer contract and policy | Six Important findings fixed across two rounds; independent scoped re-reviews approved. |
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
-| Independent feature tracking | Implemented locally at `ac011c46`; independent numerical/spec review pending. |
+| Independent feature tracking | Implemented; fractional-lineage boundary fixed at `35c0fb4d` and independently re-reviewed. |
 | Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
 | Time-compatible evidence and bounded payload | Pending. |
 | Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
 | Full/realtime/legacy/SSE/snapshot/bundle integration | Pending. |
-| Web explorer and capability/expiry lifecycle | Implementation in progress. |
-| Native explorer and raw-cache/capability lifecycle | Implementation in progress; no Mac execution. |
+| Web explorer and capability/expiry lifecycle | Committed locally at `81653e16`; fresh unit/type/browser verification passed; independent review pending. |
+| Native explorer and raw-cache/capability lifecycle | Edits preserved; final static review/report interrupted by worker usage limit; no Mac execution. |
 | Integrated tests and independent final review | Pending. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
@@ -78,6 +78,7 @@ Controller-verified local stages (not full-feature verification):
 | `84c7c5ae` exact search-boundary refusal | Same warning-strict contract invocation | 92 passed in 1.28s, no warnings. |
 | Current route/geometry integration | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_route.py tests/observed/test_motion_geometry.py tests/test_route_points.py tests/test_model_region.py --tb=short` | 101 passed in 2.10s, one known warning. |
 | `ac011c46` tracking integration | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_tracking.py tests/observed/test_motion_geometry.py tests/observed/test_motion_history.py tests/observed/test_motion_readers.py tests/observed/test_motion_contract.py tests/observed/test_motion_route.py` | 220 passed in 3.95s, two known reader/environment warnings. |
+| `35c0fb4d` fractional-lineage fix | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_tracking.py` | 55 passed in 3.03s, no warnings. |
 
 These commits remain local. No server writer, web or native prediction integration
 is claimed from these stage tests.
@@ -89,6 +90,40 @@ against actual elapsed time on a clean newest-ending chain, not centroid movemen
 Observed-only failure results carry explicit known/unknown count metadata. The
 44 focused tracking cases are included in the 220-test integration run above;
 independent review remains a separate gate.
+
+The tracking reviewer reproduced an exact-threshold lineage defect: shifting a
+cell by `0.8` cells gives a floating-point overlap of `0.199999999999999956`,
+which a bare `>= 0.20` comparison excludes. If it is a second parent/child, that
+can incorrectly turn an ambiguous match into a unique one. The fix preserves the
+physical 20% rule with a numerical allowance of 64 float64 epsilons times the
+smaller footprint's cell count. Literal positive/negative fractional shifts at
+1/64/512-cell scales, a second small/unselected competitor and genuinely
+below-threshold controls cover it. Independent scoped re-review found I1 addressed
+with no new breakage.
+
+Fresh controller web verification for `81653e16`, from `web/` with the Node PATH
+shown above:
+
+```bash
+./node_modules/.bin/vitest run
+./node_modules/.bin/tsc --noEmit
+env -u NO_COLOR OBSERVED_BROWSER_CHANNEL=chromium \
+  ./node_modules/.bin/playwright test -c playwright.observed.config.ts
+```
+
+Results: **839 unit tests / 52 files passed** (1.67s), TypeScript exit 0 with no
+diagnostics, and **16 real-entrypoint Chromium scenarios passed** (12.9s).
+Removing the inherited `NO_COLOR` conflict for that command made the browser
+output pristine without changing application settings. Strict Python validation
+also accepts `web/tests/fixtures/observed-motion-v1.json` (available revision 1,
+one feature, two reciprocal pairs). The web implementation and these checks do
+not establish server integration or replace its pending independent review.
+
+Worker usage limits interrupted the native final static pass and the initial
+Task4/5 dispatches. No Task4/5 production files existed at that interruption;
+native changes and task requirements were retained. Available fallback workers
+are being checked, with no weakening of test, review or scientific requirements.
+Nothing was pushed or changed on GitHub at this checkpoint.
 
 Independent publication review found that Python dictionary equality treats JSON
 `true` and `1` as equal, allowing conflicting unknown content at the same revision
