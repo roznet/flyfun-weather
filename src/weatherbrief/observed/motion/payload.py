@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import numpy as np
 from shapely.affinity import translate
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 from pydantic import ValidationError
 
 from weatherbrief.models import RouteConfig
@@ -329,9 +329,12 @@ def _geometry_unavailable(reason: str) -> GeometryRecord:
 
 
 def _supported_geometry(shape, frame: AnalysisFrame, grid, policy: MotionPolicy) -> GeometryRecord:
-    if not grid.domain.covers(shape):
+    rim = grid.cell_size_m
+    x0, y0, x1, y1 = shape.bounds
+    rim_shape = box(x0 - rim, y0 - rim, x1 + rim, y1 + rim)
+    if not grid.domain.covers(rim_shape):
         return _geometry_unavailable("outside_analysis_domain")
-    support = _coverage(frame, shape)
+    support = _coverage(frame, rim_shape)
     if support.status != "available" or not math.isclose(support.known_fraction or 0.0, 1.0, abs_tol=1e-12):
         return _geometry_unavailable("unknown_support")
     return display_geometry(shape, grid, policy)
@@ -535,6 +538,24 @@ def _counts(
     lightning_omitted = None if lightning_reported is None else max(0, lightning_reported - len(lightning))
     route_rows = sum(len(feature.route_rows) for feature in features)
     overlap_intervals = sum(len(feature.planned_overlap.intervals) for feature in features)
+    planned_refusal_reasons = [
+        reason
+        for feature in features
+        if feature.motion.status == "accepted" and feature.planned_overlap.status == "unavailable"
+        for reason in feature.planned_overlap.reason_codes
+    ]
+    route_row_refusal_reasons = [
+        reason for reason in planned_refusal_reasons if reason == "selection_limit"
+    ]
+    overlap_refusal_reasons = [
+        reason
+        for reason in planned_refusal_reasons
+        if reason in ("selection_limit", "overlap_interval_limit")
+    ]
+    route_rows_considered = None if route_row_refusal_reasons else route_rows
+    route_rows_omitted = None if route_row_refusal_reasons else 0
+    overlap_intervals_considered = None if overlap_refusal_reasons else overlap_intervals
+    overlap_intervals_omitted = None if overlap_refusal_reasons else 0
     geometry_considered = len(features) * (1 + len(projection_times))
     geometry_emitted = sum(
         1
@@ -574,8 +595,14 @@ def _counts(
         ),
         _completeness("lightning", lightning_reported, len(lightning), lightning_omitted, lightning_reasons),
         _completeness("legs", route_leg_count, route_leg_count, 0, ()),
-        _completeness("route_rows", route_rows, route_rows, 0, ()),
-        _completeness("overlap_intervals", overlap_intervals, overlap_intervals, 0, ()),
+        _completeness("route_rows", route_rows_considered, route_rows, route_rows_omitted, route_row_refusal_reasons),
+        _completeness(
+            "overlap_intervals",
+            overlap_intervals_considered,
+            overlap_intervals,
+            overlap_intervals_omitted,
+            overlap_refusal_reasons,
+        ),
     ]
 
 
@@ -620,6 +647,7 @@ def _failure_reason(exc: BaseException) -> str:
         "region_too_large",
         "incompatible_grid",
         "invalid_time",
+        "invalid_route",
         "history_gap",
         "frame_changed",
         "source_window_limit",

@@ -533,7 +533,7 @@ def test_projection_leaving_analysis_domain_is_unavailable(monkeypatch) -> None:
             frames[-1].reference_at,
             samples[-1].footprint,
             samples,
-            (20.0, 0.0),
+            (10.0, 0.0),
             pair_diagnostics=[_pair(frames[0], frames[1], final=False), _pair(frames[1], frames[2], final=True)],
         )
         count = TrackingCount("opera_dbzh", frames[-1].frame_id, 1, 0, 1, 1, 1, 0, True, True)
@@ -654,6 +654,15 @@ def test_bounded_failure_codes_are_preserved(monkeypatch) -> None:
     assert deadline.status == "unavailable"
     assert deadline.reason_codes == ["compute_deadline"]
 
+    history = _history(cloud_geo=_geo("unverified"))
+    monkeypatch.setattr(payload, "load_history", lambda *args, **kwargs: history)
+    monkeypatch.setattr(payload, "build_route_geometry", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("invalid_route")))
+
+    invalid_route = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=24)
+
+    assert invalid_route.status == "unavailable"
+    assert invalid_route.reason_codes == ["invalid_route"]
+
     monkeypatch.setattr(payload, "load_history", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
 
     failed = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=21)
@@ -707,6 +716,101 @@ def test_payload_limit_failure_is_reported_explicitly(monkeypatch) -> None:
 
     assert motion.status == "unavailable"
     assert motion.reason_codes == ["payload_limit"]
+
+
+def test_route_row_selection_limit_keeps_unknown_incomplete_completeness(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history(cloud_geo=_geo("unverified"))
+    _install_payload_inputs(monkeypatch, history)
+    monkeypatch.setattr(
+        payload,
+        "route_relationships",
+        lambda *args, **kwargs: (
+            [],
+            PlannedOverlapResult(
+                status="unavailable",
+                reason_codes=["selection_limit"],
+                method="relative_segment_contour_intersection",
+                planned_time_method="distance_proportional_planned",
+                evaluated_interval=None,
+                intervals=[],
+                complete=False,
+            ),
+        ),
+    )
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=25)
+
+    route_rows = next(record for record in motion.completeness if record.category == "route_rows")
+    overlap_intervals = next(record for record in motion.completeness if record.category == "overlap_intervals")
+    assert route_rows.status == "partial"
+    assert route_rows.reason_codes == ["selection_limit"]
+    assert route_rows.considered_count is None
+    assert route_rows.emitted_count == 0
+    assert route_rows.omitted_count is None
+    assert overlap_intervals.status == "partial"
+    assert overlap_intervals.reason_codes == ["selection_limit"]
+    assert overlap_intervals.considered_count is None
+    assert overlap_intervals.omitted_count is None
+
+
+def test_overlap_interval_limit_keeps_route_rows_but_unknown_overlap_count(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history(cloud_geo=_geo("unverified"))
+    _install_payload_inputs(monkeypatch, history)
+
+    row = RouteRow(
+        leg_id="leg-1",
+        leg_index=0,
+        from_label="A",
+        to_label="B",
+        at=T0,
+        status="available",
+        reason_codes=[],
+        distance_nm=1.0,
+        closure_kt=1.0,
+        closure_interval=Interval(start_at=T0, end_at=T0 + timedelta(seconds=1)),
+        relationship="approaching",
+        planned_time_method="distance_proportional_planned",
+        planned_time_status="unavailable",
+        planned_time_reason_codes=["missing_departure_time"],
+        planned_overlap_at_time=None,
+    )
+    monkeypatch.setattr(
+        payload,
+        "route_relationships",
+        lambda *args, **kwargs: (
+            [row],
+            PlannedOverlapResult(
+                status="unavailable",
+                reason_codes=["overlap_interval_limit"],
+                method="relative_segment_contour_intersection",
+                planned_time_method="distance_proportional_planned",
+                evaluated_interval=Interval(start_at=T0, end_at=T0 + timedelta(minutes=15)),
+                intervals=[],
+                complete=False,
+            ),
+        ),
+    )
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=26)
+
+    route_rows = next(record for record in motion.completeness if record.category == "route_rows")
+    overlap_intervals = next(record for record in motion.completeness if record.category == "overlap_intervals")
+    assert route_rows.status == "complete"
+    assert route_rows.considered_count == 1
+    assert route_rows.emitted_count == 1
+    assert route_rows.omitted_count == 0
+    assert overlap_intervals.status == "partial"
+    assert overlap_intervals.reason_codes == ["overlap_interval_limit"]
+    assert overlap_intervals.considered_count is None
+    assert overlap_intervals.omitted_count is None
 
 
 def test_lightning_completeness_keeps_unknown_count_without_precise_evaluation(monkeypatch) -> None:
