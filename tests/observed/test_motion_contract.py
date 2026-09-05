@@ -11,7 +11,11 @@ from weatherbrief.models.observed_motion import (
     AssociationRecord,
     FeatureLightningEvidence,
     FrameRecord,
+    Interval,
     ObservedMotion,
+    OverlapInterval,
+    PlannedOverlapResult,
+    RouteRow,
     empty_motion,
 )
 from weatherbrief.observed.motion.policy import DEFAULT_POLICY
@@ -110,6 +114,15 @@ def test_datetime_requires_explicit_utc_and_normalizes_aware_instances() -> None
     assert result["cutoff_at"] == "2026-09-05T12:00:00Z"
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["2026-09-05Z", "2026-09-05T12:00Z", "2026-09-05 12:00:00Z"],
+)
+def test_utc_wire_datetime_rejects_reduced_or_date_only_forms(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Interval.model_validate({"start_at": value, "end_at": "2026-09-05T12:00:00Z"})
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_nonfinite_numbers_are_rejected_at_every_record_level(value: float) -> None:
     raw = available_motion_dict()
@@ -172,6 +185,24 @@ def test_analysis_domain_rejects_ground_points_beyond_projection_radius() -> Non
         AnalysisDomain.model_validate(raw)
 
 
+@pytest.mark.parametrize(
+    "crs",
+    [
+        "+proj=aeqd definitely-not-a-valid-crs",
+        "+proj=aeqd +lat_0=50.05 +lon_0=-0.95 +ellps=GRS80 +units=m +no_defs",
+        "+proj=merc +lat_0=50.05 +lon_0=-0.95 +datum=WGS84 +units=m +no_defs",
+        "+proj=aeqd +lat_0=49 +lon_0=-0.95 +datum=WGS84 +units=m +no_defs",
+    ],
+    ids=["garbage-token", "wrong-ellipsoid", "wrong-method", "wrong-centre"],
+)
+def test_analysis_domain_requires_parseable_wgs84_aeqd_at_its_declared_center(crs: str) -> None:
+    raw = available_motion_dict()["analysis_domain"]
+    raw["crs"] = crs
+
+    with pytest.raises(ValidationError):
+        AnalysisDomain.model_validate(raw)
+
+
 def test_dangling_feature_source_reference_is_rejected() -> None:
     raw = available_motion_dict()
     raw["features"][0]["source_id"] = "unknown-source"
@@ -191,6 +222,190 @@ def test_dangling_feature_frame_reference_is_rejected() -> None:
 def test_motion_pair_references_must_follow_the_feature_history() -> None:
     raw = available_motion_dict()
     raw["features"][0]["motion"]["pair_diagnostics"][0]["from_frame_id"] = "unknown-frame"
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("patches", 0, "support_fraction"), 0.79),
+        (("patches", 0, "ncc"), 0.79),
+        (("patches", 0, "competing_peak_margin"), 0.09),
+        (("patch_disagreement_cells",), 1.42),
+        (("reverse_residual_cells",), 1.42),
+        (("next_observation_residual_cells",), 2.83),
+        (("common_support_iou",), 0.49),
+        (("area_ratio",), 0.66),
+        (("area_ratio",), 1.51),
+        (("lineage_complete",), False),
+        (("plausible_parent_count",), 2),
+        (("plausible_child_count",), 0),
+    ],
+    ids=[
+        "support",
+        "ncc",
+        "peak-margin",
+        "patch-disagreement",
+        "reverse-residual",
+        "next-observation-residual",
+        "iou",
+        "area-low",
+        "area-high",
+        "lineage-incomplete",
+        "multiple-parents",
+        "missing-child",
+    ],
+)
+def test_accepted_pair_diagnostics_must_satisfy_exported_policy(
+    path: tuple[object, ...], value: object
+) -> None:
+    raw = available_motion_dict()
+    target = raw["features"][0]["motion"]["pair_diagnostics"][0]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_pair_patch_centres_must_be_separated_by_two_cells() -> None:
+    raw = available_motion_dict()
+    patches = raw["features"][0]["motion"]["pair_diagnostics"][0]["patches"]
+    patches[1]["center_column"] = patches[0]["center_column"] + 1
+    patches[1]["center_row"] = patches[0]["center_row"]
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_pair_displacement_cannot_exceed_search_speed() -> None:
+    raw = available_motion_dict()
+    pair = raw["features"][0]["motion"]["pair_diagnostics"][0]
+    pair["forward_dx_cells"] = 20.0
+    for patch in pair["patches"]:
+        patch["dx_cells"] = 20.0 if patch["direction"] == "forward" else -20.0
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_radar_history_rejects_an_eleven_minute_adjacent_gap() -> None:
+    raw = available_motion_dict()
+    first_frame = raw["sources"][0]["frames"][0]
+    first_frame.update(
+        {
+            "valid_at": "2026-09-05T11:39:00Z",
+            "received_at": "2026-09-05T11:39:00Z",
+            "reference_at": "2026-09-05T11:39:00Z",
+            "acquisition_window": {
+                "start_at": "2026-09-05T11:39:00Z",
+                "end_at": "2026-09-05T11:39:00Z",
+            },
+        }
+    )
+    raw["features"][0]["trail"][0]["observed_at"] = "2026-09-05T11:39:00Z"
+    raw["features"][0]["motion"]["pair_diagnostics"][0]["elapsed_seconds"] = 660.0
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_cloud_history_rejects_a_span_over_forty_five_minutes() -> None:
+    raw = available_motion_dict()
+    source = raw["sources"][0]
+    feature = raw["features"][0]
+    source["source_id"] = "eumetsat-ctth"
+    feature["source_id"] = "eumetsat-ctth"
+    feature["family"] = "high_cloud_top"
+    feature["definition"] = {
+        "quantity": "geometric_cloud_top_height",
+        "operator": "gte",
+        "threshold": 4572.0,
+        "unit": "m_msl",
+    }
+    times = [
+        "2026-09-05T11:12:00Z",
+        "2026-09-05T11:28:00Z",
+        "2026-09-05T11:44:00Z",
+        "2026-09-05T12:00:00Z",
+    ]
+    newest = deepcopy(source["frames"][-1])
+    newest["frame_id"] = "frame-4"
+    newest["content_id"] = "content-frame-4"
+    source["frames"].append(newest)
+    feature["frame_ids"] = ["frame-1", "frame-2", "frame-3", "frame-4"]
+    feature["reference_frame_id"] = "frame-4"
+    newest_trail = deepcopy(feature["trail"][-1])
+    newest_trail["frame_id"] = "frame-4"
+    feature["trail"].append(newest_trail)
+    for frame, trail, at in zip(source["frames"], feature["trail"], times, strict=True):
+        frame["valid_at"] = at
+        frame["received_at"] = at
+        frame["reference_at"] = at
+        frame["acquisition_window"] = {"start_at": at, "end_at": at}
+        trail["observed_at"] = at
+    pairs = feature["motion"]["pair_diagnostics"]
+    pairs[0]["elapsed_seconds"] = 960.0
+    pairs[1]["elapsed_seconds"] = 960.0
+    pairs[1]["next_observation_residual_cells"] = 0.2
+    last_pair = deepcopy(pairs[1])
+    last_pair["from_frame_id"] = "frame-3"
+    last_pair["to_frame_id"] = "frame-4"
+    last_pair["next_observation_residual_cells"] = None
+    pairs.append(last_pair)
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_feature_must_anchor_to_the_final_frame_in_its_chain() -> None:
+    raw = available_motion_dict()
+    feature = raw["features"][0]
+    feature["reference_frame_id"] = "frame-2"
+    feature["reference_at"] = "2026-09-05T11:50:00Z"
+    feature["projection_end_at"] = "2026-09-05T12:05:00Z"
+    feature["projections"] = []
+    raw["projection_times"] = []
+    raw["expires_at"] = "2026-09-05T12:05:00Z"
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_feature_cannot_bypass_a_newer_selected_source_frame() -> None:
+    raw = available_motion_dict()
+    source = raw["sources"][0]
+    feature = raw["features"][0]
+    times = ["2026-09-05T11:30:00Z", "2026-09-05T11:40:00Z", "2026-09-05T11:50:00Z"]
+    for frame, trail, at in zip(source["frames"], feature["trail"], times, strict=True):
+        frame["valid_at"] = at
+        frame["received_at"] = at
+        frame["reference_at"] = at
+        frame["acquisition_window"] = {"start_at": at, "end_at": at}
+        trail["observed_at"] = at
+    newest = deepcopy(source["frames"][-1])
+    newest.update(
+        {
+            "frame_id": "frame-4",
+            "content_id": "content-frame-4",
+            "valid_at": "2026-09-05T12:00:00Z",
+            "received_at": "2026-09-05T12:00:00Z",
+            "reference_at": "2026-09-05T12:00:00Z",
+            "acquisition_window": {
+                "start_at": "2026-09-05T12:00:00Z",
+                "end_at": "2026-09-05T12:00:00Z",
+            },
+        }
+    )
+    source["frames"].append(newest)
+    feature["reference_at"] = times[-1]
+    feature["projection_end_at"] = "2026-09-05T12:05:00Z"
+    feature["projections"] = []
+    raw["projection_times"] = []
+    raw["expires_at"] = "2026-09-05T12:05:00Z"
 
     with pytest.raises(ValidationError):
         ObservedMotion.model_validate(raw)
@@ -446,6 +661,15 @@ def test_projection_time_limit_is_enforced() -> None:
         ObservedMotion.model_validate(raw)
 
 
+def test_projection_times_must_be_absolute_five_minute_utc_ticks() -> None:
+    raw = available_motion_dict()
+    raw["projection_times"][0] = "2026-09-05T12:06:00Z"
+    raw["features"][0]["projections"][0]["at"] = "2026-09-05T12:06:00Z"
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
 def test_lightning_payload_limit_is_enforced() -> None:
     raw = unavailable_motion_dict()
     raw["lightning"] = [lightning_dict(f"flash-{i}") for i in range(DEFAULT_POLICY.max_lightning_records + 1)]
@@ -539,6 +763,165 @@ def test_available_planned_evaluation_requires_planned_timing_identity() -> None
 
     with pytest.raises(ValidationError):
         ObservedMotion.model_validate(raw)
+
+
+def _available_route_row() -> dict[str, object]:
+    return {
+        "leg_id": "route-1:leg-0",
+        "leg_index": 0,
+        "from_label": "A",
+        "to_label": "B",
+        "at": "2026-09-05T12:00:00Z",
+        "status": "available",
+        "reason_codes": [],
+        "distance_nm": 5.0,
+        "closure_kt": 2.0,
+        "closure_interval": {
+            "start_at": "2026-09-05T11:59:30Z",
+            "end_at": "2026-09-05T12:00:30Z",
+        },
+        "relationship": "approaching",
+        "planned_time_method": "distance_proportional_planned",
+        "planned_time_status": "unavailable",
+        "planned_time_reason_codes": ["invalid_planned_timing"],
+        "planned_overlap_at_time": None,
+    }
+
+
+def test_nonintersecting_available_route_row_requires_closure_and_interval() -> None:
+    raw = _available_route_row()
+    raw["closure_kt"] = None
+    raw["closure_interval"] = None
+
+    with pytest.raises(ValidationError):
+        RouteRow.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    "relationship,closure_kt",
+    [
+        ("approaching", -2.0),
+        ("approaching", 0.5),
+        ("receding", 2.0),
+        ("receding", -0.5),
+        ("approximately_unchanged", 1.0),
+        ("approximately_unchanged", -1.0),
+    ],
+)
+def test_route_relationship_matches_closure_sign_and_one_knot_threshold(
+    relationship: str, closure_kt: float
+) -> None:
+    raw = _available_route_row()
+    raw["relationship"] = relationship
+    raw["closure_kt"] = closure_kt
+
+    with pytest.raises(ValidationError):
+        RouteRow.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    "start_at,end_at",
+    [
+        ("2026-09-05T11:58:30Z", "2026-09-05T12:00:30Z"),
+        ("2026-09-05T12:00:01Z", "2026-09-05T12:00:30Z"),
+    ],
+    ids=["longer-than-sixty-seconds", "does-not-contain-evaluation-time"],
+)
+def test_route_closure_interval_is_bounded_around_the_evaluation_time(
+    start_at: str, end_at: str
+) -> None:
+    raw = _available_route_row()
+    raw["closure_interval"] = {"start_at": start_at, "end_at": end_at}
+
+    with pytest.raises(ValidationError):
+        RouteRow.model_validate(raw)
+
+
+def _available_planned_overlap(interval: dict[str, object]) -> dict[str, object]:
+    return {
+        "status": "available",
+        "reason_codes": [],
+        "method": "relative_segment_contour_intersection",
+        "planned_time_method": "distance_proportional_planned",
+        "evaluated_interval": {
+            "start_at": "2026-09-05T12:00:30Z",
+            "end_at": "2026-09-05T12:10:30Z",
+        },
+        "intervals": [interval],
+        "complete": True,
+    }
+
+
+def test_tangent_overlap_is_an_instant() -> None:
+    raw = {
+        "leg_id": "route-1:leg-0",
+        "leg_index": 0,
+        "start_at": "2026-09-05T12:05:00Z",
+        "end_at": "2026-09-05T12:06:00Z",
+        "contact": "tangent",
+        "approximate": True,
+    }
+
+    with pytest.raises(ValidationError):
+        OverlapInterval.model_validate(raw)
+
+
+def test_interval_overlap_has_nonzero_duration() -> None:
+    raw = {
+        "leg_id": "route-1:leg-0",
+        "leg_index": 0,
+        "start_at": "2026-09-05T12:05:00Z",
+        "end_at": "2026-09-05T12:05:00Z",
+        "contact": "interval",
+        "approximate": True,
+    }
+
+    with pytest.raises(ValidationError):
+        OverlapInterval.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    "interval",
+    [
+        {
+            "leg_id": "route-1:leg-0",
+            "leg_index": 0,
+            "start_at": "2026-09-05T12:01:30Z",
+            "end_at": "2026-09-05T12:03:00Z",
+            "contact": "interval",
+            "approximate": True,
+        },
+        {
+            "leg_id": "route-1:leg-0",
+            "leg_index": 0,
+            "start_at": "2026-09-05T12:05:30Z",
+            "end_at": "2026-09-05T12:05:30Z",
+            "contact": "tangent",
+            "approximate": True,
+        },
+    ],
+    ids=["unrounded-interval-endpoint", "unrounded-tangent"],
+)
+def test_overlap_display_times_are_minute_rounded_unless_clamped_to_a_boundary(
+    interval: dict[str, object]
+) -> None:
+    with pytest.raises(ValidationError):
+        PlannedOverlapResult.model_validate(_available_planned_overlap(interval))
+
+
+def test_overlap_endpoint_can_equal_a_nonminute_evaluated_boundary_after_clamping() -> None:
+    interval = {
+        "leg_id": "route-1:leg-0",
+        "leg_index": 0,
+        "start_at": "2026-09-05T12:00:30Z",
+        "end_at": "2026-09-05T12:03:00Z",
+        "contact": "interval",
+        "approximate": True,
+    }
+
+    result = PlannedOverlapResult.model_validate(_available_planned_overlap(interval))
+
+    assert result.intervals[0].start_at.isoformat() == "2026-09-05T12:00:30+00:00"
 
 
 def test_available_fixture_roundtrips_as_a_valid_producer_record() -> None:

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import math
+import re
 from typing import Annotated, Any, Literal, Self
 
+from pyproj import CRS
+from pyproj.exceptions import CRSError
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -38,6 +41,10 @@ COMPLETENESS_CATEGORIES = (
     "route_rows",
     "overlap_intervals",
 )
+UTC_WIRE_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z"
+)
+WGS84_ELLIPSOID = CRS.from_epsg(4326).ellipsoid
 
 
 def _parse_utc(value: Any) -> datetime:
@@ -46,12 +53,14 @@ def _parse_utc(value: Any) -> datetime:
             raise ValueError("UTC datetime must be timezone-aware")
         return value.astimezone(timezone.utc)
     if isinstance(value, str):
-        if not value.endswith("Z"):
-            raise ValueError("UTC wire datetime must end in Z")
+        if UTC_WIRE_PATTERN.fullmatch(value) is None:
+            raise ValueError("UTC wire datetime must use full YYYY-MM-DDTHH:MM:SS[.ffffff]Z form")
         try:
             parsed = datetime.fromisoformat(value[:-1] + "+00:00")
         except ValueError as exc:
             raise ValueError("invalid UTC datetime") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("UTC wire datetime must be timezone-aware")
         return parsed.astimezone(timezone.utc)
     raise ValueError("UTC datetime must be an aware datetime or Z string")
 
@@ -77,6 +86,10 @@ def _availability(status: str, reasons: Reasons) -> None:
 
 def _strictly_sorted(values: list[datetime]) -> bool:
     return all(left < right for left, right in zip(values, values[1:]))
+
+
+def _minute_aligned(value: datetime) -> bool:
+    return value.second == 0 and value.microsecond == 0
 
 
 class MotionModel(BaseModel):
@@ -163,8 +176,66 @@ class AnalysisDomain(MotionModel):
         max_radius_m = DEFAULT_POLICY.max_distance_from_projection_center_km * 1000.0
         if any(math.hypot(x, y) > max_radius_m for x in x_limits for y in y_limits):
             raise ValueError("analysis domain exceeds the projection-centre radius")
-        if "+proj=aeqd" not in self.crs:
+        if self.crs.startswith("+"):
+            allowed_proj_keys = {
+                "proj",
+                "lat_0",
+                "lon_0",
+                "x_0",
+                "y_0",
+                "datum",
+                "ellps",
+                "units",
+                "no_defs",
+                "type",
+            }
+            keys: list[str] = []
+            for token in self.crs.split():
+                if not token.startswith("+"):
+                    raise ValueError("analysis CRS contains an invalid PROJ token")
+                key = token[1:].split("=", 1)[0]
+                if not key or key not in allowed_proj_keys:
+                    raise ValueError("analysis CRS contains an unsupported PROJ token")
+                keys.append(key)
+            if len(keys) != len(set(keys)):
+                raise ValueError("analysis CRS contains duplicate PROJ parameters")
+        try:
+            crs = CRS.from_user_input(self.crs)
+        except CRSError as exc:
+            raise ValueError("analysis CRS must be parseable") from exc
+        operation = crs.coordinate_operation
+        datum_name = crs.datum.name if crs.datum is not None else ""
+        ellipsoid = crs.ellipsoid
+        if (
+            not crs.is_projected
+            or operation is None
+            or operation.method_name != "Azimuthal Equidistant"
+            or not datum_name.startswith("World Geodetic System 1984")
+            or ellipsoid is None
+            or not math.isclose(
+                ellipsoid.semi_major_metre,
+                WGS84_ELLIPSOID.semi_major_metre,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
+            or not math.isclose(
+                ellipsoid.inverse_flattening,
+                WGS84_ELLIPSOID.inverse_flattening,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or any(axis.unit_name.lower() not in {"metre", "meter"} for axis in crs.axis_info)
+        ):
             raise ValueError("analysis CRS must be a WGS84 AEQD definition")
+        parameters = {parameter.code: parameter.value for parameter in operation.params}
+        longitude, latitude = self.center
+        if (
+            not math.isclose(parameters.get("8801", math.inf), latitude, abs_tol=1e-12)
+            or not math.isclose(parameters.get("8802", math.inf), longitude, abs_tol=1e-12)
+            or not math.isclose(parameters.get("8806", 0.0), 0.0, abs_tol=1e-12)
+            or not math.isclose(parameters.get("8807", 0.0), 0.0, abs_tol=1e-12)
+        ):
+            raise ValueError("analysis CRS must be centred on the declared domain center")
         return self
 
 
@@ -387,6 +458,13 @@ class PatchDiagnostics(MotionModel):
         values = (self.support_fraction, self.ncc, self.competing_peak_margin, self.dx_cells, self.dy_cells, self.refinement)
         if self.status == "available" and any(value is None for value in values):
             raise ValueError("available patch requires complete diagnostics")
+        if self.status == "available":
+            if self.support_fraction < DEFAULT_POLICY.min_template_support_fraction:
+                raise ValueError("available patch has insufficient template support")
+            if self.ncc < DEFAULT_POLICY.min_ncc:
+                raise ValueError("available patch has insufficient normalized cross-correlation")
+            if self.competing_peak_margin < DEFAULT_POLICY.min_competing_peak_margin:
+                raise ValueError("available patch has an ambiguous competing peak")
         return self
 
 
@@ -412,7 +490,8 @@ class PairDiagnostics(MotionModel):
     def validate_pair(self) -> Self:
         _availability(self.status, self.reason_codes)
         if self.status == "available":
-            directions = [patch.direction for patch in self.patches if patch.status == "available"]
+            available_patches = [patch for patch in self.patches if patch.status == "available"]
+            directions = [patch.direction for patch in available_patches]
             if directions.count("forward") != 2 or directions.count("reverse") != 2:
                 raise ValueError("available pair requires two forward and two reverse patches")
             required = (
@@ -427,6 +506,56 @@ class PairDiagnostics(MotionModel):
             )
             if any(value is None for value in required):
                 raise ValueError("available pair requires complete diagnostics")
+            cell_diagonal = math.sqrt(2.0)
+            if self.patch_disagreement_cells > cell_diagonal:
+                raise ValueError("accepted patch translations disagree by more than one cell diagonal")
+            if self.reverse_residual_cells > DEFAULT_POLICY.max_reverse_error_cell_diagonals * cell_diagonal:
+                raise ValueError("accepted pair exceeds the reverse-error policy")
+            if (
+                self.next_observation_residual_cells is not None
+                and self.next_observation_residual_cells
+                > DEFAULT_POLICY.max_next_observation_residual_cell_diagonals * cell_diagonal
+            ):
+                raise ValueError("accepted pair exceeds the next-observation residual policy")
+            if self.common_support_iou < DEFAULT_POLICY.min_common_support_iou:
+                raise ValueError("accepted pair has insufficient common-support overlap")
+            if not (
+                DEFAULT_POLICY.min_common_support_area_ratio
+                <= self.area_ratio
+                <= DEFAULT_POLICY.max_common_support_area_ratio
+            ):
+                raise ValueError("accepted pair has an unsupported common-support area ratio")
+            if (
+                not self.lineage_complete
+                or self.plausible_parent_count != 1
+                or self.plausible_child_count != 1
+            ):
+                raise ValueError("accepted pair requires complete unambiguous lineage")
+            for direction in ("forward", "reverse"):
+                directional = [patch for patch in available_patches if patch.direction == direction]
+                separation = math.hypot(
+                    directional[0].center_column - directional[1].center_column,
+                    directional[0].center_row - directional[1].center_row,
+                )
+                if separation < DEFAULT_POLICY.competing_peak_neighborhood_cells:
+                    raise ValueError("accepted pair patch centres must be spatially separated")
+            forward_patches = [patch for patch in available_patches if patch.direction == "forward"]
+            mean_dx = sum(patch.dx_cells for patch in forward_patches) / len(forward_patches)
+            mean_dy = sum(patch.dy_cells for patch in forward_patches) / len(forward_patches)
+            if not math.isclose(self.forward_dx_cells, mean_dx, abs_tol=1e-12) or not math.isclose(
+                self.forward_dy_cells, mean_dy, abs_tol=1e-12
+            ):
+                raise ValueError("forward translation must equal the mean accepted patch translation")
+            max_displacement_cells = (
+                DEFAULT_POLICY.max_search_speed_mps
+                * self.elapsed_seconds
+                / DEFAULT_POLICY.analysis_cell_size_m
+            )
+            if any(
+                math.hypot(patch.dx_cells, patch.dy_cells) > max_displacement_cells
+                for patch in available_patches
+            ):
+                raise ValueError("accepted patch translation exceeds the search-speed policy")
         return self
 
 
@@ -625,17 +754,43 @@ class RouteRow(MotionModel):
         _availability(self.status, self.reason_codes)
         _availability(self.planned_time_status, self.planned_time_reason_codes)
         if self.status == "unavailable":
-            if self.distance_nm is not None or self.closure_kt is not None or self.relationship != "unavailable":
+            if (
+                self.distance_nm is not None
+                or self.closure_kt is not None
+                or self.closure_interval is not None
+                or self.relationship != "unavailable"
+            ):
                 raise ValueError("unavailable route row cannot carry a relationship measurement")
         else:
             if self.distance_nm is None or self.relationship == "unavailable":
                 raise ValueError("available route row requires distance and relationship")
             if self.relationship == "intersecting":
-                if self.distance_nm != 0 or self.closure_kt is not None:
-                    raise ValueError("intersection requires zero distance and null closure")
-            elif self.closure_kt is not None:
-                if self.closure_interval is None or self.closure_interval.start_at == self.closure_interval.end_at:
-                    raise ValueError("closure requires a nonzero-duration interval")
+                if self.distance_nm != 0 or self.closure_kt is not None or self.closure_interval is not None:
+                    raise ValueError("intersection requires zero distance and null closure data")
+            else:
+                if self.distance_nm <= 0 or self.closure_kt is None or self.closure_interval is None:
+                    raise ValueError("nonintersecting route row requires distance, closure, and interval")
+                duration = (
+                    self.closure_interval.end_at - self.closure_interval.start_at
+                ).total_seconds()
+                if (
+                    duration <= 0
+                    or duration > 60
+                    or not (
+                        self.closure_interval.start_at
+                        <= self.at
+                        <= self.closure_interval.end_at
+                    )
+                ):
+                    raise ValueError("closure interval must contain at and span at most sixty seconds")
+                if abs(self.closure_kt) < 1.0:
+                    expected_relationship = "approximately_unchanged"
+                elif self.closure_kt > 0:
+                    expected_relationship = "approaching"
+                else:
+                    expected_relationship = "receding"
+                if self.relationship != expected_relationship:
+                    raise ValueError("route relationship must match closure sign and threshold")
         if self.planned_time_status == "available" and self.planned_overlap_at_time is None:
             raise ValueError("available planned-time evaluation requires a boolean result")
         if self.planned_time_status == "unavailable" and self.planned_overlap_at_time is not None:
@@ -655,6 +810,10 @@ class OverlapInterval(MotionModel):
     def validate_order(self) -> Self:
         if self.start_at > self.end_at:
             raise ValueError("overlap start_at must not follow end_at")
+        if self.contact == "tangent" and self.start_at != self.end_at:
+            raise ValueError("tangent overlap must be instantaneous")
+        if self.contact == "interval" and self.start_at == self.end_at:
+            raise ValueError("interval overlap must have nonzero duration")
         if not self.approximate:
             raise ValueError("version-1 overlap intervals are approximate")
         return self
@@ -681,6 +840,16 @@ class PlannedOverlapResult(MotionModel):
                 for interval in self.intervals
             ):
                 raise ValueError("overlap interval lies outside evaluated_interval")
+            boundaries = {
+                self.evaluated_interval.start_at,
+                self.evaluated_interval.end_at,
+            }
+            if any(
+                endpoint not in boundaries and not _minute_aligned(endpoint)
+                for interval in self.intervals
+                for endpoint in (interval.start_at, interval.end_at)
+            ):
+                raise ValueError("overlap display times must be minute-rounded or boundary-clamped")
         elif self.complete or self.intervals:
             raise ValueError("unavailable overlap result must be incomplete with no intervals")
         return self
@@ -716,6 +885,8 @@ class FeatureRecord(MotionModel):
             raise ValueError("feature frame_ids must be unique")
         if self.reference_frame_id not in self.frame_ids:
             raise ValueError("reference_frame_id must be part of frame_ids")
+        if self.reference_frame_id != self.frame_ids[-1]:
+            raise ValueError("reference_frame_id must be the final feature frame")
         trail_times = [sample.observed_at for sample in self.trail]
         if trail_times and not _strictly_sorted(trail_times):
             raise ValueError("trail samples must be in chronological order")
@@ -815,6 +986,12 @@ class ObservedMotion(MotionModel):
             raise ValueError("projection_times must be sorted and unique")
         if any(at <= self.cutoff_at for at in projection_times):
             raise ValueError("projection_times must be strictly after cutoff")
+        if any(
+            not _minute_aligned(at)
+            or at.minute % DEFAULT_POLICY.projection_tick_minutes != 0
+            for at in projection_times
+        ):
+            raise ValueError("projection_times must be exact absolute five-minute UTC ticks")
 
         accepted_features: list[FeatureRecord] = []
         for feature in self.features:
@@ -845,6 +1022,27 @@ class ObservedMotion(MotionModel):
             if feature.motion.status == "accepted":
                 if len(feature.frame_ids) < DEFAULT_POLICY.min_primary_valid_times:
                     raise ValueError("accepted motion requires a clean three-frame history")
+                source_frame_ids = [frame.frame_id for frame in source.frames]
+                if source_frame_ids[-len(feature.frame_ids) :] != feature.frame_ids:
+                    raise ValueError("accepted motion must use the newest selected source-frame suffix")
+                if frame_times[-1] - frame_times[0] > timedelta(
+                    minutes=DEFAULT_POLICY.max_history_span_minutes
+                ):
+                    raise ValueError("accepted motion history exceeds the maximum span")
+                max_gap_minutes = (
+                    DEFAULT_POLICY.max_dbzh_adjacent_gap_minutes
+                    if feature.family == "radar_echo"
+                    else DEFAULT_POLICY.max_ctth_adjacent_gap_minutes
+                )
+                if any(
+                    right - left > timedelta(minutes=max_gap_minutes)
+                    for left, right in zip(frame_times, frame_times[1:])
+                ):
+                    raise ValueError("accepted motion history contains an excessive adjacent gap")
+                if self.cutoff_at - feature.reference_at > timedelta(
+                    minutes=DEFAULT_POLICY.max_reference_age_minutes
+                ):
+                    raise ValueError("accepted motion reference is stale at the cutoff")
                 if len(pairs) != len(feature.frame_ids) - 1:
                     raise ValueError("accepted motion requires diagnostics for every adjacent frame pair")
                 for index, pair in enumerate(pairs):

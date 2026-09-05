@@ -132,8 +132,8 @@ def source_dict() -> dict[str, Any]:
 def patch_dict(direction: str, index: int) -> dict[str, Any]:
     return {
         "direction": direction,
-        "center_column": 10 + index,
-        "center_row": 20 + index,
+        "center_column": 10 + 3 * index,
+        "center_row": 20 + 3 * index,
         "status": "available",
         "reason_codes": [],
         "support_fraction": 1.0,
