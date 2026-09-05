@@ -234,6 +234,22 @@ def _validated_motion(motion: ObservedMotion) -> dict:
     return ObservedMotion.model_validate(motion.model_dump(mode="python")).model_dump(mode="json")
 
 
+def _json_equal(left: object, right: object) -> bool:
+    """Compare JSON values without Python's recursive boolean/number coercion."""
+    if type(left) is not type(right):
+        # JSON has one number type, but booleans are a distinct scalar type.
+        return type(left) in (int, float) and type(right) in (int, float) and left == right
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _json_equal(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _json_equal(a, b) for a, b in zip(left, right)
+        )
+    return left == right
+
+
 def reserve_motion_revision(pack_dir: Path, *, allow_create: bool = False) -> MotionPublicationToken:
     """Reserve before computation; only a full writer may authorize creation."""
     with _locked(pack_dir) as (pack, state, save):
@@ -316,7 +332,7 @@ def publish_motion_snapshot(
         _snapshot_revision(base)
         _check_motion_identity(base, body)
         if current is not None and _snapshot_revision(current) == token.revision:
-            if current["observed_motion"] != body:
+            if not _json_equal(current["observed_motion"], body):
                 raise MotionPublicationError("Conflicting motion content at the same revision")
             if recovered:
                 save(state)
@@ -355,7 +371,7 @@ def write_snapshot_atomic(pack_dir: Path, snapshot: dict) -> dict:
             current_revision = _snapshot_revision(current)
             if incoming_revision > current_revision:
                 raise MotionPublicationError("New motion requires its reserved publication token")
-            if incoming_revision == current_revision and incoming != current["observed_motion"]:
+            if incoming_revision == current_revision and not _json_equal(incoming, current["observed_motion"]):
                 raise MotionPublicationError("Conflicting motion content at the same revision")
         if "observed_motion" in current:
             merged["observed_motion"] = current["observed_motion"]

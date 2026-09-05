@@ -567,3 +567,49 @@ def test_first_publication_requires_complete_forecast_snapshot(publication, pack
     with pytest.raises(publication.MotionPublicationError):
         publication.publish_motion_snapshot(new_pack, token, empty(1), refreshed_fields={}, initial_snapshot=incomplete)
     assert not (new_pack / "briefing.json").exists()
+
+
+@pytest.mark.parametrize("writer", ["tokened", "full"])
+@pytest.mark.parametrize("number,boolean", [(1, True), (0, False), (1.0, True)])
+def test_same_revision_nested_boolean_number_collision_is_conflict(publication, pack, writer, number, boolean):
+    from weatherbrief.models.observed_motion import ObservedMotion
+
+    token = publication.reserve_motion_revision(pack)
+    raw = empty(token.revision).model_dump(mode="json")
+    raw["future_extension"] = {"nested": [{"value": number}]}
+    current = publication.publish_motion_snapshot(
+        pack, token, ObservedMotion.model_validate(raw), refreshed_fields={},
+    )
+    previous_bytes = (pack / "briefing.json").read_bytes()
+    conflicting = {**raw, "future_extension": {"nested": [{"value": boolean}]}}
+    with pytest.raises(publication.MotionPublicationError, match="Conflicting motion content"):
+        if writer == "tokened":
+            publication.publish_motion_snapshot(
+                pack, token, ObservedMotion.model_validate(conflicting), refreshed_fields={},
+            )
+        else:
+            publication.write_snapshot_atomic(pack, {"observed_motion": conflicting, "analyses": ["stale"]})
+    assert (pack / "briefing.json").read_bytes() == previous_bytes
+    assert read(pack) == current
+
+
+@pytest.mark.parametrize("writer", ["tokened", "full"])
+def test_same_revision_nested_object_key_order_is_idempotent(publication, pack, writer):
+    from weatherbrief.models.observed_motion import ObservedMotion
+
+    token = publication.reserve_motion_revision(pack)
+    raw = empty(token.revision).model_dump(mode="json")
+    raw["future_extension"] = {"nested": [{"number": 1, "boolean": True}], "keep": None}
+    current = publication.publish_motion_snapshot(
+        pack, token, ObservedMotion.model_validate(raw), refreshed_fields={},
+    )
+    reordered = dict(reversed(list(raw.items())))
+    reordered["future_extension"] = {"keep": None, "nested": [{"boolean": True, "number": 1}]}
+    if writer == "tokened":
+        result = publication.publish_motion_snapshot(
+            pack, token, ObservedMotion.model_validate(reordered), refreshed_fields={},
+        )
+    else:
+        result = publication.write_snapshot_atomic(pack, {"observed_motion": reordered})
+    assert result == current
+    assert read(pack) == current
