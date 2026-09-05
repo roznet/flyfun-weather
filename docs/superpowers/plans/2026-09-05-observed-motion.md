@@ -99,7 +99,7 @@ def test_unknown_hole_is_not_filled():
 
 **Files:** Create `observed/motion/tracking.py`; tests `tests/observed/test_motion_tracking.py`. Consume task-2 geometry, not source reader internals.
 
-**Interfaces:** `TrackSample(frame_id, reference_at, footprint)` and `Track(feature_id, source_id, reference_at, footprint, history, velocity_xy_m_s, reason_codes, pair_diagnostics, fit_rms_residual_cells)` dataclasses. `track_history(frames: Sequence[AnalysisFrame], *, policy=DEFAULT_POLICY, deadline=None) -> list[Track]`. Footprints are unsimplified metric Shapely geometry; velocity is `tuple[float,float] | None`, never a fabricated zero. `history` contains observed `TrackSample` records.
+**Interfaces:** `TrackSample(frame_id, reference_at, footprint)` and `Track(feature_id, source_id, reference_at, footprint, history, velocity_xy_m_s, reason_codes, pair_diagnostics, fit_rms_residual_cells)` dataclasses. `track_history(frames: Sequence[AnalysisFrame], *, route_geometry: BaseGeometry, policy=DEFAULT_POLICY, deadline=None) -> list[Track]`. The supplied projected continuous route is used to rank candidates, not inferred from the grid centre. Footprints are unsimplified metric Shapely geometry; velocity is `tuple[float,float] | None`, never a fabricated zero. `history` contains observed `TrackSample` records.
 
 - [ ] Write literal translations and observed-only failures before implementation. Synthetic zero and unknown are separate:
 
@@ -108,7 +108,7 @@ def test_clean_stationary_echo_is_not_unknown():
     track = tracked_square_history(offsets=[(0,0),(0,0),(0,0)])[0]
     assert track.velocity_xy_m_s == pytest.approx((0,0))
 def test_failed_latest_match_cannot_reuse_old_velocity():
-    tracks = track_history(history_with_split_latest())
+    tracks = track_history(history_with_split_latest(), route_geometry=fixture_route_line())
     assert all(t.velocity_xy_m_s is None for t in tracks)
 ```
 
@@ -120,7 +120,7 @@ def test_failed_latest_match_cannot_reuse_old_velocity():
 
 **Files:** Create `observed/motion/route.py`, `association.py`, `payload.py`; extend `fetch/route_walk.py` with an opt-in strict segment limit without changing defaults. Tests `tests/observed/test_motion_route.py`, `test_motion_association.py`, `test_motion_payload.py` and route-walker tests.
 
-**Interfaces:** `build_observed_motion(route: RouteConfig, *, departure_time: datetime | None, cutoff_at: datetime, revision: int, store: FrameStore | None = None) -> ObservedMotion`. `route_identities(route, departure_time) -> tuple[str,str|None]`. `route_relationships(track, route, grid, departure_time, cutoff_at, projection_times) -> tuple[list[RouteRow], PlannedOverlapResult]`. `associate_tracks(tracks, frames_by_source, grid, context) -> tuple[list[AssociationRecord], list[LightningRecord], dict[str,FeatureLightningEvidence]]`; this internal map never appears as ID-keyed JSON. Grid is the task-2 type and tracks the task-3 type.
+**Interfaces:** `build_observed_motion(route: RouteConfig, *, departure_time: datetime | None, cutoff_at: datetime, revision: int, store: FrameStore | None = None) -> ObservedMotion`. `route_identities(route, departure_time) -> tuple[str,str|None]`. `build_route_geometry(route, grid) -> BaseGeometry` supplies a projected continuous route to tracking's candidate ranking. `route_relationships(track, route, grid, departure_time, cutoff_at, projection_times) -> tuple[list[RouteRow], PlannedOverlapResult]`. `associate_tracks(tracks, frames_by_source, grid, context) -> tuple[list[AssociationRecord], list[LightningRecord], dict[str,FeatureLightningEvidence]]`; this internal map never appears as ID-keyed JSON. Grid is the task-2 type and tracks the task-3 type.
 
 - [ ] Test a moving polygon crossing between UI ticks using hand-calculated overlap times, a route bend, holes/tangent/zero relative movement and already-intersecting closure.
 
@@ -157,6 +157,7 @@ def test_newer_failure_fences_old_success(pack_dir):
 ```
 
 - [ ] Wire task 9's reviewed stable lock/control and atomic helpers into every direct snapshot writer/deletion. Full creation is explicitly distinct from refresh; no bypass restores an older motion block.
+- [ ] Compute from the same snapshot route/timing identity captured at reservation, using task 4's shared `route_identities`. Do not replace those inputs with a later flight-DB route. Verify initial complete snapshot inputs before first publication; storage freezes raw identity fields but does not derive a competing hash algorithm.
 - [ ] Call task-4 payload during full/realtime optional stage with captured cutoff. Completed failures/disabled/outside-D-0 publish replacements; transport failure does not claim computation. Preserve ordinary observations.
 - [ ] Add serve-time capability/no-store headers for existing snapshot/bundle/refresh paths; propagate full motion through all return models, including SSE complete and direct observations refresh. Tests exercise actual endpoints and pack bundles, not mock existence.
 - [ ] Run targeted API/storage suites, inspect all changed-writer callers; controller commits/reviews before clients depend on endpoints.

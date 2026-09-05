@@ -11,7 +11,9 @@ backend/client investigations and a second audit against the user's complete req
 > **both web and native iOS** vector explorer with "Looks good, pls continue".
 > The [written specification](../../docs/superpowers/specs/2026-09-05-observed-motion-design.md)
 > and its [record definitions](../../docs/superpowers/specs/2026-09-05-observed-motion-contract.md)
-> now capture that direction and await written-spec review. Earlier statements
+> now capture that direction. The user subsequently approved the written spec
+> and implementation; see the [implementation/verification record](2026-09-05-observed-motion-verification.md).
+> Earlier statements
 > below that client coverage or the design direction is undecided are historical.
 > Numerical policy choices are unvalidated engineering proposals for that review.
 > No prediction code, runtime verification, PR update or deployment is implied.
@@ -424,8 +426,9 @@ produced these changes. They are design corrections, not implemented bug fixes:
 | Atomic control-file replacement can invalidate a lock, and first creation/deletion were unspecified. | Separate stable lifecycle lock, generation token, authorized full-writer creation and deleted-pack refusal. Follow-up contract review requires retaining the revision high-water mark across same-URL recreation, so older cached results cannot outrank the new generation. |
 | Remaining implementation choices were ambiguous. | Fix the supported radar spacing/raw-read caps, missing-publication versus corrupt-frame behavior, conditional planned solver scope and no result-cache increment. |
 
-The next user checkpoint is review of the written specification. The requested
-Superpowers brainstorming workflow pauses here before `writing-plans` and code.
+At that checkpoint, the requested Superpowers brainstorming workflow paused for
+written-spec review. The user subsequently approved it and requested implementation;
+the linked implementation/verification record tracks the resumed work.
 Mac/iOS execution remains deferred. The published PR still contains observation
 corrections only; eventual prediction delivery needs implementation, new tests,
 independent code review and an update of existing draft PR #600.
