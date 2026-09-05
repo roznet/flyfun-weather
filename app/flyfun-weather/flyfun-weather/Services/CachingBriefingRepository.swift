@@ -13,6 +13,12 @@ enum DownloadState: Equatable {
     case error(String)
 }
 
+struct PackDownloadOutcome: Sendable {
+    let observedMotion: RawObservedMotion?
+    let observedMotionCapability: ObservedMotionCapability?
+    let observedMotionCapabilitySequence: Int?
+}
+
 /// Repository that serves cached data when available, falls back to network.
 /// Caching is explicit — only packs downloaded via `downloadPack()` are cached.
 final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting {
@@ -396,7 +402,26 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     }
 
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
-        try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
+        if let data = await cache.readData(flightId: flightId, timestamp: timestamp, endpoint: "snapshot") {
+            if let result = try? SnapshotResponse.decodePreservingObservedMotion(
+                from: data, origin: .stored(packTimestamp: timestamp)) { return result }
+        }
+        do {
+            return try await online.snapshot(flightId: flightId, timestamp: timestamp)
+        } catch {
+            for entry in await cache.cachedPacks() where entry.flightId == flightId && entry.timestamp != timestamp {
+                if let data = await cache.readData(flightId: flightId, timestamp: entry.timestamp, endpoint: "snapshot"),
+                   let result = try? SnapshotResponse.decodePreservingObservedMotion(
+                    from: data, origin: .stored(packTimestamp: entry.timestamp)) {
+                    return result
+                }
+            }
+            throw error
+        }
+    }
+
+    func freshSnapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        try await online.freshSnapshot(flightId: flightId, timestamp: timestamp)
     }
 
     /// Same-timestamp realtime refreshes must survive reopening offline. No
@@ -450,51 +475,43 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         packMeta: PackMetaResponse? = nil,
         departureTime: String? = nil,
         progress: @Sendable @escaping (_ fraction: Double, _ receivedBytes: Int64, _ totalBytes: Int64) -> Void
-    ) async throws {
+    ) async throws -> PackDownloadOutcome {
         progress(0, 0, 0)
+        let token = await cache.beginPackWrite(flightId: flightId, timestamp: timestamp)
 
         // Single streaming request fetches everything (gzip-compressed by server).
         // The network transfer is the slow part on poor connections; the percentage
         // tracks bytes received. The local disk writes below are near-instant.
         let path = "/api/flights/\(flightId)/packs/\(timestamp)/bundle"
-        let data = try await client.requestDataStreaming(path) { received, total in
+        let response = try await client.requestDataStreaming(path) { received, total in
             let fraction = total > 0 ? min(Double(received) / Double(total), 1.0) : 0
             progress(fraction, received, total)
         }
 
-        // Parse the bundle: { "endpoint-name": { ... }, ... }
-        guard let bundle = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw APIError.decodingError(NSError(domain: "BundleDownload", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid bundle format"]))
-        }
-
-        var diskBytes: Int64 = 0
-        var downloaded: Set<String> = []
-
-        for (endpoint, value) in bundle {
-            do {
-                let entryData = try JSONSerialization.data(withJSONObject: value)
-                try await cache.writeData(entryData, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
-                diskBytes += Int64(entryData.count)
-                downloaded.insert(endpoint)
-            } catch {
-                Self.logger.warning("Failed to cache \(endpoint): \(error)")
-            }
-        }
-
-        await cache.registerDownload(
-            flightId: flightId,
-            timestamp: timestamp,
+        let saved = try await cache.writeDownloadedBundle(
+            response.data, token: token,
             flightTitle: flightTitle,
             assessment: assessment,
-            endpoints: downloaded,
-            totalBytes: diskBytes,
             departureTime: departureTime
         )
         // Cache pack metadata for offline latestPack() recovery
         if let packMeta, let metaData = try? JSONEncoder.weatherBrief.encode(packMeta) {
             try? await cache.writeFlightMetadata(metaData, flightId: flightId, name: "pack-meta")
         }
-        Self.logger.info("Downloaded pack \(flightId)/\(timestamp): \(downloaded.count) endpoints, \(diskBytes) bytes")
+        Self.logger.info("Downloaded pack \(flightId)/\(timestamp): \(saved.endpoints.count) endpoints, \(saved.totalBytes) bytes")
+        // The cache actor may have retained a newer same-pack motion revision than
+        // this bundle carried. Return the merged bytes that were actually saved so
+        // the screen follows the same ordering decision as disk.
+        let snapshotData = await cache.readData(
+            flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
+        let motionData = snapshotData.flatMap { RawJSONDocument($0).member(named: "observed_motion") }
+        let motion = motionData.flatMap {
+            String(decoding: $0, as: UTF8.self) == "null" ? nil : RawObservedMotion(rawJSON: $0)
+        }
+        return PackDownloadOutcome(
+            observedMotion: motion,
+            observedMotionCapability: response.observedMotionCapability,
+            observedMotionCapabilitySequence: response.observedMotionCapabilitySequence)
     }
 
     func deletePack(flightId: String, timestamp: String) async {

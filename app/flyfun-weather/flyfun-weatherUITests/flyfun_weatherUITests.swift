@@ -13,6 +13,34 @@ import UIKit
 
 final class flyfun_weatherUITests: XCTestCase {
 
+    /// Experimental motion remains fully navigable when MapKit tiles are absent:
+    /// controls, feature list and evidence card are SwiftUI siblings of the map.
+    /// Execution is intentionally deferred with the rest of the native suite.
+    @MainActor
+    func testObservedMotionExplorerCardsRemainAccessibleWithoutBasemapTiles() {
+        let app = launchMockApp(offline: true)
+        openFixture1Briefing(app)
+        switchToBriefingTab(app, "Map")
+
+        let mode = app.buttons["observedMotionMode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: Self.uiTimeout))
+        mode.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["observedMotionControls"]
+            .waitForExistence(timeout: Self.uiTimeout))
+        XCTAssertTrue(app.descendants(matching: .any)["observedMotionFeatureList"]
+            .waitForExistence(timeout: Self.uiTimeout))
+        XCTAssertTrue(app.staticTexts["Radar 5 dBZ"].firstMatch
+            .waitForExistence(timeout: Self.uiTimeout))
+        let radar = app.buttons["observedMotionFeature-fixture-radar-1"]
+        XCTAssertTrue(radar.waitForExistence(timeout: Self.uiTimeout))
+        radar.tap()
+        XCTAssertTrue(app.staticTexts["Selected evidence"].waitForExistence(timeout: Self.uiTimeout))
+        XCTAssertTrue(app.staticTexts["Ground velocity: 18 kt @ 090° true"]
+            .waitForExistence(timeout: Self.uiTimeout))
+        XCTAssertTrue(app.staticTexts["rain rate max: 3.5 mm_h at 30 Jun 2099 05:54Z"]
+            .waitForExistence(timeout: Self.uiTimeout))
+    }
+
     @MainActor
     override func setUpWithError() throws {
         continueAfterFailure = false

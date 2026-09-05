@@ -77,7 +77,26 @@ struct RouteMapView: View {
                 placeholder
             } else {
                 mapContent
-                controls
+            }
+            if viewModel.observedMotionState.modeEnabled {
+                ObservedMotionView(
+                    state: viewModel.observedMotionState,
+                    refreshCapability: { await viewModel.refreshObservedMotionCapability() },
+                    leaveMode: { viewModel.leaveObservedMotionMode() })
+            } else {
+                if !mapVM.routeCoordinates.isEmpty { controls }
+                Button {
+                    viewModel.enterObservedMotionMode()
+                } label: {
+                    Label("Experimental motion", systemImage: "move.3d")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(Theme.spacingM)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityIdentifier("observedMotionMode")
             }
         }
         .onChange(of: viewModel.snapshotState.isLoaded) {
@@ -133,9 +152,23 @@ struct RouteMapView: View {
             forecastMetric: overlayMetric,
             forecastModel: viewModel.selectedModel,
             showForecastOverlay: forecastOverlayVisible && overlayModelSupported,
-            forecastRevision: overlayModel?.payloadRevision ?? 0
+            forecastRevision: overlayModel?.payloadRevision ?? 0,
+            observedMotionOverlay: observedMotionOverlay
         )
         .ignoresSafeArea(edges: .bottom)
+    }
+
+    private var observedMotionOverlay: ObservedMotionOverlaySnapshot {
+        let state = viewModel.observedMotionState
+        return ObservedMotionOverlay.build(
+            envelope: state.envelope,
+            selectedProjection: state.selectedProjection,
+            enabledFamilies: state.modeEnabled ? state.enabledFamilies : [],
+            selectedFeatureID: state.selectedFeatureID,
+            selectedAssociation: state.selectedAssociation,
+            allowProjectedGeometry: state.canPresentActivePrediction
+                || (state.origin.isStoredOnly && state.selectedProjection != nil),
+            storedOnly: state.origin.isStoredOnly || state.capability != .enabled)
     }
 
     /// Live aircraft state for the representable, or nil when not tracking.

@@ -33,7 +33,8 @@ enum RefreshDriver {
         return await withCheckedContinuation { continuation in
             // Unstructured Task: retained by the runtime until it finishes, so the
             // SSE stream stays alive (server run not disconnected) even after we
-            // resume the continuation on the first progress event.
+            // resume the continuation once the full-run `briefing_ready` event
+            // proves this was not a realtime path awaiting a durable cache save.
             Task {
                 var reported = false
                 func report(_ outcome: Outcome) {
@@ -53,10 +54,18 @@ enum RefreshDriver {
                             // seam before reporting completion, targeting only
                             // the pack identified by the server event.
                             if event.refreshDecision?.mode == "realtime",
-                               let caching = repository as? CachingBriefingRepository,
-                               let timestamp = event.pack?.fetchTimestamp {
-                                try await caching.persistRealtimeRefresh(
-                                    event, flightId: flightId, timestamp: timestamp)
+                               let caching = repository as? CachingBriefingRepository {
+                                guard let timestamp = event.pack?.fetchTimestamp else {
+                                    report(.failed("The refreshed briefing could not be matched to its offline pack."))
+                                    return
+                                }
+                                do {
+                                    try await caching.persistRealtimeRefresh(
+                                        event, flightId: flightId, timestamp: timestamp)
+                                } catch {
+                                    report(.failed("The briefing refreshed online, but its offline copy could not be saved."))
+                                    return
+                                }
                             }
                             if let decision = event.refreshDecision, decision.mode == "none" {
                                 report(.alreadyFresh(reason: decision.reason))
@@ -67,9 +76,13 @@ enum RefreshDriver {
                         case "error":
                             report(.failed(event.message ?? "Refresh failed."))
                             return
-                        case "progress", "briefing_ready":
-                            // A real run is underway — report interim, keep draining.
+                        case "briefing_ready":
+                            // A full run has crossed the gate. Realtime-only paths
+                            // reach `complete` instead, so their cache-save result
+                            // remains reportable to Siri before the outcome closes.
                             report(.started)
+                        case "progress":
+                            break
                         default:
                             break
                         }
@@ -77,7 +90,7 @@ enum RefreshDriver {
                     // Stream ended without any progress or terminal event: nothing
                     // actually started (the sibling `BriefingViewModel.refresh()`
                     // treats this same case as anomalous). Don't tell the pilot a
-                    // refresh is in progress. If a progress event *had* arrived,
+                    // refresh is in progress. If `briefing_ready` had arrived,
                     // `.started` was already reported and this is a no-op.
                     report(.failed("I couldn't start the refresh. Please try again from FlyFun."))
                 } catch {

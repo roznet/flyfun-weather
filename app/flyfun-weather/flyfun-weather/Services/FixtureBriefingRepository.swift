@@ -239,7 +239,14 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     }
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
-        return FixtureBriefingData.snapshot
+        return FixtureBriefingData.snapshotWithObservedMotion()
+    }
+    /// Mirror the production lifecycle boundary for the DEBUG UI fixture: this
+    /// is an existing-snapshot read carrying a fresh explicit capability value,
+    /// not a fabricated motion computation or persisted authorization.
+    func freshSnapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.snapshotWithObservedMotion()
     }
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }

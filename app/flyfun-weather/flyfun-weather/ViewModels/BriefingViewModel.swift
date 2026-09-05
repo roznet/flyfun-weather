@@ -111,6 +111,8 @@ final class BriefingViewModel {
     private(set) var routeAnalysesState: LoadingState<RouteAnalysesResponse> = .idle
     private(set) var elevationState: LoadingState<ElevationResponse> = .idle
     private(set) var pirepsState: LoadingState<[PirepResponse]> = .idle
+    let observedMotionState = ObservedMotionState()
+    @ObservationIgnored private var observedMotionCapabilityTask: Task<Void, Never>?
 
     // Timing scenarios (#357) — the latest poll result, or nil when the flight
     // has Flexibility `none` / the pack predates the feature (404). Online-only:
@@ -474,26 +476,101 @@ final class BriefingViewModel {
     /// Download the current pack for offline access.
     func downloadCurrentPack() async {
         guard let pack, let caching = repository as? CachingBriefingRepository else { return }
+        let timestamp = pack.fetchTimestamp
         downloadState = .downloading(progress: 0, receivedBytes: 0, totalBytes: -1)
         do {
-            try await caching.downloadPack(
+            let outcome = try await caching.downloadPack(
                 flightId: flight.id,
-                timestamp: pack.fetchTimestamp,
+                timestamp: timestamp,
                 flightTitle: flight.shortTitle,
                 assessment: pack.assessment,
                 packMeta: pack,
                 departureTime: flight.departureTime
             ) { [weak self] fraction, received, total in
                 Task { @MainActor in
-                    self?.downloadState = .downloading(progress: fraction, receivedBytes: received, totalBytes: total)
+                    guard self?.pack?.fetchTimestamp == timestamp else { return }
+                    self?.downloadState = .downloading(
+                        progress: fraction, receivedBytes: received, totalBytes: total)
                 }
             }
+            packCacheStatus[timestamp] = true
+            guard self.pack?.fetchTimestamp == timestamp else { return }
+            observedMotionState.accept(
+                raw: outcome.observedMotion,
+                capability: outcome.observedMotionCapability,
+                capabilitySequence: outcome.observedMotionCapabilitySequence,
+                origin: .network)
             downloadState = .downloaded
-            packCacheStatus[pack.fetchTimestamp] = true
         } catch {
-            downloadState = .error(error.localizedDescription)
+            if self.pack?.fetchTimestamp == timestamp {
+                downloadState = .error(error.localizedDescription)
+            }
             Self.logger.error("Download failed: \(error)")
         }
+    }
+
+    func enterObservedMotionMode() {
+        observedMotionCapabilityTask?.cancel()
+        observedMotionCapabilityTask = nil
+        observedMotionState.modeEnabled = true
+        // Entry itself revokes remembered authority synchronously; the task below
+        // performs the one bounded request that may grant it again.
+        _ = observedMotionState.beginCapabilityCheck()
+        observedMotionState.enabledFamilies = Set(ObservedMotionFamily.allCases)
+        observedMotionState.selectObserved()
+        Task { await refreshObservedMotionCapability() }
+    }
+
+    func leaveObservedMotionMode() {
+        stopObservedMotionLifecycle()
+        observedMotionState.modeEnabled = false
+        observedMotionState.selectObserved()
+    }
+
+    /// One generation-scoped, cache-bypassing read of the existing snapshot.
+    /// Repeated lifecycle triggers coalesce while the same check is in flight.
+    func refreshObservedMotionCapability() async {
+        guard observedMotionState.modeEnabled, let timestamp = pack?.fetchTimestamp else { return }
+        if let task = observedMotionCapabilityTask { await task.value; return }
+        let flightID = flight.id
+        let generation = observedMotionState.beginCapabilityCheck()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let snapshot = try await self.repository.freshSnapshot(flightId: flightID, timestamp: timestamp)
+                guard !Task.isCancelled, self.pack?.fetchTimestamp == timestamp else { return }
+                self.observedMotionState.accept(
+                    raw: snapshot.observedMotion,
+                    capability: snapshot.observedMotionCapability,
+                    capabilitySequence: snapshot.observedMotionCapabilitySequence,
+                    origin: .network,
+                    generation: generation)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.observedMotionState.markCapabilityFailure(error, generation: generation)
+            }
+        }
+        observedMotionCapabilityTask = task
+        await task.value
+        if observedMotionState.generation == generation {
+            observedMotionCapabilityTask = nil
+        }
+    }
+
+    func observedMotionLifecycleDidChange() async {
+        guard observedMotionState.modeEnabled else { return }
+        observedMotionCapabilityTask?.cancel()
+        observedMotionCapabilityTask = nil
+        // Foreground/reconnect is a new authority generation, not permission to
+        // reuse a request that began before the lifecycle boundary.
+        _ = observedMotionState.beginCapabilityCheck()
+        await refreshObservedMotionCapability()
+    }
+
+    func stopObservedMotionLifecycle() {
+        observedMotionCapabilityTask?.cancel()
+        observedMotionCapabilityTask = nil
+        observedMotionState.cancelLifecycleCallbacks()
     }
 
     /// Delete the current pack from the cache.
@@ -566,6 +643,7 @@ final class BriefingViewModel {
             }
         } catch {
             refreshState = .error(error.localizedDescription)
+            observedMotionState.markRefreshFailure(error.localizedDescription)
             Self.logger.error("Refresh stream error: \(error)")
         }
     }
@@ -616,6 +694,17 @@ final class BriefingViewModel {
         }
         if let observed = event.observed {
             snapshot.observedConditions = observed
+            changed = true
+        }
+        if event.observedMotion != nil || event.observedMotionCapability != nil {
+            observedMotionState.accept(
+                raw: event.observedMotion,
+                capability: event.observedMotionCapability,
+                capabilitySequence: event.observedMotionCapabilitySequence,
+                origin: .network)
+            if let motion = event.observedMotion { snapshot.observedMotion = motion }
+            snapshot.observedMotionCapability = event.observedMotionCapability
+            snapshot.observedMotionOrigin = .network
             changed = true
         }
         guard changed else { return }
@@ -949,6 +1038,22 @@ final class BriefingViewModel {
         do {
             let result = try await repository.snapshot(flightId: flight.id, timestamp: timestamp)
             guard pack?.fetchTimestamp == timestamp else { return }
+            let motionTimestamp: String
+            switch result.observedMotionOrigin {
+            case .network: motionTimestamp = timestamp
+            case .stored(let storedTimestamp): motionTimestamp = storedTimestamp
+            }
+            let identity = "\(flight.id)/\(motionTimestamp)"
+            let routeID = result.observedMotion?.typed?.routeGeometryID
+            if observedMotionState.ensureContext(packIdentity: identity, routeGeometryID: routeID) {
+                observedMotionCapabilityTask?.cancel()
+                observedMotionCapabilityTask = nil
+            }
+            observedMotionState.accept(
+                raw: result.observedMotion,
+                capability: result.observedMotionCapability,
+                capabilitySequence: result.observedMotionCapabilitySequence,
+                origin: result.observedMotionOrigin)
             snapshotState = .loaded(result)
         } catch {
             Self.logger.error("Failed to load snapshot: \(error)")

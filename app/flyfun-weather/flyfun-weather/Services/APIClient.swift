@@ -47,10 +47,16 @@ enum APIError: LocalizedError {
 /// rolled forward when the server emits `X-Renewed-Token`, and cleared on 401
 /// (which fires `AppState.handleUnauthorized` to bounce the user to login).
 actor APIClient {
+    struct ResponseData: Sendable {
+        let data: Data
+        let observedMotionCapability: ObservedMotionCapability?
+        let observedMotionCapabilitySequence: Int
+    }
     let baseURL: URL
     private let session: URLSession
     private let tokenStore: any BearerTokenStore
     private let rollingSession: RollingBearerSession
+    private var observedMotionRequestSequence = 0
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "APIClient")
 
@@ -177,6 +183,37 @@ actor APIClient {
         }
     }
 
+    func requestResponseData(
+        _ path: String,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy,
+        timeout: TimeInterval? = nil
+    ) async throws -> ResponseData {
+        let url = baseURL.appendingPathComponent(path)
+        observedMotionRequestSequence &+= 1
+        let sequence = observedMotionRequestSequence
+        guard let timeout else {
+            return try await _fetchResponse(
+                url: url, method: "GET", body: nil, label: path,
+                cachePolicy: cachePolicy, capabilitySequence: sequence)
+        }
+        return try await withThrowingTaskGroup(of: ResponseData.self) { group in
+            group.addTask {
+                try await self._fetchResponse(
+                    url: url, method: "GET", body: nil, label: path,
+                    cachePolicy: cachePolicy, timeout: timeout, capabilitySequence: sequence)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw APIError.networkError(URLError(.timedOut))
+            }
+            guard let first = try await group.next() else {
+                throw APIError.networkError(URLError(.unknown))
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// Stream SSE events from the server's refresh endpoint.
     ///
     /// We deliberately use a delegate-based `URLSessionDataTask` rather than
@@ -197,6 +234,8 @@ actor APIClient {
         // a 405 (no route matches that verb on the encoded path). Same rule as `requestDataURL`.
         let url = URL(string: path, relativeTo: baseURL)
         let token = tokenStore.token
+        observedMotionRequestSequence &+= 1
+        let capabilitySequence = observedMotionRequestSequence
 
         return AsyncThrowingStream { continuation in
             guard let url else {
@@ -221,7 +260,9 @@ actor APIClient {
             config.requestCachePolicy = .reloadIgnoringLocalCacheData
             config.waitsForConnectivity = true
 
-            let delegate = SSEStreamDelegate(continuation: continuation, path: path, logger: Self.logger)
+            let delegate = SSEStreamDelegate(
+                continuation: continuation, path: path, logger: Self.logger,
+                capabilitySequence: capabilitySequence)
             let queue = OperationQueue()
             queue.maxConcurrentOperationCount = 1   // serialize delegate callbacks
             let session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
@@ -281,10 +322,14 @@ actor APIClient {
     func requestDataStreaming(
         _ path: String,
         progress: @Sendable @escaping (_ receivedBytes: Int64, _ totalBytes: Int64) -> Void
-    ) async throws -> Data {
+    ) async throws -> ResponseData {
+        observedMotionRequestSequence &+= 1
+        let capabilitySequence = observedMotionRequestSequence
         let url = baseURL.appendingPathComponent(path)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         if let token = tokenStore.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -296,7 +341,9 @@ actor APIClient {
         Self.logger.debug("GET \(path) (streaming)")
 
         return try await withCheckedThrowingContinuation { continuation in
-            let delegate = StreamingDownloadDelegate(onProgress: progress, continuation: continuation)
+            let delegate = StreamingDownloadDelegate(
+                onProgress: progress, continuation: continuation,
+                capabilitySequence: capabilitySequence)
             let task = session.dataTask(with: request)
             task.delegate = delegate
             task.resume()
@@ -304,8 +351,23 @@ actor APIClient {
     }
 
     private func _fetch(url: URL, method: String, body: Data?, label: String, quietLog: Bool = false) async throws -> Data {
+        try await _fetchResponse(url: url, method: method, body: body, label: label, quietLog: quietLog).data
+    }
+
+    private func _fetchResponse(
+        url: URL,
+        method: String,
+        body: Data?,
+        label: String,
+        quietLog: Bool = false,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy,
+        timeout: TimeInterval? = nil,
+        capabilitySequence: Int = 0
+    ) async throws -> ResponseData {
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.cachePolicy = cachePolicy
+        if let timeout { request.timeoutInterval = timeout }
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -327,13 +389,24 @@ actor APIClient {
 
         switch http.statusCode {
         case 200...299:
-            return data
+            return ResponseData(
+                data: data,
+                observedMotionCapability: Self.observedMotionCapability(from: http),
+                observedMotionCapabilitySequence: capabilitySequence)
         case 403:
             throw APIError.forbidden(Self.detailMessage(from: data) ?? "Forbidden")
         case 404:
             throw APIError.notFound
         default:
             throw APIError.serverError(http.statusCode, Self.detailMessage(from: data))
+        }
+    }
+
+    nonisolated static func observedMotionCapability(from response: HTTPURLResponse) -> ObservedMotionCapability? {
+        switch response.value(forHTTPHeaderField: "X-Observed-Motion-Enabled") {
+        case "1": .enabled
+        case "0": .disabled
+        default: nil
         }
     }
 
@@ -368,13 +441,16 @@ private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate,
     private var total: Int64 = -1
     private var lastReportedBytes: Int64 = 0
     private let onProgress: @Sendable (Int64, Int64) -> Void
-    private var continuation: CheckedContinuation<Data, Error>?
+    private var continuation: CheckedContinuation<APIClient.ResponseData, Error>?
     private var keepAlive: StreamingDownloadDelegate?
+    private let capabilitySequence: Int
 
     init(onProgress: @escaping @Sendable (Int64, Int64) -> Void,
-         continuation: CheckedContinuation<Data, Error>) {
+         continuation: CheckedContinuation<APIClient.ResponseData, Error>,
+         capabilitySequence: Int) {
         self.onProgress = onProgress
         self.continuation = continuation
+        self.capabilitySequence = capabilitySequence
         super.init()
         self.keepAlive = self
     }
@@ -422,7 +498,10 @@ private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate,
         }
         switch http.statusCode {
         case 200...299:
-            continuation.resume(returning: buffer)
+            continuation.resume(returning: APIClient.ResponseData(
+                data: buffer,
+                observedMotionCapability: APIClient.observedMotionCapability(from: http),
+                observedMotionCapabilitySequence: capabilitySequence))
         case 401:
             continuation.resume(throwing: APIError.unauthorized)
         case 403:
@@ -445,10 +524,11 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
     private let continuation: AsyncThrowingStream<RefreshEvent, Error>.Continuation
     private let path: String
     private let logger: Logger
-    private let decoder: JSONDecoder
     private var buffer = Data()
     private var eventCount = 0
     private var finished = false
+    private var observedMotionCapability: ObservedMotionCapability?
+    private let capabilitySequence: Int
 
     /// SSE frames are separated by a blank line, i.e. a double newline.
     private static let frameSeparator = Data([0x0a, 0x0a]) // "\n\n"
@@ -456,14 +536,13 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
     init(
         continuation: AsyncThrowingStream<RefreshEvent, Error>.Continuation,
         path: String,
-        logger: Logger
+        logger: Logger,
+        capabilitySequence: Int
     ) {
         self.continuation = continuation
         self.path = path
         self.logger = logger
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        self.decoder = decoder
+        self.capabilitySequence = capabilitySequence
         super.init()
     }
 
@@ -473,13 +552,15 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
         didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let http = response as? HTTPURLResponse
+        let code = http?.statusCode ?? 0
         guard (200...299).contains(code) else {
             logger.error("SSE stream failed: HTTP \(code) for \(self.path, privacy: .public)")
             finish(throwing: APIError.serverError(code, "SSE stream failed"))
             completionHandler(.cancel)
             return
         }
+        if let http { observedMotionCapability = APIClient.observedMotionCapability(from: http) }
         logger.info("SSE connected (HTTP \(code)) for \(self.path, privacy: .public)")
         completionHandler(.allow)
     }
@@ -521,7 +602,9 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
         }
         guard !payload.isEmpty, let data = payload.data(using: .utf8) else { return }
         do {
-            let event = try decoder.decode(RefreshEvent.self, from: data)
+            let event = try RefreshEvent.decodePreservingObservedMotion(
+                from: data, capability: observedMotionCapability,
+                capabilitySequence: capabilitySequence)
             eventCount += 1
             logger.debug("SSE event #\(self.eventCount) type=\(event.type, privacy: .public) stage=\(event.stage ?? "-", privacy: .public)")
             continuation.yield(event)
@@ -544,6 +627,8 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
                     type: type, stage: nil, detail: nil, label: nil, progress: nil,
                     pack: nil, elapsedSeconds: nil, refreshDecision: nil,
                     observations: nil, sigmets: nil, observed: nil,
+                    observedMotion: nil, observedMotionCapability: observedMotionCapability,
+                    observedMotionCapabilitySequence: capabilitySequence,
                     message: obj["message"] as? String))
                 finish(throwing: nil)
             }
