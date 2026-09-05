@@ -21,7 +21,7 @@ import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMetric } from '../../helpers/metrics-helper';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
-import { OBSERVED_OVERLAY_OPTIONS } from '../route-map/observed-overlay-geometry';
+import { OBSERVED_OVERLAY_OPTIONS, resolveObservedOverlay } from '../route-map/observed-overlay-geometry';
 import { FORECAST_METRICS, METRIC_LABEL } from '../weather-map-format';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
 import { showThemePreview } from '../cross-section/theme-preview';
@@ -1190,13 +1190,16 @@ export function renderMapControls(
   // One at a time: these are different measurements of the same sky, and
   // stacking them leaves a colour on the map whose source is ambiguous.
   if (observed && (observed.reflectivity || observed.rainRate || observed.cloudTops || observed.lightning)) {
+    // Match the renderer's fallback without overwriting the saved preference:
+    // a missing preferred source must not make this menu say None over radar.
+    const observedSource = resolveObservedOverlay(settings.observedOverlay, observed);
     html += '<div class="map-controls-observed">';
     html += '<label class="map-control-label">';
     html += `<span class="viz-toggle-label">${t('viz.observed.label')}</span>`;
     html += '<select id="map-observed-overlay" class="map-control-select">';
     for (const opt of OBSERVED_OVERLAY_OPTIONS) {
       if (opt.needs && !observed[opt.needs]) continue;
-      const selected = opt.id === settings.observedOverlay ? ' selected' : '';
+      const selected = opt.id === observedSource ? ' selected' : '';
       html += `<option value="${opt.id}"${selected}>${escapeHtml(t(opt.labelKey))}</option>`;
     }
     html += '</select>';
@@ -1205,7 +1208,7 @@ export function renderMapControls(
     // corridor, so a fixed value either buries the basemap or washes the data
     // out depending on the product — and the pilot needs to read place names
     // through it.
-    if (settings.observedOverlay && settings.observedOverlay !== 'eumetsat_li') {
+    if (observedSource && observedSource !== 'eumetsat_li') {
       const pct = Math.round((settings.observedOverlayOpacity ?? 0.75) * 100);
       html += '<label class="map-control-label map-observed-opacity">';
       html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.opacity'))}</span>`;

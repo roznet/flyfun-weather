@@ -483,6 +483,17 @@ fixture cannot: a renamed variable, a re-cut OPERA domain, a changed LI
 baseline, a nodata fraction that has drifted far from the 49.4% the whole
 three-state design was calibrated against.
 
+`web/tests/observed-browser.spec.ts`, run with
+`web/playwright.observed.config.ts`, exercises the actual briefing entrypoint and
+Leaflet using intercepted HTTP and a controlled clock. The entrypoint bundle stays
+in memory; no dev server or `web/dist` build is required. Cases cover response
+provenance, source/None selection, real refresh clicks, bounded failure retries,
+late response/URL cleanup, flash expiry and responsive labels. The legend and
+source badge share a renderer-owned normal-flow stack above basemap attribution;
+observed controls wrap on narrow layouts. Synthetic images verify decoding and
+layout, not provider/scientific correctness. Detailed results and remaining gates:
+[verification record](reviews/2026-09-05-observed-fix-verification.md).
+
 ## Out of scope
 
 **Phase 2:** model sampling of any kind, `echo_match`/`intensity_match`

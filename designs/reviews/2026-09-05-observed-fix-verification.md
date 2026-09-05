@@ -8,6 +8,11 @@ This is a local, unsubmitted follow-up to PR #584. Worktree:
 The original checkout and unrelated worktrees were left untouched. No deployment,
 GitHub comments, push or PR submission was performed.
 
+The initial corrections were committed locally as
+`359373818d40f6b2031e70f73ae074f08aa642da`. The subsequent non-Mac continuation
+adds full-entrypoint browser verification and fixes three more web defects.
+Mac/iOS execution is **deferred at the user's request**, not reported as passed.
+
 ## Approach and baseline
 
 Used Superpowers brainstorming to keep future motion/association design separate
@@ -42,6 +47,22 @@ worktree's own editable-install venv and its own frontend dependencies.
   cleanup fix; all three passed afterward. These cover custom-label teardown,
   late image completion after destruction, and flash fade/expiry without image
   reconstruction or weather fetching.
+- Full-page browser fallback regression: the map rendered radar while the
+  selector's value was None (`''`, expected `opera_dbzh`). Sharing the renderer's
+  source resolution with the menu and opacity control fixed the mismatch without
+  overwriting the saved preference.
+- Full-page refresh regressions: one click sent **2 POSTs**, expected 1, for both
+  raster and lightning recovery. Replacing the panel-owned delegated handler on
+  each render fixes accumulation; a second refresh still sends only one request.
+- Narrow-layout regression: at 390px the opacity readout ended at **394.625px**,
+  the legend intruded into the wrapped badge, and the badge intruded into the
+  attribution row. A normal-flow legend/badge stack and wrapping controls pass
+  with long, dated labels at 1280, 390 and 320px.
+- Harness integration regression: inheriting the default runner's localhost base
+  URL produced `ERR_HTTP_RESPONSE_CODE_FAILURE` from the fixture's denied request.
+  Absolute navigation to the intercepted fixture origin passed the same no-server
+  probe; the independent reviewer subsequently passed the full ten-test suite
+  with that alternate base URL.
 - Swift tests were written before their corresponding changes, but could not be
   run red/green because neither `swift` nor `xcodebuild` exists here. This is an
   explicit limitation, not successful iOS test execution.
@@ -72,6 +93,10 @@ retained here rather than reporting only final positive assessments.
 | W8 | Observed legend survived map destruction | Remove renderer-owned legend alongside badge; actual renderer regression and re-review passed |
 | W9 | Flash completion callback could run after hiding map | Clear/invalidate request state at map teardown; generation regression passed, callsite statically re-reviewed |
 | W10 | Explicit None selection silently enabled radar | Shared option-based selector preserves None and unavailable-source fallback; six cases passed and callsite re-reviewed |
+| W11 | Unavailable saved source showed None in the menu while the map displayed radar | Use the same resolved source for menu, opacity control and renderer without changing the preference; full-page regression and independent review passed |
+| W12 | Re-rendering route observations accumulated refresh/popup click handlers | Replace the panel-owned delegated handler; real repeated-click tests verify one POST per click; independently re-reviewed |
+| W13 | Narrow layouts overlapped legend, source badge and basemap attribution, and clipped the opacity readout | Renderer-owned normal-flow label stack, wrapping controls and explicit teardown; long-label layout regressions at 1280/390/320px and independent review passed |
+| T1 | New focused browser tests inherited an incompatible origin in the default runner | Absolute intercepted-origin navigation; no-server alternate-base RED/GREEN and independent full-suite execution passed |
 | I1 | iOS still said histogram percentage was sky area | Readout/model/help/config footer now say valid retrieval samples; stale test comments/names corrected; static re-review closed |
 | I2 | IR effective cloudiness still multiplied by 100 | Both clients display decoded numbers, explicitly scale unverified |
 | I3 | Lightning still implied full-disc absence | Qualified zero as no flashes reported; corrected docs/help/comments |
@@ -82,19 +107,28 @@ retained here rather than reporting only final positive assessments.
 
 Final Python/iOS reviewer: no remaining Critical or Important issues in the
 reviewed correction scope; Python findings closed, iOS assessment static-only.
-Final web reviewer: no remaining Critical or Important findings after the focused
-cleanup/selection re-review; ready for **local user review**, not merge approval.
+Final web reviewer: no remaining Critical, Important or Minor findings in the
+browser continuation after the responsive/origin re-review; independently ran all
+ten browser tests with a different inherited base URL. The earlier correction
+review also closed its Critical/Important findings. Ready for **local user
+review**, not merge approval.
 Both reviewers explicitly retain the validation gates below.
 
-## Final verification
+## Verification evidence
 
-- Full isolated Python suite: **5,782 passed, 20 skipped, 23 deselected,
+- Initial correction commit, full isolated Python suite: **5,782 passed,
+  20 skipped, 23 deselected,
   849 warnings**, 188.36 seconds. No shared application data or database used.
-- Final targeted Python observed/API suite: **190 passed, 6 deselected,
+- Initial correction commit, final targeted Python observed/API suite:
+  **190 passed, 6 deselected,
   163 warnings**, 9.27 seconds.
-- Full web unit suite: **817 passed in 50 files**; independently rerun by the
-  final web reviewer with the same result.
-- TypeScript `npx tsc --noEmit`: passed on the final web code. This separately
+- Backend code did not change during the browser continuation; those Python
+  suites were not rerun for the web-only additions.
+- Fresh full web unit suite after the responsive fix: **817 passed in 50 files**.
+  The reviewer had also independently run the initial correction's 817-test suite.
+- Fresh focused browser suite: **10 passed in 8.1 seconds**, real Chrome
+  152.0.7977.64. Independent alternate-base run: **10 passed in 5.7 seconds**.
+- Fresh application TypeScript `npx tsc --noEmit`: passed. This previously
   caught an optional dataset-string error that the panel unit test did not;
   the formatter now handles absent values as unknown.
 - Both bundled JSON help catalogs parse and match exactly.
@@ -117,21 +151,69 @@ PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m pytest -q -p no:cacheprovider \
 env PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin npm test
 env PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin npx tsc --noEmit
 
+# Dedicated browser configuration: no server and no provider/network requests.
+env PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  OBSERVED_BROWSER_CHANNEL=chrome \
+  npx playwright test --config playwright.observed.config.ts
+
 # From the worktree root.
 git diff --check
 ```
 
 No frontend production build or dev server was run, per repository instructions.
-Renderer integration tests exercise real renderer/clock/request logic with small
-DOM/Leaflet boundary doubles and fixture HTTP responses; they do not prove actual
-Leaflet/browser layout or PNG decoding. Full `briefing-main` lifecycle wiring was
-reviewed statically, not exercised through an end-to-end browser journey.
+The browser harness bundles the actual `briefing-main.ts` entrypoint with esbuild
+**in memory** (`write: false`), leaving `web/dist` untouched. It uses the actual
+HTML/CSS, store and Leaflet. All HTTP, including basemap tiles, is intercepted;
+the PNG is a valid synthetic 16×16 image whose decoding is checked in Chrome.
+The test clock is controlled; URL instrumentation delegates to the real browser
+creation/revocation methods. Page errors and unexpectedly omitted requests fail
+the tests; intentionally absent auxiliary APIs have an explicit allowlist.
+
+The ten browser cases cover:
+
+1. Full-page focused-node preservation and advancing snapshot/image ages without
+   refetching or reconstructing imagery; actual response time/producer displayed.
+2. Unavailable-source fallback agreement and explicit None cleanup.
+3. One failed raster request, no retry on unrelated controls/clock, one authorized
+   retry after the real observations-refresh click; repeated clicks stay singular.
+4. Equivalent lightning failure/recovery through the same actual refresh UI.
+5. Real Leaflet flash opacity at 58.5 and 59.5 minutes, expiry at 60.5, no fetching.
+6. Delayed flashes cannot overwrite a replacement map after hide/reopen.
+7. A→B→A imagery race keeps newest provenance, rejects obsolete results and releases
+   its real object URL at teardown.
+8. Desktop (1280px) long dated label/control layout and label-container teardown.
+9. Phone (390px) equivalent layout, including readable opacity slider/readout.
+10. Narrow phone (320px) equivalent layout and non-overlapping basemap attribution.
+
+The refresh fixture deliberately returns the same source timestamps and bounds,
+so failure recovery cannot pass merely by switching to a different request key.
+These cases supersede the previous static-only assessment of full-entrypoint
+observed wiring **for these paths**, not for every auxiliary briefing feature.
+Root inspected the generated layout screenshots; imagery/tiles are solid synthetic
+fixtures, so these are label/control checks, not weather-map visual validation.
+For screenshot attachments, use Playwright's HTML reporter (`--reporter=line,html`,
+`PLAYWRIGHT_HTML_OPEN=never`); the default console reporter does not persist the
+in-memory successful-test attachments as PNG files.
+
+An optional standalone strict typecheck of the Playwright harness was attempted
+and **did not pass**: the repository does not provide `@types/node`, so `process`,
+`Buffer`, `__dirname`, `node:fs` and `node:path` lack types. The normal application
+tsconfig covers `ts/**/*`, not browser tests. Browser execution is verified, but
+is not claimed as harness typechecking; no dependency was added for this probe.
+The attempted command, from `web/`, was:
+
+```bash
+npx tsc --noEmit --strict --target es2022 --module commonjs \
+  --moduleResolution node --esModuleInterop --skipLibCheck \
+  tests/observed-browser.spec.ts playwright.observed.config.ts
+```
 
 Warnings: netCDF/numpy binary-size warning and Starlette/AnyIO deprecation existed
 in the baseline. New netCDF test-fixture scalar writes trigger NumPy 2.5 shape
 deprecations. The broader suite also reports pre-existing JWT test-key-length,
 cookie API, interpolation, and Matplotlib deprecation warnings. These are not test
 failures, but a passing suite is not presented as a warning-free environment.
+Browser runs also emit the Node `NO_COLOR`/`FORCE_COLOR` environment warning.
 
 A synthetic one-million-detection geostationary render at 800 output pixels
 completed in **0.76 s**, **146 MiB process peak RSS** after batching on this host.
@@ -144,15 +226,19 @@ cross-batch highest-top precedence.
 
 ## Remaining validation gates
 
-1. Xcode compilation, unit tests and UI tests. Linux-only code review cannot
-   establish Swift compiler, SwiftUI layout, simulator or device correctness.
-2. Browser/device visual check of long source windows, partial-coverage marks,
-   off-scale tops, source switching, failure recovery and flash expiry.
+1. **Mac/iOS deferred by user request:** Xcode compilation, unit tests and UI
+   tests remain unexecuted. Static review cannot establish Swift compiler,
+   SwiftUI layout, simulator or device correctness. Deferral does not block this
+   local review package, but does not establish iOS merge/release readiness.
+2. Actual-device/cross-browser visual checks and realistic geographic imagery.
+   Chrome fixture tests now cover source switching, failures, flash expiry and
+   responsive labels. They do not validate Safari/WebKit, real-provider imagery,
+   all cross-section partial-coverage/off-scale marks, or backend auth/network.
 3. Real-granule scientific validation of FCI status/packing, parallax magnitude
    and LI coverage. No live-provider credentials were used for this task.
 4. User approval before any push or GitHub PR creation.
 
-Suggested Xcode unit command (select an installed simulator):
+Deferred Xcode unit command for later (select an installed simulator):
 
 ```bash
 xcodebuild test \

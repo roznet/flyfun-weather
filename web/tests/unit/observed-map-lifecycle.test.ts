@@ -55,7 +55,14 @@ class Element {
     if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
     this.parent = null;
   }
-  querySelector(selector: string) { return this.children.find(child => `.${child.className}` === selector) ?? null; }
+  querySelector(selector: string): Element | null {
+    for (const child of this.children) {
+      if (`.${child.className}` === selector) return child;
+      const descendant = child.querySelector(selector);
+      if (descendant) return descendant;
+    }
+    return null;
+  }
 }
 
 function route(): VizRouteData {
@@ -138,6 +145,7 @@ describe('RouteMapRenderer observed lifecycle', () => {
 
     expect.soft(container.querySelector('.map-observed-legend')).toBeNull();
     expect.soft(container.querySelector('.map-observed-badge')).toBeNull();
+    expect.soft(container.children).toHaveLength(0);
     expect.soft(vi.getTimerCount()).toBe(0);
     expect(renderer.getMap()).toBeNull();
   });

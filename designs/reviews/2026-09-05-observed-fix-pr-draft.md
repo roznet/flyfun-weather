@@ -35,6 +35,10 @@ following the review of PR #584. Keep existing payload keys and product boundari
 - Give map imagery the actual response's time, acquisition window and attribution;
   protect request/URL lifecycles, failures and lightning aging. Preserve explicit
   None selection and remove labels/pending callbacks when the map is closed.
+- Keep the observed-source menu and opacity control aligned with the rendered
+  fallback; prevent duplicate refresh requests from accumulated click handlers.
+- Stack map legend and source labels without overlap, keep basemap attribution
+  clear, and wrap observed controls on phone-width layouts.
 - Save the full correctness review, evidence limits and future visualization/
   motion-estimation proposals; align design docs and both bundled help catalogs.
 
@@ -51,6 +55,9 @@ for final commands, counts, reviewer dispositions and outstanding checks.
 - Full Python: **5,782 passed**, 20 skipped, 23 deselected.
 - Final observed/API regressions: **190 passed**, 6 deselected.
 - Full web: **817 passed**; TypeScript typecheck passed.
+- Full-entrypoint browser checks: **10 passed**, including real Leaflet/PNG
+  decoding, refresh retries, races/cleanup and 1280/390/320px layouts. Independent
+  alternate-base run also passed all ten tests without starting a server.
 - Bundled help JSON matches; diff whitespace check passed.
 - Independent Python/iOS and web re-reviews closed all reported Critical/Important
   code findings in this fix scope. The iOS assessment is static-only.
@@ -58,11 +65,14 @@ for final commands, counts, reviewer dispositions and outstanding checks.
 Regression coverage includes FCI quality contradictions; incomplete coverage;
 source timestamps/windows; temperature overlap including inversions and missing
 values; projection/clipping/batching; live clocks; map request failures/races;
-and iOS cache reopen, Siri and save-failure paths.
+and iOS cache reopen, Siri and save-failure paths (Swift tests written, unexecuted).
 
-The Linux workspace cannot compile or run the iOS app. Xcode unit and UI checks
-remain required before submission/merge; written Swift tests are not represented
-as executed tests. Live-provider granules were not fetched for scientific validation.
+Mac/iOS testing is **deferred at the user's request**; this Linux workspace cannot
+compile or run the app. The local review package can proceed, but does not claim
+iOS merge/release readiness. Browser tests use synthetic HTTP fixtures, not a live
+backend or provider granules. The application typecheck passes; the optional
+standalone harness typecheck is blocked by missing repository Node typings, as
+documented in the verification record.
 
 ## Compatibility, rollout and limitations
 
@@ -86,9 +96,10 @@ as executed tests. Live-provider granules were not fetched for scientific valida
 ## Before submission
 
 - [ ] User reviews this draft and the branch diff.
-- [ ] Run the iOS unit target in Xcode and verify a nonzero executed test count.
-- [ ] Run relevant iOS UI journeys and inspect observed labels/hatches on-device.
-- [ ] Inspect map source switching, failure recovery and lightning expiry in-browser.
+- [x] Verify map source switching, failure recovery, lightning expiry and responsive
+  labels in real Chrome using synthetic fixtures; independently re-review fixes.
+- [ ] iOS unit/UI and on-device checks — deferred by user request, not verified.
+- [ ] Actual-device/cross-browser and live-granule validation remain outstanding.
 - [ ] Confirm the intended upstream base is still current before publishing.
 - [ ] Obtain explicit approval to push and create the GitHub PR.
 

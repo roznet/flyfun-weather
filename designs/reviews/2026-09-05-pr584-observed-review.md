@@ -177,6 +177,47 @@ semantics accurately. Some Spanish ten-minute inputs are already extrapolated
 with Lucas–Kanade to support the five-minute composite cadence, an important
 caveat before estimating motion from these images.
 
+## Additional browser follow-up findings
+
+These were reproduced while verifying the local correction package after commit
+`359373818d40f6b2031e70f73ae074f08aa642da`, not newly attributed to PR #584 alone.
+
+### F13 — The source selector can contradict the displayed map (medium)
+
+With a saved satellite preference and unavailable cloud-top data, the renderer
+falls back to radar but `controls/panel.ts` selects against the missing saved
+option. The browser then shows None while radar is visible. The opacity control
+can disagree for the same reason. Both controls now use the renderer's shared
+resolved source, without overwriting the preference. Explicit None still disables
+the overlay. Reproduced and fixed through the real page, not only a pure selector.
+
+### F14 — Refresh clicks multiply after observation-panel renders (medium)
+
+`managers/briefing-ui.ts::renderRouteObservations` added another delegated click
+listener on every render. One refresh click sent two POSTs in both raster and
+lightning recovery journeys; more renders could accumulate further handlers and
+stale popup closures. Replacing the panel-owned `onclick` handler keeps one
+current delegate. A repeated-click browser regression verifies one POST per click.
+
+### F15 — Phone layouts hide provenance and controls (medium)
+
+The legend's fixed `bottom: 28px` position assumed a single-line source badge.
+Long dated attribution wrapped behind the legend and into the basemap attribution;
+the non-wrapping observed-controls row pushed its opacity readout off-screen.
+Simple x-bound checks missed the overlap, which was found by inspecting screenshots.
+
+A renderer-owned, bottom-left normal-flow stack now keeps legend and source badge
+separate, above basemap attribution. Controls wrap at narrow widths. Browser
+regressions check non-overlap, slider/readout bounds and teardown at 1280, 390 and
+320px with long dated labels. Do not move the legend into the top-right corner:
+the existing airport-forecast legend already occupies that position.
+
+The browser harness itself also needed an integration correction: the repository's
+default runner uses a different base URL. Absolute navigation to the intercepted
+fixture origin avoids a fixture-generated 404 when discovered by that runner.
+The no-server alternate-base reproduction failed before this change and passed
+afterward. All ten focused tests then passed independently under that base URL.
+
 ## Other limitations and unresolved evidence
 
 These are deliberately distinguished from verified bugs and are not silently
@@ -322,6 +363,6 @@ The original review ran 116 targeted Python tests and 64 web tests. The current
 upstream baseline ran 142 Python tests (6 deselected) and 68 web tests. These are
 baselines, not final verification of this corrective branch. Tests are synthetic;
 no live-provider credentials or operational weather were used to validate a
-forecast. The Linux workspace has no Xcode/Swift runtime, so iOS compilation and
-device/UI tests remain an explicit pre-submission requirement. Final checks and
-independent-review dispositions are documented separately.
+forecast. The Linux workspace has no Xcode/Swift runtime, and the user has deferred
+Mac/iOS execution. It remains unverified, not silently waived as successful.
+Final checks and independent-review dispositions are documented separately.

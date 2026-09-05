@@ -1236,8 +1236,9 @@ export function renderRouteObservations(
     </div>
   `;
 
-  // Wire click handlers via event delegation
-  el.addEventListener('click', (e) => {
+  // Replace this panel's handler on each render. Accumulating delegated
+  // listeners sends duplicate refreshes and retains obsolete popup data.
+  el.onclick = (e) => {
     const target = e.target as HTMLElement;
 
     // (i) info button
@@ -1263,7 +1264,7 @@ export function renderRouteObservations(
         refreshBtn.textContent = t('observations.refresh');
       });
     }
-  });
+  };
 }
 
 // --- Weather-based alternates (D-2 inward) ---

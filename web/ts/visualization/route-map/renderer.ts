@@ -65,6 +65,7 @@ export class RouteMapRenderer {
   // slider — deliberately out of scope, not a first cut.
   private observedGroup: L.LayerGroup | null = null;
   private observedFlashGroup: L.LayerGroup | null = null;
+  private observedLabelsEl: HTMLElement | null = null;
   private observedBadgeEl: HTMLElement | null = null;
   private observedSource: string | null = null;
   private observedOpacity = 0.75;
@@ -288,6 +289,7 @@ export class RouteMapRenderer {
       this.map = null;
     }
     if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
+    if (this.observedLabelsEl) { this.observedLabelsEl.remove(); this.observedLabelsEl = null; }
     this.observedGroup = null;
     this.observedFlashGroup = null;
     this.observedFlashes = [];
@@ -448,6 +450,17 @@ export class RouteMapRenderer {
     renderObservedFlashes(this.observedFlashGroup, this.observedFlashes);
   }
 
+  /** Shared normal-flow stack: long timestamps/attribution must push the legend
+   *  upward rather than wrapping underneath its fixed corner position. */
+  private observedLabelContainer(): HTMLElement {
+    if (!this.observedLabelsEl) {
+      this.observedLabelsEl = document.createElement('div');
+      this.observedLabelsEl.className = 'map-observed-labels';
+      this.container.appendChild(this.observedLabelsEl);
+    }
+    return this.observedLabelsEl;
+  }
+
   /** The age badge rides on the map itself, not in a side panel: it labels a
    *  specific picture, and the picture is what the pilot is looking at. */
   private updateObservedBadge(text: string): void {
@@ -458,7 +471,7 @@ export class RouteMapRenderer {
     if (!this.observedBadgeEl) {
       this.observedBadgeEl = document.createElement('div');
       this.observedBadgeEl.className = 'map-observed-badge';
-      this.container.appendChild(this.observedBadgeEl);
+      this.observedLabelContainer().appendChild(this.observedBadgeEl);
     }
     this.observedBadgeEl.textContent = text;
   }
@@ -477,7 +490,7 @@ export class RouteMapRenderer {
     if (!this.observedLegendEl) {
       this.observedLegendEl = document.createElement('div');
       this.observedLegendEl.className = 'map-observed-legend';
-      this.container.appendChild(this.observedLegendEl);
+      this.observedLabelContainer().appendChild(this.observedLegendEl);
     }
     const stops = status.legend;
     const swatches = stops
