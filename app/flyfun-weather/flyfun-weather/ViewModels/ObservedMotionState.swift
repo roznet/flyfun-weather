@@ -20,7 +20,10 @@ final class ObservedMotionState {
     var enabledFamilies = Set(ObservedMotionFamily.allCases)
     private(set) var selectedFeatureID: String?
     private(set) var selectedAssociationID: String?
-    private(set) var selectedProjection: Date?
+    /// Exact server-advertised UTC spelling. Date is derived only for clock and
+    /// display comparisons, never regenerated for a projection-key lookup.
+    private(set) var selectedProjectionTime: String?
+    var selectedProjection: Date? { selectedProjectionTime.flatMap(Date.parseISO8601) }
 
     var envelope: ObservedMotionEnvelope? { raw?.typed }
     var envelopeStatus: String? { envelope?.status ?? raw?.status }
@@ -157,10 +160,13 @@ final class ObservedMotionState {
         selectedFeatureID = association.radarFeatureID
     }
 
-    func selectObserved() { selectedProjection = nil }
+    func selectObserved() { selectedProjectionTime = nil }
 
-    func selectProjection(_ date: Date, now: Date = Date()) {
-        selectedProjection = date
+    func selectProjection(_ advertisedTime: String, now: Date = Date()) {
+        guard envelope?.projectionTimes.contains(advertisedTime) == true,
+              Date.parseISO8601(advertisedTime) != nil
+        else { return }
+        selectedProjectionTime = advertisedTime
         updateClock(now)
     }
 
@@ -181,14 +187,15 @@ final class ObservedMotionState {
               capability == .enabled, origin.isStoredOnly == false,
               let envelope, envelope.status == "available",
               contractIssue == nil, refreshFailure == nil, !currentResponseMissingMotion, !isClockUncertain,
-              let selectedProjection,
+              let selectedProjectionTime,
+              let selectedProjection = Date.parseISO8601(selectedProjectionTime),
               selectedProjection > now,
               let expiry = envelope.expiryDate, now <= expiry,
               selectedProjection <= expiry
         else { return false }
         return envelope.features.contains { feature in
             enabledFamilies.contains(feature.family)
-                && feature.projections.contains { $0.at == isoString(selectedProjection) && $0.status == "available" }
+                && feature.projections.contains { $0.at == selectedProjectionTime && $0.status == "available" }
         }
     }
 
@@ -224,18 +231,8 @@ final class ObservedMotionState {
     private func resetSelection() {
         selectedFeatureID = nil
         selectedAssociationID = nil
-        selectedProjection = nil
+        selectedProjectionTime = nil
     }
-
-    private func isoString(_ date: Date) -> String {
-        Self.iso8601.string(from: date)
-    }
-
-    private static let iso8601: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
 
     private static let utcDateTime: DateFormatter = {
         let formatter = DateFormatter()

@@ -162,7 +162,7 @@ struct RouteMapView: View {
         let state = viewModel.observedMotionState
         return ObservedMotionOverlay.build(
             envelope: state.envelope,
-            selectedProjection: state.selectedProjection,
+            selectedProjectionTime: state.selectedProjectionTime,
             enabledFamilies: state.modeEnabled ? state.enabledFamilies : [],
             selectedFeatureID: state.selectedFeatureID,
             selectedAssociation: state.selectedAssociation,

@@ -12,7 +12,7 @@ struct ObservedMotionOverlaySnapshot {
 enum ObservedMotionOverlay {
     static func build(
         envelope: ObservedMotionEnvelope?,
-        selectedProjection: Date?,
+        selectedProjectionTime: String?,
         enabledFamilies: Set<ObservedMotionFamily>,
         selectedFeatureID: String?,
         selectedAssociation: ObservedMotionAssociation? = nil,
@@ -20,7 +20,7 @@ enum ObservedMotionOverlay {
         storedOnly: Bool = false
     ) -> ObservedMotionOverlaySnapshot {
         guard let envelope, envelope.status == "available" else { return .empty }
-        let selectedTime = selectedProjection.map { iso8601.string(from: $0) }
+        let selectedTime = selectedProjectionTime
         let highlighted = Set([
             selectedAssociation?.radarFeatureID,
             selectedAssociation?.cloudFeatureID,
@@ -103,12 +103,6 @@ enum ObservedMotionOverlay {
               (-180...180).contains(point[0]), (-90...90).contains(point[1]) else { return nil }
         return CLLocationCoordinate2D(latitude: point[1], longitude: point[0])
     }
-
-    private static let iso8601: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
 }
 
 final class ObservedMotionPolygon: MKPolygon {

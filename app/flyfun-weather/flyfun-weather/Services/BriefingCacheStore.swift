@@ -101,15 +101,19 @@ actor BriefingCacheStore {
     }
 
     func writeData(_ data: Data, flightId: String, timestamp: String, endpoint: String) throws {
+        let key = "\(flightId)/\(timestamp)"
+        guard !deletedPackGenerations.contains(key) else {
+            throw ObservedMotionCacheError.deletedPack
+        }
+        if endpoint == "snapshot" {
+            try writeSnapshotData(data, flightId: flightId, timestamp: timestamp, allowCreate: true)
+            return
+        }
         try ensureCacheRoot()
         let dir = packDir(flightId: flightId, timestamp: timestamp)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("\(endpoint).json")
-        if endpoint == "snapshot" {
-            try writeSnapshotData(data, flightId: flightId, timestamp: timestamp, allowCreate: true)
-        } else {
-            try data.write(to: file, options: Self.writeOptions)
-        }
+        try data.write(to: file, options: Self.writeOptions)
     }
 
     func beginPackWrite(flightId: String, timestamp: String) -> PackWriteToken {
@@ -123,6 +127,10 @@ actor BriefingCacheStore {
     func writeSnapshotData(
         _ incoming: Data, flightId: String, timestamp: String, allowCreate: Bool
     ) throws {
+        let key = "\(flightId)/\(timestamp)"
+        guard !deletedPackGenerations.contains(key) else {
+            throw ObservedMotionCacheError.deletedPack
+        }
         let file = fileURL(flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
         let previous = try? Data(contentsOf: file)
         if previous == nil && !allowCreate { throw ObservedMotionCacheError.deletedPack }

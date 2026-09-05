@@ -99,6 +99,22 @@ struct ObservedMotionCacheTests {
         #expect(await store.readData(flightId: "f1", timestamp: "2026:09", endpoint: "snapshot") == nil)
     }
 
+    @Test func deletedPackRejectsDirectSnapshotWritersAndDoesNotRecreateDirectory() async throws {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let initial = cacheSnapshot(observedMotionFixture(revision: 8))
+        try await store.writeData(initial, flightId: "f1", timestamp: "p1", endpoint: "snapshot")
+        await store.deletePack(flightId: "f1", timestamp: "p1")
+
+        await #expect(throws: ObservedMotionCacheError.self) {
+            try await store.writeData(initial, flightId: "f1", timestamp: "p1", endpoint: "snapshot")
+        }
+        await #expect(throws: ObservedMotionCacheError.self) {
+            try await store.writeSnapshotData(initial, flightId: "f1", timestamp: "p1", allowCreate: true)
+        }
+        #expect(await store.readData(flightId: "f1", timestamp: "p1", endpoint: "snapshot") == nil)
+    }
+
     @Test func deletedDownloadedPackMakesLateRealtimeSaveFail() async throws {
         let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let store = BriefingCacheStore(cacheDir: dir)

@@ -362,8 +362,13 @@ struct ObservedMotionSource: Decodable, Identifiable, Sendable {
 
 struct ObservedMotionDefinition: Decodable, Sendable {
     let quantity: String
+    let comparisonOperator: String
     let threshold: Double
     let unit: String
+
+    enum CodingKeys: String, CodingKey {
+        case quantity, comparisonOperator = "operator", threshold, unit
+    }
 }
 
 struct ObservedMotionMultiPolygon: Decodable, Sendable {
@@ -637,10 +642,11 @@ struct ObservedMotionFeature: Decodable, Identifiable, Sendable {
               })
         else { return false }
         if family == .radarEcho {
-            guard definition.quantity == "reflectivity", definition.threshold == 5, definition.unit == "dBZ" else { return false }
+            guard definition.quantity == "reflectivity", definition.comparisonOperator == "gte",
+                  definition.threshold == 5, definition.unit == "dBZ" else { return false }
         } else {
-            guard definition.quantity == "geometric_cloud_top_height", definition.threshold == 4572,
-                  definition.unit == "m_msl" else { return false }
+            guard definition.quantity == "geometric_cloud_top_height", definition.comparisonOperator == "gte",
+                  definition.threshold == 4572, definition.unit == "m_msl" else { return false }
         }
         if motion.status == "accepted" {
             let frameByID = Dictionary(source.frames.map { ($0.frameID, $0) }, uniquingKeysWith: { first, _ in first })
@@ -675,14 +681,23 @@ struct ObservedMotionFeature: Decodable, Identifiable, Sendable {
                       return true
                   })
             else { return false }
-            return motion.reasonCodes.isEmpty && motion.groundSpeedKt.map { $0 >= 0 && $0.isFinite } == true
-                && motion.velocityMethod == "inverse_aeqd_geodesic_1s"
-                && motion.velocityReferencePoint?.count == 2
-                && geolocation.status == "validated" && coverage.status == "available"
-                && !motion.pairDiagnostics.isEmpty && motion.pairDiagnostics.allSatisfy { $0.isValidAvailable(in: domain) }
-                && motion.pairDiagnostics.allSatisfy { pair in
-                    frameIDs.contains(pair.fromFrameID) && frameIDs.contains(pair.toFrameID)
-                }
+            guard motion.reasonCodes.isEmpty,
+                  let speed = motion.groundSpeedKt, speed >= 0, speed.isFinite,
+                  motion.velocityMethod == "inverse_aeqd_geodesic_1s",
+                  let velocityReferencePoint = motion.velocityReferencePoint,
+                  velocityReferencePoint.count == 2,
+                  velocityReferencePoint[0].isFinite, velocityReferencePoint[1].isFinite,
+                  (-180...180).contains(velocityReferencePoint[0]),
+                  (-90...90).contains(velocityReferencePoint[1]),
+                  geolocation.status == "validated", coverage.status == "available",
+                  !motion.pairDiagnostics.isEmpty,
+                  motion.pairDiagnostics.allSatisfy({ $0.isValidAvailable(in: domain) }),
+                  motion.pairDiagnostics.allSatisfy({ pair in
+                      frameIDs.contains(pair.fromFrameID) && frameIDs.contains(pair.toFrameID)
+                  })
+            else { return false }
+            if speed == 0 { return motion.bearingDegTrue == nil }
+            return motion.bearingDegTrue.map { $0.isFinite && (0..<360).contains($0) } == true
         }
         return motion.status == "unavailable" && !motion.reasonCodes.isEmpty
     }

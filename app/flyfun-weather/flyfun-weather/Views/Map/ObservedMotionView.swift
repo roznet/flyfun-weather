@@ -38,10 +38,12 @@ struct ObservedMotionView: View {
                 Button("Observed") { state.selectObserved() }
                     .buttonStyle(.borderedProminent)
                     .tint(state.selectedProjection == nil ? .accentColor : .gray)
-                ForEach(state.envelope?.projectionDates ?? [], id: \.self) { date in
-                    Button(Self.utcProjection.string(from: date)) { state.selectProjection(date) }
-                        .buttonStyle(.bordered)
-                        .disabled(state.isClockUncertain)
+                ForEach(state.envelope?.projectionTimes ?? [], id: \.self) { time in
+                    if let date = Date.parseISO8601(time) {
+                        Button(Self.utcProjection.string(from: date)) { state.selectProjection(time) }
+                            .buttonStyle(.bordered)
+                            .disabled(state.isClockUncertain)
+                    }
                 }
             }
             .font(.caption)
@@ -222,15 +224,15 @@ struct ObservedMotionView: View {
     }
 
     private func rows(for feature: ObservedMotionFeature) -> [ObservedMotionRouteRow] {
-        guard let selected = state.selectedProjection else {
+        guard let selected = state.selectedProjectionTime else {
             return feature.routeRows.filter { $0.at == feature.referenceAt }
         }
-        return feature.routeRows.filter { Date.parseISO8601($0.at) == selected }
+        return feature.routeRows.filter { $0.at == selected }
     }
 
     private func projectionIssue(for feature: ObservedMotionFeature) -> String? {
-        guard let selected = state.selectedProjection else { return nil }
-        guard let projection = feature.projections.first(where: { Date.parseISO8601($0.at) == selected }) else {
+        guard let selected = state.selectedProjectionTime else { return nil }
+        guard let projection = feature.projections.first(where: { $0.at == selected }) else {
             return "Projection unavailable: unsupported time"
         }
         guard projection.status != "available" else { return nil }

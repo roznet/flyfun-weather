@@ -117,6 +117,33 @@ struct ObservedMotionRawTests {
         #expect(malformed.presentationIssue == .malformed)
     }
 
+    @Test func acceptedMotionRejectsContourOperatorOtherThanGTE() {
+        let malformed = RawObservedMotion(rawJSON: Data(
+            String(decoding: observedMotionFixture(revision: 12).rawJSON, as: UTF8.self)
+                .replacingOccurrences(of: #""operator":"gte""#,
+                                      with: #""operator":"lte""#).utf8))
+        #expect(malformed.typed == nil)
+        #expect(malformed.presentationIssue == .malformed)
+    }
+
+    @Test func acceptedMotionRejectsMissingContourOperator() {
+        let malformed = RawObservedMotion(rawJSON: Data(
+            String(decoding: observedMotionFixture(revision: 12).rawJSON, as: UTF8.self)
+                .replacingOccurrences(of: #""operator":"gte","#,
+                                      with: "").utf8))
+        #expect(malformed.typed == nil)
+        #expect(malformed.presentationIssue == .malformed)
+    }
+
+    @Test func acceptedMotionRejectsOutOfRangeTrueBearing() {
+        let malformed = RawObservedMotion(rawJSON: Data(
+            String(decoding: observedMotionFixture(revision: 12).rawJSON, as: UTF8.self)
+                .replacingOccurrences(of: #""bearing_deg_true":90"#,
+                                      with: #""bearing_deg_true":400"#).utf8))
+        #expect(malformed.typed == nil)
+        #expect(malformed.presentationIssue == .malformed)
+    }
+
     @Test func duplicateAdvertisedProjectionTimeDoesNotProduceTypedMotion() {
         // This catches removal of the v1 contract's sorted-*unique* projection
         // time check: controls must never have two choices for the same instant.
@@ -294,12 +321,12 @@ struct ObservedMotionStateTests {
         state.start(packIdentity: "flight-1/pack-1", routeGeometryID: "route-1")
         state.observeCapability(.enabled, generation: state.generation)
         state.accept(raw: observedMotionFixture(revision: 8), generation: state.generation)
-        let selected = try #require(Date.parseISO8601("2026-09-05T10:05:00Z"))
+        let selected = "2026-09-05T10:05:00Z"
         state.selectProjection(selected, now: try #require(Date.parseISO8601("2026-09-05T10:01:00Z")))
         #expect(state.canPresentActivePrediction)
         state.updateClock(try #require(Date.parseISO8601("2026-09-05T10:21:00Z")))
         #expect(state.canPresentActivePrediction == false)
-        #expect(state.selectedProjection == selected)
+        #expect(state.selectedProjectionTime == selected)
         #expect(state.presentationReasons.contains("expired"))
     }
 
@@ -308,11 +335,31 @@ struct ObservedMotionStateTests {
         state.start(packIdentity: "flight-1/pack-1", routeGeometryID: "route-1")
         state.observeCapability(.enabled, generation: state.generation)
         state.accept(raw: observedMotionFixture(revision: 8), generation: state.generation)
-        state.selectProjection(try #require(Date.parseISO8601("2026-09-05T10:05:00Z")),
+        state.selectProjection("2026-09-05T10:05:00Z",
                                now: try #require(Date.parseISO8601("2026-09-04T23:59:00Z")))
         #expect(state.canPresentActivePrediction == false)
         #expect(state.presentationReasons.contains("clock_uncertain"))
         #expect(state.projectionLabel.contains("05 Sep 2026"))
+    }
+
+    @Test func advertisedProjectionSpellingSurvivesDateParsingForActiveMapGeometry() throws {
+        let advertised = "2026-09-05T10:05:00.000Z"
+        let raw = RawObservedMotion(rawJSON: Data(
+            String(decoding: observedMotionFixture(revision: 8).rawJSON, as: UTF8.self)
+                .replacingOccurrences(of: "2026-09-05T10:05:00Z", with: advertised).utf8))
+        let state = ObservedMotionState()
+        state.start(packIdentity: "flight-1/pack-1", routeGeometryID: "route-1")
+        state.observeCapability(.enabled, generation: state.generation)
+        state.accept(raw: raw, generation: state.generation,
+                     now: try #require(Date.parseISO8601("2026-09-05T10:01:00Z")))
+        state.selectProjection(advertised,
+                               now: try #require(Date.parseISO8601("2026-09-05T10:01:00Z")))
+        #expect(state.selectedProjectionTime == advertised)
+        #expect(state.canPresentActivePrediction)
+        let snapshot = ObservedMotionOverlay.build(
+            envelope: try #require(state.envelope), selectedProjectionTime: state.selectedProjectionTime,
+            enabledFamilies: Set(ObservedMotionFamily.allCases), selectedFeatureID: "radar-1")
+        #expect(snapshot.overlays.compactMap { $0 as? ObservedMotionPolygon }.contains { $0.isProjected })
     }
 
     @Test func navigationRejectsLateCapabilityAndClearsSelection() throws {
@@ -334,9 +381,8 @@ struct ObservedMotionOverlayTests {
     @Test func polygonKeepsInteriorHoleAndProjectionStyle() throws {
         let raw = observedMotionFixture(revision: 8)
         let typed = try #require(raw.typed)
-        let projection = try #require(Date.parseISO8601("2026-09-05T10:05:00Z"))
         let snapshot = ObservedMotionOverlay.build(
-            envelope: typed, selectedProjection: projection,
+            envelope: typed, selectedProjectionTime: "2026-09-05T10:05:00Z",
             enabledFamilies: Set(ObservedMotionFamily.allCases), selectedFeatureID: "radar-1")
         let polygon = try #require(snapshot.overlays.compactMap { $0 as? ObservedMotionPolygon }.first)
         #expect(polygon.interiorPolygons?.count == 1)
