@@ -3,10 +3,22 @@ import type { FeatureRecord, MotionTime, ObservedMotion } from './types';
 
 type ProjectionPresentation = 'active' | 'stored' | 'hidden';
 
-function latLngs(feature: FeatureRecord, time: MotionTime): L.LatLngExpression[][][] | null {
-  const geometry = time === 'observed'
-    ? feature.display_geometry
-    : feature.projections.find(projection => projection.at === time)?.display_geometry;
+function hasValidatedGeolocation(value: Record<string, unknown>): boolean {
+  return value.status === 'validated';
+}
+
+function latLngs(data: ObservedMotion, feature: FeatureRecord, time: MotionTime): L.LatLngExpression[][][] | null {
+  if (time !== 'observed') {
+    const projectionEnd = feature.projection_end_at === null ? Number.NaN : Date.parse(feature.projection_end_at);
+    const at = Date.parse(time);
+    const source = data.sources.find(item => item.source_id === feature.source_id);
+    if (!data.projection_times.includes(time) || feature.motion.status !== 'accepted'
+        || !hasValidatedGeolocation(feature.geolocation) || !source || !hasValidatedGeolocation(source.geolocation)
+        || !Number.isFinite(at) || at <= Date.parse(data.cutoff_at) || at > projectionEnd) return null;
+  }
+  const projection = time === 'observed' ? null : feature.projections.find(item => item.at === time);
+  if (projection?.status === 'unavailable') return null;
+  const geometry = time === 'observed' ? feature.display_geometry : projection?.display_geometry;
   if (geometry?.status !== 'available' || !geometry.geometry) return null;
   return geometry.geometry.coordinates.map(polygon => polygon.map(ring =>
     ring.map(([longitude, latitude]) => [latitude, longitude] as L.LatLngTuple)));
@@ -99,7 +111,7 @@ export class ObservedMotionMapLayer {
         trail.bindTooltip(feature.trail.map(sample => `${sample.observed_at}: contour centre`).join('<br>'));
         this.group.addLayer(trail);
       }
-      const polygons = drawProjection ? latLngs(feature, this.time) : null;
+      const polygons = drawProjection ? latLngs(this.data, feature, this.time) : null;
       if (!polygons) continue;
       for (const polygon of polygons) {
         const layer = L.polygon(polygon, {

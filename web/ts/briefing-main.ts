@@ -1979,8 +1979,9 @@ async function init(): Promise<void> {
         ? [association.radar_feature_id, association.cloud_feature_id]
         : observedMotionState.selectedFeatureId ? [observedMotionState.selectedFeatureId] : []);
       const projectionPresentation = observedMotionState.selectedTime === 'observed' ? 'active'
+        : observedMotionState.canPresentActivePrediction ? 'active'
         : observedMotionState.capability === 'disabled' || observedMotionState.presentationReasons.includes('expired') || observedMotionState.clockUncertain ? 'hidden'
-        : observedMotionState.capability === 'enabled' ? 'active' : 'stored';
+        : 'stored';
       observedMotionMapLayer?.selectTime(observedMotionState.selectedTime, projectionPresentation);
 
       // Attach or update map interaction

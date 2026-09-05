@@ -138,6 +138,7 @@ export class ObservedMotionView {
     if (reasons.includes('expired')) return `Stored analysis · Expired selection ${this.state.selectedTime === 'observed' ? '' : utcDate(this.state.selectedTime)}. Refresh or inspect Observed.`;
     if (this.state.capability === 'disabled') return 'Stored analysis · server capability is disabled; active projected geometry is removed.';
     if (this.state.capability === 'unknown') return 'Stored analysis · capability unavailable; active prediction styling is not authorized.';
+    if (reasons.includes('stored_analysis')) return 'Stored analysis · current motion authority does not authorize active prediction styling.';
     if (this.state.selectedTime !== 'observed') return `Experimental constant-motion projection · ${utcDate(this.state.selectedTime)}.`;
     return this.state.current?.status === 'available' ? 'Observed source-timed analysis. Select a server UTC projection to inspect it.'
       : `Motion unavailable · ${reasonText(this.state.current?.unavailableReason ?? 'missing legacy data')}.`;

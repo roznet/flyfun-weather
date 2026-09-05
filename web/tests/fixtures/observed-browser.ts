@@ -204,7 +204,7 @@ export async function openObservedPage(page: Page, options: {
   let currentMotion = options.motion === undefined ? observedMotionFixture() : options.motion;
   let capability = options.capability === undefined ? true : options.capability;
   const snapshot = { ...fixture('snapshot.json'), observed_conditions: observed, observed_motion: currentMotion };
-  const state = { images: [] as string[], flashes: 0, refreshes: 0, snapshots: 0, failSnapshots: false, failRefresh: false,
+  const state = { images: [] as string[], flashes: 0, refreshes: 0, snapshots: 0, failSnapshots: false, failRefresh: false, omitMotion: false,
     pageErrors: [] as string[], unhandled: [] as string[] };
   page.on('pageerror', error => state.pageErrors.push(error.message));
   await page.clock.install({ time: new Date(CLOCK) });
@@ -245,7 +245,8 @@ export async function openObservedPage(page: Page, options: {
     if (path.endsWith('/snapshot')) {
       state.snapshots++;
       if (state.failSnapshots) return route.fulfill({ status: 503, json: { detail: 'Synthetic snapshot failure' } });
-      return route.fulfill({ json: { ...snapshot, observed_motion: currentMotion }, headers: capability == null ? {} : { 'X-Observed-Motion-Enabled': capability ? '1' : '0' } });
+      const { observed_motion: _storedMotion, ...snapshotWithoutMotion } = snapshot;
+      return route.fulfill({ json: { ...snapshotWithoutMotion, ...(state.omitMotion ? {} : { observed_motion: currentMotion }) }, headers: capability == null ? {} : { 'X-Observed-Motion-Enabled': capability ? '1' : '0' } });
     }
     const payloads: Record<string, string> = { '/route-analyses': 'route_analyses.json', '/advisories': 'advisories.json',
       '/elevation': 'elevation.json', '/digest/json': 'digest.json' };
@@ -292,6 +293,7 @@ export async function openObservedPage(page: Page, options: {
   return Object.assign(state, {
     setCapability(value: boolean | null) { capability = value; },
     setMotion(value: Record<string, unknown> | null) { currentMotion = value; },
+    omitMotionFromSnapshots() { state.omitMotion = true; },
     assertHealthy() {
     expect(state.pageErrors).toEqual([]);
     expect([...new Set(state.unhandled)].filter(path => !expectedMissing(path))).toEqual([]);

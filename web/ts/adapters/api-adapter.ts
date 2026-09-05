@@ -370,27 +370,6 @@ export async function fetchPack(flightId: string, timestamp: string): Promise<Pa
   );
 }
 
-export interface RefreshAccepted {
-  status: 'queued' | 'already_fresh' | 'realtime' | 'pending_coverage';
-  flight_id: string;
-  message: string;
-  // Tiered refresh gate detail — present when the request was gated to a
-  // real-time-only refresh or skipped entirely (never 'full' here; a full
-  // decision proceeds to the pipeline instead).
-  mode?: 'realtime' | 'none';
-  reason?: string;
-  eta_useful?: string | null;
-  observations?: RouteObservations | null;
-  observed_motion?: unknown;
-}
-
-export async function refreshBriefing(flightId: string): Promise<RefreshAccepted> {
-  return apiFetch<RefreshAccepted>(
-    `/flights/${encodeURIComponent(flightId)}/packs/refresh`,
-    { method: 'POST' }
-  );
-}
-
 export async function fetchFreshness(flightId: string): Promise<DataStatus> {
   return apiFetch<DataStatus>(
     `/flights/${encodeURIComponent(flightId)}/packs/freshness`
@@ -435,9 +414,9 @@ export interface RefreshStreamEvent {
     eta_useful?: string | null;
     available_date?: string;  // pending-coverage no-op only
   };
-  // Freshly fetched observations on the realtime gate path — mirrors the
-  // non-streaming RefreshAccepted.observations so SSE consumers don't need a
-  // separate reload. Null on the `none` path and full-pipeline completes.
+  // Freshly fetched observations on the realtime gate path, so SSE consumers
+  // do not need a separate reload. Null on the `none` path and full-pipeline
+  // completes.
   observations?: RouteObservations | null;
   // Freshly fetched route SIGMETs on the realtime gate path.
   sigmets?: RouteSigmets | null;

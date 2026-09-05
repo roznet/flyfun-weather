@@ -90,6 +90,36 @@ test('capability revocation removes active vectors while retaining stored analys
   state.assertHealthy();
 });
 
+test('enabled lifecycle authority without a motion block leaves a retained projection stored', async ({ page }) => {
+  const state = await openObservedPage(page);
+  await enterMotionMode(page);
+  await page.locator('#observed-motion-time').selectOption('2026-02-25T17:05:00Z');
+  await expect(page.locator('.observed-motion-projection')).toHaveCount(1);
+  state.omitMotionFromSnapshots();
+  const before = state.snapshots;
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
+  await expect.poll(() => state.snapshots).toBe(before + 1);
+
+  await expect(page.locator('#observed-motion-status')).toContainText('Stored analysis');
+  await expect(page.locator('.observed-motion-projection.observed-motion-stored')).toHaveCount(1);
+  state.assertHealthy();
+});
+
+test('a failed observations refresh leaves an already selected projection stored', async ({ page }) => {
+  const state = await openObservedPage(page);
+  await enterMotionMode(page);
+  await page.locator('#observed-motion-time').selectOption('2026-02-25T17:05:00Z');
+  await expect(page.locator('.observed-motion-projection')).toHaveCount(1);
+  state.failRefresh = true;
+  const observations = page.locator('[data-section="observations"]');
+  if (await observations.evaluate(el => el.classList.contains('collapsed'))) await observations.locator('h3').first().click();
+  await page.locator('.obs-refresh-btn').click();
+
+  await expect(page.locator('#observed-motion-status')).toContainText('Refresh failed');
+  await expect(page.locator('.observed-motion-projection.observed-motion-stored')).toHaveCount(1);
+  state.assertHealthy();
+});
+
 test('foreground return rechecks authority and expires the selected time without advancing it', async ({ page }) => {
   const state = await openObservedPage(page);
   await enterMotionMode(page);

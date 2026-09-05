@@ -313,7 +313,23 @@ function parseMotion(value: unknown, featureFrameIds: Set<string>, validationRea
 
 function parseProjection(value: unknown, validationReasons: string[]): ProjectionRecord | null {
   if (!record(value) || !utc(value.at) || !availability(value.status) || !reasons(value.reason_codes)) return null;
-  return { ...value, display_geometry: geometry(value.display_geometry, validationReasons) } as ProjectionRecord;
+  const displayGeometry = geometry(value.display_geometry, validationReasons);
+  return value.status === 'unavailable'
+    ? { ...value, display_geometry: unavailableGeometry('projection_unavailable') } as ProjectionRecord
+    : { ...value, display_geometry: displayGeometry } as ProjectionRecord;
+}
+
+function unavailableProjection(projection: ProjectionRecord, reason: string): ProjectionRecord {
+  return {
+    ...projection,
+    status: 'unavailable',
+    reason_codes: [...new Set([...projection.reason_codes, reason])],
+    display_geometry: unavailableGeometry(reason),
+  };
+}
+
+function validatedGeolocation(value: unknown): boolean {
+  return record(value) && value.status === 'validated';
 }
 
 function parseRouteRow(value: unknown): RouteRow | null {
@@ -343,6 +359,8 @@ function parsePlannedOverlap(value: unknown): PlannedOverlap {
 function parseFeature(
   value: unknown,
   sourcesById: Map<string, SourceRecord>,
+  projectionTimes: Set<string>,
+  cutoffAt: string,
   validationReasons: string[],
 ): FeatureRecord | null {
   const sourceId = record(value) && id(value.source_id) ? value.source_id : null;
@@ -379,7 +397,22 @@ function parseFeature(
     if (!valid) validationReasons.push('dangling_reference');
     return valid;
   });
-  const projections = value.projections.map(item => parseProjection(item, validationReasons)).filter((item): item is ProjectionRecord => item !== null);
+  const motion = parseMotion(value.motion, featureFrameIds, validationReasons);
+  const projectionAuthority = motion.status === 'accepted'
+    && validatedGeolocation(value.geolocation) && validatedGeolocation(source.geolocation);
+  const projectionEnd = value.projection_end_at === null ? null : Date.parse(value.projection_end_at);
+  const cutoff = Date.parse(cutoffAt);
+  const projections = value.projections.map(item => parseProjection(item, validationReasons)).filter((item): item is ProjectionRecord => {
+    if (item === null) validationReasons.push('invalid_projection');
+    return item !== null;
+  }).map(projection => {
+    const at = Date.parse(projection.at);
+    const valid = projection.status === 'unavailable' || (projectionAuthority && projectionTimes.has(projection.at)
+      && at > cutoff && projectionEnd !== null && at <= projectionEnd);
+    if (valid) return projection;
+    validationReasons.push('invalid_projection');
+    return unavailableProjection(projection, 'invalid_projection');
+  });
   const routeRows = value.route_rows.map(parseRouteRow).filter((item): item is RouteRow => item !== null);
   return {
     feature_id: value.feature_id, source_id: value.source_id, family: value.family,
@@ -387,7 +420,7 @@ function parseFeature(
     reference_frame_id: value.reference_frame_id, frame_ids: value.frame_ids,
     display_geometry: geometry(value.display_geometry, validationReasons), trail, observations,
     lightning_evidence: parseLightningEvidence(value.lightning_evidence, sourcesById), coverage: record(value.coverage) ? value.coverage : {},
-    geolocation: record(value.geolocation) ? value.geolocation : {}, motion: parseMotion(value.motion, featureFrameIds, validationReasons),
+    geolocation: record(value.geolocation) ? value.geolocation : {}, motion,
     projection_end_at: value.projection_end_at, projections, route_rows: routeRows,
     planned_overlap: parsePlannedOverlap(value.planned_overlap), reason_codes: value.reason_codes,
   };
@@ -425,7 +458,8 @@ export function parseObservedMotion(raw: unknown): ParsedObservedMotion {
   const sources = raw.sources.map(parseSource).filter((item): item is SourceRecord => item !== null);
   if (sources.length !== raw.sources.length) validationReasons.push('invalid_source');
   const sourcesById = new Map(sources.map(source => [source.source_id, source]));
-  let features = raw.features.map(item => parseFeature(item, sourcesById, validationReasons)).filter((item): item is FeatureRecord => item !== null);
+  const projectionTimes = new Set(raw.projection_times);
+  let features = raw.features.map(item => parseFeature(item, sourcesById, projectionTimes, raw.cutoff_at as string, validationReasons)).filter((item): item is FeatureRecord => item !== null);
   if (features.length !== raw.features.length) validationReasons.push('dangling_reference');
   if (raw.status === 'available' && domain === null) {
     features = features.map(feature => ({ ...feature,

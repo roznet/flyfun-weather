@@ -183,6 +183,76 @@ describe('parseObservedMotion', () => {
     expect(parsed.validationReasons).toContain('dangling_reference');
   });
 
+  it('degrades a projection beyond its owning feature expiry even when the envelope advertises that time', () => {
+    const malformed = structuredClone(motionFixture);
+    malformed.projection_times = ['2026-09-05T12:05:00Z', '2026-09-05T12:10:00Z'];
+    malformed.features[1].projection_end_at = '2026-09-05T12:06:00Z';
+    malformed.features[1].projections = [{
+      ...structuredClone(motionFixture.features[0].projections[0]),
+      at: '2026-09-05T12:10:00Z',
+    }];
+
+    const parsed = parseObservedMotion(malformed);
+
+    expect(parsed.motion?.features[1].projections[0]).toMatchObject({
+      at: '2026-09-05T12:10:00Z',
+      status: 'unavailable',
+      display_geometry: { status: 'unavailable', geometry: null },
+    });
+  });
+
+  it('degrades a projection that is not an advertised future time', () => {
+    const malformed = structuredClone(motionFixture);
+    malformed.features[0].projections[0].at = '2026-09-05T12:06:00Z';
+
+    const parsed = parseObservedMotion(malformed);
+
+    expect(parsed.motion?.features[0].projections[0]).toMatchObject({
+      at: '2026-09-05T12:06:00Z',
+      status: 'unavailable',
+      display_geometry: { status: 'unavailable', geometry: null },
+    });
+  });
+
+  it('degrades a projection at the envelope cutoff even when the envelope advertises it', () => {
+    const malformed = structuredClone(motionFixture);
+    malformed.projection_times = ['2026-09-05T12:00:00Z'];
+    malformed.features[0].projections[0].at = '2026-09-05T12:00:00Z';
+
+    const parsed = parseObservedMotion(malformed);
+
+    expect(parsed.motion?.features[0].projections[0]).toMatchObject({
+      at: '2026-09-05T12:00:00Z',
+      status: 'unavailable',
+      display_geometry: { status: 'unavailable', geometry: null },
+    });
+  });
+
+  it('degrades a projection whose feature lacks validated geolocation or accepted motion', () => {
+    const malformed = structuredClone(motionFixture);
+    malformed.features[0].geolocation.status = 'unverified';
+
+    const parsed = parseObservedMotion(malformed);
+
+    expect(parsed.motion?.features[0].projections[0]).toMatchObject({
+      status: 'unavailable',
+      display_geometry: { status: 'unavailable', geometry: null },
+    });
+  });
+
+  it('does not retain geometry from an unavailable projection record', () => {
+    const malformed = structuredClone(motionFixture);
+    malformed.features[0].projections[0].status = 'unavailable';
+    malformed.features[0].projections[0].reason_codes = ['motion_unavailable'];
+
+    const parsed = parseObservedMotion(malformed);
+
+    expect(parsed.motion?.features[0].projections[0]).toMatchObject({
+      status: 'unavailable',
+      display_geometry: { status: 'unavailable', geometry: null },
+    });
+  });
+
   it('resolves context frames through their named source and association endpoints through the correct families', () => {
     const malformed = structuredClone(motionFixture) as any;
     malformed.features[0].trail[0].frame_id = 'cloud-frame-1';
