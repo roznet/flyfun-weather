@@ -51,7 +51,7 @@ were redirected to this worktree's existing `venv`.
 |---|---|
 | Strict shared producer contract and policy | Six Important findings fixed across two rounds; independent scoped re-reviews approved. |
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
-| Independent feature tracking | Implementation in progress on reviewed inputs/contract. |
+| Independent feature tracking | Implemented locally at `ac011c46`; independent numerical/spec review pending. |
 | Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
 | Time-compatible evidence and bounded payload | Pending. |
 | Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
@@ -77,9 +77,18 @@ Controller-verified local stages (not full-feature verification):
 | `a757f27c` contract validation fix | Contract-only invocation above, additionally `-p no:asyncio` | 89 passed in 1.39s, warning-strict. |
 | `84c7c5ae` exact search-boundary refusal | Same warning-strict contract invocation | 92 passed in 1.28s, no warnings. |
 | Current route/geometry integration | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_route.py tests/observed/test_motion_geometry.py tests/test_route_points.py tests/test_model_region.py --tb=short` | 101 passed in 2.10s, one known warning. |
+| `ac011c46` tracking integration | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_tracking.py tests/observed/test_motion_geometry.py tests/observed/test_motion_history.py tests/observed/test_motion_readers.py tests/observed/test_motion_contract.py tests/observed/test_motion_route.py` | 220 passed in 3.95s, two known reader/environment warnings. |
 
 These commits remain local. No server writer, web or native prediction integration
 is claimed from these stage tests.
+
+Tracking now labels the full eight-connected field before candidate limits, uses
+fixed-support two-patch forward/reverse matching and retains full relevant lineage,
+including small/unselected competitors. It fits cumulative matched displacement
+against actual elapsed time on a clean newest-ending chain, not centroid movement.
+Observed-only failure results carry explicit known/unknown count metadata. The
+44 focused tracking cases are included in the 220-test integration run above;
+independent review remains a separate gate.
 
 Independent publication review found that Python dictionary equality treats JSON
 `true` and `1` as equal, allowing conflicting unknown content at the same revision
@@ -182,3 +191,9 @@ netCDF/NumPy/Starlette deprecations plus the legacy LI timezone conversion.
   clarification is subject to the tracking review; it is not predictive-skill
   evidence. If the guard suppresses a genuinely fractional but numerically
   indistinguishable match, the refinement must be revisited.
+- The competing-peak exclusion neighbourhood is now explicitly a Euclidean
+  two-cell radius; offset `(2, 2)` is a competitor. The design previously omitted
+  the metric. This matches the displacement/separation geometry but may refuse
+  more tracks than a square neighbourhood. A low-contrast fractional fixture is
+  retained as a refusal case, with separate stronger-texture refinement coverage;
+  regional replay must judge usefulness rather than weakening acceptance tests.

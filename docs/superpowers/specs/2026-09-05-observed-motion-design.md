@@ -266,7 +266,11 @@ regions without identifiable boundaries/texture remain observed-only.
    shifts choose different missing-data subsets. Unknown values may not contribute
    to correlation, including indirectly through a moving coverage edge.
 3. Apply the policy's support, texture, peak and search-edge checks. Require both
-   patches to agree within one cell diagonal. Attempt quadratic refinement when
+   patches to agree within one cell diagonal. The competing-peak exclusion uses
+   Euclidean grid distance at most two cells from the best integer peak; a peak
+   offset by `(2, 2)` cells is therefore a competitor, not excluded background.
+   This fixes the previously unstated neighbourhood metric, consistently with
+   the displacement search and patch separation. Attempt quadratic refinement when
    all nine local 3 × 3 peak scores are finite and inside the search region.
    Accept it only for a negative-definite peak with the fitted offset within half
    a cell of the integer solution; otherwise use the integer displacement and
