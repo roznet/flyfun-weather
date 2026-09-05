@@ -105,6 +105,14 @@ def _track(source: str, feature_id: str, *, start: datetime = T0 - timedelta(min
     return Track(feature_id, source, times[-1], history[-1].footprint, history, (dx / 600.0, 0.0))
 
 
+def _custom_track(source: str, feature_id: str, times: list[datetime], shapes: list[object], velocity=(0.0, 0.0)) -> Track:
+    history = [
+        type("Sample", (), {"frame_id": f"{source}-{at:%H%M}", "reference_at": at, "footprint": shape})
+        for at, shape in zip(times, shapes)
+    ]
+    return Track(feature_id, source, times[-1], shapes[-1], history, velocity)
+
+
 def _lightning(count: int, *, precise: bool = True) -> LightningInput:
     start = T0 - timedelta(minutes=5)
     record = FrameRecord(
@@ -231,3 +239,61 @@ def test_window_only_lightning_remains_observed_context_without_feature_claim() 
     assert record.association_status == "unavailable"
     assert record.associated_feature_ids is None
     assert evidence == {}
+
+
+def test_association_translates_left_bracket_contour_and_reports_source_windows() -> None:
+    from weatherbrief.observed.motion.association import AssociationContext, associate_tracks
+
+    radar_times = [T0 - timedelta(minutes=10), T0 - timedelta(minutes=5), T0]
+    cloud_times = [T0 - timedelta(minutes=13), T0 - timedelta(minutes=8), T0 - timedelta(minutes=3)]
+    radar = _custom_track(
+        "opera_dbzh",
+        "radar-1",
+        radar_times,
+        [
+            box(0, 10_000, 2_000, 12_000),
+            box(0, 10_000, 2_000, 12_000),
+            box(100_000, 10_000, 102_000, 12_000),
+        ],
+        velocity=(10.0, 0.0),
+    )
+    cloud = _custom_track(
+        "eumetsat_ctth",
+        "cloud-1",
+        cloud_times,
+        [
+            box(1_200, 10_000, 3_200, 12_000),
+            box(1_200, 10_000, 3_200, 12_000),
+            box(1_200, 10_000, 3_200, 12_000),
+        ],
+    )
+    frames = {
+        "opera_dbzh": tuple(_frame("opera_dbzh", at) for at in radar_times),
+        "eumetsat_ctth": tuple(_frame("eumetsat_ctth", at) for at in cloud_times),
+    }
+
+    associations, _, _ = associate_tracks([radar, cloud], frames, GRID, AssociationContext())
+
+    link = associations[0]
+    assert link.status == "available"
+    assert link.comparison_at == T0 - timedelta(minutes=3)
+    assert link.radar_frame_ids == ["opera_dbzh-1155", "opera_dbzh-1200"]
+    assert link.radar_window == Interval(start_at=T0 - timedelta(minutes=10), end_at=T0)
+    assert link.cloud_window == Interval(start_at=T0 - timedelta(minutes=8), end_at=T0 - timedelta(minutes=3))
+    assert link.relation == "overlap"
+
+
+def test_nearby_association_is_limited_to_one_analysis_cell_diagonal() -> None:
+    from weatherbrief.observed.motion.association import AssociationContext, associate_tracks
+
+    radar = _custom_track("opera_dbzh", "radar-1", [T0], [box(10_000, 10_000, 12_000, 12_000)])
+    cloud = _custom_track("eumetsat_ctth", "cloud-1", [T0], [box(15_000, 10_000, 17_000, 12_000)])
+    frames = {
+        "opera_dbzh": (_frame("opera_dbzh", T0),),
+        "eumetsat_ctth": (_frame("eumetsat_ctth", T0),),
+    }
+
+    associations, _, _ = associate_tracks([radar, cloud], frames, GRID, AssociationContext())
+
+    assert associations[0].status == "unavailable"
+    assert associations[0].reason_codes == ["no_spatial_association"]

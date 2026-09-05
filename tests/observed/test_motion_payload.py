@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import math
+from threading import Event
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -13,9 +15,12 @@ from weatherbrief.models import RouteConfig, Waypoint
 from weatherbrief.models.observed_motion import (
     GeolocationRecord,
     GeometryRecord,
+    Interval,
     ObservedMotion,
     PairDiagnostics,
     PatchDiagnostics,
+    PlannedOverlapResult,
+    RouteRow,
 )
 from weatherbrief.observed.motion.geometry import AnalysisGrid
 from weatherbrief.observed.motion.history import AnalysisFrame, HistoryResult, InputCount
@@ -101,6 +106,35 @@ def _history(*, cloud_geo: GeolocationRecord | None = None, lightning_count: int
             InputCount("eumetsat_ctth", 3, 3, 3, 3, 0, True),
             InputCount("opera_rate", 1, 1, 1, 1, 0, True),
             InputCount("eumetsat_li", 1 if lightning_count else None, 1 if lightning_count else 0, 1 if lightning_count else 0, 1 if lightning_count else 0, 0 if lightning_count else None, True),
+        ),
+    )
+
+
+def _history_with_times(
+    radar_times: list[datetime],
+    *,
+    cloud_geo: GeolocationRecord | None = None,
+    rate_frames: tuple[AnalysisFrame, ...] | None = None,
+) -> HistoryResult:
+    radar = tuple(_analysis("opera_dbzh", at, values=42.0) for at in radar_times)
+    cloud_times = [T0 - timedelta(minutes=10), T0 - timedelta(minutes=5), T0]
+    cloud = tuple(_analysis("eumetsat_ctth", at, values=9_000.0, geolocation=cloud_geo or _geo("unverified")) for at in cloud_times)
+    rate = rate_frames if rate_frames is not None else (_analysis("opera_rate", radar_times[-1], values=7.5),)
+    return HistoryResult(
+        GRID,
+        {"opera_dbzh": radar, "eumetsat_ctth": cloud},
+        (
+            _source("opera_dbzh", radar, _geo()),
+            _source("eumetsat_ctth", cloud, cloud_geo or _geo("unverified")),
+            _source("opera_rate", rate, _geo()),
+        ),
+        (),
+        rate_frames=rate,
+        lightning_frames=(),
+        input_counts=(
+            InputCount("opera_dbzh", len(radar), len(radar), len(radar), len(radar), 0, True),
+            InputCount("eumetsat_ctth", len(cloud), len(cloud), len(cloud), len(cloud), 0, True),
+            InputCount("opera_rate", len(rate), len(rate), len(rate), len(rate), 0, True),
         ),
     )
 
@@ -260,6 +294,32 @@ def _tracking_many(history: HistoryResult):
     return TrackingResult(tracks, (), counts)
 
 
+def _tracking_uneven(history: HistoryResult):
+    from weatherbrief.observed.motion.tracking import TrackingCount, TrackingResult
+
+    tracks = []
+    counts = []
+    for source_id, frames in history.frames_by_source.items():
+        total = 30 if source_id == "opera_dbzh" else 1
+        for index in range(total):
+            offset = index * 3_000
+            samples = [
+                _Sample(frame.frame_id, frame.reference_at, box(20_000 + offset, 20_000, 22_000 + offset, 22_000))
+                for frame in frames
+            ]
+            tracks.append(_Track(
+                f"{source_id}-feature-{index:02d}",
+                source_id,
+                frames[-1].reference_at,
+                samples[-1].footprint,
+                samples,
+                (0.0, 0.0),
+                pair_diagnostics=[_pair(frames[0], frames[1], final=False), _pair(frames[1], frames[2], final=True)],
+            ))
+        counts.append(TrackingCount(source_id, frames[-1].frame_id, total, 0, total, total, total, 0, True, True))
+    return TrackingResult(tracks, (), tuple(counts))
+
+
 def test_motion_enabled_requires_both_observed_and_motion_gates(monkeypatch) -> None:
     from weatherbrief.observed.motion.payload import motion_enabled
 
@@ -409,16 +469,257 @@ def test_geometry_cap_preserves_feature_card_and_trims_projection_details(monkey
     assert geometry.status == "partial"
 
 
-def test_runtime_error_replaces_old_motion_with_unavailable_envelope(monkeypatch) -> None:
+def test_stale_reference_withholds_motion_without_generic_replacement(monkeypatch) -> None:
     from weatherbrief.observed.motion import payload
 
     monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
     monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
-    monkeypatch.setattr(payload, "load_history", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("busy")))
+    history = _history_with_times([
+        T0 - timedelta(minutes=31),
+        T0 - timedelta(minutes=26),
+        T0 - timedelta(minutes=21),
+    ])
+    _install_payload_inputs(monkeypatch, history)
 
-    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=10)
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=13)
 
     assert motion.status == "unavailable"
-    assert motion.reason_codes == ["runtime_error"]
-    assert motion.sources == []
-    assert motion.features == []
+    assert "stale_reference" in motion.reason_codes
+    assert "runtime_error" not in motion.reason_codes
+    assert motion.features
+    assert motion.projection_times == []
+    assert all(feature.motion.status == "unavailable" for feature in motion.features)
+
+
+def test_advertised_projection_ticks_stop_at_max_accepted_feature_expiry(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history_with_times([
+        T0 - timedelta(minutes=20),
+        T0 - timedelta(minutes=15),
+        T0 - timedelta(minutes=10),
+    ])
+    _install_payload_inputs(monkeypatch, history)
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=14)
+
+    assert motion.status == "available"
+    assert motion.expires_at == T0 + timedelta(minutes=5)
+    assert motion.projection_times == [T0 + timedelta(minutes=5)]
+    radar = next(feature for feature in motion.features if feature.source_id == "opera_dbzh")
+    assert [projection.at for projection in radar.projections] == motion.projection_times
+
+
+def test_projection_leaving_analysis_domain_is_unavailable(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+    from weatherbrief.observed.motion.tracking import TrackingCount, TrackingResult
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history(cloud_geo=_geo("unverified"))
+    _install_payload_inputs(monkeypatch, history)
+
+    def edge_tracking(*args, **kwargs):
+        frames = history.frames_by_source["opera_dbzh"]
+        samples = [
+            _Sample(frame.frame_id, frame.reference_at, box(150_000, 20_000, 156_000, 26_000))
+            for frame in frames
+        ]
+        track = _Track(
+            "opera_dbzh-edge",
+            "opera_dbzh",
+            frames[-1].reference_at,
+            samples[-1].footprint,
+            samples,
+            (20.0, 0.0),
+            pair_diagnostics=[_pair(frames[0], frames[1], final=False), _pair(frames[1], frames[2], final=True)],
+        )
+        count = TrackingCount("opera_dbzh", frames[-1].frame_id, 1, 0, 1, 1, 1, 0, True, True)
+        return TrackingResult([track], (), (count,))
+
+    monkeypatch.setattr(payload, "track_history", edge_tracking)
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=15)
+
+    radar = motion.features[0]
+    assert radar.projections[0].display_geometry.status == "unavailable"
+    assert radar.projections[0].display_geometry.reason_codes == ["outside_analysis_domain"]
+
+
+def test_rate_scalar_samples_radar_contour_at_rate_observation_time(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+    from weatherbrief.observed.motion.tracking import TrackingCount, TrackingResult
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    rate = _analysis("opera_rate", T0 - timedelta(minutes=2), values=7.5)
+    rate.detected[:] = False
+    rate.values[:] = np.nan
+    rate.detected[10:12, 17:19] = True
+    rate.values[10:12, 17:19] = 7.5
+    history = _history_with_times([T0 - timedelta(minutes=10), T0 - timedelta(minutes=5), T0], rate_frames=(rate,))
+    _install_payload_inputs(monkeypatch, history)
+
+    def moving_tracking(*args, **kwargs):
+        frames = history.frames_by_source["opera_dbzh"]
+        samples = [
+            _Sample(frames[0].frame_id, frames[0].reference_at, box(10_000, 20_000, 14_000, 24_000)),
+            _Sample(frames[1].frame_id, frames[1].reference_at, box(25_000, 20_000, 29_000, 24_000)),
+            _Sample(frames[2].frame_id, frames[2].reference_at, box(40_000, 20_000, 44_000, 24_000)),
+        ]
+        track = _Track(
+            "opera_dbzh-moving",
+            "opera_dbzh",
+            frames[-1].reference_at,
+            samples[-1].footprint,
+            samples,
+            (50.0, 0.0),
+            pair_diagnostics=[_pair(frames[0], frames[1], final=False), _pair(frames[1], frames[2], final=True)],
+        )
+        count = TrackingCount("opera_dbzh", frames[-1].frame_id, 1, 0, 1, 1, 1, 0, True, True)
+        return TrackingResult([track], (), (count,))
+
+    monkeypatch.setattr(payload, "track_history", moving_tracking)
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=16)
+
+    radar = motion.features[0]
+    rain = next(observation for observation in radar.observations if observation.kind == "rain_rate_max")
+    assert rain.status == "available"
+    assert rain.value == 7.5
+    assert rain.observed_at == T0 - timedelta(minutes=2)
+    assert rain.comparison_at == T0 - timedelta(minutes=2)
+    assert rain.alignment_method == "in_history_translation"
+
+
+def test_feature_cap_fills_unused_family_slots_from_other_family(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history(cloud_geo=_geo())
+    _install_payload_inputs(monkeypatch, history)
+    monkeypatch.setattr(payload, "track_history", lambda *args, **kwargs: _tracking_uneven(history))
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=17)
+
+    assert len(motion.features) == 31
+    assert sum(feature.family == "radar_echo" for feature in motion.features) == 30
+    assert sum(feature.family == "high_cloud_top" for feature in motion.features) == 1
+
+
+def test_concurrent_motion_build_returns_busy_without_second_analysis(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history(cloud_geo=_geo("unverified"))
+    _install_payload_inputs(monkeypatch, history)
+    entered = Event()
+    release = Event()
+    calls = 0
+
+    def blocking_history(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            assert release.wait(timeout=5)
+        return history
+
+    monkeypatch.setattr(payload, "load_history", blocking_history)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(payload.build_observed_motion, route(), departure_time=T0, cutoff_at=T0, revision=18)
+        assert entered.wait(timeout=5)
+        busy = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=19)
+        release.set()
+        first.result(timeout=5)
+
+    assert busy.status == "unavailable"
+    assert busy.reason_codes == ["busy"]
+    assert calls == 1
+
+
+def test_bounded_failure_codes_are_preserved(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    monkeypatch.setattr(payload, "load_history", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("compute_deadline")))
+
+    deadline = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=20)
+
+    assert deadline.status == "unavailable"
+    assert deadline.reason_codes == ["compute_deadline"]
+
+    monkeypatch.setattr(payload, "load_history", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    failed = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=21)
+
+    assert failed.status == "unavailable"
+    assert failed.reason_codes == ["compute_failed"]
+
+
+def test_payload_limit_failure_is_reported_explicitly(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    history = _history(cloud_geo=_geo("unverified"))
+    _install_payload_inputs(monkeypatch, history)
+
+    def too_many_rows(*args, **kwargs):
+        rows = [
+            RouteRow(
+                leg_id=f"leg-{index}",
+                leg_index=0,
+                from_label="A",
+                to_label="B",
+                at=T0,
+                status="available",
+                reason_codes=[],
+                distance_nm=1.0,
+                closure_kt=1.0,
+                closure_interval=Interval(start_at=T0, end_at=T0 + timedelta(seconds=1)),
+                relationship="approaching",
+                planned_time_method="distance_proportional_planned",
+                planned_time_status="unavailable",
+                planned_time_reason_codes=["missing_departure_time"],
+                planned_overlap_at_time=None,
+            )
+            for index in range(1_025)
+        ]
+        return rows, PlannedOverlapResult(
+            status="available",
+            reason_codes=[],
+            method="relative_segment_contour_intersection",
+            planned_time_method="distance_proportional_planned",
+            evaluated_interval=Interval(start_at=T0, end_at=T0 + timedelta(minutes=15)),
+            intervals=[],
+            complete=True,
+        )
+
+    monkeypatch.setattr(payload, "route_relationships", too_many_rows)
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=22)
+
+    assert motion.status == "unavailable"
+    assert motion.reason_codes == ["payload_limit"]
+
+
+def test_lightning_completeness_keeps_unknown_count_without_precise_evaluation(monkeypatch) -> None:
+    from weatherbrief.observed.motion import payload
+
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "true")
+    _install_payload_inputs(monkeypatch, _history(lightning_count=0))
+
+    motion = payload.build_observed_motion(route(), departure_time=T0, cutoff_at=T0, revision=23)
+
+    lightning = next(record for record in motion.completeness if record.category == "lightning")
+    assert lightning.status == "partial"
+    assert lightning.reason_codes == ["missing_source"]
+    assert lightning.considered_count is None
+    assert lightning.omitted_count is None

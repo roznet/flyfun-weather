@@ -50,22 +50,46 @@ def _track_shape_at(track, at: datetime) -> BaseGeometry | None:
     times = [_utc(sample.reference_at) for sample in samples]
     if at < times[0] or at > times[-1]:
         return None
-    newest = samples[-1]
-    seconds = (at - _utc(newest.reference_at)).total_seconds()
+    left_sample = None
+    for left, right in zip(samples, samples[1:]):
+        if _utc(left.reference_at) <= at <= _utc(right.reference_at):
+            left_sample = left
+            break
+    if left_sample is None:
+        return None
+    seconds = (at - _utc(left_sample.reference_at)).total_seconds()
     vx, vy = track.velocity_xy_m_s
-    return translate(newest.footprint, xoff=vx * seconds, yoff=vy * seconds)
+    return translate(left_sample.footprint, xoff=vx * seconds, yoff=vy * seconds)
 
 
-def _frame_records(track, at: datetime) -> tuple[list[str], Interval | None, str | None]:
+def _source_frame_by_id(frames_by_source: dict[str, tuple[AnalysisFrame, ...]], source_id: str):
+    return {frame.frame_id: frame for frame in frames_by_source.get(source_id, ())}
+
+
+def _frame_records(track, at: datetime, frames_by_source) -> tuple[list[str], Interval | None, str | None]:
     at = _utc(at)
     samples = sorted(track.history, key=lambda sample: sample.reference_at)
+    source_frames = _source_frame_by_id(frames_by_source, track.source_id)
     exact = [sample for sample in samples if _utc(sample.reference_at) == at]
     if exact:
-        return [exact[0].frame_id], Interval(start_at=at, end_at=at), "simultaneous_observed"
+        frame = source_frames.get(exact[0].frame_id)
+        window = frame.source_record.acquisition_window if frame is not None else Interval(start_at=at, end_at=at)
+        return [exact[0].frame_id], window, "simultaneous_observed"
     for left, right in zip(samples, samples[1:]):
         start, end = _utc(left.reference_at), _utc(right.reference_at)
         if start <= at <= end:
-            return [left.frame_id, right.frame_id], Interval(start_at=start, end_at=end), "in_history_translation"
+            left_frame = source_frames.get(left.frame_id)
+            right_frame = source_frames.get(right.frame_id)
+            if left_frame is None or right_frame is None:
+                return [left.frame_id, right.frame_id], Interval(start_at=start, end_at=end), "in_history_translation"
+            return (
+                [left.frame_id, right.frame_id],
+                Interval(
+                    start_at=left_frame.source_record.acquisition_window.start_at,
+                    end_at=right_frame.source_record.acquisition_window.end_at,
+                ),
+                "in_history_translation",
+            )
     return [], None, None
 
 
@@ -96,7 +120,7 @@ def _unavailable_association(index: int, radar, cloud, reasons: list[str]) -> As
     )
 
 
-def _association(index: int, radar, cloud, frames_by_source, policy: MotionPolicy, deadline: float | None) -> AssociationRecord:
+def _association(index: int, radar, cloud, frames_by_source, grid, policy: MotionPolicy, deadline: float | None) -> AssociationRecord:
     reasons: list[str] = []
     for source_id in (radar.source_id, cloud.source_id):
         geolocation = _source_geolocation(frames_by_source, source_id)
@@ -117,8 +141,8 @@ def _association(index: int, radar, cloud, frames_by_source, policy: MotionPolic
         reasons.append("no_common_history")
     radar_shape = _track_shape_at(radar, comparison_at) if not reasons else None
     cloud_shape = _track_shape_at(cloud, comparison_at) if not reasons else None
-    radar_ids, radar_window, radar_method = _frame_records(radar, comparison_at)
-    cloud_ids, cloud_window, cloud_method = _frame_records(cloud, comparison_at)
+    radar_ids, radar_window, radar_method = _frame_records(radar, comparison_at, frames_by_source)
+    cloud_ids, cloud_window, cloud_method = _frame_records(cloud, comparison_at, frames_by_source)
     if not reasons and (radar_shape is None or cloud_shape is None or radar_window is None or cloud_window is None):
         reasons.append("outside_observed_history")
     if reasons:
@@ -128,7 +152,8 @@ def _association(index: int, radar, cloud, frames_by_source, policy: MotionPolic
     area_km2 = float(intersection.area / 1_000_000.0)
     distance_nm = float(radar_shape.distance(cloud_shape) / NM_M)
     relation = "overlap" if area_km2 > 0.0 else "nearby"
-    if relation == "nearby" and distance_nm > policy.route_capture_corridor_nm:
+    nearby_threshold_nm = math.sqrt(2.0) * grid.cell_size_m / NM_M
+    if relation == "nearby" and distance_nm > nearby_threshold_nm:
         return _unavailable_association(index, radar, cloud, ["no_spatial_association"])
     method = "simultaneous_observed" if radar_method == cloud_method == "simultaneous_observed" else "in_history_translation"
     radar_area = max(float(radar_shape.area), 0.0)
@@ -267,7 +292,7 @@ def associate_tracks(tracks, frames_by_source, grid, context: AssociationContext
         for c in cloud:
             if len(associations) >= policy.max_associations:
                 break
-            associations.append(_association(len(associations) + 1, r, c, frames_by_source, policy, context.deadline))
+            associations.append(_association(len(associations) + 1, r, c, frames_by_source, grid, policy, context.deadline))
     lightning, evidence = _lightning(list(tracks), context.lightning_frames, frames_by_source, grid, policy, context.deadline)
     return associations, lightning, evidence
 

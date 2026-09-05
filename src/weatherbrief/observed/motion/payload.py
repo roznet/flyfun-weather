@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 import time
+from threading import Lock
 from uuid import uuid4
 
 import numpy as np
 from shapely.affinity import translate
 from shapely.geometry import Point
+from pydantic import ValidationError
 
 from weatherbrief.models import RouteConfig
 from weatherbrief.models.observed_motion import (
@@ -41,6 +44,8 @@ from weatherbrief.observed.motion.route import (
     route_relationships,
 )
 from weatherbrief.observed.motion.tracking import TrackingCount, track_history
+
+_ADMISSION_LOCK = Lock()
 
 
 def _enabled_value(value: str | None) -> bool:
@@ -143,7 +148,17 @@ def _sample_mask(frame: AnalysisFrame, shape):
     return np.vectorize(lambda xx, yy: shape.covers(Point(float(xx), float(yy))))(x, y)
 
 
-def _scalar(kind: str, frame: AnalysisFrame | None, shape, comparison_at: datetime, *, temperature=False) -> ScalarObservation:
+def _scalar(
+    kind: str,
+    frame: AnalysisFrame | None,
+    shape,
+    comparison_at: datetime,
+    *,
+    temperature=False,
+    alignment_method: str | None = None,
+) -> ScalarObservation:
+    if alignment_method is None:
+        alignment_method = "observed" if frame is not None and frame.reference_at == comparison_at else "in_history_translation"
     units = {"reflectivity_max": "dBZ", "rain_rate_max": "mm_h", "cloud_top_max": "m_msl"}
     if frame is None:
         return ScalarObservation(
@@ -202,7 +217,7 @@ def _scalar(kind: str, frame: AnalysisFrame | None, shape, comparison_at: dateti
         observed_at=frame.reference_at,
         comparison_at=comparison_at,
         acquisition_window=frame.source_record.acquisition_window,
-        alignment_method="observed",
+        alignment_method=alignment_method,
         sample_id=sample_id,
         sample_position=sample_position,
         paired_temperature_k=paired_temp,
@@ -210,9 +225,40 @@ def _scalar(kind: str, frame: AnalysisFrame | None, shape, comparison_at: dateti
     )
 
 
-def _rate_frame(history: HistoryResult, reference_at: datetime) -> AnalysisFrame | None:
-    eligible = [frame for frame in history.rate_frames if frame.reference_at <= reference_at]
-    return eligible[-1] if eligible else None
+def _track_shape_at(track, at: datetime):
+    at = _utc(at)
+    samples = sorted(track.history, key=lambda sample: sample.reference_at)
+    for sample in samples:
+        if _utc(sample.reference_at) == at:
+            return sample.footprint
+    if track.velocity_xy_m_s is None or not samples:
+        return None
+    times = [_utc(sample.reference_at) for sample in samples]
+    if at < times[0] or at > times[-1]:
+        return None
+    for left, right in zip(samples, samples[1:]):
+        if _utc(left.reference_at) <= at <= _utc(right.reference_at):
+            seconds = (at - _utc(left.reference_at)).total_seconds()
+            vx, vy = track.velocity_xy_m_s
+            return translate(left.footprint, xoff=vx * seconds, yoff=vy * seconds)
+    return None
+
+
+def _rate_scalar(history: HistoryResult, track) -> ScalarObservation:
+    first = _utc(track.history[0].reference_at) if track.history else _utc(track.reference_at)
+    eligible = [
+        frame
+        for frame in history.rate_frames
+        if first <= _utc(frame.reference_at) <= _utc(track.reference_at)
+    ]
+    frame = eligible[-1] if eligible else None
+    if frame is None:
+        return _scalar("rain_rate_max", None, track.footprint, track.reference_at)
+    shape = _track_shape_at(track, frame.reference_at)
+    if shape is None:
+        return _scalar("rain_rate_max", None, track.footprint, frame.reference_at)
+    alignment = "observed" if _utc(frame.reference_at) == _utc(track.reference_at) else "in_history_translation"
+    return _scalar("rain_rate_max", frame, shape, frame.reference_at, alignment_method=alignment)
 
 
 def _definition(source_id: str) -> ContourDefinition:
@@ -231,10 +277,12 @@ def _definition(source_id: str) -> ContourDefinition:
     )
 
 
-def _motion(track, frame: AnalysisFrame, grid) -> MotionRecord:
+def _motion(track, frame: AnalysisFrame, grid, cutoff_at: datetime, policy: MotionPolicy) -> MotionRecord:
     reasons = list(track.reason_codes)
     if frame.geolocation.status != "validated":
         reasons.extend(frame.geolocation.reason_codes or ["geolocation_unverified"])
+    if _utc(cutoff_at) - _utc(track.reference_at) > timedelta(minutes=policy.max_reference_age_minutes):
+        reasons.append("stale_reference")
     if track.velocity_xy_m_s is None:
         reasons.extend(track.reason_codes or ["insufficient_history"])
     if reasons:
@@ -270,18 +318,31 @@ def _projection_times(cutoff_at: datetime, policy: MotionPolicy) -> list[datetim
     return [first + timedelta(minutes=policy.projection_tick_minutes * index) for index in range(policy.max_projection_times)]
 
 
-def _project(track, at: datetime, grid, policy: MotionPolicy) -> GeometryRecord:
+def _geometry_unavailable(reason: str) -> GeometryRecord:
+    return GeometryRecord(
+        status="unavailable",
+        reason_codes=[reason],
+        geometry=None,
+        provenance="grid_contour",
+        simplification_tolerance_m=0.0,
+    )
+
+
+def _supported_geometry(shape, frame: AnalysisFrame, grid, policy: MotionPolicy) -> GeometryRecord:
+    if not grid.domain.covers(shape):
+        return _geometry_unavailable("outside_analysis_domain")
+    support = _coverage(frame, shape)
+    if support.status != "available" or not math.isclose(support.known_fraction or 0.0, 1.0, abs_tol=1e-12):
+        return _geometry_unavailable("unknown_support")
+    return display_geometry(shape, grid, policy)
+
+
+def _project(track, frame: AnalysisFrame, at: datetime, grid, policy: MotionPolicy) -> GeometryRecord:
     if track.velocity_xy_m_s is None:
-        return GeometryRecord(
-            status="unavailable",
-            reason_codes=["insufficient_history"],
-            geometry=None,
-            provenance="grid_contour",
-            simplification_tolerance_m=0.0,
-        )
+        return _geometry_unavailable("insufficient_history")
     seconds = (at - track.reference_at).total_seconds()
     vx, vy = track.velocity_xy_m_s
-    return display_geometry(translate(track.footprint, xoff=vx * seconds, yoff=vy * seconds), grid, policy)
+    return _supported_geometry(translate(track.footprint, xoff=vx * seconds, yoff=vy * seconds), frame, grid, policy)
 
 
 def _feature(track, history: HistoryResult, grid, route: RouteConfig, departure_time, cutoff_at, projection_times, deadline, policy):
@@ -291,19 +352,13 @@ def _feature(track, history: HistoryResult, grid, route: RouteConfig, departure_
     frame_by_id = {frame.frame_id: frame for frame in source_frames}
     frame = frame_by_id.get(track.history[-1].frame_id, source_frames[-1])
     family = "high_cloud_top" if track.source_id == "eumetsat_ctth" else "radar_echo"
-    display = display_geometry(track.footprint, grid, policy)
+    display = _supported_geometry(track.footprint, frame, grid, policy)
     coverage = _coverage(frame, track.footprint)
-    motion = _motion(track, frame, grid)
+    motion = _motion(track, frame, grid, cutoff_at, policy)
     projection_end_at = track.reference_at + timedelta(minutes=policy.projection_horizon_minutes) if motion.status == "accepted" else None
     projections = []
     for at in projection_times:
-        geom = _project(track, at, grid, policy) if motion.status == "accepted" and at <= projection_end_at else GeometryRecord(
-            status="unavailable",
-            reason_codes=["no_future_lead"],
-            geometry=None,
-            provenance="grid_contour",
-            simplification_tolerance_m=0.0,
-        )
+        geom = _project(track, frame, at, grid, policy) if motion.status == "accepted" and at <= projection_end_at else _geometry_unavailable("no_future_lead")
         projections.append(
             ProjectionRecord(
                 at=at,
@@ -315,19 +370,20 @@ def _feature(track, history: HistoryResult, grid, route: RouteConfig, departure_
     observations = []
     if track.source_id == "opera_dbzh":
         observations.append(_scalar("reflectivity_max", frame, track.footprint, track.reference_at))
-        observations.append(_scalar("rain_rate_max", _rate_frame(history, track.reference_at), track.footprint, track.reference_at))
+        observations.append(_rate_scalar(history, track))
     else:
         observations.append(_scalar("cloud_top_max", frame, track.footprint, track.reference_at, temperature=True))
     route_rows = []
     planned_overlap = _empty_planned("not_evaluated")
     if motion.status == "accepted":
+        applicable_projection_times = [at for at in projection_times if at <= projection_end_at]
         route_rows, planned_overlap = route_relationships(
             track,
             route,
             grid,
             departure_time,
             cutoff_at,
-            projection_times,
+            applicable_projection_times,
             policy=policy,
             deadline=deadline,
         )
@@ -362,9 +418,42 @@ def _feature(track, history: HistoryResult, grid, route: RouteConfig, departure_
 
 
 def _cap_features(features, policy: MotionPolicy):
-    radar = [feature for feature in features if feature.family == "radar_echo"][: policy.initial_features_per_family]
-    cloud = [feature for feature in features if feature.family == "high_cloud_top"][: policy.initial_features_per_family]
-    return (radar + cloud)[: policy.max_features]
+    radar = [feature for feature in features if feature.family == "radar_echo"]
+    cloud = [feature for feature in features if feature.family == "high_cloud_top"]
+    selected_ids: set[str] = set()
+    selected = []
+    for family_features in (radar, cloud):
+        for feature in family_features[: policy.initial_features_per_family]:
+            selected.append(feature)
+            selected_ids.add(feature.feature_id)
+    for feature in features:
+        if len(selected) >= policy.max_features:
+            break
+        if feature.feature_id not in selected_ids:
+            selected.append(feature)
+            selected_ids.add(feature.feature_id)
+    return selected[: policy.max_features]
+
+
+def _trim_projection_times(features, projection_times):
+    accepted = [feature for feature in features if feature.motion.status == "accepted"]
+    expires_at = max((feature.projection_end_at for feature in accepted), default=None)
+    retained_times = [at for at in projection_times if expires_at is not None and at <= expires_at]
+    retained_time_set = set(retained_times)
+    trimmed_features = [
+        feature.model_copy(
+            update={
+                "projections": [projection for projection in feature.projections if projection.at in retained_time_set],
+                "route_rows": [
+                    row
+                    for row in feature.route_rows
+                    if row.at == feature.reference_at or row.at in retained_time_set
+                ],
+            }
+        )
+        for feature in features
+    ]
+    return retained_times, trimmed_features
 
 
 def _apply_evidence(features, evidence):
@@ -427,6 +516,7 @@ def _counts(
     lightning,
     projection_times,
     route_leg_count: int,
+    association_considered: int,
 ):
     input_considered = _sum_counts([count.considered_count for count in history.input_counts])
     input_omitted = _sum_counts([count.omitted_count for count in history.input_counts])
@@ -440,11 +530,8 @@ def _counts(
     selected = _sum_counts([count.selected_candidates for count in tracking_counts])
     eligible = _sum_counts([count.eligible_candidates for count in tracking_counts])
     small = _sum_counts([count.small_detections for count in tracking_counts])
-    lightning_reported = _sum_counts([
-        feature.lightning_evidence.reported_detection_count
-        for feature in features
-        if feature.lightning_evidence.reported_detection_count is not None
-    ])
+    lightning_reported = _lightning_reported_count(history)
+    lightning_reasons = _lightning_reasons(history, lightning_reported, len(lightning))
     lightning_omitted = None if lightning_reported is None else max(0, lightning_reported - len(lightning))
     route_rows = sum(len(feature.route_rows) for feature in features)
     overlap_intervals = sum(len(feature.planned_overlap.intervals) for feature in features)
@@ -470,12 +557,77 @@ def _counts(
         _completeness("candidates", eligible, selected or 0, None if eligible is None or selected is None else eligible - selected, track_reasons),
         _completeness("features", feature_considered, len(features), feature_omitted, feature_reasons),
         _completeness("geometry", geometry_considered, geometry_emitted, geometry_omitted, geometry_reasons),
-        _completeness("associations", len(associations), len(associations), 0, [reason for item in associations if item.status != "available" for reason in item.reason_codes]),
-        _completeness("lightning", lightning_reported, len(lightning), lightning_omitted, ["lightning_marker_limit"] if lightning_omitted else ()),
+        _completeness(
+            "associations",
+            association_considered,
+            len(associations),
+            max(0, association_considered - len(associations)),
+            [
+                *(["association_limit"] if association_considered > len(associations) else []),
+                *[
+                    reason
+                    for item in associations
+                    if item.status != "available"
+                    for reason in item.reason_codes
+                ],
+            ],
+        ),
+        _completeness("lightning", lightning_reported, len(lightning), lightning_omitted, lightning_reasons),
         _completeness("legs", route_leg_count, route_leg_count, 0, ()),
         _completeness("route_rows", route_rows, route_rows, 0, ()),
         _completeness("overlap_intervals", overlap_intervals, overlap_intervals, 0, ()),
     ]
+
+
+def _lightning_reported_count(history: HistoryResult) -> int | None:
+    if not history.lightning_frames:
+        return None
+    return sum(len(frame_input.frame.lons) for frame_input in history.lightning_frames)
+
+
+def _lightning_reasons(history: HistoryResult, reported: int | None, emitted: int) -> list[str]:
+    reasons: list[str] = []
+    if reported is None:
+        for source in history.sources:
+            if source.source_id == "eumetsat_li" and source.status == "unavailable":
+                reasons.extend(source.reason_codes)
+        return list(dict.fromkeys(reasons or ["missing_source"]))
+    if emitted < reported:
+        reasons.append("lightning_marker_limit")
+    return reasons
+
+
+def _association_considered(tracks) -> int:
+    radar = sum(1 for track in tracks if track.source_id == "opera_dbzh")
+    cloud = sum(1 for track in tracks if track.source_id == "eumetsat_ctth")
+    return radar * cloud
+
+
+def _enforce_aggregate_limits(features, policy: MotionPolicy) -> None:
+    if sum(len(feature.route_rows) for feature in features) > policy.max_route_rows:
+        raise ValueError("payload_limit")
+    if sum(len(feature.planned_overlap.intervals) for feature in features) > policy.max_overlap_intervals:
+        raise ValueError("payload_limit")
+
+
+def _failure_reason(exc: BaseException) -> str:
+    text = str(exc)
+    if "compute_deadline" in text:
+        return "compute_deadline"
+    if "payload_limit" in text or "payload limit exceeded" in text:
+        return "payload_limit"
+    for code in (
+        "region_too_large",
+        "incompatible_grid",
+        "invalid_time",
+        "history_gap",
+        "frame_changed",
+        "source_window_limit",
+        "unsupported_grid_spacing",
+    ):
+        if code in text:
+            return code
+    return "compute_failed"
 
 
 def _empty(route: RouteConfig, departure_time, cutoff_at, revision: int, status: str, reasons: list[str]) -> ObservedMotion:
@@ -505,6 +657,8 @@ def build_observed_motion(
     if not motion_enabled():
         return _empty(route, departure_time, cutoff_at, revision, "disabled", ["feature_disabled"])
     policy = DEFAULT_POLICY
+    if not _ADMISSION_LOCK.acquire(blocking=False):
+        return _empty(route, departure_time, cutoff_at, revision, "unavailable", ["busy"])
     deadline = time.monotonic() + policy.compute_budget_seconds
     route_geometry_id, planned_timing_id = route_identities(route, departure_time)
     try:
@@ -522,6 +676,7 @@ def build_observed_motion(
             if (feature := _feature(track, history, history.grid, route, departure_time, cutoff_at, projection_times, deadline, policy)) is not None
         ]
         features = _cap_features(features, policy)
+        projection_times, features = _trim_projection_times(features, projection_times)
         features = _cap_geometry_total(features, policy)
         retained_feature_ids = {feature.feature_id for feature in features}
         retained_tracks = [track for track in tracked.tracks if track.feature_id in retained_feature_ids]
@@ -532,6 +687,7 @@ def build_observed_motion(
             AssociationContext(lightning_frames=history.lightning_frames, policy=policy, deadline=deadline),
         )
         features = _apply_evidence(features, evidence)
+        _enforce_aggregate_limits(features, policy)
         accepted = [feature for feature in features if feature.motion.status == "accepted"]
         status = "available" if accepted else "unavailable"
         if status == "unavailable":
@@ -544,7 +700,15 @@ def build_observed_motion(
                 })
                 for feature in features
             ]
-        reason_codes = [] if status == "available" else list(dict.fromkeys((*history.reason_codes, *tracked.reason_codes))) or ["insufficient_history"]
+        if status == "unavailable":
+            feature_reasons = [
+                reason
+                for feature in features
+                for reason in feature.motion.reason_codes
+            ]
+            reason_codes = list(dict.fromkeys((*history.reason_codes, *tracked.reason_codes, *feature_reasons))) or ["insufficient_history"]
+        else:
+            reason_codes = []
         motion = ObservedMotion(
             schema_version=1,
             status=status,
@@ -572,12 +736,17 @@ def build_observed_motion(
                 lightning,
                 projection_times,
                 len(route.waypoints) - 1,
+                _association_considered(retained_tracks) if status == "available" else 0,
             ),
         )
         check_deadline(deadline)
+        if len(motion.model_dump_json().encode("utf-8")) > policy.max_serialized_bytes:
+            raise ValueError("payload_limit")
         return ObservedMotion.model_validate(motion.model_dump(mode="python"))
-    except (ValueError, RuntimeError, OSError, TimeoutError):
-        return _empty(route, departure_time, cutoff_at, revision, "unavailable", ["runtime_error"])
+    except (ValueError, RuntimeError, OSError, TimeoutError, ValidationError) as exc:
+        return _empty(route, departure_time, cutoff_at, revision, "unavailable", [_failure_reason(exc)])
+    finally:
+        _ADMISSION_LOCK.release()
 
 
 __all__ = ["build_observed_motion", "motion_enabled"]
