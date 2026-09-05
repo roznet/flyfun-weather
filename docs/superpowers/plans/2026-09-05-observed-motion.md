@@ -32,7 +32,7 @@
 
 ## Execution and file ownership
 
-Tasks 1–5 are the server increment; task 6 is web; task 7 is native; task 8 verifies the integrated increment. Each has its own test/review gate. Tasks can be delegated on disjoint file sets when their consumed interfaces are stable; no concurrent edits or commits to shared files. The controller serializes commits and records ownership/review ranges in the plan-scoped ledger. This follows the environment's explicit parallel-delegation instruction while avoiding shared-file conflicts.
+Tasks 1–5 and 9 are the server increment; task 6 is web; task 7 is native; task 8 verifies the integrated increment. Task 9 extracts the independently testable publication primitive from task 5 and can run alongside input work; task 5 later wires its reviewed helper into real writers/transports. Each has its own test/review gate. Tasks can be delegated on disjoint file sets when their consumed interfaces are stable; no concurrent edits or commits to shared files. The controller serializes commits and records ownership/review ranges in the plan-scoped ledger. This follows the environment's explicit parallel-delegation instruction while avoiding shared-file conflicts.
 
 Python commands below use `env PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 WB_OBSERVED_LIVE_TESTS=0 venv/bin/python -m pytest -q -p no:cacheprovider`. API tests use their in-memory SQLite fixtures/temporary paths. Web commands run in `web/` with `PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin`.
 
@@ -140,7 +140,7 @@ def test_ground_speed_is_not_route_closure():
 
 ### Task 5: Revision-fenced publication and every server transport
 
-**Files:** Create `storage/observed_motion.py`; modify `models/analysis.py`, `models/observations.py`, `models/__init__.py` as needed, `pipeline.py`, `tasks/artifacts.py`, `tasks/route_weather.py`, `storage/snapshots.py`, pack deletion paths and `api/packs.py`. Tests `tests/test_observed_motion_publication.py`, `tests/test_api_observed_motion.py` and existing pack/realtime tests.
+**Files:** Consume reviewed `storage/observed_motion.py` and publication tests from task 9; modify `models/analysis.py`, `models/observations.py`, `models/__init__.py` as needed, `pipeline.py`, `tasks/artifacts.py`, `tasks/route_weather.py`, `storage/snapshots.py`, `storage/flights.py` pack deletion paths and `api/packs.py`. Tests `tests/test_api_observed_motion.py` and existing pack/realtime tests.
 
 **Interfaces:** `reserve_motion_revision(pack_dir: Path, *, allow_create=False) -> MotionPublicationToken`; token contains public identity/generation/revision. `publish_motion_snapshot(pack_dir, token, motion, *, refreshed_fields, initial_snapshot=None) -> dict`; merges under stable parent lock, validates generation/latest attempt, preserves unrelated JSON and returns current published snapshot for superseded callers. Shared full/legacy writers must pass through the same atomic helper. Deletion invalidates generation while preserving high-water. Helpers return explicit transport errors on invalid lifecycle, never recreate deleted packs. `observed_motion` is the same optional raw-compatible sibling in snapshot/full/direct/gated/SSE response models.
 
@@ -156,7 +156,7 @@ def test_newer_failure_fences_old_success(pack_dir):
     assert result["observed_motion"]["status"] == "unavailable"
 ```
 
-- [ ] Implement separate stable lock/control sidecars, atomic replace, monotonic reservation, generation and latest-attempt checks and high-water persistence. Full creation is explicitly distinct from refresh; all direct snapshot writers and deletions honor ordering.
+- [ ] Wire task 9's reviewed stable lock/control and atomic helpers into every direct snapshot writer/deletion. Full creation is explicitly distinct from refresh; no bypass restores an older motion block.
 - [ ] Call task-4 payload during full/realtime optional stage with captured cutoff. Completed failures/disabled/outside-D-0 publish replacements; transport failure does not claim computation. Preserve ordinary observations.
 - [ ] Add serve-time capability/no-store headers for existing snapshot/bundle/refresh paths; propagate full motion through all return models, including SSE complete and direct observations refresh. Tests exercise actual endpoints and pack bundles, not mock existence.
 - [ ] Run targeted API/storage suites, inspect all changed-writer callers; controller commits/reviews before clients depend on endpoints.
@@ -216,8 +216,32 @@ func testUnknownCapabilityDoesNotAuthorizeCachedPrediction() {
 - [ ] Update Markdown requirement status per delivered component. No real granule/replay claim without actual authorized evidence; no synthetic manifest enabled in production. Keep feature gated off.
 - [ ] Prepare commit(s), verify clean worktree and diff, then update existing fork branch/PR #600 using explicit `https://github.com/downle/flyfun-weather.git`, preserving draft. Read resulting head/checks/comments and report actual outcome. Do not merge/deploy or send Brice a message.
 
+### Task 9: Independently testable publication primitive (before task 5)
+
+**Files:** Create `src/weatherbrief/storage/observed_motion.py` and `tests/test_observed_motion_publication.py`. Own only these files. No pipeline/API/model changes.
+
+**Interfaces:** `MotionPublicationToken` frozen dataclass binds resolved pack path, generation, revision. `MotionPublicationError` represents lifecycle/transport failures. Implement `reserve_motion_revision(pack_dir: Path, *, allow_create=False) -> MotionPublicationToken` and `publish_motion_snapshot(pack_dir: Path, token: MotionPublicationToken, motion: ObservedMotion, *, refreshed_fields: dict, initial_snapshot: dict | None = None) -> dict`. Also export `write_snapshot_atomic(pack_dir: Path, snapshot: dict) -> dict` for legacy/full writes that must preserve the current motion block and unknown existing fields, and `delete_motion_pack(pack_dir: Path) -> None` for generation-fenced deletion; integration follows in task 5.
+
+- [ ] Write real temporary-file tests before implementation: an existing `briefing.json` gets two reserved revisions, newer unavailable publishes first and old success cannot replace it; unrelated unknown root JSON remains. Same-revision different content is a contract error. Initial full-writer creation is allowed explicitly but ordinary refresh cannot create or resurrect a pack.
+
+```python
+def test_deletion_preserves_high_water_and_fences_old_generation(tmp_path):
+    pack = tmp_path / "pack"
+    first = reserve_motion_revision(pack, allow_create=True)
+    delete_motion_pack(pack)
+    second = reserve_motion_revision(pack, allow_create=True)
+    assert second.revision > first.revision
+    with pytest.raises(MotionPublicationError):
+        publish_motion_snapshot(pack, first, None, refreshed_fields={}, initial_snapshot={})
+```
+
+- [ ] Implement a parent-scoped stable lock file using `fcntl.flock`, separate atomically replaced control record, persisted high-water and invalidatable generation. Reserve under lock, compute outside (caller-owned), recheck generation/latest attempt/current snapshot under lock and atomic replace intended fields. Initial creation records pending full-writer ownership; only matching current token can publish a complete initial snapshot. Refuse unreadable/corrupt control/snapshot rather than resetting the counter.
+- [ ] Atomic writer rereads current JSON, preserves unknown fields and newer/equal-identical motion, refuses same-revision conflicts and identity contradictions. Superseded publication returns current snapshot; no current snapshot means explicit error. Current failure with higher revision replaces geometry rather than skipping nil. Use validated `ObservedMotion` from task 1 when present; lifecycle rejection occurs before inspecting superseded/invalid body data.
+- [ ] Tests cover separate stable lock inode, concurrent reserve/publication via barriers, snapshot readers never observing partial JSON, safe-integer exhaustion, retained high-water, wrong-path token, deleted/recreated path, old full-writer content and failed atomic write preserving prior JSON. All deletion fixtures live under pytest tmp_path; no shared data.
+- [ ] Run focused tests red then green; controller commits owned files and dispatches a dedicated concurrency/quality review. Task 5 cannot bypass these helpers after review.
+
 ## Coverage self-review
 
-Design §§1–3: tasks 1/4/6/7/8; §§4–5: tasks 2/3; §§6–7: task 4; §8 and contract: tasks 1/4/6/7; §9: tasks 5/6/7; §10: tasks 6/7; §§11–12: task 8 and each task's red/green/review gate. Both clients, independent cloud, lightning precision/summary, continuous planned overlap, server/client cache ordering and every transport have explicit owners.
+Design §§1–3: tasks 1/4/6/7/8; §§4–5: tasks 2/3; §§6–7: task 4; §8 and contract: tasks 1/4/6/7; §9: tasks 5/6/7/9; §10: tasks 6/7; §§11–12: task 8 and each task's red/green/review gate. Both clients, independent cloud, lightning precision/summary, continuous planned overlap, server/client cache ordering and every transport have explicit owners.
 
 Source registration and forecast usefulness are evidence gates, not work silently replaced by unit tests. Public/authorized real-source acquisition needs its own documented step; this plan neither reads shared data nor enables production to bypass it.
