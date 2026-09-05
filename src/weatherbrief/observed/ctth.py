@@ -294,6 +294,19 @@ def _attribution(dataset) -> ObservedAttribution:
     return ObservedAttribution(producer=producer, license=license_text, url=url, text=text)
 
 
+def acquisition_metadata(dataset) -> dict:
+    """Actual documented interval only; never infer it from a filename/cadence."""
+    result = {}
+    for key, names in (
+        ("acquisition_start", ("sensing_start_time", "start_time", "time_coverage_start")),
+        ("acquisition_end", ("sensing_end_time", "end_time", "time_coverage_end")),
+    ):
+        value = next((str(dataset.getncattr(n)) for n in names if n in dataset.ncattrs()), None)
+        parsed = _parse_iso(value) if value is not None else None
+        result[key] = parsed.isoformat() if parsed is not None else None
+    return result
+
+
 def read_metadata(path: Path | str) -> dict:
     """Sidecar metadata for one granule, without reading the 5568² arrays."""
     import netCDF4
@@ -304,6 +317,9 @@ def read_metadata(path: Path | str) -> dict:
         valid = _valid_time(dataset, path)
         return {
             "quantity": "cloud_top_height",
+            **acquisition_metadata(dataset),
+            "product_id": CTTH_COLLECTION + ":" + str(getattr(dataset, "product_version", "unspecified")),
+            "decoder_version": "ctth_supplied_parallax_v1",
             "valid_time": valid.isoformat() if valid else None,
             "window_minutes": 0.0,
             "grid": {
@@ -320,71 +336,70 @@ def read_metadata(path: Path | str) -> dict:
 
 
 def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFrame:
-    """Decode one row-strip of a granule, keeping the parallax fields.
-
-    Only the *row* range narrows the read: the granule's chunks are
-    ``[23, 5568]`` full-width strips, so trimming columns costs a partial-chunk
-    decompression and saves nothing.  ``window.full_width`` records that the
-    caller knows this.
-    """
+    """Decode a window, opening this granule once."""
     import netCDF4
 
-    path = Path(path)
     with netCDF4.Dataset(str(path)) as dataset:
-        grid = read_grid(dataset)
-        row0 = max(0, min(window.row0, grid.ny))
-        row1 = max(row0, min(window.row1, grid.ny))
-        if window.full_width:
-            col0, col1 = 0, grid.nx
-        else:
-            col0 = max(0, min(window.col0, grid.nx))
-            col1 = max(col0, min(window.col1, grid.nx))
-        rows = slice(row0, row1)
-        cols = slice(col0, col1)
+        return read_dataset_window(dataset, window, source=source, path=Path(path))
 
-        height, height_missing = _read_raw(dataset, "cloud_top_height", rows, cols)
-        quality, quality_missing = _read_raw(dataset, "quality_method", rows, cols)
-        dlat, dlat_missing = _read_raw(dataset, "delta_latitude", rows, cols)
-        dlon, dlon_missing = _read_raw(dataset, "delta_longitude", rows, cols)
-        # Three more variables over the SAME rows. The granule chunks are
-        # [23, 5568] full-width strips, so the expensive part — seeking and
-        # decompressing that row band — is already paid; each extra variable
-        # measured ~6 ms on a route-sized window, about 10% of a payload build.
-        #
-        # Effective cloudiness is pixel cloud amount × emissivity at 10.5 µm,
-        # not visual opacity, a cloud-cover fraction, or overflight guidance.
-        # Preserve netCDF packing: measured granules decode to fractions,
-        # despite the guide's percent label. That discrepancy is unresolved;
-        # applying another /100 or masking values would guess an encoding.
-        # Optional: a granule that does not carry one of these still decodes,
-        # and the sampler reports the corresponding field as None. Height,
-        # quality and the parallax pair are the only hard requirements —
-        # without those the product cannot be placed or believed at all.
-        optional = {
-            name: _read_raw(dataset, name, rows, cols)
-            for name in (
-                "cloud_top_temperature",
-                "effective_cloudiness",
-                "cloud_top_aviation_height",
-            )
-            if name in dataset.variables
-        }
 
-        # Table 10 spells status "qualiy_status"; accept that spelling as
-        # well as the conventional variable name. netCDF enum types decode
-        # through _read_raw just like integer flags, including their fill.
-        status_name = next(
-            (name for name in ("quality_status", "qualiy_status") if name in dataset.variables),
-            None,
+def read_dataset_window(dataset, window: GridWindow, *, source: str, path: Path | str) -> GridFrame:
+    """Decode a bounded block from a caller-owned, already open granule."""
+    path = Path(path)
+    grid = read_grid(dataset)
+    row0 = max(0, min(window.row0, grid.ny))
+    row1 = max(row0, min(window.row1, grid.ny))
+    if window.full_width:
+        col0, col1 = 0, grid.nx
+    else:
+        col0 = max(0, min(window.col0, grid.nx))
+        col1 = max(col0, min(window.col1, grid.nx))
+    rows = slice(row0, row1)
+    cols = slice(col0, col1)
+
+    height, height_missing = _read_raw(dataset, "cloud_top_height", rows, cols)
+    quality, quality_missing = _read_raw(dataset, "quality_method", rows, cols)
+    dlat, dlat_missing = _read_raw(dataset, "delta_latitude", rows, cols)
+    dlon, dlon_missing = _read_raw(dataset, "delta_longitude", rows, cols)
+    # Three more variables over the SAME rows. The granule chunks are
+    # [23, 5568] full-width strips, so the expensive part — seeking and
+    # decompressing that row band — is already paid; each extra variable
+    # measured ~6 ms on a route-sized window, about 10% of a payload build.
+    #
+    # Effective cloudiness is pixel cloud amount × emissivity at 10.5 µm,
+    # not visual opacity, a cloud-cover fraction, or overflight guidance.
+    # Preserve netCDF packing: measured granules decode to fractions,
+    # despite the guide's percent label. That discrepancy is unresolved;
+    # applying another /100 or masking values would guess an encoding.
+    # Optional: a granule that does not carry one of these still decodes,
+    # and the sampler reports the corresponding field as None. Height,
+    # quality and the parallax pair are the only hard requirements —
+    # without those the product cannot be placed or believed at all.
+    optional = {
+        name: _read_raw(dataset, name, rows, cols)
+        for name in (
+            "cloud_top_temperature",
+            "effective_cloudiness",
+            "cloud_top_aviation_height",
         )
-        status = _read_raw(dataset, status_name, rows, cols)[0] if status_name else None
-        overall = (
-            _read_raw(dataset, "quality_overall_processing", rows, cols)[0]
-            if "quality_overall_processing" in dataset.variables else None
-        )
+        if name in dataset.variables
+    }
 
-        valid = _valid_time(dataset, path)
-        attribution = _attribution(dataset)
+    # Table 10 spells status "qualiy_status"; accept that spelling as
+    # well as the conventional variable name. netCDF enum types decode
+    # through _read_raw just like integer flags, including their fill.
+    status_name = next(
+        (name for name in ("quality_status", "qualiy_status") if name in dataset.variables),
+        None,
+    )
+    status = _read_raw(dataset, status_name, rows, cols)[0] if status_name else None
+    overall = (
+        _read_raw(dataset, "quality_overall_processing", rows, cols)[0]
+        if "quality_overall_processing" in dataset.variables else None
+    )
+
+    valid = _valid_time(dataset, path)
+    attribution = _attribution(dataset)
 
     if valid is None:
         raise ValueError(f"CTTH granule {path} carries no usable valid time")

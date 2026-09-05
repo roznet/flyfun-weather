@@ -180,6 +180,14 @@ def read_metadata(path: Path | str, quantity: str) -> dict:
         return {
             "quantity": quantity,
             "valid_time": valid_time.isoformat() if valid_time else None,
+            "acquisition_start": start_time.isoformat() if start_time else None,
+            "acquisition_end": (_parse_odim_time(
+                _attr(dataset["what"], "enddate"), _attr(dataset["what"], "endtime")
+            ).isoformat() if _parse_odim_time(
+                _attr(dataset["what"], "enddate"), _attr(dataset["what"], "endtime")
+            ) else None),
+            "product_id": f"OPERA:{quantity}:{_attr(handle['what'], 'version') or 'unspecified'}",
+            "decoder_version": "odim_ground_v1",
             "window_minutes": window_minutes,
             "grid": {
                 "proj4": grid.proj4,
