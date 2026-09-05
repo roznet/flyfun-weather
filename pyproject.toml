@@ -19,6 +19,10 @@ dependencies = [
     "euro-aip>=0.15.1",
     "metpy>=1.5",
     "numpy>=1.24",
+    # Observed-motion matching and polygon topology are production paths.
+    # Both were previously either transitive (SciPy) or absent (Shapely).
+    "scipy>=1.10",
+    "shapely>=2.0",
     "matplotlib>=3.7",
     "langchain>=1.2",
     "langgraph>=1.0",
