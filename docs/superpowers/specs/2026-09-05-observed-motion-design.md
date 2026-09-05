@@ -3,8 +3,13 @@
 Date: 2026-09-05. Follow-up: [PR #600](https://github.com/roznet/flyfun-weather/pull/600),
 following the review of [PR #584](https://github.com/roznet/flyfun-weather/pull/584).
 
-**Status: written specification approved; implementation in progress under the
-[implementation plan](../plans/2026-09-05-observed-motion.md). No completed prediction implementation is claimed.** The user approved the proposed
+**Status: backend/web/native software implemented; integrated verification and
+final review in progress under the
+[implementation plan](../plans/2026-09-05-observed-motion.md).** See the
+[verification record](../../../designs/reviews/2026-09-05-observed-motion-verification.md)
+for current evidence, review gates and publication status. Production gates remain
+off; real CTTH registration, predictive usefulness and native execution remain
+unverified. The user approved the proposed
 shared backend and native/web vector explorer with "Looks good, pls continue".
 After written-spec review, the user explicitly approved continuing with implementation.
 Mac/iOS execution remains deferred. The published correction head is still
@@ -80,10 +85,11 @@ and offline bundle; no independent latest-prediction endpoint is introduced.
 | Pack publication helper | Revision reservation and conditional atomic motion publication; shared by full/realtime artifact writers. |
 | Web / Swift adapters | Tolerant contract decoding, freshness/expiry presentation, layer ownership and interaction. |
 
-Names identify proposed ownership, not files that already exist. Extend existing
-frame/route/cache primitives where appropriate rather than duplicating them. No
-database migration is required. Small publication-control files inside a pack are
-permitted; a second public prediction data stream is not.
+Names identify the implemented ownership boundaries. Existing frame/route/cache
+primitives are extended where appropriate. No database migration is required.
+Small identity-keyed publication-control files in the pack's parent namespace
+preserve ordering across pack deletion, as specified in §9; a second public
+prediction data stream is not introduced.
 
 ### Dependencies
 
@@ -459,8 +465,9 @@ result. Missing rows or unsampled times alone cannot establish no encounter.
 
 The [normative record definitions](2026-09-05-observed-motion-contract.md) fix the
 field names, types, enums and nullability for Python, TypeScript and Swift. They
-are part of this written specification, not an implemented schema. The summary
-below explains the intent; implementations must share fixtures for those records.
+are part of this written specification and define the implemented schema. The
+summary below explains the intent; implementations share fixtures for those
+records. Validation evidence is recorded separately from this normative contract.
 
 All dates are aware ISO-8601 UTC. All numerical values are finite or explicitly
 null. Use arrays with ID **values**, not dictionaries keyed by source/feature IDs:
@@ -773,8 +780,10 @@ requirement or automatic raster download.
 
 ## 11. Verification required by the implementation plan
 
-All tests below are future prediction work. Existing correction-test counts do
-not verify this specification.
+The requirements below govern prediction verification. Actual commands, counts,
+review dispositions and unexecuted native checks are recorded in the
+[verification record](../../../designs/reviews/2026-09-05-observed-motion-verification.md).
+Existing correction-only test counts do not verify this specification.
 
 ### Backend and shared contract fixtures
 
@@ -890,11 +899,11 @@ The final prediction handoff must identify independently:
 - Mac/iOS execution still deferred unless subsequently performed with permission.
 - Optional history/raster/time-chart enhancements still excluded.
 
-Before implementation, self-review this spec for placeholders, contradictions,
-scope and ambiguous contracts; commit it locally and request the user's written
-spec review. After approval, invoke the writing-plans skill, then implement with
-test-first development and independent code review. This document is not an
-implementation plan, deployment authorization or evidence that prediction exists.
+The written-spec review and user implementation approval are complete. Execution
+uses the separate implementation plan, test-first development and independent
+code review. This normative document is not deployment authorization or evidence
+of predictive usefulness; the verification record distinguishes actual software
+checks from outstanding source and native validation.
 
 ## References
 

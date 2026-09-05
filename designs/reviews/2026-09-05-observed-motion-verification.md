@@ -1,11 +1,87 @@
 # Observed-motion implementation and verification record
 
-Status: **implementation in progress, not a completed prediction feature**.
+Status: **backend/web/native software implemented; isolated software suites passed;
+final independent review pending**. Production prediction remains disabled. This
+does not complete live cloud-motion readiness or establish predictive usefulness.
 User approved the written specification and explicitly requested implementation.
 The [implementation plan](../../docs/superpowers/plans/2026-09-05-observed-motion.md)
 and [normative contract](../../docs/superpowers/specs/2026-09-05-observed-motion-contract.md)
 govern this increment. Published PR #600 still contains observation corrections
 until a later verified update; no prediction deployment is authorized.
+
+## Current integrated verification
+
+At integration commit `08f7e699`, with documentation archive `ff0c4aea`:
+
+- The controller's focused Python run passed **11 tests**, with one known
+  Starlette deprecation warning, in 4.03s. The real enabled retained OPERA
+  DBZH/RATE test exercises history, matching, payload construction, publication,
+  direct-refresh API and disk. A hand-derived eastward speed of approximately
+  12.959 kt is checked independently of the producer calculation.
+- Shared web and authored native fixture literals pass Python's producer schema.
+  The TypeScript parser boundary passed **17 tests / 1 file**. This does not
+  execute Swift.
+- The final full web unit suite passed **844 tests / 52 files in 938ms**.
+- Application TypeScript (`tsc --noEmit`) exited 0 without diagnostics.
+- The no-server Chromium harness passed **18 scenarios in 13.5s**, including
+  motion entry/selection, expiry, capability revocation, refresh failures and
+  narrow layout. Web/type/browser outputs were pristine.
+- Full isolated Python: **6,117 passed, 20 skipped, 23 deselected, 854 warnings in
+  225.96s**, exit 0. JUnit independently records 6,137 executed, 20 skipped,
+  zero errors and zero failures. No task test file was excluded.
+- Independent integration test/doc review at `08f7e699`: spec compliant, quality
+  approved, no Critical/Important findings. Its single Minor warning-evidence
+  finding is resolved by the exact disclosure below. The final whole-branch
+  review remains a separate pending gate.
+
+Full Python command, from the worktree, using a fresh temporary data/SQLite root:
+
+```bash
+env -u AIRPORTS_DB -u ECMWF_GRIB_DIR -u ECMWF_PROD_GRIB_DIR \
+  -u ECMWF_TEST_GRIB_DIR -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+  PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 \
+  WB_OBSERVED_ENABLED=0 WB_OBSERVED_MOTION_ENABLED=0 \
+  WB_OBSERVED_LIVE_TESTS=0 WEATHERBRIEF_EVAL_LIVE=0 \
+  DATA_DIR=/tmp/flyfun-motion-final.0qT3w7/data \
+  DATABASE_URL=sqlite:////tmp/flyfun-motion-final.0qT3w7/test.sqlite \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  venv/bin/python -m pytest -q -p no:cacheprovider tests --tb=short \
+  --junitxml=.superpowers/sdd/2026-09-05-observed-motion/final-python.xml
+```
+
+Skipped tests require missing evaluation corpora, ECMWF/HRRR samples or mirrors,
+or the navigation DB. No shared data was substituted to make them execute.
+The 23 deselected tests follow the existing suite selection; this is not live
+provider, real-source replay or native verification.
+
+The 854 warnings remain visible: netCDF/NumPy ABI import and fixture-shape
+deprecations, legacy LI timezone conversion, Starlette/HTTPX deprecations,
+deliberately short JWT test keys, the srtm escape-sequence warning, MetPy
+interpolation/Matplotlib deprecations, and three publication-test warnings about
+forking a multithreaded process. No production deadlock was observed. These are
+retained for final triage, not a warning-free claim or blanket waiver of future
+warnings. The focused integration warning is specifically
+`starlette/testclient.py:53`, `DeprecationWarning: The anyio.abc.BlockingPortal
+alias is deprecated, use anyio.from_thread.BlockingPortal instead.` It also
+appeared in the pre-motion baseline; Task8 changes no production code.
+
+Commands for the full web checks, from `web/`:
+
+```bash
+env PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  ./node_modules/.bin/vitest run
+env PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  ./node_modules/.bin/tsc --noEmit
+env -u NO_COLOR \
+  PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin \
+  OBSERVED_BROWSER_CHANNEL=chromium \
+  ./node_modules/.bin/playwright test -c playwright.observed.config.ts
+```
+
+The [historical review register](2026-09-05-observed-motion-review-register.md)
+preserves the original findings, fix/re-review closures and deferred minor triage.
+Historical stage entries below retain their at-the-time status and are not the
+current publication or completion claim.
 
 ## Baseline and environment
 
@@ -52,13 +128,13 @@ were redirected to this worktree's existing `venv`.
 | Strict shared producer contract and policy | Six Important findings fixed across two rounds; independent scoped re-reviews approved. |
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
 | Independent feature tracking | Implemented; fractional-lineage boundary fixed at `35c0fb4d` and independently re-reviewed. |
-| Route closure and continuous planned overlap | Pure solver and payload integration implemented and independently approved; real source-to-endpoint check follows. |
+| Route closure and continuous planned overlap | Pure solver and payload integration implemented and independently approved. |
 | Time-compatible evidence and bounded payload | Implemented and independently approved after fix round 2 at `3ad0088f`; all eight original Important findings closed. |
 | Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration independently approved. |
 | Full/realtime/legacy/SSE/snapshot/bundle integration | Implemented and independently approved after fix round 1 at `95941574`; fresh 274-test regression passes. |
 | Web explorer and capability/expiry lifecycle | Implemented and independently approved after fixes at `c7be612c`; final server integration remains separate. |
 | Native explorer and raw-cache/capability lifecycle | Implemented and independently statically approved after fix round 1 at `d793698c`. No Mac execution. |
-| Integrated tests and independent final review | Real enabled source-to-endpoint and shared-fixture work in progress; full suites and final review follow. |
+| Integrated tests and independent final review | Real enabled source-to-endpoint/shared fixtures independently approved; full isolated Python/web/type/browser checks passed. Whole-branch review pending. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
 work ledger during execution. Final commands/counts and actionable review findings

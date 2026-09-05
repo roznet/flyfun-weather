@@ -2,8 +2,11 @@
 
 Date: 2026-09-05. Normative companion to the
 [motion design](2026-09-05-observed-motion-design.md), approved for implementation with it.
-This is a wire-format specification, **not an implemented API or test result**.
-Algorithm, limits, publication and UI rules remain in that design.
+This is the normative wire-format specification for the implemented experimental
+API, **not a test result or source-readiness claim**. Actual verification and
+remaining evidence gates are recorded in the
+[verification report](../../../designs/reviews/2026-09-05-observed-motion-verification.md).
+Algorithm, limits, publication and UI rules remain in the design.
 
 ## Conventions
 

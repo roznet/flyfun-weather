@@ -10,8 +10,9 @@ not necessarily current `HEAD`.
 ## Disposition ledger
 
 All Task 1–7, 9 and 10 task gates were approved after the recorded fix/re-review
-rounds. Task 8 archive and the final whole-branch gate were not part of those
-reviews and remain pending.
+rounds. The Task 8 test/doc subgate at `08f7e699` is also approved. This archive
+is a documentation extraction, not another code review; the final whole-branch
+gate remains separate.
 
 ### Task 1 — contract and policy (`84c7c5ae`)
 
@@ -124,10 +125,25 @@ No Critical, Important or Minor findings requiring change. The task gate was
 approved. Registration/eligibility, shared deadline, aggregate caller caps and
 real CTTH evidence remained caller/integration responsibilities.
 
+### Task 8 — integrated fixtures and as-built documentation (`08f7e699`)
+
+Spec compliant and quality approved; no Critical/Important findings. The retained
+radar test uses a hand-derived approximately 12.959 kt eastward motion and the
+real history/tracking/payload/publication/API/disk path. Shared literals are
+Python-producer-validated and the TypeScript boundary is executed; native
+execution is not claimed.
+
+One Minor warning-evidence finding in the task report was addressed by recording
+the exact known `starlette/testclient.py:53` AnyIO `BlockingPortal` alias
+deprecation and its pre-motion baseline provenance in the verification record.
+Broader implementation claims are supported by the respective component gates;
+final suites/review and external validation are separate from this subgate.
+
 ## Pending gates and evidence boundaries
 
-- Integrated/final whole-branch review and the actual enabled source-to-endpoint
-  accepted-result check remain separate from the approved task gates.
+- The final whole-branch review remains separate from the approved task gates.
+  The enabled source-to-endpoint check and isolated full suites now pass as
+  recorded in the verification report.
 - Actual CTTH registration with reviewed non-synthetic geolocation evidence and
   forecast-skill replay remain unestablished; synthetic fixtures do not prove
   predictive usefulness.
@@ -135,5 +151,4 @@ real CTTH evidence remained caller/integration responsibilities.
 - Swift tests were authored and statically reviewed, never executed here.
 - Existing dependency/fixture warnings remain disclosed in the verification
   record; they are not silently reclassified as feature failures.
-- Task 8 archive review itself is pending until the main controller completes
-  integrated verification and the final gate.
+- The historical archive is included in the final whole-branch review package.
