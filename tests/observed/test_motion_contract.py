@@ -292,6 +292,34 @@ def test_accepted_pair_displacement_cannot_exceed_search_speed() -> None:
         ObservedMotion.model_validate(raw)
 
 
+@pytest.mark.parametrize("direction,boundary_dx", [("forward", 18.0), ("reverse", -18.0)])
+def test_accepted_pair_rejects_patch_on_search_speed_boundary(
+    direction: str, boundary_dx: float
+) -> None:
+    raw = available_motion_dict()
+    pair = raw["features"][0]["motion"]["pair_diagnostics"][0]
+    for patch in pair["patches"]:
+        if patch["direction"] == direction:
+            patch["dx_cells"] = boundary_dx
+    if direction == "forward":
+        pair["forward_dx_cells"] = boundary_dx
+
+    with pytest.raises(ValidationError):
+        ObservedMotion.model_validate(raw)
+
+
+def test_accepted_pair_allows_patch_inside_search_speed_boundary() -> None:
+    raw = available_motion_dict()
+    pair = raw["features"][0]["motion"]["pair_diagnostics"][0]
+    pair["forward_dx_cells"] = 17.0
+    for patch in pair["patches"]:
+        patch["dx_cells"] = 17.0 if patch["direction"] == "forward" else -17.0
+
+    result = ObservedMotion.model_validate(raw)
+
+    assert result.features[0].motion.pair_diagnostics[0].forward_dx_cells == 17.0
+
+
 def test_accepted_radar_history_rejects_an_eleven_minute_adjacent_gap() -> None:
     raw = available_motion_dict()
     first_frame = raw["sources"][0]["frames"][0]

@@ -552,10 +552,10 @@ class PairDiagnostics(MotionModel):
                 / DEFAULT_POLICY.analysis_cell_size_m
             )
             if any(
-                math.hypot(patch.dx_cells, patch.dy_cells) > max_displacement_cells
+                math.hypot(patch.dx_cells, patch.dy_cells) >= max_displacement_cells
                 for patch in available_patches
             ):
-                raise ValueError("accepted patch translation exceeds the search-speed policy")
+                raise ValueError("accepted patch translation reaches the search-speed boundary")
         return self
 
 
