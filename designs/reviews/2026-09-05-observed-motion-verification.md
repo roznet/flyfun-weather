@@ -49,20 +49,75 @@ were redirected to this worktree's existing `venv`.
 
 | Component | Current state |
 |---|---|
-| Strict shared producer contract and policy | In progress; no completion/review verdict yet. |
-| Cutoff-safe history, bounded source geometry, lightning precision | In progress; no completion/review verdict yet. |
+| Strict shared producer contract and policy | Six Important review findings fixed locally; scoped re-review pending. |
+| Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
 | Independent feature tracking | Pending. |
-| Route closure, continuous planned overlap, evidence and bounded payload | Pending. |
-| Atomic publication primitive | In progress; no completion/review verdict yet. |
+| Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
+| Time-compatible evidence and bounded payload | Pending. |
+| Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
 | Full/realtime/legacy/SSE/snapshot/bundle integration | Pending. |
-| Web explorer and capability/expiry lifecycle | Pending. |
-| Native explorer and raw-cache/capability lifecycle | Pending. |
+| Web explorer and capability/expiry lifecycle | Implementation in progress. |
+| Native explorer and raw-cache/capability lifecycle | Implementation in progress; no Mac execution. |
 | Integrated tests and independent final review | Pending. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
 work ledger during execution. Final commands/counts and actionable review findings
 will be recorded here as each gate is actually verified; a worker's partial test
 run is not the completion of its task or the feature.
+
+Controller-verified local stages (not full-feature verification):
+
+| Commit / stage | Fresh command suffix after the Python environment prefix above | Result |
+|---|---|---|
+| `dd106ee7` contract/policy | `venv/bin/python -m pytest -q -p no:cacheprovider -W error tests/observed/test_motion_contract.py` | 49 passed in 1.29s, no warnings. |
+| `878a916a` source inputs/geometry | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_history.py tests/observed/test_motion_geometry.py tests/observed/test_motion_readers.py` | 39 passed in 2.05s, one existing NumPy binary warning. |
+| `f168274e` publication primitive | `venv/bin/python -m pytest --noconftest -p no:cacheprovider tests/test_observed_motion_publication.py -q` | 59 passed in 0.55s, no warnings. |
+| `c733be60` publication equality fix | Same publication-only invocation | 67 passed in 0.61s, no warnings. |
+| `07f61d49` nominal/precision fix | Same three focused source files listed above | 46 passed in 2.08s, two warnings. |
+| `a757f27c` contract validation fix | Contract-only invocation above, additionally `-p no:asyncio` | 89 passed in 1.39s, warning-strict. |
+| Current route/geometry integration | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_route.py tests/observed/test_motion_geometry.py tests/test_route_points.py tests/test_model_region.py --tb=short` | 101 passed in 2.10s, one known warning. |
+
+These commits remain local. No server writer, web or native prediction integration
+is claimed from these stage tests.
+
+Independent publication review found that Python dictionary equality treats JSON
+`true` and `1` as equal, allowing conflicting unknown content at the same revision
+through both publication paths. The fix uses recursive JSON-aware equality and
+has passed independent scoped re-review, including both write paths. A separate
+minor reader-test scheduling issue is retained for final review. End-to-end server
+integration and strict DTO fix re-review remain separate gates.
+
+The source review found a five-minute nominal-versus-acquisition reference error
+and dropped genuine netCDF variable-length ISO lightning timestamps. Both were
+reproduced with real file formats, corrected and independently re-reviewed.
+OPERA now persists a separate nominal motion target without changing ordinary
+observation timing. Old sidecars without that target are motion-ineligible.
+Precise lightning timestamps remain distinct from the legacy fallback display time.
+
+Current combined primitive verification:
+
+```bash
+env PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 WB_OBSERVED_LIVE_TESTS=0 \
+  venv/bin/python -m pytest -q -p no:cacheprovider \
+  tests/observed/test_motion_contract.py tests/observed/test_motion_history.py \
+  tests/observed/test_motion_geometry.py tests/observed/test_motion_readers.py \
+  tests/observed/test_motion_route.py tests/test_observed_motion_publication.py \
+  tests/test_route_points.py tests/test_model_region.py
+```
+
+Result: **290 passed in 3.12s, five warnings**. Warnings comprise the known netCDF
+binary-size warning, the legacy LI `datetime64` timezone warning newly exercised by
+the vlen fixture, and three warnings about forking a multithreaded test process.
+The latter need final test-harness triage; no production deadlock was observed.
+
+A previous mixed explicit-file invocation had two missing-fixture setup errors.
+Instrumented pytest 9.1.1 collection showed two different collector objects named
+`tests/observed`: fixtures were registered on one but tests belonged to the other.
+Its node-identity fixture matching therefore returned no definitions. Keeping all
+observed test arguments contiguous executes the same tests successfully (101-pass
+run above). No application or global-fixture changes were needed. Full-suite
+collection will name `tests` once; this is not evidence that the unimplemented
+tracking, payload or UI layers pass.
 
 ## Remaining external evidence
 
@@ -98,3 +153,7 @@ run is not the completion of its task or the feature.
   A bare list loses the distinction between known omissions, unevaluated work and
   evaluated zero. Source loading similarly carries inventory/selection counts.
   These are internal interface changes; consumers and count tests must agree.
+- The plan-named briefing CSS source did not exist. The web task creates it and
+  imports it through the existing entrypoint/CSS asset path; the no-server browser
+  harness must verify the rendered styling. No generated distribution files or
+  shared global stylesheet changes are needed.
