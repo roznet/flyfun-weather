@@ -1,5 +1,16 @@
 # Observed corrections: verification and independent review
 
+> Publication update — 2026-09-05: the user subsequently approved submission.
+> [Draft PR #600](https://github.com/roznet/flyfun-weather/pull/600) is open at
+> `95e233b60104e79e3dd05b06ff3ecc54cb9812c6`, using the existing
+> `downle/flyfun-weather` fork. The no-push/access-blocked statements below describe
+> earlier checkpoints, not the current publication state. Direct upstream push
+> access remains unnecessary for this fork PR. No merge or deployment is implied.
+> Prediction remains unimplemented; see the
+> [full-request audit](2026-09-05-observed-request-coverage.md).
+
+## Historical preparation and verification record
+
 This is a local, unsubmitted follow-up to PR #584. Worktree:
 `/home/qian/flyfun_weather/observed-corrections`; branch:
 `codex/observed-corrections`; base:

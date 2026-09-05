@@ -14,11 +14,16 @@ reviewed here originate in shared pre-existing code, not in that PR alone.
 
 The corrective branch is `codex/observed-corrections`, based on upstream main
 `b48d9a8ff5831ab44fc3e43253c808578c215277`. It does not add a nowcasting subsystem.
-The fixes and independent re-reviews are prepared locally for user review, before
-any push or GitHub submission. See the [local PR draft](2026-09-05-observed-fix-pr-draft.md)
-and [verification/reviewer record](2026-09-05-observed-fix-verification.md) for
-implemented corrections, additional review-round findings and remaining gates.
-Recommendations below are not all claims of implemented changes.
+The corrections and independent re-reviews were subsequently published, with user
+approval, as [draft PR #600](https://github.com/roznet/flyfun-weather/pull/600), at
+head `95e233b60104e79e3dd05b06ff3ecc54cb9812c6`. See the
+[historical preparation record](2026-09-05-observed-fix-pr-draft.md) and
+[verification/reviewer record](2026-09-05-observed-fix-verification.md) for
+implemented corrections, review-round findings and remaining validation gates.
+The user's later request to implement prediction is audited separately in
+[full-request coverage](2026-09-05-observed-request-coverage.md), including the
+previously under-specified independent high-cloud-top motion requirement.
+Recommendations below are not claims of implemented prediction or association.
 
 Original PR head: `67d79414ab15661d9a22d42132689f3342dc0cca`; original base:
 `b6271e4a89a1118feaa56ae111167671c6c28f75`; merged 2026-08-27 as

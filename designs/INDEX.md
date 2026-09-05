@@ -133,6 +133,8 @@ Observed conditions along the route (#574, phase 1): OPERA radar reflectivity + 
 Key exports: `build_observed_conditions`, `ObservedConditions`, `FrameStore`, `sample`, `sample_flashes`, `collect_once`, `run_observed_collect_loop`, `render_overlay`, `build_summary`
 → Full doc: current-conditions.md
 → Correctness review and future visualization/motion ideas: reviews/2026-09-05-pr584-observed-review.md
+→ Full-request audit and delivery status: reviews/2026-09-05-observed-request-coverage.md
+→ Proposed motion subsystem (direction approved; written spec awaiting review, not implemented): ../docs/superpowers/specs/2026-09-05-observed-motion-design.md
 
 ## iOS app
 

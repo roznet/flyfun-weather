@@ -1,4 +1,13 @@
-# Final local PR package — awaiting user review
+# Historical PR preparation package
+
+> Publication update — 2026-09-05: after the approval described below, this package
+> was published as [draft PR #600](https://github.com/roznet/flyfun-weather/pull/600)
+> at `95e233b60104e79e3dd05b06ff3ecc54cb9812c6`, using the existing
+> `downle/flyfun-weather` fork. The unchecked publication gates and unexecuted
+> commands below are the earlier preparation record, not instructions to create
+> another PR. Mac/iOS execution and live-granule validation remain outstanding.
+> See the [full-request audit](2026-09-05-observed-request-coverage.md) for the
+> subsequent, not-yet-implemented prediction request.
 
 Final title: **Fix observed-weather validity, freshness, cache durability and map rendering**
 
