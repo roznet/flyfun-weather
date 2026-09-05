@@ -270,7 +270,15 @@ regions without identifiable boundaries/texture remain observed-only.
    all nine local 3 × 3 peak scores are finite and inside the search region.
    Accept it only for a negative-definite peak with the fitted offset within half
    a cell of the integer solution; otherwise use the integer displacement and
-   record that resolution. Combine the two forward displacements by their
+   record that resolution. Implementation clarification from the asymmetric
+   stationary regression: after attempting the fit, retain the integer solution
+   when its NCC is already at the mathematical upper bound of one (absolute
+   float64 roundoff tolerance `1e-12`, relative tolerance zero). A quadratic fit
+   to asymmetric neighbouring scores cannot improve on perfect normalized
+   correlation; its offset must not manufacture motion for an exact match. This
+   numerical guard is not a meteorological acceptance/confidence threshold.
+   Exact nonzero integer translations and non-perfect fractional matches require
+   separate regression coverage as well. Combine the two forward displacements by their
    arithmetic mean. Apply the same two-patch checks in reverse at the proposed
    corresponding target locations; reverse consistency compares the forward mean
    with the negated reverse mean. Do not add the reverse estimate to the fitted

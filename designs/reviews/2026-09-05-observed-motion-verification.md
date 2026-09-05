@@ -49,9 +49,9 @@ were redirected to this worktree's existing `venv`.
 
 | Component | Current state |
 |---|---|
-| Strict shared producer contract and policy | Six Important review findings fixed locally; scoped re-review pending. |
+| Strict shared producer contract and policy | Six Important findings fixed across two rounds; independent scoped re-reviews approved. |
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
-| Independent feature tracking | Pending. |
+| Independent feature tracking | Implementation in progress on reviewed inputs/contract. |
 | Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
 | Time-compatible evidence and bounded payload | Pending. |
 | Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
@@ -75,6 +75,7 @@ Controller-verified local stages (not full-feature verification):
 | `c733be60` publication equality fix | Same publication-only invocation | 67 passed in 0.61s, no warnings. |
 | `07f61d49` nominal/precision fix | Same three focused source files listed above | 46 passed in 2.08s, two warnings. |
 | `a757f27c` contract validation fix | Contract-only invocation above, additionally `-p no:asyncio` | 89 passed in 1.39s, warning-strict. |
+| `84c7c5ae` exact search-boundary refusal | Same warning-strict contract invocation | 92 passed in 1.28s, no warnings. |
 | Current route/geometry integration | `venv/bin/python -m pytest -q -p no:cacheprovider tests/observed/test_motion_route.py tests/observed/test_motion_geometry.py tests/test_route_points.py tests/test_model_region.py --tb=short` | 101 passed in 2.10s, one known warning. |
 
 These commits remain local. No server writer, web or native prediction integration
@@ -85,7 +86,9 @@ Independent publication review found that Python dictionary equality treats JSON
 through both publication paths. The fix uses recursive JSON-aware equality and
 has passed independent scoped re-review, including both write paths. A separate
 minor reader-test scheduling issue is retained for final review. End-to-end server
-integration and strict DTO fix re-review remain separate gates.
+integration remains a separate gate. Strict DTO fixes are now independently
+approved; the second round added exact search-boundary refusal rather than
+accepting a capped-speed result.
 
 The source review found a five-minute nominal-versus-acquisition reference error
 and dropped genuine netCDF variable-length ISO lightning timestamps. Both were
@@ -118,6 +121,21 @@ observed test arguments contiguous executes the same tests successfully (101-pas
 run above). No application or global-fixture changes were needed. Full-suite
 collection will name `tests` once; this is not evidence that the unimplemented
 tracking, payload or UI layers pass.
+
+Current observation/API compatibility check (Task3 was still being authored and
+explicitly excluded):
+
+```bash
+env PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 WB_OBSERVED_LIVE_TESTS=0 \
+  venv/bin/python -m pytest -q -p no:cacheprovider tests/observed \
+  tests/test_api_observed.py tests/test_route_weather.py \
+  --ignore=tests/observed/test_motion_tracking.py --tb=short
+```
+
+Result: **400 passed, 6 deselected, 164 warnings in 10.13s**. This is compatibility
+evidence for the reviewed source/contract changes and existing displays, not a
+passed tracking/payload or full-feature test. The warnings are the recorded
+netCDF/NumPy/Starlette deprecations plus the legacy LI timezone conversion.
 
 ## Remaining external evidence
 
@@ -157,3 +175,10 @@ tracking, payload or UI layers pass.
   imports it through the existing entrypoint/CSS asset path; the no-server browser
   harness must verify the rendered styling. No generated distribution files or
   shared global stylesheet changes are needed.
+- An asymmetric identical-image tracking test exposed spurious subcell movement
+  from quadratic refinement despite an integer NCC of one. The design now requires
+  retaining the integer match at that mathematical upper bound (absolute roundoff
+  guard `1e-12`), while separately testing non-perfect fractional movement. This
+  clarification is subject to the tracking review; it is not predictive-skill
+  evidence. If the guard suppresses a genuinely fractional but numerically
+  indistinguishable match, the refinement must be revisited.
