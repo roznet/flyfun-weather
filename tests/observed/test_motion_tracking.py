@@ -566,3 +566,43 @@ def test_candidate_cap_cannot_hide_an_eligible_competing_parent():
     assert main.pair_diagnostics[-1].plausible_parent_count == 2
     assert main.pair_diagnostics[-1].lineage_complete
     assert result.counts[0].full_field_detections == 32
+
+
+@pytest.mark.parametrize("cells", [1, 64, 512])
+@pytest.mark.parametrize("dx,want", [(.8, [1]), (-.8, [1]), (.8+1e-12, [])])
+def test_inclusive_fractional_lineage_threshold_respects_roundoff_not_real_deficit(cells, dx, want):
+    module = importlib.import_module("weatherbrief.observed.motion.tracking")
+    mask = np.zeros((cells, 3), dtype=bool)
+    mask[:, 1] = True
+    labels = mask.astype(int)
+    overlap = module._overlaps(mask, labels, dx, 0., None)
+    # Exactly 0.2*cells in real arithmetic for +/-0.8; 1e-12*cells less
+    # for +0.800000000001. The latter is not float64 accumulation noise.
+    assert module._plausible(overlap, cells, np.array([0, cells]), module.DEFAULT_POLICY).tolist() == want
+
+
+@pytest.mark.parametrize("dx,main_columns,small_column,selected", [
+    (.8, (52, 67), 50, [2]),
+    (-.8, (50, 65), 66, [1]),
+])
+def test_exact_fractional_threshold_retains_second_small_unselected_lineage_competitor(
+        dx, main_columns, small_column, selected):
+    module = importlib.import_module("weatherbrief.observed.motion.tracking")
+    first, last = frames([(0, 0)]*2)
+    first.detected[:] = last.detected[:] = False
+    first.detected[50:67, 50:67] = True
+    last.detected[50:67, main_columns[0]:main_columns[1]] = True
+    last.detected[50, small_column] = True
+    for f in (first, last):
+        f.descriptor[:] = f.detected.astype(float)
+    earlier = module._label(first, module.DEFAULT_POLICY, None)
+    later = module._label(last, module.DEFAULT_POLICY, None)
+    module._rank(later, ROUTE, module.DEFAULT_POLICY, None)
+    assert later.selected == selected
+    # The separate single cell is eight-disconnected and below the nine-cell
+    # motion-work minimum. It still overlaps the translated full parent by
+    # exactly20% of its own area and must prevent a unique child/parent claim.
+    assert sorted(later.sizes[1:].tolist()) == [1, 255]
+    overlap = module._overlaps(earlier.labels == 1, later.labels, dx, 0., None)
+    plausible = module._plausible(overlap, 289, later.sizes, module.DEFAULT_POLICY)
+    assert plausible.tolist() == [1, 2]

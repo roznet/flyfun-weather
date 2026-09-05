@@ -267,8 +267,16 @@ def _overlaps(mask, labels, dx, dy, deadline):
 
 
 def _plausible(overlaps, own_size, other_sizes, policy):
+    smaller = np.minimum(own_size, other_sizes)
+    threshold = policy.lineage_ambiguity_overlap_fraction*smaller
+    # Bincounts are exact bounded integers; each of the <=4 weighted terms is
+    # bounded by the smaller footprint's cell count. Allow 64 float64 epsilons
+    # at that arithmetic scale for fraction/complement formation, products,
+    # accumulation and threshold comparison. This only conservatively includes
+    # numerically boundary-equal competitors; it is not a change to the 20% rule.
+    roundoff = 64*np.finfo(np.float64).eps*smaller
     return np.flatnonzero((other_sizes > 0) &
-                          (overlaps >= policy.lineage_ambiguity_overlap_fraction*np.minimum(own_size, other_sizes)))
+                          (overlaps >= threshold-roundoff))
 
 
 def _pair(earlier, later, label, policy, deadline, support0, support1):
