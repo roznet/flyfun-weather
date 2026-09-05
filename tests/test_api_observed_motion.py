@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import shutil
 import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
@@ -29,6 +32,11 @@ from weatherbrief.storage.observed_motion import (
 from weatherbrief.storage.snapshots import save_snapshot
 from weatherbrief.tasks.artifacts import save_analysis_artifacts
 
+OBSERVED_FIXTURES = Path(__file__).parent / "observed" / "data"
+FIXTURE_STATION_LAT = 50.517
+FIXTURE_STATION_LON = 1.627
+MPS_TO_KT = 1.9438444924406048
+
 
 def _route() -> RouteConfig:
     return RouteConfig(
@@ -38,6 +46,27 @@ def _route() -> RouteConfig:
             Waypoint(icao="LFQA", name="Reims", lat=49.310, lon=3.620),
         ],
         flight_duration_hours=2.0,
+    )
+
+
+def _fixture_route() -> RouteConfig:
+    return RouteConfig(
+        name="Motion retained radar route",
+        waypoints=[
+            Waypoint(
+                icao="LFAT",
+                name="Le Touquet west",
+                lat=FIXTURE_STATION_LAT,
+                lon=FIXTURE_STATION_LON - 0.2,
+            ),
+            Waypoint(
+                icao="EAST",
+                name="Le Touquet east",
+                lat=FIXTURE_STATION_LAT,
+                lon=FIXTURE_STATION_LON + 0.5,
+            ),
+        ],
+        flight_duration_hours=1.0,
     )
 
 
@@ -90,6 +119,93 @@ def motion_client(tmp_path, monkeypatch):
         yield TestClient(app, raise_server_exceptions=False), sessions
     finally:
         engine.dispose()
+
+
+def _motion_texture() -> np.ndarray:
+    rng = np.random.default_rng(123)
+    values = rng.uniform(10.0, 45.0, size=(50, 50)).astype(np.float32)
+    rows, cols = np.mgrid[:50, :50]
+    return values + rows * 0.2 + cols * 0.1
+
+
+def _write_shifted_opera_frame(
+    store_root: Path,
+    *,
+    source: str,
+    quantity: str,
+    valid_at: datetime,
+    source_fixture: Path,
+    column_shift: int,
+) -> None:
+    import h5py
+
+    from weatherbrief.observed import opera
+    from weatherbrief.observed.frames import FrameStore
+
+    store = FrameStore(store_root)
+    path = store.payload_path(source, valid_at)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_fixture, path)
+
+    with h5py.File(path, "r+") as handle:
+        handle["what"].attrs["date"] = valid_at.strftime("%Y%m%d")
+        handle["what"].attrs["time"] = valid_at.strftime("%H%M%S")
+        for prefix, at in (
+            ("start", valid_at - timedelta(minutes=10)),
+            ("end", valid_at - timedelta(minutes=1)),
+        ):
+            handle["dataset1/what"].attrs[f"{prefix}date"] = at.strftime("%Y%m%d")
+            handle["dataset1/what"].attrs[f"{prefix}time"] = at.strftime("%H%M%S")
+
+        data = handle["dataset1/data1/data"]
+        raw = np.zeros(data.shape, dtype=np.uint8)
+        raw[:, : raw.shape[1] // 2] = 255
+        gain = float(handle["dataset1/data1/what"].attrs["gain"])
+        offset = float(handle["dataset1/data1/what"].attrs["offset"])
+        physical = _motion_texture() if quantity == "DBZH" else np.full((50, 50), 3.5)
+        encoded = np.clip(np.round((physical - offset) / gain), 1, 254).astype(np.uint8)
+        row0, col0 = 55, 88 + column_shift
+        raw[row0 : row0 + encoded.shape[0], col0 : col0 + encoded.shape[1]] = encoded
+        data[:] = raw
+
+    store.write_sidecar(
+        source,
+        valid_at,
+        {
+            **opera.read_metadata(path, quantity),
+            "received_at": valid_at.isoformat(),
+        },
+    )
+
+
+def _stock_motion_store(data_dir: Path, cutoff_at: datetime) -> None:
+    store_root = data_dir / "observed"
+    for minutes, column_shift in ((-10, -2), (-5, -1), (0, 0)):
+        _write_shifted_opera_frame(
+            store_root,
+            source="opera_dbzh",
+            quantity="DBZH",
+            valid_at=cutoff_at + timedelta(minutes=minutes),
+            source_fixture=OBSERVED_FIXTURES / "opera_dbzh.h5",
+            column_shift=column_shift,
+        )
+    _write_shifted_opera_frame(
+        store_root,
+        source="opera_rate",
+        quantity="RATE",
+        valid_at=cutoff_at - timedelta(minutes=5),
+        source_fixture=OBSERVED_FIXTURES / "opera_rate.h5",
+        column_shift=-1,
+    )
+
+
+class _FrozenMotionClock(datetime):
+    @classmethod
+    def now(cls, tz=None):  # noqa: D102 - matches datetime.now for monkeypatching.
+        current = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        if tz is None:
+            return current.replace(tzinfo=None)
+        return current.astimezone(tz)
 
 
 def _stored_pack(sessions, route: RouteConfig):
@@ -225,6 +341,107 @@ def test_direct_observations_refresh_returns_published_disabled_motion(
     assert response.json()["observed_motion"]["status"] == "disabled"
     stored = json.loads((pack_dir / "briefing.json").read_text())
     assert stored["observed_motion"] == response.json()["observed_motion"]
+
+
+def test_direct_observations_refresh_publishes_enabled_retained_radar_motion(
+    motion_client, tmp_path, monkeypatch,
+):
+    """The enabled endpoint must traverse real retained files through publication."""
+    from weatherbrief.tasks import route_weather
+
+    cutoff_at = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_MOTION_ENABLED", "1")
+    monkeypatch.setattr(route_weather, "datetime", _FrozenMotionClock)
+    _stock_motion_store(data_dir, cutoff_at)
+
+    route = _fixture_route()
+    client, sessions = motion_client
+    pack = _stored_pack(sessions, route)
+    pack_dir = pack_dir_for(DEV_USER_ID, pack.flight_id, pack.fetch_timestamp)
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "briefing.json").write_text(json.dumps({
+        "route": route.model_dump(mode="json"),
+        "target_date": cutoff_at.date().isoformat(),
+        "fetch_date": cutoff_at.date().isoformat(),
+        "days_out": 0,
+        "departure_time": (cutoff_at - timedelta(minutes=30)).isoformat(),
+    }))
+    (pack_dir / "forecasts.json").write_text('{"forecasts": []}')
+    client.app.state.db_path = "/motion-test-nav.db"
+    fresh = RouteObservations(
+        corridor_nm=30.0,
+        fetch_time=cutoff_at,
+        airports_found=0,
+        airports_with_metar=0,
+        airports_with_taf=0,
+    )
+
+    with patch(
+        "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
+    ), patch(
+        "weatherbrief.tasks.route_weather.run_route_sigmets", return_value=None,
+    ), patch("weatherbrief.airports.get_runway_ends", return_value={}), patch(
+        "weatherbrief.airports.get_airport_elevations", return_value={},
+    ):
+        response = client.post(
+            f"/api/flights/{pack.flight_id}/packs/"
+            f"{pack.fetch_timestamp.isoformat()}/observations/refresh",
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Observed-Motion-Enabled"] == "1"
+    assert response.headers["Cache-Control"] == "no-store"
+    motion = response.json()["observed_motion"]
+    assert motion["status"] == "available"
+    assert motion["reason_codes"] == []
+    assert motion["revision"] == 1
+    assert motion["run_id"]
+    assert motion["projection_times"] == [
+        "2026-09-05T12:05:00Z",
+        "2026-09-05T12:10:00Z",
+        "2026-09-05T12:15:00Z",
+    ]
+    assert [source["source_id"] for source in motion["sources"]] == [
+        "opera_dbzh",
+        "eumetsat_ctth",
+        "opera_rate",
+        "eumetsat_li",
+    ]
+
+    feature = motion["features"][0]
+    assert feature["family"] == "radar_echo"
+    assert feature["source_id"] == "opera_dbzh"
+    assert feature["motion"]["status"] == "accepted"
+    assert feature["motion"]["ground_speed_kt"] == pytest.approx(
+        2000 / 300 * MPS_TO_KT,
+        abs=0.5,
+    )
+    assert feature["motion"]["bearing_deg_true"] == pytest.approx(90.0, abs=2.0)
+    assert len(feature["frame_ids"]) == 3
+    assert len(feature["motion"]["pair_diagnostics"]) == 2
+    assert all(pair["status"] == "available" for pair in feature["motion"]["pair_diagnostics"])
+    assert [trail["observed_at"] for trail in feature["trail"]] == [
+        "2026-09-05T11:50:00Z",
+        "2026-09-05T11:55:00Z",
+        "2026-09-05T12:00:00Z",
+    ]
+    assert (
+        feature["trail"][0]["center"][0]
+        < feature["trail"][1]["center"][0]
+        < feature["trail"][2]["center"][0]
+    )
+    observations = {item["kind"]: item for item in feature["observations"]}
+    assert observations["reflectivity_max"]["status"] == "available"
+    assert observations["rain_rate_max"]["status"] == "available"
+    assert observations["rain_rate_max"]["value"] == pytest.approx(3.5)
+    assert observations["rain_rate_max"]["observed_at"] == "2026-09-05T11:55:00Z"
+    assert observations["rain_rate_max"]["alignment_method"] == "in_history_translation"
+
+    stored = json.loads((pack_dir / "briefing.json").read_text())
+    assert stored["observed_motion"] == motion
 
 
 def test_direct_refresh_replaces_stored_motion_outside_current_d0(

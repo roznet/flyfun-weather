@@ -318,6 +318,23 @@ shown?", and that is the valid time of the frame we hold.
 updates it. That re-sample costs no network I/O — the collector has been
 writing frames all along — which is why it can ride on the cheap refresh path.
 
+`observed_motion` is now a separate optional sibling, not part of
+`ObservedConditions`. It is versioned as schema 1 and is produced only by the
+experimental motion subsystem when both `WB_OBSERVED_ENABLED` and
+`WB_OBSERVED_MOTION_ENABLED` are on and the pack is current D-0. Disabled,
+unavailable and available outcomes are all full envelopes with a pack-scoped
+monotonic `revision`, so a failed or disabled refresh can replace an older ready
+motion result without deleting ordinary observations.
+
+The motion payload uses retained local frame files only: DBZH and CTTH histories
+are selected as of an explicit cutoff, decoded through the normal readers, passed
+through the shared tracker, then published atomically back into `briefing.json`
+and the offline bundle. Endpoint regression coverage now stocks only isolated
+synthetic OPERA DBZH/RATE files and exercises the real
+`load_history` -> `track_history` -> payload -> publication -> direct-refresh
+endpoint -> disk path. It proves accepted radar motion can publish from retained
+local files; it is not live-provider, CTTH-registration or replay evidence.
+
 **Imagery is served, never in JSON.** A 2 km composite clipped to a corridor is
 hundreds of kilobytes of PNG; putting it in the payload would make every pack
 load pay for a layer most of them never draw.
@@ -348,6 +365,8 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 | iOS cross-section (group `conditions`) | The same two layers, same defaults, same three-state marks. Corridor picker + per-source ages in the Layers sheet; measured values in the scrub readout, prefixed `Obs` so they never read as forecast. |
+| Web experimental motion mode | Opt-in vector explorer for stored/active `observed_motion`: radar and high-cloud-top outlines, observed trails, server-advertised UTC projection times, selection cards, route rows, association highlighting, source controls and expiry/capability handling. It uses a separate Leaflet layer group and never derives positions client-side. |
+| iOS experimental motion mode | Authored native parity for the same raw `observed_motion` contract, stored-only/active authority states, exact UTC projection tokens and separate weather-owned MapKit overlays. Swift unit/UI tests are authored and statically reviewed, but Mac/iOS execution remains deferred. |
 
 ### The iOS surface needs no endpoint
 
@@ -457,6 +476,7 @@ exactly the comparison phase 2 exists to compute properly.
 | Variable | Meaning |
 |---|---|
 | `WB_OBSERVED_ENABLED` | Master gate. Off by default — the collector needs EUMETSAT credentials and ~440 MB of disk, so a deployment opts in. Gates the scheduler loop, the API router, the registry rows and the pipeline stage. |
+| `WB_OBSERVED_MOTION_ENABLED` | Additional experimental motion gate. Off by default. When off, the server emits a disabled `observed_motion` envelope on current D-0 motion refreshes and the capability header is `X-Observed-Motion-Enabled: 0`. |
 | `WB_OBSERVED_SOURCES` | Comma-separated subset. Radar without EUMETSAT credentials is half the feature working, not a broken one. |
 | `EUMETSAT_CONSUMER_KEY` / `_SECRET` | Data Store OAuth credentials. |
 
@@ -494,23 +514,33 @@ observed controls wrap on narrow layouts. Synthetic images verify decoding and
 layout, not provider/scientific correctness. Detailed results and remaining gates:
 [verification record](reviews/2026-09-05-observed-fix-verification.md).
 
+`web/tests/fixtures/observed-motion-v1.json` is the shared version-1 motion wire
+fixture: TypeScript imports it at the parser boundary, and Python validates the
+same JSON through `ObservedMotion`. Native DEBUG/test literals are statically
+extracted and validated with the Python producer model as fixture-parity evidence;
+that check is not Swift execution.
+
 ## Out of scope
 
-**Phase 2:** model sampling of any kind, `echo_match`/`intensity_match`
-verdicts, per-model comparison, advisory wiring, the ETA-vs-observation-time
-alignment fork.
+**Phase 2 observed-vs-forecast comparison:** model sampling of any kind,
+`echo_match`/`intensity_match` verdicts, per-model comparison, advisory wiring,
+and the ETA-vs-observation-time alignment fork.
 
 The iOS `/observed` endpoint listed here originally is **not needed and not
 built**: the payload already rides the snapshot and the bundle (see [The iOS
 surface needs no endpoint](#the-ios-surface-needs-no-endpoint)). Still absent on
-iOS: the map overlay (which *would* need `/api/observed/overlay`), the route-graph
-metrics, and the "Observed now" summary panel.
+iOS for ordinary observations: the latest-raster map overlay (which would need
+`/api/observed/overlay`), the route-graph metrics, and the "Observed now" summary
+panel.
 
-**Out of the current product scope:** nowcasting and a time slider. The original
-decision called these permanently out. The user has since requested exploration;
-[the review](reviews/2026-09-05-pr584-observed-review.md) records options and
-validation requirements. A cached regional history loop need not require a
-global tile service. No prediction or animation is added by the corrective PR.
+**Experimental motion exclusions:** full raster-history playback, a new
+route-distance-by-time canvas, native raw-raster parity, live-aircraft prediction,
+provider integration, operational enablement and advisory-colour changes remain
+out of this increment. Radar software can publish accepted experimental motion
+from retained local files, but predictive usefulness has not been established by
+regional replay. CTTH ground speed/projection/quantitative association remains
+withheld until real product/domain geolocation evidence is registered; synthetic
+fixtures do not authorize production CTTH motion.
 
 ## Known limitations
 

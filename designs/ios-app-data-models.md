@@ -52,7 +52,15 @@ One file per server response. Names below are the actual Swift type names.
 - `SnapshotResponse` (`SnapshotResponse.swift`) — route + per-waypoint analysis + `routeObservations`
   (METAR/TAF airports) + `routeSigmets`. Nested: `RouteConfig`, `Waypoint`, `WaypointAnalysis`,
   `WindComponent`, `SoundingAnalysisSummary`, `ThermodynamicIndicesSummary`, `RouteObservations`,
-  `AirportObservation`, `ObservationComparison`, `RouteSigmets`, `SigmetAlongRoute`.
+  `AirportObservation`, `ObservationComparison`, `RouteSigmets`, `SigmetAlongRoute`. It also
+  extracts the optional raw `observed_motion` member separately from ordinary `Codable` decoding,
+  preserving unknown JSON keys and carrying the serve-time `X-Observed-Motion-Enabled` capability
+  as transient network metadata.
+- `RawObservedMotion` and typed observed-motion view (`ObservedMotion.swift`) — raw JSON wrapper plus
+  conservative schema-1 accessors for the experimental motion explorer. The raw bytes are the cache
+  source of truth; known fields drive rendering only after version, revision, source/frame,
+  geometry, timing, accepted-motion and projection-authority checks pass. Unsupported/malformed
+  motion disables that explorer without failing the surrounding briefing.
 - `RouteAnalysesResponse` (`RouteAnalysesResponse.swift`) — the big one: per-point full sounding for
   every model, drives the cross-section. Nested `RoutePointAnalysis` (per point: `windComponents`,
   `sounding: [String: SoundingAnalysis]`, `modelDivergence: [ModelDivergence]`) → `SoundingAnalysis`
@@ -70,7 +78,8 @@ One file per server response. Names below are the actual Swift type names.
   `AirportModelCondition`, `RunwayWind`).
 - `PirepResponse` + `PirepListResponse` + `SubmitPirepRequest` (`PirepResponse.swift`) — see PIREPs.
 - Other response files (one struct family each): `DigestResponse`, `ElevationResponse`,
-  `PreferencesResponse`, `RefreshEvent` (SSE) + `ActiveRefreshResponse`, `SoundingProfileResponse`,
+  `PreferencesResponse`, `RefreshEvent` (SSE, including optional raw `observed_motion` and transient
+  motion capability) + `ActiveRefreshResponse`, `SoundingProfileResponse`,
   `AdvisoryDetailResponse`, `AirportWeatherResponse`, `AlternatesResponse`, `AutorouterRoute`,
   `BulkDeleteResponse`, `DebriefResponse`, `DebriefTaxonomy`, `FeedbackRequest`,
   `ForecastDaysResponse`, `ForecastMapResponse`, `FrequentAirportsResponse`, `HelpCatalogResponse`,
@@ -134,6 +143,21 @@ and `AirportDatabase` (downloaded `airports.db` in Application Support, opened v
 by RZFlight's `KnownAirports` for offline ICAO autocomplete — read-only reference data, ETag-
 refreshed; no cached copy simply means empty suggestions, never a broken search).
 
+`BriefingCacheStore` also patches the raw `observed_motion` member through the
+same snapshot/bundle/realtime cache boundary. Newer unavailable/disabled motion
+replaces older ready motion; older bundle/realtime responses cannot roll it
+back; same-revision conflicts disable motion presentation instead of selecting a
+nicer-looking envelope. Pack deletion fencing prevents late direct writes from
+recreating a removed snapshot. Motion capability is process/session authority and
+is not persisted as an enabled flag.
+
+`ObservedMotionState` is intentionally not a persistence model. It holds the
+in-memory mode flag, family/time/feature selections, request generation,
+capability state, expiry/clock status and stored-only fallback for the
+experimental map explorer. Active projection styling requires a current enabled
+capability observation from the existing snapshot/refresh network boundary;
+offline or unknown authority can inspect stored analysis only.
+
 ## PIREPs — flat model, not first-class "Observations"
 
 The old design's `Observation` / `FlightSession` / `TrackPoint` SwiftData entities and their enums
@@ -165,6 +189,25 @@ persisted entity.
   duplicating server-side.
 - **Pack completeness gate** — a cached pack only counts as offline-ready once all five
   `requiredEndpoints` are on disk.
+- **Observed-motion raw cache** — `observed_motion` is preserved as raw JSON with revision-aware
+  merge semantics. The typed Swift view is deliberately lossy and conservative; it never reconstructs
+  cache bytes from today's known fields and never authorizes active prediction from persisted
+  capability.
+
+## Experimental Observed Motion Status
+
+Backend, web and native software paths are implemented for the schema-1
+`observed_motion` envelope, including radar/high-top feature records, route
+rows, projection controls and stored/active authority states. Native execution
+is still not claimed: Swift unit/UI tests were authored and statically reviewed,
+and fixture literals were validated with the Python producer model, but no
+`xcodebuild`, simulator or device run was performed.
+
+Source readiness is narrower than the UI surface. Radar can publish accepted
+experimental motion from retained OPERA DBZH local files. CTTH motion/projection
+and quantitative cloud association remain source-gated on real product/domain
+geolocation evidence. No regional replay has established predictive usefulness
+or an operational horizon.
 
 ## References
 

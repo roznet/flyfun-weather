@@ -3,9 +3,9 @@
 Audit date: 2026-09-05. Original review: [PR #584](https://github.com/roznet/flyfun-weather/pull/584).
 Published corrections: [draft PR #600](https://github.com/roznet/flyfun-weather/pull/600).
 
-This records the requirements audit and subsequent design discussion, **not evidence
-that prediction has been implemented**. It incorporates independent read-only
-backend/client investigations and a second audit against the user's complete request.
+This records the requirements audit, design discussion and current as-built
+status. It incorporates independent read-only backend/client investigations and a
+second audit against the user's complete request.
 
 > Superseding design update: the user approved the proposed shared backend and
 > **both web and native iOS** vector explorer with "Looks good, pls continue".
@@ -16,7 +16,9 @@ backend/client investigations and a second audit against the user's complete req
 > Earlier statements
 > below that client coverage or the design direction is undecided are historical.
 > Numerical policy choices are unvalidated engineering proposals for that review.
-> No prediction code, runtime verification, PR update or deployment is implied.
+> That design checkpoint did not itself imply prediction code, runtime
+> verification, PR update or deployment; the current as-built status is recorded
+> below.
 
 ## Current checkpoint
 
@@ -26,10 +28,23 @@ Read-only GitHub verification confirmed PR #600 is open and draft, targeting
 `downle/flyfun-weather` fork; no new PR or fork is needed. No GitHub comments or
 reviews were present at this check.
 
-The published implementation corrects observations. **It has no history playback,
-motion tracking, extrapolation, radar/satellite association, or encounter engine.**
-The later request to add prediction reopens that scope; the older observation-only
-boundary is not permission to omit the new request.
+That GitHub checkpoint is historical. The local branch now contains the
+experimental observed-motion implementation in addition to the original
+observation corrections. PR/update, final full-suite verification and merge/deploy
+decisions are tracked separately by the implementation/verification record.
+
+As-built status for the expanded request:
+
+| User request | Current software status | Remaining evidence / boundary |
+|---|---|---|
+| Find better ways to visualize radar and satellite | Implemented as an opt-in vector explorer on web and authored native iOS, alongside existing observed raster/cross-section views | Full raster-history playback, native raw-raster parity and a new time-distance canvas remain explicit exclusions. |
+| Predict rain-patch movement and speed | Implemented for radar echoes from retained OPERA DBZH history, with ground speed/bearing and constant-motion projections when accepted | Experimental only; no replay evidence establishes forecast usefulness or an operational horizon. |
+| Show thunder-related feature movement | Implemented as reported-lightning evidence attached to tracked features when source times/geometry support it | Lightning is not forecast and no feature is labelled a thunderstorm merely from echo/top evidence. |
+| Show high-cloud-top movement, including without rain | Backend/web/native software paths exist for independent high-cloud-top features | Production CTTH motion/projection/quantitative association remains withheld until real product/domain geolocation evidence is registered. Synthetic tests do not approve CTTH. |
+| Is a feature moving toward or away from the route, and how fast? | Implemented as separate ground vector, per-leg distance/closure rows and planned-overlap intervals | Results are planned-timing context, not live-aircraft guidance, avoidance advice or a clearance. |
+| Link rain to high tops | Implemented as bounded radar/cloud association records when source timing, geolocation and geometry permit | Unavailable/ambiguous cases remain explicit; no fused storm identity or corridor-max pairing is claimed. |
+| Prediction useful to a flight along the route | Software can display route-relative experimental projections | Predictive usefulness is not established without regional replay against later observations. |
+| Client coverage and deferred Mac testing | Web unit/type/browser tests exist; native Swift unit/UI tests and fixtures are authored and statically reviewed | Mac/iOS compilation, unit/UI, simulator and device execution remain deferred and are not reported as passed. |
 
 ## Initial request-by-request audit (before design approval)
 
