@@ -32,7 +32,8 @@ At integration commit `08f7e699`, with documentation archive `ff0c4aea`:
 - Independent integration test/doc review at `08f7e699`: spec compliant, quality
   approved, no Critical/Important findings. Its single Minor warning-evidence
   finding is resolved by the exact disclosure below. The final whole-branch
-  review was completed below; PR publication remains a separate controller action.
+  review was completed below; the verified branch and updated description are now
+  published to draft PR #600 at the head recorded below.
 
 Full Python command, from the worktree, using a fresh temporary data/SQLite root:
 
@@ -104,7 +105,8 @@ native compilation or real-source/replay evidence.
 The scoped re-review of `167f7c56..57aa53fb` closed all eight findings as
 **ADDRESSED**, with no new Critical/Important breakage. Native compilation and
 real-source/replay evidence remain explicitly unexecuted; the branch is ready
-for the controller's draft-PR update, not for deployment or operational use.
+for the draft-PR update, not for deployment or operational use. PR #600 remains
+open and draft after the verified branch update.
 Historical stage entries below retain their at-the-time status and are not the
 current publication or completion claim.
 

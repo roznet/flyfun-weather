@@ -216,7 +216,7 @@ func testUnknownCapabilityDoesNotAuthorizeCachedPrediction() {
 - [x] Run full isolated Python suite, web unit suite, application typecheck and observed Chrome harness, capturing commands/counts/skips/errors. Run focused failure reproductions rather than claiming science from synthetic tests.
 - [x] Independent whole-increment review against approved requirements (implementation base `79b88b37`, retaining published corrections); fix findings with covering tests and scoped re-review. Record unresolved real-source validation and unexecuted Mac checks.
 - [x] Update Markdown requirement status per delivered component. No real granule/replay claim without actual authorized evidence; no synthetic manifest enabled in production. Keep feature gated off.
-- [ ] Prepare commit(s), verify clean worktree and diff, then update existing fork branch/PR #600 using explicit `https://github.com/downle/flyfun-weather.git`, preserving draft. Read resulting head/checks/comments and report actual outcome. Do not merge/deploy or send Brice a message.
+- [x] Prepare commit(s), verify clean worktree and diff, then update existing fork branch/PR #600 using explicit `https://github.com/downle/flyfun-weather.git`, preserving draft. Read resulting head/checks/comments and report actual outcome. Do not merge/deploy or send Brice a message.
 
 ### Task 9: Independently testable publication primitive (before task 5)
 
