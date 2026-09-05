@@ -62,7 +62,9 @@ from weatherbrief.storage.sounding_profiles import (
 from weatherbrief.tasks.route_weather import run_realtime_refresh
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.models.observed_motion import ObservedMotion
 from weatherbrief.observed.collect import observed_enabled
+from weatherbrief.observed.motion.payload import motion_enabled
 from weatherbrief.models import (
     AdvisorySummary,
     BriefingPackMeta,
@@ -85,6 +87,15 @@ from weatherbrief.storage.flights import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _motion_transport_headers(**headers: str) -> dict[str, str]:
+    """Attach the live capability authority to motion-bearing transports."""
+    return {
+        "X-Observed-Motion-Enabled": "1" if motion_enabled() else "0",
+        "Cache-Control": "no-store",
+        **headers,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2075,6 +2086,7 @@ class RefreshAccepted(BaseModel):
     # picture from the refresh response instead of re-fetching the snapshot —
     # which, on iOS, a cached pack would have served stale anyway.
     observed: ObservedConditions | None = None
+    observed_motion: ObservedMotion | None = None
 
 
 def _profile_cloud_source(db, flight, user_id: str) -> str | None:
@@ -2184,6 +2196,7 @@ async def refresh_briefing(
             ).model_dump_json(),
             status_code=200,
             media_type="application/json",
+            headers=_motion_transport_headers(),
         )
 
     # Tiered refresh gate: full -> pipeline, realtime -> cheap
@@ -2203,6 +2216,7 @@ async def refresh_briefing(
                 sigmets = None
                 delta = None
                 observed = None
+                observed_motion = None
                 resp_status = "already_fresh"
                 resp_mode = decision.mode
                 if decision.mode == "realtime":
@@ -2215,6 +2229,7 @@ async def refresh_briefing(
                         sigmets = result.sigmets
                         delta = result.delta
                         observed = result.observed
+                        observed_motion = result.observed_motion
                         resp_status = "realtime"
                     except Exception:
                         # Degrade to a no-op so status and mode agree.
@@ -2235,9 +2250,11 @@ async def refresh_briefing(
                         sigmets=sigmets,
                         delta=delta,
                         observed=observed,
+                        observed_motion=observed_motion,
                     ).model_dump_json(),
                     status_code=200,
                     media_type="application/json",
+                    headers=_motion_transport_headers(),
                 )
 
     # Duplicate / queue-depth check
@@ -2325,10 +2342,14 @@ async def refresh_briefing(
 
     asyncio.get_event_loop().run_in_executor(_refresh_executor, run_pipeline)
 
-    return RefreshAccepted(
-        status="queued",
-        flight_id=flight_id,
-        message="Briefing refresh queued. Poll get_briefing or refresh/status for progress.",
+    return JSONResponse(
+        content=RefreshAccepted(
+            status="queued",
+            flight_id=flight_id,
+            message="Briefing refresh queued. Poll get_briefing or refresh/status for progress.",
+        ).model_dump(mode="json"),
+        status_code=202,
+        headers=_motion_transport_headers(),
     )
 
 
@@ -2421,7 +2442,7 @@ async def refresh_briefing_stream(
             return StreamingResponse(
                 pending_generator(),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=_motion_transport_headers(**{"X-Accel-Buffering": "no"}),
             )
 
         # Tiered refresh gate: full -> pipeline, realtime -> cheap
@@ -2441,6 +2462,7 @@ async def refresh_briefing_stream(
                     sigmets_payload = None
                     delta_payload = None
                     observed_payload = None
+                    observed_motion_payload = None
                     effective_mode = decision.mode
                     if decision.mode == "realtime":
                         try:
@@ -2455,6 +2477,8 @@ async def refresh_briefing_stream(
                                 delta_payload = result.delta.model_dump(mode="json")
                             if result.observed is not None:
                                 observed_payload = result.observed.model_dump(mode="json")
+                            if result.observed_motion is not None:
+                                observed_motion_payload = result.observed_motion.model_dump(mode="json")
                         except Exception:
                             # Degrade to a no-op so consumers don't treat the
                             # null observations as a successful realtime refresh.
@@ -2484,13 +2508,14 @@ async def refresh_briefing_stream(
                             "sigmets": sigmets_payload,
                             "delta": delta_payload,
                             "observed": observed_payload,
+                            "observed_motion": observed_motion_payload,
                         }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
                     return StreamingResponse(
                         gate_generator(),
                         media_type="text/event-stream",
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                        headers=_motion_transport_headers(**{"X-Accel-Buffering": "no"}),
                     )
 
         # Duplicate / queue-depth check — return SSE error so clients
@@ -2510,7 +2535,7 @@ async def refresh_briefing_stream(
                 busy_generator(),
                 media_type="text/event-stream",
                 status_code=503,
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=_motion_transport_headers(**{"X-Accel-Buffering": "no"}),
             )
         except UserQueueLimitError as exc:
             raise HTTPException(
@@ -2525,7 +2550,7 @@ async def refresh_briefing_stream(
             return StreamingResponse(
                 duplicate_generator(),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=_motion_transport_headers(**{"X-Accel-Buffering": "no"}),
             )
         registered = True
 
@@ -2652,6 +2677,10 @@ async def refresh_briefing_stream(
                     meta, flexibility=flight.flexibility
                 ).model_dump(mode="json"),
                 "elapsed_seconds": total_elapsed,
+                "observed_motion": (
+                    result.snapshot.observed_motion.model_dump(mode="json")
+                    if result.snapshot.observed_motion is not None else None
+                ),
             }
             refresh_registry.mark_outcome(flight_id, "succeeded")
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
@@ -2692,10 +2721,7 @@ async def refresh_briefing_stream(
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_motion_transport_headers(**{"X-Accel-Buffering": "no"}),
     )
 
 
@@ -2864,10 +2890,18 @@ def get_snapshot(
     # Prefer briefing.json, fall back to legacy snapshot.json for old packs
     briefing_path = pack_dir / "briefing.json"
     if briefing_path.exists():
-        return FileResponse(briefing_path, media_type="application/json")
+        return FileResponse(
+            briefing_path,
+            media_type="application/json",
+            headers=_motion_transport_headers(),
+        )
     snapshot_path = pack_dir / "snapshot.json"
     if snapshot_path.exists():
-        return FileResponse(snapshot_path, media_type="application/json")
+        return FileResponse(
+            snapshot_path,
+            media_type="application/json",
+            headers=_motion_transport_headers(),
+        )
     raise HTTPException(status_code=404, detail="Snapshot not found")
 
 
@@ -2909,7 +2943,10 @@ def refresh_observations(
             pack_dir, db_path,
             cloud_source=_profile_cloud_source(db, flight, user_id),
         )
-        return result.model_dump(mode="json")
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers=_motion_transport_headers(),
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -4186,10 +4223,10 @@ def get_bundle(
     return Response(
         content=compressed,
         media_type="application/json",
-        headers={
+        headers=_motion_transport_headers(**{
             "Content-Encoding": "gzip",
             "X-Uncompressed-Length": str(len(payload)),
-        },
+        }),
     )
 
 
@@ -4861,5 +4898,3 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")
     return pack_path
-
-

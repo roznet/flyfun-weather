@@ -390,6 +390,7 @@ class TestRunRealtimeRefresh:
 
         briefing = {
             "route": two_wp_route.model_dump(mode="json"),
+            "target_date": "2026-05-20",
             "departure_time": "2026-05-20T09:00:00+00:00",
             "days_out": 0,
         }
@@ -449,6 +450,7 @@ class TestRunRealtimeRefresh:
 
         briefing = {
             "route": two_wp_route.model_dump(mode="json"),
+            "target_date": "2026-05-20",
             "departure_time": "2026-05-20T09:00:00+00:00",
             "days_out": 0,
             "route_observations": {

@@ -34,11 +34,30 @@ def save_snapshot(
 
     # briefing.json: everything except cross_sections and forecasts
     briefing_path = out_dir / "briefing.json"
-    briefing_path.write_text(
-        snapshot.model_dump_json(
-            indent=2, exclude={"cross_sections", "forecasts"},
-        )
-    )
+    briefing = snapshot.model_dump(mode="json", exclude={"cross_sections", "forecasts"})
+    if briefing_path.exists() or (out_dir / "snapshot.json").exists():
+        from weatherbrief.storage.observed_motion import write_snapshot_atomic
+
+        write_snapshot_atomic(out_dir, briefing)
+    else:
+        if snapshot.observed_motion is not None:
+            from weatherbrief.storage.observed_motion import (
+                publish_motion_snapshot,
+                reserve_motion_revision,
+                write_snapshot_atomic,
+            )
+
+            token = reserve_motion_revision(out_dir, allow_create=True)
+            publish_motion_snapshot(
+                out_dir,
+                token,
+                snapshot.observed_motion,
+                refreshed_fields={},
+                initial_snapshot=snapshot.model_dump(mode="json"),
+            )
+            write_snapshot_atomic(out_dir, briefing)
+        else:
+            briefing_path.write_text(json.dumps(briefing, indent=2))
 
     # forecasts.json: route + metadata + forecasts only
     forecasts_path = out_dir / "forecasts.json"

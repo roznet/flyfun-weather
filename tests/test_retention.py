@@ -24,6 +24,7 @@ from weatherbrief.tasks.retention import (
     prune_raw_observations,
     run_retention,
 )
+from weatherbrief.storage.observed_motion import reserve_motion_revision
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +51,11 @@ def _make_pack_dir(tmp_path: Path, *, heavy: bool = True) -> Path:
         "elevation_profile.json", "route_points.json", "fetch_meta.json",
         "digest.json", "digest.md",
     ):
-        (pack_dir / name).write_text(f'{{"file": "{name}"}}')
+        body = (
+            '{"route": {}, "target_date": "2026-09-05"}'
+            if name == "briefing.json" else f'{{"file": "{name}"}}'
+        )
+        (pack_dir / name).write_text(body)
 
     if heavy:
         # Heavy files
@@ -233,6 +238,18 @@ class TestPurgeHeavyArtifacts:
 
 
 class TestPurgeFullPack:
+
+    def test_fences_reserved_motion_before_removing_pack(self, db_session, dev_user, tmp_path):
+        """Replacing the pack-only deletion helper with rmtree breaks recreation ordering."""
+        pack_dir = _make_pack_dir(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=200)
+        pack = _insert_pack(db_session, "flight-1", pack_dir)
+        old = reserve_motion_revision(pack_dir)
+
+        _purge_full_pack(pack, pack_dir, dry_run=False)
+
+        recreated = reserve_motion_revision(pack_dir, allow_create=True)
+        assert recreated.revision > old.revision
 
     def test_removes_dir_and_db_row(self, db_session, dev_user, tmp_path):
         pack_dir = _make_pack_dir(tmp_path)

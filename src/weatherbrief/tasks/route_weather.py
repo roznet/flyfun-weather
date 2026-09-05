@@ -24,6 +24,56 @@ from weatherbrief.models.observations import (
 
 logger = logging.getLogger(__name__)
 
+
+def _stored_motion_departure(briefing: dict) -> datetime | None:
+    """Return only an actually stored aware departure for motion timing.
+
+    ``parse_target_time`` intentionally supplies legacy observation fallbacks;
+    those must not become invented planned-motion input.
+    """
+    value = briefing.get("departure_time")
+    if not isinstance(value, str):
+        return None
+    try:
+        departure = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if departure.tzinfo is None or departure.utcoffset() is None:
+        return None
+    return departure.astimezone(timezone.utc)
+
+
+def _build_realtime_motion(route: RouteConfig, briefing: dict, revision: int):
+    """Build one explicit motion outcome from the pack's frozen identity."""
+    from weatherbrief.models.observed_motion import empty_motion
+    from weatherbrief.observed.motion.route import route_identities
+
+    cutoff_at = datetime.now(timezone.utc)
+    departure = _stored_motion_departure(briefing)
+    geometry_id, timing_id = route_identities(route, departure)
+    try:
+        target_date = datetime.fromisoformat(str(briefing["target_date"])).date()
+    except (KeyError, TypeError, ValueError):
+        target_date = None
+    if target_date != cutoff_at.date():
+        return empty_motion(
+            route_geometry_id=geometry_id,
+            planned_timing_id=timing_id,
+            cutoff_at=cutoff_at,
+            revision=revision,
+            status="unavailable",
+            reason_codes=["outside_d0"],
+        )
+
+    from weatherbrief.observed.motion.payload import build_observed_motion
+
+    return build_observed_motion(
+        route,
+        departure_time=departure,
+        cutoff_at=cutoff_at,
+        revision=revision,
+    )
+
 # Flight category severity: higher index = worse conditions
 _CATEGORY_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 
@@ -800,22 +850,35 @@ def run_realtime_refresh(
     except Exception:
         logger.warning("Observed conditions refresh failed", exc_info=True)
 
-    # Patch observations (and SIGMETs, when fetched) back into the briefing.
-    briefing_data["route_observations"] = new_obs.model_dump(mode="json")
+    # Reserve before the optional work and publish all refreshed fields through
+    # the generation-fenced snapshot writer.  A newer disabled/unavailable
+    # outcome must supersede an older ready envelope just like a success does.
+    from weatherbrief.storage.observed_motion import (
+        publish_motion_snapshot,
+        reserve_motion_revision,
+    )
+
+    token = reserve_motion_revision(pack_dir)
+    motion = _build_realtime_motion(route, briefing_data, token.revision)
+    refreshed_fields = {"route_observations": new_obs.model_dump(mode="json")}
     if new_observed is not None:
-        briefing_data["observed_conditions"] = new_observed.model_dump(mode="json")
+        refreshed_fields["observed_conditions"] = new_observed.model_dump(mode="json")
     if new_sigmets is not None:
-        briefing_data["route_sigmets"] = new_sigmets.model_dump(mode="json")
+        refreshed_fields["route_sigmets"] = new_sigmets.model_dump(mode="json")
     # Always persist the delta (even when nothing worsened) so a stale banner
     # from a prior refresh is cleared on the next load.
-    briefing_data["last_refresh_delta"] = delta.model_dump(mode="json")
-    briefing_path = pack_dir / "briefing.json"
-    target_path = briefing_path if briefing_path.exists() else pack_dir / "snapshot.json"
-    target_path.write_text(json.dumps(briefing_data, indent=2, default=str))
+    refreshed_fields["last_refresh_delta"] = delta.model_dump(mode="json")
+    published = publish_motion_snapshot(
+        pack_dir,
+        token,
+        motion,
+        refreshed_fields=refreshed_fields,
+    )
 
     return RealtimeRefreshResult(
         observations=new_obs,
         sigmets=new_sigmets,
         delta=delta,
         observed=new_observed,
+        observed_motion=published["observed_motion"],
     )

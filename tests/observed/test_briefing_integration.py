@@ -94,6 +94,7 @@ def test_realtime_refresh_resamples_observed_conditions(tmp_path):
 
     (tmp_path / "briefing.json").write_text(json.dumps({
         "route": ROUTE.model_dump(mode="json"),
+        "target_date": "2026-08-25",
         "departure_time": "2026-08-25T14:00:00+00:00",
         "days_out": 0,
     }))
@@ -127,6 +128,7 @@ def test_realtime_refresh_skips_observed_when_not_enabled(tmp_path):
 
     (tmp_path / "briefing.json").write_text(json.dumps({
         "route": ROUTE.model_dump(mode="json"),
+        "target_date": "2026-08-25",
         "departure_time": "2026-08-25T14:00:00+00:00",
         "days_out": 0,
     }))

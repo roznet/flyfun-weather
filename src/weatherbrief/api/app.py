@@ -82,12 +82,13 @@ def _on_delete_user(user_id: str, db):
         UserAircraftRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
+    from weatherbrief.storage.observed_motion import delete_motion_pack
 
     # Delete artifact files for all user's flights
     for flight in db.query(FlightRow).filter(FlightRow.user_id == user_id).all():
         for pack in flight.packs:
             if pack.artifact_path:
-                _rmtree(Path(pack.artifact_path))
+                delete_motion_pack(Path(pack.artifact_path))
 
     # Remove the entire user packs directory (catches any orphaned files)
     user_pack_dir = _data_dir() / "packs" / safe_path_component(user_id)

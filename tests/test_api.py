@@ -138,7 +138,10 @@ def _write_pack_artifacts(app_db, flight, tmp_path):
     fetch_timestamp = _NOW - timedelta(hours=6)
     pack_dir = pack_dir_for(DEV_USER_ID, flight.id, fetch_timestamp)
     pack_dir.mkdir(parents=True, exist_ok=True)
-    (pack_dir / "briefing.json").write_text('{"route": {}}')
+    (pack_dir / "briefing.json").write_text(json.dumps({
+        "route": {},
+        "target_date": flight.departure_time.date().isoformat(),
+    }))
 
     session = app_db()
     save_pack_meta(session, BriefingPackMeta(
@@ -1566,6 +1569,7 @@ class TestRefreshEndpoint:
                 "cruise_altitude_ft": 6000,
                 "flight_duration_hours": 2.0,
             },
+            "target_date": "2026-05-20",
             "departure_time": "2026-05-20T09:00:00+00:00",
             "days_out": 0,
         }
