@@ -122,7 +122,7 @@ def test_failed_latest_match_cannot_reuse_old_velocity():
 
 **Interfaces:** `build_observed_motion(route: RouteConfig, *, departure_time: datetime | None, cutoff_at: datetime, revision: int, store: FrameStore | None = None) -> ObservedMotion`. `route_identities(route, departure_time) -> tuple[str,str|None]`. `build_route_geometry(route, grid) -> BaseGeometry` supplies a projected continuous route to tracking's candidate ranking. `route_relationships(track, route, grid, departure_time, cutoff_at, projection_times) -> tuple[list[RouteRow], PlannedOverlapResult]`. `associate_tracks(tracks, frames_by_source, grid, context) -> tuple[list[AssociationRecord], list[LightningRecord], dict[str,FeatureLightningEvidence]]`; this internal map never appears as ID-keyed JSON. Grid is the task-2 type and tracks the task-3 type.
 
-- [ ] Integrate task 10's independently tested route relationships and planned-overlap calculations. Its tests cover a moving polygon crossing between UI ticks, a route bend, holes/tangent/zero relative movement and already-intersecting closure.
+- [x] Integrate task 10's independently tested route relationships and planned-overlap calculations. Its tests cover a moving polygon crossing between UI ticks, a route bend, holes/tangent/zero relative movement and already-intersecting closure.
 
 ```python
 def test_ground_speed_is_not_route_closure():
@@ -133,10 +133,10 @@ def test_ground_speed_is_not_route_closure():
     assert overlap.status == "unavailable"
 ```
 
-- [ ] Use the reviewed route helpers for dense great-circle legs, closure and continuous planned overlap; use the same source-bounded intervals and planned distance-fraction timing in payloads. Convert representative speed via the reviewed inverse AEQD + WGS84 one-second displacement helper.
-- [ ] Test compatible asynchronous overlap vs unavailable time/registration; rain RATE remains independent; lightning precision remains observed and feature summaries precede marker caps. Translate only within bracketed observed histories for association; keep identities/vectors separate.
-- [ ] Orchestrate bounded independent source tracks, source statuses, per-feature observations, UTC times and projection geometries. Enforce caps/deterministic omission counts and 1 MiB serialized UTF-8; preserve feature cards/positive evidence, never silently simplify beyond tolerance or return a negative on incomplete evaluation. One cooperative computation/process, 15-second budget. Gate defaults off; runtime refusal returns an explicit envelope.
-- [ ] Test no network access, independent unavailable source, CTTH production gate, >256 lightning markers with retained positive summary, 48-feature/geometry/interval caps, expired lead, empty history, busy/error replacement. Run relevant tests; controller commits/reviews.
+- [x] Use the reviewed route helpers for dense great-circle legs, closure and continuous planned overlap; use the same source-bounded intervals and planned distance-fraction timing in payloads. Convert representative speed via the reviewed inverse AEQD + WGS84 one-second displacement helper.
+- [x] Test compatible asynchronous overlap vs unavailable time/registration; rain RATE remains independent; lightning precision remains observed and feature summaries precede marker caps. Translate only within bracketed observed histories for association; keep identities/vectors separate.
+- [x] Orchestrate bounded independent source tracks, source statuses, per-feature observations, UTC times and projection geometries. Enforce caps/deterministic omission counts and 1 MiB serialized UTF-8; preserve feature cards/positive evidence, never silently simplify beyond tolerance or return a negative on incomplete evaluation. One cooperative computation/process, 15-second budget. Gate defaults off; runtime refusal returns an explicit envelope.
+- [x] Test no network access, independent unavailable source, CTTH production gate, >256 lightning markers with retained positive summary, 48-feature/geometry/interval caps, expired lead, empty history, busy/error replacement. Run relevant tests; controller commits/reviews.
 
 ### Task 5: Revision-fenced publication and every server transport
 

@@ -52,13 +52,13 @@ were redirected to this worktree's existing `venv`.
 | Strict shared producer contract and policy | Six Important findings fixed across two rounds; independent scoped re-reviews approved. |
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
 | Independent feature tracking | Implemented; fractional-lineage boundary fixed at `35c0fb4d` and independently re-reviewed. |
-| Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
-| Time-compatible evidence and bounded payload | Fix round 1 at `5f0cc743` resolves five review findings; three remain in fix round 2 (projection rim, invalid-route reason, refused-work counts). |
-| Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
+| Route closure and continuous planned overlap | Pure solver and payload integration implemented and independently approved; real source-to-endpoint check follows. |
+| Time-compatible evidence and bounded payload | Implemented and independently approved after fix round 2 at `3ad0088f`; all eight original Important findings closed. |
+| Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration independently approved. |
 | Full/realtime/legacy/SSE/snapshot/bundle integration | Implemented and independently approved after fix round 1 at `95941574`; fresh 274-test regression passes. |
 | Web explorer and capability/expiry lifecycle | Implemented and independently approved after fixes at `c7be612c`; final server integration remains separate. |
 | Native explorer and raw-cache/capability lifecycle | Implemented and independently statically approved after fix round 1 at `d793698c`. No Mac execution. |
-| Integrated tests and independent final review | Pending. |
+| Integrated tests and independent final review | Real enabled source-to-endpoint and shared-fixture work in progress; full suites and final review follow. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
 work ledger during execution. Final commands/counts and actionable review findings
@@ -145,7 +145,10 @@ run by the controller with no warnings. Independent scoped re-review confirms
 five original findings addressed. The remaining three require the projection's
 one-cell support/domain rim, retention of the expected `invalid_route` refusal
 code, and unknown/incomplete counts when route/interval work was refused before
-enumeration. They are assigned to fix round 2, not waived.
+enumeration. Fix round 2 at `3ad0088f` addresses them; fresh controller result:
+**23 focused tests passed in 29.04s**, no warnings. Independent scoped re-review
+confirms all three addressed without new breakage. All eight original payload
+findings are now closed, separately from final integrated verification.
 
 Server integration at `b8d031a2` has a fresh controller result of **273 passed,
 21 warnings in 20.70s**. This covers real snapshot/bundle/header/direct/gated/SSE
@@ -220,6 +223,11 @@ Task4/5 dispatches. No Task4/5 production files existed at that interruption;
 native changes and task requirements were retained. Available fallback workers
 are being checked, with no weakening of test, review or scientific requirements.
 Nothing was pushed or changed on GitHub at this checkpoint.
+
+Read-only PR checks confirm the published draft remains at `95e233b6` and its
+actual upstream base is `b48d9a8ff5831ab44fc3e43253c808578c215277`. Final whole-branch
+review uses that base, not the unrelated stale local `main`; `79b88b37` separately
+identifies the prediction-increment start. No remote state was changed.
 
 Independent publication review found that Python dictionary equality treats JSON
 `true` and `1` as equal, allowing conflicting unknown content at the same revision
