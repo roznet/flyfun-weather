@@ -74,3 +74,51 @@ def test_lightning_filtered_positions_keep_original_sample_identity(tmp_path):
     frame=lightning.read_flashes(path,source="eumetsat_li",window_minutes=10)
     assert list(frame.lats)==[50,51]
     assert list(getattr(frame,"sample_ids",[]))==[1,2]
+
+
+def test_opera_nominal_target_is_separate_from_legacy_observation_time(tmp_path, dbzh_path):
+    import h5py
+    path = tmp_path / "nominal.h5"
+    shutil.copyfile(dbzh_path, path)
+    with h5py.File(path, "r+") as f:
+        f["what"].attrs["time"] = "140000"
+    meta = opera.read_metadata(path, "DBZH")
+    assert meta.get("motion_valid_time") == "2026-08-25T14:00:00+00:00"
+    assert meta["valid_time"] == meta["acquisition_end"] == "2026-08-25T14:05:00+00:00"
+    observed = opera.read_window(path, "DBZH", GridWindow(0,1,0,1), source="opera_dbzh", units="dBZ")
+    assert observed.valid_time == datetime(2026,8,25,14,5,tzinfo=timezone.utc)
+
+
+def test_lightning_vlen_iso_times_retain_individual_precision(tmp_path):
+    path = tmp_path / "vlen.nc"
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.sensing_start_time = "2026-09-05T11:50:00Z"
+        ds.sensing_end_time = "2026-09-05T12:00:00Z"
+        ds.createDimension("flash", 4)
+        ds.createVariable("latitude", "f8", ("flash",))[:] = [50, 51, 52, 53]
+        ds.createVariable("longitude", "f8", ("flash",))[:] = [1, 2, 3, 4]
+        var = ds.createVariable("flash_time", str, ("flash",))
+        var[:] = np.array(["2026-09-05T11:51:40Z", "invalid", "2026-09-05T12:01:00Z", "100"], dtype=object)
+    frame = lightning.read_flashes(path, source="eumetsat_li", window_minutes=10)
+    assert frame.event_times[0] == datetime(2026,9,5,11,51,40,tzinfo=timezone.utc)
+    assert frame.time_precision == ("individual_time", "window_only", "window_only", "window_only")
+    assert frame.event_times[1:] == (None, None, None)
+    assert frame.time_reason_codes[0] == ()
+    assert "invalid_flash_time" in frame.time_reason_codes[1]
+    assert "out_of_window_time" in frame.time_reason_codes[2]
+    assert "invalid_flash_time" in frame.time_reason_codes[3]
+
+
+def test_lightning_numeric_times_without_epoch_remain_window_only(tmp_path):
+    path = tmp_path / "epochless.nc"
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.sensing_start_time = "2026-09-05T11:50:00Z"
+        ds.sensing_end_time = "2026-09-05T12:00:00Z"
+        ds.createDimension("flash", 1)
+        ds.createVariable("latitude", "f8", ("flash",))[:] = [50]
+        ds.createVariable("longitude", "f8", ("flash",))[:] = [1]
+        ds.createVariable("flash_time", "f8", ("flash",))[:] = [100]
+    frame = lightning.read_flashes(path, source="eumetsat_li", window_minutes=10)
+    assert frame.event_times == (None,)
+    assert frame.time_precision == ("window_only",)
+    assert "invalid_flash_time" in frame.time_reason_codes[0]

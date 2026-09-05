@@ -12,7 +12,7 @@ NOW = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
 
 def put(store, minute, **overrides):
     when = NOW + timedelta(minutes=minute)
-    meta = dict(valid_time=when.isoformat(), received_at=when.isoformat(),
+    meta = dict(valid_time=when.isoformat(), motion_valid_time=when.isoformat(), received_at=when.isoformat(),
                 acquisition_start=(when-timedelta(minutes=10)).isoformat(),
                 acquisition_end=when.isoformat(), quantity="DBZH",
                 product_id="OPERA:DBZH", decoder_version="odim_v1",
@@ -60,7 +60,9 @@ def radar_store(tmp_path, dbzh_path, minutes=(-10, -5, 0)):
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(dbzh_path, path)
         with h5py.File(path, "r+") as f:
-            for prefix, at in (("start", when-timedelta(minutes=10)), ("end", when)):
+            f["what"].attrs["date"] = when.strftime("%Y%m%d")
+            f["what"].attrs["time"] = when.strftime("%H%M%S")
+            for prefix, at in (("start", when-timedelta(minutes=10)), ("end", when-timedelta(minutes=1))):
                 f["dataset1/what"].attrs[prefix+"date"] = at.strftime("%Y%m%d")
                 f["dataset1/what"].attrs[prefix+"time"] = at.strftime("%H%M%S")
         store.write_sidecar("opera_dbzh", when, {**opera.read_metadata(path, "DBZH"), "received_at": when.isoformat()})
@@ -73,6 +75,8 @@ def test_history_is_pinned_and_replacement_is_detected(tmp_path, dbzh_path):
     assert selected.reason_codes == ()
     latest = selected.frames[-1]
     assert latest.reference_at == NOW
+    assert latest.record.valid_at == NOW
+    assert latest.record.acquisition_window.end_at == NOW-timedelta(minutes=1)
     assert latest.received_at == NOW
     assert latest.recheck()
     latest.stored.path.write_bytes(b"replaced")
@@ -231,4 +235,45 @@ def test_sidecar_source_identity_cannot_disagree_with_inventory(tmp_path,dbzh_pa
     meta=json.loads(sidecar.read_text());meta["source"]="opera_rate"
     sidecar.write_text(json.dumps(meta))
     selected=selector()(store,"opera_dbzh",NOW)
+    assert not selected.frames and "frame_changed" in selected.reason_codes
+
+
+def test_asof_uses_nominal_target_not_acquisition_end(tmp_path):
+    store = FrameStore(tmp_path)
+    put(store, -5, motion_valid_time=(NOW+timedelta(minutes=1)).isoformat())
+    assert store.as_of_inventory("opera_dbzh", NOW) == []
+
+
+def test_nominal_target_before_acquisition_end_stays_reference(tmp_path, dbzh_path):
+    import h5py
+    from weatherbrief.observed import opera
+    store = radar_store(tmp_path, dbzh_path, (-5,))
+    target = NOW-timedelta(minutes=5)
+    path = store.payload_path("opera_dbzh", target)
+    with h5py.File(path, "r+") as f:
+        f["dataset1/what"].attrs["endtime"] = "120000"
+    store.write_sidecar("opera_dbzh", target, {**opera.read_metadata(path, "DBZH"), "received_at": NOW.isoformat()})
+    selected = selector()(store, "opera_dbzh", NOW)
+    assert selected.frames[0].reference_at == target
+    assert selected.frames[0].record.acquisition_window.end_at == NOW
+
+
+def test_missing_nominal_target_is_not_inferred_from_acquisition(tmp_path, dbzh_path):
+    import h5py
+    from weatherbrief.observed import opera
+    store = radar_store(tmp_path, dbzh_path, (0,))
+    path = store.payload_path("opera_dbzh", NOW)
+    with h5py.File(path, "r+") as f:
+        del f["what"].attrs["time"]
+    store.write_sidecar("opera_dbzh", NOW, {**opera.read_metadata(path, "DBZH"), "received_at": NOW.isoformat()})
+    selected = selector()(store, "opera_dbzh", NOW)
+    assert not selected.frames and "invalid_time" in selected.reason_codes
+
+
+def test_changed_nominal_target_cannot_bypass_pinned_inventory(tmp_path, dbzh_path):
+    import h5py
+    store = radar_store(tmp_path, dbzh_path, (0,))
+    with h5py.File(store.payload_path("opera_dbzh", NOW), "r+") as f:
+        f["what"].attrs["time"] = "115500"
+    selected = selector()(store, "opera_dbzh", NOW)
     assert not selected.frames and "frame_changed" in selected.reason_codes

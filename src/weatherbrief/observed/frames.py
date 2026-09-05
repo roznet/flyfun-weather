@@ -418,7 +418,8 @@ class FrameStore:
                 entries.append(AsOfEntry(slot, None, ("unreadable_frame",)))
                 continue
             try:
-                valid = aware_time(meta.get("valid_time"))
+                time_key = "motion_valid_time" if source.startswith("opera_") else "valid_time"
+                valid = aware_time(meta.get(time_key))
             except (ValueError, TypeError):
                 entries.append(AsOfEntry(slot, None, ("invalid_time",)))
                 continue

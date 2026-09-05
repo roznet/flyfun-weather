@@ -95,15 +95,16 @@ def _pin(stored, cutoff, deadline):
         raise ValueError("missing_acquisition")
     try:
         start, end = aware_time(meta["acquisition_start"]), aware_time(meta["acquisition_end"])
-        valid, receipt = aware_time(meta["valid_time"]), aware_time(stored.meta["received_at"])
+        time_key = "motion_valid_time" if stored.source.startswith("opera_") else "valid_time"
+        valid, receipt = aware_time(meta[time_key]), aware_time(stored.meta["received_at"])
     except (TypeError, ValueError):
         raise ValueError("invalid_time") from None
     if end > cutoff:
         raise ValueError("future_acquisition")
     if not start <= end <= receipt <= cutoff or valid > receipt:
         raise ValueError("invalid_time")
-    # New collectors retain actual decoded time. Older rounded sidecars cannot
-    # silently substitute a different canonical reference.
+    # Canonical target is independent of acquisition end and filename slot.
+    # Old radar sidecars without the explicit target are inventory barriers.
     if valid != stored.valid_time:
         raise ValueError("frame_changed")
     for key in ("grid", "product_id", "decoder_version", "acquisition_start", "acquisition_end"):

@@ -133,9 +133,14 @@ def _precise_flash_times(var, count, start, end):
                                             only_use_python_datetimes=True).replace(tzinfo=timezone.utc)
                 else:
                     # Numeric values without a documented epoch are not times.
-                    if raw.dtype.kind not in "SU":
+                    # netCDF vlen strings use object arrays: validate the
+                    # original element rather than trusting the array dtype.
+                    value = raw[i]
+                    if isinstance(value, bytes):
+                        value = value.decode("utf-8")
+                    if not isinstance(value, str):
                         raise ValueError("missing epoch")
-                    stamp = _parse_iso(str(raw[i]))
+                    stamp = _parse_iso(value)
                     if stamp is None:
                         raise ValueError("invalid timestamp")
                 if start is None or end is None or start > end:
