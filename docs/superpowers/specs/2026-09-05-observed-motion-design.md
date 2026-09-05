@@ -3,8 +3,8 @@
 Date: 2026-09-05. Follow-up: [PR #600](https://github.com/roznet/flyfun-weather/pull/600),
 following the review of [PR #584](https://github.com/roznet/flyfun-weather/pull/584).
 
-**Status: backend/web/native software implemented; integrated verification and
-final review in progress under the
+**Status: backend/web/native software implemented; isolated verification and
+independent whole-branch review complete under the
 [implementation plan](../plans/2026-09-05-observed-motion.md).** See the
 [verification record](../../../designs/reviews/2026-09-05-observed-motion-verification.md)
 for current evidence, review gates and publication status. Production gates remain

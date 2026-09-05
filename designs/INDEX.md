@@ -134,7 +134,7 @@ Key exports: `build_observed_conditions`, `ObservedConditions`, `FrameStore`, `s
 → Full doc: current-conditions.md
 → Correctness review and future visualization/motion ideas: reviews/2026-09-05-pr584-observed-review.md
 → Full-request audit and delivery status: reviews/2026-09-05-observed-request-coverage.md
-→ Experimental motion design (approved, implementation in progress; not deployed): ../docs/superpowers/specs/2026-09-05-observed-motion-design.md
+→ Experimental motion design (implemented/reviewed, gated off; not deployed): ../docs/superpowers/specs/2026-09-05-observed-motion-design.md
 → Motion implementation/verification status: reviews/2026-09-05-observed-motion-verification.md
 
 ## iOS app

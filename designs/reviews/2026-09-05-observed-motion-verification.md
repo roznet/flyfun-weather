@@ -1,7 +1,7 @@
 # Observed-motion implementation and verification record
 
-Status: **backend/web/native software implemented; isolated software suites passed;
-final independent review pending**. Production prediction remains disabled. This
+Status: **backend/web/native software implemented; isolated software suites and
+independent whole-branch review passed**. Production prediction remains disabled. This
 does not complete live cloud-motion readiness or establish predictive usefulness.
 User approved the written specification and explicitly requested implementation.
 The [implementation plan](../../docs/superpowers/plans/2026-09-05-observed-motion.md)
@@ -32,7 +32,7 @@ At integration commit `08f7e699`, with documentation archive `ff0c4aea`:
 - Independent integration test/doc review at `08f7e699`: spec compliant, quality
   approved, no Critical/Important findings. Its single Minor warning-evidence
   finding is resolved by the exact disclosure below. The final whole-branch
-  review remains a separate pending gate.
+  review was completed below; PR publication remains a separate controller action.
 
 Full Python command, from the worktree, using a fresh temporary data/SQLite root:
 
@@ -80,6 +80,31 @@ env -u NO_COLOR \
 
 The [historical review register](2026-09-05-observed-motion-review-register.md)
 preserves the original findings, fix/re-review closures and deferred minor triage.
+
+## Final whole-branch review and fix wave
+
+The independent whole-branch review of `167f7c56` against the actual upstream
+base found **8 Important groups and no Critical findings**. The complete report
+is retained at [final-review.md](../../.superpowers/sdd/2026-09-05-observed-motion/final-review.md)
+for the plan workspace. Findings covered deleted-pack writer fencing, off-grid
+projection ticks, multi-window lightning scope, web malformed-result and
+registration gates, native freshness/observed-only rendering, BFCache expiry,
+known-disconnect authority and visible evidence/completeness scope.
+
+The combined fix is committed at `57aa53fb`; its detailed I1–I8 dispositions and
+focused evidence are in [final-fix-report.md](../../.superpowers/sdd/2026-09-05-observed-motion/final-fix-report.md).
+The controller's full checks on the corrected tree are **6,136 Python passed,
+20 skipped, 23 deselected, 854 warnings in 226.66s** (JUnit 6,156 executed,
+zero failures/errors), **861 web unit tests / 52 files**, clean application
+TypeScript, and **22 Chromium scenarios in 16.2s**. Focused fix evidence is 111
+Python tests (three known fork warnings), 44 targeted web tests, 12 motion
+browser scenarios, and static native-fixture validation. These outputs are not
+native compilation or real-source/replay evidence.
+
+The scoped re-review of `167f7c56..57aa53fb` closed all eight findings as
+**ADDRESSED**, with no new Critical/Important breakage. Native compilation and
+real-source/replay evidence remain explicitly unexecuted; the branch is ready
+for the controller's draft-PR update, not for deployment or operational use.
 Historical stage entries below retain their at-the-time status and are not the
 current publication or completion claim.
 
@@ -134,7 +159,7 @@ were redirected to this worktree's existing `venv`.
 | Full/realtime/legacy/SSE/snapshot/bundle integration | Implemented and independently approved after fix round 1 at `95941574`; fresh 274-test regression passes. |
 | Web explorer and capability/expiry lifecycle | Implemented and independently approved after fixes at `c7be612c`; final server integration remains separate. |
 | Native explorer and raw-cache/capability lifecycle | Implemented and independently statically approved after fix round 1 at `d793698c`. No Mac execution. |
-| Integrated tests and independent final review | Real enabled source-to-endpoint/shared fixtures independently approved; full isolated Python/web/type/browser checks passed. Whole-branch review pending. |
+| Integrated tests and independent final review | Real enabled source-to-endpoint/shared fixtures independently approved; full isolated Python/web/type/browser checks passed; whole-branch review and scoped fix re-review clean. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
 work ledger during execution. Final commands/counts and actionable review findings
