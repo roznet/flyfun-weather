@@ -5,7 +5,7 @@ digest context, so it must be reproducible from the payload alone — the digest
 quotes it as fact, and a sentence that varied run-to-run would make the
 briefing look like it changed when only the phrasing did.
 
-Written in aviation shorthand (ICAO codes, flight levels, dBZ, NM) so it needs
+Written in aviation shorthand (ICAO codes, ft MSL, dBZ, NM) so it needs
 no per-locale translation, matching the convention ``RefreshDelta`` already
 uses for the worsened-conditions banner.
 
@@ -14,14 +14,16 @@ Three things the wording is careful about:
 * **It never asserts a clear sky it did not see.**  Where coverage is
   insufficient the line says "no radar coverage over N of M points"; it does
   not say "no echo".
-* **Every clause carries its own age.**  The four sources do not share an
-  instant and the summary does not pretend otherwise.
+* **Every clause carries its own acquisition time.**  Immutable UTC stamps
+  remain truthful in saved briefings; the four sources do not share an instant.
 * **It describes, it does not grade.**  Phase 1 computes no verdict, so there
   is no "significant" or "hazardous" anywhere in here — just what was
   measured, where, and how long ago.
 """
 
 from __future__ import annotations
+
+from datetime import timedelta, timezone
 
 from weatherbrief.models.observed import (
     ObservedAnnulus,
@@ -32,9 +34,9 @@ from weatherbrief.models.observed import (
     ObservedTopsField,
 )
 
-# Reflectivity at which an echo is worth naming in a one-line summary.  Below
-# this is cloud and drizzle returns that a pilot would not route around; the
-# annuli carry every value regardless, this only governs the prose.
+# Reflectivity at which an echo is worth naming in a one-line summary. Below
+# this are weaker echoes; the annuli carry every value regardless,
+# and this threshold only governs concise prose.
 ECHO_MENTION_DBZ = 20.0
 
 
@@ -115,17 +117,14 @@ def _reflectivity_clause(field: ObservedField | None, by_station, widest) -> str
     best = _peak(field, widest)
     if best is None or best[1].max_value is None or best[1].max_value < ECHO_MENTION_DBZ:
         looked = _stations_with_coverage(field, widest)
-        total = _station_count(field, widest)
         if looked == 0:
             return ""
-        if looked == total:
-            return (
-                f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ along the "
-                f"route ({_age(field)})."
-            )
+        valid_px, total_px = _covered_sample_counts(field, widest)
+        sample_coverage = 100 * valid_px / total_px if total_px else 0
         return (
-            f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ where the radar "
-            f"covers the route ({looked} of {total} points, {_age(field)})."
+            f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ in covered radar "
+            f"samples along the route ({sample_coverage:.0f}% sample coverage, "
+            f"{_age(field)})."
         )
     station_id, annulus = best
     caveat = " (partial radar coverage there)" if annulus.insufficient_coverage else ""
@@ -142,9 +141,12 @@ def _rain_rate_clause(field: ObservedField | None, by_station, widest) -> str:
     if best is None or not best[1].max_value:
         return ""
     station_id, annulus = best
+    caveat = ""
+    if annulus.coverage_fraction < 1:
+        caveat = f" ({annulus.coverage_fraction * 100:.0f}% rain-rate sample coverage there)"
     return (
         f"Rain rate to {annulus.max_value:.1f} mm/h near "
-        f"{_where(station_id, by_station)} ({_age(field)})."
+        f"{_where(station_id, by_station)}{caveat} ({_age(field)})."
     )
 
 
@@ -163,15 +165,20 @@ def _lightning_clause(field: ObservedFlashField | None, by_station, widest) -> s
                 if nearest is None or annulus.nearest_flash_nm < nearest:
                     nearest = annulus.nearest_flash_nm
                     nearest_station = station.station_id
-    window = field.window_minutes or 10.0
     if total == 0:
-        return f"Lightning: none within {widest:.0f} NM in the last {window:.0f} min."
+        return (
+            f"Lightning: no flashes detected within {widest:.0f} NM of the route "
+            f"({_age(field)})."
+        )
     # Discs overlap, so a flash near two adjacent route points is counted
     # twice; say "detections" rather than implying a flash census.
+    proximity = (
+        f", nearest {nearest:.0f} NM at {_where(nearest_station, by_station)}"
+        if nearest is not None else ""
+    )
     return (
         f"Lightning: {total} flash detections within {widest:.0f} NM of the route "
-        f"in the last {window:.0f} min, nearest {nearest:.0f} NM at "
-        f"{_where(nearest_station, by_station)} ({_age(field)})."
+        f"({_age(field)}){proximity}."
     )
 
 
@@ -180,38 +187,51 @@ def _tops_clause(field: ObservedTopsField | None, by_station, widest) -> str:
         return ""
     highest: float | None = None
     highest_station: str | None = None
-    multilayer = 0
+    total = 0
+    incomplete = 0
+    peak_partial = False
     covered = 0
     clear = 0
     for station in field.stations:
         for annulus in station.annuli:
             if annulus.radius_nm != widest:
                 continue
-            if annulus.insufficient_coverage:
-                continue
-            covered += 1
-            if annulus.detected_px == 0:
-                clear += 1
-            if annulus.highest_fl is not None and (
+            total += 1
+            partial = annulus.coverage_fraction < 1
+            incomplete += int(partial)
+            if not annulus.insufficient_coverage:
+                covered += 1
+                if annulus.detected_px == 0:
+                    clear += 1
+            # Coverage limits negative claims, not positive detections.
+            if annulus.detected_px and annulus.highest_fl is not None and (
                 highest is None or annulus.highest_fl > highest
             ):
                 highest = annulus.highest_fl
                 highest_station = station.station_id
-            if int(annulus.quality_method.get("9", 0)) > 0:
-                multilayer += 1
-    if covered == 0:
+                peak_partial = partial
+    if total == 0:
         return ""
     if highest is None:
-        return f"Cloud tops: clear over the whole corridor ({_age(field)})."
+        if covered == 0:
+            return f"Cloud tops: insufficient coverage at all {total} sampled route points ({_age(field)})."
+        if not incomplete and clear == total:
+            return f"Cloud tops: no cloud detected across the sampled corridor ({_age(field)})."
+        return (
+            f"Cloud tops: no cloud detected in covered portions at {clear} of {total} "
+            f"sampled route points; data unavailable or incomplete at {incomplete} of {total} "
+            f"points ({_age(field)})."
+        )
     parts = [
-        f"Cloud tops to FL{highest:.0f} near {_where(highest_station, by_station)}"
+        f"Cloud tops to {highest * 100:,.0f} ft MSL (geometric) near "
+        f"{_where(highest_station, by_station)}"
     ]
+    if peak_partial:
+        parts.append("partial cloud-top coverage there")
     if clear:
-        parts.append(f"clear at {clear} of {covered} points")
-    if multilayer:
-        # quality_method 9 is the retrieval's own multi-layer-suspect flag —
-        # the case where a single cloud-top number is least trustworthy.
-        parts.append(f"multi-layer suspected at {multilayer} of {covered}")
+        parts.append(f"no cloud detected in covered portions at {clear} of {total} sampled points")
+    if incomplete:
+        parts.append(f"data unavailable or incomplete at {incomplete} of {total} points")
     return f"{', '.join(parts)} ({_age(field)})."
 
 
@@ -231,8 +251,8 @@ def _coverage_clause(field: ObservedField | None, widest) -> str:
     if total == 0 or blind == 0:
         return ""
     if blind == total:
-        return "Radar: no coverage anywhere along this route."
-    return f"Radar: no coverage over {blind} of {total} route points."
+        return f"Radar: no coverage anywhere along this route ({_age(field)})."
+    return f"Radar: no coverage over {blind} of {total} route points ({_age(field)})."
 
 
 # --- helpers ---------------------------------------------------------------
@@ -259,6 +279,19 @@ def _stations_with_coverage(field: ObservedField, widest: float) -> int:
     )
 
 
+def _covered_sample_counts(field: ObservedField, widest: float) -> tuple[int, int]:
+    """Valid and total pixels for annuli that meet the absence-claim floor."""
+    valid_px = 0
+    total_px = 0
+    for station in field.stations:
+        for annulus in station.annuli:
+            if annulus.radius_nm != widest or annulus.insufficient_coverage:
+                continue
+            valid_px += annulus.valid_px
+            total_px += annulus.total_px
+    return valid_px, total_px
+
+
 def _station_count(field: ObservedField, widest: float) -> int:
     return sum(
         1
@@ -281,7 +314,14 @@ def _where(station_id: str | None, by_station) -> str:
 
 
 def _age(field) -> str:
-    minutes = field.age_minutes
-    if minutes < 1:
-        return "observed just now"
-    return f"observed {minutes:.0f} min ago"
+    """Immutable acquisition stamp, safe to quote from a saved briefing.
+
+    DBZH is a max-reflectivity composite of contributing scans from its
+    preceding ten-minute window, not an instantaneous snapshot.
+    """
+    end = field.valid_time.astimezone(timezone.utc)
+    if field.window_minutes > 0:
+        start = end - timedelta(minutes=field.window_minutes)
+        end_format = "%H:%M" if start.date() == end.date() else "%Y-%m-%d %H:%M"
+        return f"observed {start:%Y-%m-%d %H:%M}–{end.strftime(end_format)} UTC"
+    return f"observed {end:%Y-%m-%d %H:%M} UTC"

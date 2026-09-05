@@ -121,18 +121,8 @@ struct CrossSectionTheme: Sendable {
 
 /// Cross-section colours for the observed layers.
 ///
-/// `shareStops` colours a cloud-top band by its share of the LOOKED-AT SKY —
-/// not of the cloud that was found, and not by temperature.
-///
-/// Of the sky, because that reads as coverage a pilot can act on ("a tenth of
-/// the area around here had its top in FL180-190"), and because a share of the
-/// cloud inflates as the sky clears: a disc holding two cloudy pixels out of 131
-/// drew both its bands as loud as a solid deck, each being 50% of the cloud.
-///
-/// Share rather than temperature, because the vertical axis already says how
-/// high the band is and cloud-top temperature is very nearly a function of
-/// height — the MAP keeps the temperature ramp, having no altitude axis to
-/// spend.
+/// `shareStops` uses each band's share of valid retrieval samples, cloudy and
+/// clear, not area-weighted sky cover. The map separately offers temperature.
 ///
 /// The ramp's *direction* is per-theme and deliberate. Standard and Light run
 /// light→dark because their skies are pale; GRAMET and High-Contrast run
@@ -151,12 +141,10 @@ struct ObservedPalette: Sendable {
     /// 20 NM disc splits its cloud across a dozen fine 10-FL bands, so a fifth of
     /// the sky in one of them is already a big band.
     var shareStops: [(Double, Color)]
-    /// Hatching that means "depth unknown" below a deck, and the off-scale box.
+    /// Hatching for the off-scale box; no below-bin vertical extent is inferred.
     var hatchColor: Color
     /// Outline of the highest-top cap, and the off-scale arrow.
     var capColor: Color
-    /// Cap outline when the retrieval flags the disc multi-layer-suspect (qm 9).
-    var capMultiLayerColor: Color
     /// "The sensor does not look here" — never the same as "saw nothing".
     var noCoverageColor: Color
 
@@ -279,7 +267,6 @@ extension CrossSectionTheme {
             ],
             hatchColor: c(190, 210, 235, 0.55),
             capColor: c(232, 238, 248),
-            capMultiLayerColor: c(240, 169, 76),
             noCoverageColor: c(150, 160, 175, 0.75)
         ),
         inversionBase: RGB(r: 233, g: 30, b: 99),
@@ -389,7 +376,6 @@ extension CrossSectionTheme {
         ]
         t.observed.hatchColor = c(255, 255, 255, 0.8)
         t.observed.capColor = c(255, 255, 255)
-        t.observed.capMultiLayerColor = c(255, 192, 70)
         t.observed.noCoverageColor = c(255, 255, 255, 0.85)
         t.inversionBase = RGB(r: 255, g: 82, b: 82)
         t.inversionFloor = 0.25
@@ -555,7 +541,6 @@ extension CrossSectionTheme {
         ]
         t.observed.hatchColor = c(70, 95, 130, 0.6)
         t.observed.capColor = c(31, 41, 55)
-        t.observed.capMultiLayerColor = c(180, 83, 9)
         t.observed.noCoverageColor = c(107, 114, 128, 0.8)
         t.inversionBase = RGB(r: 194, g: 24, b: 91)
         t.inversionFloor = 0.20

@@ -62,11 +62,10 @@ class SourceSpec:
     """Static shape of one observed source.
 
     ``interval`` is the publication cadence, ``retention`` how long frames are
-    kept, and ``window_minutes`` the width of the product's own accumulation
-    or rolling-maximum window (``0`` for an instantaneous retrieval).  The
-    last one is not cosmetic: DBZH is a rolling 10-minute maximum, so an echo
-    on screen may describe a cell that was there ten minutes before the frame's
-    own valid time, on top of the delivery lag.
+    kept, and ``window_minutes`` the acquisition/accumulation window width
+    (``0`` for an instantaneous retrieval). DBZH is a max-reflectivity
+    composite whose contributing scans come from the preceding 10-minute
+    window, so an echo may predate the frame time, on top of delivery lag.
     """
 
     key: str
@@ -178,9 +177,8 @@ class GridFrame:
 class FlashFrame:
     """One lightning frame: a point cloud, not a grid.
 
-    The imager sees the whole disc, so there is no coverage mask to carry —
-    absence of flashes inside the accumulation window is a real observation
-    rather than a gap.
+    This point product carries no coverage mask. Zero means no detections
+    reported in the acquisition window, not verified full-disc coverage.
     """
 
     source: str
@@ -190,6 +188,12 @@ class FlashFrame:
     lons: np.ndarray
     times: np.ndarray  # datetime64[s], same length as lats/lons
     attribution: ObservedAttribution = field(default_factory=ObservedAttribution)
+    time_precision: tuple[str, ...] = ()
+    time_reason_codes: tuple[tuple[str, ...], ...] = ()
+    event_times: tuple[datetime | None, ...] = ()
+    acquisition_start: datetime | None = None
+    acquisition_end: datetime | None = None
+    sample_ids: tuple[int, ...] = ()
 
     def age_minutes(self, now: datetime | None = None) -> float:
         now = now or datetime.now(timezone.utc)
@@ -240,6 +244,23 @@ class StoredFrame:
 def observed_root(data_dir: Path | str | None = None) -> Path:
     base = Path(data_dir) if data_dir else Path(os.environ.get("DATA_DIR", "data"))
     return base / "observed"
+
+
+@dataclass(frozen=True)
+class AsOfEntry:
+    """An eligible stored candidate or a known, unskippable inventory barrier."""
+
+    valid_time: datetime
+    stored: StoredFrame | None
+    reason_codes: tuple[str, ...] = ()
+
+
+def aware_time(value: Any) -> datetime:
+    """Parse persisted times without silently assigning a timezone."""
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("time must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 class FrameStore:
@@ -301,7 +322,9 @@ class FrameStore:
         payload_path = self.payload_path(source, valid_time)
         full_meta = dict(meta)
         full_meta.setdefault("source", source)
-        full_meta["valid_time"] = valid_time.astimezone(timezone.utc).isoformat()
+        # Storage slots may be floored by collection. Never overwrite decoded
+        # sensing/target time with that filename convenience.
+        full_meta.setdefault("valid_time", valid_time.astimezone(timezone.utc).isoformat())
         full_meta.setdefault("received_at", datetime.now(timezone.utc).isoformat())
         full_meta["file"] = payload_path.name
         try:
@@ -370,6 +393,52 @@ class FrameStore:
             if newest.valid_time < now - max_age:
                 return None
         return newest
+
+    def as_of_inventory(self, source: str, cutoff_at: datetime) -> list[AsOfEntry]:
+        """Motion inventory, newest first, preserving malformed middle barriers.
+
+        Unlike ``latest`` this excludes future valid/receipt inputs. A malformed
+        published sidecar or missing payload is retained as a barrier, not a
+        missing nominal publication. Ordinary observation callers are unchanged.
+        """
+        cutoff_at = aware_time(cutoff_at)
+        entries = []
+        for sidecar in self.source_dir(source).glob("*.json"):
+            try:
+                slot = parse_frame_stamp(sidecar.stem)
+            except ValueError:
+                continue
+            if slot > cutoff_at:
+                continue
+            try:
+                meta = json.loads(sidecar.read_text())
+                if not isinstance(meta, dict):
+                    raise ValueError("sidecar is not an object")
+            except (OSError, ValueError):
+                entries.append(AsOfEntry(slot, None, ("unreadable_frame",)))
+                continue
+            try:
+                time_key = "motion_valid_time" if source.startswith("opera_") else "valid_time"
+                valid = aware_time(meta.get(time_key))
+            except (ValueError, TypeError):
+                entries.append(AsOfEntry(slot, None, ("invalid_time",)))
+                continue
+            if valid > cutoff_at:
+                continue
+            try:
+                receipt = aware_time(meta.get("received_at"))
+            except (ValueError, TypeError):
+                entries.append(AsOfEntry(valid, None, ("missing_receipt_time",)))
+                continue
+            if receipt > cutoff_at:
+                continue
+            payload = self.payload_path(source, slot)
+            reasons = () if payload.is_file() else ("unreadable_frame",)
+            if valid > receipt:
+                reasons = ("invalid_time",)
+            stored = StoredFrame(source, valid, payload, meta) if not reasons else None
+            entries.append(AsOfEntry(valid, stored, reasons))
+        return sorted(entries, key=lambda item: item.valid_time, reverse=True)
 
     def purge(
         self,

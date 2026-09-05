@@ -146,7 +146,7 @@ def test_ctth_grid_converts_scan_angles_to_metres(ctth_path):
 
 
 def test_ctth_no_cloud_is_undetect_not_nodata(ctth_path):
-    """``quality_method == 0`` is a positive observation of clear sky."""
+    """Only explicit cloud-free status is a positive observation of clear sky."""
     import netCDF4
 
     with netCDF4.Dataset(str(ctth_path)) as dataset:
@@ -155,13 +155,13 @@ def test_ctth_no_cloud_is_undetect_not_nodata(ctth_path):
         ctth_path, GridWindow(0, grid.ny, 0, grid.nx, full_width=True),
         source="eumetsat_ctth",
     )
-    quality = frame.aux["quality_method"]
-    clear = quality == 0
+    status = frame.aux["quality_status"]
+    clear = status == 1
     assert clear.any()
     assert frame.undetect[clear].all()
     assert not frame.nodata[clear].any()
-    # The failed-retrieval strip carries no method code and is nodata.
-    failed = quality < 0
+    # Failed pixels include method 0 as well as fill, and are all nodata.
+    failed = status == 0
     assert failed.any()
     assert frame.nodata[failed].all()
 

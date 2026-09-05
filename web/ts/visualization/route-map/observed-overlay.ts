@@ -13,8 +13,8 @@
  *     flat would suggest every flash happened at once; fading by each flash's
  *     own time keeps the trail readable as a trail.
  *
- * The age badge is not decoration. A DBZH composite is a rolling ten-minute
- * maximum plus delivery lag, so an echo on screen can be ~15 min old — about
+ * The age badge is not decoration. A DBZH composite uses scans from the prior
+ * ten minutes plus delivery lag, so an echo on screen can be ~15 min old — about
  * 30 NM of own-ship at 120 kt — and the badge is the only thing on the map
  * that says so. It reports the frame's own valid time, never a synthesised
  * "as of" shared with the other sources.
@@ -44,12 +44,19 @@ export interface ObservedOverlayOptions {
   imageryOpacity?: number;
   /** Corridor width (NM) whose buffer is outlined. */
   radiusNm: number;
+  /** Loaded bytes with provenance retained by the owning renderer. */
+  imageUrl?: string;
 }
 
 export interface ObservedFlashPoint {
   lat: number;
   lon: number;
   time: string;
+}
+
+export interface ObservedFlashResult {
+  flashes: ObservedFlashPoint[];
+  field: import('./observed-overlay-geometry').ObservedBadgeField;
 }
 
 /** Route corridor box as Leaflet bounds. */
@@ -71,9 +78,10 @@ function boundsToBox(bounds: L.LatLngBounds): LatLonBox {
 /** Age badge for whichever source the map is currently drawing. */
 export function badgeText(observed: VizObserved, source: string | null): string {
   const field =
-    source === 'eumetsat_ctth' ? observed.cloudTops
+    source === 'eumetsat_ctth' || source === 'eumetsat_ctth_temp' ? observed.cloudTops
       : source === 'opera_rate' ? observed.rainRate
-      : observed.reflectivity ?? observed.lightning;
+      : source === 'opera_dbzh' ? observed.reflectivity
+      : source === 'eumetsat_li' ? observed.lightning : null;
   return formatBadge(field);
 }
 
@@ -104,8 +112,8 @@ export function renderObservedOverlay(
   if (!bounds) return '';
 
   // 1. The frame itself, under everything else.
-  if (options.imagerySource) {
-    L.imageOverlay(overlayUrl(options.imagerySource, bounds), bounds, {
+  if (options.imageUrl) {
+    L.imageOverlay(options.imageUrl, bounds, {
       opacity: options.imageryOpacity ?? 0.75,
       interactive: false,
     }).addTo(group);
@@ -122,6 +130,26 @@ export function renderObservedOverlay(
   }).addTo(group);
 
   // 3. Lightning, oldest first so recent flashes draw on top.
+  addObservedFlashes(group, flashes, now);
+
+  return badgeText(observed, options.imagerySource);
+}
+
+/** Redraw only the clock-sensitive lightning markers, leaving raster layers intact. */
+export function renderObservedFlashes(
+  group: L.LayerGroup,
+  flashes: readonly ObservedFlashPoint[],
+  now: Date = new Date(),
+): void {
+  group.clearLayers();
+  addObservedFlashes(group, flashes, now);
+}
+
+function addObservedFlashes(
+  group: L.LayerGroup,
+  flashes: readonly ObservedFlashPoint[],
+  now: Date,
+): void {
   const dated = flashes
     .map((f) => ({ flash: f, ageMinutes: (now.getTime() - new Date(f.time).getTime()) / 60000 }))
     .filter((f) => Number.isFinite(f.ageMinutes) && f.ageMinutes < FLASH_TRAIL_MINUTES)
@@ -139,19 +167,21 @@ export function renderObservedOverlay(
       interactive: false,
     }).addTo(group);
   }
-
-  return badgeText(observed, options.imagerySource);
 }
 
 /** Fetch lightning points inside the corridor. Failure is not fatal: the
  *  imagery and corridor still draw, and the badge still says how old they are. */
 export async function fetchObservedFlashes(
   bounds: L.LatLngBounds,
-): Promise<ObservedFlashPoint[]> {
+): Promise<ObservedFlashResult> {
   const response = await fetch(`/api/observed/flashes?${boxParams(boundsToBox(bounds))}`);
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error('Observed lightning unavailable');
   const payload = await response.json();
-  return (payload.flashes ?? []) as ObservedFlashPoint[];
+  return {
+    flashes: payload.flashes ?? [],
+    field: { source: 'eumetsat_li', label: 'Lightning', validTime: payload.newest_valid_time ?? '', ageMinutes: 0,
+      windowMinutes: payload.window_minutes ?? 0, attribution: payload.attribution?.text ?? '' },
+  };
 }
 
 /** One colour stop of a source's ramp, as the server renders it. */
@@ -195,11 +225,11 @@ export async function fetchObservedLegends(): Promise<Map<string, ObservedSource
 /** Format a ramp value for the legend, per source.
  *
  *  Temperature arrives in kelvin because that is what the granule stores; a
- *  pilot reads celsius. Heights arrive in metres and are read as flight levels.
+ *  pilot reads celsius. Geometric heights arrive in metres and are shown in ft MSL.
  */
 export function formatLegendValue(source: string, value: number, units: string): string {
   if (source === 'eumetsat_ctth_temp') return `${Math.round(value - 273.15)}°C`;
-  if (source === 'eumetsat_ctth') return `FL${Math.round((value * 3.28084) / 100)}`;
+  if (source === 'eumetsat_ctth') return `${Math.round(value * 3.28084)} ft MSL`;
   if (units === 'mm/h') return `${value}`;
   return `${value}`;
 }

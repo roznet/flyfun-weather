@@ -19,6 +19,7 @@
 
 import type { CrossSectionLayer, CoordTransform, VizObservedPoint } from '../../types';
 import { ageBadgeText, drawBadge } from './observed-tops';
+import { observationWindowText } from '../../observed-time';
 
 const STRIP_HEIGHT_PX = 10;
 const MARK_HALF_WIDTH_NM = 4;
@@ -72,15 +73,16 @@ export const observedSurfaceLayer: CrossSectionLayer = {
     // a briefing where OPERA is down but lightning is up, a hardcoded 'Radar'
     // would stamp a radar name on a lightning frame's age, which is exactly
     // the per-source blending this layer exists to avoid.
-    const source = observed.reflectivity ?? observed.lightning;
-    if (source) {
+    const sources = [observed.reflectivity, observed.lightning].filter(s => s != null);
+    for (const [index, source] of sources.entries()) {
       // Second row whenever the cloud-top layer is also drawing a badge, so
       // neither source's age is hidden behind the other.
-      const row = observed.cloudTops ? 1 : 0;
+      const row = (observed.cloudTops ? 1 : 0) + index;
       drawBadge(
         ctx,
         transform,
-        ageBadgeText(source.validTime, source.ageMinutes, source.label),
+        ageBadgeText(source.validTime, source.ageMinutes, source.label)
+          + observationWindowText(source.source, source.windowMinutes),
         row,
       );
     }
@@ -123,7 +125,6 @@ function drawEcho(
       ctx.stroke();
     }
     ctx.restore();
-    return;
   }
   if (point.dbz == null) return;
 

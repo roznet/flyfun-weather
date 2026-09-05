@@ -188,6 +188,7 @@ struct BriefingContainerView: View {
                 networkMonitor: appState.networkMonitor
             )
             viewModel = vm
+            vm.observedMotionState.setConnectivity(appState.networkMonitor.isConnected)
             await vm.loadBriefing()
             await vm.checkActiveRefresh()
             // Only load PIREPs when the user may view them — the query 403s for a
@@ -205,7 +206,17 @@ struct BriefingContainerView: View {
             // pack (no-op if unchanged). Mirrors the flight list's foreground
             // reload — the open briefing shouldn't stay frozen on a stale pack.
             if scenePhase == .active {
-                Task { await viewModel?.syncLatestPack() }
+                Task {
+                    await viewModel?.syncLatestPack()
+                    await viewModel?.observedMotionLifecycleDidChange()
+                }
+            }
+        }
+        .onChange(of: appState.networkMonitor.isConnected) { oldValue, newValue in
+            viewModel?.observedMotionState.setConnectivity(newValue)
+            if !newValue { viewModel?.stopObservedMotionLifecycle() }
+            if !oldValue && newValue {
+                Task { await viewModel?.observedMotionLifecycleDidChange() }
             }
         }
         .onChange(of: appState.externalSync) {
@@ -220,6 +231,7 @@ struct BriefingContainerView: View {
             // until the scan reaches a terminal state. Re-entry recreates the VM
             // via `.task` and restarts polling.
             viewModel?.stopTimeOptionsPolling()
+            viewModel?.stopObservedMotionLifecycle()
         }
     }
 

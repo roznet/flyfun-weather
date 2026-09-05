@@ -17,6 +17,24 @@ import type { RouteFrontsManifest } from '../types/fronts';
 import type { SoundingProfileData } from '../visualization/skewt/types';
 import { API_BASE, apiFetch, redirectToLogin } from '../utils';
 
+export interface MotionTransport<T> {
+  value: T;
+  /** Serve-time authority from X-Observed-Motion-Enabled, separate from the
+   * stored scientific record. null means absent/malformed authority. */
+  observedMotionCapability: boolean | null;
+}
+
+function motionCapability(response: Response): boolean | null {
+  const value = response.headers.get('X-Observed-Motion-Enabled');
+  return value === '1' ? true : value === '0' ? false : null;
+}
+
+async function fetchWithMotionCapability<T>(path: string, init?: RequestInit): Promise<MotionTransport<T>> {
+  let capability: boolean | null = null;
+  const value = await apiFetch<T>(path, init, response => { capability = motionCapability(response); });
+  return { value, observedMotionCapability: capability };
+}
+
 /** Typed error for refresh stream failures — avoids fragile string matching. */
 export class RefreshStreamError extends Error {
   constructor(message: string) {
@@ -352,26 +370,6 @@ export async function fetchPack(flightId: string, timestamp: string): Promise<Pa
   );
 }
 
-export interface RefreshAccepted {
-  status: 'queued' | 'already_fresh' | 'realtime' | 'pending_coverage';
-  flight_id: string;
-  message: string;
-  // Tiered refresh gate detail — present when the request was gated to a
-  // real-time-only refresh or skipped entirely (never 'full' here; a full
-  // decision proceeds to the pipeline instead).
-  mode?: 'realtime' | 'none';
-  reason?: string;
-  eta_useful?: string | null;
-  observations?: RouteObservations | null;
-}
-
-export async function refreshBriefing(flightId: string): Promise<RefreshAccepted> {
-  return apiFetch<RefreshAccepted>(
-    `/flights/${encodeURIComponent(flightId)}/packs/refresh`,
-    { method: 'POST' }
-  );
-}
-
 export async function fetchFreshness(flightId: string): Promise<DataStatus> {
   return apiFetch<DataStatus>(
     `/flights/${encodeURIComponent(flightId)}/packs/freshness`
@@ -416,12 +414,13 @@ export interface RefreshStreamEvent {
     eta_useful?: string | null;
     available_date?: string;  // pending-coverage no-op only
   };
-  // Freshly fetched observations on the realtime gate path — mirrors the
-  // non-streaming RefreshAccepted.observations so SSE consumers don't need a
-  // separate reload. Null on the `none` path and full-pipeline completes.
+  // Freshly fetched observations on the realtime gate path, so SSE consumers
+  // do not need a separate reload. Null on the `none` path and full-pipeline
+  // completes.
   observations?: RouteObservations | null;
   // Freshly fetched route SIGMETs on the realtime gate path.
   sigmets?: RouteSigmets | null;
+  observed_motion?: unknown;
 }
 
 /**
@@ -436,6 +435,7 @@ export async function refreshBriefingStream(
   onEvent: (event: RefreshStreamEvent) => void,
   force?: boolean,
   asOfDate?: string,
+  onMotionCapability?: (enabled: boolean | null) => void,
 ): Promise<PackMeta | null> {
   const params = new URLSearchParams();
   if (force) params.set('force', 'true');
@@ -446,6 +446,7 @@ export async function refreshBriefingStream(
     method: 'POST',
     credentials: 'same-origin',
   });
+  onMotionCapability?.(motionCapability(resp));
 
   if (!resp.ok) {
     if (resp.status === 401) {
@@ -523,10 +524,36 @@ export async function refreshBriefingStream(
 export async function fetchSnapshot(
   flightId: string,
   timestamp: string
-): Promise<ForecastSnapshot> {
-  return apiFetch<ForecastSnapshot>(
+): Promise<MotionTransport<ForecastSnapshot>> {
+  return fetchWithMotionCapability<ForecastSnapshot>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/snapshot`
   );
+}
+
+const existingSnapshotReads = new Map<string, Promise<MotionTransport<ForecastSnapshot>>>();
+
+/** One cache-bypassing, deadline-bounded read of the existing snapshot.
+ * Callers supply their MotionState request generation; equal in-flight reads
+ * coalesce, while navigation/lifecycle generations never share authority. */
+export function fetchExistingSnapshotForMotionAuthority(
+  flightId: string,
+  timestamp: string,
+  requestGeneration: number,
+): Promise<MotionTransport<ForecastSnapshot>> {
+  const key = `${flightId}\n${timestamp}\n${requestGeneration}`;
+  const existing = existingSnapshotReads.get(key);
+  if (existing) return existing;
+  const controller = new AbortController();
+  const deadline = globalThis.setTimeout(() => controller.abort(), 10_000);
+  const request = fetchWithMotionCapability<ForecastSnapshot>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/snapshot`,
+    { cache: 'no-store', signal: controller.signal, headers: { 'Cache-Control': 'no-cache' } },
+  ).finally(() => {
+    globalThis.clearTimeout(deadline);
+    existingSnapshotReads.delete(key);
+  });
+  existingSnapshotReads.set(key, request);
+  return request;
 }
 
 // --- Route analyses ---
@@ -792,8 +819,8 @@ export async function generateDigest(
 export async function refreshObservations(
   flightId: string,
   timestamp: string,
-): Promise<RealtimeRefreshResult> {
-  return apiFetch<RealtimeRefreshResult>(
+): Promise<MotionTransport<RealtimeRefreshResult>> {
+  return fetchWithMotionCapability<RealtimeRefreshResult>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/observations/refresh`,
     { method: 'POST' },
   );

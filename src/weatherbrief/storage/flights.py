@@ -661,7 +661,7 @@ def delete_flight(
     artifact_paths = [pack.artifact_path for pack in row.packs if pack.artifact_path]
     if remove_artifacts:
         for path in artifact_paths:
-            _rmtree(Path(path))
+            _delete_pack_artifacts(Path(path))
 
     session.delete(row)  # cascades to briefing_packs
     session.flush()
@@ -684,7 +684,7 @@ def remove_artifacts_after_commit(session: Session, paths: Sequence[str]) -> Non
 
     def _cleanup(_session: Session) -> None:
         for path in targets:
-            _rmtree(path)
+            _delete_pack_artifacts(path)
 
     event.listen(session, "after_commit", _cleanup, once=True)
 
@@ -728,7 +728,7 @@ def bulk_delete_flights(
     session.flush()
 
     for path in artifact_paths:
-        _rmtree(Path(path))
+        _delete_pack_artifacts(Path(path))
 
     return list(owned_ids)
 
@@ -1043,3 +1043,10 @@ def _rmtree(path: Path) -> None:
     """Recursively remove a directory tree."""
     if path.exists():
         shutil.rmtree(path)
+
+
+def _delete_pack_artifacts(path: Path) -> None:
+    """Delete one public pack while retaining its publication high-water mark."""
+    from weatherbrief.storage.observed_motion import delete_motion_pack
+
+    delete_motion_pack(path)

@@ -1,7 +1,9 @@
 /** Briefing page entry point — wires store, UI manager, and event handlers. */
 
+import '../css/briefing.css';
+
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { briefingStore, type BriefingState } from './store/briefing-store';
+import { briefingStore, observedMotionState, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
@@ -41,7 +43,9 @@ import {
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
-import { corridorBounds, fetchObservedFlashes, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
+import { corridorBounds, fetchObservedFlashes, fetchObservedLegends, type ObservedFlashResult } from './visualization/route-map/observed-overlay';
+import { ObservedFlashRequests } from './visualization/route-map/observed-request-state';
+import { resolveObservedOverlay } from './visualization/route-map/observed-overlay-geometry';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -50,6 +54,8 @@ import { RouteGraphRenderer } from './visualization/route-graph/renderer';
 import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
 import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from './visualization/route-graph/interaction';
 import { RouteMapRenderer, type MapFrontLine } from './visualization/route-map/renderer';
+import { ObservedMotionMapLayer } from './observed-motion/map-layer';
+import { ObservedMotionView } from './observed-motion/view';
 import { fetchHewsonFronts } from './adapters/hewson-map-adapter';
 import type { RouteFrontsManifest } from './types/fronts';
 import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/metrics';
@@ -271,9 +277,7 @@ function patchForecastTimeLabel(label: string): void {
 // Flashes are fetched once per corridor and cached: the payload changes only
 // when a new frame lands, and re-requesting on every map re-render (altitude
 // slider drags, model switches) would spend a request per frame of a drag.
-let observedFlashCache: ObservedFlashPoint[] | null = null;
-let observedFlashKey: string | null = null;
-let observedFlashPending = false;
+const observedFlashRequests = new ObservedFlashRequests<ObservedFlashResult>();
 
 function updateObservedOverlay(
   data: VizRouteData,
@@ -282,6 +286,7 @@ function updateObservedOverlay(
 ): void {
   const observed = data.observed;
   if (!observed) {
+    observedFlashRequests.clear();
     renderer.setObservedSource(null);
     renderer.setObservedFlashes([]);
     renderer.refreshObserved();
@@ -292,19 +297,15 @@ function updateObservedOverlay(
   // briefing. Reflectivity is the default elsewhere: highest cadence, and the
   // one that answers "is that cell on my route".
   const chosen = briefingStore.getState().vizSettings.observedOverlay;
-  const availableFor: Record<string, boolean> = {
-    opera_dbzh: !!observed.reflectivity,
-    opera_rate: !!observed.rainRate,
-    eumetsat_ctth: !!observed.cloudTops,
-    eumetsat_ctth_temp: !!observed.cloudTops,
-    eumetsat_li: !!observed.lightning,
-  };
-  const wanted = chosen && availableFor[chosen] ? chosen : (
-    observed.reflectivity ? 'opera_dbzh' : observed.rainRate ? 'opera_rate' : ''
-  );
+  const wanted = resolveObservedOverlay(chosen, {
+    reflectivity: !!observed.reflectivity,
+    rainRate: !!observed.rainRate,
+    cloudTops: !!observed.cloudTops,
+    lightning: !!observed.lightning,
+  });
   // Lightning is points, not a raster: selecting it draws no imagery at all.
   const showFlashes = wanted === 'eumetsat_li';
-  renderer.setObservedSource(showFlashes || !wanted ? null : wanted);
+  renderer.setObservedSource(wanted || null);
   renderer.setObservedOpacity(briefingStore.getState().vizSettings.observedOverlayOpacity ?? 0.75);
   // Fetched once and cached; a failure costs the scale, not the overlay.
   void fetchObservedLegends().then((legends) => {
@@ -317,24 +318,18 @@ function updateObservedOverlay(
     // One measurement at a time: with a raster selected, lightning points on
     // top would leave a colour on the map whose source is ambiguous.
     renderer.setObservedFlashes([]);
+    observedFlashRequests.clear();
     renderer.refreshObserved();
     return;
   }
 
   const key = `${observed.lightning.validTime}|${bounds.toBBoxString()}`;
-  if (key !== observedFlashKey && !observedFlashPending) {
-    observedFlashPending = true;
-    fetchObservedFlashes(bounds)
-      .then((flashes) => {
-        observedFlashCache = flashes;
-        observedFlashKey = key;
-      })
-      // A flash-fetch failure costs the lightning points, not the overlay:
-      // the imagery and its age badge still draw.
-      .catch(() => { observedFlashCache = []; })
-      .finally(() => { observedFlashPending = false; requestRerender(); });
-  }
-  renderer.setObservedFlashes(observedFlashCache ?? []);
+  // A failure is latched before the completion rerender, preventing an
+  // outage from creating a request/rerender loop. Source changes or an
+  // explicitly refreshed snapshot allow another attempt.
+  observedFlashRequests.select(key, () => fetchObservedFlashes(bounds), requestRerender);
+  const flashes = observedFlashRequests.current(key);
+  renderer.setObservedFlashes(flashes?.flashes ?? [], flashes?.field ?? null);
   renderer.refreshObserved();
 }
 
@@ -1233,6 +1228,8 @@ async function init(): Promise<void> {
   let routeGraphRenderer: RouteGraphRenderer | null = null;
   let routeGraphInteraction: RouteGraphInteractionHandle | null = null;
   let mapRenderer: RouteMapRenderer | null = null;
+  let observedMotionMapLayer: ObservedMotionMapLayer | null = null;
+  let observedMotionView: ObservedMotionView | null = null;
   let mapInteraction: MapInteractionHandle | null = null;
   let compareRenderer: CompareSectionRenderer | null = null;
   let compareInteraction: CompareInteractionHandle | null = null;
@@ -1926,6 +1923,10 @@ async function init(): Promise<void> {
       mapRenderer.setShowFronts(state.vizSettings.mapFrontsVisible ?? false);
       mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       mapRenderer.render();
+      if (!observedMotionMapLayer) {
+        const group = mapRenderer.createObservedMotionLayerGroup();
+        if (group) observedMotionMapLayer = new ObservedMotionMapLayer(group, mapContainer);
+      }
       // Gated front axes for the selected model (async; redraws when ready).
       updateMapFrontLines(
         state.routeFronts,
@@ -1939,7 +1940,49 @@ async function init(): Promise<void> {
       // Observed conditions overlay (#574): the newest radar frame under the
       // route plus age-faded lightning. Imagery is served, never carried in
       // the briefing payload, so it is requested here when the layer is drawn.
-      updateObservedOverlay(data, mapRenderer, () => renderVisualization(store.getState()));
+      if (observedMotionState.modeActive) {
+        // Motion owns independent vectors; the ordinary raster preference is
+        // retained in settings but deliberately not requested underneath it.
+        observedFlashRequests.clear();
+        mapRenderer.setObservedSource(null);
+        mapRenderer.setObservedFlashes([]);
+        mapRenderer.refreshObserved();
+      } else {
+        updateObservedOverlay(data, mapRenderer, () => renderVisualization(store.getState()));
+      }
+
+      if (mapControlsContainer) {
+        let motionShell = document.getElementById('observed-motion-shell');
+        if (!motionShell) {
+          motionShell = document.createElement('div');
+          motionShell.id = 'observed-motion-shell';
+          motionShell.className = 'observed-motion-shell';
+          mapControlsContainer.insertAdjacentElement('afterend', motionShell);
+        }
+        if (!observedMotionView) {
+          observedMotionView = new ObservedMotionView(motionShell, observedMotionState, {
+            onToggle: active => { if (active) void store.getState().enterObservedMotionMode(); else store.getState().leaveObservedMotionMode(); },
+            onSelectTime: time => observedMotionState.selectTime(time),
+            onSelectFeature: id => observedMotionState.selectFeature(id),
+            onSelectAssociation: id => observedMotionState.selectAssociation(id),
+            onSourceToggle: (family, enabled) => observedMotionState.setSourceEnabled(family, enabled),
+          });
+        }
+        observedMotionView.render();
+      }
+      const motion = observedMotionState.modeActive ? observedMotionState.current?.motion ?? null : null;
+      observedMotionMapLayer?.setData(motion);
+      observedMotionMapLayer?.setSourceEnabled('radar_echo', observedMotionState.sourceEnabled.radar_echo);
+      observedMotionMapLayer?.setSourceEnabled('high_cloud_top', observedMotionState.sourceEnabled.high_cloud_top);
+      const association = motion?.associations.find(item => item.association_id === observedMotionState.selectedAssociationId);
+      observedMotionMapLayer?.selectFeatures(association
+        ? [association.radar_feature_id, association.cloud_feature_id]
+        : observedMotionState.selectedFeatureId ? [observedMotionState.selectedFeatureId] : []);
+      const projectionPresentation = observedMotionState.selectedTime === 'observed' ? 'active'
+        : observedMotionState.canPresentActivePrediction ? 'active'
+        : observedMotionState.capability === 'disabled' || observedMotionState.presentationReasons.includes('expired') || observedMotionState.clockUncertain ? 'hidden'
+        : 'stored';
+      observedMotionMapLayer?.selectTime(observedMotionState.selectedTime, projectionPresentation);
 
       // Attach or update map interaction
       if (mapInteraction) {
@@ -2013,6 +2056,8 @@ async function init(): Promise<void> {
       });
     } else {
       // Map not visible — destroy
+      observedFlashRequests.clear();
+      if (observedMotionMapLayer) { observedMotionMapLayer.destroy(); observedMotionMapLayer = null; }
       if (mapInteraction) { mapInteraction.destroy(); mapInteraction = null; }
       if (mapRenderer) { mapRenderer.destroy(); mapRenderer = null; }
     }
@@ -2134,6 +2179,8 @@ async function init(): Promise<void> {
     // Resolve 'auto' units against this flight's region (US flights → US units)
     // before any sub-render reads getUnitsRegion(). No-op for a forced pref.
     if (state.snapshot !== prev.snapshot && state.snapshot) {
+      observedFlashRequests.retryFailed();
+      mapRenderer?.retryObservedFetch();
       setFlightRegion(regionFromIcaos(state.snapshot.route.waypoints.map(w => w.icao)));
     }
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
@@ -2181,7 +2228,7 @@ async function init(): Promise<void> {
         track(EVENTS.BRIEFING_REFRESHED);
       }
     }
-    if (
+    const briefingContentChanged =
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||
       state.digest !== prev.digest ||
@@ -2192,8 +2239,8 @@ async function init(): Promise<void> {
       state.showingAlt !== prev.showingAlt ||
       state.elevationProfile !== prev.elevationProfile ||
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride ||
-      state.windOverlay !== prev.windOverlay
-    ) {
+      state.windOverlay !== prev.windOverlay;
+    if (briefingContentChanged) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
       // Re-check here too, not just on first load: the history dropdown swaps
       // packs in place and a refresh lands one, so a chip painted beside a
@@ -2214,6 +2261,8 @@ async function init(): Promise<void> {
       renderPointSections(state);
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
+    } else if (state.observedMotionVersion !== prev.observedMotionVersion) {
+      renderVisualization(state);
     }
     if (
       state.timeOptions !== prev.timeOptions ||
@@ -2683,6 +2732,36 @@ async function init(): Promise<void> {
   }
 
   // --- Load flight data, then render even if no packs exist ---
+  let motionClock: number | null = null;
+  const startMotionClock = (): void => {
+    if (motionClock !== null) return;
+    motionClock = window.setInterval(() => {
+      if (observedMotionState.modeActive) observedMotionState.updateClock(new Date());
+    }, 60_000);
+  };
+  startMotionClock();
+  observedMotionState.setConnectivity(navigator.onLine);
+  const refreshMotionLifecycle = (): void => {
+    observedMotionState.setConnectivity(navigator.onLine);
+    if (!navigator.onLine) return;
+    if (!observedMotionState.modeActive) return;
+    observedMotionState.updateClock(new Date());
+    void store.getState().recheckObservedMotionAuthority();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshMotionLifecycle();
+  });
+  window.addEventListener('pageshow', () => {
+    startMotionClock();
+    refreshMotionLifecycle();
+  });
+  window.addEventListener('online', refreshMotionLifecycle);
+  window.addEventListener('offline', () => observedMotionState.setConnectivity(false));
+  window.addEventListener('pagehide', () => {
+    if (motionClock !== null) window.clearInterval(motionClock);
+    motionClock = null;
+  });
+
   store.getState().loadFlight(flightId).then(async () => {
     // If a specific pack timestamp was requested via URL, select it
     if (packTimestamp) {

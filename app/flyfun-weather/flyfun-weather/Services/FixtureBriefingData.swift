@@ -315,6 +315,79 @@ enum FixtureBriefingData {
 
     // MARK: - Snapshot (route + waypoint analyses + observations)
 
+    /// A complete version-1 raw envelope used only by the DEBUG/UI-test
+    /// repository. It deliberately crosses the same raw boundary as production
+    /// rather than constructing a lossy typed DTO, and retains an unknown key to
+    /// keep that boundary visible in fixture-backed journeys.
+    static let observedMotion = RawObservedMotion(rawJSON: Data(#"""
+    {
+      "schema_version":1,"status":"available","reason_codes":[],"revision":1,
+      "run_id":"fixture-motion-run-1","route_geometry_id":"fixture-route-geometry-v1","planned_timing_id":"fixture-timing-v1",
+      "computed_at":"2099-06-30T05:56:00Z","cutoff_at":"2099-06-30T05:55:00Z","expires_at":"2099-06-30T06:10:00Z",
+      "method_version":"masked_contour_translation_v1","policy_version":"observed_motion_policy_v1",
+      "analysis_domain":{"center":[6.0,43.5],"crs":"+proj=aeqd +lat_0=43.5 +lon_0=6.0 +datum=WGS84 +units=m +no_defs","cell_size_m":2000,"width_cells":100,"height_cells":100,"origin_x_m":-100000,"origin_y_m":-100000,"bounds":[5.5,43.0,6.5,44.0],"reason_codes":[]},
+      "sources":[
+        {"source_id":"radar","status":"available","reason_codes":[],"frames":[
+          {"frame_id":"radar-frame-1","content_id":"radar-content-1","product_id":"DBZH","decoder_version":"fixture-1","grid_id":"fixture-grid","valid_at":"2099-06-30T05:35:00Z","received_at":"2099-06-30T05:35:00Z","acquisition_window":{"start_at":"2099-06-30T05:35:00Z","end_at":"2099-06-30T05:35:00Z"},"reference_at":"2099-06-30T05:35:00Z"},
+          {"frame_id":"radar-frame-2","content_id":"radar-content-2","product_id":"DBZH","decoder_version":"fixture-1","grid_id":"fixture-grid","valid_at":"2099-06-30T05:45:00Z","received_at":"2099-06-30T05:45:00Z","acquisition_window":{"start_at":"2099-06-30T05:45:00Z","end_at":"2099-06-30T05:45:00Z"},"reference_at":"2099-06-30T05:45:00Z"},
+          {"frame_id":"radar-frame-3","content_id":"radar-content-3","product_id":"DBZH","decoder_version":"fixture-1","grid_id":"fixture-grid","valid_at":"2099-06-30T05:55:00Z","received_at":"2099-06-30T05:55:00Z","acquisition_window":{"start_at":"2099-06-30T05:55:00Z","end_at":"2099-06-30T05:55:00Z"},"reference_at":"2099-06-30T05:55:00Z"}
+        ],"gaps":[],"attribution":"Fixture radar","coverage":{"status":"available","reason_codes":[],"scope":"analysis_domain","known_cells":100,"total_cells":100,"known_fraction":1},"geolocation":{"status":"validated","reason_codes":[],"evidence_id":"fixture-geo","method_version":"fixture-registration-v1","applicability_id":"fixture-domain"}},
+        {"source_id":"rate","status":"available","reason_codes":[],"frames":[
+          {"frame_id":"rate-frame-1","content_id":"rate-content-1","product_id":"RATE","decoder_version":"fixture-1","grid_id":"fixture-grid","valid_at":"2099-06-30T05:54:00Z","received_at":"2099-06-30T05:54:30Z","acquisition_window":{"start_at":"2099-06-30T05:53:00Z","end_at":"2099-06-30T05:54:00Z"},"reference_at":"2099-06-30T05:54:00Z"}
+        ],"gaps":[],"attribution":"Fixture rate","coverage":{"status":"available","reason_codes":[],"scope":"analysis_domain","known_cells":100,"total_cells":100,"known_fraction":1},"geolocation":{"status":"validated","reason_codes":[],"evidence_id":"fixture-geo","method_version":"fixture-registration-v1","applicability_id":"fixture-domain"}}
+      ],
+      "features":[{
+        "feature_id":"fixture-radar-1","source_id":"radar","family":"radar_echo","definition":{"quantity":"reflectivity","operator":"gte","threshold":5,"unit":"dBZ"},
+        "reference_at":"2099-06-30T05:55:00Z","reference_frame_id":"radar-frame-3","frame_ids":["radar-frame-1","radar-frame-2","radar-frame-3"],
+        "display_geometry":{"status":"available","reason_codes":[],"geometry":{"type":"MultiPolygon","coordinates":[[[[5.8,43.3],[6.2,43.3],[6.2,43.7],[5.8,43.7],[5.8,43.3]],[[5.9,43.4],[6.1,43.4],[6.1,43.6],[5.9,43.6],[5.9,43.4]]]]},"provenance":"grid_contour","simplification_tolerance_m":500},
+        "trail":[{"frame_id":"radar-frame-1","observed_at":"2099-06-30T05:35:00Z","center":[5.8,43.5]},{"frame_id":"radar-frame-2","observed_at":"2099-06-30T05:45:00Z","center":[5.9,43.5]},{"frame_id":"radar-frame-3","observed_at":"2099-06-30T05:55:00Z","center":[6.0,43.5]}],
+        "observations":[{"kind":"rain_rate_max","status":"available","reason_codes":[],"value":3.5,"unit":"mm_h","source_id":"rate","frame_id":"rate-frame-1","observed_at":"2099-06-30T05:54:00Z","comparison_at":"2099-06-30T05:54:00Z","acquisition_window":{"start_at":"2099-06-30T05:53:00Z","end_at":"2099-06-30T05:54:00Z"},"alignment_method":"observed","sample_id":"fixture-rate-sample","sample_position":[6.0,43.5],"paired_temperature_k":null,"coverage":{"status":"available","reason_codes":[],"scope":"feature_contour","known_cells":20,"total_cells":20,"known_fraction":1}}],
+        "lightning_evidence":{"status":"unavailable","reason_codes":["fixture_no_lightning"],"source_id":null,"frame_ids":[],"evaluated_window":null,"reported_detection_count":null,"emitted_marker_count":0,"evaluation_complete":false},
+        "coverage":{"status":"available","reason_codes":[],"scope":"feature_contour","known_cells":20,"total_cells":20,"known_fraction":1},"geolocation":{"status":"validated","reason_codes":[],"evidence_id":"fixture-geo","method_version":"fixture-registration-v1","applicability_id":"fixture-domain"},
+        "motion":{"status":"accepted","reason_codes":[],"ground_speed_kt":18,"bearing_deg_true":90,"velocity_reference_point":[6.0,43.5],"velocity_method":"inverse_aeqd_geodesic_1s","pair_diagnostics":[{"from_frame_id":"radar-frame-1","to_frame_id":"radar-frame-2","elapsed_seconds":600,"status":"available","reason_codes":[],"patches":[
+          {"direction":"forward","center_column":10,"center_row":20,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":1,"dy_cells":0,"refinement":"quadratic"},
+          {"direction":"forward","center_column":13,"center_row":23,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":1,"dy_cells":0,"refinement":"quadratic"},
+          {"direction":"reverse","center_column":10,"center_row":20,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":-1,"dy_cells":0,"refinement":"quadratic"},
+          {"direction":"reverse","center_column":13,"center_row":23,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":-1,"dy_cells":0,"refinement":"quadratic"}
+        ],"forward_dx_cells":1,"forward_dy_cells":0,"patch_disagreement_cells":0,"reverse_residual_cells":0,"next_observation_residual_cells":0.2,"common_support_iou":0.8,"area_ratio":1,"plausible_parent_count":1,"plausible_child_count":1,"lineage_complete":true},{"from_frame_id":"radar-frame-2","to_frame_id":"radar-frame-3","elapsed_seconds":600,"status":"available","reason_codes":[],"patches":[
+          {"direction":"forward","center_column":10,"center_row":20,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":1,"dy_cells":0,"refinement":"quadratic"},
+          {"direction":"forward","center_column":13,"center_row":23,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":1,"dy_cells":0,"refinement":"quadratic"},
+          {"direction":"reverse","center_column":10,"center_row":20,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":-1,"dy_cells":0,"refinement":"quadratic"},
+          {"direction":"reverse","center_column":13,"center_row":23,"status":"available","reason_codes":[],"support_fraction":1,"ncc":0.9,"competing_peak_margin":0.2,"dx_cells":-1,"dy_cells":0,"refinement":"quadratic"}
+        ],"forward_dx_cells":1,"forward_dy_cells":0,"patch_disagreement_cells":0,"reverse_residual_cells":0,"next_observation_residual_cells":null,"common_support_iou":0.8,"area_ratio":1,"plausible_parent_count":1,"plausible_child_count":1,"lineage_complete":true}],"fit_rms_residual_cells":0.2},
+        "projection_end_at":"2099-06-30T06:10:00Z","projections":[{"at":"2099-06-30T06:00:00Z","status":"available","reason_codes":[],"display_geometry":{"status":"available","reason_codes":["projected_translation"],"geometry":{"type":"MultiPolygon","coordinates":[[[[5.85,43.3],[6.25,43.3],[6.25,43.7],[5.85,43.7],[5.85,43.3]],[[5.95,43.4],[6.15,43.4],[6.15,43.6],[5.95,43.6],[5.95,43.4]]]]},"provenance":"grid_contour","simplification_tolerance_m":500}},{"at":"2099-06-30T06:05:00Z","status":"available","reason_codes":[],"display_geometry":{"status":"available","reason_codes":["projected_translation"],"geometry":{"type":"MultiPolygon","coordinates":[[[[5.9,43.3],[6.3,43.3],[6.3,43.7],[5.9,43.7],[5.9,43.3]],[[6.0,43.4],[6.2,43.4],[6.2,43.6],[6.0,43.6],[6.0,43.4]]]]},"provenance":"grid_contour","simplification_tolerance_m":500}},{"at":"2099-06-30T06:10:00Z","status":"available","reason_codes":[],"display_geometry":{"status":"available","reason_codes":["projected_translation"],"geometry":{"type":"MultiPolygon","coordinates":[[[[5.95,43.3],[6.35,43.3],[6.35,43.7],[5.95,43.7],[5.95,43.3]],[[6.05,43.4],[6.25,43.4],[6.25,43.6],[6.05,43.6],[6.05,43.4]]]]},"provenance":"grid_contour","simplification_tolerance_m":500}}],
+        "route_rows":[{"leg_id":"fixture-route:0","leg_index":0,"from_label":"LFMD","to_label":"LFML","at":"2099-06-30T06:00:00Z","status":"available","reason_codes":[],"distance_nm":4.2,"closure_kt":7,"closure_interval":{"start_at":"2099-06-30T05:59:30Z","end_at":"2099-06-30T06:00:30Z"},"relationship":"approaching","planned_time_method":"distance_proportional_planned","planned_time_status":"available","planned_time_reason_codes":[],"planned_overlap_at_time":false}],
+        "planned_overlap":{"status":"available","reason_codes":[],"method":"relative_segment_contour_intersection","planned_time_method":"distance_proportional_planned","evaluated_interval":{"start_at":"2099-06-30T05:55:00Z","end_at":"2099-06-30T06:10:00Z"},"intervals":[{"leg_id":"fixture-route:0","leg_index":0,"start_at":"2099-06-30T06:02:00Z","end_at":"2099-06-30T06:04:00Z","contact":"interval","approximate":true}],"complete":true},"reason_codes":[]
+      }],
+      "associations":[],"lightning":[],"projection_times":["2099-06-30T06:00:00Z","2099-06-30T06:05:00Z","2099-06-30T06:10:00Z"],
+      "completeness":[
+        {"category":"regions","status":"complete","reason_codes":[],"considered_count":1,"emitted_count":1,"omitted_count":0},
+        {"category":"input_frames","status":"complete","reason_codes":[],"considered_count":3,"emitted_count":3,"omitted_count":0},
+        {"category":"small_detections","status":"complete","reason_codes":[],"considered_count":0,"emitted_count":0,"omitted_count":0},
+        {"category":"candidates","status":"complete","reason_codes":[],"considered_count":1,"emitted_count":1,"omitted_count":0},
+        {"category":"features","status":"complete","reason_codes":[],"considered_count":1,"emitted_count":1,"omitted_count":0},
+        {"category":"geometry","status":"complete","reason_codes":[],"considered_count":4,"emitted_count":4,"omitted_count":0},
+        {"category":"associations","status":"complete","reason_codes":[],"considered_count":0,"emitted_count":0,"omitted_count":0},
+        {"category":"lightning","status":"complete","reason_codes":[],"considered_count":0,"emitted_count":0,"omitted_count":0},
+        {"category":"legs","status":"complete","reason_codes":[],"considered_count":1,"emitted_count":1,"omitted_count":0},
+        {"category":"route_rows","status":"complete","reason_codes":[],"considered_count":1,"emitted_count":1,"omitted_count":0},
+        {"category":"overlap_intervals","status":"complete","reason_codes":[],"considered_count":1,"emitted_count":1,"omitted_count":0}
+      ],"Fixture_Unknown_ID":{"Kept":true}
+    }
+    """#.utf8))
+
+    static func snapshotWithObservedMotion(
+        capability: ObservedMotionCapability = .enabled,
+        capabilitySequence: Int = 1
+    ) -> SnapshotResponse {
+        var value = snapshot
+        value.observedMotion = observedMotion
+        value.observedMotionCapability = capability
+        value.observedMotionCapabilitySequence = capabilitySequence
+        value.observedMotionOrigin = .network
+        return value
+    }
+
     static let snapshot: SnapshotResponse = decode(SnapshotResponse.self, """
     {
       "route": {

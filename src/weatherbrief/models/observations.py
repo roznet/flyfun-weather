@@ -7,6 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, computed_field
 
 from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.models.observed_motion import ObservedMotion
 
 
 class AirportObservation(BaseModel):
@@ -174,3 +175,4 @@ class RealtimeRefreshResult(BaseModel):
     sigmets: RouteSigmets | None = None
     delta: RefreshDelta | None = None
     observed: ObservedConditions | None = None
+    observed_motion: ObservedMotion | None = None

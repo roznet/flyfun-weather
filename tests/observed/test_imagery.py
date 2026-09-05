@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
 from weatherbrief.observed import ctth, opera
-from weatherbrief.observed.grid import GridWindow
+from weatherbrief.observed.grid import GridSpec, GridWindow
 from weatherbrief.observed.imagery import (
     DETECTION_ALPHA,
     MAX_OVERLAY_PIXELS,
@@ -17,7 +18,7 @@ from weatherbrief.observed.imagery import (
     legend_for,
     render_overlay,
 )
-from weatherbrief.observed.frames import SOURCE_EUMETSAT_CTTH, SOURCE_OPERA_DBZH
+from weatherbrief.observed.frames import GridFrame, SOURCE_EUMETSAT_CTTH, SOURCE_OPERA_DBZH
 
 # The fixture domain, comfortably inside its edges.
 BOUNDS = OverlayBounds(south=49.8, west=0.4, north=51.2, east=2.9)
@@ -286,6 +287,134 @@ def test_a_missing_aux_field_draws_nothing_rather_than_the_wrong_thing(ctth_path
     assert not (image[:, :, 3] == DETECTION_ALPHA).any(), (
         "drew detections from a plane the granule does not carry"
     )
+
+
+def _overlapping_clouds(heights, temperatures, lons=None):
+    """0.1-degree cells on an equatorial equidistant grid, shifted individually."""
+    size = len(heights)
+    grid = GridSpec(
+        proj4="+proj=eqc +lat_ts=0 +datum=WGS84 +units=m",
+        nx=size, ny=1, x0=0, y0=0, dx=11131.949079327358, dy=11131.949079327358,
+    )
+    nominal_lons, _ = grid.colrow_to_lonlat(np.arange(size), np.zeros(size))
+    corrected_lons = np.zeros(size) if lons is None else np.asarray(lons)
+    return GridFrame(
+        source=SOURCE_EUMETSAT_CTTH, quantity="cloud_top_height", units="m",
+        valid_time=datetime(2026, 9, 5, tzinfo=timezone.utc), window_minutes=0,
+        grid=grid, window=GridWindow(0, 1, 0, size),
+        values=np.asarray([heights], dtype=float),
+        nodata=np.zeros((1, size), dtype=bool), undetect=np.zeros((1, size), dtype=bool),
+        aux={
+            "cloud_top_temperature": np.asarray([temperatures], dtype=float),
+            "delta_latitude": np.zeros((1, size)),
+            "delta_longitude": np.asarray([corrected_lons - nominal_lons]),
+        },
+    )
+
+
+SMALL_BOUNDS = OverlayBounds(south=-0.2, west=-0.2, north=0.2, east=0.2)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_temperature_overlap_uses_highest_cloud_not_warmest(reverse):
+    heights, temperatures = [12000, 1000], [220, 280]
+    if reverse:
+        heights.reverse()
+        temperatures.reverse()
+    frame = _overlapping_clouds(heights, temperatures)
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80,
+                                   field="cloud_top_temperature")[0])
+    drawn = image[image[:, :, 3] == DETECTION_ALPHA]
+    assert len(drawn) > 0
+    assert set(map(tuple, drawn)) == {(224, 216, 74, 190)}
+
+
+def test_temperature_overlap_does_not_assume_highest_is_coldest():
+    # Inversions mean neither max(temperature) nor min(temperature) selects tops.
+    frame = _overlapping_clouds([12000, 1000], [280, 220])
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80,
+                                   field="cloud_top_temperature")[0])
+    assert tuple(image[40, 40]) == (127, 157, 196, 190)
+
+
+def test_highest_cloud_wins_where_shifted_footprint_edges_overlap():
+    frame = _overlapping_clouds([12000, 1000], [220, 280], [-0.025, 0.025])
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80,
+                                   field="cloud_top_temperature")[0])
+    assert tuple(image[40, 40]) == (224, 216, 74, 190)
+    # At 0.0625 E only the lower cloud's footprint is present.
+    assert tuple(image[40, 52]) == (127, 157, 196, 190)
+
+
+def test_missing_highest_temperature_is_unknown_not_a_lower_cloud():
+    frame = _overlapping_clouds([12000, 1000], [np.nan, 280])
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80,
+                                   field="cloud_top_temperature")[0])
+    assert tuple(image[40, 40]) == NODATA_RGBA
+
+
+def test_projected_source_footprint_is_centred_and_not_capped_to_16_pixels():
+    frame = _overlapping_clouds([12000], [220])
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80)[0])
+    rows, cols = np.nonzero(image[:, :, 3] == DETECTION_ALPHA)
+    # A 0.1 degree footprint in a 0.4 degree, 80px image covers 20x20 pixels.
+    assert (rows.min(), rows.max(), cols.min(), cols.max()) == (30, 49, 30, 49)
+
+
+def test_footprint_intersecting_bounds_is_drawn_when_centre_is_outside():
+    frame = _overlapping_clouds([12000], [220], [-0.22])
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80)[0])
+    rows, cols = np.nonzero(image[:, :, 3] == DETECTION_ALPHA)
+    assert len(rows) > 0
+    assert (rows.min(), rows.max(), cols.min(), cols.max()) == (30, 49, 0, 5)
+
+
+def test_geostationary_footprint_uses_the_grid_projection():
+    from dataclasses import replace
+
+    frame = _overlapping_clouds([12000], [220])
+    grid = GridSpec(
+        proj4="+proj=geos +h=35786400 +lon_0=0 +sweep=y +ellps=WGS84 +units=m",
+        nx=1, ny=1, x0=0, y0=0, dx=2000, dy=2000,
+    )
+    x, y = grid.lonlat_to_xy(1.5, 50.5)
+    frame.grid = replace(grid, x0=x, y0=y)
+    bounds = OverlayBounds(south=50.4, west=1.4, north=50.6, east=1.6)
+    image = _decode(render_overlay(frame, bounds, max_pixels=100)[0])
+    rows, cols = np.nonzero(image[:, :, 3] == DETECTION_ALPHA)
+    # Approximately .036 latitude x .030 longitude, NOT .018 x .018.
+    assert 17 <= rows.max() - rows.min() + 1 <= 20
+    assert 14 <= cols.max() - cols.min() + 1 <= 17
+    assert abs((rows.max() + rows.min()) / 2 - 49.5) <= 1
+    assert abs((cols.max() + cols.min()) / 2 - 49.5) <= 1
+
+
+def test_large_cloud_strip_projects_bounded_batches_without_losing_overlap_order(monkeypatch):
+    """A full-width strip must not allocate four-corner arrays for every pixel."""
+    size = 20000
+    heights = np.full(size, 1000.0)
+    temperatures = np.full(size, 280.0)
+    heights[0], temperatures[0] = 12000, 220
+    # Reuse the same source location to isolate memory batching from longitude
+    # wraparound on this artificial many-column strip.
+    frame = _overlapping_clouds(heights, temperatures)
+    from dataclasses import replace
+    frame.grid = replace(frame.grid, dx=0.00001, dy=11131.949079327358)
+    lons, _ = frame.grid.colrow_to_lonlat(np.arange(size), np.zeros(size))
+    frame.aux["delta_longitude"] = -np.asarray([lons])
+    original = GridSpec.colrow_to_lonlat
+    projected_batches = []
+
+    def bounded_projection(self, cols, rows):
+        projected_batches.append(np.asarray(cols).size)
+        assert np.asarray(cols).size <= 32768, "unbounded source-corner allocation"
+        return original(self, cols, rows)
+
+    monkeypatch.setattr(GridSpec, "colrow_to_lonlat", bounded_projection)
+    image = _decode(render_overlay(frame, SMALL_BOUNDS, max_pixels=80,
+                                   field="cloud_top_temperature")[0])
+    assert len(projected_batches) > 1
+    assert tuple(image[40, 40]) == (224, 216, 74, 190)
 
 
 # --- Echo thresholds --------------------------------------------------------

@@ -197,22 +197,14 @@ struct VizCloudDiagBand {
 // it to one sample per route point at one corridor width, so switching the
 // corridor is a client-side re-resolve with no request.
 
-/// One populated flight-level band of the cloud-top histogram.
+/// One populated geometric-height band (ft MSL) of the cloud-top histogram.
 struct VizObservedTopBin {
     let label: String
     let loFt: Double
     let hiFt: Double
-    /// Share of the disc's LOOKED-AT SKY with its top in this band, 0–1.
-    ///
-    /// Denominator is `validPx` — every pixel the retrieval could answer for,
-    /// cloudy or clear — not the cloudy pixels alone. So a band reads directly
-    /// as "this much of the sky around the point", the bands sum to how cloudy
-    /// the disc was, and a thin deck in an otherwise clear sky can no longer
-    /// draw as bright as a solid overcast simply for being most of the little
-    /// cloud there was.
-    ///
-    /// It is also what the drawing floor is measured against, so "5% of the sky"
-    /// means the same thing in the filter, in the colour ramp and in the legend.
+    /// Count / validPx (cloudy and clear), 0–1; also the drawing-floor and
+    /// colour-scale denominator. Not sky area: parallax-corrected cloudy and
+    /// nominal clear samples can overlap and are not area-weighted.
     let fraction: Double
     /// Pixels in this band, so a hover can say "12 of 201" rather than only a
     /// percentage — 4% of 201 and 4% of 3 are very different evidence.
@@ -229,8 +221,8 @@ struct VizObservedPoint {
     let distanceNm: Double
     /// Peak reflectivity (dBZ), or nil when nothing was detected.
     var dbz: Double? = nil
-    /// True when the radar does not cover enough of this disc to say anything.
-    /// Renderers MUST distinguish this from `dbz == nil`.
+    /// True when the radar does not cover enough of the disc to assert absence.
+    /// Real detections remain visible alongside this unknown-coverage state.
     var radarNoCoverage = false
     var rateMmH: Double? = nil
     var rateNoCoverage = false
@@ -240,13 +232,11 @@ struct VizObservedPoint {
     /// Highest observed cloud top (ft), or nil when the disc was clear.
     var topsHighestFt: Double? = nil
     var topsBins: [VizObservedTopBin] = []
-    /// Share of cloudy pixels the retrieval flagged multi-layer-suspect (qm 9).
-    var topsMultiLayerFraction: Double = 0
     var topsNoCoverage = false
     /// Coldest top in the disc (°C). Deepest convection, not an average.
     var topsColdestC: Double? = nil
-    /// Effective cloudiness at the highest top, 0–1. Separates a solid deck from
-    /// wispy cirrus — height alone renders both identically.
+    /// IR effective cloudiness at the highest top, 0–1: cloud amount × emissivity.
+    /// It is not visible opacity or METAR cloud cover.
     var topsHighestCloudiness: Double? = nil
     var topsMedianCloudiness: Double? = nil
     /// Pressure-based FL of the highest top, what an altimeter agrees with.
@@ -263,7 +253,7 @@ struct VizObservedSource {
     let label: String
     let validTime: String
     let ageMinutes: Double
-    /// Width of the product's own accumulation / rolling-max window; 0 = instant.
+    /// Width of the product's acquisition window; 0 = instant.
     let windowMinutes: Double
     let attribution: String
 }

@@ -3,10 +3,16 @@
 import * as L from 'leaflet';
 import {
   renderObservedOverlay,
+  renderObservedFlashes,
   formatLegendValue,
   type ObservedFlashPoint,
   type ObservedSourceStatus,
+  corridorBounds,
+  overlayUrl,
 } from './observed-overlay';
+import { fetchObservedImage, formatBadge, type ObservedBadgeField } from './observed-overlay-geometry';
+import { ObservedImageRequests } from './observed-request-state';
+import { observeDisplayClock } from '../observed-time';
 import { escapeHtml } from '../../utils';
 import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
@@ -58,12 +64,21 @@ export class RouteMapRenderer {
   // and age-faded lightning. Nothing here animates and there is no time
   // slider — deliberately out of scope, not a first cut.
   private observedGroup: L.LayerGroup | null = null;
+  private observedFlashGroup: L.LayerGroup | null = null;
+  private observedLabelsEl: HTMLElement | null = null;
   private observedBadgeEl: HTMLElement | null = null;
   private observedSource: string | null = null;
   private observedOpacity = 0.75;
   private observedLegendEl: HTMLElement | null = null;
   private observedLegends: Map<string, ObservedSourceStatus> | null = null;
   private observedFlashes: ObservedFlashPoint[] = [];
+  private observedFlashField: ObservedBadgeField | null = null;
+  private readonly observedImages = new ObservedImageRequests(
+    fetchObservedImage,
+    (blob) => URL.createObjectURL(blob),
+    (url) => URL.revokeObjectURL(url),
+  );
+  private stopObservedClock: () => void;
   private highlightMarker: L.CircleMarker | null = null;
   private forecastLegendEl: HTMLElement | null = null;
   private forecastZoomHandler: (() => void) | null = null;
@@ -93,6 +108,11 @@ export class RouteMapRenderer {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    this.stopObservedClock = observeDisplayClock(() => {
+      // Clock-sensitive points and labels only; never touch the raster group.
+      this.renderObservedFlashClock();
+      if (this.observedBadgeEl) this.updateObservedBadge(this.currentObservedBadge());
+    });
   }
 
   setData(data: VizRouteData): void {
@@ -148,13 +168,19 @@ export class RouteMapRenderer {
 
   /** Lightning points for the corridor, fetched async by briefing-main.
    *  Each carries its own time so the overlay can fade the trail by age. */
-  setObservedFlashes(flashes: ObservedFlashPoint[]): void {
+  setObservedFlashes(flashes: ObservedFlashPoint[], field: ObservedBadgeField | null = null): void {
     this.observedFlashes = flashes;
+    this.observedFlashField = field;
   }
 
   /** Redraw just the observed overlay, after new flashes or a source change. */
   refreshObserved(): void {
     this.renderObserved();
+  }
+
+  /** Allow one raster retry after an explicit briefing refresh. */
+  retryObservedFetch(): void {
+    this.observedImages.retryFailed();
   }
 
   /** Toggle the airport forecast overlay (#424). */
@@ -254,13 +280,18 @@ export class RouteMapRenderer {
   }
 
   destroy(): void {
+    this.stopObservedClock();
+    this.observedImages.destroy();
     if (this.forecastLegendEl) { this.forecastLegendEl.remove(); this.forecastLegendEl = null; }
+    if (this.observedLegendEl) { this.observedLegendEl.remove(); this.observedLegendEl = null; }
     if (this.map) {
       this.map.remove();
       this.map = null;
     }
     if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
+    if (this.observedLabelsEl) { this.observedLabelsEl.remove(); this.observedLabelsEl = null; }
     this.observedGroup = null;
+    this.observedFlashGroup = null;
     this.observedFlashes = [];
     this.segmentGroup = null;
     this.frontsGroup = null;
@@ -297,6 +328,7 @@ export class RouteMapRenderer {
     // Observed imagery is the backdrop: it is a picture of the sky, and
     // everything the briefing computed must stay legible over it.
     this.observedGroup = L.layerGroup().addTo(this.map);
+    this.observedFlashGroup = L.layerGroup().addTo(this.map);
     // Airport forecast overlay sits at the bottom of the stack so the route
     // segments, fronts and waypoints always draw on top of the airport dots.
     this.airportForecastGroup = L.layerGroup().addTo(this.map);
@@ -372,7 +404,23 @@ export class RouteMapRenderer {
    *  nearest closing front. Advisory-only, free-atmosphere boundaries. */
   private renderObserved(): void {
     if (!this.observedGroup || !this.map || !this.data) return;
-    const badge = renderObservedOverlay(
+    const observed = this.data.observed;
+    const source = this.observedSource;
+    const field = !source ? null : source.startsWith('eumetsat_ctth') ? observed?.cloudTops
+      : source === 'opera_rate' ? observed?.rainRate : source === 'opera_dbzh' ? observed?.reflectivity : null;
+    const bounds = corridorBounds(this.data, observed?.radiusNm ?? 20);
+    const imageRequest = field && source && bounds ? overlayUrl(source, bounds) : null;
+    const key = imageRequest ? `${imageRequest}|${field!.validTime}` : null;
+    if (imageRequest && field && key) {
+      const requestField = source === 'eumetsat_ctth_temp'
+        ? { ...field, label: 'Cloud-top temperature' }
+        : field;
+      this.observedImages.select(key, imageRequest, requestField, () => this.renderObserved());
+    } else {
+      this.observedImages.clear();
+    }
+    const image = this.observedImages.current();
+    renderObservedOverlay(
       this.observedGroup,
       this.map,
       this.data,
@@ -380,11 +428,37 @@ export class RouteMapRenderer {
         imagerySource: this.observedSource,
         imageryOpacity: this.observedOpacity,
         radiusNm: this.data.observed?.radiusNm ?? 20,
+        imageUrl: image.url ?? undefined,
       },
-      this.observedFlashes,
+      [],
     );
-    this.updateObservedBadge(badge);
+    this.renderObservedFlashClock();
+    this.updateObservedBadge(this.currentObservedBadge());
     this.updateObservedLegend();
+  }
+
+  private currentObservedBadge(): string {
+    if (this.observedSource === 'eumetsat_li') return this.observedFlashField
+      ? formatBadge(this.observedFlashField) : 'Lightning unavailable or loading · age unknown';
+    if (!this.observedSource) return '';
+    const image = this.observedImages.current();
+    return image.field ? formatBadge(image.field) : 'Observed image unavailable or loading · age unknown';
+  }
+
+  private renderObservedFlashClock(): void {
+    if (!this.observedFlashGroup) return;
+    renderObservedFlashes(this.observedFlashGroup, this.observedFlashes);
+  }
+
+  /** Shared normal-flow stack: long timestamps/attribution must push the legend
+   *  upward rather than wrapping underneath its fixed corner position. */
+  private observedLabelContainer(): HTMLElement {
+    if (!this.observedLabelsEl) {
+      this.observedLabelsEl = document.createElement('div');
+      this.observedLabelsEl.className = 'map-observed-labels';
+      this.container.appendChild(this.observedLabelsEl);
+    }
+    return this.observedLabelsEl;
   }
 
   /** The age badge rides on the map itself, not in a side panel: it labels a
@@ -397,7 +471,7 @@ export class RouteMapRenderer {
     if (!this.observedBadgeEl) {
       this.observedBadgeEl = document.createElement('div');
       this.observedBadgeEl.className = 'map-observed-badge';
-      this.container.appendChild(this.observedBadgeEl);
+      this.observedLabelContainer().appendChild(this.observedBadgeEl);
     }
     this.observedBadgeEl.textContent = text;
   }
@@ -416,7 +490,7 @@ export class RouteMapRenderer {
     if (!this.observedLegendEl) {
       this.observedLegendEl = document.createElement('div');
       this.observedLegendEl.className = 'map-observed-legend';
-      this.container.appendChild(this.observedLegendEl);
+      this.observedLabelContainer().appendChild(this.observedLegendEl);
     }
     const stops = status.legend;
     const swatches = stops
@@ -671,6 +745,12 @@ export class RouteMapRenderer {
   /** Expose map for interaction attachment. */
   getMap(): L.Map | null {
     return this.map;
+  }
+
+  /** Explicit ownership seam for an independent weather overlay. Route
+   * redraw/recolour operations never clear groups created through this seam. */
+  createObservedMotionLayerGroup(): L.LayerGroup | null {
+    return this.map ? L.layerGroup().addTo(this.map) : null;
   }
 
   getSegmentGroup(): L.LayerGroup | null {

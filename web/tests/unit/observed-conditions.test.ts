@@ -6,7 +6,10 @@
  * half of Europe dry. Several of these tests exist only to pin that.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-25T14:17:00Z')); });
+afterEach(() => { vi.useRealTimers(); });
 
 import { extractVizData, getUnavailableLayers } from '../../ts/visualization/data-extract';
 import {
@@ -21,7 +24,7 @@ import {
 import {
   corridorBox, flashOpacity, formatBadge, overlayUrl,
 } from '../../ts/visualization/route-map/observed-overlay-geometry';
-import { getMetricById, sampleMetric } from '../../ts/visualization/route-graph/metrics';
+import { getMetricById, sampleMetric, formatSample } from '../../ts/visualization/route-graph/metrics';
 import { LAYER_TOOLTIPS } from '../../ts/visualization/cross-section/tooltip-formatters';
 import type {
   ElevationProfile, ObservedConditions, RouteAnalysesManifest,
@@ -174,6 +177,88 @@ function extract(observed: ObservedConditions | null, radiusNm: number | null = 
 
 // --- Extraction ------------------------------------------------------------
 
+describe('observed correctness regressions', () => {
+  it('advances elapsed age on an unchanged historical source and includes its date', () => {
+    vi.setSystemTime(new Date('2026-08-26T14:17:00Z'));
+    expect(ageBadgeText('2026-08-25T14:05:00Z', 0, 'Radar')).toBe('Radar 2026-08-25 14:05Z · 1452 min old · stale');
+    expect(formatBadge(extract(makeObserved()).observed!.reflectivity)).toContain('1452 min old');
+  });
+
+  it('never calls invalid or future observation clocks fresh', () => {
+    for (const stamp of ['bad', '2026-08-25T14:18:00Z']) {
+      expect(ageBadgeText(stamp, 0, 'Radar')).toContain('age unknown');
+    }
+  });
+
+  it('retains measured echoes and tops below the coverage threshold', () => {
+    const raw = makeObserved();
+    for (const field of [raw.reflectivity, raw.rain_rate, raw.cloud_tops]) {
+      for (const a of field!.stations[0].annuli) a.insufficient_coverage = true;
+    }
+    const data = extract(raw);
+    const point = data.observed!.points[0];
+    expect(point.dbz).toBe(52);
+    expect(point.rateMmH).toBe(6.5);
+    expect(point.topsHighestFt).toBe(35000);
+    expect(point.topsBins.some(b => b.count > 0)).toBe(true);
+    const def = LAYER_TOOLTIPS.find(d => d.id === 'observed-tops')!;
+    const lines = def.getZones({ observed: point } as never, data).map(z => def.formatLine(z, 35000)).join(' ');
+    expect(lines).toContain('35000 ft MSL');
+    expect(lines).toContain('partial coverage');
+    const surface = LAYER_TOOLTIPS.find(d => d.id === 'observed-surface')!;
+    const line = surface.formatLine(surface.getZones({ observed: point } as never, data)[0], 0);
+    expect(line).toContain('52 dBZ');
+    expect(line).toContain('6.5 mm/h');
+    expect(line).toContain('partial coverage');
+  });
+
+  it('does not infer multilayer cloud or confidence from QM9 in old packs', () => {
+    const raw = makeObserved();
+    for (const a of raw.cloud_tops!.stations[0].annuli) a.quality_method = { '9': 40 };
+    const data = extract(raw);
+    const def = LAYER_TOOLTIPS.find(d => d.id === 'observed-tops')!;
+    const lines = def.getZones({ observed: data.observed!.points[0] } as never, data).map(z => def.formatLine(z, 35000)).join(' ');
+    expect(lines).not.toContain('multi-layer');
+    expect(lines).toContain('ft MSL');
+  });
+
+  it('does not assert no echo or no flashes for a source missing this station', () => {
+    const raw = makeObserved();
+    raw.reflectivity!.stations = [];
+    raw.lightning!.stations = [];
+    const data = extract(raw);
+    const def = LAYER_TOOLTIPS.find(d => d.id === 'observed-surface')!;
+    const line = def.formatLine(def.getZones({ observed: data.observed!.points[0] } as never, data)[0], 0);
+    expect(line).toContain('6.5 mm/h');
+    expect(line).not.toMatch(/echo|flashes/);
+  });
+
+  it('shows covered zero echo and zero flashes explicitly as detections, not assurance', () => {
+    const raw = makeObserved({ rain_rate: null, cloud_tops: null });
+    for (const a of raw.reflectivity!.stations[0].annuli) a.max_value = null;
+    for (const a of raw.lightning!.stations[0].annuli) a.flash_count = 0;
+    const data = extract(raw);
+    const def = LAYER_TOOLTIPS.find(d => d.id === 'observed-surface')!;
+    const line = def.formatLine(def.getZones({ observed: data.observed!.points[0] } as never, data)[0], 0);
+    expect(line).toContain('no echo detected');
+    expect(line).toContain('no flashes detected');
+  });
+
+  it('gives radar and lightning distinct timed badges in addition to satellite', () => {
+    const data = extract(makeObserved());
+    data.observed!.lightning!.validTime = '2026-08-25T14:10:00Z';
+    const ctx = recordingCtx();
+    observedTopsLayer.render(ctx, transform, data);
+    observedSurfaceLayer.render(ctx, transform, data);
+    const badges = ctx.calls.filter(c => c.op === 'fillText');
+    expect(badges).toHaveLength(3);
+    expect(new Set(badges.map(c => c.args[2])).size).toBe(3);
+    const texts = badges.map(c => String(c.args[0]));
+    expect(texts.some(t => t.includes('Radar') && t.includes('12 min old') && t.includes('10 min acquisition window'))).toBe(true);
+    expect(texts.some(t => t.includes('Lightning') && t.includes('7 min old') && t.includes('10 min accumulation window'))).toBe(true);
+  });
+});
+
 describe('observed extraction', () => {
   it('resolves to the widest sampled radius by default', () => {
     const data = extract(makeObserved());
@@ -219,8 +304,8 @@ describe('observed extraction', () => {
 
   it('exposes the FL histogram as a share of the looked-at sky', () => {
     const point = extract(makeObserved()).observed!.points[0];
-    const high = point.topsBins.find((b) => b.label === 'FL250-400')!;
-    const low = point.topsBins.find((b) => b.label === 'FL000-050')!;
+    const high = point.topsBins.find((b) => b.label === '25000–40000 ft MSL')!;
+    const low = point.topsBins.find((b) => b.label === '0–5000 ft MSL')!;
     // The disc: 100 pixels looked at, 40 of them cloudy — 30 topping high,
     // 10 low. A bimodal scene, the multi-layer structure one cloud-top number
     // would have destroyed.
@@ -309,7 +394,7 @@ describe('observed-tops layer', () => {
   it('filters out negligible FL bands', () => {
     const point = extract(makeObserved()).observed!.points[0];
     const bins = significantBins(point);
-    expect(bins.map((b) => b.label)).toEqual(['FL000-050', 'FL250-400']);
+    expect(bins.map((b) => b.label)).toEqual(['0–5000 ft MSL', '25000–40000 ft MSL']);
   });
 
   it('renders nothing in the time-axis airport view', () => {
@@ -363,17 +448,17 @@ describe('observed-tops layer', () => {
     observedTopsLayer.render(ctx as never, gaChart as never, extract(makeObserved()) as never);
     const badge = texts.find((t) => t.includes('Satellite'));
     expect(badge).toBeDefined();
-    expect(badge).toMatch(/tops to FL\d+/);
+    expect(badge).toContain('tops to 35000 ft MSL');
   });
 
   it('formats FL labels from feet', () => {
-    expect(flLabel(38100)).toBe('FL381');
-    expect(flLabel(5000)).toBe('FL50');
+    expect(flLabel(38100)).toBe('38100 ft MSL');
+    expect(flLabel(5000)).toBe('5000 ft MSL');
   });
 
   it('formats an age badge from the frame own valid time', () => {
     expect(ageBadgeText('2026-08-25T14:05:00Z', 12, 'Satellite')).toBe('Satellite 14:05Z · 12 min old');
-    expect(ageBadgeText('2026-08-25T14:05:00Z', 0.4, 'Satellite')).toBe('Satellite 14:05Z · just now');
+    expect(ageBadgeText('2026-08-25T14:16:40Z', 99, 'Satellite')).toBe('Satellite 14:16Z · just now');
   });
 });
 
@@ -458,7 +543,14 @@ describe('observed route-graph metrics', () => {
     expect(sample).toEqual({ kind: 'value', value: 6.5 });
   });
 
-  it('gives lightning no coverage state — the imager sees the whole disc', () => {
+  it('plots a measured rate with partial coverage instead of discarding it', () => {
+    const metric = getMetricById('observed-rain-rate')!;
+    const sample = sampleMetric(metric, point({ observedRateMmH: 6.5, observedRadarNoCoverage: true }));
+    expect(sample).toEqual({ kind: 'value', value: 6.5, partialCoverage: true });
+    expect(formatSample(metric, sample)).toContain('partial coverage');
+  });
+
+  it('does not apply radar coverage to reported lightning counts; LI coverage is not supplied', () => {
     const metric = getMetricById('observed-flash-rate')!;
     expect(metric.isNoCoverage).toBeUndefined();
     const sample = sampleMetric(metric, point({ observedFlashRate: 0, observedRadarNoCoverage: true }));
@@ -511,13 +603,18 @@ describe('observed map overlay', () => {
     expect(flashOpacity(90)).toBe(0);
   });
 
+  it('does not paint future or invalid lightning times as fresh detections', () => {
+    expect(flashOpacity(-1)).toBe(0);
+    expect(flashOpacity(Number.NaN)).toBe(0);
+  });
+
   it('badges the frame with its own age and rolling window', () => {
     const observed = extract(makeObserved()).observed!;
     const text = formatBadge(observed.reflectivity);
     expect(text).toContain('14:05Z');
     expect(text).toContain('12 min old');
     // A rolling maximum is not a snapshot and the badge says so.
-    expect(text).toContain('10 min rolling max');
+    expect(text).toContain('10 min acquisition window');
     expect(text).toContain('Météo-France');
   });
 
@@ -603,6 +700,23 @@ describe('observed layers actually draw', () => {
     expect(ctx.calls.some((c) => c.op === 'stroke')).toBe(true);
     // And the FL-band ticks are filled rects.
     expect(ctx.calls.some((c) => c.op === 'fillRect')).toBe(true);
+  });
+
+  it('does not invent cloud depth below a nearby-pixel top histogram', () => {
+    const data = extract(makeObserved());
+    const point = data.observed!.points[0];
+    data.observed!.points = [{
+      ...point,
+      topsNoCoverage: false,
+      topsHighestFt: null,
+      topsBins: [{ label: '5000–6000 ft MSL', loFt: 5000, hiFt: 6000, count: 20, fraction: 0.2, meanTempC: -5, meanCloudiness: null }],
+    }];
+    const ctx = recordingCtx();
+    observedTopsLayer.render(ctx, transform, data);
+    const pathPoints = ctx.calls.filter((c) => c.op === 'moveTo' || c.op === 'lineTo');
+    for (let i = 0; i < pathPoints.length; i += 2) {
+      expect(pathPoints[i + 1]?.args[1]).toBe(pathPoints[i].args[1]);
+    }
   });
 
   it('gives each observed source its own badge row', () => {
@@ -743,13 +857,20 @@ describe('observed hover rows', () => {
     expect(line).not.toContain('no echo');
   });
 
-  it('reports the top with its temperature and opacity', () => {
+  it('describes histogram fractions as retrieval samples, not measured sky area', () => {
+    const line = rowFor('observed-tops', 35000);
+    expect(line).toContain('of valid retrieval samples');
+    expect(line).not.toContain('of sampled area');
+  });
+
+  it('reports the top with its temperature and IR effective cloudiness', () => {
     const line = rowFor('observed-tops', 35000);
     expect(line).toBeTruthy();
     expect(line).toMatch(/FL\d+/);
-    // Opacity is what separates "cannot get on top" from "wispy cirrus";
-    // height alone draws both identically.
-    expect(line).toMatch(/opaque \((solid|broken|thin)\)/);
+    // IR effective cloudiness is not visual opacity or climb-through advice.
+    expect(line).toContain('IR effective cloudiness 0.35 (decoded; scale unverified)');
+    expect(line).not.toContain('35% effective cloudiness');
+    expect(line).not.toMatch(/opaque|solid|broken|thin/);
     expect(line).toMatch(/-?\d+°C/);
   });
 });
@@ -826,7 +947,7 @@ describe('cloud-top deck grouping', () => {
     for (const p of observed.points) p.topsBins = [];
     expect(observed.points.some((p) => p.topsHighestFt != null)).toBe(true);
     observedTopsLayer.render(ctx as never, chart as never, data as never);
-    expect(texts.find((s) => s.includes('Satellite'))).toMatch(/tops to FL\d+/);
+    expect(texts.find((s) => s.includes('Satellite'))).toContain('tops to 35000 ft MSL');
   });
 });
 
@@ -853,7 +974,7 @@ describe('tops above the chart ceiling', () => {
     const atCeiling = 22000;
     const match = zones.find((z) => atCeiling >= z.baseFt && atCeiling <= z.topFt);
     expect(match, `nothing matched at ${atCeiling} ft`).toBeDefined();
-    expect(def().formatLine(match, atCeiling)).toMatch(/highest top FL\d+/);
+    expect(def().formatLine(match, atCeiling)).toContain('highest top 35000 ft MSL');
   });
 
   it('spans the column when no band is drawn at all', () => {

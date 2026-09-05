@@ -1,7 +1,7 @@
 /** Observed satellite cloud tops (#574) — group `conditions`, **default ON**.
  *
  * This layer is the whole cross-check. It renders in the same space as the
- * NWP cloud bands, so "model says FL120, satellite saw FL280" is visible to
+ * NWP cloud bands, so forecast and retrieved geometric heights are visible to
  * the eye with nobody computing it. Phase 1 deliberately computes no verdict:
  * the comparison is the pilot's to make, and the two things are drawn in
  * unmistakably different styles so it stays obvious which is measured and
@@ -10,7 +10,7 @@
  * Three things the drawing has to be honest about:
  *
  *  - **The retrieval commits to one top per pixel.** A cirrus-over-stratus
- *    stack shows up only in aggregate, so each route point draws its FL-band
+ *    stack cannot be resolved from one top, so each point draws its height-bin
  *    histogram as stacked ticks rather than a single line. A line would be a
  *    claim the data does not support.
  *  - **No coverage is not a clear sky.** Points where the retrieval could not
@@ -23,32 +23,14 @@
 
 import type { CrossSectionLayer, CoordTransform, VizObserved, VizObservedPoint, VizObservedTopBin } from '../../types';
 import { getActiveTheme } from '../theme';
+import { observationTimeText } from '../../observed-time';
 
 /** Half-width of a point's mark on the X axis, in nm. */
 const MARK_HALF_WIDTH_NM = 4;
-/** A band has to cover MORE than this share of the looked-at sky to be drawn.
- *
- *  5%: the fine 10-FL bands split a deck into a dozen slivers, and below a
- *  twentieth of the sky a band is a fuzz of stray retrievals drawn at the same
- *  weight as a deck you could fly into. Measured over local packs the cut
- *  removes 60% of the bands at 20 NM while the survivors still account for 87%
- *  of the disc's cloud cover — it takes the noise, not the picture — and only
- *  2 route points in 96 lost every band they had.
- *
- *  Measured against the SKY, the same denominator the band is drawn as, so the
- *  floor means what the legend means. It subsumes the old 1%-of-the-cloud
- *  floor: a band over 5% of the sky is necessarily over 5% of the cloud.
- *
- *  Safe to discard here only because the HIGHEST top is drawn separately, from
- *  `topsHighestFt`, and never passes through this filter — so a single cold
- *  pixel still gets its cap line or its off-scale arrow even when its band is
- *  too thin to draw. Losing the tail entirely was the objection to a high
- *  floor; the cap line is what answers it. */
+/** Visual floor as a share of valid retrieval samples, not sky area.
+ *  The highest top bypasses the filter, preserving isolated detections.
+ *  Missing or suppressed bins do not prove clear air or a cloud-free gap. */
 const MIN_BIN_FRACTION = 0.05;
-/** How far the "depth unknown" hatching hangs below a top marker, px.
- *  Deliberately short: long enough to read as "there is cloud under this",
- *  short enough that it cannot be mistaken for measured vertical extent. */
-const HATCH_DEPTH_PX = 9;
 /** Fixed height of the off-scale box at the chart ceiling, px. Fixed because
  *  the real value has no position on this chart — the badge and the hover
  *  carry the number instead. */
@@ -65,21 +47,9 @@ const RULE_SPACING_MAX_PX = 7;
  *  third redundant encoding muddies both. */
 const BAND_ALPHA = 0.85;
 
-/** Colour for a band's share of the looked-at sky, from the active theme's
- *  ramp.
- *
- *  The share is of the SKY, not of the cloud that was found: a band then says
- *  "this much of the area around the point had its top here", which is the
- *  quantity a pilot can act on, and 8 bands over a broken sky no longer colour
- *  like 8 bands over a solid overcast. The stops start at the drawing floor —
- *  nothing under 5% of the sky is drawn at all, so a ramp reaching below it
- *  would spend its darkest colours on bands that never appear — and are
- *  spaced over what the fine 10-FL bands actually produce: a wide disc splits
- *  its cloud over a dozen of them, so a band holding a fifth of the sky is
- *  already a big one.
- *
- *  Nearest stop, never interpolated. A blended intermediate colour would imply
- *  a precision the 2 km retrieval does not have. */
+/** Colour for a band's valid-sample share, including clear samples in the
+ *  denominator. Stops start at the drawing floor and are not interpolated.
+ *  No sky-area or continuous-deck inference follows from the colour. */
 export function shareColor(fraction: number): string {
   const stops = getActiveTheme().observed.shareStops;
   let best = stops[0];
@@ -93,8 +63,8 @@ export function shareColor(fraction: number): string {
  *  altitude axis and temperature is genuinely new information. The
  *  cross-section colours by share instead — see `shareColor`.
  *
- *  Temperature — not height — because temperature is what the instrument
- *  measures; height is derived from it against a model profile. The ramp
+ *  Both temperature and height are retrieved from radiances with atmospheric
+ *  information; this temperature is not raw L1 brightness temperature. The ramp
  *  follows the enhanced-IR convention pilots already read on satellite
  *  imagery, except at the warm end, where the conventional grayscale is
  *  replaced by a desaturated blue: gray here is indistinguishable from the
@@ -116,14 +86,7 @@ export function significantBins(point: VizObservedPoint) {
   return point.topsBins.filter((b) => b.fraction > MIN_BIN_FRACTION);
 }
 
-/** Contiguous runs of populated bands — the decks.
- *
- *  A gap between runs is a real, measured absence of cloud top, and it is the
- *  thing coarse bins destroyed: one station had decks at FL7-31, FL60-92 and
- *  FL302-370 with nothing between, rendered as slabs implying continuous cloud
- *  from the surface to FL150. Only the BASE of each run gets the "depth
- *  unknown" hatching, because that is the one edge where cloud genuinely
- *  continues below into air the satellite cannot see. */
+/** Contiguous runs of populated height bins, not measured cloud decks. */
 export function bandRuns(bins: VizObservedTopBin[]): VizObservedTopBin[][] {
   const sorted = [...bins].sort((a, b) => a.loFt - b.loFt);
   const runs: VizObservedTopBin[][] = [];
@@ -149,13 +112,8 @@ export function drawablePoints(observed: VizObserved): VizObservedPoint[] {
 }
 
 /** "14:00Z · 12 min old" — the badge text for a source's frame. */
-export function ageBadgeText(validTime: string, ageMinutes: number, label: string): string {
-  const stamp = new Date(validTime);
-  const hhmm = Number.isNaN(stamp.getTime())
-    ? '--:--'
-    : `${String(stamp.getUTCHours()).padStart(2, '0')}:${String(stamp.getUTCMinutes()).padStart(2, '0')}Z`;
-  const age = ageMinutes < 1 ? 'just now' : `${Math.round(ageMinutes)} min old`;
-  return `${label} ${hhmm} · ${age}`;
+export function ageBadgeText(validTime: string, _storedAgeMinutes: number, label: string): string {
+  return `${label} ${observationTimeText(validTime)}`;
 }
 
 export const observedTopsLayer: CrossSectionLayer = {
@@ -214,15 +172,13 @@ function drawPoint(
       ctx.stroke();
     }
     ctx.restore();
-    return;
   }
 
-  // One marker per populated FL band. NOT a filled band: this product carries
+  // One marker per populated geometric-height band. This product carries
   // no cloud base at all, so a solid rect spanning the bin reads as "cloud
-  // occupies FL150-250" when the data only says "this share of the TOPS is
-  // somewhere in FL150-250". Drawn as a capped bar with a few short hatch
-  // strokes hanging below it — the cap is what we measured, the hatching is
-  // the depth we cannot see.
+  // occupies 15000–25000 ft" when the data only says "this share of the TOPS is
+  // somewhere in 15000–25000 ft MSL". No stroke continues below the histogram:
+  // nearby-pixel tops do not establish a shared deck base or depth.
   const theme = getActiveTheme();
 
   const bins = significantBins(point);
@@ -252,8 +208,7 @@ function drawPoint(
       // altitude reads as a physical layer sitting there; this is a tally —
       // "this share of the tops in the disc fell in this band". Rules say
       // "counted" the way a solid says "substance", and they cannot be
-      // confused with the diagonal hatching, which everywhere in this layer
-      // means "unknown" (depth below a deck, or no retrieval at all).
+      // confused with the diagonal no-retrieval hatching in this layer.
       //
       // Density carries the share as well as opacity: a band holding most of
       // the pixels is closely ruled, a band holding a handful is sparse.
@@ -274,30 +229,12 @@ function drawPoint(
       ctx.strokeRect(x0, top, width, height);
     }
 
-    // Only under the base of the deck: that is the one edge where cloud really
-    // does continue down into air the satellite cannot see. Hatching under
-    // every band would re-imply the continuous slab this change removes.
-    const base = run[run.length - 1];
-    const yBase = transform.altitudeToY(base.loFt);
-    if (yBase >= plotArea.top) {
-      ctx.globalAlpha = 0.45;
-      ctx.strokeStyle = theme.observed.hatchColor;
-      ctx.lineWidth = 1;
-      for (let offset = 0; offset < width; offset += 4) {
-        ctx.beginPath();
-        ctx.moveTo(x0 + offset, yBase);
-        ctx.lineTo(x0 + offset - HATCH_DEPTH_PX * 0.5, yBase + HATCH_DEPTH_PX);
-        ctx.stroke();
-      }
-    }
   }
   ctx.restore();
 
   if (point.topsHighestFt == null) return;
 
-  const color = point.topsMultiLayerFraction > 0.1
-    ? theme.observed.capMultiLayerColor
-    : theme.observed.capColor;
+  const color = theme.observed.capColor;
   const yTop = transform.altitudeToY(point.topsHighestFt);
 
   // Above the chart's ceiling the cap line has nowhere to go. A GA
@@ -386,9 +323,9 @@ export function topsAboveScale(observed: VizObserved, transform: CoordTransform)
   return transform.altitudeToY(highest) < transform.plotArea.top;
 }
 
-/** "FL381" for a height in feet. */
+/** Geometric height; retained export name for existing callers, NOT pressure FL. */
 export function flLabel(ft: number): string {
-  return `FL${Math.round(ft / 100)}`;
+  return `${Math.round(ft)} ft MSL`;
 }
 
 /** Height of one badge row, including its gap. */

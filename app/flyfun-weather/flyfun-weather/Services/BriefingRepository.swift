@@ -102,6 +102,9 @@ protocol BriefingRepository: Sendable {
     func rescanTimeOptions(flightId: String, timestamp: String) async throws
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse
+    /// Existing snapshot endpoint, explicitly bypassing URL caches for the
+    /// generation-scoped 10-second capability authority check.
+    func freshSnapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data
@@ -138,6 +141,11 @@ extension BriefingRepository {
     /// that don't name a source stay unchanged; Siri passes `.siri` explicitly.
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
         await refreshStream(flightId: flightId, source: .manual)
+    }
+
+
+    func freshSnapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        try await snapshot(flightId: flightId, timestamp: timestamp)
     }
 }
 
@@ -333,7 +341,20 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
-        try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/snapshot")
+        let response = try await client.requestResponseData(
+            "/api/flights/\(flightId)/packs/\(timestamp)/snapshot")
+        return try SnapshotResponse.decodePreservingObservedMotion(
+            from: response.data, capability: response.observedMotionCapability,
+            capabilitySequence: response.observedMotionCapabilitySequence, origin: .network)
+    }
+
+    func freshSnapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        let response = try await client.requestResponseData(
+            "/api/flights/\(flightId)/packs/\(timestamp)/snapshot",
+            cachePolicy: .reloadIgnoringLocalCacheData, timeout: 10)
+        return try SnapshotResponse.decodePreservingObservedMotion(
+            from: response.data, capability: response.observedMotionCapability,
+            capabilitySequence: response.observedMotionCapabilitySequence, origin: .network)
     }
 
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse {

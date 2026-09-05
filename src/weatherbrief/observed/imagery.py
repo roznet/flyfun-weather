@@ -58,13 +58,13 @@ _RATE_STOPS: tuple[tuple[float, int, int, int], ...] = (
     (10.0, 240, 140, 40),
     (30.0, 225, 60, 60),
 )
-# Cloud-top height in metres, binned to match the payload's FL histogram.
+# Geometric cloud-top height in metres MSL, matching the legacy height bins.
 _CTTH_STOPS: tuple[tuple[float, int, int, int], ...] = (
-    (0.0, 175, 185, 195),      # FL000-050 low stratus
-    (1524.0, 150, 165, 200),   # FL050-150
-    (4572.0, 130, 150, 215),   # FL150-250
-    (7620.0, 235, 235, 245),   # FL250-400 — cold, bright, Cb/cirrus
-    (12192.0, 255, 255, 255),  # FL400+
+    (0.0, 175, 185, 195),      # 0–5000 ft MSL
+    (1524.0, 150, 165, 200),   # 5000–15000 ft MSL
+    (4572.0, 130, 150, 215),   # 15000–25000 ft MSL
+    (7620.0, 235, 235, 245),   # 25000–40000 ft MSL
+    (12192.0, 255, 255, 255),  # 40000+ ft MSL
 )
 
 # Cloud-top TEMPERATURE, in kelvin, warmest first.  Mirrors the client's
@@ -117,12 +117,9 @@ _STOPS_BY_SOURCE = {
 NODATA_RGBA = (120, 120, 128, 46)
 DETECTION_ALPHA = 190
 
-# Below this, a radar detection is cloud, drizzle or ground clutter — the same
-# floor the summary prose uses (`ECHO_MENTION_DBZ`), which calls it "returns a
-# pilot would not route around". It is still a real detection and is still
-# drawn, but faintly: painting it at full strength made a France that Windy
-# renders dry read as widely wet, because 93% of detections in a sample box
-# were below this line.
+# Weak returns can include drizzle or non-precipitation echoes. This is a
+# visual de-emphasis threshold, not a classifier or safe-routing threshold.
+# Detections remain visible; intensity alone cannot establish their cause.
 FAINT_ECHO_DBZ = 20.0
 FAINT_ALPHA = 70
 
@@ -253,9 +250,8 @@ def render_overlay(
 def _recede_faint_echo(rgba, values, detected, source: str, field: str | None) -> None:
     """Drop the alpha of sub-threshold radar returns.
 
-    Reflectivity only, and only when drawing reflectivity itself: a rain RATE
-    or a cloud top has no equivalent "not worth routing around" floor, and
-    dimming those would hide real signal.
+    Reflectivity only: the visual threshold does not apply to rain rate or
+    cloud tops, and carries no claim about safe routing.
     """
     if field is not None or source != SOURCE_OPERA_DBZH:
         return
@@ -297,80 +293,71 @@ def _scatter_parallax_detections(
     """Paint detected pixels at their parallax-corrected ground position.
 
     A scatter rather than a gather: the correction is per-pixel and not
-    invertible in closed form, so we walk the source pixels and place each one
-    where it belongs. Each writes a block sized to its own footprint in output
-    pixels, so an overlay finer than the 2 km source grid does not come out
-    stippled.
+    invertible in closed form. Project each cell's corners and translate them
+    by its supplied parallax offset. Their bounding rectangle approximates the
+    footprint without treating projected metres as latitude/longitude degrees.
+    This is a display rasterisation, not an area-conservative cloud mask.
     """
     detected = frame.detected
     if not detected.any():
         return
-    src_rows, src_cols = np.nonzero(detected)
+    all_rows, all_cols = np.nonzero(detected)
+    # A full-width CTTH strip can have millions of detections. Keep the global
+    # height order, but bound four-corner projection/colour temporaries to a
+    # small batch instead of allocating Nx4 arrays for the entire strip.
+    order = np.argsort(frame.values[all_rows, all_cols], kind="stable")
     grid = frame.grid
-    lon, lat = grid.colrow_to_lonlat(
-        src_cols + frame.window.col0, src_rows + frame.window.row0
-    )
-    lon = np.asarray(lon, dtype=float) + frame.aux["delta_longitude"][src_rows, src_cols]
-    lat = np.asarray(lat, dtype=float) + frame.aux["delta_latitude"][src_rows, src_cols]
+    plane = _plane_for(frame, field)
+    batch_pixels = 8192
+    for start in range(0, len(order), batch_pixels):
+        selected = order[start:start + batch_pixels]
+        src_rows, src_cols = all_rows[selected], all_cols[selected]
+        corner_cols = src_cols[:, None] + frame.window.col0 + [-0.5, 0.5, 0.5, -0.5]
+        corner_rows = src_rows[:, None] + frame.window.row0 + [-0.5, -0.5, 0.5, 0.5]
+        lon, lat = grid.colrow_to_lonlat(corner_cols, corner_rows)
+        lon = np.asarray(lon) + frame.aux["delta_longitude"][src_rows, src_cols, None]
+        lat = np.asarray(lat) + frame.aux["delta_latitude"][src_rows, src_cols, None]
+        west, east = lon.min(axis=1), lon.max(axis=1)
+        south, north = lat.min(axis=1), lat.max(axis=1)
+        tops = frame.values[src_rows, src_cols]
+        values = plane[src_rows, src_cols]
+        keep = (
+            np.isfinite(tops)
+            & np.isfinite(lat).all(axis=1)
+            & np.isfinite(lon).all(axis=1)
+            & (north > bounds.south)
+            & (south < bounds.north)
+            & (east > bounds.west)
+            & (west < bounds.east)
+        )
+        if not keep.any():
+            continue
+        values, tops = values[keep], tops[keep]
+        lat_span = max(1e-6, bounds.north - bounds.south)
+        lon_span = max(1e-6, bounds.east - bounds.west)
+        # Include output pixel centres inside the footprint, or its nearest pixel
+        # for sub-pixel detections. Clip whole rectangles, not individual writes:
+        # an off-image centre can still have a visible footprint, and nothing is
+        # piled onto the boundary. No 16px cap that truncates clouds when zoomed in.
+        row0 = np.ceil((bounds.north - north[keep]) / lat_span * height - 0.5)
+        row1 = np.ceil((bounds.north - south[keep]) / lat_span * height - 0.5)
+        col0 = np.ceil((west[keep] - bounds.west) / lon_span * width - 0.5)
+        col1 = np.ceil((east[keep] - bounds.west) / lon_span * width - 0.5)
+        row0 = np.clip(row0, 0, height - 1).astype(int)
+        col0 = np.clip(col0, 0, width - 1).astype(int)
+        row1 = np.clip(np.maximum(row1, row0 + 1), 1, height).astype(int)
+        col1 = np.clip(np.maximum(col1, col0 + 1), 1, width).astype(int)
 
-    lat_span = max(1e-6, bounds.north - bounds.south)
-    lon_span = max(1e-6, bounds.east - bounds.west)
-    out_rows = np.floor((bounds.north - lat) / lat_span * height).astype(int)
-    out_cols = np.floor((lon - bounds.west) / lon_span * width).astype(int)
-
-    values = _plane_for(frame, field)[src_rows, src_cols]
-    keep = (
-        np.isfinite(values)
-        & np.isfinite(lat)
-        & np.isfinite(lon)
-        & (out_rows >= 0)
-        & (out_rows < height)
-        & (out_cols >= 0)
-        & (out_cols < width)
-    )
-    if not keep.any():
-        return
-    out_rows, out_cols, values = out_rows[keep], out_cols[keep], values[keep]
-
-    # Resolve overlaps by VALUE, into a max-buffer, rather than by paint order.
-    #
-    # Sorting the points and letting the last write win only settles two
-    # detections that land on the same *base* pixel.  Each detection also
-    # paints a block the size of its source pixel, and parallax displacement
-    # is height-dependent — so a low cloud and a high one land different
-    # distances apart and their blocks can overlap at different offsets.
-    # Painting those in loop order let whichever offset came last win,
-    # regardless of which cloud was higher, exactly where it matters most:
-    # the edge of a cell. `np.maximum.at` makes the highest top win every
-    # overlap by construction.
-    best = np.full((height, width), -np.inf, dtype=np.float64)
-    block_rows, block_cols = _source_pixel_block(frame, bounds, height, width)
-    for dr in range(block_rows):
-        rows_d = np.clip(out_rows + dr, 0, height - 1)
-        for dc in range(block_cols):
-            cols_d = np.clip(out_cols + dc, 0, width - 1)
-            np.maximum.at(best, (rows_d, cols_d), values)
-
-    painted = np.isfinite(best)
-    if not painted.any():
-        return
-    rgba[painted, :3] = _colourise(best, stops)[painted]
-    rgba[painted, 3] = DETECTION_ALPHA
-
-
-def _source_pixel_block(
-    frame: GridFrame, bounds: OverlayBounds, height: int, width: int
-) -> tuple[int, int]:
-    """How many output pixels one source pixel covers, at least 1 in each axis."""
-    lat_span = max(1e-6, bounds.north - bounds.south)
-    lon_span = max(1e-6, bounds.east - bounds.west)
-    source_deg_lat = abs(frame.grid.dy) / 1000.0 / 111.0
-    source_deg_lon = abs(frame.grid.dx) / 1000.0 / 111.0
-    block_rows = int(np.ceil(source_deg_lat / (lat_span / height)))
-    block_cols = int(np.ceil(source_deg_lon / (lon_span / width)))
-    # Bounded so a pathologically small bbox cannot turn one pixel into a
-    # thousand-iteration paint loop.
-    return max(1, min(block_rows, 16)), max(1, min(block_cols, 16))
+        colours = np.empty((len(values), 4), dtype=np.uint8)
+        colours[:, :3] = _colourise(values, stops)
+        colours[:, 3] = DETECTION_ALPHA
+        # A missing temperature of the highest top is unknown, not permission to
+        # show a lower cloud's temperature through it.
+        colours[~np.isfinite(values)] = NODATA_RGBA
+        # Both the batches and their complete footprints are ordered globally
+        # low-to-high, so cross-batch overlaps also retain the highest top.
+        for i in range(len(values)):
+            rgba[row0[i]:row1[i], col0[i]:col1[i]] = colours[i]
 
 
 def _project_to_grid(frame: GridFrame, lon_mesh, lat_mesh):

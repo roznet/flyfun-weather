@@ -66,7 +66,7 @@ def test_parallax_is_load_bearing_for_cloud_tops(ctth_path):
     corrected = with_parallax[0]
     assert corrected.highest_fl == pytest.approx(350.0, abs=1.0)
     assert corrected.fl_bins["FL250-400"] > 0
-    assert corrected.quality_method["6"] > 0  # opaque IR, cold cloud
+    assert corrected.quality_method["6"] > 0  # radiance ratio IR10.5 / IR13.4
 
     frame.aux.pop("delta_latitude")
     frame.aux.pop("delta_longitude")

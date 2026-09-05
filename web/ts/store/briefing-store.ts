@@ -15,6 +15,9 @@ import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-sec
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
+import { MotionState } from '../observed-motion/state';
+
+export const observedMotionState = new MotionState();
 
 // --- localStorage persistence helpers ---
 
@@ -114,6 +117,9 @@ export interface BriefingState {
   packs: PackMeta[];
   currentPack: PackMeta | null;
   snapshot: ForecastSnapshot | null;
+  /** Incremented when the mutable MotionState changes so entrypoint consumers
+   * can react through the ordinary Zustand subscription. */
+  observedMotionVersion: number;
   digest: WeatherDigest | null;
   routeAnalyses: RouteAnalysesManifest | null;
   routeAdvisories: RouteAdvisoriesManifest | null;
@@ -191,6 +197,9 @@ export interface BriefingState {
   changeFlightProfile: (profileId: number) => Promise<void>;
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
+  enterObservedMotionMode: () => Promise<void>;
+  leaveObservedMotionMode: () => void;
+  recheckObservedMotionAuthority: () => Promise<void>;
   /** Generate the AI summary on demand for a pack whose profile had AI off. */
   generateDigest: () => Promise<void>;
   sendEmail: () => Promise<void>;
@@ -292,6 +301,16 @@ function makeRefreshEventHandler(
     } else if (event.type === 'complete' && event.elapsed_seconds) {
       tracker.elapsed = event.elapsed_seconds;
     }
+    if (Object.prototype.hasOwnProperty.call(event, 'observed_motion')) {
+      const targetPack = event.pack?.fetch_timestamp;
+      if (!targetPack || targetPack === get().currentPack?.fetch_timestamp) {
+        observedMotionState.accept(event.observed_motion, observedMotionState.requestGeneration);
+        const snapshot = get().snapshot;
+        if (snapshot && observedMotionState.current) {
+          set({ snapshot: { ...snapshot, observed_motion: observedMotionState.current.raw } });
+        }
+      }
+    }
   };
 }
 
@@ -324,6 +343,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   packs: [],
   currentPack: null,
   snapshot: null,
+  observedMotionVersion: 0,
   digest: null,
   routeAnalyses: null,
   routeAdvisories: null,
@@ -382,6 +402,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   selectPack: async (timestamp: string) => {
     const flight = get().flight;
     if (!flight) return;
+    const motionGeneration = observedMotionState.enterContext(flight.id, timestamp);
     // Cancel any in-flight altitude-probe wind-overlay request and bump the
     // sequence so a slow response from the previous pack can't apply to this
     // one (the per-probe guard alone misses the release-at-default case where
@@ -399,7 +420,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       let routeAnalyses: RouteAnalysesManifest | null = null;
       let elevationProfile: ElevationProfile | null = null;
       try {
-        snapshot = await api.fetchSnapshot(flight.id, timestamp);
+        const token = observedMotionState.beginRequest(motionGeneration);
+        const response = await api.fetchSnapshot(flight.id, timestamp);
+        if (motionGeneration !== observedMotionState.requestGeneration) return;
+        observedMotionState.acceptCapability(response.observedMotionCapability, token);
+        observedMotionState.accept(response.value.observed_motion, motionGeneration);
+        snapshot = { ...response.value,
+          ...(observedMotionState.current ? { observed_motion: observedMotionState.current.raw } : {}) };
       } catch {
         // Snapshot may not be available
       }
@@ -503,8 +530,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     try {
       const tracker: { elapsed: number | null } = { elapsed: null };
       const handleEvent = makeRefreshEventHandler(set, get, tracker);
+      const motionGeneration = observedMotionState.requestGeneration;
+      const motionToken = observedMotionState.beginRequest(motionGeneration);
       const newPack = await api.refreshBriefingStream(
         flight.id, handleEvent, false, asOfDate,
+        capability => observedMotionState.acceptCapability(capability, motionToken),
       );
       // Null = gated no-op with no pack (pending coverage — no model reaches
       // the date yet). Nothing new to render; clear the spinner and keep the
@@ -539,6 +569,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
+      observedMotionState.noteRefreshFailure(msg);
       set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: msg });
     }
   },
@@ -550,7 +581,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     try {
       const tracker: { elapsed: number | null } = { elapsed: null };
       const handleEvent = makeRefreshEventHandler(set, get, tracker);
-      const newPack = await api.refreshBriefingStream(flight.id, handleEvent, true);
+      const motionGeneration = observedMotionState.requestGeneration;
+      const motionToken = observedMotionState.beginRequest(motionGeneration);
+      const newPack = await api.refreshBriefingStream(flight.id, handleEvent, true, undefined,
+        capability => observedMotionState.acceptCapability(capability, motionToken));
       // Null = gated no-op with no pack (pending coverage) even under force —
       // no model reaches the date. Clear the spinner; nothing to select.
       if (!newPack) {
@@ -572,6 +606,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
+      observedMotionState.noteRefreshFailure(msg);
       set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: msg });
     }
   },
@@ -860,7 +895,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const { flight, currentPack, snapshot } = get();
     if (!flight || !currentPack || !snapshot) return;
     try {
-      const result = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
+      const generation = observedMotionState.requestGeneration;
+      const token = observedMotionState.beginRequest(generation);
+      const response = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
+      const result = response.value;
+      if (generation !== observedMotionState.requestGeneration) return;
+      observedMotionState.acceptCapability(response.observedMotionCapability, token);
+      observedMotionState.accept(result.observed_motion, generation);
       // Only overwrite SIGMETs when the server actually returned them; a null
       // means the SIGMET fetch failed server-side — keep the existing ones
       // rather than silently blanking the section.
@@ -876,11 +917,55 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // — the server recomputes it precisely so ↻ refreshes the radar /
           // lightning / cloud-top picture, and the client was discarding it.
           ...(result.observed != null ? { observed_conditions: result.observed } : {}),
+          ...(observedMotionState.current ? { observed_motion: observedMotionState.current.raw } : {}),
           last_refresh_delta: result.delta ?? null,
         },
       });
     } catch (err) {
+      observedMotionState.noteRefreshFailure(String(err));
       set({ error: `Observation refresh failed: ${err}` });
+    }
+  },
+
+  enterObservedMotionMode: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    const generation = observedMotionState.enterMotionMode();
+    const token = observedMotionState.beginRequest(generation);
+    try {
+      const response = await api.fetchExistingSnapshotForMotionAuthority(flight.id, currentPack.fetch_timestamp, generation);
+      if (generation !== observedMotionState.requestGeneration) return;
+      observedMotionState.accept(response.value.observed_motion, generation);
+      observedMotionState.acceptCapability(response.observedMotionCapability, token);
+      const current = get().snapshot;
+      if (current && observedMotionState.current) {
+        set({ snapshot: { ...current, observed_motion: observedMotionState.current.raw } });
+      }
+    } catch {
+      if (generation === observedMotionState.requestGeneration) {
+        observedMotionState.acceptCapability(null, token);
+      }
+    }
+  },
+
+  leaveObservedMotionMode: () => { observedMotionState.leaveMotionMode(); },
+
+  recheckObservedMotionAuthority: async () => {
+    const { flight, currentPack } = get();
+    if (!observedMotionState.modeActive || !flight || !currentPack) return;
+    const generation = observedMotionState.markLifecycleUnknown();
+    const token = observedMotionState.beginRequest(generation);
+    try {
+      const response = await api.fetchExistingSnapshotForMotionAuthority(flight.id, currentPack.fetch_timestamp, generation);
+      if (generation !== observedMotionState.requestGeneration) return;
+      observedMotionState.accept(response.value.observed_motion, generation);
+      observedMotionState.acceptCapability(response.observedMotionCapability, token);
+      const current = get().snapshot;
+      if (current && observedMotionState.current) {
+        set({ snapshot: { ...current, observed_motion: observedMotionState.current.raw } });
+      }
+    } catch {
+      if (generation === observedMotionState.requestGeneration) observedMotionState.acceptCapability(null, token);
     }
   },
 
@@ -1283,6 +1368,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     window.dispatchEvent(new Event('theme-changed')); // existing re-render trigger
   },
 }));
+
+observedMotionState.subscribe(() => {
+  briefingStore.setState(state => ({ observedMotionVersion: state.observedMotionVersion + 1 }));
+});
 
 // Initialize cross-section theme from saved settings
 {

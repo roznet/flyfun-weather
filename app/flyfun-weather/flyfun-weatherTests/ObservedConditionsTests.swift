@@ -244,37 +244,35 @@ import Foundation
         // 3 fine bands, not the 5 coarse ones — and in ascending altitude order.
         #expect(p.topsBins.count == 3)
         #expect(p.topsBins.map(\.loFt) == [6_000, 7_000, 36_000])
-        #expect(p.topsBins[0].label == "FL060-070")
-        #expect(p.topsBins[2].label == "FL360-370")
+        #expect(p.topsBins[0].label == "6000–7000 ft MSL")
+        #expect(p.topsBins[2].label == "36000–37000 ft MSL")
         #expect(p.topsBins[2].count == 200)
     }
 
     /// A band's share is of the LOOKED-AT SKY (`valid_px` = 700), not of the
     /// cloudy pixels (`detected_px` = 352).
     ///
-    /// A share of the cloud answers "of the cloud that was found, how much
-    /// topped out here?" — a number with no cockpit meaning, which inflates as
-    /// the sky clears. Of the sky, a band reads directly as coverage.
-    @Test func bandShareIsOfTheSkyNotOfTheCloud() throws {
+    /// Count all valid retrieval samples, including explicitly clear samples,
+    /// rather than renormalising height bins onto cloudy detections alone.
+    /// This is a sample fraction, not an area-conservative cloud-cover estimate.
+    @Test func bandShareUsesValidRetrievalSamplesIncludingClear() throws {
         let resolved = try #require(ObservedResolver.resolve(try Self.decoded()))
         let p = try #require(resolved.points.first { $0.distanceNm == 0 })
 
         #expect(abs(p.topsBins[2].fraction - 200.0 / 700.0) < 1e-9)
 
-        // The bands sum to the disc's cloud cover (352/700), NOT to 1.0. That
-        // identity is the whole point: a sum of 1.0 would mean the percentages
-        // had been renormalised back onto the cloud.
+        // The bands sum to the cloudy share of valid retrieval samples
+        // (352/700), not to 1.0: clear samples remain in the denominator.
         let total = p.topsBins.reduce(0.0) { $0 + $1.fraction }
         #expect(abs(total - 352.0 / 700.0) < 1e-9)
         #expect(total < 0.99)
     }
 
-    /// The drawing floor is 5% OF THE SKY, and strictly greater — the same
-    /// denominator the band is drawn as, so the floor means what the legend
-    /// means. Two cloudy pixels out of 131 are 1.5% of the sky: a sliver drawn
-    /// with the visual weight of a deck you could fly into, and now dropped.
+    /// The drawing floor is strictly greater than 5% of valid retrieval samples,
+    /// the same denominator as the bands and legend. Two cloudy samples out
+    /// of 131 valid samples are 1.5% and do not form a displayed height band.
     /// Under the older cloud-share floor the same band was 50% and survived.
-    @Test func thinBandsBelowFivePercentOfSkyAreDropped() {
+    @Test func thinBandsBelowFivePercentOfValidSamplesAreDropped() {
         var point = VizObservedPoint(distanceNm: 0)
         point.topsBins = [
             VizObservedTopBin(label: "FL180-190", loFt: 18_000, hiFt: 19_000,
@@ -321,12 +319,10 @@ import Foundation
     @Test func convertsTopUnits() throws {
         let resolved = try #require(ObservedResolver.resolve(try Self.decoded()))
         let p = try #require(resolved.points.first { $0.distanceNm == 0 })
-        // highest_fl is a flight level; the chart works in feet.
+        // Legacy highest_fl encodes geometric hundreds of feet, not flight level.
         #expect(abs(p.topsHighestFt! - 37_093) < 1)
         // Kelvin on the wire, °C for anything a pilot reads.
         #expect(abs(p.topsColdestC! - (214.93 - 273.15)) < 1e-6)
-        // qm 9 over detected pixels, not over the whole disc.
-        #expect(abs(p.topsMultiLayerFraction - 86.0 / 352.0) < 1e-9)
         #expect(p.topsHighestAviationFl == 380)
     }
 
@@ -362,29 +358,32 @@ import Foundation
     @Test func badgeRendersThePerSourceInstant() throws {
         let o = try Self.decoded()
         let tops = try #require(o.cloudTops)
-        #expect(ObservedBadge.ageText(tops.validTime, tops.ageMinutes, "Satellite")
-                == "Satellite 12:52Z · 13 min old")
+        let now = Date.parseISO8601("2026-08-26T13:05:08Z")!
+        #expect(ObservedBadge.ageText(tops.validTime, tops.ageMinutes, "Satellite", now: now)
+                == "Satellite 2026-08-26 12:52Z · 13 min old")
         let radar = try #require(o.reflectivity)
-        #expect(ObservedBadge.ageText(radar.validTime, radar.ageMinutes, "Radar")
-                == "Radar 13:00Z · 5 min old")
+        #expect(ObservedBadge.ageText(radar.validTime, radar.ageMinutes, "Radar", now: now)
+                == "Radar 2026-08-26 13:00Z · 5 min old")
         // Sub-minute reads as "just now" rather than "0 min old".
-        #expect(ObservedBadge.ageText(radar.validTime, 0.4, "Radar").hasSuffix("just now"))
+        #expect(ObservedBadge.ageText(radar.validTime, 900, "Radar",
+                                     now: Date.parseISO8601("2026-08-26T13:00:24Z")!).hasSuffix("just now"))
     }
 
     @Test func badgeSurvivesAnUnparseableInstant() {
         // "--:--" rather than inventing a time, and never a crash.
-        #expect(ObservedBadge.ageText("not-a-date", 3, "Radar") == "Radar --:--Z · 3 min old")
+        #expect(ObservedBadge.ageText("not-a-date", 3, "Radar") == "Radar time / age unknown")
     }
 
-    @Test func flLabelRounds() {
-        #expect(ObservedBadge.flLabel(37_093) == "FL371")
+    @Test func geometricHeightKeepsItsDatum() {
+        #expect(ObservedBadge.heightLabel(37_093) == "37093 ft MSL (geometric)")
     }
 
     /// Without a label the badge is just the stamp — no stray leading space. The
     /// Layers sheet names the source in its own column and passes none.
     @Test func badgeOmitsAnEmptyLabelCleanly() throws {
         let radar = try #require(try Self.decoded().reflectivity)
-        #expect(ObservedBadge.ageText(radar.validTime, radar.ageMinutes) == "13:00Z · 5 min old")
+        #expect(ObservedBadge.ageText(radar.validTime, radar.ageMinutes,
+                                     now: Date.parseISO8601("2026-08-26T13:05:08Z")!) == "2026-08-26 13:00Z · 5 min old")
     }
 
     /// Invariant 2, enforced rather than asserted in a comment: `computed_at` is
@@ -414,7 +413,7 @@ import Foundation
     @Test func thinBandsAreDroppedButTheHighestTopIsNot() throws {
         let resolved = try #require(ObservedResolver.resolve(try Self.decoded()))
         let p = try #require(resolved.points.first { $0.distanceNm == 0 })
-        // As a share of the looked-at sky (700 px): 52/700 = 7.4%, 100/700 =
+        // As a share of valid retrieval samples (700): 52/700 = 7.4%, 100/700 =
         // 14.3%, 200/700 = 28.6% — all above the 5% floor, so nothing is
         // dropped here…
         #expect(ObservedTopsLayer.significantBins(p).count == 3)
@@ -497,7 +496,7 @@ import Foundation
             Self.vizPointWith(point), sources: allUp, scrubAltitudeFt: nil)
         // Lightning is a point product over the whole disc, so an empty window is
         // a real observation, not a gap.
-        #expect(chips == ["Obs radar: no echo", "Obs no flashes"])
+        #expect(chips == ["Obs radar: no echo", "Obs no flashes reported"])
     }
 
     /// Rain rate is its own OPERA product on its own cadence: it must survive a
@@ -533,7 +532,7 @@ import Foundation
 
         let chips = CrossSectionReadoutView.observedChips(
             Self.vizPointWith(point), sources: topsOnly, scrubAltitudeFt: nil)
-        #expect(chips == ["Obs top FL226 · 95% opaque (solid)", "Obs ≈FL226 pressure"])
+        #expect(chips == ["Obs top 22600 ft MSL (geometric) · IR effective cloudiness 0.95 (decoded; scale unverified)", "Obs ≈FL226 pressure"])
     }
 
     // MARK: - Absent payload
@@ -559,7 +558,7 @@ import Foundation
         return p
     }
 
-    fileprivate func vizPoint(_ distanceNm: Double) -> VizPoint {
+    func vizPoint(_ distanceNm: Double) -> VizPoint {
         VizPoint(
             distanceNm: distanceNm, lat: 49, lon: 2, time: "2026-08-26T13:00:00Z",
             altitudeLines: AltitudeLines(

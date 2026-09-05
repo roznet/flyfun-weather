@@ -42,6 +42,39 @@ Also consumed by the app, documented with their own subsystems rather than here:
 `/api/nav/airports-db`, `/api/aircraft`, `/api/user/{preferences,profiles,usage}`,
 `/api/feedback`, `/api/pireps`.
 
+### Experimental observed motion transport
+
+The full snapshot, offline bundle, direct observations refresh, gated refresh and
+SSE completion surfaces now carry the same optional `observed_motion` sibling
+beside ordinary observations. The record is the schema-1 contract described in
+`docs/superpowers/specs/2026-09-05-observed-motion-contract.md`: disabled,
+unavailable and available are all full replacement envelopes with a monotonic
+pack-scoped `revision`.
+
+Every capability-bearing response also sends:
+
+| Header | Meaning |
+|---|---|
+| `X-Observed-Motion-Enabled: 0|1` | Current server/session capability, derived from `WB_OBSERVED_ENABLED` and `WB_OBSERVED_MOTION_ENABLED`; not a persisted pack permission. |
+| `Cache-Control: no-store` | Required so capability checks are not satisfied by HTTP cache. Offline pack caching remains separate and deliberate. |
+
+When motion is enabled and the pack is current D-0, the server builds the
+experimental payload only from retained local observed files. No provider request
+is added to the motion stage. Direct-refresh regression coverage now stocks
+isolated synthetic OPERA DBZH/RATE files and exercises the real endpoint through
+local history selection, tracking, payload assembly, atomic publication and the
+on-disk snapshot. When the feature gate is disabled or the pack is outside D-0,
+the server returns an explicit disabled/unavailable envelope rather than omitting
+the member.
+
+Clients must apply the envelope through revision ordering. A missing or malformed
+motion block on a newer response is not clear weather and cannot authorize active
+projection styling; retained data can only be inspected as stored analysis until
+a fresh capability-bearing snapshot/refresh says otherwise. CTTH ground motion
+and quantitative cloud associations remain source-gated until real registration
+evidence is recorded, and no replay/operational usefulness claim is part of this
+API contract.
+
 ### Editing a flight: PATCH vs move (#552)
 
 The flight ID is derived from route + date + altitude/ceiling/duration

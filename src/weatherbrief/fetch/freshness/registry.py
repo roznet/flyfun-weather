@@ -564,9 +564,9 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         coverage="Europe (radar network footprint; ~half the grid has no coverage)",
         description=(
             "Pan-European weather-radar composite reflectivity (DBZH), "
-            "published every 5 minutes. Each frame is a rolling 10-minute "
-            "maximum, so an echo on screen can be ~15 minutes old once "
-            "delivery is counted. Roughly half the grid carries no radar "
+            "published every 5 minutes from contributing radar scans in the "
+            "preceding 10-minute window, plus delivery lag. This is not a "
+            "temporal maximum of earlier composite frames. Roughly half the grid carries no radar "
             "coverage at all — reported distinctly from 'looked, saw nothing'."
         ),
     ),

@@ -214,7 +214,9 @@ def _purge_full_pack(pack: BriefingPackRow, pack_dir: Path | None, dry_run: bool
         if dry_run:
             logger.info("DRY-RUN: would rmtree %s (%d bytes)", pack_dir, freed)
         else:
-            shutil.rmtree(pack_dir)
+            from weatherbrief.storage.observed_motion import delete_motion_pack
+
+            delete_motion_pack(pack_dir)
 
     if not dry_run:
         session = Session.object_session(pack)

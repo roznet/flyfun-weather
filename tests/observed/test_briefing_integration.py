@@ -54,8 +54,8 @@ def _conditions() -> ObservedConditions:
         reflectivity=_field("opera_dbzh", 12.0, 10.0, "EUMETNET OPERA · Météo-France"),
         rain_rate=_field("opera_rate", 14.0, 15.0, "EUMETNET OPERA · Météo-France"),
         cloud_tops=_field("eumetsat_ctth", 17.0, 0.0, "EUMETSAT · MTG CTTH", cls=ObservedTopsField),
-        summary="Radar: peak 45 dBZ within 20 NM of LFAT (observed 12 min ago).",
-        summary_lines=["Radar: peak 45 dBZ within 20 NM of LFAT (observed 12 min ago)."],
+        summary="Radar: peak 45 dBZ within 20 NM of LFAT (observed 2026-08-25 13:55–14:05 UTC).",
+        summary_lines=["Radar: peak 45 dBZ within 20 NM of LFAT (observed 2026-08-25 13:55–14:05 UTC)."],
         sources=[
             ObservedSourceStatus(source="opera_dbzh", available=True),
             ObservedSourceStatus(
@@ -94,6 +94,7 @@ def test_realtime_refresh_resamples_observed_conditions(tmp_path):
 
     (tmp_path / "briefing.json").write_text(json.dumps({
         "route": ROUTE.model_dump(mode="json"),
+        "target_date": "2026-08-25",
         "departure_time": "2026-08-25T14:00:00+00:00",
         "days_out": 0,
     }))
@@ -127,6 +128,7 @@ def test_realtime_refresh_skips_observed_when_not_enabled(tmp_path):
 
     (tmp_path / "briefing.json").write_text(json.dumps({
         "route": ROUTE.model_dump(mode="json"),
+        "target_date": "2026-08-25",
         "departure_time": "2026-08-25T14:00:00+00:00",
         "days_out": 0,
     }))
@@ -171,16 +173,16 @@ def test_text_digest_quotes_the_summary_verbatim():
 # --- LLM prompt ------------------------------------------------------------
 
 
-def test_prompt_carries_each_source_age():
+def test_prompt_uses_immutable_source_times_not_saved_relative_ages():
     from weatherbrief.digest.prompt_builder import _format_observed_context
 
     context = _format_observed_context(_conditions())
     assert "OBSERVED CONDITIONS ALONG ROUTE (measured, not forecast)" in context
     assert _conditions().summary_lines[0] in context
-    # Without per-source ages the model would read four measurements as one
-    # instant; a radar composite alone can be ~15 min behind.
-    assert "opera_dbzh 12 min old" in context
-    assert "eumetsat_ctth 17 min old" in context
+    assert "opera_dbzh 2026-08-25 14:05 UTC" in context
+    assert "eumetsat_ctth 2026-08-25 14:05 UTC" in context
+    assert "Frame ages" not in context
+    assert "min old" not in context
     assert "Not collected: eumetsat_li" in context
 
 

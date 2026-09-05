@@ -170,6 +170,7 @@ from weatherbrief.models.observed import (  # noqa: F401
     ObservedTopsAnnulus,
     ObservedTopsField,
 )
+from weatherbrief.models.observed_motion import ObservedMotion  # noqa: F401
 from weatherbrief.models.storage import (  # noqa: F401
     AdvisoryChip,
     AdvisorySummary,

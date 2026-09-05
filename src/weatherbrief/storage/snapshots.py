@@ -30,26 +30,23 @@ def save_snapshot(
     out_dir = _snapshot_dir(
         snapshot.target_date, snapshot.days_out, snapshot.fetch_date, data_dir
     )
-    out_dir.mkdir(parents=True, exist_ok=True)
+    from weatherbrief.storage.observed_motion import full_snapshot_writer
 
-    # briefing.json: everything except cross_sections and forecasts
-    briefing_path = out_dir / "briefing.json"
-    briefing_path.write_text(
-        snapshot.model_dump_json(
-            indent=2, exclude={"cross_sections", "forecasts"},
+    with full_snapshot_writer(out_dir) as write:
+        briefing_path = out_dir / "briefing.json"
+        briefing = snapshot.model_dump(mode="json", exclude={"cross_sections", "forecasts"})
+        write(briefing, snapshot.model_dump(mode="json"))
+
+        # forecasts.json: route + metadata + forecasts only
+        forecasts_path = out_dir / "forecasts.json"
+        forecasts_path.write_text(
+            snapshot.model_dump_json(
+                indent=2,
+                include={"route", "target_date", "fetch_date", "days_out", "departure_time", "forecasts"},
+            )
         )
-    )
 
-    # forecasts.json: route + metadata + forecasts only
-    forecasts_path = out_dir / "forecasts.json"
-    forecasts_path.write_text(
-        snapshot.model_dump_json(
-            indent=2,
-            include={"route", "target_date", "fetch_date", "days_out", "departure_time", "forecasts"},
-        )
-    )
-
-    return briefing_path
+        return briefing_path
 
 
 def save_cross_section(

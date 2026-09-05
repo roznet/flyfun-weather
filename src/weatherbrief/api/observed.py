@@ -123,9 +123,8 @@ def observed_status(_user_id: str = Depends(current_user_id)) -> dict[str, Any]:
             "label": spec.label,
             "units": spec.units,
             "interval_minutes": spec.interval.total_seconds() / 60.0,
-            # Non-zero where the product is an accumulation or a rolling
-            # maximum rather than an instant — a 10-minute rolling max is not
-            # a snapshot and the client must be able to say so.
+            # Default product window when no frame is held. Actual sidecar
+            # metadata below takes precedence over publication cadence.
             "window_minutes": spec.window_minutes,
             "renders_imagery": key in IMAGE_SOURCES,
             "available": newest is not None,
@@ -134,6 +133,7 @@ def observed_status(_user_id: str = Depends(current_user_id)) -> dict[str, Any]:
         if newest is not None:
             age = newest.age_minutes(now)
             entry.update(
+                window_minutes=newest.meta.get("window_minutes", spec.window_minutes),
                 valid_time=newest.valid_time.isoformat(),
                 age_minutes=round(age, 1),
                 stale=age > spec.max_display_age.total_seconds() / 60.0,
@@ -200,6 +200,7 @@ def observed_overlay(
             # producer names (one composite is Météo-France's).  The client
             # decodes with decodeURIComponent.
             "X-Observed-Valid-Time": frame.valid_time.isoformat(),
+            "X-Observed-Window-Minutes": str(float(frame.window_minutes)),
             "X-Observed-Attribution": quote(frame.attribution.text or ""),
         },
     )

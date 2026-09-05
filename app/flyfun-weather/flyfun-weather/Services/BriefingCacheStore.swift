@@ -27,6 +27,33 @@ struct CachedPackEntry: Codable, Sendable, Identifiable {
     ]
 }
 
+struct PackWriteToken: Equatable, Sendable {
+    let flightId: String
+    let timestamp: String
+    fileprivate let generation: UUID
+}
+
+struct PackWriteResult: Sendable {
+    let endpoints: Set<String>
+    let totalBytes: Int64
+}
+
+enum ObservedMotionCacheError: LocalizedError {
+    case stalePackWriter
+    case deletedPack
+    case invalidBundle
+    case sameRevisionConflict(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .stalePackWriter: "The offline pack changed while it was being saved."
+        case .deletedPack: "The offline pack was deleted before the save completed."
+        case .invalidBundle: "The downloaded briefing bundle is invalid."
+        case .sameRevisionConflict(let revision): "Observed motion revision \(revision) has conflicting content."
+        }
+    }
+}
+
 /// Manages on-disk cache of briefing pack data.
 actor BriefingCacheStore {
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "Cache")
@@ -35,6 +62,8 @@ actor BriefingCacheStore {
     private var index: [String: CachedPackEntry] = [:] // keyed by "flightId/timestamp"
     private var loaded = false
     private var cacheRootEnsured = false
+    private var activePackWrites: [String: UUID] = [:]
+    private var deletedPackGenerations = Set<String>()
 
     /// All cache writes are at-rest encrypted (readable only after first unlock)
     /// so briefing routes, positions, and digest content aren't exposed on a
@@ -72,11 +101,162 @@ actor BriefingCacheStore {
     }
 
     func writeData(_ data: Data, flightId: String, timestamp: String, endpoint: String) throws {
+        let key = "\(flightId)/\(timestamp)"
+        guard !deletedPackGenerations.contains(key) else {
+            throw ObservedMotionCacheError.deletedPack
+        }
+        if endpoint == "snapshot" {
+            try writeSnapshotData(data, flightId: flightId, timestamp: timestamp, allowCreate: true)
+            return
+        }
         try ensureCacheRoot()
         let dir = packDir(flightId: flightId, timestamp: timestamp)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("\(endpoint).json")
         try data.write(to: file, options: Self.writeOptions)
+    }
+
+    func beginPackWrite(flightId: String, timestamp: String) -> PackWriteToken {
+        let key = "\(flightId)/\(timestamp)"
+        let generation = UUID()
+        activePackWrites[key] = generation
+        deletedPackGenerations.remove(key)
+        return PackWriteToken(flightId: flightId, timestamp: timestamp, generation: generation)
+    }
+
+    func writeSnapshotData(
+        _ incoming: Data, flightId: String, timestamp: String, allowCreate: Bool
+    ) throws {
+        let key = "\(flightId)/\(timestamp)"
+        guard !deletedPackGenerations.contains(key) else {
+            throw ObservedMotionCacheError.deletedPack
+        }
+        let file = fileURL(flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
+        let previous = try? Data(contentsOf: file)
+        if previous == nil && !allowCreate { throw ObservedMotionCacheError.deletedPack }
+        let merged = try Self.mergeSnapshot(existing: previous, incoming: incoming)
+        if previous == nil {
+            try ensureCacheRoot()
+            try FileManager.default.createDirectory(
+                at: packDir(flightId: flightId, timestamp: timestamp),
+                withIntermediateDirectories: true)
+        }
+        try merged.write(to: file, options: Self.writeOptions)
+        try updateIndexedByteCount(flightId: flightId, timestamp: timestamp,
+                                   delta: merged.count - (previous?.count ?? 0))
+    }
+
+    func writeDownloadedBundle(
+        _ data: Data,
+        token: PackWriteToken,
+        flightTitle: String,
+        assessment: String?,
+        departureTime: String? = nil
+    ) throws -> PackWriteResult {
+        let key = "\(token.flightId)/\(token.timestamp)"
+        guard activePackWrites[key] == token.generation else {
+            throw ObservedMotionCacheError.stalePackWriter
+        }
+        guard !deletedPackGenerations.contains(key) else { throw ObservedMotionCacheError.deletedPack }
+        let members = RawJSONDocument(data).members()
+        guard !members.isEmpty, members.contains(where: { $0.key == "snapshot" }) else {
+            throw ObservedMotionCacheError.invalidBundle
+        }
+
+        var prepared: [(String, Data)] = []
+        var endpoints = Set<String>()
+        var totalBytes: Int64 = 0
+        for member in members {
+            let entry: Data
+            if member.key == "snapshot" {
+                let existing = readData(flightId: token.flightId, timestamp: token.timestamp, endpoint: "snapshot")
+                entry = try Self.mergeSnapshot(existing: existing, incoming: member.value)
+            } else {
+                entry = member.value
+            }
+            prepared.append((member.key, entry))
+            endpoints.insert(member.key)
+            totalBytes += Int64(entry.count)
+        }
+        guard endpoints.isSuperset(of: CachedPackEntry.requiredEndpoints) else {
+            throw ObservedMotionCacheError.invalidBundle
+        }
+
+        guard activePackWrites[key] == token.generation,
+              !deletedPackGenerations.contains(key)
+        else { throw ObservedMotionCacheError.deletedPack }
+        try ensureCacheRoot()
+        let dir = packDir(flightId: token.flightId, timestamp: token.timestamp)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (endpoint, entry) in prepared {
+            try entry.write(to: dir.appendingPathComponent("\(endpoint).json"), options: Self.writeOptions)
+        }
+        ensureLoaded()
+        let previousEntry = index[key]
+        index[key] = CachedPackEntry(
+            flightId: token.flightId, timestamp: token.timestamp,
+            flightTitle: flightTitle, assessment: assessment, downloadedAt: Date(),
+            endpoints: endpoints, totalBytes: totalBytes, departureTime: departureTime)
+        do {
+            try saveIndexThrowing()
+        } catch {
+            index[key] = previousEntry
+            throw error
+        }
+        activePackWrites.removeValue(forKey: key)
+        return PackWriteResult(endpoints: endpoints, totalBytes: totalBytes)
+    }
+
+    /// Patch only refreshed fields in an existing downloaded snapshot. Running
+    /// the read/merge/atomic write in this actor without suspension avoids lost
+    /// updates, preserves unknown JSON fields, and cannot recreate a deleted pack.
+    func patchRealtimeSnapshot(_ event: RefreshEvent, flightId: String, timestamp: String) throws {
+        guard event.refreshDecision?.mode == "realtime" else { return }
+        guard event.observed != nil || event.observations != nil || event.sigmets != nil
+                || event.observedMotion != nil else { return }
+        let file = fileURL(flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            let key = "\(flightId)/\(timestamp)"
+            if deletedPackGenerations.contains(key) { throw ObservedMotionCacheError.deletedPack }
+            if isPackCached(flightId: flightId, timestamp: timestamp) { throw CocoaError(.fileReadNoSuchFile) }
+            return
+        }
+        let previous = try Data(contentsOf: file)
+        let previousMotion = RawJSONDocument(previous).member(named: "observed_motion")
+        guard var object = try JSONSerialization.jsonObject(with: previous) as? [String: Any] else {
+            throw CocoaError(.coderReadCorrupt)
+        }
+        let encoded = try JSONEncoder.weatherBrief.encode(event)
+        guard let refresh = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+            throw CocoaError(.coderReadCorrupt)
+        }
+        for (source, destination) in [("observations", "route_observations"),
+                                      ("sigmets", "route_sigmets"),
+                                      ("observed", "observed_conditions")] {
+            if let value = refresh[source], !(value is NSNull) { object[destination] = value }
+        }
+        var updated = try JSONSerialization.data(withJSONObject: object)
+        if let motion = event.observedMotion {
+            let shell = try RawJSONDocument(updated).replacingMember(named: "observed_motion", with: motion.rawJSON)
+            updated = try Self.mergeSnapshot(existing: previous, incoming: shell)
+        } else if let previousMotion {
+            updated = try RawJSONDocument(updated).replacingMember(
+                named: "observed_motion", with: previousMotion)
+        }
+        try updated.write(to: file, options: Self.writeOptions)
+        ensureLoaded()
+        let key = "\(flightId)/\(timestamp)"
+        if var entry = index[key] {
+            let previousEntry = entry
+            entry.totalBytes += Int64(updated.count - previous.count)
+            index[key] = entry
+            do {
+                try saveIndexThrowing()
+            } catch {
+                index[key] = previousEntry
+                throw error
+            }
+        }
     }
 
     // MARK: - Metadata cache (for offline fallback)
@@ -147,6 +327,8 @@ actor BriefingCacheStore {
     func deletePack(flightId: String, timestamp: String) {
         ensureLoaded()
         let key = "\(flightId)/\(timestamp)"
+        activePackWrites.removeValue(forKey: key)
+        deletedPackGenerations.insert(key)
         index.removeValue(forKey: key)
         saveIndex()
         let dir = packDir(flightId: flightId, timestamp: timestamp)
@@ -230,12 +412,64 @@ actor BriefingCacheStore {
 
     private func saveIndex() {
         do {
-            try ensureCacheRoot()
-            let data = try JSONEncoder().encode(index)
-            try data.write(to: cacheDir.appendingPathComponent("index.json"), options: Self.writeOptions)
+            try saveIndexThrowing()
         } catch {
             Self.logger.error("Failed to save cache index: \(error)")
         }
+    }
+
+    private func saveIndexThrowing() throws {
+        try ensureCacheRoot()
+        let data = try JSONEncoder().encode(index)
+        try data.write(to: cacheDir.appendingPathComponent("index.json"), options: Self.writeOptions)
+    }
+
+    private func updateIndexedByteCount(flightId: String, timestamp: String, delta: Int) throws {
+        ensureLoaded()
+        let key = "\(flightId)/\(timestamp)"
+        guard var entry = index[key] else { return }
+        let previousEntry = entry
+        entry.totalBytes += Int64(delta)
+        index[key] = entry
+        do {
+            try saveIndexThrowing()
+        } catch {
+            index[key] = previousEntry
+            throw error
+        }
+    }
+
+    private static func mergeSnapshot(existing: Data?, incoming: Data) throws -> Data {
+        guard let existing else { return incoming }
+        let oldRaw = RawJSONDocument(existing).member(named: "observed_motion").flatMap {
+            String(decoding: $0, as: UTF8.self) == "null" ? nil : RawObservedMotion(rawJSON: $0)
+        }
+        let newRaw = RawJSONDocument(incoming).member(named: "observed_motion").flatMap {
+            String(decoding: $0, as: UTF8.self) == "null" ? nil : RawObservedMotion(rawJSON: $0)
+        }
+        guard let newRaw else {
+            if let oldRaw {
+                return try RawJSONDocument(incoming).replacingMember(named: "observed_motion", with: oldRaw.rawJSON)
+            }
+            return incoming
+        }
+        guard let oldRaw else { return incoming }
+        guard let newRevision = newRaw.revision else {
+            // A malformed current response must not make old ready data appear
+            // freshly authoritative; preserve the unsupported raw value instead.
+            return incoming
+        }
+        guard let oldRevision = oldRaw.revision else { return incoming }
+        if newRevision < oldRevision {
+            return try RawJSONDocument(incoming).replacingMember(named: "observed_motion", with: oldRaw.rawJSON)
+        }
+        if newRevision == oldRevision {
+            guard newRaw.hasSameJSONValue(as: oldRaw) else {
+                throw ObservedMotionCacheError.sameRevisionConflict(newRevision)
+            }
+            return try RawJSONDocument(incoming).replacingMember(named: "observed_motion", with: oldRaw.rawJSON)
+        }
+        return incoming
     }
 }
 

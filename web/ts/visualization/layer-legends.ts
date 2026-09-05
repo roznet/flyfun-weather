@@ -238,21 +238,20 @@ function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
     label: `${Math.round(f * 100)}%`,
     color: pick(f)[1],
     meaning: f <= 0.05
-      ? 'the faintest band drawn — under 5% of the sky nothing is drawn at all'
+      ? 'bands at or below 5% of valid sampled pixels are omitted; the highest top is always marked'
       : f >= 0.55
-        ? 'over half the sky around the point had its cloud top in this band'
-        : 'share of the sky around the point with cloud tops in this band',
+        ? 'over half the valid sampled pixels had their retrieved cloud top in this geometric-height band'
+        : 'share of valid sampled pixels with retrieved tops in this geometric-height band (ft MSL)',
   }));
   entries.push({
-    label: 'depth unknown',
+    label: 'base / depth unknown',
     color: theme.observed.hatchColor,
-    meaning: 'the satellite measures the TOP only — there is no cloud base in this data',
-    hatchStyle: `repeating-linear-gradient(-45deg, ${theme.observed.hatchColor} 0 1px, transparent 1px 4px)`,
+    meaning: 'no cloud base or vertical depth is measured: nearby-pixel tops do not establish a shared layer stack; nothing is drawn below the bins',
   });
   entries.push({
-    label: 'no retrieval',
+    label: 'limited retrieval coverage',
     color: theme.observed.noCoverageColor,
-    meaning: 'the retrieval could not answer here — NOT a clear sky',
+    meaning: 'insufficient coverage — known tops remain visible; NOT a clear sky',
     hatchStyle: `repeating-linear-gradient(45deg, ${theme.observed.noCoverageColor} 0 1px, transparent 1px 4px)`,
   });
   return entries;
@@ -267,9 +266,9 @@ function observedSurfaceLegend(theme: CrossSectionTheme): LegendEntry[] {
     { label: '55 dBZ', color: '#e13c3c', meaning: 'very heavy' },
     { label: '65 dBZ', color: '#be3cbe', meaning: 'extreme' },
     {
-      label: 'no coverage',
+      label: 'limited coverage',
       color: theme.observed.noCoverageColor,
-      meaning: 'the radar does not look here — roughly half the OPERA grid. NOT "no rain"',
+      meaning: 'insufficient radar coverage — known echoes remain visible; NOT "no rain"',
       hatchStyle: `repeating-linear-gradient(45deg, ${theme.observed.noCoverageColor} 0 1px, transparent 1px 4px)`,
     },
   ];

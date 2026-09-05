@@ -101,26 +101,22 @@ def save_analysis_artifacts(
     - **briefing.json** — route, analyses, observations, metadata (no forecasts)
     - **forecasts.json** — route, metadata, raw forecasts (no analyses)
     """
-    pack_dir.mkdir(parents=True, exist_ok=True)
+    from weatherbrief.storage.observed_motion import full_snapshot_writer
 
-    # briefing.json: everything except cross_sections and forecasts
-    briefing_path = pack_dir / "briefing.json"
-    briefing_path.write_text(
-        snapshot.model_dump_json(
-            indent=2, exclude={"cross_sections", "forecasts"},
+    with full_snapshot_writer(pack_dir) as write:
+        briefing = snapshot.model_dump(mode="json", exclude={"cross_sections", "forecasts"})
+        write(briefing, snapshot.model_dump(mode="json"))
+
+        # forecasts.json: route + metadata + forecasts only (compact — large file)
+        forecasts_path = pack_dir / "forecasts.json"
+        forecasts_path.write_text(
+            snapshot.model_dump_json(
+                include={"route", "target_date", "fetch_date", "days_out", "forecasts"},
+            )
         )
-    )
 
-    # forecasts.json: route + metadata + forecasts only (compact — large file)
-    forecasts_path = pack_dir / "forecasts.json"
-    forecasts_path.write_text(
-        snapshot.model_dump_json(
-            include={"route", "target_date", "fetch_date", "days_out", "forecasts"},
-        )
-    )
-
-    if route_analyses_manifest:
-        save_route_analyses(pack_dir, route_analyses_manifest)
+        if route_analyses_manifest:
+            save_route_analyses(pack_dir, route_analyses_manifest)
 
 
 def save_route_analyses(

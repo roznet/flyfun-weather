@@ -4,6 +4,7 @@ import type { CoordTransform, VizRouteData, CrossSectionLayer } from '../types';
 import { drawAxes } from './axes';
 import { getActiveTheme } from './theme';
 import { createCoordTransform, renderCrosshairOverlay, setupCanvasDpr } from './renderer-utils';
+import { observeDisplayClock } from '../observed-time';
 
 export class CrossSectionRenderer {
   private container: HTMLElement;
@@ -14,6 +15,7 @@ export class CrossSectionRenderer {
   private layers: CrossSectionLayer[] = [];
   private enabledLayers: Record<string, boolean> = {};
   private selectedPointIndex = -1;
+  private stopObservedClock: () => void;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -30,6 +32,9 @@ export class CrossSectionRenderer {
     this.resizeObserver.observe(container);
 
     window.addEventListener('theme-changed', () => this.render());
+    this.stopObservedClock = observeDisplayClock(() => {
+      if (this.data?.observed) this.render();
+    });
   }
 
   setData(data: VizRouteData): void {
@@ -120,6 +125,7 @@ export class CrossSectionRenderer {
   }
 
   destroy(): void {
+    this.stopObservedClock();
     this.resizeObserver.disconnect();
     this.mainCanvas.remove();
     this.overlayCanvas.remove();

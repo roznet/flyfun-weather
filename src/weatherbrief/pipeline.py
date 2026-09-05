@@ -647,6 +647,43 @@ def _execute_briefing_stages(
                 logger.warning("Observed conditions stage failed", exc_info=True)
             stage_timings["observed_conditions"] = perf_counter() - _t0
 
+    # === 3.56 Experimental observed motion ===
+    # Reserve before optional analysis so a completed refusal fences an older
+    # ready run.  The frozen pipeline route/departure is the only identity this
+    # stage may use; it must not consult a later Flight DB row.
+    from weatherbrief.observed.motion.route import route_identities
+    from weatherbrief.storage.observed_motion import (
+        publish_motion_snapshot,
+        reserve_motion_revision,
+    )
+    from weatherbrief.models.observed_motion import ObservedMotion, empty_motion
+
+    motion_pack_dir = pack_dir or (
+        data_dir / "forecasts" / target_date / f"d-{days_out}_{today}"
+    )
+    motion_pack_dir.parent.mkdir(parents=True, exist_ok=True)
+    motion_token = reserve_motion_revision(motion_pack_dir, allow_create=True)
+    motion_cutoff = datetime.now(timezone.utc)
+    if date.fromisoformat(target_date) != motion_cutoff.date():
+        motion_geometry_id, motion_timing_id = route_identities(route, departure_time)
+        observed_motion = empty_motion(
+            route_geometry_id=motion_geometry_id,
+            planned_timing_id=motion_timing_id,
+            cutoff_at=motion_cutoff,
+            revision=motion_token.revision,
+            status="unavailable",
+            reason_codes=["outside_d0"],
+        )
+    else:
+        from weatherbrief.observed.motion.payload import build_observed_motion
+
+        observed_motion = build_observed_motion(
+            route,
+            departure_time=departure_time,
+            cutoff_at=motion_cutoff,
+            revision=motion_token.revision,
+        )
+
     # === 3.6 Weather-based alternates (D-2 inward, opt-in) ===
     # Surfaces the closest divert candidates that fix the destination's
     # specific problem (category/wind/crosswind), via the SAME shared assembly
@@ -691,6 +728,7 @@ def _execute_briefing_stages(
         route_observations=route_observations,
         route_sigmets=route_sigmets,
         observed_conditions=observed_conditions,
+        observed_motion=observed_motion,
         alternates=alternates,
     )
 
@@ -712,6 +750,17 @@ def _execute_briefing_stages(
         except Exception:
             logger.warning("Alternate-requirement stage failed", exc_info=True)
         stage_timings["alternate_requirement"] = perf_counter() - _t0
+
+    published_snapshot = publish_motion_snapshot(
+        motion_pack_dir,
+        motion_token,
+        observed_motion,
+        refreshed_fields={},
+        initial_snapshot=snapshot.model_dump(mode="json"),
+    )
+    snapshot = snapshot.model_copy(
+        update={"observed_motion": ObservedMotion.model_validate(published_snapshot["observed_motion"])},
+    )
 
     if pack_dir:
         from weatherbrief.tasks.artifacts import save_analysis_artifacts

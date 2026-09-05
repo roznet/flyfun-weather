@@ -33,9 +33,31 @@ struct RefreshEvent: Codable, Sendable {
     /// server no network I/O — the collector has been writing frames all along —
     /// which is why it rides on the cheap path.
     let observed: ObservedConditions?
+    var observedMotion: RawObservedMotion? = nil
+    var observedMotionCapability: ObservedMotionCapability? = nil
+    var observedMotionCapabilitySequence: Int? = nil
 
     // Error fields
     let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, stage, detail, label, progress, pack, elapsedSeconds
+        case refreshDecision, observations, sigmets, observed, message
+    }
+
+    static func decodePreservingObservedMotion(
+        from data: Data, capability: ObservedMotionCapability? = nil, capabilitySequence: Int? = nil
+    ) throws -> RefreshEvent {
+        let raw = RawJSONDocument(data).member(named: "observed_motion")
+        let withoutMotion = try RawJSONDocument(data).replacingMember(named: "observed_motion", with: Data("null".utf8))
+        var event = try JSONDecoder.weatherBrief.decode(RefreshEvent.self, from: withoutMotion)
+        if let raw, String(decoding: raw, as: UTF8.self) != "null" {
+            event.observedMotion = RawObservedMotion(rawJSON: raw)
+        }
+        event.observedMotionCapability = capability
+        event.observedMotionCapabilitySequence = capabilitySequence
+        return event
+    }
 }
 
 /// Outcome of the server-side refresh gate, attached to the `complete` event.

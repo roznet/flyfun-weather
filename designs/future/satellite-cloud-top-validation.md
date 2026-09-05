@@ -1,5 +1,14 @@
 # Satellite Cloud-Top Validation for GA Routes
 
+> **2026-09-05 correction:** this is a historical investigation, not the
+> current decoder specification. Observed conditions have since shipped.
+> The original method-code interpretations and inferred multilayer/sky-area
+> conclusions were incorrect or unsupported; corrected below against the
+> [FCI product guide](https://user.eumetsat.int/resources/user-guides/mtg-fci-clm-ct-and-ctth-data-guide).
+> Large low-cloud parallax offsets and effective-cloudiness packing still need
+> independent real-granule validation. See the
+> [full PR #584 review](../reviews/2026-09-05-pr584-observed-review.md).
+
 **Status: Investigation paused 2026-05-10** (still paused, re-checked
 2026-08-15) — MTG L2 CTTH (Cloud Top Temperature & Height) was successfully
 fetched and sampled; OCA collection is accessible but not yet exercised; L1
@@ -77,7 +86,8 @@ samples side-by-side so the limitation of single-pixel sampling is visible:
 1. **nominal** — nearest pixel to the airport's surface footprint.
 2. **parallax** — pixel whose corrected ground location (pixel_lat + dlat,
    pixel_lon + dlon) is nearest the airport.
-3. **highest** — coldest CTT in the search box (= highest cloud top).
+3. **highest** — the script selects coldest CTT in the search box. This is a
+   heuristic, not necessarily the highest top (e.g. temperature inversions).
 
 Useful diagnostic; not the final answer.
 
@@ -92,9 +102,10 @@ returned for each waypoint over time".
 
 The most useful view. For each waypoint × timestep, takes a 10 km radius
 circle around the *parallax-corrected* ground projection of each cloud-top
-pixel. Histograms the cloud tops in 5 FL bins (FL00–50, 50–150, 150–250,
-250–400, 400+) and breaks down by `quality_method` code so you see the
-multi-layer structure directly.
+pixel. Histograms the geometric cloud tops in five height bands and breaks
+down retrieval methods. Legacy "FL" values here mean hundreds of geometric
+feet MSL, not pressure flight levels. Several modes describe neighbouring
+retrievals; they cannot establish stacked layers in one column.
 
 ```bash
 python scripts/ctth_route_histogram.py --radius-km 10
@@ -113,7 +124,9 @@ python scripts/ctth_route_histogram.py --radius-km 10
   - `cloud_top_height` (m, float32)
   - `cloud_top_pressure` (hPa, float32)
   - `cloud_top_aviation_height` (FL/10, float32)
-  - `effective_cloudiness` (0–1 fraction, NOT 0–100 despite valid_range)
+  - `effective_cloudiness` (decoded 0–1 in this investigation despite percent
+    metadata; verify packing on current granules before any normalization).
+    Cloud amount × 10.5 µm emissivity, not visual opacity or METAR cloud amount.
   - `delta_latitude` / `delta_longitude` (degrees, int8 ×0.01) — per-pixel
     parallax shift; corrected ground location = pixel_lat + dlat
   - `quality_method` (int8) — height assignment method, see codes below
@@ -151,40 +164,42 @@ satellite's line-of-sight extends past the cloud and intersects ground
 - To find the cloud over an airfield at lat=L, search pixels with
   pixel_lat > L (NORTH of the airfield), i.e., **larger row indices**.
 
-Magnitude: dlat ≈ −0.4° even for low cloud (FL00–50) at 50°N latitude;
-grows to ≈ −0.6° for FL400 cirrus. Simple `h × tan(view_zenith)` formula
-underestimates this — use the dlat field directly.
+Reported magnitude: dlat ≈ −0.4° even for low cloud (0–5000 geometric ft) at
+50°N, growing to ≈ −0.6° for high cirrus. These unexpectedly large low-cloud
+values disagree with a simple viewing-geometry estimate and are **unresolved**.
+Recheck packed units, grid, signs and independent positions on real granules;
+neither the synthetic fixture nor this discrepancy validates a new scale factor.
 
 ### `quality_method` codes (FCI L2 CTTH)
 
-Empirically verified on 2026-05-04 08:00Z product (full disk):
+The original pixel shares/temperatures below are historical measurements, not
+evidence of enum meaning. Meanings are corrected from FCI Guide Table 10.
 
-| Code | Pixels | Median CTH | Median CTT | Interpretation |
-|------|--------|------------|------------|----------------|
-| 0 | 62% | — | — | no cloud |
-| 1 | 16% | 1261 m / FL041 | +11 °C | opaque IR window — low stratus / fog |
-| 6 | 13% | 10377 m / FL340 | −45 °C | opaque IR for cold cloud — Cb / thick cirrus |
-| 7 | <1% | 12962 m / FL425 | −59 °C | radiance-ratio thin cirrus — very high |
-| 8 | 3% | 10546 m / FL346 | −46 °C | CO₂ slicing / semi-transparent high |
-| 9 | 4% | 1236 m / FL040 | +2 °C | mixed / lower-layer-corrected — multi-layer suspect |
-| 10 | 1.5% | — | — | other semi-transparent |
+| Code | Historical pixels | Historical median CTH / CTT | Guide meaning |
+|---|---|---|---|
+| 0 | 62% | — | Unprocessed: no/corrupt data **or** cloud-free |
+| 1 | 16% | 1261 m / +11 °C | Opaque and RTM |
+| 2 | — | — | Opaque minus RTM |
+| 3 | — | — | Intercept IR10.5/IR13.4 |
+| 4 | — | — | Intercept IR10.5/IR6.3 |
+| 5 | — | — | Intercept IR10.5/IR7.3 |
+| 6 | 13% | 10377 m / −45 °C | Radiance ratio IR10.5/IR13.4 |
+| 7 | <1% | 12962 m / −59 °C | Radiance ratio IR10.5/IR6.3 |
+| 8 | 3% | 10546 m / −46 °C | Radiance ratio IR10.5/IR7.3 |
+| 9 | 4% | 1236 m / +2 °C | Opaque + RTM + inversion; **not multilayer** |
+| 10 | 1.5% | — | No solution |
 
-For multi-layer scenes, methods 6/7/8 = high cirrus signature; method 1 = low
-opaque; method 9 = the algorithm noticed multi-layer.
+Use separate status flags to distinguish cloud-free (1), failed cloud retrieval
+(2), successful cloud retrieval (3), unprocessed (0), and dust/ash (4–7).
+Processing quality also matters; method 0 alone cannot establish clear sky.
 
 ### CTTH's fundamental limitation for multi-layer scenes
 
-CTTH commits to **one cloud-top per pixel**. For a cirrus-over-stratus stack:
-
-- τ_cirrus > ~3 → algorithm reports cirrus top
-- τ_cirrus < ~0.5 → cirrus invisible; algorithm reports stratus top
-- in between → ambiguous, often method=9
-
-Adjacent 2 km pixels can flip between "high" and "low" answers as cirrus
-opacity wobbles around the algorithm's threshold. Sampling a single pixel at
-the airport gives an arbitrary slice of this. **The histogram-in-window
-approach (`ctth_route_histogram.py`) is the only way to recover the
-multi-layer truth from CTTH.**
+CTTH commits to **one cloud-top per pixel**. Semitransparent cloud over another
+layer can make interpretation difficult and nearby pixels may return different
+heights. A spatial histogram exposes that variability, but does not recover
+hidden layers or prove a vertical stack. The original optical-depth thresholds
+were not validated for this product, and method 9 is not evidence of multilayer.
 
 ## What we found for the 2026-05-04 flight
 
@@ -196,6 +211,11 @@ Pilot's report:
 - EGTF: lower layer +4 to +6 °C
 
 CTTH-histogram (10 km parallax-corrected radius, FCI L2) verdict:
+
+> Historical interpretations below are hypotheses, not validated layer/sky-area
+> measurements. The old status decoding and sample denominator require reanalysis;
+> correspondence with a pilot's report is useful context, not proof of retrieval
+> correctness. Descriptions of "FL" from geometric CTH use a legacy mislabel.
 
 - **LSGL**: low stratus 50–60% + 8–14% mid + 1–5% high cirrus across all
   timesteps. ✅ All three layers present, matches pilot.
@@ -254,9 +274,9 @@ CTTH or OCA.
 
 4. **Render the CTTH quicklook PNGs** (already in the cached zips:
    `quicklooks/...QCK-IMAGE-CTT--PNG_...png`) — false-colour CTT for the
-   full disk. Lower precision (8-bit) but visually equivalent to what
-   Windy renders for free. Could georeference and crop to the route as a
-   poor-man's substitute until L1 access lands.
+   full disk. They show the retrieved CTTH temperature, not the raw L1
+   brightness-temperature signal; a similar palette does not make them
+   scientifically equivalent. They could still aid inspection of the retrieval.
 
 ## File layout reference
 

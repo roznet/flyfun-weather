@@ -22,10 +22,45 @@ struct SnapshotResponse: Codable, Sendable {
     /// "clear", it is "we did not look". Recomputed by every gated D-0 refresh,
     /// so the ↻ button moves it.
     var observedConditions: ObservedConditions?
+    /// Raw-preserving experimental motion sibling. It is deliberately excluded
+    /// from synthesized Codable: use the byte-boundary helpers below.
+    var observedMotion: RawObservedMotion? = nil
+    var observedMotionCapability: ObservedMotionCapability? = nil
+    var observedMotionCapabilitySequence: Int? = nil
+    var observedMotionOrigin: ObservedMotionOrigin = .network
     /// Weather-based divert candidates (D-2 inward, `compute_alternates` pref).
     /// Present only on marginal D-0/D-1/D-2 packs; nil otherwise. Mirrors
     /// `models/alternates.py` / `designs/future/alternates.md`.
     let alternates: RouteAlternates?
+
+    enum CodingKeys: String, CodingKey {
+        case route, targetDate, daysOut, departureTime, analyses
+        case routeObservations, routeSigmets, observedConditions, alternates
+    }
+
+    static func decodePreservingObservedMotion(
+        from data: Data,
+        capability: ObservedMotionCapability? = nil,
+        capabilitySequence: Int? = nil,
+        origin: ObservedMotionOrigin = .network
+    ) throws -> SnapshotResponse {
+        let raw = RawJSONDocument(data).member(named: "observed_motion")
+        let withoutMotion = try RawJSONDocument(data).replacingMember(named: "observed_motion", with: Data("null".utf8))
+        var snapshot = try JSONDecoder.weatherBrief.decode(SnapshotResponse.self, from: withoutMotion)
+        if let raw, String(decoding: raw, as: UTF8.self) != "null" {
+            snapshot.observedMotion = RawObservedMotion(rawJSON: raw)
+        }
+        snapshot.observedMotionCapability = capability
+        snapshot.observedMotionCapabilitySequence = capabilitySequence
+        snapshot.observedMotionOrigin = origin
+        return snapshot
+    }
+
+    func encodePreservingObservedMotion() throws -> Data {
+        let encoded = try JSONEncoder.weatherBrief.encode(self)
+        guard let observedMotion else { return encoded }
+        return try RawJSONDocument(encoded).replacingMember(named: "observed_motion", with: observedMotion.rawJSON)
+    }
 }
 
 struct RouteConfig: Codable, Sendable {

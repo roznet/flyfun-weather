@@ -83,6 +83,7 @@ struct RouteMapKitView: UIViewRepresentable {
     /// Bumped when the snapshot payload changes; markers rebuild on change. A
     /// metric/model switch leaves it and is a pure recolour.
     let forecastRevision: Int
+    let observedMotionOverlay: ObservedMotionOverlaySnapshot
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -100,6 +101,8 @@ struct RouteMapKitView: UIViewRepresentable {
         // Airport-forecast markers reuse the forecast map's view class (#428).
         map.register(AirportMarkerView.self,
                      forAnnotationViewWithReuseIdentifier: AirportMarkerView.reuseID)
+        map.register(ObservedMotionLightningView.self,
+                     forAnnotationViewWithReuseIdentifier: ObservedMotionLightningView.reuseID)
         map.setRegion(initialRegion, animated: false)
         context.coordinator.map = map
         return map
@@ -128,6 +131,9 @@ struct RouteMapKitView: UIViewRepresentable {
         /// Whether airport markers are currently on the map — so a re-show after
         /// the model regained data rebuilds even when the payload is unchanged.
         private var markersShown = false
+        private var renderedObservedOverlays: [MKOverlay] = []
+        private var renderedObservedLightning: [ObservedMotionLightningAnnotation] = []
+        private var renderedObservedSignature: String?
 
         /// The inputs the airport markers colour from — a recolour is only needed
         /// when one of these changes (not on every unrelated re-render).
@@ -143,6 +149,7 @@ struct RouteMapKitView: UIViewRepresentable {
             self.parent = parent
             guard let map else { return }
             updateRoute(on: map)
+            updateObservedMotion(on: map)
             updateForecastOverlay(on: map)
             updateWaypoints(on: map)
             updateActivePoint(on: map)
@@ -154,7 +161,7 @@ struct RouteMapKitView: UIViewRepresentable {
         private func updateRoute(on map: MKMapView) {
             guard renderedRouteSignature != parent.routeSignature else { return }
             renderedRouteSignature = parent.routeSignature
-            map.removeOverlays(map.overlays)
+            map.removeOverlays(RouteMapKitView.routeOwnedOverlays(in: map.overlays))
 
             if parent.routeCoordinates.count >= 2 {
                 let base = ColoredPolyline(coordinates: parent.routeCoordinates,
@@ -169,6 +176,19 @@ struct RouteMapKitView: UIViewRepresentable {
                 line.width = seg.width
                 map.addOverlay(line, level: .aboveRoads)
             }
+        }
+
+        private func updateObservedMotion(on map: MKMapView) {
+            guard renderedObservedSignature != parent.observedMotionOverlay.signature else { return }
+            renderedObservedSignature = parent.observedMotionOverlay.signature
+            map.removeOverlays(renderedObservedOverlays)
+            map.removeAnnotations(renderedObservedLightning)
+            renderedObservedOverlays = parent.observedMotionOverlay.overlays
+            renderedObservedLightning = parent.observedMotionOverlay.lightning
+            if !renderedObservedOverlays.isEmpty {
+                map.addOverlays(renderedObservedOverlays, level: .aboveRoads)
+            }
+            if !renderedObservedLightning.isEmpty { map.addAnnotations(renderedObservedLightning) }
         }
 
         // MARK: Waypoint annotations
@@ -300,6 +320,14 @@ struct RouteMapKitView: UIViewRepresentable {
             AirportMarkerSizing.diameter(for: map, radii: [4, 5, 6, 8, 10], fallback: 12)
         }
     }
+
+    static func routeOwnedOverlays(in overlays: [MKOverlay]) -> [MKOverlay] {
+        overlays.filter { $0 is ColoredPolyline }
+    }
+
+    static func weatherOwnedOverlays(in overlays: [MKOverlay]) -> [MKOverlay] {
+        overlays.filter { $0 is ObservedMotionPolygon || $0 is ObservedMotionPolyline }
+    }
 }
 
 // MapKit calls the delegate on the main thread; `@preconcurrency` lets the
@@ -307,6 +335,7 @@ struct RouteMapKitView: UIViewRepresentable {
 // pattern as `ForecastMapKitView` / `FlightTrackingService`).
 extension RouteMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        if let renderer = ObservedMotionOverlayRenderer.renderer(for: overlay) { return renderer }
         guard let line = overlay as? ColoredPolyline else {
             return MKOverlayRenderer(overlay: overlay)
         }
@@ -339,6 +368,11 @@ extension RouteMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
             if let marker = view as? AirportMarkerView {
                 configureForecast(marker, airport: apt.airport, mode: .model(parent.forecastModel))
             }
+            return view
+        case let lightning as ObservedMotionLightningAnnotation:
+            let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: ObservedMotionLightningView.reuseID, for: lightning)
+            (view as? ObservedMotionLightningView)?.configure(precision: lightning.record.timePrecision)
             return view
         default:
             return nil

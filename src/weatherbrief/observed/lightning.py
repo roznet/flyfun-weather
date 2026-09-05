@@ -2,10 +2,10 @@
 
 Total lightning — intra-cloud as well as cloud-to-ground — as a point product
 rather than a grid.  That distinction runs through the payload: a flash list
-has no coverage mask, because the imager sees the whole disc.  "No flashes in
-the last ten minutes" is a real observation here, not a gap, and the models
-reflect that by giving :class:`~weatherbrief.models.observed.ObservedFlashAnnulus`
-no ``nodata``/``undetect`` split at all.
+has no coverage mask. Zero means no detections reported in its acquisition
+window, not verified full-disc coverage or a guarantee of no lightning.
+:class:`~weatherbrief.models.observed.ObservedFlashAnnulus` therefore has no
+``nodata``/``undetect`` split; consumers must not infer one from zero counts.
 
 Variable naming has moved between LI product baselines, so the reader looks
 for any of the known spellings rather than pinning one.  A granule that
@@ -23,7 +23,7 @@ import numpy as np
 
 from weatherbrief.models.observed import ObservedAttribution
 
-from .ctth import _parse_iso, _valid_time
+from .ctth import LI_COLLECTION, _parse_iso, _valid_time, acquisition_metadata
 from .frames import FlashFrame
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,55 @@ def _attribution(dataset) -> ObservedAttribution:
     )
 
 
+def _precise_flash_times(var, count, start, end):
+    """Validate each original timestamp before any display-age fallback."""
+    import netCDF4
+
+    events = [None] * count
+    reasons = [("window_only_time",)] * count
+    if var is None:
+        return events, reasons
+    try:
+        var.set_auto_maskandscale(True)
+        raw = np.ma.asarray(var[:]).ravel()
+        if raw.size != count:
+            return events, [("time_array_mismatch", "window_only_time")] * count
+        units = var.getncattr("units") if "units" in var.ncattrs() else None
+        for i in range(count):
+            if np.ma.is_masked(raw[i]):
+                reasons[i] = ("invalid_flash_time", "window_only_time")
+                continue
+            try:
+                if units:
+                    if not np.isfinite(float(raw[i])):
+                        raise ValueError("nonfinite time")
+                    stamp = netCDF4.num2date(raw[i].item(), units, only_use_cftime_datetimes=False,
+                                            only_use_python_datetimes=True).replace(tzinfo=timezone.utc)
+                else:
+                    # Numeric values without a documented epoch are not times.
+                    # netCDF vlen strings use object arrays: validate the
+                    # original element rather than trusting the array dtype.
+                    value = raw[i]
+                    if isinstance(value, bytes):
+                        value = value.decode("utf-8")
+                    if not isinstance(value, str):
+                        raise ValueError("missing epoch")
+                    stamp = _parse_iso(value)
+                    if stamp is None:
+                        raise ValueError("invalid timestamp")
+                if start is None or end is None or start > end:
+                    reasons[i] = ("missing_acquisition", "window_only_time")
+                elif not start <= stamp <= end:
+                    reasons[i] = ("out_of_window_time", "window_only_time")
+                else:
+                    events[i], reasons[i] = stamp, ()
+            except (ValueError, TypeError, OverflowError):
+                reasons[i] = ("invalid_flash_time", "window_only_time")
+    except Exception:
+        return events, [("invalid_flash_time", "window_only_time")] * count
+    return events, reasons
+
+
 def read_metadata(path: Path | str) -> dict:
     import netCDF4
 
@@ -117,6 +166,9 @@ def read_metadata(path: Path | str) -> dict:
         count = int(np.asarray(lat_var[:]).size) if lat_var is not None else 0
         return {
             "quantity": "flash",
+            **acquisition_metadata(dataset),
+            "product_id": LI_COLLECTION + ":" + str(getattr(dataset, "product_version", "unspecified")),
+            "decoder_version": "li_individual_time_v1",
             "valid_time": valid.isoformat() if valid else None,
             "flash_count": count,
             "attribution": _attribution(dataset).model_dump(),
@@ -144,12 +196,18 @@ def read_flashes(path: Path | str, *, source: str, window_minutes: float) -> Fla
             )
         lat_var.set_auto_maskandscale(True)
         lon_var.set_auto_maskandscale(True)
-        lats = np.ma.filled(np.asarray(lat_var[:]).ravel().astype(float), np.nan)
-        lons = np.ma.filled(np.asarray(lon_var[:]).ravel().astype(float), np.nan)
+        lats = np.ma.filled(np.ma.asarray(lat_var[:]).ravel().astype(float), np.nan)
+        lons = np.ma.filled(np.ma.asarray(lon_var[:]).ravel().astype(float), np.nan)
+        acquisition = acquisition_metadata(dataset)
+        start = _parse_iso(acquisition["acquisition_start"]) if acquisition["acquisition_start"] else None
+        end = _parse_iso(acquisition["acquisition_end"]) if acquisition["acquisition_end"] else None
+        events, reasons = _precise_flash_times(_find_variable(dataset, _TIME_NAMES), lats.size, start, end)
         times = _flash_times(_find_variable(dataset, _TIME_NAMES), lats.size, valid)
         attribution = _attribution(dataset)
 
-    keep = np.isfinite(lats) & np.isfinite(lons)
+    if lats.size != lons.size:
+        raise ValueError("LI latitude/longitude array lengths differ")
+    keep = np.isfinite(lats) & np.isfinite(lons) & (np.abs(lats) <= 90) & (np.abs(lons) <= 180)
     if times.size != lats.size:
         times = np.full(lats.size, np.datetime64(valid.replace(tzinfo=None), "s"))
 
@@ -161,4 +219,10 @@ def read_flashes(path: Path | str, *, source: str, window_minutes: float) -> Fla
         lons=lons[keep],
         times=times[keep],
         attribution=attribution,
+        time_precision=tuple("individual_time" if events[i] is not None else "window_only" for i in np.flatnonzero(keep)),
+        time_reason_codes=tuple(reasons[i] for i in np.flatnonzero(keep)),
+        event_times=tuple(events[i] for i in np.flatnonzero(keep)),
+        acquisition_start=start,
+        acquisition_end=end,
+        sample_ids=tuple(int(i) for i in np.flatnonzero(keep)),
     )

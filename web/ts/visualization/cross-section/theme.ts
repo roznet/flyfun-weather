@@ -169,8 +169,6 @@ export interface CrossSectionTheme {
     hatchColor: string;
     /** Outline of the highest-top cap, and the off-scale arrow. */
     capColor: string;
-    /** Cap outline when the retrieval flags the disc multi-layer-suspect. */
-    capMultiLayerColor: string;
     /** "The sensor does not look here" — never the same as "saw nothing". */
     noCoverageColor: string;
   };
@@ -185,12 +183,8 @@ export interface CrossSectionTheme {
 /** Sequential share ramp, lightest first. A single hue so it reads as one
  *  quantity getting stronger, and blue-violet so it cannot be confused with
  *  the radar ramp (green→red) or the NWP cloud bands (gray/white). */
-/** Band share of the LOOKED-AT SKY → colour. Breakpoints, not the colours,
- *  carry the calibration, and they start at the 5% drawing floor: a stop below
- *  it would be spent on bands that are never drawn. Above it, measured over
- *  real packs, the surviving bands run from the floor to about half the sky —
- *  a 20 NM disc splits its cloud across a dozen fine 10-FL bands, so a fifth
- *  of the sky in one of them is already a big band. */
+/** Valid retrieval sample share → colour, starting at the 5% drawing floor.
+ *  This is a display scale, not calibrated sky-area cover or confidence. */
 export const SHARE_STOPS: Array<[number, string]> = [
   [0.05, '#6377b8'],
   [0.07, '#576aa8'],
@@ -384,7 +378,6 @@ const STANDARD_THEME: CrossSectionTheme = {
     tempUnknown: 'rgba(143, 168, 200, 0.75)',
     hatchColor: 'rgba(190, 210, 235, 0.55)',
     capColor: '#e8eef8',
-    capMultiLayerColor: '#f0a94c',
     noCoverageColor: 'rgba(150, 160, 175, 0.75)',
   },
 
@@ -569,7 +562,6 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     tempUnknown: 'rgba(170, 195, 230, 0.9)',
     hatchColor: 'rgba(255, 255, 255, 0.8)',
     capColor: '#ffffff',
-    capMultiLayerColor: '#ffc046',
     noCoverageColor: 'rgba(255, 255, 255, 0.85)',
   },
 };
@@ -718,7 +710,6 @@ const LIGHT_THEME: CrossSectionTheme = {
     tempUnknown: 'rgba(92, 120, 153, 0.8)',
     hatchColor: 'rgba(70, 95, 130, 0.6)',
     capColor: '#1f2937',
-    capMultiLayerColor: '#b45309',
     noCoverageColor: 'rgba(107, 114, 128, 0.8)',
   },
   nightShading: {

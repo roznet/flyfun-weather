@@ -57,10 +57,9 @@ enum ObservedResolver {
             guard var p = point(station.stationId),
                   let a = pick(station.annuli, radiusNm, \.radiusNm) else { continue }
             p.radarNoCoverage = a.isInsufficient
-            // Never assert a value the disc could not support: below the coverage
-            // floor the number describes too little of the circle to mean
-            // anything, and a rendered 0 dBZ reads as "clear".
-            p.dbz = a.isInsufficient ? nil : a.maxValue
+            // A detection remains real even where the surrounding disc is unknown.
+            // Coverage limits absence claims, not the measured positive signal.
+            p.dbz = a.maxValue
             byId[station.stationId] = p
         }
 
@@ -68,7 +67,7 @@ enum ObservedResolver {
             guard var p = point(station.stationId),
                   let a = pick(station.annuli, radiusNm, \.radiusNm) else { continue }
             p.rateNoCoverage = a.isInsufficient
-            p.rateMmH = a.isInsufficient ? nil : a.maxValue
+            p.rateMmH = a.maxValue
             byId[station.stationId] = p
         }
 
@@ -84,15 +83,10 @@ enum ObservedResolver {
             guard var p = point(station.stationId),
                   let a = pick(station.annuli, radiusNm, \.radiusNm) else { continue }
             p.topsNoCoverage = a.isInsufficient
-            if a.isInsufficient { byId[station.stationId] = p; continue }
             p.topsHighestFt = a.highestFl.map { $0 * 100 }
-            let detected = Double(a.detectedPx)
             p.topsBins = topBins(a)
-            // quality_method 9 is the retrieval's own multi-layer-suspect flag —
-            // the case where committing to one cloud top is least trustworthy.
-            p.topsMultiLayerFraction = detected > 0
-                ? Double(a.qualityMethod?["9"] ?? 0) / detected
-                : 0
+            // Retrieval method is not cloud layering or a confidence score.
+            // In particular method 9 means opaque RTM + inversion (guide table 10).
             // Kelvin on the wire (the granule's own unit); °C for anything a
             // pilot reads.
             p.topsColdestC = a.coldestTopK.map { $0 - 273.15 }
@@ -165,16 +159,11 @@ enum ObservedResolver {
     }
 
     /// Prefer the sparse fine histogram; fall back to the coarse bands for a pack
-    /// built before it existed. The coarse bands are kept for prose, not for
-    /// drawing: at one measured station the FL050-150 bucket held pixels spanning
-    /// only FL60–FL92, so 68% of the drawn bar was empty air, and the clear gap
-    /// above it disappeared entirely.
+    /// built before it existed. Fine bins avoid implying the full coarse
+    /// interval contains detected tops; missing bins do not prove clear air.
     private static func topBins(_ a: ObservedTopsAnnulus) -> [VizObservedTopBin] {
-        // Denominator is the LOOKED-AT SKY (`validPx`), not the cloudy pixels:
-        // a band then means "this much of the sky around the point had its top
-        // here", the bands sum to the disc's cloud cover instead of always
-        // summing to 100%, and the drawing floor, the colour ramp and the legend
-        // all measure the same quantity.
+        // Valid retrieval samples, cloudy and clear. Parallax overlap and
+        // unequal footprints prevent interpreting this as a sky-area share.
         let lookedAt = Double(a.validPx)
         let fine = a.flFine ?? [:]
         if !fine.isEmpty {
@@ -184,7 +173,7 @@ enum ObservedResolver {
                 .map { fl in
                     let count = fine[String(fl)] ?? 0
                     return VizObservedTopBin(
-                        label: "FL\(pad3(fl))-\(pad3(fl + observedFineFlStep))",
+                        label: "\(fl * 100)–\((fl + observedFineFlStep) * 100) ft MSL",
                         loFt: Double(fl) * 100,
                         hiFt: Double(fl + observedFineFlStep) * 100,
                         fraction: lookedAt > 0 ? Double(count) / lookedAt : 0,
@@ -195,7 +184,9 @@ enum ObservedResolver {
         return observedCoarseTopBands.map { band in
             let count = a.flBins?[band.label] ?? 0
             return VizObservedTopBin(
-                label: band.label,
+                label: band.loFt == 0 ? "<\(Int(band.hiFt)) ft MSL"
+                    : band.hiFt >= 60_000 ? "≥\(Int(band.loFt)) ft MSL"
+                    : "\(Int(band.loFt))–\(Int(band.hiFt)) ft MSL",
                 loFt: band.loFt,
                 hiFt: band.hiFt,
                 fraction: lookedAt > 0 ? Double(count) / lookedAt : 0,
@@ -204,7 +195,4 @@ enum ObservedResolver {
         }
     }
 
-    private static func pad3(_ fl: Int) -> String {
-        String(format: "%03d", fl)
-    }
 }

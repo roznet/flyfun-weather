@@ -163,6 +163,9 @@ def read_metadata(path: Path | str, quantity: str) -> dict:
     with h5py.File(str(path), "r") as handle:
         grid = _grid_from_where(handle["where"])
         dataset, _data = _find_data_group(handle, quantity)
+        nominal_time = _parse_odim_time(
+            _attr(handle["what"], "date"), _attr(handle["what"], "time")
+        )
         valid_time = _parse_odim_time(
             _attr(dataset["what"], "enddate"), _attr(dataset["what"], "endtime")
         ) or _parse_odim_time(
@@ -180,6 +183,18 @@ def read_metadata(path: Path | str, quantity: str) -> dict:
         return {
             "quantity": quantity,
             "valid_time": valid_time.isoformat() if valid_time else None,
+            # ODIM root /what is the product's nominal target. Preserve the
+            # legacy observation valid_time above, but never use acquisition
+            # end as the motion reference or infer a missing nominal target.
+            "motion_valid_time": nominal_time.isoformat() if nominal_time else None,
+            "acquisition_start": start_time.isoformat() if start_time else None,
+            "acquisition_end": (_parse_odim_time(
+                _attr(dataset["what"], "enddate"), _attr(dataset["what"], "endtime")
+            ).isoformat() if _parse_odim_time(
+                _attr(dataset["what"], "enddate"), _attr(dataset["what"], "endtime")
+            ) else None),
+            "product_id": f"OPERA:{quantity}:{_attr(handle['what'], 'version') or 'unspecified'}",
+            "decoder_version": "odim_ground_v1",
             "window_minutes": window_minutes,
             "grid": {
                 "proj4": grid.proj4,

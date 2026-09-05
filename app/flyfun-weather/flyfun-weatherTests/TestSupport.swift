@@ -61,6 +61,8 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     /// the `notStubbed` throw below.
     var latestPackHandler: (@Sendable () throws -> PackMetaResponse)?
     var advisoriesHandler: (@Sendable () throws -> AdvisoriesResponse)?
+    /// Delivered by the real ViewModel refresh loop; no persistence is mocked.
+    var refreshEvents: [RefreshEvent] = []
 
     // Call counters + captured args for behaviour assertions.
     private(set) var flightsCallCount = 0
@@ -190,7 +192,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw MockError.notStubbed("grametImage") }
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw MockError.notStubbed("soundingProfile") }
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
-        AsyncThrowingStream { $0.finish() }
+        AsyncThrowingStream { continuation in
+            for event in refreshEvents { continuation.yield(event) }
+            continuation.finish()
+        }
     }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw MockError.notStubbed("refreshStatus") }
     func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }

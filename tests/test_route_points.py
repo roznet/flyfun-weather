@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from weatherbrief.fetch.route_points import interpolate_route
+from weatherbrief.fetch.route_walk import walk_route
 from weatherbrief.models import RouteConfig, Waypoint
 
 
@@ -81,3 +82,24 @@ class TestInterpolateRoute:
         coarse = interpolate_route(two_waypoint_route, spacing_nm=50.0)
         fine = interpolate_route(two_waypoint_route, spacing_nm=10.0)
         assert len(fine) > len(coarse)
+
+
+def test_strict_walker_bounds_final_segment_without_changing_defaults():
+    route = RouteConfig(name="short", waypoints=[
+        Waypoint(icao="A", name="A", lat=0, lon=0),
+        Waypoint(icao="A", name="A again", lat=0, lon=.03),
+    ])
+    assert len(list(walk_route(route, 1))) == 2  # Legacy one-NM tolerance.
+    strict = list(walk_route(route, 1, max_segment_nm=1, max_segments=2048))
+    assert len(strict) == 3
+    assert strict[-1][3:] == ("A", "A again")
+    assert all(0 < b[2] - a[2] <= 1 for a, b in zip(strict, strict[1:]))
+
+
+def test_strict_walker_refuses_cap_before_yielding_partial_route():
+    route = RouteConfig(name="long", waypoints=[
+        Waypoint(icao="A", name="A", lat=0, lon=0),
+        Waypoint(icao="B", name="B", lat=0, lon=40),
+    ])
+    with pytest.raises(ValueError, match="route_segment_limit"):
+        next(walk_route(route, 1, max_segment_nm=1, max_segments=2048))
