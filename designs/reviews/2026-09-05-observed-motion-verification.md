@@ -94,3 +94,7 @@ run is not the completion of its task or the feature.
   generic ancestor-directory cleanup must remain distinct. Ordinary reusable pack
   identities retain ordering state; a removed account namespace with lost state
   must not be reused. This is planned integration work, not a real-data deletion.
+- Tracking returns explicit count/completeness metadata alongside its tracks.
+  A bare list loses the distinction between known omissions, unevaluated work and
+  evaluated zero. Source loading similarly carries inventory/selection counts.
+  These are internal interface changes; consumers and count tests must agree.

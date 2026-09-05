@@ -99,7 +99,7 @@ def test_unknown_hole_is_not_filled():
 
 **Files:** Create `observed/motion/tracking.py`; tests `tests/observed/test_motion_tracking.py`. Consume task-2 geometry, not source reader internals.
 
-**Interfaces:** `TrackSample(frame_id, reference_at, footprint)` and `Track(feature_id, source_id, reference_at, footprint, history, velocity_xy_m_s, reason_codes, pair_diagnostics, fit_rms_residual_cells)` dataclasses. `track_history(frames: Sequence[AnalysisFrame], *, route_geometry: BaseGeometry, policy=DEFAULT_POLICY, deadline=None) -> list[Track]`. The supplied projected continuous route is used to rank candidates, not inferred from the grid centre. Footprints are unsimplified metric Shapely geometry; velocity is `tuple[float,float] | None`, never a fabricated zero. `history` contains observed `TrackSample` records.
+**Interfaces:** `TrackSample(frame_id, reference_at, footprint)` and `Track(feature_id, source_id, reference_at, footprint, history, velocity_xy_m_s, reason_codes, pair_diagnostics, fit_rms_residual_cells)` dataclasses. `track_history(frames: Sequence[AnalysisFrame], *, route_geometry: BaseGeometry, policy=DEFAULT_POLICY, deadline=None) -> TrackingResult`. The result has `.tracks: list[Track]`, `.reason_codes`, and explicit `.counts` for full-field detections, small detections, eligible candidates, selected candidates and emitted observed features; unevaluated counts are null with a completeness flag, never inferred zero from an empty list. Exact count scopes are documented and consumed by payload completeness. The supplied projected continuous route is used to rank candidates, not inferred from the grid centre. Footprints are unsimplified metric Shapely geometry; velocity is `tuple[float,float] | None`, never a fabricated zero. `history` contains observed `TrackSample` records.
 
 - [ ] Write literal translations and observed-only failures before implementation. Synthetic zero and unknown are separate:
 
@@ -108,7 +108,7 @@ def test_clean_stationary_echo_is_not_unknown():
     track = tracked_square_history(offsets=[(0,0),(0,0),(0,0)])[0]
     assert track.velocity_xy_m_s == pytest.approx((0,0))
 def test_failed_latest_match_cannot_reuse_old_velocity():
-    tracks = track_history(history_with_split_latest(), route_geometry=fixture_route_line())
+    tracks = track_history(history_with_split_latest(), route_geometry=fixture_route_line()).tracks
     assert all(t.velocity_xy_m_s is None for t in tracks)
 ```
 
