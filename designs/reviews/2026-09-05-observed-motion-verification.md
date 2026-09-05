@@ -85,3 +85,7 @@ run is not the completion of its task or the feature.
   revision, with the single shared route-identity function. Storage separately
   detects raw identity changes; it cannot certify a first envelope against an
   independently changed flight record merely because both carry opaque IDs.
+- Pure route/timing work has its own task/review gate before payload integration.
+  This permits parallel numerical tests using the agreed grid/track fields; the
+  required continuous solver and scientific limits are unchanged. Any interface
+  disagreement still requires reconciliation and covering tests.

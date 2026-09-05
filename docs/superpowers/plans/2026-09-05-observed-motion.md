@@ -32,7 +32,7 @@
 
 ## Execution and file ownership
 
-Tasks 1–5 and 9 are the server increment; task 6 is web; task 7 is native; task 8 verifies the integrated increment. Task 9 extracts the independently testable publication primitive from task 5 and can run alongside input work; task 5 later wires its reviewed helper into real writers/transports. Each has its own test/review gate. Tasks can be delegated on disjoint file sets when their consumed interfaces are stable; no concurrent edits or commits to shared files. The controller serializes commits and records ownership/review ranges in the plan-scoped ledger. This follows the environment's explicit parallel-delegation instruction while avoiding shared-file conflicts.
+Tasks 1–5, 9 and 10 are the server increment; task 6 is web; task 7 is native; task 8 verifies the integrated increment. Task 9 extracts the independently testable publication primitive from task 5 and can run alongside input work; task 5 later wires its reviewed helper into real writers/transports. Task 10 similarly extracts continuous route geometry/timing from task 4, so those pure calculations can be tested against the agreed grid/track interfaces before payload orchestration. Each has its own test/review gate. Tasks can be delegated on disjoint file sets when their consumed interfaces are stable; no concurrent edits or commits to shared files. The controller serializes commits and records ownership/review ranges in the plan-scoped ledger. This follows the environment's explicit parallel-delegation instruction while avoiding shared-file conflicts.
 
 Python commands below use `env PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 WB_OBSERVED_LIVE_TESTS=0 venv/bin/python -m pytest -q -p no:cacheprovider`. API tests use their in-memory SQLite fixtures/temporary paths. Web commands run in `web/` with `PATH=/home/qian/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin`.
 
@@ -118,11 +118,11 @@ def test_failed_latest_match_cannot_reuse_old_velocity():
 
 ### Task 4: Route relationships, associations and bounded payload
 
-**Files:** Create `observed/motion/route.py`, `association.py`, `payload.py`; extend `fetch/route_walk.py` with an opt-in strict segment limit without changing defaults. Tests `tests/observed/test_motion_route.py`, `test_motion_association.py`, `test_motion_payload.py` and route-walker tests.
+**Files:** Consume the reviewed `observed/motion/route.py` and strict route-walker extension from task 10. Create `observed/motion/association.py`, `payload.py`. Tests `tests/observed/test_motion_association.py`, `test_motion_payload.py`; task 10 owns route/route-walker tests.
 
 **Interfaces:** `build_observed_motion(route: RouteConfig, *, departure_time: datetime | None, cutoff_at: datetime, revision: int, store: FrameStore | None = None) -> ObservedMotion`. `route_identities(route, departure_time) -> tuple[str,str|None]`. `build_route_geometry(route, grid) -> BaseGeometry` supplies a projected continuous route to tracking's candidate ranking. `route_relationships(track, route, grid, departure_time, cutoff_at, projection_times) -> tuple[list[RouteRow], PlannedOverlapResult]`. `associate_tracks(tracks, frames_by_source, grid, context) -> tuple[list[AssociationRecord], list[LightningRecord], dict[str,FeatureLightningEvidence]]`; this internal map never appears as ID-keyed JSON. Grid is the task-2 type and tracks the task-3 type.
 
-- [ ] Test a moving polygon crossing between UI ticks using hand-calculated overlap times, a route bend, holes/tangent/zero relative movement and already-intersecting closure.
+- [ ] Integrate task 10's independently tested route relationships and planned-overlap calculations. Its tests cover a moving polygon crossing between UI ticks, a route bend, holes/tangent/zero relative movement and already-intersecting closure.
 
 ```python
 def test_ground_speed_is_not_route_closure():
@@ -133,7 +133,7 @@ def test_ground_speed_is_not_route_closure():
     assert overlap.status == "unavailable"
 ```
 
-- [ ] Implement dense great-circle legs preserving every original bend/leg identity; minimum full-contour distance and centered supported closure; planned relative-segment/polygon intersection, preserving holes/multiple intervals/tangencies. Use source-bounded intervals and planned distance-fraction timing only. Convert representative speed via inverse AEQD + WGS84 one-second displacement.
+- [ ] Use the reviewed route helpers for dense great-circle legs, closure and continuous planned overlap; use the same source-bounded intervals and planned distance-fraction timing in payloads. Convert representative speed via the reviewed inverse AEQD + WGS84 one-second displacement helper.
 - [ ] Test compatible asynchronous overlap vs unavailable time/registration; rain RATE remains independent; lightning precision remains observed and feature summaries precede marker caps. Translate only within bracketed observed histories for association; keep identities/vectors separate.
 - [ ] Orchestrate bounded independent source tracks, source statuses, per-feature observations, UTC times and projection geometries. Enforce caps/deterministic omission counts and 1 MiB serialized UTF-8; preserve feature cards/positive evidence, never silently simplify beyond tolerance or return a negative on incomplete evaluation. One cooperative computation/process, 15-second budget. Gate defaults off; runtime refusal returns an explicit envelope.
 - [ ] Test no network access, independent unavailable source, CTTH production gate, >256 lightning markers with retained positive summary, 48-feature/geometry/interval caps, expired lead, empty history, busy/error replacement. Run relevant tests; controller commits/reviews.
@@ -241,8 +241,22 @@ def test_deletion_preserves_high_water_and_fences_old_generation(tmp_path):
 - [ ] Tests cover separate stable lock inode, concurrent reserve/publication via barriers, snapshot readers never observing partial JSON, safe-integer exhaustion, retained high-water, wrong-path token, deleted/recreated path, old full-writer content and failed atomic write preserving prior JSON. All deletion fixtures live under pytest tmp_path; no shared data.
 - [ ] Run focused tests red then green; controller commits owned files and dispatches a dedicated concurrency/quality review. Task 5 cannot bypass these helpers after review.
 
+### Task 10: Continuous route/timing primitive (before task 4)
+
+**Files:** Create `src/weatherbrief/observed/motion/route.py`; extend `src/weatherbrief/fetch/route_walk.py` with an opt-in strict segment limit without changing defaults. Tests `tests/observed/test_motion_route.py` and relevant route-walker tests. Own only these files.
+
+**Interfaces:** `route_identities(route, departure_time) -> tuple[str,str|None]`; `build_route_geometry(route, grid) -> BaseGeometry`; `route_relationships(track, route, grid, departure_time, cutoff_at, projection_times) -> tuple[list[RouteRow], PlannedOverlapResult]`; `ground_velocity(track, grid) -> tuple[float, float|None, tuple[float,float]]` gives speed knots, bearing degrees true/null, and reference point lon/lat. `track` consumes task 3's agreed data fields; `grid` consumes task 2's `AnalysisGrid`. The pure route functions must not access providers/storage or construct alternative motion models. Task 4 imports these reviewed primitives.
+
+- [ ] Write literal/hand-calculated geometry tests first: movement parallel to a leg has nonzero ground speed but unchanged closure; intersection has distance zero and closure not applicable; a moving contour crossing between UI ticks yields a continuous planned interval. Include holes, multiple intervals, tangencies and zero relative displacement.
+- [ ] Reuse the great-circle distance convention and preserve every original waypoint/bend/leg index (including repeated labels). Strict densification is opt-in, at most 1 NM per segment and 2,048 segments; defaults and unrelated advisory behavior remain unchanged. Degenerate legs do not erase valid legs or gain passage intervals.
+- [ ] Implement route geometry and a single deterministic geometry/timing identity algorithm. Invalid timing yields null timing ID, not a guessed speed/departure. Planned timing uses aware departure plus duration times cumulative-distance fraction only. Reject nonfinite/invalid route or durations and unsupported segment counts explicitly.
+- [ ] Compute minimum full-contour/continuous-leg distance; centered 60-second supported finite-difference closure, shortened at reference/expiry boundaries. Positive means distance decreasing; magnitude below 1 kt is approximately unchanged. Each leg/time retains its own identity and reasons.
+- [ ] Solve continuous overlap using relative aircraft segments versus the unsimplified translated contour. Preserve holes/tangent instants/multiple intervals; zero relative displacement uses point coverage. Restrict to the planned/source-supported interval and whole-contour domain support; fail unavailable (not evaluated-empty) on geometry/interval/resource limits. Round output outward to minutes, clamp to evaluated interval, and distinguish tangent instants.
+- [ ] Convert the latest contour centroid and its one-second grid translation through inverse AEQD then WGS84 geodesic; return true toward bearing and knots, zero speed with null bearing. Test off-centre projection orientation, not raw grid-axis atan2.
+- [ ] Test no future lead, invalid timing, before-arrival crossing, repeated/zero legs, route cap, interval cap and fractional-domain exits. Run focused route/adjacent walker tests red then green; controller commits owned files and dispatches an independent numerical/spec review.
+
 ## Coverage self-review
 
-Design §§1–3: tasks 1/4/6/7/8; §§4–5: tasks 2/3; §§6–7: task 4; §8 and contract: tasks 1/4/6/7; §9: tasks 5/6/7/9; §10: tasks 6/7; §§11–12: task 8 and each task's red/green/review gate. Both clients, independent cloud, lightning precision/summary, continuous planned overlap, server/client cache ordering and every transport have explicit owners.
+Design §§1–3: tasks 1/4/6/7/8; §§4–5: tasks 2/3; §§6–7: tasks 4/10; §8 and contract: tasks 1/4/6/7; §9: tasks 5/6/7/9; §10: tasks 6/7; §§11–12: task 8 and each task's red/green/review gate. Both clients, independent cloud, lightning precision/summary, continuous planned overlap, server/client cache ordering and every transport have explicit owners.
 
 Source registration and forecast usefulness are evidence gates, not work silently replaced by unit tests. Public/authorized real-source acquisition needs its own documented step; this plan neither reads shared data nor enables production to bypass it.
