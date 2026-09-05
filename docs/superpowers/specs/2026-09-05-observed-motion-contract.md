@@ -1,7 +1,7 @@
 # Observed motion: version-1 record definitions
 
 Date: 2026-09-05. Normative companion to the
-[motion design](2026-09-05-observed-motion-design.md), awaiting the same user review.
+[motion design](2026-09-05-observed-motion-design.md), approved for implementation with it.
 This is a wire-format specification, **not an implemented API or test result**.
 Algorithm, limits, publication and UI rules remain in that design.
 

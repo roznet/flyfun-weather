@@ -3,9 +3,10 @@
 Date: 2026-09-05. Follow-up: [PR #600](https://github.com/roznet/flyfun-weather/pull/600),
 following the review of [PR #584](https://github.com/roznet/flyfun-weather/pull/584).
 
-**Status: design direction approved; this written specification awaits user
-review. No prediction implementation is claimed.** The user approved the proposed
+**Status: written specification approved; implementation in progress under the
+[implementation plan](../plans/2026-09-05-observed-motion.md). No completed prediction implementation is claimed.** The user approved the proposed
 shared backend and native/web vector explorer with "Looks good, pls continue".
+After written-spec review, the user explicitly approved continuing with implementation.
 Mac/iOS execution remains deferred. The published correction head is still
 `95e233b60104e79e3dd05b06ff3ecc54cb9812c6` at the time of this specification.
 
