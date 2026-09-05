@@ -1,7 +1,9 @@
 /** Briefing page entry point — wires store, UI manager, and event handlers. */
 
+import '../css/briefing.css';
+
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { briefingStore, type BriefingState } from './store/briefing-store';
+import { briefingStore, observedMotionState, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
@@ -52,6 +54,8 @@ import { RouteGraphRenderer } from './visualization/route-graph/renderer';
 import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
 import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from './visualization/route-graph/interaction';
 import { RouteMapRenderer, type MapFrontLine } from './visualization/route-map/renderer';
+import { ObservedMotionMapLayer } from './observed-motion/map-layer';
+import { ObservedMotionView } from './observed-motion/view';
 import { fetchHewsonFronts } from './adapters/hewson-map-adapter';
 import type { RouteFrontsManifest } from './types/fronts';
 import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/metrics';
@@ -1224,6 +1228,8 @@ async function init(): Promise<void> {
   let routeGraphRenderer: RouteGraphRenderer | null = null;
   let routeGraphInteraction: RouteGraphInteractionHandle | null = null;
   let mapRenderer: RouteMapRenderer | null = null;
+  let observedMotionMapLayer: ObservedMotionMapLayer | null = null;
+  let observedMotionView: ObservedMotionView | null = null;
   let mapInteraction: MapInteractionHandle | null = null;
   let compareRenderer: CompareSectionRenderer | null = null;
   let compareInteraction: CompareInteractionHandle | null = null;
@@ -1917,6 +1923,10 @@ async function init(): Promise<void> {
       mapRenderer.setShowFronts(state.vizSettings.mapFrontsVisible ?? false);
       mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       mapRenderer.render();
+      if (!observedMotionMapLayer) {
+        const group = mapRenderer.createObservedMotionLayerGroup();
+        if (group) observedMotionMapLayer = new ObservedMotionMapLayer(group, mapContainer);
+      }
       // Gated front axes for the selected model (async; redraws when ready).
       updateMapFrontLines(
         state.routeFronts,
@@ -1930,7 +1940,48 @@ async function init(): Promise<void> {
       // Observed conditions overlay (#574): the newest radar frame under the
       // route plus age-faded lightning. Imagery is served, never carried in
       // the briefing payload, so it is requested here when the layer is drawn.
-      updateObservedOverlay(data, mapRenderer, () => renderVisualization(store.getState()));
+      if (observedMotionState.modeActive) {
+        // Motion owns independent vectors; the ordinary raster preference is
+        // retained in settings but deliberately not requested underneath it.
+        observedFlashRequests.clear();
+        mapRenderer.setObservedSource(null);
+        mapRenderer.setObservedFlashes([]);
+        mapRenderer.refreshObserved();
+      } else {
+        updateObservedOverlay(data, mapRenderer, () => renderVisualization(store.getState()));
+      }
+
+      if (mapControlsContainer) {
+        let motionShell = document.getElementById('observed-motion-shell');
+        if (!motionShell) {
+          motionShell = document.createElement('div');
+          motionShell.id = 'observed-motion-shell';
+          motionShell.className = 'observed-motion-shell';
+          mapControlsContainer.insertAdjacentElement('afterend', motionShell);
+        }
+        if (!observedMotionView) {
+          observedMotionView = new ObservedMotionView(motionShell, observedMotionState, {
+            onToggle: active => { if (active) void store.getState().enterObservedMotionMode(); else store.getState().leaveObservedMotionMode(); },
+            onSelectTime: time => observedMotionState.selectTime(time),
+            onSelectFeature: id => observedMotionState.selectFeature(id),
+            onSelectAssociation: id => observedMotionState.selectAssociation(id),
+            onSourceToggle: (family, enabled) => observedMotionState.setSourceEnabled(family, enabled),
+          });
+        }
+        observedMotionView.render();
+      }
+      const motion = observedMotionState.modeActive ? observedMotionState.current?.motion ?? null : null;
+      observedMotionMapLayer?.setData(motion);
+      observedMotionMapLayer?.setSourceEnabled('radar_echo', observedMotionState.sourceEnabled.radar_echo);
+      observedMotionMapLayer?.setSourceEnabled('high_cloud_top', observedMotionState.sourceEnabled.high_cloud_top);
+      const association = motion?.associations.find(item => item.association_id === observedMotionState.selectedAssociationId);
+      observedMotionMapLayer?.selectFeatures(association
+        ? [association.radar_feature_id, association.cloud_feature_id]
+        : observedMotionState.selectedFeatureId ? [observedMotionState.selectedFeatureId] : []);
+      const projectionPresentation = observedMotionState.selectedTime === 'observed' ? 'active'
+        : observedMotionState.capability === 'disabled' || observedMotionState.presentationReasons.includes('expired') || observedMotionState.clockUncertain ? 'hidden'
+        : observedMotionState.capability === 'enabled' ? 'active' : 'stored';
+      observedMotionMapLayer?.selectTime(observedMotionState.selectedTime, projectionPresentation);
 
       // Attach or update map interaction
       if (mapInteraction) {
@@ -2005,6 +2056,7 @@ async function init(): Promise<void> {
     } else {
       // Map not visible — destroy
       observedFlashRequests.clear();
+      if (observedMotionMapLayer) { observedMotionMapLayer.destroy(); observedMotionMapLayer = null; }
       if (mapInteraction) { mapInteraction.destroy(); mapInteraction = null; }
       if (mapRenderer) { mapRenderer.destroy(); mapRenderer = null; }
     }
@@ -2175,7 +2227,7 @@ async function init(): Promise<void> {
         track(EVENTS.BRIEFING_REFRESHED);
       }
     }
-    if (
+    const briefingContentChanged =
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||
       state.digest !== prev.digest ||
@@ -2186,8 +2238,8 @@ async function init(): Promise<void> {
       state.showingAlt !== prev.showingAlt ||
       state.elevationProfile !== prev.elevationProfile ||
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride ||
-      state.windOverlay !== prev.windOverlay
-    ) {
+      state.windOverlay !== prev.windOverlay;
+    if (briefingContentChanged) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
       // Re-check here too, not just on first load: the history dropdown swaps
       // packs in place and a refresh lands one, so a chip painted beside a
@@ -2208,6 +2260,8 @@ async function init(): Promise<void> {
       renderPointSections(state);
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
+    } else if (state.observedMotionVersion !== prev.observedMotionVersion) {
+      renderVisualization(state);
     }
     if (
       state.timeOptions !== prev.timeOptions ||
@@ -2677,6 +2731,21 @@ async function init(): Promise<void> {
   }
 
   // --- Load flight data, then render even if no packs exist ---
+  const motionClock = window.setInterval(() => {
+    if (observedMotionState.modeActive) observedMotionState.updateClock(new Date());
+  }, 60_000);
+  const refreshMotionLifecycle = (): void => {
+    if (!observedMotionState.modeActive) return;
+    observedMotionState.updateClock(new Date());
+    void store.getState().recheckObservedMotionAuthority();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshMotionLifecycle();
+  });
+  window.addEventListener('pageshow', refreshMotionLifecycle);
+  window.addEventListener('online', refreshMotionLifecycle);
+  window.addEventListener('pagehide', () => window.clearInterval(motionClock), { once: true });
+
   store.getState().loadFlight(flightId).then(async () => {
     // If a specific pack timestamp was requested via URL, select it
     if (packTimestamp) {

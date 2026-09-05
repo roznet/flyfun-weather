@@ -1,0 +1,31 @@
+.observed-motion-shell { margin-top: .65rem; min-width: 0; }
+.observed-motion-toggle { border-color: #7c3aed; color: #6d28d9; }
+.observed-motion-toggle[aria-pressed="true"] { background: #6d28d9; color: #fff; }
+.observed-motion-panel { margin-top: .5rem; padding: .75rem; border: 1px solid color-mix(in srgb, #7c3aed 45%, var(--border-color, #cbd5e1)); border-radius: 8px; background: color-mix(in srgb, var(--card-bg, #fff) 94%, #7c3aed); min-width: 0; overflow: hidden; }
+.observed-motion-status { margin: 0 0 .4rem; font-weight: 700; }
+.motion-experimental-note { margin: 0 0 .65rem; font-size: .84rem; line-height: 1.35; }
+.observed-motion-controls { display: flex; flex-wrap: wrap; gap: .55rem 1rem; align-items: center; }
+.observed-motion-controls label { display: inline-flex; align-items: center; gap: .35rem; font-size: .86rem; }
+.observed-motion-controls select { max-width: 100%; }
+.observed-motion-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); gap: .7rem; margin-top: .7rem; }
+.observed-motion-grid h4 { margin: 0 0 .35rem; font-size: .9rem; }
+.observed-motion-feature-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+.observed-motion-feature, .observed-motion-association { width: 100%; text-align: left; padding: .55rem; border: 1px solid var(--border-color, #cbd5e1); border-radius: 6px; color: inherit; background: var(--card-bg, #fff); cursor: pointer; }
+.observed-motion-feature span { display: block; margin-top: .18rem; font-size: .78rem; }
+.observed-motion-feature[aria-pressed="true"], .observed-motion-association[aria-pressed="true"] { outline: 3px solid #7c3aed; outline-offset: 1px; }
+.observed-motion-association { margin-bottom: .4rem; }
+.observed-motion-detail-card { margin-top: .7rem; padding-top: .6rem; border-top: 1px solid var(--border-color, #cbd5e1); }
+.observed-motion-detail-card h5 { margin: 0 0 .35rem; }
+.motion-reasons { display: inline-block; color: #8a4b08; font-size: .78rem; }
+.motion-table-wrap { overflow-x: auto; }
+#observed-motion-route-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+#observed-motion-route-table th, #observed-motion-route-table td { padding: .35rem; border: 1px solid var(--border-color, #cbd5e1); vertical-align: top; }
+.observed-motion-limitations { margin-top: .65rem; font-size: .8rem; }
+.observed-motion-map-legend { position: absolute; z-index: 500; left: .5rem; bottom: 1.8rem; max-width: calc(100% - 1rem); padding: .3rem .45rem; border-radius: 4px; background: color-mix(in srgb, var(--card-bg, #fff) 90%, transparent); box-shadow: 0 1px 4px #0004; font-size: .72rem; pointer-events: none; }
+.observed-motion-stored { opacity: .55; }
+@media (max-width: 600px) {
+  .observed-motion-panel { padding: .55rem; }
+  .observed-motion-grid, .observed-motion-feature-list { grid-template-columns: minmax(0, 1fr); }
+  .observed-motion-controls { align-items: stretch; flex-direction: column; }
+  .observed-motion-controls label { justify-content: space-between; }
+}

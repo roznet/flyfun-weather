@@ -816,6 +816,8 @@ export interface RealtimeRefreshResult {
   /** Re-sampled from locally-held frames, which is why the refresh button
    *  updates the observed panel without any provider fetch. */
   observed?: ObservedConditions | null;
+  /** Optional raw observed-motion sibling. Missing on legacy servers. */
+  observed_motion?: unknown;
 }
 
 /** One weather-based divert candidate (issue #210). */
@@ -964,6 +966,9 @@ export interface ForecastSnapshot {
   /** Observed radar / lightning / cloud tops along the corridor (#574).
    *  D-0 only, and only where the observed collector is enabled. */
   observed_conditions?: ObservedConditions | null;
+  /** Raw/tolerant motion block; parsed independently so malformed data cannot
+   *  fail the rest of the briefing. Unknown nested keys remain untouched. */
+  observed_motion?: unknown;
   alternates?: RouteAlternates | null;
   last_refresh_delta?: RefreshDelta | null;
 }

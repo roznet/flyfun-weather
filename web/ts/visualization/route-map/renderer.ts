@@ -747,6 +747,12 @@ export class RouteMapRenderer {
     return this.map;
   }
 
+  /** Explicit ownership seam for an independent weather overlay. Route
+   * redraw/recolour operations never clear groups created through this seam. */
+  createObservedMotionLayerGroup(): L.LayerGroup | null {
+    return this.map ? L.layerGroup().addTo(this.map) : null;
+  }
+
   getSegmentGroup(): L.LayerGroup | null {
     return this.segmentGroup;
   }

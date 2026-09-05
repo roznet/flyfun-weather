@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test';
 // Playwright interception. No application server, shared DB or dist build.
 export default defineConfig({
   testDir: './tests',
-  testMatch: 'observed-browser.spec.ts',
+  testMatch: ['observed-browser.spec.ts', 'observed-motion-browser.spec.ts'],
   timeout: 30_000,
   workers: 1,
   retries: 0,

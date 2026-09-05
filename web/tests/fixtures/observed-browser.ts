@@ -85,6 +85,98 @@ function observedFixture(includeTops: boolean) {
   };
 }
 
+function observedMotionFixture() {
+  const coverage = { status: 'available', reason_codes: [], scope: 'feature_contour', known_cells: 20, total_cells: 20, known_fraction: 1 };
+  const geolocation = { status: 'validated', reason_codes: [], evidence_id: 'fixture-geolocation', method_version: 'fixture-registration-v1', applicability_id: 'fixture-domain' };
+  const geometry = (coordinates: number[][][][]) => ({ status: 'available', reason_codes: [], geometry: { type: 'MultiPolygon', coordinates }, provenance: 'grid_contour', simplification_tolerance_m: 200 });
+  const source = (source_id: string, frame_id: string, valid_at: string, attribution: string, previousValidAt?: string) => ({
+    source_id, status: 'available', reason_codes: [], attribution, gaps: [], coverage: { ...coverage, scope: 'analysis_domain' }, geolocation,
+    frames: [...(previousValidAt ? [{ frame_id: frame_id.replace(/-1$/, '-0'), content_id: `content-${frame_id}-previous`, product_id: source_id,
+      decoder_version: 'fixture-v1', grid_id: 'fixture-grid', valid_at: previousValidAt, received_at: previousValidAt, reference_at: previousValidAt,
+      acquisition_window: { start_at: previousValidAt, end_at: previousValidAt } }] : []),
+      { frame_id, content_id: `content-${frame_id}`, product_id: source_id, decoder_version: 'fixture-v1', grid_id: 'fixture-grid',
+        valid_at, received_at: valid_at, reference_at: valid_at, acquisition_window: { start_at: valid_at, end_at: valid_at } }],
+  });
+  const radarCoordinates = [[
+    [[-0.95, 51.15], [-0.55, 51.15], [-0.55, 51.45], [-0.95, 51.45], [-0.95, 51.15]],
+    [[-0.82, 51.24], [-0.68, 51.24], [-0.68, 51.34], [-0.82, 51.34], [-0.82, 51.24]],
+  ]];
+  const cloudCoordinates = [[[[ -0.35, 51.18], [0.05, 51.18], [0.05, 51.48], [-0.35, 51.48], [-0.35, 51.18]]]];
+  const baseFeature = {
+    coverage, geolocation, projections: [], route_rows: [], observations: [], reason_codes: [],
+    lightning_evidence: { status: 'unavailable', reason_codes: ['missing_source'], source_id: null, frame_ids: [], evaluated_window: null,
+      reported_detection_count: null, emitted_marker_count: 0, evaluation_complete: false },
+    planned_overlap: { status: 'unavailable', reason_codes: ['invalid_planned_timing'], method: 'relative_segment_contour_intersection',
+      planned_time_method: 'distance_proportional_planned', evaluated_interval: null, intervals: [], complete: false },
+  };
+  const radar = {
+    ...baseFeature, feature_id: 'radar-feature-1', source_id: 'opera-dbzh', family: 'radar_echo',
+    definition: { quantity: 'reflectivity', operator: 'gte', threshold: 5, unit: 'dBZ' },
+    reference_at: '2026-02-25T16:50:00Z', reference_frame_id: 'radar-frame-1', frame_ids: ['radar-frame-0', 'radar-frame-1'],
+    display_geometry: geometry(radarCoordinates),
+    trail: [{ frame_id: 'radar-frame-0', observed_at: '2026-02-25T16:40:00Z', center: [-0.88, 51.27] },
+      { frame_id: 'radar-frame-1', observed_at: '2026-02-25T16:50:00Z', center: [-0.75, 51.30] }],
+    observations: [{ kind: 'rain_rate_max', status: 'available', reason_codes: [], value: 6.5, unit: 'mm_h', source_id: 'opera-rate', frame_id: 'rate-frame-1',
+      observed_at: '2026-02-25T16:47:00Z', comparison_at: '2026-02-25T16:50:00Z', acquisition_window: { start_at: '2026-02-25T16:42:00Z', end_at: '2026-02-25T16:47:00Z' },
+      alignment_method: 'in_history_translation', sample_id: 'rate-sample-1', sample_position: [-0.75, 51.30], paired_temperature_k: null, coverage }],
+    lightning_evidence: { status: 'available', reason_codes: ['selection_limit'], source_id: 'eumetsat-li', frame_ids: ['li-frame-1'],
+      evaluated_window: { start_at: '2026-02-25T16:40:00Z', end_at: '2026-02-25T16:50:00Z' }, reported_detection_count: 7,
+      emitted_marker_count: 1, evaluation_complete: false },
+    motion: { status: 'accepted', reason_codes: ['grid_discretization'], ground_speed_kt: 22, bearing_deg_true: 85,
+      velocity_reference_point: [-0.75, 51.30], velocity_method: 'inverse_aeqd_geodesic_1s', pair_diagnostics: [], fit_rms_residual_cells: 0.3 },
+    projection_end_at: '2026-02-25T17:05:00Z',
+    projections: [{ at: '2026-02-25T17:05:00Z', status: 'available', reason_codes: ['projected_translation'],
+      display_geometry: geometry([[...radarCoordinates[0].map(ring => ring.map(([lon, lat]) => [lon + 0.1, lat]))]]) }],
+    route_rows: [{ leg_id: 'fixture-route:0', leg_index: 0, from_label: 'EGTF', to_label: 'EGLF', at: '2026-02-25T17:05:00Z', status: 'available',
+      reason_codes: ['grid_discretization'], distance_nm: 3.2, closure_kt: 8.4,
+      closure_interval: { start_at: '2026-02-25T17:00:00Z', end_at: '2026-02-25T17:05:00Z' }, relationship: 'approaching',
+      planned_time_method: 'distance_proportional_planned', planned_time_status: 'available', planned_time_reason_codes: [], planned_overlap_at_time: false }],
+    planned_overlap: { status: 'available', reason_codes: ['grid_discretization'], method: 'relative_segment_contour_intersection',
+      planned_time_method: 'distance_proportional_planned', evaluated_interval: { start_at: '2026-02-25T17:00:00Z', end_at: '2026-02-25T17:10:00Z' },
+      intervals: [{ leg_id: 'fixture-route:0', leg_index: 0, start_at: '2026-02-25T17:03:00Z', end_at: '2026-02-25T17:05:00Z', contact: 'interval', approximate: true }], complete: true },
+  };
+  const cloud = {
+    ...baseFeature, feature_id: 'cloud-feature-1', source_id: 'eumetsat-ctth', family: 'high_cloud_top',
+    definition: { quantity: 'geometric_cloud_top_height', operator: 'gte', threshold: 4572, unit: 'm_msl' },
+    reference_at: '2026-02-25T16:48:00Z', reference_frame_id: 'cloud-frame-1', frame_ids: ['cloud-frame-0', 'cloud-frame-1'],
+    display_geometry: geometry(cloudCoordinates),
+    trail: [{ frame_id: 'cloud-frame-0', observed_at: '2026-02-25T16:38:00Z', center: [-0.30, 51.28] },
+      { frame_id: 'cloud-frame-1', observed_at: '2026-02-25T16:48:00Z', center: [-0.15, 51.32] }],
+    observations: [{ kind: 'cloud_top_max', status: 'available', reason_codes: [], value: 9000, unit: 'm_msl', source_id: 'eumetsat-ctth', frame_id: 'cloud-frame-1',
+      observed_at: '2026-02-25T16:48:00Z', comparison_at: '2026-02-25T16:48:00Z', acquisition_window: { start_at: '2026-02-25T16:38:00Z', end_at: '2026-02-25T16:48:00Z' },
+      alignment_method: 'observed', sample_id: 'cloud-sample-1', sample_position: [-0.15, 51.32], paired_temperature_k: 223.15, coverage }],
+    motion: { status: 'accepted', reason_codes: [], ground_speed_kt: 14, bearing_deg_true: 265,
+      velocity_reference_point: [-0.15, 51.32], velocity_method: 'inverse_aeqd_geodesic_1s', pair_diagnostics: [], fit_rms_residual_cells: 0.2 },
+    projection_end_at: '2026-02-25T17:05:00Z', projections: [],
+  };
+  return {
+    schema_version: 1, status: 'available', reason_codes: ['source_window_limit'], revision: 8, run_id: 'fixture-run-8',
+    route_geometry_id: 'fixture-route-geometry', planned_timing_id: 'fixture-planned-timing', computed_at: '2026-02-25T16:51:00Z',
+    cutoff_at: '2026-02-25T16:50:00Z', expires_at: '2026-02-25T17:05:00Z', method_version: 'masked_contour_translation_v1',
+    policy_version: 'observed_motion_policy_v1', analysis_domain: { center: [-0.5, 51.3], crs: '+proj=aeqd +datum=WGS84', cell_size_m: 2000,
+      width_cells: 100, height_cells: 100, origin_x_m: -100000, origin_y_m: -100000, bounds: [-2, 50, 1, 52], reason_codes: ['grid_discretization'] },
+    sources: [source('opera-dbzh', 'radar-frame-1', '2026-02-25T16:50:00Z', 'Synthetic OPERA', '2026-02-25T16:40:00Z'),
+      source('opera-rate', 'rate-frame-1', '2026-02-25T16:47:00Z', 'Synthetic OPERA rate'),
+      source('eumetsat-ctth', 'cloud-frame-1', '2026-02-25T16:48:00Z', 'Synthetic EUMETSAT', '2026-02-25T16:38:00Z'),
+      source('eumetsat-li', 'li-frame-1', '2026-02-25T16:49:00Z', 'Synthetic EUMETSAT LI')],
+    features: [radar, cloud], associations: [{ association_id: 'association-1', radar_feature_id: 'radar-feature-1', cloud_feature_id: 'cloud-feature-1',
+      status: 'available', reason_codes: [], relation: 'nearby', comparison_at: '2026-02-25T16:48:00Z', alignment_method: 'in_history_translation',
+      radar_frame_ids: ['radar-frame-1'], cloud_frame_ids: ['cloud-frame-1'], radar_window: { start_at: '2026-02-25T16:45:00Z', end_at: '2026-02-25T16:50:00Z' },
+      cloud_window: { start_at: '2026-02-25T16:38:00Z', end_at: '2026-02-25T16:48:00Z' }, intersection_area_km2: 0,
+      radar_overlap_fraction: 0, cloud_overlap_fraction: 0, edge_distance_nm: 2.1, measurement_basis: 'analysis_grid_contours' }],
+    lightning: [
+      { detection_id: 'flash-individual', source_id: 'eumetsat-li', frame_id: 'li-frame-1', position: [-0.72, 51.31], time_precision: 'individual_time',
+        event_at: '2026-02-25T16:48:30Z', acquisition_window: { start_at: '2026-02-25T16:40:00Z', end_at: '2026-02-25T16:49:00Z' }, reason_codes: [],
+        association_status: 'available', association_reason_codes: [], associated_feature_ids: ['radar-feature-1'] },
+      { detection_id: 'flash-window', source_id: 'eumetsat-li', frame_id: 'li-frame-1', position: [-0.20, 51.30], time_precision: 'window_only',
+        event_at: null, acquisition_window: { start_at: '2026-02-25T16:40:00Z', end_at: '2026-02-25T16:49:00Z' }, reason_codes: ['window_only_time'],
+        association_status: 'unavailable', association_reason_codes: ['window_only_time'], associated_feature_ids: null },
+    ], projection_times: ['2026-02-25T17:05:00Z'],
+    completeness: [{ category: 'features', status: 'complete', reason_codes: [], considered_count: 2, emitted_count: 2, omitted_count: 0 }],
+    future_extension: { preserve_me: [1, true] },
+  };
+}
+
 export function fulfillImage(route: Route, attribution = 'Synthetic image producer', validTime = IMAGE_TIME) {
   return route.fulfill({ body: PNG, contentType: 'image/png', headers: {
     'X-Observed-Valid-Time': validTime,
@@ -105,10 +197,15 @@ export async function openObservedPage(page: Page, options: {
   includeTops?: boolean;
   image?: (route: Route, source: string, attempt: number) => Promise<void>;
   flashes?: (route: Route, attempt: number) => Promise<void>;
+  motion?: Record<string, unknown> | null;
+  capability?: boolean | null;
 } = {}) {
   const observed = observedFixture(options.includeTops ?? true);
-  const snapshot = { ...fixture('snapshot.json'), observed_conditions: observed };
-  const state = { images: [] as string[], flashes: 0, refreshes: 0, pageErrors: [] as string[], unhandled: [] as string[] };
+  let currentMotion = options.motion === undefined ? observedMotionFixture() : options.motion;
+  let capability = options.capability === undefined ? true : options.capability;
+  const snapshot = { ...fixture('snapshot.json'), observed_conditions: observed, observed_motion: currentMotion };
+  const state = { images: [] as string[], flashes: 0, refreshes: 0, snapshots: 0, failSnapshots: false, failRefresh: false,
+    pageErrors: [] as string[], unhandled: [] as string[] };
   page.on('pageerror', error => state.pageErrors.push(error.message));
   await page.clock.install({ time: new Date(CLOCK) });
   await page.clock.pauseAt(new Date(CLOCK));
@@ -145,7 +242,11 @@ export async function openObservedPage(page: Page, options: {
     if (path === `/api/flights/${FLIGHT}`) return route.fulfill({ json: { ...fixture('flight.json'), user_id: 'fixture-user', role: 'owner' } });
     if (path === `/api/flights/${FLIGHT}/packs`) return route.fulfill({ json: fixture('packs.json') });
     if (/\/packs\/[^/]+$/.test(path) && !path.endsWith('/freshness')) return route.fulfill({ json: fixture('pack_meta.json') });
-    if (path.endsWith('/snapshot')) return route.fulfill({ json: snapshot });
+    if (path.endsWith('/snapshot')) {
+      state.snapshots++;
+      if (state.failSnapshots) return route.fulfill({ status: 503, json: { detail: 'Synthetic snapshot failure' } });
+      return route.fulfill({ json: { ...snapshot, observed_motion: currentMotion }, headers: capability == null ? {} : { 'X-Observed-Motion-Enabled': capability ? '1' : '0' } });
+    }
     const payloads: Record<string, string> = { '/route-analyses': 'route_analyses.json', '/advisories': 'advisories.json',
       '/elevation': 'elevation.json', '/digest/json': 'digest.json' };
     for (const [suffix, file] of Object.entries(payloads)) {
@@ -153,7 +254,9 @@ export async function openObservedPage(page: Page, options: {
     }
     if (path.endsWith('/observations/refresh')) {
       state.refreshes++;
-      return route.fulfill({ json: { observations: snapshot.route_observations, observed, sigmets: null, delta: null } });
+      if (state.failRefresh) return route.fulfill({ status: 503, json: { detail: 'Synthetic refresh failure' } });
+      return route.fulfill({ json: { observations: snapshot.route_observations, observed, sigmets: null, delta: null, observed_motion: currentMotion },
+        headers: capability == null ? {} : { 'X-Observed-Motion-Enabled': capability ? '1' : '0' } });
     }
     if (path.startsWith('/api/observed/overlay/')) {
       const source = path.split('/').pop()!.replace('.png', '');
@@ -186,7 +289,10 @@ export async function openObservedPage(page: Page, options: {
   const section = page.locator('[data-section="cross-section"]');
   if (await section.evaluate(el => el.classList.contains('collapsed'))) await section.locator('h3').first().click();
   await expect(page.locator('#map-observed-overlay')).toBeVisible();
-  return Object.assign(state, { assertHealthy() {
+  return Object.assign(state, {
+    setCapability(value: boolean | null) { capability = value; },
+    setMotion(value: Record<string, unknown> | null) { currentMotion = value; },
+    assertHealthy() {
     expect(state.pageErrors).toEqual([]);
     expect([...new Set(state.unhandled)].filter(path => !expectedMissing(path))).toEqual([]);
   } });
