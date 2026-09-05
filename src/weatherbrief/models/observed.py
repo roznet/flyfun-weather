@@ -6,7 +6,7 @@ concentric annuli around each corridor station.
 
 Phase 1 **displays observations only**: nothing here carries a verdict, and no
 advisory reads it.  The cross-check is visual — ``observed-tops`` renders over
-the NWP cloud bands, so "model says FL120, satellite saw FL280" is legible to
+the NWP cloud bands, so forecast and retrieved geometric heights are legible to
 the eye without anyone computing it.
 
 Three invariants shape these models, and each is load-bearing:
@@ -19,12 +19,13 @@ Three invariants shape these models, and each is load-bearing:
    says when the sample must not be asserted at all.
 2. **No synthetic common timestamp.**  Each field carries its own frame's
    :attr:`~ObservedField.valid_time` and :attr:`~ObservedField.age_minutes`.
-   A DBZH composite is a rolling 10-minute maximum plus delivery lag, so an
+   A DBZH max-reflectivity composite uses scans from a preceding 10-minute
+   window plus delivery lag, so an
    on-screen echo can be ~15 min old — ~30 NM of own-ship at 120 kt.  Nothing
    in the payload lets a client pretend the four sources share an instant.
-3. **``quality_method`` is a histogram, not a count.**  ``qm=9`` is the
-   multi-layer-suspect flag; collapsing it into one "confidence" number
-   destroys exactly the signal the "can I get on top?" question needs.
+3. **``quality_method`` describes retrieval algorithms, not confidence.**
+   ``qm=9`` is opaque + RTM + inversion, not a multilayer flag. Cloud-free
+   status is independent of method 0, which also includes unprocessed data.
 """
 
 from __future__ import annotations
@@ -33,7 +34,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, computed_field
 
-# Flight-level bins for the cloud-top histogram.  Chosen to match the bands a
+# Legacy wire labels for geometric height bins in hundreds of feet MSL, NOT
+# pressure flight levels. Chosen to match the bands a
 # GA pilot actually reasons about: below the typical VFR cruise, the piston
 # IFR band, the turbocharged/oxygen band, then jet levels.  Kept as a module
 # constant so the client's legend and the server's binning cannot drift.
@@ -51,13 +53,11 @@ CLOUD_TOP_FL_BINS: tuple[tuple[str, float, float], ...] = (
 # coverage boundary can be "clear" on 8% of its area and unknown on the rest.
 MIN_COVERAGE_FRACTION = 0.35
 
-# Resolution of the *fine* cloud-top histogram, in flight levels.  The coarse
-# CLOUD_TOP_FL_BINS above are right for prose ("87% of tops above FL250") and
-# actively misleading as geometry: measured at one real station, the FL050-150
-# bucket held 9 pixels spanning FL60-FL92, so a bar drawn across the bucket was
-# 68% empty air — and the gap between that deck and the next (FL92 to FL302)
-# vanished entirely.  A pilot reading it saw near-continuous cloud where there
-# were three thin layers.
+# Resolution of the fine histogram in hundreds of geometric feet (10 = 1000 ft).
+# Coarse bins are useful for prose ("87% of tops above 25,000 ft") but not
+# precise geometry: a 5,000–15,000 ft bucket may contain only a narrow spread
+# of tops. Drawing its full height invents continuous cloud; even fine bins
+# identify top-height samples, not cloud bases or layer thicknesses.
 CLOUD_TOP_FINE_FL_STEP = 10
 
 
@@ -134,36 +134,37 @@ class ObservedAnnulus(BaseModel):
 class ObservedTopsAnnulus(ObservedAnnulus):
     """Cloud-top annulus: adds the two histograms the tops question needs.
 
-    ``fl_bins`` is the multi-layer picture CTTH's one-top-per-pixel commitment
-    only reveals in aggregate — a cirrus-over-stratus stack shows as a bimodal
-    histogram where any single pixel would have picked one layer arbitrarily.
+    ``fl_bins`` describes the spatial distribution of retrieved cloud tops,
+    not cloud bases or proof of a vertical multilayer stack. All height-bin
+    keys retain their legacy FL-shaped names but denote geometric feet MSL.
 
     ``quality_method`` is the per-pixel height-assignment method, kept as a
-    full histogram.  ``0`` means *no cloud* — a positive observation, not a
-    failed retrieval — and is counted in ``undetect_px``.  ``9`` is the
-    multi-layer-suspect flag.
+    full histogram. ``0`` means not processed (cloud free OR no/corrupt data);
+    the separate quality status, not this histogram, determines undetect.
+    ``9`` means opaque + RTM + inversion, not low confidence or multilayer.
     """
 
     fl_bins: dict[str, int] = Field(default_factory=dict)
     # Sparse: only non-empty bins are present, keyed by the band's lower edge
-    # in FL ("60" == FL060-070, step CLOUD_TOP_FINE_FL_STEP).  Sparse because
+    # in hundreds of geometric ft ("60" == 6000–7000 ft MSL). Sparse because
     # empty air is most of the column and should cost nothing to transmit —
     # and because "absent" and "zero" mean the same thing here, unlike
     # everywhere else in this payload.
     fl_fine: dict[str, int] = Field(default_factory=dict)
     quality_method: dict[str, int] = Field(default_factory=dict)
+    # Hundreds of geometric feet MSL; legacy name, NOT pressure altitude.
     highest_fl: float | None = None
 
     # Coldest top in the disc (K).  Reported rather than a mean because the
-    # coldest pixel is the deepest convection, and a mean over a disc that is
-    # mostly low stratus would hide it.
+    # coldest retrieved top is an extremum a mean over low stratus could hide.
+    # Cold temperature alone does not establish active convection.
     coldest_top_k: float | None = None
 
-    # Effective cloudiness at the highest top, 0-1.  Height alone draws a
-    # solid deck and wispy cirrus identically; this is what separates "you
-    # cannot get on top" from "you can see stars through it".
+    # Effective IR cloudiness at the highest top: pixel cloud amount × 10.5µm
+    # emissivity, not visual opacity or overflight guidance. Values retain
+    # netCDF scale/offset decoding (measured products 0–1; guide labels %).
     highest_cloudiness: float | None = None
-    # Median opacity across the disc's cloudy pixels, for the overall picture.
+    # Median effective IR cloudiness across the disc's cloudy pixels.
     median_cloudiness: float | None = None
 
     # Pressure-based flight level of the highest top — what an altimeter
@@ -176,8 +177,8 @@ class ObservedFlashAnnulus(BaseModel):
     """Lightning annulus.
 
     Lightning is a point product, not a grid, so it has no ``nodata`` /
-    ``undetect`` split: the instrument sees the whole disc.  Absence of
-    flashes in the accumulation window is a real observation.
+    ``undetect`` split: this point product provides no coverage mask. Zero
+    means no reported detections in the window, not verified full coverage.
     """
 
     radius_nm: float
@@ -239,9 +240,8 @@ class ObservedFieldMeta(BaseModel):
     units: str = ""
     valid_time: datetime
     age_minutes: float
-    # For products that are an accumulation or a rolling maximum rather than
-    # an instant (DBZH is a rolling 10-minute maximum), the width of that
-    # window.  ``0`` for instantaneous retrievals.
+    # Acquisition/accumulation window width; DBZH's contributing scans come
+    # from the preceding 10 minutes. ``0`` for instantaneous retrievals.
     window_minutes: float = 0.0
     attribution: ObservedAttribution = Field(default_factory=ObservedAttribution)
 

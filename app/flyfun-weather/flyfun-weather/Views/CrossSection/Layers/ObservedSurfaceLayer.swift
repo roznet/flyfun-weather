@@ -55,21 +55,7 @@ struct ObservedSurfaceLayer: CrossSectionLayerProtocol {
             drawFlashes(point, context: &context, transform: transform, terrain: data.terrainProfile)
         }
 
-        // Radar and lightning frames are minutes apart and neither is an instant;
-        // whichever is on screen says so for itself — including which one it is.
-        // The label must come from the source actually supplying the timestamp:
-        // on a briefing where OPERA is down but lightning is up, a hardcoded
-        // "Radar" would stamp a radar name on a lightning frame's age, which is
-        // exactly the per-source blending this layer exists to avoid.
-        guard let source = observed.reflectivity ?? observed.lightning else { return }
-        // Second row whenever the cloud-top layer is also drawing a badge, so
-        // neither source's age is hidden behind the other.
-        let row = observed.cloudTops != nil ? 1 : 0
-        ObservedBadge.draw(
-            &context, transform: transform,
-            text: ObservedBadge.ageText(source.validTime, source.ageMinutes, source.label),
-            row: row
-        )
+        // Each source's age/window renders in the independent clock overlay.
     }
 
     /// Terrain elevation nearest a route distance; 0 when the pack carries no
@@ -92,6 +78,12 @@ struct ObservedSurfaceLayer: CrossSectionLayerProtocol {
         let width = max(2, x1 - x0)
         let yBase = transform.altitudeToY(terrainAt(terrain, point.distanceNm))
 
+        if let dbz = point.dbz {
+            context.fill(
+                Path(CGRect(x: x0, y: yBase - Self.stripHeightPx, width: width, height: Self.stripHeightPx)),
+                with: .color(Self.echoColor(dbz).opacity(0.75))
+            )
+        }
         if point.radarNoCoverage {
             // A hatched strip: the radar does not see here. Distinct from a blank
             // strip, which is the radar looking and finding nothing.
@@ -110,14 +102,7 @@ struct ObservedSurfaceLayer: CrossSectionLayerProtocol {
             context.stroke(
                 hatch, with: .color(CrossSectionTheme.active.observed.noCoverageColor),
                 lineWidth: 1)
-            return
         }
-        guard let dbz = point.dbz else { return }
-
-        context.fill(
-            Path(CGRect(x: x0, y: yBase - Self.stripHeightPx, width: width, height: Self.stripHeightPx)),
-            with: .color(Self.echoColor(dbz).opacity(0.75))
-        )
     }
 
     private func drawFlashes(

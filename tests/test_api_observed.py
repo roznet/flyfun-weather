@@ -22,6 +22,7 @@ from weatherbrief.observed.frames import (
     SOURCE_EUMETSAT_CTTH,
     SOURCE_EUMETSAT_LI,
     SOURCE_OPERA_DBZH,
+    SOURCE_OPERA_RATE,
     FrameStore,
 )
 
@@ -197,6 +198,22 @@ def test_overlay_returns_a_png_with_its_own_valid_time(client, stocked):
     # so the two cannot disagree.
     assert response.headers["X-Observed-Valid-Time"]
     assert response.headers["X-Observed-Attribution"]
+
+
+def test_rain_image_and_status_use_actual_frame_window_not_publication_cadence(client, stocked):
+    from weatherbrief.observed import opera
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    path = stocked.write_payload(SOURCE_OPERA_RATE, now, (FIXTURES / "opera_rate.h5").read_bytes())
+    stocked.write_sidecar(SOURCE_OPERA_RATE, now, opera.read_metadata(path, "RATE"))
+    # The test granule spans ten minutes, even though RATE publishes every 15.
+    response = client.get("/api/observed/overlay/opera_rate.png", params=BBOX)
+    assert response.status_code == 200
+    assert response.headers.get("X-Observed-Window-Minutes") == "10.0"
+    sources = client.get("/api/observed/status").json()["sources"]
+    rate = next(s for s in sources if s["source"] == SOURCE_OPERA_RATE)
+    assert rate["window_minutes"] == 10.0
+    assert rate["interval_minutes"] == 15.0
 
 
 def test_overlay_rejects_an_unknown_source(client, stocked):

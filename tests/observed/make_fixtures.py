@@ -161,29 +161,32 @@ def write_ctth(path: Path) -> None:
     lon, lat = inv.transform(xx, yy)
 
     height = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
-    quality = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.int8)  # 0 = no cloud
+    quality = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.int8)  # not processed
+    status = np.ones((CTTH_ROWS, CTTH_COLS), dtype=np.int8)  # explicit cloud free
+    overall = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.int8)  # no retrieval
     dlat = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.float32)
     dlon = np.zeros((CTTH_ROWS, CTTH_COLS), dtype=np.float32)
     # The three optional planes. Values are chosen so the two decks are
-    # distinguishable in a test: the cirrus is COLD and SEMI-TRANSPARENT, the
-    # stratus is warm and solid. That contrast is the point of carrying
-    # opacity at all — height alone renders both identically.
+    # distinguishable in a test: different temperatures and effective IR
+    # cloudiness. Cloud amount × emissivity is not visual transparency.
     temperature = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
     cloudiness = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
     aviation = np.full((CTTH_ROWS, CTTH_COLS), np.nan, dtype=np.float32)
 
-    # Cirrus at FL350 whose imagery position sits 0.5° NORTH of the station:
+    # Cirrus at 35,000 geometric ft whose imagery position sits 0.5° NORTH:
     # the satellite's line of sight to it strikes the ground north of where
     # the cloud actually is, exactly as the real product behaves at 50°N.
     displaced_lat = STATION_LAT + 0.5
     cirrus = (np.abs(lat - displaced_lat) < 0.06) & (np.abs(lon - STATION_LON) < 0.25)
-    height[cirrus] = 10668.0  # FL350
-    quality[cirrus] = 6  # opaque IR, cold cloud
+    height[cirrus] = 10668.0  # 35,000 ft MSL geometric
+    quality[cirrus] = 6  # radiance ratio IR10.5 / IR13.4 (Table 10)
+    status[cirrus] = 3  # cloudy and successful
+    overall[cirrus] = 2  # good quality
     dlat[cirrus] = -0.5
     dlon[cirrus] = 0.0
     temperature[cirrus] = 223.15  # -50C
-    cloudiness[cirrus] = 0.35     # thin: you can see through this
-    aviation[cirrus] = 34.0       # FL/10 -> FL340, below the geometric FL350
+    cloudiness[cirrus] = 0.35     # effective IR cloudiness, decoded fraction
+    aviation[cirrus] = 34.0       # FL/10 -> pressure FL340
 
     # Low stratus sitting directly over the station: barely displaced, so it
     # is found with or without the correction.
@@ -191,17 +194,22 @@ def write_ctth(path: Path) -> None:
         np.abs(lon - STATION_LON) < 0.12
     )
     stratus &= ~cirrus
-    height[stratus] = 1219.0  # FL040
+    height[stratus] = 1219.0  # ~4,000 ft MSL geometric
     quality[stratus] = 1
+    status[stratus] = 3
+    overall[stratus] = 2
     dlat[stratus] = -0.03
     temperature[stratus] = 281.15  # +8C
-    cloudiness[stratus] = 0.98     # solid
+    cloudiness[stratus] = 0.98     # effective IR cloudiness, decoded fraction
     aviation[stratus] = 4.0        # FL040
 
     # A strip with no retrieval at all (off-swath / failed) in the far south.
     failed = lat < STATION_LAT - 0.35
     height[failed] = np.nan
     quality[failed] = -128  # fill
+    status[failed] = 0  # not processed (no/corrupt data)
+    # Method 0 also occurs in unprocessed pixels, not just cloud-free ones.
+    quality[failed & (lon < STATION_LON)] = 0
 
     with netCDF4.Dataset(str(path), "w", format="NETCDF4") as ds:
         ds.institution = "EUMETSAT"
@@ -229,7 +237,21 @@ def write_ctth(path: Path) -> None:
         hv[:] = height
 
         qv = ds.createVariable("quality_method", "i1", ("y", "x"), fill_value=np.int8(-128))
+        qv.flag_values = np.arange(11, dtype=np.int8)
+        qv.flag_meanings = (
+            "not_processed opaque_and_rtm opaque_minus_rtm intercept_ir105_ir134 "
+            "intercept_ir105_ir63 intercept_ir105_ir73 rr_ir105_ir134 "
+            "rr_ir105_ir63 rr_ir105_ir73 opaque_rtm_inversion no_solution"
+        )
         qv[:] = quality
+        for name, values, meanings in (
+            ("quality_status", status, "not_processed cloud_free cloudy_failed cloudy_success dust_failed dust_success ash_failed ash_success"),
+            ("quality_overall_processing", overall, "not_processed poor_quality good_quality"),
+        ):
+            var = ds.createVariable(name, "i1", ("y", "x"), fill_value=np.int8(-128))
+            var.flag_values = np.arange(len(meanings.split()), dtype=np.int8)
+            var.flag_meanings = meanings
+            var[:] = values
 
         for name, values, units in (
             ("cloud_top_temperature", temperature, "K"),

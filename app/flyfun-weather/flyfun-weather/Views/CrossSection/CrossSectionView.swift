@@ -242,6 +242,10 @@ struct CrossSectionView: View {
                 .overlay {
                     CrossSectionCursorOverlay(data: vizData, cursorDistanceNm: cursor, aircraft: aircraft)
                 }
+                .overlay {
+                    ObservedClockBadges(data: vizData, enabledLayers: layers)
+                        .allowsHitTesting(false)
+                }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
                 .gesture(scrubGesture)
                 // A Canvas has no intrinsic a11y children, so expose it as a
@@ -435,6 +439,67 @@ struct CrossSectionView: View {
                 observed: snapshot?.observedConditions
             )
         }
+    }
+}
+
+/// A local UI clock only: never refreshes weather or rebuilds the static scene.
+/// Restarting the schedule on appear/foreground immediately re-evaluates dates.
+struct ObservedClock<Content: View>: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+    @ViewBuilder let content: (Date) -> Content
+
+    var body: some View {
+        Group {
+            if visible && scenePhase == .active {
+                TimelineView(.periodic(from: Date(), by: 60)) { context in
+                    content(context.date)
+                }
+            } else {
+                content(Date())
+            }
+        }
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
+    }
+}
+
+private struct ObservedClockBadges: View {
+    let data: VizRouteData
+    let enabledLayers: [String: Bool]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let transform = CoordTransform(size: geometry.size, maxDistanceNm: data.totalDistanceNm,
+                                           maxAltitudeFt: data.flightCeilingFt)
+            ObservedClock { now in
+                if let observed = data.observed {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if enabledLayers["observed-tops"] == true, let tops = observed.cloudTops {
+                            Text(ObservedBadge.sourceText(tops, now: now) + topSuffix(observed, transform))
+                                .background(.white.opacity(0.88))
+                        }
+                        if enabledLayers["observed-surface"] == true {
+                            ForEach(ObservedBadge.surfaceTexts(observed, now: now), id: \.self) { text in
+                                Text(text).background(.white.opacity(0.88))
+                            }
+                        }
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.22))
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: max(0, transform.plotArea.width - 12), alignment: .trailing)
+                    .padding(.leading, transform.plotArea.left + 6)
+                    .padding(.top, transform.plotArea.top + 4)
+                }
+            }
+        }
+    }
+
+    private func topSuffix(_ observed: VizObserved, _ transform: CoordTransform) -> String {
+        guard ObservedTopsLayer.topsAboveScale(observed, transform),
+              let highest = ObservedTopsLayer.highestTopFt(observed) else { return "" }
+        return " · tops to \(ObservedBadge.heightLabel(highest))"
     }
 }
 

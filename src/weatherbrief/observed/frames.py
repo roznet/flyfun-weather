@@ -62,11 +62,10 @@ class SourceSpec:
     """Static shape of one observed source.
 
     ``interval`` is the publication cadence, ``retention`` how long frames are
-    kept, and ``window_minutes`` the width of the product's own accumulation
-    or rolling-maximum window (``0`` for an instantaneous retrieval).  The
-    last one is not cosmetic: DBZH is a rolling 10-minute maximum, so an echo
-    on screen may describe a cell that was there ten minutes before the frame's
-    own valid time, on top of the delivery lag.
+    kept, and ``window_minutes`` the acquisition/accumulation window width
+    (``0`` for an instantaneous retrieval). DBZH is a max-reflectivity
+    composite whose contributing scans come from the preceding 10-minute
+    window, so an echo may predate the frame time, on top of delivery lag.
     """
 
     key: str
@@ -178,9 +177,8 @@ class GridFrame:
 class FlashFrame:
     """One lightning frame: a point cloud, not a grid.
 
-    The imager sees the whole disc, so there is no coverage mask to carry —
-    absence of flashes inside the accumulation window is a real observation
-    rather than a gap.
+    This point product carries no coverage mask. Zero means no detections
+    reported in the acquisition window, not verified full-disc coverage.
     """
 
     source: str

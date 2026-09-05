@@ -1015,13 +1015,12 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
 def _format_observed_context(observed) -> str:
     """Observed radar/lightning/cloud-top summary for the LLM prompt.
 
-    Each source's own age travels with it. Without that the model would read
-    four measurements as one instant, and a radar composite is a rolling
-    10-minute maximum plus delivery lag — up to ~30 NM of own-ship at 120 kt.
+    Each source's immutable UTC time travels with it. Stored ``age_minutes``
+    is intentionally omitted because it freezes when a briefing is saved.
     """
     lines = ["OBSERVED CONDITIONS ALONG ROUTE (measured, not forecast):"]
     lines.extend(f"- {line}" for line in observed.summary_lines)
-    ages = []
+    frame_times = []
     for field in (
         observed.reflectivity,
         observed.rain_rate,
@@ -1030,9 +1029,10 @@ def _format_observed_context(observed) -> str:
     ):
         if field is None:
             continue
-        ages.append(f"{field.source} {field.age_minutes:.0f} min old")
-    if ages:
-        lines.append(f"  Frame ages: {'; '.join(ages)}.")
+        valid_time = field.valid_time.astimezone(timezone.utc)
+        frame_times.append(f"{field.source} {valid_time:%Y-%m-%d %H:%M} UTC")
+    if frame_times:
+        lines.append(f"  Frame times: {'; '.join(frame_times)}.")
     missing = [s.source for s in observed.sources if not s.available]
     if missing:
         # Named rather than omitted: "no radar collected" and "radar saw

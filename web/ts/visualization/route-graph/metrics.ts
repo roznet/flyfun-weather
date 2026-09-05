@@ -235,7 +235,7 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
  * rendering "ceiling is excellent" identically to "no data".
  */
 export type MetricSample =
-  | { readonly kind: 'value'; readonly value: number }
+  | { readonly kind: 'value'; readonly value: number; readonly partialCoverage?: boolean }
   | { readonly kind: 'above-scale'; readonly value: number }
   | { readonly kind: 'unavailable' }
   // The sensor does not look here (#574). Distinct from `unavailable`, which
@@ -256,8 +256,10 @@ export function sampleMetric(metric: RouteGraphMetric, point: VizPoint): MetricS
   // Checked before the value: for an observed metric a missing number means
   // "the sensor saw nothing" only when it was looking, and the metric alone
   // knows which of the two it is.
-  if (metric.isNoCoverage?.(point)) return NO_COVERAGE_SAMPLE;
   const v = metric.getValue(point);
+  if (metric.isNoCoverage?.(point)) {
+    return v != null && v > 0 ? { kind: 'value', value: v, partialCoverage: true } : NO_COVERAGE_SAMPLE;
+  }
   if (v === null) return UNAVAILABLE_SAMPLE;
   if (metric.aboveScale && metric.suggestedRange && v > metric.suggestedRange[1]) {
     return { kind: 'above-scale', value: v };
@@ -273,7 +275,7 @@ export function formatSample(metric: RouteGraphMetric, sample: MetricSample): st
   const fmt = (v: number): string => (metric.formatValue ? metric.formatValue(v) : v.toFixed(1));
   switch (sample.kind) {
     case 'value':
-      return fmt(sample.value);
+      return fmt(sample.value) + (sample.partialCoverage ? ' (partial coverage)' : '');
     case 'above-scale':
       // Formatted from the cap, not the value: we are reporting the axis limit
       // we can show, not disclosing a number we declined to plot.

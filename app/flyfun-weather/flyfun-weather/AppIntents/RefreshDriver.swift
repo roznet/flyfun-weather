@@ -48,6 +48,16 @@ enum RefreshDriver {
                     for try await event in stream {
                         switch event.type {
                         case "complete":
+                            // Siri has no BriefingViewModel to persist a same-ID
+                            // realtime refresh. Use the same repository/cache
+                            // seam before reporting completion, targeting only
+                            // the pack identified by the server event.
+                            if event.refreshDecision?.mode == "realtime",
+                               let caching = repository as? CachingBriefingRepository,
+                               let timestamp = event.pack?.fetchTimestamp {
+                                try await caching.persistRealtimeRefresh(
+                                    event, flightId: flightId, timestamp: timestamp)
+                            }
                             if let decision = event.refreshDecision, decision.mode == "none" {
                                 report(.alreadyFresh(reason: decision.reason))
                             } else {

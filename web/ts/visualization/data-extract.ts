@@ -250,8 +250,8 @@ function buildCurrentConditions(
   return { airports, sigmets: zones };
 }
 
-/** FL-band edges in feet, mirroring CLOUD_TOP_FL_BINS on the server. */
-/** Width of one fine band, in FL. Must match `CLOUD_TOP_FINE_FL_STEP`. */
+/** Legacy wire bin widths in hundreds of geometric ft MSL, NOT pressure FL.
+ *  Must match `CLOUD_TOP_FINE_FL_STEP`. */
 const OBSERVED_FINE_FL_STEP = 10;
 
 /** Coarse bands, kept only as a fallback for packs built before `fl_fine`. */
@@ -324,6 +324,9 @@ function buildObserved(
     if (!point) {
       point = {
         distanceNm,
+        radarPresent: false,
+        ratePresent: false,
+        lightningPresent: false,
         dbz: null,
         radarNoCoverage: false,
         rateMmH: null,
@@ -332,7 +335,6 @@ function buildObserved(
         flashRate: null,
         topsHighestFt: null,
         topsBins: [],
-        topsMultiLayerFraction: 0,
         topsNoCoverage: false,
         topsColdestC: null,
         topsHighestCloudiness: null,
@@ -349,7 +351,8 @@ function buildObserved(
     const annulus = pickAnnulus<ObservedAnnulus>(station.annuli, radiusNm);
     if (!point || !annulus) continue;
     point.radarNoCoverage = annulus.insufficient_coverage;
-    point.dbz = annulus.insufficient_coverage ? null : annulus.max_value;
+    point.radarPresent = true;
+    point.dbz = annulus.max_value;
   }
 
   for (const station of observed.rain_rate?.stations ?? []) {
@@ -357,7 +360,8 @@ function buildObserved(
     const annulus = pickAnnulus<ObservedAnnulus>(station.annuli, radiusNm);
     if (!point || !annulus) continue;
     point.rateNoCoverage = annulus.insufficient_coverage;
-    point.rateMmH = annulus.insufficient_coverage ? null : annulus.max_value;
+    point.ratePresent = true;
+    point.rateMmH = annulus.max_value;
   }
 
   for (const station of observed.lightning?.stations ?? []) {
@@ -365,6 +369,7 @@ function buildObserved(
     const annulus = pickAnnulus<ObservedFlashAnnulus>(station.annuli, radiusNm);
     if (!point || !annulus) continue;
     point.flashCount = annulus.flash_count;
+    point.lightningPresent = true;
     point.flashRate = annulus.flashes_per_1000km2_per_min;
   }
 
@@ -373,19 +378,13 @@ function buildObserved(
     const annulus = pickAnnulus<ObservedTopsAnnulus>(station.annuli, radiusNm);
     if (!point || !annulus) continue;
     point.topsNoCoverage = annulus.insufficient_coverage;
-    if (annulus.insufficient_coverage) continue;
     point.topsHighestFt = annulus.highest_fl != null ? annulus.highest_fl * 100 : null;
-    const detected = annulus.detected_px || 0;
-    // `fraction` is of the LOOKED-AT SKY, not of the cloudy pixels: a band then
-    // means "this much of the sky around the point had its top here", the
-    // bands sum to the disc's cloud cover instead of always summing to 100%,
-    // and the drawing floor can be stated in the same terms the legend uses.
+    // Denominator is valid retrieval samples (cloudy and clear), not cloudy
+    // pixels alone. Parallax overlap/unequal footprints prevent an area claim.
     const lookedAt = annulus.valid_px || 0;
     // Prefer the sparse fine histogram; fall back to the coarse bands for a
-    // pack built before it existed. The coarse bands are kept for prose, not
-    // for drawing: at one measured station the FL050-150 bucket held pixels
-    // spanning only FL60-FL92, so 68% of the drawn bar was empty air, and the
-    // clear gap above it disappeared entirely.
+    // pack built before it existed. Fine bins avoid implying the full coarse
+    // interval contains detected tops; missing bins still do not prove clear air.
     const fine = annulus.fl_fine ?? {};
     const fineKeys = Object.keys(fine);
     point.topsBins = fineKeys.length > 0
@@ -396,7 +395,7 @@ function buildObserved(
           .map((fl): VizObservedTopBin => {
             const count = fine[String(fl)] ?? 0;
             return {
-              label: `FL${String(fl).padStart(3, '0')}-${String(fl + OBSERVED_FINE_FL_STEP).padStart(3, '0')}`,
+              label: `${fl * 100}–${(fl + OBSERVED_FINE_FL_STEP) * 100} ft MSL`,
               loFt: fl * 100,
               hiFt: (fl + OBSERVED_FINE_FL_STEP) * 100,
               fraction: lookedAt > 0 ? count / lookedAt : 0,
@@ -406,16 +405,14 @@ function buildObserved(
       : OBSERVED_TOP_BANDS.map((band): VizObservedTopBin => {
           const count = annulus.fl_bins?.[band.label] ?? 0;
           return {
-            label: band.label,
+            label: band.label === 'FL400+' ? '40000+ ft MSL' : `${band.loFt}–${band.hiFt} ft MSL`,
             loFt: band.loFt,
             hiFt: band.hiFt,
             fraction: lookedAt > 0 ? count / lookedAt : 0,
             count,
           };
         });
-    // quality_method 9 is the retrieval's own multi-layer-suspect flag — the
-    // case where committing to one cloud top is least trustworthy.
-    point.topsMultiLayerFraction = detected > 0 ? (annulus.quality_method?.['9'] ?? 0) / detected : 0;
+    // QM9 describes Opaque + RTM + inversion; no multilayer/confidence inference.
     // Kelvin on the wire (the granule's own unit); °C for anything a pilot reads.
     point.topsColdestC = annulus.coldest_top_k != null ? annulus.coldest_top_k - 273.15 : null;
     point.topsHighestCloudiness = annulus.highest_cloudiness ?? null;
@@ -465,7 +462,8 @@ function mergeObserved(points: VizPoint[], observed: VizObserved | null): void {
     point.observed = best;
     point.observedRateMmH = best.rateMmH;
     point.observedFlashRate = best.flashRate;
-    point.observedRadarNoCoverage = best.radarNoCoverage || best.rateNoCoverage;
+    // This flag belongs to the rain-rate graph, not the reflectivity stream.
+    point.observedRadarNoCoverage = best.rateNoCoverage;
   }
 }
 

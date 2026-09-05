@@ -5,7 +5,7 @@ import SwiftUI
 /// SYNC — port of web/ts/visualization/cross-section/layers/observed-tops.ts.
 ///
 /// This layer is the whole cross-check. It renders in the same space as the NWP
-/// cloud bands, so "model says FL120, satellite saw FL280" is visible to the eye
+/// cloud bands, so forecast and retrieved geometric heights are visible to the eye
 /// with nobody computing it. Phase 1 deliberately computes no verdict: the
 /// comparison is the pilot's to make, and the two things are drawn in
 /// unmistakably different styles so it stays obvious which is measured and which
@@ -14,9 +14,8 @@ import SwiftUI
 /// Three things the drawing has to be honest about:
 ///
 ///  - **The retrieval commits to one top per pixel.** A cirrus-over-stratus
-///    stack shows up only in aggregate, so each route point draws its FL-band
-///    histogram as ruled ticks rather than a single line. A line would be a
-///    claim the data does not support.
+///    stack cannot be resolved from one top. Ruled height-bin ticks describe
+///    variability among nearby samples, not layers in one vertical column.
 ///  - **No coverage is not a clear sky.** Points where the retrieval could not
 ///    answer draw a hatched "no data" mark at the top of the plot, never a gap
 ///    (which reads as "nothing up there").
@@ -30,27 +29,10 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
 
     /// Half-width of a point's mark on the X axis, in nm.
     private static let markHalfWidthNm: Double = 4
-    /// A band has to cover MORE than this share of the looked-at sky to be drawn.
-    ///
-    /// 5%: the fine 10-FL bands split a deck into a dozen slivers, and below a
-    /// twentieth of the sky a band is a fuzz of stray retrievals drawn at the
-    /// same weight as a deck you could fly into. Measured over local packs the
-    /// cut removes 60% of the bands at 20 NM while the survivors still account
-    /// for 87% of the disc's cloud cover — it takes the noise, not the picture —
-    /// and only 2 route points in 96 lost every band they had.
-    ///
-    /// Measured against the SKY, the same denominator the band is drawn as, so
-    /// the floor means what the legend means.
-    ///
-    /// Safe to discard here only because the HIGHEST top is drawn separately,
-    /// from `topsHighestFt`, and never passes through this filter — so a single
-    /// cold pixel still gets its cap line or its off-scale arrow even when its
-    /// band is too thin to draw.
+    /// Visual floor as a share of valid retrieval samples, not sky area.
+    /// The highest top bypasses it, preserving isolated detections.
+    /// Missing or suppressed bins do not prove clear air or a cloud-free gap.
     static let minBinFraction: Double = 0.05
-    /// How far the "depth unknown" hatching hangs below a deck's base, px.
-    /// Deliberately short: long enough to read as "there is cloud under this",
-    /// short enough that it cannot be mistaken for measured vertical extent.
-    private static let hatchDepthPx: CGFloat = 9
     /// Fixed height of the off-scale box at the chart ceiling, px. Fixed because
     /// the real value has no position on this chart — the badge and the readout
     /// carry the number instead.
@@ -67,24 +49,13 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
     private static let bandAlpha: Double = 0.85
 
     func render(context: inout GraphicsContext, transform: CoordTransform, data: VizRouteData) {
-        guard let observed = data.observed, let tops = observed.cloudTops else { return }
+        guard let observed = data.observed, observed.cloudTops != nil else { return }
 
         for point in Self.drawablePoints(observed) {
             draw(point, context: &context, transform: transform)
         }
 
-        // When the cap line is off-scale the badge is the only place the number
-        // survives, so carry it there rather than leaving the pilot to infer
-        // "higher than the chart" from a row of chevrons.
-        let highest = Self.highestTopFt(observed)
-        let suffix: String = {
-            guard let highest, Self.topsAboveScale(observed, transform) else { return "" }
-            return " · tops to \(ObservedBadge.flLabel(highest))"
-        }()
-        ObservedBadge.draw(
-            &context, transform: transform,
-            text: ObservedBadge.ageText(tops.validTime, tops.ageMinutes, "Satellite") + suffix
-        )
+        // Ages render in the cheap clock overlay, not this cached static scene.
     }
 
     // MARK: - Selection helpers (shared with the readout)
@@ -94,14 +65,8 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
         point.topsBins.filter { $0.fraction > minBinFraction }
     }
 
-    /// Contiguous runs of populated bands — the decks.
-    ///
-    /// A gap between runs is a real, measured absence of cloud top, and it is the
-    /// thing coarse bins destroyed: one station had decks at FL7-31, FL60-92 and
-    /// FL302-370 with nothing between, rendered as slabs implying continuous
-    /// cloud from the surface to FL150. Only the BASE of each run gets the "depth
-    /// unknown" hatching, because that is the one edge where cloud genuinely
-    /// continues below into air the satellite cannot see.
+    /// Contiguous runs of populated height bins, not measured cloud decks.
+    /// A gap says nothing about clear air or a shared cloud base.
     static func bandRuns(_ bins: [VizObservedTopBin]) -> [[VizObservedTopBin]] {
         let sorted = bins.sorted { $0.loFt < $1.loFt }
         var runs: [[VizObservedTopBin]] = []
@@ -158,7 +123,6 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
                 offset += 4
             }
             context.stroke(hatch, with: .color(theme.observed.noCoverageColor), lineWidth: 1)
-            return
         }
 
         // One marker per populated FL band. NOT a filled band: this product
@@ -180,15 +144,8 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
                 let top = max(yHi, plotArea.top)
                 let height = max(1.5, yLo - top)
                 let share = bin.fraction / peakFraction
-                // Colour carries the band's share of the LOOKED-AT SKY, not of
-                // the cloud that was found: a band then says "this much of the
-                // area around the point had its top here", which is the quantity
-                // a pilot can act on, and 8 bands over a broken sky no longer
-                // colour like 8 bands over a solid overcast. (Share rather than
-                // temperature because the vertical axis already says how high the
-                // band is, and cloud-top temperature is nearly a function of
-                // height — the map keeps the temperature ramp, having no
-                // altitude axis to spend.)
+                // Colour carries valid-sample share, not sky area or visual
+                // opacity. The map separately offers the temperature ramp.
                 let bandColor = theme.observed.shareColor(bin.fraction)
 
                 // Filled with HORIZONTAL RULES, not a solid block. A solid fill
@@ -222,31 +179,13 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
                     with: .color(bandColor.opacity(Self.bandAlpha * 0.6)), lineWidth: 1)
             }
 
-            // Only under the base of the deck: that is the one edge where cloud
-            // really does continue down into air the satellite cannot see.
-            // Hatching under every band would re-imply the continuous slab the
-            // fine histogram exists to remove.
-            guard let base = run.last else { continue }
-            let yBase = transform.altitudeToY(base.loFt)
-            if yBase >= plotArea.top {
-                var hatch = Path()
-                var offset: CGFloat = 0
-                while offset < width {
-                    hatch.move(to: CGPoint(x: x0 + offset, y: yBase))
-                    hatch.addLine(to: CGPoint(
-                        x: x0 + offset - Self.hatchDepthPx * 0.5, y: yBase + Self.hatchDepthPx))
-                    offset += 4
-                }
-                context.stroke(
-                    hatch, with: .color(theme.observed.hatchColor.opacity(0.45)), lineWidth: 1)
-            }
+            // No geometry below a run: nearby-pixel tops cannot establish a
+            // shared base or vertical extent. Coverage hatches remain separate.
         }
 
         guard let highestFt = point.topsHighestFt else { return }
 
-        let capColor = point.topsMultiLayerFraction > 0.1
-            ? theme.observed.capMultiLayerColor
-            : theme.observed.capColor
+        let capColor = theme.observed.capColor
         let yTop = transform.altitudeToY(highestFt)
 
         // Above the chart's ceiling the cap line has nowhere to go. A GA
@@ -325,15 +264,62 @@ enum ObservedBadge {
 
     /// "Satellite 14:00Z · 12 min old", or just "14:00Z · 12 min old" where the
     /// caller already names the source in its own column (the Layers sheet does).
-    static func ageText(_ validTime: String, _ ageMinutes: Double, _ label: String = "") -> String {
-        let hhmm = utcHHMM(validTime) ?? "--:--"
-        let age = ageMinutes < 1 ? "just now" : "\(Int(ageMinutes.rounded())) min old"
-        let stamp = "\(hhmm)Z · \(age)"
+    static func ageText(
+        _ validTime: String, _ ageMinutes: Double, _ label: String = "", now: Date = Date()
+    ) -> String {
+        // Server age is retained for wire compatibility only; it freezes in a
+        // downloaded pack. Always derive display age from the source valid time.
+        guard let date = Date.parseISO8601(validTime), date.timeIntervalSince1970.isFinite,
+              now.timeIntervalSince1970.isFinite else {
+            return label.isEmpty ? "time / age unknown" : "\(label) time / age unknown"
+        }
+        let minutes = now.timeIntervalSince(date) / 60
+        let age: String
+        if minutes < 0 {
+            age = "future time — check clock"
+        } else if minutes < 1 {
+            age = "just now"
+        } else {
+            // Informational age policy only, never a weather-severity grade.
+            age = "\(Int(minutes.rounded(.down))) min old" + (minutes >= 30 ? " · stale" : "")
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        // Always include the UTC date: history/offline packs must remain explicit
+        // even if the caller cannot tell whether this is today's pack.
+        let utc = String(format: "%04d-%02d-%02d %02d:%02dZ", parts.year!, parts.month!, parts.day!, parts.hour!, parts.minute!)
+        let stamp = "\(utc) · \(age)"
         return label.isEmpty ? stamp : "\(label) \(stamp)"
     }
 
-    /// "FL381" for a height in feet.
-    static func flLabel(_ ft: Double) -> String { "FL\(Int((ft / 100).rounded()))" }
+    static func heightLabel(_ ft: Double) -> String { "\(Int(ft.rounded())) ft MSL (geometric)" }
+
+    static func sourceText(_ source: VizObservedSource, now: Date, includeLabel: Bool = true) -> String {
+        var text = ageText(source.validTime, source.ageMinutes, includeLabel ? source.label : "", now: now)
+        if source.windowMinutes.isFinite, source.windowMinutes > 0 {
+            let window = Int(source.windowMinutes.rounded())
+            let kind = source.source == "opera_dbzh" ? "composite scan window"
+                : source.source == "eumetsat_li" ? "accumulation" : "acquisition window"
+            text += " · \(window) min \(kind)"
+            if let end = Date.parseISO8601(source.validTime) {
+                let start = end.addingTimeInterval(-source.windowMinutes * 60)
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.timeZone = TimeZone(secondsFromGMT: 0)
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+                formatter.dateFormat = calendar.isDate(start, inSameDayAs: end)
+                    ? "HH:mm'Z'" : "yyyy-MM-dd HH:mm'Z'"
+                text += " (\(formatter.string(from: start))–\(formatter.string(from: end)))"
+            }
+        }
+        return text
+    }
+
+    static func surfaceTexts(_ observed: VizObserved, now: Date) -> [String] {
+        [observed.reflectivity, observed.lightning].compactMap { $0 }.map { sourceText($0, now: now) }
+    }
 
     @MainActor
     static func draw(

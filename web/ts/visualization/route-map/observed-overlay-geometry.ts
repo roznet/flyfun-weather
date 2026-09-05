@@ -8,6 +8,8 @@
  */
 
 /** Lightning older than this is dropped rather than drawn nearly-invisible. */
+import { observationTimeText, observationWindowText } from '../observed-time';
+
 export const FLASH_TRAIL_MINUTES = 60;
 
 export interface LatLonBox {
@@ -18,6 +20,7 @@ export interface LatLonBox {
 }
 
 export interface ObservedBadgeField {
+  source?: string;
   label: string;
   validTime: string;
   ageMinutes: number;
@@ -56,6 +59,7 @@ export function corridorBox(
 
 /** Opacity for a flash of a given age. Linear fade to nothing at the trail end. */
 export function flashOpacity(ageMinutes: number): number {
+  if (!Number.isFinite(ageMinutes) || ageMinutes < 0) return 0;
   if (ageMinutes <= 0) return 0.9;
   if (ageMinutes >= FLASH_TRAIL_MINUTES) return 0;
   return 0.9 * (1 - ageMinutes / FLASH_TRAIL_MINUTES);
@@ -77,26 +81,37 @@ export function overlayUrl(source: string, box: LatLonBox): string {
 }
 
 /**
- * "Radar reflectivity 14:05Z · 12 min old · 10 min rolling max · <attribution>"
+ * "Radar reflectivity 14:05Z · 12 min old · 10 min acquisition window · <attribution>"
  *
  * Every clause is load-bearing. The valid time is the frame's own, never a
  * synthesised instant shared with the other sources; the age is what turns
  * "there is a cell there" into "there was a cell there twelve minutes ago";
- * and the rolling-window note is what stops a 10-minute maximum being read as
- * a snapshot. At 120 kt those minutes are tens of nautical miles.
+ * and the acquisition-window note distinguishes contributing scan times from
+ * the composite nominal time. It is not a maximum over earlier composites.
  */
 export function formatBadge(field: ObservedBadgeField | null): string {
   if (!field) return '';
-  const stamp = new Date(field.validTime);
-  const hhmm = Number.isNaN(stamp.getTime())
-    ? '--:--'
-    : `${String(stamp.getUTCHours()).padStart(2, '0')}:${String(stamp.getUTCMinutes()).padStart(2, '0')}Z`;
-  const age = field.ageMinutes < 1 ? 'just now' : `${Math.round(field.ageMinutes)} min old`;
-  const rolling = field.windowMinutes > 0
-    ? ` · ${Math.round(field.windowMinutes)} min rolling max`
-    : '';
+  const rolling = observationWindowText(field.source ?? '', field.windowMinutes);
   const attribution = field.attribution ? ` · ${field.attribution}` : '';
-  return `${field.label} ${hhmm} · ${age}${rolling}${attribution}`;
+  return `${field.label} ${observationTimeText(field.validTime)}${rolling}${attribution}`;
+}
+
+/** Fetch bytes and their provenance together; a missing header means unknown. */
+export async function fetchObservedImage(url: string, field: ObservedBadgeField): Promise<{ blob: Blob; field: ObservedBadgeField }> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Observed image unavailable (${response.status})`);
+  const attribution = response.headers.get('X-Observed-Attribution') ?? '';
+  const rawWindow = Number(response.headers.get('X-Observed-Window-Minutes'));
+  const windowMinutes = Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : 0;
+  return {
+    blob: await response.blob(),
+    field: {
+      ...field,
+      validTime: response.headers.get('X-Observed-Valid-Time') ?? '',
+      windowMinutes,
+      attribution: decodeURIComponent(attribution),
+    },
+  };
 }
 
 /** The observed layers the map can draw, in menu order.
@@ -123,6 +138,18 @@ export const OBSERVED_OVERLAY_OPTIONS: Array<{
   { id: 'eumetsat_ctth_temp', labelKey: 'viz.observed.cloudTemp', needs: 'cloudTops' },
   { id: 'eumetsat_li', labelKey: 'viz.observed.lightning', needs: 'lightning', points: true },
 ];
+
+/** Resolve the saved selection against the fields carried by this briefing. */
+export function resolveObservedOverlay(
+  chosen: string,
+  available: { reflectivity: boolean; rainRate: boolean; cloudTops: boolean; lightning: boolean },
+): string {
+  // Empty is an explicit "None", not a missing preference.
+  if (chosen === '') return '';
+  const option = OBSERVED_OVERLAY_OPTIONS.find((candidate) => candidate.id === chosen);
+  if (option?.needs && available[option.needs]) return chosen;
+  return available.reflectivity ? 'opera_dbzh' : available.rainRate ? 'opera_rate' : '';
+}
 
 /** True when this selection  draws lightning points instead of a raster. */
 export function isPointsOverlay(id: string): boolean {

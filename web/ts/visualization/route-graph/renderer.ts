@@ -351,6 +351,7 @@ export class RouteGraphRenderer {
       const barTop = Math.min(y, zeroY);
       const barHeight = Math.abs(y - zeroY);
       ctx.fillRect(barLeft, barTop, barWidth, barHeight);
+      if (s.partialCoverage) drawNoCoverageMarks(ctx, [x], plotArea);
     }
 
     ctx.restore();

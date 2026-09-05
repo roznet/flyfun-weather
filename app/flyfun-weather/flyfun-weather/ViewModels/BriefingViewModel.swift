@@ -508,6 +508,8 @@ final class BriefingViewModel {
 
     func refresh() async {
         guard !refreshState.isRefreshing else { return }
+        let refreshedFlightId = flight.id
+        let startingTimestamp = pack?.fetchTimestamp
         refreshState = .refreshing(stage: "Starting", detail: nil, progress: 0)
 
         do {
@@ -530,7 +532,8 @@ final class BriefingViewModel {
                     } else {
                         refreshState = .completed(elapsedSeconds: event.elapsedSeconds ?? 0)
                     }
-                    if let newPack = event.pack {
+                    if let newPack = event.pack, flight.id == refreshedFlightId,
+                       pack?.fetchTimestamp == startingTimestamp {
                         await applyPack(newPack)
                     }
                     // AFTER `applyPack`, deliberately. A gated realtime refresh
@@ -539,7 +542,8 @@ final class BriefingViewModel {
                     // stale copy the press was meant to replace. Overwriting it
                     // here with what the server just computed is what makes ↻
                     // move the METAR/TAF and observed picture in flight.
-                    applyRealtimeRefresh(event)
+                    await applyRealtimeRefresh(event, flightId: refreshedFlightId,
+                                               timestamp: event.pack?.fetchTimestamp ?? startingTimestamp)
                     // Clear the transient banner after a delay.
                     try? await Task.sleep(for: .seconds(10))
                     switch refreshState {
@@ -574,16 +578,30 @@ final class BriefingViewModel {
     /// collector switched off), and keeping what the pack loaded with beats
     /// blanking a panel — the observed ages on screen stay honest either way,
     /// because every source carries its own.
-    private func applyRealtimeRefresh(_ event: RefreshEvent) {
+    func applyRealtimeRefresh(_ event: RefreshEvent, flightId: String, timestamp: String?) async {
         guard event.refreshDecision?.mode == "realtime" else { return }
+        guard let timestamp else { return }
+        // Persist the exact refreshed pack even if the pilot selected another
+        // history entry while the network/reload was awaiting. Never patch that
+        // newly selected snapshot with the first pack's observations.
+        if let caching = repository as? CachingBriefingRepository {
+            do {
+                try await caching.persistRealtimeRefresh(event, flightId: flightId, timestamp: timestamp)
+            } catch {
+                Self.logger.error("Realtime snapshot cache update failed: \(error)")
+                if self.flight.id == flightId, pack?.fetchTimestamp == timestamp {
+                    downloadState = .error("Latest observations could not be saved offline")
+                    refreshState = .error("Observations refreshed, but the offline copy could not be updated")
+                }
+            }
+        }
+        guard self.flight.id == flightId, pack?.fetchTimestamp == timestamp else { return }
         guard case .loaded(var snapshot) = snapshotState else {
-            // The preceding reload failed or is still running, so there is no
-            // snapshot to fold into and this data is lost. Say so: the refresh
-            // banner reports success either way, and a silent drop here looks
-            // exactly like a server that returned nothing.
-            if event.observed != nil || event.observations != nil {
+            // The preceding reload failed or is still running. The disk patch
+            // has been attempted, but there is no displayed snapshot to merge.
+            if event.observed != nil || event.observations != nil || event.sigmets != nil {
                 Self.logger.warning(
-                    "Realtime refresh returned fresh data but the snapshot is not loaded — discarding")
+                    "Realtime refresh returned fresh data but the snapshot is not loaded for display")
             }
             return
         }

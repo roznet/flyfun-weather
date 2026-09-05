@@ -41,7 +41,9 @@ import {
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
-import { corridorBounds, fetchObservedFlashes, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
+import { corridorBounds, fetchObservedFlashes, fetchObservedLegends, type ObservedFlashResult } from './visualization/route-map/observed-overlay';
+import { ObservedFlashRequests } from './visualization/route-map/observed-request-state';
+import { resolveObservedOverlay } from './visualization/route-map/observed-overlay-geometry';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -271,9 +273,7 @@ function patchForecastTimeLabel(label: string): void {
 // Flashes are fetched once per corridor and cached: the payload changes only
 // when a new frame lands, and re-requesting on every map re-render (altitude
 // slider drags, model switches) would spend a request per frame of a drag.
-let observedFlashCache: ObservedFlashPoint[] | null = null;
-let observedFlashKey: string | null = null;
-let observedFlashPending = false;
+const observedFlashRequests = new ObservedFlashRequests<ObservedFlashResult>();
 
 function updateObservedOverlay(
   data: VizRouteData,
@@ -282,6 +282,7 @@ function updateObservedOverlay(
 ): void {
   const observed = data.observed;
   if (!observed) {
+    observedFlashRequests.clear();
     renderer.setObservedSource(null);
     renderer.setObservedFlashes([]);
     renderer.refreshObserved();
@@ -292,19 +293,15 @@ function updateObservedOverlay(
   // briefing. Reflectivity is the default elsewhere: highest cadence, and the
   // one that answers "is that cell on my route".
   const chosen = briefingStore.getState().vizSettings.observedOverlay;
-  const availableFor: Record<string, boolean> = {
-    opera_dbzh: !!observed.reflectivity,
-    opera_rate: !!observed.rainRate,
-    eumetsat_ctth: !!observed.cloudTops,
-    eumetsat_ctth_temp: !!observed.cloudTops,
-    eumetsat_li: !!observed.lightning,
-  };
-  const wanted = chosen && availableFor[chosen] ? chosen : (
-    observed.reflectivity ? 'opera_dbzh' : observed.rainRate ? 'opera_rate' : ''
-  );
+  const wanted = resolveObservedOverlay(chosen, {
+    reflectivity: !!observed.reflectivity,
+    rainRate: !!observed.rainRate,
+    cloudTops: !!observed.cloudTops,
+    lightning: !!observed.lightning,
+  });
   // Lightning is points, not a raster: selecting it draws no imagery at all.
   const showFlashes = wanted === 'eumetsat_li';
-  renderer.setObservedSource(showFlashes || !wanted ? null : wanted);
+  renderer.setObservedSource(wanted || null);
   renderer.setObservedOpacity(briefingStore.getState().vizSettings.observedOverlayOpacity ?? 0.75);
   // Fetched once and cached; a failure costs the scale, not the overlay.
   void fetchObservedLegends().then((legends) => {
@@ -317,24 +314,18 @@ function updateObservedOverlay(
     // One measurement at a time: with a raster selected, lightning points on
     // top would leave a colour on the map whose source is ambiguous.
     renderer.setObservedFlashes([]);
+    observedFlashRequests.clear();
     renderer.refreshObserved();
     return;
   }
 
   const key = `${observed.lightning.validTime}|${bounds.toBBoxString()}`;
-  if (key !== observedFlashKey && !observedFlashPending) {
-    observedFlashPending = true;
-    fetchObservedFlashes(bounds)
-      .then((flashes) => {
-        observedFlashCache = flashes;
-        observedFlashKey = key;
-      })
-      // A flash-fetch failure costs the lightning points, not the overlay:
-      // the imagery and its age badge still draw.
-      .catch(() => { observedFlashCache = []; })
-      .finally(() => { observedFlashPending = false; requestRerender(); });
-  }
-  renderer.setObservedFlashes(observedFlashCache ?? []);
+  // A failure is latched before the completion rerender, preventing an
+  // outage from creating a request/rerender loop. Source changes or an
+  // explicitly refreshed snapshot allow another attempt.
+  observedFlashRequests.select(key, () => fetchObservedFlashes(bounds), requestRerender);
+  const flashes = observedFlashRequests.current(key);
+  renderer.setObservedFlashes(flashes?.flashes ?? [], flashes?.field ?? null);
   renderer.refreshObserved();
 }
 
@@ -2013,6 +2004,7 @@ async function init(): Promise<void> {
       });
     } else {
       // Map not visible — destroy
+      observedFlashRequests.clear();
       if (mapInteraction) { mapInteraction.destroy(); mapInteraction = null; }
       if (mapRenderer) { mapRenderer.destroy(); mapRenderer = null; }
     }
@@ -2134,6 +2126,8 @@ async function init(): Promise<void> {
     // Resolve 'auto' units against this flight's region (US flights → US units)
     // before any sub-render reads getUnitsRegion(). No-op for a forced pref.
     if (state.snapshot !== prev.snapshot && state.snapshot) {
+      observedFlashRequests.retryFailed();
+      mapRenderer?.retryObservedFetch();
       setFlightRegion(regionFromIcaos(state.snapshot.route.waypoints.map(w => w.icao)));
     }
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {

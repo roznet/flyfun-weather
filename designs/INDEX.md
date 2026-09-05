@@ -129,9 +129,10 @@ Key exports: `run_route_weather`, `run_observation_comparison`, `run_realtime_re
 → Full doc: metar-taf-route-weather.md
 
 ### current-conditions
-Observed conditions along the route (#574, phase 1): OPERA radar reflectivity + rain rate, EUMETSAT MTG total lightning and satellite cloud tops, collected as local frames and sampled in 5/10/20 NM discs around every route point. Displays observations only — no verdict, no advisory wiring; the cross-check is visual, with `observed-tops` drawn over the NWP cloud bands. Load-bearing invariants: `nodata` (half the OPERA grid) never conflated with `undetect`; parallax applied before corridor membership (52 km median displacement vs a 37 km corridor); one windowed read, never per-station file access; no synthetic shared timestamp. Payload inline on `briefing.json`; imagery served from `/api/observed`. Gated on `WB_OBSERVED_ENABLED`.
+Observed conditions along the route (#574, phase 1): OPERA radar reflectivity + rain rate, EUMETSAT MTG total lightning and satellite cloud tops, collected as local frames and sampled in 5/10/20 NM discs around every route point. Displays observations only — no verdict, no advisory wiring; `observed-tops` draws geometric heights over NWP cloud bands. Invariants: `nodata` never conflated with `undetect`; satellite status (not method 0 alone) establishes cloud-free; positive detections survive partial coverage; parallax precedes corridor membership; one windowed read; per-source observation times rather than a synthetic shared timestamp. Large reported low-cloud parallax offsets remain a validation question. Payload inline on `briefing.json`; imagery served from `/api/observed`. Gated on `WB_OBSERVED_ENABLED`.
 Key exports: `build_observed_conditions`, `ObservedConditions`, `FrameStore`, `sample`, `sample_flashes`, `collect_once`, `run_observed_collect_loop`, `render_overlay`, `build_summary`
 → Full doc: current-conditions.md
+→ Correctness review and future visualization/motion ideas: reviews/2026-09-05-pr584-observed-review.md
 
 ## iOS app
 

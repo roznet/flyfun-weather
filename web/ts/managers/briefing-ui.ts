@@ -46,6 +46,7 @@ import {
 } from '../helpers/metrics-helper';
 import { compareAdvisories } from '../helpers/alt-departure-compare';
 import { formatHeading, formatWind } from '../units';
+import { observationTimeText, observationWindowText, observeDisplayClock } from '../visualization/observed-time';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
 import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, modelSlotLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
@@ -1892,7 +1893,11 @@ function renderSigmetPopup(s: RouteSigmets['sigmets'][number]): string {
  * An unavailable source is listed, not hidden: a briefing with no radar is
  * not a briefing with no weather, and the difference is the pilot's to know.
  */
+let stopObservedPanelClock: (() => void) | null = null;
+
 export function renderObservedConditions(snapshot: ForecastSnapshot | null): void {
+  stopObservedPanelClock?.();
+  stopObservedPanelClock = null;
   const el = $('observed-section');
   const wrapper = $('observed-wrapper');
   if (!el) return;
@@ -1903,6 +1908,13 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
     return;
   }
   if (wrapper) wrapper.style.display = '';
+  stopObservedPanelClock = observeDisplayClock(() => {
+    if (!el.isConnected) { stopObservedPanelClock?.(); stopObservedPanelClock = null; return; }
+    // A clock tick must not replace focused info buttons or attribution links.
+    el.querySelectorAll<HTMLElement>('[data-observed-time]').forEach((stamp) => {
+      stamp.textContent = observationTimeText(stamp.dataset.observedTime ?? '');
+    });
+  });
 
   // One card per clause, styled like the advisory cards so the page reads as
   // one thing. Deliberately NOT colour-coded by severity: phase 1 computes no
@@ -1912,9 +1924,8 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
     ? observed.summary_entries
     : observed.summary_lines.map((text) => ({ kind: '', text, metric_id: '' }));
 
-  // Each clause pairs with its OWN source's frame time. The prose already
-  // carries a relative age ("observed 8 min ago"); the chip adds the absolute
-  // valid time, which the panel otherwise never shows. Never a shared clock.
+  // Each clause pairs with its OWN source's frame time. Older saved prose may
+  // contain relative ages; the chip carries its live age and absolute UTC time.
   const fieldFor: Record<string, { valid_time: string } | null | undefined> = {
     reflectivity: observed.reflectivity,
     rain_rate: observed.rain_rate,
@@ -1951,7 +1962,10 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
       }</div>`
     : '';
 
-  const summaryHtml = `${cardsHtml}${unavailableHtml}`;
+  // Saved prose can contain ages and interpretation from an older pack. Do
+  // not rewrite scientific claims with regex or call assembly time an observation.
+  const savedAt = observed.computed_at ? ` (assembled ${escapeHtml(observed.computed_at)})` : '';
+  const summaryHtml = `<div class="observed-summary-note">Saved summary${savedAt}; relative ages in this text are as saved. Current source ages below.</div>${cardsHtml}${unavailableHtml}`;
 
   // One row per source with its OWN valid time: the four streams are minutes
   // apart and none of them is an instant, so there is no combined "as of".
@@ -1966,12 +1980,10 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
   // varies per frame (one sampled frame was built by Météo-France, not EUMETNET
   // centrally), so the text comes from the data and is never hardcoded.
   const present = fields.map((f) => {
-    const rolling = f!.window_minutes > 0
-      ? `, ${Math.round(f!.window_minutes)} min window`
-      : '';
-    const age = f!.age_minutes < 1 ? 'just now' : `${Math.round(f!.age_minutes)} min ago`;
+    const rolling = observationWindowText(f!.source, f!.window_minutes);
+    const stamp = `<span data-observed-time="${escapeHtml(f!.valid_time)}">${escapeHtml(observationTimeText(f!.valid_time))}</span>`;
     return `<span class="observed-source">${attributionHtml(f!.attribution)}`
-      + `<span class="observed-source-age">${escapeHtml(age)}${escapeHtml(rolling)}</span></span>`;
+      + `<span class="observed-source-age">${escapeHtml(observedSourceLabel(f!.source))} ${stamp}${escapeHtml(rolling)}</span></span>`;
   });
 
   const sourcesHtml = `
@@ -1984,13 +1996,9 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
   el.innerHTML = `${summaryHtml}${sourcesHtml}`;
 }
 
-/** "10:20Z" — a frame's own valid time, per source. Never a shared clock. */
+/** A frame's UTC date/time and live age, per source. Never a shared timestamp. */
 function observedStampHtml(validTime: string): string {
-  const d = new Date(validTime);
-  if (Number.isNaN(d.getTime())) return '';
-  const hh = String(d.getUTCHours()).padStart(2, '0');
-  const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  return `<span class="observed-stamp" title="${escapeHtml(t('observed.frameValidTime'))}">${hh}:${mm}Z</span>`;
+  return `<span class="observed-stamp" data-observed-time="${escapeHtml(validTime)}" title="${escapeHtml(t('observed.frameValidTime'))}">${escapeHtml(observationTimeText(validTime))}</span>`;
 }
 
 /** Human label for a raw source key, so a missing source does not read as a

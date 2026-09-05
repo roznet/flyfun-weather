@@ -21,9 +21,9 @@ import Foundation
 //     `validTime` / `ageMinutes`. `ObservedConditions.computedAt` is when the
 //     payload was ASSEMBLED and must never be rendered as an observation age —
 //     `ObservedConditionsTests` asserts no surface does.
-//  3. **`qualityMethod` is a histogram, not a count.** `9` is the
-//     multi-layer-suspect flag; collapsing it into one confidence number
-//     destroys exactly the signal the "can I get on top?" question needs.
+//  3. **`qualityMethod` is a retrieval-method histogram, not confidence.**
+//     Method 9 is opaque RTM + inversion; 0 can mean bad retrieval or clear.
+//     Neither establishes cloud layering. Retained as wire metadata only.
 //
 // Decoded with the shared `JSONDecoder.weatherBrief` (`.convertFromSnakeCase`).
 // That strategy also rewrites DICTIONARY keys — the trap `ForecastMapResponse`
@@ -35,7 +35,7 @@ import Foundation
 // `CodingKeys`.
 // =============================================================================
 
-/// Resolution of the *fine* cloud-top histogram, in flight levels.
+/// Legacy histogram resolution in hundreds of geometric feet (not flight levels).
 /// Mirrors `CLOUD_TOP_FINE_FL_STEP` in `models/observed.py`.
 let observedFineFlStep = 10
 
@@ -106,19 +106,20 @@ struct ObservedTopsAnnulus: Codable, Sendable {
     /// Coarse bands, keyed by label ("FL150-250"). Prose only — see
     /// `observedCoarseTopBands`.
     let flBins: [String: Int]?
-    /// Sparse fine histogram keyed by the band's lower edge in FL ("60" ==
-    /// FL060–FL070, step `observedFineFlStep`). Sparse because empty air is most
+    /// Sparse fine histogram keyed in hundreds of geometric feet ("60" ==
+    /// 6000–7000 ft MSL, step `observedFineFlStep`). Sparse because empty air is most
     /// of the column, and because here — unlike everywhere else in this payload
     /// — "absent" and "zero" genuinely mean the same thing.
     let flFine: [String: Int]?
-    /// Per-pixel height-assignment method. `0` is *no cloud* (a positive
-    /// observation, counted in `undetectPx`); `9` is multi-layer-suspect.
+    /// Per-pixel height-assignment method, not confidence or cloud layering.
+    /// Guide table 10: 0 = bad/clear; 9 = opaque RTM + inversion.
     let qualityMethod: [String: Int]?
     let highestFl: Double?
     /// Coldest top in the disc (K) — the deepest convection, not an average.
     let coldestTopK: Double?
-    /// Effective cloudiness at the highest top, 0–1. Height alone draws a solid
-    /// deck and wispy cirrus identically; this is what separates them.
+    /// Decoded IR effective cloudiness: cloud amount × emissivity. Historical
+    /// granules decode as 0–1 despite percent metadata; scale needs validation.
+    /// Not visible opacity or a METAR coverage category.
     let highestCloudiness: Double?
     let medianCloudiness: Double?
     /// Pressure-based FL of the highest top — what an altimeter agrees with,
@@ -129,9 +130,8 @@ struct ObservedTopsAnnulus: Codable, Sendable {
     var isInsufficient: Bool { insufficientCoverage ?? false }
 }
 
-/// Lightning disc. No `nodata`/`undetect` split: lightning is a point product
-/// and the imager sees the whole disc, so an absence of flashes is a real
-/// observation.
+/// Lightning disc. This point payload has no coverage/quality mask; zero is
+/// no flashes reported in the window, not guaranteed absence of convection.
 struct ObservedFlashAnnulus: Codable, Sendable {
     let radiusNm: Double
     let flashCount: Int
@@ -185,9 +185,8 @@ protocol ObservedFieldMeta {
     var units: String? { get }
     var validTime: String { get }
     var ageMinutes: Double { get }
-    /// Width of the product's own accumulation / rolling-max window; `0` for an
-    /// instantaneous retrieval. DBZH is a rolling 10-minute maximum, so an
-    /// on-screen echo can be ~15 min old — about 30 NM of own-ship at 120 kt.
+    /// Width of the product's acquisition window; `0` for an instantaneous
+    /// retrieval. DBZH combines radar scans from the preceding 10 minutes.
     var windowMinutes: Double? { get }
     var attribution: ObservedAttribution? { get }
 }

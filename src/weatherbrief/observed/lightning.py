@@ -2,10 +2,10 @@
 
 Total lightning — intra-cloud as well as cloud-to-ground — as a point product
 rather than a grid.  That distinction runs through the payload: a flash list
-has no coverage mask, because the imager sees the whole disc.  "No flashes in
-the last ten minutes" is a real observation here, not a gap, and the models
-reflect that by giving :class:`~weatherbrief.models.observed.ObservedFlashAnnulus`
-no ``nodata``/``undetect`` split at all.
+has no coverage mask. Zero means no detections reported in its acquisition
+window, not verified full-disc coverage or a guarantee of no lightning.
+:class:`~weatherbrief.models.observed.ObservedFlashAnnulus` therefore has no
+``nodata``/``undetect`` split; consumers must not infer one from zero counts.
 
 Variable naming has moved between LI product baselines, so the reader looks
 for any of the known spellings rather than pinning one.  A granule that

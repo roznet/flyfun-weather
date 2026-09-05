@@ -306,22 +306,14 @@ export interface VizCurrentConditions {
 // remotely-sensed fields with their own coverage and their own clocks. The
 // existing `current-conditions` layer is untouched by any of this.
 
-/** One FL band's share of the cloud-top pixels in a disc. */
+/** One geometric-height band's share of valid retrieval samples in a disc. */
 export interface VizObservedTopBin {
   label: string;
   loFt: number;
   hiFt: number;
-  /** Share of the disc's LOOKED-AT SKY with its top in this band, 0–1.
-   *
-   *  Denominator is `valid_px` — every pixel the retrieval could answer for,
-   *  cloudy or clear — not the cloudy pixels alone. So a band reads directly
-   *  as "this much of the sky around the point", the bands sum to how cloudy
-   *  the disc was, and a thin deck in an otherwise clear sky can no longer
-   *  draw as bright as a solid overcast simply for being most of the little
-   *  cloud there was.
-   *
-   *  It is also what the drawing floor is measured against, so "5% of the sky"
-   *  means the same thing in the filter, in the colour ramp and in the legend. */
+  /** Count / valid_px (cloudy and clear), 0–1. Also the drawing-floor and
+   *  colour-scale denominator. Not sky area: parallax-corrected cloudy and
+   *  nominal clear samples can overlap and are not area-weighted. */
   fraction: number;
   /** Pixels in this band, so a hover can say "12 of 201" rather than only a
    *  percentage — 4% of 201 and 4% of 3 are very different evidence. */
@@ -331,29 +323,28 @@ export interface VizObservedTopBin {
 /** Every observed quantity at one route point, for the selected corridor. */
 export interface VizObservedPoint {
   distanceNm: number;
+  radarPresent?: boolean;
+  ratePresent?: boolean;
+  lightningPresent?: boolean;
   /** Peak reflectivity (dBZ), or null when nothing was detected. */
   dbz: number | null;
-  /** True when the radar does not cover enough of this disc to say anything.
-   *  Renderers MUST distinguish this from `dbz === null`, which means the
-   *  radar looked and found no echo. */
+  /** Limited radar coverage: retain detected echoes with a qualifier.
+   *  A null alone cannot establish no echo; also check source presence/coverage. */
   radarNoCoverage: boolean;
   rateMmH: number | null;
   rateNoCoverage: boolean;
   flashCount: number;
   /** Flashes per 1000 km² per minute — comparable between corridor widths. */
   flashRate: number | null;
-  /** Highest observed cloud top (ft), or null when the disc was clear. */
+  /** Highest retrieved geometric cloud top (ft MSL), or null when none retrieved. */
   topsHighestFt: number | null;
   topsBins: VizObservedTopBin[];
-  /** Share of cloudy pixels the retrieval flagged multi-layer-suspect (qm 9). */
-  topsMultiLayerFraction: number;
   topsNoCoverage: boolean;
-  /** Coldest top in the disc (°C). Deepest convection, not an average. */
+  /** Coldest retrieved top in the disc (°C), not an average or storm classification. */
   topsColdestC: number | null;
-  /** Effective cloudiness at the highest top, 0-1. Separates a solid deck from
-   *  wispy cirrus — height alone renders both identically. */
+  /** Decoded IR cloud amount × emissivity at the highest top; scale unverified, not visible opacity. */
   topsHighestCloudiness: number | null;
-  /** Median opacity across the disc's cloudy pixels. */
+  /** Median effective cloudiness across retrieved cloudy pixels. */
   topsMedianCloudiness: number | null;
   /** Pressure-based FL of the highest top, what an altimeter agrees with.
    *  Coarse (10 FL steps) and can diverge from the geometric height, so it is
@@ -367,7 +358,7 @@ export interface VizObservedSource {
   label: string;
   validTime: string;
   ageMinutes: number;
-  /** Width of the product's own accumulation / rolling-max window; 0 = instant. */
+  /** Source accumulation/acquisition window; zero means no window supplied. */
   windowMinutes: number;
   attribution: string;
 }
@@ -489,9 +480,8 @@ export interface VizPoint {
    * would paint about half of Europe as dry.
    */
   observedRateMmH: number | null;
-  /** Observed lightning density (flashes per 1000 km² per minute) in the
-   *  selected corridor. Lightning has no coverage caveat — the imager sees
-   *  the whole disc, so zero here is an observation. */
+  /** Reported lightning density in the selected corridor/window. This point
+   *  payload lacks a coverage/quality mask; zero cannot rule out convection. */
   observedFlashRate: number | null;
   /** True when the radar does not cover this point's disc. */
   observedRadarNoCoverage: boolean;

@@ -367,13 +367,10 @@ const observedSurface: LayerTooltipDef = {
     // tinguishable from a radar that looked and saw nothing, and from an imager
     // that saw no lightning. So a clause may only be written for a source the
     // payload says reported; without that, one live stream speaks for all four.
-    const radar = data?.observed?.reflectivity != null;
-    const rain = data?.observed?.rainRate != null;
-    const lightning = data?.observed?.lightning != null;
-    const hasAnything =
-      (radar && (o.radarNoCoverage || o.dbz != null)) ||
-      (rain && o.rateMmH != null) ||
-      lightning;
+    const radar = data?.observed?.reflectivity != null && o.radarPresent !== false;
+    const rain = data?.observed?.rainRate != null && o.ratePresent !== false;
+    const lightning = data?.observed?.lightning != null && o.lightningPresent !== false;
+    const hasAnything = radar || rain || lightning;
     return hasAnything ? [{ baseFt: -1e6, topFt: 1e6, point: o, radar, rain, lightning }] : [];
   },
   formatLine: (z: ObservedSurfaceZone) => {
@@ -385,27 +382,28 @@ const observedSurface: LayerTooltipDef = {
     // "38 dBZ · no flashes", which is worse — absence of lightning is something
     // a pilot acts on, and it was manufactured from a struct default.
     if (z.radar) {
-      if (p.radarNoCoverage) {
+      if (p.dbz != null) {
+        parts.push(`${p.dbz.toFixed(0)} dBZ${p.radarNoCoverage ? ' (partial coverage)' : ''}`);
+      } else if (p.radarNoCoverage) {
         parts.push('no radar coverage');
-      } else if (p.dbz != null) {
-        parts.push(`${p.dbz.toFixed(0)} dBZ`);
       } else {
-        parts.push('no echo');
+        parts.push('no echo detected');
       }
     }
     // Rain rate is its own OPERA product on its own 15-minute cadence, so it is
     // gated on its own source rather than on reflectivity's.
-    if (z.rain && !p.rateNoCoverage && p.rateMmH != null) {
-      parts.push(`${p.rateMmH.toFixed(1)} mm/h`);
+    if (z.rain) {
+      if (p.rateMmH != null) parts.push(`${p.rateMmH.toFixed(1)} mm/h${p.rateNoCoverage ? ' (partial coverage)' : ''}`);
+      else parts.push(p.rateNoCoverage ? 'no rain-rate coverage' : 'no rain detected');
     }
     if (z.lightning) {
       if (p.flashCount > 0) {
         const rate = p.flashRate != null ? ` (${p.flashRate.toFixed(1)}/1000km²/min)` : '';
         parts.push(`${p.flashCount} flash${p.flashCount === 1 ? '' : 'es'}${rate}`);
       } else {
-        // Lightning is the one source whose absence is a positive observation:
-        // it is a point product and the imager sees the whole disc.
-        parts.push('no flashes');
+        // Zero is a detection count in this source's window, not assurance
+        // that thunderstorms are absent.
+        parts.push('no flashes detected');
       }
     }
     return parts.join(' · ');
@@ -430,24 +428,21 @@ const observedTops: LayerTooltipDef = {
   getZones: (p): ObservedTopsZone[] => {
     const o = p.observed;
     if (!o) return [];
-    if (o.topsNoCoverage) {
+    if (o.topsNoCoverage && o.topsHighestFt == null && !o.topsBins.some(b => b.count > 0)) {
       return [{ baseFt: -1e6, topFt: 1e6, point: o, label: 'no retrieval here' }];
     }
     const zones: ObservedTopsZone[] = [];
     for (const bin of o.topsBins) {
       if (bin.count <= 0) continue;
-      // Share AND count: 4% of 201 pixels and 4% of 3 are very different
-      // evidence, and only one of them is worth acting on. The share is of
-      // the SKY the retrieval could see, so it reads as coverage — "4% of the
-      // area around here had its cloud top in FL180-190" — and the bands at
-      // a point sum to how cloudy the disc was, not to 100%.
+      // Share AND count expose the sample support. Corrected cloudy and
+      // nominal clear pixels can overlap; this is not a sky-area fraction.
       const pct = bin.fraction * 100;
       const share = pct >= 1 ? `${Math.round(pct)}%` : '<1%';
       zones.push({
         baseFt: bin.loFt,
         topFt: bin.hiFt,
         point: o,
-        label: `${bin.label} · ${share} of sky (${bin.count} px)`,
+        label: `${bin.label} · ${share} of valid retrieval samples (${bin.count} px)`,
       });
     }
     if (o.topsHighestFt != null) {
@@ -465,7 +460,7 @@ const observedTops: LayerTooltipDef = {
         baseFt: -1e6,
         topFt: 1e6,
         point: o,
-        label: `highest top ${formatFl(o.topsHighestFt)}`,
+        label: `highest top ${Math.round(o.topsHighestFt)} ft MSL`,
       });
     }
     return zones;
@@ -473,25 +468,17 @@ const observedTops: LayerTooltipDef = {
   formatLine: (z: ObservedTopsZone) => {
     const p = z.point;
     const parts: string[] = [z.label];
+    if (p.topsNoCoverage && p.topsHighestFt != null) parts.push('partial coverage');
     if (p.topsColdestC != null) parts.push(`coldest ${p.topsColdestC.toFixed(0)}°C`);
-    if (p.topsHighestCloudiness != null) {
-      // The number that separates "cannot get on top" from "wispy".
-      const pct = Math.round(p.topsHighestCloudiness * 100);
-      const how = pct >= 90 ? 'solid' : pct >= 50 ? 'broken' : 'thin';
-      parts.push(`${pct}% opaque (${how})`);
+    if (p.topsHighestCloudiness != null && Number.isFinite(p.topsHighestCloudiness)) {
+      // Real-granule packing disagrees with percent metadata; don't infer a
+      // percentage until normalization is independently validated.
+      parts.push(`IR effective cloudiness ${p.topsHighestCloudiness.toFixed(2)} (decoded; scale unverified)`);
     }
     if (p.topsHighestAviationFl != null) parts.push(`≈FL${Math.round(p.topsHighestAviationFl)} pressure`);
-    if (p.topsMultiLayerFraction > 0.1) {
-      parts.push(`${Math.round(p.topsMultiLayerFraction * 100)}% multi-layer suspect`);
-    }
     return parts.join(' · ');
   },
 };
-
-/** "FL350" from feet. */
-function formatFl(ft: number): string {
-  return `FL${Math.round(ft / 100)}`;
-}
 
 export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   cloudDD,

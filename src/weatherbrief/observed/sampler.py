@@ -250,7 +250,7 @@ def sample(
             if is_tops:
                 cloudy = counted & detected_px
                 # Everything below is reported over DETECTED pixels only: an
-                # opacity or a temperature averaged across clear-sky pixels
+                # effective IR cloudiness or temperature over clear-sky pixels
                 # would describe a cloud that is not there.
                 annuli.append(
                     ObservedTopsAnnulus(
@@ -282,8 +282,8 @@ def sample_flashes(
 ) -> dict[str, list[ObservedFlashAnnulus]]:
     """Count flashes in concentric discs around every station.
 
-    No coverage bookkeeping: the imager sees the whole disc, so zero flashes
-    is an observation rather than a gap.
+    This point product carries no coverage mask. Zero means no reported
+    detections in the acquisition window, not verified full-disc coverage.
     """
     radii = sorted(float(r) for r in radii_nm)
     results: dict[str, list[ObservedFlashAnnulus]] = {}
@@ -358,10 +358,10 @@ def _fl_histogram(height_m: np.ndarray) -> dict[str, int]:
 def _quality_histogram(quality: np.ndarray | None, counted: np.ndarray) -> dict[str, int]:
     """Per-method pixel counts inside the disc.
 
-    Kept as the full breakdown rather than a single confidence number: ``9``
-    is the multi-layer-suspect flag, and ``0`` is a positive observation of
-    clear sky.  Codes below zero mark pixels with no method at all (off-disc
-    or failed retrieval) and are excluded — those are already in ``nodata_px``.
+    Methods identify algorithms, not confidence or vertical cloud structure.
+    ``9`` is opaque + RTM + inversion; ``0`` includes both cloud free and
+    unprocessed pixels. Counts alone cannot distinguish their status. Codes
+    below zero mark missing methods and are excluded.
     """
     if quality is None:
         return {}
@@ -385,12 +385,11 @@ def _empty_annuli(radii: list[float], is_tops: bool) -> list[ObservedAnnulus]:
 
 
 def _tops_extras(cloudy, values, temperature, cloudiness, aviation) -> dict:
-    """Temperature / opacity / pressure-FL stats over an annulus' cloudy pixels.
+    """Temperature / effective IR cloudiness / pressure-FL over cloudy pixels.
 
     Each is keyed to the *highest* top rather than averaged where the question
-    is about that top specifically: the opacity of the highest cloud is what
-    decides whether a pilot can get above it, and a disc-wide mean over a low
-    stratus deck would report it as solid regardless.
+    is about that top specifically. Effective cloudiness is cloud amount ×
+    10.5 µm emissivity, not visible transparency or an overflight criterion.
     """
     out: dict[str, float | None] = {
         "coldest_top_k": None,
@@ -428,14 +427,15 @@ def _tops_extras(cloudy, values, temperature, cloudiness, aviation) -> dict:
 
 
 def _fl_fine_histogram(height_m: np.ndarray) -> dict[str, int]:
-    """Sparse fine-resolution histogram of cloud-top flight levels.
+    """Sparse histogram in hundreds of geometric feet MSL, not pressure FL.
 
-    Keyed by the band's lower edge in FL, as a string, with only non-empty
+    Keyed by the band's lower edge in legacy hundred-ft units, as a string, with only non-empty
     bands present.  The coarse :data:`CLOUD_TOP_FL_BINS` stay for prose; this
     is what a renderer should draw, because a bar spanning a coarse bucket
     claims cloud through air where none was measured — 68% of the drawn height
     at one sampled station — and erases the clear gaps between decks, which is
-    the multi-layer structure the histogram exists to reveal.
+    the spatial distribution of retrieved tops. It does not establish a
+    vertical multilayer stack or cloud bases.
     """
     if height_m.size == 0:
         return {}

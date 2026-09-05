@@ -289,11 +289,11 @@ def test_summary_lines_stay_derived_from_the_entries(stocked_store):
     assert conditions.summary == " ".join(conditions.summary_lines)
 
 
-def test_summary_names_the_echo_and_its_age(stocked_store):
+def test_summary_names_the_echo_and_its_acquisition_time(stocked_store):
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     radar = next(line for line in conditions.summary_lines if line.startswith("Radar: peak"))
     assert "dBZ" in radar
-    assert "observed 5 min ago" in radar
+    assert "2026-08-25 13:55–14:05 UTC" in radar
 
 
 def test_summary_reports_missing_coverage_distinctly_from_no_echo(stocked_store):
@@ -317,10 +317,10 @@ def test_summary_reports_missing_coverage_distinctly_from_no_echo(stocked_store)
     assert not any("no echo" in line for line in coverage)
 
 
-def test_summary_reports_cloud_tops_with_the_multilayer_flag(stocked_store):
+def test_summary_reports_cloud_tops_in_geometric_feet(stocked_store):
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     tops = next(line for line in conditions.summary_lines if line.startswith("Cloud tops"))
-    assert "FL" in tops
+    assert "ft MSL (geometric)" in tops
 
 
 def test_summary_is_deterministic(stocked_store):
@@ -332,10 +332,12 @@ def test_summary_is_deterministic(stocked_store):
 
 def test_summary_grades_nothing(stocked_store):
     """Phase 1 displays observations; it computes no verdict."""
+    import re
+
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     forbidden = ("severe", "hazard", "significant", "amber", "red", "warning")
     lowered = conditions.summary.lower()
-    assert not any(word in lowered for word in forbidden), conditions.summary
+    assert not any(re.search(rf"\b{word}\b", lowered) for word in forbidden), conditions.summary
 
 
 def test_lightning_absence_is_stated_as_an_observation(tmp_path, li_path):
@@ -351,7 +353,7 @@ def test_lightning_absence_is_stated_as_an_observation(tmp_path, li_path):
     conditions = build_observed_conditions(
         quiet, store=store, now=NOW, sources=(SOURCE_EUMETSAT_LI,)
     )
-    assert "Lightning: none within 20 NM" in conditions.summary
+    assert "Lightning: no flashes detected within 20 NM" in conditions.summary
 
 
 def test_no_echo_is_never_asserted_from_mostly_blind_data(stocked_store):

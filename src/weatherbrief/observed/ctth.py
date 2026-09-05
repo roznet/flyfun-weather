@@ -13,17 +13,17 @@ sample of a different place.  The product ships per-pixel ``delta_latitude`` /
 anything decides which pixels belong to a station.  ``tests/observed`` pins
 this with a fixture that fails if the correction is dropped.
 
-**One cloud top per pixel.**  For a cirrus-over-stratus stack the retrieval
-commits to whichever layer wins, and adjacent 2 km pixels flip between the
-two as opacity wobbles.  A single-pixel sample gets an arbitrary slice of
-that; only the histogram over an annulus recovers the structure, which is why
-:class:`~weatherbrief.models.observed.ObservedTopsAnnulus` carries FL bins and
-a full ``quality_method`` breakdown rather than one number.
+**One retrieved cloud top per pixel.** Histograms over the sampling disc
+describe the spatial distribution of retrieved tops. They do not establish
+cloud bases or prove a vertical multilayer stack.
+:class:`~weatherbrief.models.observed.ObservedTopsAnnulus` carries height bins
+and a full ``quality_method`` breakdown rather than one number.
 
-``quality_method == 0`` means *no cloud* — a positive observation, and mapped
-to ``undetect``, not to ``nodata``.  Off-disc and failed retrievals are
-``nodata``.  See ``designs/future/satellite-cloud-top-validation.md`` for the
-empirical method-code table this reading rests on.
+``quality_method == 0`` means not processed, either cloud free OR missing /
+corrupt data. Only the separate cloud-free ``quality_status`` supports
+``undetect``. Off-disc, failed and unknown retrievals remain ``nodata``.
+The FCI CLM/CT/CTTH user guide, Table 10, defines these categorical flags;
+the method is neither a confidence score nor a multilayer flag.
 """
 
 from __future__ import annotations
@@ -128,16 +128,20 @@ def parallax_pad_km(lats, lons) -> float:
     at_worst = _satellite_zenith_tangent(max(angles))
     return max(PARALLAX_PAD_KM, PARALLAX_PAD_KM * at_worst / reference)
 
-# Empirically-verified FCI L2 height-assignment methods (full-disc sample,
-# 2026-05-04 08:00Z).  Kept as labels so the UI need not embed the table.
+# FCI CLM/CT/CTTH user guide, Table 10 (not the former empirical table):
+# https://user.eumetsat.int/resources/user-guides/mtg-fci-clm-ct-and-ctth-data-guide
 QUALITY_METHOD_LABELS: dict[int, str] = {
-    0: "no cloud",
-    1: "opaque IR window (low stratus/fog)",
-    6: "opaque IR, cold cloud (Cb/thick cirrus)",
-    7: "radiance ratio, thin cirrus",
-    8: "CO2 slicing, semi-transparent high",
-    9: "multi-layer suspect",
-    10: "other semi-transparent",
+    0: "not processed (no/corrupt data or cloud free)",
+    1: "opaque and RTM",
+    2: "opaque minus RTM",
+    3: "intercept IR10.5 / IR13.4",
+    4: "intercept IR10.5 / IR6.3",
+    5: "intercept IR10.5 / IR7.3",
+    6: "radiance ratio IR10.5 / IR13.4",
+    7: "radiance ratio IR10.5 / IR6.3",
+    8: "radiance ratio IR10.5 / IR7.3",
+    9: "opaque + RTM + inversion",
+    10: "no solution",
 }
 
 DEFAULT_LICENSE = "© EUMETSAT — MTG FCI Level 2 Cloud Top Height"
@@ -146,19 +150,19 @@ FEET_PER_METRE = 1.0 / 0.3048
 
 
 def metres_to_fl(height_m):
-    """Geometric height in metres → flight level.
+    """Geometric metres → hundreds of geometric feet MSL (legacy wire units).
 
     Deliberately geometric, not pressure altitude.  The product also ships
     ``cloud_top_aviation_height``, the pressure-based quantity a pilot's
     altimeter agrees with.  Its ``FL/10`` units are now **confirmed** against a
     real granule (123k cloudy pixels, 2026-08-26): geometric tops span
-    FL0.3–442 and ``aviation × 10`` spans FL10–440, correlation 0.83.
+    30–44,200 ft and ``aviation × 10`` spans pressure FL10–440, correlation 0.83.
 
     It is carried alongside rather than instead of this, because it is coarse
     (``int8``, so 10 FL steps) and diverges from the geometric height by a
     median +15 FL with p90 +91 FL.  Two answers to two different questions:
-    the histogram bins stay geometric, and the pressure figure is reported as
-    a secondary number where a pilot wants what the altimeter will read.
+    the histogram bins are NOT flight levels; the pressure figure is reported
+    separately for comparison with standard-pressure altimetry.
     """
     return np.asarray(height_m, dtype=float) * FEET_PER_METRE / 100.0
 
@@ -347,10 +351,11 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
         # decompressing that row band — is already paid; each extra variable
         # measured ~6 ms on a route-sized window, about 10% of a payload build.
         #
-        # `effective_cloudiness` earns its place more than the other two: it
-        # separates a solid deck from wispy cirrus, which is the difference
-        # between "you cannot get on top" and "you can see stars through it" —
-        # and height alone draws both identically.
+        # Effective cloudiness is pixel cloud amount × emissivity at 10.5 µm,
+        # not visual opacity, a cloud-cover fraction, or overflight guidance.
+        # Preserve netCDF packing: measured granules decode to fractions,
+        # despite the guide's percent label. That discrepancy is unresolved;
+        # applying another /100 or masking values would guess an encoding.
         # Optional: a granule that does not carry one of these still decodes,
         # and the sampler reports the corresponding field as None. Height,
         # quality and the parallax pair are the only hard requirements —
@@ -365,17 +370,42 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
             if name in dataset.variables
         }
 
+        # Table 10 spells status "qualiy_status"; accept that spelling as
+        # well as the conventional variable name. netCDF enum types decode
+        # through _read_raw just like integer flags, including their fill.
+        status_name = next(
+            (name for name in ("quality_status", "qualiy_status") if name in dataset.variables),
+            None,
+        )
+        status = _read_raw(dataset, status_name, rows, cols)[0] if status_name else None
+        overall = (
+            _read_raw(dataset, "quality_overall_processing", rows, cols)[0]
+            if "quality_overall_processing" in dataset.variables else None
+        )
+
         valid = _valid_time(dataset, path)
         attribution = _attribution(dataset)
 
     if valid is None:
         raise ValueError(f"CTTH granule {path} carries no usable valid time")
 
-    # quality_method == 0 is a *positive* observation of clear sky, so it is
-    # `undetect`.  Anything with no usable method code at all — off-disc,
-    # failed retrieval — is `nodata`: the retrieval did not answer.
-    clear = np.isclose(quality, 0.0) & ~quality_missing
-    detected = ~np.isnan(height) & ~height_missing & ~clear
+    # Method 0 conflates cloud-free and unprocessed; method 10 is no solution.
+    # Require independent cloud-free status, with no contradictory height.
+    clear = np.zeros(height.shape, dtype=bool)
+    if status is not None:
+        clear = (status == 1) & (quality == 0) & ~np.isfinite(height)
+        if overall is not None:
+            clear &= overall == 0
+    detected = np.isfinite(height) & ~height_missing & np.isin(quality, range(1, 10))
+    if status is not None:
+        # Status 3 alone means CLOUDY and successful; dust/ash success (5/7)
+        # is not a cloud top. Missing/unknown flags must not imply success.
+        detected &= status == 3
+    # Legacy granules lacking status may still supply positive evidence with
+    # a valid method/height, but can never assert clear. Poor quality remains
+    # a retrieval, not "no data"; no calibrated confidence threshold is added.
+    if overall is not None:
+        detected &= np.isin(overall, (1, 2))
     # A cloud top we cannot place is not a usable cloud top.  Parallax is not
     # a refinement on this product — the uncorrected position is tens of km
     # from the cloud — so a detection whose correction is missing would be
@@ -404,6 +434,8 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
         attribution=attribution,
         aux={
             "quality_method": np.where(quality_missing, -1, quality).astype(np.int16),
+            **({"quality_status": status.astype(np.float32)} if status is not None else {}),
+            **({"quality_overall_processing": overall.astype(np.float32)} if overall is not None else {}),
             "delta_latitude": np.nan_to_num(dlat, nan=0.0).astype(np.float32),
             "delta_longitude": np.nan_to_num(dlon, nan=0.0).astype(np.float32),
             # NaN where absent rather than a sentinel: these are sampled with

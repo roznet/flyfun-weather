@@ -399,6 +399,12 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
     }
 
+    /// Same-timestamp realtime refreshes must survive reopening offline. No
+    /// endpoint or full-pack re-download: update the snapshot already on disk.
+    func persistRealtimeRefresh(_ event: RefreshEvent, flightId: String, timestamp: String) async throws {
+        try await cache.patchRealtimeSnapshot(event, flightId: flightId, timestamp: timestamp)
+    }
+
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse {
         try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "route-analyses")
     }

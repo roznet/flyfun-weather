@@ -79,6 +79,41 @@ actor BriefingCacheStore {
         try data.write(to: file, options: Self.writeOptions)
     }
 
+    /// Patch only refreshed fields in an existing downloaded snapshot. Running
+    /// the read/merge/atomic write in this actor without suspension avoids lost
+    /// updates, preserves unknown JSON fields, and cannot recreate a deleted pack.
+    func patchRealtimeSnapshot(_ event: RefreshEvent, flightId: String, timestamp: String) throws {
+        guard event.refreshDecision?.mode == "realtime" else { return }
+        guard event.observed != nil || event.observations != nil || event.sigmets != nil else { return }
+        let file = fileURL(flightId: flightId, timestamp: timestamp, endpoint: "snapshot")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            if isPackCached(flightId: flightId, timestamp: timestamp) { throw CocoaError(.fileReadNoSuchFile) }
+            return
+        }
+        let previous = try Data(contentsOf: file)
+        guard var object = try JSONSerialization.jsonObject(with: previous) as? [String: Any] else {
+            throw CocoaError(.coderReadCorrupt)
+        }
+        let encoded = try JSONEncoder.weatherBrief.encode(event)
+        guard let refresh = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+            throw CocoaError(.coderReadCorrupt)
+        }
+        for (source, destination) in [("observations", "route_observations"),
+                                      ("sigmets", "route_sigmets"),
+                                      ("observed", "observed_conditions")] {
+            if let value = refresh[source], !(value is NSNull) { object[destination] = value }
+        }
+        let updated = try JSONSerialization.data(withJSONObject: object)
+        try updated.write(to: file, options: Self.writeOptions)
+        ensureLoaded()
+        let key = "\(flightId)/\(timestamp)"
+        if var entry = index[key] {
+            entry.totalBytes += Int64(updated.count - previous.count)
+            index[key] = entry
+            saveIndex()
+        }
+    }
+
     // MARK: - Metadata cache (for offline fallback)
 
     /// Write a metadata file at the cache root level (e.g. "flights.json").

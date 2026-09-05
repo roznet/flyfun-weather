@@ -3,12 +3,13 @@
 > Phase 1 of #574. **Displays observations only** — it computes no verdict and
 > touches no advisory.
 
-Shows what a pilot can actually *see* along the route right now, next to what
+Shows remotely observed conditions at their source times, next to what
 the models forecast: OPERA radar reflectivity and rain rate, EUMETSAT MTG
 total lightning, and EUMETSAT MTG satellite cloud tops.
 
 The cross-check still happens — `observed-tops` renders directly over the NWP
-cloud bands, so "model says FL120, satellite saw FL280" is visible to the eye.
+cloud bands, with geometric heights explicitly labelled in feet MSL and any
+pressure flight levels kept separate.
 **Computing** that comparison is phase 2 (see [Out of scope](#out-of-scope)).
 
 > **Note on provenance.** This was written before
@@ -43,9 +44,10 @@ cloud bands, so "model says FL120, satellite saw FL280" is visible to the eye.
 >   but do not fade with it. The map's lightning trail does fade; the radar and
 >   tops layers do not.
 >
-> Neither is a correctness gap — the age is always on screen and coverage is
-> never implied — but both are real divergences from a rule that was written
-> down, and belong in phase 2's display pass.
+> The follow-up [PR #584 review](reviews/2026-09-05-pr584-observed-review.md)
+> found correctness gaps in stored ages and coverage wording. The corrective
+> branch updates clock-driven per-source labels; age-fading remains a separate
+> visual choice, not a substitute for accurate timestamps.
 
 ## Why this shape
 
@@ -67,18 +69,18 @@ total_px == valid_px + nodata_px
 valid_px == detected_px + undetect_px
 ```
 
-`insufficient_coverage` (below `MIN_COVERAGE_FRACTION`, 0.35) is the signal
-that a sample must not be asserted at all. The route graph renders it as a
-distinct hatched state on the baseline, never as a gap — a gap in a rain-rate
-line reads as "no rain".
+`insufficient_coverage` (below `MIN_COVERAGE_FRACTION`, 0.35) prevents an
+absence claim; it does not erase measured positive detections. Render values
+alongside the distinct coverage hatch/warning. A gap alone can read as "no rain".
 
 On the satellite side the same discipline applies with different vocabulary:
-`quality_method == 0` means *no cloud*, a positive observation, and maps to
-`undetect`. Off-disc and failed retrievals are `nodata`.
+`quality_method == 0` includes both cloud-free and unprocessed pixels. Only
+explicit cloud-free status, without contradictory retrieval values, establishes
+`undetect`. Failed, unknown and off-disc retrievals are `nodata`.
 
-Lightning is the exception, and deliberately so: it is a point product and the
-imager sees the whole disc, so an absence of flashes is a real observation.
-`ObservedFlashAnnulus` therefore has no coverage split at all.
+Lightning is a point product and `ObservedFlashAnnulus` currently has no coverage
+split. LI does not cover the entire disc; zero means no flashes reported in the
+specified window, not verified full coverage or absence of convection.
 
 This matters *more* in phase 1 than it will in phase 2, because no comparison
 exists yet to carry confidence.
@@ -89,8 +91,9 @@ The satellite sits over the equator. Its line of sight to a cloud at 50°N
 continues past the cloud and strikes the ground *north* of it, so the pixel
 containing a cloud-top claims a ground position tens of kilometres away.
 
-**Measured displacement: 52 km median, against a 37 km (20 NM) corridor.** An
-uncorrected sample is not slightly wrong — it describes a different place.
+Earlier research reported a 52 km median displacement against a 37 km (20 NM)
+corridor. Its unusually large low-cloud offsets need independent real-granule
+validation; the synthetic tests establish correction application, not its scale.
 
 The product ships per-pixel `delta_latitude` / `delta_longitude`; the sampler
 applies them *before* deciding which pixels belong to a station, and the read
@@ -110,9 +113,9 @@ Helsinki 121 against 144, while western Europe was unaffected only because the
 worst-viewed point in the set, scales by the zenith-tangent ratio, and clamps at
 a 70° sub-satellite angle, where the geometry degenerates and the retrieval is
 unusable anyway. It is the geometry's *ratio* that is used, never its absolute
-value — the naive `h × tan(zenith)` formula underestimates real dlat by
-roughly a factor of four, which is why the product ships a correction field at
-all.
+value. The earlier factor-of-four discrepancy with `h × tan(zenith)` remains
+unresolved; it is not a validated physical correction factor. Numeric padding
+and supplied offsets are unchanged pending independent geolocation checks.
 
 **The map overlay applies it too.** This is not automatic: the overlay
 resamples a frame into a plate-carrée raster, and gathering each output pixel
@@ -121,7 +124,10 @@ hits the ground rather than where the cloud is. The same briefing would then
 show a cell ~60 km from the position its own annuli reported. `render_overlay`
 therefore *scatters* detections to their corrected positions for a
 parallax-carrying frame (a gather for a ground-projected one, which needs no
-correction), painting lowest-first so the highest top wins an overlap.
+correction). Each complete projected-cell bounding rectangle is painted
+lowest-first, so the highest geometric top wins every overlap and supplies
+its own temperature. Rectangles approximate projected footprints; they are
+not an area-conservative cloud mask.
 `nodata` and `undetect` keep their nominal positions — neither carries a cloud
 to displace.
 
@@ -137,9 +143,9 @@ Cloud tops are coloured by **cloud-top temperature**, following the
 enhanced-IR ramp pilots already read on satellite imagery (warm → cold: blue,
 cyan, green, yellow, orange, red).
 
-Temperature rather than height because temperature is what the instrument
-*measures* — height is derived from it against a model profile, so colouring by
-height would put a modelled quantity in the place of the observation.
+Temperature adds thermal information independently of the altitude axis. Both
+CTTH temperature and height are retrieved quantities derived from satellite
+radiances with atmospheric information; this is not raw L1 brightness temperature.
 
 One deliberate departure from the convention: its warm end is grayscale, and
 gray is indistinguishable from the NWP cloud bands this layer exists to be
@@ -172,8 +178,12 @@ threshold.
 
 ### 4. Never a synthetic common timestamp
 
-Each source carries its own frame's `valid_time` and `age_minutes`, badged on
-the layer. There is no payload-level *observation* time anywhere — not on
+Each source carries its own `valid_time` and assembly-time `age_minutes`.
+Live labels derive age from `valid_time` and the device clock, updating without
+weather polling. Each visible source has a distinct badge/window, including
+an explicit UTC date and invalid/future-time handling. Map imagery uses its
+own response metadata, not the briefing sample's timestamp.
+There is no payload-level *observation* time anywhere — not on
 `ObservedConditions`, not on `/api/observed/status`.
 
 The one payload-level timestamp is `ObservedConditions.computed_at`, and it is
@@ -182,24 +192,23 @@ assembled. No surface renders it as an age, and a test asserts that, because a
 single rendered timestamp over four sources that are minutes apart is exactly
 the conflation this rule exists to prevent.
 
-DBZH is a **rolling 10-minute maximum** plus delivery lag, so an on-screen
-echo can be ~15 min old: about 30 NM of own-ship at 120 kt. `window_minutes`
-carries that separately from the age, and the map badge says "10 min rolling
-max" so a maximum is never read as a snapshot.
+DBZH is a max-reflectivity composite from contributing scans in the ten minutes
+ending at its nominal time, plus delivery lag. This is not a temporal maximum
+of previous composites. `window_minutes` carries that scan interval separately
+from display age; lightning carries its own accumulation interval.
 
 ### 5. `quality_method` as a histogram, not a count
 
-CTTH commits to **one cloud top per pixel**. For a cirrus-over-stratus stack,
-adjacent 2 km pixels flip between "high" and "low" as cirrus opacity wobbles
-around the retrieval's threshold; a single-pixel sample gets an arbitrary
-slice of that. Only the histogram over an annulus recovers the structure.
+CTTH commits to **one cloud top per pixel**. The histogram describes the
+distribution across nearby retrieval samples. Several height modes do not
+establish stacked layers in one column or recover obscured lower cloud.
 
 So `ObservedTopsAnnulus` carries the full per-method breakdown rather than one
-confidence number. `qm=9` is the multi-layer-suspect flag — precisely the case
-where committing to one number is least trustworthy — and `qm=0` is a positive
-observation of clear sky. Collapsing them loses both.
+confidence number. The FCI guide defines `qm=9` as opaque + RTM + inversion,
+not multilayer-suspect; `qm=0` includes unprocessed, and `qm=10` means no
+solution. The separate status/processing-quality fields control validity.
 
-Empirical method table:
+Corrected guide-based method table (the original empirical labels were wrong):
 `designs/future/satellite-cloud-top-validation.md#quality_method-codes-fci-l2-ctth`.
 
 ## Architecture
@@ -333,7 +342,7 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 
 | Surface | What it shows |
 |---|---|
-| Cross-section `observed-tops` (group `conditions`, **default ON**) | FL-band histogram ticks + a solid highest-top cap per route point, over the NWP cloud bands. Hatched mark where the retrieval could not answer. Age badge. |
+| Cross-section `observed-tops` (group `conditions`, **default ON**) | Geometric-height histogram ticks + a highest-top cap per route point over NWP cloud bands. Partial detections remain visible beside coverage marks. Per-source age badge. |
 | Cross-section `observed-surface` (group `conditions`, default off) | Echo colour strip along the terrain + lightning ticks. Hatched strip for no coverage. |
 | Route map | Corridor box, newest frame as a single `imageOverlay`, lightning points age-faded, age badge with attribution. |
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
@@ -360,7 +369,9 @@ since offline packs shipped; observed only made it visible.)
 So `RefreshAccepted` and the SSE gate's `complete` event now carry `observed`
 alongside `observations`/`sigmets` — the server had already computed it and was
 discarding it — and the client folds all three into the loaded snapshot *after*
-the pack reload, rather than fetching anything again. The web is unaffected: it
+the pack reload. The follow-up also persists these fields atomically in an
+already-downloaded snapshot through the repository, preserving unknown fields,
+so reopen/offline cannot revert the successful refresh. The web is unaffected: it
 has no client cache and reloads the snapshot from the server anyway.
 
 **Refresh stays a button, on both platforms.** No poll loop. The four sources
@@ -376,31 +387,32 @@ breakpoints. That is the next section.
 
 ### What a cloud-top band is a share of, and when it is drawn
 
-A drawn band carries `fraction` — its count over `valid_px`, the pixels the
-retrieval could answer for, cloudy *and* clear. So a band reads as coverage
-("a tenth of the sky around this point had its top in FL180-190") and the
-bands at a point sum to the disc's cloud cover rather than always to 100%.
+A drawn band carries `fraction` — its count over `valid_px`, the retrieval
+samples considered valid, cloudy *and* clear. It is a **sample share**, not an
+area-weighted sky-cover measurement: parallax-shifted cloudy and nominal clear
+samples can overlap and are not deduplicated. The bands sum to the cloudy
+sample share rather than always to 100%.
 Dividing by `detected_px` instead answers "of the cloud that was found, how
 much topped out here?", which inflates as the sky clears: a measured 10 NM
 disc holding two cloudy pixels out of 131 drew both bands mid-ramp, as loud
 as a solid deck, because each was 50% of the cloud.
 
-The drawing floor is measured against that same sky: bands at or under **5%**
-are not drawn. The fine 10-FL bands split a deck into a dozen slivers, and
-under a twentieth of the sky a band is stray retrievals carrying the weight of
-something you could fly into. Measured over local packs the cut removes 60% of
+The drawing floor uses the same valid-sample denominator: bands at or under
+**5%** are not drawn. The fine 1000-ft geometric bands split a distribution
+into many bins. This is visual de-emphasis, not evidence of clear gaps or
+permission to fly through them. Measured over local packs the cut removes 60% of
 the bands at 20 NM while the survivors still account for 87% of the disc's
 cloud cover, and 2 route points in 96 lost every band they had — it takes
 the noise, not the picture. Those points keep their highest-top cap, which is
 drawn from `topsHighestFt` and never passes the filter.
 
 The consequence has to stay visible in the copy: a point with no band is not a
-point with no cloud, and the drawn shares sum to most of the cloud cover, not
+point with no cloud, and the drawn shares sum to most of the cloudy sample share, not
 all of it. The help card and the legend both say so.
 
-Colour stops start at the floor — a stop below it would be spent on bands
-that are never drawn — and run to about half the sky, which is where the
-surviving bands top out.
+Where share-based opacity is used, its scale refers to retrieval samples,
+not sky area. IR effective cloudiness is cloud amount × 10.5 µm emissivity,
+not visual opacity, METAR cloud amount or climb-through advice.
 
 The existing `current-conditions` layer (METAR columns + SIGMET zones) is
 untouched — these are siblings, not a replacement. Adding a second layer to
@@ -429,9 +441,10 @@ and a sentence that varied run-to-run would make a briefing look like it
 changed when only the phrasing did. Written in aviation shorthand so it needs
 no per-locale translation, matching `RefreshDelta`.
 
-Three things the wording is careful about: it never asserts a clear sky it did
-not see (an insufficient-coverage disc reads "no radar coverage over N of M
-points", not "no echo"); every clause carries its own age; and it grades
+Three things the wording is careful about: negative claims are scoped to the
+available samples; positive detections survive insufficient coverage; every
+clause carries immutable UTC observation times/windows, not a frozen relative
+age. It grades
 nothing — there is no "severe" or "significant" anywhere in it, and a test
 asserts that.
 
@@ -482,17 +495,18 @@ surface needs no endpoint](#the-ios-surface-needs-no-endpoint)). Still absent on
 iOS: the map overlay (which *would* need `/api/observed/overlay`), the route-graph
 metrics, and the "Observed now" summary panel.
 
-**Permanently out:** nowcasting, and a time slider. The map draws one frame,
-not a loop — a tiled animated radar product is a different, much more
-expensive thing than the question this layer answers.
+**Out of the current product scope:** nowcasting and a time slider. The original
+decision called these permanently out. The user has since requested exploration;
+[the review](reviews/2026-09-05-pr584-observed-review.md) records options and
+validation requirements. A cached regional history loop need not require a
+global tile service. No prediction or animation is added by the corrective PR.
 
 ## Known limitations
 
-- **Cloud-top heights are geometric, not pressure altitude.** The product also
-  ships `cloud_top_aviation_height`, which is what an altimeter would agree
-  with, but its documented units (`FL/10`) have not been verified against a
-  real granule. Adopting it is a phase-2 change once that is checked;
-  `metres_to_fl` is the single place it would change.
+- **Cloud-top heights are geometric, not pressure altitude.** Legacy `*_fl`
+  fields remain geometric hundreds of feet for compatibility; labels use ft MSL.
+  The separate pressure-based `cloud_top_aviation_height` readout already exists
+  and retains pressure-FL labelling. Do not replace the geometric axis silently.
 - **Overlapping discs double-count lightning.** A flash near two adjacent
   route points is counted in both, which is why the summary says "flash
   detections" rather than implying a flash census.

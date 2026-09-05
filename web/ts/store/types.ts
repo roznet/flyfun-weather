@@ -659,8 +659,8 @@ export interface RouteSigmets {
 //      clear sky is the single worst bug this layer can have, which is what
 //      `insufficient_coverage` is for.
 //   2. There is no shared timestamp. Each field carries its own frame's
-//      `valid_time` and `age_minutes`; a radar composite is a rolling
-//      10-minute maximum plus delivery lag, so an echo on screen can be ~15
+//      `valid_time` and `age_minutes`; radar scans span the preceding
+//      10 minutes plus delivery lag, so an echo on screen can be ~15
 //      minutes old — about 30 NM of own-ship at 120 kt.
 
 export interface ObservedAttribution {
@@ -687,27 +687,26 @@ export interface ObservedAnnulus {
   coverage_fraction: number;
   /** `null` when nothing was looked at — deliberately not 0, which reads as clear. */
   detected_fraction: number | null;
-  /** True → render "no coverage", never a value and never "clear". */
+  /** Limited coverage: retain detected values with a qualifier, never assert clear. */
   insufficient_coverage: boolean;
 }
 
 /** Cloud-top disc: adds the histograms a single top-per-pixel value destroys. */
 export interface ObservedTopsAnnulus extends ObservedAnnulus {
-  /** Pixel counts per coarse FL band. Right for prose ("87% above FL250"),
-   *  misleading as geometry — see `fl_fine`. */
+  /** Legacy wire keys for geometric-height bins in hundreds of ft MSL, not pressure FL. */
   fl_bins: Record<string, number>;
-  /** Sparse fine histogram: only non-empty 10-FL bands, keyed by the band's
-   *  lower edge in FL ("60" == FL060-070). This is what a renderer should
+  /** Sparse fine histogram: non-empty 1000-ft bands, keyed by the band's
+   *  lower edge in hundreds of ft MSL ("60" == 6000–7000 ft). A renderer should
    *  draw: a bar spanning a coarse bucket claims cloud through air where none
    *  was measured, and erases the gaps between decks. */
   fl_fine: Record<string, number>;
-  /** Per-method pixel counts. "0" = no cloud (a positive observation);
-   *  "9" = the retrieval's own multi-layer-suspect flag. */
+  /** Retrieval method counts, not confidence. QM0 = not processed;
+   *  QM9 = Opaque + RTM + inversion (EUMETSAT Table 10), not multilayer. */
   quality_method: Record<string, number>;
   highest_fl: number | null;
   /** Coldest top in the disc (K) — the deepest convection, not an average. */
   coldest_top_k: number | null;
-  /** Effective cloudiness at the highest top, and the disc median (0-1). */
+  /** IR cloud amount × emissivity at the highest top and disc median, not visible opacity. */
   highest_cloudiness: number | null;
   median_cloudiness: number | null;
   /** Pressure-based FL of the highest top. Coarse (10 FL steps) and can
@@ -747,8 +746,7 @@ interface ObservedFieldMeta {
   units: string;
   valid_time: string;
   age_minutes: number;
-  /** Width of the product's own accumulation / rolling-maximum window.
-   *  0 for an instantaneous retrieval. */
+  /** Source accumulation/acquisition window; zero means no window supplied. */
   window_minutes: number;
   attribution: ObservedAttribution;
 }

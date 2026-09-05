@@ -297,15 +297,17 @@ struct CrossSectionConfigSheet: View {
                             .font(.caption)
                             .foregroundStyle(Theme.textMuted)
                         Spacer()
-                        Text(ObservedBadge.ageText(source.validTime, source.ageMinutes))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(Theme.textMuted)
+                        ObservedClock { now in
+                            Text(ObservedBadge.sourceText(source, now: now, includeLabel: false))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(Theme.textMuted)
+                        }
                     }
                 }
             } header: {
                 Text("Observed conditions")
             } footer: {
-                Text("Measured, not forecast. Radar and satellite frames are minutes old and each carries its own time. Cloud-top bands under 5% of the sky aren't drawn, so a point with no band is not a point with no cloud.")
+                Text("Measured, not forecast. Each source has its own UTC date, age and acquisition window. Stale means at least 30 minutes old, not weather severity. Cloud tops are geometric ft MSL; IR effective cloudiness is cloud amount × emissivity, not visible opacity. Bands under 5% of valid retrieval samples aren't drawn; no band does not mean no cloud. Hatching marks unknown coverage alongside any detections.")
             }
         }
     }
