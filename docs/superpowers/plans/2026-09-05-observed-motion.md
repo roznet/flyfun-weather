@@ -42,7 +42,7 @@ Python commands below use `env PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=
 
 **Interfaces:** Export every PascalCase record named in the normative contract. `ObservedMotion.model_validate(raw)` validates producers and preserves extra fields. Export `empty_motion(*, route_geometry_id: str, planned_timing_id: str | None, cutoff_at: datetime, revision: int, status: str, reason_codes: list[str]) -> ObservedMotion` and `MotionPolicy`/`DEFAULT_POLICY` for the exact approved bounds. Empty builder populates all completeness categories without manufacturing evaluated zeros.
 
-- [ ] Write contract tests using literal unavailable records and valid finite polygons. Observe failure before adding the module. Representative rejection:
+- [x] Write contract tests using literal unavailable records and valid finite polygons. Observe failure before adding the module. Representative rejection:
 
 ```python
 def test_failure_envelope_cannot_carry_an_accepted_velocity():
@@ -52,7 +52,7 @@ def test_failure_envelope_cannot_carry_an_accepted_velocity():
         ObservedMotion.model_validate(raw)
 ```
 
-- [ ] Implement explicit Pydantic record models with `ConfigDict(extra="allow", allow_inf_nan=False)`, aware-UTC normalization, required nullable fields, safe strict integer revisions, geometry bounds/topology and cross-record identity/state validation. Do not use `dict[str, Any]` as a substitute for a listed nested record. Validation must distinguish unavailable geometry, zero velocity, empty evaluated intervals and not-evaluated results.
+- [x] Implement explicit Pydantic record models with `ConfigDict(extra="allow", allow_inf_nan=False)`, aware-UTC normalization, required nullable fields, safe strict integer revisions, geometry bounds/topology and cross-record identity/state validation. Do not use `dict[str, Any]` as a substitute for a listed nested record. Validation must distinguish unavailable geometry, zero velocity, empty evaluated intervals and not-evaluated results.
 
 ```python
 def test_newer_failure_roundtrips_unknown_fields():
@@ -63,8 +63,8 @@ def test_newer_failure_roundtrips_unknown_fields():
     assert result["future_extension"] == {"source_with_underscores": 42}
 ```
 
-- [ ] Add tests for unsafe/bool revisions, naive/nonfinite dates/numbers, dangling references, disabled contents, unsupported root states, accepted cloud without registration, lightning marker/evidence count invariants and payload limits. Add policy only as used production constraints, not tests that merely assert constant text.
-- [ ] Run focused tests red then green, install declared wheels in `venv`, run `pip check`, self-review; ask controller to commit only owned files as `feat: define validated observed-motion contract` and dispatch task review.
+- [x] Add tests for unsafe/bool revisions, naive/nonfinite dates/numbers, dangling references, disabled contents, unsupported root states, accepted cloud without registration, lightning marker/evidence count invariants and payload limits. Add policy only as used production constraints, not tests that merely assert constant text.
+- [x] Run focused tests red then green, install declared wheels in `venv`, run `pip check`, self-review; ask controller to commit only owned files as `feat: define validated observed-motion contract` and dispatch task review.
 
 ### Task 2: Cutoff-safe inputs and bounded common geometry
 
@@ -72,7 +72,7 @@ def test_newer_failure_roundtrips_unknown_fields():
 
 **Interfaces:** `AnalysisGrid` contains `crs: str`, `center: tuple[float,float]` (lon,lat), `origin_x_m`, `origin_y_m`, `width`, `height`, `cell_size_m`; inverse/project methods and `to_record() -> AnalysisDomain`. `AnalysisFrame` contains `source_id`, `frame_id`, `reference_at`, `grid`, `descriptor: ndarray`, `known: ndarray[bool]`, `detected: ndarray[bool]`, `values: ndarray`, `temperature_k: ndarray | None`, `source_record: FrameRecord`, `geolocation: GeolocationRecord`. Rows in analysis arrays increase northward. `select_history(store, source_id, cutoff_at, policy=DEFAULT_POLICY)` returns pinned stored-frame records plus reasons. `load_history(store, route, cutoff_at, policy=DEFAULT_POLICY, *, deadline=None)` returns a result with `.grid`, `.frames_by_source`, `.sources`, `.reason_codes` and bounded RATE/LI context. `geometry.footprint(mask, grid)` returns unsimplified Shapely cell unions; `geometry.display_geometry(shape, grid)` returns `GeometryRecord`.
 
-- [ ] Add synthetic retained-file tests that reject a future receipt/acquisition even when the filename rounds below cutoff, stop at corrupt middle frames and report permitted missing-publication gaps.
+- [x] Add synthetic retained-file tests that reject a future receipt/acquisition even when the filename rounds below cutoff, stop at corrupt middle frames and report permitted missing-publication gaps.
 
 ```python
 def test_asof_does_not_select_future_receipt(tmp_path):
@@ -82,8 +82,8 @@ def test_asof_does_not_select_future_receipt(tmp_path):
     assert "insufficient_history" in selected.reason_codes
 ```
 
-- [ ] Extend the shared frame-store as-of primitive, pin content/grid/product/receipt/window identity and recheck after reads. Retain existing latest/observation semantics. Use documented acquisition metadata; if it is unavailable, return `missing_acquisition` for motion, never invent a precise time.
-- [ ] Implement route-bounded AEQD grid construction/padding/caps; nearest radar sampling with three-state masks; streamed CTTH corrected quadrilateral sampling and highest-top/own-temperature winner. Use binary high-top descriptor with known lower/clear as background and unknown masked. Synthetic quadrilateral/holes/sign tests precede each step.
+- [x] Extend the shared frame-store as-of primitive, pin content/grid/product/receipt/window identity and recheck after reads. Retain existing latest/observation semantics. Use documented acquisition metadata; if it is unavailable, return `missing_acquisition` for motion, never invent a precise time.
+- [x] Implement route-bounded AEQD grid construction/padding/caps; nearest radar sampling with three-state masks; streamed CTTH corrected quadrilateral sampling and highest-top/own-temperature winner. Use binary high-top descriptor with known lower/clear as background and unknown masked. Synthetic quadrilateral/holes/sign tests precede each step.
 
 ```python
 def test_unknown_hole_is_not_filled():
@@ -92,8 +92,8 @@ def test_unknown_hole_is_not_filled():
     assert not shape.covers(Point(3000,3000))
 ```
 
-- [ ] Extend `FlashFrame`/reader with explicit individual-time/window-only provenance; mismatched/masked/invalid/out-of-window timestamps remain regional context, no fake precision. Registration factory applies real evidence manifests separately; no production synthetic approval.
-- [ ] Run focused/adjacent observed-reader tests and review resource-limit/corner fixtures; controller commits owned files and requests review before tracking consumes the interfaces.
+- [x] Extend `FlashFrame`/reader with explicit individual-time/window-only provenance; mismatched/masked/invalid/out-of-window timestamps remain regional context, no fake precision. Registration factory applies real evidence manifests separately; no production synthetic approval.
+- [x] Run focused/adjacent observed-reader tests and review resource-limit/corner fixtures; controller commits owned files and requests review before tracking consumes the interfaces.
 
 ### Task 3: Independent conservative feature tracking
 
@@ -101,7 +101,7 @@ def test_unknown_hole_is_not_filled():
 
 **Interfaces:** `TrackSample(frame_id, reference_at, footprint)` and `Track(feature_id, source_id, reference_at, footprint, history, velocity_xy_m_s, reason_codes, pair_diagnostics, fit_rms_residual_cells)` dataclasses. `track_history(frames: Sequence[AnalysisFrame], *, route_geometry: BaseGeometry, policy=DEFAULT_POLICY, deadline=None) -> TrackingResult`. The result has `.tracks: list[Track]`, `.reason_codes`, and explicit `.counts` for full-field detections, small detections, eligible candidates, selected candidates and emitted observed features; unevaluated counts are null with a completeness flag, never inferred zero from an empty list. Exact count scopes are documented and consumed by payload completeness. The supplied projected continuous route is used to rank candidates, not inferred from the grid centre. Footprints are unsimplified metric Shapely geometry; velocity is `tuple[float,float] | None`, never a fabricated zero. `history` contains observed `TrackSample` records.
 
-- [ ] Write literal translations and observed-only failures before implementation. Synthetic zero and unknown are separate:
+- [x] Write literal translations and observed-only failures before implementation. Synthetic zero and unknown are separate:
 
 ```python
 def test_clean_stationary_echo_is_not_unknown():
@@ -112,9 +112,9 @@ def test_failed_latest_match_cannot_reuse_old_velocity():
     assert all(t.velocity_xy_m_s is None for t in tracks)
 ```
 
-- [ ] Label full bounded fields before candidate selection; two usable variance-ranked patches per pair; fixed support across searched shifts; masked NCC, peak margin/boundary checks, deterministic quadratic fallback, arithmetic mean, reverse consistency. Require whole-feature support/rim and full relevant lineage including small/unselected competitors.
-- [ ] Use a clean newest-ending chain, previous-pair next-observation residual and elapsed-time least-squares of cumulative displacements. Preserve scalar/appearance diagnostics rather than fitting changing centroids. Return observed-only tracks with reasons on low texture, ambiguity, clipping, split/merge, size or deadline.
-- [ ] Tests cover opposing radar/cloud vectors, cloud-only, 4-frame failed newest, fractional shifts, support clipping with clean interior, capped small competitor, speed limits and budget exits. Run focused tests; controller commits and reviews this task.
+- [x] Label full bounded fields before candidate selection; two usable variance-ranked patches per pair; fixed support across searched shifts; masked NCC, peak margin/boundary checks, deterministic quadratic fallback, arithmetic mean, reverse consistency. Require whole-feature support/rim and full relevant lineage including small/unselected competitors.
+- [x] Use a clean newest-ending chain, previous-pair next-observation residual and elapsed-time least-squares of cumulative displacements. Preserve scalar/appearance diagnostics rather than fitting changing centroids. Return observed-only tracks with reasons on low texture, ambiguity, clipping, split/merge, size or deadline.
+- [x] Tests cover opposing radar/cloud vectors, cloud-only, 4-frame failed newest, fractional shifts, support clipping with clean interior, capped small competitor, speed limits and budget exits. Run focused tests; controller commits and reviews this task.
 
 ### Task 4: Route relationships, associations and bounded payload
 
@@ -169,7 +169,7 @@ def test_newer_failure_fences_old_success(pack_dir):
 
 **Interfaces:** `parseObservedMotion(raw: unknown)` returns a tolerant validated view or unavailable reason while retaining raw JSON; `MotionState` owns revision/identity/request-generation/capability/time selection. `ObservedMotionView` owns accessible controls/cards/table; `ObservedMotionMapLayer` owns an independent Leaflet group with `setData`, `selectTime`, `selectFeature`, `clear`, `destroy`. Network adapter returns capability separately from stored motion and exposes a cache-bypassing existing-snapshot read; zero client scientific calculations.
 
-- [ ] Test a newer unavailable response replacing old ready; unknown raw keys, unsupported schema, missing legacy data, foreground expiry and generation mismatch. Write real UI interactions for two families and hole geometry.
+- [x] Test a newer unavailable response replacing old ready; unknown raw keys, unsupported schema, missing legacy data, foreground expiry and generation mismatch. Write real UI interactions for two families and hole geometry.
 
 ```typescript
 it('does not resurrect ready data after a failed newer run', () => {
@@ -181,13 +181,13 @@ it('does not resurrect ready data after a failed newer run', () => {
 });
 ```
 
-- [ ] Add opt-in Experimental motion mode, independent source outlines/trails, server UTC projection controls, source-timed cards/association selection and selected-feature route/time table. Keep ordinary raster preference; no raster underlay in motion mode. Display all reasons/contour definitions/experimental limitations and feature lightning summary independently of markers.
-- [ ] Implement nonpersisted capability unknown on lifecycle entry; coalesced cache-bypassing existing-snapshot GET with 10-second deadline. Failed/missing authority permits only stored analysis. Revision merge handles disk-equivalent browser snapshot reload and all refresh paths; time changes never fetch/recompute.
-- [ ] Real-entrypoint browser tests exercise mode entry, capability revocation, selection/focus, holes, independent vectors, refresh failure, time expiry/date display, narrow layout and layer teardown. Run Vitest + application TypeScript + Chrome harness without `npm run build`; controller commits/reviews.
+- [x] Add opt-in Experimental motion mode, independent source outlines/trails, server UTC projection controls, source-timed cards/association selection and selected-feature route/time table. Keep ordinary raster preference; no raster underlay in motion mode. Display all reasons/contour definitions/experimental limitations and feature lightning summary independently of markers.
+- [x] Implement nonpersisted capability unknown on lifecycle entry; coalesced cache-bypassing existing-snapshot GET with 10-second deadline. Failed/missing authority permits only stored analysis. Revision merge handles disk-equivalent browser snapshot reload and all refresh paths; time changes never fetch/recompute.
+- [x] Real-entrypoint browser tests exercise mode entry, capability revocation, selection/focus, holes, independent vectors, refresh failure, time expiry/date display, narrow layout and layer teardown. Run Vitest + application TypeScript + Chrome harness without `npm run build`; controller commits/reviews.
 
 ### Task 7: Native iOS explorer and raw cache durability
 
-**Files:** Under `app/flyfun-weather/flyfun-weather`, create `Models/ObservedMotion.swift`, `ViewModels/ObservedMotionState.swift`, `Views/Map/ObservedMotionView.swift`, `Views/Map/ObservedMotionOverlay.swift`; modify snapshot/refresh models, `BriefingViewModel`, `RouteMapView`, `RouteMapKitView`, repository/network/cache services and `AppIntents/RefreshDriver`. Add `flyfun-weatherTests/ObservedMotionTests.swift`, `ObservedMotionCacheTests.swift`, relevant existing cache tests and `flyfun-weatherUITests` scenario; register new files if project format requires.
+**Files:** Under `app/flyfun-weather/flyfun-weather`, create `Models/ObservedMotion.swift`, `ViewModels/ObservedMotionState.swift`, `Views/Map/ObservedMotionView.swift`, `Views/Map/ObservedMotionOverlay.swift`; modify snapshot/refresh models, `BriefingViewModel`, `RouteMapView`, `RouteMapKitView`, repository/network/cache services and `AppIntents/RefreshDriver`. Add `flyfun-weatherTests/ObservedMotionTests.swift`, `ObservedMotionCacheTests.swift`, relevant existing cache tests and `flyfun-weatherUITests` scenario; extend existing DEBUG `Services/FixtureBriefingData.swift` and `FixtureBriefingRepository.swift` so that scenario exercises actual motion cards/lifecycle rather than empty containers. Register new files if project format requires.
 
 **Interfaces:** Tolerant raw-motion value preserves JSON spelling/unknown fields from original bytes, with typed validated view access. Snapshot/refresh `observedMotion` optional sibling does not fail the whole briefing on malformed data. `ObservedMotionState` mirrors web identity/revision/capability/expiry rules; MapKit weather ownership is independent of route overlays. Shared cache actor merges raw motion on both patches and full snapshot/bundle writes.
 
@@ -224,7 +224,7 @@ func testUnknownCapabilityDoesNotAuthorizeCachedPrediction() {
 
 **Interfaces:** `MotionPublicationToken` frozen dataclass binds resolved pack path, generation, revision. `MotionPublicationError` represents lifecycle/transport failures. Implement `reserve_motion_revision(pack_dir: Path, *, allow_create=False) -> MotionPublicationToken` and `publish_motion_snapshot(pack_dir: Path, token: MotionPublicationToken, motion: ObservedMotion, *, refreshed_fields: dict, initial_snapshot: dict | None = None) -> dict`. Also export `write_snapshot_atomic(pack_dir: Path, snapshot: dict) -> dict` for legacy/full writes that must preserve the current motion block and unknown existing fields, and `delete_motion_pack(pack_dir: Path) -> None` for generation-fenced deletion; integration follows in task 5.
 
-- [ ] Write real temporary-file tests before implementation: an existing `briefing.json` gets two reserved revisions, newer unavailable publishes first and old success cannot replace it; unrelated unknown root JSON remains. Same-revision different content is a contract error. Initial full-writer creation is allowed explicitly but ordinary refresh cannot create or resurrect a pack.
+- [x] Write real temporary-file tests before implementation: an existing `briefing.json` gets two reserved revisions, newer unavailable publishes first and old success cannot replace it; unrelated unknown root JSON remains. Same-revision different content is a contract error. Initial full-writer creation is allowed explicitly but ordinary refresh cannot create or resurrect a pack.
 
 ```python
 def test_deletion_preserves_high_water_and_fences_old_generation(tmp_path):
@@ -237,10 +237,10 @@ def test_deletion_preserves_high_water_and_fences_old_generation(tmp_path):
         publish_motion_snapshot(pack, first, None, refreshed_fields={}, initial_snapshot={})
 ```
 
-- [ ] Implement a parent-scoped stable lock file using `fcntl.flock`, separate atomically replaced control record, persisted high-water and invalidatable generation. Reserve under lock, compute outside (caller-owned), recheck generation/latest attempt/current snapshot under lock and atomic replace intended fields. Initial creation records pending full-writer ownership; only matching current token can publish a complete initial snapshot. Refuse unreadable/corrupt control/snapshot rather than resetting the counter.
-- [ ] Atomic writer rereads current JSON, preserves unknown fields and newer/equal-identical motion, refuses same-revision conflicts and identity contradictions. Superseded publication returns current snapshot; no current snapshot means explicit error. Current failure with higher revision replaces geometry rather than skipping nil. Use validated `ObservedMotion` from task 1 when present; lifecycle rejection occurs before inspecting superseded/invalid body data.
-- [ ] Tests cover separate stable lock inode, concurrent reserve/publication via barriers, snapshot readers never observing partial JSON, safe-integer exhaustion, retained high-water, wrong-path token, deleted/recreated path, old full-writer content and failed atomic write preserving prior JSON. All deletion fixtures live under pytest tmp_path; no shared data.
-- [ ] Run focused tests red then green; controller commits owned files and dispatches a dedicated concurrency/quality review. Task 5 cannot bypass these helpers after review.
+- [x] Implement a parent-scoped stable lock file using `fcntl.flock`, separate atomically replaced control record, persisted high-water and invalidatable generation. Reserve under lock, compute outside (caller-owned), recheck generation/latest attempt/current snapshot under lock and atomic replace intended fields. Initial creation records pending full-writer ownership; only matching current token can publish a complete initial snapshot. Refuse unreadable/corrupt control/snapshot rather than resetting the counter.
+- [x] Atomic writer rereads current JSON, preserves unknown fields and newer/equal-identical motion, refuses same-revision conflicts and identity contradictions. Superseded publication returns current snapshot; no current snapshot means explicit error. Current failure with higher revision replaces geometry rather than skipping nil. Use validated `ObservedMotion` from task 1 when present; lifecycle rejection occurs before inspecting superseded/invalid body data.
+- [x] Tests cover separate stable lock inode, concurrent reserve/publication via barriers, snapshot readers never observing partial JSON, safe-integer exhaustion, retained high-water, wrong-path token, deleted/recreated path, old full-writer content and failed atomic write preserving prior JSON. All deletion fixtures live under pytest tmp_path; no shared data.
+- [x] Run focused tests red then green; controller commits owned files and dispatches a dedicated concurrency/quality review. Task 5 cannot bypass these helpers after review.
 
 ### Task 10: Continuous route/timing primitive (before task 4)
 
@@ -248,13 +248,13 @@ def test_deletion_preserves_high_water_and_fences_old_generation(tmp_path):
 
 **Interfaces:** `route_identities(route, departure_time) -> tuple[str,str|None]`; `build_route_geometry(route, grid) -> BaseGeometry`; `route_relationships(track, route, grid, departure_time, cutoff_at, projection_times) -> tuple[list[RouteRow], PlannedOverlapResult]`; `ground_velocity(track, grid) -> tuple[float, float|None, tuple[float,float]]` gives speed knots, bearing degrees true/null, and reference point lon/lat. `track` consumes task 3's agreed data fields; `grid` consumes task 2's `AnalysisGrid`. The pure route functions must not access providers/storage or construct alternative motion models. Task 4 imports these reviewed primitives.
 
-- [ ] Write literal/hand-calculated geometry tests first: movement parallel to a leg has nonzero ground speed but unchanged closure; intersection has distance zero and closure not applicable; a moving contour crossing between UI ticks yields a continuous planned interval. Include holes, multiple intervals, tangencies and zero relative displacement.
-- [ ] Reuse the great-circle distance convention and preserve every original waypoint/bend/leg index (including repeated labels). Strict densification is opt-in, at most 1 NM per segment and 2,048 segments; defaults and unrelated advisory behavior remain unchanged. Degenerate legs do not erase valid legs or gain passage intervals.
-- [ ] Implement route geometry and a single deterministic geometry/timing identity algorithm. Invalid timing yields null timing ID, not a guessed speed/departure; an invalid route still has a deterministic geometry fingerprint for a refusal envelope, not a validated route. Planned timing uses aware departure plus duration times cumulative-distance fraction only. Reject nonfinite/invalid route or durations and unsupported segment counts explicitly. Add optional keyword-only `policy=DEFAULT_POLICY` and `deadline=None` (absolute monotonic time) to bounded helpers; check between legs/segments, not only at stage entry.
-- [ ] Compute minimum full-contour/continuous-leg distance; centered 60-second supported finite-difference closure, shortened at reference/expiry boundaries. Positive means distance decreasing; magnitude below 1 kt is approximately unchanged. Each leg/time retains its own identity and reasons.
-- [ ] Solve continuous overlap using relative aircraft segments versus the unsimplified translated contour. Preserve holes/tangent instants/multiple intervals; zero relative displacement uses point coverage. Restrict to the planned/source-supported interval and whole-contour domain support; fail unavailable (not evaluated-empty) on geometry/interval/resource limits. Round output outward to minutes, clamp to evaluated interval, and distinguish tangent instants.
-- [ ] Convert the latest contour centroid and its one-second grid translation through inverse AEQD then WGS84 geodesic; return true toward bearing and knots, zero speed with null bearing. Test off-centre projection orientation, not raw grid-axis atan2.
-- [ ] Test no future lead, invalid timing, before-arrival crossing, repeated/zero legs, route cap, interval cap and fractional-domain exits. Run focused route/adjacent walker tests red then green; controller commits owned files and dispatches an independent numerical/spec review.
+- [x] Write literal/hand-calculated geometry tests first: movement parallel to a leg has nonzero ground speed but unchanged closure; intersection has distance zero and closure not applicable; a moving contour crossing between UI ticks yields a continuous planned interval. Include holes, multiple intervals, tangencies and zero relative displacement.
+- [x] Reuse the great-circle distance convention and preserve every original waypoint/bend/leg index (including repeated labels). Strict densification is opt-in, at most 1 NM per segment and 2,048 segments; defaults and unrelated advisory behavior remain unchanged. Degenerate legs do not erase valid legs or gain passage intervals.
+- [x] Implement route geometry and a single deterministic geometry/timing identity algorithm. Invalid timing yields null timing ID, not a guessed speed/departure; an invalid route still has a deterministic geometry fingerprint for a refusal envelope, not a validated route. Planned timing uses aware departure plus duration times cumulative-distance fraction only. Reject nonfinite/invalid route or durations and unsupported segment counts explicitly. Add optional keyword-only `policy=DEFAULT_POLICY` and `deadline=None` (absolute monotonic time) to bounded helpers; check between legs/segments, not only at stage entry.
+- [x] Compute minimum full-contour/continuous-leg distance; centered 60-second supported finite-difference closure, shortened at reference/expiry boundaries. Positive means distance decreasing; magnitude below 1 kt is approximately unchanged. Each leg/time retains its own identity and reasons.
+- [x] Solve continuous overlap using relative aircraft segments versus the unsimplified translated contour. Preserve holes/tangent instants/multiple intervals; zero relative displacement uses point coverage. Restrict to the planned/source-supported interval and whole-contour domain support; fail unavailable (not evaluated-empty) on geometry/interval/resource limits. Round output outward to minutes, clamp to evaluated interval, and distinguish tangent instants.
+- [x] Convert the latest contour centroid and its one-second grid translation through inverse AEQD then WGS84 geodesic; return true toward bearing and knots, zero speed with null bearing. Test off-centre projection orientation, not raw grid-axis atan2.
+- [x] Test no future lead, invalid timing, before-arrival crossing, repeated/zero legs, route cap, interval cap and fractional-domain exits. Run focused route/adjacent walker tests red then green; controller commits owned files and dispatches an independent numerical/spec review.
 
 ## Coverage self-review
 

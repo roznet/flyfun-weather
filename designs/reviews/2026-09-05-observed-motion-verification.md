@@ -53,11 +53,11 @@ were redirected to this worktree's existing `venv`.
 | Cutoff-safe history, bounded source geometry, lightning precision | Implemented; two Important findings fixed and independently re-reviewed. |
 | Independent feature tracking | Implemented; fractional-lineage boundary fixed at `35c0fb4d` and independently re-reviewed. |
 | Route closure and continuous planned overlap | Pure solver implemented and independently approved; payload integration pending. |
-| Time-compatible evidence and bounded payload | Pending. |
+| Time-compatible evidence and bounded payload | Initial implementation at `d854666c`; independent review found eight Important issues; fix round 1 in progress. |
 | Atomic publication primitive | Implemented, equality bug fixed and independently re-reviewed; server integration pending. |
-| Full/realtime/legacy/SSE/snapshot/bundle integration | Pending. |
-| Web explorer and capability/expiry lifecycle | Committed locally at `81653e16`; fresh unit/type/browser verification passed; independent review pending. |
-| Native explorer and raw-cache/capability lifecycle | Edits preserved; final static review/report interrupted by worker usage limit; no Mac execution. |
+| Full/realtime/legacy/SSE/snapshot/bundle integration | Implemented at `b8d031a2`; fresh 273-test regression passes; independent task review in progress. |
+| Web explorer and capability/expiry lifecycle | Implemented and independently approved after fixes at `c7be612c`; final server integration remains separate. |
+| Native explorer and raw-cache/capability lifecycle | Corrected fixture literals pass producer validation; committed at `fd625b9c`; independent static task review in progress. No Mac execution. |
 | Integrated tests and independent final review | Pending. |
 
 Task-level red/green reports and scoped review packages live in the plan-scoped
@@ -118,6 +118,75 @@ output pristine without changing application settings. Strict Python validation
 also accepts `web/tests/fixtures/observed-motion-v1.json` (available revision 1,
 one feature, two reciprocal pairs). The web implementation and these checks do
 not establish server integration or replace its pending independent review.
+
+The independent web review found three Important gaps: the entrypoint bypassed
+its own failure/missing-motion authority predicate; an unused direct adapter
+discarded capability; and nested projections lacked owning-feature expiry/time
+validation. The fix uses the state predicate for stored/active styling, removes
+the uncalled adapter while preserving supported refresh paths, and validates
+projection ownership, advertised time, strict cutoff and feature end in both
+parser and renderer. Controller verification: **27 focused tests**, TypeScript
+exit 0, and **18 Chromium scenarios in 13.5s**, all pristine. Independent scoped
+re-review marked all three findings addressed with no new breakage. The worker's
+full unit run was 844 tests / 52 files; final integrated checks will run again.
+
+The payload/evidence task's first implementation passed **11 focused tests in
+9.78s**, freshly checked by the controller, and is committed at `d854666c` for
+independent review. That review found eight Important issues: stale-motion and
+source-bounded tick eligibility, full-domain projection support, RATE-time
+alignment, radar/cloud comparison geometry/acquisition windows/proximity,
+uneven-family capacity fill, nonblocking busy admission and explicit failure
+reasons, aggregate limits/counts, and lightning completeness. Each is assigned
+to a test-first fix round and scoped independent re-review. The initial passing
+tests are not approval of those behaviors.
+
+Server integration at `b8d031a2` has a fresh controller result of **273 passed,
+21 warnings in 20.70s**. This covers real snapshot/bundle/header/direct/gated/SSE
+paths, disabled-builder replacement, outside-D-0 timing, reused writer
+preservation, retention fencing and delayed-old/newer-disabled publication.
+The ordinary MetPy fixture interpolation warnings (20) and Starlette alias
+deprecation (1) remain disclosed. This is not accepted-result end-to-end evidence;
+that follows the payload fixes. Command from the worktree:
+
+```bash
+env -u AIRPORTS_DB -u ECMWF_GRIB_DIR -u ECMWF_PROD_GRIB_DIR \
+  -u ECMWF_TEST_GRIB_DIR -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+  PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 \
+  WB_OBSERVED_ENABLED=0 WB_OBSERVED_MOTION_ENABLED=0 \
+  WB_OBSERVED_LIVE_TESTS=0 WEATHERBRIEF_EVAL_LIVE=0 \
+  DATA_DIR=/tmp/flyfun-motion-server-review.ZvyK2a/data \
+  DATABASE_URL=sqlite:////tmp/flyfun-motion-server-review.ZvyK2a/test.sqlite \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  venv/bin/python -m pytest -q -p no:cacheprovider \
+  tests/observed/test_briefing_integration.py tests/test_api_observed_motion.py \
+  tests/test_api.py tests/test_retention.py tests/test_flights_storage.py \
+  tests/test_route_weather.py tests/test_models.py tests/test_sounding_sidecar.py \
+  tests/test_briefing_ready.py tests/test_pipeline.py --tb=short
+```
+
+An interim isolated broad Python run, before changing existing server writers,
+passed **6,082 tests**, with **20 skipped, 23 deselected and 853 warnings** in
+221.94s. It explicitly excluded the in-progress Task4 association/payload and
+Task5 API tests. Both master feature flags, both live-test flags and dotenv were
+disabled; provider keys and shared-data overrides were unset; data/SQLite lived
+under `/tmp/flyfun-motion-regression.9dMC7T`. JUnit confirmed zero errors/failures.
+It is not the required final integrated suite. A preceding run was deliberately
+interrupted to make the already-default-off master flags explicit; its partial
+1,601-pass count is not used as full-suite evidence. Warnings include existing
+dependency/fixture warnings and the already-recorded publication fork warning.
+
+Native initial pre-commit parity check: Python's strict producer model rejected the new
+DEBUG fixture because its latest receipt is after its cutoff. Static inspection
+also finds a two-frame accepted chain and out-of-domain patch indices. These are
+fixture/validation issues to correct, not permission to weaken the scientific
+contract or call an unexecuted Swift UI test passed. Those fixture issues are now
+corrected at `fd625b9c`: fresh Python validation accepts the DEBUG raw literal
+and the native available fixture's extracted literal fields, each with three
+frames, two matching pairs and three advertised times. Native validator checks
+were strengthened, and fictional positive lightning was replaced by explicit
+unavailable evidence. The worker also checked the strict disabled-envelope
+shape; the controller statically inspected that helper. No Swift compilation,
+unit/UI, simulator or device command was run. Independent native review is active.
 
 Worker usage limits interrupted the native final static pass and the initial
 Task4/5 dispatches. No Task4/5 production files existed at that interruption;
@@ -232,3 +301,13 @@ netCDF/NumPy/Starlette deprecations plus the legacy LI timezone conversion.
   more tracks than a square neighbourhood. A low-contrast fractional fixture is
   retained as a refusal case, with separate stronger-texture refinement coverage;
   regional replay must judge usefulness rather than weakening acceptance tests.
+- Future ticks follow the normative any-eligible-feature rule, with the maximum
+  accepted feature expiry as the envelope bound. The review's suggested earliest
+  family expiry would unnecessarily shorten a newer source; each other feature
+  still has an explicit unavailable entry outside its own lead. If that ruling
+  is wrong, heterogeneous-source projection selection needs rework.
+- Regional lightning completeness counts reported detections, not a sum of
+  potentially overlapping feature-association summaries. Unknown evaluation
+  stays null rather than a fabricated zero. If that interpretation is wrong,
+  completeness/card counts and regression coverage need correction; neither
+  interpretation permits a no-thunderstorm or complete-coverage claim.
