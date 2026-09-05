@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from weatherbrief.models.observed_motion import ObservedMotion
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,3 +149,23 @@ def test_authored_native_fixture_literals_remain_producer_compatible() -> None:
     _assert_radar_fixture_shape(native_test_motion)
     assert ui_motion.cutoff_at < ui_motion.projection_times[0]
     assert native_test_motion.cutoff_at < native_test_motion.projection_times[0]
+
+
+@pytest.mark.parametrize("age", [16, 20])
+def test_native_historical_fixture_cases_remain_strict_producer_compatible(age):
+    """Validate the authored native regression inputs, not the Swift consumer."""
+    raw = _native_test_default_fixture()
+    raw["cutoff_at"] = f"2026-09-05T10:{age}:00Z"
+    raw["computed_at"] = f"2026-09-05T10:{age}:01Z"
+    raw["projection_times"] = []
+    raw["features"][0]["projections"] = []
+    raw["features"][0]["route_rows"] = []
+    raw["features"][0]["planned_overlap"].update(
+        status="unavailable", reason_codes=["no_future_lead"],
+        evaluated_interval=None, intervals=[], complete=False,
+    )
+    motion = ObservedMotion.model_validate(raw)
+    assert motion.status == "available"
+    assert motion.projection_times == []
+    assert motion.features[0].motion.ground_speed_kt == 18
+    assert motion.expires_at.isoformat() == "2026-09-05T10:15:00+00:00"

@@ -211,6 +211,7 @@ def _lightning(tracks, frames: Sequence[LightningInput], frames_by_source, grid,
     frame_ids: dict[str, set[str]] = {}
     source_id: dict[str, str] = {}
     windows: dict[str, Interval] = {}
+    qualification_reasons: dict[str, set[str]] = {}
     truncated = False
     for frame_input in frames:
         frame = frame_input.frame
@@ -242,7 +243,14 @@ def _lightning(tracks, frames: Sequence[LightningInput], frames_by_source, grid,
                 reported[feature_id] = reported.get(feature_id, 0) + 1
                 frame_ids.setdefault(feature_id, set()).add(frame_input.source_record.frame_id)
                 source_id[feature_id] = "eumetsat_li"
-                windows[feature_id] = _feature_window([track for track in tracks if track.feature_id == feature_id], frame_input)
+                if reasons:
+                    qualification_reasons.setdefault(feature_id, set()).update(reasons)
+                evaluated = _feature_window([track for track in tracks if track.feature_id == feature_id], frame_input)
+                previous = windows.get(feature_id)
+                windows[feature_id] = Interval(
+                    start_at=min(previous.start_at, evaluated.start_at) if previous else evaluated.start_at,
+                    end_at=max(previous.end_at, evaluated.end_at) if previous else evaluated.end_at,
+                )
             if len(records) >= policy.max_lightning_records:
                 truncated = True
                 continue
@@ -269,7 +277,8 @@ def _lightning(tracks, frames: Sequence[LightningInput], frames_by_source, grid,
     evidence = {
         feature_id: FeatureLightningEvidence(
             status="available",
-            reason_codes=["lightning_marker_limit"] if truncated and emitted.get(feature_id, 0) < count else [],
+            reason_codes=sorted(qualification_reasons.get(feature_id, set())
+                                | ({"lightning_marker_limit"} if truncated and emitted.get(feature_id, 0) < count else set())),
             source_id=source_id.get(feature_id, "eumetsat_li"),
             frame_ids=sorted(frame_ids.get(feature_id, ())),
             evaluated_window=windows.get(feature_id),

@@ -15,6 +15,8 @@ final class ObservedMotionState {
     private(set) var currentResponseMissingMotion = false
     private(set) var now = Date()
     private var latestNetworkResponseSequence = 0
+    private(set) var connected = true
+    private var requiresLifecycleAuthority = false
 
     var modeEnabled = false
     var enabledFamilies = Set(ObservedMotionFamily.allCases)
@@ -55,6 +57,15 @@ final class ObservedMotionState {
         return generation
     }
 
+    func setConnectivity(_ connected: Bool) {
+        guard self.connected != connected else { return }
+        self.connected = connected
+        generation &+= 1
+        capability = .unknown
+        requiresLifecycleAuthority = true
+        // Raw observations and deliberate absolute-time selection stay dated.
+    }
+
     func cancelLifecycleCallbacks() {
         generation &+= 1
         if modeEnabled { capability = .unknown }
@@ -70,15 +81,19 @@ final class ObservedMotionState {
     ) {
         if let expectedGeneration, expectedGeneration != generation { return }
         self.now = now
+        let mayAuthorize = connected && (!requiresLifecycleAuthority || expectedGeneration == generation)
         var isCurrentNetworkResponse = true
         if origin == .network, let capabilitySequence {
             isCurrentNetworkResponse = capabilitySequence >= latestNetworkResponseSequence
             if isCurrentNetworkResponse {
                 latestNetworkResponseSequence = capabilitySequence
-                capability = newCapability ?? .unknown
+                if mayAuthorize { capability = newCapability ?? .unknown }
             }
-        } else if let newCapability {
+        } else if let newCapability, mayAuthorize {
             capability = newCapability
+        }
+        if mayAuthorize, origin == .network, expectedGeneration == generation {
+            requiresLifecycleAuthority = false
         }
         guard let candidate else {
             if origin != .network || isCurrentNetworkResponse {
@@ -135,8 +150,9 @@ final class ObservedMotionState {
     }
 
     func observeCapability(_ capability: ObservedMotionCapability, generation expectedGeneration: Int) {
-        guard expectedGeneration == generation else { return }
+        guard connected, expectedGeneration == generation else { return }
         self.capability = capability
+        requiresLifecycleAuthority = false
     }
 
     func markCapabilityFailure(_ error: Error?, generation expectedGeneration: Int) {
@@ -183,7 +199,8 @@ final class ObservedMotionState {
     }
 
     var canPresentActivePrediction: Bool {
-        guard modeEnabled || selectedProjection != nil,
+        guard connected, !requiresLifecycleAuthority,
+              modeEnabled || selectedProjection != nil,
               capability == .enabled, origin.isStoredOnly == false,
               let envelope, envelope.status == "available",
               contractIssue == nil, refreshFailure == nil, !currentResponseMissingMotion, !isClockUncertain,
@@ -200,6 +217,7 @@ final class ObservedMotionState {
     }
 
     var canInspectStoredAnalysis: Bool { envelope != nil }
+    var isStoredPresentation: Bool { origin.isStoredOnly || !connected || requiresLifecycleAuthority }
 
     var isClockUncertain: Bool {
         guard let cutoff = envelope?.cutoffDate else { return false }
@@ -208,7 +226,7 @@ final class ObservedMotionState {
 
     var presentationReasons: [String] {
         var reasons: [String] = []
-        if origin.isStoredOnly { reasons.append("stored_analysis") }
+        if isStoredPresentation { reasons.append("stored_analysis") }
         if capability == .unknown { reasons.append("capability_unknown") }
         if capability == .disabled { reasons.append("observed_disabled") }
         if let envelope, envelope.status != "available" {

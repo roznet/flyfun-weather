@@ -220,6 +220,41 @@ def test_lightning_feature_summary_survives_marker_cap() -> None:
     assert summary.reason_codes == ["lightning_marker_limit"]
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_lightning_evidence_encloses_all_counted_frame_windows(reverse):
+    from weatherbrief.observed.motion.association import AssociationContext, associate_tracks
+
+    radar = _track("opera_dbzh", "radar-1")
+    frames = {"opera_dbzh": tuple(_frame("opera_dbzh", s.reference_at) for s in radar.history)}
+    earlier = _lightning(1)
+    earlier_record = _record("eumetsat_li", T0 - timedelta(minutes=5))
+    earlier.frame.event_times = (T0 - timedelta(minutes=8),)
+    earlier.frame.acquisition_start = T0 - timedelta(minutes=10)
+    earlier.frame.acquisition_end = T0 - timedelta(minutes=5)
+    earlier = LightningInput(earlier_record, earlier.frame)
+    inputs = [earlier, _lightning(1)]
+    if reverse:
+        inputs.reverse()
+    _, markers, evidence = associate_tracks([radar], frames, GRID, AssociationContext(lightning_frames=inputs))
+    summary = evidence["radar-1"]
+    assert summary.evaluated_window == Interval(start_at=T0 - timedelta(minutes=10), end_at=T0)
+    assert summary.frame_ids == ["eumetsat_li-1155", "li-1200"]
+    assert summary.reported_detection_count == summary.emitted_marker_count == 2
+    assert summary.evaluation_complete
+    assert all(summary.evaluated_window.start_at <= marker.event_at <= summary.evaluated_window.end_at for marker in markers)
+
+
+def test_lightning_feature_evidence_retains_qualification_reasons_from_counted_frames():
+    from weatherbrief.observed.motion.association import AssociationContext, associate_tracks
+
+    radar = _track("opera_dbzh", "radar-1")
+    frames = {"opera_dbzh": tuple(_frame("opera_dbzh", s.reference_at) for s in radar.history)}
+    lightning = _lightning(1)
+    lightning.frame.time_reason_codes = (("event_quality_limited",),)
+    _, _, evidence = associate_tracks([radar], frames, GRID, AssociationContext(lightning_frames=(lightning,)))
+    assert evidence["radar-1"].reason_codes == ["event_quality_limited"]
+
+
 def test_window_only_lightning_remains_observed_context_without_feature_claim() -> None:
     from weatherbrief.observed.motion.association import AssociationContext, associate_tracks
 

@@ -28,6 +28,25 @@ from tests.observed.test_motion_association import _geo, _lightning, _record
 
 
 T0 = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(("cutoff", "expected"), [
+    ("12:00:00", "12:05:00"),
+    ("12:00:01", "12:05:00"),
+    ("12:01:17", "12:05:00"),
+    ("12:06:00", "12:10:00"),
+    ("12:11:59", "12:15:00"),
+    ("12:58:32", "13:00:00"),
+])
+def test_projection_uses_strictly_next_absolute_tick(cutoff, expected):
+    from weatherbrief.observed.motion.payload import _projection_times
+    from weatherbrief.observed.motion.policy import DEFAULT_POLICY
+
+    times = _projection_times(datetime.fromisoformat(f"2026-09-05T{cutoff}+00:00"), DEFAULT_POLICY)
+    assert times[0] == datetime.fromisoformat(f"2026-09-05T{expected}+00:00")
+    if cutoff == "12:11:59":
+        assert [t.strftime("%H:%M") for t in times if t <= T0 + timedelta(minutes=15)] == ["12:15"]
+
 GRID = AnalysisGrid(
     "+proj=aeqd +lat_0=50 +lon_0=0 +datum=WGS84 +units=m",
     (0.0, 50.0),

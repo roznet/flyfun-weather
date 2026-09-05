@@ -39,6 +39,14 @@ final class flyfun_weatherUITests: XCTestCase {
             .waitForExistence(timeout: Self.uiTimeout))
         XCTAssertTrue(app.staticTexts["rain rate max: 3.5 mm_h at 30 Jun 2099 05:54Z"]
             .waitForExistence(timeout: Self.uiTimeout))
+        let evaluated = app.staticTexts["Evaluated planned interval: 30 Jun 2099 05:55Z–30 Jun 2099 06:10Z"]
+        app.descendants(matching: .any)["observedMotionFeatureList"].swipeUp()
+        XCTAssertTrue(evaluated.waitForExistence(timeout: Self.uiTimeout))
+        XCTAssertTrue(app.staticTexts["Lightning evidence unavailable: fixture no lightning"]
+            .waitForExistence(timeout: Self.uiTimeout))
+        let counts = app.staticTexts["small detections (untracked): complete; considered 0, emitted 0, omitted 0"]
+        app.descendants(matching: .any)["observedMotionFeatureList"].swipeUp()
+        XCTAssertTrue(counts.waitForExistence(timeout: Self.uiTimeout))
     }
 
     @MainActor

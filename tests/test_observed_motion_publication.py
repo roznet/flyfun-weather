@@ -6,7 +6,7 @@ import importlib
 import json
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 
@@ -50,6 +50,120 @@ def test_refresh_cannot_create_missing_pack(publication, tmp_path):
     with pytest.raises(publication.MotionPublicationError):
         publication.reserve_motion_revision(tmp_path / "missing")
     assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize("writer", ["artifacts", "legacy"])
+def test_full_wrapper_first_creation_and_deleted_pack_fence(publication, pack, tmp_path, writer):
+    from weatherbrief.models import ForecastSnapshot
+    from weatherbrief.storage.snapshots import save_snapshot
+    from weatherbrief.tasks.artifacts import save_analysis_artifacts
+
+    snapshot = ForecastSnapshot.model_validate(json.loads((pack / "briefing.json").read_text()))
+    target = tmp_path / "fresh" if writer == "artifacts" else tmp_path / "forecasts/2026-09-05/d-0_2026-09-05"
+    def save():
+        if writer == "artifacts":
+            save_analysis_artifacts(target, snapshot, None)
+        else:
+            save_snapshot(snapshot, tmp_path)
+    save()
+    assert json.loads((target / "briefing.json").read_text())["observed_motion"] is None
+    old = publication.reserve_motion_revision(target)
+    publication.delete_motion_pack(target)
+    with pytest.raises(publication.MotionPublicationError):
+        save()
+    assert not target.exists()
+    # Explicit recreation remains owned by the full-writer reservation; late
+    # tokens cannot enter this generation, and the durable counter advances.
+    recreated = publication.reserve_motion_revision(target, allow_create=True)
+    assert recreated.revision > old.revision
+    with pytest.raises(publication.MotionPublicationError):
+        publication.publish_motion_snapshot(target, old, None, refreshed_fields={})
+
+
+@pytest.mark.parametrize("writer", ["artifacts", "legacy"])
+def test_full_wrapper_null_write_preserves_newer_motion_and_raw_fields(publication, pack, tmp_path, writer):
+    from weatherbrief.models import ForecastSnapshot
+    from weatherbrief.models.observed_motion import empty_motion
+    from weatherbrief.storage.snapshots import save_snapshot
+    from weatherbrief.tasks.artifacts import save_analysis_artifacts
+
+    snapshot = ForecastSnapshot.model_validate(json.loads((pack / "briefing.json").read_text()))
+    target = tmp_path / "fresh" if writer == "artifacts" else tmp_path / "forecasts/2026-09-05/d-0_2026-09-05"
+    if writer == "artifacts":
+        save_analysis_artifacts(target, snapshot, None)
+    else:
+        save_snapshot(snapshot, tmp_path)
+    token = publication.reserve_motion_revision(target)
+    motion = empty_motion(route_geometry_id="route", planned_timing_id=None, cutoff_at=datetime(2026, 9, 5, 12, tzinfo=timezone.utc), revision=token.revision, status="unavailable", reason_codes=["missing_source"])
+    publication.publish_motion_snapshot(target, token, motion, refreshed_fields={"unknown_root": {"keep": True}})
+    if writer == "artifacts":
+        save_analysis_artifacts(target, snapshot, None)
+    else:
+        save_snapshot(snapshot, tmp_path)
+    stored = json.loads((target / "briefing.json").read_text())
+    assert stored["observed_motion"]["revision"] == token.revision
+    assert stored["unknown_root"] == {"keep": True}
+
+
+@pytest.mark.parametrize("writer", ["artifacts", "legacy"])
+def test_full_wrapper_delayed_serialization_cannot_cross_deletion(publication, pack, tmp_path, monkeypatch, writer):
+    from weatherbrief.models import ForecastSnapshot
+    from weatherbrief.storage.snapshots import save_snapshot
+    from weatherbrief.tasks.artifacts import save_analysis_artifacts
+
+    snapshot = ForecastSnapshot.model_validate(json.loads((pack / "briefing.json").read_text()))
+    target = tmp_path / "race" if writer == "artifacts" else tmp_path / "forecasts/2026-09-05/d-0_2026-09-05"
+    def save():
+        if writer == "artifacts":
+            save_analysis_artifacts(target, snapshot, None)
+        else:
+            save_snapshot(snapshot, tmp_path)
+    save()
+    old_revision = publication.reserve_motion_revision(target).revision
+    serialization_started, deletion_started = Event(), Event()
+    original_dump = ForecastSnapshot.model_dump
+    def delayed_dump(self, **kwargs):
+        serialization_started.set()
+        assert deletion_started.wait(5)
+        return original_dump(self, **kwargs)
+    monkeypatch.setattr(ForecastSnapshot, "model_dump", delayed_dump)
+    def delete():
+        assert serialization_started.wait(5)
+        deletion_started.set()
+        publication.delete_motion_pack(target)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writer_future = executor.submit(save)
+        deleter_future = executor.submit(delete)
+        # Valid serialization and deletion are both completed operations, not a
+        # swallowed missing-directory error or a resurrected partial artifact set.
+        writer_future.result(timeout=5)
+        deleter_future.result(timeout=5)
+    assert not target.exists()
+    recreated = publication.reserve_motion_revision(target, allow_create=True)
+    assert recreated.revision > old_revision
+
+
+@pytest.mark.parametrize("writer", ["artifacts", "legacy"])
+def test_full_wrapper_first_briefing_uses_atomic_publication(publication, pack, tmp_path, monkeypatch, writer):
+    from weatherbrief.models import ForecastSnapshot
+    from weatherbrief.storage.snapshots import save_snapshot
+    from weatherbrief.tasks.artifacts import save_analysis_artifacts
+
+    snapshot = ForecastSnapshot.model_validate(json.loads((pack / "briefing.json").read_text()))
+    target = tmp_path / "atomic" if writer == "artifacts" else tmp_path / "forecasts/2026-09-05/d-0_2026-09-05"
+    original = publication.os.replace
+    def failed_replace(source, destination):
+        if str(destination).endswith("/briefing.json"):
+            raise OSError("injected publication replacement failure")
+        return original(source, destination)
+    monkeypatch.setattr(publication.os, "replace", failed_replace)
+    with pytest.raises(publication.MotionPublicationError):
+        if writer == "artifacts":
+            save_analysis_artifacts(target, snapshot, None)
+        else:
+            save_snapshot(snapshot, tmp_path)
+    assert not (target / "briefing.json").exists()
+    assert not target.exists()
 
 
 def test_deletion_preserves_high_water_and_fences_old_generation(publication, tmp_path):

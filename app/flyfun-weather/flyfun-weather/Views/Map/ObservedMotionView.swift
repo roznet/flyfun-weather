@@ -131,7 +131,7 @@ struct ObservedMotionView: View {
     private func featureCard(_ feature: ObservedMotionFeature) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Selected evidence").font(.caption.weight(.bold))
-            if let speed = feature.motion.groundSpeedKt {
+            if feature.motion.status == "accepted", let speed = feature.motion.groundSpeedKt {
                 Text("Ground velocity: \(speed, format: .number.precision(.fractionLength(0))) kt\(bearing(feature.motion.bearingDegTrue))")
             }
             if let projectionIssue = projectionIssue(for: feature) {
@@ -149,31 +149,25 @@ struct ObservedMotionView: View {
             ForEach(feature.observations) { observation in
                 Text(observationLine(observation)).font(.caption)
             }
-            if let count = feature.lightningEvidence.reportedDetectionCount {
-                Text("Reported lightning detections: \(count) in evaluated source window")
-                    .font(.caption)
-            } else {
-                Text("Lightning evidence unavailable").font(.caption)
+            ForEach(Self.lightningLines(feature.lightningEvidence), id: \.self) { line in
+                Text(line).font(.caption)
             }
             ForEach(rows(for: feature)) { row in
                 Text("\(row.fromLabel)–\(row.toLabel) at \(rowTime(row)): \(distance(row)) · \(closure(row)) · \(plannedOverlap(row))")
                     .font(.caption)
             }
-            if feature.plannedOverlap.status == "available" {
-                ForEach(feature.plannedOverlap.intervals) { interval in
-                    Text("Approximate planned overlap \(Self.shortInterval(interval))")
-                        .font(.caption)
-                }
+            ForEach(Self.plannedOverlapLines(feature.plannedOverlap), id: \.self) { line in
+                Text(line).font(.caption)
             }
             let warnings = feature.reasonCodes + feature.coverage.reasonCodes
                 + feature.geolocation.reasonCodes + feature.motion.reasonCodes
+                + feature.lightningEvidence.reasonCodes + feature.plannedOverlap.reasonCodes
             if !warnings.isEmpty {
                 Text("Limitations: \(warnings.joined(separator: ", "))")
                     .font(.caption2).foregroundStyle(Theme.textMuted)
             }
-            let incomplete = (state.envelope?.completeness ?? []).filter { $0.status != "complete" }
-            if !incomplete.isEmpty {
-                Text("Incomplete/truncated: \(incomplete.map(\.category).joined(separator: ", "))")
+            ForEach(state.envelope?.completeness ?? []) { completeness in
+                Text(Self.completenessLine(completeness))
                     .font(.caption2).foregroundStyle(Theme.textMuted)
             }
             Text("Analysis context only — not a route verdict, alarm, clearance, probability or forecast-skill claim.")
@@ -307,6 +301,43 @@ struct ObservedMotionView: View {
             return "time unavailable"
         }
         return "\(utcDateTime.string(from: start))–\(utcDateTime.string(from: end)) (\(interval.contact))"
+    }
+
+    private static func evaluatedWindow(_ interval: ObservedMotionInterval?) -> String {
+        guard let interval, let start = Date.parseISO8601(interval.startAt), let end = Date.parseISO8601(interval.endAt) else { return "Unavailable" }
+        return "\(utcDateTime.string(from: start))–\(utcDateTime.string(from: end))"
+    }
+
+    static func lightningLines(_ evidence: ObservedMotionFeatureLightning) -> [String] {
+        let reasons = evidence.reasonCodes.map(reasonLabel).joined(separator: ", ")
+        guard evidence.status == "available", let count = evidence.reportedDetectionCount else {
+            return ["Lightning evidence unavailable: \(reasons.isEmpty ? "not evaluated" : reasons)"]
+        }
+        return [
+            "\(count) reported detections; \(evidence.emittedMarkerCount) map markers\(evidence.evaluationComplete ? " (complete for stated local inputs)" : " (partial/lower bound)")",
+            "Evaluated lightning window: \(evaluatedWindow(evidence.evaluatedWindow))",
+            "Local reported detections, not a coverage guarantee. \(reasons)",
+        ]
+    }
+
+    static func plannedOverlapLines(_ result: ObservedMotionPlannedOverlap) -> [String] {
+        var lines = ["Evaluated planned interval: \(evaluatedWindow(result.evaluatedInterval))"]
+        if result.status == "available", result.complete, result.evaluatedInterval != nil {
+            lines += result.intervals.isEmpty
+                ? ["No overlap calculated for this tracked contour under this model in the evaluated interval (complete evaluation)."]
+                : result.intervals.map { "Approximate planned overlap \(shortInterval($0))" }
+        } else {
+            let reasons = result.reasonCodes.map(reasonLabel).joined(separator: ", ")
+            lines.append("Unavailable: \(reasons.isEmpty ? "not evaluated" : reasons)")
+        }
+        return lines
+    }
+
+    static func completenessLine(_ value: ObservedMotionCompleteness) -> String {
+        let considered = value.consideredCount.map(String.init) ?? "unknown"
+        let omitted = value.omittedCount.map(String.init) ?? "unknown"
+        let category = reasonLabel(value.category) + (value.category == "small_detections" ? " (untracked)" : "")
+        return "\(category): \(reasonLabel(value.status)); considered \(considered), emitted \(value.emittedCount), omitted \(omitted)"
     }
 
     private static func reasonLabel(_ code: String) -> String {

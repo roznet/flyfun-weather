@@ -655,7 +655,9 @@ struct ObservedMotionFeature: Decodable, Identifiable, Sendable {
                   let referenceFrame = frameByID[referenceFrameID],
                   let referenceDate = Date.parseISO8601(referenceAt),
                   Date.parseISO8601(referenceFrame.validAt) == referenceDate,
-                  cutoff.timeIntervalSince(referenceDate) <= 15 * 60,
+                  // Current accepted evidence remains inspectable for 20 minutes;
+                  // the independent projection horizon below remains 15 minutes.
+                  cutoff.timeIntervalSince(referenceDate) <= 20 * 60,
                   projectionEndAt.flatMap(Date.parseISO8601) == referenceDate.addingTimeInterval(15 * 60),
                   projections.map(\.at) == projectionTimes,
                   motion.pairDiagnostics.count == frameIDs.count - 1,

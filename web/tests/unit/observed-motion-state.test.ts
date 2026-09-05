@@ -4,7 +4,8 @@ import { MotionState } from '../../ts/observed-motion/state';
 function fixture(revision: number, status: 'available' | 'unavailable' = 'available') {
   const source = {
     source_id: 'opera-dbzh', status: 'available', reason_codes: [], attribution: 'OPERA', gaps: [],
-    coverage: {}, geolocation: { status: 'validated', reason_codes: [] },
+    coverage: { status: 'available', scope: 'analysis_domain', known_cells: 25, total_cells: 25, known_fraction: 1, reason_codes: [] },
+    geolocation: { status: 'validated', reason_codes: [], evidence_id: 'radar-grid', method_version: 'registration-v1', applicability_id: 'domain' },
     frames: [{
       frame_id: 'frame-1', content_id: 'content-1', product_id: 'opera-dbzh', decoder_version: 'odim-v1', grid_id: 'opera-grid',
       valid_at: '2026-09-05T12:00:00Z', received_at: '2026-09-05T12:00:00Z', reference_at: '2026-09-05T12:00:00Z',
@@ -19,7 +20,9 @@ function fixture(revision: number, status: 'available' | 'unavailable' = 'availa
     reference_at: '2026-09-05T12:00:00Z', reference_frame_id: 'frame-1', frame_ids: ['frame-1'],
     display_geometry: geometry, trail: [], observations: [],
     lightning_evidence: { status: 'unavailable', reason_codes: ['missing_source'], reported_detection_count: null, emitted_marker_count: 0, evaluation_complete: false, evaluated_window: null },
-    coverage: {}, geolocation: {}, motion: { status: 'accepted', reason_codes: [], ground_speed_kt: 10, bearing_deg_true: 90,
+    coverage: { status: 'available', scope: 'feature_contour', known_cells: 25, total_cells: 25, known_fraction: 1, reason_codes: [] },
+    geolocation: { status: 'validated', reason_codes: [], evidence_id: 'radar-grid', method_version: 'registration-v1', applicability_id: 'domain' },
+    motion: { status: 'accepted', reason_codes: [], ground_speed_kt: 10, bearing_deg_true: 90,
       velocity_reference_point: [0.05, 50.05], velocity_method: 'inverse_aeqd_geodesic_1s', pair_diagnostics: [], fit_rms_residual_cells: 0.1 },
     projection_end_at: '2026-09-05T12:15:00Z',
     projections: [{ at: '2026-09-05T12:05:00Z', status: 'available', reason_codes: [], display_geometry: geometry }],
@@ -38,6 +41,31 @@ function fixture(revision: number, status: 'available' | 'unavailable' = 'availa
 }
 
 describe('MotionState', () => {
+  it('disconnect fences pre-disconnect authority and retains dated raw selection until a reconnect check', () => {
+    const state = new MotionState();
+    state.enterMotionMode();
+    const raw = fixture(8);
+    state.accept(raw);
+    state.updateClock(new Date('2026-09-05T12:01:00Z'));
+    state.selectTime('2026-09-05T12:05:00Z');
+    const old = state.beginRequest();
+    state.acceptCapability(true, old);
+    expect(state.canPresentActivePrediction).toBe(true);
+    state.setConnectivity(false);
+    expect(state.canPresentActivePrediction).toBe(false);
+    expect(state.presentationReasons).toContain('stored_analysis');
+    expect(state.current?.raw).toBe(raw);
+    expect(state.selectedTime).toBe('2026-09-05T12:05:00Z');
+    expect(state.acceptCapability(true, old)).toBe(false);
+    expect(state.accept(fixture(9), old.generation)).toBe(false);
+    state.setConnectivity(true);
+    expect(state.canPresentActivePrediction).toBe(false);
+    expect(state.acceptCapability(true, old)).toBe(false);
+    state.accept(raw);
+    state.acceptCapability(true, state.beginRequest());
+    expect(state.canPresentActivePrediction).toBe(true);
+  });
+
   it('does not resurrect ready data after a failed newer run', () => {
     const state = new MotionState();
     state.accept(fixture(8));

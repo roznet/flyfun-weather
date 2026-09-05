@@ -188,6 +188,7 @@ struct BriefingContainerView: View {
                 networkMonitor: appState.networkMonitor
             )
             viewModel = vm
+            vm.observedMotionState.setConnectivity(appState.networkMonitor.isConnected)
             await vm.loadBriefing()
             await vm.checkActiveRefresh()
             // Only load PIREPs when the user may view them — the query 403s for a
@@ -212,6 +213,8 @@ struct BriefingContainerView: View {
             }
         }
         .onChange(of: appState.networkMonitor.isConnected) { oldValue, newValue in
+            viewModel?.observedMotionState.setConnectivity(newValue)
+            if !newValue { viewModel?.stopObservedMotionLifecycle() }
             if !oldValue && newValue {
                 Task { await viewModel?.observedMotionLifecycleDidChange() }
             }

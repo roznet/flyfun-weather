@@ -310,11 +310,8 @@ def _motion(track, frame: AnalysisFrame, grid, cutoff_at: datetime, policy: Moti
 
 
 def _projection_times(cutoff_at: datetime, policy: MotionPolicy) -> list[datetime]:
-    first = cutoff_at.replace(second=0, microsecond=0)
-    if first <= cutoff_at:
-        first += timedelta(minutes=policy.projection_tick_minutes)
-    while first.minute % policy.projection_tick_minutes:
-        first += timedelta(minutes=1)
+    first = cutoff_at.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    first += timedelta(minutes=policy.projection_tick_minutes - first.minute % policy.projection_tick_minutes)
     return [first + timedelta(minutes=policy.projection_tick_minutes * index) for index in range(policy.max_projection_times)]
 
 

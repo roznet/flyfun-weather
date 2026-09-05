@@ -61,8 +61,63 @@ private func snapshotFixture(motion: RawObservedMotion?) -> Data {
     """.utf8)
 }
 
+/// Authored regression fixtures; Swift execution remains deferred.
+private func editedMotionFixture(_ edit: (inout [String: Any]) -> Void) throws -> RawObservedMotion {
+    var root = try #require(JSONSerialization.jsonObject(with: observedMotionFixture(revision: 12).rawJSON) as? [String: Any])
+    edit(&root)
+    return RawObservedMotion(rawJSON: try JSONSerialization.data(withJSONObject: root))
+}
+
+private func cloudOnlyUnavailableFixture() throws -> RawObservedMotion {
+    try editedMotionFixture { root in
+        root["status"] = "unavailable"
+        root["reason_codes"] = ["geolocation_unverified"]
+        root["expires_at"] = NSNull()
+        root["projection_times"] = [String]()
+        var source = (root["sources"] as! [[String: Any]])[0]
+        let geolocation: [String: Any] = ["status": "unverified", "reason_codes": ["geolocation_unverified"], "evidence_id": NSNull(), "method_version": NSNull(), "applicability_id": NSNull()]
+        source["source_id"] = "cloud"
+        source["geolocation"] = geolocation
+        root["sources"] = [source]
+        var feature = (root["features"] as! [[String: Any]])[0]
+        feature["source_id"] = "cloud"
+        feature["family"] = "high_cloud_top"
+        feature["definition"] = ["quantity": "geometric_cloud_top_height", "operator": "gte", "threshold": 4572, "unit": "m_msl"] as [String: Any]
+        feature["geolocation"] = geolocation
+        feature["motion"] = ["status": "unavailable", "reason_codes": ["geolocation_unverified"], "ground_speed_kt": NSNull(), "bearing_deg_true": NSNull(), "velocity_reference_point": NSNull(), "velocity_method": NSNull(), "pair_diagnostics": [], "fit_rms_residual_cells": NSNull()] as [String: Any]
+        feature["projection_end_at"] = NSNull()
+        feature["projections"] = [Any]()
+        feature["route_rows"] = [Any]()
+        feature["planned_overlap"] = ["status": "unavailable", "reason_codes": ["geolocation_unverified"], "method": "relative_segment_contour_intersection", "planned_time_method": "distance_proportional_planned", "evaluated_interval": NSNull(), "intervals": [], "complete": false] as [String: Any]
+        var observation = (feature["observations"] as! [[String: Any]])[0]
+        observation.merge(["kind": "cloud_top_max", "value": 9000, "unit": "m_msl", "source_id": "cloud", "frame_id": "frame-3", "observed_at": "2026-09-05T10:00:00Z", "comparison_at": "2026-09-05T10:00:00Z", "sample_position": NSNull()] as [String: Any]) { _, new in new }
+        observation["acquisition_window"] = ["start_at": "2026-09-05T10:00:00Z", "end_at": "2026-09-05T10:00:00Z"]
+        feature["observations"] = [observation]
+        root["features"] = [feature]
+        root["Future_Context"] = ["keep": true]
+    }
+}
+
 @Suite("Observed motion raw boundary")
 struct ObservedMotionRawTests {
+    @Test(arguments: [16, 20]) func acceptedHistoricalMotionRetainsZeroFutureLead(ageMinutes: Int) throws {
+        let raw = try editedMotionFixture { root in
+            root["cutoff_at"] = "2026-09-05T10:\(ageMinutes):00Z"
+            root["computed_at"] = "2026-09-05T10:\(ageMinutes):01Z"
+            root["projection_times"] = [String]()
+            var features = root["features"] as! [[String: Any]]
+            features[0]["projections"] = [Any]()
+            features[0]["route_rows"] = [Any]()
+            features[0]["planned_overlap"] = ["status": "unavailable", "reason_codes": ["no_future_lead"], "method": "relative_segment_contour_intersection", "planned_time_method": "distance_proportional_planned", "evaluated_interval": NSNull(), "intervals": [], "complete": false] as [String: Any]
+            root["features"] = features
+        }
+        let typed = try #require(raw.typed)
+        #expect(typed.projectionTimes.isEmpty)
+        #expect(typed.features.first?.motion.groundSpeedKt == 18)
+        #expect(typed.features.first?.referenceAt == "2026-09-05T10:00:00Z")
+        #expect(typed.expiresAt == "2026-09-05T10:15:00Z")
+    }
+
     @Test func capabilityHeaderAcceptsOnlyExplicitZeroOrOne() throws {
         let url = try #require(URL(string: "https://example.invalid/snapshot"))
         let enabled = try #require(HTTPURLResponse(
@@ -226,6 +281,35 @@ struct ObservedMotionRawTests {
 @MainActor
 @Suite("Observed motion state")
 struct ObservedMotionStateTests {
+    @Test @MainActor func disconnectRetainsRawButFencesLateAuthorityThroughReconnect() throws {
+        let state = ObservedMotionState()
+        state.start(packIdentity: "flight/pack", routeGeometryID: "route-1")
+        state.modeEnabled = true
+        let raw = observedMotionFixture(revision: 12)
+        let now = try #require(Date.parseISO8601("2026-09-05T10:01:00Z"))
+        state.accept(raw: raw, capability: .enabled, capabilitySequence: 1, generation: state.generation, now: now)
+        state.selectProjection("2026-09-05T10:05:00Z", now: now)
+        #expect(state.canPresentActivePrediction)
+        let oldGeneration = state.generation
+        state.setConnectivity(false)
+        #expect(state.canPresentActivePrediction == false)
+        #expect(state.presentationReasons.contains("stored_analysis"))
+        #expect(state.isStoredPresentation)
+        #expect(state.raw == raw)
+        #expect(state.selectedProjectionTime == "2026-09-05T10:05:00Z")
+        state.accept(raw: raw, capability: .enabled, capabilitySequence: 2, generation: oldGeneration, now: now)
+        #expect(state.capability == .unknown)
+        state.setConnectivity(true)
+        // Ordinary late refresh replies without a lifecycle token also cannot
+        // restore authority before the fresh bounded reconnect read.
+        state.accept(raw: raw, capability: .enabled, capabilitySequence: 3, now: now)
+        #expect(state.canPresentActivePrediction == false)
+        let generation = state.beginCapabilityCheck()
+        state.accept(raw: raw, capability: .enabled, capabilitySequence: 4, generation: generation, now: now)
+        #expect(state.canPresentActivePrediction)
+        #expect(state.isStoredPresentation == false)
+    }
+
     @Test func sourceVisibilityIsIndependent() {
         let state = ObservedMotionState()
         state.enabledFamilies.remove(.radarEcho)
@@ -378,6 +462,24 @@ struct ObservedMotionStateTests {
 
 @Suite("Observed motion MapKit overlays")
 struct ObservedMotionOverlayTests {
+    @Test func unavailableCloudOnlyKeepsObservedContourAndEvidenceButNeverProjects() throws {
+        let raw = try cloudOnlyUnavailableFixture()
+        let typed = try #require(raw.typed)
+        #expect(typed.features.first?.family == .highCloudTop)
+        #expect(typed.features.first?.observations.first?.value == 9000)
+        #expect(typed.features.first?.motion.groundSpeedKt == nil)
+        #expect(String(decoding: raw.rawJSON, as: UTF8.self).contains("Future_Context"))
+        let observed = ObservedMotionOverlay.build(envelope: typed, selectedProjectionTime: nil,
+            enabledFamilies: Set(ObservedMotionFamily.allCases), selectedFeatureID: nil)
+        let polygons = observed.overlays.compactMap { $0 as? ObservedMotionPolygon }
+        #expect(polygons.count == 1)
+        #expect(polygons.first?.isProjected == false)
+        #expect(polygons.first?.interiorPolygons?.count == 1)
+        let future = ObservedMotionOverlay.build(envelope: typed, selectedProjectionTime: "2026-09-05T10:05:00Z",
+            enabledFamilies: Set(ObservedMotionFamily.allCases), selectedFeatureID: nil)
+        #expect(future.overlays.isEmpty)
+    }
+
     @Test func polygonKeepsInteriorHoleAndProjectionStyle() throws {
         let raw = observedMotionFixture(revision: 8)
         let typed = try #require(raw.typed)
@@ -397,5 +499,39 @@ struct ObservedMotionOverlayTests {
         let overlays: [MKOverlay] = [route, weather]
         #expect(RouteMapKitView.routeOwnedOverlays(in: overlays).count == 1)
         #expect(RouteMapKitView.weatherOwnedOverlays(in: overlays).count == 1)
+    }
+}
+
+@Suite("Observed motion card evaluated scope")
+@MainActor
+struct ObservedMotionCardScopeTests {
+    @Test func positiveLightningDisplaysAbsoluteWindowCountsAndLowerBound() {
+        let evidence = ObservedMotionFeatureLightning(status: "available", reasonCodes: ["selection_limit"],
+            evaluatedWindow: .init(startAt: "2020-02-01T23:55:00Z", endAt: "2020-02-02T00:00:00Z"),
+            reportedDetectionCount: 300, emittedMarkerCount: 0, evaluationComplete: false)
+        let text = ObservedMotionView.lightningLines(evidence).joined(separator: " ")
+        #expect(text.contains("300 reported detections; 0 map markers"))
+        #expect(text.contains("partial/lower bound"))
+        #expect(text.contains("01 Feb 2020 23:55Z–02 Feb 2020 00:00Z"))
+        #expect(text.contains("selection limit"))
+    }
+
+    @Test func completeEmptyAndUnavailablePlannedResultsRemainDistinct() {
+        let window = ObservedMotionInterval(startAt: "2020-02-01T23:55:00Z", endAt: "2020-02-02T00:00:00Z")
+        let empty = ObservedMotionPlannedOverlap(status: "available", reasonCodes: [], evaluatedInterval: window, intervals: [], complete: true)
+        let emptyText = ObservedMotionView.plannedOverlapLines(empty).joined(separator: " ")
+        #expect(emptyText.contains("No overlap calculated for this tracked contour under this model"))
+        #expect(emptyText.contains("01 Feb 2020 23:55Z–02 Feb 2020 00:00Z"))
+        let unavailable = ObservedMotionPlannedOverlap(status: "unavailable", reasonCodes: ["outside_planned_interval"], evaluatedInterval: window, intervals: [], complete: false)
+        let unavailableText = ObservedMotionView.plannedOverlapLines(unavailable).joined(separator: " ")
+        #expect(unavailableText.contains("Unavailable: outside planned interval"))
+        #expect(!unavailableText.contains("No overlap"))
+    }
+
+    @Test func completenessDistinguishesKnownOmissionsFromUnenumeratedTotals() {
+        let partial = ObservedMotionCompleteness(category: "small_detections", status: "partial", reasonCodes: ["selection_limit"], consideredCount: 9, emittedCount: 2, omittedCount: 7)
+        #expect(ObservedMotionView.completenessLine(partial).contains("small detections (untracked): partial; considered 9, emitted 2, omitted 7"))
+        let unknown = ObservedMotionCompleteness(category: "candidates", status: "not_evaluated", reasonCodes: ["not_evaluated"], consideredCount: nil, emittedCount: 0, omittedCount: nil)
+        #expect(ObservedMotionView.completenessLine(unknown).contains("considered unknown, emitted 0, omitted unknown"))
     }
 }

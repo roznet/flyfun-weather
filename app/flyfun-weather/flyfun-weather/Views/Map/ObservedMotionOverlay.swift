@@ -19,7 +19,7 @@ enum ObservedMotionOverlay {
         allowProjectedGeometry: Bool = true,
         storedOnly: Bool = false
     ) -> ObservedMotionOverlaySnapshot {
-        guard let envelope, envelope.status == "available" else { return .empty }
+        guard let envelope, envelope.status != "disabled", envelope.isValidVersionOne else { return .empty }
         let selectedTime = selectedProjectionTime
         let highlighted = Set([
             selectedAssociation?.radarFeatureID,
@@ -30,7 +30,9 @@ enum ObservedMotionOverlay {
         for feature in envelope.features where enabledFamilies.contains(feature.family) {
             let projected = selectedTime != nil
             let geometry: ObservedMotionGeometry?
-            if let selectedTime, allowProjectedGeometry {
+            if let selectedTime, allowProjectedGeometry, envelope.status == "available",
+               feature.motion.status == "accepted", feature.geolocation.status == "validated",
+               envelope.sources.first(where: { $0.sourceID == feature.sourceID })?.geolocation.status == "validated" {
                 geometry = feature.projections.first(where: { $0.at == selectedTime && $0.status == "available" })?.displayGeometry
             } else if selectedTime == nil {
                 geometry = feature.displayGeometry

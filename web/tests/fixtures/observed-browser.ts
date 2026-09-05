@@ -85,7 +85,7 @@ function observedFixture(includeTops: boolean) {
   };
 }
 
-function observedMotionFixture() {
+export function observedMotionFixture() {
   const coverage = { status: 'available', reason_codes: [], scope: 'feature_contour', known_cells: 20, total_cells: 20, known_fraction: 1 };
   const geolocation = { status: 'validated', reason_codes: [], evidence_id: 'fixture-geolocation', method_version: 'fixture-registration-v1', applicability_id: 'fixture-domain' };
   const geometry = (coordinates: number[][][][]) => ({ status: 'available', reason_codes: [], geometry: { type: 'MultiPolygon', coordinates }, provenance: 'grid_contour', simplification_tolerance_m: 200 });
@@ -199,6 +199,7 @@ export async function openObservedPage(page: Page, options: {
   flashes?: (route: Route, attempt: number) => Promise<void>;
   motion?: Record<string, unknown> | null;
   capability?: boolean | null;
+  beforeEntrypoint?: string;
 } = {}) {
   const observed = observedFixture(options.includeTops ?? true);
   let currentMotion = options.motion === undefined ? observedMotionFixture() : options.motion;
@@ -229,7 +230,9 @@ export async function openObservedPage(page: Page, options: {
     if (path === '/dist/briefing.js' || path === '/dist/briefing.css') {
       const asset = assets.find(file => file.path.endsWith(path.endsWith('.js') ? '.js' : '.css'));
       if (!asset) throw new Error(`Missing in-memory test asset: ${path}`);
-      return route.fulfill({ body: Buffer.from(asset.contents), contentType: path.endsWith('.js') ? 'text/javascript' : 'text/css' });
+      const body = path.endsWith('.js') && options.beforeEntrypoint
+        ? Buffer.concat([Buffer.from(options.beforeEntrypoint + '\n'), Buffer.from(asset.contents)]) : Buffer.from(asset.contents);
+      return route.fulfill({ body, contentType: path.endsWith('.js') ? 'text/javascript' : 'text/css' });
     }
     const local = resolve(WEB, `.${path}`);
     if (local.startsWith(WEB + sep) && /\.(html|css|png|svg|ico|woff2?)$/.test(local) && existsSync(local)) {

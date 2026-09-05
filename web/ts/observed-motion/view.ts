@@ -12,7 +12,6 @@ export interface ObservedMotionViewCallbacks {
 
 const reasonText = (reason: string): string => reason.replace(/_/g, ' ');
 const utcDate = (value: string): string => `${value.slice(0, 10)} ${value.slice(11, 16)}Z`;
-const utcTime = (value: string): string => `${value.slice(11, 16)}Z`;
 const number = (value: number | null, suffix: string): string => value == null ? 'Unavailable' : `${value.toFixed(Number.isInteger(value) ? 0 : 1)} ${suffix}`;
 
 function contour(feature: FeatureRecord): string {
@@ -32,7 +31,13 @@ function observationLine(observation: ScalarObservation): string {
 }
 
 function intervalText(value: Interval): string {
-  return `${utcTime(value.start_at)}–${utcTime(value.end_at)}`;
+  return `${utcDate(value.start_at)}–${utcDate(value.end_at)}`;
+}
+
+function completenessText(value: Record<string, unknown>): string {
+  const count = (raw: unknown): string => typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? String(raw) : 'unknown';
+  const category = reasonText(String(value.category ?? 'unknown scope')) + (value.category === 'small_detections' ? ' (untracked)' : '');
+  return `${category}: ${reasonText(String(value.status ?? 'unknown'))}; considered ${count(value.considered_count)}, emitted ${count(value.emitted_count)}, omitted ${count(value.omitted_count)}`;
 }
 
 function featureDetail(feature: FeatureRecord, selectedTime: MotionTime): string {
@@ -46,7 +51,7 @@ function featureDetail(feature: FeatureRecord, selectedTime: MotionTime): string
     : `${feature.lightning_evidence.reported_detection_count} reported detections; ${feature.lightning_evidence.emitted_marker_count} map markers${feature.lightning_evidence.evaluation_complete ? '' : ' (partial/lower bound)'} ${reasons(feature.lightning_evidence.reason_codes)}`;
   const rows = feature.route_rows.map(row => `<tr><th scope="row">${escapeHtml(`${row.from_label}–${row.to_label}`)}</th><td>${escapeHtml(utcDate(row.at))}</td><td>${escapeHtml(number(row.distance_nm, 'NM'))}</td><td>${row.closure_kt == null ? 'Not applicable' : `Closure ${escapeHtml(number(row.closure_kt, 'kt'))}${row.closure_interval ? ` over ${escapeHtml(intervalText(row.closure_interval))}` : ''}`}</td><td>${escapeHtml(row.relationship)}</td><td>Planned overlap at this instant: ${row.planned_overlap_at_time == null ? 'Unavailable' : row.planned_overlap_at_time ? 'Yes' : 'No'}</td></tr>`).join('');
   const overlap = feature.planned_overlap.status === 'available'
-    ? feature.planned_overlap.intervals.map(item => `${escapeHtml(item.leg_id)}: ${intervalText(item)} (${item.contact}, approximate)`).join('<br>') || 'No overlap in the stated evaluated interval'
+    ? feature.planned_overlap.intervals.map(item => `${escapeHtml(item.leg_id)}: ${intervalText(item)} (${item.contact}, approximate)`).join('<br>') || 'No overlap calculated for this tracked contour under this model in the evaluated interval (complete evaluation).'
     : `Unavailable ${reasons(feature.planned_overlap.reason_codes)}`;
   const selectedProjection = selectedTime === 'observed' ? '' : (() => {
     const projection = feature.projections.find(item => item.at === selectedTime);
@@ -59,10 +64,10 @@ function featureDetail(feature: FeatureRecord, selectedTime: MotionTime): string
     <p>Source reference ${escapeHtml(utcDate(feature.reference_at))}. ${escapeHtml(motion)}</p>
     ${reasons([...feature.reason_codes, ...feature.motion.reason_codes, ...feature.display_geometry.reason_codes])}
     ${observations}
-    <p>${lightning}</p>
+    <p>${lightning}<br>Evaluated lightning window: ${feature.lightning_evidence.evaluated_window ? escapeHtml(intervalText(feature.lightning_evidence.evaluated_window)) : 'Unavailable'}. ${feature.lightning_evidence.evaluation_complete ? 'Complete for stated local inputs; not a coverage guarantee.' : 'Evaluation incomplete; positive counts are lower bounds.'}</p>
     ${selectedProjection}
     <div class="motion-table-wrap"><table id="observed-motion-route-table"><caption>Selected-feature route leg and server time results. Positive closure is toward this leg and is not ground speed.</caption><thead><tr><th>Leg</th><th>At UTC</th><th>Distance</th><th>Closure</th><th>Relationship</th><th>Planned timing</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No evaluated route rows.</td></tr>'}</tbody></table></div>
-    <p id="observed-motion-overlap"><strong>Approximate planned-overlap intervals:</strong><br>${overlap}<br><small>Model- and interval-scoped analysis, not a route verdict, aircraft alarm or clearance.</small></p>
+    <p id="observed-motion-overlap"><strong>Approximate planned-overlap intervals:</strong><br>Evaluated planned interval: ${feature.planned_overlap.evaluated_interval ? escapeHtml(intervalText(feature.planned_overlap.evaluated_interval)) : 'Unavailable'}.<br>${overlap}<br><small>Model- and interval-scoped analysis, not a route verdict, aircraft alarm or clearance.</small></p>
   </article>`;
 }
 
@@ -119,7 +124,7 @@ export class ObservedMotionView {
           <div><h4>Associations</h4>${(motion?.associations ?? []).map(association => `<button type="button" class="observed-motion-association" data-motion-association-id="${escapeHtml(association.association_id)}" aria-pressed="${association.association_id === this.state.selectedAssociationId}">${escapeHtml(association.relation ?? 'Unavailable')} · ${association.comparison_at ? escapeHtml(utcDate(association.comparison_at)) : 'time unavailable'}</button>`).join('') || '<p>No validated source-time associations.</p>'}</div>
         </div>
         <div id="observed-motion-detail">${selectedFeature ? featureDetail(selectedFeature, this.state.selectedTime) : selectedAssociation ? associationDetail(selectedAssociation, motion?.features ?? []) : '<p>Select a feature or association for source-timed evidence and route results.</p>'}</div>
-        <details class="observed-motion-limitations" open><summary>Limitations and unavailable evidence</summary>${allReasons.length ? `<ul>${allReasons.map(reason => `<li>${escapeHtml(reasonText(reason))}</li>`).join('')}</ul>` : '<p>No additional reason codes were supplied.</p>'}</details>
+        <details class="observed-motion-limitations" open><summary>Limitations and unavailable evidence</summary><ul>${(motion?.completeness ?? []).map(item => `<li>${escapeHtml(completenessText(item))}</li>`).join('')}</ul>${allReasons.length ? `<ul>${allReasons.map(reason => `<li>${escapeHtml(reasonText(reason))}</li>`).join('')}</ul>` : '<p>No additional reason codes were supplied.</p>'}</details>
       </section>`;
     }
     this.container.innerHTML = html;

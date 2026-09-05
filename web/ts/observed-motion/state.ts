@@ -22,6 +22,7 @@ export class MotionState {
   private requestSequence = 0;
   private capabilitySequence = 0;
   private contextKey = '';
+  private connected = true;
   private now = new Date();
   private refreshFailed = false;
   private requestMotionIssue: string | null = null;
@@ -79,12 +80,19 @@ export class MotionState {
     return this.requestGeneration;
   }
 
+  setConnectivity(connected: boolean): void {
+    if (this.connected === connected) return;
+    this.connected = connected;
+    // Keep raw data and deliberate selection, but revoke all earlier callbacks.
+    this.markLifecycleUnknown();
+  }
+
   beginRequest(generation = this.requestGeneration): MotionRequestToken {
     return { generation, sequence: ++this.requestSequence };
   }
 
   acceptCapability(enabled: boolean | null, token: MotionRequestToken): boolean {
-    if (token.generation !== this.requestGeneration || token.sequence < this.capabilitySequence) return false;
+    if (!this.connected || token.generation !== this.requestGeneration || token.sequence < this.capabilitySequence) return false;
     this.capabilitySequence = token.sequence;
     this.capability = enabled === true ? 'enabled' : enabled === false ? 'disabled' : 'unknown';
     this.changed();
@@ -164,7 +172,7 @@ export class MotionState {
   }
 
   get canPresentActivePrediction(): boolean {
-    if (!this.modeActive || this.capability !== 'enabled' || this.requestMotionIssue !== null
+    if (!this.connected || !this.modeActive || this.capability !== 'enabled' || this.requestMotionIssue !== null
         || this.selectedTime === 'observed' || this.current?.status !== 'available' || !this.current.motion) return false;
     const selected = Date.parse(this.selectedTime);
     return Number.isFinite(selected) && selected > this.now.getTime() && !this.clockUncertain;

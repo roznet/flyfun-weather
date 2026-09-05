@@ -346,37 +346,82 @@ def publish_motion_snapshot(
 
 
 def write_snapshot_atomic(pack_dir: Path, snapshot: dict) -> dict:
-    """Merge an existing pack's full/legacy fields without resurrecting a pack.
-
-    Initial full writers must reserve with ``allow_create=True`` and publish
-    their complete initial snapshot with that token instead.
-    """
+    """Merge existing fields under the publication fence; never create a pack."""
     with _locked(pack_dir) as (pack, state, save):
-        current = _read_snapshot(pack, state)
-        if current is None:
+        return _write_snapshot_locked(pack, state, save, snapshot)
+
+
+@contextmanager
+def full_snapshot_writer(pack_dir: Path):
+    """Own one full/legacy artifact write, including first creation.
+
+    The fence is acquired before snapshot serialization and retained through
+    sibling artifact writes. A deleted identity is never implicitly recreated.
+    """
+    pack_dir.parent.mkdir(parents=True, exist_ok=True)
+    with _locked(pack_dir) as (pack, state, save):
+        if state is not None:
+            _check_current(pack, state, _read_snapshot(pack, state))
+        yield lambda snapshot, initial_snapshot: _write_snapshot_locked(
+            pack, state, save, snapshot, initial_snapshot=initial_snapshot,
+        )
+
+
+def _write_snapshot_locked(pack, state, save, snapshot, *, initial_snapshot=None):
+    current = _read_snapshot(pack, state)
+    if current is None:
+        if state is not None or initial_snapshot is None:
             raise MotionPublicationError("Untokened writer cannot create a snapshot")
-        if state is None:
-            state = _new_state(pack, current)
+        from weatherbrief.models import ForecastSnapshot
+
+        initial = ForecastSnapshot.model_validate(initial_snapshot)
+        if initial.observed_motion is not None:
+            _validated_motion(initial.observed_motion)
+        _identity(snapshot)
+        _snapshot_revision(snapshot)
+        # Only an identity with no lifecycle history may be created here.
+        # Deletion/recreation requires an explicit reserved generation. Keep
+        # failed first publication from leaving an empty/partial pack that a
+        # later writer could mistake for an authorized generation.
+        had_pack = pack.exists()
+        prior_entries = tuple(pack.iterdir()) if had_pack else ()
+        pack.mkdir(exist_ok=True)
+        try:
+            _atomic_json(pack / "briefing.json", snapshot)
+            state = _new_state(pack, snapshot)
             save(state)
-        recovered = _check_current(pack, state, current)
-        if not isinstance(snapshot, dict):
-            raise MotionPublicationError("Snapshot update must be a JSON object")
-        merged = {**current, **snapshot}
-        if _identity(merged) != _identity(current):
-            raise MotionPublicationError("Untokened writer cannot change pack identity")
-        incoming = snapshot.get("observed_motion")
-        if incoming is not None:
-            incoming_revision = _snapshot_revision(snapshot)
-            _check_motion_identity(current, incoming)
-            current_revision = _snapshot_revision(current)
-            if incoming_revision > current_revision:
-                raise MotionPublicationError("New motion requires its reserved publication token")
-            if incoming_revision == current_revision and not _json_equal(incoming, current["observed_motion"]):
-                raise MotionPublicationError("Conflicting motion content at the same revision")
-        if "observed_motion" in current:
-            merged["observed_motion"] = current["observed_motion"]
-        _atomic_json(pack / "briefing.json", merged)
-        if recovered or state["snapshot_file"] != "briefing.json":
-            state["snapshot_file"] = "briefing.json"
-            save(state)
-        return merged
+        except BaseException:
+            if not prior_entries:
+                try:
+                    (pack / "briefing.json").unlink(missing_ok=True)
+                    if not any(pack.iterdir()):
+                        pack.rmdir()
+                except OSError:
+                    pass
+            raise
+        return snapshot
+    if state is None:
+        state = _new_state(pack, current)
+        save(state)
+    recovered = _check_current(pack, state, current)
+    if not isinstance(snapshot, dict):
+        raise MotionPublicationError("Snapshot update must be a JSON object")
+    merged = {**current, **snapshot}
+    if _identity(merged) != _identity(current):
+        raise MotionPublicationError("Untokened writer cannot change pack identity")
+    incoming = snapshot.get("observed_motion")
+    if incoming is not None:
+        incoming_revision = _snapshot_revision(snapshot)
+        _check_motion_identity(current, incoming)
+        current_revision = _snapshot_revision(current)
+        if incoming_revision > current_revision:
+            raise MotionPublicationError("New motion requires its reserved publication token")
+        if incoming_revision == current_revision and not _json_equal(incoming, current["observed_motion"]):
+            raise MotionPublicationError("Conflicting motion content at the same revision")
+    if "observed_motion" in current:
+        merged["observed_motion"] = current["observed_motion"]
+    _atomic_json(pack / "briefing.json", merged)
+    if recovered or state["snapshot_file"] != "briefing.json":
+        state["snapshot_file"] = "briefing.json"
+        save(state)
+    return merged

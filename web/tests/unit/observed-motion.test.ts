@@ -118,6 +118,50 @@ const motionFixture = {
 };
 
 describe('parseObservedMotion', () => {
+  it.each([
+    { intervals: [{ leg_id: 'route:0', leg_index: 0, start_at: 'broken', end_at: '2026-09-05T12:08:00Z', contact: 'interval', approximate: true }] },
+    { complete: false },
+    { method: 'unknown_solver' },
+    { planned_time_method: 'live_aircraft' },
+    { evaluated_interval: null },
+    { intervals: [{ leg_id: 'route:0', leg_index: 0, start_at: '2026-09-05T11:00:00Z', end_at: '2026-09-05T12:08:00Z', contact: 'interval', approximate: true }] },
+    { intervals: [{ leg_id: 'route:0', leg_index: 0, start_at: '2026-09-05T12:06:00Z', end_at: '2026-09-05T12:08:00Z', contact: 'tangent', approximate: true }] },
+  ])('fails malformed positive planned overlap closed without manufacturing an evaluated zero: %j', patch => {
+    const raw = structuredClone(motionFixture) as any;
+    Object.assign(raw.features[0].planned_overlap, patch);
+    const parsed = parseObservedMotion(raw);
+    expect(parsed.motion?.features[0].planned_overlap).toMatchObject({ status: 'unavailable', complete: false, intervals: [], reason_codes: ['invalid_planned_overlap'] });
+    expect(parsed.validationReasons).toContain('invalid_planned_overlap');
+    expect(parsed.raw).toBe(raw);
+    expect(parsed.motion?.features[0].display_geometry.status).toBe('available');
+  });
+
+  it.each(['source_registration', 'feature_registration', 'evidence_mismatch', 'source_support', 'feature_support'])('withholds ground and route claims for %s while retaining raw observed evidence', condition => {
+    const raw = structuredClone(motionFixture) as any;
+    if (condition === 'source_registration') raw.sources[0].geolocation.status = 'unverified';
+    if (condition === 'feature_registration') raw.features[0].geolocation.status = 'unverified';
+    if (condition === 'evidence_mismatch') raw.features[0].geolocation.evidence_id = 'other-domain';
+    if (condition === 'source_support') raw.sources[0].coverage.status = 'unavailable';
+    if (condition === 'feature_support') raw.features[0].coverage.known_fraction = 0.5;
+    const parsed = parseObservedMotion(raw);
+    const feature = parsed.motion!.features[0];
+    expect(feature.motion).toMatchObject({ status: 'unavailable', ground_speed_kt: null, bearing_deg_true: null });
+    expect(feature.route_rows[0]).toMatchObject({ status: 'unavailable', distance_nm: null, closure_kt: null, planned_time_status: 'unavailable', planned_overlap_at_time: null });
+    expect(feature.planned_overlap.status).toBe('unavailable');
+    expect(feature.projections[0].status).toBe('unavailable');
+    expect(feature.display_geometry.status).toBe('available');
+    expect(feature.observations[0].value).toBe(6.5);
+    expect((parsed.raw as any).future_extension).toEqual({ untouched: [1, true, 'raw'] });
+  });
+
+  it('drops an internally inconsistent available route row instead of exposing a route claim', () => {
+    const raw = structuredClone(motionFixture) as any;
+    raw.features[0].route_rows[0].relationship = 'unavailable';
+    const parsed = parseObservedMotion(raw);
+    expect(parsed.motion?.features[0].route_rows).toEqual([]);
+    expect(parsed.validationReasons).toContain('invalid_route_row');
+  });
+
   it('accepts the full strict producer fixture including reciprocal pair and patch diagnostics', () => {
     const parsed = parseObservedMotion(strictV1Fixture);
     expect(parsed.status).toBe('available');
@@ -145,6 +189,23 @@ describe('parseObservedMotion', () => {
     expect(parsed.motion?.features[0].display_geometry.status).toBe('available');
     expect(parsed.motion?.features[0].motion.status).toBe('unavailable');
     expect(parsed.validationReasons).toContain('invalid_analysis_domain');
+  });
+
+  it.each(['unavailable', 'invalid_domain'])('withholds dependent route claims for %s envelope while retaining observed geometry', condition => {
+    const raw = structuredClone(motionFixture) as any;
+    if (condition === 'unavailable') { raw.status = 'unavailable'; raw.reason_codes = ['compute_failed']; }
+    else raw.analysis_domain = null;
+    const feature = parseObservedMotion(raw).motion!.features[0];
+    expect(feature.route_rows[0]).toMatchObject({ status: 'unavailable', distance_nm: null, closure_kt: null, planned_overlap_at_time: null });
+    expect(feature.planned_overlap.status).toBe('unavailable');
+    expect(feature.display_geometry.status).toBe('available');
+  });
+
+  it('retains genuine unavailable planned reasons for an observed-only unverified cloud', () => {
+    const raw = structuredClone(motionFixture) as any;
+    raw.features[1].geolocation.status = 'unverified';
+    const feature = parseObservedMotion(raw).motion!.features[1];
+    expect(feature.planned_overlap.reason_codes).toContain('invalid_planned_timing');
   });
 
   it('retains unknown raw JSON and validates two families, holes and independent evidence', () => {

@@ -167,8 +167,8 @@ struct RouteMapView: View {
             selectedFeatureID: state.selectedFeatureID,
             selectedAssociation: state.selectedAssociation,
             allowProjectedGeometry: state.canPresentActivePrediction
-                || (state.origin.isStoredOnly && state.selectedProjection != nil),
-            storedOnly: state.origin.isStoredOnly || state.capability != .enabled)
+                || (state.isStoredPresentation && state.selectedProjection != nil),
+            storedOnly: state.isStoredPresentation || state.capability != .enabled)
     }
 
     /// Live aircraft state for the representable, or nil when not tracking.

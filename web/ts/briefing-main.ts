@@ -2732,10 +2732,18 @@ async function init(): Promise<void> {
   }
 
   // --- Load flight data, then render even if no packs exist ---
-  const motionClock = window.setInterval(() => {
-    if (observedMotionState.modeActive) observedMotionState.updateClock(new Date());
-  }, 60_000);
+  let motionClock: number | null = null;
+  const startMotionClock = (): void => {
+    if (motionClock !== null) return;
+    motionClock = window.setInterval(() => {
+      if (observedMotionState.modeActive) observedMotionState.updateClock(new Date());
+    }, 60_000);
+  };
+  startMotionClock();
+  observedMotionState.setConnectivity(navigator.onLine);
   const refreshMotionLifecycle = (): void => {
+    observedMotionState.setConnectivity(navigator.onLine);
+    if (!navigator.onLine) return;
     if (!observedMotionState.modeActive) return;
     observedMotionState.updateClock(new Date());
     void store.getState().recheckObservedMotionAuthority();
@@ -2743,9 +2751,16 @@ async function init(): Promise<void> {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') refreshMotionLifecycle();
   });
-  window.addEventListener('pageshow', refreshMotionLifecycle);
+  window.addEventListener('pageshow', () => {
+    startMotionClock();
+    refreshMotionLifecycle();
+  });
   window.addEventListener('online', refreshMotionLifecycle);
-  window.addEventListener('pagehide', () => window.clearInterval(motionClock), { once: true });
+  window.addEventListener('offline', () => observedMotionState.setConnectivity(false));
+  window.addEventListener('pagehide', () => {
+    if (motionClock !== null) window.clearInterval(motionClock);
+    motionClock = null;
+  });
 
   store.getState().loadFlight(flightId).then(async () => {
     // If a specific pack timestamp was requested via URL, select it

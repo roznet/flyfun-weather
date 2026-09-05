@@ -329,31 +329,100 @@ function unavailableProjection(projection: ProjectionRecord, reason: string): Pr
 }
 
 function validatedGeolocation(value: unknown): boolean {
-  return record(value) && value.status === 'validated';
+  return record(value) && value.status === 'validated' && id(value.evidence_id)
+    && id(value.method_version) && id(value.applicability_id);
 }
 
-function parseRouteRow(value: unknown): RouteRow | null {
+function supported(value: unknown, fullContour = false): boolean {
+  return record(value) && value.status === 'available' && integer(value.known_cells)
+    && integer(value.total_cells) && value.total_cells > 0 && value.known_cells > 0
+    && value.known_cells <= value.total_cells && finite(value.known_fraction)
+    && value.known_fraction > 0 && value.known_fraction <= 1
+    && (!fullContour || (value.scope === 'feature_contour' && value.known_fraction === 1 && value.known_cells === value.total_cells));
+}
+
+function unavailableOverlap(reason: string): PlannedOverlap {
+  return { status: 'unavailable', reason_codes: [reason], evaluated_interval: null, intervals: [], complete: false };
+}
+
+function unavailableRoute(row: RouteRow, reason: string): RouteRow {
+  return { ...row, status: 'unavailable', reason_codes: [...row.reason_codes, reason],
+    distance_nm: null, closure_kt: null, closure_interval: null, relationship: 'unavailable',
+    planned_time_status: 'unavailable', planned_time_reason_codes: [...row.planned_time_reason_codes, reason], planned_overlap_at_time: null };
+}
+
+function observedOnlyFeature(feature: FeatureRecord, reason: string): FeatureRecord {
+  return { ...feature,
+    motion: { ...feature.motion, status: 'unavailable', reason_codes: [...new Set([...feature.motion.reason_codes, reason])],
+      ground_speed_kt: null, bearing_deg_true: null, velocity_reference_point: null, velocity_method: null },
+    projection_end_at: null, projections: [], route_rows: feature.route_rows.map(row => unavailableRoute(row, reason)),
+    planned_overlap: feature.planned_overlap.status === 'unavailable' ? feature.planned_overlap : unavailableOverlap(reason),
+  };
+}
+
+function parseRouteRow(value: unknown, validationReasons: string[]): RouteRow | null {
   if (!record(value) || !id(value.leg_id) || !integer(value.leg_index) || typeof value.from_label !== 'string'
       || typeof value.to_label !== 'string' || !utc(value.at) || !availability(value.status) || !reasons(value.reason_codes)
       || !(value.distance_nm === null || (finite(value.distance_nm) && value.distance_nm >= 0))
       || !(value.closure_kt === null || finite(value.closure_kt))
       || !(value.closure_interval === null || interval(value.closure_interval))
       || !['approaching', 'receding', 'approximately_unchanged', 'intersecting', 'unavailable'].includes(String(value.relationship))
+      || value.planned_time_method !== 'distance_proportional_planned'
       || !availability(value.planned_time_status) || !reasons(value.planned_time_reason_codes)
-      || !(value.planned_overlap_at_time === null || typeof value.planned_overlap_at_time === 'boolean')) return null;
+      || !(value.planned_overlap_at_time === null || typeof value.planned_overlap_at_time === 'boolean')) {
+    validationReasons.push('invalid_route_row');
+    return null;
+  }
+  const at = Date.parse(value.at);
+  const intervalValue = value.closure_interval;
+  const intervalValid = intervalValue === null || (
+    Date.parse(intervalValue.start_at) <= at && at <= Date.parse(intervalValue.end_at)
+      && Date.parse(intervalValue.end_at) > Date.parse(intervalValue.start_at));
+  const available = value.status === 'available';
+  const relationship = value.relationship;
+  const distanceValid = available
+    ? finite(value.distance_nm) && (relationship === 'intersecting' ? value.distance_nm === 0 : value.distance_nm > 0)
+    : value.distance_nm === null;
+  const closureValid = available
+    ? relationship === 'intersecting'
+      ? value.closure_kt === null && value.closure_interval === null
+      : finite(value.closure_kt) && value.closure_interval !== null
+        && (Math.abs(value.closure_kt) < 1 ? relationship === 'approximately_unchanged' : value.closure_kt > 0 ? relationship === 'approaching' : relationship === 'receding')
+    : value.closure_kt === null && value.closure_interval === null && relationship === 'unavailable';
+  const plannedValid = value.planned_time_status === 'available'
+    ? typeof value.planned_overlap_at_time === 'boolean'
+    : value.planned_overlap_at_time === null;
+  if (!intervalValid || !distanceValid || !closureValid || !plannedValid
+      || (available && relationship === 'unavailable')) {
+    validationReasons.push('invalid_route_row');
+    return null;
+  }
   return value as RouteRow;
 }
 
-function parsePlannedOverlap(value: unknown): PlannedOverlap {
+function parsePlannedOverlap(value: unknown, validationReasons: string[]): PlannedOverlap {
+  const invalid = (): PlannedOverlap => {
+    validationReasons.push('invalid_planned_overlap');
+    return unavailableOverlap('invalid_planned_overlap');
+  };
   if (!record(value) || !availability(value.status) || !reasons(value.reason_codes)
       || !(value.evaluated_interval === null || interval(value.evaluated_interval))
-      || !Array.isArray(value.intervals) || typeof value.complete !== 'boolean') {
-    return { status: 'unavailable', reason_codes: ['not_evaluated'], evaluated_interval: null, intervals: [], complete: false };
+      || !Array.isArray(value.intervals) || typeof value.complete !== 'boolean'
+      || value.method !== 'relative_segment_contour_intersection'
+      || value.planned_time_method !== 'distance_proportional_planned') {
+    return invalid();
   }
-  const intervals = value.intervals.filter((item): item is PlannedOverlap['intervals'][number] =>
+  if (value.status === 'unavailable') {
+    return !value.complete && value.intervals.length === 0 && value.reason_codes.length > 0 ? value as PlannedOverlap : invalid();
+  }
+  const evaluated = value.evaluated_interval;
+  if (!value.complete || !interval(evaluated)) return invalid();
+  const valid = value.intervals.every(item =>
     record(item) && id(item.leg_id) && integer(item.leg_index) && utc(item.start_at) && utc(item.end_at)
-      && Date.parse(item.start_at) <= Date.parse(item.end_at) && (item.contact === 'interval' || item.contact === 'tangent') && item.approximate === true);
-  return { ...value, intervals } as PlannedOverlap;
+      && Date.parse(item.start_at) >= Date.parse(evaluated.start_at) && Date.parse(item.end_at) <= Date.parse(evaluated.end_at)
+      && Date.parse(item.start_at) <= Date.parse(item.end_at) && (item.contact === 'interval' || item.contact === 'tangent')
+      && (item.contact !== 'tangent' || Date.parse(item.start_at) === Date.parse(item.end_at)) && item.approximate === true);
+  return valid ? value as PlannedOverlap : invalid();
 }
 
 function parseFeature(
@@ -397,9 +466,18 @@ function parseFeature(
     if (!valid) validationReasons.push('dangling_reference');
     return valid;
   });
-  const motion = parseMotion(value.motion, featureFrameIds, validationReasons);
-  const projectionAuthority = motion.status === 'accepted'
-    && validatedGeolocation(value.geolocation) && validatedGeolocation(source.geolocation);
+  let motion = parseMotion(value.motion, featureFrameIds, validationReasons);
+  const featureGeolocation = value.geolocation;
+  const registration = validatedGeolocation(featureGeolocation) && validatedGeolocation(source.geolocation)
+    && record(featureGeolocation) && ['evidence_id', 'method_version', 'applicability_id'].every(key => featureGeolocation[key] === source.geolocation[key]);
+  const measurementReason = !registration ? 'geolocation_unverified' : 'unknown_support';
+  const measurementAuthority = registration && source.status === 'available' && supported(source.coverage) && supported(value.coverage, true);
+  if (motion.status === 'accepted' && !measurementAuthority) {
+    validationReasons.push(measurementReason);
+    motion = { ...motion, status: 'unavailable', reason_codes: [...motion.reason_codes, measurementReason],
+      ground_speed_kt: null, bearing_deg_true: null, velocity_reference_point: null, velocity_method: null };
+  }
+  const projectionAuthority = motion.status === 'accepted';
   const projectionEnd = value.projection_end_at === null ? null : Date.parse(value.projection_end_at);
   const cutoff = Date.parse(cutoffAt);
   const projections = value.projections.map(item => parseProjection(item, validationReasons)).filter((item): item is ProjectionRecord => {
@@ -413,7 +491,8 @@ function parseFeature(
     validationReasons.push('invalid_projection');
     return unavailableProjection(projection, 'invalid_projection');
   });
-  const routeRows = value.route_rows.map(parseRouteRow).filter((item): item is RouteRow => item !== null);
+  const routeRows = value.route_rows.map(item => parseRouteRow(item, validationReasons)).filter((item): item is RouteRow => item !== null);
+  const planned = parsePlannedOverlap(value.planned_overlap, validationReasons);
   return {
     feature_id: value.feature_id, source_id: value.source_id, family: value.family,
     definition: value.definition as FeatureRecord['definition'], reference_at: value.reference_at,
@@ -421,8 +500,9 @@ function parseFeature(
     display_geometry: geometry(value.display_geometry, validationReasons), trail, observations,
     lightning_evidence: parseLightningEvidence(value.lightning_evidence, sourcesById), coverage: record(value.coverage) ? value.coverage : {},
     geolocation: record(value.geolocation) ? value.geolocation : {}, motion,
-    projection_end_at: value.projection_end_at, projections, route_rows: routeRows,
-    planned_overlap: parsePlannedOverlap(value.planned_overlap), reason_codes: value.reason_codes,
+    projection_end_at: projectionAuthority ? value.projection_end_at : null, projections,
+    route_rows: projectionAuthority ? routeRows : routeRows.map(row => unavailableRoute(row, measurementReason)),
+    planned_overlap: projectionAuthority || planned.status === 'unavailable' ? planned : unavailableOverlap(measurementReason), reason_codes: value.reason_codes,
   };
 }
 
@@ -462,9 +542,7 @@ export function parseObservedMotion(raw: unknown): ParsedObservedMotion {
   let features = raw.features.map(item => parseFeature(item, sourcesById, projectionTimes, raw.cutoff_at as string, validationReasons)).filter((item): item is FeatureRecord => item !== null);
   if (features.length !== raw.features.length) validationReasons.push('dangling_reference');
   if (raw.status === 'available' && domain === null) {
-    features = features.map(feature => ({ ...feature,
-      motion: { status: 'unavailable', reason_codes: ['invalid_analysis_domain'], ground_speed_kt: null, bearing_deg_true: null },
-    }));
+    features = features.map(feature => observedOnlyFeature(feature, 'invalid_analysis_domain'));
   }
   const featureIds = new Set(features.map(feature => feature.feature_id));
   const associations = raw.associations.filter((item): item is AssociationRecord => {
@@ -492,12 +570,7 @@ export function parseObservedMotion(raw: unknown): ParsedObservedMotion {
   if (status !== 'available') {
     const retainedAcceptedMotion = features.some(feature => feature.motion.status === 'accepted');
     if (retainedAcceptedMotion) validationReasons.push('invalid_motion');
-    features = features.map(feature => feature.motion.status === 'accepted' ? {
-      ...feature,
-      motion: { status: 'unavailable', reason_codes: ['not_evaluated'], ground_speed_kt: null, bearing_deg_true: null },
-      projection_end_at: null,
-      projections: [],
-    } : feature);
+    features = features.map(feature => observedOnlyFeature(feature, 'not_evaluated'));
   }
   const motion: ObservedMotion = {
     schema_version: 1, status, reason_codes: raw.reason_codes, revision, run_id: raw.run_id as string | null,
