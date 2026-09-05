@@ -21,7 +21,11 @@ from weatherbrief.models.observations import RealtimeRefreshResult, RouteObserva
 from weatherbrief.models.observed_motion import empty_motion
 from weatherbrief.observed.motion.route import route_identities
 from weatherbrief.storage.flights import pack_dir_for, save_flight, save_pack_meta
-from weatherbrief.storage.observed_motion import publish_motion_snapshot, reserve_motion_revision
+from weatherbrief.storage.observed_motion import (
+    MotionPublicationError,
+    publish_motion_snapshot,
+    reserve_motion_revision,
+)
 from weatherbrief.storage.snapshots import save_snapshot
 from weatherbrief.tasks.artifacts import save_analysis_artifacts
 
@@ -320,11 +324,20 @@ def test_newer_disabled_realtime_publication_fences_delayed_older_result(
         "departure_time": now.isoformat(),
     }))
     (tmp_path / "forecasts.json").write_text('{"forecasts": []}')
-    fresh = RouteObservations(
-        corridor_nm=30.0, fetch_time=now, airports_found=0,
-        airports_with_metar=0, airports_with_taf=0,
-    )
-    monkeypatch.setattr(route_weather, "run_route_weather", lambda **_kwargs: fresh)
+    observation_calls = 0
+    observation_lock = threading.Lock()
+
+    def distinct_observations(**_kwargs):
+        nonlocal observation_calls
+        with observation_lock:
+            observation_calls += 1
+            airports_found = observation_calls
+        return RouteObservations(
+            corridor_nm=30.0, fetch_time=now, airports_found=airports_found,
+            airports_with_metar=0, airports_with_taf=0,
+        )
+
+    monkeypatch.setattr(route_weather, "run_route_weather", distinct_observations)
     monkeypatch.setattr(route_weather, "run_route_sigmets", lambda **_kwargs: None)
 
     actual_build = motion_payload.build_observed_motion
@@ -362,6 +375,8 @@ def test_newer_disabled_realtime_publication_fences_delayed_older_result(
     assert newer.observed_motion is not None
     assert older_motion.revision == newer.observed_motion.revision
     assert older_motion.revision == 2
+    assert old_result[0].observations.airports_found == 2
+    assert newer.observations.airports_found == 2
     assert json.loads((tmp_path / "briefing.json").read_text())["observed_motion"]["revision"] == 2
 
 
@@ -413,3 +428,52 @@ def test_gated_refresh_and_sse_return_the_motion_transport(
     assert stream.headers["Cache-Control"] == "no-store"
     event = json.loads([line[6:] for line in stream.text.splitlines() if line.startswith("data: ")][-1])
     assert event["observed_motion"]["revision"] == 1
+
+
+def test_gated_refresh_surfaces_motion_publication_errors(
+    motion_client, tmp_path, monkeypatch,
+):
+    """A lifecycle failure must not be presented as a successful gated no-op."""
+    from weatherbrief.api.packs import DataStatus, RefreshDecision
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+    monkeypatch.delenv("WB_OBSERVED_MOTION_ENABLED", raising=False)
+    route = _route()
+    client, sessions = motion_client
+    pack = _stored_pack(sessions, route)
+    client.app.state.db_path = "/motion-test-nav.db"
+    decision = RefreshDecision(
+        mode="realtime", reason="D-0 motion refresh", needed=1,
+        n_eligible=1, n_updated=0, days_out=0,
+    )
+    status = DataStatus(fresh=True, refresh_decision=decision)
+    latest = BriefingPackMeta(
+        flight_id=pack.flight_id,
+        fetch_timestamp=pack.fetch_timestamp,
+        days_out=0,
+        artifact_path=str(tmp_path / "pack"),
+    )
+    failure = MotionPublicationError("Pack generation was deleted")
+
+    with patch("weatherbrief.api.packs.list_packs", return_value=[latest]), patch(
+        "weatherbrief.api.packs.gated_data_status", return_value=status,
+    ), patch(
+        "weatherbrief.api.packs.run_realtime_refresh", side_effect=failure,
+    ), patch("weatherbrief.api.packs.SessionLocal", side_effect=sessions):
+        accepted = client.post(f"/api/flights/{pack.flight_id}/packs/refresh")
+        stream = client.post(f"/api/flights/{pack.flight_id}/packs/refresh/stream")
+
+    assert accepted.status_code == 409
+    assert "publication failed" in accepted.json()["detail"].lower()
+    assert accepted.headers["X-Observed-Motion-Enabled"] == "0"
+    assert accepted.headers["Cache-Control"] == "no-store"
+    assert stream.status_code == 200
+    assert stream.headers["X-Observed-Motion-Enabled"] == "0"
+    assert stream.headers["Cache-Control"] == "no-store"
+    assert "event: error" in stream.text
+    assert "event: complete" not in stream.text
+    event = json.loads([line[6:] for line in stream.text.splitlines() if line.startswith("data: ")][-1])
+    assert event["type"] == "error"
+    assert event["status"] == 409
+    assert "publication failed" in event["detail"].lower()

@@ -16,11 +16,14 @@ from weatherbrief.units import M_PER_SM as _M_PER_SM
 from weatherbrief.models.observations import (
     AirportObservation,
     ObservationComparison,
+    RefreshDelta,
     RealtimeRefreshResult,
     RouteObservations,
     RouteSigmets,
     SigmetAlongRoute,
 )
+from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.models.observed_motion import ObservedMotion
 
 logger = logging.getLogger(__name__)
 
@@ -876,9 +879,21 @@ def run_realtime_refresh(
     )
 
     return RealtimeRefreshResult(
-        observations=new_obs,
-        sigmets=new_sigmets,
-        delta=delta,
-        observed=new_observed,
-        observed_motion=published["observed_motion"],
+        # A superseded token returns the newer persisted snapshot.  Return all
+        # of that snapshot rather than mixing its motion revision with this
+        # invocation's stale local refresh data.
+        observations=RouteObservations.model_validate(published["route_observations"]),
+        sigmets=(
+            RouteSigmets.model_validate(published["route_sigmets"])
+            if published.get("route_sigmets") is not None else None
+        ),
+        delta=(
+            RefreshDelta.model_validate(published["last_refresh_delta"])
+            if published.get("last_refresh_delta") is not None else None
+        ),
+        observed=(
+            ObservedConditions.model_validate(published["observed_conditions"])
+            if published.get("observed_conditions") is not None else None
+        ),
+        observed_motion=ObservedMotion.model_validate(published["observed_motion"]),
     )

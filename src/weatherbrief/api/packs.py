@@ -85,6 +85,7 @@ from weatherbrief.storage.flights import (
     save_pack_meta,
     update_pack_meta,
 )
+from weatherbrief.storage.observed_motion import MotionPublicationError
 
 logger = logging.getLogger(__name__)
 
@@ -2231,6 +2232,16 @@ async def refresh_briefing(
                         observed = result.observed
                         observed_motion = result.observed_motion
                         resp_status = "realtime"
+                    except MotionPublicationError as exc:
+                        logger.error(
+                            "Real-time motion publication failed for %s",
+                            flight_id, exc_info=True,
+                        )
+                        return JSONResponse(
+                            status_code=409,
+                            content={"detail": f"Observed-motion publication failed: {exc}"},
+                            headers=_motion_transport_headers(),
+                        )
                     except Exception:
                         # Degrade to a no-op so status and mode agree.
                         logger.warning(
@@ -2479,6 +2490,26 @@ async def refresh_briefing_stream(
                                 observed_payload = result.observed.model_dump(mode="json")
                             if result.observed_motion is not None:
                                 observed_motion_payload = result.observed_motion.model_dump(mode="json")
+                        except MotionPublicationError as exc:
+                            logger.error(
+                                "Real-time motion publication failed for %s (stream)",
+                                flight_id, exc_info=True,
+                            )
+                            detail = f"Observed-motion publication failed: {exc}"
+
+                            async def motion_publication_error_generator() -> AsyncGenerator[str, None]:
+                                event = {
+                                    "type": "error",
+                                    "status": 409,
+                                    "detail": detail,
+                                }
+                                yield f"event: error\ndata: {json_mod.dumps(event, default=str)}\n\n"
+
+                            return StreamingResponse(
+                                motion_publication_error_generator(),
+                                media_type="text/event-stream",
+                                headers=_motion_transport_headers(**{"X-Accel-Buffering": "no"}),
+                            )
                         except Exception:
                             # Degrade to a no-op so consumers don't treat the
                             # null observations as a successful realtime refresh.
