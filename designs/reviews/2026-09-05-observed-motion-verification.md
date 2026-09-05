@@ -89,3 +89,8 @@ run is not the completion of its task or the feature.
   This permits parallel numerical tests using the agreed grid/track fields; the
   required continuous solver and scientific limits are unchanged. Any interface
   disagreement still requires reconciliation and covering tests.
+- The deletion audit found retention and account-delete callers as well as flight
+  deletion. Their individual-pack operations join the same publication lock;
+  generic ancestor-directory cleanup must remain distinct. Ordinary reusable pack
+  identities retain ordering state; a removed account namespace with lost state
+  must not be reused. This is planned integration work, not a real-data deletion.
