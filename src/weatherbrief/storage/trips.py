@@ -181,17 +181,25 @@ def delete_trip(session: Session, trip_id: str, user_id: str) -> bool:
     return True
 
 
-def prune_empty_trips(session: Session, user_id: str) -> list[str]:
+def prune_empty_trips(
+    session: Session, user_id: str, *, keep: str | None = None,
+) -> list[str]:
     """Delete the user's trips that have no legs left, returning their ids.
 
     Called after a delete / unlink / move. A **1-leg trip is valid** and is
     deliberately kept (adding legs later is a normal flow) — only the genuinely
     empty container goes, because nothing can ever be shown for it.
+
+    ``keep`` exempts one trip id. ``create_trip`` needs it: an empty
+    ``flight_ids`` would otherwise have this delete the row created moments
+    earlier, and the caller would return a 201 for a trip that no longer
+    exists.
     """
     trip_ids = [
         t for t in session.execute(
             select(FlightTripRow.id).where(FlightTripRow.user_id == user_id)
         ).scalars().all()
+        if t != keep
     ]
     if not trip_ids:
         return []

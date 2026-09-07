@@ -258,6 +258,18 @@ def _validated_trip_id(db: Session, trip_id: str | None, user_id: str) -> str | 
         return None
     if load_trip_row(db, trip_id, user_id) is None:
         raise HTTPException(status_code=404, detail="Trip not found")
+    # The same cap `create_trip` and `add_legs` enforce. Without it this path is
+    # a way to grow a trip past the documented limit one created flight at a
+    # time — and the cap is also the worst-case latency of a serial trip
+    # refresh, so it is not merely cosmetic.
+    from weatherbrief.api.trips import MAX_TRIP_LEGS
+    from weatherbrief.storage.trips import trip_members
+
+    if len(trip_members(db, trip_id)) >= MAX_TRIP_LEGS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"A trip can hold at most {MAX_TRIP_LEGS} legs.",
+        )
     return trip_id
 
 

@@ -178,8 +178,11 @@ class TestBindingLeg:
         assert summary.unavailable_leg_ids == ["b"]
         assert set(summary.needs_briefing_leg_ids) == {"a", "c"}
         headline = summary.headline.lower()
+        # Both facts stated: the ungradeable leg and the never-briefed ones.
+        # Asserting on meaning rather than exact wording — the sentence is
+        # expected to be reworded, the two claims are not.
         assert "could not be assessed" in headline
-        assert "no briefing yet" in headline
+        assert "2 legs still need a briefing" in headline
 
 
 class TestTwoAggregationsNeverOne:

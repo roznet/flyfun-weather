@@ -149,18 +149,21 @@ Two things keep "one leg at a time" actually true, and both are load-bearing:
   the lock is what makes the second caller's read see the first caller's write.
   A single uvicorn worker makes a process-local lock sufficient — the same
   assumption `refresh-durability` already relies on.
-- **Every task is fenced on its run id.** `_claim_next` and `_record_result`
-  refuse to act when `row.refresh_id` is not the run the task was submitted for,
-  so a submission left over from a superseded run exits instead of claiming a
-  leg alongside the live chain. `_record_result` returns **`None`** when fenced,
-  which the caller must not conflate with an empty state: an empty `pending`
-  means the chain is done and should be closed out, while a fenced-out task must
-  touch nothing — closing out from there would end whatever run is *currently*
-  live, firing its notification early on incomplete results.
-- **Every read-check-write of `refresh_id` holds `_state_lock`**, including
-  `open_scheduler_run`. A scheduler cycle racing a manual press can otherwise
-  both pass their own "not already active" check, and the scheduler's write then
-  clobbers an in-flight manual run's legs.
+- **One gate, `_run_scope(db, trip_id, run_id)`, and every mutator goes through
+  it.** It takes `_state_lock`, loads the row, and yields `None` when the
+  caller's run is not the live one. This shape is the fix for a *process*, not
+  just a bug: fencing used to be something each function opted into, and three
+  review rounds running found the function that had not — `open_scheduler_run`,
+  then `_finish`. A new mutator that skips the gate is now visible in review
+  rather than in production, and a test asserts the three mutators reference it.
+- **`_record_result` returns `None` when fenced**, which the caller must not
+  conflate with an empty state: an empty `pending` means the chain is done and
+  should be closed out, while a fenced-out task must touch nothing.
+- **`_finish` is fenced too, and this one is subtle.** `_record_result` commits
+  `pending=[]` and releases the lock; at that instant `start()`'s busy check
+  sees an idle trip and may open a *new* run. An unfenced `_finish` arriving
+  moments later closes that one — dropping the first run's notification and
+  killing the second before it claims a leg.
 - **The scheduler yields legs the driver already owns.** A leg sitting in a
   run's `pending` has been promised to the driver but is not yet in
   `refresh_registry` — nothing claims it until `_claim_next` picks it up — so the
@@ -254,29 +257,40 @@ Three properties are load-bearing:
   vocabulary is rejected. On a mismatch we fall back to the deterministic
   sentence, so the LLM can only ever make it *nicer to read*, never different.
 
-  Three details that look cosmetic and are not. The superlative list must
-  include **"difficult"** — the prompt itself asks the model to describe "what
-  kind of problem the difficult leg has", so that is the phrasing a mislabelled
-  paragraph will actually use. A leg is matched on its **ordered** route, origin
-  before destination (word-boundary matched): both legs of a round trip carry
-  the same two ICAO codes, so an unordered test cannot tell `EGTF → LSGS` from
-  `LSGS → EGTF`. And the superlative is searched in the **clause** naming the
-  leg, not the whole sentence: chain-adjacent legs share an airport, so in
-  *"Friday's A to B looks fine, but Saturday's B to C is the difficult one"* the
-  ordered match for `A → B` succeeds on the sentence, and a sentence-wide search
-  would reject a perfectly correct paragraph — over-rejection that would quietly
-  defeat the AI summary on any chain longer than one leg.
+  **The leg identity is a field, not prose.** `generate()` uses
+  `with_structured_output(TripParagraph)`, so the model returns
+  `worst_leg_id` alongside its paragraph and the guardrail is an *equality
+  check on a flight id*. Getting here took three rounds of the wrong approach
+  and the history is the argument: matching the named leg by regex meant
+  widening a superlative list (which rejected correct paragraphs), then scoping
+  the search to a clause (which let a comma-appositive through), then facing
+  negation ("has no problem") and single-waypoint legs. Every patch traded a
+  false negative for a false positive, because natural-language matching has no
+  fixed point. Asking for the id deletes the parse and the entire class of
+  finding with it — `_names_leg`, `_fragments_naming`, the superlative regex and
+  the clause splitter are all gone.
 
-  The guardrail stays deliberately conservative rather than exhaustive: a
-  destination-first phrasing ("EGTF, arriving from LFAT, is difficult") is not
-  recognised as naming a leg, so it falls back to the deterministic sentence.
-  Falling back is the safe direction, and the prompt asks for the route form.
+  What stays regex-matched is what genuinely is a property of the prose: the
+  go/no-go vocabulary and the length cap. That list must be a **superset of what
+  the prompt forbids** — the guardrail exists precisely for the case where the
+  model ignores the instruction, so a word banned in the prompt but absent here
+  (as "avoid", bare "safe" and bare "go" once were) is a guardrail that does not
+  guard.
 - **Keyed and persisted** on the member `(flight_id, fetch_timestamp,
   debrief_decision)` tuples, so unchanged inputs never pay twice. The debrief is
   in the key because it feeds `_pick_binding_leg`: marking the binding leg
   cancelled changes which leg decides the trip without moving any
   `fetch_timestamp`, and a packs-only key would keep serving the stale paragraph
-  as fresh. Generated once per completed trip refresh and
+  as fresh. The key is stored on a *rejected* attempt too, and the cache check
+  keys off the key alone rather than the text — otherwise an input set that
+  reliably fails the guardrail is regenerated and re-charged on every page open.
+
+  **The consent gate runs before the cache, and the order is load-bearing.**
+  `llm_digest_enabled` is in neither the packs nor the debriefs, so it cannot be
+  in the key: turning AI off on a leg without touching its pack leaves the key
+  unchanged, and a gate placed after the cache check would never be reached —
+  the stored paragraph would keep being served to a pilot who had switched AI
+  off. That is a consent property, not a caching one. Generated once per completed trip refresh and
   on demand when the page opens stale. Goes through `compute_cost` and the
   ledger (`action="trip_summary"`) — an invisible cost line is how a small cost
   becomes an unexplained one.

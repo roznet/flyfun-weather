@@ -71,116 +71,84 @@ class TestPromptPayload:
 
 
 class TestGuardrail:
-    def test_a_good_paragraph_passes(self, summary):
+    """The guardrail after #603 round 3: an id equality check, not a parse.
+
+    The leg identity is a *field* now, so every previous test about superlative
+    phrasing, clause boundaries and ordered route matching is gone with the
+    machinery it exercised — that arms race is what the structured output
+    removes. What is left is what genuinely lives in the prose: forbidden
+    vocabulary and length.
+    """
+
+    def test_a_good_paragraph_naming_the_right_leg_passes(self, summary):
         text = (
             "Friday's EGTF to LSGS looks straightforward at green. "
             "The Sunday LSGS to EGTF return is the difficult one — it is red "
             "six days out, so the picture will still move."
         )
-        assert check_guardrail(text, summary) is None
+        assert check_guardrail(text, summary, worst_leg_id="b") is None
 
-    @pytest.mark.parametrize("superlative", [
-        "is the worst leg of this trip",
-        # The prompt itself tells the model to describe "the difficult leg", so
-        # this is the phrasing a mislabelled paragraph is most likely to use.
-        "is the difficult leg here",
-        "is the leg that decides this trip",
-        "is the binding leg",
-        "is the problem leg",
-        "is the limiting leg",
-    ])
-    def test_naming_a_different_leg_as_the_worst_is_rejected(self, summary, superlative):
-        text = f"EGTF to LSGS {superlative}. LSGS to EGTF is fine."
-        assert check_guardrail(text, summary) is not None
+    def test_naming_a_different_leg_is_rejected(self, summary):
+        # Phrasing is irrelevant now: the model declared the wrong leg.
+        text = "Everything about this trip reads normally."
+        assert check_guardrail(text, summary, worst_leg_id="a") is not None
 
-    def test_a_later_sentence_mislabelling_a_leg_is_still_caught(self, summary):
-        # The superlative check must look at *every* sentence naming the leg,
-        # not just the first: a lead-in can mention a leg neutrally well before
-        # the sentence that actually (wrongly) calls it the difficult one.
-        text = (
-            "This trip runs EGTF to LSGS and back. "
-            "Sunday's LSGS to EGTF is red. "
-            "EGTF to LSGS is the difficult leg."
+    def test_an_unknown_leg_id_is_rejected(self, summary):
+        assert check_guardrail("Fine.", summary, worst_leg_id="nope") is not None
+
+    def test_an_empty_id_is_rejected_when_a_binding_leg_exists(self, summary):
+        assert check_guardrail("Fine.", summary, worst_leg_id="") is not None
+
+    def test_an_empty_id_is_correct_when_no_leg_is_gradeable(self):
+        pending = summarize_trip(
+            "t3", [_leg("a", ["EGTF", "LSGS"], 60, pending_coverage=True)], now=NOW,
         )
-        assert check_guardrail(text, summary) is not None
-
-    def test_mentioning_another_leg_neutrally_is_fine(self, summary):
-        text = (
-            "Friday's EGTF to LSGS is green and straightforward. "
-            "Sunday's LSGS to EGTF is the difficult one, red at six days out."
-        )
-        assert check_guardrail(text, summary) is None
-
-    def test_a_round_trip_does_not_confuse_its_two_legs(self, summary):
-        """The regression the ordered match exists for.
-
-        Both legs of a round trip carry the same two ICAO codes, just reversed.
-        An unordered "mentions both codes" test scores every sentence about the
-        return as also being about the outbound, so a perfectly correct
-        paragraph gets rejected — and, worse, the reverse case slips through.
-        """
-        text = (
-            "Friday's EGTF to LSGS looks fine at green. "
-            "Sunday's LSGS to EGTF is the difficult leg, red at six days out."
-        )
-        assert check_guardrail(text, summary) is None
-
-        # Same two codes, the claim attached to the wrong leg → rejected.
-        wrong = (
-            "Sunday's LSGS to EGTF looks fine at green. "
-            "Friday's EGTF to LSGS is the difficult leg."
-        )
-        assert check_guardrail(wrong, summary) is not None
-
-    def test_a_superlative_about_a_later_leg_does_not_flag_an_earlier_one(self):
-        """Chain-adjacent legs share an airport — scope the check to the clause.
-
-        In "Friday's A to B looks fine, but Saturday's B to C is the difficult
-        one", the ordered match for A→B succeeds on the *sentence* (it contains
-        A before B), so a sentence-wide superlative search would reject this
-        perfectly correct paragraph — over-rejection that would silently defeat
-        the AI summary on any chain longer than one leg.
-        """
-        chain = summarize_trip(
-            "t4",
-            [
-                _leg("a", ["EGTF", "LSGS"], 3, days_out=3, assessment="GREEN"),
-                _leg("b", ["LSGS", "LFAT"], 5, days_out=5, assessment="RED"),
-            ],
-            now=NOW,
-        )
-        assert chain.binding_leg_id == "b"
-        text = (
-            "Friday's EGTF to LSGS looks fine, but Sunday's LSGS to LFAT is "
-            "the difficult one."
-        )
-        assert check_guardrail(text, chain) is None
-
-        # And the genuine mislabel in the same shape is still caught.
-        wrong = (
-            "Sunday's LSGS to LFAT looks fine, but Friday's EGTF to LSGS is "
-            "the difficult one."
-        )
-        assert check_guardrail(wrong, chain) is not None
-
-    def test_endpoints_are_matched_on_word_boundaries(self, summary):
-        # A bare substring search would match an ICAO code inside a longer
-        # token; the binding leg is LSGS → EGTF.
-        assert check_guardrail("The XLSGSX to XEGTFX leg is fine.", summary) is not None
-
-    def test_not_mentioning_the_binding_leg_at_all_is_rejected(self, summary):
-        text = "Both legs of this trip look broadly similar."
-        assert check_guardrail(text, summary) is not None
+        assert pending.binding_leg_id is None
+        assert check_guardrail("No model reaches these dates yet.", pending,
+                               worst_leg_id="") is None
+        # ...and claiming a leg binds when none does is still wrong.
+        assert check_guardrail("Fine.", pending, worst_leg_id="a") is not None
 
     @pytest.mark.parametrize("phrase", [
-        "This is a no-go for Sunday's LSGS to EGTF.",
-        "I would not fly Sunday's LSGS to EGTF.",
-        "You should cancel Sunday's LSGS to EGTF.",
-        "Sunday's LSGS to EGTF is unsafe.",
-        "We recommend watching Sunday's LSGS to EGTF.",
+        "This is a no-go for Sunday's leg.",
+        "I would not fly Sunday's leg.",
+        "You should cancel Sunday's leg.",
+        "Sunday's leg is unsafe.",
+        "We recommend watching Sunday's leg.",
+        # Every one of these is a word `trip_v1.md` explicitly forbids, and each
+        # slipped through the old compound-only patterns.
+        "Avoid Sunday's leg.",
+        "Friday's leg looks safe.",
+        "Friday's leg is a go.",
+        "Friday's leg is good to go.",
     ])
     def test_go_no_go_vocabulary_is_rejected(self, summary, phrase):
-        assert check_guardrail(phrase, summary) is not None
+        assert check_guardrail(phrase, summary, worst_leg_id="b") is not None
+
+    def test_vocabulary_is_checked_even_without_a_declared_leg(self, summary):
+        assert check_guardrail("Avoid this trip.", summary) is not None
+
+    def test_hedged_prose_is_not_over_rejected(self, summary):
+        # The old clause/superlative scan rejected this: "has no problem" put
+        # `problem` in a clause naming the non-binding leg.
+        text = (
+            "Friday's EGTF to LSGS has no problem and looks green. "
+            "Sunday's LSGS to EGTF is the difficult one at red."
+        )
+        assert check_guardrail(text, summary, worst_leg_id="b") is None
+
+    def test_a_local_flight_leg_is_not_a_special_case_any_more(self):
+        # A leg whose origin == destination used to need its ICAO code to
+        # appear twice for the prose matcher; identity is a field now, so the
+        # shape of the route is irrelevant.
+        local = summarize_trip(
+            "t5",
+            [_leg("solo", ["EGTF"], 3, days_out=3, assessment="AMBER")],
+            now=NOW,
+        )
+        assert local.binding_leg_id == "solo"
+        assert check_guardrail("The local flight is amber.", local,
+                               worst_leg_id="solo") is None
 
     def test_empty_output_is_rejected(self, summary):
         assert check_guardrail("", summary) == "empty"
@@ -188,16 +156,6 @@ class TestGuardrail:
 
     def test_an_over_long_paragraph_is_rejected(self, summary):
         assert check_guardrail("x" * (MAX_SUMMARY_CHARS + 1), summary) == "too_long"
-
-    def test_no_binding_leg_means_nothing_to_check_against(self):
-        # A trip entirely beyond coverage has no computed binding leg; the
-        # guardrail then only polices vocabulary.
-        pending = summarize_trip(
-            "t3", [_leg("a", ["EGTF", "LSGS"], 60, pending_coverage=True)], now=NOW,
-        )
-        assert pending.binding_leg_id is None
-        assert check_guardrail("No model reaches these dates yet.", pending) is None
-        assert check_guardrail("This is a no-go.", pending) is not None
 
 
 class TestGuardrailFallbackWiring:
@@ -232,7 +190,13 @@ class TestGuardrailFallbackWiring:
         monkeypatch.setattr(mod, "legs_allow_ai", lambda *a, **k: True)
         monkeypatch.setattr(
             mod, "generate",
-            lambda _s: ("You should not fly Sunday's LSGS to EGTF.", {}),
+            lambda _s: (
+                mod.TripParagraph(
+                    worst_leg_id="b",
+                    paragraph="You should not fly Sunday's LSGS to EGTF.",
+                ),
+                {},
+            ),
         )
         monkeypatch.setattr(mod, "_charge", lambda *a, **k: None)
 
@@ -243,9 +207,11 @@ class TestGuardrailFallbackWiring:
         )
         assert result.unavailable_reason == "guardrail_rejected"
         assert result.text is None
-        # Not stored: keeping a rejected paragraph would only invite showing it.
+        # The text is not stored — keeping a rejected paragraph would only
+        # invite showing it — but the *key* is, so the same inputs are not
+        # regenerated and re-charged on every page open.
         assert row.ai_summary_text is None
-        assert row.ai_summary_key is None
+        assert row.ai_summary_key is not None
 
     def test_a_clean_paragraph_is_persisted_with_its_key(self, summary, monkeypatch):
         from weatherbrief.digest import trip_summary as mod
@@ -255,7 +221,10 @@ class TestGuardrailFallbackWiring:
             "six days out, with the problem being convective."
         )
         monkeypatch.setattr(mod, "legs_allow_ai", lambda *a, **k: True)
-        monkeypatch.setattr(mod, "generate", lambda _s: (good, {}))
+        monkeypatch.setattr(
+            mod, "generate",
+            lambda _s: (mod.TripParagraph(worst_leg_id="b", paragraph=good), {}),
+        )
         monkeypatch.setattr(mod, "_charge", lambda *a, **k: None)
 
         row = self._Row()
@@ -265,6 +234,85 @@ class TestGuardrailFallbackWiring:
         assert result.text == good
         assert row.ai_summary_text == good
         assert row.ai_summary_key
+
+    def test_the_ai_off_gate_runs_before_the_cache(self, summary, monkeypatch):
+        """The round-3 Critical: a consent guarantee, not a cache nicety.
+
+        `ai_summary_key` is built from packs and debriefs — `llm_digest_enabled`
+        is in neither. So turning AI off on a leg without touching its pack
+        leaves the key unchanged, and a gate placed *after* the cache check
+        would never run: the stored LLM paragraph would keep being served to a
+        pilot who had switched AI off.
+        """
+        from weatherbrief.digest import trip_summary as mod
+
+        monkeypatch.setattr(mod, "legs_allow_ai", lambda *a, **k: False)
+        monkeypatch.setattr(
+            mod, "generate", lambda _s: pytest.fail("must not call the model"),
+        )
+
+        row = self._Row()
+        row.ai_summary_text = "written while AI was still on"
+        # The key deliberately MATCHES what the inputs would produce, so this
+        # would be a cache hit if the gate were ordered after it.
+        from weatherbrief.api.trips import ai_summary_key
+        row.ai_summary_key = ai_summary_key([])
+
+        result = ensure_trip_ai_summary(
+            None, row, summary, [self._member()], user_id="u", leg_inputs=[],
+        )
+        assert result.unavailable_reason == "ai_disabled"
+        assert result.text is None
+        assert row.ai_summary_text is None
+
+    def test_a_rejected_input_set_is_not_regenerated_or_recharged(
+        self, summary, monkeypatch,
+    ):
+        from weatherbrief.digest import trip_summary as mod
+
+        calls: list[int] = []
+        monkeypatch.setattr(mod, "legs_allow_ai", lambda *a, **k: True)
+        monkeypatch.setattr(mod, "_charge", lambda *a, **k: None)
+
+        def _generate(_s):
+            calls.append(1)
+            return mod.TripParagraph(worst_leg_id="a", paragraph="Wrong leg."), {}
+
+        monkeypatch.setattr(mod, "generate", _generate)
+
+        row = self._Row()
+        members = [self._member()]
+        first = ensure_trip_ai_summary(
+            None, row, summary, members, user_id="u", leg_inputs=[],
+        )
+        assert first.unavailable_reason == "guardrail_rejected"
+
+        # Same inputs again: the key was recorded, so no second model call and
+        # no second charge — "unchanged inputs never pay twice" holds even for
+        # inputs that reliably fail.
+        second = ensure_trip_ai_summary(
+            None, row, summary, members, user_id="u", leg_inputs=[],
+        )
+        assert second.text is None
+        assert len(calls) == 1
+
+    def test_a_billed_but_empty_call_is_still_charged(self, summary, monkeypatch):
+        from weatherbrief.digest import trip_summary as mod
+
+        charged: list[dict] = []
+        monkeypatch.setattr(mod, "legs_allow_ai", lambda *a, **k: True)
+        monkeypatch.setattr(mod, "generate", lambda _s: (None, {"input_tokens": 400}))
+        monkeypatch.setattr(
+            mod, "_charge",
+            lambda _db, _u, _t, _text, usage: charged.append(usage),
+        )
+
+        result = ensure_trip_ai_summary(
+            None, self._Row(), summary, [self._member()], user_id="u", leg_inputs=[],
+        )
+        assert result.unavailable_reason == "generation_failed"
+        # An invisible cost line is how a small cost becomes an unexplained one.
+        assert charged == [{"input_tokens": 400}]
 
     def test_ai_off_on_any_leg_clears_a_stale_paragraph(self, summary, monkeypatch):
         from weatherbrief.digest import trip_summary as mod

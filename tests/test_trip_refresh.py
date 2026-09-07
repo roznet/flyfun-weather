@@ -215,6 +215,60 @@ class TestRunFencing:
         assert state["pending"] == ["leg2", "leg3"]
 
 
+class TestFinishIsFenced:
+    """`_finish` closing the *wrong* run was the round-3 Critical.
+
+    `_record_result` commits `pending=[]` and releases the lock; `start()`'s
+    busy check then sees an idle trip and can open a new run. An unfenced
+    `_finish` arriving late closes that one — dropping the first run's
+    notification and killing the second before it claims a leg.
+    """
+
+    def test_finish_under_a_stale_run_id_leaves_the_live_run_alone(
+        self, session, trip_with_legs,
+    ):
+        run_a = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID).refresh_id
+        row = session.get(FlightTripRow, trip_with_legs.id)
+        row.refresh_started_at = _NOW - timedelta(
+            seconds=trip_refresh.STALE_RUN_SECONDS + 60,
+        )
+        session.commit()
+        run_b = trip_refresh.start(
+            session, session.get(FlightTripRow, trip_with_legs.id), object(), DEV_USER_ID,
+        ).refresh_id
+
+        trip_refresh._finish(session, trip_with_legs.id, DEV_USER_ID, run_a)
+
+        live = session.get(FlightTripRow, trip_with_legs.id)
+        assert live.refresh_id == run_b, "the live run must survive a stale finish"
+        state = trip_storage.read_refresh_state(live)
+        assert state["pending"] == ["leg1", "leg2", "leg3"]
+
+    def test_finish_under_the_live_run_id_closes_it(self, session, trip_with_legs, monkeypatch):
+        monkeypatch.setattr(trip_refresh, "_regenerate_ai_summary", lambda *a: None)
+        monkeypatch.setattr(trip_refresh, "_send_coalesced", lambda *a: None)
+        status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+
+        trip_refresh._finish(session, trip_with_legs.id, DEV_USER_ID, status.refresh_id)
+
+        assert session.get(FlightTripRow, trip_with_legs.id).refresh_id is None
+
+    def test_every_mutator_goes_through_the_run_scope(self):
+        """The structural point: fencing is not opt-in per function any more.
+
+        Three rounds found the one function that had not opted in. This asserts
+        the gate exists and that the mutators reference it, so a new mutator
+        added without it is visible in review rather than in production.
+        """
+        import inspect
+
+        source = inspect.getsource(trip_refresh)
+        assert "def _run_scope(" in source
+        for fn in ("_claim_next", "_record_result", "_finish"):
+            body = inspect.getsource(getattr(trip_refresh, fn))
+            assert "_run_scope(" in body, f"{fn} must be fenced through _run_scope"
+
+
 class TestBootRecovery:
     """A container killed mid-chain must not strand the remaining legs.
 

@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 import secrets
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -97,6 +98,30 @@ def _is_stale(row: FlightTripRow) -> bool:
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     return (_now() - started).total_seconds() > STALE_RUN_SECONDS
+
+
+@contextmanager
+def _run_scope(db: Session, trip_id: str, run_id: str | None):
+    """Hold the driver lock and yield the trip row **iff** ``run_id`` is live.
+
+    Every read-check-write of ``refresh_id`` goes through here, and that is the
+    point: fencing was previously something each function opted into, and three
+    review rounds running found the one function that had not. Yields ``None``
+    when the caller's run has been superseded (or there is no run), so a task
+    from an old run can neither write into the live one nor close it out.
+
+    ``run_id=None`` means "whatever run is live" and is only for callers that
+    legitimately have no run of their own — the boot pass and the busy check.
+    """
+    with _state_lock:
+        row = db.get(FlightTripRow, trip_id)
+        if row is None or not row.refresh_id:
+            yield None
+            return
+        if run_id is not None and row.refresh_id != run_id:
+            yield None
+            return
+        yield row
 
 
 def status(row: FlightTripRow) -> "TripRefreshStatus":
@@ -265,24 +290,25 @@ def _claim_next(
 ) -> tuple[FlightTripRow | None, str | None]:
     """Move the head of ``pending`` into ``current`` and return it.
 
-    Returns ``(None, None)`` when the run this task belongs to is no longer the
-    trip's current one — the fence that keeps a superseded submission from
-    claiming a leg alongside the live chain.
+    Returns ``(None, None)`` when this task's run is no longer live — the fence
+    that keeps a superseded submission from claiming a leg alongside the
+    current chain.
     """
-    row = db.get(FlightTripRow, trip_id)
-    if row is None or not row.refresh_id or row.refresh_id != run_id:
-        return None, None
-    state = trip_storage.read_refresh_state(row)
-    pending = list(state.get("pending") or [])
-    if not pending:
-        return row, None
-    flight_id = pending.pop(0)
-    state["pending"] = pending
-    state["current"] = flight_id
-    trip_storage.write_refresh_state(
-        db, row, refresh_id=row.refresh_id, state=state,
-    )
-    return row, flight_id
+    with _run_scope(db, trip_id, run_id) as row:
+        if row is None:
+            return None, None
+        state = trip_storage.read_refresh_state(row)
+        pending = list(state.get("pending") or [])
+        if not pending:
+            return row, None
+        flight_id = pending.pop(0)
+        state["pending"] = pending
+        state["current"] = flight_id
+        trip_storage.write_refresh_state(
+            db, row, refresh_id=row.refresh_id, state=state,
+        )
+        db.commit()
+        return row, flight_id
 
 
 def _record_result(
@@ -290,25 +316,25 @@ def _record_result(
 ) -> dict | None:
     """Record one leg's outcome and clear ``current``. Returns the new state.
 
-    Fenced on ``run_id`` for the same reason as ``_claim_next``: a task from a
-    superseded run must not write into the live run's results.
-
     Returns **None** when fenced out, which is not the same as an empty state
     and the caller must not conflate the two: an empty ``pending`` means the
     chain is done and should be closed out, while a fenced-out task must touch
     nothing at all — closing out from here would end whatever run is *currently*
     live, firing its notification early on incomplete results.
     """
-    row = db.get(FlightTripRow, trip_id)
-    if row is None or not row.refresh_id or row.refresh_id != run_id:
-        return None
-    state = trip_storage.read_refresh_state(row)
-    results = dict(state.get("results") or {})
-    results[flight_id] = outcome
-    state["results"] = results
-    state["current"] = None
-    trip_storage.write_refresh_state(db, row, refresh_id=row.refresh_id, state=state)
-    return state
+    with _run_scope(db, trip_id, run_id) as row:
+        if row is None:
+            return None
+        state = trip_storage.read_refresh_state(row)
+        results = dict(state.get("results") or {})
+        results[flight_id] = outcome
+        state["results"] = results
+        state["current"] = None
+        trip_storage.write_refresh_state(
+            db, row, refresh_id=row.refresh_id, state=state,
+        )
+        db.commit()
+        return state
 
 
 def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
@@ -332,9 +358,8 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
     claimed = False
     try:
         try:
-            with _state_lock:
-                row, flight_id = _claim_next(db, trip_id, run_id)
-                db.commit()
+            # ``_claim_next`` takes the driver lock and commits internally.
+            row, flight_id = _claim_next(db, trip_id, run_id)
             claimed = True
         except Exception:
             # Claiming is the one step whose failure would strand the run with
@@ -342,12 +367,12 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
             # rather than left to the advance block below.
             logger.error("Trip %s: could not claim the next leg", trip_id, exc_info=True)
             db.rollback()
-            _finish(db, trip_id, user_id)
+            _finish(db, trip_id, user_id, run_id)
             return
         if row is None or not claimed:
             return
         if flight_id is None:
-            _finish(db, trip_id, user_id)
+            _finish(db, trip_id, user_id, run_id)
             return
 
         flight_row = db.get(FlightRow, flight_id)
@@ -400,9 +425,7 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
     finally:
         try:
             if flight_id is not None:
-                with _state_lock:
-                    state = _record_result(db, trip_id, flight_id, outcome, run_id)
-                    db.commit()
+                state = _record_result(db, trip_id, flight_id, outcome, run_id)
                 if state is None:
                     # Fenced out: this task's run is no longer the live one, so
                     # it neither advances nor finishes anything. Deliberately
@@ -415,7 +438,7 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
                 elif state.get("pending"):
                     _submit_next(trip_id, app_state, user_id, run_id)
                 else:
-                    _finish(db, trip_id, user_id)
+                    _finish(db, trip_id, user_id, run_id)
         except Exception:
             logger.error("Trip %s: advancing after %s failed", trip_id, flight_id, exc_info=True)
         finally:
@@ -568,18 +591,20 @@ async def run_trip_refresh_resume(app_state) -> None:
                 _submit_next(trip_id, app_state, user_id, run_id)
             else:
                 logger.info("Trip refresh resume: closing out %s", trip_id)
-                await asyncio.to_thread(_finish_in_new_session, trip_id, user_id)
+                await asyncio.to_thread(
+                    _finish_in_new_session, trip_id, user_id, run_id,
+                )
         except Exception:
             logger.error(
                 "Trip refresh resume: reconciling %s failed", trip_id, exc_info=True,
             )
 
 
-def _finish_in_new_session(trip_id: str, user_id: str) -> None:
+def _finish_in_new_session(trip_id: str, user_id: str, run_id: str | None = None) -> None:
     """``_finish`` on its own session — the boot pass holds none."""
     db = SessionLocal()
     try:
-        _finish(db, trip_id, user_id)
+        _finish(db, trip_id, user_id, run_id)
     finally:
         db.close()
 
@@ -621,6 +646,12 @@ def open_scheduler_run(db: Session, due_rows: list) -> None:
                 trip_row = db.get(FlightTripRow, trip_id)
                 if trip_row is None or not trip_row.auto_refresh:
                     continue
+                # Locking read for the same reason ``start()`` needs one: this
+                # runs on the scheduler's long-lived session, whose MySQL
+                # REPEATABLE READ snapshot predates the cycle, so a manual
+                # ``start()`` that committed mid-cycle would otherwise be
+                # invisible here and get clobbered.
+                db.refresh(trip_row, with_for_update=True)
                 if trip_row.refresh_id and not _is_stale(trip_row):
                     continue
                 trip_storage.write_refresh_state(
@@ -664,8 +695,9 @@ def note_leg_done(db: Session, trip_id: str, flight_id: str, outcome: str) -> No
             db.commit()
             remaining = state["pending"]
             user_id = state.get("user_id") or row.user_id
+            run_id = row.refresh_id
         if not remaining:
-            _finish(db, trip_id, user_id)
+            _finish(db, trip_id, user_id, run_id)
     except Exception:
         logger.warning(
             "Trip %s: recording scheduler leg %s failed", trip_id, flight_id, exc_info=True,
@@ -754,11 +786,18 @@ def _leg_lines(state: dict) -> list[str]:
     return lines
 
 
-def _finish(db: Session, trip_id: str, user_id: str) -> None:
-    """Close out a run: fire the single coalesced notification, clear the state."""
-    with _state_lock:
-        row = db.get(FlightTripRow, trip_id)
-        if row is None or not row.refresh_id:
+def _finish(db: Session, trip_id: str, user_id: str, run_id: str | None = None) -> None:
+    """Close out a run: fire the single coalesced notification, clear the state.
+
+    Fenced like every other mutator. Without ``run_id`` this was the last
+    unfenced read-check-write in the module and it was the dangerous one:
+    ``_record_result`` commits ``pending=[]`` and releases the lock, at which
+    point ``start()``'s busy check sees an idle trip and can open a *new* run —
+    and this call, arriving late, would close that one instead. The first run's
+    notification is dropped and the second dies before claiming a leg.
+    """
+    with _run_scope(db, trip_id, run_id) as row:
+        if row is None:
             return
         state = trip_storage.read_refresh_state(row)
         trip_name = row.name or "Trip"

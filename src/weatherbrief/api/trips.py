@@ -382,8 +382,11 @@ def create_trip(
 
     trip = trip_storage.create_trip(db, user_id, req.name or "")
     trip_storage.set_leg_trip(db, flight_ids, user_id, trip.id)
-    # A leg can leave a previous trip empty on the way in.
-    trip_storage.prune_empty_trips(db, user_id)
+    # A leg can leave a previous trip empty on the way in — but the trip we just
+    # created is exempt. Without that, `flight_ids: []` creates a row and then
+    # deletes it one line later, and the handler goes on to return a 201 for a
+    # trip that no longer exists (or 404s mid-request while auto-naming it).
+    trip_storage.prune_empty_trips(db, user_id, keep=trip.id)
 
     if not req.name:
         summary, _members, _inputs = build_trip_summary(db, trip)
@@ -463,8 +466,11 @@ def add_legs(
 ):
     _owned_trip_row(db, trip_id, user_id)
     flight_ids = _validate_owned_flights(db, req.flight_ids, user_id)
-    existing = len(trip_storage.trip_members(db, trip_id))
-    if existing + len(flight_ids) > MAX_TRIP_LEGS:
+    member_ids = {f.id for f in trip_storage.trip_members(db, trip_id)}
+    # Count only the legs that would actually be *added*: a client retry that
+    # re-sends a leg already in the trip must not 422 a trip that isn't growing.
+    incoming = [fid for fid in flight_ids if fid not in member_ids]
+    if len(member_ids) + len(incoming) > MAX_TRIP_LEGS:
         raise HTTPException(
             status_code=422,
             detail=f"A trip can hold at most {MAX_TRIP_LEGS} legs.",
