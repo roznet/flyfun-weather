@@ -206,12 +206,10 @@ def check_guardrail(text: str, summary: TripSummary) -> str | None:
     if binding is None:
         return None
 
-    # The paragraph must mention the binding leg. Matching on the route ends
-    # rather than the exact label: the model may write "LFAT to EGTF" or
-    # "LFAT-EGTF" and all of those are the same leg.
-    lowered = text.lower()
-    ends = [end for end in (binding.origin, binding.destination) if end]
-    if ends and not all(end.lower() in lowered for end in ends):
+    # The paragraph must mention the binding leg. Matched on the *ordered*
+    # route rather than the exact label, so "LFAT to EGTF", "LFAT-EGTF" and
+    # "LFAT → EGTF" all count as the same leg.
+    if _mentions_leg(text, binding.origin, binding.destination) is False:
         return "named worst leg does not match the computed binding leg"
 
     # And it must not headline a *different* leg as the worst one. Any other
@@ -220,20 +218,64 @@ def check_guardrail(text: str, summary: TripSummary) -> str | None:
     for leg in summary.legs:
         if leg.flight_id == summary.binding_leg_id:
             continue
-        leg_ends = [end for end in (leg.origin, leg.destination) if end]
-        if not leg_ends or not all(end.lower() in lowered for end in leg_ends):
-            continue
-        window = _sentence_containing(text, leg_ends[-1].lower())
-        if window and re.search(r"\b(worst|decides|binding|the problem leg)\b", window, re.I):
-            return "a leg other than the binding one is named as the worst"
+        # Every sentence naming the leg, not just the first: a lead-in can
+        # mention a leg well before the sentence that actually describes it, so
+        # checking only the first match would inspect the wrong sentence and
+        # wave the mislabelled paragraph through.
+        for window in _sentences_naming(text, leg.origin, leg.destination):
+            if _SUPERLATIVE_RE.search(window):
+                return "a leg other than the binding one is named as the worst"
     return None
 
 
-def _sentence_containing(text: str, needle: str) -> str | None:
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        if needle in sentence.lower():
-            return sentence
-    return None
+#: Words that turn a mention of a leg into a claim that *it* is the problem.
+#: ``difficult`` is load-bearing and easy to miss: ``prompts/trip_v1.md`` tells
+#: the model to describe "what kind of problem the difficult leg has", so that
+#: is the phrasing a mislabelled paragraph is most likely to use.
+_SUPERLATIVE_RE = re.compile(
+    r"\b(worst|difficult|hardest|toughest|problem(?:atic)?|decides|deciding|binding|"
+    r"limiting|weakest|marginal)\b",
+    re.IGNORECASE,
+)
+
+
+def _names_leg(fragment: str, origin: str | None, destination: str | None) -> bool:
+    """Does ``fragment`` name the leg ``origin`` → ``destination``?
+
+    **Order matters, and that is the whole point.** On a round trip both legs
+    carry the same two ICAO codes — ``EGTF → LSGS`` out and ``LSGS → EGTF``
+    back — so an unordered "does it mention both codes" test cannot tell them
+    apart, and every sentence about the return would also read as a sentence
+    about the outbound. Requiring the origin to appear *before* the
+    destination separates them, which is what stops "Sunday's LSGS to EGTF is
+    the difficult one" from being scored as a claim about Friday's outbound.
+    """
+    if not origin or not destination:
+        return False
+    lowered = fragment.lower()
+    start = lowered.find(origin.lower())
+    if start < 0:
+        return False
+    return lowered.find(destination.lower(), start + len(origin)) > 0
+
+
+def _mentions_leg(text: str, origin: str | None, destination: str | None) -> bool:
+    """Whether the paragraph names this leg anywhere (see :func:`_names_leg`)."""
+    if not origin or not destination:
+        # Nothing to match against — don't reject on an unknowable condition.
+        return True
+    return _names_leg(text, origin, destination)
+
+
+def _sentences_naming(
+    text: str, origin: str | None, destination: str | None,
+) -> list[str]:
+    """Every sentence that names the leg ``origin`` → ``destination``."""
+    return [
+        sentence
+        for sentence in re.split(r"(?<=[.!?])\s+", text)
+        if _names_leg(sentence, origin, destination)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -318,18 +360,23 @@ def ensure_trip_ai_summary(
     *,
     user_id: str,
     force: bool = False,
+    leg_inputs=None,
 ) -> TripAiResult:
     """Return the trip's AI paragraph, generating it only when stale.
 
     Called on a completed trip refresh and on demand when the trip page opens.
     ``force`` is for the refresh path, which knows the inputs just changed.
+    ``leg_inputs`` lets a caller that already built them (every caller that
+    computed ``summary``) avoid a second packs + debriefs query pair.
     """
     from weatherbrief.api.trips import ai_summary_key, build_leg_inputs
 
     if not members:
         return TripAiResult(unavailable_reason="no_legs")
 
-    key = ai_summary_key(build_leg_inputs(db, members))
+    if leg_inputs is None:
+        leg_inputs = build_leg_inputs(db, members)
+    key = ai_summary_key(leg_inputs)
     if not force and row.ai_summary_text and row.ai_summary_key == key:
         return TripAiResult(text=row.ai_summary_text)
 

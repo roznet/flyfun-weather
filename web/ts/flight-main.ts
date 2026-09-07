@@ -360,17 +360,38 @@ async function init(): Promise<void> {
       return document.getElementById('edit-keep-in-trip') as HTMLInputElement | null;
     }
 
-    // Opposite defaults, both explicit: pointing at Move pre-ticks the box,
-    // pointing at Duplicate un-ticks it. Set on hover/focus rather than only
-    // at click time so the pilot sees the default before committing to it.
-    moveBtn?.addEventListener('mouseenter', () => {
+    /**
+     * Whether this action should keep the flight in its trip.
+     *
+     * Move and Duplicate have opposite defaults, and the *default* is resolved
+     * here — at the moment the action is taken — rather than by nudging the
+     * checkbox on hover. Hover is not an input every pilot has: a touch tap and
+     * a keyboard Tab+Enter never fire `mouseenter`, so a hover-set default left
+     * Duplicate silently inheriting the trip on exactly the devices most likely
+     * to be used in a cockpit. Resolving at click time is deterministic on every
+     * input method, and an explicit tick still wins (`dataset.touched`).
+     */
+    function keepInTrip(defaultValue: boolean): boolean {
       const box = keepInTripBox();
-      if (box && !box.dataset.touched) box.checked = true;
-    });
-    dupBtn?.addEventListener('mouseenter', () => {
+      if (!box) return false;
+      return box.dataset.touched ? box.checked : defaultValue;
+    }
+
+    // Show each action's default in the checkbox before it is taken, on every
+    // input method: `mouseenter` for a pointer, `focus` for the keyboard, and
+    // `pointerdown` for touch (which fires before `click`, so the box is
+    // correct by the time the action runs). Without the last two, a touch or
+    // keyboard user saw the box still ticked while Duplicate was — correctly —
+    // not going to inherit, which is a UI that lies about what it will do.
+    const previewDefault = (value: boolean) => () => {
       const box = keepInTripBox();
-      if (box && !box.dataset.touched) box.checked = false;
-    });
+      if (box && !box.dataset.touched) box.checked = value;
+    };
+    for (const [btn, value] of [[moveBtn, true], [dupBtn, false]] as const) {
+      for (const evt of ['mouseenter', 'focus', 'pointerdown'] as const) {
+        btn?.addEventListener(evt, previewDefault(value));
+      }
+    }
     document.getElementById('edit-keep-in-trip')?.addEventListener('change', (ev) => {
       // Once the pilot has touched it, stop moving it under them.
       (ev.target as HTMLInputElement).dataset.touched = '1';
@@ -396,10 +417,10 @@ async function init(): Promise<void> {
         // Trip membership must be carried explicitly: /move recreates the
         // row, so it would not survive on its own. Default true (a move is
         // the same leg, rescheduled).
-        const keepBox = keepInTripBox();
         const newFlight = await moveFlight(flight.id, {
           ...payload,
-          ...(flight.trip ? { keep_in_trip: keepBox ? keepBox.checked : true } : {}),
+          // A move is the same leg rescheduled, so membership follows by default.
+          ...(flight.trip ? { keep_in_trip: keepInTrip(true) } : {}),
         });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {
@@ -432,8 +453,7 @@ async function init(): Promise<void> {
           // Duplicate does NOT inherit the trip unless the pilot ticks the
           // box: a duplicate is a new thing, and inheriting would quietly
           // grow the trip with a leg that is not part of it.
-          ...(flight.trip && keepInTripBox()?.checked
-            ? { trip_id: flight.trip.id } : {}),
+          ...(flight.trip && keepInTrip(false) ? { trip_id: flight.trip.id } : {}),
         });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {

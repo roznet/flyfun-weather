@@ -5,6 +5,7 @@ import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
 import { buildTripSelection, type TripSelectionContext } from '../helpers/trip-selection';
+import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 import { t, getDateLocale } from '../i18n/i18n';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefPill, renderDebriefSummary } from '../components/debrief-summary';
@@ -12,34 +13,12 @@ import { renderDebriefStats } from '../components/debrief-stats';
 import { flaggedTagsFromAdvisories } from '../components/debrief-taxonomy';
 import { showRoutePopup } from '../components/route-interpret';
 
-/** Assessment badge color class. */
-function assessmentClass(assessment: string | null): string {
-  if (!assessment) return 'badge-none';
-  switch (assessment.toUpperCase()) {
-    case 'GREEN': return 'badge-green';
-    case 'AMBER': return 'badge-amber';
-    case 'RED': return 'badge-red';
-    // A real verdict ("we could not assess this"), so it carries the bordered
-    // badge rather than badge-none, which means "no verdict at all" (#392).
-    case 'UNAVAILABLE': return 'badge-unavailable';
-    default: return 'badge-none';
-  }
-}
-
-// Long-range early outlook → soft badge class. Distinct from the GREEN/AMBER/RED
-// traffic light: an outlook is a tendency ("what to expect"), not a verdict.
-const OUTLOOK_BADGE_CLASS: Record<string, string> = {
-  TRENDING_SETTLED: 'badge-outlook-settled',
-  MIXED_SIGNALS: 'badge-outlook-mixed',
-  TRENDING_UNSETTLED: 'badge-outlook-unsettled',
-};
-
 /** Status badge for a flight's latest briefing: long-range outlook badge when
  *  present, otherwise the GREEN/AMBER/RED assessment chip. */
 function statusBadge(lb: BriefingStatusInfo): string {
   if (lb.outlook) {
     const key = lb.outlook.toUpperCase();
-    const cls = OUTLOOK_BADGE_CLASS[key] ?? 'badge-outlook-mixed';
+    const cls = outlookClass(key);
     const label = t(`outlook.${lb.outlook.toLowerCase()}`);
     return `<span class="badge badge-outlook ${cls}" title="${escapeHtml(t('outlook.early'))}">${escapeHtml(label)}</span>`;
   }
@@ -328,7 +307,7 @@ function bindingChip(summary: TripSummary): string {
     return `<span class="badge badge-none">${escapeHtml(t('trips.noGrade'))}</span>`;
   }
   const badge = summary.binding_basis === 'outlook'
-    ? `<span class="badge badge-outlook ${OUTLOOK_BADGE_CLASS[(leg.outlook || '').toUpperCase()] ?? 'badge-outlook-mixed'}">${escapeHtml(t(`outlook.${(leg.outlook || '').toLowerCase()}`))}</span>`
+    ? `<span class="badge badge-outlook ${outlookClass(leg.outlook)}">${escapeHtml(t(`outlook.${(leg.outlook || '').toLowerCase()}`))}</span>`
     : `<span class="badge ${assessmentClass(leg.assessment)}">${escapeHtml(leg.assessment || '—')}</span>`;
   const days = leg.days_out != null ? ` <span class="pack-info">D-${leg.days_out}</span>` : '';
   return `<span class="trip-binding" title="${escapeHtml(summary.headline)}">${escapeHtml(t('trips.decidedBy', { leg: leg.label }))} ${badge}${days}</span>`;
@@ -412,6 +391,18 @@ function renderFlightCard(
     ? `<span class="unseen-dot" role="img" title="${escapeHtml(unseenLabel)}" aria-label="${escapeHtml(unseenLabel)}"></span>`
     : '';
 
+  // Trip badge (#602). A trip card groups only its future/recent legs — the
+  // past section is server-paginated, so a past leg pulled into the card could
+  // duplicate or vanish depending on which page is loaded. Past legs therefore
+  // render individually, and this badge is the only thing that says they belong
+  // to a chain at all; without it a flown outbound leg is indistinguishable
+  // from an ungrouped flight. Rendered on every card: inside the trip card it
+  // is redundant but harmless, and omitting it there would need a second code
+  // path for the same row.
+  const tripBadge = f.trip
+    ? `<a class="badge badge-trip" href="/trip.html?id=${encodeURIComponent(f.trip.id)}" title="${escapeHtml(f.trip.name)}">${escapeHtml(t('trips.legOf', { position: f.trip.position, total: f.trip.total }))}</a> `
+    : '';
+
   const isShared = f.role === 'subscriber';
   // When owner_display_name is null (no display_name set on the owner),
   // fall back to the generic shared-flight label instead of rendering
@@ -488,7 +479,7 @@ function renderFlightCard(
       <div class="flight-card-main">
         <div class="flight-card-body">
           <div class="flight-header">
-            ${sharedBadge}${pastBadge}${unseenDot}<span class="flight-route">${escapeHtml(title)}</span>
+            ${sharedBadge}${tripBadge}${pastBadge}${unseenDot}<span class="flight-route">${escapeHtml(title)}</span>
             <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
             <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>${debriefPill}
           </div>

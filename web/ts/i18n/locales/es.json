@@ -942,5 +942,6 @@
   "trips.notFound": "Viaje no encontrado.",
   "trips.notesLabel": "Notas",
   "trips.keepInTrip": "Mantener en el viaje «{name}»",
-  "trips.decidableFrom": "Guía de alta resolución desde el {date}"
+  "trips.decidableFrom": "Guía de alta resolución desde el {date}",
+  "trips.legOf": "Tramo {position}/{total}"
 }

@@ -8756,3 +8756,16 @@ body.resizing-rail {
   color: var(--text-muted);
   font-size: 0.9rem;
 }
+
+/* Trip badge on an individually-rendered flight card. Past legs never join a
+   trip card (the past section is server-paginated), so this is the only signal
+   that a flown leg belongs to a chain — and it links straight to it. */
+.badge-trip {
+  background: var(--surface-alt, rgba(127, 127, 127, 0.15));
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.badge-trip:hover {
+  color: var(--text);
+}

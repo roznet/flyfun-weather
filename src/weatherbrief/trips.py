@@ -154,6 +154,10 @@ class TripSummary(BaseModel):
     beyond_horizon_leg_ids: list[str] = Field(default_factory=list)
     pending_coverage_leg_ids: list[str] = Field(default_factory=list)
     needs_briefing_leg_ids: list[str] = Field(default_factory=list)
+    #: Briefed, but the pack came back ungradeable (``assessment`` UNAVAILABLE).
+    #: A fourth state, and distinct from "not briefed yet" — saying a leg has no
+    #: briefing when it has one that failed to grade is simply false.
+    unavailable_leg_ids: list[str] = Field(default_factory=list)
 
     #: ``days_out`` of the binding leg, and the date its first GRIB-backed
     #: briefing becomes available. The most useful line at booking time.
@@ -307,6 +311,16 @@ def _build_headline(summary: TripSummary, binding: TripLeg | None) -> str:
                 f"No weather model reaches {'this leg' if len(summary.pending_coverage_leg_ids) == 1 else 'these legs'} yet — "
                 "nothing to weigh until they come into range."
             )
+        if summary.unavailable_leg_ids and not summary.needs_briefing_leg_ids:
+            # Briefed, but ungradeable. Distinct from "no briefing yet", and
+            # the difference matters: one says wait, the other says the data
+            # we got back could not be assessed.
+            n = len(summary.unavailable_leg_ids)
+            return (
+                f"{'This leg' if n == 1 else f'All {n} remaining legs'} "
+                f"{'was' if n == 1 else 'were'} briefed, but the forecast could "
+                "not be assessed. Re-check after the next model run."
+            )
         return "No leg of this trip has a briefing yet."
 
     when = f"{_weekday(binding.departure_time)}'s {binding.label}"
@@ -403,6 +417,9 @@ def summarize_trip(
     ]
     summary.needs_briefing_leg_ids = [
         leg.flight_id for leg in remaining if leg.grade_kind == "needs_briefing"
+    ]
+    summary.unavailable_leg_ids = [
+        leg.flight_id for leg in remaining if leg.grade_kind == "unavailable"
     ]
 
     binding_id, basis, chain_status = _pick_binding_leg(built)

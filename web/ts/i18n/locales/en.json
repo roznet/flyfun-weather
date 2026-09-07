@@ -1103,5 +1103,6 @@
   "trips.notFound": "Trip not found.",
   "trips.notesLabel": "Notes",
   "trips.keepInTrip": "Keep in trip “{name}”",
-  "trips.decidableFrom": "High-resolution guidance from {date}"
+  "trips.decidableFrom": "High-resolution guidance from {date}",
+  "trips.legOf": "Leg {position}/{total}"
 }

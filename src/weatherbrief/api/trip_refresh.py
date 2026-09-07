@@ -47,6 +47,7 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from flyfun_common.db import SessionLocal
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import FlightTripRow
@@ -168,38 +169,57 @@ def start(db: Session, row: FlightTripRow, app_state, user_id: str) -> "TripRefr
 
     Returns immediately; the chain advances in the background. Raises
     :class:`TripRefreshBusy` when one is already running.
+
+    The busy check, the state write **and its commit** all happen under
+    ``_state_lock``. A plain check-then-write here is not safe: two concurrent
+    presses (a double-click, a retry, web and iOS both firing) open independent
+    sessions, both read a ``refresh_id`` of ``None``, both pass the check, and
+    both submit — and since a submitted task claims whichever leg is at the head
+    of ``pending``, the two would run *different legs of the same trip
+    concurrently*, breaching ``TRIP_REFRESH_CONCURRENCY`` and taking both of the
+    process's refresh slots for one user. Committing inside the lock is what
+    makes the second caller's read see the first caller's write; a
+    single uvicorn worker makes a process-local lock sufficient (the same
+    assumption ``refresh-durability`` relies on).
     """
     from weatherbrief.api.trips import TripRefreshStatus
 
-    if row.refresh_id and not _is_stale(row):
-        state = trip_storage.read_refresh_state(row)
-        if state.get("pending") or state.get("current"):
-            raise TripRefreshBusy(
-                "A refresh is already running for this trip. Wait for it to finish."
+    with _state_lock:
+        # Re-read inside the lock: ``row`` was loaded by an unlocked SELECT and
+        # a concurrent caller may have written since.
+        db.refresh(row)
+        if row.refresh_id and not _is_stale(row):
+            state = trip_storage.read_refresh_state(row)
+            if state.get("pending") or state.get("current"):
+                raise TripRefreshBusy(
+                    "A refresh is already running for this trip. Wait for it to finish."
+                )
+
+        legs = remaining_leg_ids(db, row.id)
+        if not legs:
+            trip_storage.write_refresh_state(db, row, refresh_id=None, state=None)
+            db.commit()
+            return TripRefreshStatus(
+                trip_id=row.id,
+                active=False,
+                message="No remaining legs to refresh.",
             )
 
-    legs = remaining_leg_ids(db, row.id)
-    if not legs:
-        trip_storage.write_refresh_state(db, row, refresh_id=None, state=None)
-        return TripRefreshStatus(
-            trip_id=row.id,
-            active=False,
-            message="No remaining legs to refresh.",
+        run_id = _new_run_id()
+        trip_storage.write_refresh_state(
+            db,
+            row,
+            refresh_id=run_id,
+            state={"legs": legs, "pending": legs, "results": {}, "current": None,
+                   "notices": {}, "user_id": user_id},
+            started_at=_now(),
         )
+        db.commit()
 
-    run_id = _new_run_id()
-    trip_storage.write_refresh_state(
-        db,
-        row,
-        refresh_id=run_id,
-        state={"legs": legs, "pending": legs, "results": {}, "current": None,
-               "notices": {}, "user_id": user_id},
-        started_at=_now(),
-    )
     # NOTE: the first leg is NOT submitted here. The worker opens its own
-    # session, so it must not start until the caller has committed the run
-    # marker — otherwise it reads a trip row that does not yet carry it and
-    # exits immediately. The endpoint calls ``kick()`` after its commit.
+    # session, so it must not start until the run marker is committed —
+    # otherwise it reads a trip row that does not yet carry it and exits
+    # immediately. The endpoint calls ``kick()`` with the run id.
     return TripRefreshStatus(
         trip_id=row.id,
         refresh_id=run_id,
@@ -210,27 +230,38 @@ def start(db: Session, row: FlightTripRow, app_state, user_id: str) -> "TripRefr
     )
 
 
-def kick(trip_id: str, app_state, user_id: str) -> None:
-    """Start the chain. Call **after** committing the run marker from ``start``."""
-    _submit_next(trip_id, app_state, user_id)
+def kick(trip_id: str, app_state, user_id: str, run_id: str) -> None:
+    """Start the chain. Call **after** ``start`` has committed the run marker."""
+    _submit_next(trip_id, app_state, user_id, run_id)
 
 
-def _submit_next(trip_id: str, app_state, user_id: str) -> None:
+def _submit_next(trip_id: str, app_state, user_id: str, run_id: str) -> None:
     """Pop the next pending leg and run it on the shared refresh executor.
 
     One executor task **per leg** rather than one per chain: the slot is
     released between legs, so a single-flight refresh from another user can
     interleave instead of queueing behind an entire trip.
+
+    ``run_id`` fences the task: a task belonging to a superseded run exits
+    without claiming anything, so a stale submission can never put a second leg
+    of the same trip in flight.
     """
     from weatherbrief.api.packs import _refresh_executor
 
-    _refresh_executor.submit(_run_leg, trip_id, app_state, user_id)
+    _refresh_executor.submit(_run_leg, trip_id, app_state, user_id, run_id)
 
 
-def _claim_next(db: Session, trip_id: str) -> tuple[FlightTripRow | None, str | None]:
-    """Move the head of ``pending`` into ``current`` and return it."""
+def _claim_next(
+    db: Session, trip_id: str, run_id: str,
+) -> tuple[FlightTripRow | None, str | None]:
+    """Move the head of ``pending`` into ``current`` and return it.
+
+    Returns ``(None, None)`` when the run this task belongs to is no longer the
+    trip's current one — the fence that keeps a superseded submission from
+    claiming a leg alongside the live chain.
+    """
     row = db.get(FlightTripRow, trip_id)
-    if row is None or not row.refresh_id:
+    if row is None or not row.refresh_id or row.refresh_id != run_id:
         return None, None
     state = trip_storage.read_refresh_state(row)
     pending = list(state.get("pending") or [])
@@ -245,10 +276,16 @@ def _claim_next(db: Session, trip_id: str) -> tuple[FlightTripRow | None, str | 
     return row, flight_id
 
 
-def _record_result(db: Session, trip_id: str, flight_id: str, outcome: str) -> dict:
-    """Record one leg's outcome and clear ``current``. Returns the new state."""
+def _record_result(
+    db: Session, trip_id: str, flight_id: str, outcome: str, run_id: str,
+) -> dict:
+    """Record one leg's outcome and clear ``current``. Returns the new state.
+
+    Fenced on ``run_id`` for the same reason as ``_claim_next``: a task from a
+    superseded run must not write into the live run's results.
+    """
     row = db.get(FlightTripRow, trip_id)
-    if row is None or not row.refresh_id:
+    if row is None or not row.refresh_id or row.refresh_id != run_id:
         return {}
     state = trip_storage.read_refresh_state(row)
     results = dict(state.get("results") or {})
@@ -259,14 +296,13 @@ def _record_result(db: Session, trip_id: str, flight_id: str, outcome: str) -> d
     return state
 
 
-def _run_leg(trip_id: str, app_state, user_id: str) -> None:
+def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
     """Refresh one leg, then advance the chain.
 
     Every exit path advances: a leg that failed, or that the registry refused,
     still hands the baton on. The alternative — a chain that stops dead on the
     first bad leg — hides exactly the leg the pilot most needs to see.
     """
-    from flyfun_common.db import SessionLocal
     from weatherbrief.api.packs import (
         QueueFullError,
         UserQueueLimitError,
@@ -282,7 +318,7 @@ def _run_leg(trip_id: str, app_state, user_id: str) -> None:
     try:
         try:
             with _state_lock:
-                row, flight_id = _claim_next(db, trip_id)
+                row, flight_id = _claim_next(db, trip_id, run_id)
                 db.commit()
             claimed = True
         except Exception:
@@ -345,16 +381,132 @@ def _run_leg(trip_id: str, app_state, user_id: str) -> None:
         try:
             if flight_id is not None:
                 with _state_lock:
-                    state = _record_result(db, trip_id, flight_id, outcome)
+                    state = _record_result(db, trip_id, flight_id, outcome, run_id)
                     db.commit()
                 if state.get("pending"):
-                    _submit_next(trip_id, app_state, user_id)
+                    _submit_next(trip_id, app_state, user_id, run_id)
                 else:
                     _finish(db, trip_id, user_id)
         except Exception:
             logger.error("Trip %s: advancing after %s failed", trip_id, flight_id, exc_info=True)
         finally:
             db.close()
+
+
+# ---------------------------------------------------------------------------
+# Boot-time recovery
+#
+# Every leg is an ordinary durable refresh job, so ``tasks/refresh_resume.py``
+# already resumes the *one* leg that was mid-flight when a container died. It
+# knows nothing about trips, though, so without the pass below the rest of the
+# chain never runs: the remaining pending legs are never submitted, and every
+# per-leg notice gathered before and after the crash is stranded until
+# ``STALE_RUN_SECONDS`` lapses and the next ``start()`` overwrites it.
+# ---------------------------------------------------------------------------
+
+#: Delay before the boot pass runs, so the leg-level resume in
+#: ``tasks/refresh_resume.py`` gets first claim on anything it is recovering.
+RESUME_STARTUP_DELAY_SECONDS = 90
+
+
+def _orphaned_runs() -> list[tuple[str, str, str]]:
+    """``(trip_id, run_id, user_id)`` for every trip with a run open at boot.
+
+    Single uvicorn worker, so any non-NULL ``refresh_id`` at boot is by
+    definition an orphan — the same reasoning ``snapshot_orphans`` uses for
+    refresh jobs.
+    """
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(FlightTripRow).where(FlightTripRow.refresh_id.isnot(None))
+        ).scalars().all()
+        return [(row.id, row.refresh_id, row.user_id) for row in rows]
+    finally:
+        db.close()
+
+
+def _requeue_interrupted(trip_id: str, run_id: str) -> bool:
+    """Put an interrupted ``current`` leg back at the head of ``pending``.
+
+    Returns True when the chain still has work. The leg that was in flight is
+    re-queued rather than dropped: the leg-level resume may or may not have
+    finished it, and the refresh gate makes a redundant re-run a cheap no-op
+    while a dropped leg would silently never be briefed.
+    """
+    db = SessionLocal()
+    try:
+        with _state_lock:
+            row = db.get(FlightTripRow, trip_id)
+            if row is None or row.refresh_id != run_id:
+                return False
+            state = trip_storage.read_refresh_state(row)
+            pending = list(state.get("pending") or [])
+            current = state.get("current")
+            if current and current not in pending:
+                pending.insert(0, current)
+            state["pending"] = pending
+            state["current"] = None
+            trip_storage.write_refresh_state(
+                db, row, refresh_id=run_id, state=state,
+            )
+            db.commit()
+            return bool(pending)
+    finally:
+        db.close()
+
+
+async def run_trip_refresh_resume(app_state) -> None:
+    """One-shot boot pass: restart or close out trip refreshes killed mid-chain.
+
+    Sibling of ``tasks/refresh_resume.run_refresh_resume`` and started from the
+    same lifespan block. A chain with legs still pending is re-submitted (under
+    its original run id, so the fence still holds); one with nothing left is
+    closed out so its coalesced notification finally fires instead of being
+    discarded three hours later.
+    """
+    import asyncio
+
+    try:
+        orphans = await asyncio.to_thread(_orphaned_runs)
+    except Exception:
+        logger.error("Trip refresh resume: could not read open runs", exc_info=True)
+        return
+    if not orphans:
+        logger.info("Trip refresh resume: no trip refreshes open at boot")
+        return
+
+    logger.warning(
+        "Trip refresh resume: %d trip refresh(es) were in flight when the "
+        "previous process died — reconciling in %ds",
+        len(orphans), RESUME_STARTUP_DELAY_SECONDS,
+    )
+    await asyncio.sleep(RESUME_STARTUP_DELAY_SECONDS)
+
+    for trip_id, run_id, user_id in orphans:
+        try:
+            has_work = await asyncio.to_thread(_requeue_interrupted, trip_id, run_id)
+            if has_work:
+                logger.info("Trip refresh resume: restarting chain for %s", trip_id)
+                _submit_next(trip_id, app_state, user_id, run_id)
+            else:
+                logger.info("Trip refresh resume: closing out %s", trip_id)
+                await asyncio.to_thread(_finish_in_new_session, trip_id, user_id)
+        except Exception:
+            logger.error(
+                "Trip refresh resume: reconciling %s failed", trip_id, exc_info=True,
+            )
+
+
+def _finish_in_new_session(trip_id: str, user_id: str) -> None:
+    """``_finish`` on its own session — the boot pass holds none."""
+    db = SessionLocal()
+    try:
+        _finish(db, trip_id, user_id)
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -562,8 +714,10 @@ def _regenerate_ai_summary(db: Session, trip_id: str, user_id: str) -> None:
     row = db.get(FlightTripRow, trip_id)
     if trip is None or row is None:
         return
-    summary, members = build_trip_summary(db, trip)
-    ensure_trip_ai_summary(db, row, summary, members, user_id=user_id, force=True)
+    summary, members, leg_inputs = build_trip_summary(db, trip)
+    ensure_trip_ai_summary(
+        db, row, summary, members, user_id=user_id, force=True, leg_inputs=leg_inputs,
+    )
     db.commit()
 
 

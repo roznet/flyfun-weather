@@ -27,9 +27,10 @@ decidable"* — never a colour for the trip.
 | Where | What |
 |---|---|
 | `weatherbrief/trips.py` | `summarize_trip`, `TripLegInput`, `TripSummary`, `TripLeg`, `SORTIE_GAP_HOURS` — the pure deterministic summary |
+| `web/ts/helpers/assessment-badges.ts` | `assessmentClass`, `outlookClass` — shared by the flights list and the trip page so their badge colours cannot drift |
 | `weatherbrief/storage/trips.py` | `create_trip`, `trip_members`, `set_leg_trip`, `delete_trip`, `prune_empty_trips`, `read_refresh_state`, `write_refresh_state` |
 | `weatherbrief/api/trips.py` | the `/api/trips` router, `build_leg_inputs`, `build_trip_summary`, `bulk_trip_refs`, `trip_ref_for`, `ai_summary_key`, `derive_trip_name` |
-| `weatherbrief/api/trip_refresh.py` | `start`, `kick`, `status`, `active_run_for_flight`, `record_leg_notice`, `open_scheduler_run`, `note_leg_done` |
+| `weatherbrief/api/trip_refresh.py` | `start`, `kick`, `status`, `active_run_for_flight`, `record_leg_notice`, `open_scheduler_run`, `note_leg_done`, `run_trip_refresh_resume` |
 | `weatherbrief/digest/trip_summary.py` | `ensure_trip_ai_summary`, `check_guardrail`, `build_context`, `legs_allow_ai` |
 | `web/ts/helpers/trip-selection.ts` | `buildTripSelection` — the selection-bar rule, pure |
 | `web/ts/managers/trip-ui.ts`, `web/ts/trip-main.ts` | the `/trip.html` page |
@@ -73,6 +74,13 @@ So `summarize_trip` produces two things and the page headlines the second:
 2. `decision_ripeness_days` / `decidable_from` — "the binding leg is 5 days out;
    nothing here is decidable until Thursday." Nearly free to compute from
    `days_out`, and the single most useful line at booking time.
+
+There are four non-gradeable states, not three, and they are reported
+separately: `beyond_horizon_leg_ids` (an outlook), `pending_coverage_leg_ids`
+(no model reaches the date), `needs_briefing_leg_ids` (never briefed) and
+`unavailable_leg_ids` (briefed, but the pack came back ungradeable). The last
+two must not be conflated — telling a pilot a leg has no briefing when it has
+one that failed to grade is simply false, and the two imply different actions.
 
 ### The binding-leg rule lives in exactly one place
 
@@ -131,6 +139,39 @@ half-refreshed. The state — run id, ordered leg list, pending, per-leg outcome
 per-leg notification notices — is one small JSON document on the trip row, live
 only while a run is in flight, with a 3-hour staleness bound so a process killed
 mid-chain cannot disable the button forever.
+
+Two things keep "one leg at a time" actually true, and both are load-bearing:
+
+- **`start()` holds `_state_lock` across the busy check, the write and its
+  commit.** A plain check-then-write is not enough: two concurrent presses (a
+  double-click, a retry, web and iOS both firing) open independent sessions,
+  both read `refresh_id is None`, both pass, and both submit. Committing inside
+  the lock is what makes the second caller's read see the first caller's write.
+  A single uvicorn worker makes a process-local lock sufficient — the same
+  assumption `refresh-durability` already relies on.
+- **Every task is fenced on its run id.** `_claim_next` and `_record_result`
+  refuse to act when `row.refresh_id` is not the run the task was submitted for,
+  so a submission left over from a superseded run exits instead of claiming a
+  leg alongside the live chain.
+
+### Recovery after a crash
+
+Each leg is an ordinary durable refresh job, so `tasks/refresh_resume.py`
+already resumes the *one* leg that was in flight — but it knows nothing about
+trips, so on its own the rest of the chain never runs and every gathered notice
+is discarded once the staleness window lapses.
+`trip_refresh.run_trip_refresh_resume` is the sibling boot pass, started from
+the same lifespan block: any trip with a non-NULL `refresh_id` at boot is by
+definition an orphan (single worker). It puts the interrupted `current` leg back
+at the head of `pending` — re-queued rather than dropped, because the gate makes
+a redundant re-run a cheap no-op while a dropped leg would silently never be
+briefed — and either restarts the chain under its original run id or closes it
+out so the coalesced notification finally fires.
+
+One more path had to report in: when `try_register` refuses a due leg, the
+scheduler loop `continue`s past its `finally`, so the leg must be reported to
+`note_leg_done` explicitly. Without that it stays in `pending` forever and the
+trip's single notification is lost for the legs that *did* complete.
 
 Partial failure completes the rest and reports per-leg. The gate skips legs with
 no new model run, and the UI says so ("2 of 3 legs had new data") — without that
@@ -191,8 +232,21 @@ Three properties are load-bearing:
   answer: the named worst leg must match the computed binding leg, and go/no-go
   vocabulary is rejected. On a mismatch we fall back to the deterministic
   sentence, so the LLM can only ever make it *nicer to read*, never different.
-- **Keyed and persisted** on the member `(flight_id, fetch_timestamp)` tuples, so
-  unchanged inputs never pay twice. Generated once per completed trip refresh and
+
+  Two details that look cosmetic and are not. The superlative list must include
+  **"difficult"** — the prompt itself asks the model to describe "what kind of
+  problem the difficult leg has", so that is the phrasing a mislabelled
+  paragraph will actually use. And a leg is matched on its **ordered** route,
+  origin before destination: both legs of a round trip carry the same two ICAO
+  codes, so an unordered "mentions both codes" test cannot tell `EGTF → LSGS`
+  from `LSGS → EGTF` and scores every sentence about the return as one about the
+  outbound too.
+- **Keyed and persisted** on the member `(flight_id, fetch_timestamp,
+  debrief_decision)` tuples, so unchanged inputs never pay twice. The debrief is
+  in the key because it feeds `_pick_binding_leg`: marking the binding leg
+  cancelled changes which leg decides the trip without moving any
+  `fetch_timestamp`, and a packs-only key would keep serving the stale paragraph
+  as fresh. Generated once per completed trip refresh and
   on demand when the page opens stale. Goes through `compute_cost` and the
   ledger (`action="trip_summary"`) — an invisible cost line is how a small cost
   becomes an unexplained one.
@@ -214,7 +268,8 @@ today's path, so the trip case is additive rather than a rewrite.
 The card holds only its **future + recent** members. The past section is
 server-paginated and server-filtered, so a past leg pulled into the card could
 vanish or duplicate depending on which page is loaded; past legs keep rendering
-individually with their trip badge instead. The "n of m legs ahead" count comes
+individually with a trip badge (`badge-trip`, linking to the trip) instead —
+without it a flown outbound leg is indistinguishable from an ungrouped flight. The "n of m legs ahead" count comes
 from the server's leg total, so it stays honest either way, and `/trip.html`
 shows the whole chain including flown legs.
 
@@ -248,6 +303,13 @@ rendered only when the source is in a trip.
 field-merge block — it will not survive on its own. The moved leg loses its
 packs (correct: a new date needs a new forecast), and the summary shows it as
 *needs a briefing*, never UNAVAILABLE.
+
+The checkbox's default is resolved **at click time**, not by nudging it on
+hover: a touch tap and a keyboard Tab+Enter never fire `mouseenter`, so a
+hover-set default left Duplicate silently inheriting the trip on exactly the
+devices most likely to be used in a cockpit. Hover, focus and `pointerdown` all
+*display* the pending default so the box never shows something other than what
+the action will do.
 
 `bulk-delete`, single delete and unlink all call `prune_empty_trips`. A **1-leg
 trip is valid** and is kept — adding legs later is a normal flow, and it is what

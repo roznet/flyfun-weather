@@ -143,6 +143,23 @@ class TestBindingLeg:
         summary = summarize_trip("t", legs, now=NOW)
         assert summary.binding_leg_id == "b"
         assert summary.chain_status == "AMBER"
+        assert summary.unavailable_leg_ids == ["a"]
+
+    def test_all_remaining_legs_unavailable_does_not_claim_they_are_unbriefed(self):
+        # "No leg has a briefing yet" would be simply false: these legs WERE
+        # briefed, the forecast just came back ungradeable. One says wait for
+        # coverage, the other says the data we got could not be assessed.
+        legs = [
+            leg("a", ["EGTF", "LSGS"], days=3, days_out=3, assessment="UNAVAILABLE"),
+            leg("b", ["LSGS", "EGTF"], days=5, days_out=5, assessment="UNAVAILABLE"),
+        ]
+        summary = summarize_trip("t", legs, now=NOW)
+        assert summary.binding_leg_id is None
+        assert summary.chain_status is None
+        assert set(summary.unavailable_leg_ids) == {"a", "b"}
+        assert summary.needs_briefing_leg_ids == []
+        assert "no briefing" not in summary.headline.lower()
+        assert "could not be assessed" in summary.headline
 
 
 class TestTwoAggregationsNeverOne:
