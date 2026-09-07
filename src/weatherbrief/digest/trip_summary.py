@@ -218,11 +218,11 @@ def check_guardrail(text: str, summary: TripSummary) -> str | None:
     for leg in summary.legs:
         if leg.flight_id == summary.binding_leg_id:
             continue
-        # Every sentence naming the leg, not just the first: a lead-in can
-        # mention a leg well before the sentence that actually describes it, so
-        # checking only the first match would inspect the wrong sentence and
-        # wave the mislabelled paragraph through.
-        for window in _sentences_naming(text, leg.origin, leg.destination):
+        # Every *clause* naming the leg, not just the first sentence: a lead-in
+        # can mention a leg well before the text that actually describes it, and
+        # a clause boundary is what keeps a superlative attached to the leg it
+        # was written about (see _fragments_naming).
+        for window in _fragments_naming(text, leg.origin, leg.destination):
             if _SUPERLATIVE_RE.search(window):
                 return "a leg other than the binding one is named as the worst"
     return None
@@ -252,11 +252,14 @@ def _names_leg(fragment: str, origin: str | None, destination: str | None) -> bo
     """
     if not origin or not destination:
         return False
-    lowered = fragment.lower()
-    start = lowered.find(origin.lower())
-    if start < 0:
+    # Word-boundary matched, like the superlative and go/no-go regexes: a bare
+    # substring search would let an ICAO code match inside a longer token.
+    first = re.search(rf"\b{re.escape(origin)}\b", fragment, re.IGNORECASE)
+    if first is None:
         return False
-    return lowered.find(destination.lower(), start + len(origin)) > 0
+    return re.search(
+        rf"\b{re.escape(destination)}\b", fragment[first.end():], re.IGNORECASE,
+    ) is not None
 
 
 def _mentions_leg(text: str, origin: str | None, destination: str | None) -> bool:
@@ -267,15 +270,33 @@ def _mentions_leg(text: str, origin: str | None, destination: str | None) -> boo
     return _names_leg(text, origin, destination)
 
 
-def _sentences_naming(
+#: Clause boundaries within a sentence. Splitting on these is what keeps the
+#: superlative check *local* to the leg it is next to.
+_CLAUSE_SPLIT_RE = re.compile(r"[,;:]|\s+(?:but|and|while|whereas|though|although)\s+|\s+[—–-]\s+")
+
+
+def _fragments_naming(
     text: str, origin: str | None, destination: str | None,
 ) -> list[str]:
-    """Every sentence that names the leg ``origin`` → ``destination``."""
-    return [
-        sentence
-        for sentence in re.split(r"(?<=[.!?])\s+", text)
-        if _names_leg(sentence, origin, destination)
-    ]
+    """Every **clause** that names the leg ``origin`` → ``destination``.
+
+    Clause-level, not sentence-level, and that distinction is what keeps the
+    guardrail from rejecting correct paragraphs. Chain-adjacent legs share an
+    airport — ``A → B`` then ``B → C`` — so in
+
+        "Friday's A to B looks fine, but Saturday's B to C is the difficult one"
+
+    the ordered match for ``A → B`` succeeds on the whole sentence (it contains
+    A before B), and a sentence-wide search for "difficult" would then flag a
+    perfectly *correct* paragraph as naming the wrong leg. Scoped to the clause,
+    "difficult" stays attached to ``B → C``, where it belongs.
+    """
+    fragments: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        for clause in _CLAUSE_SPLIT_RE.split(sentence):
+            if clause and _names_leg(clause, origin, destination):
+                fragments.append(clause)
+    return fragments
 
 
 # ---------------------------------------------------------------------------

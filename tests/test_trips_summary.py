@@ -157,9 +157,29 @@ class TestBindingLeg:
         assert summary.binding_leg_id is None
         assert summary.chain_status is None
         assert set(summary.unavailable_leg_ids) == {"a", "b"}
+        # Disjoint from *every* other non-gradeable set, not just one of them.
         assert summary.needs_briefing_leg_ids == []
+        assert summary.pending_coverage_leg_ids == []
+        assert summary.beyond_horizon_leg_ids == []
         assert "no briefing" not in summary.headline.lower()
         assert "could not be assessed" in summary.headline
+
+    def test_a_mix_of_unavailable_and_unbriefed_describes_both(self):
+        # The partial fix trapped here: "unavailable AND NOT needs_briefing"
+        # let a mixed trip fall through to "no leg has a briefing yet", which
+        # is false for the legs that were briefed and came back ungradeable.
+        legs = [
+            leg("a", ["EGTF", "LSGS"], days=3),  # never briefed
+            leg("b", ["LSGS", "LFAT"], days=5, days_out=5, assessment="UNAVAILABLE"),
+            leg("c", ["LFAT", "EGTF"], days=6),  # never briefed
+        ]
+        summary = summarize_trip("t", legs, now=NOW)
+        assert summary.binding_leg_id is None
+        assert summary.unavailable_leg_ids == ["b"]
+        assert set(summary.needs_briefing_leg_ids) == {"a", "c"}
+        headline = summary.headline.lower()
+        assert "could not be assessed" in headline
+        assert "no briefing yet" in headline
 
 
 class TestTwoAggregationsNeverOne:

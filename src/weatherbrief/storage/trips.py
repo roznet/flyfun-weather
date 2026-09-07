@@ -134,9 +134,17 @@ def set_leg_trip(
 
     Returns the ids actually changed. Flights the user doesn't own are silently
     skipped — the caller has already 404'd anything it cares about.
+
+    The *destination* trip is scoped to the user as well. Every current caller
+    already validates it via ``_owned_trip_row``, so this is defence in depth
+    rather than a live hole — but "can a leg belong to another user's trip?" is
+    the question the design doc parks before any ``share_code`` work, and the
+    answer should not depend on every future caller remembering to check.
     """
     if not flight_ids:
         return []
+    if trip_id is not None and load_trip_row(session, trip_id, user_id) is None:
+        raise ValueError(f"Trip {trip_id} is not owned by {user_id}")
     rows = session.execute(
         select(FlightRow).where(
             FlightRow.id.in_(flight_ids), FlightRow.user_id == user_id,

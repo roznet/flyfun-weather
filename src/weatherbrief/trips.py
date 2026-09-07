@@ -311,16 +311,25 @@ def _build_headline(summary: TripSummary, binding: TripLeg | None) -> str:
                 f"No weather model reaches {'this leg' if len(summary.pending_coverage_leg_ids) == 1 else 'these legs'} yet — "
                 "nothing to weigh until they come into range."
             )
-        if summary.unavailable_leg_ids and not summary.needs_briefing_leg_ids:
-            # Briefed, but ungradeable. Distinct from "no briefing yet", and
-            # the difference matters: one says wait, the other says the data
-            # we got back could not be assessed.
+        # Briefed-but-ungradeable and never-briefed are different claims, and a
+        # trip can hold both at once — so describe whatever is actually there
+        # rather than falling through to a sentence that is false for half of
+        # the legs.
+        if summary.unavailable_leg_ids:
             n = len(summary.unavailable_leg_ids)
-            return (
-                f"{'This leg' if n == 1 else f'All {n} remaining legs'} "
+            parts = [
+                f"{'One remaining leg' if n == 1 else f'{n} remaining legs'} "
                 f"{'was' if n == 1 else 'were'} briefed, but the forecast could "
-                "not be assessed. Re-check after the next model run."
-            )
+                "not be assessed."
+            ]
+            waiting = len(summary.needs_briefing_leg_ids)
+            if waiting:
+                parts.append(
+                    f"{'Another' if waiting == 1 else f'{waiting} others'} "
+                    f"{'has' if waiting == 1 else 'have'} no briefing yet."
+                )
+            parts.append("Re-check after the next model run.")
+            return " ".join(parts)
         return "No leg of this trip has a briefing yet."
 
     when = f"{_weekday(binding.departure_time)}'s {binding.label}"

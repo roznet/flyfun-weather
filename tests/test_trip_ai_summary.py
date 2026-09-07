@@ -132,6 +132,42 @@ class TestGuardrail:
         )
         assert check_guardrail(wrong, summary) is not None
 
+    def test_a_superlative_about_a_later_leg_does_not_flag_an_earlier_one(self):
+        """Chain-adjacent legs share an airport — scope the check to the clause.
+
+        In "Friday's A to B looks fine, but Saturday's B to C is the difficult
+        one", the ordered match for A→B succeeds on the *sentence* (it contains
+        A before B), so a sentence-wide superlative search would reject this
+        perfectly correct paragraph — over-rejection that would silently defeat
+        the AI summary on any chain longer than one leg.
+        """
+        chain = summarize_trip(
+            "t4",
+            [
+                _leg("a", ["EGTF", "LSGS"], 3, days_out=3, assessment="GREEN"),
+                _leg("b", ["LSGS", "LFAT"], 5, days_out=5, assessment="RED"),
+            ],
+            now=NOW,
+        )
+        assert chain.binding_leg_id == "b"
+        text = (
+            "Friday's EGTF to LSGS looks fine, but Sunday's LSGS to LFAT is "
+            "the difficult one."
+        )
+        assert check_guardrail(text, chain) is None
+
+        # And the genuine mislabel in the same shape is still caught.
+        wrong = (
+            "Sunday's LSGS to LFAT looks fine, but Friday's EGTF to LSGS is "
+            "the difficult one."
+        )
+        assert check_guardrail(wrong, chain) is not None
+
+    def test_endpoints_are_matched_on_word_boundaries(self, summary):
+        # A bare substring search would match an ICAO code inside a longer
+        # token; the binding leg is LSGS → EGTF.
+        assert check_guardrail("The XLSGSX to XEGTFX leg is fine.", summary) is not None
+
     def test_not_mentioning_the_binding_leg_at_all_is_rejected(self, summary):
         text = "Both legs of this trip look broadly similar."
         assert check_guardrail(text, summary) is not None

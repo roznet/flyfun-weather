@@ -43,7 +43,8 @@ export interface FlightsState {
   loadTrips: () => Promise<void>;
   groupAsTrip: (flightIds: string[]) => Promise<void>;
   addToTrip: (tripId: string, flightIds: string[]) => Promise<void>;
-  removeFromTrip: (tripId: string, flightId: string) => Promise<void>;
+  /** Unlink one leg. Resolves to false (and sets `error`) on failure. */
+  removeFromTrip: (tripId: string, flightId: string) => Promise<boolean>;
   loadMorePast: () => Promise<void>;
   setUpcomingQuery: (q: string) => void;
   setPastQuery: (q: string) => Promise<void>;
@@ -158,13 +159,19 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   },
 
   removeFromTrip: async (tripId, flightId) => {
-    set({ error: null });
+    // Deliberately does NOT clear `error` on entry. A multi-leg unlink calls
+    // this once per flight, and a `set({ error: null })` here would let a later
+    // success erase an earlier failure's message — the pilot would see no error
+    // at all while one flight silently stayed in the trip. Returns whether it
+    // succeeded so the caller can stop at the first failure.
     try {
       await removeTripLeg(tripId, flightId);
       get().clearSelection();
       await Promise.all([get().loadFlights(), get().loadTrips()]);
+      return true;
     } catch (err) {
       set({ error: errorToMessage(err) });
+      return false;
     }
   },
 

@@ -256,8 +256,13 @@ struct TripBadge: View {
             .padding(.vertical, 2)
             .background(Color.secondary.opacity(0.15), in: Capsule())
             .foregroundStyle(.secondary)
+            // The server can return an empty trip name (a trip created before
+            // its default was derived), which would have VoiceOver read
+            // "…in trip " with a trailing space and nothing after it.
             .accessibilityLabel(
-                "Leg \(trip.position) of \(trip.total) in trip \(trip.name)"
+                trip.name.isEmpty
+                    ? "Leg \(trip.position) of \(trip.total) in a trip"
+                    : "Leg \(trip.position) of \(trip.total) in trip \(trip.name)"
             )
     }
 }

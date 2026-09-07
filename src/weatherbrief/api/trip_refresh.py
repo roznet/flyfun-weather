@@ -187,7 +187,16 @@ def start(db: Session, row: FlightTripRow, app_state, user_id: str) -> "TripRefr
     with _state_lock:
         # Re-read inside the lock: ``row`` was loaded by an unlocked SELECT and
         # a concurrent caller may have written since.
-        db.refresh(row)
+        #
+        # ``with_for_update`` is not belt-and-braces here. Prod is MySQL at
+        # REPEATABLE READ, where a plain ``refresh()`` can be served from the
+        # enclosing transaction's snapshot and so miss another transaction's
+        # just-committed write — which would silently reopen the race in
+        # production only, where it is hardest to see. A locking read takes the
+        # latest committed row, and it also serialises across processes, which
+        # the in-process lock alone cannot. SQLite ignores FOR UPDATE, so dev is
+        # unaffected.
+        db.refresh(row, with_for_update=True)
         if row.refresh_id and not _is_stale(row):
             state = trip_storage.read_refresh_state(row)
             if state.get("pending") or state.get("current"):
@@ -278,15 +287,21 @@ def _claim_next(
 
 def _record_result(
     db: Session, trip_id: str, flight_id: str, outcome: str, run_id: str,
-) -> dict:
+) -> dict | None:
     """Record one leg's outcome and clear ``current``. Returns the new state.
 
     Fenced on ``run_id`` for the same reason as ``_claim_next``: a task from a
     superseded run must not write into the live run's results.
+
+    Returns **None** when fenced out, which is not the same as an empty state
+    and the caller must not conflate the two: an empty ``pending`` means the
+    chain is done and should be closed out, while a fenced-out task must touch
+    nothing at all — closing out from here would end whatever run is *currently*
+    live, firing its notification early on incomplete results.
     """
     row = db.get(FlightTripRow, trip_id)
     if row is None or not row.refresh_id or row.refresh_id != run_id:
-        return {}
+        return None
     state = trip_storage.read_refresh_state(row)
     results = dict(state.get("results") or {})
     results[flight_id] = outcome
@@ -337,6 +352,11 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
 
         flight_row = db.get(FlightRow, flight_id)
         if flight_row is None or flight_row.user_id != user_id:
+            # Logged like every other failure branch — silently failing a leg
+            # is exactly the kind of thing that is impossible to diagnose later.
+            logger.error(
+                "Trip %s: leg %s is missing or not owned by %s", trip_id, flight_id, user_id,
+            )
             outcome = "failed"
             return
 
@@ -383,7 +403,16 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
                 with _state_lock:
                     state = _record_result(db, trip_id, flight_id, outcome, run_id)
                     db.commit()
-                if state.get("pending"):
+                if state is None:
+                    # Fenced out: this task's run is no longer the live one, so
+                    # it neither advances nor finishes anything. Deliberately
+                    # not an `else` on the check below — treating a fenced-out
+                    # result as "chain complete" would close out the *live* run.
+                    logger.info(
+                        "Trip %s: leg %s finished under superseded run %s — "
+                        "not advancing", trip_id, flight_id, run_id,
+                    )
+                elif state.get("pending"):
                     _submit_next(trip_id, app_state, user_id, run_id)
                 else:
                     _finish(db, trip_id, user_id)
@@ -391,6 +420,52 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
             logger.error("Trip %s: advancing after %s failed", trip_id, flight_id, exc_info=True)
         finally:
             db.close()
+
+
+def legs_claimed_by_a_live_run(db: Session, flight_ids: list[str]) -> set[str]:
+    """Of ``flight_ids``, those a live trip refresh has already queued.
+
+    A leg sitting in a run's ``pending`` has been *promised* to the driver but
+    is not yet in ``refresh_registry`` — nothing claims it until ``_claim_next``
+    picks it up. The scheduler's due-leg check only consults the registry, so
+    without this it happily registers and runs that leg itself under
+    ``triggered_by="scheduler"``, which is uncapped — a second leg of the same
+    trip refreshing beside the driver's current one, breaching
+    ``TRIP_REFRESH_CONCURRENCY`` through a path the admission fence never sees.
+
+    The driver owns its legs until its run ends; the scheduler will pick them up
+    on a later cycle if they are still due.
+    """
+    if not flight_ids:
+        return set()
+    from sqlalchemy import select
+
+    from weatherbrief.db.models import FlightRow
+
+    trip_ids = {
+        trip_id
+        for trip_id in db.execute(
+            select(FlightRow.trip_id).where(
+                FlightRow.id.in_(flight_ids), FlightRow.trip_id.isnot(None),
+            )
+        ).scalars().all()
+    }
+    if not trip_ids:
+        return set()
+
+    claimed: set[str] = set()
+    for row in db.execute(
+        select(FlightTripRow).where(
+            FlightTripRow.id.in_(trip_ids), FlightTripRow.refresh_id.isnot(None),
+        )
+    ).scalars().all():
+        if _is_stale(row):
+            continue
+        state = trip_storage.read_refresh_state(row)
+        claimed.update(state.get("pending") or [])
+        if state.get("current"):
+            claimed.add(state["current"])
+    return claimed & set(flight_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -534,26 +609,32 @@ def open_scheduler_run(db: Session, due_rows: list) -> None:
         for row in due_rows:
             if getattr(row, "trip_id", None):
                 by_trip.setdefault(row.trip_id, []).append(row.id)
-        for trip_id, leg_ids in by_trip.items():
-            if len(leg_ids) < 2:
-                continue
-            trip_row = db.get(FlightTripRow, trip_id)
-            if trip_row is None or not trip_row.auto_refresh:
-                continue
-            if trip_row.refresh_id and not _is_stale(trip_row):
-                continue
-            trip_storage.write_refresh_state(
-                db,
-                trip_row,
-                refresh_id=_new_run_id(),
-                state={
-                    "legs": leg_ids, "pending": list(leg_ids), "results": {},
-                    "current": None, "notices": {}, "user_id": trip_row.user_id,
-                    "source": "scheduler",
-                },
-                started_at=_now(),
-            )
-        db.commit()
+        # Under the same lock as every other read-check-write of ``refresh_id``.
+        # Without it a scheduler cycle racing a manual "Refresh trip" press can
+        # both pass their own "not already active" check, and this write then
+        # silently clobbers the manual run's legs/pending — orphaning a chain
+        # that is already in flight.
+        with _state_lock:
+            for trip_id, leg_ids in by_trip.items():
+                if len(leg_ids) < 2:
+                    continue
+                trip_row = db.get(FlightTripRow, trip_id)
+                if trip_row is None or not trip_row.auto_refresh:
+                    continue
+                if trip_row.refresh_id and not _is_stale(trip_row):
+                    continue
+                trip_storage.write_refresh_state(
+                    db,
+                    trip_row,
+                    refresh_id=_new_run_id(),
+                    state={
+                        "legs": leg_ids, "pending": list(leg_ids), "results": {},
+                        "current": None, "notices": {},
+                        "user_id": trip_row.user_id, "source": "scheduler",
+                    },
+                    started_at=_now(),
+                )
+            db.commit()
     except Exception:
         logger.warning("Opening scheduler coalescing runs failed", exc_info=True)
         db.rollback()
