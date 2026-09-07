@@ -144,9 +144,11 @@ class TestRunFencing:
     def test_recording_under_a_stale_run_id_is_refused(self, session, trip_with_legs):
         status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
         trip_refresh._claim_next(session, trip_with_legs.id, status.refresh_id)
+        # None, not {} — and the distinction is the whole point: an empty state
+        # would read as "chain complete" and close out the live run.
         assert trip_refresh._record_result(
             session, trip_with_legs.id, "leg1", "succeeded", "not-the-run",
-        ) == {}
+        ) is None
         state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
         assert state["results"] == {}
 
