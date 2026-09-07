@@ -355,13 +355,18 @@ def ensure_trip_ai_summary(
     members: list[Flight],
     *,
     user_id: str,
-    force: bool = False,
     leg_inputs=None,
 ) -> TripAiResult:
     """Return the trip's AI paragraph, generating it only when stale.
 
     Called on a completed trip refresh and on demand when the trip page opens.
-    ``force`` is for the refresh path, which knows the inputs just changed.
+    Both go through the same key check — there is deliberately no ``force``
+    escape hatch. The refresh path used one on the reasoning that it "knows the
+    inputs just changed", which is not true: the refresh gate can skip every
+    leg for want of a new model run, and the paragraph was then re-billed for
+    provably identical input. The key is derived from every input the paragraph
+    depends on, so a chain that did change something misses the cache anyway.
+
     ``leg_inputs`` lets a caller that already built them (every caller that
     computed ``summary``) avoid a second packs + debriefs query pair.
     """
@@ -388,7 +393,7 @@ def ensure_trip_ai_summary(
     if leg_inputs is None:
         leg_inputs = build_leg_inputs(db, members)
     key = ai_summary_key(leg_inputs)
-    if not force and row.ai_summary_key == key:
+    if row.ai_summary_key == key:
         # Keyed on the *key alone*, not on the text: a stored key means these
         # inputs have already been through the model, and the text is whatever
         # came of it — a paragraph, or None because the guardrail rejected it or

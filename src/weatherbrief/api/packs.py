@@ -2049,6 +2049,7 @@ def _notify_refresh_complete(
         # unopened *flights*), but delivery is deferred to the trip driver,
         # which sends one notification when the chain lands.
         active = trip_refresh.active_run_for_flight(db, flight.id)
+        active_run_id = active[0].refresh_id if active is not None else None
         override = None
         if flight.trip_id:
             trip_row = db.get(FlightTripRow, flight.trip_id)
@@ -2068,6 +2069,9 @@ def _notify_refresh_complete(
             trip_row, _state = active
             trip_refresh.record_leg_notice(
                 db, trip_row, flight.id,
+                # The run observed above, so a run that closes and reopens
+                # between that read and this write cannot inherit the notice.
+                run_id=active_run_id,
                 label=" → ".join(flight.waypoints) or flight.route_name,
                 qualified=outcome.qualified,
                 assessment=outcome.assessment,

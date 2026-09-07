@@ -748,6 +748,7 @@ def record_leg_notice(
     trip_row: FlightTripRow,
     flight_id: str,
     *,
+    run_id: str,
     label: str,
     qualified: bool,
     assessment: str | None,
@@ -763,11 +764,20 @@ def record_leg_notice(
     blob and one commit would clobber the other's snapshot — losing a leg's
     notice, and with it the whole coalesced push when that was the only
     qualifying leg.
+
+    ``run_id`` is the run the caller observed, not "whatever is live now".
+    Passing ``None`` here was a fence in name only: if the run closed and a new
+    one opened between the caller's read and this write, the stale leg's notice
+    landed in the *new* run's ``notices``, and a run none of whose own legs
+    qualified could then fire a push. The leg-membership check is the same one
+    ``note_leg_done`` makes, for the same reason.
     """
-    with _run_scope(db, trip_row.id, None) as row:
+    with _run_scope(db, trip_row.id, run_id) as row:
         if row is None:
             return
         state = trip_storage.read_refresh_state(row)
+        if flight_id not in (state.get("legs") or []):
+            return
         notices = dict(state.get("notices") or {})
         notices[flight_id] = {
             "label": label,
@@ -856,8 +866,16 @@ def _regenerate_ai_summary(db: Session, trip_id: str, user_id: str) -> None:
     if trip is None or row is None:
         return
     summary, members, leg_inputs = build_trip_summary(db, trip)
+    # Deliberately NOT force=True. The key already covers every input the
+    # paragraph is derived from — each leg's fetch_timestamp, debrief decision
+    # and derived state — so a chain that actually changed something misses the
+    # cache on its own. Forcing only mattered for the case where nothing
+    # changed: the refresh gate can skip every leg for want of a new model run,
+    # and re-billing Haiku for provably identical input is the "unchanged
+    # inputs never pay twice" invariant broken by the one caller that is
+    # certain it knows better.
     ensure_trip_ai_summary(
-        db, row, summary, members, user_id=user_id, force=True, leg_inputs=leg_inputs,
+        db, row, summary, members, user_id=user_id, leg_inputs=leg_inputs,
     )
     db.commit()
 
@@ -871,8 +889,14 @@ def _send_coalesced(
     layer coalesces delivery, it never manufactures a notification the per-leg
     gate would have suppressed.
     """
+    # Scoped to this run's own legs. ``_leg_lines`` already iterates
+    # ``state["legs"]``, so an unscoped read here was the one place a notice
+    # that did not belong to the run could still decide whether it notifies.
+    legs = state.get("legs") or []
     notices = state.get("notices") or {}
-    qualifying = [n for n in notices.values() if n.get("qualified")]
+    qualifying = [
+        n for fid, n in notices.items() if fid in legs and n.get("qualified")
+    ]
     if not qualifying:
         logger.info("Trip %s: no leg qualified to notify", trip_id)
         return

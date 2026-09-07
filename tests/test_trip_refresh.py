@@ -337,10 +337,29 @@ class TestFinishIsFenced:
                 assert "_state_lock" in body, f"{name} must at least hold the lock"
                 continue
             if "_run_scope(" not in body:
-                offenders.append(name)
+                offenders.append(f"{name}: no _run_scope")
+                continue
+            # Substring presence is not the property. `record_leg_notice`
+            # called `_run_scope(db, trip_row.id, None)` — "whatever run is
+            # live" — and this test passed it, twice. The fence is only a fence
+            # if the caller names the run it observed, so the run-id argument
+            # is inspected rather than assumed.
+            import ast
+            import textwrap
+
+            for call in ast.walk(ast.parse(textwrap.dedent(body))):
+                if not isinstance(call, ast.Call):
+                    continue
+                target = call.func
+                if not (isinstance(target, ast.Name) and target.id == "_run_scope"):
+                    continue
+                if len(call.args) < 3:
+                    offenders.append(f"{name}: _run_scope called without a run id")
+                elif isinstance(call.args[2], ast.Constant) and call.args[2].value is None:
+                    offenders.append(f"{name}: passes a literal None as the run id")
 
         assert not offenders, (
-            f"these mutate refresh state without the fence: {offenders}"
+            f"these mutate refresh state without a real fence: {offenders}"
         )
 
 
@@ -495,14 +514,14 @@ class TestCoalescing:
         assert trip_refresh.active_run_for_flight(session, "leg1") is None
 
     def test_leg_notices_accumulate_for_one_summary(self, session, trip_with_legs):
-        trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        run = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID).refresh_id
         row = session.get(FlightTripRow, trip_with_legs.id)
         trip_refresh.record_leg_notice(
-            session, row, "leg1", label="EGTF → LSGS", qualified=True,
+            session, row, "leg1", run_id=run, label="EGTF → LSGS", qualified=True,
             assessment="GREEN", outlook=None, worsened_message=None, badge=1,
         )
         trip_refresh.record_leg_notice(
-            session, row, "leg3", label="LFAT → EGTF", qualified=True,
+            session, row, "leg3", run_id=run, label="LFAT → EGTF", qualified=True,
             assessment="RED", outlook=None, worsened_message="was AMBER", badge=2,
         )
         state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
@@ -648,3 +667,131 @@ class TestJsonState:
         row = session.get(FlightTripRow, trip_with_legs.id)
         assert json.loads(row.refresh_state_json) == payload
         assert trip_storage.read_refresh_state(row) == payload
+
+
+class TestLegNoticesBelongToTheirRun:
+    """A notice must land in the run its leg actually ran under.
+
+    ``record_leg_notice`` fenced on "whatever run is live" and did not check
+    leg membership, so a notice from a closed run could be written into the
+    next one — and `_send_coalesced` read the whole notices dict, so a run
+    none of whose own legs qualified could fire a push on the strength of it.
+    """
+
+    def _notice(self, session, trip_id, flight_id, run_id, *, qualified=True):
+        trip_refresh.record_leg_notice(
+            session, session.get(FlightTripRow, trip_id), flight_id,
+            run_id=run_id,
+            label=flight_id, qualified=qualified,
+            assessment="GREEN", outlook=None, worsened_message=None, badge=1,
+        )
+
+    def test_a_notice_from_a_superseded_run_is_dropped(self, session, trip_with_legs):
+        run_a = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID).refresh_id
+        row = session.get(FlightTripRow, trip_with_legs.id)
+        row.refresh_started_at = _NOW - timedelta(
+            seconds=trip_refresh.STALE_RUN_SECONDS + 60,
+        )
+        session.commit()
+        run_b = trip_refresh.start(
+            session, session.get(FlightTripRow, trip_with_legs.id), object(), DEV_USER_ID,
+        ).refresh_id
+        assert run_a != run_b
+
+        self._notice(session, trip_with_legs.id, "leg1", run_a)
+
+        state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
+        assert state["notices"] == {}, "run B must not inherit run A's notice"
+
+    def test_a_leg_outside_the_run_is_dropped(self, session, trip_with_legs):
+        run = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID).refresh_id
+        _flight(session, "loner", 2, ["EGTF", "EGLL"])
+        session.commit()
+
+        self._notice(session, trip_with_legs.id, "loner", run)
+
+        state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
+        assert "loner" not in state["notices"]
+
+    def test_the_live_run_records_its_own_leg(self, session, trip_with_legs):
+        run = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID).refresh_id
+        self._notice(session, trip_with_legs.id, "leg1", run)
+        state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
+        assert state["notices"]["leg1"]["qualified"] is True
+
+    def _drive_coalesced(self, session, trip_id, monkeypatch, notices, legs):
+        """Run `_send_coalesced` with delivery captured at its real seams."""
+        sent: list[str] = []
+        import weatherbrief.notify.push as push_mod
+
+        monkeypatch.setattr(
+            push_mod, "send_trip_push", lambda *a, **k: sent.append("push"),
+        )
+        monkeypatch.setattr(
+            trip_refresh, "_headline_for", lambda *a, **k: "headline",
+        )
+        monkeypatch.setattr(
+            "weatherbrief.api.preferences.load_notify_prefs",
+            lambda *a, **k: {"notify_push": True, "notify_email": False},
+        )
+        trip_refresh._send_coalesced(
+            session, trip_id, "Sion",
+            {"legs": legs, "results": {}, "notices": notices},
+            DEV_USER_ID,
+        )
+        return sent
+
+    def test_a_qualifying_leg_of_this_run_does_notify(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """Positive control: without this the negative test below proves nothing."""
+        sent = self._drive_coalesced(
+            session, trip_with_legs.id, monkeypatch,
+            notices={"leg1": {"label": "leg1", "qualified": True, "badge": 1}},
+            legs=["leg1"],
+        )
+        assert sent == ["push"]
+
+    def test_a_stray_notice_cannot_trigger_the_coalesced_push(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """Defence in depth: even a leaked notice must not decide delivery."""
+        sent = self._drive_coalesced(
+            session, trip_with_legs.id, monkeypatch,
+            notices={
+                "leg1": {"label": "leg1", "qualified": False, "badge": 0},
+                # Not one of this run's legs.
+                "ghost": {"label": "ghost", "qualified": True, "badge": 9},
+            },
+            legs=["leg1"],
+        )
+        assert sent == [], "a notice outside state['legs'] must not decide delivery"
+
+
+class TestAiSummaryIsNotRebilled:
+    def test_the_post_refresh_regeneration_respects_the_cache(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """A chain can complete having refreshed nothing.
+
+        The refresh gate skips a leg with no new model run, so "the chain
+        finished" is not evidence the inputs changed. Forcing regeneration
+        re-billed Haiku for provably identical input.
+        """
+        calls: list[str] = []
+
+        from weatherbrief.digest import trip_summary as ts
+
+        def _fake_generate(*a, **k):
+            calls.append("generate")
+            return None, None
+
+        monkeypatch.setattr(ts, "generate", _fake_generate)
+        monkeypatch.setattr(ts, "legs_allow_ai", lambda *a, **k: True)
+
+        trip_refresh._regenerate_ai_summary(session, trip_with_legs.id, DEV_USER_ID)
+        assert len(calls) == 1, "first pass must generate"
+
+        # Nothing about the legs has changed since.
+        trip_refresh._regenerate_ai_summary(session, trip_with_legs.id, DEV_USER_ID)
+        assert len(calls) == 1, "unchanged inputs must not pay twice"
