@@ -68,6 +68,18 @@ export interface LayerTogglesOptions {
    *  {@link openFamily}: the panel must survive toggling a layer, because
    *  reading about a method and then switching it on is the point of it. */
   aboutFamily?: LayerFamily | null;
+  /** Stack the bar for a narrow column instead of running it across a wide one.
+   *
+   *  The bar's shape in #591 is bought with HORIZONTAL space: chips on one line,
+   *  and a detail row that runs *across* so the expansion is exactly one row
+   *  whichever family is open. That trade is right on the briefing page, whose
+   *  scarce axis is vertical. The airport-profile drawer is the inverse — 320px
+   *  wide (`maps.html`), full height, scrolling — so the same markup there wraps
+   *  the chips to six rows and turns the detail row into a sideways scroller
+   *  whose last item is the hint slot.
+   *
+   *  Same markup, same wiring, same state: only the axis changes, in CSS. */
+  narrow?: boolean;
 }
 
 /** Source state derived from which cloud layer ids are currently enabled.
@@ -404,7 +416,7 @@ export function layerTogglesHtml(
   const families = visibleFamilies(opts);
   const open = compact ? null : (opts.openFamily ?? null);
 
-  let html = '<div class="viz-layer-toggles">';
+  let html = `<div class="viz-layer-toggles${opts.narrow ? ' viz-narrow' : ''}">`;
   html += '<div class="viz-layer-bar">';
   html += `<span class="viz-bar-label">${t('viz.layers')}</span>`;
 

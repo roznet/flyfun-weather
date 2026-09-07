@@ -299,3 +299,61 @@ describe('detail row: pills, None and the hint slot (#591)', () => {
     expect(html).toContain('data-about-family="observed"');
   });
 });
+
+describe('narrow variant (#597)', () => {
+  // The drawer is 320px wide and the bar was shaped for ~900px. The variant is
+  // a CSS axis flip and nothing else, so what the tests can hold is exactly
+  // that: same markup, same ids, same wiring hooks — only the class differs.
+
+  it('adds the modifier only when asked for it', () => {
+    expect(layerTogglesHtml({}, {})).not.toContain('viz-narrow');
+    expect(layerTogglesHtml({}, { narrow: true })).toContain('class="viz-layer-toggles viz-narrow"');
+  });
+
+  it('changes nothing but the container class', () => {
+    // The whole design rests on this: if the narrow variant rendered different
+    // controls, the two surfaces would drift the way the drawer's now-deleted
+    // `.viz-layer-group` overrides silently did after #591 rewrote the markup.
+    const opts = { openFamily: 'icing' as const, aboutFamily: 'icing' as const };
+    const wide = layerTogglesHtml({}, opts);
+    const narrow = layerTogglesHtml({}, { ...opts, narrow: true });
+    expect(narrow.replace(' viz-narrow', '')).toBe(wide);
+  });
+
+  it('still carries the hint slot the wide row pushes off the end', () => {
+    // In the wide bar the hint sits at the end of a row that fits. In 320px
+    // that row becomes a sideways scroller and the hint is what falls off it
+    // — which is the reason this variant exists, so it must still be emitted.
+    const html = layerTogglesHtml({}, { narrow: true, openFamily: 'clouds' });
+    expect(html).toContain('viz-detail-hint');
+    expect(html).toContain('viz-hint-text');
+    expect(html).toContain('data-family-about="clouds"');
+  });
+
+  it('has no effect in compact mode, which has no detail row to wrap', () => {
+    const html = layerTogglesHtml({}, { narrow: true, displayMode: 'compact', openFamily: 'icing' });
+    expect(html).toContain('viz-narrow');
+    expect(html).not.toContain('viz-layer-detail');
+  });
+
+  it('composes with the drawer\'s hidden groups rather than replacing them', () => {
+    // The drawer passes both. A variant that dropped `hiddenGroups` would put
+    // the route-only Observed conditions back into a panel with no route.
+    const html = layerTogglesHtml({}, {
+      narrow: true,
+      hiddenGroups: new Set(['conditions' as const, 'highlight' as const]),
+      openFamily: 'observed',
+    });
+    expect(html).toContain('viz-narrow');
+    expect(hasToggle(html, 'night-shading')).toBe(true);
+    expect(hasToggle(html, 'current-conditions')).toBe(false);
+  });
+
+  it('renders the cloud style the caller persisted, not the square default', () => {
+    // The drawer passed no `cloudStyle` at all before #597, so `cloudState()`
+    // fell back to 'square' and a style picked with every source off was lost
+    // on the next re-render.
+    const html = layerTogglesHtml({}, { narrow: true, cloudStyle: 'soft', openFamily: 'clouds' });
+    expect(html).toContain('<option value="soft" selected>');
+  });
+});
