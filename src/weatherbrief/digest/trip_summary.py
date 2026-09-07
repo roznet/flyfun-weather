@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import FlightTripRow
@@ -134,10 +135,11 @@ def build_context(summary: TripSummary) -> str:
         lines.append(f"Chain: {summary.chain_label}")
     lines.append(f"Legs: {summary.total_legs} total, {summary.remaining_legs} remaining")
     lines.append("")
-    lines.append("Legs (in order):")
+    lines.append("Legs (in order). Each carries the id you must echo back:")
     for index, leg in enumerate(summary.legs, start=1):
         bits = [
-            f"{index}. {leg.departure_time.strftime('%A %d %b %H:%MZ')} {leg.label}",
+            f"{index}. id={leg.flight_id}",
+            f"{leg.departure_time.strftime('%A %d %b %H:%MZ')} {leg.label}",
             f"state={leg.state}",
         ]
         if leg.grade_kind == "assessment":
@@ -165,11 +167,15 @@ def build_context(summary: TripSummary) -> str:
     )
     if binding is not None:
         lines.append(
-            f"Deterministic binding leg (you MUST name this one as the worst): "
-            f"{binding.departure_time.strftime('%A')}'s {binding.label}"
+            f"Deterministic binding leg — set worst_leg_id to exactly this id: "
+            f"{binding.flight_id} "
+            f"({binding.departure_time.strftime('%A')}'s {binding.label})"
         )
     else:
-        lines.append("Deterministic binding leg: none — no remaining leg is gradeable yet.")
+        lines.append(
+            "Deterministic binding leg: none — no remaining leg is gradeable "
+            "yet. Set worst_leg_id to the empty string."
+        )
     lines.append(f"Deterministic sentence: {summary.headline}")
     if summary.continuity_warnings:
         lines.append(
@@ -181,15 +187,81 @@ def build_context(summary: TripSummary) -> str:
 
 # ---------------------------------------------------------------------------
 # Guardrail
+#
+# The model returns the worst leg as a **field**, not as prose to be parsed, so
+# "did it name the right leg?" is an equality check on a flight id.
+#
+# The previous shape — regexes over the paragraph, looking for superlatives near
+# an ordered route match — was a losing game, and three review rounds proved it:
+# widen the superlative list and a correct paragraph gets rejected; scope the
+# search to a clause and a comma-appositive slips through; add negation
+# handling and something else appears. Each patch traded a false negative for a
+# false positive. Asking for the id removes the parse, and with it the entire
+# class of finding.
+#
+# The vocabulary and length checks stay: those genuinely are properties of the
+# prose, and matching a fixed word list is exactly what a regex is good at.
 # ---------------------------------------------------------------------------
 
 
-def check_guardrail(text: str, summary: TripSummary) -> str | None:
+class TripParagraph(BaseModel):
+    """Structured output from the trip model.
+
+    ``worst_leg_id`` is what makes the guardrail exact. The prompt lists each
+    leg with its id, and the model must echo the id of the leg it treats as the
+    difficult one — so verifying it is a comparison, not an interpretation.
+    """
+
+    worst_leg_id: str = Field(
+        description=(
+            "The flight id (exactly as given in the leg list) of the leg you "
+            "describe as the difficult one. Use the empty string only if no leg "
+            "is gradeable."
+        ),
+    )
+    paragraph: str = Field(description="Two to four sentences of plain prose.")
+
+
+#: Vocabulary that turns a description into a recommendation. Whole-word
+#: matched, case-insensitive, and deliberately a superset of what
+#: ``prompts/trip_v1.md`` forbids — the guardrail exists for the case where the
+#: model ignores the instruction, so anything the prompt bans must appear here.
+#: Kept blunt: a false positive costs a fallback to the deterministic sentence,
+#: which is the safe direction.
+_GO_NOGO_PATTERNS = [
+    r"\bgo/?no[- ]?go\b",
+    r"\bno[- ]?go\b",
+    r"\bis a go\b",
+    r"\bgood to go\b",
+    r"\bavoid(?:ed|ing|s)?\b",
+    r"\bshould (?:not )?fly\b",
+    r"\bshouldn'?t fly\b",
+    r"\bdon'?t fly\b",
+    r"\bdo not fly\b",
+    r"\brecommend(?:ed|ation|s)?\b",
+    r"\badvis(?:e|ed|able)\b",
+    r"\bsafe\b",
+    r"\bunsafe\b",
+    r"\bcancel(?:led|ling)?\b",
+    r"\bscrub\b",
+    r"\bpostpone\b",
+    r"\bI would\b",
+    r"\byou should\b",
+]
+_GO_NOGO_RE = re.compile("|".join(_GO_NOGO_PATTERNS), re.IGNORECASE)
+
+
+def check_guardrail(
+    text: str, summary: TripSummary, worst_leg_id: str | None = None,
+) -> str | None:
     """Return a rejection reason, or None when the paragraph may be shown.
 
     Cheap and exact because the deterministic layer already knows the answer:
-    the model's named worst leg must be the computed binding leg, and
+    the model's declared worst leg must *be* the computed binding leg, and
     recommendation vocabulary is out. Sibling of ``digest.guardrails``.
+
+    ``worst_leg_id`` is the model's structured answer. It is optional so the
+    vocabulary and length checks can be used on their own.
     """
     if not text or not text.strip():
         return "empty"
@@ -200,103 +272,16 @@ def check_guardrail(text: str, summary: TripSummary) -> str | None:
     if match:
         return f"go/no-go vocabulary: {match.group(0)!r}"
 
-    binding = next(
-        (leg for leg in summary.legs if leg.flight_id == summary.binding_leg_id), None,
-    )
-    if binding is None:
+    if worst_leg_id is None:
         return None
 
-    # The paragraph must mention the binding leg. Matched on the *ordered*
-    # route rather than the exact label, so "LFAT to EGTF", "LFAT-EGTF" and
-    # "LFAT → EGTF" all count as the same leg.
-    if _mentions_leg(text, binding.origin, binding.destination) is False:
-        return "named worst leg does not match the computed binding leg"
-
-    # And it must not headline a *different* leg as the worst one. Any other
-    # leg named alongside a superlative is the failure this guardrail exists
-    # for; naming other legs neutrally is fine and expected.
-    for leg in summary.legs:
-        if leg.flight_id == summary.binding_leg_id:
-            continue
-        # Every *clause* naming the leg, not just the first sentence: a lead-in
-        # can mention a leg well before the text that actually describes it, and
-        # a clause boundary is what keeps a superlative attached to the leg it
-        # was written about (see _fragments_naming).
-        for window in _fragments_naming(text, leg.origin, leg.destination):
-            if _SUPERLATIVE_RE.search(window):
-                return "a leg other than the binding one is named as the worst"
+    expected = summary.binding_leg_id or ""
+    if (worst_leg_id or "").strip() != expected:
+        return (
+            f"named worst leg {worst_leg_id!r} is not the computed binding leg "
+            f"{expected!r}"
+        )
     return None
-
-
-#: Words that turn a mention of a leg into a claim that *it* is the problem.
-#: ``difficult`` is load-bearing and easy to miss: ``prompts/trip_v1.md`` tells
-#: the model to describe "what kind of problem the difficult leg has", so that
-#: is the phrasing a mislabelled paragraph is most likely to use.
-_SUPERLATIVE_RE = re.compile(
-    r"\b(worst|difficult|hardest|toughest|problem(?:atic)?|decides|deciding|binding|"
-    r"limiting|weakest|marginal)\b",
-    re.IGNORECASE,
-)
-
-
-def _names_leg(fragment: str, origin: str | None, destination: str | None) -> bool:
-    """Does ``fragment`` name the leg ``origin`` → ``destination``?
-
-    **Order matters, and that is the whole point.** On a round trip both legs
-    carry the same two ICAO codes — ``EGTF → LSGS`` out and ``LSGS → EGTF``
-    back — so an unordered "does it mention both codes" test cannot tell them
-    apart, and every sentence about the return would also read as a sentence
-    about the outbound. Requiring the origin to appear *before* the
-    destination separates them, which is what stops "Sunday's LSGS to EGTF is
-    the difficult one" from being scored as a claim about Friday's outbound.
-    """
-    if not origin or not destination:
-        return False
-    # Word-boundary matched, like the superlative and go/no-go regexes: a bare
-    # substring search would let an ICAO code match inside a longer token.
-    first = re.search(rf"\b{re.escape(origin)}\b", fragment, re.IGNORECASE)
-    if first is None:
-        return False
-    return re.search(
-        rf"\b{re.escape(destination)}\b", fragment[first.end():], re.IGNORECASE,
-    ) is not None
-
-
-def _mentions_leg(text: str, origin: str | None, destination: str | None) -> bool:
-    """Whether the paragraph names this leg anywhere (see :func:`_names_leg`)."""
-    if not origin or not destination:
-        # Nothing to match against — don't reject on an unknowable condition.
-        return True
-    return _names_leg(text, origin, destination)
-
-
-#: Clause boundaries within a sentence. Splitting on these is what keeps the
-#: superlative check *local* to the leg it is next to.
-_CLAUSE_SPLIT_RE = re.compile(r"[,;:]|\s+(?:but|and|while|whereas|though|although)\s+|\s+[—–-]\s+")
-
-
-def _fragments_naming(
-    text: str, origin: str | None, destination: str | None,
-) -> list[str]:
-    """Every **clause** that names the leg ``origin`` → ``destination``.
-
-    Clause-level, not sentence-level, and that distinction is what keeps the
-    guardrail from rejecting correct paragraphs. Chain-adjacent legs share an
-    airport — ``A → B`` then ``B → C`` — so in
-
-        "Friday's A to B looks fine, but Saturday's B to C is the difficult one"
-
-    the ordered match for ``A → B`` succeeds on the whole sentence (it contains
-    A before B), and a sentence-wide search for "difficult" would then flag a
-    perfectly *correct* paragraph as naming the wrong leg. Scoped to the clause,
-    "difficult" stays attached to ``B → C``, where it belongs.
-    """
-    fragments: list[str] = []
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        for clause in _CLAUSE_SPLIT_RE.split(sentence):
-            if clause and _names_leg(clause, origin, destination):
-                fragments.append(clause)
-    return fragments
 
 
 # ---------------------------------------------------------------------------
@@ -304,31 +289,41 @@ def _fragments_naming(
 # ---------------------------------------------------------------------------
 
 
-def generate(summary: TripSummary) -> tuple[str | None, dict]:
-    """Call the model. Returns ``(text_or_None, token_usage)``. Never raises."""
+def generate(summary: TripSummary) -> tuple[TripParagraph | None, dict]:
+    """Call the model. Returns ``(parsed_or_None, token_usage)``. Never raises.
+
+    Structured output via ``with_structured_output(..., include_raw=True)`` —
+    the same shape ``digest/llm_digest.py`` uses — because the raw message is
+    where the token usage lives, and the cost has to be recorded even when the
+    parse or the guardrail later rejects the content.
+    """
     try:
         from weatherbrief.digest.llm_config import create_chat_model, load_digest_config
 
         config = load_digest_config()
         model = create_chat_model(config.trip)
+        structured = model.with_structured_output(TripParagraph, include_raw=True)
         system = config.load_prompt("trip")
-        result = model.invoke([
+        raw_result = structured.invoke([
             {"role": "system", "content": system},
             {"role": "user", "content": build_context(summary)},
         ])
-        text = getattr(result, "content", None)
-        if isinstance(text, list):  # some providers return content blocks
-            text = "".join(
-                block.get("text", "") for block in text if isinstance(block, dict)
-            )
-        usage = getattr(result, "usage_metadata", None) or {}
+        parsed = raw_result.get("parsed") if isinstance(raw_result, dict) else None
+        raw_msg = raw_result.get("raw") if isinstance(raw_result, dict) else None
+        usage = getattr(raw_msg, "usage_metadata", None) or {}
         details = usage.get("input_token_details") or {}
-        return (text or "").strip() or None, {
+        tokens = {
             "input_tokens": usage.get("input_tokens") or 0,
             "output_tokens": usage.get("output_tokens") or 0,
             "cache_read_tokens": details.get("cache_read") or 0,
             "cache_write_tokens": details.get("cache_creation") or 0,
         }
+        if parsed is None or not (parsed.paragraph or "").strip():
+            # Billed but unusable. Return the usage anyway so the caller can
+            # still charge it — an invisible cost line is how a small cost
+            # becomes an unexplained one.
+            return None, tokens
+        return parsed, tokens
     except Exception:
         logger.warning("Trip AI summary generation failed", exc_info=True)
         return None, {}
@@ -395,34 +390,69 @@ def ensure_trip_ai_summary(
     if not members:
         return TripAiResult(unavailable_reason="no_legs")
 
-    if leg_inputs is None:
-        leg_inputs = build_leg_inputs(db, members)
-    key = ai_summary_key(leg_inputs)
-    if not force and row.ai_summary_text and row.ai_summary_key == key:
-        return TripAiResult(text=row.ai_summary_text)
-
+    # The consent gate runs FIRST, ahead of the cache. It has to: the cache key
+    # is built from packs and debriefs, and ``llm_digest_enabled`` is in
+    # neither — so a pilot who turns AI off on a leg without touching its pack
+    # leaves the key unchanged, and a gate placed after the cache check would
+    # never be reached. The stored paragraph would keep being served, which is
+    # exactly the "gating inherits" guarantee this module promises three times
+    # over. Cheapest correct order, not merely the safest.
     if not legs_allow_ai(db, members, user_id):
-        # Inherited gate: clear any stale text so a leg switched to AI-off
-        # cannot keep being described by a paragraph written before the switch.
+        # Clear any stored text too, so a leg switched to AI-off cannot keep
+        # being described by a paragraph written before the switch.
         row.ai_summary_text = None
         row.ai_summary_key = None
         row.ai_summary_at = None
         return TripAiResult(unavailable_reason="ai_disabled")
 
-    text, usage = generate(summary)
-    if text is None:
+    if leg_inputs is None:
+        leg_inputs = build_leg_inputs(db, members)
+    key = ai_summary_key(leg_inputs)
+    if not force and row.ai_summary_key == key:
+        # Keyed on the *key alone*, not on the text: a stored key means these
+        # inputs have already been through the model, and the text is whatever
+        # came of it — a paragraph, or None because the guardrail rejected it or
+        # the call came back empty. Requiring text here would re-run (and
+        # re-charge) every page open for exactly the inputs that reliably fail.
+        # A None text simply hides the AI section; the deterministic sentence is
+        # always there.
+        return TripAiResult(text=row.ai_summary_text)
+
+    parsed, usage = generate(summary)
+    if parsed is None:
+        # A call that billed tokens and returned nothing usable still costs
+        # money, so it is still charged (``usage`` is empty when the call
+        # itself failed, which charges zero).
+        _charge(db, user_id, row.id, "", usage)
+        _remember_attempt(row, key)
         return TripAiResult(unavailable_reason="generation_failed")
 
-    rejection = check_guardrail(text, summary)
+    text = parsed.paragraph.strip()
+    rejection = check_guardrail(text, summary, worst_leg_id=parsed.worst_leg_id)
+    _charge(db, user_id, row.id, text, usage)
     if rejection is not None:
         logger.info("Trip %s: AI summary rejected (%s)", row.id, rejection)
-        # Deliberately not persisted: the deterministic sentence stands on its
-        # own, and storing a rejected paragraph would only invite showing it.
-        _charge(db, user_id, row.id, text, usage)
+        # Deliberately not shown: the deterministic sentence stands on its own.
+        # The key is still recorded so a leg combination that reliably fails the
+        # guardrail is not regenerated — and re-charged — on every page open.
+        _remember_attempt(row, key)
         return TripAiResult(unavailable_reason="guardrail_rejected")
 
     row.ai_summary_text = text
     row.ai_summary_key = key
     row.ai_summary_at = datetime.now(timezone.utc)
-    _charge(db, user_id, row.id, text, usage)
     return TripAiResult(text=text, regenerated=True)
+
+
+def _remember_attempt(row: FlightTripRow, key: str) -> None:
+    """Record that this input set was tried and produced nothing showable.
+
+    Without it, inputs that reliably fail (a rejected paragraph, a model that
+    keeps returning empty) are regenerated and re-charged on every trip-page
+    open — the opposite of the "unchanged inputs never pay twice" invariant.
+    The text stays ``None``, so the page falls back to the deterministic
+    sentence; only the key advances.
+    """
+    row.ai_summary_text = None
+    row.ai_summary_key = key
+    row.ai_summary_at = datetime.now(timezone.utc)

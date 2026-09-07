@@ -111,6 +111,31 @@ class TestTripCrud:
         assert r.status_code == 201, r.text
         assert r.json()["summary"]["total_legs"] == 1
 
+    def test_an_empty_create_survives_its_own_prune(self, client, app_db):
+        """`prune_empty_trips` must not delete the trip created a line earlier.
+
+        It ran unscoped, so `flight_ids: []` created a row and immediately
+        removed it — returning 201 for a trip that 404s on the very next GET.
+        """
+        r = client.post("/api/trips", json={"flight_ids": [], "name": "Later"})
+        assert r.status_code == 201, r.text
+        trip_id = r.json()["id"]
+        assert client.get(f"/api/trips/{trip_id}").status_code == 200
+
+    def test_an_empty_create_without_a_name_also_survives(self, client, app_db):
+        r = client.post("/api/trips", json={"flight_ids": []})
+        assert r.status_code == 201, r.text
+        assert client.get(f"/api/trips/{r.json()['id']}").status_code == 200
+
+    def test_readding_an_existing_leg_does_not_trip_the_cap(self, client, chain):
+        trip = client.post("/api/trips", json={"flight_ids": [chain[0].id]}).json()
+        # A client retry re-sending a leg already in the trip is not growth.
+        r = client.post(
+            f"/api/trips/{trip['id']}/legs", json={"flight_ids": [chain[0].id]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["flight_ids"] == [chain[0].id]
+
     def test_unknown_flight_is_a_404_not_a_partial_group(self, client, chain):
         r = client.post(
             "/api/trips", json={"flight_ids": [chain[0].id, "does-not-exist"]},

@@ -75,7 +75,12 @@ function stopPolling(): void {
 function startPolling(): void {
   if (pollTimer != null || !trip) return;
   const id = trip.id;
+  // Guard against overlapping ticks: a slow response arriving after a fresher
+  // one would otherwise write stale progress back over it.
+  let inFlight = false;
   pollTimer = window.setInterval(async () => {
+    if (inFlight) return;
+    inFlight = true;
     try {
       const status = await fetchTripRefreshStatus(id);
       if (trip) {
@@ -95,6 +100,8 @@ function startPolling(): void {
       }
     } catch {
       stopPolling();
+    } finally {
+      inFlight = false;
     }
   }, REFRESH_POLL_MS);
 }
@@ -143,10 +150,18 @@ async function handleRemoveLeg(flightId: string): Promise<void> {
   }
   try {
     trip = await fetchTrip(id);
-  } catch {
-    // Unlinking the last leg prunes the (now empty) container, so there is no
-    // trip left to show — that is the expected end of this page, not an error.
-    window.location.href = '/index.html';
+  } catch (err) {
+    // Only a 404 means "the container was pruned because that was its last
+    // leg" — the expected end of this page. Any other failure (network, 500)
+    // is a real error and must say so rather than silently navigating away,
+    // which would look identical to success. `API 404:` is the prefix the
+    // adapter puts on HTTP errors (see briefing-store's use of the same test).
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith('API 404:')) {
+      window.location.href = '/index.html';
+      return;
+    }
+    ui.renderError(errorToMessage(err));
     return;
   }
   renderAll(null);

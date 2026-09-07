@@ -306,7 +306,17 @@ def _build_headline(summary: TripSummary, binding: TripLeg | None) -> str:
     if binding is None:
         if summary.remaining_legs == 0:
             return "Every leg of this trip is behind you."
-        if summary.pending_coverage_leg_ids:
+        pending_only = (
+            summary.pending_coverage_leg_ids
+            and not summary.unavailable_leg_ids
+            and not summary.needs_briefing_leg_ids
+        )
+        if pending_only:
+            # Only when pending coverage is the *whole* story. Returning here
+            # unconditionally made a trip with one 60-days-out leg and one
+            # never-briefed leg say "nothing to weigh until they come into
+            # range", which is false for the near one — the same conflation
+            # fixed for unavailable/needs-briefing, in a sibling branch.
             return (
                 f"No weather model reaches {'this leg' if len(summary.pending_coverage_leg_ids) == 1 else 'these legs'} yet — "
                 "nothing to weigh until they come into range."
@@ -322,13 +332,12 @@ def _build_headline(summary: TripSummary, binding: TripLeg | None) -> str:
                 f"{'was' if n == 1 else 'were'} briefed, but the forecast could "
                 "not be assessed."
             ]
-            waiting = len(summary.needs_briefing_leg_ids)
-            if waiting:
-                parts.append(
-                    f"{'Another' if waiting == 1 else f'{waiting} others'} "
-                    f"{'has' if waiting == 1 else 'have'} no briefing yet."
-                )
+            parts.extend(_other_gaps(summary, skip="unavailable"))
             parts.append("Re-check after the next model run.")
+            return " ".join(parts)
+        if summary.needs_briefing_leg_ids:
+            parts = ["No leg of this trip has a briefing yet."]
+            parts.extend(_other_gaps(summary, skip="needs_briefing"))
             return " ".join(parts)
         return "No leg of this trip has a briefing yet."
 
@@ -349,17 +358,42 @@ def _build_headline(summary: TripSummary, binding: TripLeg | None) -> str:
             f"Not decidable on high-resolution guidance until {summary.decidable_from.strftime('%a %d %b')}."
         )
 
-    extras = []
-    if summary.needs_briefing_leg_ids:
-        n = len(summary.needs_briefing_leg_ids)
-        extras.append(f"{n} leg{'' if n == 1 else 's'} still needs a briefing")
-    if summary.pending_coverage_leg_ids:
-        n = len(summary.pending_coverage_leg_ids)
-        extras.append(f"{n} beyond coverage")
+    # Every gap, not just two of them: a trip whose binding leg is GREEN while
+    # another remaining leg is beyond-horizon or ungradeable deserves to have
+    # that said, or the one sentence the eye lands on is silent about a real
+    # hole elsewhere in the same trip.
+    extras = _gap_phrases(summary)
     if extras:
         parts.append(f"({'; '.join(extras)}.)")
 
     return " ".join(parts)
+
+
+def _gap_phrases(summary: TripSummary, skip: str | None = None) -> list[str]:
+    """Short "n legs still need a briefing" phrases for every non-gradeable set."""
+    phrases: list[str] = []
+    if skip != "needs_briefing" and summary.needs_briefing_leg_ids:
+        n = len(summary.needs_briefing_leg_ids)
+        phrases.append(
+            f"{n} leg{'' if n == 1 else 's'} still "
+            f"{'needs' if n == 1 else 'need'} a briefing"
+        )
+    if skip != "unavailable" and summary.unavailable_leg_ids:
+        n = len(summary.unavailable_leg_ids)
+        phrases.append(f"{n} could not be assessed")
+    if skip != "pending_coverage" and summary.pending_coverage_leg_ids:
+        n = len(summary.pending_coverage_leg_ids)
+        phrases.append(f"{n} beyond coverage")
+    if skip != "beyond_horizon" and summary.beyond_horizon_leg_ids:
+        n = len(summary.beyond_horizon_leg_ids)
+        phrases.append(f"{n} still on a long-range outlook")
+    return phrases
+
+
+def _other_gaps(summary: TripSummary, *, skip: str) -> list[str]:
+    """The gap phrases as a sentence, for the no-binding-leg branches."""
+    phrases = _gap_phrases(summary, skip=skip)
+    return [f"Also: {'; '.join(phrases)}."] if phrases else []
 
 
 def summarize_trip(
