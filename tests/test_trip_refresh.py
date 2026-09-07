@@ -363,6 +363,67 @@ class TestFinishIsFenced:
         )
 
 
+class TestFullChainFiresOnce:
+    """The chain's two terminal side effects fire once, at the end, not per leg.
+
+    Every other test in this module monkeypatches ``_regenerate_ai_summary`` and
+    ``_send_coalesced`` to no-ops, so a regression that stopped either call —
+    or moved it inside the per-leg path, re-billing Haiku and pushing three
+    times for one chain — passes the whole suite. This drives a real chain to
+    completion and counts.
+    """
+
+    def _spies(self, monkeypatch):
+        calls: dict[str, list] = {"ai": [], "send": []}
+        monkeypatch.setattr(
+            trip_refresh, "_regenerate_ai_summary",
+            lambda db, trip_id, user_id: calls["ai"].append(trip_id),
+        )
+        monkeypatch.setattr(
+            trip_refresh, "_send_coalesced",
+            lambda db, trip_id, trip_name, state, user_id: calls["send"].append(state),
+        )
+        return calls
+
+    def test_a_full_chain_fires_each_exactly_once(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        calls = self._spies(monkeypatch)
+        trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+
+        trip_refresh.note_leg_done(session, trip_with_legs.id, "leg1", "succeeded")
+        trip_refresh.note_leg_done(session, trip_with_legs.id, "leg2", "succeeded")
+        # Positive control: an absence assertion is worthless without one. If
+        # either call had moved into the per-leg path these would already be 2.
+        assert calls["ai"] == [], "the AI paragraph must not regenerate per leg"
+        assert calls["send"] == [], "the notification must not fire per leg"
+
+        trip_refresh.note_leg_done(session, trip_with_legs.id, "leg3", "succeeded")
+
+        assert calls["ai"] == [trip_with_legs.id], "exactly one regeneration per chain"
+        assert len(calls["send"]) == 1, "exactly one coalesced notification per chain"
+
+    def test_the_coalesced_send_gets_every_legs_result(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """The state handed to the notification carries the whole chain.
+
+        Guards the shape the summary line is built from — a send that fired once
+        but only knew about the last leg would satisfy the count assertion above.
+        """
+        calls = self._spies(monkeypatch)
+        trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        for flight_id, outcome in (
+            ("leg1", "succeeded"), ("leg2", "skipped"), ("leg3", "succeeded"),
+        ):
+            trip_refresh.note_leg_done(session, trip_with_legs.id, flight_id, outcome)
+
+        state = calls["send"][0]
+        assert state["results"] == {
+            "leg1": "succeeded", "leg2": "skipped", "leg3": "succeeded",
+        }
+
+
 class TestSingleLegGuard:
     """A manual per-flight refresh must yield to a live trip run too.
 

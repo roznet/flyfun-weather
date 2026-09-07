@@ -158,7 +158,12 @@ export function renderLegs(summary: TripSummary, handlers: LegRowHandlers): void
   if (!el) return;
 
   if (summary.legs.length === 0) {
-    el.innerHTML = `<p class="muted">${escapeHtml(t('trips.notFound'))}</p>`;
+    // Not `trips.notFound` — that string is for a trip container that does not
+    // exist, which is a 404 handled before we ever render. A trip that loads
+    // with no legs is a different (and currently unreachable, since empty trips
+    // are pruned server-side) state, and saying "not found" about a trip the
+    // user is looking at would be actively misleading if pruning ever slips.
+    el.innerHTML = `<p class="muted">${escapeHtml(t('trips.noLegs'))}</p>`;
     return;
   }
 

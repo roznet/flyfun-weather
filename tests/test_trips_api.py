@@ -13,11 +13,27 @@ from sqlalchemy.orm import sessionmaker
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
 from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.api.app import create_app
-from weatherbrief.db.models import FlightRow, FlightTripRow
+from weatherbrief.db.models import FlightProfileRow, FlightRow, FlightTripRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import save_flight
 
 _NOW = datetime.now(timezone.utc)
+
+#: Every route scoped to a single trip id, with a body where one is required.
+#: Held as an explicit table so each entry is a deliberate claim about what a
+#: foreign caller gets; ``test_the_foreign_route_table_covers_every_trip_scoped_route``
+#: stops it drifting behind the router.
+_FOREIGN_TRIP_ROUTES = [
+    ("get", "/api/trips/otherstrip", None),
+    ("get", "/api/trips/otherstrip/summary", None),
+    ("patch", "/api/trips/otherstrip", {"name": "mine now"}),
+    ("delete", "/api/trips/otherstrip", None),
+    ("post", "/api/trips/otherstrip/legs", {"flight_ids": []}),
+    ("delete", "/api/trips/otherstrip/legs/whatever", None),
+    ("post", "/api/trips/otherstrip/refresh", None),
+    ("get", "/api/trips/otherstrip/refresh/status", None),
+    ("post", "/api/trips/otherstrip/ai-summary", None),
+]
 
 
 @pytest.fixture
@@ -222,8 +238,35 @@ class TestTripCrud:
         ))
         s.commit()
         s.close()
-        assert client.get("/api/trips/otherstrip").status_code == 404
-        assert client.delete("/api/trips/otherstrip").status_code == 404
+        # Every trip-id-scoped route, not just the two that were covered here
+        # before. The guard is re-applied per handler, so a dropped call site on
+        # any one of them is a cross-user read/write — this codebase has already
+        # shipped exactly that failure mode once, on the refresh guard.
+        for method, path, body in _FOREIGN_TRIP_ROUTES:
+            r = getattr(client, method)(path, **({"json": body} if body else {}))
+            assert r.status_code == 404, f"{method.upper()} {path} -> {r.status_code}"
+
+    def test_the_foreign_route_table_covers_every_trip_scoped_route(self, client):
+        """The table above must not drift behind the router.
+
+        A new ``/{trip_id}/...`` endpoint added without a line here would be
+        untested for cross-user access and nothing would say so.
+        """
+        registered = {
+            (m.lower(), r.path)
+            for r in client.app.routes
+            for m in getattr(r, "methods", set()) or set()
+            if "/trips/{trip_id}" in getattr(r, "path", "")
+        }
+        covered = {
+            (m, p.replace("/api/trips/otherstrip", "/api/trips/{trip_id}")
+                 .replace("/whatever", "/{flight_id}"))
+            for m, p, _ in _FOREIGN_TRIP_ROUTES
+        }
+        assert registered - covered == set(), (
+            "trip-scoped routes with no cross-user 404 test: "
+            f"{sorted(registered - covered)}"
+        )
 
 
 class TestTripOnFlightResponse:
@@ -240,6 +283,58 @@ class TestTripOnFlightResponse:
     def test_ungrouped_flight_has_no_trip_block(self, client, chain):
         flights = client.get("/api/flights").json()
         assert all(f["trip"] is None for f in flights)
+
+
+class TestReadTimeConsentGate:
+    """A stored paragraph must not survive a leg switching AI off.
+
+    `ai_summary_key` is built from packs and debriefs, so flipping
+    `llm_digest_enabled` leaves the key untouched and the stored text un-stale.
+    `_trip_to_response` therefore re-checks consent on every read; without that,
+    `GET /api/trips/{id}` keeps serving an LLM paragraph to a pilot who opted
+    out. Exercised end-to-end through a real profile rather than a patched gate.
+    """
+
+    def _trip_with_stored_paragraph(self, client, chain, app_db):
+        trip = client.post("/api/trips", json={"flight_ids": [f.id for f in chain]}).json()
+        s = app_db()
+        row = s.get(FlightTripRow, trip["id"])
+        row.ai_summary_text = "Sunday's return is the one to watch."
+        s.commit()
+        s.close()
+        return trip["id"]
+
+    def test_a_stored_paragraph_is_served_while_every_leg_consents(
+        self, client, chain, app_db,
+    ):
+        """Positive control — without it the assertion below proves nothing."""
+        trip_id = self._trip_with_stored_paragraph(client, chain, app_db)
+        body = client.get(f"/api/trips/{trip_id}").json()
+        assert body["ai_summary"] == "Sunday's return is the one to watch."
+
+    def test_one_leg_with_ai_off_withholds_the_stored_paragraph(
+        self, client, chain, app_db,
+    ):
+        trip_id = self._trip_with_stored_paragraph(client, chain, app_db)
+        s = app_db()
+        profile = FlightProfileRow(
+            user_id=DEV_USER_ID, name="No AI",
+            settings_json=json.dumps({"llm_digest_enabled": False}),
+        )
+        s.add(profile)
+        s.flush()
+        # Just one leg opts out — consent is unanimous or it is not consent.
+        s.get(FlightRow, chain[1].id).profile_id = profile.id
+        s.commit()
+        s.close()
+
+        body = client.get(f"/api/trips/{trip_id}").json()
+        assert body["ai_summary"] is None
+        # Withheld at read time, not deleted: the row still holds the text, so
+        # turning AI back on restores it without re-billing Haiku.
+        s = app_db()
+        assert s.get(FlightTripRow, trip_id).ai_summary_text is not None
+        s.close()
 
 
 class TestMoveAndDuplicate:

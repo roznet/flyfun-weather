@@ -915,6 +915,7 @@
   "trips.btnRemove": "Retirer du voyage",
   "trips.removeConfirm": "Retirer {count} vol(s) de leur voyage ? Les vols et leurs briefings sont conservés.",
   "trips.legsAhead": "{remaining} étapes sur {total} à venir",
+  "trips.noLegs": "Ce voyage n'a aucune \u00e9tape.",
   "trips.decidedBy": "Déterminé par {leg}",
   "trips.noGrade": "Pas encore évaluable",
   "trips.open": "Voyage",

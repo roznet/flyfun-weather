@@ -915,6 +915,7 @@
   "trips.btnRemove": "Aus Reise entfernen",
   "trips.removeConfirm": "{count} Flug/Flüge aus der Reise entfernen? Die Flüge und ihre Briefings bleiben erhalten.",
   "trips.legsAhead": "{remaining} von {total} Etappen bevorstehend",
+  "trips.noLegs": "Diese Reise hat keine Etappen.",
   "trips.decidedBy": "Entscheidend: {leg}",
   "trips.noGrade": "Noch nicht bewertbar",
   "trips.open": "Reise",

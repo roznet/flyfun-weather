@@ -915,6 +915,7 @@
   "trips.btnRemove": "Quitar del viaje",
   "trips.removeConfirm": "¿Quitar {count} vuelo(s) de su viaje? Los vuelos y sus briefings se conservan.",
   "trips.legsAhead": "{remaining} de {total} tramos por delante",
+  "trips.noLegs": "Este viaje no tiene tramos.",
   "trips.decidedBy": "Decidido por {leg}",
   "trips.noGrade": "Aún no evaluable",
   "trips.open": "Viaje",

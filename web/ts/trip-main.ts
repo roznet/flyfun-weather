@@ -187,7 +187,12 @@ async function handleRemoveLeg(flightId: string): Promise<void> {
     ui.renderError(errorToMessage(err));
     return;
   }
-  renderAll(null);
+  // Re-fetch rather than clear: unlinking changes the member tuple, so the
+  // stored paragraph could name a leg that is no longer in the trip. Blanking
+  // it is safe but leaves the section empty until the next page load — which
+  // would regenerate on the same stale key anyway, so this moves that cost
+  // earlier rather than adding one.
+  renderAll(await loadAiSummary(id));
 }
 
 async function handleDelete(): Promise<void> {

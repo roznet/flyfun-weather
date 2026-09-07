@@ -1076,6 +1076,7 @@
   "trips.btnRemove": "Remove from trip",
   "trips.removeConfirm": "Remove {count} flight(s) from their trip? The flights and their briefings are kept.",
   "trips.legsAhead": "{remaining} of {total} legs ahead",
+  "trips.noLegs": "This trip has no legs.",
   "trips.decidedBy": "Decided by {leg}",
   "trips.noGrade": "Not yet gradeable",
   "trips.open": "Trip",
