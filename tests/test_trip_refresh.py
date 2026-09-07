@@ -109,6 +109,57 @@ class TestAdmission:
                 object(), DEV_USER_ID,
             )
 
+    def test_starts_commit_happens_inside_the_state_lock(self):
+        """The sequential double-press test above cannot see this property.
+
+        Both calls share one session, so the second observes the first's write
+        whether or not the commit was inside ``_state_lock`` — it would keep
+        passing through exactly the regression it looks like it guards. A real
+        two-thread race cannot discriminate either: ``make_app_engine`` uses a
+        ``StaticPool``, so both threads share one connection and therefore one
+        transaction, and the second caller sees the first's *uncommitted* write
+        regardless. (A file-backed WAL engine would isolate them, at the price
+        of a timing-dependent test in CI, which is worse than none.)
+
+        So the property is asserted where it actually lives: lexically. Every
+        ``commit()`` in ``start`` must sit inside the ``with _state_lock``
+        block, which is what makes a concurrent caller's read see the write.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        src = textwrap.dedent(inspect.getsource(trip_refresh.start))
+        fn = ast.parse(src).body[0]
+
+        def commits(node):
+            return [
+                n for n in ast.walk(node)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "commit"
+            ]
+
+        guarded = [
+            c
+            for stmt in ast.walk(fn)
+            if isinstance(stmt, ast.With)
+            and any(
+                isinstance(i.context_expr, ast.Name)
+                and i.context_expr.id == "_state_lock"
+                for i in stmt.items
+            )
+            for c in commits(stmt)
+        ]
+        all_commits = commits(fn)
+        assert all_commits, "start() no longer commits — has the state write moved?"
+        outside = [c for c in all_commits if c not in guarded]
+        assert not outside, (
+            f"{len(outside)} commit(s) in start() are outside _state_lock; a "
+            "concurrent press would then read a row without the run marker and "
+            "open a second run over the same trip"
+        )
+
     def test_a_stale_run_does_not_block_forever(self, session, trip_with_legs):
         trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
         row = session.get(FlightTripRow, trip_with_legs.id)
