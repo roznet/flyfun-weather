@@ -1,9 +1,10 @@
 /** DOM management for the Flights list page. */
 
-import type { BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse } from '../store/types';
+import type { BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse, TripResponse, TripSummary } from '../store/types';
 import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
+import { buildTripSelection, type TripSelectionContext } from '../helpers/trip-selection';
 import { t, getDateLocale } from '../i18n/i18n';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefPill, renderDebriefSummary } from '../components/debrief-summary';
@@ -284,6 +285,108 @@ let pastExpanded = false;
 /** Recent section starts expanded — it's the nudge to debrief. */
 let recentExpanded = true;
 
+// --- Trip cards (#602) ---
+
+/** Which trip cards the pilot has opened.
+ *
+ * Per-trip rather than the single boolean the past/recent sections use, and
+ * persisted so a reload doesn't re-collapse what was opened. Default is
+ * **collapsed**: the collapsed card already carries the binding-leg chip, so
+ * auto-expanding a red trip would add noise rather than information — and make
+ * the list jump around as forecasts change. Remember the choice instead. */
+const TRIP_EXPANDED_KEY = 'flights.tripsExpanded';
+
+function loadExpandedTrips(): Set<string> {
+  try {
+    const raw = localStorage.getItem(TRIP_EXPANDED_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+let tripExpanded: Set<string> = loadExpandedTrips();
+
+function persistExpandedTrips(): void {
+  try {
+    localStorage.setItem(TRIP_EXPANDED_KEY, JSON.stringify([...tripExpanded]));
+  } catch {
+    // Private mode / storage disabled — expansion just doesn't survive a reload.
+  }
+}
+
+/** Binding-leg chip for the collapsed trip card.
+ *
+ * Renders the server's computed binding leg — never a colour for the trip as a
+ * whole. When the binding leg was picked on a long-range *outlook* rather than
+ * a traffic light, it shows the soft outlook badge, because folding an outlook
+ * into a traffic light is exactly how the signal dies. */
+function bindingChip(summary: TripSummary): string {
+  const leg = summary.legs.find(l => l.flight_id === summary.binding_leg_id);
+  if (!leg) {
+    if (summary.remaining_legs === 0) return '';
+    return `<span class="badge badge-none">${escapeHtml(t('trips.noGrade'))}</span>`;
+  }
+  const badge = summary.binding_basis === 'outlook'
+    ? `<span class="badge badge-outlook ${OUTLOOK_BADGE_CLASS[(leg.outlook || '').toUpperCase()] ?? 'badge-outlook-mixed'}">${escapeHtml(t(`outlook.${(leg.outlook || '').toLowerCase()}`))}</span>`
+    : `<span class="badge ${assessmentClass(leg.assessment)}">${escapeHtml(leg.assessment || '—')}</span>`;
+  const days = leg.days_out != null ? ` <span class="pack-info">D-${leg.days_out}</span>` : '';
+  return `<span class="trip-binding" title="${escapeHtml(summary.headline)}">${escapeHtml(t('trips.decidedBy', { leg: leg.label }))} ${badge}${days}</span>`;
+}
+
+/** One collapsible trip card, holding its future/recent member legs.
+ *
+ * Placement and scope, both deliberate:
+ *
+ * - The card sits in the section of its earliest un-flown leg, which keeps the
+ *   trip (not the leg) as the unit of attention and resolves the straddle case
+ *   with one rule instead of a rendering special case.
+ * - It holds only the **future + recent** members. The past section is
+ *   server-paginated and server-filtered, so a past leg pulled into this card
+ *   could vanish or duplicate depending on which page is loaded; past legs keep
+ *   rendering individually with a trip badge instead. The "n of m legs ahead"
+ *   count comes from the server's leg total, so it stays honest either way, and
+ *   the trip page shows the whole chain including flown legs. */
+function renderTripCard(
+  trip: TripResponse,
+  members: FlightResponse[],
+  activeRefreshes: Record<string, RefreshEntry>,
+  selectedIds: Set<string>,
+  matchTokens: string[],
+): string {
+  const summary = trip.summary;
+  const expanded = tripExpanded.has(trip.id);
+  const dates = summary.legs.length > 0
+    ? `${formatDate(summary.legs[0].departure_time.slice(0, 10))} – ${formatDate(summary.legs[summary.legs.length - 1].departure_time.slice(0, 10))}`
+    : '';
+  const ahead = t('trips.legsAhead', {
+    remaining: summary.remaining_legs,
+    total: summary.total_legs,
+  });
+  const refreshing = trip.refresh?.active
+    ? `<span class="badge badge-refreshing">${escapeHtml(trip.refresh.message || t('trips.refreshing'))}<span class="dots-spinner"></span></span>`
+    : '';
+  const cards = members.map(f =>
+    renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), matchTokens),
+  ).join('');
+
+  return `
+    <div class="trip-card${expanded ? '' : ' collapsed'}" data-trip-id="${escapeHtml(trip.id)}">
+      <div class="trip-card-header">
+        <button type="button" class="trip-toggle" data-trip-toggle="${escapeHtml(trip.id)}"
+                aria-expanded="${expanded ? 'true' : 'false'}">
+          <span class="trip-chain">${escapeHtml(summary.chain_label || trip.name)}</span>
+          <span class="trip-dates">${escapeHtml(dates)}</span>
+          <span class="trip-count">${escapeHtml(ahead)}</span>
+        </button>
+        <div class="trip-card-status">${refreshing}${bindingChip(summary)}</div>
+        <a class="btn btn-secondary btn-sm trip-open" href="/trip.html?id=${encodeURIComponent(trip.id)}">${escapeHtml(t('trips.open'))}</a>
+      </div>
+      <div class="trip-legs">${cards}</div>
+    </div>
+  `;
+}
+
 /** Render a single flight card. */
 function renderFlightCard(
   f: FlightResponse,
@@ -417,6 +520,12 @@ export interface SelectionHandlers {
   onClearSelection: () => void;
   /** Drop selections whose row the active filter is hiding (#542). */
   onPruneSelection: (visibleIds: string[]) => void;
+  /** Group the selected flights into a new trip (#602). */
+  onGroupAsTrip?: (ids: string[]) => void;
+  /** Add the selected flights to the one trip already represented. */
+  onAddToTrip?: (tripId: string, ids: string[]) => void;
+  /** Unlink the selected flights from their trip — never a delete. */
+  onRemoveFromTrip?: (pairs: { tripId: string; flightId: string }[]) => void;
 }
 
 export function renderFlightList(
@@ -434,6 +543,7 @@ export function renderFlightList(
   stats?: DebriefStats | null,
   onDebriefChanged?: () => void,
   filters?: FilterHandlers,
+  trips: TripResponse[] = [],
 ): void {
   const container = $('flight-list');
   if (!container) return;
@@ -492,17 +602,34 @@ export function renderFlightList(
   const recentShown = upcomingTokens.length > 0 ? recent.filter(keep) : recent;
   renderUpcomingFilter(filters, upcomingTotal, futureShown.length + recentShown.length);
 
-  const futureCards = futureShown.map(f =>
-    renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), upcomingTokens),
-  ).join('');
+  // --- Trip grouping (#602) ---
+  // Group *before* sectioning, then place each group at its first un-flown
+  // member. Ungrouped flights keep exactly today's path — the trip case is
+  // additive, not a rewrite.
+  const tripsById = new Map(trips.map(t => [t.id, t]));
+  const emittedTrips = new Set<string>();
+
+  const renderSectionCards = (rows: FlightResponse[], tokens: string[]): string =>
+    rows.map((f) => {
+      const trip = f.trip ? tripsById.get(f.trip.id) : undefined;
+      if (!trip) {
+        return renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), tokens);
+      }
+      if (emittedTrips.has(trip.id)) return '';  // already inside its card
+      emittedTrips.add(trip.id);
+      const members = [...futureShown, ...recentShown].filter(
+        m => m.trip?.id === trip.id,
+      );
+      return renderTripCard(trip, members, activeRefreshes, selectedIds, tokens);
+    }).join('');
+
+  const futureCards = renderSectionCards(futureShown, upcomingTokens);
 
   let recentSection = '';
   // A section with no matches hides entirely rather than rendering "(0)".
   if (recentShown.length > 0) {
     const expandedClass = recentExpanded ? '' : ' collapsed';
-    const recentCards = recentShown.map(f =>
-      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), upcomingTokens),
-    ).join('');
+    const recentCards = renderSectionCards(recentShown, upcomingTokens);
     recentSection = `
       <div class="recent-flights-section${expandedClass}">
         <button class="recent-flights-toggle" id="recent-flights-toggle">
@@ -584,6 +711,20 @@ export function renderFlightList(
     recentExpanded = !recentExpanded;
     const section = recentToggleBtn.closest('.recent-flights-section');
     section?.classList.toggle('collapsed', !recentExpanded);
+  });
+
+  // Trip cards: toggle a class (no re-render) and remember the choice.
+  container.querySelectorAll('[data-trip-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tripId = (btn as HTMLElement).dataset.tripToggle!;
+      const card = btn.closest('.trip-card');
+      const open = tripExpanded.has(tripId);
+      if (open) tripExpanded.delete(tripId);
+      else tripExpanded.add(tripId);
+      persistExpandedTrips();
+      card?.classList.toggle('collapsed', open);
+      btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
   });
 
   // --- Past filter (#542) ---
@@ -769,6 +910,7 @@ export function renderFlightList(
     [...selectableActive, ...selectablePast],
     selectablePast,
     selection,
+    buildTripSelection(flights, effectiveSelected),
   );
 }
 
@@ -778,6 +920,7 @@ function renderSelectionBar(
   allIds: string[],
   pastIds: string[],
   selection: SelectionHandlers,
+  tripCtx?: TripSelectionContext,
 ): void {
   let bar = document.getElementById('selection-bar') as HTMLDivElement | null;
 
@@ -795,15 +938,42 @@ function renderSelectionBar(
 
   const showSelectAll = allIds.length > 0;
   const showSelectPast = pastIds.length > 0;
+
+  // Context-sensitive trip actions — see buildTripSelection for the rule.
+  let tripActions = '';
+  if (tripCtx && selection.onGroupAsTrip && tripCtx.tripCount === 0) {
+    tripActions += `<button type="button" class="btn btn-outline btn-sm btn-group-trip">${escapeHtml(t('trips.btnGroup'))}</button>`;
+  } else if (tripCtx && selection.onAddToTrip && tripCtx.tripCount === 1 && tripCtx.ungroupedIds.length > 0) {
+    tripActions += `<button type="button" class="btn btn-outline btn-sm btn-add-trip">${escapeHtml(t('trips.btnAddTo', { name: tripCtx.singleTrip!.name }))}</button>`;
+  }
+  if (tripCtx && selection.onRemoveFromTrip && tripCtx.memberships.length > 0) {
+    tripActions += `<button type="button" class="btn btn-outline btn-sm btn-remove-trip">${escapeHtml(t('trips.btnRemove'))}</button>`;
+  }
+
   bar.innerHTML = `
     <span class="selection-count">${t('flights.selected', { count: selectedCount })}</span>
     <div class="selection-actions">
       ${showSelectAll ? `<button type="button" class="btn btn-outline btn-sm btn-select-all">${t('flights.btnSelectAll')}</button>` : ''}
       ${showSelectPast ? `<button type="button" class="btn btn-outline btn-sm btn-select-past">${t('flights.btnSelectAllPast')}</button>` : ''}
+      ${tripActions}
       <button type="button" class="btn btn-outline btn-sm btn-clear-selection">${t('flights.btnClearSelection')}</button>
       <button type="button" class="btn btn-danger btn-sm btn-bulk-delete">${t('flights.btnDeleteSelected')}</button>
     </div>
   `;
+
+  bar.querySelector('.btn-group-trip')?.addEventListener('click', () => {
+    selection.onGroupAsTrip?.(tripCtx!.selectedIds);
+  });
+  bar.querySelector('.btn-add-trip')?.addEventListener('click', () => {
+    selection.onAddToTrip?.(tripCtx!.singleTrip!.id, tripCtx!.ungroupedIds);
+  });
+  bar.querySelector('.btn-remove-trip')?.addEventListener('click', () => {
+    // An unlink, and the confirm says so — the flights and their (expensive)
+    // packs are untouched.
+    if (confirm(t('trips.removeConfirm', { count: tripCtx!.memberships.length }))) {
+      selection.onRemoveFromTrip?.(tripCtx!.memberships);
+    }
+  });
 
   bar.querySelector('.btn-select-all')?.addEventListener('click', () => {
     selection.onSelectAll(allIds);

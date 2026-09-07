@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.security import audit_pack_access
-from weatherbrief.db.models import BriefingUsageRow
+from weatherbrief.db.models import BriefingUsageRow, FlightTripRow
 from weatherbrief.connectors.views import (
     advisory_detail as _advisory_detail,
     convective_detail as _convective_detail,
@@ -2038,14 +2038,43 @@ def _notify_refresh_complete(
     if not notify_user_id:
         return
     try:
+        from weatherbrief.api import trip_refresh
         from weatherbrief.notify.dispatch import notify_briefing_refresh
 
         present = refresh_registry.is_watched(flight.id)
-        notify_briefing_refresh(
+
+        # Trip coalescing + override precedence, both from this one seam.
+        # A leg inside a live trip refresh must not fire its own push: the WHEN
+        # decision still runs (and still advances the badge, which counts
+        # unopened *flights*), but delivery is deferred to the trip driver,
+        # which sends one notification when the chain lands.
+        active = trip_refresh.active_run_for_flight(db, flight.id)
+        override = None
+        if flight.trip_id:
+            trip_row = db.get(FlightTripRow, flight.trip_id)
+            if trip_row is not None and flight.notify_override == "default":
+                # Precedence: an explicit per-flight override wins, else the
+                # trip's, else the account scope.
+                override = trip_row.notify_override
+
+        outcome = notify_briefing_refresh(
             db, flight, meta, Path(pack_path),
             user_id=notify_user_id,
             present=present,
+            override=override,
+            deliver=active is None,
         )
+        if active is not None:
+            trip_row, _state = active
+            trip_refresh.record_leg_notice(
+                db, trip_row, flight.id,
+                label=" → ".join(flight.waypoints) or flight.route_name,
+                qualified=outcome.qualified,
+                assessment=outcome.assessment,
+                outlook=outcome.outlook,
+                worsened_message=outcome.worsened_message,
+                badge=outcome.badge,
+            )
         db.commit()
     except Exception:
         logger.warning(

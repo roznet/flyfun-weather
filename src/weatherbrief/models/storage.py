@@ -37,6 +37,9 @@ class Flight(BaseModel):
     user_id: str = ""  # owner; empty in single-user / dev mode
     profile_id: int | None = None  # associated flight profile
     aircraft_id: int | None = None  # associated user aircraft
+    # Trip membership (#602). At most one trip per leg; None = ungrouped.
+    # Chain order derives from ``departure_time``, so there is no position here.
+    trip_id: str | None = None
     route_name: str  # user-assigned name or derived from waypoints
     waypoints: list[str] = Field(default_factory=list)  # airports, navaids, or fixes
     departure_time: datetime  # aware UTC datetime
@@ -90,6 +93,33 @@ class Flight(BaseModel):
     def target_time_utc(self) -> int:
         """Departure hour derived from departure_time (backward compat)."""
         return self.departure_time.hour
+
+
+class FlightTrip(BaseModel):
+    """A pilot-defined group of flights — the container only.
+
+    Everything derived (chain order, the binding leg, remaining count,
+    round-trip-ness) lives in :mod:`weatherbrief.trips` and is computed from the
+    members at read time. This model is just what is persisted.
+    """
+
+    id: str  # short base62 token, like Flight.share_code
+    user_id: str = ""
+    name: str = ""
+    notes: str | None = None
+    auto_refresh: bool = False
+    auto_refresh_hour: int | None = None
+    # default (follow the leg / account decision) | notify | mute. Sits between
+    # the per-flight override and the account scope in precedence.
+    notify_override: Literal["default", "notify", "mute"] = "default"
+    # Reserved for trip sharing (v2) — the column exists before the feature.
+    share_code: str | None = None
+    # Persisted AI paragraph + the member-(flight_id, fetch_timestamp) key it
+    # was generated from, so unchanged inputs never pay for a second call.
+    ai_summary_text: str | None = None
+    ai_summary_key: str | None = None
+    ai_summary_at: datetime | None = None
+    created_at: datetime
 
 
 class AdvisoryChip(BaseModel):

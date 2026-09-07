@@ -81,6 +81,16 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// memberwise init's existing call sites unchanged.
     var rawRoute: String? = nil
 
+    /// Trip membership (#602): which trip this leg belongs to, and where it sits
+    /// in the chain. `nil` for an ungrouped flight and on older servers.
+    ///
+    /// Phase 1 on iOS is deliberately just this — the list shows a "leg 2 of 3"
+    /// badge from it, with no new screen. The full trip UI (chain strip,
+    /// binding-leg callout, trip refresh) is web-only for now; the field is what
+    /// lets the list group later without a redesign.
+    /// `var … = nil` so it decodes AND keeps memberwise-init call sites unchanged.
+    var trip: TripLegRef? = nil
+
     /// Whether the viewer has already subscribed to this (someone else's) flight.
     /// Flips the shared-flight preview banner button Subscribe ↔ Unsubscribe.
     /// `var … = nil` so it decodes AND keeps memberwise-init call sites unchanged;
@@ -366,4 +376,16 @@ struct AdvisorySummary: Codable, Sendable, Equatable {
 struct AdvisoryChip: Codable, Sendable, Equatable {
     let status: String  // "RED" | "AMBER"
     let name: String
+}
+
+/// The `trip` block the server embeds on every member flight.
+///
+/// Position and total are derived server-side from `departure_time` — there is
+/// no stored leg position, so a rescheduled leg needs no client-side fixup.
+struct TripLegRef: Codable, Sendable, Equatable {
+    let id: String
+    let name: String
+    /// 1-based index in departure-time order.
+    let position: Int
+    let total: Int
 }

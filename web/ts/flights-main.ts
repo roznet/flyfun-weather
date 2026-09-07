@@ -671,6 +671,17 @@ async function init(): Promise<void> {
     onBulkDelete: bulkDeleteHandler,
     onClearSelection: () => store.getState().clearSelection(),
     onPruneSelection: (visibleIds: string[]) => store.getState().pruneSelection(visibleIds),
+    // Trips (#602). Grouping reuses the existing multi-select bar — zero new
+    // interaction vocabulary.
+    onGroupAsTrip: (ids: string[]) => void store.getState().groupAsTrip(ids),
+    onAddToTrip: (tripId: string, ids: string[]) => void store.getState().addToTrip(tripId, ids),
+    onRemoveFromTrip: (pairs: { tripId: string; flightId: string }[]) => {
+      void (async () => {
+        for (const pair of pairs) {
+          await store.getState().removeFromTrip(pair.tripId, pair.flightId);
+        }
+      })();
+    },
   };
 
   const refreshAfterDebrief = () => {
@@ -678,6 +689,7 @@ async function init(): Promise<void> {
     // stats panel updates.
     void store.getState().loadFlights();
     void store.getState().loadDebriefStats();
+    void store.getState().loadTrips();
   };
 
   // Flights-list filters (#542). Two section-scoped queries: upcoming filters
@@ -703,7 +715,8 @@ async function init(): Promise<void> {
       state.loaded !== prev.loaded ||
       state.upcomingQuery !== prev.upcomingQuery ||
       state.pastQuery !== prev.pastQuery ||
-      state.pastFiltering !== prev.pastFiltering
+      state.pastFiltering !== prev.pastFiltering ||
+      state.trips !== prev.trips
     ) {
       ui.renderFlightList(
         state.flights,
@@ -720,6 +733,7 @@ async function init(): Promise<void> {
         state.debriefStats,
         refreshAfterDebrief,
         filterHandlers(state),
+        state.trips,
       );
     }
     if (state.flights !== prev.flights) {
@@ -985,6 +999,8 @@ async function init(): Promise<void> {
   });
   // Stats are independent of the flights load — fire and forget.
   store.getState().loadDebriefStats();
+  // Trips likewise: the list renders ungrouped until they land, then regroups.
+  store.getState().loadTrips();
 
   // Poll active refreshes every 5 seconds
   const refreshPollInterval = setInterval(() => {

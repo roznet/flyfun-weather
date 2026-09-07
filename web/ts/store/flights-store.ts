@@ -1,10 +1,11 @@
 /** Zustand vanilla store for the Flights management page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DebriefStats, FlightResponse } from './types';
+import type { DebriefStats, FlightResponse, TripResponse } from './types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { fetchDebriefStats } from '../adapters/debrief-adapter';
+import { addTripLegs, createTrip, fetchTrips, removeTripLeg } from '../adapters/trips-adapter';
 import { errorToMessage } from '../utils';
 
 /** Past-section page size. Future + recent are never paginated. */
@@ -13,6 +14,11 @@ export const PAST_PAGE_SIZE = 20;
 export interface FlightsState {
   // Data
   flights: FlightResponse[];
+  /** The user's trips, each carrying its server-computed summary. Loaded
+   *  alongside the flights so the list card can show the binding-leg chip
+   *  without re-deriving the binding rule in the browser — it lives in exactly
+   *  one place, on the server. Empty for a user with no trips. */
+  trips: TripResponse[];
   pastTotal: number;  // full count of "past" flights (for the "Show more" gate)
   activeRefreshes: Record<string, RefreshEntry>; // flight_id → active refresh entry
   debriefStats: DebriefStats | null;
@@ -34,6 +40,10 @@ export interface FlightsState {
 
   // Actions
   loadFlights: () => Promise<void>;
+  loadTrips: () => Promise<void>;
+  groupAsTrip: (flightIds: string[]) => Promise<void>;
+  addToTrip: (tripId: string, flightIds: string[]) => Promise<void>;
+  removeFromTrip: (tripId: string, flightId: string) => Promise<void>;
   loadMorePast: () => Promise<void>;
   setUpcomingQuery: (q: string) => void;
   setPastQuery: (q: string) => Promise<void>;
@@ -74,6 +84,7 @@ let flightsLoadSeq = 0;
 
 export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
+  trips: [],
   pastTotal: 0,
   activeRefreshes: {},
   debriefStats: null,
@@ -113,6 +124,47 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         return;
       }
       set({ loading: false, error: `Failed to load flights: ${err}` });
+    }
+  },
+
+  loadTrips: async () => {
+    try {
+      set({ trips: await fetchTrips() });
+    } catch {
+      // Non-critical: without trips the list simply renders ungrouped cards.
+    }
+  },
+
+  groupAsTrip: async (flightIds) => {
+    set({ error: null });
+    try {
+      await createTrip(flightIds);
+      get().clearSelection();
+      await Promise.all([get().loadFlights(), get().loadTrips()]);
+    } catch (err) {
+      set({ error: errorToMessage(err) });
+    }
+  },
+
+  addToTrip: async (tripId, flightIds) => {
+    set({ error: null });
+    try {
+      await addTripLegs(tripId, flightIds);
+      get().clearSelection();
+      await Promise.all([get().loadFlights(), get().loadTrips()]);
+    } catch (err) {
+      set({ error: errorToMessage(err) });
+    }
+  },
+
+  removeFromTrip: async (tripId, flightId) => {
+    set({ error: null });
+    try {
+      await removeTripLeg(tripId, flightId);
+      get().clearSelection();
+      await Promise.all([get().loadFlights(), get().loadTrips()]);
+    } catch (err) {
+      set({ error: errorToMessage(err) });
     }
   },
 

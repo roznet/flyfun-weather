@@ -88,6 +88,72 @@ class FlightProfileRow(Base):
     flights: Mapped[list[FlightRow]] = relationship(back_populates="profile")
 
 
+class FlightTripRow(Base):
+    """A pilot-defined group of flights whose viability is conjunctive.
+
+    A trip happens only if **all** its remaining legs work, and the set of legs
+    that must work shrinks as the trip is flown. The container carries the
+    pilot's naming, the trip-level refresh/notify controls and the persisted AI
+    summary; everything else (order, chain status, the binding leg) is *derived*
+    from the members at read time — see ``weatherbrief.trips``.
+
+    Deliberately not stored here:
+
+    * **leg position** — order comes from ``departure_time``, so a ``/move``
+      that reschedules a leg needs no fixup;
+    * **the deterministic chain aggregate** — it is stale the moment any leg
+      refreshes, so it is computed per request and never persisted.
+
+    Membership is a single nullable ``FlightRow.trip_id`` (``SET NULL``), not a
+    join table: one leg belongs to at most one trip, and the hot flights-list
+    query stays join-free. ``SET NULL`` means deleting a trip never deletes
+    flights — the flights own the packs, and the packs cost real money.
+    """
+
+    __tablename__ = "flight_trips"
+
+    #: Short base62 token, like ``FlightRow.share_code`` — so a later
+    #: share-a-trip feature needs no id migration.
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), default="")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    auto_refresh_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Trip-level briefing-notification override. Precedence when a leg
+    #: refreshes: the leg's own non-default ``notify_override`` wins, else this,
+    #: else the account-level scope.
+    notify_override: Mapped[str] = mapped_column(
+        String(16), default="default", server_default="default"
+    )
+    #: Reserved for trip sharing (v2) — mirrors ``FlightRow.share_code`` so the
+    #: column exists before the feature does.
+    share_code: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, unique=True, index=True
+    )
+    #: Haiku trip paragraph. Persisted (unlike the deterministic aggregate)
+    #: precisely because it costs money: ``ai_summary_key`` is a hash of the
+    #: member ``(flight_id, fetch_timestamp)`` tuples, so unchanged inputs never
+    #: pay twice.
+    ai_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ai_summary_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    #: Serial trip-refresh driver state (see ``api/trip_refresh.py``). NULL when
+    #: no trip refresh is in flight. The state is deliberately small — the run
+    #: id plus the ordered leg list, what is still pending, and per-leg outcomes
+    #: — because every leg is an ordinary durable refresh job underneath.
+    refresh_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    refresh_state_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TZDateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped[UserRow] = relationship(UserRow)
+
+
 class FlightRow(Base):
     __tablename__ = "flights"
 
@@ -100,6 +166,13 @@ class FlightRow(Base):
     )
     aircraft_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("user_aircraft.id", ondelete="SET NULL"), nullable=True
+    )
+    # Trip membership (issue #602). At most one trip per leg — "which legs are
+    # still needed" has no multi-trip reading. SET NULL: deleting a trip unlinks
+    # its legs, never deletes them.
+    trip_id: Mapped[str | None] = mapped_column(
+        String(16), ForeignKey("flight_trips.id", ondelete="SET NULL"),
+        nullable=True, index=True,
     )
     route_name: Mapped[str] = mapped_column(String(256), default="")
     waypoints_json: Mapped[str] = mapped_column(Text, default="[]")

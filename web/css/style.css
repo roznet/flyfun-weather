@@ -8525,3 +8525,234 @@ body.resizing-rail {
     padding-bottom: 0.75rem;
   }
 }
+
+/* Flight trips (#602) ------------------------------------------------------
+   A trip renders as one collapsible card holding its member legs, so the trip
+   (not the leg) is the unit of attention. Collapsed is the default: the header
+   already carries the binding-leg chip, so auto-expanding would add noise. */
+
+.trip-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, var(--border));
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+  background: var(--surface, transparent);
+}
+
+.trip-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
+}
+
+.trip-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+.trip-toggle::before {
+  content: '\25BC';
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.trip-card.collapsed .trip-toggle::before {
+  transform: rotate(-90deg);
+}
+
+.trip-card.collapsed .trip-legs {
+  display: none;
+}
+
+.trip-chain {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trip-dates,
+.trip-count {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.trip-card-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.trip-binding {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.trip-legs {
+  padding: 0 0.6rem 0.5rem;
+}
+
+/* Trip page --------------------------------------------------------------- */
+
+/* Chain strip: one tile per leg, ground gaps labelled between them. Scrolls
+   horizontally on narrow screens rather than wrapping, so the left-to-right
+   reading of the chain survives. */
+.trip-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.4rem;
+}
+
+.trip-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 9rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.trip-tile-binding {
+  border-color: var(--accent, var(--text));
+  border-width: 2px;
+}
+
+/* Flown legs grey out — the shrinking scope made literally visible. */
+.trip-tile-flown,
+.trip-leg-flown {
+  opacity: 0.55;
+}
+
+.trip-tile-label {
+  font-weight: 600;
+}
+
+.trip-tile-date {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.trip-gap {
+  align-self: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding: 0 0.2rem;
+}
+
+/* The deterministic callout is the thing the eye should land on; the AI
+   paragraph below it is deliberately quieter. */
+.trip-callout {
+  border-left: 3px solid var(--accent, var(--border));
+  padding: 0.5rem 0 0.5rem 0.8rem;
+}
+
+.trip-callout-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.trip-callout-text {
+  font-size: 1.05rem;
+  margin: 0.25rem 0 0;
+}
+
+.trip-ripeness,
+.trip-ai-text {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.trip-continuity-warning {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.trip-leg-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.trip-leg-binding {
+  border-left: 3px solid var(--accent, var(--text));
+  padding-left: 0.6rem;
+}
+
+.trip-leg-head,
+.trip-leg-status,
+.trip-leg-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.trip-leg-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.trip-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.trip-auto-refresh,
+.edit-trip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.trip-refresh-progress {
+  margin-top: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.trip-title {
+  margin: 0;
+}
+
+.trip-subtitle {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}

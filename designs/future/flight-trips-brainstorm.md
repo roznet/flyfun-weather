@@ -1,7 +1,8 @@
 # Flight trips (packages) — brainstorm
 
-> Status: design agreed, nothing built. Grouping flights into a trip whose
-> viability is the conjunction of its remaining legs.
+> Status: **v1 built** (#602) — see `designs/flight-trips.md` for the as-built
+> doc. This file is kept for the reasoning and the rejected options behind each
+> decision; where the two disagree, the as-built doc wins.
 
 ## Decisions taken
 
