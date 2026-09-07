@@ -405,3 +405,59 @@ class TestTripRefreshEndpoint:
         assert r.status_code == 200, r.text
         assert r.json()["total"] == 3
         assert r.json()["completed"] == 0
+
+
+class TestManualRefreshYieldsToTheTripDriver:
+    """The per-flight Refresh button must respect a live trip run.
+
+    ``leg_is_claimed`` is unit-tested in tests/test_trip_refresh.py, but the
+    invariant that matters is that both refresh endpoints actually *call* it.
+    The design doc records that fixing only the scheduler once already left
+    this reopened through the path a user is most likely to take, so the guard
+    is pinned here at the endpoint, where a refactor that reorders or drops it
+    is what would ship silently.
+    """
+
+    @pytest.fixture
+    def running_trip(self, client, chain, tmp_path, monkeypatch):
+        from weatherbrief.api import trip_refresh
+
+        # Admission only — the pipeline itself is not the subject here.
+        monkeypatch.setattr(trip_refresh, "kick", lambda *a, **k: None)
+        client.app.state.db_path = str(tmp_path / "airports.db")
+        trip = client.post(
+            "/api/trips", json={"flight_ids": [f.id for f in chain]},
+        ).json()
+        started = client.post(f"/api/trips/{trip['id']}/refresh")
+        assert started.json()["active"] is True
+        return trip
+
+    def test_queued_refresh_of_a_claimed_leg_is_a_409(self, client, chain, running_trip):
+        # leg 2 is pending, not yet current: the registry cannot see it, so
+        # only the explicit guard stands between it and a second in-flight leg.
+        r = client.post(f"/api/flights/{chain[1].id}/packs/refresh")
+        assert r.status_code == 409, r.text
+        assert "trip refresh" in r.json()["detail"]
+
+    def test_the_stream_endpoint_refuses_the_same_leg(
+        self, client, chain, running_trip, app_db, monkeypatch,
+    ):
+        # The stream manages its own session rather than taking Depends(get_db).
+        from weatherbrief.api import packs as packs_api
+
+        monkeypatch.setattr(packs_api, "SessionLocal", app_db)
+        r = client.post(f"/api/flights/{chain[1].id}/packs/refresh/stream")
+        assert r.status_code == 409, r.text
+        # Also delivered *as an SSE error event*, not only as the status, so a
+        # client that has already opened the stream renders the reason rather
+        # than surfacing a bare failed fetch.
+        assert '"type": "error"' in r.text or '"type":"error"' in r.text
+        assert "trip refresh" in r.text
+
+    def test_an_ungrouped_flight_is_not_blocked(self, client, app_db, running_trip):
+        s = app_db()
+        loner = _make_flight(s, ["EGTF", "EGLL"], 4, hour=15)
+        s.commit()
+        s.close()
+        r = client.post(f"/api/flights/{loner.id}/packs/refresh")
+        assert r.status_code != 409, r.text
