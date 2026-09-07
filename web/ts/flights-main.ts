@@ -678,7 +678,11 @@ async function init(): Promise<void> {
     onRemoveFromTrip: (pairs: { tripId: string; flightId: string }[]) => {
       void (async () => {
         for (const pair of pairs) {
-          await store.getState().removeFromTrip(pair.tripId, pair.flightId);
+          // Stop at the first failure rather than pressing on: continuing would
+          // leave the error message from a later success/failure describing the
+          // wrong flight, and a partly-unlinked selection with no indication of
+          // which leg is still in the trip.
+          if (!await store.getState().removeFromTrip(pair.tripId, pair.flightId)) break;
         }
       })();
     },

@@ -333,7 +333,23 @@ def _with_trip_mates(
             "Auto-refresh: pulling in %d trip-mate(s) for %d trip(s)",
             len(extra), len(enabled),
         )
-    return due + extra
+
+    # Drop any leg a live trip refresh has already queued. Such a leg is not yet
+    # in ``refresh_registry`` (nothing claims it until the driver's turn), so the
+    # admission check above cannot see it — and running it here, under the
+    # uncapped "scheduler" trigger, would put a second leg of the same trip in
+    # flight beside the driver's current one.
+    from weatherbrief.api import trip_refresh
+
+    candidates = due + extra
+    claimed = trip_refresh.legs_claimed_by_a_live_run(
+        db, [row.id for row in candidates],
+    )
+    if claimed:
+        logger.info(
+            "Auto-refresh: %d leg(s) left to an in-flight trip refresh", len(claimed),
+        )
+    return [row for row in candidates if row.id not in claimed]
 
 
 def _user_defers_for_model_update(

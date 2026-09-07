@@ -152,7 +152,28 @@ Two things keep "one leg at a time" actually true, and both are load-bearing:
 - **Every task is fenced on its run id.** `_claim_next` and `_record_result`
   refuse to act when `row.refresh_id` is not the run the task was submitted for,
   so a submission left over from a superseded run exits instead of claiming a
-  leg alongside the live chain.
+  leg alongside the live chain. `_record_result` returns **`None`** when fenced,
+  which the caller must not conflate with an empty state: an empty `pending`
+  means the chain is done and should be closed out, while a fenced-out task must
+  touch nothing — closing out from there would end whatever run is *currently*
+  live, firing its notification early on incomplete results.
+- **Every read-check-write of `refresh_id` holds `_state_lock`**, including
+  `open_scheduler_run`. A scheduler cycle racing a manual press can otherwise
+  both pass their own "not already active" check, and the scheduler's write then
+  clobbers an in-flight manual run's legs.
+- **The scheduler yields legs the driver already owns.** A leg sitting in a
+  run's `pending` has been promised to the driver but is not yet in
+  `refresh_registry` — nothing claims it until `_claim_next` picks it up — so the
+  scheduler's admission check cannot see it, and running it there under the
+  *uncapped* `"scheduler"` trigger would put a second leg of the same trip in
+  flight. `legs_claimed_by_a_live_run` filters them out of `_find_due_flights`;
+  they come back on a later cycle if still due.
+- **`start()` re-reads with `with_for_update=True`.** Prod is MySQL at
+  REPEATABLE READ, where a plain `refresh()` can be served from the enclosing
+  transaction's snapshot and miss another transaction's just-committed write —
+  silently reopening the race in production only. A locking read takes the
+  latest committed row and serialises across processes, which the in-process
+  lock alone cannot. SQLite ignores `FOR UPDATE`.
 
 ### Recovery after a crash
 
@@ -233,14 +254,23 @@ Three properties are load-bearing:
   vocabulary is rejected. On a mismatch we fall back to the deterministic
   sentence, so the LLM can only ever make it *nicer to read*, never different.
 
-  Two details that look cosmetic and are not. The superlative list must include
-  **"difficult"** — the prompt itself asks the model to describe "what kind of
-  problem the difficult leg has", so that is the phrasing a mislabelled
-  paragraph will actually use. And a leg is matched on its **ordered** route,
-  origin before destination: both legs of a round trip carry the same two ICAO
-  codes, so an unordered "mentions both codes" test cannot tell `EGTF → LSGS`
-  from `LSGS → EGTF` and scores every sentence about the return as one about the
-  outbound too.
+  Three details that look cosmetic and are not. The superlative list must
+  include **"difficult"** — the prompt itself asks the model to describe "what
+  kind of problem the difficult leg has", so that is the phrasing a mislabelled
+  paragraph will actually use. A leg is matched on its **ordered** route, origin
+  before destination (word-boundary matched): both legs of a round trip carry
+  the same two ICAO codes, so an unordered test cannot tell `EGTF → LSGS` from
+  `LSGS → EGTF`. And the superlative is searched in the **clause** naming the
+  leg, not the whole sentence: chain-adjacent legs share an airport, so in
+  *"Friday's A to B looks fine, but Saturday's B to C is the difficult one"* the
+  ordered match for `A → B` succeeds on the sentence, and a sentence-wide search
+  would reject a perfectly correct paragraph — over-rejection that would quietly
+  defeat the AI summary on any chain longer than one leg.
+
+  The guardrail stays deliberately conservative rather than exhaustive: a
+  destination-first phrasing ("EGTF, arriving from LFAT, is difficult") is not
+  recognised as naming a leg, so it falls back to the deterministic sentence.
+  Falling back is the safe direction, and the prompt asks for the route form.
 - **Keyed and persisted** on the member `(flight_id, fetch_timestamp,
   debrief_decision)` tuples, so unchanged inputs never pay twice. The debrief is
   in the key because it feeds `_pick_binding_leg`: marking the binding leg

@@ -150,6 +150,58 @@ class TestRunFencing:
         state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
         assert state["results"] == {}
 
+    def test_a_leftover_task_from_a_superseded_run_finishes_nothing(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """The real race, end to end — not a hand-typed stale id.
+
+        Run A starts, goes stale, run B starts. A's leftover task then completes
+        its leg. It must neither record into B nor *close B out*: treating its
+        fenced-out result as "chain complete" would fire B's coalesced
+        notification early on incomplete results and regenerate its AI summary.
+        """
+        run_a = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID).refresh_id
+        row = session.get(FlightTripRow, trip_with_legs.id)
+        row.refresh_started_at = _NOW - timedelta(
+            seconds=trip_refresh.STALE_RUN_SECONDS + 60,
+        )
+        session.commit()
+        run_b = trip_refresh.start(
+            session, session.get(FlightTripRow, trip_with_legs.id), object(), DEV_USER_ID,
+        ).refresh_id
+        assert run_a != run_b
+
+        finished: list[str] = []
+        monkeypatch.setattr(
+            trip_refresh, "_finish", lambda *a, **k: finished.append("finished"),
+        )
+
+        # A's leftover task reports in under its own (now superseded) run id.
+        state = trip_refresh._record_result(
+            session, trip_with_legs.id, "leg1", "succeeded", run_a,
+        )
+        assert state is None, "a fenced-out result must be distinguishable from a done chain"
+        assert finished == [], "a fenced-out task must not close out the live run"
+
+        # Run B is untouched: still every leg pending, no results recorded.
+        live = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
+        assert live["pending"] == ["leg1", "leg2", "leg3"]
+        assert live["results"] == {}
+
+    def test_a_completed_chain_is_still_distinguishable_from_a_fenced_one(
+        self, session, trip_with_legs,
+    ):
+        status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        for leg in ("leg1", "leg2", "leg3"):
+            trip_refresh._claim_next(session, trip_with_legs.id, status.refresh_id)
+            state = trip_refresh._record_result(
+                session, trip_with_legs.id, leg, "succeeded", status.refresh_id,
+            )
+        # A real completion returns a state with an empty `pending` — which is
+        # what tells the caller to close the run out.
+        assert state is not None
+        assert state["pending"] == []
+
     def test_the_live_run_id_claims_normally(self, session, trip_with_legs):
         status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
         _row, flight_id = trip_refresh._claim_next(
@@ -189,6 +241,56 @@ class TestBootRecovery:
         # cheap no-op, while a dropped leg would silently never be briefed.
         assert state["pending"] == ["leg1", "leg2", "leg3"]
         assert state["current"] is None
+
+    def test_resume_restarts_a_chain_that_still_has_legs(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """End-to-end through ``run_trip_refresh_resume``, both branches below."""
+        import asyncio
+
+        status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        trip_refresh._claim_next(session, trip_with_legs.id, status.refresh_id)
+        session.commit()
+
+        submitted: list[tuple] = []
+        monkeypatch.setattr(trip_refresh, "_submit_next", lambda *a: submitted.append(a))
+        monkeypatch.setattr(trip_refresh, "RESUME_STARTUP_DELAY_SECONDS", 0)
+
+        asyncio.run(trip_refresh.run_trip_refresh_resume(object()))
+
+        assert len(submitted) == 1
+        trip_id, _app_state, _user, run_id = submitted[0]
+        assert trip_id == trip_with_legs.id
+        # Restarted under the *original* run id, so the fence still holds.
+        assert run_id == status.refresh_id
+
+    def test_resume_closes_out_a_chain_with_nothing_left(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        import asyncio
+
+        status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        row = session.get(FlightTripRow, trip_with_legs.id)
+        state = trip_storage.read_refresh_state(row)
+        state["pending"] = []
+        state["current"] = None
+        trip_storage.write_refresh_state(
+            session, row, refresh_id=status.refresh_id, state=state,
+        )
+        session.commit()
+
+        closed: list[str] = []
+        monkeypatch.setattr(
+            trip_refresh, "_finish_in_new_session",
+            lambda trip_id, _user: closed.append(trip_id),
+        )
+        monkeypatch.setattr(trip_refresh, "_submit_next", lambda *a: pytest.fail("should not resubmit"))
+        monkeypatch.setattr(trip_refresh, "RESUME_STARTUP_DELAY_SECONDS", 0)
+
+        asyncio.run(trip_refresh.run_trip_refresh_resume(object()))
+        # Closed out so the coalesced notification fires rather than being
+        # discarded when the staleness window lapses.
+        assert closed == [trip_with_legs.id]
 
     def test_a_run_with_nothing_left_reports_no_work(self, session, trip_with_legs):
         status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
@@ -332,6 +434,53 @@ class TestSchedulerTripMates:
 
         due = [session.get(FlightRow, "future")]
         assert {r.id for r in _with_trip_mates(session, due, _NOW)} == {"future"}
+
+
+class TestSchedulerYieldsToTheDriver:
+    """A leg queued by a manual trip refresh is the driver's, not the scheduler's.
+
+    Such a leg is not yet in ``refresh_registry`` — nothing claims it until
+    ``_claim_next`` picks it up — so the scheduler's admission check cannot see
+    it. Running it there, under the uncapped "scheduler" trigger, would put a
+    second leg of the same trip in flight beside the driver's current one.
+    """
+
+    def test_pending_and_current_legs_are_reported_as_claimed(self, session, trip_with_legs):
+        status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        trip_refresh._claim_next(session, trip_with_legs.id, status.refresh_id)
+        session.commit()
+        claimed = trip_refresh.legs_claimed_by_a_live_run(
+            session, ["leg1", "leg2", "leg3"],
+        )
+        assert claimed == {"leg1", "leg2", "leg3"}
+
+    def test_nothing_is_claimed_when_no_run_is_live(self, session, trip_with_legs):
+        assert trip_refresh.legs_claimed_by_a_live_run(
+            session, ["leg1", "leg2", "leg3"],
+        ) == set()
+
+    def test_a_stale_run_does_not_hold_its_legs(self, session, trip_with_legs):
+        trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        row = session.get(FlightTripRow, trip_with_legs.id)
+        row.refresh_started_at = _NOW - timedelta(
+            seconds=trip_refresh.STALE_RUN_SECONDS + 60,
+        )
+        session.commit()
+        assert trip_refresh.legs_claimed_by_a_live_run(session, ["leg1"]) == set()
+
+    def test_the_scheduler_drops_legs_the_driver_owns(self, session, trip_with_legs):
+        from weatherbrief.db.models import FlightRow
+        from weatherbrief.scheduler import _with_trip_mates
+
+        trip_with_legs.auto_refresh = True
+        session.commit()
+        status = trip_refresh.start(
+            session, session.get(FlightTripRow, trip_with_legs.id), object(), DEV_USER_ID,
+        )
+        assert status.active
+
+        due = [session.get(FlightRow, "leg1")]
+        assert _with_trip_mates(session, due, _NOW) == []
 
 
 class TestJsonState:
