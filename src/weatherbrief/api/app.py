@@ -192,6 +192,16 @@ async def lifespan(app: FastAPI):
 
         refresh_resume_task = asyncio.create_task(run_refresh_resume(app.state))
 
+    # Sibling pass for trip refreshes (#602). The leg-level resume above knows
+    # nothing about trips, so a chain killed mid-flight would leave its
+    # remaining legs unrun and its coalesced notification stranded. Same gate:
+    # any trip with an open run at boot is by definition an orphan.
+    trip_resume_task = None
+    if os.environ.get("DISABLE_REFRESH_RESUME") != "1":
+        from weatherbrief.api.trip_refresh import run_trip_refresh_resume
+
+        trip_resume_task = asyncio.create_task(run_trip_refresh_resume(app.state))
+
     retention_task = None
     if os.environ.get("DISABLE_RETENTION") != "1":
         from weatherbrief.scheduler import run_retention_loop
@@ -305,7 +315,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    for task in (scheduler_task, refresh_resume_task, retention_task,
+    for task in (scheduler_task, refresh_resume_task, trip_resume_task,
+                 retention_task,
                  verification_task,
                  digest_task, metar_ingest_task, forecast_fetch_task,
                  standalone_task, ecmwf_watcher_task,

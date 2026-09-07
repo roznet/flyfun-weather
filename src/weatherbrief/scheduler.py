@@ -170,6 +170,13 @@ async def process_auto_refreshes(app_state) -> None:
             )
             if entry is None:
                 logger.info("Auto-refresh: skipping %s (refresh already in progress)", row.id)
+                # Still report it into any coalescing window: this `continue`
+                # bypasses the `finally` below, and a leg left in `pending`
+                # means `_finish` never fires — so the trip's single
+                # notification is silently lost for the legs that *did*
+                # complete, until the staleness window discards their notices.
+                if row.trip_id:
+                    trip_refresh.note_leg_done(db, row.trip_id, row.id, "busy")
                 continue
 
             try:

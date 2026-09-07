@@ -942,5 +942,6 @@
   "trips.notFound": "Voyage introuvable.",
   "trips.notesLabel": "Notes",
   "trips.keepInTrip": "Conserver dans le voyage « {name} »",
-  "trips.decidableFrom": "Guidage haute résolution à partir du {date}"
+  "trips.decidableFrom": "Guidage haute résolution à partir du {date}",
+  "trips.legOf": "Étape {position}/{total}"
 }

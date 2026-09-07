@@ -34,6 +34,11 @@ struct FlightCardView: View, Equatable {
             && lhs.flight.latestBriefing == rhs.flight.latestBriefing
             && lhs.flight.section == rhs.flight.section
             && lhs.flight.debrief == rhs.flight.debrief
+            // The trip badge is a field the body draws, so it belongs here:
+            // adding or removing a leg changes position/total without touching
+            // any other field, and omitting it would leave "leg 2 of 3" stale
+            // until an unrelated change forced a repaint (#602).
+            && lhs.flight.trip == rhs.flight.trip
     }
 
     var body: some View {

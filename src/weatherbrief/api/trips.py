@@ -166,26 +166,40 @@ def build_leg_inputs(db: Session, flights: list[Flight]) -> list[TripLegInput]:
     return inputs
 
 
-def build_trip_summary(db: Session, trip: FlightTrip) -> tuple[TripSummary, list[Flight]]:
-    """The deterministic summary for one trip, plus its ordered member legs."""
+def build_trip_summary(
+    db: Session, trip: FlightTrip,
+) -> tuple[TripSummary, list[Flight], list[TripLegInput]]:
+    """The deterministic summary, the ordered member legs, and the pure inputs.
+
+    The inputs come back rather than being rebuilt by the caller: they cost a
+    packs query and a debriefs query, and every caller that wants the summary
+    also wants the AI-summary key derived from the same inputs.
+    """
     members = trip_storage.trip_members(db, trip.id)
-    summary = summarize_trip(
-        trip.id, build_leg_inputs(db, members), name=trip.name,
-    )
-    return summary, members
+    leg_inputs = build_leg_inputs(db, members)
+    summary = summarize_trip(trip.id, leg_inputs, name=trip.name)
+    return summary, members, leg_inputs
 
 
 def ai_summary_key(legs: list[TripLegInput]) -> str:
-    """Content key for the AI paragraph: the member ``(id, fetch_timestamp)`` set.
+    """Content key for the AI paragraph — everything that can change what it says.
 
     Regenerating on unchanged inputs is the one failure mode that turns a
     fraction-of-a-cent feature into a recurring line item, so the key is what
     the summary was *actually* written from, not a timestamp.
+
+    ``debrief_decision`` is in the key alongside the pack timestamp because it
+    feeds ``_pick_binding_leg``: marking the current binding leg cancelled or
+    flown changes which leg decides the trip **without changing any**
+    ``fetch_timestamp``. Keyed on packs alone, the stale paragraph — still
+    naming a leg that no longer matters — would keep being served as fresh.
     """
     import hashlib
 
     parts = sorted(
-        f"{leg.flight_id}:{leg.fetch_timestamp.isoformat() if leg.fetch_timestamp else '-'}"
+        f"{leg.flight_id}"
+        f":{leg.fetch_timestamp.isoformat() if leg.fetch_timestamp else '-'}"
+        f":{leg.debrief_decision or '-'}"
         for leg in legs
     )
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:64]
@@ -250,8 +264,7 @@ def _validate_owned_flights(db: Session, flight_ids: list[str], user_id: str) ->
 def _trip_to_response(db: Session, trip: FlightTrip) -> TripResponse:
     from weatherbrief.api import trip_refresh
 
-    summary, members = build_trip_summary(db, trip)
-    leg_inputs = build_leg_inputs(db, members)
+    summary, members, leg_inputs = build_trip_summary(db, trip)
     stale = bool(trip.ai_summary_text) and trip.ai_summary_key != ai_summary_key(leg_inputs)
     row = db.get(FlightTripRow, trip.id)
     return TripResponse(
@@ -373,7 +386,7 @@ def create_trip(
     trip_storage.prune_empty_trips(db, user_id)
 
     if not req.name:
-        summary, _ = build_trip_summary(db, trip)
+        summary, _members, _inputs = build_trip_summary(db, trip)
         row = _owned_trip_row(db, trip.id, user_id)
         row.name = derive_trip_name(summary)
         db.flush()
@@ -401,7 +414,9 @@ def get_trip_summary(
 ):
     """The pure ``TripSummary`` on its own — computed, never stored."""
     _owned_trip_row(db, trip_id, user_id)
-    summary, _ = build_trip_summary(db, trip_storage.load_trip(db, trip_id, user_id))
+    summary, _members, _inputs = build_trip_summary(
+        db, trip_storage.load_trip(db, trip_id, user_id),
+    )
     return summary
 
 
@@ -507,14 +522,13 @@ def refresh_trip(
 
     row = _owned_trip_row(db, trip_id, user_id)
     try:
+        # ``start`` commits the run marker itself, under the driver lock — the
+        # commit has to be inside that lock for a concurrent press to see it.
         status = trip_refresh.start(db, row, request.app.state, user_id)
     except trip_refresh.TripRefreshBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    db.commit()
-    # Only after the run marker is committed: the worker opens its own session
-    # and would otherwise read a trip row that does not yet carry it.
-    if status.active:
-        trip_refresh.kick(trip_id, request.app.state, user_id)
+    if status.active and status.refresh_id:
+        trip_refresh.kick(trip_id, request.app.state, user_id, status.refresh_id)
     return status
 
 
@@ -557,8 +571,10 @@ def generate_ai_summary(
 
     row = _owned_trip_row(db, trip_id, user_id)
     trip = trip_storage.load_trip(db, trip_id, user_id)
-    summary, members = build_trip_summary(db, trip)
-    result = ensure_trip_ai_summary(db, row, summary, members, user_id=user_id)
+    summary, members, leg_inputs = build_trip_summary(db, trip)
+    result = ensure_trip_ai_summary(
+        db, row, summary, members, user_id=user_id, leg_inputs=leg_inputs,
+    )
     db.commit()
     return TripAiSummaryResponse(
         trip_id=trip_id,

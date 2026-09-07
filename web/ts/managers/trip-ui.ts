@@ -18,27 +18,12 @@ import type {
 import type { TripLeg, TripResponse, TripSummary } from '../store/types';
 import { $, escapeHtml, formatDate } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
-
-const OUTLOOK_BADGE_CLASS: Record<string, string> = {
-  TRENDING_SETTLED: 'badge-outlook-settled',
-  MIXED_SIGNALS: 'badge-outlook-mixed',
-  TRENDING_UNSETTLED: 'badge-outlook-unsettled',
-};
-
-function assessmentClass(assessment: string | null): string {
-  switch ((assessment || '').toUpperCase()) {
-    case 'GREEN': return 'badge-green';
-    case 'AMBER': return 'badge-amber';
-    case 'RED': return 'badge-red';
-    case 'UNAVAILABLE': return 'badge-unavailable';
-    default: return 'badge-none';
-  }
-}
+import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 
 /** The badge for one leg — traffic light, soft outlook, or a neutral state. */
 function legBadge(leg: TripLeg): string {
   if (leg.grade_kind === 'outlook') {
-    const cls = OUTLOOK_BADGE_CLASS[(leg.outlook || '').toUpperCase()] ?? 'badge-outlook-mixed';
+    const cls = outlookClass(leg.outlook);
     const label = t(`outlook.${(leg.outlook || '').toLowerCase()}`);
     return `<span class="badge badge-outlook ${cls}">${escapeHtml(label)}</span>`;
   }

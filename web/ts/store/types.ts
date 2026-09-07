@@ -158,6 +158,9 @@ export interface TripSummary {
   beyond_horizon_leg_ids: string[];
   pending_coverage_leg_ids: string[];
   needs_briefing_leg_ids: string[];
+  /** Briefed, but the pack came back ungradeable. Distinct from "not briefed
+   *  yet" — one says wait, the other says the data could not be assessed. */
+  unavailable_leg_ids: string[];
   decision_ripeness_days: number | null;
   decidable_from: string | null;
   is_round_trip: boolean;

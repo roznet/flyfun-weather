@@ -942,5 +942,6 @@
   "trips.notFound": "Reise nicht gefunden.",
   "trips.notesLabel": "Notizen",
   "trips.keepInTrip": "In Reise „{name}“ behalten",
-  "trips.decidableFrom": "Hochaufgelöste Vorhersage ab {date}"
+  "trips.decidableFrom": "Hochaufgelöste Vorhersage ab {date}",
+  "trips.legOf": "Etappe {position}/{total}"
 }
