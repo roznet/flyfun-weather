@@ -136,6 +136,21 @@ class TestTripCrud:
         assert r.status_code == 200, r.text
         assert r.json()["flight_ids"] == [chain[0].id]
 
+    def test_add_legs_with_an_empty_body_is_a_no_op_not_a_500(self, client):
+        """An empty `flight_ids` on an empty trip used to destroy it.
+
+        `prune_empty_trips` ran without `keep`, removing the trip mid-request;
+        the response builder then dereferenced None and surfaced a raw 500,
+        with the trip gone as a side effect of what should have been a no-op.
+        """
+        trip = client.post(
+            "/api/trips", json={"flight_ids": [], "name": "Placeholder"},
+        ).json()
+        r = client.post(f"/api/trips/{trip['id']}/legs", json={"flight_ids": []})
+        assert r.status_code == 200, r.text
+        assert r.json()["flight_ids"] == []
+        assert client.get(f"/api/trips/{trip['id']}").status_code == 200
+
     def test_unknown_flight_is_a_404_not_a_partial_group(self, client, chain):
         r = client.post(
             "/api/trips", json={"flight_ids": [chain[0].id, "does-not-exist"]},

@@ -58,7 +58,7 @@ _OUTLOOK_RANK = {"TRENDING_SETTLED": 0, "MIXED_SIGNALS": 1, "TRENDING_UNSETTLED"
 #: turnaround time or local night is still open (see the design doc).
 SORTIE_GAP_HOURS = 4.0
 
-LegState = Literal["flown", "cancelled", "remaining"]
+LegState = Literal["flown", "cancelled", "monitoring", "remaining"]
 GradeKind = Literal["assessment", "outlook", "pending_coverage", "needs_briefing", "unavailable"]
 BindingBasis = Literal["assessment", "outlook"]
 
@@ -218,6 +218,13 @@ def _leg_state(leg: TripLegInput, now: datetime) -> LegState:
         return "cancelled"
     if leg.debrief_decision == "flown":
         return "flown"
+    if leg.debrief_decision == "monitoring":
+        # The taxonomy's third value: created to watch the weather, never
+        # intended to fly. Treating it as ordinary "remaining" let it become
+        # the binding leg and drag the chain status down for a trip nobody
+        # plans to fly — the same reasoning as cancelled, for the enum member
+        # that was left out.
+        return "monitoring"
     ended = leg.departure_time + timedelta(hours=leg.duration_hours or 0.0)
     return "flown" if ended < now else "remaining"
 
@@ -483,12 +490,17 @@ def summarize_trip(
     # Chain identity + continuity, both derived.
     labels: list[str] = []
     for index, leg in enumerate(built):
-        if index == 0 and leg.origin:
+        prev = built[index - 1] if index > 0 else None
+        # Append this leg's origin whenever it is not already the previous
+        # leg's destination. Emitting it only for leg 0 produced a route string
+        # that was simply wrong on a broken chain — the label silently dropped
+        # the airport the pilot actually departs from, at the same moment
+        # `continuity_warnings` was reporting that very gap.
+        if leg.origin and (prev is None or prev.destination != leg.origin):
             labels.append(leg.origin)
         if leg.destination:
             labels.append(leg.destination)
-        if index > 0:
-            prev = built[index - 1]
+        if prev is not None:
             if prev.destination and leg.origin and prev.destination != leg.origin:
                 summary.continuity_warnings.append(
                     ContinuityWarning(

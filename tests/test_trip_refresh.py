@@ -254,19 +254,65 @@ class TestFinishIsFenced:
         assert session.get(FlightTripRow, trip_with_legs.id).refresh_id is None
 
     def test_every_mutator_goes_through_the_run_scope(self):
-        """The structural point: fencing is not opt-in per function any more.
+        """Fencing must not be opt-in per function.
 
-        Three rounds found the one function that had not opted in. This asserts
-        the gate exists and that the mutators reference it, so a new mutator
-        added without it is visible in review rather than in production.
+        The previous version of this test named three functions explicitly —
+        and so could not catch the *fourth* mutator, `record_leg_notice`, which
+        is exactly the failure it existed to prevent. A test that hard-codes
+        the list it is meant to police is not a structural guarantee.
+
+        So the list is now *discovered*: any module-level function that writes
+        refresh state must go through the gate. A new mutator added without it
+        fails here rather than in production.
         """
         import inspect
 
-        source = inspect.getsource(trip_refresh)
-        assert "def _run_scope(" in source
-        for fn in ("_claim_next", "_record_result", "_finish"):
-            body = inspect.getsource(getattr(trip_refresh, fn))
-            assert "_run_scope(" in body, f"{fn} must be fenced through _run_scope"
+        assert hasattr(trip_refresh, "_run_scope")
+
+        offenders = []
+        for name, fn in vars(trip_refresh).items():
+            if not inspect.isfunction(fn) or fn.__module__ != trip_refresh.__name__:
+                continue
+            try:
+                body = inspect.getsource(fn)
+            except OSError:  # pragma: no cover
+                continue
+            if "write_refresh_state(" not in body:
+                continue
+            # `_run_scope` itself, `start` and the boot-recovery helpers hold
+            # the lock directly and are documented exceptions: they legitimately
+            # act with no run of their own (opening one, or reconciling at boot).
+            if name in {"start", "_requeue_interrupted", "open_scheduler_run", "note_leg_done"}:
+                assert "_state_lock" in body, f"{name} must at least hold the lock"
+                continue
+            if "_run_scope(" not in body:
+                offenders.append(name)
+
+        assert not offenders, (
+            f"these mutate refresh state without the fence: {offenders}"
+        )
+
+
+class TestSingleLegGuard:
+    """A manual per-flight refresh must yield to a live trip run too.
+
+    Round 3 filtered only the scheduler's due-leg list. A pilot pressing
+    Refresh on an individual trip-mate's briefing page went through an unfenced
+    path and could put a second leg of the same trip in flight.
+    """
+
+    def test_a_queued_leg_is_reported_as_claimed(self, session, trip_with_legs):
+        trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        assert trip_refresh.leg_is_claimed(session, "leg2") is True
+
+    def test_an_unrelated_flight_is_not_claimed(self, session, trip_with_legs):
+        trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
+        _flight(session, "loner", 2, ["EGTF", "EGLL"])
+        session.commit()
+        assert trip_refresh.leg_is_claimed(session, "loner") is False
+
+    def test_nothing_is_claimed_with_no_live_run(self, session, trip_with_legs):
+        assert trip_refresh.leg_is_claimed(session, "leg1") is False
 
 
 class TestBootRecovery:

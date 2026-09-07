@@ -50,28 +50,6 @@ from weatherbrief.trips import TripSummary
 
 logger = logging.getLogger(__name__)
 
-#: Vocabulary that turns a description into a recommendation. Whole-word
-#: matched, case-insensitive. Kept deliberately blunt: a false positive costs a
-#: fallback to the deterministic sentence, which is the safe direction.
-_GO_NOGO_PATTERNS = [
-    r"\bgo/?no[- ]?go\b",
-    r"\bno[- ]?go\b",
-    r"\bshould (?:not )?fly\b",
-    r"\bshouldn'?t fly\b",
-    r"\bdon'?t fly\b",
-    r"\bdo not fly\b",
-    r"\brecommend(?:ed|ation|s)?\b",
-    r"\badvis(?:e|ed|able)\b",
-    r"\bsafe to fly\b",
-    r"\bunsafe\b",
-    r"\bcancel(?:led|ling)?\b",
-    r"\bscrub\b",
-    r"\bpostpone\b",
-    r"\bI would\b",
-    r"\byou should\b",
-]
-_GO_NOGO_RE = re.compile("|".join(_GO_NOGO_PATTERNS), re.IGNORECASE)
-
 #: Longest paragraph we will show. Not a prompt-side limit (the model is asked
 #: for 2-4 sentences) but a display guard.
 MAX_SUMMARY_CHARS = 900
@@ -231,8 +209,10 @@ class TripParagraph(BaseModel):
 _GO_NOGO_PATTERNS = [
     r"\bgo/?no[- ]?go\b",
     r"\bno[- ]?go\b",
-    r"\bis a go\b",
-    r"\bgood to go\b",
+    # Bare "go" as a verdict, which the prompt forbids by name. Guarded with a
+    # lookahead so ordinary uses survive — "going", "goes", and the infinitive
+    # in "the weather is going to move" are description, not a recommendation.
+    r"\bgo\b(?!\s+(?:to|through|into|from|down|up|via|around|over)\b)",
     r"\bavoid(?:ed|ing|s)?\b",
     r"\bshould (?:not )?fly\b",
     r"\bshouldn'?t fly\b",

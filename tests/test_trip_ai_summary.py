@@ -121,9 +121,25 @@ class TestGuardrail:
         "Friday's leg looks safe.",
         "Friday's leg is a go.",
         "Friday's leg is good to go.",
+        # Bare "go" as a verdict — named in the prompt, and missing from the
+        # guard until round 4 despite a commit message claiming otherwise.
+        "Friday's leg is go for departure.",
+        "Overall: go.",
     ])
     def test_go_no_go_vocabulary_is_rejected(self, summary, phrase):
         assert check_guardrail(phrase, summary, worst_leg_id="b") is not None
+
+    @pytest.mark.parametrize("phrase", [
+        "The weather is going to move through the afternoon.",
+        "Conditions go from green to amber during the morning.",
+        "It goes downhill after midday.",
+    ])
+    def test_ordinary_uses_of_go_are_not_rejected(self, summary, phrase):
+        # The bare-"go" pattern is a verdict check, not a ban on the verb: a
+        # lookahead spares "going to", "go from", "goes". Over-rejecting here
+        # would silently disable the summary on perfectly descriptive prose.
+        text = f"Sunday's LSGS to EGTF is red. {phrase}"
+        assert check_guardrail(text, summary, worst_leg_id="b") is None
 
     def test_vocabulary_is_checked_even_without_a_declared_leg(self, summary):
         assert check_guardrail("Avoid this trip.", summary) is not None
