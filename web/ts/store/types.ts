@@ -98,6 +98,100 @@ export interface FlightResponse {
   // didn't get backfilled — the share helpers then fall back to the
   // long ?id= URL.
   share_code?: string | null;
+  // Trip membership (#602). Null/absent for an ungrouped flight. Carries the
+  // position and total so the list can group and render "leg 2 of 3" without
+  // a second request.
+  trip?: TripLegRef | null;
+}
+
+/** The `trip` block embedded on a member flight's FlightResponse. */
+export interface TripLegRef {
+  id: string;
+  name: string;
+  position: number;  // 1-based, in departure-time order
+  total: number;
+}
+
+/** One leg as the trip view renders it (server-computed, never persisted). */
+export interface TripLeg {
+  flight_id: string;
+  label: string;              // "EGTF → LSGS"
+  origin: string | null;
+  destination: string | null;
+  departure_time: string;
+  duration_hours: number;
+  state: 'flown' | 'cancelled' | 'remaining';
+  grade_kind: 'assessment' | 'outlook' | 'pending_coverage' | 'needs_briefing' | 'unavailable';
+  assessment: string | null;
+  assessment_reason: string | null;
+  outlook: string | null;
+  outlook_reason: string | null;
+  days_out: number | null;
+  advisory_summary: AdvisorySummary | null;
+  fetch_timestamp: string | null;
+  gap_hours_before: number | null;
+  same_sortie_as_previous: boolean;
+}
+
+export interface TripContinuityWarning {
+  after_flight_id: string;
+  before_flight_id: string;
+  arrives: string;
+  departs: string;
+}
+
+/**
+ * The deterministic trip picture. Two aggregations, never one: `chain_status`
+ * is the worst traffic light among *gradeable remaining* legs, and
+ * `decision_ripeness_days` is how far out the leg that decides the trip is.
+ * There is deliberately no colour for the trip as a whole.
+ */
+export interface TripSummary {
+  trip_id: string;
+  name: string;
+  legs: TripLeg[];
+  total_legs: number;
+  remaining_legs: number;
+  chain_status: string | null;
+  binding_leg_id: string | null;
+  binding_basis: 'assessment' | 'outlook' | null;
+  beyond_horizon_leg_ids: string[];
+  pending_coverage_leg_ids: string[];
+  needs_briefing_leg_ids: string[];
+  decision_ripeness_days: number | null;
+  decidable_from: string | null;
+  is_round_trip: boolean;
+  chain_label: string;
+  continuity_warnings: TripContinuityWarning[];
+  headline: string;
+}
+
+export interface TripRefreshStatus {
+  trip_id: string;
+  refresh_id: string | null;
+  active: boolean;
+  total: number;
+  completed: number;
+  current_flight_id: string | null;
+  results: Record<string, string>;
+  message: string;
+}
+
+export interface TripResponse {
+  id: string;
+  user_id: string;
+  name: string;
+  notes: string | null;
+  auto_refresh: boolean;
+  auto_refresh_hour: number | null;
+  notify_override: 'default' | 'notify' | 'mute';
+  created_at: string;
+  flight_ids: string[];
+  summary: TripSummary;
+  ai_summary: string | null;
+  ai_summary_at: string | null;
+  ai_summary_stale: boolean;
+  refresh: TripRefreshStatus | null;
 }
 
 export type DebriefDecision = 'cancelled' | 'flown' | 'monitoring';
@@ -149,6 +243,10 @@ export interface CreateFlightRequest {
   // interpret popup confirmed the resolved waypoints. Omitted from
   // iOS/MCP clients (which only know the resolved list).
   raw_route?: string;
+  /** Trip membership, opt-in (#602). Duplicate deliberately does NOT inherit
+   *  the source flight's trip; the edit panel's un-ticked "Keep in trip"
+   *  checkbox is what sets this. */
+  trip_id?: string;
 }
 
 export interface ModelStatus {

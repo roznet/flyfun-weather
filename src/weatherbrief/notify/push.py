@@ -400,6 +400,39 @@ def send_briefing_push(
     return _dispatch(db, devices, payload, push_type="alert", priority=10, user_id=user_id)
 
 
+def send_trip_push(
+    db: Session,
+    user_id: str,
+    *,
+    trip_id: str,
+    trip_name: str,
+    title: str,
+    body: str,
+    badge: int | None = None,
+) -> int:
+    """One coalesced alert for a completed **trip** refresh.
+
+    A 3-leg trip refresh must not fire 3 pushes, so the driver collects the
+    per-leg outcomes and sends this once when the last leg lands. The custom
+    payload carries ``trip_id`` (not ``flight_id``) so a tap deep-links to the
+    trip page — the whole point being that the chain, not one leg, is the unit
+    of attention.
+    """
+    devices = _load_devices(db, user_id)
+    if not devices:
+        return 0
+    aps: dict = {"alert": {"title": title, "body": body}, "sound": "default"}
+    if badge is not None:
+        aps["badge"] = badge
+    payload = {
+        "aps": aps,
+        "trip_id": trip_id,
+        "trip_name": trip_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    return _dispatch(db, devices, payload, push_type="alert", priority=10, user_id=user_id)
+
+
 def send_silent_badge_push(db: Session, user_id: str, badge: int) -> int:
     """Send a silent ``content-available`` push carrying the current badge count.
 

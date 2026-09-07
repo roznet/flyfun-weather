@@ -915,6 +915,24 @@ export function renderAutoRefreshBar(
   }
 
   el.style.display = '';
+
+  // A leg inside a trip has its auto-refresh managed by the trip (#602): the
+  // per-leg hour defaults to *that leg's* departure − 1 h, which for a trip is
+  // exactly wrong — Sunday's return would refresh Sunday morning, long after the
+  // decision was actually made on Friday. The trip refreshes the whole chain
+  // ahead of its next commit point instead, so the per-leg control is disabled
+  // rather than hidden: hiding it would look like the setting had been lost.
+  if (flight.trip) {
+    el.innerHTML = `
+      <label class="auto-refresh-toggle is-managed">
+        <input type="checkbox" disabled ${flight.auto_refresh ? 'checked' : ''}>
+        <span>${escapeHtml(t('autoRefresh.label'))}</span>
+      </label>
+      <a class="auto-refresh-managed" href="/trip.html?id=${encodeURIComponent(flight.trip.id)}">${escapeHtml(t('trips.refreshManaged'))}</a>
+    `;
+    return;
+  }
+
   const enabled = flight.auto_refresh;
   const defaultHour = ((flight.target_time_utc - 1) + 24) % 24;
   const effectiveHour = flight.auto_refresh_hour ?? defaultHour;

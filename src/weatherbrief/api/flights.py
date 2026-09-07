@@ -31,6 +31,8 @@ from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.api.flight_search import MAX_QUERY_LEN, matches as _search_matches, parse_query
 from weatherbrief.api.preferences import load_flight_order
+from weatherbrief.api.trips import TripLegRef, bulk_trip_refs, trip_ref_for
+from weatherbrief.storage.trips import load_trip_row, prune_empty_trips
 from weatherbrief.storage.flights import (
     SHARE_CODE_RE,
     SubscriptionError,
@@ -94,6 +96,13 @@ class CreateFlightRequest(BaseModel):
     # which is set via PATCH after creation (mirrors the existing alt flow), so
     # it is rejected here; the web form creates then patches.
     flexibility: Literal["none", "same_day", "prev_day", "next_day"] = "none"
+    # Trip membership, opt-in (#602). Duplicate deliberately does **not**
+    # inherit the source's trip: a duplicate is a *new* thing, and the
+    # overwhelmingly common use ("same route, different weekend") belongs to a
+    # different trip or to none, so inheriting would quietly grow the trip with
+    # a leg that is not part of it. The edit panel offers an un-ticked
+    # "Keep in trip …" checkbox that sets this.
+    trip_id: str | None = Field(default=None, max_length=16)
 
     @field_validator("departure_time")
     @classmethod
@@ -225,6 +234,11 @@ class FlightResponse(BaseModel):
     # old rows that didn't get backfilled (extremely unlikely in
     # practice, but the client falls back to the long ?id= URL).
     share_code: str | None = None
+    # Trip membership (#602). ``None`` for an ungrouped flight. Carries the
+    # position and total so a client can render "leg 2 of 3" and group the list
+    # without a second request — the one field that lets iOS group flights with
+    # no new screen.
+    trip: TripLegRef | None = None
 
 
 # Number of flights surfaced in the "recent" section as a debrief nudge,
@@ -232,6 +246,19 @@ class FlightResponse(BaseModel):
 # patterns suggest a larger window or a per-user setting.
 RECENT_SECTION_CAP = 2
 RECENT_SECTION_MAX_AGE_DAYS = 30
+
+
+def _validated_trip_id(db: Session, trip_id: str | None, user_id: str) -> str | None:
+    """Accept a trip id only when the caller owns that trip.
+
+    404 rather than silently ignoring: a client that asked for "keep this in
+    the trip" and got a flight outside it would be a quiet data loss.
+    """
+    if trip_id is None:
+        return None
+    if load_trip_row(db, trip_id, user_id) is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return trip_id
 
 
 def _rejected_waypoints_message(rejected: list[RejectedWaypoint]) -> str:
@@ -455,6 +482,7 @@ def _flight_to_response(
     debrief: FlightDebrief | None = None,
     section: Literal["future", "recent", "past"] | None = None,
     unseen: bool = False,
+    trip: "TripLegRef | None" = None,
 ) -> FlightResponse:
     # viewer_id is required: the role derivation below compares flight.user_id
     # against it, and with viewer_id=None we would silently classify the
@@ -496,6 +524,11 @@ def _flight_to_response(
     if latest_briefing is not None and unseen:
         latest_briefing = latest_briefing.model_copy(update={"unseen": True})
 
+    # Single-flight endpoints resolve the trip ref here; the list endpoint
+    # computes them all in two queries and passes them in.
+    if trip is None and flight.trip_id and effective_role == "owner":
+        trip = trip_ref_for(db, flight.trip_id, flight.id)
+
     return FlightResponse(
         id=flight.id,
         user_id=flight.user_id,
@@ -527,6 +560,7 @@ def _flight_to_response(
         parser_version=flight.parser_version,
         share_code=flight.share_code,
         section=section,
+        trip=trip,
     )
 
 
@@ -716,6 +750,9 @@ def list_all_flights(
     # Flights with an unopened notify-qualifying update — drives the flight-list
     # red dot, kept consistent with the app-icon badge. One cheap query.
     unseen_ids = unseen_flight_ids(db, user_id)
+    # Two queries for the whole list — the trip card groups from these rather
+    # than joining ``flight_trips`` into the hot flights query.
+    trip_refs = bulk_trip_refs(db, user_id)
 
     owned_pairs: list[tuple[Flight, FlightDebrief | None]] = [
         (f, debrief_map.get(f.id)) for f, role, _ in paired if role == "owner"
@@ -746,6 +783,7 @@ def list_all_flights(
             debrief=debrief,
             section=section,
             unseen=f.id in unseen_ids,
+            trip=trip_refs.get(f.id) if role == "owner" else None,
         )
         if section == "past":
             past.append(resp)
@@ -913,6 +951,7 @@ def create_flight(
         raw_route=raw_route,
         parser_version=parser_version,
         flexibility=req.flexibility,
+        trip_id=_validated_trip_id(db, req.trip_id, user_id),
         created_at=datetime.now(tz=timezone.utc),
     )
 
@@ -1455,6 +1494,11 @@ def bulk_delete_flights(
     """Delete multiple flights in one request. Silently skips IDs that don't exist
     or aren't owned by the current user (returned in `not_found`)."""
     deleted = _bulk_delete_flights(db, req.ids, user_id)
+    # Deleting a trip's last leg must not leave the container stranded. A
+    # 1-leg trip stays (adding legs later is a normal flow) — only the empty
+    # one goes, because it can never render anything.
+    if deleted:
+        prune_empty_trips(db, user_id)
     deleted_set = set(deleted)
     not_found = [fid for fid in req.ids if fid not in deleted_set]
     return BulkDeleteResponse(deleted=deleted, not_found=not_found)
@@ -1476,6 +1520,12 @@ class MoveFlightRequest(BaseModel):
     # change without a raw_route in the body, the new flight clears
     # the (now-stale) stored value rather than carrying it forward.
     raw_route: str | None = Field(default=None, max_length=4000)
+    # Trip membership survives a move by default (#602). A move *is the same
+    # leg, rescheduled* — the Sunday return slipping to Monday is still this
+    # trip's return — so dropping it out of the trip would be a silent data
+    # loss the pilot never asked for. It has to be carried explicitly because
+    # ``/move`` recreates the row; it will not survive on its own.
+    keep_in_trip: bool = True
 
     @field_validator("departure_time")
     @classmethod
@@ -1708,6 +1758,11 @@ def move_flight(
         # have keep resolving after a move (date/route edit). The unique
         # index is honored because we delete the source row first.
         share_code=source.share_code,
+        # Carried explicitly: /move destroys and recreates the row, so trip
+        # membership does not survive on its own. Position needs no fixup —
+        # chain order is derived from departure_time, which is the payoff for
+        # not storing a trip position.
+        trip_id=source.trip_id if req.keep_in_trip else None,
         created_at=datetime.now(tz=timezone.utc),
     )
 
@@ -1742,6 +1797,10 @@ def move_flight(
             )
         )
     db.flush()
+    # Moving the last leg out of a trip can empty it; an empty container can
+    # never show anything, so it goes rather than lingering.
+    if source.trip_id and not req.keep_in_trip:
+        prune_empty_trips(db, user_id)
     remove_artifacts_after_commit(db, orphaned_artifacts)
 
     return _flight_to_response(new_flight, db, viewer_id=user_id)
@@ -2275,11 +2334,14 @@ def remove_flight(
     db: Session = Depends(get_db),
 ):
     """Delete a flight and all its packs."""
-    _load_owned_flight(db, flight_id, user_id)  # verify ownership
+    flight = _load_owned_flight(db, flight_id, user_id)  # verify ownership
     try:
         delete_flight(db, flight_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    # Same rule as bulk-delete: an emptied trip container goes, a 1-leg one stays.
+    if flight.trip_id:
+        prune_empty_trips(db, user_id)
 
 
 def _load_flight_or_404(db: Session, flight_id: str, *, viewer_id: str | None = None) -> Flight:

@@ -108,6 +108,10 @@ export interface MoveFlightRequest {
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
   raw_route?: string;
+  /** Keep the moved leg in its trip (#602). Defaults to true server-side — a
+   *  move is the same leg rescheduled, so membership follows it unless the
+   *  pilot explicitly unticks "Keep in trip". */
+  keep_in_trip?: boolean;
 }
 
 export async function moveFlight(

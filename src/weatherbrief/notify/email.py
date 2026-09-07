@@ -481,6 +481,51 @@ def _build_plain_body(
     return "\n".join(lines)
 
 
+def send_trip_email(
+    recipients: list[str],
+    *,
+    trip_name: str,
+    subject: str,
+    lines: list[str],
+    trip_url: str = "",
+    smtp_config: SmtpConfig | None = None,
+) -> None:
+    """One coalesced email for a completed trip refresh.
+
+    Deliberately plainer than ``send_briefing_email``: a trip refresh has no
+    single pack to render, and the useful content is the per-leg line-up plus a
+    link. ``lines`` is the already-composed per-leg summary from the driver, so
+    the wording of "which leg decides this trip" lives in exactly one place.
+    """
+    if not recipients:
+        raise ValueError("No email recipients specified")
+    if smtp_config is None:
+        smtp_config = SmtpConfig.from_env()
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_config.from_address
+    msg["To"] = ", ".join(recipients)
+
+    plain = "\n".join([trip_name, "", *[f"- {line}" for line in lines]])
+    if trip_url:
+        plain += f"\n\nOpen the trip: {trip_url}"
+
+    items = "".join(f"<li>{html.escape(line)}</li>" for line in lines)
+    link = (
+        f'<p><a href="{html.escape(trip_url)}">Open the trip</a></p>' if trip_url else ""
+    )
+    body_html = (
+        f"<h2>{html.escape(trip_name)}</h2><ul>{items}</ul>{link}"
+    )
+
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(body_html, "html"))
+
+    logger.info("Sending trip email to %s", mask_email(recipients))
+    send_message(msg, smtp_config)
+
+
 def send_briefing_email(
     recipients: list[str],
     flight: Flight,

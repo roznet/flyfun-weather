@@ -53,6 +53,9 @@ class PromptsConfig(BaseModel):
     briefer: str = "prompts/briefer_v1.md"
     # Long-range (>7 day) outlook prompt — softer, model-agreement driven.
     briefer_longrange: str = "prompts/briefer_longrange_v1.md"
+    # Trip chain paragraph (#602) — rewriting, not judging: it runs over
+    # already-summarized per-leg conclusions and never sees a sounding.
+    trip: str = "prompts/trip_v1.md"
 
 
 class DigestConfig(BaseModel):
@@ -70,6 +73,19 @@ class DigestConfig(BaseModel):
         temperature=0.0,
     )
     translator: LLMConfig = LLMConfig(
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        temperature=0.0,
+    )
+    # Trip summary (#602).  Haiku is the *structural* right answer here, not
+    # merely the cheap one: the task is rewriting, not analysis.  It runs over
+    # data that has already been analysed — per-leg assessment / outlook,
+    # advisory chips, days_out and the deterministic binding leg — and never
+    # sees a sounding or re-derives meteorology.  There is nothing left for a
+    # bigger model to do, and a model that only ever sees three colours and
+    # nine advisory names cannot invent a verdict from weather it never read.
+    # Pinned to match the ``longrange`` / ``translator`` blocks above.
+    trip: LLMConfig = LLMConfig(
         provider="anthropic",
         model="claude-haiku-4-5-20251001",
         temperature=0.0,

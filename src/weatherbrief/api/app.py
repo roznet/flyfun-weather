@@ -38,6 +38,7 @@ from weatherbrief.api.help import router as help_router
 from weatherbrief.api.debriefs import router as debriefs_router
 from weatherbrief.api.pireps import router as pireps_router
 from weatherbrief.api.flights import router as flights_router
+from weatherbrief.api.trips import router as trips_router
 from weatherbrief.api.notifications import router as notifications_router
 from weatherbrief.api.devices import router as devices_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
@@ -569,6 +570,7 @@ def create_app() -> FastAPI:
     # over the /flights/{flight_id} catch-all.
     app.include_router(notifications_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
+    app.include_router(trips_router, prefix="/api")
     app.include_router(devices_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")

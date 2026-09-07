@@ -180,6 +180,14 @@ async function init(): Promise<void> {
     if (moveBtn) moveBtn.style.display = structural ? '' : 'none';
     if (dupBtn) dupBtn.style.display = structural ? '' : 'none';
 
+    // The "Keep in trip" checkbox belongs to the structural actions, so it
+    // appears with them and hides with them. Its default is set on click by
+    // the two handlers below (ticked for Move, un-ticked for Duplicate) —
+    // rendering it here would have to pick one, and the whole point is that
+    // the two actions differ.
+    const tripRow = document.getElementById('edit-trip-row');
+    if (tripRow) tripRow.style.display = structural ? '' : 'none';
+
     const dateNote = document.getElementById('edit-date-note');
     if (dateNote) {
       dateNote.style.display = dateChanged ? '' : 'none';
@@ -347,6 +355,27 @@ async function init(): Promise<void> {
       if (newWaypoints) store.getState().loadWaypoints();
     });
 
+    /** The "Keep in trip" checkbox, or null when the flight isn't in a trip. */
+    function keepInTripBox(): HTMLInputElement | null {
+      return document.getElementById('edit-keep-in-trip') as HTMLInputElement | null;
+    }
+
+    // Opposite defaults, both explicit: pointing at Move pre-ticks the box,
+    // pointing at Duplicate un-ticks it. Set on hover/focus rather than only
+    // at click time so the pilot sees the default before committing to it.
+    moveBtn?.addEventListener('mouseenter', () => {
+      const box = keepInTripBox();
+      if (box && !box.dataset.touched) box.checked = true;
+    });
+    dupBtn?.addEventListener('mouseenter', () => {
+      const box = keepInTripBox();
+      if (box && !box.dataset.touched) box.checked = false;
+    });
+    document.getElementById('edit-keep-in-trip')?.addEventListener('change', (ev) => {
+      // Once the pilot has touched it, stop moving it under them.
+      (ev.target as HTMLInputElement).dataset.touched = '1';
+    });
+
     moveBtn?.addEventListener('click', async () => {
       if (!flight) return;
       const payload = await buildStructuralPayload();
@@ -364,7 +393,14 @@ async function init(): Promise<void> {
         // would push the server into the "new raw" branch and re-stamp
         // ``parser_version`` to the current euro_aip release, defeating
         // its role as a re-derive marker.
-        const newFlight = await moveFlight(flight.id, payload);
+        // Trip membership must be carried explicitly: /move recreates the
+        // row, so it would not survive on its own. Default true (a move is
+        // the same leg, rescheduled).
+        const keepBox = keepInTripBox();
+        const newFlight = await moveFlight(flight.id, {
+          ...payload,
+          ...(flight.trip ? { keep_in_trip: keepBox ? keepBox.checked : true } : {}),
+        });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
@@ -393,6 +429,11 @@ async function init(): Promise<void> {
           // therefore starts with NULL raw_route on a copy-without-edit
           // — annotation is lost, but the re-derive marker stays honest.
           raw_route: payload.raw_route,
+          // Duplicate does NOT inherit the trip unless the pilot ticks the
+          // box: a duplicate is a new thing, and inheriting would quietly
+          // grow the trip with a leg that is not part of it.
+          ...(flight.trip && keepInTripBox()?.checked
+            ? { trip_id: flight.trip.id } : {}),
         });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {

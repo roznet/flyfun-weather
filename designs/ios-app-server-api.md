@@ -109,6 +109,28 @@ an orphaned directory, never a restored pack row that cannot be read.
   clients bind the day to the departure's instead (web pins
   `flight.target_date`, iOS uses `AddFlightViewModel.alignedAltDepartureInstant`).
 
+### Trip membership on a flight (#602)
+
+`FlightResponse` carries `trip: {id, name, position, total} | null` for every
+owned flight in a trip. `position` is 1-based in **departure-time order** and is
+derived server-side — there is no stored leg position, so a rescheduled leg
+needs no client-side fixup. iOS reads it as `FlightResponse.trip` and renders a
+"leg 2 of 3" badge (`TripBadge`); the full trip surface (`/api/trips`, the chain
+strip, the serial trip refresh) is web-only for now.
+
+Two write paths treat membership differently, and a client that guesses gets it
+wrong in a way the pilot never asked for:
+
+- **`POST /flights/{id}/move`** takes `keep_in_trip`, **defaulting to true**. A
+  move is the same leg rescheduled, so membership follows it. The server has to
+  carry `trip_id` explicitly because `/move` recreates the row.
+- **`POST /flights`** takes `trip_id`, **opt-in**. A duplicate is a *new* thing;
+  inheriting would quietly grow the trip with a leg that is not part of it.
+
+Refreshing a member leg individually still works, but on the web it is presented
+as a trip-level action: the trip refresh is serial and server-driven, and its
+notifications are coalesced into one per chain.
+
 ### Queueing a refresh without watching it
 
 `POST /api/flights/{id}/packs/refresh?source=user` returns **202** and runs the

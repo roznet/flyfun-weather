@@ -62,6 +62,10 @@ struct FlightCardView: View, Equatable {
                         .accessibilityLabel("Shared flight")
                 }
 
+                if let trip = flight.trip {
+                    TripBadge(trip: trip)
+                }
+
                 Spacer()
 
                 if hasCachedData {
@@ -227,5 +231,28 @@ struct OutlookBadge: View {
             .background(tint.opacity(0.15), in: Capsule())
             .overlay(Capsule().stroke(tint.opacity(0.4), lineWidth: 0.5))
             .accessibilityLabel("Outlook: \(label)")
+    }
+}
+
+/// "Leg 2 of 3" — the whole of iOS trip support in phase 1 (#602).
+///
+/// A trip is a chain that only happens if all its remaining legs work, and the
+/// binding leg is usually the one you did *not* open. The badge cannot say
+/// which leg that is (that computation lives on the server and is surfaced on
+/// the web trip page), but it can say this flight is part of a chain, which is
+/// the thing the per-flight card otherwise hides completely.
+struct TripBadge: View {
+    let trip: TripLegRef
+
+    var body: some View {
+        Text("\(trip.position)/\(trip.total)")
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.15), in: Capsule())
+            .foregroundStyle(.secondary)
+            .accessibilityLabel(
+                "Leg \(trip.position) of \(trip.total) in trip \(trip.name)"
+            )
     }
 }

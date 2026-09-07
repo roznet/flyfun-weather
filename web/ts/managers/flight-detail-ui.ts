@@ -159,6 +159,33 @@ export function renderFlightInfo(
       return `<option value="${ac.id}"${sel}>${escapeHtml(label + nickname)}</option>`;
     }).join('');
 
+    // Trip membership control (#602). Rendered only when the source flight is
+    // in a trip, and shown only alongside Move / Duplicate — the two actions
+    // that treat membership differently. Same control, opposite default:
+    //
+    //   Move      → pre-ticked. A move *is the same leg, rescheduled*; the
+    //               Sunday return slipping to Monday is still this trip's
+    //               return, so dropping it would be a silent data loss.
+    //   Duplicate → un-ticked. A duplicate is a *new* thing, and the common
+    //               use ("same route, different weekend") belongs to a
+    //               different trip or to none.
+    //
+    // The default encodes the common case; the checkbox makes the uncommon one
+    // one click away. ``updateStructuralUi`` in flight-main flips the default
+    // as the pilot moves between the two buttons.
+    const tripCheckbox = flight.trip
+      ? `
+        <div class="info-row edit-trip-row" id="edit-trip-row" style="display:none;">
+          <span class="info-label"></span>
+          <span class="info-value">
+            <label class="edit-trip-label">
+              <input type="checkbox" id="edit-keep-in-trip" checked>
+              ${escapeHtml(t('trips.keepInTrip', { name: flight.trip.name }))}
+            </label>
+          </span>
+        </div>`
+      : '';
+
     container.innerHTML = `
       <div class="flight-info-grid editing">
         <div class="info-row">
@@ -241,6 +268,7 @@ export function renderFlightInfo(
             </div>
           </span>
         </div>
+        ${tripCheckbox}
         <div class="info-row edit-actions">
           <button class="btn btn-primary btn-sm" id="edit-save">Save</button>
           <button class="btn btn-primary btn-sm" id="edit-move" style="display:none;">Move flight</button>

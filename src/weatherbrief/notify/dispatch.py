@@ -44,6 +44,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow
@@ -206,6 +207,23 @@ def _send_push(
         logger.warning("notify: briefing push failed for %s", flight.id, exc_info=True)
 
 
+class NotifyOutcome(BaseModel):
+    """What the WHEN gate decided for one completed refresh.
+
+    Returned so a *coalescing* caller — the trip-refresh driver, which must fire
+    one push for an N-leg chain rather than N — can run the identical decision
+    per leg, suppress the per-leg delivery, and still know which legs would have
+    notified and what to say about them.
+    """
+
+    qualified: bool = False
+    badge: int = 0
+    assessment: str | None = None
+    outlook: str | None = None
+    #: Short "was GREEN"-style transition line when the traffic light worsened.
+    worsened_message: str | None = None
+
+
 def notify_briefing_refresh(
     db: Session,
     flight: Flight,
@@ -214,7 +232,9 @@ def notify_briefing_refresh(
     *,
     user_id: str,
     present: bool,
-) -> None:
+    override: str | None = None,
+    deliver: bool = True,
+) -> NotifyOutcome:
     """Evaluate the notification decision for a completed refresh and dispatch.
 
     Called once per refresh from ``_notify_refresh_complete`` (after commit).
@@ -233,7 +253,18 @@ def notify_briefing_refresh(
     ``present`` is computed by the caller from the live UI refresh stream (see
     ``api/packs.py``) — the same signal for web and iOS, so "don't notify me
     about a refresh I just watched finish" works identically on both.
+
+    ``override`` lets the caller supply the *effective* per-flight override
+    instead of ``flight.notify_override``. Only the trip layer uses it, to apply
+    the documented precedence — an explicit per-flight override wins, else the
+    trip's, else the account scope — without teaching this module about trips.
+
+    ``deliver=False`` runs the whole decision, including the badge advance, but
+    sends nothing. The trip driver uses it to coalesce: the badge must still
+    move per leg (it counts unopened *flights*), while the push and email fire
+    once for the chain.
     """
+    outcome = NotifyOutcome()
     try:
         from weatherbrief.api.preferences import load_notify_prefs
         from weatherbrief.notify.badge import compute_badge_count, record_notify_qualifying
@@ -249,7 +280,7 @@ def notify_briefing_refresh(
                 "notify: skipping %s — assessment UNAVAILABLE (nothing to report)",
                 flight.id,
             )
-            return
+            return outcome
 
         prefs = load_notify_prefs(db, user_id)
         changed, delta = detect_change(db, flight.id, meta)
@@ -257,17 +288,31 @@ def notify_briefing_refresh(
         # WHEN: one decision, channel- and trigger-agnostic. A user actively
         # watching the refresh finish needs no notification (they saw it live).
         if present or not notify_qualifies(
-            notify_override=flight.notify_override,
+            notify_override=override or flight.notify_override,
             scope=prefs["notify_scope"],
             change_only=prefs["notify_change_only"],
             changed=changed,
         ):
-            return
+            return outcome
 
         # Advance the badge (gated by the same single WHEN decision above) and
         # read the authoritative count for aps.badge.
         record_notify_qualifying(db, user_id, flight.id, meta.fetch_timestamp)
         badge = compute_badge_count(db, user_id)
+
+        outcome = NotifyOutcome(
+            qualified=True,
+            badge=badge,
+            assessment=meta.assessment,
+            outlook=meta.outlook,
+            worsened_message=(
+                delta.messages[0] if delta and delta.worsened and delta.messages else None
+            ),
+        )
+        if not deliver:
+            # Coalescing caller: the decision and the badge stand, the channels
+            # are its job. Nothing else about the gate changes.
+            return outcome
 
         # HOW: pure channel preference — nothing about the trigger or surface.
         if prefs["notify_email"]:
@@ -276,3 +321,4 @@ def notify_briefing_refresh(
             _send_push(db, user_id, flight, meta, delta, badge)
     except Exception:
         logger.warning("notify: dispatch failed for %s", getattr(flight, "id", "?"), exc_info=True)
+    return outcome

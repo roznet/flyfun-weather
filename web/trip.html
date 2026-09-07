@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Trip</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <div id="trip-header"></div>
+      <div class="header-right">
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <div id="error-message"></div>
+
+    <!-- 1. Chain strip: one tile per leg, the whole trip at a glance -->
+    <div class="section">
+      <div id="trip-chain-strip"></div>
+    </div>
+
+    <!-- 2. The deterministic binding-constraint callout. The thing the eye
+         should land on: which leg decides this trip, and when it is decidable.
+         Never a colour for the trip as a whole. -->
+    <div class="section">
+      <div id="trip-callout"></div>
+    </div>
+
+    <!-- 3. AI paragraph — visually secondary to the callout above by design. -->
+    <div class="section" id="trip-ai-section" style="display: none;">
+      <h3 id="trip-ai-heading"></h3>
+      <div id="trip-ai"></div>
+    </div>
+
+    <!-- 4. Continuity warnings (soft — a broken chain is usually a mistake
+         worth seeing, never a block). -->
+    <div id="trip-continuity"></div>
+
+    <!-- 5. Per-leg detail rows: the substance of the page. -->
+    <div class="section">
+      <h3 id="trip-legs-heading"></h3>
+      <div id="trip-legs">
+        <p class="muted">Loading…</p>
+      </div>
+    </div>
+
+    <!-- 6. Trip-level controls. One "Refresh trip" button: per-leg refresh is
+         a trip-level action here, and the gate already skips legs with no new
+         data, so one button is genuinely sufficient. -->
+    <div class="section">
+      <div id="trip-controls"></div>
+    </div>
+
+    <div id="loading-spinner" style="display: none;">Loading trip…</div>
+  </div>
+
+  <script src="/dist/trip.js"></script>
+</body>
+</html>

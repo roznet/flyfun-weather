@@ -177,5 +177,6 @@ from weatherbrief.models.storage import (  # noqa: F401
     Flight,
     FlightDebrief,
     FlightProfile,
+    FlightTrip,
     NOTE_MAX_LEN,
 )

@@ -154,6 +154,13 @@ async def process_auto_refreshes(app_state) -> None:
             return
         logger.info("Auto-refresh: %d flight(s) due", len(due))
 
+        # Open one coalescing window per multi-leg trip in this cycle, so a trip
+        # whose three legs all come due sends one push rather than three. The
+        # loop below stays exactly as sequential as it was.
+        from weatherbrief.api import trip_refresh
+
+        trip_refresh.open_scheduler_run(db, due)
+
         for row in due:
             from weatherbrief.api.packs import refresh_registry
 
@@ -186,14 +193,18 @@ async def process_auto_refreshes(app_state) -> None:
                     row.id, "succeeded" if ran else "skipped",
                     None if ran else "refresh gate declined a full run",
                 )
+                leg_outcome = "succeeded" if ran else "skipped"
                 logger.info(
                     "Auto-refresh %s: %s", "completed" if ran else "skipped", row.id,
                 )
             except Exception as exc:
+                leg_outcome = "failed"
                 refresh_registry.mark_outcome(row.id, "failed", str(exc))
                 logger.error("Auto-refresh failed for %s", row.id, exc_info=True)
             finally:
                 refresh_registry.unregister(row.id)
+                if row.trip_id:
+                    trip_refresh.note_leg_done(db, row.trip_id, row.id, leg_outcome)
     finally:
         db.close()
 
@@ -248,7 +259,74 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
         if due_at is not None and now_utc >= due_at:
             due.append(row)
 
-    return due
+    return _with_trip_mates(db, due, now_utc)
+
+
+def _with_trip_mates(
+    db: Session, due: list[FlightRow], now_utc: datetime,
+) -> list[FlightRow]:
+    """Extend a due list with the still-future trip-mates of any due leg.
+
+    This is what gives a **trip** auto-refresh, and it needs no new machinery:
+    ``process_auto_refreshes`` is already a strictly sequential ``for`` loop, so
+    the added legs are already correctly paced — one at a time, never a fan-out.
+
+    It exists because per-leg ``auto_refresh_hour`` is exactly wrong for a
+    trip. It defaults to *that leg's* departure − 1 h, so Sunday's return would
+    auto-refresh Sunday morning, long after the decision was actually made on
+    Friday. Refreshing the whole chain when any member comes due brings the
+    return forward to the commit point that matters.
+
+    Only future legs are pulled in (a flown leg's briefing is history), and the
+    trip must have ``auto_refresh`` on — a trip is opt-in exactly like a flight.
+    Beyond-horizon legs are skipped for the same reason the per-flight path
+    skips them: the pipeline would only build an empty pack.
+    """
+    if not due:
+        return due
+
+    from weatherbrief.db.models import FlightTripRow
+
+    trip_ids = {row.trip_id for row in due if row.trip_id}
+    if not trip_ids:
+        return due
+
+    enabled = set(
+        db.execute(
+            select(FlightTripRow.id).where(
+                FlightTripRow.id.in_(trip_ids),
+                FlightTripRow.auto_refresh.is_(True),
+            )
+        ).scalars().all()
+    )
+    if not enabled:
+        return due
+
+    seen = {row.id for row in due}
+    mates = db.execute(
+        select(FlightRow)
+        .where(FlightRow.trip_id.in_(enabled))
+        .order_by(FlightRow.departure_time.asc())
+    ).scalars().all()
+
+    extra: list[FlightRow] = []
+    for mate in mates:
+        if mate.id in seen:
+            continue
+        start = _flight_start_dt(mate)
+        if start is None or now_utc >= start:
+            continue
+        if is_beyond_forecast_horizon(start.date(), now_utc.date()):
+            continue
+        seen.add(mate.id)
+        extra.append(mate)
+
+    if extra:
+        logger.info(
+            "Auto-refresh: pulling in %d trip-mate(s) for %d trip(s)",
+            len(extra), len(enabled),
+        )
+    return due + extra
 
 
 def _user_defers_for_model_update(
