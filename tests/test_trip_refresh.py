@@ -335,18 +335,20 @@ class TestBootRecovery:
         )
         session.commit()
 
-        closed: list[str] = []
+        closed: list[tuple] = []
+        # Takes the run id too: the boot pass must close out the run it
+        # actually inspected, not "whatever is live by the time it gets there".
         monkeypatch.setattr(
             trip_refresh, "_finish_in_new_session",
-            lambda trip_id, _user: closed.append(trip_id),
+            lambda trip_id, user_id, run_id=None: closed.append((trip_id, run_id)),
         )
         monkeypatch.setattr(trip_refresh, "_submit_next", lambda *a: pytest.fail("should not resubmit"))
         monkeypatch.setattr(trip_refresh, "RESUME_STARTUP_DELAY_SECONDS", 0)
 
         asyncio.run(trip_refresh.run_trip_refresh_resume(object()))
         # Closed out so the coalesced notification fires rather than being
-        # discarded when the staleness window lapses.
-        assert closed == [trip_with_legs.id]
+        # discarded when the staleness window lapses — under its own run id.
+        assert closed == [(trip_with_legs.id, status.refresh_id)]
 
     def test_a_run_with_nothing_left_reports_no_work(self, session, trip_with_legs):
         status = trip_refresh.start(session, trip_with_legs, object(), DEV_USER_ID)
