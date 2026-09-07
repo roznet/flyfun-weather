@@ -150,12 +150,16 @@ Two things keep "one leg at a time" actually true, and both are load-bearing:
   A single uvicorn worker makes a process-local lock sufficient — the same
   assumption `refresh-durability` already relies on.
 - **One gate, `_run_scope(db, trip_id, run_id)`, and every mutator goes through
-  it.** It takes `_state_lock`, loads the row, and yields `None` when the
+  it — including `record_leg_notice`, and committing inside it.** It takes `_state_lock`, loads the row, and yields `None` when the
   caller's run is not the live one. This shape is the fix for a *process*, not
   just a bug: fencing used to be something each function opted into, and three
   review rounds running found the function that had not — `open_scheduler_run`,
   then `_finish`. A new mutator that skips the gate is now visible in review
-  rather than in production, and a test asserts the three mutators reference it.
+  rather than in production. The test that polices this **discovers** the
+  mutators (any module function calling `write_refresh_state`) rather than
+  naming them: the first version hard-coded three names and so could not catch
+  the fourth, which is precisely the failure it existed to prevent. A test that
+  enumerates the list it polices is not a structural guarantee.
 - **`_record_result` returns `None` when fenced**, which the caller must not
   conflate with an empty state: an empty `pending` means the chain is done and
   should be closed out, while a fenced-out task must touch nothing.
@@ -164,6 +168,12 @@ Two things keep "one leg at a time" actually true, and both are load-bearing:
   sees an idle trip and may open a *new* run. An unfenced `_finish` arriving
   moments later closes that one — dropping the first run's notification and
   killing the second before it claims a leg.
+- **Nothing else may refresh a leg the driver owns**, and there are two paths,
+  not one. `legs_claimed_by_a_live_run` filters the scheduler's due list;
+  `leg_is_claimed` guards the manual per-flight `/packs/refresh` endpoints
+  (queued and streaming), which a pilot reaches from an individual leg's
+  briefing page. Fixing only the scheduler left the invariant reopened through
+  the path a user is most likely to take.
 - **The scheduler yields legs the driver already owns.** A leg sitting in a
   run's `pending` has been promised to the driver but is not yet in
   `refresh_registry` — nothing claims it until `_claim_next` picks it up — so the
@@ -285,12 +295,21 @@ Three properties are load-bearing:
   keys off the key alone rather than the text — otherwise an input set that
   reliably fails the guardrail is regenerated and re-charged on every page open.
 
+  The key also includes each leg's derived **state**. A leg flips
+  `remaining` → `flown` from the clock alone, with no debrief and no new pack,
+  and only remaining legs can bind — so the binding leg changes identity as a
+  departure passes, and a key without it would pair a fresh deterministic
+  callout with a cached paragraph naming a leg that no longer matters.
+
   **The consent gate runs before the cache, and the order is load-bearing.**
   `llm_digest_enabled` is in neither the packs nor the debriefs, so it cannot be
   in the key: turning AI off on a leg without touching its pack leaves the key
   unchanged, and a gate placed after the cache check would never be reached —
   the stored paragraph would keep being served to a pilot who had switched AI
-  off. That is a consent property, not a caching one. Generated once per completed trip refresh and
+  off. That is a consent property, not a caching one — and it applies to
+  *reads* as well: `_trip_to_response` re-checks `legs_allow_ai` before
+  returning a stored paragraph, so the API contract holds for any consumer, not
+  just for the page that happens to fetch it through the generating endpoint. Generated once per completed trip refresh and
   on demand when the page opens stale. Goes through `compute_cost` and the
   ledger (`action="trip_summary"`) — an invisible cost line is how a small cost
   becomes an unexplained one.

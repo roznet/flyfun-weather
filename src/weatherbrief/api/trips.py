@@ -193,13 +193,27 @@ def ai_summary_key(legs: list[TripLegInput]) -> str:
     flown changes which leg decides the trip **without changing any**
     ``fetch_timestamp``. Keyed on packs alone, the stale paragraph — still
     naming a leg that no longer matters — would keep being served as fresh.
+
+    The derived **leg state** is in the key for the same reason, and it is the
+    commoner case: a leg flips ``remaining`` → ``flown`` from the clock alone,
+    with no debrief and no new pack, and ``_pick_binding_leg`` only considers
+    remaining legs. So the binding leg changes identity as a departure passes,
+    and without this the page would show a deterministic callout naming one leg
+    beside a cached paragraph still naming another.
     """
     import hashlib
 
+    from weatherbrief.trips import summarize_trip
+
+    # Reuse the real state derivation rather than re-implementing the clock
+    # rule here — two definitions of "flown" would be exactly the kind of drift
+    # the single binding-leg rule exists to avoid.
+    states = {leg.flight_id: leg.state for leg in summarize_trip("key", legs).legs}
     parts = sorted(
         f"{leg.flight_id}"
         f":{leg.fetch_timestamp.isoformat() if leg.fetch_timestamp else '-'}"
         f":{leg.debrief_decision or '-'}"
+        f":{states.get(leg.flight_id, '-')}"
         for leg in legs
     )
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:64]
@@ -264,8 +278,17 @@ def _validate_owned_flights(db: Session, flight_ids: list[str], user_id: str) ->
 def _trip_to_response(db: Session, trip: FlightTrip) -> TripResponse:
     from weatherbrief.api import trip_refresh
 
+    from weatherbrief.digest.trip_summary import legs_allow_ai
+
     summary, members, leg_inputs = build_trip_summary(db, trip)
     stale = bool(trip.ai_summary_text) and trip.ai_summary_key != ai_summary_key(leg_inputs)
+    # The consent gate applies to *reads* too, not just to generation. Turning
+    # AI off on a leg touches no pack, so the key is unchanged and `stale` is
+    # False — without this, every endpoint returning a stored paragraph would
+    # keep serving it to a pilot who had switched AI off. `/trip.html` happens
+    # to fetch the paragraph through its own endpoint today; the contract
+    # should not depend on that staying true.
+    ai_text = trip.ai_summary_text if legs_allow_ai(db, members, trip.user_id) else None
     row = db.get(FlightTripRow, trip.id)
     return TripResponse(
         id=trip.id,
@@ -278,7 +301,7 @@ def _trip_to_response(db: Session, trip: FlightTrip) -> TripResponse:
         created_at=trip.created_at.isoformat(),
         flight_ids=[f.id for f in members],
         summary=summary,
-        ai_summary=trip.ai_summary_text,
+        ai_summary=ai_text,
         ai_summary_at=trip.ai_summary_at.isoformat() if trip.ai_summary_at else None,
         ai_summary_stale=stale,
         refresh=trip_refresh.status(row) if row is not None else None,
@@ -476,7 +499,12 @@ def add_legs(
             detail=f"A trip can hold at most {MAX_TRIP_LEGS} legs.",
         )
     trip_storage.set_leg_trip(db, flight_ids, user_id, trip_id)
-    trip_storage.prune_empty_trips(db, user_id)
+    # `keep=trip_id` for the same reason `create_trip` needs it: an empty
+    # `flight_ids` on an already-empty trip would otherwise prune the trip out
+    # from under this request, and the response builder would then dereference
+    # None — a 500 for what should have been a no-op, with the trip destroyed
+    # as a side effect.
+    trip_storage.prune_empty_trips(db, user_id, keep=trip_id)
     db.commit()
     return _trip_to_response(db, trip_storage.load_trip(db, trip_id, user_id))
 

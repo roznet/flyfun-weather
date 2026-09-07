@@ -2269,6 +2269,22 @@ async def refresh_briefing(
                     media_type="application/json",
                 )
 
+    # A leg promised to a live trip refresh belongs to that driver: refreshing
+    # it here too would put two legs of the same trip in flight at once, which
+    # the serial design exists to prevent. The registry cannot see it — nothing
+    # claims a pending leg until the driver's turn — so it is checked
+    # explicitly. 409, the same status a duplicate refresh already returns.
+    from weatherbrief.api import trip_refresh as _trip_refresh
+
+    if _trip_refresh.leg_is_claimed(db, flight_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This flight is part of a trip refresh that is already running. "
+                "Wait for the trip to finish."
+            ),
+        )
+
     # Duplicate / queue-depth check
     try:
         entry = refresh_registry.try_register(
@@ -2521,6 +2537,28 @@ async def refresh_briefing_stream(
                         media_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                     )
+
+        # Same trip-driver guard as the queued path, delivered as an SSE error
+        # so a client that already opened the stream handles it gracefully.
+        from weatherbrief.api import trip_refresh as _trip_refresh
+
+        if _trip_refresh.leg_is_claimed(db, flight_id):
+            async def trip_busy_generator() -> AsyncGenerator[str, None]:
+                event = {
+                    "type": "error",
+                    "message": (
+                        "This flight is part of a trip refresh that is already "
+                        "running. Wait for the trip to finish."
+                    ),
+                }
+                yield f"event: error\ndata: {json_mod.dumps(event, default=str)}\n\n"
+
+            return StreamingResponse(
+                trip_busy_generator(),
+                media_type="text/event-stream",
+                status_code=409,
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         # Duplicate / queue-depth check — return SSE error so clients
         # that already opened the stream can handle it gracefully.

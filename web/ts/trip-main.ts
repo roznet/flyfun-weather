@@ -26,6 +26,15 @@ const REFRESH_POLL_MS = 5000;
 
 let trip: TripResponse | null = null;
 let pollTimer: number | null = null;
+/** The AI paragraph currently on screen.
+ *
+ * Held so a re-render for an unrelated action keeps it. Renaming a trip or
+ * toggling auto-refresh touches no leg's pack, debrief or state, so the
+ * paragraph's cache key is unaffected — blanking the section on those actions
+ * made it look like the summary had been withdrawn. Only a completed refresh
+ * (or a reload) actually re-fetches it.
+ */
+let currentAi: TripAiSummary | null = null;
 
 async function loadAiSummary(tripId: string): Promise<TripAiSummary | null> {
   try {
@@ -39,6 +48,7 @@ async function loadAiSummary(tripId: string): Promise<TripAiSummary | null> {
 
 function renderAll(ai: TripAiSummary | null): void {
   if (!trip) return;
+  currentAi = ai;
   ui.renderHeader(trip);
   ui.renderChainStrip(trip.summary);
   ui.renderCallout(trip.summary);
@@ -53,12 +63,27 @@ function renderAll(ai: TripAiSummary | null): void {
   });
 }
 
+/** A 404 means the trip container was pruned — its last leg was unlinked.
+ *
+ * Shared rather than inlined in one handler: another tab or device can prune
+ * the trip while this one is mid-poll, so every path that re-reads the trip
+ * needs the same distinction between "it is gone" and "the request failed".
+ */
+function isMissingTrip(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.startsWith('API 404:');
+}
+
 async function reload(withAi = true): Promise<void> {
   if (!trip) return;
   const id = trip.id;
   try {
     trip = await fetchTrip(id);
   } catch (err) {
+    if (isMissingTrip(err)) {
+      window.location.href = '/index.html';
+      return;
+    }
     ui.renderError(errorToMessage(err));
     return;
   }
@@ -123,7 +148,8 @@ async function handleRename(name: string): Promise<void> {
   if (!trip) return;
   try {
     trip = await updateTrip(trip.id, { name });
-    renderAll(null);
+    // Keeps the AI paragraph: this action cannot have invalidated it.
+    renderAll(currentAi);
   } catch (err) {
     ui.renderError(errorToMessage(err));
   }
@@ -133,7 +159,8 @@ async function handleAutoRefresh(value: boolean): Promise<void> {
   if (!trip) return;
   try {
     trip = await updateTrip(trip.id, { auto_refresh: value });
-    renderAll(null);
+    // Keeps the AI paragraph: this action cannot have invalidated it.
+    renderAll(currentAi);
   } catch (err) {
     ui.renderError(errorToMessage(err));
   }
@@ -151,13 +178,9 @@ async function handleRemoveLeg(flightId: string): Promise<void> {
   try {
     trip = await fetchTrip(id);
   } catch (err) {
-    // Only a 404 means "the container was pruned because that was its last
-    // leg" — the expected end of this page. Any other failure (network, 500)
-    // is a real error and must say so rather than silently navigating away,
-    // which would look identical to success. `API 404:` is the prefix the
-    // adapter puts on HTTP errors (see briefing-store's use of the same test).
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.startsWith('API 404:')) {
+    // Expected when that was the trip's last leg; anything else is a real
+    // failure and must say so rather than silently navigating away.
+    if (isMissingTrip(err)) {
       window.location.href = '/index.html';
       return;
     }

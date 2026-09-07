@@ -491,6 +491,19 @@ def legs_claimed_by_a_live_run(db: Session, flight_ids: list[str]) -> set[str]:
     return claimed & set(flight_ids)
 
 
+def leg_is_claimed(db: Session, flight_id: str) -> bool:
+    """Is this one leg promised to a live trip refresh?
+
+    The single-flight guard for the manual ``/packs/refresh`` endpoint.
+    ``legs_claimed_by_a_live_run`` covers the scheduler's batch, but a pilot can
+    also press Refresh on an individual trip-mate from its own briefing page —
+    an unfenced path that would put a second leg of the same trip in flight
+    beside the driver's current one, which is the invariant the whole serial
+    design exists to hold.
+    """
+    return bool(legs_claimed_by_a_live_run(db, [flight_id]))
+
+
 # ---------------------------------------------------------------------------
 # Boot-time recovery
 #
@@ -742,10 +755,17 @@ def record_leg_notice(
     worsened_message: str | None,
     badge: int,
 ) -> None:
-    """Stash one leg's notification decision for the coalesced push."""
-    with _state_lock:
-        row = db.get(FlightTripRow, trip_row.id)
-        if row is None or not row.refresh_id:
+    """Stash one leg's notification decision for the coalesced push.
+
+    Through ``_run_scope`` and committing **inside** it, like every other
+    mutator. It previously only flushed under the lock and left the commit to
+    the caller, so two sessions could read-modify-write the same ``notices``
+    blob and one commit would clobber the other's snapshot — losing a leg's
+    notice, and with it the whole coalesced push when that was the only
+    qualifying leg.
+    """
+    with _run_scope(db, trip_row.id, None) as row:
+        if row is None:
             return
         state = trip_storage.read_refresh_state(row)
         notices = dict(state.get("notices") or {})
@@ -759,6 +779,7 @@ def record_leg_notice(
         }
         state["notices"] = notices
         trip_storage.write_refresh_state(db, row, refresh_id=row.refresh_id, state=state)
+        db.commit()
 
 
 def _leg_lines(state: dict) -> list[str]:

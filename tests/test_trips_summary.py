@@ -91,6 +91,10 @@ class TestChainDerivation:
         assert (warning.arrives, warning.departs) == ("LSGS", "LFAT")
         # A broken chain is a warning, never a refusal to summarize.
         assert summary.binding_leg_id is not None
+        # And the label must not quietly drop the airport the second leg
+        # actually departs from — reporting the gap while printing a route
+        # string that hides it is worse than either alone.
+        assert summary.chain_label == "EGTF → LSGS → LFAT → EGTF"
 
 
 class TestBindingLeg:
@@ -183,6 +187,22 @@ class TestBindingLeg:
         # expected to be reworded, the two claims are not.
         assert "could not be assessed" in headline
         assert "2 legs still need a briefing" in headline
+
+
+    def test_a_monitoring_leg_never_binds(self):
+        # The taxonomy's third debrief value. Treating it as ordinary
+        # "remaining" let a flight created purely to watch the weather become
+        # the leg that "decides the trip" — and drag chain_status with it.
+        legs = [
+            leg("watch", ["EGTF", "LSGS"], days=3, days_out=3, assessment="RED",
+                debrief_decision="monitoring"),
+            leg("real", ["LSGS", "EGTF"], days=5, days_out=5, assessment="GREEN"),
+        ]
+        summary = summarize_trip("t", legs, now=NOW)
+        assert summary.legs[0].state == "monitoring"
+        assert summary.binding_leg_id == "real"
+        assert summary.chain_status == "GREEN"
+        assert summary.remaining_legs == 1
 
 
 class TestTwoAggregationsNeverOne:

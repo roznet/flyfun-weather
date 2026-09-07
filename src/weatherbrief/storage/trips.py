@@ -29,13 +29,6 @@ logger = logging.getLogger(__name__)
 _TRIP_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 _TRIP_ID_LEN = 10
 
-#: Below this ground gap, two consecutive legs are the same *sortie* — a fuel
-#: or customs stop, not a decision point. Fixed for v1 (the alternative,
-#: deriving it from turnaround time or local night, is still open in the design
-#: doc); kept here as one named constant so raising it is a one-line change.
-SORTIE_GAP_HOURS = 4.0
-
-
 def _generate_trip_id() -> str:
     """10-char base62 token — same shape family as ``FlightRow.share_code``."""
     return "".join(secrets.choice(_TRIP_ID_ALPHABET) for _ in range(_TRIP_ID_LEN))
