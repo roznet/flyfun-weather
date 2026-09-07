@@ -4410,6 +4410,16 @@ html {
   flex: 1 1 auto;
 }
 
+/* The cloud-style <select> is the one control here that sizes to its own text
+   rather than to the column. With the drawer's overflow-x now pinned, a long
+   localized label ("Naturbelassen", "Suavizado") would be clipped rather than
+   shown — so cap it at the track and let the native control ellipsize. */
+.viz-layer-toggles.viz-narrow .viz-pills > select,
+.viz-layer-toggles.viz-narrow .viz-model-select {
+  max-width: 100%;
+  min-width: 0;
+}
+
 /* The hint slot drops to its own line rather than competing for the row's
    remaining width — which, in 320px, is none. */
 .viz-layer-toggles.viz-narrow .viz-detail-hint {

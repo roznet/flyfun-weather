@@ -117,6 +117,51 @@ function saveCloudStyle(style: CloudStyle): void {
   try { localStorage.setItem(CLOUD_STYLE_KEY, style); } catch { /* quota */ }
 }
 
+/** Attributes that identify a layer control across a redraw.
+ *
+ *  Deliberately not "the layer id": the bar renders three kinds of control and
+ *  they do NOT share an id scheme. Ordinary layers carry `data-layer-id`, but
+ *  the compound cloud sources carry `data-cloud-source` and their layer ids are
+ *  filtered OUT of the pill list (`panel.ts`, `ALL_CLOUD_LAYER_IDS`) because the
+ *  style axis multiplies them out — so looking up a toggled cloud band by
+ *  `data-layer-id` matches nothing at all. The group clear carries
+ *  `data-none-group`, and the family chips carry `data-family`.
+ *
+ *  Order matters only in that each control carries exactly one of these. */
+const FOCUS_MARK_KEYS = ['data-layer-id', 'data-cloud-source', 'data-none-group', 'data-family'] as const;
+
+interface FocusMark { key: string; value: string }
+
+/** Note which control has focus, so the redraw can hand it back.
+ *
+ *  Reading the ACTIVE ELEMENT rather than deriving a target from the toggled
+ *  layer is what makes this correct for every control, including the None pill
+ *  (which drives several toggles and should keep focus on itself, not on
+ *  whichever layer went off last). It also self-limits to the case that
+ *  matters: a mouse click in a browser that does not focus buttons leaves
+ *  nothing to capture, so nothing is stolen. */
+function captureFocusMark(host: HTMLElement): FocusMark | null {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement) || !host.contains(el)) return null;
+  for (const key of FOCUS_MARK_KEYS) {
+    const value = el.getAttribute(key);
+    if (value !== null) return { key, value };
+  }
+  return null;
+}
+
+/** Put focus back on the control's replacement after the subtree was swapped.
+ *  Compares the attribute by value rather than building a selector, so a value
+ *  holding quotes or spaces (`data-none-group` is a space-joined id list) needs
+ *  no escaping. */
+function restoreFocusMark(host: HTMLElement, mark: FocusMark | null): void {
+  if (!mark) return;
+  // The key is from FOCUS_MARK_KEYS, never user input.
+  for (const el of Array.from(host.querySelectorAll<HTMLElement>(`[${mark.key}]`))) {
+    if (el.getAttribute(mark.key) === mark.value) { el.focus(); return; }
+  }
+}
+
 export interface AirportProfilePanelOptions {
   container: HTMLElement;
   initialModel?: string;
@@ -194,7 +239,6 @@ export class AirportProfilePanel {
   private cloudStyle: CloudStyle = loadCloudStyle();
   /** Coalescing state for {@link queueToggleRedraw}. */
   private redrawQueued = false;
-  private pendingFocusLayer: string | null = null;
 
   private snapshot: AirportProfileSnapshot = {
     meta: null, surface: [], levels: [], enriched: null, derived: [],
@@ -788,7 +832,7 @@ export class AirportProfilePanel {
     // (`wb_apProfileLayers`) and has no such subscription, so the pill, the
     // family chip's summary and the None pill all sat stale until the drawer
     // was reopened.
-    this.queueToggleRedraw(layerId);
+    this.queueToggleRedraw();
   }
 
   /** Redraw the layer controls once per burst of toggles.
@@ -799,24 +843,17 @@ export class AirportProfilePanel {
    *  wherever the last iteration put it. The burst is synchronous, so a
    *  microtask coalesces it exactly — and the DOM the redraw reads its open
    *  family back from is still the previous render when the microtask runs. */
-  private queueToggleRedraw(layerId: string): void {
-    this.pendingFocusLayer = layerId;
+  private queueToggleRedraw(): void {
     if (this.redrawQueued) return;
     this.redrawQueued = true;
     queueMicrotask(() => {
       this.redrawQueued = false;
-      const focusId = this.pendingFocusLayer;
-      this.pendingFocusLayer = null;
       if (!this.drawerOpen) return;
       const host = this.drawerEl.querySelector<HTMLElement>('.ap-drawer-cross-host');
       if (!host) return;
+      const focus = captureFocusMark(host);
       this.renderCrossToggles(host);
-      // The click destroyed the button it landed on, so put focus back on its
-      // replacement — otherwise tabbing through the pills resets to the top of
-      // the document on every toggle.
-      if (focusId) {
-        host.querySelector<HTMLElement>(`[data-layer-id="${CSS.escape(focusId)}"]`)?.focus();
-      }
+      restoreFocusMark(host, focus);
     });
   }
 
