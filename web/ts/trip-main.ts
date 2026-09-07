@@ -1,5 +1,6 @@
 /** Trip page entry point (#602) — /trip.html?id=… */
 
+import { fetchActiveRefreshes } from './adapters/api-adapter';
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   deleteTrip,
@@ -11,6 +12,7 @@ import {
   updateTrip,
   type TripAiSummary,
 } from './adapters/trips-adapter';
+import type { RefreshEntry } from './adapters/api-adapter';
 import type { TripResponse } from './store/types';
 import * as ui from './managers/trip-ui';
 import { errorToMessage, redirectToLogin, renderUserInfo } from './utils';
@@ -26,6 +28,12 @@ const REFRESH_POLL_MS = 5000;
 
 let trip: TripResponse | null = null;
 let pollTimer: number | null = null;
+/** Legs refreshing right now, by flight id — including refreshes this page did
+ *  not start (briefing page, Siri intent, scheduler, MCP). Its own always-on
+ *  timer, separate from `pollTimer`: that one only lives for the duration of a
+ *  trip run, which is exactly the case this map is *not* for. */
+let legRefreshes: Record<string, RefreshEntry> = {};
+let legPollTimer: number | null = null;
 /** The AI paragraph currently on screen.
  *
  * Held so a re-render for an unrelated action keeps it. Renaming a trip or
@@ -54,7 +62,7 @@ function renderAll(ai: TripAiSummary | null): void {
   ui.renderCallout(trip.summary);
   ui.renderAiSummary(ai);
   ui.renderContinuity(trip.summary);
-  ui.renderLegs(trip.summary, { onRemoveLeg: handleRemoveLeg });
+  ui.renderLegs(trip.summary, { onRemoveLeg: handleRemoveLeg }, legRefreshes);
   ui.renderControls(trip, {
     onRefresh: handleRefresh,
     onRename: handleRename,
@@ -88,6 +96,49 @@ async function reload(withAi = true): Promise<void> {
     return;
   }
   renderAll(withAi ? await loadAiSummary(id) : null);
+}
+
+/** Poll the shared active-refresh endpoint and repaint the leg rows on change.
+ *
+ * Same endpoint and cadence the flights list uses. The identity guard mirrors
+ * the store's: repainting on every tick would rebuild the rows and rewire their
+ * handlers for nothing.
+ */
+function startLegRefreshPolling(): void {
+  if (legPollTimer != null) return;
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight || !trip) return;
+    inFlight = true;
+    try {
+      const members = new Set(trip.summary.legs.map(l => l.flight_id));
+      const next: Record<string, RefreshEntry> = {};
+      for (const e of await fetchActiveRefreshes()) {
+        if (members.has(e.flight_id)) next[e.flight_id] = e;
+      }
+      const before = Object.keys(legRefreshes);
+      const after = Object.keys(next);
+      const same = before.length === after.length
+        && after.every(k => legRefreshes[k]?.status === next[k]?.status);
+      if (!same) {
+        legRefreshes = next;
+        ui.renderLegs(trip.summary, { onRemoveLeg: handleRemoveLeg }, legRefreshes);
+      }
+    } catch {
+      // Non-critical: the badge is a readout, not a control.
+    } finally {
+      inFlight = false;
+    }
+  };
+  void tick();
+  legPollTimer = window.setInterval(tick, REFRESH_POLL_MS);
+}
+
+function stopLegRefreshPolling(): void {
+  if (legPollTimer != null) {
+    window.clearInterval(legPollTimer);
+    legPollTimer = null;
+  }
 }
 
 function stopPolling(): void {
@@ -233,11 +284,15 @@ async function init(): Promise<void> {
 
   renderAll(null);
   if (trip.refresh?.active) startPolling();
+  startLegRefreshPolling();
   // The AI paragraph loads second so the deterministic callout paints first —
   // it is the thing the eye should land on, and it must never wait on an LLM.
   renderAll(await loadAiSummary(tripId));
 
-  window.addEventListener('beforeunload', stopPolling);
+  window.addEventListener('beforeunload', () => {
+    stopPolling();
+    stopLegRefreshPolling();
+  });
 }
 
 void init();

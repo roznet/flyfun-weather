@@ -5,6 +5,7 @@ import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
 import { buildTripSelection, type TripSelectionContext } from '../helpers/trip-selection';
+import { tripCardRefresh } from '../helpers/trip-refresh-indicator';
 import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 import { t, getDateLocale } from '../i18n/i18n';
 import { renderDebriefForm } from '../components/debrief-form';
@@ -342,9 +343,18 @@ function renderTripCard(
     remaining: summary.remaining_legs,
     total: summary.total_legs,
   });
-  const refreshing = trip.refresh?.active
-    ? `<span class="badge badge-refreshing">${escapeHtml(trip.refresh.message || t('trips.refreshing'))}<span class="dots-spinner"></span></span>`
-    : '';
+  // Covers a member leg refreshed outside a trip run, which a collapsed card
+  // would otherwise report as idle. Rule and rationale in the helper.
+  const indicator = tripCardRefresh(trip, members.map(m => m.id), activeRefreshes);
+  let refreshing = '';
+  if (indicator?.kind === 'trip') {
+    refreshing = `<span class="badge badge-refreshing">${escapeHtml(indicator.message || t('trips.refreshing'))}<span class="dots-spinner"></span></span>`;
+  } else if (indicator?.kind === 'leg') {
+    const label = indicator.status === 'queued'
+      ? t('flights.queuedBadge') : t('flights.refreshingBadge');
+    const spinner = indicator.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
+    refreshing = `<span class="badge badge-refreshing">${escapeHtml(label)}${spinner}</span>`;
+  }
   const cards = members.map(f =>
     renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), matchTokens),
   ).join('');

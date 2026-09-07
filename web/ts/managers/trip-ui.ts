@@ -15,6 +15,7 @@
 import type {
   TripAiSummary,
 } from '../adapters/trips-adapter';
+import type { RefreshEntry } from '../adapters/api-adapter';
 import type { TripLeg, TripResponse, TripSummary } from '../store/types';
 import { $, escapeHtml, formatDate } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
@@ -141,6 +142,21 @@ export interface LegRowHandlers {
   onRemoveLeg: (flightId: string) => void;
 }
 
+/** Per-leg "refreshing"/"queued" badge, for a refresh started anywhere.
+ *
+ * The single Refresh trip button is still the only way to start one *here*,
+ * but a leg can be refreshed from the briefing page, a Siri intent, the
+ * scheduler or MCP — none of which opens a trip run. Reporting only
+ * `trip.refresh` left those invisible on this page.
+ */
+function legRefreshBadge(entry: RefreshEntry | undefined): string {
+  if (!entry) return '';
+  const label = entry.status === 'queued'
+    ? t('flights.queuedBadge') : t('flights.refreshingBadge');
+  const spinner = entry.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
+  return `<span class="badge badge-refreshing">${escapeHtml(label)}${spinner}</span> `;
+}
+
 /**
  * Per-leg detail rows. Each carries the two links out — Briefing and Edit —
  * as explicit controls rather than a click-the-card affordance: getting from
@@ -151,7 +167,11 @@ export interface LegRowHandlers {
  * (see the serial driver), and the refresh gate already skips legs with no new
  * data, so one button is genuinely sufficient.
  */
-export function renderLegs(summary: TripSummary, handlers: LegRowHandlers): void {
+export function renderLegs(
+  summary: TripSummary,
+  handlers: LegRowHandlers,
+  activeRefreshes: Record<string, RefreshEntry> = {},
+): void {
   const heading = $('trip-legs-heading');
   if (heading) heading.textContent = t('trips.legs');
   const el = $('trip-legs');
@@ -191,7 +211,7 @@ export function renderLegs(summary: TripSummary, handlers: LegRowHandlers): void
             <span class="flight-date">${escapeHtml(formatUtc(leg.departure_time))}Z</span>
             ${duration}
           </div>
-          <div class="trip-leg-status">${legBadge(leg)} ${days} ${freshness}</div>
+          <div class="trip-leg-status">${legRefreshBadge(activeRefreshes[leg.flight_id])}${legBadge(leg)} ${days} ${freshness}</div>
           <div class="trip-leg-chips">${chips}</div>
         </div>
         <div class="trip-leg-actions">
