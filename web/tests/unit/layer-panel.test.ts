@@ -357,3 +357,42 @@ describe('narrow variant (#597)', () => {
     expect(html).toContain('<option value="soft" selected>');
   });
 });
+
+describe('controls are render output, not DOM state (#597)', () => {
+  // The regression this guards is not in this file — it was in the
+  // airport-profile drawer, which redrew the CHART on every toggle and never
+  // the controls, so the pills sat stale until the drawer was reopened.
+  //
+  // It was invisible before #591 because the controls were
+  // `<input type="checkbox">`: the browser flipped them natively, so a caller
+  // that re-rendered nothing still looked correct. #591 made them
+  // `<button aria-pressed>`, which is inert. That moved the on/off state
+  // entirely into the render input — which is what these assert, because the
+  // suite runs without a DOM and cannot click anything.
+
+  it('carries a pill\'s on/off state in the markup, not in the element', () => {
+    const on = layerTogglesHtml({ lcl: true }, { openFamily: 'stability' });
+    const off = layerTogglesHtml({ lcl: false }, { openFamily: 'stability' });
+    expect(on).toContain('data-layer-id="lcl" aria-pressed="true"');
+    expect(off).toContain('data-layer-id="lcl" aria-pressed="false"');
+    // No `checked` attribute and no input anywhere: nothing here updates itself.
+    expect(on).not.toContain('type="checkbox"');
+  });
+
+  it('restates the family summary from the same input, so a stale chip is a stale render', () => {
+    // The chip is the other half a caller must not forget: toggling the last
+    // layer in a family has to move it to `off`, and only a re-render does that.
+    const on = layerTogglesHtml({}, {});
+    const off = layerTogglesHtml(
+      Object.fromEntries(getAllLayers().map((l) => [l.id, false])), {});
+    expect(chipFor(on, 'stability')).not.toContain('viz-family is-off');
+    expect(chipFor(off, 'stability')).toContain('is-off');
+  });
+
+  it('flips the None pill with the group, which is the same render', () => {
+    const allOff = Object.fromEntries(getAllLayers().map((l) => [l.id, false]));
+    const cleared = layerTogglesHtml(allOff, { openFamily: 'stability' });
+    expect(cleared).toContain('data-none-group');
+    expect(cleared).toMatch(/data-none-group="[^"]*" aria-pressed="true"/);
+  });
+});

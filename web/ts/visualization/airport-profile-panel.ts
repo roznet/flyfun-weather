@@ -192,6 +192,9 @@ export class AirportProfilePanel {
    *  renderer via `setLayers()` whenever it (re)mounts. */
   private enabledLayers: Record<string, boolean> = loadEnabledLayers();
   private cloudStyle: CloudStyle = loadCloudStyle();
+  /** Coalescing state for {@link queueToggleRedraw}. */
+  private redrawQueued = false;
+  private pendingFocusLayer: string | null = null;
 
   private snapshot: AirportProfileSnapshot = {
     meta: null, surface: [], levels: [], enriched: null, derived: [],
@@ -720,19 +723,7 @@ export class AirportProfilePanel {
       // context (snapshotToVizData hardcodes advisoryHighlights=null), so the
       // Highlight toggle could never do anything — a static exclusion here,
       // unlike the main view's dynamic gating (#373).
-      renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId), {
-        hiddenGroups: new Set(['conditions', 'highlight']),
-        // The drawer is 320px wide and scrolls vertically — the inverse of the
-        // briefing toolbar the bar was shaped for (#597). Same markup and
-        // wiring; the modifier stacks it so the detail row wraps instead of
-        // turning into a sideways scroller with the hint slot off its end.
-        narrow: true,
-        cloudStyle: this.cloudStyle,
-        onCloudStyleChange: (style) => {
-          this.cloudStyle = style;
-          saveCloudStyle(style);
-        },
-      });
+      this.renderCrossToggles(host);
     }
     if (showSkewT) {
       const host = this.drawerEl.querySelector('.ap-drawer-skewt-host') as HTMLElement;
@@ -748,6 +739,34 @@ export class AirportProfilePanel {
     }
   }
 
+  /** Draw the cross-section layer controls into the drawer's host.
+   *
+   *  Split out of {@link renderDrawer} so {@link onLayerToggle} can redraw the
+   *  controls WITHOUT rebuilding the drawer around them: `renderLayerToggles`
+   *  recovers the open family and About panel by reading them back off the
+   *  container it is about to replace, so it must be handed the node that still
+   *  holds the previous render. Re-running `renderDrawer` would blow that node
+   *  away first and the detail row would slam shut on every click. */
+  private renderCrossToggles(host: HTMLElement): void {
+    renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId), {
+      hiddenGroups: new Set(['conditions', 'highlight']),
+      // The drawer is 320px wide and scrolls vertically — the inverse of the
+      // briefing toolbar the bar was shaped for (#597). Same markup and
+      // wiring; the modifier stacks it so the detail row wraps instead of
+      // turning into a sideways scroller with the hint slot off its end.
+      narrow: true,
+      cloudStyle: this.cloudStyle,
+      // Only persist. The style dropdown is a native <select>, so it already
+      // shows the new value, and `wireCloudCompound` follows this with an
+      // `onToggle` per enabled source — each of which redraws. Redrawing here
+      // too would just do it twice more.
+      onCloudStyleChange: (style) => {
+        this.cloudStyle = style;
+        saveCloudStyle(style);
+      },
+    });
+  }
+
   private onLayerToggle(layerId: string): void {
     // Default-enabled layers are stored as `true`; flipping a missing
     // key to `false` is the explicit "off" signal the renderer checks.
@@ -758,6 +777,47 @@ export class AirportProfilePanel {
       this.crossRenderer.setLayers(getAllLayers(), this.enabledLayers);
       this.crossRenderer.render();
     }
+    // Redraw the controls, not just the chart.
+    //
+    // Before #591 these were `<input type="checkbox">` and the browser flipped
+    // them natively on click, so a caller that only re-rendered the chart still
+    // LOOKED right. #591 made them `<button aria-pressed>`, which is inert: it
+    // changes only when something re-renders it. The briefing toolbar happens
+    // to be covered because its store subscription re-runs `renderVizControls`
+    // on every settings change — this panel owns its layer state directly
+    // (`wb_apProfileLayers`) and has no such subscription, so the pill, the
+    // family chip's summary and the None pill all sat stale until the drawer
+    // was reopened.
+    this.queueToggleRedraw(layerId);
+  }
+
+  /** Redraw the layer controls once per burst of toggles.
+   *
+   *  A single pill is one call, but the None pill is not: it clears a group by
+   *  calling `onToggle` for every layer that is on, so a redraw per call would
+   *  rebuild the subtree up to four times for one click and leave focus
+   *  wherever the last iteration put it. The burst is synchronous, so a
+   *  microtask coalesces it exactly — and the DOM the redraw reads its open
+   *  family back from is still the previous render when the microtask runs. */
+  private queueToggleRedraw(layerId: string): void {
+    this.pendingFocusLayer = layerId;
+    if (this.redrawQueued) return;
+    this.redrawQueued = true;
+    queueMicrotask(() => {
+      this.redrawQueued = false;
+      const focusId = this.pendingFocusLayer;
+      this.pendingFocusLayer = null;
+      if (!this.drawerOpen) return;
+      const host = this.drawerEl.querySelector<HTMLElement>('.ap-drawer-cross-host');
+      if (!host) return;
+      this.renderCrossToggles(host);
+      // The click destroyed the button it landed on, so put focus back on its
+      // replacement — otherwise tabbing through the pills resets to the top of
+      // the document on every toggle.
+      if (focusId) {
+        host.querySelector<HTMLElement>(`[data-layer-id="${CSS.escape(focusId)}"]`)?.focus();
+      }
+    });
   }
 
   /** User clicked the ✕ button. Notifies the host so it can decide
