@@ -4349,40 +4349,93 @@ html {
 .viz-about-more:hover { border-color: var(--primary); color: var(--primary); }
 .viz-about-more:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
-.viz-layer-group {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
+/* --- Narrow variant (#597): the same bar, stacked for a 320px column. ---
+
+   The bar's one-row shape is bought with HORIZONTAL space — chips on a line,
+   and a detail row that runs *across* so the expansion is exactly one row
+   whichever family is open. That trade is right on the briefing page, whose
+   scarce axis is vertical.
+
+   The airport-profile drawer is the inverse: 320px wide, full height, already
+   scrolling. There the same rules wrap the chips to six rows and turn the
+   detail row into a sideways scroller whose LAST item is the hint slot — so
+   the one thing that replaced twenty ⓘ glyphs is the one thing off-screen.
+
+   Nothing here changes the markup, the wiring or the state. Only the axis. */
+
+.viz-layer-toggles.viz-narrow .viz-layer-bar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.22rem;
 }
 
-.viz-group-label {
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 0.75rem;
+.viz-layer-toggles.viz-narrow .viz-bar-label {
+  margin: 0 0 0.15rem;
 }
 
-.viz-layer-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  font-size: 0.78rem;
-  font-weight: 400;
-  color: var(--text);
-  cursor: pointer;
-  white-space: nowrap;
+/* A chip becomes a full-width row: name left, value right. The values then
+   column-align down the drawer, which reads BETTER stacked than inline — the
+   one place where the narrow surface has the advantage. */
+.viz-layer-toggles.viz-narrow .viz-family {
+  width: 100%;
+  justify-content: flex-start;
 }
 
-.viz-layer-checkbox input[type="checkbox"] {
-  width: auto;
-  margin: 0;
+.viz-layer-toggles.viz-narrow .viz-family-value {
+  margin-left: auto;
+  text-align: right;
+  padding-left: 0.5rem;
+}
+
+/* The detail row wraps instead of scrolling. `overflow-x: visible` is the
+   important half: the drawer sets `overflow-y: auto` and leaves overflow-x at
+   `visible`, which per spec computes to `auto` — so a scroller in here gives
+   the whole drawer a second scrollbar. */
+.viz-layer-toggles.viz-narrow .viz-layer-detail {
+  flex-wrap: wrap;
+  overflow-x: visible;
+  gap: 0.35rem 0.5rem;
+  padding: 0.45rem 0.1rem 0.3rem;
+}
+
+.viz-layer-toggles.viz-narrow .viz-detail-name { width: 100%; }
+
+.viz-layer-toggles.viz-narrow .viz-detail-sub {
+  width: 100%;
+  margin-top: 0.1rem;
+}
+
+.viz-layer-toggles.viz-narrow .viz-pills {
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+}
+
+/* The hint slot drops to its own line rather than competing for the row's
+   remaining width — which, in 320px, is none. */
+.viz-layer-toggles.viz-narrow .viz-detail-hint {
+  width: 100%;
+  flex: 1 1 100%;
+  margin-left: 0;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding-top: 0.3rem;
+  border-top: 1px dotted var(--border);
+}
+
+.viz-layer-toggles.viz-narrow .viz-hint-text {
+  text-align: left;
+  max-height: none;
+}
+
+/* One card per row: `auto-fit` already collapses the grid at this width, but
+   saying so keeps the About panel from depending on a 15rem minmax staying put. */
+.viz-layer-toggles.viz-narrow .viz-about-grid {
+  grid-template-columns: 1fr;
 }
 
 .viz-layer-unavailable {
   opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.viz-layer-unavailable input[type="checkbox"] {
   cursor: not-allowed;
 }
 

@@ -16,6 +16,7 @@
 import { CrossSectionRenderer } from './cross-section/renderer';
 import { SkewTRenderer } from './skewt/renderer';
 import { getAllLayers, getDefaultEnabled } from './cross-section/layer-registry';
+import type { CloudStyle } from './cross-section/layers/cloud-bands-factory';
 import { renderLayerToggles } from './controls/panel';
 import { renderSkewtOverlayControls } from './skewt/overlay-controls';
 import {
@@ -65,6 +66,7 @@ const VIEW_MODE_KEY = 'wb_apProfileView2';
  *  briefing's `wb_visibleLayers` so toggles in this panel don't bleed
  *  into the main /briefing.html view. */
 const LAYERS_KEY = 'wb_apProfileLayers';
+const CLOUD_STYLE_KEY = 'wb_apProfileCloudStyle';
 
 function loadViewMode(): ViewMode {
   const v = localStorage.getItem(VIEW_MODE_KEY);
@@ -95,6 +97,24 @@ function loadEnabledLayers(): Record<string, boolean> {
 }
 function saveEnabledLayers(m: Record<string, boolean>): void {
   try { localStorage.setItem(LAYERS_KEY, JSON.stringify(m)); } catch { /* quota */ }
+}
+
+/** The drawer's cloud render style. Persisted per-surface, alongside
+ *  {@link LAYERS_KEY}, because this panel's layer state has always been its
+ *  own (`wb_apProfileLayers`, `getDefaultEnabled('airport-profile')`) rather
+ *  than the briefing page's `wb_vizSettings`.
+ *
+ *  Without it the drawer passed no `cloudStyle` at all, so `cloudState()` fell
+ *  back to 'square': picking a style with every cloud source OFF produced no
+ *  toggle event, nothing was stored, and the dropdown snapped back on the next
+ *  re-render. With a source on it happened to work, because the style is
+ *  carried in the enabled layer's own id. */
+function loadCloudStyle(): CloudStyle {
+  const v = localStorage.getItem(CLOUD_STYLE_KEY);
+  return v === 'natural' || v === 'soft' || v === 'square' ? v : 'square';
+}
+function saveCloudStyle(style: CloudStyle): void {
+  try { localStorage.setItem(CLOUD_STYLE_KEY, style); } catch { /* quota */ }
 }
 
 export interface AirportProfilePanelOptions {
@@ -171,6 +191,7 @@ export class AirportProfilePanel {
    *  so the user's toggles survive panel close + reopen. Applied to the
    *  renderer via `setLayers()` whenever it (re)mounts. */
   private enabledLayers: Record<string, boolean> = loadEnabledLayers();
+  private cloudStyle: CloudStyle = loadCloudStyle();
 
   private snapshot: AirportProfileSnapshot = {
     meta: null, surface: [], levels: [], enriched: null, derived: [],
@@ -701,6 +722,16 @@ export class AirportProfilePanel {
       // unlike the main view's dynamic gating (#373).
       renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId), {
         hiddenGroups: new Set(['conditions', 'highlight']),
+        // The drawer is 320px wide and scrolls vertically — the inverse of the
+        // briefing toolbar the bar was shaped for (#597). Same markup and
+        // wiring; the modifier stacks it so the detail row wraps instead of
+        // turning into a sideways scroller with the hint slot off its end.
+        narrow: true,
+        cloudStyle: this.cloudStyle,
+        onCloudStyleChange: (style) => {
+          this.cloudStyle = style;
+          saveCloudStyle(style);
+        },
       });
     }
     if (showSkewT) {

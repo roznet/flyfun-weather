@@ -331,18 +331,14 @@
       color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;
     }
     .ap-drawer-empty { color: var(--text-muted); font-style: italic; padding: 0.3rem 0; }
-    /* Reused viz layer-toggle styling: tighter line height + wrap inside
-     * the narrow drawer column. */
-    .ap-settings-drawer .viz-layer-toggles {
-      display: flex; flex-direction: column; gap: 0.3rem;
-    }
-    .ap-settings-drawer .viz-layer-group {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem;
-    }
-    .ap-settings-drawer .viz-layer-checkbox {
-      display: inline-flex; align-items: center; gap: 0.25rem;
-      font-size: 0.78rem;
-    }
+    /* The layer bar stacks itself here via the `viz-narrow` modifier the panel
+     * passes (see style.css, "#597"), so the drawer needs no per-class tuning
+     * of its own. What it DOES need is to stop scrolling sideways: overflow-y
+     * is `auto` above and overflow-x is left at `visible`, which per spec
+     * computes to `auto` — so the drawer has carried a second, horizontal
+     * scrollbar ever since the bar landed. Nothing in a stacked bar is wider
+     * than the column, so pin it. */
+    .ap-settings-drawer { overflow-x: hidden; }
 
     @media (max-width: 900px) {
       .ap-split-host { display: block; }
