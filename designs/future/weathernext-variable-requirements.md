@@ -284,33 +284,6 @@ Surface pressure rather than mean-sea-level pressure matters more than it
 sounds: we anchor each profile on station pressure, and density altitude at a
 2,000 ft Alpine strip on a hot day is a real performance question.
 
----
-
-## A separate opportunity: extend the station head
-
-Everything above is, in effect, "match what ECMWF IFS already gives us." This
-one is different, and it is the only item where WeatherNext could be *better*
-than every alternative rather than match them.
-
-WN3 already predicts 2 m temperature and dewpoint at 0.05° from a head trained
-on in-situ station observations, and the paper shows it beating analysis-based
-forecasts against METAR. But a METAR carries more than temperature and dewpoint.
-It carries **cloud amount and base height per layer, horizontal visibility, wind
-direction and speed, and gust**. Those are exactly the fields every physics
-model produces by parameterization, and exactly the fields those
-parameterizations get worst.
-
-Ceiling and visibility are the two numbers that decide whether a GA flight is
-legal and safe to depart. Today we estimate them from a mix of model ceiling
-diagnostics, dewpoint-depression profiles and TAF at short range, and we
-reconcile those estimates conservatively because we do not fully trust any one
-of them. A station head trained directly on the METAR ceiling and visibility
-fields would be better than anything in our stack.
-
-It sits outside the ranked asks because it is a larger piece of work than any of
-them and it serves a different surface (airports rather than the en-route
-profile). In terms of what it would be *worth*, it is arguably first.
-
 ## For our own reference
 
 Internal cross-references, not intended for the external reader: the icing
