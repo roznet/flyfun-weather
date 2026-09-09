@@ -416,6 +416,19 @@ html {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Hairline between the selection group (what is picked) and the action group
+   (what happens to it). Without it the pills read as one undifferentiated set
+   and the grouping buys nothing. Collapses when the bar wraps onto two rows,
+   where the line break already does the separating. */
+.selection-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.25rem;
+  background: var(--border);
+  margin: 0 0.25rem;
 }
 
 .flight-header {

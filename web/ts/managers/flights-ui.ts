@@ -6,6 +6,7 @@ import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
 import { buildTripSelection, type TripSelectionContext } from '../helpers/trip-selection';
 import { tripCardRefresh } from '../helpers/trip-refresh-indicator';
+import { actionGroupStart, selectionBarButtons } from '../helpers/selection-bar-order';
 import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 import { t, getDateLocale } from '../i18n/i18n';
 import { renderDebriefForm } from '../components/debrief-form';
@@ -937,29 +938,52 @@ function renderSelectionBar(
     document.body.appendChild(bar);
   }
 
-  const showSelectAll = allIds.length > 0;
-  const showSelectPast = pastIds.length > 0;
+  // Order and visual weight live in one pure rule — see selection-bar-order.
+  // Context-sensitivity of the trip actions themselves is buildTripSelection's.
+  const buttons = selectionBarButtons({
+    hasSelectAll: allIds.length > 0,
+    hasSelectPast: pastIds.length > 0,
+    canGroupAsTrip: Boolean(tripCtx && selection.onGroupAsTrip && tripCtx.tripCount === 0),
+    canAddToTrip: Boolean(
+      tripCtx && selection.onAddToTrip
+      && tripCtx.tripCount === 1 && tripCtx.ungroupedIds.length > 0,
+    ),
+    canRemoveFromTrip: Boolean(
+      tripCtx && selection.onRemoveFromTrip && tripCtx.memberships.length > 0,
+    ),
+  });
 
-  // Context-sensitive trip actions — see buildTripSelection for the rule.
-  let tripActions = '';
-  if (tripCtx && selection.onGroupAsTrip && tripCtx.tripCount === 0) {
-    tripActions += `<button type="button" class="btn btn-outline btn-sm btn-group-trip">${escapeHtml(t('trips.btnGroup'))}</button>`;
-  } else if (tripCtx && selection.onAddToTrip && tripCtx.tripCount === 1 && tripCtx.ungroupedIds.length > 0) {
-    tripActions += `<button type="button" class="btn btn-outline btn-sm btn-add-trip">${escapeHtml(t('trips.btnAddTo', { name: tripCtx.singleTrip!.name }))}</button>`;
-  }
-  if (tripCtx && selection.onRemoveFromTrip && tripCtx.memberships.length > 0) {
-    tripActions += `<button type="button" class="btn btn-outline btn-sm btn-remove-trip">${escapeHtml(t('trips.btnRemove'))}</button>`;
-  }
+  const LABELS: Record<string, () => string> = {
+    'select-all': () => t('flights.btnSelectAll'),
+    'select-past': () => t('flights.btnSelectAllPast'),
+    'clear': () => t('flights.btnClearSelection'),
+    'delete': () => t('flights.btnDeleteSelected'),
+    'remove-trip': () => t('trips.btnRemove'),
+    'group-trip': () => t('trips.btnGroup'),
+    'add-trip': () => t('trips.btnAddTo', { name: tripCtx!.singleTrip!.name }),
+  };
+  const CLASSES: Record<string, string> = {
+    'select-all': 'btn-select-all',
+    'select-past': 'btn-select-past',
+    'clear': 'btn-clear-selection',
+    'delete': 'btn-bulk-delete',
+    'remove-trip': 'btn-remove-trip',
+    'group-trip': 'btn-group-trip',
+    'add-trip': 'btn-add-trip',
+  };
+
+  const boundary = actionGroupStart(buttons);
+  const html = buttons.map((b, i) => {
+    // A hairline between the two groups — without it five near-identical pills
+    // read as one undifferentiated set and the grouping buys nothing.
+    const divider = i === boundary && i > 0
+      ? '<span class="selection-divider" aria-hidden="true"></span>' : '';
+    return `${divider}<button type="button" class="btn btn-${b.variant} btn-sm ${CLASSES[b.key]}">${escapeHtml(LABELS[b.key]())}</button>`;
+  }).join('');
 
   bar.innerHTML = `
     <span class="selection-count">${t('flights.selected', { count: selectedCount })}</span>
-    <div class="selection-actions">
-      ${showSelectAll ? `<button type="button" class="btn btn-outline btn-sm btn-select-all">${t('flights.btnSelectAll')}</button>` : ''}
-      ${showSelectPast ? `<button type="button" class="btn btn-outline btn-sm btn-select-past">${t('flights.btnSelectAllPast')}</button>` : ''}
-      ${tripActions}
-      <button type="button" class="btn btn-outline btn-sm btn-clear-selection">${t('flights.btnClearSelection')}</button>
-      <button type="button" class="btn btn-danger btn-sm btn-bulk-delete">${t('flights.btnDeleteSelected')}</button>
-    </div>
+    <div class="selection-actions">${html}</div>
   `;
 
   bar.querySelector('.btn-group-trip')?.addEventListener('click', () => {
