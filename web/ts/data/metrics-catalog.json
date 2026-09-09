@@ -164,10 +164,26 @@
     "name": "Freezing Level",
     "unit": "ft",
     "vibe": "The icing floor — below here, ice melts off",
-    "primary_goal": "Mark the altitude where temperature crosses 0°C.",
-    "best_used_for": "The key reference for icing escape: descend below it to exit the icing zone.",
-    "limitations": "Can be multiple freezing levels in inversions. Model gives one value; real atmosphere can be messier.",
-    "theory": "The altitude where the air temperature crosses 0°C, found by interpolating between model levels above and below freezing. Below this line, ice melts; above it, supercooled water can freeze on contact with your aircraft. This is the primary reference point for icing decisions — descending below the freezing level is often the safest escape strategy.",
+    "primary_goal": "Mark the altitude where temperature crosses 0°C, read off the model's vertical temperature profile.",
+    "best_used_for": "The key reference for icing escape: descend below it to exit the icing zone. This is the value the icing advisory, the cross-section line and the Skew-T all use.",
+    "limitations": "Can be multiple freezing levels in inversions. Model gives one value; real atmosphere can be messier. Where the model also publishes its own freezing-level product, the two can differ by a few hundred feet — see \"Freezing Level, model native\".",
+    "theory": "The altitude where the air temperature crosses 0°C, found by interpolating between the model pressure levels above and below freezing. Below this line, ice melts; above it, supercooled water can freeze on contact with your aircraft. This is the primary reference point for icing decisions — descending below the freezing level is often the safest escape strategy. Note this is computed here from the vertical profile, which is not the same number as the model's own single-field freezing-level product: that one is listed separately as \"Freezing Level, model native\".",
+    "wikipedia": "https://en.wikipedia.org/wiki/Freezing_level",
+    "thresholds": [
+      { "min": 0, "max": 1000, "label": "Very low", "risk": "high", "meaning": "Freezing near surface. Ground icing, very limited escape options." },
+      { "min": 1000, "max": 3000, "label": "Low", "risk": "moderate", "meaning": "Limited room to descend below icing." },
+      { "min": 3000, "max": 10000, "label": "Moderate", "risk": "low", "meaning": "Reasonable icing-free zone below." },
+      { "min": 10000, "max": null, "label": "High", "risk": "none", "meaning": "Large icing-free zone below. Descent escape strategy is viable." }
+    ]
+  },
+  "nwp_freezing_level_ft": {
+    "name": "Freezing Level, model native",
+    "unit": "ft",
+    "vibe": "The model's own answer, for cross-checking ours",
+    "primary_goal": "Show the freezing level as the forecast model itself publishes it, rather than as computed from its profile.",
+    "best_used_for": "Cross-checking the profile-derived freezing level. When the two agree, confidence is high; a large gap usually means a shallow or inverted layer near 0°C that a single value cannot capture.",
+    "limitations": "Not every model publishes one, so this row can be sparser than the derived row. It is a single number with no information about inversions or multiple crossings. Use \"Freezing Level\" for decisions; use this to gauge how solid that number is.",
+    "theory": "Most forecast models ship a freezing-level (0°C isotherm height) field of their own, computed inside the model at full vertical resolution rather than from the handful of pressure levels published for download. Reported here in feet above mean sea level — ECMWF publishes it above ground and it is referenced to MSL before display. It answers the same question as \"Freezing Level\" by a different route, so the pair is a free consistency check on the icing picture.",
     "wikipedia": "https://en.wikipedia.org/wiki/Freezing_level",
     "thresholds": [
       { "min": 0, "max": 1000, "label": "Very low", "risk": "high", "meaning": "Freezing near surface. Ground icing, very limited escape options." },
@@ -177,13 +193,13 @@
     ]
   },
   "freezing_level_m": {
-    "name": "Freezing Level",
+    "name": "Freezing Level, model native",
     "unit": "m",
-    "vibe": "The icing floor — below here, ice melts off",
-    "primary_goal": "Mark the altitude where temperature crosses 0°C.",
-    "best_used_for": "The key reference for icing escape: descend below it to exit the icing zone.",
-    "limitations": "Can be multiple freezing levels in inversions. Model gives one value; real atmosphere can be messier.",
-    "theory": "The altitude where the air temperature crosses 0°C, found by interpolating between model levels above and below freezing. Below this line, ice melts; above it, supercooled water can freeze on contact with your aircraft. This is the primary reference point for icing decisions — descending below the freezing level is often the safest escape strategy.",
+    "vibe": "The model's own answer, for cross-checking ours",
+    "primary_goal": "Show the freezing level as the forecast model itself publishes it, rather than as computed from its profile.",
+    "best_used_for": "Cross-checking the profile-derived freezing level. Only appears on briefings generated before this row switched to feet — newer ones use \"Freezing Level, model native\" in ft.",
+    "limitations": "Reported in metres, unlike every other altitude in the app. Retained only so older briefings still read correctly; new briefings emit the same quantity in feet.",
+    "theory": "Most forecast models ship a freezing-level (0°C isotherm height) field of their own, computed inside the model at full vertical resolution rather than from the handful of pressure levels published for download. This is that field in its native metres, as stored on briefings generated before the switch to feet. It answers the same question as \"Freezing Level\" by a different route.",
     "wikipedia": "https://en.wikipedia.org/wiki/Freezing_level",
     "thresholds": [
       { "min": 0, "max": 300, "label": "Very low", "risk": "high", "meaning": "Freezing near surface. Ground icing, very limited escape options." },

@@ -404,7 +404,9 @@ div = compare_models("temperature_c", {"gfs": 5.0, "ecmwf": 6.0, "icon": 5.5})
 div.agreement  # → AgreementLevel.GOOD
 ```
 
-**Thresholds** `DIVERGENCE_THRESHOLDS` (good, poor) — 22 entries (some, e.g. `cape_jkg`/`ceiling_ft`/`visibility_m`, are defined for variables not currently collected by `_run_point_analysis`). `DEFAULT_THRESHOLD = (5.0, 15.0)` for anything unlisted:
+**Thresholds** `DIVERGENCE_THRESHOLDS` (good, poor) — 22 entries (some, e.g. `cape_jkg`/`ceiling_ft`/`visibility_m`, are defined for variables not currently collected by `_run_point_analysis`). `DEFAULT_THRESHOLD = (5.0, 15.0)` for anything unlisted.
+
+**Every altitude here is in feet.** The model-native freezing level was once collected as `freezing_level_m` in its native metres, one row above the derived `freezing_level_ft` in the UI's comparison table and labelled identically — a user read the metres value as feet. It is now collected as `nwp_freezing_level_ft` (from `indices.nwp_freezing_level_ft`, which `analyze_sounding` already converts) and graded on the same thresholds as its derived sibling. `visibility_m` stays metres — that is the aviation convention for visibility, and it is not an altitude.
 
 | Variable | Good ≤ | Poor > |
 |----------|--------|--------|
@@ -413,10 +415,10 @@ div.agreement  # → AgreementLevel.GOOD
 | wind_direction_deg | 20° | 60° |
 | precipitation_mm | 1.0 | 5.0 |
 | cloud_cover_pct | 20.0 | 50.0 |
-| freezing_level_m | 200.0 | 600.0 |
 | ceiling_ft | 500.0 | 1500.0 |
 | visibility_m | 2000.0 | 5000.0 |
 | freezing_level_ft | 500.0 | 1500.0 |
+| nwp_freezing_level_ft | 500.0 | 1500.0 |
 | cape_jkg | 200.0 | 500.0 |
 | cape_surface_jkg | 200.0 | 500.0 |
 | nwp_cape_jkg | 200.0 | 500.0 |

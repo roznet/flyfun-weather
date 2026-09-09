@@ -13,11 +13,14 @@ DIVERGENCE_THRESHOLDS: dict[str, tuple[float, float]] = {
     "wind_direction_deg": (20.0, 60.0),
     "precipitation_mm": (1.0, 5.0),
     "cloud_cover_pct": (20.0, 50.0),
-    "freezing_level_m": (200.0, 600.0),
     "ceiling_ft": (500.0, 1500.0),
     "visibility_m": (2000.0, 5000.0),
     # Sounding-derived metrics
     "freezing_level_ft": (500.0, 1500.0),
+    # The model's own freezing-level product. Same physical quantity as
+    # ``freezing_level_ft`` (and now also in feet), so it is graded on the
+    # same spread thresholds.
+    "nwp_freezing_level_ft": (500.0, 1500.0),
     "cape_jkg": (200.0, 500.0),
     "cape_surface_jkg": (200.0, 500.0),
     "nwp_cape_jkg": (200.0, 500.0),

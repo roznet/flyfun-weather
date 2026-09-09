@@ -26,8 +26,10 @@ const VARIABLE_TO_METRIC: Record<string, string> = {
   'wind_direction_deg': 'wind_direction_deg',
   'cloud_cover_pct': 'cloud_cover_pct',
   'precipitation_mm': 'precipitation_mm',
+  // Kept for briefings saved before the model-native row switched to feet.
   'freezing_level_m': 'freezing_level_m',
   'freezing_level_ft': 'freezing_level_ft',
+  'nwp_freezing_level_ft': 'nwp_freezing_level_ft',
   'cape_surface_jkg': 'cape_surface_jkg',
   'lcl_altitude_ft': 'lcl_altitude_ft',
   'k_index': 'k_index',
@@ -44,6 +46,22 @@ const VARIABLE_TO_METRIC: Record<string, string> = {
 
 export function getMetric(id: string): MetricCatalogEntry | undefined {
   return CATALOG[id];
+}
+
+/** Catalog name with its unit appended, e.g. "Freezing Level (ft)".
+ *
+ *  The catalog keeps `name` and `unit` in separate fields, so a caller that
+ *  renders `name` alone shows two rows of the same quantity in different units
+ *  as identical duplicates — which is exactly what the model-comparison table
+ *  did with the freezing level. Dimensionless metrics (K-index, Total Totals,
+ *  Lifted Index) carry an empty unit and come back bare.
+ *
+ *  Returns undefined for an unknown id so callers can fall back to their own
+ *  label table. */
+export function metricLabelWithUnit(id: string): string | undefined {
+  const entry = CATALOG[id];
+  if (!entry) return undefined;
+  return entry.unit ? `${entry.name} (${entry.unit})` : entry.name;
 }
 
 export function getDisplayConfig(): MetricsDisplayConfig {

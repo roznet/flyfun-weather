@@ -96,8 +96,9 @@ def _run_point_analysis(
     # Comparison accumulators
     comp: dict[str, dict[str, float]] = {
         "temperature_c": {}, "wind_speed_kt": {}, "wind_direction_deg": {},
-        "cloud_cover_pct": {}, "precipitation_mm": {}, "freezing_level_m": {},
-        "freezing_level_ft": {}, "cape_surface_jkg": {}, "nwp_cape_jkg": {},
+        "cloud_cover_pct": {}, "precipitation_mm": {},
+        "freezing_level_ft": {}, "nwp_freezing_level_ft": {},
+        "cape_surface_jkg": {}, "nwp_cape_jkg": {},
         "lcl_altitude_ft": {},
         "k_index": {}, "total_totals": {}, "precipitable_water_mm": {},
         "lifted_index": {}, "bulk_shear_0_6km_kt": {}, "max_omega_pa_s": {},
@@ -128,6 +129,11 @@ def _run_point_analysis(
             idx = sounding.indices
             if idx is not None:
                 _collect_opt(comp, "freezing_level_ft", model_key, idx.freezing_level_ft)
+                # The model's OWN freezing-level product, already converted to
+                # feet by analyze_sounding. Kept as a separate comparison row
+                # from the profile-derived value above so the two can be
+                # cross-checked — both in feet, never metres.
+                _collect_opt(comp, "nwp_freezing_level_ft", model_key, idx.nwp_freezing_level_ft)
                 _collect_opt(comp, "cape_surface_jkg", model_key, idx.cape_surface_jkg)
                 _collect_opt(comp, "lcl_altitude_ft", model_key, idx.lcl_altitude_ft)
                 _collect_opt(comp, "k_index", model_key, idx.k_index)
@@ -152,7 +158,6 @@ def _run_point_analysis(
         _collect_opt(comp, "precipitation_mm", model_key, hourly.precipitation_mm)
         _collect_opt(comp, "snowfall_cm", model_key, hourly.snowfall_cm)
         _collect_opt(comp, "rain_mm", model_key, hourly.rain_mm)
-        _collect_opt(comp, "freezing_level_m", model_key, hourly.freezing_level_m)
         _collect_opt(comp, "pressure_msl_hpa", model_key, hourly.pressure_msl_hpa)
 
     # Altitude advisories

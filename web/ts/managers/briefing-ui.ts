@@ -39,6 +39,7 @@ import {
   getMetric,
   isMetricVisible,
   matchThreshold,
+  metricLabelWithUnit,
   renderAnnotationRow,
   renderInfoButton,
   riskCssClass,
@@ -3094,7 +3095,12 @@ function renderComparisonTable(
     if (metricId && !isMetricVisible('comparison', metricId, tierVisibility)) return '';
 
     const metric = metricId ? getMetric(metricId) : null;
-    const varLabel = metric?.name ?? formatVarName(d.variable);
+    // Label carries its unit: the catalog stores name and unit separately and
+    // this table rendered the name alone, so two rows of the same quantity in
+    // different units read as identical duplicates. The formatVarName fallback
+    // labels already embed their own units.
+    const varLabel = (metricId ? metricLabelWithUnit(metricId) : undefined)
+      ?? formatVarName(d.variable);
 
     const valueCells = models.map((m) => {
       const val = d.model_values[m];
@@ -3107,7 +3113,9 @@ function renderComparisonTable(
       : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
     const agreeClass = `agree-${d.agreement}`;
 
-    const infoBtn = metricId && displayMode === 'full'
+    // `metric` guards the (i): a variable can map to a metric id that has no
+    // catalog entry (nwp_cape_jkg), and the popup it opens would be empty.
+    const infoBtn = metricId && metric && displayMode === 'full'
       ? ` ${renderInfoButton(metricId, d.mean)}`
       : '';
 
@@ -3156,6 +3164,11 @@ function formatVarName(name: string): string {
     'precipitation_mm': 'comparison.precip',
     'freezing_level_m': 'comparison.freezingM',
     'freezing_level_ft': 'comparison.freezingFt',
+    'nwp_freezing_level_ft': 'comparison.freezingNativeFt',
+    'nwp_cape_jkg': 'comparison.nwpCape',
+    'snowfall_cm': 'comparison.snowfall',
+    'rain_mm': 'comparison.rain',
+    'pressure_msl_hpa': 'comparison.qnh',
     'cape_surface_jkg': 'comparison.cape',
     'lcl_altitude_ft': 'comparison.lcl',
     'k_index': 'comparison.kIndex',

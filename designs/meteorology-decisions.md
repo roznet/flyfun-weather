@@ -2647,7 +2647,11 @@ Downstream of that same mirror, and unaffected by anything done in the gate:
 - `advisories/dd_nwp_agreement.py` compares the MSL sounding freezing level
   against `nwp_freezing_level_ft` — a pure datum comparison.
 - `analysis/comparison.py` scores model divergence on `freezing_level_m`
-  across models, i.e. ECMWF-AGL against GFS-MSL.
+  across models, i.e. ECMWF-AGL against GFS-MSL. *(Since then the comparison
+  row itself moved to `nwp_freezing_level_ft` — same quantity, feet, because
+  a user read the metres value in the UI's Model Comparison table as feet.
+  The datum fix below is what makes that row comparable at all; the unit
+  change is presentation only. See `designs/analysis.md`.)*
 - `digest/text.py` and `digest/prompt_builder.py` print it as "FzLvl … ft".
 
 Ironically the gate the issue named is where it bites least: the explicit

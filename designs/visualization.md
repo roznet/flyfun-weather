@@ -549,7 +549,7 @@ Keyboard (ESC) and click-outside close the popup.
 
 ### Metrics Catalog (`web/ts/data/metrics-catalog.json`)
 
-~64 metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help (the iOS app mirrors this file at `app/.../Resources/metrics-catalog.json`):
+~67 metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help (the iOS app mirrors this file at `app/.../Resources/metrics-catalog.json`):
 
 - `vibe`: One-liner analogy (e.g., "The atmosphere's battery level" for CAPE)
 - `primary_goal`, `best_used_for`, `limitations`: Aviation-focused guidance
@@ -557,6 +557,10 @@ Keyboard (ESC) and click-outside close the popup.
 - `wikipedia`: External reference link
 - `llm_prompt`: Context for "Discuss with AI" feature
 - Thresholds with `min/max/label/risk/meaning` tuples
+
+**`name` and `unit` are separate fields, and a table that renders `name` alone loses the unit.** That is how two rows both reading "Freezing Level" — one metres, one feet — reached the Model Comparison table, with the unit visible only behind the (i). Build row labels through `metricLabelWithUnit()` in `metrics-helper.ts`, which appends `(unit)` and leaves dimensionless indices bare.
+
+**A metric absent from `metrics-display.json` bypasses tier filtering entirely** — `isMetricVisible()` returns `true` for an unknown id, so an unlisted variable shows in the default view next to `key`-tier rows. Every variable the backend emits for a section needs an entry there; `web/tests/unit/comparison-row-labels.test.ts` pins that for the comparison section.
 
 ### "Discuss with AI" Buttons
 

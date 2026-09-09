@@ -122,6 +122,29 @@ class TestAnalyzeWaypoint:
         assert "temperature_c" in var_names
         assert "wind_speed_kt" in var_names
 
+    def test_no_divergence_variable_is_in_metres(self, sample_forecasts, target_time):
+        """Every altitude in the comparison table is in feet.
+
+        A user read the model-native freezing level (published in metres) as
+        feet, sitting one row above the derived freezing level in feet. Nothing
+        in the comparison table may be metres-valued.
+        """
+        analysis = analyze_waypoint(sample_forecasts, target_time, track_deg=155.0)
+        var_names = {d.variable for d in analysis.model_divergence}
+        assert not [v for v in var_names if v.endswith("_m")], var_names
+
+    def test_model_native_freezing_level_is_feet(self, sample_forecasts, target_time):
+        analysis = analyze_waypoint(sample_forecasts, target_time, track_deg=155.0)
+        native = next(
+            (d for d in analysis.model_divergence
+             if d.variable == "nwp_freezing_level_ft"),
+            None,
+        )
+        assert native is not None, "model-native freezing level row is missing"
+        # Fixture models sit at 1500 m and 1600 m -> ~4900-5300 ft, not ~1500.
+        for model, value in native.model_values.items():
+            assert 4500 < value < 5600, (model, value)
+
     def test_raises_on_empty_forecasts(self, target_time):
         with pytest.raises(ValueError, match="No forecasts"):
             analyze_waypoint([], target_time, track_deg=155.0)
