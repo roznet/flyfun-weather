@@ -239,18 +239,46 @@ it the natural first step if one is wanted.
 
 ---
 
-## Also valuable
+## Surface fields, not only pressure levels
 
-Not in the top five, but each is cheap and feeds a decision directly.
+Everything above asks for something on the vertical grid. Two surface fields
+would be immediately useful on their own, need no 3D output at all, and are the
+two numbers a pilot actually reads first.
+
+### Ceiling
+
+The height of the lowest broken or overcast layer above the field. Together with
+visibility it sets the **flight category**, which is the single go/no-go number
+in a briefing: whether a VFR pilot may legally depart or arrive, and whether an
+IFR approach is likely to get in.
+
+We estimate it today from a mix of model ceiling diagnostics, the
+dewpoint-depression profile, and TAF at short range, and we reconcile those
+estimates conservatively because we do not fully trust any one of them. A direct
+`ceil` would replace that reconciliation with a number.
+
+This also appears in ask 2, for a different reason. There it falls out of the 3D
+cloud field and serves the en-route cross-section. Here it is wanted as a plain
+surface diagnostic at the airport, and it would be worth having on its own even
+if the 3D field never arrives.
+
+### Visibility
+
+Decides VFR legality directly, and with ceiling completes the flight category.
+It is also the field most likely to be the reason a flight does not happen on a
+European winter morning, when the ceiling is fine and the visibility is 1,200 m
+in mist.
+
+### The rest, briefly
 
 | Variable | Needed for | Where we get it today | WeatherNext |
 |---|---|---|---|
-| `10fg` wind gust | **Crosswind limits for light aircraft are gust-driven, not mean-wind driven.** A 12 kt mean with 28 kt gusts is the no-go, and the mean alone does not show it | ECMWF `fg10`, all Open-Meteo models | **Absent** |
-| `vis` horizontal visibility | Flight category, VFR legality | ECMWF `vis`, GFS, ICON, UKMO | **Absent** |
-| `sp` surface pressure (not just `msl`) | Anchoring the sounding to the station, density altitude | all models | **Absent** |
-| Precipitation type (rain / snow / freezing rain / ice pellets) | Freezing-precipitation advisory | Derived from wet-bulb profile and warm-nose detection; ECMWF `ptype` delivered, not yet decoded | **Absent** |
-| `sf` snowfall | Surface phase, runway condition | all models | **Absent** |
-| `tp` total precipitation, hourly | En-route visibility proxy, precipitation extent | all models | **Present**, IMERG-trained, and the strongest single-level field WN3 has |
+| `ceil` cloud ceiling height | **Flight category, the go/no-go number** | ECMWF `ceil`, ICON `ceiling`, GFS and HRRR `HGT`@ceiling | **Absent** |
+| `vis` horizontal visibility | **Flight category, VFR legality** | ECMWF `vis`, GFS, ICON, UKMO | **Absent** |
+| `10fg` wind gust | Crosswind limits for light aircraft are gust-driven, not mean-wind driven. A 12 kt mean with 28 kt gusts is the no-go, and the mean alone does not show it | ECMWF `fg10`, all Open-Meteo models | **Absent** |
+| `sp` surface pressure, not just `msl` | Anchoring the sounding to the station, density altitude | all models | **Absent** |
+| Precipitation type (rain / snow / freezing rain / ice pellets) | Freezing-precipitation advisory | Derived from wet-bulb profile and warm-nose detection | **Absent** |
+| `tp` total precipitation, hourly | En-route visibility proxy, precipitation extent | all models | **Present**, IMERG-trained |
 
 Surface pressure rather than mean-sea-level pressure matters more than it
 sounds: we anchor each profile on station pressure, and density altitude at a
@@ -282,90 +310,6 @@ fields would be better than anything in our stack.
 It sits outside the ranked asks because it is a larger piece of work than any of
 them and it serves a different surface (airports rather than the en-route
 profile). In terms of what it would be *worth*, it is arguably first.
-
----
-
-## Cross-cutting constraints
-
-These affect whether any of the above is usable, independent of variable
-coverage.
-
-### Temporal resolution aloft
-
-Upper-air fields are 6-hourly; only single-level fields plus `300/500 hPa t,z`
-and `1000 hPa u,v` are hourly. Flights depart at arbitrary times and we grade a
-specific flight window, typically two to four hours long.
-
-We enforce a hard internal rule: **we never grade an hour whose fields were not
-actually delivered for the model we are claiming.** Silently interpolating and
-presenting the result as that model's forecast is a correctness bug we have
-specific guards against. So 6-hourly upper air means we can honestly grade four
-times a day and must refuse the rest.
-
-**Ask:** hourly upper air, or 3-hourly as a middle ground.
-
-### Latency
-
-WN3 interim cycles target init +7h10. That is comparable to ECMWF direct
-delivery (+6h40) and much slower than ICON-D2 (+2h, 48 h horizon). The hourly
-init cadence does improve *worst-case* forecast age, roughly 8 h against ECMWF's
-12 h40 just before a new cycle lands, and that is a real benefit at medium
-range. But for a flight departing this afternoon the freshest regional model
-still wins.
-
-### Licensing
-
-Real-time WeatherNext data (under 1 h old, or under 48 h on BigQuery) is
-governed by the GDM Real-Time Weather Forecasting *Experimental* Data Terms of
-Use; only the historical tail is CC BY 4.0. A briefing product that pilots use
-to make go/no-go decisions is squarely the case those terms govern, and
-"experimental" terms are difficult to build a safety-adjacent product on.
-
-**Ask:** clarity on a licence that contemplates operational aviation use, or
-confirmation that the Maps Platform Weather API is the intended commercial route
-for this class of application.
-
-### Access shape
-
-Upper-air fields are currently only on the Requester-Pays GCS Zarr bucket in
-`us-east1`. We are a small European application running neither compute nor
-storage on GCP, sampling a few hundred route points per flight.
-
-**Ask:** a plain HTTPS point or vertical-profile query, of the shape Open-Meteo
-already serves for WN2, is worth considerably more to us than bulk Zarr access.
-Pulling a 64-member global ensemble across the Atlantic to sample 20 points is
-the wrong shape for this workload.
-
----
-
-## Summary
-
-| # | Ask | Effort for you | What it unblocks for us |
-|---|---|---|---|
-| 1 | Levels below 700 hPa (950, 900, 800, 750 minimum) | Output grid change, no new physics | Turbulence and CAT outright; improves everything profile-derived |
-| 2 | `cc` fractional cloud cover on pressure levels | New 3D output field | The cloud cross-section, our most-used view; the icing in-cloud gate |
-| 3 | Ensemble convective probability, or a native realization channel (`cp` + convective top) | New output; the ensemble route may be the easier one | Convective grading that is not a conservative CAPE fallback |
-| 4 | `clwc` and `ciwc` on pressure levels | Largest change to the output set | The entire icing engine, our highest-consequence hazard |
-| 5 | (none; see ask 1) | | |
-| + | `10fg`, `vis`, `sp`, precipitation type | Small single-level additions | Airport go/no-go and freezing-precipitation grading |
-| + | Station head extended to ceiling, visibility, gust | Largest, and the most distinctive | Would make WeatherNext our best airport-conditions source outright |
-
-**With asks 1 to 4:** WeatherNext becomes a full model slot alongside ECMWF,
-ICON and GFS, graded on every advisory, drawn in cross-sections and Skew-T
-diagrams, contributing to the multi-model consensus.
-
-**With ask 1 alone:** turbulence and CAT become gradeable, and the profile-derived
-quantities improve across the board. A real, if partial, integration.
-
-**With the station head extension alone:** WeatherNext becomes the authoritative
-source for airport conditions (flight category, density altitude, crosswind)
-even with no sounding at all.
-
-**As things stand today:** the 64-member ensemble remains interesting as a
-*confidence* signal at D-5 to D-7, where our current confidence measure is
-spread across six deterministic models, which is a proxy for uncertainty rather
-than a measurement of it. Worth prototyping against Open-Meteo's WN2 feed
-regardless of what happens with the asks above.
 
 ## For our own reference
 
