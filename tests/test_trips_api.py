@@ -284,6 +284,26 @@ class TestTripOnFlightResponse:
         flights = client.get("/api/flights").json()
         assert all(f["trip"] is None for f in flights)
 
+    def test_the_trip_block_carries_the_trips_auto_refresh(self, client, chain):
+        """The briefing page shows the *trip's* switch on a member leg, and keeps
+        the per-leg hour editable beside it — it cannot do either without this."""
+        trip = client.post(
+            "/api/trips", json={"flight_ids": [f.id for f in chain]},
+        ).json()
+        flights = client.get("/api/flights").json()
+        assert all(f["trip"]["auto_refresh"] is False for f in flights)
+        # Single-flight endpoint builds the ref by the other code path.
+        assert client.get(
+            f"/api/flights/{chain[0].id}"
+        ).json()["trip"]["auto_refresh"] is False
+
+        client.patch(f"/api/trips/{trip['id']}", json={"auto_refresh": True})
+        flights = client.get("/api/flights").json()
+        assert all(f["trip"]["auto_refresh"] is True for f in flights)
+        assert client.get(
+            f"/api/flights/{chain[0].id}"
+        ).json()["trip"]["auto_refresh"] is True
+
 
 class TestReadTimeConsentGate:
     """A stored paragraph must not survive a leg switching AI off.

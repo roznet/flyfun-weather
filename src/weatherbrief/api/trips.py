@@ -59,6 +59,10 @@ class TripLegRef(BaseModel):
     name: str
     position: int  # 1-based index in departure-time order
     total: int
+    #: The trip's own auto-refresh switch. Carried here because for a member
+    #: leg it is the trip that decides *whether* to refresh — the briefing
+    #: page shows this state and keeps the per-leg *hour* editable.
+    auto_refresh: bool = False
 
 
 class TripResponse(BaseModel):
@@ -330,6 +334,7 @@ def trip_ref_for(db: Session, trip_id: str, flight_id: str) -> TripLegRef | None
         name=row.name or "",
         position=member_ids.index(flight_id) + 1,
         total=len(member_ids),
+        auto_refresh=row.auto_refresh,
     )
 
 
@@ -341,13 +346,14 @@ def bulk_trip_refs(db: Session, user_id: str) -> dict[str, TripLegRef]:
     same rule the summary uses.
     """
     trip_rows = db.execute(
-        select(FlightTripRow.id, FlightTripRow.name).where(
-            FlightTripRow.user_id == user_id
-        )
+        select(
+            FlightTripRow.id, FlightTripRow.name, FlightTripRow.auto_refresh
+        ).where(FlightTripRow.user_id == user_id)
     ).all()
     if not trip_rows:
         return {}
-    names = {trip_id: name for trip_id, name in trip_rows}
+    names = {trip_id: name for trip_id, name, _ in trip_rows}
+    auto = {trip_id: bool(flag) for trip_id, _, flag in trip_rows}
     members = db.execute(
         select(FlightRow.id, FlightRow.trip_id)
         .where(FlightRow.trip_id.in_(list(names)))
@@ -366,6 +372,7 @@ def bulk_trip_refs(db: Session, user_id: str) -> dict[str, TripLegRef]:
                 name=names.get(trip_id) or "",
                 position=index,
                 total=len(flight_ids),
+                auto_refresh=auto.get(trip_id, False),
             )
     return refs
 

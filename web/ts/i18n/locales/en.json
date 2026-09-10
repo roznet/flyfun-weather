@@ -1093,6 +1093,7 @@
   "trips.aiDisabled": "No AI summary: at least one leg has the AI briefing turned off.",
   "trips.refreshBtn": "Refresh trip",
   "trips.refreshManaged": "Managed by the trip",
+  "trips.refreshEarliest": "The trip refreshes every leg — at the earliest leg's time.",
   "trips.legs": "Legs",
   "trips.flown": "Flown",
   "trips.cancelled": "Cancelled",

@@ -123,6 +123,7 @@ export function renderHeader(
 // --- Stale-pack banner ---
 
 import { computeStalePackBanner } from '../helpers/stale-pack-banner';
+import { autoRefreshControl, hourPatchValue } from '../helpers/auto-refresh-control';
 import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel, temsiValidityOffset } from '../utils/temsi';
 
 /** Render the stale-pack banner. Owner-only — non-owners can't trigger
@@ -917,26 +918,8 @@ export function renderAutoRefreshBar(
 
   el.style.display = '';
 
-  // A leg inside a trip has its auto-refresh managed by the trip (#602): the
-  // per-leg hour defaults to *that leg's* departure − 1 h, which for a trip is
-  // exactly wrong — Sunday's return would refresh Sunday morning, long after the
-  // decision was actually made on Friday. The trip refreshes the whole chain
-  // ahead of its next commit point instead, so the per-leg control is disabled
-  // rather than hidden: hiding it would look like the setting had been lost.
-  if (flight.trip) {
-    el.innerHTML = `
-      <label class="auto-refresh-toggle is-managed">
-        <input type="checkbox" disabled ${flight.auto_refresh ? 'checked' : ''}>
-        <span>${escapeHtml(t('autoRefresh.label'))}</span>
-      </label>
-      <a class="auto-refresh-managed" href="/trip.html?id=${encodeURIComponent(flight.trip.id)}">${escapeHtml(t('trips.refreshManaged'))}</a>
-    `;
-    return;
-  }
-
-  const enabled = flight.auto_refresh;
-  const defaultHour = ((flight.target_time_utc - 1) + 24) % 24;
-  const effectiveHour = flight.auto_refresh_hour ?? defaultHour;
+  const control = autoRefreshControl(flight);
+  const { defaultHour, effectiveHour } = control;
 
   // Build hour options
   const hourOptions = Array.from({ length: 24 }, (_, h) => {
@@ -947,14 +930,50 @@ export function renderAutoRefreshBar(
     return `<option value="${h}"${selected}>${label}${suffix}</option>`;
   }).join('');
 
-  el.innerHTML = `
-    <label class="auto-refresh-toggle">
-      <input type="checkbox" id="auto-refresh-check" ${enabled ? 'checked' : ''}>
-      <span>${t('autoRefresh.label')}</span>
-    </label>
-    <span class="auto-refresh-hour-group" ${enabled ? '' : 'style="display:none;"'}>
+  const hourGroupHtml = `
+    <span class="auto-refresh-hour-group" ${control.hourVisible ? '' : 'style="display:none;"'}>
       ${t('autoRefresh.at')}<select id="auto-refresh-hour">${hourOptions}</select>
     </span>
+  `;
+
+  // A leg inside a trip splits the control in two (#602): *whether* to refresh
+  // is the trip's — it refreshes the whole chain or none of it, so the checkbox
+  // shows the trip's switch and is disabled here, linking to the trip instead
+  // of hiding (hiding would look like the setting had been lost). The *hour*
+  // stays this leg's and stays editable, because the earliest leg's hour is
+  // what fires the chain: without it a Fri-out/Sun-back trip could only be
+  // moved by editing whichever leg happened to come due first.
+  if (control.owner === 'trip') {
+    const hint = escapeHtml(t('trips.refreshEarliest'));
+    el.innerHTML = `
+      <label class="auto-refresh-toggle is-managed" title="${hint}">
+        <input type="checkbox" disabled ${control.switchOn ? 'checked' : ''}>
+        <span>${escapeHtml(t('autoRefresh.label'))}</span>
+      </label>
+      ${hourGroupHtml}
+      <a class="auto-refresh-managed" href="/trip.html?id=${encodeURIComponent(control.tripId!)}" title="${hint}">${escapeHtml(t('trips.refreshManaged'))}</a>
+    `;
+    if (control.hourVisible) {
+      const tripHourSelect = document.getElementById('auto-refresh-hour') as HTMLSelectElement;
+      tripHourSelect.addEventListener('change', () => {
+        // Carry the leg's own switch through untouched: it is not what governs
+        // a member leg, and flipping it here would silently change what happens
+        // if the leg later leaves the trip.
+        onUpdate(
+          flight.auto_refresh,
+          hourPatchValue(parseInt(tripHourSelect.value, 10), defaultHour),
+        );
+      });
+    }
+    return;
+  }
+
+  el.innerHTML = `
+    <label class="auto-refresh-toggle">
+      <input type="checkbox" id="auto-refresh-check" ${control.switchOn ? 'checked' : ''}>
+      <span>${t('autoRefresh.label')}</span>
+    </label>
+    ${hourGroupHtml}
   `;
 
   // Wire events
@@ -965,15 +984,12 @@ export function renderAutoRefreshBar(
   checkbox.addEventListener('change', () => {
     const isOn = checkbox.checked;
     hourGroup.style.display = isOn ? '' : 'none';
-    const selectedHour = parseInt(hourSelect.value, 10);
-    const hourVal = selectedHour === defaultHour ? null : selectedHour;
+    const hourVal = hourPatchValue(parseInt(hourSelect.value, 10), defaultHour);
     onUpdate(isOn, isOn ? hourVal : null);
   });
 
   hourSelect.addEventListener('change', () => {
-    const selectedHour = parseInt(hourSelect.value, 10);
-    const hourVal = selectedHour === defaultHour ? null : selectedHour;
-    onUpdate(true, hourVal);
+    onUpdate(true, hourPatchValue(parseInt(hourSelect.value, 10), defaultHour));
   });
 }
 

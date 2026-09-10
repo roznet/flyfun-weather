@@ -932,6 +932,7 @@
   "trips.aiDisabled": "Pas de résumé IA : au moins une étape a le briefing IA désactivé.",
   "trips.refreshBtn": "Actualiser le voyage",
   "trips.refreshManaged": "Géré par le voyage",
+  "trips.refreshEarliest": "Le voyage actualise toutes les étapes — à l'heure de l'étape la plus précoce.",
   "trips.legs": "Étapes",
   "trips.flown": "Volé",
   "trips.cancelled": "Annulé",

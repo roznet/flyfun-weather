@@ -932,6 +932,7 @@
   "trips.aiDisabled": "Keine KI-Zusammenfassung: Bei mindestens einer Etappe ist das KI-Briefing deaktiviert.",
   "trips.refreshBtn": "Reise aktualisieren",
   "trips.refreshManaged": "Von der Reise verwaltet",
+  "trips.refreshEarliest": "Die Reise aktualisiert alle Etappen — zur Zeit der frühesten Etappe.",
   "trips.legs": "Etappen",
   "trips.flown": "Geflogen",
   "trips.cancelled": "Abgesagt",

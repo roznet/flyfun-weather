@@ -671,6 +671,105 @@ class TestSchedulerTripMates:
         assert {r.id for r in _with_trip_mates(session, due, _NOW)} == {"future"}
 
 
+class TestSchedulerAdmitsTripLegs:
+    """The trip switch has to count on its own.
+
+    ``_find_due_flights`` used to filter on the per-leg ``auto_refresh`` before
+    ``_with_trip_mates`` ever ran, and a flight is created with that flag off —
+    joining a trip does not turn it on, and neither ``PATCH /trips/{id}`` nor
+    ``add_legs`` cascades. So a trip with auto-refresh on and every leg off had
+    nothing to hand the trip-mate step and simply never refreshed, while the
+    briefing page disabled the only control that could have switched a leg on.
+    """
+
+    def _due_ids(self, session):
+        from weatherbrief.scheduler import _find_due_flights
+
+        return {row.id for row in _find_due_flights(session)}
+
+    def _refreshed_two_days_ago(self, session, *leg_ids):
+        """Anchor the regular slot on a past date, whatever the wall clock says.
+
+        ``_next_due_at`` bases an untouched leg's slot on *today* at
+        ``departure − 1 h``, which is still ahead of ``now`` for an hour of the
+        run that has not come round yet — so a bare clock-relative fixture
+        would pass or fail depending on the time of day.
+        """
+        from weatherbrief.db.models import FlightRow
+
+        for leg_id in leg_ids:
+            session.get(FlightRow, leg_id).last_auto_refresh_at = _NOW - timedelta(days=2)
+        session.commit()
+
+    def test_the_trip_switch_alone_makes_its_legs_due(self, session, trip_with_legs):
+        self._refreshed_two_days_ago(session, "leg1", "leg2", "leg3")
+        trip_with_legs.auto_refresh = True
+        session.commit()
+        # Every leg still has its own ``auto_refresh`` off — as a created
+        # flight does, and as joining a trip leaves it.
+        assert self._due_ids(session) == {"leg1", "leg2", "leg3"}
+
+    def test_a_trip_that_opts_out_leaves_its_legs_alone(self, session, trip_with_legs):
+        self._refreshed_two_days_ago(session, "leg1", "leg2", "leg3")
+        assert self._due_ids(session) == set()
+
+    def test_an_ungrouped_flight_still_needs_its_own_switch(self, session):
+        from weatherbrief.db.models import FlightRow
+
+        _flight(session, "solo", 3, ["EGTF", "LSGS"])
+        session.commit()
+        assert self._due_ids(session) == set()
+
+        row = session.get(FlightRow, "solo")
+        row.auto_refresh = True
+        row.auto_refresh_hour = _NOW.hour
+        session.commit()
+        assert self._due_ids(session) == {"solo"}
+
+    def test_a_leg_switched_on_inside_an_opted_out_trip_still_pulls_the_chain(
+        self, session, trip_with_legs,
+    ):
+        """Per-leg on/off keeps working: it is what the leg reverts to if it
+        later leaves the trip, so the web control must not clobber it."""
+        from weatherbrief.db.models import FlightRow
+
+        leg = session.get(FlightRow, "leg2")
+        leg.auto_refresh = True
+        leg.auto_refresh_hour = _NOW.hour
+        session.commit()
+        # Trip opted out — the due leg runs alone, no mates pulled in.
+        assert self._due_ids(session) == {"leg2"}
+
+        trip_with_legs.auto_refresh = True
+        session.commit()
+        assert self._due_ids(session) == {"leg1", "leg2", "leg3"}
+
+    def test_the_earliest_leg_hour_is_what_fires_the_chain(self, session, trip_with_legs):
+        """The whole point of keeping the hour per-leg: whichever leg comes due
+        first drags the rest along, so setting an early hour on any one leg
+        moves the trip. Checked on ``_next_due_at`` because it takes ``now``
+        explicitly — reading the wall clock would make the hours wrap-sensitive.
+        """
+        from weatherbrief.db.models import FlightRow
+        from weatherbrief.scheduler import _flight_start_dt, _next_due_at
+
+        noon = _NOW.replace(hour=12, minute=0, second=0, microsecond=0)
+        hours = {"leg1": 18, "leg2": 7, "leg3": 15}
+        for leg_id, hour in hours.items():
+            session.get(FlightRow, leg_id).auto_refresh_hour = hour
+        session.commit()
+
+        due_at = {}
+        for leg_id in hours:
+            row = session.get(FlightRow, leg_id)
+            due_at[leg_id] = _next_due_at(row, _flight_start_dt(row), noon)
+
+        # leg2 at 07:00Z is the earliest slot of the day, so it is the leg that
+        # brings the whole chain forward.
+        assert min(due_at, key=lambda k: due_at[k]) == "leg2"
+        assert due_at["leg2"].hour == 7
+
+
 class TestSchedulerYieldsToTheDriver:
     """A leg queued by a manual trip refresh is the driver's, not the scheduler's.
 

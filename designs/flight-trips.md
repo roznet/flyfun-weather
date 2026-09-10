@@ -233,6 +233,41 @@ That path registers with `triggered_by="scheduler"`, which *is* uncapped — saf
 only because the loop serialises it. The manual trip refresh must not reuse that
 trigger to get past the caps.
 
+### The trip switch has to count on its own
+
+`_find_due_flights` originally selected on `FlightRow.auto_refresh` alone, and
+`_with_trip_mates` returns early on an empty list — so the trip-mate step was
+only ever reached through a leg that had its *own* flag on. A flight is created
+with `auto_refresh` off (`db/models.py`), and neither `PATCH /trips/{id}` nor
+`add_legs` cascades, so a trip with auto-refresh on and every leg untouched had
+nothing to hand `_with_trip_mates` and simply never refreshed — while the
+briefing page disabled the only control that could have switched a leg on. The
+query now admits a leg on **either** flag (`or_`, outer-joined on
+`FlightTripRow`).
+
+### On/off is the trip's, the hour is the leg's
+
+The two halves of the control are owned by different things, and the split is
+the point:
+
+* **Whether** — the trip's. It refreshes the whole chain or none of it, so
+  `renderAutoRefreshBar` shows `flight.trip.auto_refresh` on a member leg,
+  disabled, linking to the trip page. Disabled rather than hidden: hiding looks
+  like the setting was lost. `TripLegRef.auto_refresh` exists to carry it.
+* **When** — the leg's. Whichever leg comes due first pulls in the rest, so the
+  *earliest* leg's hour is the trip's effective refresh time. The hour select
+  therefore stays editable on a member leg; without it a Fri-out/Sun-back trip
+  could only be re-timed by guessing which leg happened to come due first.
+
+A member leg's own `auto_refresh` is carried through the PATCH untouched — it is
+not what governs the leg while it is in a trip, but it is what the leg reverts
+to on leaving one. `helpers/auto-refresh-control.ts` holds the decision (the
+renderer only draws it) so it is unit-testable without a DOM.
+
+`FlightTripRow.auto_refresh_hour` is still read by nothing. It predates this and
+would mean "one hour for the whole chain", which the per-leg-min rule makes
+redundant; it is left in place rather than migrated away.
+
 ## Notifications
 
 One coalesced push + email per trip refresh, carrying the deterministic
