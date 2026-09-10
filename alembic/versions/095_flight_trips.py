@@ -70,8 +70,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The FK goes before the index it rides on: MySQL refuses to drop an index
+    # a foreign key still needs (error 1553), and since dev is SQLite -- where
+    # ``batch_alter_table`` recreates the table and the order is immaterial --
+    # the wrong order passes every local test and only fails on a production
+    # rollback, which is the worst moment to discover it.
     with op.batch_alter_table("flights") as batch_op:
-        batch_op.drop_index("ix_flights_trip_id")
         batch_op.drop_constraint("fk_flights_trip_id", type_="foreignkey")
+        batch_op.drop_index("ix_flights_trip_id")
         batch_op.drop_column("trip_id")
     op.drop_table("flight_trips")
