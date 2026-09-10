@@ -110,6 +110,9 @@ export interface TripLegRef {
   name: string;
   position: number;  // 1-based, in departure-time order
   total: number;
+  /** The *trip's* auto-refresh switch — for a member leg it is the trip that
+   *  decides whether to refresh at all. The per-leg hour stays the leg's. */
+  auto_refresh: boolean;
 }
 
 /** One leg as the trip view renders it (server-computed, never persisted). */

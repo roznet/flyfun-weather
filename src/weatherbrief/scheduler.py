@@ -24,11 +24,11 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
-from weatherbrief.db.models import FlightRow
+from weatherbrief.db.models import FlightRow, FlightTripRow
 from weatherbrief.fetch.variables import is_beyond_forecast_horizon
 
 if TYPE_CHECKING:
@@ -222,12 +222,27 @@ async def process_auto_refreshes(app_state) -> None:
 
 
 def _find_due_flights(db: Session) -> list[FlightRow]:
-    """Return flights that are due for auto-refresh."""
+    """Return flights that are due for auto-refresh.
+
+    A leg is admitted on **either** its own ``auto_refresh`` or its trip's. The
+    trip flag has to count on its own because a flight is created with
+    ``auto_refresh`` off and joining a trip does not turn it on: filtering on
+    the per-leg flag alone left a trip whose legs were all off with nothing to
+    hand ``_with_trip_mates``, so the trip toggle was inert. On/off is the
+    trip's decision for its members; the *hour* stays per-leg, and whichever
+    leg comes due first pulls in the rest.
+    """
     now_utc = datetime.now(timezone.utc)
 
     stmt = (
         select(FlightRow)
-        .where(FlightRow.auto_refresh.is_(True))
+        .outerjoin(FlightTripRow, FlightRow.trip_id == FlightTripRow.id)
+        .where(
+            or_(
+                FlightRow.auto_refresh.is_(True),
+                FlightTripRow.auto_refresh.is_(True),
+            )
+        )
         .where(FlightRow.departure_time >= now_utc)
     )
     rows = db.execute(stmt).scalars().all()

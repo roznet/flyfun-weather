@@ -1036,6 +1036,18 @@ html {
   margin-left: 0.2rem;
 }
 
+/* A member leg: the trip owns the on/off switch, the leg owns the hour. */
+.auto-refresh-toggle.is-managed {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.auto-refresh-managed {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-decoration: underline dotted;
+}
+
 /* --- Assessment banner --- */
 
 .assessment-banner {
