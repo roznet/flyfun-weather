@@ -53,7 +53,25 @@ services:
           # workers (~250 MB each during ICON decode) + cfgrib eccodes
           # native memory accumulating between recycles > 4 GiB peak.
           # Host has ~7.8 GiB, this still leaves ~1.8 GiB for other apps.
-          memory: 6G
+          #
+          # Trimmed 6G -> 5G on 2026-09-10 after a health check found the host
+          # swapping ~23 GB/day in (pswpin 86M pages / 15 days, ~66 swap-ins a
+          # second sustained). Committed anon across the box was ~9.5 GiB
+          # against 8 GiB of RAM, so the kernel had no choice; MySQL's InnoDB
+          # buffer pool was the loser (2.2 GB of mysqld paged out while InnoDB
+          # still reported a 1000/1000 hit rate, so every "cache hit" was a
+          # major fault). This limit is the oversubscription half of the fix;
+          # the other half is vm.swappiness 60 -> 10 on the host.
+          #
+          # Why 5G and not lower: observed peak ``anon`` is ~4.1 GiB, so 5G
+          # leaves ~900 MiB of headroom before the OOM killer replaces the
+          # 2026-05-15 signature. 4.5G was considered and rejected as too
+          # tight. The reclaimed GiB is almost entirely page cache: cached
+          # GRIB chunks have a 1.55 MB median (44.5 MB max) and only 2 decode
+          # workers, so the live decode working set is ~15-30 MB against the
+          # 0.5-2 GiB of file cache the cgroup was holding. Dropping it costs
+          # a re-read measured in milliseconds against 800-1700 ms decodes.
+          memory: 5G
     networks:
       - shared-services
 
