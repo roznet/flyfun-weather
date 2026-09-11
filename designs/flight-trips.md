@@ -461,19 +461,23 @@ any leg has a pack newer than that.
 
 ## iOS
 
-Phase 1 is the `trip` field on `FlightResponse` and a "leg 2 of 3" badge on the
-flight card (`TripBadge`). It cannot say which leg binds — that computation is
-server-side and surfaced on the web trip page — but it says this flight is part
-of a chain, which the per-flight card otherwise hides completely. Full trip UI
-is v2.
+Phase 1 was the `trip` field on `FlightResponse` and a "leg 2 of 3" badge on the
+flight card (`TripBadge`). The native trip UI (#607) is built to
+[`plans/ios-trips.md`](plans/ios-trips.md) M1 + M2: a trip is a header row with
+the binding chip followed by its remaining legs as plain sibling rows (never a
+`DisclosureGroup` — `List(selection:)` drives the iPad detail pane), and a trip
+screen with a vertical timeline behind the header. It reads the same server
+answers as the web — binding leg, headline, leg state (`monitoring` is not
+remaining), `finished_at` — and re-derives none of them. Membership editing
+(M3) is not built yet.
 
 ## Deferred (v2)
 
 Commit-point table (the per-decision-point view: what you are deciding, legs
 still needed, binding leg, and where you are stranded if it fails); MCP
 `get_trip`; joint time optimisation across legs using the per-leg `flexibility`
-scans; trip sharing via the reserved `share_code`; full iOS trip UI. Nested
-trips: no.
+scans; trip sharing via the reserved `share_code`; iOS membership editing
+(group / add / remove from the list, `plans/ios-trips.md` M3). Nested trips: no.
 
 ## Still open
 
