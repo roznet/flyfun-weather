@@ -78,19 +78,107 @@ Why not a `DisclosureGroup` mirroring the web:
   per-leg `days_out` — lives on the trip screen anyway. An inline expansion would
   be a second, weaker rendering of the same thing.
 
+**Decided (2026-09-11):** option A, the pushed row. The two alternatives
+considered and rejected were an inline `DisclosureGroup` mirroring the web (see
+above) and one `List` section per trip — the latter is genuinely native and gives
+one-tap leg access with no nesting at all, but it cannot coexist with the
+Future/Recent/Past sectioning (sections don't nest, and a trip straddling Future
+and Recent loses the time framing entirely), and it leaves trip-level actions
+with no home but a small header button.
+
 **The honest cost:** getting from the list to Sunday's briefing becomes two taps
-instead of one. Mitigations, in order of preference: (a) the row's context menu
-lists the legs as direct destinations; (b) the collapsed row already carries the
-binding chip, which is the decision-relevant bit; (c) on iPad, `SidebarSelection`
-gains a `.trip(String)` case so the trip screen fills the detail pane — the same
-shape `.forecastMap` already uses — and a leg tap swaps the detail to the
-briefing, which is one tap from there.
+instead of one. Three things buy it back, in order:
+
+1. **A long-press context menu on the trip row** — the accelerator, spec'd below.
+2. The row carries the binding chip, which is the decision-relevant bit already.
+3. On iPad, `SidebarSelection` gains a `.trip(String)` case so the trip screen
+   fills the detail pane — the same shape `.forecastMap` already uses — and a leg
+   tap swaps the detail to the briefing, one tap from there.
+
+#### The trip row's context menu
+
+`.contextMenu(menuItems:preview:)`. `FlightListView.flightRow` already attaches a
+plain `.contextMenu` inside this exact `List(selection:)`-in-a-sidebar, so the
+mechanism is proven here; what is new is the `preview:`.
+
+```
+        ┌──────────────────────────────┐
+        │  Alps weekend                │   preview: a custom SwiftUI view —
+        │  EGTF → LSGS → EGTF          │   trip name, chain label, and the
+        │  Sunday's LSGS → EGTF        │   binding-leg sentence. This is the
+        │  decides this trip. AMBER,   │   "nice looking" lever; menu rows
+        │  D-5.                        │   themselves cannot be styled.
+        └──────────────────────────────┘
+        ┌──────────────────────────────┐
+        │ LEGS                         │   Section("Legs")
+        │ ✓ Fri 12 Sep · EGTF → LSGS   │   remaining legs only
+        │   GREEN · D-7                │
+        │ ⚠ Sun 14 Sep · LSGS → EGTF   │   binding leg marked in text
+        │   AMBER · D-5 · decides      │
+        ├──────────────────────────────┤
+        │ ↻ Refresh Trip               │
+        │ ⌥ Open Trip                  │
+        └──────────────────────────────┘
+```
+
+Four constraints that shape it, each with a reason:
+
+- **Menu rows are text + monochrome SF Symbol.** A context-menu row is
+  system-styled; a coloured traffic-light badge in one is not reliably
+  renderable. So the grade goes in the **text** ("AMBER · D-5") and the symbol
+  carries the grade by *shape* (`checkmark.circle` / `exclamationmark.triangle` /
+  `xmark.octagon`), which survives monochrome rendering. This is the
+  never-rely-on-colour-alone rule the app follows elsewhere, and it is forced
+  here rather than chosen.
+- **Remaining legs only.** The shrinking scope is the feature's premise — a flown
+  leg is precisely the one that no longer matters — and it keeps the menu short
+  against `MAX_TRIP_LEGS = 12`. Flown legs stay reachable on the trip screen,
+  which shows the whole chain.
+- **The binding leg is named in text, not promoted to the top.** Reordering would
+  make the menu's order disagree with the timeline's departure order for no gain.
+- **The menu never shows a trip-level grade**, in the preview or anywhere else —
+  rule 1 applies to the accelerator too. The preview carries `summary.headline`,
+  which is a sentence about a *leg*.
+
+#### Teaching it: `TripLegsTip`
+
+A `.popoverTip` on the trip row, following the existing `AddFlightTip` /
+`ForecastMapTip` pattern in `Tips/FlightListTips.swift`. Three gates, all
+necessary:
+
+- **`@Parameter static var hasTrip: Bool`** — the tip must not exist for a pilot
+  who never uses trips. Set from the list when a trip row is actually rendered.
+- **Sequenced after the existing pair.** `Tips.configure` uses
+  `.displayFrequency(.immediate)` (`App/WeatherBriefApp.swift:25`), so on a fresh
+  install every eligible tip fires at once. Extend the existing event chain — a
+  `#Rule` on a `forecastMapTipSeen` event donated the way
+  `addFlightTipSeen` already is — so the flight-list tips still read in order
+  instead of three popovers competing.
+- **Attached to the *first* trip row only**, or every trip row races to present
+  the same popover.
+
+It also inherits the UI-test suppression for free: `Tips.configure` is skipped
+entirely under `FLYFUN_UITEST=1`, so the new tip cannot break an XCUI journey the
+way an unguarded popover scrim would.
+
+#### The pushback that comes with this
+
+If the long press becomes a *primary* path rather than a power-user accelerator,
+that is evidence the extra tap is a real cost — and the answer then is to revisit
+A vs the section-per-trip option, **not** to invest further in a hidden gesture.
+A tip teaches it once; it does nothing for a pilot who dismissed it, reinstalled,
+or opens the app twice a month, which is a normal usage pattern for this app.
+Long press also has a real accessibility cost (VoiceOver reaches it through the
+Actions rotor; it is slower, and it is hard for some motor impairments), so the
+trip screen must stay a complete path to everything the menu offers — it does.
+
+Worth watching after release rather than designing around now.
 
 Past legs keep rendering individually with the existing `TripBadge`, matching
 web: the Past section is server-paginated, so pulling a past leg into the trip
 row would make it vanish or duplicate depending on the page loaded.
 
-Offline: see the open question below.
+Offline: see the decisions section below.
 
 ### 2. The trip screen — a vertical timeline, not the web's horizontal strip
 
@@ -232,16 +320,30 @@ protocol** rather than nine more methods on that one. `AppState` exposes
 
 ## Milestones
 
-**M1 — close the silent drops (small, ship independently of any UI).**
-Gaps 1–4: `trip_id` push routing, AASA + `/trip.html` link routing,
-`TripLegRef.autoRefresh`, claimed-leg 409 copy. M1 makes the trip features that
-are *already live server-side* stop failing quietly on iOS. Note the AASA deploy
-ordering.
+**M1 — the one genuinely standalone fix.** Gap 4 only: the claimed-leg 409 (and
+its SSE twin) surfaces the server's sentence instead of a generic failure. A
+pilot with a web-created trip refreshing a leg from the iOS briefing screen hits
+this **today**, so it is worth shipping ahead of everything else.
 
-**M2 — read-only trip screen.** DTOs, `TripRepository`, `TripDetailViewModel`,
-`TripDetailView` (timeline + callout + AI paragraph + continuity), list row +
-`SidebarSelection.trip`. No mutation. This is the bulk of the product value:
-"which leg decides this trip" becomes reachable on a phone.
+An earlier draft of this plan put gaps 1–3 here too, on the reasoning that they
+are live server behaviour iOS drops. That was wrong: routing a trip push or a
+`/trip.html` Universal Link into the app is pointless until there is a trip
+screen to land on, and `TripLegRef.autoRefresh` has nothing to render it. They
+are not independent fixes — they are M2's reachability, and they belong there.
+
+**M2 — read-only trip screen, and the paths that reach it.** DTOs,
+`TripRepository`, `TripDetailViewModel`, `TripDetailView` (timeline + callout +
+AI paragraph + continuity), list row + context menu + `TripLegsTip` +
+`SidebarSelection.trip`, plus gaps 1–3: `trip_id` push routing,
+`/trip.html` link routing, `TripLegRef.autoRefresh`. No mutation. This is the
+bulk of the product value: "which leg decides this trip" becomes reachable on a
+phone.
+
+The AASA line (`deploy/weather.flyfun.aero.caddy:17`) must be deployed **before**
+this build ships — iOS caches AASA per-install, so an app that handles
+`/trip.html` against a server that does not yet advertise it simply never gets
+the link. Nothing about the web trip page changes; the file is purely the iOS
+registration of which paths belong to the app.
 
 **M3 — trip actions.** Refresh + progress polling, auto-refresh toggle, rename,
 delete, remove leg.
