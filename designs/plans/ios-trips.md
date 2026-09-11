@@ -249,8 +249,9 @@ delete, remove leg.
 **M4 — membership.** `AddToTripSheet`, generalised `FlightSelectionView` with
 the ported selection rule, Move/Duplicate captions.
 
-**M5 — polish.** Offline behaviour (see below), an XCUI journey, App Intents
-(`TripEntity`, "what decides my next trip?") if it earns its place.
+**M5 — polish.** Offline caching of the `TripResponse` with the calendar-staleness
+rule (see below), an XCUI journey, App Intents (`TripEntity`, "what decides my
+next trip?") if it earns its place.
 
 M1 and M2 are independently shippable and in that order. M3 before M4
 deliberately: a pilot who can read the chain but not refresh it is better served
@@ -258,23 +259,61 @@ than one who can build trips but can't see what they decide.
 
 ## Decisions to make, and my recommendation
 
-**Offline.** The trip summary is computed per read and never persisted — by
-design. iOS caches `flights.json`, so today an offline list can show trip
-*badges* but not trip *rows*. Two options: (a) hide trip grouping offline and
-fall back to per-flight rows with badges; (b) cache the last `/api/trips`
-payload the way `flights.json` is cached, and render it stale-marked.
+**Offline: cache the `TripResponse`, but the headline has a second clock on
+it.** iOS caches `flights.json`, so an offline list can show trip *badges* but
+not trip *rows*. Cache the last `GET /api/trips` payload the same way — it
+carries `summary` and `ai_summary` inline, so one cached document covers the
+list row, the timeline and the paragraph.
 
-I lean **(b)**, but it deserves an explicit decision because it sits in tension
-with "never persist the aggregate": a cached headline naming Sunday as binding
-is *wrong* the moment any leg refreshes, and the pilot reading it at the airport
-on one bar of signal is exactly the person who can least afford that. If we take
-(b), the fetch time must be on the callout itself, not in a corner — and the
-refresh button must be visibly unavailable, not merely fail.
+Re-downloading it whenever a leg refreshes is the right trigger and iOS already
+has the signal (the coalesced trip push, and the `externalSync` nudge the list
+already listens to). **But refresh is not the only thing that invalidates a
+cached summary, and the other cause fires no push at all:**
 
-**AI paragraph on open.** Web `POST`s `/ai-summary` when the page opens stale. On
-iOS that is a paid call fired by a view appearing, including on every iPad detail
-re-present. Recommendation: request it on explicit open of the trip screen only,
-debounced per trip id per app session, never from the list row.
+| What changes | Fires a push? | What goes stale |
+|---|---|---|
+| A leg refreshes (new `fetch_timestamp`) | yes | assessments, chips, freshness, the AI paragraph |
+| A **departure passes** (`remaining` → `flown`, from the clock alone) | **no** | the binding leg can change identity with zero new data — only remaining legs can bind |
+| The **UTC date rolls over** | **no** | every `D-N` in the headline, `decision_ripeness_days`, `decidable_from` |
+
+So a download-on-refresh cache fixes *data* staleness and not *calendar*
+staleness. A headline cached on Monday saying "Sunday's LSGS → EGTF decides this
+trip. It is AMBER at D-5" is simply false on Wednesday, with nothing having
+happened.
+
+Recommendation — split the cached document by how it decays:
+
+- **Per-leg rows are cacheable without caveat.** They are pack facts (assessment,
+  chips, `fetch_timestamp`) and stay true until the leg refreshes. `D-N` is
+  re-derivable from `departure_time` and the current clock, which is arithmetic,
+  not a binding-leg derivation.
+- **The headline and `decidable_from` get an explicit `as of <time>` on the
+  callout itself**, not in a corner.
+- **Suppress the headline entirely** when the cache is calendar-stale: it was
+  written on an earlier UTC day, or any cached leg's `departure_time` has since
+  passed. Fall back to the timeline plus "Connect to see which leg decides this
+  trip."
+
+That last check is a clock comparison on cached data — it says *don't trust
+this*, never *here is the new answer* — so it stays on the right side of rule 2.
+Re-deriving the binding leg client-side would not.
+
+**AI paragraph on open — correcting an earlier framing of mine.** It is *not*
+regenerated per open. `ensure_trip_ai_summary` is keyed on the per-leg
+`(fetch_timestamp, debrief_decision, derived state)` tuples and returns the
+stored text on a key hit with **no model call and no charge**
+(`digest/trip_summary.py:396`). It regenerates when a leg refreshes, when a
+debrief decision changes, or when a departure passes and flips a leg's state —
+not on a view appearing, and notably **not** as `days_out` ticks down, since
+`days_out` is not in the key.
+
+So no debounce is needed. Better still, iOS should not `POST` at all on the
+normal path: `GET /trips/{id}` already returns `ai_summary` plus
+`ai_summary_stale` (`api/trips.py:286`), with the consent gate re-checked on
+read. Render the stored paragraph from the GET, and `POST /ai-summary` only when
+`ai_summary_stale` is true. That is one fewer write-shaped call than the web page
+makes, and it means an offline cached `TripResponse` carries the paragraph with
+no extra plumbing.
 
 **`chain_status` on the list row.** Tempting, and wrong — see rule 1. The row
 carries the binding-leg chip (leg label + that *leg's* badge + `days_out`),
@@ -305,6 +344,9 @@ Pure-logic (`flyfun-weatherTests`, CI-gated):
 - Badge selection per `grade_kind` — in particular that `unavailable` and
   `needs_briefing` produce different labels, and that an `outlook` leg never
   produces a traffic light.
+- Cache calendar-staleness: a cached `TripResponse` written on an earlier UTC
+  day, or before a leg's `departure_time` passed, suppresses the headline while
+  still rendering the timeline.
 
 XCUI (`flyfun-weatherUITests`, **not** CI-gated — run
 `-only-testing:flyfun-weatherUITests` locally before merging): list → trip row →
