@@ -466,7 +466,11 @@ flight card (`TripBadge`). The native trip UI (#607) is built to
 [`plans/ios-trips.md`](plans/ios-trips.md) M1 + M2: a trip is a header row with
 the binding chip followed by its remaining legs as plain sibling rows (never a
 `DisclosureGroup` — `List(selection:)` drives the iPad detail pane), and a trip
-screen with a vertical timeline behind the header. It reads the same server
+screen with a vertical timeline behind the header. One pass across Future and
+Recent places the header at the trip's earliest remaining leg and gathers all its
+remaining legs beneath in chain order, so a trip is drawn once and never split by
+an unrelated flight. The header carries a faint accent wash and the legs an
+accent rail — the accent, never a grade colour. It reads the same server
 answers as the web — binding leg, headline, leg state (`monitoring` is not
 remaining), `finished_at` — and re-derives none of them. Membership editing
 (M3) is not built yet.

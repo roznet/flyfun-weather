@@ -237,6 +237,65 @@ struct TripGroupingTests {
         #expect(Set(ids).count == ids.count)
     }
 
+    /// Emitting each leg at its own list position let an unrelated flight dated
+    /// between two legs split the trip, and a furthest-first sort ran the chain
+    /// backwards. The legs are gathered under the header in chain order instead.
+    @Test("Legs are gathered under the header in chain order, whatever the sort")
+    func legsGatheredInChainOrder() {
+        let trip = TripFixture.trip(legs: [
+            TripFixture.leg(id: "fri", departure: "2099-08-07T08:00:00Z"),
+            TripFixture.leg(id: "sun", departure: "2099-08-09T14:00:00Z"),
+        ])
+        // Furthest-first, with an unrelated Saturday flight between the legs.
+        let flights = [
+            TripFixture.flight(id: "sun", departure: "2099-08-09T14:00:00Z", trip: TripFixture.ref(position: 2)),
+            TripFixture.flight(id: "sat", departure: "2099-08-08T10:00:00Z"),
+            TripFixture.flight(id: "fri", departure: "2099-08-07T08:00:00Z", trip: TripFixture.ref(position: 1)),
+        ]
+        let ids = TripGrouping.rows(for: flights, trips: [trip]).map(\.id)
+        #expect(ids == ["flight:sat", "trip:trip-1", "trip:trip-1:leg:fri", "trip:trip-1:leg:sun"])
+    }
+
+    /// The per-section call pattern the list actually uses. A trip with remaining
+    /// legs in both Future and Recent (a trip document older than the flight
+    /// list) must draw one header — in the section of its earliest leg — not one
+    /// per section.
+    @Test("A trip straddling two sections draws exactly one header")
+    func straddleAcrossSectionsDrawsOneHeader() {
+        let trip = TripFixture.trip(legs: [
+            TripFixture.leg(id: "out", departure: "2099-08-07T08:00:00Z"),
+            TripFixture.leg(id: "back", departure: "2099-08-09T14:00:00Z"),
+        ])
+        let future = [TripFixture.flight(id: "back", trip: TripFixture.ref(position: 2))]
+        let recent = [TripFixture.flight(id: "out", trip: TripFixture.ref(position: 1))]
+        let sections = TripGrouping.sectionRows(for: [future, recent], trips: [trip])
+
+        let headers = sections.joined().filter { if case .tripHeader = $0 { true } else { false } }
+        #expect(headers.count == 1)
+        // Future held only a leg now drawn under Recent's header, so it is empty
+        // and the list skips it.
+        #expect(sections[0].isEmpty)
+        #expect(sections[1].map(\.id) == ["trip:trip-1", "trip:trip-1:leg:out", "trip:trip-1:leg:back"])
+    }
+
+    @Test("The list's grouped rows leave Past out and dedupe across sections")
+    func groupedRowsSkipPast() {
+        let trip = TripFixture.trip(legs: [TripFixture.leg(id: "a"), TripFixture.leg(id: "b")])
+        let groups = [
+            FlightListView.FlightGroup(title: "Future", flights: [
+                TripFixture.flight(id: "b", trip: TripFixture.ref(position: 2)),
+            ]),
+            FlightListView.FlightGroup(title: "Recent", flights: [
+                TripFixture.flight(id: "a", trip: TripFixture.ref(position: 1)),
+            ]),
+            FlightListView.FlightGroup(title: "Past", flights: [TripFixture.flight(id: "old")]),
+        ]
+        let rows = FlightListView.groupedRows(groups, trips: [trip])
+        #expect(rows["Past"] == nil)
+        #expect(rows["Future"]?.isEmpty == true)
+        #expect(rows["Recent"]?.count == 3)
+    }
+
     /// The count comes from the server's totals, so it stays honest once the
     /// header holds fewer legs than the trip has.
     @Test("Legs-ahead label counts remaining against the server's total")
@@ -614,5 +673,57 @@ struct TripRunMessageTests {
         """
         let decoded = try JSONDecoder.weatherBrief.decode(TripRefreshStatus.self, from: Data(json.utf8))
         #expect(decoded.finishedAt == "2026-09-11T10:00:00+00:00")
+    }
+}
+
+// MARK: - Trip screen closes when the trip is gone
+
+/// Removing a trip's last leg makes the server prune the empty trip (a 204), so
+/// the follow-up GET 404s. The screen must close rather than keep a trip that no
+/// longer exists on screen behind a "couldn't refresh" alert.
+@Suite("Trip screen when the trip is gone")
+@MainActor
+struct TripDetailGoneTests {
+
+    /// A loaded one-leg trip. The stored paragraph is present and fresh so the
+    /// load never reaches the AI-summary POST.
+    private func loadedModel() async -> (TripDetailViewModel, MockBriefingRepository) {
+        let repo = MockBriefingRepository()
+        repo.tripResult = .success(TripFixture.trip(legs: [TripFixture.leg(id: "a")], aiSummary: "Stored."))
+        let model = TripDetailViewModel(tripId: "trip-1", repository: repo)
+        await model.load()
+        return (model, repo)
+    }
+
+    @Test("Removing the last leg closes the screen")
+    func removingLastLegCloses() async {
+        let (model, repo) = await loadedModel()
+        #expect(model.trip != nil)
+        repo.tripResult = .failure(APIError.notFound)
+
+        await model.removeLeg(flightId: "a")
+
+        #expect(model.isGone)
+        #expect(model.actionError == nil)
+    }
+
+    @Test("Deleting the trip closes the screen")
+    func deletingCloses() async {
+        let (model, _) = await loadedModel()
+        await model.deleteTrip()
+        #expect(model.isGone)
+    }
+
+    /// A transient failure is not a deletion: keep the trip on screen and say so.
+    @Test("A failed reload keeps the trip and reports it")
+    func transientFailureKeepsTrip() async {
+        let (model, repo) = await loadedModel()
+        repo.tripResult = .failure(APIError.serverError(500, nil))
+
+        await model.load()
+
+        #expect(!model.isGone)
+        #expect(model.trip != nil)
+        #expect(model.actionError != nil)
     }
 }

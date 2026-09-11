@@ -34,63 +34,92 @@ enum FlightListRow: Identifiable, Equatable {
 }
 
 enum TripGrouping {
-    /// Expand one section's flights into rows, emitting each trip once at the
-    /// position of its earliest member **in this section**.
+    /// Rows for a single list of flights — ``sectionRows(for:trips:)`` over one
+    /// section.
+    static func rows(
+        for flights: [FlightResponse],
+        trips: [TripResponse]
+    ) -> [FlightListRow] {
+        sectionRows(for: [flights], trips: trips)[0]
+    }
+
+    /// Expand the list's sections into rows in **one pass**, so each trip is drawn
+    /// exactly once: a header, then all of its remaining legs.
     ///
-    /// Three rules, each load-bearing:
+    /// Four rules, each load-bearing:
     ///
-    /// 1. **Group before sectioning, emit at the first member.** This mirrors the
-    ///    web's placement rule and means a trip appears in the section its
-    ///    earliest un-flown leg belongs to, rather than needing a rendering
-    ///    special case for a trip that straddles Future and Recent.
-    /// 2. **Emit each trip at most once per call**, so a straddling trip whose
-    ///    later legs also appear in this section doesn't draw two headers.
-    /// 3. **Only *remaining* legs go under the header.** A flown leg stays an
+    /// 1. **One pass over every grouping section, never one call per section.**
+    ///    A per-section pass can only dedupe within its section, so a trip with
+    ///    remaining legs in both Future and Recent drew two headers. Both
+    ///    boundaries are "has the flight ended", so on fresh data they agree —
+    ///    but the flights and the trips are fetched separately, and an offline
+    ///    trip document can be older than the flight list, so they can disagree.
+    /// 2. **The header sits at the trip's earliest remaining leg**, the web's
+    ///    placement rule: a trip appears in the section of its earliest un-flown
+    ///    leg, and at that leg's position within it.
+    /// 3. **The legs are gathered under the header in chain order**, whatever the
+    ///    list's sort and wherever else they would fall. Emitting each leg at its
+    ///    own list position let an unrelated flight dated between two legs split
+    ///    the group, and ran the chain backwards under a furthest-first sort.
+    /// 4. **Only *remaining* legs go under the header.** A flown leg stays an
     ///    ordinary row with its trip badge — which is both what bounds the list's
     ///    length and the shrinking scope made visible: the flown leg is precisely
-    ///    the one that stopped mattering. It also keeps the Past section honest,
-    ///    since Past is server-paginated and a leg pulled into a header could
-    ///    otherwise vanish or duplicate depending on which page is loaded.
+    ///    the one that stopped mattering. Past is not passed in at all: it is
+    ///    server-paginated, so a leg pulled into a header could vanish or
+    ///    duplicate depending on which page is loaded.
+    ///
+    /// A section can come back empty when its only flights were gathered under a
+    /// header elsewhere; the caller should then skip the section.
     ///
     /// A flight whose `trip` names a trip absent from `trips` (an older server, a
     /// trip the list hasn't fetched, or an offline load with no cached trip
     /// document) renders as a plain flight row. Degrading to today's layout is
     /// deliberate: a header with no summary behind it could show no binding chip,
     /// which is the only reason the header exists.
-    static func rows(
-        for flights: [FlightResponse],
+    static func sectionRows(
+        for sections: [[FlightResponse]],
         trips: [TripResponse]
-    ) -> [FlightListRow] {
-        guard !trips.isEmpty else { return flights.map { .flight($0) } }
+    ) -> [[FlightListRow]] {
+        guard !trips.isEmpty else { return sections.map { $0.map { .flight($0) } } }
         let tripsById = Dictionary(trips.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        // Which legs the *server* says are still remaining. Never re-derived from
-        // `departureTime` here: leg state is the server's call (clock time,
-        // refined by a debrief), and a second definition of "flown" is exactly
-        // the drift the single binding-leg rule exists to prevent.
-        var remainingByTrip: [String: Set<String>] = [:]
+        var present: [String: FlightResponse] = [:]
+        for flight in sections.joined() { present[flight.id] = flight }
+
+        // Each trip's group: its remaining legs that are in these sections, in
+        // the server's chain order. "Remaining" is the server's call (clock time,
+        // refined by a debrief) and never re-derived from `departureTime` here —
+        // a second definition of "flown" is exactly the drift the single
+        // binding-leg rule exists to prevent.
+        var groupByTrip: [String: [FlightResponse]] = [:]
         for trip in trips {
-            remainingByTrip[trip.id] = Set(trip.summary.remainingLegsList.map(\.flightId))
+            groupByTrip[trip.id] = trip.summary.remainingLegsList.compactMap { leg in
+                guard let flight = present[leg.flightId], flight.trip?.id == trip.id else { return nil }
+                return flight
+            }
         }
 
         var emitted: Set<String> = []
-        var rows: [FlightListRow] = []
-        for flight in flights {
-            guard let ref = flight.trip, let trip = tripsById[ref.id] else {
-                rows.append(.flight(flight))
-                continue
-            }
-            let remaining = remainingByTrip[trip.id] ?? []
-            guard remaining.contains(flight.id) else {
-                // A flown/cancelled member: its own row, badge intact.
-                rows.append(.flight(flight))
-                continue
-            }
-            if emitted.insert(trip.id).inserted {
+        return sections.map { flights in
+            var rows: [FlightListRow] = []
+            for flight in flights {
+                guard let ref = flight.trip,
+                      let trip = tripsById[ref.id],
+                      let group = groupByTrip[ref.id],
+                      group.contains(where: { $0.id == flight.id })
+                else {
+                    // Ungrouped, or a flown/cancelled member: its own row.
+                    rows.append(.flight(flight))
+                    continue
+                }
+                // Any other member is drawn under the header, at the anchor.
+                guard flight.id == group.first?.id, emitted.insert(trip.id).inserted else {
+                    continue
+                }
                 rows.append(.tripHeader(trip))
+                rows.append(contentsOf: group.map { .tripLeg($0, tripId: trip.id) })
             }
-            rows.append(.tripLeg(flight, tripId: trip.id))
+            return rows
         }
-        return rows
     }
 
     /// "2 of 3 legs ahead" for a trip header.
