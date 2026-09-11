@@ -109,6 +109,7 @@ struct PendingNavigationStore {
         case .briefing(let id): "briefing:\(id)"
         case .forecastMap(let dl): "forecastMap:" + encodeMap(dl)
         case .share(let code): "share:\(code)"
+        case .trip(let id): "trip:\(id)"
         }
     }
 
@@ -124,6 +125,10 @@ struct PendingNavigationStore {
         if raw.hasPrefix("share:") {
             let code = String(raw.dropFirst("share:".count))
             return code.isEmpty ? nil : .share(code: code)
+        }
+        if raw.hasPrefix("trip:") {
+            let id = String(raw.dropFirst("trip:".count))
+            return id.isEmpty ? nil : .trip(id: id)
         }
         return nil
     }

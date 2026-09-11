@@ -40,7 +40,14 @@ enum TripLegState: String, Codable, Sendable {
 
     /// Whether this leg still has to work for the trip to happen. Only these can
     /// bind — which is why the AI-summary cache key includes the derived state.
-    var isRemaining: Bool { self == .remaining || self == .monitoring }
+    ///
+    /// `monitoring` is deliberately **not** remaining: it is the debrief value for
+    /// a flight created to watch the weather, never intended to fly, and the
+    /// server (`trips.py::_leg_state`) excludes it from both the binding-leg pick
+    /// and the `remaining_legs` count for the same reason as `cancelled`. Counting
+    /// it here would pull it under the trip header while the header's own
+    /// "n of m legs ahead" (the server's count) left it out.
+    var isRemaining: Bool { self == .remaining }
 }
 
 /// What kind of claim a leg carries. **Four non-gradeable states, not three** —
@@ -197,6 +204,39 @@ struct TripRefreshStatus: Codable, Sendable, Equatable {
     /// without it, a trip refresh that legitimately did almost nothing (every
     /// leg skipped for want of a new model run) reads as one that failed.
     var message: String = ""
+    /// When the last run closed (ISO, UTC); nil before any has. The server keeps
+    /// a finished run's `results`/`message` indefinitely, so this is what lets the
+    /// screen drop that readout once a leg has been refreshed on its own since.
+    var finishedAt: String? = nil
+
+    /// The run readout to show, or "" for none — a port of the web's
+    /// `helpers/trip-leg-refresh.ts::tripRunMessage`.
+    ///
+    /// Always while a run is live. After one, only until any leg has a pack newer
+    /// than the finish: a single-leg refresh since then makes the line describe a
+    /// run the legs have moved past (it would call a just-re-briefed leg "already
+    /// current"). No finish time means the age is unknown, so say nothing rather
+    /// than risk a stale claim.
+    func runMessage(legs: [TripLeg]) -> String {
+        guard !message.isEmpty else { return "" }
+        if active { return message }
+        guard let finished = finishedAt.flatMap(Self.parseDate) else { return "" }
+        let legMovedOn = legs.contains { leg in
+            guard let fetched = leg.fetchTimestamp.flatMap(Self.parseDate) else { return false }
+            return fetched > finished
+        }
+        return legMovedOn ? "" : message
+    }
+
+    /// Server timestamps come from Python `isoformat()`, which carries fractional
+    /// seconds whenever the microseconds are non-zero — try both shapes.
+    private static func parseDate(_ raw: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        if let date = plain.date(from: raw) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: raw)
+    }
 }
 
 /// A trip container plus its derived summary.
@@ -410,6 +450,7 @@ extension TripSummary {
 extension TripRefreshStatus {
     enum CodingKeys: String, CodingKey {
         case tripId, refreshId, active, total, completed, currentFlightId, results, message
+        case finishedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -422,6 +463,7 @@ extension TripRefreshStatus {
         currentFlightId = try c.decodeIfPresent(String.self, forKey: .currentFlightId)
         results = try c.decodeIfPresent([String: String].self, forKey: .results) ?? [:]
         message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
+        finishedAt = try c.decodeIfPresent(String.self, forKey: .finishedAt)
     }
 }
 
