@@ -33,6 +33,12 @@ final class TripDetailViewModel {
     /// turned AI off on one leg should see that the trip inherited it, not an
     /// unexplained missing section.
     private(set) var aiUnavailableReason: String?
+    /// The trip no longer exists server-side: deleted from this screen, or
+    /// pruned when its last leg was removed (the server answers that removal with
+    /// a 204 and the follow-up GET with a 404). The screen closes on it — keeping
+    /// a loaded trip on screen behind a "couldn't refresh" alert would show a
+    /// trip that is not there.
+    private(set) var isGone = false
 
     let tripId: String
     private let repository: any TripRepository
@@ -86,6 +92,11 @@ final class TripDetailViewModel {
             if trip.aiSummary?.isEmpty == false { aiUnavailableReason = nil }
             if trip.refresh?.active == true { startPolling() }
             await ensureAiSummary(for: trip)
+        } catch APIError.notFound {
+            // Not a failed refresh: the trip is gone. See `isGone`.
+            Self.logger.info("Trip \(self.tripId) no longer exists")
+            stopPolling()
+            isGone = true
         } catch {
             Self.logger.warning("Trip \(self.tripId) load failed: \(error)")
             if case .loaded = state {
@@ -239,10 +250,14 @@ final class TripDetailViewModel {
         }
     }
 
-    /// Delete the trip container. Returns true when the caller should dismiss.
+    /// Delete the trip container. On success `isGone` is set, which closes the
+    /// screen; the return value says the same for callers that want it.
+    @discardableResult
     func deleteTrip() async -> Bool {
         do {
             try await repository.deleteTrip(tripId: tripId)
+            stopPolling()
+            isGone = true
             return true
         } catch {
             actionError = Self.message(for: error, fallback: "Couldn’t delete this trip.")

@@ -525,3 +525,29 @@ message indefinitely, so after a single-leg refresh it called a re-briefed leg
 "already current". `TripRefreshStatus.runMessage(legs:)` ports the web's
 `tripRunMessage` — shown while a run is live, then only until any leg has a pack
 newer than the finish.
+
+**Grouping is one pass across sections, and gathers the legs.** The first cut
+called `TripGrouping.rows` once per section, so its "one header per trip" guard
+only held within a section, and it drew each leg at its own list position. Two
+failures followed. A trip whose trip document is older than the flight list (the
+two are fetched separately; the offline document can be days old) could have
+remaining legs in both Future and Recent, and drew two headers. And an unrelated
+flight dated between two legs split the group, while the default furthest-first
+sort ran the chain backwards under its header. `TripGrouping.sectionRows` takes
+Future and Recent together, puts the header at the trip's earliest remaining leg
+(the web's placement rule), and draws all its remaining legs beneath in chain
+order. A section left empty by that is skipped.
+
+**A trip that disappears closes its screen.** Removing the last leg makes the
+server prune the empty trip (204), so the reload 404s; the screen used to keep
+the dead trip on show behind a "couldn't refresh" alert. A 404 now sets
+`TripDetailViewModel.isGone`, as does a successful delete, and the screen calls
+its container's `onClose` — which clears the selection rather than calling
+`dismiss()`, a no-op in the iPad detail pane.
+
+**The trip header is styled as a group title.** On device the header read as one
+more flight. It now carries a faint accent wash and an accent-coloured trip icon,
+and each member leg a thin accent rail (`Theme.tripRail`, pre-blended per mode so
+it holds up on dark cells). The accent, never a grade colour — a green/amber/red
+wash would be the trip-level traffic light the design forbids. Both backgrounds
+give way while the row is selected so the iPad sidebar highlight still shows.

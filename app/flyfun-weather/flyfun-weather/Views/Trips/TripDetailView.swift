@@ -19,6 +19,11 @@ struct TripDetailView: View {
     /// Called when a leg is tapped, so the container decides how to present the
     /// briefing (an iPad detail swap, or a push on iPhone).
     var onOpenLeg: ((String) -> Void)?
+    /// Called when the trip no longer exists (deleted, or pruned with its last
+    /// leg), so the container can close the screen the right way for its
+    /// presentation — `dismiss()` does nothing in an iPad detail pane. Falls back
+    /// to `dismiss()` when nil.
+    var onClose: (() -> Void)?
 
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
@@ -28,7 +33,13 @@ struct TripDetailView: View {
     @State private var showRename = false
     @State private var legToRemove: TripLeg?
 
+    // Split into `screen` + `alerts(on:)`: as one modifier chain the body hit the
+    // type checker's time limit.
     var body: some View {
+        alerts(on: screen)
+    }
+
+    private var screen: some View {
         Group {
             if let viewModel {
                 LoadingStateView(state: viewModel.state, retryAction: viewModel.load) { trip in
@@ -55,13 +66,21 @@ struct TripDetailView: View {
             await model.pollActiveLegRefreshes()
         }
         .onDisappear { viewModel?.stopPolling() }
+        .onChange(of: viewModel?.isGone ?? false) { _, gone in
+            guard gone else { return }
+            if let onClose { onClose() } else { dismiss() }
+        }
         .refreshable { await viewModel?.load() }
+    }
+
+    private func alerts(on content: some View) -> some View {
+        content
         .alert("Delete Trip?", isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                Task {
-                    if await viewModel?.deleteTrip() == true { dismiss() }
-                }
+                // Closing is driven by `isGone`, the same path as a trip pruned
+                // with its last leg.
+                Task { await viewModel?.deleteTrip() }
             }
             .accessibilityIdentifier("confirmDeleteTripButton")
         } message: {

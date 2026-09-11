@@ -106,13 +106,14 @@ struct FlightListView: View {
                             // Utility logbook (§4.4): Future · Recent · Past.
                             // Past is collapsible (collapsed by default).
                             List(selection: $selection) {
-                                ForEach(
-                                    Self.groupedFlights(
-                                        flights,
-                                        order: appState.userPreferences.preferences.flightOrderPreference
-                                    ),
-                                    id: \.title
-                                ) { group in
+                                let groups = Self.groupedFlights(
+                                    flights,
+                                    order: appState.userPreferences.preferences.flightOrderPreference
+                                )
+                                // Trip rows for Future + Recent in one pass, so a
+                                // trip straddling them draws one header.
+                                let rowsByTitle = Self.groupedRows(groups, trips: viewModel.trips)
+                                ForEach(groups, id: \.title) { group in
                                     if group.title == "Past" {
                                         Section {
                                             if pastExpanded {
@@ -141,14 +142,11 @@ struct FlightListView: View {
                                             }
                                             .buttonStyle(.plain)
                                         }
-                                    } else {
+                                    } else if let rows = rowsByTitle[group.title], !rows.isEmpty {
+                                        // Empty when every flight in it was drawn
+                                        // under a trip header in another section.
                                         Section(group.title) {
-                                            ForEach(
-                                                TripGrouping.rows(
-                                                    for: group.flights,
-                                                    trips: viewModel.trips
-                                                )
-                                            ) { row in
+                                            ForEach(rows) { row in
                                                 listRow(row, viewModel: viewModel)
                                             }
                                         }
@@ -387,12 +385,23 @@ struct FlightListView: View {
                 // does. Tapping one of its legs swaps the detail to that leg's
                 // briefing rather than pushing, so the sidebar stays the spine.
                 NavigationStack {
-                    TripDetailView(tripId: tripId) { flightId in
-                        if case .loaded(let flights) = viewModel?.state,
-                           let match = flights.first(where: { $0.id == flightId }) {
-                            selection = .flight(match)
+                    TripDetailView(
+                        tripId: tripId,
+                        onOpenLeg: { flightId in
+                            if case .loaded(let flights) = viewModel?.state,
+                               let match = flights.first(where: { $0.id == flightId }) {
+                                selection = .flight(match)
+                            }
+                        },
+                        onClose: {
+                            // The trip is gone — deleted, or pruned with its last
+                            // leg. Clearing the selection pops it on iPhone and
+                            // empties the iPad detail pane, where `dismiss()` does
+                            // nothing; the reload drops its header from the list.
+                            selection = nil
+                            Task { await viewModel?.loadFlights() }
                         }
-                    }
+                    )
                 }
                 .id(tripId)
             case .forecastMap:
@@ -946,6 +955,18 @@ struct FlightListView: View {
     // MARK: - Logbook grouping (Future · Recent · Past, §4.4)
 
     struct FlightGroup { let title: String; let flights: [FlightResponse] }
+
+    /// Trip-grouped rows for every section except Past, keyed by section title.
+    /// One `TripGrouping.sectionRows` pass across them all — see its rules. Past
+    /// stays flat (server-paginated) and is not included.
+    static func groupedRows(
+        _ groups: [FlightGroup],
+        trips: [TripResponse]
+    ) -> [String: [FlightListRow]] {
+        let grouping = groups.filter { $0.title != "Past" }
+        let rows = TripGrouping.sectionRows(for: grouping.map(\.flights), trips: trips)
+        return Dictionary(zip(grouping.map(\.title), rows), uniquingKeysWith: { first, _ in first })
+    }
 
     /// Group flights into Future · Recent · Past. Recent and Past are always
     /// most-recent-first; Future follows the user's `flight_order` preference
