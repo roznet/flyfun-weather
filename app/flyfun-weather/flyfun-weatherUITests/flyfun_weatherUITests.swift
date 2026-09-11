@@ -168,6 +168,41 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
+    /// Journey — a trip in the flight list (#607): one header row for the chain,
+    /// its remaining leg beneath it, the flown leg as its own row; tapping the
+    /// header opens the trip screen with the binding-leg callout and timeline.
+    /// Backed by `FixtureTripData` (a flown outbound, an AMBER binding return).
+    @MainActor
+    func testTripHeaderOpensTripScreen() throws {
+        let app = launchMockApp()
+        revealFlightList(app)
+
+        let header = app.descendants(matching: .any)["tripHeaderRow-fixture-trip-1"].firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: Self.uiTimeout),
+                      "the fixture trip should render a header row")
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-trip-back"].exists,
+                      "the remaining return leg should be listed")
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-trip-out"].exists,
+                      "the flown outbound should still be listed, as its own row")
+
+        let list = XCTAttachment(screenshot: app.screenshot())
+        list.name = "Trip-FlightList"
+        list.lifetime = .keepAlways
+        add(list)
+
+        header.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["tripBindingCallout"].firstMatch
+                        .waitForExistence(timeout: Self.uiTimeout),
+                      "the trip screen should lead with the binding-leg callout")
+        XCTAssertTrue(app.descendants(matching: .any)["tripTimeline"].firstMatch.exists,
+                      "the trip screen should draw the leg timeline")
+
+        let detail = XCTAttachment(screenshot: app.screenshot())
+        detail.name = "Trip-Detail"
+        detail.lifetime = .keepAlways
+        add(detail)
+    }
+
     /// Journey 2 — add-flight form: submit is gated until ≥2 waypoints, then a
     /// create round-trips and the new flight appears in the list.
     @MainActor
