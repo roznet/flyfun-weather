@@ -293,6 +293,8 @@ def generate(summary: TripSummary) -> tuple[TripParagraph | None, dict]:
         usage = getattr(raw_msg, "usage_metadata", None) or {}
         details = usage.get("input_token_details") or {}
         tokens = {
+            # The model that actually ran — what the charge is priced at.
+            "model": config.trip.model,
             "input_tokens": usage.get("input_tokens") or 0,
             "output_tokens": usage.get("output_tokens") or 0,
             "cache_read_tokens": details.get("cache_read") or 0,
@@ -310,27 +312,30 @@ def generate(summary: TripSummary) -> tuple[TripParagraph | None, dict]:
 
 
 def _charge(db: Session, user_id: str, trip_id: str, text: str, usage: dict) -> None:
-    """Put the (tiny) cost through the ledger.
+    """Put the (tiny) cost through the ledger, at the trip model's own rate.
 
-    A fraction of a cent per trip — three orders of magnitude below a briefing —
-    and it still goes through ``compute_cost``, because an invisible cost line is
-    how a small cost becomes an unexplained one. Never blocks.
+    A fraction of a cent per trip. It is priced by ``compute_call_cost``, *not*
+    the per-briefing ``compute_cost``: that one adds a droplet/subscription
+    share and margin to every call, which billed each Haiku paragraph at ~$0.62
+    — more than the briefing it summarises. Still recorded, because an invisible
+    cost line is how a small cost becomes an unexplained one; a call that failed
+    before returning any usage records nothing. Never blocks.
     """
+    usage = usage or {}
+    model = usage.get("model")
+    if not model:
+        return
     try:
         from flyfun_common.costs import record_cost
-        from weatherbrief.api.credits import SERVICE, get_active_cost_config
-        from weatherbrief.costs import compute_cost, config_from_row
+        from weatherbrief.api.credits import SERVICE
+        from weatherbrief.costs import compute_call_cost
 
-        config_row = get_active_cost_config(db)
-        if not config_row:
-            return
-        config, config_id = config_from_row(config_row)
-        breakdown = compute_cost(
-            input_tokens=usage.get("input_tokens") or 0,
-            output_tokens=usage.get("output_tokens") or 0,
-            result_size_bytes=len(text.encode()),
-            config=config,
-            config_id=config_id,
+        input_tokens = usage.get("input_tokens") or 0
+        output_tokens = usage.get("output_tokens") or 0
+        cost = compute_call_cost(
+            model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             cache_read_tokens=usage.get("cache_read_tokens") or 0,
             cache_write_tokens=usage.get("cache_write_tokens") or 0,
         )
@@ -339,9 +344,14 @@ def _charge(db: Session, user_id: str, trip_id: str, text: str, usage: dict) -> 
             user_id,
             service=SERVICE,
             action="trip_summary",
-            cost=breakdown.total_usd,
+            cost=cost,
             category="trip_summary",
-            description=f"Trip summary (${breakdown.total_usd:.4f})",
+            description=f"Trip summary (${cost:.4f})",
+            metadata={
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
             reference_id=trip_id,
         )
     except Exception:

@@ -410,6 +410,17 @@ below the active base — and caps "your own usage" at a year, spilling the
 overflow into pilots: "covers ~1 year of your own usage + ~N other pilots"
 (`_OWN_USAGE_CAP_MONTHS`).
 
+#### Side calls are not briefings — `compute_call_cost()`
+
+`compute_cost` is a *briefing* price: the rate card's single token rate (the
+digest model's) plus the amortised fixed share and margin. An LLM call that is
+not a briefing must not go through it — the Haiku trip paragraph did, and was
+billed ~$0.62 a time, 98% of it droplet/subscription share and margin, for a
+call that costs a fraction of a cent. Such calls use `compute_call_cost`:
+tokens only, at the model's own list rate from `MODEL_TOKEN_RATES_PER_1K`
+(an unpriced model raises, like an unpriced cache TTL), with the model and
+token counts in the ledger row's `metadata`.
+
 #### The ledger is not the true cost — `usage_footprint()`
 
 `cost_ledger.cost` is what was *charged*, not what the usage cost to run.

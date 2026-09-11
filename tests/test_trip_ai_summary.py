@@ -45,6 +45,53 @@ def summary():
     )
 
 
+class TestCharge:
+    """The paragraph is billed at the trip model's own token rate.
+
+    It was routed through the per-briefing ``compute_cost``, which adds a
+    droplet/subscription share and margin to every call — ~$0.62 a paragraph,
+    more than the briefing it summarises.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch) -> list[dict]:
+        import flyfun_common.costs as costs_mod
+
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            costs_mod, "record_cost", lambda _db, _user_id, **kw: calls.append(kw),
+        )
+        return calls
+
+    def test_the_trip_model_is_priced(self):
+        # Structural: an unpriced trip model would make every charge raise,
+        # which ``_charge`` logs and swallows — the cost would go invisible.
+        from weatherbrief.costs import token_rates_for
+        from weatherbrief.digest.llm_config import load_digest_config
+
+        token_rates_for(load_digest_config().trip.model)
+
+    def test_charged_at_token_cost_only(self, monkeypatch):
+        from weatherbrief.digest.trip_summary import _charge
+
+        calls = self._capture(monkeypatch)
+        usage = {"model": "claude-haiku-4-5-20251001", "input_tokens": 1500, "output_tokens": 200}
+        _charge(None, "u", "t1", "text", usage)
+
+        assert len(calls) == 1
+        assert calls[0]["action"] == "trip_summary"
+        # 1.5k in at $0.001/1k + 0.2k out at $0.005/1k.
+        assert calls[0]["cost"] == pytest.approx(0.0025)
+        assert calls[0]["metadata"] == usage
+
+    def test_a_call_that_returned_no_usage_records_nothing(self, monkeypatch):
+        from weatherbrief.digest.trip_summary import _charge
+
+        calls = self._capture(monkeypatch)
+        _charge(None, "u", "t1", "", {})
+        assert calls == []
+
+
 class TestPromptPayload:
     def test_context_carries_only_already_summarized_state(self, summary):
         context = build_context(summary)

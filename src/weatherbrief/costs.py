@@ -175,6 +175,63 @@ def compute_cost(
     )
 
 
+# --- Side calls, priced at their own model's rate ----------------------------
+#
+# USD per 1k tokens ``(input, output)``, Anthropic first-party list price.
+# ``CostConfig`` carries ONE flat token rate (the digest model's) plus the
+# per-briefing fixed-cost shares, so a side call routed through ``compute_cost``
+# was billed like a briefing: the Haiku trip paragraph came out at ~$0.62, 98%
+# of it amortised droplet/subscription share and margin, for a call that costs
+# a fraction of a cent. A model must be priced here before anything bills it.
+MODEL_TOKEN_RATES_PER_1K: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5": (0.001, 0.005),
+}
+
+
+def token_rates_for(model: str) -> tuple[float, float]:
+    """``(input, output)`` USD per 1k tokens for a model id.
+
+    Accepts a dated snapshot (``claude-haiku-4-5-20251001``) and a
+    ``provider:`` prefix. Raises ``ValueError`` for an unpriced model — the same
+    stance as ``cache_write_multiplier_for``: price it here, never guess.
+    """
+    name = model.split(":", 1)[-1]
+    for family, rates in MODEL_TOKEN_RATES_PER_1K.items():
+        if name == family or name.startswith(family + "-"):
+            return rates
+    raise ValueError(
+        f"Unpriced model {model!r}; known: {', '.join(sorted(MODEL_TOKEN_RATES_PER_1K))}"
+    )
+
+
+def compute_call_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_ttl: str = "5m",
+) -> float:
+    """Token cost in USD of one LLM call that is not a briefing.
+
+    Tokens only — no infra or subscription share and no margin. Those amortise
+    the fixed costs over *briefings* (``compute_cost``); a side call adds none
+    of them, and charging them per call is what billed a sub-cent paragraph at
+    more than the briefing it summarises. Cache tokens are subsets of
+    ``input_tokens``, re-priced at their multipliers exactly as in
+    ``compute_cost``.
+    """
+    in_rate, out_rate = token_rates_for(model)
+    cached = min(cache_read_tokens + cache_write_tokens, input_tokens)
+    cost = (
+        ((input_tokens - cached) / 1000) * in_rate
+        + (cache_read_tokens / 1000) * in_rate * CACHE_READ_MULTIPLIER
+        + (cache_write_tokens / 1000) * in_rate * cache_write_multiplier_for(cache_ttl)
+        + (output_tokens / 1000) * out_rate
+    )
+    return round(cost, 6)
+
+
 _DAYS_PER_MONTH = 30.0
 
 
