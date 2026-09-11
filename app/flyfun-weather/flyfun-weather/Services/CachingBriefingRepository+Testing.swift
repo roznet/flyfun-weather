@@ -11,8 +11,12 @@ extension CachingBriefingRepository {
     /// these tests goes through `online` and `cache` only and never touches the
     /// client, so it stays a placeholder. Lives in the app module (guarded by
     /// `DEBUG`) because the test target doesn't link `FlyFunCommon`.
+    /// The double must conform to `TripRepository` too (#607) — the caching
+    /// layer composes both onto one stored `online`. `StubTripRepository` in the
+    /// test target is the minimal conformance for a test that exercises only the
+    /// flight paths.
     static func makeForTesting(
-        online: any BriefingRepository,
+        online: any BriefingRepository & TripRepository,
         cache: BriefingCacheStore
     ) -> CachingBriefingRepository {
         let store = InMemoryBearerTokenStore()

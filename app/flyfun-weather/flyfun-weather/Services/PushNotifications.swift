@@ -24,9 +24,22 @@ enum PushSupport {
         token.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The deep-link target carried by a briefing push, if any. The server sets
-    /// a top-level `flight_id`; a silent badge-sync push carries none.
+    /// The deep-link target carried by a push, if any.
+    ///
+    /// Two alert shapes, and **`trip_id` is checked first**:
+    ///
+    /// * A **trip** refresh sends one coalesced alert for the whole chain
+    ///   (`send_trip_push`) carrying `trip_id` and *no* `flight_id` — deliberate,
+    ///   because the chain rather than any one leg is the unit of attention. A
+    ///   tap must land on the trip, not on a leg picked by the client.
+    /// * A per-flight briefing refresh carries `flight_id`.
+    ///
+    /// A silent badge-sync push carries neither. The trip check goes first so a
+    /// future payload that carried both could not be mis-routed to a leg.
     static func pendingNavigation(from userInfo: [AnyHashable: Any]) -> PendingNavigation? {
+        if let tripId = userInfo["trip_id"] as? String, !tripId.isEmpty {
+            return .trip(id: tripId)
+        }
         guard let flightId = userInfo["flight_id"] as? String, !flightId.isEmpty else {
             return nil
         }

@@ -1312,6 +1312,26 @@ final class AddFlightViewModel {
                 do {
                     try await repository.triggerRefresh(flightId: flightId)
                     return
+                } catch let error where TripRefreshConflict.matches(error: error) {
+                    // Also a 409, but a different situation and **not retryable**
+                    // (#607). This leg belongs to a trip refresh the server is
+                    // driving: the chain runs one leg at a time and each leg is a
+                    // full pipeline run, so it can hold the leg for many minutes —
+                    // far past the retry budget below, which is sized for a single
+                    // refresh clearing. Retrying would spend every attempt for
+                    // nothing and then log the misleading "still in progress".
+                    //
+                    // Stop instead. The trip driver re-runs the pipeline per leg
+                    // and reads the flight row fresh, so a chain that reaches this
+                    // leg after the edit committed picks up the new parameters by
+                    // itself. If it had already started on this leg, the edit is
+                    // not picked up — the pilot's own Refresh button (and the
+                    // params-hash gate) remain the backstop, exactly as they are
+                    // when this task gives up for any other reason.
+                    Self.logger.info(
+                        "Leg \(flightId) is claimed by a running trip refresh — not re-queueing"
+                    )
+                    return
                 } catch APIError.serverError(409, _) {
                     // A refresh was already running when the edit landed. It is
                     // computing the OLD parameters, so letting it stand would

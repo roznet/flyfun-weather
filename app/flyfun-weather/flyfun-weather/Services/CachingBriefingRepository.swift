@@ -20,7 +20,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     // Protocol type (not the concrete `OnlineBriefingRepository`) so the online
     // layer can be faulted with a test double — the seam ServiceTests flagged as
     // a follow-up. Production still injects `OnlineBriefingRepository`.
-    private let online: any BriefingRepository
+    // Composed with `TripRepository` (#607) rather than stored twice: the trip
+    // pass-throughs need the same object, and every call site already passes an
+    // `OnlineBriefingRepository`, which conforms to both.
+    private let online: any BriefingRepository & TripRepository
     let cache: BriefingCacheStore
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "CachingRepo")
@@ -37,7 +40,16 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// Whether the last `flights()` call was served from cache (offline).
     private(set) var isServingCachedFlights = false
 
-    init(client: APIClient, online: any BriefingRepository, cache: BriefingCacheStore) {
+    /// Whether the last `trips()` call was served from cache (offline). Separate
+    /// from `isServingCachedFlights` because the two can legitimately disagree:
+    /// a cold cache has flights but no trips document.
+    private(set) var isServingCachedTrips = false
+
+    init(
+        client: APIClient,
+        online: any BriefingRepository & TripRepository,
+        cache: BriefingCacheStore
+    ) {
         self.client = client
         self.online = online
         self.cache = cache
@@ -654,5 +666,78 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
             }
             throw error
         }
+    }
+}
+
+// MARK: - Trips (#602, iOS port #607)
+
+/// In this file, not `TripRepository.swift`, because `online` and
+/// `isServingCachedTrips` are `private` and Swift grants private access only to
+/// same-file extensions.
+extension CachingBriefingRepository: TripRepository {
+    /// The one trip call with an offline story. Everything else is a server
+    /// computation or a server write, where a silent cache hit would be worse
+    /// than an honest failure.
+    func trips() async throws -> [TripResponse] {
+        do {
+            let trips = try await online.trips()
+            isServingCachedTrips = false
+            if let data = try? JSONEncoder.weatherBrief.encode(
+                TripListCache(trips: trips, fetchedAt: Date())
+            ) {
+                try? await cache.writeMetadata(data, name: "trips")
+            }
+            return trips
+        } catch {
+            Self.logger.warning("Online trips() failed: \(error)")
+            guard let cached = await cachedTripList() else { throw error }
+            isServingCachedTrips = true
+            return cached.trips
+        }
+    }
+
+    /// The cached trip document, or nil when there isn't one. Disk-only (no
+    /// network). The flight list reads this for `fetchedAt` so it can decide
+    /// whether a cached headline is still honest — see
+    /// `TripListCache.isCalendarStale(now:)`.
+    func cachedTripList() async -> TripListCache? {
+        guard let data = await cache.readMetadata(name: "trips") else { return nil }
+        return try? JSONDecoder.weatherBrief.decode(TripListCache.self, from: data)
+    }
+
+    func trip(id: String) async throws -> TripResponse {
+        try await online.trip(id: id)
+    }
+
+    func createTrip(flightIds: [String], name: String?) async throws -> TripResponse {
+        try await online.createTrip(flightIds: flightIds, name: name)
+    }
+
+    func addTripLegs(tripId: String, flightIds: [String]) async throws -> TripResponse {
+        try await online.addTripLegs(tripId: tripId, flightIds: flightIds)
+    }
+
+    func removeTripLeg(tripId: String, flightId: String) async throws {
+        try await online.removeTripLeg(tripId: tripId, flightId: flightId)
+    }
+
+    func updateTrip(tripId: String, request: UpdateTripRequest) async throws -> TripResponse {
+        try await online.updateTrip(tripId: tripId, request: request)
+    }
+
+    func deleteTrip(tripId: String) async throws {
+        try await online.deleteTrip(tripId: tripId)
+    }
+
+    func refreshTrip(tripId: String) async throws -> TripRefreshStatus {
+        try await online.refreshTrip(tripId: tripId)
+    }
+
+    func tripRefreshStatus(tripId: String) async throws -> TripRefreshStatus {
+        try await online.tripRefreshStatus(tripId: tripId)
+    }
+
+    func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
+        try await online.tripAiSummary(tripId: tripId)
     }
 }

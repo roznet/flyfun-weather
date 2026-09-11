@@ -419,6 +419,14 @@ final class AppState {
             return .briefing(flightId: flight)
         case "/maps.html":
             return .forecastMap(mapDeepLink(from: comps.queryItems ?? []))
+        case "/trip.html":
+            // #607. Requires `/trip.html` in the domain's AASA `paths` — iOS
+            // caches that file per-install, so the Caddy change must be deployed
+            // *before* a build carrying this ships, or the link silently keeps
+            // opening Safari.
+            guard let trip = comps.queryItems?.first(where: { $0.name == "id" })?.value,
+                  !trip.isEmpty else { return nil }
+            return .trip(id: trip)
         default:
             // Short share link `/s/{code}` → preview-before-subscribe (#446). The
             // code is the single path component after `/s/`. Validate its shape
@@ -670,6 +678,17 @@ final class AppState {
     /// Typed accessor for cache operations (download/delete).
     var cachingRepository: CachingBriefingRepository? {
         repository as? CachingBriefingRepository
+    }
+
+    /// Trip data access (#607).
+    ///
+    /// A separate accessor rather than nine more methods on `BriefingRepository`
+    /// — see `TripRepository`. Both repositories that back `repository` in the
+    /// app conform (the caching one in production, the fixture one under
+    /// `FLYFUN_MOCK=1`), so this is a cast rather than a second stored property;
+    /// nil only when signed out, exactly like `repository`.
+    var tripRepository: (any TripRepository)? {
+        repository as? any TripRepository
     }
 
     /// Per-user offline PIREP queue: `<Documents>/PendingPireps/<scope>/pending_pireps.json`.

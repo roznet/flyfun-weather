@@ -16,10 +16,21 @@ enum PendingNavigation: Equatable, Sendable {
     /// Subscribe banner (#446). The flight isn't in `/api/flights` until the
     /// viewer subscribes, so the UI resolves the code via the by-share endpoint.
     case share(code: String)
+    /// Open a trip's screen by id (#607). Reached from the coalesced trip push —
+    /// which carries `trip_id` and deliberately no `flight_id`, because the chain
+    /// rather than one leg is the unit of attention — and from a `/trip.html?id=`
+    /// Universal Link.
+    case trip(id: String)
 
     /// The target flight id, when this navigation names one.
     var flightId: String? {
         if case .briefing(let id) = self { return id }
+        return nil
+    }
+
+    /// The target trip id, when this navigation names one.
+    var tripId: String? {
+        if case .trip(let id) = self { return id }
         return nil
     }
 }
