@@ -315,6 +315,22 @@ read. Render the stored paragraph from the GET, and `POST /ai-summary` only when
 makes, and it means an offline cached `TripResponse` carries the paragraph with
 no extra plumbing.
 
+**`/api/trips` fetch cadence — measure before deciding.** `list_trips` builds a
+full `TripResponse` per trip: a packs query, a debriefs query, and
+`legs_allow_ai`, which calls an **uncached** `load_profile_settings` per member
+leg (`api/profiles.py:421`). The web pays this once per page load.
+`FlightListViewModel.loadFlights()` fires on cold start, every
+`scenePhase == .active`, every return from a briefing, every `externalSync` push
+and pull-to-refresh — a much higher cadence against the same endpoint.
+
+Not measured, so not yet a problem. But do measure it with a realistic trip count
+before wiring `trips()` into `loadFlights()` unconditionally. If it bites, the
+cheap client-side fix is a longer TTL on trips than on flights: the flights
+payload already carries `trip` refs (id, name, position, total), which is enough
+to render a trip row's *identity* — only the binding chip needs the summary. The
+server-side fix (a lighter list shape that skips `legs_allow_ai`, which the list
+row never needs) is out of scope for an iOS issue.
+
 **`chain_status` on the list row.** Tempting, and wrong — see rule 1. The row
 carries the binding-leg chip (leg label + that *leg's* badge + `days_out`),
 which is what `bindingChip` does on web. Don't let it collapse into a trip dot.
