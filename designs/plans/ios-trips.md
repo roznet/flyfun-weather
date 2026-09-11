@@ -59,124 +59,113 @@ Two structural facts that make this cheaper than it looks:
 
 ## Proposed native shape
 
-### 1. The flights list — a trip is one row that pushes, not a collapsible card
+### 1. The flights list — the trip's legs are visible, not behind a tap
 
 The web renders a trip as a collapsible card placed in the section of its
-earliest un-flown leg, collapsed by default, carrying the binding-leg chip.
+earliest un-flown leg, carrying the binding-leg chip, holding only its
+future/recent members.
 
-**Recommendation: keep the placement rule, drop the inline expansion.** The trip
-becomes a single `NavigationLink` row in the section of its earliest un-flown
-leg, showing chain label, date range, "2 of 3 legs ahead", and the binding chip.
-
-Why not a `DisclosureGroup` mirroring the web:
-
-- `FlightListView`'s `List(selection: $selection)` *is* the iPad detail driver.
-  Nesting expandable rows that themselves contain `NavigationLink(value:)` rows
-  inside a `NavigationSplitView` sidebar re-opens exactly the class of problem
-  `FlightSelectionView`'s doc comment already documents for `editMode`.
-- Everything that justifies expansion — the callout, the AI paragraph, refresh,
-  per-leg `days_out` — lives on the trip screen anyway. An inline expansion would
-  be a second, weaker rendering of the same thing.
-
-**Decided (2026-09-11):** option A, the pushed row. The two alternatives
-considered and rejected were an inline `DisclosureGroup` mirroring the web (see
-above) and one `List` section per trip — the latter is genuinely native and gives
-one-tap leg access with no nesting at all, but it cannot coexist with the
-Future/Recent/Past sectioning (sections don't nest, and a trip straddling Future
-and Recent loses the time framing entirely), and it leaves trip-level actions
-with no home but a small header button.
-
-**The honest cost:** getting from the list to Sunday's briefing becomes two taps
-instead of one. Three things buy it back, in order:
-
-1. **A long-press context menu on the trip row** — the accelerator, spec'd below.
-2. The row carries the binding chip, which is the decision-relevant bit already.
-3. On iPad, `SidebarSelection` gains a `.trip(String)` case so the trip screen
-   fills the detail pane — the same shape `.forecastMap` already uses — and a leg
-   tap swaps the detail to the briefing, one tap from there.
-
-#### The trip row's context menu
-
-`.contextMenu(menuItems:preview:)`. `FlightListView.flightRow` already attaches a
-plain `.contextMenu` inside this exact `List(selection:)`-in-a-sidebar, so the
-mechanism is proven here; what is new is the `preview:`.
+**Decided (2026-09-11): mirror that placement, and render the legs inline as
+plain sibling rows.** A trip is a header row — chain label, date range, "2 of 3
+legs ahead", and the binding-leg chip — followed by its remaining leg rows,
+indented, inside the time section its earliest un-flown leg belongs to.
 
 ```
-        ┌──────────────────────────────┐
-        │  Alps weekend                │   preview: a custom SwiftUI view —
-        │  EGTF → LSGS → EGTF          │   trip name, chain label, and the
-        │  Sunday's LSGS → EGTF        │   binding-leg sentence. This is the
-        │  decides this trip. AMBER,   │   "nice looking" lever; menu rows
-        │  D-5.                        │   themselves cannot be styled.
-        └──────────────────────────────┘
-        ┌──────────────────────────────┐
-        │ LEGS                         │   Section("Legs")
-        │ ✓ Fri 12 Sep · EGTF → LSGS   │   remaining legs only
-        │   GREEN · D-7                │
-        │ ⚠ Sun 14 Sep · LSGS → EGTF   │   binding leg marked in text
-        │   AMBER · D-5 · decides      │
-        ├──────────────────────────────┤
-        │ ↻ Refresh Trip               │
-        │ ⌥ Open Trip                  │
-        └──────────────────────────────┘
+FUTURE
+  Alps weekend · 2 of 3 ahead · decided by LSGS→EGTF 🟡 D-5   ›
+  │  EGTF → LSGS    Fri 12 Sep   🟢 D-7                       ›
+  │  LSGS → EGTF    Sun 14 Sep   🟡 D-5                       ›
+  EGTF → LFAT       Fri 19 Sep   🟢 D-9                       ›
+RECENT
+  …
 ```
 
-Four constraints that shape it, each with a reason:
+The header row is a `NavigationLink` to the trip screen; each leg row is an
+ordinary `NavigationLink` to that leg's briefing. On iPad both drive the existing
+detail pane — `SidebarSelection` gains a `.trip(String)` case beside
+`.forecastMap`, and leg rows keep using `.flight`.
 
-- **Menu rows are text + monochrome SF Symbol.** A context-menu row is
-  system-styled; a coloured traffic-light badge in one is not reliably
-  renderable. So the grade goes in the **text** ("AMBER · D-5") and the symbol
-  carries the grade by *shape* (`checkmark.circle` / `exclamationmark.triangle` /
-  `xmark.octagon`), which survives monochrome rendering. This is the
-  never-rely-on-colour-alone rule the app follows elsewhere, and it is forced
-  here rather than chosen.
-- **Remaining legs only.** The shrinking scope is the feature's premise — a flown
-  leg is precisely the one that no longer matters — and it keeps the menu short
-  against `MAX_TRIP_LEGS = 12`. Flown legs stay reachable on the trip screen,
-  which shows the whole chain.
-- **The binding leg is named in text, not promoted to the top.** Reordering would
-  make the menu's order disagree with the timeline's departure order for no gain.
-- **The menu never shows a trip-level grade**, in the preview or anywhere else —
-  rule 1 applies to the accelerator too. The preview carries `summary.headline`,
-  which is a sentence about a *leg*.
+#### Why this shape, and what was rejected
 
-#### Teaching it: `TripLegsTip`
+The decision turned on observed usage of the web app: **the trip page is rarely
+opened. The expanded card in the flights list is what gets used**, and the common
+action is "go straight to the leg I want to know more about". Any design that put
+the legs behind a navigation step optimised for a journey that does not happen.
 
-A `.popoverTip` on the trip row, following the existing `AddFlightTip` /
-`ForecastMapTip` pattern in `Tips/FlightListTips.swift`. Three gates, all
-necessary:
+Three alternatives were considered:
 
-- **`@Parameter static var hasTrip: Bool`** — the tip must not exist for a pilot
-  who never uses trips. Set from the list when a trip row is actually rendered.
-- **Sequenced after the existing pair.** `Tips.configure` uses
-  `.displayFrequency(.immediate)` (`App/WeatherBriefApp.swift:25`), so on a fresh
-  install every eligible tip fires at once. Extend the existing event chain — a
-  `#Rule` on a `forecastMapTipSeen` event donated the way
-  `addFlightTipSeen` already is — so the flight-list tips still read in order
-  instead of three popovers competing.
-- **Attached to the *first* trip row only**, or every trip row races to present
-  the same popover.
+- **A pushed row** (the trip is one row; legs live only on the trip screen).
+  Rejected on the usage evidence above. It cost a tap on the single most common
+  action and tried to buy it back with a long-press context menu — a hidden
+  gesture as a primary path, which also carries a real accessibility cost
+  (VoiceOver reaches context menus through the Actions rotor; long press is hard
+  for some motor impairments).
+- **An inline `DisclosureGroup`** mirroring the web's collapse. Rejected as
+  fragile: `FlightListView`'s `List(selection: $selection)` *is* the iPad detail
+  driver, and wrapping `NavigationLink(value:)` rows in an expandable container
+  inside a `NavigationSplitView` sidebar is the same corner
+  `FlightSelectionView`'s doc comment already documents dodging for `editMode`.
+- **One `List` section per trip.** Rejected because sections do not nest, so trip
+  sections would sit *alongside* Future/Recent/Past rather than inside them —
+  mixing two taxonomies at the same level ("is *Alps weekend* future or
+  recent?") and losing the placement rule entirely.
 
-It also inherits the UI-test suppression for free: `Tips.configure` is skipped
-entirely under `FLYFUN_UITEST=1`, so the new tip cannot break an XCUI journey the
-way an unguarded popover scrim would.
+**The chosen shape is the disclosure option with the disclosure removed**, and
+that is precisely what makes it safe: with no expandable container the rows are
+plain siblings, so none of the nesting fragility applies. The indent is cosmetic
+(`.listRowInsets` plus a leading rail), not structural.
 
-#### The pushback that comes with this
+#### Bounding the list length
 
-If the long press becomes a *primary* path rather than a power-user accelerator,
-that is evidence the extra tap is a real cost — and the answer then is to revisit
-A vs the section-per-trip option, **not** to invest further in a hidden gesture.
-A tip teaches it once; it does nothing for a pilot who dismissed it, reinstalled,
-or opens the app twice a month, which is a normal usage pattern for this app.
-Long press also has a real accessibility cost (VoiceOver reaches it through the
-Actions rotor; it is slower, and it is hard for some motor impairments), so the
-trip screen must stay a complete path to everything the menu offers — it does.
+Always-expanded means a 3-leg trip occupies four rows, and a pilot planning
+several trips could push ungrouped flights a long way down.
 
-Worth watching after release rather than designing around now.
+Bound it the way the web already does: **the trip holds only its future and
+recent legs.** A flown outbound stays in Recent/Past as its own row with the
+existing `TripBadge`. This is not only a length fix — it is the shrinking scope
+made visible, since the flown leg is exactly the one that stopped mattering. The
+trip screen still shows the whole chain including flown legs.
 
-Past legs keep rendering individually with the existing `TripBadge`, matching
-web: the Past section is server-paginated, so pulling a past leg into the trip
-row would make it vanish or duplicate depending on the page loaded.
+**No collapse in v1, deliberately.** The obvious implementation — a chevron
+`Button` inside the header row — fights the `NavigationLink` wrapping that row:
+SwiftUI generally lets the link consume taps meant for a nested button, and
+working around it is the kind of cleverness this design is avoiding. The Past
+section's existing collapse works because its header is a real `Section` header
+that is *only* a button, never also a link. If the list proves long in practice,
+add it then — either as a header-row swipe action, or by moving the trip screen
+to the context menu so the header row can become a pure `Button`.
+
+#### The binding chip stays on the header row
+
+Even with three leg badges visible directly beneath it. Three badges do not
+answer *which one decides the trip* — that is a server-computed ranking over
+remaining legs only, and reading it off by eye is exactly the re-derivation rule
+2 forbids. It is the one piece of deliberate redundancy in this layout, and it is
+the feature's whole point.
+
+#### The context menu is a convenience, not load-bearing
+
+With the legs visible there is nothing the menu must pay for, so it carries
+trip-level actions only — Refresh Trip, Rename, Remove from trip. A custom
+`.contextMenu(menuItems:preview:)` preview showing `summary.headline` is optional
+polish. `FlightListView.flightRow:764` already attaches a plain `.contextMenu`
+inside this exact `List(selection:)`-in-a-sidebar, so the mechanism is proven.
+
+**No `TripLegsTip`.** An earlier draft specified a TipKit coachmark teaching the
+long press. Visible leg rows leave it nothing to teach, which also avoids
+sequencing a third tip against the existing `AddFlightTip` / `ForecastMapTip`
+pair — `Tips.configure` uses `.displayFrequency(.immediate)`
+(`App/WeatherBriefApp.swift:25`), so every eligible tip fires at once on a fresh
+install and each addition has to join that chain.
+
+#### Consequence for the trip screen
+
+It becomes a place the pilot rarely visits, and that is correct. It remains the
+only home for the refresh button, the AI paragraph, continuity warnings and the
+flown legs — so it has to be genuinely good rather than vestigial. Resist
+thinning it out later on the grounds that nobody goes there; the traffic is low
+because the list answers the common question, not because the screen is
+unwanted.
 
 Offline: see the decisions section below.
 
@@ -309,8 +298,8 @@ rendered only when the source is in a trip. Same information, no new control.
 | `Services/*Repository.swift` | `OnlineBriefingRepository` conforms; `CachingBriefingRepository` forwards (online-only, modulo the cache decision below); a `FixtureTripRepository` backs the XCUI journey. |
 | `ViewModels/TripDetailViewModel.swift` (new) | Load, poll refresh status, poll active refreshes, mutate membership, request the AI paragraph on open-when-stale. |
 | `ViewModels/FlightListViewModel.swift` | Load `trips()` alongside `flights()`; expose a grouped model. |
-| `Views/Trips/` (new) | `TripDetailView`, `TripTimelineView`, `TripLegRow`, `TripBindingCallout`, `TripRowView` (list row), `AddToTripSheet`. |
-| `Views/Flights/` | `SidebarSelection.trip`, trip row in `groupedFlights`, generalised `FlightSelectionView`, Move/Duplicate captions. |
+| `Views/Trips/` (new) | `TripDetailView`, `TripTimelineView`, `TripLegRow`, `TripBindingCallout`, `TripHeaderRow` (the list's trip row), `AddToTripSheet`. |
+| `Views/Flights/` | `SidebarSelection.trip`; grouping *before* sectioning in `groupedFlights` so a trip's header + remaining-leg rows emit together in the section of its earliest un-flown leg; generalised `FlightSelectionView`; Move/Duplicate captions. |
 | `Utilities/TripSelection.swift` (new) | Swift port of `buildTripSelection`, pure and unit-tested. |
 
 **On `BriefingRepository`:** the architecture doc already warns that widening it
@@ -333,8 +322,8 @@ are not independent fixes — they are M2's reachability, and they belong there.
 
 **M2 — read-only trip screen, and the paths that reach it.** DTOs,
 `TripRepository`, `TripDetailViewModel`, `TripDetailView` (timeline + callout +
-AI paragraph + continuity), list row + context menu + `TripLegsTip` +
-`SidebarSelection.trip`, plus gaps 1–3: `trip_id` push routing,
+AI paragraph + continuity), the trip header row + inline leg rows + trip context
+menu + `SidebarSelection.trip`, plus gaps 1–3: `trip_id` push routing,
 `/trip.html` link routing, `TripLegRef.autoRefresh`. No mutation. This is the
 bulk of the product value: "which leg decides this trip" becomes reachable on a
 phone.
@@ -453,8 +442,10 @@ which is what `bindingChip` does on web. Don't let it collapse into a trip dot.
 
 Pure-logic (`flyfun-weatherTests`, CI-gated):
 
-- Trip placement in `groupedFlights` — the trip lands in the section of its
-  earliest un-flown leg, and a past member still renders individually.
+- Trip placement in `groupedFlights` — the trip's header and its remaining-leg
+  rows emit together, in the section of its earliest un-flown leg; a flown member
+  still renders individually in Recent/Past with its `TripBadge`; a trip whose
+  legs straddle Future and Recent emits exactly once.
 - The `buildTripSelection` port: 0 / 1 / >1 distinct trips → the right actions.
 - `PushSupport.pendingNavigation` for a `trip_id` payload, and for a payload
   carrying neither.
@@ -467,8 +458,10 @@ Pure-logic (`flyfun-weatherTests`, CI-gated):
   still rendering the timeline.
 
 XCUI (`flyfun-weatherUITests`, **not** CI-gated — run
-`-only-testing:flyfun-weatherUITests` locally before merging): list → trip row →
-trip screen → leg → briefing, against `FixtureTripRepository`.
+`-only-testing:flyfun-weatherUITests` locally before merging), against
+`FixtureTripRepository`. Two journeys, because the whole point of the layout is
+that the first one is short: list → **leg row** → briefing (no trip screen in
+the path), and list → trip header row → trip screen → leg → briefing.
 
 After implementation, run the `sync-ios-web` skill: the badge vocabulary and the
 selection rule are exactly the kind of hand-copied surface it exists to police.
