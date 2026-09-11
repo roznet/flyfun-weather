@@ -104,8 +104,11 @@ struct TripDetailView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 TripBindingCallout(summary: trip.summary)
 
-                if let progress = trip.refresh, progress.active || !progress.message.isEmpty {
-                    TripRefreshProgressView(status: progress)
+                if let progress = trip.refresh {
+                    let message = progress.runMessage(legs: trip.summary.legs)
+                    if progress.active || !message.isEmpty {
+                        TripRefreshProgressView(status: progress, message: message)
+                    }
                 }
 
                 TripTimelineView(
@@ -237,9 +240,12 @@ struct TripBindingCallout: View {
 
 /// "Leg 2 of 3 · 2 of 3 legs had new data". `message` is shown verbatim: without
 /// it a trip refresh that legitimately did almost nothing — every leg skipped
-/// for want of a new model run — reads as one that failed.
+/// for want of a new model run — reads as one that failed. The caller passes
+/// `TripRefreshStatus.runMessage(legs:)` rather than the raw field, so a
+/// finished run's line disappears once a leg has been refreshed since.
 struct TripRefreshProgressView: View {
     let status: TripRefreshStatus
+    let message: String
 
     var body: some View {
         HStack(spacing: Theme.spacingS) {
@@ -251,8 +257,8 @@ struct TripRefreshProgressView: View {
                     Text("Refreshing leg \(min(status.completed + 1, status.total)) of \(status.total)")
                         .font(.caption.weight(.medium))
                 }
-                if !status.message.isEmpty {
-                    Text(status.message)
+                if !message.isEmpty {
+                    Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

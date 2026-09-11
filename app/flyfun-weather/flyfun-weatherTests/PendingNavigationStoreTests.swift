@@ -56,6 +56,7 @@ struct PendingNavigationStoreTests {
             .flightList,
             .briefing(flightId: "abc"),
             .share(code: "aB3xy7Q9"),
+            .trip(id: "trip-1"),
             .forecastMap(MapDeepLink(day: 2, hour: 6, model: "gfs",
                                      metric: "ceiling_ft", airport: "EGLL")),
         ]

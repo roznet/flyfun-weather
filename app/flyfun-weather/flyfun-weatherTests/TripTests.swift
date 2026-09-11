@@ -161,6 +161,39 @@ struct TripGroupingTests {
         #expect(rows[2].flight?.id == "back")
     }
 
+    /// `monitoring` is the debrief value for a flight never intended to fly. The
+    /// server keeps it out of both the binding-leg pick and `remaining_legs`, so
+    /// pulling it under the header would contradict the header's own count.
+    @Test("A monitoring leg renders on its own, not under the trip header")
+    func monitoringLegStaysOnItsOwn() {
+        let trip = TripFixture.trip(legs: [
+            TripFixture.leg(id: "out", state: .remaining),
+            TripFixture.leg(id: "watch", state: .monitoring),
+        ])
+        let flights = [
+            TripFixture.flight(id: "out", trip: TripFixture.ref(position: 1)),
+            TripFixture.flight(id: "watch", trip: TripFixture.ref(position: 2)),
+        ]
+        let rows = TripGrouping.rows(for: flights, trips: [trip])
+        #expect(rows.count == 3)
+        guard case .tripHeader = rows[0] else {
+            Issue.record("the header should lead at the remaining leg")
+            return
+        }
+        guard case .tripLeg(let leg, _) = rows[1] else {
+            Issue.record("the remaining leg should sit under the header")
+            return
+        }
+        #expect(leg.id == "out")
+        guard case .flight(let watch) = rows[2] else {
+            Issue.record("a monitoring member should render as a plain flight row")
+            return
+        }
+        #expect(watch.id == "watch")
+        #expect(trip.summary.remainingLegs == 1)
+        #expect(TripGrouping.legsAheadLabel(for: trip) == "1 of 2 legs ahead")
+    }
+
     /// A trip whose legs appear more than once in the same section must not draw
     /// two headers — the straddle case the web solved with "emit at the first
     /// member".
@@ -481,5 +514,105 @@ struct TripDTOTests {
             error: APIError.serverError(409, "A refresh is already in progress for this flight.")))
         #expect(!TripRefreshConflict.matches(message: nil))
         #expect(!TripRefreshConflict.matches(error: APIError.notFound))
+    }
+
+    @Test("Only a remaining leg counts as remaining")
+    func onlyRemainingIsRemaining() {
+        #expect(TripLegState.remaining.isRemaining)
+        #expect(!TripLegState.monitoring.isRemaining)
+        #expect(!TripLegState.cancelled.isRemaining)
+        #expect(!TripLegState.flown.isRemaining)
+    }
+
+    /// The fallback count, used only when the server omits `remaining_legs`, must
+    /// agree with the server's own definition.
+    @Test("The remaining-legs fallback excludes monitoring legs")
+    func remainingFallbackExcludesMonitoring() throws {
+        let json = """
+        {
+          "trip_id": "t",
+          "legs": [
+            {"flight_id": "a", "departure_time": "2099-08-07T08:00:00Z", "state": "remaining"},
+            {"flight_id": "b", "departure_time": "2099-08-08T08:00:00Z", "state": "monitoring"}
+          ]
+        }
+        """
+        let summary = try JSONDecoder.weatherBrief.decode(TripSummary.self, from: Data(json.utf8))
+        #expect(summary.remainingLegs == 1)
+        #expect(summary.remainingLegsList.map(\.flightId) == ["a"])
+    }
+}
+
+// MARK: - Trip-run readout
+
+/// Port of the web's `tripRunMessage`: the server keeps a finished run's line
+/// indefinitely, so it must drop once a leg is refreshed on its own.
+@Suite("Trip refresh run readout")
+struct TripRunMessageTests {
+
+    private func status(
+        active: Bool = false,
+        message: String = "1 of 2 legs had new data; 1 already current",
+        finishedAt: String? = "2026-09-11T10:00:00Z"
+    ) -> TripRefreshStatus {
+        TripRefreshStatus(tripId: "t", active: active, message: message, finishedAt: finishedAt)
+    }
+
+    private func leg(fetched: String?) -> TripLeg {
+        var leg = TripFixture.leg(id: UUID().uuidString)
+        leg.fetchTimestamp = fetched
+        return leg
+    }
+
+    @Test("A live run always shows its line")
+    func liveRunShows() {
+        let subject = status(active: true, finishedAt: nil)
+        #expect(subject.runMessage(legs: [leg(fetched: "2026-09-11T11:00:00Z")]) == subject.message)
+    }
+
+    @Test("A finished run shows while no leg is newer")
+    func finishedRunShowsUntilOvertaken() {
+        let subject = status()
+        #expect(subject.runMessage(legs: [leg(fetched: "2026-09-11T09:59:00Z"), leg(fetched: nil)])
+                == subject.message)
+    }
+
+    @Test("A finished run is hidden once any leg has a newer pack")
+    func finishedRunHiddenAfterLegRefresh() {
+        let subject = status()
+        #expect(subject.runMessage(legs: [
+            leg(fetched: "2026-09-11T09:00:00Z"),
+            leg(fetched: "2026-09-11T10:30:00Z"),
+        ]).isEmpty)
+    }
+
+    /// No finish time means the age is unknown — say nothing rather than risk a
+    /// stale claim.
+    @Test("A finished run with no finish time shows nothing")
+    func finishedRunWithoutFinishTime() {
+        #expect(status(finishedAt: nil).runMessage(legs: []).isEmpty)
+    }
+
+    @Test("An empty message shows nothing, even while live")
+    func emptyMessage() {
+        #expect(status(active: true, message: "").runMessage(legs: []).isEmpty)
+    }
+
+    /// Python `isoformat()` emits microseconds and a `+00:00` offset.
+    @Test("Server isoformat timestamps with microseconds are compared")
+    func fractionalTimestamps() {
+        let subject = status(finishedAt: "2026-09-11T10:00:00.123456+00:00")
+        #expect(subject.runMessage(legs: [leg(fetched: "2026-09-11T10:00:05.5+00:00")]).isEmpty)
+        #expect(subject.runMessage(legs: [leg(fetched: "2026-09-11T09:59:59.000001+00:00")])
+                == subject.message)
+    }
+
+    @Test("finished_at decodes from the wire")
+    func finishedAtDecodes() throws {
+        let json = """
+        {"trip_id": "t", "active": false, "message": "done", "finished_at": "2026-09-11T10:00:00+00:00"}
+        """
+        let decoded = try JSONDecoder.weatherBrief.decode(TripRefreshStatus.self, from: Data(json.utf8))
+        #expect(decoded.finishedAt == "2026-09-11T10:00:00+00:00")
     }
 }
