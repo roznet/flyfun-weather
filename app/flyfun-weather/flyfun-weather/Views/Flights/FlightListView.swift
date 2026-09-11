@@ -382,27 +382,28 @@ struct FlightListView: View {
                 .id(flight.id)
             case .trip(let tripId):
                 // The trip screen fills the detail pane exactly as a briefing
-                // does. Tapping one of its legs swaps the detail to that leg's
-                // briefing rather than pushing, so the sidebar stays the spine.
-                NavigationStack {
-                    TripDetailView(
-                        tripId: tripId,
-                        onOpenLeg: { flightId in
-                            if case .loaded(let flights) = viewModel?.state,
-                               let match = flights.first(where: { $0.id == flightId }) {
-                                selection = .flight(match)
-                            }
-                        },
-                        onClose: {
-                            // The trip is gone — deleted, or pruned with its last
-                            // leg. Clearing the selection pops it on iPhone and
-                            // empties the iPad detail pane, where `dismiss()` does
-                            // nothing; the reload drops its header from the list.
-                            selection = nil
-                            Task { await viewModel?.loadFlights() }
+                // does — directly, with no NavigationStack of its own: the split
+                // view's detail column hosts its title and toolbar, as it does
+                // the briefing's. Tapping one of its legs swaps the detail to
+                // that leg's briefing rather than pushing, so the sidebar stays
+                // the spine.
+                TripDetailView(
+                    tripId: tripId,
+                    onOpenLeg: { flightId in
+                        if case .loaded(let flights) = viewModel?.state,
+                           let match = flights.first(where: { $0.id == flightId }) {
+                            selection = .flight(match)
                         }
-                    )
-                }
+                    },
+                    onClose: {
+                        // The trip is gone — deleted, or pruned with its last
+                        // leg. Clearing the selection pops it on iPhone and
+                        // empties the iPad detail pane, where `dismiss()` does
+                        // nothing; the reload drops its header from the list.
+                        selection = nil
+                        Task { await viewModel?.loadFlights() }
+                    }
+                )
                 .id(tripId)
             case .forecastMap:
                 // iPad detail pane (regular width). On compact the map opens as a

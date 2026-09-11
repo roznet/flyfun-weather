@@ -551,3 +551,10 @@ and each member leg a thin accent rail (`Theme.tripRail`, pre-blended per mode s
 it holds up on dark cells). The accent, never a grade colour — a green/amber/red
 wash would be the trip-level traffic light the design forbids. Both backgrounds
 give way while the row is selected so the iPad sidebar highlight still shows.
+
+**Remove-from-trip is a long-press, not a swipe.** The plan said "Swipe →
+Remove from trip" on the trip screen. The timeline is a `VStack` in a
+`ScrollView`, not a `List`, so `.swipeActions` is not available; the leg row's
+context menu carries the action instead, behind the same unlink-not-delete
+confirmation. Making the timeline a `List` to get swipes would cost the custom
+connector and gap rows their layout, for an action that is rare by design.

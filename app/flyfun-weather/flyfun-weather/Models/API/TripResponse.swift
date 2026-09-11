@@ -129,8 +129,11 @@ struct TripLeg: Codable, Sendable, Equatable, Identifiable {
 
     var id: String { flightId }
 
-    var departureDate: Date? { ISO8601DateFormatter().date(from: departureTime) }
-    var fetchDate: Date? { fetchTimestamp.flatMap { ISO8601DateFormatter().date(from: $0) } }
+    // The shared parser, not a bare `ISO8601DateFormatter`: server timestamps
+    // carry fractional seconds whenever the microseconds are non-zero, which a
+    // bare formatter rejects as nil.
+    var departureDate: Date? { Date.parseISO8601(departureTime) }
+    var fetchDate: Date? { fetchTimestamp.flatMap(Date.parseISO8601) }
 }
 
 /// The deterministic trip picture. Computed per read on the server and **never
@@ -220,22 +223,12 @@ struct TripRefreshStatus: Codable, Sendable, Equatable {
     func runMessage(legs: [TripLeg]) -> String {
         guard !message.isEmpty else { return "" }
         if active { return message }
-        guard let finished = finishedAt.flatMap(Self.parseDate) else { return "" }
+        guard let finished = finishedAt.flatMap(Date.parseISO8601) else { return "" }
         let legMovedOn = legs.contains { leg in
-            guard let fetched = leg.fetchTimestamp.flatMap(Self.parseDate) else { return false }
+            guard let fetched = leg.fetchDate else { return false }
             return fetched > finished
         }
         return legMovedOn ? "" : message
-    }
-
-    /// Server timestamps come from Python `isoformat()`, which carries fractional
-    /// seconds whenever the microseconds are non-zero — try both shapes.
-    private static func parseDate(_ raw: String) -> Date? {
-        let plain = ISO8601DateFormatter()
-        if let date = plain.date(from: raw) { return date }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: raw)
     }
 }
 
