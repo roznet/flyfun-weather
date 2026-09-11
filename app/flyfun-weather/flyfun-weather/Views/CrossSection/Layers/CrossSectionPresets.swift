@@ -345,6 +345,8 @@ enum CrossSectionPresets {
         "vfr": AdvisoryPreset(
             id: "vfr", label: "VFR feasibility",
             caption: "VMC picture: clouds & obscuration vs cruise and airports.",
+            // `surface-obscuration-bands` has no iOS layer: kept for parity with
+            // the web lens, dropped at apply time like `sld-bands`.
             groups: [.clouds], lines: ["surface-obscuration-bands", "freezing-level"]),
         "ifr": AdvisoryPreset(
             id: "ifr", label: "IFR feasibility",

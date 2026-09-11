@@ -108,7 +108,9 @@ and theme, a lens asks for "the preferred layer of each group" and resolves
 through them; changing the emulation re-applies an active lens, and a manual
 layer edit drops the lens but keeps the emulation (`CrossSectionViewModel`).
 Graded methods come from the advisories manifest's `primary_method_id`
-(`CrossSectionPresets.gradedMethods`), the same source the web uses. Each family
+(`CrossSectionPresets.gradedMethods`), the same source the web uses; a
+manifest that lands (or recalculates) after a FlyFun lens was applied
+re-resolves that lens while it is still intact — never a hand-tuned view. Each family
 has an **About** panel (popover on iPad, sheet on iPhone) built from the bundled
 metrics catalog via `CrossSectionLayer.metricIds`. The options sheet
 (`CrossSectionConfigSheet`) keeps only set-once settings: emulation, theme,

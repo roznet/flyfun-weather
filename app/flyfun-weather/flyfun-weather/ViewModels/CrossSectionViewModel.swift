@@ -394,11 +394,22 @@ final class CrossSectionViewModel {
         return cloudStylePreference
     }
 
-    /// Update the graded methods from a freshly loaded advisories manifest.
-    /// Changes no layer: it only moves what the next chip / lens / FlyFun
-    /// resolves to, so a late manifest never clobbers a view being read.
+    /// Update the graded methods from a freshly loaded (or recalculated)
+    /// advisories manifest. A FlyFun Focus lens that is still intact is
+    /// re-resolved through them, so a lens applied before the manifest landed
+    /// does not keep showing the engine defaults for the whole session. Nothing
+    /// else moves: a manual edit has already dropped the lens, an emulation
+    /// supplies every method group itself, and an advisory-chip lens (highlight
+    /// active) was resolved through that advisory's own methods on purpose — so
+    /// a late manifest never clobbers a view the pilot has tuned.
     func setGradedMethods(_ methods: [LayerGroup: String]) {
+        guard methods != gradedMethods else { return }
         gradedMethods = methods
+        guard activeEmulation == nil, activeHighlightAdvisoryId == nil,
+              let lens = activeAdvisoryPreset.flatMap({ CrossSectionPresets.advisory[$0] })
+        else { return }
+        applyLens(lens, methods: effectiveMethods)
+        persistLayerConfig()
     }
 
     /// Pick an emulation (nil = FlyFun). An emulation merges its method set and

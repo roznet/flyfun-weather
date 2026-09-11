@@ -211,6 +211,32 @@ private func manifest(_ advisories: [RouteAdvisoryResult]) -> AdvisoriesResponse
         #expect(vm.isLayerOn("freezing-level"))
     }
 
+    @Test func lateGradedMethodsReResolveAnIntactFlyFunLens() {
+        let vm = CrossSectionViewModel()
+        vm.applyEmulation(nil)
+        vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)  // engine default: Ogimet-NWP
+        #expect(on(vm, in: .icing) == ["icing-ogimet-nwp-bands"])
+        vm.setGradedMethods([.clouds: "nwp", .icing: "sfip_nwp", .convection: "nwp"])
+        #expect(on(vm, in: .icing) == ["sfip-bands"])
+        #expect(vm.activeAdvisoryPreset == "icing")
+    }
+
+    @Test func lateGradedMethodsNeverClobberATunedView() {
+        let vm = CrossSectionViewModel()
+        vm.applyEmulation(nil)
+        vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
+        vm.toggleLayer("icing-bands")  // a manual edit drops the lens
+        let tuned = vm.enabledLayers
+        vm.setGradedMethods([.icing: "sfip_nwp"])
+        #expect(vm.enabledLayers == tuned)
+        // Under an emulation the lens resolves through the emulation's methods.
+        vm.applyEmulation("gramet")
+        vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
+        let gramet = vm.enabledLayers
+        vm.setGradedMethods([.icing: "ogimet_dd"])
+        #expect(vm.enabledLayers == gramet)
+    }
+
     @Test func advisoryChipMethodsOverrideOnlyItsGroup() {
         let adv = advisory("icing_escape", [perModel("ecmwf", method: "ogimet_dd")])
         let methods = CrossSectionPresets.advisoryMethodOverrides(

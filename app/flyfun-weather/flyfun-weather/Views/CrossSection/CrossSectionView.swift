@@ -90,6 +90,12 @@ struct CrossSectionView: View {
         .onChange(of: manifestGradedMethods, initial: true) { _, methods in
             csVM.setGradedMethods(methods)
         }
+        // A family can drop out of the bar (Observed, when the loaded pack has
+        // no observed payload); close its row rather than leave it orphaned
+        // under a bar with no chip for it.
+        .onChange(of: LayerFamily.visible(in: csVM)) { _, visible in
+            if let family = openFamily, !visible.contains(family) { openFamily = nil }
+        }
         .task { updateVizData(); applyFocusIntent() }
         .sheet(isPresented: $showingOptions) {
             CrossSectionConfigSheet(
