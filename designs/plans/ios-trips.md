@@ -511,3 +511,17 @@ one and for a trip where a member leg has AI switched off — and only
 gate runs before generation), and without it the "AI is off for a leg" note the
 design asks for could never be shown. Still guarded to once per trip per view-model
 instance.
+
+**`monitoring` is not remaining.** The first cut had `isRemaining` include
+`monitoring`. The server's `_leg_state` treats it like `cancelled` — a flight
+created to watch the weather, never intended to fly — and excludes it from both
+`_pick_binding_leg` and `remaining_legs`. Counting it client-side pulled it under
+the trip header while the header's "n of m legs ahead" (the server's count) left
+it out.
+
+**A finished run's readout expires.** Main added per-leg refresh on the web and
+`TripRefreshStatus.finished_at` (86cec58d): the server keeps a finished run's
+message indefinitely, so after a single-leg refresh it called a re-briefed leg
+"already current". `TripRefreshStatus.runMessage(legs:)` ports the web's
+`tripRunMessage` — shown while a run is live, then only until any leg has a pack
+newer than the finish.
