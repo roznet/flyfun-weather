@@ -1102,6 +1102,8 @@
   "trips.gapNights": "{hours} h on the ground",
   "trips.sameSortie": "Same sortie — a stop, not a decision point",
   "trips.btnBriefing": "Briefing",
+  "trips.btnRefreshLeg": "Refresh leg",
+  "trips.refreshLegTitle": "Refresh only this leg — the rest of the trip is left alone.",
   "trips.btnEdit": "Edit",
   "trips.btnRename": "Rename",
   "trips.btnDelete": "Delete trip",

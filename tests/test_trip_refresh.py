@@ -302,7 +302,13 @@ class TestFinishIsFenced:
 
         trip_refresh._finish(session, trip_with_legs.id, DEV_USER_ID, status.refresh_id)
 
-        assert session.get(FlightTripRow, trip_with_legs.id).refresh_id is None
+        row = session.get(FlightTripRow, trip_with_legs.id)
+        assert row.refresh_id is None
+        # The results outlive the run; its finish time is what lets a client
+        # stop showing them once a leg has been refreshed on its own since.
+        after = trip_refresh.status(row)
+        assert not after.active
+        assert after.finished_at is not None
 
     def test_every_mutator_goes_through_the_run_scope(self):
         """Fencing must not be opt-in per function.

@@ -149,6 +149,7 @@ def status(row: FlightTripRow) -> "TripRefreshStatus":
         current_flight_id=current,
         results=results,
         message=_progress_message(legs, results, current),
+        finished_at=state.get("finished_at"),
     )
 
 

@@ -181,6 +181,10 @@ export interface TripRefreshStatus {
   current_flight_id: string | null;
   results: Record<string, string>;
   message: string;
+  /** When the last run closed. The results outlive the run, so this is what
+   *  lets the page drop a finished run's readout once a leg is refreshed on
+   *  its own (`helpers/trip-leg-refresh.ts::tripRunMessage`). */
+  finished_at?: string | null;
 }
 
 export interface TripResponse {

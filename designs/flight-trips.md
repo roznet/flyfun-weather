@@ -345,9 +345,13 @@ Three properties are load-bearing:
   *reads* as well: `_trip_to_response` re-checks `legs_allow_ai` before
   returning a stored paragraph, so the API contract holds for any consumer, not
   just for the page that happens to fetch it through the generating endpoint. Generated once per completed trip refresh and
-  on demand when the page opens stale. Goes through `compute_cost` and the
+  on demand when the page opens stale. Goes through the
   ledger (`action="trip_summary"`) — an invisible cost line is how a small cost
-  becomes an unexplained one.
+  becomes an unexplained one — priced by `costs.compute_call_cost` at the trip
+  model's own token rate, with the model and token counts in the row's
+  metadata. It was first routed through the per-briefing `compute_cost`, which
+  adds a droplet/subscription share and margin to every call and so billed a
+  sub-cent Haiku paragraph at ~$0.62, more than the briefing it summarises.
 
 No prompt-cache breakpoint: the minimum cacheable prefix is 512–4096 tokens
 depending on model and this prompt head may sit below it, so a breakpoint could
@@ -422,8 +426,38 @@ deterministic binding-constraint callout → the AI paragraph, visually secondar
 
 Every leg row carries `days_out` beside its badge (a D-7 amber and a D-1 amber
 are not the same claim), the advisory chips, freshness, and two explicit links
-out — **Briefing** and **Edit**. There is deliberately **no per-leg refresh
-button**.
+out — **Briefing** and **Edit** — plus a **Refresh leg** button on remaining
+legs (see below).
+
+### Refreshing one leg
+
+v1 made refresh trip-only — no per-leg button here, and the Refresh button on a
+member leg's briefing page disabled. That was wrong for the commonest trip-day
+pattern: the next leg wants several refreshes (D-0 METAR/TAF just before
+departure) while Sunday's return wants none, and every trip refresh re-runs and
+re-digests each leg that has new model data. So a leg is refreshable on its own
+from both its row here and its briefing page.
+
+It needs no new mechanism: a single-leg refresh is an ordinary per-flight
+refresh (`triggered_by="user"`, capped as usual, its own per-flight
+notification — nothing to coalesce). The only trip-specific rule is the existing
+one — while a trip run owns the leg, `leg_is_claimed` refuses it with a 409, and
+the row button is disabled for the duration of a run.
+
+The trip summary follows without extra plumbing. The deterministic aggregate is
+computed per read, and the AI paragraph is keyed on member `fetch_timestamp`s,
+so it regenerates once, the next time the page asks. The page watches its legs'
+refreshes (`startLegRefreshPolling`) and re-reads the trip when one *settles*
+(`helpers/trip-leg-refresh.ts::settledLegIds`) — so a leg refreshed from
+anywhere, not just this page, updates the callout without a reload.
+
+A finished run's readout ("1 of 2 legs had new data; 1 already current") stays
+on the trip row indefinitely — `_finish` keeps the results so the last poll can
+render them. After a single-leg refresh that line described a run the legs had
+moved past, calling a just-re-briefed leg "already current". So
+`TripRefreshStatus.finished_at` reports when the run closed, and
+`tripRunMessage` shows the line only while a run is live, or afterwards until
+any leg has a pack newer than that.
 
 ## iOS
 

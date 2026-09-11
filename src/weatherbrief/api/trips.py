@@ -101,6 +101,10 @@ class TripRefreshStatus(BaseModel):
     results: dict[str, str] = Field(default_factory=dict)
     # Human line for the "2 of 3 legs had new data" readout.
     message: str = ""
+    # When the last run closed (ISO, UTC); None before any has. The results
+    # outlive the run, so this is what lets a client stop showing a finished
+    # run's readout once a leg has been refreshed on its own since.
+    finished_at: str | None = None
 
 
 class CreateTripRequest(BaseModel):

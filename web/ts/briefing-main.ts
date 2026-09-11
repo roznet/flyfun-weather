@@ -2764,15 +2764,10 @@ async function init(): Promise<void> {
         : t('briefing.flightPastTitle');
     }
 
-    // Refreshing a leg of a trip is a trip-level action (#602): the chain runs
-    // serially server-side so it never claims both process-wide refresh slots,
-    // and the gate already skips legs with no new data, so one button on the
-    // trip page is genuinely sufficient. Disabled rather than hidden, with the
-    // trip page one click away — a missing button reads as a bug.
-    if (refreshBtn && s.flight?.trip && !past) {
-      refreshBtn.disabled = true;
-      refreshBtn.title = t('trips.refreshManaged');
-    }
+    // A trip leg refreshes on its own like any other flight: on the day, the
+    // next leg wants several refreshes (fresh METAR/TAF) and the rest of the
+    // chain none, so forcing the whole trip wasted a digest per leg. The server
+    // still refuses (409) while a trip run owns this leg — see `leg_is_claimed`.
 
     // Render privacy toggle
     ui.renderPrivacyToggle(s.flight, user.id, async (isPrivate) => {

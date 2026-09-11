@@ -941,6 +941,8 @@
   "trips.gapNights": "{hours} h am Boden",
   "trips.sameSortie": "Gleicher Flugtag — ein Halt, kein Entscheidungspunkt",
   "trips.btnBriefing": "Briefing",
+  "trips.btnRefreshLeg": "Etappe aktualisieren",
+  "trips.refreshLegTitle": "Nur diese Etappe aktualisieren — der Rest der Reise bleibt unberührt.",
   "trips.btnEdit": "Bearbeiten",
   "trips.btnRename": "Umbenennen",
   "trips.btnDelete": "Reise löschen",

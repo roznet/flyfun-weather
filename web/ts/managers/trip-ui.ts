@@ -20,6 +20,7 @@ import type { TripLeg, TripResponse, TripSummary } from '../store/types';
 import { $, escapeHtml, formatDate } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
 import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
+import { legRefreshButton, tripRunMessage } from '../helpers/trip-leg-refresh';
 
 /** The badge for one leg — traffic light, soft outlook, or a neutral state. */
 function legBadge(leg: TripLeg): string {
@@ -140,13 +141,13 @@ export function renderContinuity(summary: TripSummary): void {
 
 export interface LegRowHandlers {
   onRemoveLeg: (flightId: string) => void;
+  onRefreshLeg: (flightId: string) => void;
 }
 
 /** Per-leg "refreshing"/"queued" badge, for a refresh started anywhere.
  *
- * The single Refresh trip button is still the only way to start one *here*,
- * but a leg can be refreshed from the briefing page, a Siri intent, the
- * scheduler or MCP — none of which opens a trip run. Reporting only
+ * A leg can be refreshed from its row here, its briefing page, a Siri intent,
+ * the scheduler or MCP — none of which opens a trip run. Reporting only
  * `trip.refresh` left those invisible on this page.
  */
 function legRefreshBadge(entry: RefreshEntry | undefined): string {
@@ -163,14 +164,19 @@ function legRefreshBadge(entry: RefreshEntry | undefined): string {
  * the trip to one leg's full detail is the main navigation this page exists to
  * serve.
  *
- * Deliberately **no per-leg refresh button**: refreshing is a trip-level action
- * (see the serial driver), and the refresh gate already skips legs with no new
- * data, so one button is genuinely sufficient.
+ * Remaining legs also get **Refresh leg**: on the day, the next leg wants
+ * several refreshes and the rest of the chain none, so refreshing only the
+ * trip wasted a digest per leg. Off while a trip run is in flight (`tripBusy`) —
+ * the server would refuse a leg the driver owns. `notices` carries the reason a
+ * click did nothing (no new model data yet), which would otherwise read as a
+ * button that is broken.
  */
 export function renderLegs(
   summary: TripSummary,
   handlers: LegRowHandlers,
   activeRefreshes: Record<string, RefreshEntry> = {},
+  tripBusy = false,
+  notices: Record<string, string> = {},
 ): void {
   const heading = $('trip-legs-heading');
   if (heading) heading.textContent = t('trips.legs');
@@ -203,6 +209,12 @@ export function renderLegs(
     ).join(' ');
     const duration = leg.duration_hours
       ? `<span class="pack-info">${leg.duration_hours.toFixed(1)} h</span>` : '';
+    const refresh = legRefreshButton(leg, tripBusy, activeRefreshes[leg.flight_id]);
+    const refreshBtn = refresh.visible
+      ? `<button type="button" class="btn btn-secondary btn-sm btn-refresh-leg" data-id="${escapeHtml(leg.flight_id)}" title="${escapeHtml(t('trips.refreshLegTitle'))}"${refresh.enabled ? '' : ' disabled'}>${escapeHtml(t('trips.btnRefreshLeg'))}</button>`
+      : '';
+    const notice = notices[leg.flight_id]
+      ? `<div class="trip-leg-notice muted">${escapeHtml(notices[leg.flight_id])}</div>` : '';
     return `
       <div class="trip-leg-row${binding}${flown}" data-flight-id="${escapeHtml(leg.flight_id)}">
         <div class="trip-leg-main">
@@ -213,14 +225,25 @@ export function renderLegs(
           </div>
           <div class="trip-leg-status">${legRefreshBadge(activeRefreshes[leg.flight_id])}${legBadge(leg)} ${days} ${freshness}</div>
           <div class="trip-leg-chips">${chips}</div>
+          ${notice}
         </div>
         <div class="trip-leg-actions">
           <a class="btn btn-primary btn-sm" href="/briefing.html?flight=${encodeURIComponent(leg.flight_id)}">${escapeHtml(t('trips.btnBriefing'))}</a>
+          ${refreshBtn}
           <a class="btn btn-secondary btn-sm" href="/flight.html?id=${encodeURIComponent(leg.flight_id)}">${escapeHtml(t('trips.btnEdit'))}</a>
           <button type="button" class="btn btn-outline btn-sm btn-remove-leg" data-id="${escapeHtml(leg.flight_id)}">${escapeHtml(t('trips.btnRemove'))}</button>
         </div>
       </div>`;
   }).join('');
+
+  el.querySelectorAll<HTMLButtonElement>('.btn-refresh-leg').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      // Off at once: the queued badge only arrives with the next paint, and a
+      // second click in between would just earn a duplicate-refresh error.
+      btn.disabled = true;
+      handlers.onRefreshLeg(btn.dataset.id!);
+    });
+  });
 
   el.querySelectorAll('.btn-remove-leg').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -242,8 +265,9 @@ export function renderControls(trip: TripResponse, handlers: ControlHandlers): v
   const el = $('trip-controls');
   if (!el) return;
   const busy = trip.refresh?.active === true;
-  const progress = trip.refresh?.message
-    ? `<div class="trip-refresh-progress">${escapeHtml(trip.refresh.message)}</div>` : '';
+  const runMessage = tripRunMessage(trip.refresh, trip.summary.legs);
+  const progress = runMessage
+    ? `<div class="trip-refresh-progress">${escapeHtml(runMessage)}</div>` : '';
   el.innerHTML = `
     <div class="trip-controls">
       <button type="button" class="btn btn-primary btn-trip-refresh" ${busy ? 'disabled' : ''}>

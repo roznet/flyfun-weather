@@ -1,6 +1,7 @@
 /** Trip page entry point (#602) — /trip.html?id=… */
 
-import { fetchActiveRefreshes } from './adapters/api-adapter';
+import { fetchActiveRefreshes, refreshBriefing } from './adapters/api-adapter';
+import { settledLegIds } from './helpers/trip-leg-refresh';
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   deleteTrip,
@@ -54,6 +55,23 @@ async function loadAiSummary(tripId: string): Promise<TripAiSummary | null> {
   }
 }
 
+/** Why a leg's Refresh click did nothing, by flight id — typically no new model
+ *  run since its last briefing. Kept until that leg or the trip is refreshed
+ *  again: a click with no visible effect reads as a broken button. */
+let legNotices: Record<string, string> = {};
+
+const legHandlers: ui.LegRowHandlers = {
+  onRemoveLeg: handleRemoveLeg,
+  onRefreshLeg: handleRefreshLeg,
+};
+
+function renderLegRows(): void {
+  if (!trip) return;
+  ui.renderLegs(
+    trip.summary, legHandlers, legRefreshes, trip.refresh?.active === true, legNotices,
+  );
+}
+
 function renderAll(ai: TripAiSummary | null): void {
   if (!trip) return;
   currentAi = ai;
@@ -62,7 +80,7 @@ function renderAll(ai: TripAiSummary | null): void {
   ui.renderCallout(trip.summary);
   ui.renderAiSummary(ai);
   ui.renderContinuity(trip.summary);
-  ui.renderLegs(trip.summary, { onRemoveLeg: handleRemoveLeg }, legRefreshes);
+  renderLegRows();
   ui.renderControls(trip, {
     onRefresh: handleRefresh,
     onRename: handleRename,
@@ -82,7 +100,13 @@ function isMissingTrip(err: unknown): boolean {
   return message.startsWith('API 404:');
 }
 
-async function reload(withAi = true): Promise<void> {
+/** Re-read the trip and repaint.
+ *
+ * `fetchAi=false` keeps the paragraph already on screen instead of fetching it:
+ * used when a leg lands mid-run, where a fetch would regenerate (and bill) a
+ * paragraph the run's own completion is about to replace.
+ */
+async function reload(fetchAi = true): Promise<void> {
   if (!trip) return;
   const id = trip.id;
   try {
@@ -95,7 +119,7 @@ async function reload(withAi = true): Promise<void> {
     ui.renderError(errorToMessage(err));
     return;
   }
-  renderAll(withAi ? await loadAiSummary(id) : null);
+  renderAll(fetchAi ? await loadAiSummary(id) : currentAi);
 }
 
 /** Poll the shared active-refresh endpoint and repaint the leg rows on change.
@@ -103,6 +127,10 @@ async function reload(withAi = true): Promise<void> {
  * Same endpoint and cadence the flights list uses. The identity guard mirrors
  * the store's: repainting on every tick would rebuild the rows and rewire their
  * handlers for nothing.
+ *
+ * When a leg's refresh *settles* the trip is re-read, not just repainted: that
+ * leg may have a new grade, and the aggregate is computed per read — this is
+ * what keeps the callout honest after a single-leg refresh started anywhere.
  */
 function startLegRefreshPolling(): void {
   if (legPollTimer != null) return;
@@ -121,8 +149,15 @@ function startLegRefreshPolling(): void {
       const same = before.length === after.length
         && after.every(k => legRefreshes[k]?.status === next[k]?.status);
       if (!same) {
+        const settled = settledLegIds(legRefreshes, next);
         legRefreshes = next;
-        ui.renderLegs(trip.summary, { onRemoveLeg: handleRemoveLeg }, legRefreshes);
+        if (settled.length > 0) {
+          // Mid-run, keep the AI paragraph: the run regenerates it once on
+          // completion, and a per-leg fetch would bill it once per leg.
+          await reload(!trip.refresh?.active);
+        } else {
+          renderLegRows();
+        }
       }
     } catch {
       // Non-critical: the badge is a readout, not a control.
@@ -188,11 +223,52 @@ async function handleRefresh(): Promise<void> {
   try {
     const status = await refreshTrip(trip.id);
     trip = { ...trip, refresh: status };
+    // A trip run re-checks every leg, so an earlier "no new data" is moot.
+    legNotices = {};
     renderAll(null);
     if (status.active) startPolling();
   } catch (err) {
     ui.renderError(errorToMessage(err));
   }
+}
+
+/** Refresh one leg only — an ordinary per-flight refresh, no trip run.
+ *
+ * On a queued refresh the leg poll takes over and re-reads the trip when it
+ * settles. Anything else was decided by the refresh gate without queuing:
+ * no new model run (`already_fresh`), an observations-only update
+ * (`realtime`), or no model reaching the date (`pending_coverage`).
+ */
+async function handleRefreshLeg(flightId: string): Promise<void> {
+  if (!trip) return;
+  ui.renderError(null);
+  delete legNotices[flightId];
+  let result;
+  try {
+    result = await refreshBriefing(flightId);
+  } catch (err) {
+    // A 409 here means a trip run claimed the leg since the last paint (the
+    // button is off during one this page knows about).
+    ui.renderError(errorToMessage(err));
+    renderLegRows();
+    return;
+  }
+  if (result.status === 'queued') {
+    // Paint the badge now rather than on the next 5 s tick.
+    legRefreshes = {
+      ...legRefreshes,
+      [flightId]: {
+        flight_id: flightId, status: 'queued', triggered_by: 'user',
+        stage: null, detail: null, queued_at: new Date().toISOString(),
+      },
+    };
+    renderLegRows();
+    return;
+  }
+  legNotices[flightId] = result.message;
+  // Re-read rather than repaint: a realtime update can move the leg. Cheap —
+  // the AI paragraph only regenerates if its member key actually changed.
+  await reload();
 }
 
 async function handleRename(name: string): Promise<void> {

@@ -941,6 +941,8 @@
   "trips.gapNights": "{hours} h en tierra",
   "trips.sameSortie": "Misma salida — una escala, no un punto de decisión",
   "trips.btnBriefing": "Briefing",
+  "trips.btnRefreshLeg": "Actualizar tramo",
+  "trips.refreshLegTitle": "Actualizar solo este tramo — el resto del viaje no se toca.",
   "trips.btnEdit": "Editar",
   "trips.btnRename": "Renombrar",
   "trips.btnDelete": "Eliminar viaje",
