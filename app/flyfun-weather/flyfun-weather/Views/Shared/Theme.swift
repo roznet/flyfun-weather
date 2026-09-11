@@ -23,6 +23,11 @@ enum Theme {
     static let amber = dynamic(light: 0xcc8800, dark: 0xfbbf24)       // assessment AMBER
     static let red = dynamic(light: 0xdc3545, dark: 0xf87171)         // assessment RED / danger
     static let lifr = dynamic(light: 0x8e24aa, dark: 0xc084fc)        // LIFR category
+    /// The rail hanging a trip's legs off its header in the flight list. The
+    /// accent pre-blended over the list's cell colour rather than an opacity, so
+    /// each mode gets its own strength: ~35% reads on white, but the same share
+    /// of the dark accent all but vanishes on a dark cell, so dark gets ~60%.
+    static let tripRail = dynamic(light: 0xb3c8f8, dark: 0x456ea2)
 
     // MARK: Spacing (4 / 8 pt grid)
 

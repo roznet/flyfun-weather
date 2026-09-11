@@ -24,7 +24,7 @@ struct TripHeaderRow: View {
             HStack(spacing: 6) {
                 Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.primary)
                     .accessibilityHidden(true)
                 Text(trip.displayName)
                     .font(.headline)
@@ -69,5 +69,33 @@ struct TripHeaderRow: View {
         let formatter = DateFormatter.shortDate
         guard let last = dates.last, last != first else { return formatter.string(from: first) }
         return "\(formatter.string(from: first)) – \(formatter.string(from: last))"
+    }
+}
+
+/// Row backgrounds that make a trip read as a *group* in the flight list rather
+/// than as one more flight: the header carries a trace of the accent, and each
+/// member leg a thin accent rail on its leading edge, which runs unbroken down
+/// consecutive legs so they visibly hang off the header.
+///
+/// The accent, never a grade colour: the trip gets no traffic light
+/// (`designs/flight-trips.md`), and a green/amber/red wash on the header would
+/// read as exactly that. Both sit over the list's own cell colour so they stay
+/// opaque and track light/dark mode. Callers pass `nil` instead while the row is
+/// selected, so the iPad sidebar's selection highlight is not painted over.
+enum TripRowStyle {
+    static var headerBackground: some View {
+        ZStack {
+            Color(uiColor: .secondarySystemGroupedBackground)
+            Theme.primary.opacity(0.07)
+        }
+    }
+
+    static var legBackground: some View {
+        ZStack(alignment: .leading) {
+            Color(uiColor: .secondarySystemGroupedBackground)
+            Theme.tripRail
+                .frame(width: 2)
+                .padding(.leading, 18)
+        }
     }
 }
