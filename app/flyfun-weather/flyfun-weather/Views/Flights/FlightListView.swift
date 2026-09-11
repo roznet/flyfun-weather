@@ -777,6 +777,11 @@ struct FlightListView: View {
             NavigationLink(value: SidebarSelection.trip(id: trip.id)) {
                 TripHeaderRow(trip: trip, isStale: viewModel.tripsAreStale)
             }
+            // Marks the header as the trip rather than one more flight; dropped
+            // while selected so the sidebar's highlight shows.
+            .listRowBackground(
+                selection == .trip(id: trip.id) ? nil : TripRowStyle.headerBackground
+            )
             .contextMenu {
                 // Trip-level actions only. With the legs already visible below,
                 // this menu is a convenience rather than the thing paying for a
@@ -800,7 +805,17 @@ struct FlightListView: View {
                 // Cosmetic indent that ties the leg to its header. `listRowInsets`
                 // rather than padding so the row's separator indents with it.
                 .listRowInsets(EdgeInsets(top: 6, leading: 32, bottom: 6, trailing: 16))
+                // The accent rail that hangs the leg off its header.
+                .listRowBackground(
+                    isSelected(flightId: flight.id) ? nil : TripRowStyle.legBackground
+                )
         }
+    }
+
+    /// Whether the detail pane currently shows this flight.
+    private func isSelected(flightId: String) -> Bool {
+        if case .flight(let shown) = selection { return shown.id == flightId }
+        return false
     }
 
     /// Start a trip refresh from the list's context menu.
