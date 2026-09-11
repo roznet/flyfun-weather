@@ -15,6 +15,7 @@ export type { AdvisoryParameterDef, AdvisoryCatalogEntry, AdvisoryCategory, Advi
 /** Client-side fallback for the engine method defaults (#403), used only when
  *  talking to an old server that predates `engine_method_defaults` on the catalog
  *  response. Must mirror `ENGINE_METHOD_DEFAULTS` in the Python backend. */
+// SYNC: iOS mirrors this as `CrossSectionPresets.engineMethodDefaults` (#605).
 export const ENGINE_METHOD_DEFAULTS_FALLBACK: EngineMethodDefaults = {
   icing_method: 'ogimet_nwp',
   cloud_source: 'nwp',

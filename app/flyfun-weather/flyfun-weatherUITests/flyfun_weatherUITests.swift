@@ -384,6 +384,106 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
+    /// Journey (#605) — the cross-section layer bar in each layout mode, and the
+    /// scroll-trap fix. iPhone portrait: a compact chip switches its family in
+    /// place and press-and-hold opens the methods row. iPad: a full chip opens
+    /// its detail row. Both: a vertical swipe that starts ON the chart scrolls
+    /// the page — it used to be swallowed as a scrub. Then landscape. The
+    /// screenshots are the real check; an existence assertion passes on a
+    /// layout that is visibly broken.
+    @MainActor
+    func testCrossSectionLayerBar() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+        switchToBriefingTab(app, "Cross-Section")
+        let canvas = app.descendants(matching: .any)["crossSectionCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: Self.uiTimeout), "cross-section canvas should render")
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        attachScreenshot(app, "LayerBar-1-initial")
+
+        let icing = app.descendants(matching: .any)["layerFamily-icing"].firstMatch
+        XCTAssertTrue(icing.waitForExistence(timeout: Self.uiTimeout), "the icing chip should be on the layer bar")
+        if isPad {
+            icing.tap()  // full chip: opens the family's detail row
+            XCTAssertTrue(app.descendants(matching: .any)["layerFamilyDetail-icing"].waitForExistence(timeout: Self.uiTimeout),
+                          "tapping a family chip should open its detail row")
+        } else {
+            icing.tap()  // compact chip: switches the family off in place
+            let clouds = app.descendants(matching: .any)["layerFamily-clouds"].firstMatch
+            clouds.press(forDuration: 0.8)
+            XCTAssertTrue(app.descendants(matching: .any)["layerFamilyDetail-clouds"].waitForExistence(timeout: Self.uiTimeout),
+                          "press-and-hold on a chip should open its methods row")
+        }
+        attachScreenshot(app, "LayerBar-2-detail")
+
+        // Scroll trap: a vertical swipe starting on the chart must move the page.
+        let before = canvas.frame.minY
+        canvas.swipeUp()
+        XCTAssertLessThan(canvas.frame.minY, before - 20,
+                          "a vertical swipe on the chart should scroll the page, not scrub")
+        attachScreenshot(app, "LayerBar-3-scrolled")
+
+        // Back to the top before rotating, so iPad's bar is on screen to measure.
+        app.swipeDown()
+        app.swipeDown()
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(canvas.waitForExistence(timeout: Self.uiTimeout), "canvas should render in landscape")
+        if !isPad {
+            // iPhone landscape is the chart alone: the floating tab bar used to
+            // sit over the terrain and the distance axis.
+            let tabGone = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"),
+                object: app.tabBars.buttons["Cross-Section"])
+            XCTAssertEqual(XCTWaiter.wait(for: [tabGone], timeout: Self.uiTimeout), .completed,
+                           "landscape should hide the tab bar")
+        }
+        // Let the rotation animation finish before measuring.
+        Thread.sleep(forTimeInterval: 2)
+
+        // Landscape is asserted on FRAMES: XCUI's landscape screenshots come
+        // back rotated and cropped to the left half, so they cannot show a
+        // pinned control drawn over another one — the bug this layout fixed.
+        let sounding = app.buttons["Sounding"].firstMatch
+        let options = app.buttons["crossSectionOptions"].firstMatch
+        let cloudsChip = app.descendants(matching: .any)["layerFamily-clouds"].firstMatch
+        let frames = [
+            "window \(app.windows.firstMatch.frame)",
+            // iPhone landscape hides the navigation bar entirely.
+            "navBar \(app.navigationBars.firstMatch.exists ? "\(app.navigationBars.firstMatch.frame)" : "hidden")",
+            "sounding \(sounding.frame) hittable=\(sounding.isHittable)",
+            "options \(options.frame) hittable=\(options.isHittable)",
+            "cloudsChip \(cloudsChip.frame) hittable=\(cloudsChip.isHittable)",
+            "canvas \(canvas.frame)",
+        ].joined(separator: "\n")
+        let layout = XCTAttachment(string: frames)
+        layout.name = "LayerBar-4-landscape-frames"
+        layout.lifetime = .keepAlways
+        add(layout)
+        XCTAssertTrue(sounding.isHittable, "Sounding › should be reachable in landscape")
+        XCTAssertTrue(options.isHittable, "the options button should be reachable in landscape")
+        XCTAssertFalse(sounding.frame.intersects(options.frame), "Sounding › and the options button must not overlap")
+        XCTAssertTrue(cloudsChip.isHittable, "the family chips should be reachable in landscape")
+        XCTAssertLessThanOrEqual(cloudsChip.frame.maxY, canvas.frame.minY + 1, "the chips sit above the chart, not over it")
+        XCTAssertLessThanOrEqual(canvas.frame.maxY, app.windows.firstMatch.frame.maxY + 1,
+                                 "the whole chart, axis included, should be on screen")
+
+        attachScreenshot(app, "LayerBar-4-landscape")
+        let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screen.name = "LayerBar-4-landscape-screen"
+        screen.lifetime = .keepAlways
+        add(screen)
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    @MainActor
+    private func attachScreenshot(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     /// Journey 5 (#318) — offline path. Launch in mock-offline mode and confirm
     /// the flight list shows the offline banner (read-only state) and that the
     /// one offline-ready flight (fixture-1) still opens from cache. iPhone + iPad.

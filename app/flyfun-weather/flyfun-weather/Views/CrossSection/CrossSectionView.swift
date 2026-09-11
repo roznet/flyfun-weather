@@ -2,10 +2,25 @@ import SwiftUI
 import TipKit
 
 /// SwiftUI Canvas wrapper for the cross-section visualization (§4.7 interaction).
-/// Touch model (a): tap/drag = scrub → moves a continuous cursor that drives the
-/// readout strip and the shared active point; "Sounding ›" deep-links to the
-/// Skew-T tab. Config lives in a bottom sheet behind a "Layers" pill (§4.5);
-/// the model selector stays in the chrome. Landscape = full-bleed focus mode.
+///
+/// Three layouts, chosen from both size classes (#605, `CrossSectionLayoutMode`):
+///  - **iPhone portrait** — a narrow chart with room around it: compact family
+///    chips wrap directly under the chart; press and hold a chip for its methods.
+///  - **iPad** — a wide chart with room to spare: the web's layer bar (`Icing ·
+///    SFIP-NWP` chips over one swapping detail row) sits above the chart, in a
+///    band that used to be empty, and the chart is capped to the viewport so
+///    bar, chart and axis are all on screen together.
+///  - **iPhone landscape** — the tightest view, and fully immersive: the tab
+///    and navigation bars are gone (rotate back to navigate), the readout and one
+///    chip row sit over the chart; double-tap the chart to hide those too.
+/// In all three, flipping a layer changes the chart in place — nothing covers it
+/// — because comparing two states is the point. The options sheet keeps only
+/// what you set once (emulation, theme, the observed corridor).
+///
+/// Touch model: tap places the cursor; a drag that starts sideways scrubs; press
+/// and hold, then drag, scrubs in any direction; a drag that starts vertically
+/// scrolls the page (`ScrubPanGesture`). The cursor drives the readout strip and
+/// the shared active point; "Sounding ›" scrolls to the Skew-T below.
 struct CrossSectionView: View {
     let viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
@@ -13,8 +28,15 @@ struct CrossSectionView: View {
     @State private var canvasSize: CGSize = .zero
     @State private var scrubDistanceNm: Double?
     @State private var scrubAltitudeFt: Double?
-    @State private var showingConfig = false
+    @State private var showingOptions = false
     @State private var chromeHidden = false
+    /// The family whose detail row is open on the layer bar, if any.
+    @State private var openFamily: LayerFamily?
+    /// The scroll viewport, and the height of everything stacked above the chart:
+    /// the iPad chart is capped to what is left, so its axis never lands below
+    /// the fold under the bar (#605).
+    @State private var viewportSize: CGSize = .zero
+    @State private var aboveChartHeight: CGFloat = 0
     /// Route-graph metric selection, lifted here so the readout strip and the
     /// graph share one cursor + one metric choice (§4.7 unified cursor).
     /// Persisted (#9) so the chosen metrics survive relaunch, like the web.
@@ -24,29 +46,34 @@ struct CrossSectionView: View {
     /// `FocusIntent.target == .skewT` set this to "skewt"; the portrait scroll
     /// view scrolls to the embedded Skew-T and resets it to nil.
     @State private var scrollTarget: String?
-    /// Native scroll position for the portrait layout (replaces `ScrollViewReader`).
+    /// Native scroll position for the scrolling layouts (replaces `ScrollViewReader`).
     @State private var scrollPosition = ScrollPosition(idType: String.self)
+    @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.verticalSizeClass) private var vSizeClass
 
     // Contextual tips (#312), gated on this tab being visible.
     private let layersTip = CrossSectionLayersTip()
     private let scrubTip = CrossSectionScrubTip()
-    /// One-shot guard so the scrub tip is retired exactly once — and only in
-    /// portrait, where its `TipView` is actually rendered. Landscape focus has
-    /// no scrub `TipView` (distraction-free by design), so a landscape drag must
-    /// not consume the tip before the user ever sees it.
+    /// One-shot guard so the scrub tip is retired exactly once — and only where
+    /// its `TipView` is actually rendered. Landscape focus has no scrub
+    /// `TipView` (distraction-free by design), so a landscape drag must not
+    /// consume the tip before the user ever sees it.
     @State private var scrubTipInvalidated = false
+
+    private var mode: CrossSectionLayoutMode {
+        CrossSectionLayoutMode(horizontal: hSizeClass, vertical: vSizeClass)
+    }
 
     /// iPhone landscape → immersive full-bleed focus mode (§4.7): cross-section
     /// is a wide artifact, so landscape gives it the right aspect ratio.
-    private var isLandscapeFocus: Bool { vSizeClass == .compact }
+    private var isLandscapeFocus: Bool { mode == .phoneLandscape }
 
     var body: some View {
         Group {
             if isLandscapeFocus {
                 landscapeFocus
             } else {
-                portrait
+                scrolling
             }
         }
         .onChange(of: viewModel.selectedModel) { updateVizData() }
@@ -58,16 +85,26 @@ struct CrossSectionView: View {
         .onChange(of: viewModel.snapshotState.isLoaded) { updateVizData() }
         .onChange(of: observedComputedAt) { updateVizData() }
         .onChange(of: viewModel.focusIntent) { applyFocusIntent() }
+        // What FlyFun, the compact chips and the advisory chip resolve through:
+        // the methods this briefing actually graded with (#605).
+        .onChange(of: manifestGradedMethods, initial: true) { _, methods in
+            csVM.setGradedMethods(methods)
+        }
         .task { updateVizData(); applyFocusIntent() }
-        .sheet(isPresented: $showingConfig) {
-            // The Highlight visibility toggle shows only while a highlight is
-            // active AND the selected model has geometry for it (#374).
+        .sheet(isPresented: $showingOptions) {
             CrossSectionConfigSheet(
                 csVM: csVM,
-                highlightAvailable: derivedHighlights != nil,
+                showsLayerPills: mode != .regular,
                 snapshot: snapshot
             )
         }
+        // iPhone landscape is the chart and nothing else (#605): the floating
+        // tab bar sat over the terrain and the distance axis, and landscape
+        // content is not inset below the floating navigation bar, so the
+        // readout — "Sounding ›" included — sat under it, unreachable. Both bars
+        // go; rotating back to portrait is how you navigate.
+        .toolbar(isLandscapeFocus ? .hidden : .automatic, for: .tabBar)
+        .toolbar(isLandscapeFocus ? .hidden : .automatic, for: .navigationBar)
         // Gate the cross-section tips on this tab being on screen so they never
         // fire from the Advisory/Map tabs (#312).
         .onAppear { setCrossSectionTipsVisible(true) }
@@ -83,29 +120,38 @@ struct CrossSectionView: View {
         CrossSectionScrubTip.crossSectionVisible = visible
     }
 
-    // MARK: Portrait layout
+    private func retireLayersTip() {
+        layersTip.invalidate(reason: .actionPerformed)
+    }
 
-    private var portrait: some View {
+    // MARK: Scrolling layouts (iPhone portrait, iPad)
+
+    private var scrolling: some View {
         ScrollView {
             VStack(spacing: 0) {
-                chromeBar
-                CrossSectionReadoutView(
-                    vizData: csVM.vizData ?? Self.emptyViz,
-                    scrubDistanceNm: scrubDistanceNm,
-                    scrubAltitudeFt: scrubAltitudeFt,
-                    onSounding: goToSounding,
-                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
-                )
-                // "Tap any point" coachmark above the canvas (#312); cleared
-                // on the first scrub via `updateScrub`. Only render once
-                // there's a canvas to interact with — otherwise the tip
-                // would be consumed coaching against a loading/error
-                // placeholder.
-                if csVM.vizData != nil {
-                    TipView(scrubTip)
-                        .padding(.horizontal, Theme.cardPadding)
+                VStack(spacing: 0) {
+                    chromeBar
+                    if mode == .regular { regularLayerBand }
+                    CrossSectionReadoutView(
+                        vizData: csVM.vizData ?? Self.emptyViz,
+                        scrubDistanceNm: scrubDistanceNm,
+                        scrubAltitudeFt: scrubAltitudeFt,
+                        onSounding: goToSounding,
+                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
+                    )
+                    // "Tap any point" coachmark above the canvas (#312); cleared
+                    // on the first scrub via `updateScrub`. Only render once
+                    // there's a canvas to interact with — otherwise the tip
+                    // would be consumed coaching against a loading/error
+                    // placeholder.
+                    if csVM.vizData != nil {
+                        TipView(scrubTip)
+                            .padding(.horizontal, Theme.cardPadding)
+                    }
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { aboveChartHeight = $0 }
                 crossSectionCanvas
+                if mode == .phonePortrait { phoneLayerBand }
                 RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
                                leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
                 skewTSection
@@ -113,6 +159,7 @@ struct CrossSectionView: View {
             .scrollTargetLayout()
         }
         .scrollPosition($scrollPosition)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { viewportSize = $0 }
         .background(Theme.bg)
         .onChange(of: scrollTarget) { _, target in
             guard let target else { return }
@@ -120,7 +167,7 @@ struct CrossSectionView: View {
             scrollTarget = nil
         }
         .onAppear {
-            // The landscape-immersive layout has no portrait scroll view, so a
+            // The landscape-immersive layout has no scroll view, so a
             // "Sounding ›" tap there sets `scrollTarget` with nothing to consume
             // it. Returning to portrait re-mounts this scroll view — honor the
             // pending target here (onChange won't fire: unchanged).
@@ -129,6 +176,68 @@ struct CrossSectionView: View {
                 scrollTarget = nil
             }
         }
+    }
+
+    /// iPad: the web's bar, in the band above the chart that used to be empty.
+    /// The slot under it holds either the open family's detail row — one line on
+    /// a wide screen — or the Focus caption, so opening a family replaces a line
+    /// rather than adding one, and the chart does not move.
+    private var regularLayerBand: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingS) {
+            TipView(layersTip)
+            LayerBarView(
+                csVM: csVM, style: .full, openFamily: $openFamily,
+                highlightAvailable: derivedHighlights != nil, onInteract: retireLayersTip)
+            if let family = openFamily {
+                FamilyDetailRow(csVM: csVM, family: family) { closeFamily() }
+            } else {
+                focusCaption
+            }
+        }
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, Theme.spacingS)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// iPhone portrait: compact chips directly under the chart — one tap flips a
+    /// family with the method chosen for you, and the result is right above the
+    /// finger. Press and hold opens that family's detail row below the chips,
+    /// which pushes the route graph down, never the chart.
+    private var phoneLayerBand: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingS) {
+            TipView(layersTip)
+            LayerBarView(
+                csVM: csVM, style: .compact, openFamily: $openFamily,
+                highlightAvailable: derivedHighlights != nil, onInteract: retireLayersTip)
+            if let family = openFamily {
+                FamilyDetailRow(csVM: csVM, family: family) { closeFamily() }
+            } else {
+                focusCaption
+            }
+        }
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, Theme.spacingS)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The Focus lens's caption while one is active; otherwise how the bar works.
+    @ViewBuilder private var focusCaption: some View {
+        if let caption = csVM.activeAdvisoryPreset.flatMap({ CrossSectionPresets.advisory[$0]?.caption }) {
+            Label(caption, systemImage: "scope")
+                .font(.caption)
+                .foregroundStyle(Theme.textMuted)
+                .lineLimit(2)
+        } else {
+            Text(mode == .regular
+                 ? "Tap a family to choose its methods."
+                 : "Tap to show or hide · press and hold for methods.")
+                .font(.caption)
+                .foregroundStyle(Theme.textMuted)
+        }
+    }
+
+    private func closeFamily() {
+        withAnimation(.snappy(duration: 0.2)) { openFamily = nil }
     }
 
     /// Skew-T folded under the cross-section (#310): one scroll, bounded height
@@ -144,60 +253,83 @@ struct CrossSectionView: View {
 
     // MARK: Landscape immersive focus
 
+    /// The readout and one row of compact chips over a full-bleed chart. The
+    /// options button ends the chip row, so nothing is pinned into a corner the
+    /// readout's "Sounding ›" already uses (the two used to draw on top of each
+    /// other, #605). Double-tap the chart to hide every control.
     private var landscapeFocus: some View {
-        ZStack(alignment: .topTrailing) {
+        VStack(spacing: 0) {
+            if !chromeHidden {
+                CrossSectionReadoutView(
+                    vizData: csVM.vizData ?? Self.emptyViz,
+                    scrubDistanceNm: scrubDistanceNm,
+                    scrubAltitudeFt: scrubAltitudeFt,
+                    onSounding: goToSounding,
+                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
+                )
+                HStack(spacing: Theme.spacingS) {
+                    LayerBarView(
+                        csVM: csVM, style: .compact, wraps: false, openFamily: .constant(nil),
+                        allowsDetail: false, highlightAvailable: derivedHighlights != nil,
+                        onInteract: retireLayersTip)
+                    optionsButton
+                }
+                .padding(.horizontal, Theme.cardPadding)
+                .padding(.vertical, 6)
+                .background(Theme.surface)
+            }
             crossSectionCanvas
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !chromeHidden {
-                VStack {
-                    CrossSectionReadoutView(
-                        vizData: csVM.vizData ?? Self.emptyViz,
-                        scrubDistanceNm: scrubDistanceNm,
-                        scrubAltitudeFt: scrubAltitudeFt,
-                        onSounding: goToSounding,
-                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
-                    )
-                    Spacer()
-                }
-                layersPill
-                    .padding(Theme.cardPadding)
-            }
         }
         .background(Theme.bg)
-        .onTapGesture(count: 2) { withAnimation { chromeHidden.toggle() } } // Photos-style chrome toggle
     }
 
-    // MARK: Chrome bar (portrait)
+    // MARK: Chrome bar (scrolling layouts)
 
+    /// Model, Focus and — where there is room — Emulate, then the options button.
+    /// Model switching is the most frequent action of all, so it stays here.
     private var chromeBar: some View {
-        HStack(spacing: Theme.spacingM) {
+        HStack(spacing: Theme.spacingS) {
             ModelSelectorView(selectedModel: Binding(
                 get: { viewModel.selectedModel },
                 set: { viewModel.selectModel($0) }  // sticky pick (#8/#9)
             ), models: viewModel.availableModels)
-            Spacer()
-            layersPill
+            FocusMenu(csVM: csVM)
+            if mode == .regular { EmulateMenu(csVM: csVM) }
+            Spacer(minLength: 0)
+            optionsButton
         }
         .padding(.horizontal, Theme.cardPadding)
         .padding(.vertical, Theme.spacingS)
     }
 
-    private var layersPill: some View {
+    private var optionsButton: some View {
         Button {
-            showingConfig = true
-            layersTip.invalidate(reason: .actionPerformed)
+            showingOptions = true
+            retireLayersTip()
         } label: {
-            Label("Layers", systemImage: "slider.horizontal.3")
+            Image(systemName: "slider.horizontal.3")
                 .font(.caption.weight(.medium))
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(Theme.primary.opacity(0.12), in: Capsule())
                 .foregroundStyle(Theme.primary)
         }
         .buttonStyle(.plain)
-        .popoverTip(layersTip)
+        .accessibilityLabel("Chart options")
+        .accessibilityIdentifier("crossSectionOptions")
     }
 
     // MARK: Canvas
+
+    /// iPad: the chart fills the width but never pushes its own axis below the
+    /// fold — capped to the viewport left under the bar and the readout. nil
+    /// elsewhere (phone portrait keeps the 2:1 artifact; landscape fills).
+    private var regularChartHeight: CGFloat? {
+        guard mode == .regular, viewportSize.width > 0 else { return nil }
+        let natural = viewportSize.width / 2
+        let room = viewportSize.height - aboveChartHeight - Theme.spacingM
+        return max(300, min(natural, room))
+    }
 
     @ViewBuilder
     private var crossSectionCanvas: some View {
@@ -234,16 +366,20 @@ struct CrossSectionView: View {
                 // compare the non-Equatable `VizRouteData`, and redraws every scrub
                 // tick — defeating the split (#303). Do not remove.
                 .equatable()
-                .frame(minHeight: 300)
-                // Portrait constrains to a 2:1 artifact; landscape fills the screen.
+                // Portrait constrains to a 2:1 artifact (300pt floor); landscape
+                // fills what is left — no floor, or the axis runs off the bottom
+                // of a 402pt screen; iPad caps the height to the viewport.
                 // (Passing `nil` to aspectRatio means "use intrinsic ratio" — a
                 // Canvas has none, which collapsed the chart to a sliver. #9)
-                .modifier(CanvasAspectModifier(landscape: isLandscapeFocus))
+                .modifier(CanvasAspectModifier(landscape: isLandscapeFocus, fixedHeight: regularChartHeight))
                 .overlay {
                     CrossSectionCursorOverlay(data: vizData, cursorDistanceNm: cursor, aircraft: aircraft)
                 }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
-                .gesture(scrubGesture)
+                .modifier(ScrubGestures(
+                    scrollsWithPage: !isLandscapeFocus,
+                    onScrub: updateScrub(at:),
+                    onDoubleTap: { withAnimation { chromeHidden.toggle() } }))
                 // A Canvas has no intrinsic a11y children, so expose it as a
                 // single element with a stable id. The XCUITest cross-section
                 // journey (#318) asserts this renders (only present once the
@@ -266,18 +402,13 @@ struct CrossSectionView: View {
         }
     }
 
-    // MARK: Scrub gesture (tap = zero-length drag)
-
-    private var scrubGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in updateScrub(at: value.location) }
-    }
+    // MARK: Scrub
 
     private func updateScrub(at location: CGPoint) {
         guard let vizData = csVM.vizData, canvasSize.width > 0, !vizData.points.isEmpty else { return }
-        // First real scrub retires the "tap any point" tip — but only in
-        // portrait, where the tip is shown. The drag fires this repeatedly, so
-        // short-circuit after the first to avoid hammering TipKit.
+        // First real scrub retires the "tap any point" tip — but only where the
+        // tip is shown. The drag fires this repeatedly, so short-circuit after
+        // the first to avoid hammering TipKit.
         if !scrubTipInvalidated && !isLandscapeFocus {
             scrubTipInvalidated = true
             scrubTip.invalidate(reason: .actionPerformed)
@@ -300,9 +431,12 @@ struct CrossSectionView: View {
         }
     }
 
+    // MARK: Focus intents (advisory chip, deep links)
+
     /// Consume a pending deep-link intent targeting the cross-section (§4.6
-    /// "Show on cross-section ›"): enable the advisory's layer and move the
-    /// scrub cursor to the focus point, then clear the intent.
+    /// "Show on cross-section ›"): apply the advisory's lens, light up its
+    /// highlight and move the scrub cursor to the focus point, then clear the
+    /// intent.
     private func applyFocusIntent() {
         guard let intent = viewModel.focusIntent,
               intent.target == .crossSection || intent.target == .skewT else { return }
@@ -311,21 +445,33 @@ struct CrossSectionView: View {
         // the highlight, then skip re-activation.
         let highlightAlreadyOn = intent.advisoryId != nil
             && csVM.activeHighlightAdvisoryId == intent.advisoryId
-        // An advisory lens configures the whole view; a single layerId just
-        // force-enables one layer. Apply the lens first so a layerId can refine it.
-        if let presetId = intent.advisoryPresetId,
-           let preset = CrossSectionPresets.advisory[presetId] {
-            csVM.applyAdvisoryPreset(preset)
-        }
-        if let layerId = intent.layerId { csVM.enableLayer(layerId) }
-        // Highlight activation (#374). Old packs / non-emitting advisories carry
-        // no highlight geometry, so the guard falls through and the action
-        // behaves exactly as before highlights existed.
-        var peakDistNm: Double?
+        // The advisory being lit up, if any. Old packs / non-emitting advisories
+        // carry no highlight geometry, so this stays nil and the action behaves
+        // exactly as before highlights existed.
+        var highlighting: RouteAdvisoryResult?
         if let advisoryId = intent.advisoryId, !highlightAlreadyOn,
            case .loaded(let manifest) = viewModel.advisoriesState,
            let advisory = manifest.advisories.first(where: { $0.advisoryId == advisoryId }),
            advisory.perModel.contains(where: { $0.highlights != nil }) {
+            highlighting = advisory
+        }
+        // An advisory lens configures the whole view; a single layerId just
+        // force-enables one layer. Apply the lens first so a layerId can refine it.
+        if let presetId = intent.advisoryPresetId, let lens = lens(for: intent, presetId: presetId) {
+            // Resolve through the methods the ADVISORY was graded under — its
+            // representative model's `primary_method_id` — while lighting it up,
+            // so the chart paints the evidence the grade actually used; turning
+            // it off returns to the briefing's graded methods. Mirrors web
+            // `handleAdvisoryChip`.
+            let methods = highlighting.map {
+                CrossSectionPresets.advisoryMethodOverrides(
+                    $0, model: $0.resolvedRepresentativeModel, methods: csVM.gradedMethods)
+            } ?? csVM.gradedMethods
+            csVM.applyAdvisoryPreset(lens, methods: methods)
+        }
+        if let layerId = intent.layerId { csVM.enableLayer(layerId) }
+        var peakDistNm: Double?
+        if let advisory = highlighting {
             // Switch to the advisory's representative model so the highlight
             // reflects the aggregate verdict. Assigned directly (not via
             // `selectModel`) — a programmatic switch must not overwrite the
@@ -334,7 +480,7 @@ struct CrossSectionView: View {
                viewModel.availableModels.contains(rep) {
                 viewModel.selectedModel = rep
             }
-            csVM.setHighlightAdvisory(advisoryId)  // also force-shows the highlight
+            csVM.setHighlightAdvisory(advisory.advisoryId)  // also force-shows the highlight
             peakDistNm = advisory.perModel
                 .first(where: { $0.model == viewModel.selectedModel })?
                 .highlights?.peakDistNm
@@ -353,6 +499,16 @@ struct CrossSectionView: View {
         // A skewT-targeted intent (#310) means "scroll to the embedded Skew-T".
         if intent.target == .skewT { scrollTarget = "skewt" }
         viewModel.clearFocusIntent()
+    }
+
+    /// The lens an intent names — with the advisory's own extras (FIKI's warm-nose
+    /// isotherms) when it came from that advisory's chip.
+    private func lens(for intent: FocusIntent, presetId: String) -> AdvisoryPreset? {
+        if let advisoryId = intent.advisoryId,
+           let lens = CrossSectionPresets.preset(forAdvisory: advisoryId), lens.id == presetId {
+            return lens
+        }
+        return CrossSectionPresets.advisory[presetId]
     }
 
     /// Snap the shared active route point to the nearest analysis point (same
@@ -375,6 +531,15 @@ struct CrossSectionView: View {
             manifest: manifest,
             advisoryId: csVM.activeHighlightAdvisoryId,
             model: viewModel.selectedModel)
+    }
+
+    /// The methods this briefing graded with, re-read whenever the advisories
+    /// manifest changes (load, recalc). Engine defaults until it loads.
+    private var manifestGradedMethods: [LayerGroup: String] {
+        guard case .loaded(let manifest) = viewModel.advisoriesState else {
+            return CrossSectionPresets.engineMethodDefaults
+        }
+        return CrossSectionPresets.gradedMethods(from: manifest)
     }
 
     private func goToSounding() {
@@ -438,18 +603,45 @@ struct CrossSectionView: View {
     }
 }
 
-/// Sizes the cross-section canvas per orientation: portrait keeps a 2:1
-/// artifact (`.fit`), landscape fills the screen. Kept as a modifier (not an
-/// inline `.aspectRatio(landscape ? nil : 2.0, ...)`) because passing `nil`
-/// makes SwiftUI use the view's *intrinsic* ratio — a Canvas has none, which
+/// Sizes the cross-section canvas per layout: phone portrait keeps a 2:1
+/// artifact (`.fit`), landscape fills the screen, and iPad takes the capped
+/// height it is given. Kept as a modifier (not an inline
+/// `.aspectRatio(landscape ? nil : 2.0, ...)`) because passing `nil` makes
+/// SwiftUI use the view's *intrinsic* ratio — a Canvas has none, which
 /// collapsed the chart to a vertical sliver in iPhone landscape. (#9)
 private struct CanvasAspectModifier: ViewModifier {
     let landscape: Bool
+    var fixedHeight: CGFloat?
+
     func body(content: Content) -> some View {
         if landscape {
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let fixedHeight {
+            content.frame(maxWidth: .infinity).frame(height: fixedHeight)
         } else {
-            content.aspectRatio(2.0, contentMode: .fit)
+            content.frame(minHeight: 300).aspectRatio(2.0, contentMode: .fit)
+        }
+    }
+}
+
+/// The canvas's touch handling (#605). In a scroll view: tap to place the
+/// cursor; a sideways drag, or a hold then any drag, scrubs; a vertical drag
+/// scrolls the page (`ScrubPanGesture`). In landscape focus there is no page to
+/// scroll, so any drag scrubs at once and a double-tap hides the chrome.
+private struct ScrubGestures: ViewModifier {
+    let scrollsWithPage: Bool
+    let onScrub: (CGPoint) -> Void
+    let onDoubleTap: () -> Void
+
+    func body(content: Content) -> some View {
+        if scrollsWithPage {
+            content
+                .gesture(ScrubPanGesture(onChanged: onScrub))
+                .onTapGesture(coordinateSpace: .local) { onScrub($0) }
+        } else {
+            content
+                .gesture(DragGesture(minimumDistance: 0).onChanged { onScrub($0.location) })
+                .simultaneousGesture(TapGesture(count: 2).onEnded(onDoubleTap))
         }
     }
 }

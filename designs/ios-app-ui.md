@@ -86,8 +86,44 @@ Planning/viewer mode — default when not in an active flight session. What the 
 |---|---|
 | **Advisory** | `AdvisoryTabView` — accented hero (traffic-light + reason) → `DigestAltitudeWarning` → digest 👍/👎 → `DebriefCard` (past owned flights) → responsive advisory grid (`LazyVGrid` adaptive ≥280pt; AMBER/RED as `AdvisoryCardView`s, all GREEN collapsed into `GreenAdvisoryStrip` pills) → `AirportConditionsView` → conditional `RouteObservationsView` / `RouteSigmetsView` (D-0, only when something actually reported/matched) → `AlternatesView` (snapshot carries alternates) → `TimingScenariosView` → **Watch** narrative last (markdown, not chips — it reads as the "keep an eye on this" close, #4). Per-hazard digest narrative is attached to the matching advisory card, not Discussion. |
 | **Discussion** | `DiscussionTabView` — the digest's four narrative sections in order (Synoptic Overview, Specific Concerns, Trend, Watch Items), each dropped when the digest didn't populate it, with `DigestAltitudeWarning` above the prose. Watch is deliberately repeated from the Advisory tab. Surface-pressure & front charts are still a deferred fast-follow. |
-| **Cross-Section** | `CrossSectionView` with the Skew-T (`SkewTTabView`, bounded height) folded **below it in one scroll**. The "Sounding ›" deep-link and `FocusIntent.target == .skewT` scroll to the embedded Skew-T instead of switching tabs. |
+| **Cross-Section** | `CrossSectionView` with the Skew-T (`SkewTTabView`, bounded height) folded **below it in one scroll**. The "Sounding ›" deep-link and `FocusIntent.target == .skewT` scroll to the embedded Skew-T instead of switching tabs. Layer control is an inline family bar in three size-class layouts — see **Cross-section layer bar** below. |
 | **Map** | `RouteMapView` — `MKMapView`-backed (`RouteMapKitView`, migrated off SwiftUI `Map` in #428) route map: per-segment metric colour+width from the shared `MapMetrics` registry (iPad drives colour and width from two independent pickers, iPhone from one), an altitude slider for level-dependent metrics, waypoint tap → conditions, plus an **airport-forecast overlay** (#428): per-airport markers coloured by the same served forecast catalog as the full forecast map, with a control cluster — on/off toggle, independent metric picker, valid-time label, and an "open full forecast map" deep-link. Only a new day/hour slice fetches (`RouteForecastOverlayModel`); model/metric switches recolour client-side. Overlay visibility + metric persist in `@AppStorage` under the same keys the web stores in localStorage (`mapForecastOverlayVisible`, `mapForecastMetric`). |
+
+**Cross-section layer bar (#605).** The tab no longer routes layer changes
+through a modal sheet. The design invariant: *anything a pilot toggles in order
+to compare never covers the chart* — a sheet hides one of the two states being
+compared. Layout is chosen from **both** size classes (`CrossSectionLayoutMode`),
+so iPad Split View at a third of the screen degrades to the phone layout:
+
+| Mode | Size classes | Layer control |
+|---|---|---|
+| iPhone portrait | (compact, regular) | Compact `LayerFamily` chips wrap **under** the chart — tap switches a family (method chosen for you), press-and-hold opens that family's detail row below the chips, so the route graph moves, never the chart. |
+| iPad | (regular, regular) | The web's bar **above** the chart, in the band that used to be empty: `Icing · SFIP-NWP` chips, then one slot holding either the open family's detail row (one line when it fits, via `ViewThatFits`) or the Focus caption — so opening a family replaces a line and the chart does not move. The chart height is capped to the viewport left under the bar (`regularChartHeight`), keeping the axis above the fold. |
+| iPhone landscape | (any, compact) | Fully immersive: tab bar **and** nav bar hidden (landscape content is not inset below the floating nav bar, so the readout sat under it); readout + one scrolling chip row with the options button at its end; double-tap the chart hides those too. Rotate back to navigate. |
+
+The chrome row carries Model · **Focus** (· **Emulate** on iPad). Focus (the
+advisory lenses) and Emulate (GRAMET / Windy / ForeFlight, or **FlyFun** = the
+methods this briefing graded with) *compose*: an emulation supplies the methods
+and theme, a lens asks for "the preferred layer of each group" and resolves
+through them; changing the emulation re-applies an active lens, and a manual
+layer edit drops the lens but keeps the emulation (`CrossSectionViewModel`).
+Graded methods come from the advisories manifest's `primary_method_id`
+(`CrossSectionPresets.gradedMethods`), the same source the web uses. Each family
+has an **About** panel (popover on iPad, sheet on iPhone) built from the bundled
+metrics catalog via `CrossSectionLayer.metricIds`. The options sheet
+(`CrossSectionConfigSheet`) keeps only set-once settings: emulation, theme,
+observed corridor + source ages, and — on iPhone — every family's pills.
+
+**Scrub vs scroll.** `ScrubPanGesture` (a `UIGestureRecognizerRepresentable`)
+decides by direction when it would begin: a sideways drag scrubs, a hold (0.25 s)
+then any drag scrubs, and a vertical drag *fails* so the enclosing scroll view —
+made to wait for exactly that failure — scrolls. Tap places the cursor. The old
+`DragGesture(minimumDistance: 0)` claimed every touch, so a chart filling the
+screen trapped the page. Pinning the chart outside the `ScrollView` was rejected:
+that is the external-sibling shape that composites zero pixels on
+re-presentation (the #436/#437 bug), and on iPad landscape it would leave ~100pt
+for the graph and Skew-T. Landscape focus has no scroll view and keeps the
+immediate drag.
 
 **Chrome / space reclaim (#310 item 1).** The old standalone `BriefingHeaderView`
 band is gone: route identity moved to `navigationTitle` + `.navigationSubtitle`

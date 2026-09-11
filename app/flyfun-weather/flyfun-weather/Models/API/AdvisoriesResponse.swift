@@ -62,6 +62,12 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     /// Absent/null on old packs and for evaluators that don't emit it — the
     /// feature is then silently absent (chip behaves as before highlights).
     let highlights: AdvisoryHighlights?
+    /// The method this model's grade actually ran on (`sfip_nwp`, `dd`, `thermo`,
+    /// …), already reflecting any backend fallback (#408). Set on flagged grades
+    /// of the method-bearing advisories only. Drives which layer the
+    /// cross-section's compact chips, FlyFun and advisory chip resolve to (#605).
+    /// Optional so old packs decode.
+    let primaryMethodId: String?
 
     var id: String { model }
 }
@@ -174,4 +180,16 @@ struct RunwayWind: Codable, Sendable {
     let headingDeg: Double
     let crosswindKt: Double
     let headwindKt: Double
+}
+
+extension RouteAdvisoryResult {
+    /// The model whose verdict the card quotes: the server's
+    /// `representative_model` (the model holding `aggregateStatus` with the
+    /// largest flagged extent). Old packs lack it, so fall back to the first
+    /// model matching the aggregate status, then the first model.
+    var resolvedRepresentativeModel: String? {
+        if let representativeModel { return representativeModel }
+        if let match = perModel.first(where: { $0.status == aggregateStatus }) { return match.model }
+        return perModel.first?.model
+    }
 }

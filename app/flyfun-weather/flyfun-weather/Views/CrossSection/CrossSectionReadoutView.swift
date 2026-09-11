@@ -52,7 +52,7 @@ struct CrossSectionReadoutView: View {
                 }
                 soundingButton
             } else {
-                Text("Drag across the chart to read values")
+                Text("Tap or drag the chart to read values")
                     .font(.caption)
                     .foregroundStyle(Theme.textMuted)
                 Spacer()

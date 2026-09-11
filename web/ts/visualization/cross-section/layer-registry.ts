@@ -124,6 +124,10 @@ export interface LayerGroupInfo {
  *  Clouds are handled separately (see {@link getPreferredLayerForGroup}): their
  *  preferred value is a bare SOURCE composed with the client-only render STYLE
  *  (`vizSettings.cloudStyle`) into a concrete layer id (#410). */
+// SYNC: iOS mirrors PREFERRED_METHOD_LAYER, METHOD_GROUPS, getCompactLayerOverrides
+// and methodsFromPreset in
+// app/flyfun-weather/flyfun-weather/Views/CrossSection/Layers/CrossSectionPresets.swift
+// (methodLayers / methodGroups / compactOverrides / methods(from:), #605).
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
   icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands', ieng: 'ieng-icing-bands' },
   turbulence: { ri: 'cat-bands', e_shear: 'e-shear-bands' },
@@ -441,6 +445,8 @@ export type LayerFamily =
  *  rather than by the user. Every *other* group must appear exactly once — a
  *  group missing from here would vanish from the bar with no error, so the
  *  tests assert this map covers them all. */
+// SYNC: iOS mirrors FAMILY_GROUPS, the family labels/hints/about text and
+// familySummary in app/flyfun-weather/flyfun-weather/Views/CrossSection/Layers/LayerFamily.swift (#605).
 const FAMILY_GROUPS: Record<LayerFamily, LayerGroup[]> = {
   clouds: ['clouds', 'obscuration'],
   convection: ['convection'],

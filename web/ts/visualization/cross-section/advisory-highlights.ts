@@ -46,6 +46,9 @@ export function representativeModel(adv: RouteAdvisoryResult): string | null {
  * (turbulence, mountain_wind, …) have no method axis to reconstitute.
  * `ifr_feasibility` is a composite whose `primary_method_id` is its icing axis.
  */
+// SYNC: iOS mirrors ADVISORY_METHOD_GROUP, deriveGradedMethods and
+// advisoryMethodOverrides in
+// app/flyfun-weather/flyfun-weather/Views/CrossSection/Layers/CrossSectionPresets.swift (#605).
 const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> = {
   vmc_cruise: 'clouds',
   cloud_top: 'clouds',

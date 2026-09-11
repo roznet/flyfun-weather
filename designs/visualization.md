@@ -182,13 +182,19 @@ Layer presets provide one-click configurations. Three presets (`PRESETS` in `lay
 
 (SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides (merge, not clean-slate).
 
-**SYNC with iOS.** Four hand-copied surfaces carry `SYNC:` comments in the TS and
-must move together (the `sync-ios-web` skill audits them): the three layer presets
-→ `CrossSectionPresets.swift`; the cloud source×style id mapping
-(`CLOUD_LAYER_BY_AXES` / `parseCloudLayerId`) → the same file; the NWP fallback
-(`applyNwpFallback` / `getDdSubstituteId` / `SINGLE_LAYER_FALLBACK` +
+**SYNC with iOS.** These hand-copied surfaces carry `SYNC:` comments in the TS
+and must move together (the `sync-ios-web` skill audits them): the three layer
+presets → `CrossSectionPresets.swift`; the cloud source×style id mapping
+(`CLOUD_LAYER_BY_AXES` / `parseCloudLayerId`) → the same file; the method tables
+(`PREFERRED_METHOD_LAYER` / `METHOD_GROUPS` / `methodsFromPreset` /
+`getCompactLayerOverrides`) → the same file; the graded methods
+(`ADVISORY_METHOD_GROUP` / `deriveGradedMethods` / `advisoryMethodOverrides`,
+`ENGINE_METHOD_DEFAULTS_FALLBACK`) → the same file; the families (`FAMILY_GROUPS`
+/ `familySummary` + the family hint/About copy) → `LayerFamily.swift`; the NWP
+fallback (`applyNwpFallback` / `getDdSubstituteId` / `SINGLE_LAYER_FALLBACK` +
 `getUnavailableLayers`) → `NwpFallback.swift`; and `ADVISORY_PRESETS` /
-`ADVISORY_TO_PRESET`. Stability-line dashes are a fifth (see below).
+`ADVISORY_TO_PRESET`. Stability-line dashes are one more (see below). The iOS
+layer bar itself (#605) is described in ios-app-ui.md.
 
 ### Advisory presets / lenses (#219, #308)
 

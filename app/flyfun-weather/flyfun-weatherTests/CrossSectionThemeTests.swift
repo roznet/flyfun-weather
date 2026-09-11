@@ -26,7 +26,9 @@ import Foundation
     /// test). Clears the persisted theme so a test that switches+persists a theme
     /// (#320) doesn't leak into the next test's boot-default expectation.
     init() {
-        UserDefaults.standard.removeObject(forKey: "crossSectionThemeId")
+        for key in CrossSectionViewModel.persistedDefaultsKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     // MARK: Registry
@@ -83,37 +85,38 @@ import Foundation
 
     // MARK: Preset → theme wiring (CrossSectionViewModel)
 
-    @Test func bootDefaultsToGrametThemeMatchingTheGrametLayerPreset() {
+    @Test func bootDefaultsToGrametThemeMatchingTheGrametEmulation() {
         let vm = CrossSectionViewModel()
-        // The booted layer preset is GRAMET, so the theme agrees on boot.
+        // The booted emulation is GRAMET, so the theme agrees on boot.
         #expect(vm.themeId == .gramet)
-        #expect(vm.currentPreset == .gramet)
+        #expect(vm.activeEmulation == "gramet")
         #expect(CrossSectionTheme.active.id == .gramet)
     }
 
-    @Test func selectingALayerPresetAlsoAppliesItsTheme() {
+    @Test func selectingAnEmulationAlsoAppliesItsTheme() {
         let vm = CrossSectionViewModel()
 
-        vm.applyPreset(.windy)
+        vm.applyEmulation("windy")
         #expect(vm.themeId == .light)          // web mapping: windy → light
         #expect(CrossSectionTheme.active.id == .light)
 
-        vm.applyPreset(.foreFlight)
+        vm.applyEmulation("foreflight")
         #expect(vm.themeId == .highContrast)   // web mapping: foreflight → high-contrast
         #expect(CrossSectionTheme.active.id == .highContrast)
 
-        vm.applyPreset(.gramet)
+        vm.applyEmulation("gramet")
         #expect(vm.themeId == .gramet)
     }
 
-    @Test func setThemeIsOrthogonalToTheLayerPreset() {
+    @Test func setThemeIsOrthogonalToTheEmulation() {
         let vm = CrossSectionViewModel()
         // Changing the theme alone must NOT disturb the layer set / preset label
         // (mirrors web `setVizTheme`, which leaves the preset alone).
         vm.setTheme(.standard)
         #expect(vm.themeId == .standard)
         #expect(CrossSectionTheme.active.id == .standard)
-        #expect(vm.currentPreset == .gramet)   // layers untouched → still GRAMET
+        #expect(vm.activeEmulation == "gramet")   // layers untouched → still GRAMET
+        #expect(vm.enabledLayers == CrossSectionPresets.bootDefaults)
     }
 
     @Test func themeChoiceIsPersistedAcrossViewModelInstances() {
