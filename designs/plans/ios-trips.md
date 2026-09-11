@@ -1,6 +1,9 @@
 # iOS trips — porting the conjunctive chain to a native shape
 
-> Status: **plan**, not built. Scope is "replicate the web app's trip
+> Status: **M1 + M2 built** (#607) — DTOs, `TripRepository`, the list layout,
+> the trip screen, and the four dropped-behaviour gaps. M3-M5 (trip actions
+> beyond refresh/rename/delete, membership, offline polish) are still plan.
+> Two findings from building it are recorded under "Built: what changed". Scope is "replicate the web app's trip
 > functionality with native iOS UX". The feature itself is defined in
 > [`designs/flight-trips.md`](../flight-trips.md) (#602) — read that first; this
 > doc only says how iOS should surface it.
@@ -475,3 +478,36 @@ selection rule are exactly the kind of hand-copied surface it exists to police.
 - [`designs/ios-app-ui.md`](../ios-app-ui.md) — cockpit constraints
 - [`designs/future/ios-web-known-gaps.md`](../future/ios-web-known-gaps.md) —
   where "full iOS trip UI is v2" should move once this lands
+
+## Built: what changed from this plan
+
+Recorded because both were discovered in the code, not in the design.
+
+**Swift's synthesized `Decodable` ignores default values.** A non-optional
+property with `= false` still throws `keyNotFound` when the key is absent —
+only `Optional` gets `decodeIfPresent`, and the default serves the memberwise
+initializer alone. The plan's "add `autoRefresh` to `TripLegRef`" would
+therefore have failed the **entire flight list** against a server that predates
+the field, since `TripLegRef` rides on `FlightResponse`. It is an `Optional`
+with a folded `tripAutoRefresh` accessor, matching the `isSubscribed` pattern
+already in that file, and the trip DTOs carry explicit tolerant `init(from:)`
+decoders in extensions (which preserves their memberwise initializers).
+
+**The post-edit re-queue retried the trip-claim 409.**
+`AddFlightViewModel.queueRefresh` treats a 409 as "a refresh is already running,
+wait and retry", sized for a single refresh clearing. The claimed-leg refusal is
+also a 409, but a chain holds a leg for a full pipeline run *per leg*, so every
+retry was spent for nothing and the loop then logged a misleading "still in
+progress". `TripRefreshConflict` tells the two apart; the trip case stops
+retrying. Known limitation: if the chain had already started on that leg, the
+edit's new parameters are not picked up, and the pilot's own Refresh button
+remains the backstop — the same position this task is in when it gives up for
+any other reason.
+
+**The AI paragraph is fetched when stale *or absent*, not only when stale.**
+The plan said stale-only. But `ai_summary` is nil both for a trip that never had
+one and for a trip where a member leg has AI switched off — and only
+`POST /ai-summary` returns which. Asking on the consent path costs nothing (the
+gate runs before generation), and without it the "AI is off for a leg" note the
+design asks for could never be shown. Still guarded to once per trip per view-model
+instance.
