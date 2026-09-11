@@ -388,4 +388,25 @@ struct TripLegRef: Codable, Sendable, Equatable {
     /// 1-based index in departure-time order.
     let position: Int
     let total: Int
+    /// The **trip's** auto-refresh switch, not this leg's.
+    ///
+    /// The control is split between two owners and the split is the point: for a
+    /// member leg the *trip* decides **whether** to refresh (it refreshes the
+    /// whole chain or none of it), while the leg keeps its own **hour** —
+    /// whichever leg comes due first pulls in the rest, so the earliest leg's
+    /// hour is the trip's effective refresh time. A leg's own `autoRefresh` is
+    /// what it reverts to on leaving the trip, so it is not what governs it here.
+    ///
+    /// **Optional, not `Bool = false`.** Swift's synthesized `Decodable` ignores
+    /// default values for non-optional properties — only `Optional` gets
+    /// `decodeIfPresent` — so `var autoRefresh: Bool = false` would throw
+    /// `keyNotFound` against a server that predates this field, failing the
+    /// *entire flight list* rather than one value. Same pattern (and same
+    /// reasoning) as `FlightResponse.isSubscribed`; read it through
+    /// `tripAutoRefresh`.
+    var autoRefresh: Bool? = nil
+
+    /// `autoRefresh` folded to a plain Bool so callers never juggle the optional.
+    /// Absent (older server) reads as off, which is also the server's default.
+    var tripAutoRefresh: Bool { autoRefresh ?? false }
 }

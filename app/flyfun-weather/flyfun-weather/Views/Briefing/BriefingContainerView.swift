@@ -31,6 +31,11 @@ enum RefreshGate {
 /// Tab-based briefing viewer for a single flight.
 struct BriefingContainerView: View {
     let flight: FlightResponse
+    /// Navigate to this flight's trip (#607). Set by the flight list so the
+    /// refresh banner can offer a way out when a trip refresh owns this leg;
+    /// nil elsewhere (a shared-flight preview, a deep-linked briefing), which
+    /// simply hides the action.
+    var onOpenTrip: ((String) -> Void)?
     @Environment(AppState.self) private var appState
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: BriefingViewModel?
@@ -91,7 +96,11 @@ struct BriefingContainerView: View {
                 // the nav bar (title + subtitle), freshness + pack picker into
                 // the toolbar. Tabs render at the top (iPad) / bottom (iPhone).
                 VStack(spacing: 0) {
-                    RefreshBannerView(state: viewModel.refreshState)
+                    RefreshBannerView(
+                        state: viewModel.refreshState,
+                        trip: viewModel.flight.trip,
+                        onOpenTrip: onOpenTrip
+                    )
                     DownloadBannerView(state: viewModel.downloadState)
                     BriefingContentView(viewModel: viewModel, trackingService: trackingService,
                                         onAddPirep: { showingPirepSheet = true })
@@ -409,6 +418,11 @@ private struct BriefingToolbarView: View {
 /// Banner showing refresh progress or completion status.
 private struct RefreshBannerView: View {
     let state: RefreshState
+    /// The trip this flight belongs to, when it is in one — so a refusal caused
+    /// by that trip's own refresh can offer a way to it (#607). nil for an
+    /// ungrouped flight, which suppresses the action.
+    var trip: TripLegRef?
+    var onOpenTrip: ((String) -> Void)?
 
     var body: some View {
         switch state {
@@ -461,17 +475,51 @@ private struct RefreshBannerView: View {
             .padding(.vertical, 6)
             .background(.regularMaterial)
         case .error(let message):
-            HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                Text(message)
-                    .font(.caption)
-                Spacer()
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-            .background(.red.opacity(0.1))
+            RefreshErrorBanner(message: message, trip: trip, onOpenTrip: onOpenTrip)
         }
+    }
+}
+
+/// The refresh banner's error state.
+///
+/// Split out of `RefreshBannerView` so the trip-claim branch can be decided in
+/// plain Swift rather than inside a `switch` in a result builder.
+///
+/// A leg refused because its own trip is already refreshing is **not a failure**:
+/// the briefing *is* being refreshed, by the chain that owns the leg (#607). The
+/// server's sentence already explains it, so this renders it in the neutral
+/// style with a way to go and watch the chain — rather than as a red error the
+/// pilot would reasonably answer by pressing ↻ again, which cannot work until
+/// the chain is done.
+private struct RefreshErrorBanner: View {
+    let message: String
+    var trip: TripLegRef?
+    var onOpenTrip: ((String) -> Void)?
+
+    private var isTripClaim: Bool { TripRefreshConflict.matches(message: message) }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: isTripClaim
+                  ? "point.topleft.down.to.point.bottomright.curvepath"
+                  : "exclamationmark.triangle.fill")
+                .foregroundStyle(isTripClaim ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.red))
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(isTripClaim ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            Spacer()
+            if isTripClaim, let trip, let onOpenTrip {
+                Button("Open Trip") { onOpenTrip(trip.id) }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.primary)
+                    .accessibilityIdentifier("openTripFromRefreshBanner")
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(isTripClaim ? AnyShapeStyle(.regularMaterial)
+                                : AnyShapeStyle(Color.red.opacity(0.1)))
     }
 }
 

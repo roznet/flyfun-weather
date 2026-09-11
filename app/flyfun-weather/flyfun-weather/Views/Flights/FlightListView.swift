@@ -7,6 +7,10 @@ import TipKit
 enum SidebarSelection: Hashable {
     case forecastMap
     case flight(FlightResponse)
+    /// A trip's screen (#607). Carries only the id: the trip screen loads its own
+    /// data, and holding a whole `TripResponse` in the selection would make the
+    /// detail pane go stale the moment a refresh advanced a leg.
+    case trip(id: String)
 }
 
 /// Main screen showing the user's saved flights with sidebar/detail split on iPad.
@@ -57,6 +61,9 @@ struct FlightListView: View {
     @State private var deleteCandidate: FlightResponse?
     /// Error surfaced when a delete fails (same reasoning as `unsubscribeError`).
     @State private var deleteError: String?
+    /// Error surfaced when a trip-level action from the list fails (#607), for the
+    /// same reason: a context-menu tap that silently does nothing reads as a bug.
+    @State private var tripActionError: String?
     /// A flight whose share sheet is open, presented via `ShareActivitySheet` so
     /// the list's Share matches the briefing toolbar's (custom "Open in Safari").
     @State private var shareFlight: FlightResponse?
@@ -109,6 +116,11 @@ struct FlightListView: View {
                                     if group.title == "Past" {
                                         Section {
                                             if pastExpanded {
+                                                // Past stays flat: it is server-
+                                                // paginated, so a leg pulled under
+                                                // a trip header could vanish or
+                                                // duplicate depending on the page
+                                                // loaded. Members keep their badge.
                                                 ForEach(group.flights) { flight in
                                                     flightRow(flight, viewModel: viewModel)
                                                 }
@@ -131,8 +143,13 @@ struct FlightListView: View {
                                         }
                                     } else {
                                         Section(group.title) {
-                                            ForEach(group.flights) { flight in
-                                                flightRow(flight, viewModel: viewModel)
+                                            ForEach(
+                                                TripGrouping.rows(
+                                                    for: group.flights,
+                                                    trips: viewModel.trips
+                                                )
+                                            ) { row in
+                                                listRow(row, viewModel: viewModel)
                                             }
                                         }
                                     }
@@ -361,8 +378,23 @@ struct FlightListView: View {
         } detail: {
             switch selection {
             case .flight(let flight):
-                BriefingContainerView(flight: flight)
-                    .id(flight.id)
+                BriefingContainerView(flight: flight) { tripId in
+                    selection = .trip(id: tripId)
+                }
+                .id(flight.id)
+            case .trip(let tripId):
+                // The trip screen fills the detail pane exactly as a briefing
+                // does. Tapping one of its legs swaps the detail to that leg's
+                // briefing rather than pushing, so the sidebar stays the spine.
+                NavigationStack {
+                    TripDetailView(tripId: tripId) { flightId in
+                        if case .loaded(let flights) = viewModel?.state,
+                           let match = flights.first(where: { $0.id == flightId }) {
+                            selection = .flight(match)
+                        }
+                    }
+                }
+                .id(tripId)
             case .forecastMap:
                 // iPad detail pane (regular width). On compact the map opens as a
                 // fullScreenCover instead — see `openForecastMap`.
@@ -450,6 +482,14 @@ struct FlightListView: View {
         } message: {
             Text(deleteError ?? "")
         }
+        .alert("Couldn’t refresh trip", isPresented: Binding(
+            get: { tripActionError != nil },
+            set: { if !$0 { tripActionError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(tripActionError ?? "")
+        }
         .task {
             guard let repo = appState.repository else { return }
             let vm = FlightListViewModel(repository: repo, networkMonitor: appState.networkMonitor)
@@ -536,6 +576,14 @@ struct FlightListView: View {
             appState.clearPendingNavigation()
         case .forecastMap(let deepLink):
             openForecastMap(deepLink: deepLink.isEmpty ? nil : deepLink)
+            appState.clearPendingNavigation()
+        case .trip(let tripId):
+            // The coalesced trip push carries `trip_id` and no `flight_id` — the
+            // chain, not one leg, is the unit of attention — so this is the tap
+            // target for it, and for a `/trip.html?id=` Universal Link. Unlike
+            // `.briefing`, there is nothing to look up in the loaded list: the
+            // trip screen fetches its own data and reports its own 404.
+            selection = .trip(id: tripId)
             appState.clearPendingNavigation()
         case .share(let code):
             // Resolve the share code to a flight and present the preview. Keep the
@@ -709,6 +757,67 @@ struct FlightListView: View {
     private func toggleSidebar() {
         withAnimation {
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        }
+    }
+
+    /// One row of the list: a trip header, one of its remaining legs, or an
+    /// ordinary flight.
+    ///
+    /// A trip contributes a header plus its remaining legs as **plain siblings**,
+    /// never as children of an expandable container. That is what keeps this
+    /// safe: `List(selection:)` here drives the iPad detail pane, and nesting
+    /// `NavigationLink`s inside a `DisclosureGroup` in a split-view sidebar is the
+    /// fragile corner of the API. The indent is cosmetic.
+    @ViewBuilder
+    private func listRow(_ row: FlightListRow, viewModel: FlightListViewModel) -> some View {
+        switch row {
+        case .flight(let flight):
+            flightRow(flight, viewModel: viewModel)
+        case .tripHeader(let trip):
+            NavigationLink(value: SidebarSelection.trip(id: trip.id)) {
+                TripHeaderRow(trip: trip, isStale: viewModel.tripsAreStale)
+            }
+            .contextMenu {
+                // Trip-level actions only. With the legs already visible below,
+                // this menu is a convenience rather than the thing paying for a
+                // missing tap — so it does not duplicate them.
+                Button {
+                    selection = .trip(id: trip.id)
+                } label: {
+                    Label("Open Trip", systemImage: "arrow.forward.square")
+                }
+                if !viewModel.isOffline {
+                    Button {
+                        Task { await refreshTrip(trip) }
+                    } label: {
+                        Label("Refresh Trip", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(trip.refresh?.active == true)
+                }
+            }
+        case .tripLeg(let flight, _):
+            flightRow(flight, viewModel: viewModel)
+                // Cosmetic indent that ties the leg to its header. `listRowInsets`
+                // rather than padding so the row's separator indents with it.
+                .listRowInsets(EdgeInsets(top: 6, leading: 32, bottom: 6, trailing: 16))
+        }
+    }
+
+    /// Start a trip refresh from the list's context menu.
+    ///
+    /// One `POST`; the server drives the chain one leg at a time and keeps going
+    /// if the app is backgrounded. Never iterate the legs calling the per-flight
+    /// refresh: the per-user cap would refuse the third and the two-worker
+    /// executor would starve other users on the way.
+    private func refreshTrip(_ trip: TripResponse) async {
+        guard let tripRepository = appState.tripRepository else { return }
+        do {
+            _ = try await tripRepository.refreshTrip(tripId: trip.id)
+            await viewModel?.loadFlights()
+        } catch let error as APIError {
+            tripActionError = error.errorDescription ?? "Couldn’t start the trip refresh."
+        } catch {
+            tripActionError = error.localizedDescription
         }
     }
 

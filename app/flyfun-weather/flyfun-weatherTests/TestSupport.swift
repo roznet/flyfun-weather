@@ -55,6 +55,32 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
+    // --- Trips (#607). Stored here because a Swift extension can't declare
+    // stored properties; the conformance itself is in the extension below.
+    var tripsResult: Result<[TripResponse], Error> = .success([])
+    var tripResult: Result<TripResponse, Error> = .failure(MockError.notStubbed("trip"))
+    var createTripResult: Result<TripResponse, Error> = .failure(MockError.notStubbed("createTrip"))
+    var addTripLegsResult: Result<TripResponse, Error> = .failure(MockError.notStubbed("addTripLegs"))
+    var removeTripLegResult: Result<Void, Error> = .success(())
+    var updateTripResult: Result<TripResponse, Error> = .failure(MockError.notStubbed("updateTrip"))
+    var deleteTripResult: Result<Void, Error> = .success(())
+    var refreshTripResult: Result<TripRefreshStatus, Error> = .failure(MockError.notStubbed("refreshTrip"))
+    var tripAiSummaryResult: Result<TripAiSummaryResponse, Error> = .failure(MockError.notStubbed("tripAiSummary"))
+    /// Successive `tripRefreshStatus` polls. The final element is returned
+    /// repeatedly once the script runs out, so a poll loop settles instead of
+    /// throwing when it outruns the test's expectations.
+    var tripRefreshStatusQueue: [TripRefreshStatus] = []
+
+    private(set) var tripsCallCount = 0
+    private(set) var tripRefreshStatusCallCount = 0
+    private(set) var tripAiSummaryCallCount = 0
+    private(set) var refreshedTripIds: [String] = []
+    private(set) var deletedTripIds: [String] = []
+    private(set) var removedLegs: [(tripId: String, flightId: String)] = []
+    private(set) var addedLegs: [(tripId: String, flightIds: [String])] = []
+    private(set) var createdTrips: [(flightIds: [String], name: String?)] = []
+    private(set) var lastTripUpdate: (tripId: String, request: UpdateTripRequest)?
+
     /// Optional per-call overrides for the pack-data path (BriefingViewModel
     /// tests). Reassign between `await`s to vary behaviour across sequential loads
     /// — e.g. succeed on the first load, then throw on a quiet reload. Default:
@@ -383,4 +409,71 @@ func makeTempDir() -> URL {
     // misleading "no such file" error.
     try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
+}
+
+// MARK: - Trips (#607)
+
+/// `TripRepository` conformance for the shared mock.
+///
+/// Kept in its own extension so the trip surface is visible as an addition
+/// rather than buried in the ~40-method flight mock. Only `trips()` and
+/// `refreshTrip` are stubbable; the rest throw `notStubbed`, so a test that
+/// reaches an unexpected trip call fails loudly instead of seeing empty data.
+extension MockBriefingRepository: TripRepository {
+    func trips() async throws -> [TripResponse] {
+        tripsCallCount += 1
+        return try tripsResult.get()
+    }
+
+    func trip(id: String) async throws -> TripResponse {
+        try tripResult.get()
+    }
+
+    func createTrip(flightIds: [String], name: String?) async throws -> TripResponse {
+        createdTrips.append((flightIds, name))
+        return try createTripResult.get()
+    }
+
+    func addTripLegs(tripId: String, flightIds: [String]) async throws -> TripResponse {
+        addedLegs.append((tripId, flightIds))
+        return try addTripLegsResult.get()
+    }
+
+    func removeTripLeg(tripId: String, flightId: String) async throws {
+        removedLegs.append((tripId, flightId))
+        try removeTripLegResult.get()
+    }
+
+    func updateTrip(tripId: String, request: UpdateTripRequest) async throws -> TripResponse {
+        lastTripUpdate = (tripId, request)
+        return try updateTripResult.get()
+    }
+
+    func deleteTrip(tripId: String) async throws {
+        deletedTripIds.append(tripId)
+        try deleteTripResult.get()
+    }
+
+    func refreshTrip(tripId: String) async throws -> TripRefreshStatus {
+        refreshedTripIds.append(tripId)
+        return try refreshTripResult.get()
+    }
+
+    func tripRefreshStatus(tripId: String) async throws -> TripRefreshStatus {
+        tripRefreshStatusCallCount += 1
+        // A queue lets a test walk a chain forwards (leg 1 → leg 2 → done);
+        // falling back to the last element means a poll that outruns the script
+        // keeps seeing the terminal state rather than throwing.
+        if !tripRefreshStatusQueue.isEmpty {
+            return tripRefreshStatusQueue.count == 1
+                ? tripRefreshStatusQueue[0]
+                : tripRefreshStatusQueue.removeFirst()
+        }
+        return try refreshTripResult.get()
+    }
+
+    func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
+        tripAiSummaryCallCount += 1
+        return try tripAiSummaryResult.get()
+    }
 }

@@ -86,8 +86,12 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func flights() async throws -> [FlightResponse] { allFlights }
 
     /// Every fixture + journey-created flight, minus anything deleted or moved.
+    /// `FixtureTripData.legs` are merged in so the list groups a real trip
+    /// (#607); they are separate rows from `fixture-1`/`fixture-2` precisely so
+    /// the older journeys keep asserting against untouched fixtures.
     private var allFlights: [FlightResponse] {
-        (flightsFixture + createdFlights).filter { !deletedFlightIds.contains($0.id) }
+        (flightsFixture + FixtureTripData.legs + createdFlights)
+            .filter { !deletedFlightIds.contains($0.id) }
     }
 
     func flight(id: String) async throws -> FlightResponse {
@@ -307,5 +311,63 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw FixtureError.notProvided("submitPirep") }
     func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] { throw FixtureError.notProvided("submitPirepsBatch") }
+}
+
+// MARK: - Trips (#607)
+
+/// Serves the single canned trip so the trip journeys run with no backend.
+/// Mutations a journey doesn't drive throw `notProvided` rather than pretending
+/// to succeed — the same rule the flight fixtures follow.
+extension FixtureBriefingRepository: TripRepository {
+    func trips() async throws -> [TripResponse] {
+        // Gone once its legs are deleted, mirroring `prune_empty_trips`.
+        let liveLegs = allFlights.filter { $0.trip?.id == FixtureTripData.tripId }
+        return liveLegs.isEmpty ? [] : [FixtureTripData.trip]
+    }
+
+    func trip(id: String) async throws -> TripResponse {
+        guard id == FixtureTripData.tripId else { throw APIError.notFound }
+        return FixtureTripData.trip
+    }
+
+    func createTrip(flightIds: [String], name: String?) async throws -> TripResponse {
+        throw FixtureError.notProvided("createTrip")
+    }
+
+    func addTripLegs(tripId: String, flightIds: [String]) async throws -> TripResponse {
+        throw FixtureError.notProvided("addTripLegs")
+    }
+
+    func removeTripLeg(tripId: String, flightId: String) async throws {
+        throw FixtureError.notProvided("removeTripLeg")
+    }
+
+    func updateTrip(tripId: String, request: UpdateTripRequest) async throws -> TripResponse {
+        throw FixtureError.notProvided("updateTrip")
+    }
+
+    func deleteTrip(tripId: String) async throws {
+        throw FixtureError.notProvided("deleteTrip")
+    }
+
+    func refreshTrip(tripId: String) async throws -> TripRefreshStatus {
+        throw FixtureError.notProvided("refreshTrip")
+    }
+
+    func tripRefreshStatus(tripId: String) async throws -> TripRefreshStatus {
+        // Idle rather than `notProvided`: the trip screen polls this on open, and
+        // throwing would surface an error banner in every trip journey.
+        TripRefreshStatus(tripId: tripId)
+    }
+
+    func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
+        // The canned trip is never stale, so the screen renders `ai_summary` from
+        // the GET and should not reach this. Answer anyway, with the same text.
+        TripAiSummaryResponse(
+            tripId: tripId,
+            text: FixtureTripData.trip.aiSummary,
+            generatedAt: FixtureTripData.trip.aiSummaryAt
+        )
+    }
 }
 #endif

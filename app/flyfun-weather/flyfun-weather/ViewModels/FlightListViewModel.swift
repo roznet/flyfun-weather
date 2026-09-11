@@ -34,6 +34,16 @@ final class FlightListViewModel {
     /// Flight IDs whose briefing is currently queued/refreshing server-side —
     /// drives the live "Updating…" row indicator. Fed by `pollActiveRefreshes`.
     private(set) var refreshingFlightIds: Set<String> = []
+    /// The viewer's trips (#607), so the list can draw a trip header above its
+    /// remaining legs. Empty when the server has none, when the repository can't
+    /// serve trips, or on a load that failed — in every case the list falls back
+    /// to today's flat rows, which is why a failure here is never surfaced.
+    private(set) var trips: [TripResponse] = []
+    /// The cached trip document is calendar-stale: a leg departure has passed, or
+    /// the UTC day rolled over, since it was written. Both change which leg binds
+    /// (or what `D-N` means) with **no** refresh and no push, so the header's
+    /// binding chip must not be trusted. See `TripListCache.isCalendarStale`.
+    private(set) var tripsAreStale = false
 
     private let repository: any BriefingRepository
     /// Live reachability — gates the active-refresh poll so it doesn't hammer the
@@ -137,6 +147,7 @@ final class FlightListViewModel {
             if !isOffline {
                 Task { await SpotlightDonator.reindex(flights) }
             }
+            await loadTrips(flights: flights)
             Self.logger.info("Loaded \(flights.count) flights (offline=\(self.isOffline), cached=\(self.cachedFlightIds.count))")
         } catch {
             // Keep an already-loaded list on screen if a refresh fails — the
@@ -148,6 +159,44 @@ final class FlightListViewModel {
                 state = .error(error)
                 Self.logger.error("Failed to load flights: \(error)")
             }
+        }
+    }
+
+    /// Load the viewer's trips, but only when at least one flight actually names
+    /// one.
+    ///
+    /// The short-circuit matters: `GET /api/trips` builds a full summary per trip
+    /// server-side (a packs query, a debriefs query, and an *uncached* profile
+    /// lookup per member leg), and this list reloads far more often than a web
+    /// page does — cold start, scene-active, returning from a briefing, an
+    /// `externalSync` push, and pull-to-refresh. The flights payload already
+    /// carries a `trip` ref on every member, so "does this pilot use trips at
+    /// all" is free, and a pilot who doesn't never pays.
+    ///
+    /// Failures are swallowed on purpose: trips are an enhancement to the list,
+    /// so losing them degrades to today's flat rows rather than to an error.
+    private func loadTrips(flights: [FlightResponse]) async {
+        guard let tripRepository = repository as? any TripRepository else { return }
+        guard flights.contains(where: { $0.trip != nil }) else {
+            trips = []
+            tripsAreStale = false
+            return
+        }
+        do {
+            trips = try await tripRepository.trips()
+            // Only a *cached* document can be calendar-stale; a fresh one is by
+            // definition current.
+            if let caching = repository as? CachingBriefingRepository,
+               caching.isServingCachedTrips,
+               let cached = await caching.cachedTripList() {
+                tripsAreStale = cached.isCalendarStale()
+            } else {
+                tripsAreStale = false
+            }
+        } catch {
+            Self.logger.info("Trip load skipped: \(error)")
+            trips = []
+            tripsAreStale = false
         }
     }
 

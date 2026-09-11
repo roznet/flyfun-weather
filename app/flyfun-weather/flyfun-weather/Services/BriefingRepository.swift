@@ -418,3 +418,58 @@ final class OnlineBriefingRepository: BriefingRepository {
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 }
+
+// MARK: - Trips (#602, iOS port #607)
+
+/// Trip endpoints live on their own protocol (`TripRepository`) rather than on
+/// `BriefingRepository`, which is already ~40 methods — but the conformance sits
+/// in this file because `client` is `private` and Swift only extends private
+/// access to same-file extensions.
+extension OnlineBriefingRepository: TripRepository {
+    func trips() async throws -> [TripResponse] {
+        try await client.request("/api/trips")
+    }
+
+    func trip(id: String) async throws -> TripResponse {
+        try await client.request("/api/trips/\(id)")
+    }
+
+    func createTrip(flightIds: [String], name: String?) async throws -> TripResponse {
+        let body = try JSONEncoder.weatherBrief.encode(
+            CreateTripRequest(name: name, flightIds: flightIds)
+        )
+        return try await client.request("/api/trips", method: "POST", body: body)
+    }
+
+    func addTripLegs(tripId: String, flightIds: [String]) async throws -> TripResponse {
+        let body = try JSONEncoder.weatherBrief.encode(AddTripLegsRequest(flightIds: flightIds))
+        return try await client.request("/api/trips/\(tripId)/legs", method: "POST", body: body)
+    }
+
+    func removeTripLeg(tripId: String, flightId: String) async throws {
+        try await client.requestVoid("/api/trips/\(tripId)/legs/\(flightId)")
+    }
+
+    func updateTrip(tripId: String, request: UpdateTripRequest) async throws -> TripResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/trips/\(tripId)", method: "PATCH", body: body)
+    }
+
+    func deleteTrip(tripId: String) async throws {
+        try await client.requestVoid("/api/trips/\(tripId)")
+    }
+
+    func refreshTrip(tripId: String) async throws -> TripRefreshStatus {
+        try await client.request("/api/trips/\(tripId)/refresh", method: "POST")
+    }
+
+    func tripRefreshStatus(tripId: String) async throws -> TripRefreshStatus {
+        // `quietLog`: polled every 5s while a chain runs, like the active-refresh
+        // poll, and it would otherwise flood the console.
+        try await client.request("/api/trips/\(tripId)/refresh/status", quietLog: true)
+    }
+
+    func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
+        try await client.request("/api/trips/\(tripId)/ai-summary", method: "POST")
+    }
+}

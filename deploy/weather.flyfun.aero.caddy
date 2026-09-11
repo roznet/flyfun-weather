@@ -11,10 +11,13 @@ weather.flyfun.aero {
         -Server
     }
 
-    # Apple Universal Links — associate app with this domain
+    # Apple Universal Links — associate app with this domain.
+    # iOS fetches and caches this file per-install, so a path must be
+    # deployed BEFORE the app build that handles it ships — otherwise the
+    # link keeps opening Safari until iOS next re-reads the file.
     handle /.well-known/apple-app-site-association {
         header Content-Type application/json
-        respond `{"applinks":{"apps":[],"details":[{"appID":"M7QSSF3624.net.ro-z.flyfun-weather","paths":["/auth/callback","/briefing.html","/maps.html","/s/*"]}]}}`
+        respond `{"applinks":{"apps":[],"details":[{"appID":"M7QSSF3624.net.ro-z.flyfun-weather","paths":["/auth/callback","/briefing.html","/maps.html","/trip.html","/s/*"]}]}}`
     }
 
     # OAuth 2.1 Authorization Server metadata (RFC 8414) — lets native/third-party
