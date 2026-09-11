@@ -322,6 +322,11 @@ struct ObservedTopsLayer: CrossSectionLayerProtocol {
 /// one on top.
 enum ObservedBadge {
     static let rowHeightPx: CGFloat = 15
+    /// Where the first badge row starts below the plot top: clear of the
+    /// above-scale strip (1 + 14px) and the no-coverage hatching, which both live
+    /// in that top band. At `+4` the satellite badge sat on the very boxes it
+    /// was dating (#605).
+    static let topOffsetPx: CGFloat = 18
 
     /// "Satellite 14:00Z · 12 min old", or just "14:00Z · 12 min old" where the
     /// caller already names the source in its own column (the Layers sheet does).
@@ -345,7 +350,7 @@ enum ObservedBadge {
         )
         let size = resolved.measure(in: CGSize(width: plotArea.width, height: rowHeightPx))
         let right = plotArea.left + plotArea.width - 6
-        let y = plotArea.top + 4 + CGFloat(row) * rowHeightPx
+        let y = plotArea.top + topOffsetPx + CGFloat(row) * rowHeightPx
         context.fill(
             Path(CGRect(x: right - size.width - 5, y: y - 2, width: size.width + 10, height: rowHeightPx)),
             with: .color(.white.opacity(0.82))

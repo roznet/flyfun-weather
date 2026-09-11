@@ -20,14 +20,15 @@ private func modelResult(
     status: String = "amber",
     highlights: AdvisoryHighlights? = nil,
     domainNm: Double? = nil,
-    affectedDomain: String? = nil
+    affectedDomain: String? = nil,
+    primaryMethodId: String? = nil
 ) -> ModelAdvisoryResult {
     ModelAdvisoryResult(
         model: model, status: status, detail: "d",
         affectedPoints: 1, totalPoints: 10, affectedPct: 10,
         affectedNm: 5, totalNm: 50, domainNm: domainNm,
         affectedDomain: affectedDomain, crossCheck: nil, mitigations: nil,
-        highlights: highlights)
+        highlights: highlights, primaryMethodId: primaryMethodId)
 }
 
 private func advisory(
@@ -192,10 +193,7 @@ private let sampleHighlights = AdvisoryHighlights(
     /// cleared keys and clear again in a `defer` — the body is synchronous
     /// main-actor code, so no other main-actor test can observe the dirty state
     /// mid-flight.
-    private static let persistedKeys = [
-        "crossSectionThemeId", "crossSectionEnabledLayers",
-        "crossSectionAdvisoryPreset", "crossSectionHighlightAdvisory",
-    ]
+    private static let persistedKeys = CrossSectionViewModel.persistedDefaultsKeys
 
     private func withCleanDefaults(_ body: (CrossSectionViewModel) -> Void) {
         let clear = { for key in Self.persistedKeys { UserDefaults.standard.removeObject(forKey: key) } }
@@ -231,11 +229,11 @@ private let sampleHighlights = AdvisoryHighlights(
             #expect(vm.activeHighlightAdvisoryId == nil)
 
             vm.setHighlightAdvisory("convective")
-            vm.setMethod("icing-bands", for: .icing)
+            vm.toggleLayer("icing-bands")
             #expect(vm.activeHighlightAdvisoryId == nil)
 
             vm.setHighlightAdvisory("convective")
-            vm.applyPreset(.gramet)
+            vm.applyEmulation("gramet")
             #expect(vm.activeHighlightAdvisoryId == nil)
         }
     }

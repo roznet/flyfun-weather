@@ -2,13 +2,39 @@ import Foundation
 
 /// Extracts VizRouteData from API responses for a selected model.
 /// Port of web's data-extract.ts extractVizData().
+///
+/// Also owns the cross-section's layer state (#605): the enabled-layer map and
+/// the two lens selectors that compose over it. **Emulate** says whose
+/// conventions — which methods and which look (GRAMET / Windy / ForeFlight, or
+/// FlyFun for the methods this briefing graded with). **Focus** says what you
+/// are looking for — which groups are on (the advisory lenses). A lens never
+/// names a method: it asks for "the preferred layer of this group", which
+/// resolves through whatever Emulate chose, so the two cannot contradict each
+/// other. Before #605 each was a whole layer map and applying one wiped the
+/// other. Port of the web split (#591).
 @Observable
 @MainActor
 final class CrossSectionViewModel {
     private(set) var vizData: VizRouteData?
-    private(set) var enabledLayers: [String: Bool] = CrossSectionPresets.gramet
-    /// Currently-applied advisory lens id (e.g. "icing"), or nil when none/Custom.
+    private(set) var enabledLayers: [String: Bool] = CrossSectionPresets.bootDefaults
+    /// Active Focus lens id (e.g. "icing"), or nil for Custom. Any manual layer
+    /// edit drops it — the view is no longer that lens.
     private(set) var activeAdvisoryPreset: String?
+    /// Active emulation id (`gramet` / `windy` / `foreflight`), or nil for FlyFun.
+    /// Recorded rather than derived from the layer map: an emulation is a look
+    /// and a method set, so switching one band off does not stop the chart being
+    /// GRAMET-shaped — and clearing it on a manual edit would silently drop the
+    /// methods the Focus lens resolves against (web `toggleVizLayer`).
+    private(set) var activeEmulation: String?
+    /// The methods this briefing actually graded with, per method group, read
+    /// from the advisories manifest's `primary_method_id`; engine defaults until
+    /// the manifest loads. FlyFun and the advisory chip resolve through these.
+    /// Not persisted: it belongs to the pack, not to the user.
+    private(set) var gradedMethods: [LayerGroup: String] = CrossSectionPresets.engineMethodDefaults
+    /// The cloud style last chosen explicitly. Only consulted while no cloud layer
+    /// is on — otherwise the style is read off the drawn layer (`cloudStyle`), so
+    /// the control can never disagree with the chart. Persisted.
+    private(set) var cloudStylePreference: CloudStyle
     /// Monotonic identity for `vizData`: bumped only when the data is rebuilt
     /// (model/route/elevation change). `VizRouteData` is a deep value type with no
     /// `Equatable` conformance, so the static cross-section scene keys its
@@ -16,10 +42,11 @@ final class CrossSectionViewModel {
     /// each scrub tick (#303).
     private(set) var dataVersion: Int = 0
     /// Active cross-section colour theme (#320). Defaults to GRAMET to match the
-    /// booted GRAMET layer preset above, so the chart and the preset agree on
-    /// boot. Theme is orthogonal to the layer preset (changing one doesn't reset
-    /// the other) — mirrors the web, where `setVizTheme` leaves the preset alone.
-    /// Persisted across launches via `UserDefaults`.
+    /// booted GRAMET emulation, so the chart and the emulation agree on boot.
+    /// Theme is orthogonal to the layers: picking an emulation sets its theme,
+    /// but changing the theme never touches the layers or the emulation label —
+    /// mirrors the web, where `setVizTheme` leaves the preset alone. Persisted
+    /// across launches via `UserDefaults`.
     private(set) var themeId: CrossSectionThemeID
 
     /// Advisory whose cross-section highlight (scrim + verdict ribbon, #374) is
@@ -27,50 +54,67 @@ final class CrossSectionViewModel {
     /// re-derived from (advisories manifest × selected model) at render time, so
     /// model switches and recalcs update the highlight with no stale-copy bugs,
     /// and it no-ops gracefully when the advisory has no data (old pack).
-    /// Model/point changes do NOT clear it; lens application and manual layer
-    /// edits do (see `applyAdvisoryPreset` / `toggleLayer` / `setMethod` /
-    /// `applyPreset`).
+    /// Model/point changes do NOT clear it; lens application, emulation changes
+    /// and manual layer edits do.
     private(set) var activeHighlightAdvisoryId: String?
     /// Visibility of the active highlight. Deliberately NOT part of
     /// `enabledLayers`: toggling it is a visibility control, not a lens edit —
-    /// it must neither flip the preset to Custom nor clear the highlight (and
-    /// keeping it out preserves the exact-map `currentPreset` comparison).
+    /// it must neither drop the Focus lens nor clear the highlight.
     private(set) var highlightVisible = true
 
     /// `UserDefaults` key for the persisted theme choice.
-    private static let themeDefaultsKey = "crossSectionThemeId"
+    nonisolated private static let themeDefaultsKey = "crossSectionThemeId"
     /// `UserDefaults` key for the persisted layer enablement map.
-    private static let layersDefaultsKey = "crossSectionEnabledLayers"
-    /// `UserDefaults` key for the persisted advisory-lens id (absent when none).
-    private static let advisoryPresetDefaultsKey = "crossSectionAdvisoryPreset"
+    nonisolated private static let layersDefaultsKey = "crossSectionEnabledLayers"
+    /// `UserDefaults` key for the persisted Focus lens id (absent when none).
+    /// Keeps its pre-#605 name so an existing lens survives the upgrade.
+    nonisolated private static let advisoryPresetDefaultsKey = "crossSectionAdvisoryPreset"
     /// `UserDefaults` key for the persisted highlight advisory id (absent when
     /// none). Mirrors the web, which persists `activeHighlightAdvisoryId` in its
     /// viz settings; visibility intentionally resets to shown on relaunch.
-    private static let highlightAdvisoryDefaultsKey = "crossSectionHighlightAdvisory"
+    nonisolated private static let highlightAdvisoryDefaultsKey = "crossSectionHighlightAdvisory"
+    /// `UserDefaults` key for the persisted emulation id.
+    nonisolated private static let emulationDefaultsKey = "crossSectionEmulation"
+    /// `UserDefaults` key for the persisted cloud style preference.
+    nonisolated private static let cloudStyleDefaultsKey = "crossSectionCloudStyle"
+    /// Stored for FlyFun, so "our own conventions" can be told apart from "never
+    /// stored" — the one-time migration path in `restoredEmulation`.
+    private static let ownConventionsSentinel = "flyfun"
+
+    /// Every key this view model persists, for tests that need a clean slate.
+    nonisolated static let persistedDefaultsKeys = [
+        themeDefaultsKey, layersDefaultsKey, advisoryPresetDefaultsKey,
+        highlightAdvisoryDefaultsKey, emulationDefaultsKey, cloudStyleDefaultsKey,
+        observedRadiusDefaultsKey,
+    ]
 
     init() {
-        // Restore the last-chosen theme; fall back to GRAMET (the boot preset's
-        // theme) when nothing is stored or the stored value is unknown.
+        // Restore the last-chosen theme; fall back to GRAMET (the boot
+        // emulation's theme) when nothing is stored or the value is unknown.
         let stored = UserDefaults.standard.string(forKey: Self.themeDefaultsKey)
         themeId = stored.flatMap(CrossSectionThemeID.init(rawValue:)) ?? .gramet
+        cloudStylePreference = UserDefaults.standard.string(forKey: Self.cloudStyleDefaultsKey)
+            .flatMap(CloudStyle.init(rawValue:)) ?? .natural
         // Sync the module-level active theme so the very first frame (and the
-        // config sheet's legend swatches) render in the right palette even before
-        // the renderer runs.
+        // layer bar's swatches) render in the right palette even before the
+        // renderer runs.
         CrossSectionTheme.setActive(themeId)
 
         // Restore the last layer config so a relaunch keeps the user's layers
         // (not just colours) — mirrors the web, which persists the whole viz
         // config (#9, iOS testing feedback). Keep only ids the current build
         // still knows about (a renamed/removed layer can't resurrect a stale id),
-        // and merge restored values over the GRAMET defaults so a newly-added
-        // layer gets its default state rather than vanishing.
+        // and merge restored values over the boot defaults so a newly-added layer
+        // gets its default state rather than vanishing.
+        var restoredLayers = false
         if let data = UserDefaults.standard.data(forKey: Self.layersDefaultsKey),
            let decoded = try? JSONDecoder().decode([String: Bool].self, from: data) {
-            var merged = CrossSectionPresets.gramet
+            var merged = CrossSectionPresets.bootDefaults
             for (id, on) in decoded where merged[id] != nil {
                 merged[id] = on
             }
             enabledLayers = merged
+            restoredLayers = true
         }
         // A stored 0 means "absent" here: `double(forKey:)` cannot distinguish a
         // missing key from a stored zero, and zero is not a sampled radius.
@@ -78,18 +122,33 @@ final class CrossSectionViewModel {
         observedRadiusNm = storedRadius > 0 ? storedRadius : nil
         activeAdvisoryPreset = UserDefaults.standard.string(forKey: Self.advisoryPresetDefaultsKey)
         activeHighlightAdvisoryId = UserDefaults.standard.string(forKey: Self.highlightAdvisoryDefaultsKey)
+        activeEmulation = Self.restoredEmulation(layers: enabledLayers, restoredLayers: restoredLayers)
         recomputeEffectiveLayers()
     }
 
-    /// Switch the colour theme. Independent of the layer preset. Persisted.
+    /// The stored emulation. Before #605 there was none to store — the preset was
+    /// inferred from an exact layer-map match — so infer it once the same way: a
+    /// fresh install boots GRAMET, a stored map that still matches an emulation
+    /// keeps that label, and anything hand-tuned reads as FlyFun.
+    private static func restoredEmulation(layers: [String: Bool], restoredLayers: Bool) -> String? {
+        if let stored = UserDefaults.standard.string(forKey: emulationDefaultsKey) {
+            return stored == ownConventionsSentinel ? nil : CrossSectionPresets.emulation(stored)?.id
+        }
+        guard restoredLayers else { return CrossSectionPresets.bootEmulationId }
+        return CrossSectionPresets.all.first { preset in
+            preset.enabledLayers.allSatisfy { layers[$0.key] == $0.value }
+        }?.id
+    }
+
+    /// Switch the colour theme. Independent of the layers and the emulation. Persisted.
     func setTheme(_ id: CrossSectionThemeID) {
         themeId = id
         CrossSectionTheme.setActive(id)
         UserDefaults.standard.set(id.rawValue, forKey: Self.themeDefaultsKey)
     }
 
-    /// Persist the current layer set + active advisory lens. Called after every
-    /// mutation so the config survives relaunch (#9, iOS testing feedback).
+    /// Persist the layer set, both lens selectors and the highlight. Called after
+    /// every mutation so the config survives relaunch (#9, iOS testing feedback).
     private func persistLayerConfig() {
         if let data = try? JSONEncoder().encode(enabledLayers) {
             UserDefaults.standard.set(data, forKey: Self.layersDefaultsKey)
@@ -99,14 +158,14 @@ final class CrossSectionViewModel {
         } else {
             UserDefaults.standard.removeObject(forKey: Self.advisoryPresetDefaultsKey)
         }
+        UserDefaults.standard.set(activeEmulation ?? Self.ownConventionsSentinel, forKey: Self.emulationDefaultsKey)
         if let id = activeHighlightAdvisoryId {
             UserDefaults.standard.set(id, forKey: Self.highlightAdvisoryDefaultsKey)
         } else {
             UserDefaults.standard.removeObject(forKey: Self.highlightAdvisoryDefaultsKey)
         }
-        // This is the single funnel for every `enabledLayers` mutation
-        // (toggle/enable/preset/method/advisory-lens), so refresh the effective-
-        // layer cache here rather than at each call site.
+        // This is the single funnel for every `enabledLayers` mutation, so
+        // refresh the effective-layer cache here rather than at each call site.
         recomputeEffectiveLayers()
     }
 
@@ -116,11 +175,11 @@ final class CrossSectionViewModel {
     /// nil → the widest sampled disc, matching the web's default.
     private(set) var observedRadiusNm: Double?
 
-    private static let observedRadiusDefaultsKey = "crossSectionObservedRadiusNm"
+    nonisolated private static let observedRadiusDefaultsKey = "crossSectionObservedRadiusNm"
 
     /// Re-resolve the observed discs at a new corridor width. Cheap: every radius
     /// is already in the payload, so this touches no network. Deliberately NOT a
-    /// layer edit — it must not flip the preset to Custom.
+    /// layer edit — it must not drop the Focus lens.
     func setObservedRadius(_ radiusNm: Double?, snapshot: SnapshotResponse?) {
         observedRadiusNm = radiusNm
         if let radiusNm {
@@ -160,7 +219,8 @@ final class CrossSectionViewModel {
     // frequency, so they must not carry an O(points) scan on the render path.
 
     /// Layer ids the currently-rendered model can't provide (no native NWP data,
-    /// etc.) — greyed / disabled in the config sheet. Empty until `vizData` loads.
+    /// etc.) — struck through and disabled on the layer bar. Empty until
+    /// `vizData` loads.
     ///
     /// Cached, not computed: recomputed by `recomputeEffectiveLayers()` only when
     /// `vizData` or `enabledLayers` actually change. `effectiveEnabledLayers` is
@@ -189,11 +249,23 @@ final class CrossSectionViewModel {
             enabledLayers: enabledLayers, unavailable: unavailableLayers)
     }
 
+    /// Layers drawn as a DD stand-in for a wanted-but-unavailable NWP layer:
+    /// shown on the bar as on-but-substituted, so the pills match the chart.
+    var substitutedLayers: Set<String> {
+        Set(effectiveEnabledLayers.compactMap { id, on in
+            on && enabledLayers[id] != true ? id : nil
+        })
+    }
+
+    // MARK: - Manual layer edits (the layer bar)
+
+    func isLayerOn(_ id: String) -> Bool { enabledLayers[id] == true }
+
+    /// Pick-any toggle of one layer. Every layer family is pick-any: two icing
+    /// methods overlaid is a comparison, not an error.
     func toggleLayer(_ id: String) {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
-        activeAdvisoryPreset = nil  // a manual edit is no longer a named lens
-        activeHighlightAdvisoryId = nil  // …and drops the advisory highlight (#374)
-        persistLayerConfig()
+        markManualEdit()
     }
 
     /// Force-enable a known layer (e.g. a deep-link focus intent turning on the
@@ -205,75 +277,164 @@ final class CrossSectionViewModel {
         persistLayerConfig()
     }
 
-    // MARK: - Layer presets (§4.5; ported from web — see CrossSectionPresets).
-    // A preset sets every layer; touching any control flips to Custom.
-
-    enum Preset: String, CaseIterable, Identifiable {
-        case gramet = "GRAMET"
-        case windy = "Windy"
-        case foreFlight = "ForeFlight"
-        case custom = "Custom"
-        var id: String { rawValue }
-
-        /// The colour theme each preset carries (#320). Mirrors the web preset
-        /// `themeId` mapping (gramet→gramet, windy→light, foreflight→high-contrast);
-        /// Custom carries none (leave the current theme as-is).
-        var themeId: CrossSectionThemeID? {
-            switch self {
-            case .gramet: .gramet
-            case .windy: .light
-            case .foreFlight: .highContrast
-            case .custom: nil
-            }
-        }
+    /// Whether anything in the family is on — the compact chip's state.
+    func isFamilyOn(_ family: LayerFamily) -> Bool {
+        family.layerIds.contains { enabledLayers[$0] == true }
     }
 
-    func applyPreset(_ preset: Preset) {
-        let map = presetMap(preset)
-        if !map.isEmpty { enabledLayers = map }
-        if let tid = preset.themeId { setTheme(tid) }
+    /// The compact chip: one on/off per family with the method decision made for
+    /// you. On enables the preferred layer of each METHOD group (through the
+    /// effective methods) and the default lines of every other group — never the
+    /// first line alone, which is how the web once silently dropped −10/−20 °C
+    /// and LFC/EL for good. Off switches everything in the family off.
+    func setFamily(_ family: LayerFamily, on: Bool) {
+        if on {
+            let methods = effectiveMethods
+            let style = resolutionCloudStyle
+            for group in family.groups {
+                if CrossSectionPresets.methodGroups.contains(group) {
+                    if let id = CrossSectionPresets.preferredLayer(for: group, method: methods[group], cloudStyle: style) {
+                        enabledLayers[id] = true
+                    }
+                } else {
+                    for id in CrossSectionLayer.layerIds(in: group) where CrossSectionLayer.defaultEnabled.contains(id) {
+                        enabledLayers[id] = true
+                    }
+                }
+            }
+            // A family with no default line still has to show something.
+            if !isFamilyOn(family), let first = family.layerIds.first {
+                enabledLayers[first] = true
+            }
+        } else {
+            for id in family.layerIds { enabledLayers[id] = false }
+        }
+        markManualEdit()
+    }
+
+    /// The `None` pill: switch every layer in one group off in one tap.
+    func clearGroup(_ group: LayerGroup) {
+        for id in CrossSectionLayer.layerIds(in: group) { enabledLayers[id] = false }
+        markManualEdit()
+    }
+
+    /// A user edit: the view no longer is the named Focus lens, and the advisory
+    /// highlight goes with it (#374). The emulation label stays — see
+    /// `activeEmulation`.
+    private func markManualEdit() {
         activeAdvisoryPreset = nil
-        activeHighlightAdvisoryId = nil  // a layer preset drops the highlight (#374)
+        activeHighlightAdvisoryId = nil
         persistLayerConfig()
     }
 
-    /// The preset matching the current layer set, or `.custom` if it's been
-    /// hand-tuned away from any preset.
-    var currentPreset: Preset {
-        for p in [Preset.gramet, .windy, .foreFlight] where enabledLayers == presetMap(p) {
-            return p
+    // MARK: - Clouds (per-source pills × one shared style)
+
+    /// The style clouds are drawn in: read off the enabled cloud layer, else the
+    /// stored preference.
+    var cloudStyle: CloudStyle {
+        for id in CrossSectionPresets.cloudLayerIds where enabledLayers[id] == true {
+            if let axes = CrossSectionPresets.parseCloudLayerId(id) { return axes.style }
         }
-        return .custom
+        return cloudStylePreference
     }
 
-    private func presetMap(_ p: Preset) -> [String: Bool] {
-        switch p {
-        case .gramet: return CrossSectionPresets.gramet
-        case .windy: return CrossSectionPresets.windy
-        case .foreFlight: return CrossSectionPresets.foreflight
-        case .custom: return [:]
+    /// Whether any style of a cloud source is drawn.
+    func isCloudSourceOn(_ source: CloudSource) -> Bool {
+        CloudStyle.allCases.contains {
+            enabledLayers[CrossSectionPresets.cloudLayerId(source: source, style: $0)] == true
         }
     }
 
-    // MARK: - Advisory lenses (ported from web ADVISORY_PRESETS)
-
-    /// Apply a hazard lens: clean-slate the managed groups, enable the preferred
-    /// layer of each named method group, then force the lens's explicit lines on.
-    /// Terrain + cruise reference stay (always-on / not in resetGroups).
-    func applyAdvisoryPreset(_ preset: AdvisoryPreset) {
-        var m = enabledLayers
-        for layer in CrossSectionLayer.allLayers where CrossSectionPresets.resetGroups.contains(layer.group) {
-            m[layer.id] = false
+    /// Toggle one cloud source, in the current style. Both on at once is the
+    /// cross-check the family's About panel describes.
+    func toggleCloudSource(_ source: CloudSource) {
+        if isCloudSourceOn(source) {
+            for style in CloudStyle.allCases {
+                enabledLayers[CrossSectionPresets.cloudLayerId(source: source, style: style)] = false
+            }
+        } else {
+            enabledLayers[CrossSectionPresets.cloudLayerId(source: source, style: cloudStyle)] = true
         }
-        for group in preset.groups {
-            if let preferred = CrossSectionLayer.methodGroupOrder[group]?.first {
-                m[preferred] = true
+        markManualEdit()
+    }
+
+    /// Redraw every enabled cloud source in a new style, and remember it.
+    func setCloudStyle(_ style: CloudStyle) {
+        cloudStylePreference = style
+        UserDefaults.standard.set(style.rawValue, forKey: Self.cloudStyleDefaultsKey)
+        for source in CloudSource.allCases where isCloudSourceOn(source) {
+            for s in CloudStyle.allCases {
+                enabledLayers[CrossSectionPresets.cloudLayerId(source: source, style: s)] = s == style
             }
         }
-        for id in preset.lines where m[id] != nil {  // drop ids iOS doesn't have
-            m[id] = true
+        markManualEdit()
+    }
+
+    // MARK: - Emulate (whose conventions)
+
+    /// The methods a lens or a compact chip resolves through: the graded ones,
+    /// overlaid by whatever the active emulation chose — GRAMET means Ogimet-NWP
+    /// icing and natural NWP cloud, whatever the briefing graded with.
+    var effectiveMethods: [LayerGroup: String] {
+        guard let preset = CrossSectionPresets.emulation(activeEmulation) else { return gradedMethods }
+        return gradedMethods.merging(CrossSectionPresets.methods(from: preset).methods) { $1 }
+    }
+
+    /// The cloud style a lens or chip draws clouds in: the one already on the
+    /// chart, else the emulation's, else the stored preference. Read before a
+    /// lens's clean slate wipes the cloud layer it is read from.
+    private var resolutionCloudStyle: CloudStyle {
+        if CrossSectionPresets.cloudLayerIds.contains(where: { enabledLayers[$0] == true }) {
+            return cloudStyle
         }
-        enabledLayers = m
+        if let preset = CrossSectionPresets.emulation(activeEmulation),
+           let style = CrossSectionPresets.methods(from: preset).cloudStyle {
+            return style
+        }
+        return cloudStylePreference
+    }
+
+    /// Update the graded methods from a freshly loaded advisories manifest.
+    /// Changes no layer: it only moves what the next chip / lens / FlyFun
+    /// resolves to, so a late manifest never clobbers a view being read.
+    func setGradedMethods(_ methods: [LayerGroup: String]) {
+        gradedMethods = methods
+    }
+
+    /// Pick an emulation (nil = FlyFun). An emulation merges its method set and
+    /// sets its theme; FlyFun applies the graded methods, one layer per method
+    /// group, and leaves the theme alone. Either way an active Focus lens is
+    /// re-applied on top, so "Windy, focused on icing" means Windy's icing method
+    /// with only the icing groups on — rather than the lens label surviving over
+    /// a layer set that no longer matches it.
+    func applyEmulation(_ id: String?) {
+        if let preset = CrossSectionPresets.emulation(id) {
+            enabledLayers.merge(preset.enabledLayers) { $1 }
+            setTheme(preset.themeId)
+            activeEmulation = preset.id
+        } else {
+            enabledLayers.merge(
+                CrossSectionPresets.compactOverrides(methods: gradedMethods, cloudStyle: resolutionCloudStyle)
+            ) { $1 }
+            activeEmulation = nil
+        }
+        activeHighlightAdvisoryId = nil  // an emulation change drops the highlight (#374)
+        if let focus = activeAdvisoryPreset.flatMap({ CrossSectionPresets.advisory[$0] }) {
+            applyLens(focus, methods: effectiveMethods)
+        }
+        persistLayerConfig()
+    }
+
+    // MARK: - Focus (what am I looking for — ported from web ADVISORY_PRESETS)
+
+    /// Apply a Focus lens: clean-slate the managed groups, enable the preferred
+    /// layer of each named method group, then force the lens's explicit lines on.
+    /// Methods default to the effective ones (graded, overlaid by the emulation);
+    /// the advisory chip passes the advisory's own graded methods instead, so it
+    /// shows the configuration the advisory was graded under. The emulation is
+    /// left alone — the two compose.
+    func applyAdvisoryPreset(_ preset: AdvisoryPreset, methods: [LayerGroup: String]? = nil) {
+        applyLens(preset, methods: methods ?? effectiveMethods)
         activeAdvisoryPreset = preset.id
         // Applying a lens clears any prior highlight (web parity, #374): a bare
         // lens from the picker therefore ends with no highlight, while the
@@ -283,12 +444,33 @@ final class CrossSectionViewModel {
         persistLayerConfig()
     }
 
-    /// Clear the active lens (the picker's "None") without otherwise touching the
-    /// layer config. Also drops the advisory highlight, like any lens change.
+    /// Focus → Custom: clear the lens label only. It must not touch the
+    /// emulation or the layers — dropping the other selector's choice is exactly
+    /// the confusion the split exists to end. Drops the highlight, like any lens
+    /// change.
     func clearAdvisoryPreset() {
         activeAdvisoryPreset = nil
         activeHighlightAdvisoryId = nil
         persistLayerConfig()
+    }
+
+    /// The layer half of a lens, shared with `applyEmulation`'s re-apply.
+    private func applyLens(_ preset: AdvisoryPreset, methods: [LayerGroup: String]) {
+        let style = resolutionCloudStyle
+        var m = enabledLayers
+        for layer in CrossSectionLayer.allLayers where CrossSectionPresets.resetGroups.contains(layer.group) {
+            m[layer.id] = false
+        }
+        for group in preset.groups {
+            if let id = CrossSectionPresets.preferredLayer(for: group, method: methods[group], cloudStyle: style),
+               m[id] != nil {
+                m[id] = true
+            }
+        }
+        for id in preset.lines where m[id] != nil {  // drop ids iOS doesn't have
+            m[id] = true
+        }
+        enabledLayers = m
     }
 
     // MARK: - Advisory highlight (scrim + verdict ribbon, #374)
@@ -304,13 +486,12 @@ final class CrossSectionViewModel {
     }
 
     /// Show/hide the active highlight. A visibility control, NOT a lens edit —
-    /// it must not clear the highlight or the active lens (contrast
-    /// `toggleLayer`).
+    /// it must not clear the highlight or the Focus lens (contrast `toggleLayer`).
     func setHighlightVisible(_ visible: Bool) {
         highlightVisible = visible
     }
 
-    /// The representative model for an advisory — read from the server's
+    /// The representative model for an advisory — the server's
     /// `representative_model`, which names the model holding `aggregateStatus`
     /// with the largest flagged extent. The chip switches the cross-section to
     /// it, so the highlight shows the geometry behind the sentence the card
@@ -320,15 +501,9 @@ final class CrossSectionViewModel {
     /// status"), which is why it drifted: the server moved off first-match and
     /// the app kept highlighting whichever model happened to sort first, while
     /// the card beside it quoted a different one. The scan survives only as the
-    /// old-pack fallback, where the field is absent.
+    /// old-pack fallback, in `RouteAdvisoryResult.resolvedRepresentativeModel`.
     static func representativeModel(for advisory: RouteAdvisoryResult) -> String? {
-        if let published = advisory.representativeModel {
-            return published
-        }
-        if let match = advisory.perModel.first(where: { $0.status == advisory.aggregateStatus }) {
-            return match.model
-        }
-        return advisory.perModel.first?.model
+        advisory.resolvedRepresentativeModel
     }
 
     /// Derive the highlight geometry to render for (manifest × advisory × model),
@@ -346,53 +521,6 @@ final class CrossSectionViewModel {
               let highlights = advisory.perModel.first(where: { $0.model == model })?.highlights
         else { return nil }
         return VizAdvisoryHighlights(from: highlights)
-    }
-
-    // MARK: - Methods (clouds/icing/turbulence/convection — one method per group)
-
-    /// Currently-active method layer ID for a method group (clouds/icing/etc),
-    /// or nil if all methods in the group are off.
-    func activeMethod(for group: LayerGroup) -> String? {
-        guard let order = CrossSectionLayer.methodGroupOrder[group] else { return nil }
-        return order.first(where: { enabledLayers[$0] == true })
-    }
-
-    /// Set the active method for a group. Passing nil disables all methods in the group.
-    /// Other methods in the same group are turned off — only one is rendered at a time.
-    func setMethod(_ layerId: String?, for group: LayerGroup) {
-        guard let order = CrossSectionLayer.methodGroupOrder[group] else { return }
-        for id in order {
-            enabledLayers[id] = (id == layerId)
-        }
-        activeAdvisoryPreset = nil
-        activeHighlightAdvisoryId = nil  // a manual method edit drops the highlight (#374)
-        persistLayerConfig()
-    }
-
-    // MARK: - Cloud axes (source × style — two independent controls, #7)
-
-    /// Active cloud source/style, or nil when clouds are off.
-    var cloudAxes: (source: CloudSource, style: CloudStyle)? {
-        activeMethod(for: .clouds).flatMap { CrossSectionPresets.parseCloudLayerId($0) }
-    }
-
-    /// Turn the cloud layer on (defaulting to Soft NWP) or off.
-    func setCloudEnabled(_ on: Bool) {
-        if on {
-            let axes = cloudAxes ?? (.nwp, .soft)
-            setMethod(CrossSectionPresets.cloudLayerId(source: axes.source, style: axes.style), for: .clouds)
-        } else {
-            setMethod(nil, for: .clouds)
-        }
-    }
-
-    /// Change one cloud axis, keeping the other (and keeping clouds on).
-    func setCloud(source: CloudSource? = nil, style: CloudStyle? = nil) {
-        let current = cloudAxes ?? (.nwp, .soft)
-        let newId = CrossSectionPresets.cloudLayerId(
-            source: source ?? current.source,
-            style: style ?? current.style)
-        setMethod(newId, for: .clouds)
     }
 
     // MARK: - Data extraction (port of data-extract.ts)

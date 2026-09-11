@@ -68,7 +68,7 @@ struct CrossSectionLayersTip: Tip {
 
     var title: Text { Text("Choose what to show") }
     var message: Text? {
-        Text("Toggle cloud, icing, wind and other layers on the cross-section.")
+        Text("Tap a layer family to change the chart right where you're looking — nothing covers it, so you can flip back and forth to compare.")
     }
     var image: Image? { Image(systemName: "slider.horizontal.3") }
     var rules: [Rule] {
@@ -84,9 +84,9 @@ struct CrossSectionScrubTip: Tip {
     /// `CrossSectionView`'s appear/disappear — update both together.
     @Parameter static var crossSectionVisible: Bool = false
 
-    var title: Text { Text("Tap or drag anywhere") }
+    var title: Text { Text("Tap or drag along the route") }
     var message: Text? {
-        Text("Read exact values at any point along the route and altitude. Double-tap to hide the controls.")
+        Text("Read exact values at any point and altitude. Press and hold, then drag, to move up or down a column. Drag up or down to scroll past the chart; in landscape, double-tap to hide the controls.")
     }
     var image: Image? { Image(systemName: "hand.point.up.left") }
     var rules: [Rule] {

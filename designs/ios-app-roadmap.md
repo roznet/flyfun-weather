@@ -58,7 +58,7 @@ Shipped `CrossSectionLayerProtocol` conformers (`Views/CrossSection/Layers/`, 15
 - `NwpConvectiveBgLayer`, `ThermoConvectiveBgLayer`
 - `HighlightLayer` — not on the original plan; draws an advisory's highlight geometry (scrim + verdict ribbon) when a deep link arrives with a preset
 
-`CrossSectionPresets` supplies the advisory "lenses" (which layers/model a given advisory opens with). Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, and — one level up in `Views/CrossSection/` — `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`, rendering RZSkewT's `SkewTView`).
+`CrossSectionPresets` supplies the Focus lenses and the emulations (GRAMET / Windy / ForeFlight), plus the method tables and graded-method derivation they resolve through; `LayerFamily` groups the layers into the seven chips of the layer bar (#605). Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, and — one level up in `Views/CrossSection/` — `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`, rendering RZSkewT's `SkewTView`).
 
 ## Phase 2 — Offline Briefing Viewer ✅ (offline resilience + refresh-complete push shipped; SwiftData never adopted)
 
