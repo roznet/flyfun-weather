@@ -226,25 +226,33 @@ def resolve_waypoints(
         for r in getattr(route, "rejected_waypoints", [])
     ]
 
+    # Same model instance resolve_route just used — _load_airport_model is
+    # lru_cached, so this is a dict lookup, not a second DB load.
+    model = _load_airport_model(db_path)
+
     # Middle tokens that the resolver neither placed nor rejected: the
     # resolver silently dropped them because no DB entry matched under
     # route context. Surface them as ``unknown`` so callers see a single
-    # categorized rejection list.
+    # categorized rejection list. The resolver names airports by their current
+    # code, so a token typed as an airport's previous code (LELO) was placed if
+    # its current code (LERJ) was.
     resolved_middle_upper = {n.upper() for n in route.waypoints}
     detour_rejected_upper = {r.name.upper() for r in rejected}
     for c in codes[1:-1]:
         cu = c.upper()
-        if cu not in resolved_middle_upper and cu not in detour_rejected_upper:
-            rejected.append(RejectedWaypoint(name=c, reason="unknown"))
+        if cu in resolved_middle_upper or cu in detour_rejected_upper:
+            continue
+        airport = model.find_airport_by_code(cu)
+        if airport is not None and airport.ident in resolved_middle_upper:
+            continue
+        rejected.append(RejectedWaypoint(name=c, reason="unknown"))
 
-    all_points: list[tuple[str, object]] = [(codes[0], route.departure_coords)]
+    # Endpoints named as the resolver named them, so an airport is stored under
+    # its current code even when typed with a previous one
+    all_points: list[tuple[str, object]] = [(route.departure, route.departure_coords)]
     for name, coord in zip(route.waypoints, route.waypoint_coords):
         all_points.append((name, coord))
-    all_points.append((codes[-1], route.destination_coords))
-
-    # Same model instance resolve_route just used — _load_airport_model is
-    # lru_cached, so this is a dict lookup, not a second DB load.
-    model = _load_airport_model(db_path)
+    all_points.append((route.destination, route.destination_coords))
 
     waypoints: list[Waypoint] = []
     for name, coord in all_points:
@@ -384,7 +392,7 @@ def unknown_icaos(icao_codes: Iterable[str], db_path: str) -> list[str]:
     except Exception:  # noqa: BLE001 - see docstring: don't punish the user
         logger.warning("Airport model unavailable; skipping ICAO validation", exc_info=True)
         return []
-    return [c for c in codes if model.airports.get(c) is None]
+    return [c for c in codes if model.find_airport_by_code(c) is None]
 
 
 def _declared_approach() -> RunwayApproach:

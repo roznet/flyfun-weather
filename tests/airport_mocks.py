@@ -9,10 +9,13 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-def mock_airport(icao: str, name: str, lat: float, lon: float):
+def mock_airport(
+    icao: str, name: str, lat: float, lon: float, alt_ident: str | None = None,
+):
     """Create a mock airport object matching euro_aip Airport interface."""
     airport = MagicMock()
     airport.ident = icao
+    airport.alt_ident = alt_ident
     airport.name = name
     airport.latitude_deg = lat
     airport.longitude_deg = lon
@@ -61,6 +64,15 @@ def mock_model(airports_dict: dict, waypoints_dict: dict | None = None):
     """Create a mock model with airports collection and optional waypoints."""
     model = MagicMock()
     model.airports = MockAirportsCollection(airports_dict)
+
+    def find_airport_by_code(code):
+        # Mirrors EuroAipModel: exact ident first, then the previous code
+        code = code.upper()
+        if code in airports_dict:
+            return airports_dict[code]
+        return next((a for a in airports_dict.values() if a.alt_ident == code), None)
+
+    model.find_airport_by_code.side_effect = find_airport_by_code
     _wp = waypoints_dict or {}
     model.get_waypoint.side_effect = lambda name: _wp.get(name)
     model.get_waypoint_candidates.side_effect = lambda name: _wp.get(name, [])

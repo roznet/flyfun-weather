@@ -76,15 +76,24 @@ def discover_airports(
 
     # Gather all candidate ICAOs from DB matching the prefixes
     candidates: dict[str, list[str]] = {p: [] for p in prefixes}
+    # Previous code -> current code. An airport renumbered in the AIP can still
+    # issue its METAR under the old code (Logroño: LERJ, METAR as LELO), so it
+    # is asked for under both and counted as reporting under its current code.
+    aliases: dict[str, str] = {}
     for prefix in prefixes:
         for airport in model.airports:
             if airport.ident.startswith(prefix):
                 candidates[prefix].append(airport.ident)
+                alt_ident = getattr(airport, "alt_ident", None)
+                if isinstance(alt_ident, str) and alt_ident:
+                    aliases[alt_ident] = airport.ident
         candidates[prefix].sort()
         logger.info("Prefix %s: %d candidate airports in DB", prefix, len(candidates[prefix]))
 
     # Flatten and batch-query aviationweather.gov
     all_icaos = [icao for icaos in candidates.values() for icao in icaos]
+    aliases = {alt: icao for alt, icao in aliases.items() if alt not in set(all_icaos)}
+    all_icaos += sorted(aliases)
     reporting: set[str] = set()
 
     for i in range(0, len(all_icaos), _AWC_BATCH_SIZE):
@@ -102,7 +111,7 @@ def discover_airports(
             data = resp.json()
             for entry in data:
                 if isinstance(entry, dict) and "icaoId" in entry:
-                    reporting.add(entry["icaoId"])
+                    reporting.add(aliases.get(entry["icaoId"], entry["icaoId"]))
         except Exception:
             logger.warning(
                 "METAR check failed for chunk %d-%d", i, i + len(chunk),
@@ -155,7 +164,9 @@ def load_watchlist_with_coords(
 ) -> list[WatchlistAirport]:
     """Load watchlist and enrich with coordinates from euro_aip database.
 
-    Airports not found in the database are silently skipped.
+    Airports not found in the database are silently skipped. An entry saved
+    under an airport's previous code (LELO) is returned under its current one
+    (LERJ), so a watchlist written before a renumbering keeps working.
     """
     from weatherbrief.airports import _load_airport_model
 
@@ -164,15 +175,18 @@ def load_watchlist_with_coords(
 
     model = _load_airport_model(airports_db_path)
     result: list[WatchlistAirport] = []
+    seen: set[str] = set()
 
     for icao in all_icaos:
-        try:
-            airport = model.airports[icao]
-        except (KeyError, IndexError):
+        airport = model.find_airport_by_code(icao)
+        if airport is None:
             logger.debug("Watchlist airport %s not in euro_aip database, skipping", icao)
             continue
+        if airport.ident in seen:
+            continue
+        seen.add(airport.ident)
         result.append(WatchlistAirport(
-            icao=icao, lat=airport.latitude_deg, lon=airport.longitude_deg,
+            icao=airport.ident, lat=airport.latitude_deg, lon=airport.longitude_deg,
         ))
 
     logger.info(

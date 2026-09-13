@@ -96,9 +96,9 @@ class TestSaveLoadWatchlist:
     def test_load_with_coords_filters_missing(self, tmp_path):
         save_watchlist({"LF": ["LFPG", "XXXX"]}, tmp_path)
 
-        mock_airport = SimpleNamespace(latitude_deg=49.01, longitude_deg=2.55)
+        mock_airport = SimpleNamespace(ident="LFPG", latitude_deg=49.01, longitude_deg=2.55)
         mock_model = MagicMock()
-        mock_model.airports.__getitem__ = MagicMock(side_effect=lambda k: mock_airport if k == "LFPG" else (_ for _ in ()).throw(KeyError(k)))
+        mock_model.find_airport_by_code.side_effect = lambda k: mock_airport if k == "LFPG" else None
 
         with patch("weatherbrief.airports._load_airport_model", return_value=mock_model):
             result = load_watchlist_with_coords(tmp_path, "/fake/db")
@@ -106,6 +106,21 @@ class TestSaveLoadWatchlist:
         assert len(result) == 1
         assert result[0].icao == "LFPG"
         assert result[0].lat == pytest.approx(49.01)
+
+    def test_load_with_coords_uses_current_code(self, tmp_path):
+        """A watchlist saved under Logroño's previous code (LELO) loads as LERJ, once."""
+        save_watchlist({"LE": ["LELO", "LERJ"]}, tmp_path)
+
+        logrono = SimpleNamespace(ident="LERJ", latitude_deg=42.46, longitude_deg=-2.32)
+        mock_model = MagicMock()
+        mock_model.find_airport_by_code.side_effect = (
+            lambda k: logrono if k in ("LELO", "LERJ") else None
+        )
+
+        with patch("weatherbrief.airports._load_airport_model", return_value=mock_model):
+            result = load_watchlist_with_coords(tmp_path, "/fake/db")
+
+        assert [a.icao for a in result] == ["LERJ"]
 
 
 class TestDiscoverAirports:
@@ -157,6 +172,30 @@ class TestDiscoverAirports:
             result = discover_airports(["XX"], "/fake/db")
 
         assert result["XX"] == []
+
+    @responses.activate
+    def test_discover_counts_metar_under_previous_code(self):
+        """Logroño is LERJ in the DB, but its METAR is still issued as LELO."""
+        mock_model = MagicMock()
+        mock_model.airports.__iter__ = MagicMock(
+            return_value=iter([
+                SimpleNamespace(ident="LERJ", alt_ident="LELO"),
+                SimpleNamespace(ident="LEMD", alt_ident=None),
+            ])
+        )
+
+        responses.add(
+            responses.GET,
+            "https://aviationweather.gov/api/data/metar",
+            json=[{"icaoId": "LELO"}, {"icaoId": "LEMD"}],
+            status=200,
+        )
+
+        with patch("weatherbrief.airports._load_airport_model", return_value=mock_model):
+            result = discover_airports(["LE"], "/fake/db")
+
+        assert result["LE"] == ["LEMD", "LERJ"]
+        assert "LELO" in responses.calls[0].request.url
 
 
 # ---------------------------------------------------------------------------
