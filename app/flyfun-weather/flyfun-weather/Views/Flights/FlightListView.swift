@@ -595,6 +595,32 @@ struct FlightListView: View {
             // trip screen fetches its own data and reports its own 404.
             selection = .trip(id: tripId)
             appState.clearPendingNavigation()
+        case .tripShare(let code):
+            // Resolve `/t/{code}` to a trip id, then open the ordinary trip
+            // screen — no preview sheet, because the trip screen already *is*
+            // the read-only view for a recipient (it reads `role` and leaves
+            // every owner control off). Keep the pending target while the
+            // repository isn't ready, the same sign-in resumption path as
+            // `.share`.
+            guard let tripRepo = appState.tripRepository else { return }
+            appState.clearPendingNavigation()
+            Task {
+                do {
+                    let trip = try await tripRepo.tripByShareCode(code)
+                    selection = .trip(id: trip.id)
+                } catch let error as APIError {
+                    shareResolveError = {
+                        if case .notFound = error {
+                            // The all-or-nothing rule, in the recipient's words:
+                            // one private leg closes the whole trip.
+                            return "This shared trip isn’t available. The link may be wrong, or one of its flights is private."
+                        }
+                        return error.errorDescription ?? "Couldn’t open the shared trip."
+                    }()
+                } catch {
+                    shareResolveError = error.localizedDescription
+                }
+            }
         case .share(let code):
             // Resolve the share code to a flight and present the preview. Keep the
             // pending target when the repository isn't ready yet (e.g. the link
@@ -896,6 +922,17 @@ struct FlightListView: View {
             }
         }
         .contextMenu {
+            // A leg rendered flat rather than under a trip header still belongs
+            // to a chain — most often a leg someone shared, whose trip is not in
+            // the viewer's own `trips()`. Without this the badge names a trip the
+            // pilot has no way to open, and a shared leg is a dead end.
+            if let trip = flight.trip {
+                Button {
+                    selection = .trip(id: trip.id)
+                } label: {
+                    Label("Open Trip", systemImage: "arrow.forward.square")
+                }
+            }
             if !viewModel.isOffline && flight.isEditable {
                 Button {
                     editingFlight = flight

@@ -10,15 +10,19 @@ import {
   fetchTripRefreshStatus,
   refreshTrip,
   removeTripLeg,
+  subscribeTrip,
+  unsubscribeTrip,
   updateTrip,
   type TripAiSummary,
 } from './adapters/trips-adapter';
 import type { RefreshEntry } from './adapters/api-adapter';
 import type { TripResponse } from './store/types';
 import * as ui from './managers/trip-ui';
-import { errorToMessage, redirectToLogin, renderUserInfo } from './utils';
+import {
+  copyTripShareLink, errorToMessage, redirectToLogin, renderUserInfo,
+} from './utils';
 import { initTheme } from './theme';
-import { initI18n } from './i18n/i18n';
+import { initI18n, t } from './i18n/i18n';
 
 /** Progress poll cadence while a trip refresh is running.
  *
@@ -46,6 +50,11 @@ let legPollTimer: number | null = null;
 let currentAi: TripAiSummary | null = null;
 
 async function loadAiSummary(tripId: string): Promise<TripAiSummary | null> {
+  // A viewer never gets the paragraph: the owner paid for it under their own
+  // AI-digest consent, and the endpoint refuses them anyway. Skipping the call
+  // rather than swallowing its 404 keeps a shared trip from filing a failed
+  // request on every repaint.
+  if (!isOwner()) return null;
   try {
     // Keyed on the member (flight_id, fetch_timestamp) tuples server-side, so
     // reopening the page costs nothing when nothing has changed.
@@ -65,10 +74,25 @@ const legHandlers: ui.LegRowHandlers = {
   onRefreshLeg: handleRefreshLeg,
 };
 
+/** One table, wired from two places (first paint and the refresh poll's
+ *  repaint) — duplicating it is how a handler ends up on one path only. */
+const ownerHandlers: ui.ControlHandlers = {
+  onRefresh: handleRefresh,
+  onRename: handleRename,
+  onToggleAutoRefresh: handleAutoRefresh,
+  onDelete: handleDelete,
+  onShare: handleShare,
+};
+
+function isOwner(): boolean {
+  return !trip || trip.role !== 'viewer';
+}
+
 function renderLegRows(): void {
   if (!trip) return;
   ui.renderLegs(
     trip.summary, legHandlers, legRefreshes, trip.refresh?.active === true, legNotices,
+    isOwner(),
   );
 }
 
@@ -81,12 +105,60 @@ function renderAll(ai: TripAiSummary | null): void {
   ui.renderAiSummary(ai);
   ui.renderContinuity(trip.summary);
   renderLegRows();
-  ui.renderControls(trip, {
-    onRefresh: handleRefresh,
-    onRename: handleRename,
-    onToggleAutoRefresh: handleAutoRefresh,
-    onDelete: handleDelete,
-  });
+  ui.renderSharedBy(trip);
+  if (isOwner()) {
+    ui.renderControls(trip, ownerHandlers);
+  } else {
+    ui.renderViewerControls(trip, {
+      onFollow: handleFollow,
+      onUnfollow: handleUnfollow,
+    });
+  }
+}
+
+async function handleShare(): Promise<void> {
+  if (!trip) return;
+  const copied = await copyTripShareLink(trip.id, trip.share_code);
+  if (!copied) return;
+  const btn = document.querySelector('.btn-trip-share') as HTMLButtonElement | null;
+  if (!btn) return;
+  const original = btn.textContent;
+  btn.textContent = t('trips.shareCopied');
+  window.setTimeout(() => {
+    // Re-query: a repaint between the flash and its expiry replaces the node,
+    // and writing to the detached one would leave the live button stuck.
+    const live = document.querySelector('.btn-trip-share') as HTMLButtonElement | null;
+    if (live && original) live.textContent = original;
+  }, 2000);
+}
+
+/** Follow a shared trip: its legs join the viewer's own flights list.
+ *
+ * Re-reads the trip afterwards rather than flipping the flag locally — the
+ * server derives `is_subscribed` from the legs, and a leg the owner added
+ * since must leave the button un-pressed rather than claiming a leg that is
+ * not actually followed.
+ */
+async function handleFollow(): Promise<void> {
+  if (!trip) return;
+  try {
+    await subscribeTrip(trip.id);
+  } catch (err) {
+    ui.renderError(errorToMessage(err));
+    return;
+  }
+  await reload(false);
+}
+
+async function handleUnfollow(): Promise<void> {
+  if (!trip) return;
+  try {
+    await unsubscribeTrip(trip.id);
+  } catch (err) {
+    ui.renderError(errorToMessage(err));
+    return;
+  }
+  await reload(false);
 }
 
 /** A 404 means the trip container was pruned — its last leg was unlinked.
@@ -196,12 +268,7 @@ function startPolling(): void {
       const status = await fetchTripRefreshStatus(id);
       if (trip) {
         trip = { ...trip, refresh: status };
-        ui.renderControls(trip, {
-          onRefresh: handleRefresh,
-          onRename: handleRename,
-          onToggleAutoRefresh: handleAutoRefresh,
-          onDelete: handleDelete,
-        });
+        ui.renderControls(trip, ownerHandlers);
       }
       if (!status.active) {
         stopPolling();
@@ -360,7 +427,9 @@ async function init(): Promise<void> {
 
   renderAll(null);
   if (trip.refresh?.active) startPolling();
-  startLegRefreshPolling();
+  // Leg-refresh polling reads the *caller's* active refreshes; a viewer has
+  // none for someone else's legs, and cannot start one either.
+  if (isOwner()) startLegRefreshPolling();
   // The AI paragraph loads second so the deterministic callout paints first —
   // it is the thing the eye should land on, and it must never wait on an LLM.
   renderAll(await loadAiSummary(tripId));

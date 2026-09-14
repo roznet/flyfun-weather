@@ -57,6 +57,9 @@ struct PendingNavigationStoreTests {
             .briefing(flightId: "abc"),
             .share(code: "aB3xy7Q9"),
             .trip(id: "trip-1"),
+            // "tripShare:" also starts with "trip", so the decoder has to test
+            // the longer prefix first or a share code comes back as a trip id.
+            .tripShare(code: "aB3xy7Q9"),
             .forecastMap(MapDeepLink(day: 2, hour: 6, model: "gfs",
                                      metric: "ceiling_ft", airport: "EGLL")),
         ]

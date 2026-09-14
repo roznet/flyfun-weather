@@ -360,6 +360,18 @@ extension FixtureBriefingRepository: TripRepository {
         TripRefreshStatus(tripId: tripId)
     }
 
+    func tripByShareCode(_ code: String) async throws -> TripResponse {
+        throw FixtureError.notProvided("tripByShareCode")
+    }
+
+    func subscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        throw FixtureError.notProvided("subscribeTrip")
+    }
+
+    func unsubscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        throw FixtureError.notProvided("unsubscribeTrip")
+    }
+
     func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
         // The canned trip is never stale, so the screen renders `ai_summary` from
         // the GET and should not reach this. Answer anyway, with the same text.

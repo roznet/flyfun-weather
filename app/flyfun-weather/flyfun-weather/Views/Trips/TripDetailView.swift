@@ -121,6 +121,14 @@ struct TripDetailView: View {
     private func content(trip: TripResponse, viewModel: TripDetailViewModel) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
+                if !trip.isOwned {
+                    TripSharedBanner(
+                        trip: trip,
+                        onFollow: { Task { await viewModel.follow() } },
+                        onUnfollow: { Task { await viewModel.unfollow() } }
+                    )
+                }
+
                 TripBindingCallout(summary: trip.summary)
 
                 if let progress = trip.refresh {
@@ -134,27 +142,56 @@ struct TripDetailView: View {
                     summary: trip.summary,
                     refreshingLegIds: viewModel.refreshingLegIds,
                     onOpenLeg: { onOpenLeg?($0) },
-                    onRemoveLeg: { leg in legToRemove = leg }
+                    onRemoveLeg: removeLegHandler(for: trip)
                 )
 
                 if !trip.summary.continuityWarnings.isEmpty {
                     TripContinuityView(warnings: trip.summary.continuityWarnings)
                 }
 
-                TripAiSummaryView(
-                    trip: trip,
-                    unavailableReason: viewModel.aiUnavailableReason
-                )
+                if trip.isOwned {
+                    TripAiSummaryView(
+                        trip: trip,
+                        unavailableReason: viewModel.aiUnavailableReason
+                    )
+                }
             }
             .padding(Theme.cardPadding)
         }
         .accessibilityIdentifier("tripDetail")
     }
 
+    /// The unlink action, or nil on a trip the viewer does not own — the server
+    /// refuses an unlink from anyone but the owner, so offering it could only
+    /// ever produce an error.
+    ///
+    /// A named helper rather than a ternary at the call site: `cond ? { … } : nil`
+    /// gives the type checker a closure literal and a nil to unify, which it
+    /// cannot do without an explicit optional-closure type anyway.
+    private func removeLegHandler(for trip: TripResponse) -> ((TripLeg) -> Void)? {
+        guard trip.isOwned else { return nil }
+        return { leg in legToRemove = leg }
+    }
+
+    /// The share link, or nil when the trip cannot be shared as it stands.
+    ///
+    /// Both conditions are the server's answer, not a guess: `isShareable` is
+    /// false while any leg is private (the link would 404 for the recipient),
+    /// and `shareCode` is minted server-side on the trip's first read.
+    private func tripShareURL(for trip: TripResponse) -> URL? {
+        guard trip.isShareable, let code = trip.shareCode, !code.isEmpty else {
+            return nil
+        }
+        return AppState.tripShareURL(forShareCode: code)
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            if let viewModel, let trip = viewModel.trip {
+            // Every control here is an owner action the server refuses to anyone
+            // else — refresh most of all, since a chain is admitted against the
+            // *owner's* refresh slots and billed to them.
+            if let viewModel, let trip = viewModel.trip, trip.isOwned {
                 HStack(spacing: 12) {
                     Button {
                         Task { await viewModel.refresh() }
@@ -180,6 +217,23 @@ struct TripDetailView: View {
                             Label("Auto-refresh trip", systemImage: "clock.arrow.circlepath")
                         }
 
+                        if let url = tripShareURL(for: trip) {
+                            ShareLink(item: url) {
+                                Label("Share Trip", systemImage: "square.and.arrow.up")
+                            }
+                            .accessibilityIdentifier("shareTripButton")
+                        } else {
+                            // All-or-nothing: one private leg and the link 404s
+                            // for the recipient. Say why rather than hand out a
+                            // dead link — only the owner can fix it, leg by leg.
+                            Label(
+                                "Make every leg shareable to share this trip",
+                                systemImage: "lock"
+                            )
+                        }
+
+                        Divider()
+
                         Button {
                             renameText = trip.name
                             showRename = true
@@ -201,6 +255,66 @@ struct TripDetailView: View {
                 }
             }
         }
+    }
+}
+
+/// The header on a trip someone else shared: whose it is, and the one action
+/// that belongs to the recipient.
+///
+/// Deliberately a single action. Refresh, rename, delete and auto-refresh are
+/// the owner's — refresh most sharply, since a chain is admitted against the
+/// owner's per-user refresh slots and billed to them — so the recipient gets
+/// the one decision that is genuinely theirs: keep these flights in my list, or
+/// let them go.
+struct TripSharedBanner: View {
+    let trip: TripResponse
+    var onFollow: () -> Void
+    var onUnfollow: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingS) {
+            Label(sharedByText, systemImage: "person.crop.circle")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            if trip.isSubscribed {
+                HStack(spacing: Theme.spacingS) {
+                    Text(followedText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Remove from My List", role: .destructive, action: onUnfollow)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            } else {
+                Button(action: onFollow) {
+                    Label("Add These Flights to My List", systemImage: "plus.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(Theme.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityIdentifier("tripSharedBanner")
+    }
+
+    /// Never falls back to the owner's email — they shared a trip, not an
+    /// address, and the server does not send one.
+    private var sharedByText: String {
+        if let owner = trip.ownerDisplayName, !owner.isEmpty {
+            return "Shared by \(owner)"
+        }
+        return "Shared trip"
+    }
+
+    private var followedText: String {
+        let count = trip.summary.totalLegs
+        return count == 1
+            ? "This leg is in your list"
+            : "All \(count) legs are in your list"
     }
 }
 

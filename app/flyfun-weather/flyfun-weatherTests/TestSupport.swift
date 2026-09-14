@@ -66,6 +66,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var deleteTripResult: Result<Void, Error> = .success(())
     var refreshTripResult: Result<TripRefreshStatus, Error> = .failure(MockError.notStubbed("refreshTrip"))
     var tripAiSummaryResult: Result<TripAiSummaryResponse, Error> = .failure(MockError.notStubbed("tripAiSummary"))
+    var tripByShareCodeResult: Result<TripResponse, Error> = .failure(MockError.notStubbed("tripByShareCode"))
+    var subscribeTripResult: Result<TripSubscribeResponse, Error> = .failure(MockError.notStubbed("subscribeTrip"))
+    var unsubscribeTripResult: Result<TripSubscribeResponse, Error> = .failure(MockError.notStubbed("unsubscribeTrip"))
     /// Successive `tripRefreshStatus` polls. The final element is returned
     /// repeatedly once the script runs out, so a poll loop settles instead of
     /// throwing when it outruns the test's expectations.
@@ -75,6 +78,8 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var tripRefreshStatusCallCount = 0
     private(set) var tripAiSummaryCallCount = 0
     private(set) var refreshedTripIds: [String] = []
+    private(set) var subscribedTripIds: [String] = []
+    private(set) var unsubscribedTripIds: [String] = []
     private(set) var deletedTripIds: [String] = []
     private(set) var removedLegs: [(tripId: String, flightId: String)] = []
     private(set) var addedLegs: [(tripId: String, flightIds: [String])] = []
@@ -457,6 +462,20 @@ extension MockBriefingRepository: TripRepository {
     func refreshTrip(tripId: String) async throws -> TripRefreshStatus {
         refreshedTripIds.append(tripId)
         return try refreshTripResult.get()
+    }
+
+    func tripByShareCode(_ code: String) async throws -> TripResponse {
+        try tripByShareCodeResult.get()
+    }
+
+    func subscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        subscribedTripIds.append(tripId)
+        return try subscribeTripResult.get()
+    }
+
+    func unsubscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        unsubscribedTripIds.append(tripId)
+        return try unsubscribeTripResult.get()
     }
 
     func tripRefreshStatus(tripId: String) async throws -> TripRefreshStatus {

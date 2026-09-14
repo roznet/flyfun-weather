@@ -16,7 +16,10 @@ struct TripTimelineView: View {
     let summary: TripSummary
     var refreshingLegIds: Set<String> = []
     var onOpenLeg: (String) -> Void
-    var onRemoveLeg: (TripLeg) -> Void
+    /// nil on a trip the viewer does not own: the server refuses an unlink from
+    /// anyone but the owner, so the menu item is left off rather than shown and
+    /// failing.
+    var onRemoveLeg: ((TripLeg) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,7 +32,7 @@ struct TripTimelineView: View {
                     isBinding: leg.flightId == summary.bindingLegId,
                     isRefreshing: refreshingLegIds.contains(leg.flightId),
                     onOpen: { onOpenLeg(leg.flightId) },
-                    onRemove: { onRemoveLeg(leg) }
+                    onRemove: onRemoveLeg.map { handler in { handler(leg) } }
                 )
             }
         }
@@ -86,7 +89,8 @@ struct TripLegRow: View {
     let isBinding: Bool
     var isRefreshing: Bool = false
     var onOpen: () -> Void
-    var onRemove: () -> Void
+    /// nil hides the unlink item entirely — see ``TripTimelineView/onRemoveLeg``.
+    var onRemove: (() -> Void)?
 
     private var isPast: Bool { !leg.state.isRemaining }
 
@@ -150,8 +154,10 @@ struct TripLegRow: View {
                 Label("Open Briefing", systemImage: "doc.text")
             }
             // An unlink, never a delete — and the confirmation it opens says so.
-            Button(role: .destructive, action: onRemove) {
-                Label("Remove from Trip", systemImage: "minus.circle")
+            if let onRemove {
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove from Trip", systemImage: "minus.circle")
+                }
             }
         }
     }

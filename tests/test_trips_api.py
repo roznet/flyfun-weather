@@ -23,6 +23,13 @@ _NOW = datetime.now(timezone.utc)
 #: Held as an explicit table so each entry is a deliberate claim about what a
 #: foreign caller gets; ``test_the_foreign_route_table_covers_every_trip_scoped_route``
 #: stops it drifting behind the router.
+#:
+#: The trip these run against (``otherstrip``) has **no legs**, so it is not
+#: shareable and every route 404s, reads included. The reads are the ones that
+#: became conditional when trip sharing landed — a foreign trip whose legs are
+#: all public *is* readable — and that direction is covered in
+#: ``tests/test_trip_sharing.py``. Keeping the unshareable case here means this
+#: table still proves every route applies a guard.
 _FOREIGN_TRIP_ROUTES = [
     ("get", "/api/trips/otherstrip", None),
     ("get", "/api/trips/otherstrip/summary", None),
@@ -33,6 +40,8 @@ _FOREIGN_TRIP_ROUTES = [
     ("post", "/api/trips/otherstrip/refresh", None),
     ("get", "/api/trips/otherstrip/refresh/status", None),
     ("post", "/api/trips/otherstrip/ai-summary", None),
+    ("post", "/api/trips/otherstrip/subscribe", None),
+    ("delete", "/api/trips/otherstrip/subscribe", None),
 ]
 
 

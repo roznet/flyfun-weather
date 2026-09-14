@@ -73,6 +73,25 @@ enum TripGradeKind: String, Codable, Sendable {
     }
 }
 
+/// Who is reading a trip. Sharing adds no permission of its own: a trip is
+/// readable by a non-owner exactly when *every* one of its legs is (the same
+/// per-flight privacy switch a shared leg link answers to), and all-or-nothing
+/// because a chain summarised over a visible subset would name the wrong
+/// binding leg. See `designs/flight-trips.md`.
+enum TripRole: String, Codable, Sendable {
+    case owner
+    case viewer
+    /// An unrecognised role is treated as a viewer by ``TripResponse/isOwned``,
+    /// which is the safe direction: at worst a control is missing, never an
+    /// action offered that the server will refuse.
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TripRole(rawValue: raw) ?? .unknown
+    }
+}
+
 /// What the server picked the binding leg on. `outlook` means *no* remaining leg
 /// was gradeable, so there is deliberately no `chainStatus` alongside it.
 enum TripBindingBasis: String, Codable, Sendable {
@@ -256,6 +275,31 @@ struct TripResponse: Codable, Sendable, Equatable, Identifiable {
     var aiSummaryStale: Bool = false
     var refresh: TripRefreshStatus? = nil
 
+    /// Who is asking. `viewer` means this trip arrived through a share link and
+    /// belongs to someone else: **read-only**. The server refuses every write
+    /// (refresh included — a chain is admitted against the *owner's* refresh
+    /// slots and billed to them), so the screen must not offer them.
+    ///
+    /// A viewer payload also arrives with `notes`, `autoRefresh`,
+    /// `notifyOverride`, `refresh` and `aiSummary` left at their defaults: the
+    /// server withholds them rather than the client hiding them, so never read
+    /// those as facts about the owner's trip.
+    var role: TripRole = .owner
+    /// The owner's display name, for the "Shared by …" line. nil when they have
+    /// not set one — never fall back to an email, which they did not share.
+    var ownerDisplayName: String? = nil
+    /// Owner-only: the short `/t/{code}` token behind the share sheet.
+    var shareCode: String? = nil
+    /// Viewer-only: every leg of this trip is already in the viewer's own list.
+    /// Derived from the legs on each read, never stored — a leg added since is
+    /// genuinely not followed, and this comes back false to say so.
+    var isSubscribed: Bool = false
+    /// Owner-only: whether the share link resolves today. False when a leg is
+    /// private, which is the owner's to fix.
+    var isShareable: Bool = true
+
+    var isOwned: Bool { role != .viewer }
+
     /// Display title: the trip's name, falling back to the chain when a trip was
     /// created before its default name was derived.
     var displayName: String { name.isEmpty ? summary.chainLabel : name }
@@ -277,6 +321,37 @@ struct TripAiSummaryResponse: Codable, Sendable, Equatable {
     var unavailableReason: String? = nil
 
     var isAiDisabled: Bool { unavailableReason == "ai_disabled" }
+}
+
+/// Response of `POST`/`DELETE` `/api/trips/{id}/subscribe`.
+///
+/// Following a shared trip subscribes to each of its **legs** — there is no
+/// trip-level subscription row. Flight subscription already carries everything
+/// that matters (the leg appears in the follower's list, the owner's privacy
+/// flip removes it, deleting the flight takes it with it), and a second
+/// trip-shaped concept would have to be reconciled with it on every membership
+/// change.
+struct TripSubscribeResponse: Codable, Sendable, Equatable {
+    let tripId: String
+    /// Legs actually added or removed. Zero is a success, not a failure: it
+    /// means they were already all followed.
+    var changed: Int = 0
+    var totalLegs: Int = 0
+    var isSubscribed: Bool = false
+}
+
+extension TripSubscribeResponse {
+    enum CodingKeys: String, CodingKey {
+        case tripId, changed, totalLegs, isSubscribed
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tripId = try c.decode(String.self, forKey: .tripId)
+        changed = try c.decodeIfPresent(Int.self, forKey: .changed) ?? 0
+        totalLegs = try c.decodeIfPresent(Int.self, forKey: .totalLegs) ?? 0
+        isSubscribed = try c.decodeIfPresent(Bool.self, forKey: .isSubscribed) ?? false
+    }
 }
 
 // MARK: - Requests
@@ -464,6 +539,7 @@ extension TripResponse {
     enum CodingKeys: String, CodingKey {
         case id, userId, name, notes, autoRefresh, autoRefreshHour, notifyOverride
         case createdAt, flightIds, summary, aiSummary, aiSummaryAt, aiSummaryStale, refresh
+        case role, ownerDisplayName, shareCode, isSubscribed, isShareable
     }
 
     init(from decoder: Decoder) throws {
@@ -483,6 +559,13 @@ extension TripResponse {
         aiSummaryAt = try c.decodeIfPresent(String.self, forKey: .aiSummaryAt)
         aiSummaryStale = try c.decodeIfPresent(Bool.self, forKey: .aiSummaryStale) ?? false
         refresh = try c.decodeIfPresent(TripRefreshStatus.self, forKey: .refresh)
+        // An absent role means a server that predates sharing, where every trip
+        // the client could fetch was its own.
+        role = try c.decodeIfPresent(TripRole.self, forKey: .role) ?? .owner
+        ownerDisplayName = try c.decodeIfPresent(String.self, forKey: .ownerDisplayName)
+        shareCode = try c.decodeIfPresent(String.self, forKey: .shareCode)
+        isSubscribed = try c.decodeIfPresent(Bool.self, forKey: .isSubscribed) ?? false
+        isShareable = try c.decodeIfPresent(Bool.self, forKey: .isShareable) ?? true
     }
 }
 

@@ -737,6 +737,21 @@ extension CachingBriefingRepository: TripRepository {
         try await online.tripRefreshStatus(tripId: tripId)
     }
 
+    /// No cache tier for any of these: a share code must resolve against the
+    /// live privacy state (a leg flipped private since is a 404, and a stale
+    /// "yes" would be a leak), and the two subscribe calls are writes.
+    func tripByShareCode(_ code: String) async throws -> TripResponse {
+        try await online.tripByShareCode(code)
+    }
+
+    func subscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        try await online.subscribeTrip(tripId: tripId)
+    }
+
+    func unsubscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        try await online.unsubscribeTrip(tripId: tripId)
+    }
+
     func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
         try await online.tripAiSummary(tripId: tripId)
     }

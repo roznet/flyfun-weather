@@ -472,4 +472,16 @@ extension OnlineBriefingRepository: TripRepository {
     func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse {
         try await client.request("/api/trips/\(tripId)/ai-summary", method: "POST")
     }
+
+    func tripByShareCode(_ code: String) async throws -> TripResponse {
+        try await client.request("/api/trips/by-share/\(code)")
+    }
+
+    func subscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        try await client.request("/api/trips/\(tripId)/subscribe", method: "POST")
+    }
+
+    func unsubscribeTrip(tripId: String) async throws -> TripSubscribeResponse {
+        try await client.request("/api/trips/\(tripId)/subscribe", method: "DELETE")
+    }
 }

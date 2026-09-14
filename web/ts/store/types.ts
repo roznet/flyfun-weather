@@ -202,6 +202,17 @@ export interface TripResponse {
   ai_summary_at: string | null;
   ai_summary_stale: boolean;
   refresh: TripRefreshStatus | null;
+  /** Who is asking. `viewer` opened a share link: read-only, and every owner
+   *  control (refresh, rename, delete, unlink) must be left off the page. */
+  role: 'owner' | 'viewer';
+  /** Viewer only, and only when the owner has set one. */
+  owner_display_name: string | null;
+  /** Owner only: the `/t/{code}` token behind the Share button. */
+  share_code: string | null;
+  /** Viewer only: every leg is already in their own list. */
+  is_subscribed: boolean;
+  /** Owner only: whether the link resolves today. False when a leg is private. */
+  is_shareable: boolean;
 }
 
 export type DebriefDecision = 'cancelled' | 'flown' | 'monitoring';

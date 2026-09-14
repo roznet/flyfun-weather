@@ -427,6 +427,22 @@ struct TripRoutingTests {
         #expect(AppState.navigationTarget(
             for: URL(string: "https://evil.example.com/trip.html?id=x")!) == nil)
     }
+
+    @Test("A /t/{code} short link opens the shared trip")
+    func tripShareLink() {
+        let url = URL(string: "https://weather.flyfun.aero/t/AbCd1234")!
+        #expect(AppState.navigationTarget(for: url) == .tripShare(code: "AbCd1234"))
+    }
+
+    @Test("A malformed /t/ link routes nowhere")
+    func tripShareLinkRejectsBadCodes() {
+        // Same shape rule as the server's SHARE_CODE_RE, so a stray path can't
+        // route to an empty resolve.
+        for path in ["/t/", "/t/ab", "/t/waytoolongtobeacodeatall", "/t/has.a.dot"] {
+            let url = URL(string: "https://weather.flyfun.aero" + path)!
+            #expect(AppState.navigationTarget(for: url) == nil, "\(path)")
+        }
+    }
 }
 
 // MARK: - Offline cache staleness

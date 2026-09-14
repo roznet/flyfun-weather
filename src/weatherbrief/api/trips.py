@@ -22,13 +22,19 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
-from weatherbrief.db.models import FlightRow, FlightTripRow
+from weatherbrief.db.models import FlightRow, FlightSubscriptionRow, FlightTripRow
 from weatherbrief.models import Flight, FlightTrip
 from weatherbrief.storage import trips as trip_storage
+from weatherbrief.storage.flights import (
+    SHARE_CODE_RE,
+    SubscriptionError,
+    subscribe_flight,
+    unsubscribe_flight,
+)
 from weatherbrief.storage.debriefs import bulk_get_debriefs
 from weatherbrief.trips import TripLegInput, TripSummary, summarize_trip
 
@@ -66,7 +72,13 @@ class TripLegRef(BaseModel):
 
 
 class TripResponse(BaseModel):
-    """A trip container plus its derived summary."""
+    """A trip container plus its derived summary.
+
+    Doubles as the *viewer* payload for a shared trip. Everything that is the
+    owner's own business — notes, the refresh switches, the notification
+    override, the live refresh progress and the AI paragraph — is left unset
+    when ``role == "viewer"``; see ``_trip_to_response``.
+    """
 
     id: str
     user_id: str
@@ -78,6 +90,24 @@ class TripResponse(BaseModel):
     created_at: str
     flight_ids: list[str] = Field(default_factory=list)
     summary: TripSummary
+    #: Who is asking. ``viewer`` is a recipient of a share link: read-only, and
+    #: the client must not offer refresh, rename, delete or membership edits.
+    role: Literal["owner", "viewer"] = "owner"
+    #: Set for ``viewer`` only, and only when the owner has a display name —
+    #: never their email (same rule as the shared-flight line).
+    owner_display_name: str | None = None
+    #: The short ``/t/{code}`` token. Owner-only: handing a recipient the link
+    #: they already followed is noise, and it is the owner's to give out.
+    share_code: str | None = None
+    #: Whether *every* member leg is already in the viewer's own list. The
+    #: subscribe action is a loop over the legs — there is no trip-level
+    #: subscription row, and deliberately so (see ``subscribe_trip``).
+    is_subscribed: bool = False
+    #: Owner-only: whether the link would actually resolve for a recipient
+    #: right now. False when any leg is private, which is the one case the
+    #: owner has to fix themselves, so the share control says so rather than
+    #: handing out a link that 404s.
+    is_shareable: bool = True
     # Persisted Haiku paragraph, when one has been generated and is still
     # keyed to the current member packs. Deliberately secondary to
     # ``summary.headline`` — see designs/flight-trips.md.
@@ -254,10 +284,60 @@ def derive_trip_name(summary: TripSummary) -> str:
 
 
 def _owned_trip_row(db: Session, trip_id: str, user_id: str) -> FlightTripRow:
+    """The trip, for an action only its owner may take.
+
+    Every mutation goes through this, sharing or not: a recipient must never be
+    able to rename, delete, re-group or **refresh** someone else's trip. Refresh
+    is the sharp one — it spends the owner's money and is admitted against the
+    *owner's* ``MAX_PER_USER`` slots, so a viewer-triggered chain would lock the
+    owner out of their own refreshes.
+    """
     row = trip_storage.load_trip_row(db, trip_id, user_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     return row
+
+
+def _viewable_trip_row(
+    db: Session, trip_id: str, user_id: str
+) -> tuple[FlightTripRow, Literal["owner", "viewer"]]:
+    """The trip for a *read*, by its owner or by someone holding the link.
+
+    Sharing a trip introduces no new permission: a trip is readable exactly
+    when every one of its legs is (``storage.trips.is_shareable``), which is the
+    same ``flights.private`` switch the per-leg share link already answers to.
+    """
+    found = trip_storage.load_trip_row_for_viewer(db, trip_id, user_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return found
+
+
+def _load_trip_any_owner(db: Session, trip_id: str) -> FlightTrip:
+    """The trip container, without the ownership filter.
+
+    Access has already been decided by ``_viewable_trip_row``; re-passing the
+    *viewer's* id to ``load_trip`` would come back None for a shared trip and
+    blow up on the attribute access. Callers must not use this without a
+    preceding access check.
+    """
+    trip = trip_storage.load_trip_unscoped(db, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return trip
+
+
+def _subscribed_to_all(db: Session, flight_ids: list[str], user_id: str) -> bool:
+    """True when the viewer already follows every member leg. One query."""
+    if not flight_ids:
+        return False
+    count = db.execute(
+        select(func.count(FlightSubscriptionRow.id)).where(
+            FlightSubscriptionRow.flight_id.in_(flight_ids),
+            FlightSubscriptionRow.user_id == user_id,
+        )
+    ).scalar_one()
+    return int(count or 0) >= len(set(flight_ids))
 
 
 def _validate_owned_flights(db: Session, flight_ids: list[str], user_id: str) -> list[str]:
@@ -283,12 +363,54 @@ def _validate_owned_flights(db: Session, flight_ids: list[str], user_id: str) ->
     return list(dict.fromkeys(flight_ids))
 
 
-def _trip_to_response(db: Session, trip: FlightTrip) -> TripResponse:
+def _trip_to_response(
+    db: Session,
+    trip: FlightTrip,
+    *,
+    viewer_id: str | None = None,
+    role: Literal["owner", "viewer"] = "owner",
+) -> TripResponse:
+    """The wire payload, narrowed to what ``role`` is allowed to see.
+
+    A viewer gets the chain and the legs — the whole point of the share — and
+    nothing else. Withheld, each for its own reason:
+
+    * ``notes`` — the owner's private scratchpad, not part of the briefing.
+    * ``auto_refresh`` / ``auto_refresh_hour`` / ``notify_override`` — switches
+      only the owner can flip, so showing their state is at best confusing.
+    * ``refresh`` — live progress of a run only the owner can start.
+    * ``ai_summary`` — the owner paid for it under *their* AI-digest consent;
+      the recipient never agreed to it and the trip page's own deterministic
+      headline says the same thing.
+    * ``share_code`` — the owner's to hand out.
+    """
     from weatherbrief.api import trip_refresh
 
     from weatherbrief.digest.trip_summary import legs_allow_ai
 
     summary, members, leg_inputs = build_trip_summary(db, trip)
+    row = db.get(FlightTripRow, trip.id)
+    flight_ids = [f.id for f in members]
+
+    if role == "viewer":
+        from weatherbrief.api.flights import _resolve_owner_display_name
+
+        return TripResponse(
+            id=trip.id,
+            user_id=trip.user_id,
+            name=trip.name,
+            created_at=trip.created_at.isoformat(),
+            flight_ids=flight_ids,
+            summary=summary,
+            role="viewer",
+            owner_display_name=_resolve_owner_display_name(db, trip.user_id),
+            is_subscribed=(
+                _subscribed_to_all(db, flight_ids, viewer_id)
+                if viewer_id is not None
+                else False
+            ),
+        )
+
     stale = bool(trip.ai_summary_text) and trip.ai_summary_key != ai_summary_key(leg_inputs)
     # The consent gate applies to *reads* too, not just to generation. Turning
     # AI off on a leg touches no pack, so the key is unchanged and `stale` is
@@ -297,7 +419,6 @@ def _trip_to_response(db: Session, trip: FlightTrip) -> TripResponse:
     # to fetch the paragraph through its own endpoint today; the contract
     # should not depend on that staying true.
     ai_text = trip.ai_summary_text if legs_allow_ai(db, members, trip.user_id) else None
-    row = db.get(FlightTripRow, trip.id)
     return TripResponse(
         id=trip.id,
         user_id=trip.user_id,
@@ -307,12 +428,16 @@ def _trip_to_response(db: Session, trip: FlightTrip) -> TripResponse:
         auto_refresh_hour=trip.auto_refresh_hour,
         notify_override=trip.notify_override,
         created_at=trip.created_at.isoformat(),
-        flight_ids=[f.id for f in members],
+        flight_ids=flight_ids,
         summary=summary,
         ai_summary=ai_text,
         ai_summary_at=trip.ai_summary_at.isoformat() if trip.ai_summary_at else None,
         ai_summary_stale=stale,
         refresh=trip_refresh.status(row) if row is not None else None,
+        role="owner",
+        # Minted lazily so a trip created before sharing existed still shares.
+        share_code=trip_storage.ensure_share_code(db, row) if row is not None else None,
+        is_shareable=trip_storage.is_shareable(db, trip.id),
     )
 
 
@@ -381,6 +506,77 @@ def bulk_trip_refs(db: Session, user_id: str) -> dict[str, TripLegRef]:
     return refs
 
 
+def shared_trip_refs(db: Session, flight_ids: list[str]) -> dict[str, TripLegRef]:
+    """``flight_id -> TripLegRef`` for *subscribed* legs, when the trip is shared.
+
+    The recipient-side sibling of :func:`bulk_trip_refs`, which is scoped to
+    trips the caller owns. Without this a shared leg is a dead end: the
+    recipient can open the briefing they were sent but has no way back to the
+    chain it belongs to, which is the whole reason the trip exists.
+
+    Gated on the same all-or-nothing rule as the trip page, so the badge never
+    links to a trip that would 404 — a trip with one private leg produces no
+    refs at all.
+    """
+    if not flight_ids:
+        return {}
+    linked = db.execute(
+        select(FlightRow.id, FlightRow.trip_id).where(
+            FlightRow.id.in_(flight_ids), FlightRow.trip_id.is_not(None),
+        )
+    ).all()
+    if not linked:
+        return {}
+    trip_ids = {trip_id for _, trip_id in linked}
+    trips = db.execute(
+        select(FlightTripRow.id, FlightTripRow.name).where(
+            FlightTripRow.id.in_(trip_ids)
+        )
+    ).all()
+    names = {trip_id: name for trip_id, name in trips}
+    members = db.execute(
+        select(FlightRow.id, FlightRow.trip_id, FlightRow.private)
+        .where(FlightRow.trip_id.in_(list(names)))
+        .order_by(FlightRow.departure_time.asc())
+    ).all()
+
+    by_trip: dict[str, list[str]] = {}
+    has_private: set[str] = set()
+    for flight_id, trip_id, private in members:
+        by_trip.setdefault(trip_id, []).append(flight_id)
+        if private:
+            has_private.add(trip_id)
+
+    wanted = set(flight_ids)
+    refs: dict[str, TripLegRef] = {}
+    for trip_id, member_ids in by_trip.items():
+        if trip_id in has_private:
+            continue
+        for index, flight_id in enumerate(member_ids, start=1):
+            if flight_id not in wanted:
+                continue
+            refs[flight_id] = TripLegRef(
+                id=trip_id,
+                name=names.get(trip_id) or "",
+                position=index,
+                total=len(member_ids),
+                # The owner's switch, and only they can flip it. Reporting it
+                # on a leg the viewer merely follows would read as a control.
+                auto_refresh=False,
+            )
+    return refs
+
+
+def viewer_trip_ref_for(
+    db: Session, trip_id: str, flight_id: str
+) -> TripLegRef | None:
+    """:func:`trip_ref_for` for a leg the caller only subscribes to."""
+    if not trip_storage.is_shareable(db, trip_id):
+        return None
+    ref = trip_ref_for(db, trip_id, flight_id)
+    return ref.model_copy(update={"auto_refresh": False}) if ref else None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -433,14 +629,42 @@ def create_trip(
     return _trip_to_response(db, trip)
 
 
+@router.get("/by-share/{code}", response_model=TripResponse)
+def get_trip_by_share_code(
+    code: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Resolve a ``/t/{code}`` token to its trip — the iOS on-ramp.
+
+    A browser follows the redirect in ``api/app.py`` and lands on
+    ``/trip.html?id=…`` instead; this is the same resolution for a client that
+    holds the code rather than a URL bar. A code for a trip the caller may not
+    read is a 404, indistinguishable from an unknown code.
+
+    Registered before ``/{trip_id}`` so the literal segment always wins.
+    """
+    if not SHARE_CODE_RE.match(code):
+        raise HTTPException(status_code=404, detail="Unknown share link")
+    trip_id = trip_storage.lookup_trip_id_by_share_code(db, code)
+    if trip_id is None:
+        raise HTTPException(status_code=404, detail="Unknown share link")
+    _, role = _viewable_trip_row(db, trip_id, user_id)
+    return _trip_to_response(
+        db, _load_trip_any_owner(db, trip_id), viewer_id=user_id, role=role,
+    )
+
+
 @router.get("/{trip_id}", response_model=TripResponse)
 def get_trip(
     trip_id: str,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    _owned_trip_row(db, trip_id, user_id)
-    return _trip_to_response(db, trip_storage.load_trip(db, trip_id, user_id))
+    _, role = _viewable_trip_row(db, trip_id, user_id)
+    return _trip_to_response(
+        db, _load_trip_any_owner(db, trip_id), viewer_id=user_id, role=role,
+    )
 
 
 @router.get("/{trip_id}/summary", response_model=TripSummary)
@@ -450,9 +674,9 @@ def get_trip_summary(
     db: Session = Depends(get_db),
 ):
     """The pure ``TripSummary`` on its own — computed, never stored."""
-    _owned_trip_row(db, trip_id, user_id)
+    _viewable_trip_row(db, trip_id, user_id)
     summary, _members, _inputs = build_trip_summary(
-        db, trip_storage.load_trip(db, trip_id, user_id),
+        db, _load_trip_any_owner(db, trip_id),
     )
     return summary
 
@@ -547,6 +771,87 @@ def remove_leg(
         # would read as "your request failed" for a request that succeeded.
         return Response(status_code=204)
     return _trip_to_response(db, trip_storage.load_trip(db, trip_id, user_id))
+
+
+class TripSubscribeResponse(BaseModel):
+    """Outcome of following (or unfollowing) a shared trip."""
+
+    trip_id: str
+    #: Legs newly added to (or removed from) the caller's list. Zero is a
+    #: success, not a no-op error: it means they already followed all of them.
+    changed: int = 0
+    total_legs: int = 0
+    is_subscribed: bool = False
+
+
+@router.post("/{trip_id}/subscribe", response_model=TripSubscribeResponse)
+def subscribe_trip(
+    trip_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Follow a shared trip — i.e. subscribe to each of its legs.
+
+    **There is no trip subscription row, on purpose.** A trip is a grouping of
+    flights, and flight subscription already exists and already carries
+    everything that matters (the leg shows up in the recipient's list, the
+    owner's privacy flip removes it again, a deleted flight takes it with it).
+    A second, trip-shaped subscription concept would need all of that
+    re-implemented and would then have to be reconciled with the per-leg one
+    every time a leg joins or leaves the trip. So this endpoint is a loop, and
+    the "am I following this trip" answer is derived, never stored.
+
+    Its consequence is worth stating: membership is a snapshot. A leg added to
+    the trip after the recipient subscribed is not followed until they press it
+    again, which the client reports by showing the button un-pressed.
+    """
+    _row, role = _viewable_trip_row(db, trip_id, user_id)
+    if role == "owner":
+        raise HTTPException(
+            status_code=409,
+            detail="You own this trip — its legs are already in your list.",
+        )
+    members = trip_storage.trip_members(db, trip_id)
+    changed = 0
+    for flight in members:
+        try:
+            if subscribe_flight(db, flight.id, user_id):
+                changed += 1
+        except SubscriptionError:
+            # A leg of someone else's trip that this user happens to own. Not
+            # reachable through the UI, but harmless and not worth failing the
+            # whole call over — they already have it.
+            continue
+    db.commit()
+    return TripSubscribeResponse(
+        trip_id=trip_id,
+        changed=changed,
+        total_legs=len(members),
+        is_subscribed=_subscribed_to_all(db, [f.id for f in members], user_id),
+    )
+
+
+@router.delete("/{trip_id}/subscribe", response_model=TripSubscribeResponse)
+def unsubscribe_trip(
+    trip_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Stop following a shared trip: drop the subscription on every leg.
+
+    Deliberately not gated on ``is_shareable``: a trip whose owner has since
+    made a leg private is exactly the one a recipient may want to let go of,
+    and refusing to unsubscribe from something they can no longer see would
+    strand those legs in their list.
+    """
+    members = trip_storage.trip_members(db, trip_id)
+    if not members:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    changed = sum(1 for f in members if unsubscribe_flight(db, f.id, user_id))
+    db.commit()
+    return TripSubscribeResponse(
+        trip_id=trip_id, changed=changed, total_legs=len(members), is_subscribed=False,
+    )
 
 
 @router.post("/{trip_id}/refresh", response_model=TripRefreshStatus)

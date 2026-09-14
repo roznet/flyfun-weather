@@ -28,8 +28,8 @@ decidable"* — never a colour for the trip.
 |---|---|
 | `weatherbrief/trips.py` | `summarize_trip`, `TripLegInput`, `TripSummary`, `TripLeg`, `SORTIE_GAP_HOURS` — the pure deterministic summary |
 | `web/ts/helpers/assessment-badges.ts` | `assessmentClass`, `outlookClass` — shared by the flights list and the trip page so their badge colours cannot drift |
-| `weatherbrief/storage/trips.py` | `create_trip`, `trip_members`, `set_leg_trip`, `delete_trip`, `prune_empty_trips`, `read_refresh_state`, `write_refresh_state` |
-| `weatherbrief/api/trips.py` | the `/api/trips` router, `build_leg_inputs`, `build_trip_summary`, `bulk_trip_refs`, `trip_ref_for`, `ai_summary_key`, `derive_trip_name` |
+| `weatherbrief/storage/trips.py` | `create_trip`, `trip_members`, `set_leg_trip`, `delete_trip`, `prune_empty_trips`, `read_refresh_state`, `write_refresh_state`, `is_shareable`, `load_trip_row_for_viewer`, `ensure_share_code`, `lookup_trip_id_by_share_code` |
+| `weatherbrief/api/trips.py` | the `/api/trips` router, `build_leg_inputs`, `build_trip_summary`, `bulk_trip_refs`, `shared_trip_refs`, `trip_ref_for`, `viewer_trip_ref_for`, `ai_summary_key`, `derive_trip_name` |
 | `weatherbrief/api/trip_refresh.py` | `start`, `kick`, `status`, `active_run_for_flight`, `record_leg_notice`, `open_scheduler_run`, `note_leg_done`, `run_trip_refresh_resume` |
 | `weatherbrief/digest/trip_summary.py` | `ensure_trip_ai_summary`, `check_guardrail`, `build_context`, `legs_allow_ai` |
 | `web/ts/helpers/trip-selection.ts` | `buildTripSelection` — the selection-bar rule, pure |
@@ -475,13 +475,103 @@ answers as the web — binding leg, headline, leg state (`monitoring` is not
 remaining), `finished_at` — and re-derives none of them. Membership editing
 (M3) is not built yet.
 
+## Sharing a trip — all-or-nothing, and no new concept
+
+A trip is readable by someone who does not own it **exactly when every one of
+its legs is**. That is the whole rule. There is no trip-level privacy switch and
+no trip share permission: `flights.private`, the switch that already decides
+whether a per-leg share link resolves, decides this too.
+
+`storage/trips.py::is_shareable` owns it (`total > 0 and private_count == 0`),
+`load_trip_row_for_viewer` applies it, and the two read endpoints
+(`GET /{id}`, `GET /{id}/summary`) are the only ones that consult it.
+
+### Why not "show the legs that are shareable"
+
+Because the trip is a **conjunctive chain**, and its headline names the leg that
+decides it. Compute that over a visible subset and it is not merely incomplete,
+it is wrong in the direction that matters: mark the red return leg private,
+share the trip, and the recipient reads a green chain. That is worse than a 404,
+and it is the same failure mode "Two aggregations, never one" exists to prevent
+— a number that looks like the answer but was computed over the wrong set.
+
+All-or-nothing also keeps `summarize_trip` untouched. No partial mode, no
+suppressed-aggregate state, no fourth thing a client can render wrong. In
+practice legs default to public, so a trip is shareable unless the owner
+deliberately closed one.
+
+The corollary: **a trip with any private leg 404s for a viewer, and says
+nothing else.** The trip's *name* is derived from the chain
+("EGTF → LSGS → LFAT → EGTF"), so acknowledging it at all would leak the route
+of the leg that was just made private. An empty trip is not shareable either —
+there is nothing to read, and a bare name is not a briefing.
+
+### What a viewer gets, and what is withheld
+
+The chain, the legs and the deterministic headline. Withheld by the server (not
+hidden by the client), each for its own reason:
+
+| Withheld | Why |
+|---|---|
+| `notes` | the owner's scratchpad, not part of the briefing |
+| `auto_refresh`, `auto_refresh_hour`, `notify_override` | switches only the owner can flip |
+| `refresh` | progress of a run only the owner can start |
+| `ai_summary` | the owner paid for it under *their* AI-digest consent; the deterministic headline says the same thing |
+| `share_code` | the owner's to hand out |
+
+Every mutation still goes through `_owned_trip_row`. **Refresh is the sharp
+one**: a chain is admitted against the *owner's* `MAX_PER_USER` slots and billed
+to them, so a viewer-triggered refresh would both spend their money and lock
+them out of refreshing their own flights.
+
+### Following a shared trip
+
+`POST /{id}/subscribe` is a **loop over `subscribe_flight`**. There is no
+trip-subscription row, deliberately: flight subscription already carries
+everything that matters (the leg appears in the follower's list, the owner's
+privacy flip removes it again, deleting the flight takes it with it), and a
+second trip-shaped concept would have to be reconciled with the per-leg one on
+every membership change.
+
+Its consequence is worth stating rather than hiding: **membership is a
+snapshot.** A leg added after the recipient subscribed is not followed, and
+`is_subscribed` (derived per read, never stored) comes back false to say so.
+
+`DELETE /{id}/subscribe` is deliberately *not* gated on shareability — a trip
+whose owner has since closed a leg is exactly the one a recipient wants to let
+go of, and refusing would strand those legs in their list.
+
+### Finding the trip again from a shared leg
+
+`shared_trip_refs` is the recipient-side sibling of `bulk_trip_refs` (which is
+scoped to trips the caller owns). Without it a shared leg is a dead end: the
+recipient can read the briefing they were sent and has no route to the chain it
+belongs to, which is the entire reason the trip exists. Gated on the same
+all-or-nothing rule, so a badge never links to a trip that would 404.
+
+### The short link
+
+`/t/{code}` → `/trip.html?id=…`, the sibling of `/s/{code}`, over the
+`share_code` 095 reserved. It is a **link shortener, never the permission** —
+resolving a code still goes through `load_trip_row_for_viewer`, so holding a
+code for a trip that has since closed is a 404. Codes are minted at create and
+lazily on first read (migration 096 backfills the rest), so no trip is stranded
+without one. `/api/trips/by-share/{code}` is the same resolution for a client
+that holds the code rather than a URL bar; iOS routes it as
+`PendingNavigation.tripShare`, which needs `/t/*` in the domain's AASA `paths`
+(`deploy/weather.flyfun.aero.caddy`) deployed *before* the build that handles it.
+
+This also answers the open question below: **a leg never belongs to another
+user's trip.** Sharing is read-only, membership stays owner-scoped, and
+`set_leg_trip` already enforces it.
+
 ## Deferred (v2)
 
 Commit-point table (the per-decision-point view: what you are deciding, legs
 still needed, binding leg, and where you are stranded if it fails); MCP
 `get_trip`; joint time optimisation across legs using the per-leg `flexibility`
-scans; trip sharing via the reserved `share_code`; iOS membership editing
-(group / add / remove from the list, `plans/ios-trips.md` M3). Nested trips: no.
+scans; iOS membership editing (group / add / remove from the list,
+`plans/ios-trips.md` M3). Nested trips: no.
 
 ## Still open
 
@@ -494,5 +584,5 @@ scans; trip sharing via the reserved `share_code`; iOS membership editing
   calibration case worth keeping whole.
 - Booking-cap interaction: a trip whose return is beyond the cap cannot be
   created complete. The 1-leg-trip decision softens this but does not label it.
-- Can a leg belong to another user's trip? The one-trip-per-leg rule assumes not;
-  confirm before any `share_code` work.
+- ~~Can a leg belong to another user's trip?~~ Answered by the sharing section
+  above: no. Sharing is read-only and membership stays owner-scoped.

@@ -177,6 +177,10 @@ export function renderLegs(
   activeRefreshes: Record<string, RefreshEntry> = {},
   tripBusy = false,
   notices: Record<string, string> = {},
+  /** Owner-only actions (refresh, edit, unlink) are left off for a viewer.
+   *  Not merely disabled: a control a recipient can never use is clutter, and
+   *  every one of them 404s server-side anyway. */
+  isOwner = true,
 ): void {
   const heading = $('trip-legs-heading');
   if (heading) heading.textContent = t('trips.legs');
@@ -210,7 +214,7 @@ export function renderLegs(
     const duration = leg.duration_hours
       ? `<span class="pack-info">${leg.duration_hours.toFixed(1)} h</span>` : '';
     const refresh = legRefreshButton(leg, tripBusy, activeRefreshes[leg.flight_id]);
-    const refreshBtn = refresh.visible
+    const refreshBtn = isOwner && refresh.visible
       ? `<button type="button" class="btn btn-secondary btn-sm btn-refresh-leg" data-id="${escapeHtml(leg.flight_id)}" title="${escapeHtml(t('trips.refreshLegTitle'))}"${refresh.enabled ? '' : ' disabled'}>${escapeHtml(t('trips.btnRefreshLeg'))}</button>`
       : '';
     const notice = notices[leg.flight_id]
@@ -230,8 +234,8 @@ export function renderLegs(
         <div class="trip-leg-actions">
           <a class="btn btn-primary btn-sm" href="/briefing.html?flight=${encodeURIComponent(leg.flight_id)}">${escapeHtml(t('trips.btnBriefing'))}</a>
           ${refreshBtn}
-          <a class="btn btn-secondary btn-sm" href="/flight.html?id=${encodeURIComponent(leg.flight_id)}">${escapeHtml(t('trips.btnEdit'))}</a>
-          <button type="button" class="btn btn-outline btn-sm btn-remove-leg" data-id="${escapeHtml(leg.flight_id)}">${escapeHtml(t('trips.btnRemove'))}</button>
+          ${isOwner ? `<a class="btn btn-secondary btn-sm" href="/flight.html?id=${encodeURIComponent(leg.flight_id)}">${escapeHtml(t('trips.btnEdit'))}</a>` : ''}
+          ${isOwner ? `<button type="button" class="btn btn-outline btn-sm btn-remove-leg" data-id="${escapeHtml(leg.flight_id)}">${escapeHtml(t('trips.btnRemove'))}</button>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -258,6 +262,61 @@ export interface ControlHandlers {
   onRename: (name: string) => void;
   onToggleAutoRefresh: (value: boolean) => void;
   onDelete: () => void;
+  onShare: () => void;
+}
+
+export interface ViewerHandlers {
+  onFollow: () => void;
+  onUnfollow: () => void;
+}
+
+/** The recipient's controls on a shared trip.
+ *
+ * Deliberately one action. Everything on the owner's bar (refresh, rename,
+ * delete, auto-refresh) is theirs alone — refresh most of all, since it spends
+ * the owner's money against the owner's queue — so the viewer gets the one
+ * thing that is genuinely theirs: keep these flights, or let them go.
+ */
+export function renderViewerControls(
+  trip: TripResponse, handlers: ViewerHandlers,
+): void {
+  const el = $('trip-controls');
+  if (!el) return;
+  const legs = trip.summary.total_legs;
+  const followed = trip.is_subscribed;
+  el.innerHTML = `
+    <div class="trip-controls">
+      <button type="button" class="btn ${followed ? 'btn-outline' : 'btn-primary'} btn-trip-follow">
+        ${escapeHtml(followed ? t('trips.btnUnfollow') : t('trips.btnFollow'))}
+      </button>
+      ${followed ? `<span class="muted">${escapeHtml(t('trips.followed', { count: legs }))}</span>` : ''}
+    </div>
+    <div class="trip-viewer-note muted">${escapeHtml(t('trips.viewerNote'))}</div>
+  `;
+  el.querySelector('.btn-trip-follow')?.addEventListener('click', () => {
+    if (!followed) {
+      handlers.onFollow();
+    } else if (confirm(t('trips.unfollowConfirm'))) {
+      handlers.onUnfollow();
+    }
+  });
+}
+
+/** "Shared by Alice Pilot" — the sibling of the shared-flight line, so a
+ *  recipient is never left guessing whose trip they are looking at. */
+export function renderSharedBy(trip: TripResponse): void {
+  const el = $('trip-shared-by');
+  if (!el) return;
+  if (trip.role !== 'viewer') {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  const owner = trip.owner_display_name;
+  el.innerHTML = `<span class="muted">${escapeHtml(
+    owner ? t('trips.sharedBy', { owner }) : t('trips.sharedByUnknown'),
+  )}</span>`;
 }
 
 /** Trip-level controls, including the single "Refresh trip" button. */
@@ -277,13 +336,18 @@ export function renderControls(trip: TripResponse, handlers: ControlHandlers): v
         <input type="checkbox" class="trip-auto-refresh-toggle" ${trip.auto_refresh ? 'checked' : ''}>
         ${escapeHtml(t('trips.autoRefresh'))}
       </label>
+      <button type="button" class="btn btn-secondary btn-trip-share"
+        title="${escapeHtml(trip.is_shareable ? t('trips.shareTitle') : t('trips.shareBlockedHint'))}"
+        ${trip.is_shareable ? '' : 'disabled'}>${escapeHtml(t('trips.share'))}</button>
       <button type="button" class="btn btn-secondary btn-trip-rename">${escapeHtml(t('trips.btnRename'))}</button>
       <button type="button" class="btn btn-danger btn-trip-delete">${escapeHtml(t('trips.btnDelete'))}</button>
     </div>
     ${progress}
+    ${trip.is_shareable ? '' : `<div class="trip-share-blocked muted">${escapeHtml(t('trips.shareBlocked'))}</div>`}
   `;
 
   el.querySelector('.btn-trip-refresh')?.addEventListener('click', () => handlers.onRefresh());
+  el.querySelector('.btn-trip-share')?.addEventListener('click', () => handlers.onShare());
   el.querySelector('.trip-auto-refresh-toggle')?.addEventListener('change', (ev) => {
     handlers.onToggleAutoRefresh((ev.target as HTMLInputElement).checked);
   });
