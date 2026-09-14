@@ -238,6 +238,32 @@ class TestReadingASharedTrip:
         assert "localhost" not in json.dumps(body)
 
 
+class TestTripList:
+    def test_the_list_reports_shareability_per_trip(self, owner, chain, app_db):
+        """Batched for the whole list, but still each trip's own answer.
+
+        ``list_trips`` resolves shareability once via ``shareable_trip_ids``
+        instead of a grouped query per trip; the risk of that change is a single
+        verdict smeared across the list, so pin two trips that disagree.
+        """
+        shareable = owner.post(
+            "/api/trips", json={"flight_ids": [chain[0].id], "name": "Open"},
+        ).json()
+        closed = owner.post(
+            "/api/trips", json={"flight_ids": [chain[1].id], "name": "Closed"},
+        ).json()
+        _set_private(app_db, chain[1].id)
+
+        by_id = {t["id"]: t for t in owner.get("/api/trips").json()}
+        assert by_id[shareable["id"]]["is_shareable"] is True
+        assert by_id[closed["id"]]["is_shareable"] is False
+
+    def test_an_empty_trip_is_listed_as_not_shareable(self, owner):
+        empty = owner.post("/api/trips", json={"flight_ids": [], "name": "Later"}).json()
+        listed = {t["id"]: t for t in owner.get("/api/trips").json()}
+        assert listed[empty["id"]]["is_shareable"] is False
+
+
 class TestWritesStayWithTheOwner:
     @pytest.mark.parametrize("method,suffix,body", [
         ("patch", "", {"name": "mine now"}),

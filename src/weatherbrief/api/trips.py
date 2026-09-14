@@ -378,6 +378,7 @@ def _trip_to_response(
     *,
     viewer_id: str | None = None,
     role: Literal["owner", "viewer"] = "owner",
+    shareable: bool | None = None,
 ) -> TripResponse:
     """The wire payload, narrowed to what ``role`` is allowed to see.
 
@@ -392,6 +393,10 @@ def _trip_to_response(
       the recipient never agreed to it and the trip page's own deterministic
       headline says the same thing.
     * ``share_code`` — the owner's to hand out.
+
+    ``shareable`` lets a caller with many trips pass the answer in from one
+    batched ``shareable_trip_ids`` rather than have this run a grouped query per
+    trip — the N+1 the batched helper exists to avoid. Omitted, it is looked up.
     """
     from weatherbrief.api import trip_refresh
 
@@ -446,7 +451,11 @@ def _trip_to_response(
         role="owner",
         # Minted lazily so a trip created before sharing existed still shares.
         share_code=trip_storage.ensure_share_code(db, row) if row is not None else None,
-        is_shareable=trip_storage.is_shareable(db, trip.id),
+        is_shareable=(
+            shareable
+            if shareable is not None
+            else trip_storage.is_shareable(db, trip.id)
+        ),
     )
 
 
@@ -598,7 +607,15 @@ def list_trips(
     db: Session = Depends(get_db),
 ):
     """All of the caller's trips, each with its derived summary."""
-    return [_trip_to_response(db, trip) for trip in trip_storage.list_trips(db, user_id)]
+    trips = trip_storage.list_trips(db, user_id)
+    # One shareability query for the whole list rather than one per trip: this
+    # is the N+1 ``shareable_trip_ids`` was made batched to avoid, and the list
+    # endpoint is the only caller that holds more than one trip.
+    shareable = trip_storage.shareable_trip_ids(db, [t.id for t in trips])
+    return [
+        _trip_to_response(db, trip, shareable=trip.id in shareable)
+        for trip in trips
+    ]
 
 
 @router.post("", response_model=TripResponse, status_code=201)

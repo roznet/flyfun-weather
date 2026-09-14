@@ -298,7 +298,18 @@ struct TripResponse: Codable, Sendable, Equatable, Identifiable {
     /// private, which is the owner's to fix.
     var isShareable: Bool = true
 
-    var isOwned: Bool { role != .viewer }
+    /// Whether this client may offer the owner's actions.
+    ///
+    /// `role == .owner`, not `role != .viewer`: an unrecognised role decodes to
+    /// `.unknown`, and the two spellings disagree on exactly that case. Treating
+    /// `.unknown` as an owner would offer refresh, rename, delete and unlink to
+    /// a client that cannot use them — and trip refresh is admitted against, and
+    /// billed to, the *real* owner's slots. A missing control is the recoverable
+    /// failure; an offered one that spends someone else's money is not.
+    ///
+    /// An **absent** `role` is a different case and stays `.owner` (see the
+    /// decoder): a server predating sharing only ever returned your own trips.
+    var isOwned: Bool { role == .owner }
 
     /// Display title: the trip's name, falling back to the chain when a trip was
     /// created before its default name was derived.
