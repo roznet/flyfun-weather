@@ -32,6 +32,7 @@ struct TripDetailView: View {
     @State private var renameText = ""
     @State private var showRename = false
     @State private var legToRemove: TripLeg?
+    @State private var showUnfollowConfirm = false
 
     // Split into `screen` + `alerts(on:)`: as one modifier chain the body hit the
     // type checker's time limit.
@@ -100,6 +101,18 @@ struct TripDetailView: View {
             // "Remove" is an unlink and must never read as a delete.
             Text("\(leg.label) leaves this trip. The flight and its briefings are kept.")
         }
+        .alert("Remove These Flights?", isPresented: $showUnfollowConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) {
+                Task { await viewModel?.unfollow() }
+            }
+            .accessibilityIdentifier("confirmUnfollowTripButton")
+        } message: {
+            // Every leg goes at once, which is more than the one-tap button
+            // suggests — and the web asks first, so iOS asking too keeps the two
+            // from disagreeing about how destructive this is.
+            Text("All legs of this shared trip leave your list. You can add them again from the trip link.")
+        }
         .alert("Rename Trip", isPresented: $showRename) {
             TextField("Trip name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -125,7 +138,7 @@ struct TripDetailView: View {
                     TripSharedBanner(
                         trip: trip,
                         onFollow: { Task { await viewModel.follow() } },
-                        onUnfollow: { Task { await viewModel.unfollow() } }
+                        onUnfollow: { showUnfollowConfirm = true }
                     )
                 }
 
@@ -269,6 +282,8 @@ struct TripDetailView: View {
 struct TripSharedBanner: View {
     let trip: TripResponse
     var onFollow: () -> Void
+    /// Raises the confirmation rather than unfollowing outright — it drops every
+    /// leg at once, which one tap does not convey, and the web asks first too.
     var onUnfollow: () -> Void
 
     var body: some View {

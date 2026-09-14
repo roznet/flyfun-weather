@@ -128,8 +128,10 @@ class FlightTripRow(Base):
     notify_override: Mapped[str] = mapped_column(
         String(16), default="default", server_default="default"
     )
-    #: Reserved for trip sharing (v2) — mirrors ``FlightRow.share_code`` so the
-    #: column exists before the feature does.
+    #: The short ``/t/{code}`` token, mirroring ``FlightRow.share_code``.
+    #: Allocated at create and lazily on first read (migration 096 backfilled
+    #: the rest). A link shortener, never the permission: whether a non-owner
+    #: may read the trip is ``storage.trips.is_shareable``'s answer.
     share_code: Mapped[str | None] = mapped_column(
         String(16), nullable=True, unique=True, index=True
     )
