@@ -22,7 +22,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -327,17 +327,26 @@ def _load_trip_any_owner(db: Session, trip_id: str) -> FlightTrip:
     return trip
 
 
-def _subscribed_to_all(db: Session, flight_ids: list[str], user_id: str) -> bool:
-    """True when the viewer already follows every member leg. One query."""
+def subscribed_member_ids(
+    db: Session, flight_ids: list[str], user_id: str
+) -> set[str]:
+    """Which of ``flight_ids`` the caller already follows. One query."""
     if not flight_ids:
-        return False
-    count = db.execute(
-        select(func.count(FlightSubscriptionRow.id)).where(
+        return set()
+    rows = db.execute(
+        select(FlightSubscriptionRow.flight_id).where(
             FlightSubscriptionRow.flight_id.in_(flight_ids),
             FlightSubscriptionRow.user_id == user_id,
         )
-    ).scalar_one()
-    return int(count or 0) >= len(set(flight_ids))
+    ).scalars().all()
+    return set(rows)
+
+
+def _subscribed_to_all(db: Session, flight_ids: list[str], user_id: str) -> bool:
+    """True when the viewer already follows every member leg."""
+    if not flight_ids:
+        return False
+    return subscribed_member_ids(db, flight_ids, user_id) >= set(flight_ids)
 
 
 def _validate_owned_flights(db: Session, flight_ids: list[str], user_id: str) -> list[str]:
@@ -514,9 +523,9 @@ def shared_trip_refs(db: Session, flight_ids: list[str]) -> dict[str, TripLegRef
     recipient can open the briefing they were sent but has no way back to the
     chain it belongs to, which is the whole reason the trip exists.
 
-    Gated on the same all-or-nothing rule as the trip page, so the badge never
-    links to a trip that would 404 — a trip with one private leg produces no
-    refs at all.
+    Gated through ``storage.trips.shareable_trip_ids`` — the same single
+    definition the trip page reads — so the badge never links to a trip that
+    would 404, and a trip with one private leg produces no refs at all.
     """
     if not flight_ids:
         return {}
@@ -534,24 +543,25 @@ def shared_trip_refs(db: Session, flight_ids: list[str]) -> dict[str, TripLegRef
         )
     ).all()
     names = {trip_id: name for trip_id, name in trips}
+    # The all-or-nothing gate, from its one definition rather than rebuilt
+    # here: a second expression of "no private leg" is a rule that can be
+    # tightened in storage and silently missed in this badge.
+    shareable = trip_storage.shareable_trip_ids(db, list(names))
+    if not shareable:
+        return {}
     members = db.execute(
-        select(FlightRow.id, FlightRow.trip_id, FlightRow.private)
-        .where(FlightRow.trip_id.in_(list(names)))
+        select(FlightRow.id, FlightRow.trip_id)
+        .where(FlightRow.trip_id.in_(sorted(shareable)))
         .order_by(FlightRow.departure_time.asc())
     ).all()
 
     by_trip: dict[str, list[str]] = {}
-    has_private: set[str] = set()
-    for flight_id, trip_id, private in members:
+    for flight_id, trip_id in members:
         by_trip.setdefault(trip_id, []).append(flight_id)
-        if private:
-            has_private.add(trip_id)
 
     wanted = set(flight_ids)
     refs: dict[str, TripLegRef] = {}
     for trip_id, member_ids in by_trip.items():
-        if trip_id in has_private:
-            continue
         for index, flight_id in enumerate(member_ids, start=1):
             if flight_id not in wanted:
                 continue
@@ -843,9 +853,22 @@ def unsubscribe_trip(
     made a leg private is exactly the one a recipient may want to let go of,
     and refusing to unsubscribe from something they can no longer see would
     strand those legs in their list.
+
+    But "not gated on shareability" is not "not gated". The caller must already
+    hold a subscription to one of the legs, otherwise this is a 404 like any
+    other read they are not entitled to. Answering on leg count alone would
+    make ``DELETE`` an existence oracle: a stranger holding only a guessed trip
+    id would learn the trip exists and how many legs it has, from the one route
+    that did not check — while ``GET`` on the same id correctly told them
+    nothing.
     """
     members = trip_storage.trip_members(db, trip_id)
     if not members:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    subscribed = subscribed_member_ids(db, [f.id for f in members], user_id)
+    if not subscribed and trip_storage.load_trip_row_for_viewer(
+        db, trip_id, user_id
+    ) is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     changed = sum(1 for f in members if unsubscribe_flight(db, f.id, user_id))
     db.commit()

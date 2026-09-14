@@ -28,7 +28,7 @@ decidable"* — never a colour for the trip.
 |---|---|
 | `weatherbrief/trips.py` | `summarize_trip`, `TripLegInput`, `TripSummary`, `TripLeg`, `SORTIE_GAP_HOURS` — the pure deterministic summary |
 | `web/ts/helpers/assessment-badges.ts` | `assessmentClass`, `outlookClass` — shared by the flights list and the trip page so their badge colours cannot drift |
-| `weatherbrief/storage/trips.py` | `create_trip`, `trip_members`, `set_leg_trip`, `delete_trip`, `prune_empty_trips`, `read_refresh_state`, `write_refresh_state`, `is_shareable`, `load_trip_row_for_viewer`, `ensure_share_code`, `lookup_trip_id_by_share_code` |
+| `weatherbrief/storage/trips.py` | `create_trip`, `trip_members`, `set_leg_trip`, `delete_trip`, `prune_empty_trips`, `read_refresh_state`, `write_refresh_state`, `shareable_trip_ids`, `is_shareable`, `load_trip_row_for_viewer`, `ensure_share_code`, `lookup_trip_id_by_share_code` |
 | `weatherbrief/api/trips.py` | the `/api/trips` router, `build_leg_inputs`, `build_trip_summary`, `bulk_trip_refs`, `shared_trip_refs`, `trip_ref_for`, `viewer_trip_ref_for`, `ai_summary_key`, `derive_trip_name` |
 | `weatherbrief/api/trip_refresh.py` | `start`, `kick`, `status`, `active_run_for_flight`, `record_leg_notice`, `open_scheduler_run`, `note_leg_done`, `run_trip_refresh_resume` |
 | `weatherbrief/digest/trip_summary.py` | `ensure_trip_ai_summary`, `check_guardrail`, `build_context`, `legs_allow_ai` |
@@ -482,9 +482,13 @@ its legs is**. That is the whole rule. There is no trip-level privacy switch and
 no trip share permission: `flights.private`, the switch that already decides
 whether a per-leg share link resolves, decides this too.
 
-`storage/trips.py::is_shareable` owns it (`total > 0 and private_count == 0`),
-`load_trip_row_for_viewer` applies it, and the two read endpoints
-(`GET /{id}`, `GET /{id}/summary`) are the only ones that consult it.
+`storage/trips.py::shareable_trip_ids` is the **single definition**
+(`total > 0 and private_count == 0`, batched); `is_shareable` is the one-trip
+call through it, `load_trip_row_for_viewer` applies it to a read, and
+`shared_trip_refs` gates the recipient's badge through it rather than
+re-expressing "no private leg" inline. One rule, one place: a future tweak to
+what counts as private cannot be applied to the trip page and missed on the
+badge.
 
 ### Why not "show the legs that are shareable"
 
@@ -539,7 +543,11 @@ snapshot.** A leg added after the recipient subscribed is not followed, and
 
 `DELETE /{id}/subscribe` is deliberately *not* gated on shareability — a trip
 whose owner has since closed a leg is exactly the one a recipient wants to let
-go of, and refusing would strand those legs in their list.
+go of, and refusing would strand those legs in their list. It **is** gated on
+"do I follow this, or may I read it": answering on leg count alone made it an
+existence oracle, the one route that told a stranger holding a guessed trip id
+that the trip exists and how many legs it has, while `GET` on the same id
+correctly told them nothing.
 
 ### Finding the trip again from a shared leg
 
@@ -556,7 +564,14 @@ all-or-nothing rule, so a badge never links to a trip that would 404.
 resolving a code still goes through `load_trip_row_for_viewer`, so holding a
 code for a trip that has since closed is a 404. Codes are minted at create and
 lazily on first read (migration 096 backfills the rest), so no trip is stranded
-without one. `/api/trips/by-share/{code}` is the same resolution for a client
+without one.
+
+The lazy mint is a conditional `UPDATE … WHERE share_code IS NULL`, not a
+read-modify-write. Two first-reads of the same trip can race (the web page and
+the app opened together); both would see NULL, mint different codes and write
+them. Last commit wins in the DB, but the loser has already *returned* its code
+— and a link built from it, pasted into a message, 404s for the recipient
+forever. One writer wins; the loser re-reads and returns the code that landed. `/api/trips/by-share/{code}` is the same resolution for a client
 that holds the code rather than a URL bar; iOS routes it as
 `PendingNavigation.tripShare`, which needs `/t/*` in the domain's AASA `paths`
 (`deploy/weather.flyfun.aero.caddy`) deployed *before* the build that handles it.

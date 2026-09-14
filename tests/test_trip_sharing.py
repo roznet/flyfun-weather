@@ -386,6 +386,84 @@ class TestFollowingASharedTrip:
         r = owner.post(f"/api/trips/{trip['id']}/subscribe")
         assert r.status_code == 409
 
+    def test_unsubscribe_is_not_an_existence_oracle(
+        self, friend, trip, chain, app_db,
+    ):
+        """A stranger holding only a trip id learns nothing from DELETE.
+
+        Unsubscribe is ungated on *shareability* so a follower can let go of a
+        trip that went private — but ungated on shareability is not ungated.
+        Answering on leg count alone would make this the one route that
+        confirms a trip exists, and how many legs it has, to a caller that
+        ``GET`` on the same id correctly tells nothing.
+        """
+        _set_private(app_db, chain[0].id)
+        assert friend.get(f"/api/trips/{trip['id']}").status_code == 404
+        # Never followed it, and cannot see it: same answer as the GET.
+        r = friend.delete(f"/api/trips/{trip['id']}/subscribe")
+        assert r.status_code == 404
+        assert "total_legs" not in r.text
+
+    def test_a_shareable_trip_can_be_dropped_without_ever_following_it(
+        self, friend, trip,
+    ):
+        """The gate is "may I see this, or do I follow it" — not "do I follow it".
+
+        A trip the viewer can read is one they are entitled to act on, so an
+        unsubscribe that removes nothing still answers honestly rather than
+        pretending the trip is missing.
+        """
+        r = friend.delete(f"/api/trips/{trip['id']}/subscribe")
+        assert r.status_code == 200
+        assert r.json()["changed"] == 0
+
+
+class TestShareCodeMinting:
+    def test_a_concurrent_first_read_cannot_hand_out_a_losing_code(
+        self, owner, chain, app_db,
+    ):
+        """Two first-reads race; both must return the code that actually landed.
+
+        The mint used to be read-modify-write: both requests saw NULL, both
+        generated a code, and the loser still *returned* its own. A link built
+        from that code is pasted into a message and 404s for the recipient
+        forever. The conditional UPDATE means exactly one writer wins and the
+        loser reads back the winner's code.
+        """
+        from weatherbrief.db.models import FlightTripRow
+        from weatherbrief.storage.trips import ensure_share_code
+
+        created = owner.post(
+            "/api/trips", json={"flight_ids": [f.id for f in chain]},
+        ).json()
+
+        # Two sessions, each holding its own instance of a row with no code —
+        # the state both racers start from.
+        s1, s2 = app_db(), app_db()
+        s1.get(FlightTripRow, created["id"]).share_code = None
+        s1.commit()
+
+        row1 = s1.get(FlightTripRow, created["id"])
+        row2 = s2.get(FlightTripRow, created["id"])
+        assert row1.share_code is None and row2.share_code is None
+
+        first = ensure_share_code(s1, row1)
+        s1.commit()
+        second = ensure_share_code(s2, row2)
+        s2.commit()
+
+        assert first == second, "the loser handed out a code that never landed"
+
+        s3 = app_db()
+        assert s3.get(FlightTripRow, created["id"]).share_code == first
+        for session in (s1, s2, s3):
+            session.close()
+
+        # And the code that was returned is the one the link resolves.
+        assert owner.get(
+            f"/t/{first}", follow_redirects=False,
+        ).headers["location"] == f"/trip.html?id={created['id']}"
+
 
 class TestFindingTheTripFromASharedLeg:
     def test_a_subscribed_leg_carries_a_trip_badge_back_to_the_chain(

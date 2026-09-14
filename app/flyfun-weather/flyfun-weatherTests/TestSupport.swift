@@ -79,6 +79,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var tripAiSummaryCallCount = 0
     private(set) var refreshedTripIds: [String] = []
     private(set) var subscribedTripIds: [String] = []
+    private(set) var activeRefreshesCallCount = 0
+    /// Legs the server reports as queued/refreshing. Empty by default, matching
+    /// the old unconditional `[]`.
+    var activeRefreshesResult: [ActiveRefreshResponse] = []
     private(set) var unsubscribedTripIds: [String] = []
     private(set) var deletedTripIds: [String] = []
     private(set) var removedLegs: [(tripId: String, flightId: String)] = []
@@ -224,7 +228,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         AsyncThrowingStream { $0.finish() }
     }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw MockError.notStubbed("refreshStatus") }
-    func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }
+    func activeRefreshes() async throws -> [ActiveRefreshResponse] {
+        activeRefreshesCallCount += 1
+        return activeRefreshesResult
+    }
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw MockError.notStubbed("submitPirep") }
     func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
         submitPirepsBatchCallCount += 1
