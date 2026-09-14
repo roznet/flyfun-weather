@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from sqlalchemy import case, delete, func, select, update
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import FlightRow, FlightTripRow
@@ -129,12 +130,36 @@ def ensure_share_code(session: Session, row: FlightTripRow) -> str:
     # it takes the latest committed row whether we won or lost, so there is no
     # path where the answer depends on which version the snapshot happened to
     # hold. Winning already holds the exclusive lock, so re-acquiring is free.
-    session.refresh(row, ["share_code"], with_for_update=True)
+    try:
+        session.refresh(row, ["share_code"], with_for_update=True)
+    except InvalidRequestError as exc:
+        # A vanished row takes *this* branch, not the guard below: ``refresh``
+        # on a row that is gone raises before any value can be read back. Which
+        # error it raises depends on the instance's state — ``ObjectDeletedError``
+        # for an expired instance, a bare ``InvalidRequestError`` ("Could not
+        # refresh instance") otherwise — and the latter also covers ordinary
+        # session misuse, so catching it alone would dress up real bugs as a
+        # missing trip. Confirm the row is genuinely absent before saying so;
+        # anything else is not ours and propagates unchanged.
+        still_there = session.execute(
+            select(FlightTripRow.id).where(FlightTripRow.id == row.id)
+        ).first()
+        if still_there is not None:
+            raise
+        raise KeyError(f"Trip {row.id} no longer exists") from exc
     if row.share_code:
         return row.share_code
-    # Still NULL against the *current* row, so the UPDATE matched nothing
-    # because the row is gone (a trip deleted mid-read) — not because someone
-    # else won. Say so rather than returning a code that names nothing.
+    # Defence in depth, and expected to be unreachable: the refresh above
+    # succeeded, so the row exists, and the UPDATE's only other outcome is that
+    # someone else's code is now on it. Reaching here would mean a row that
+    # exists with no code after a write that should have given it one — worth a
+    # loud failure rather than returning a code that names nothing.
+    #
+    # ``KeyError`` is the storage idiom (``delete_flight`` and
+    # ``subscribe_flight`` raise it too) and deliberately *not* an
+    # ``HTTPException``: this module knows the row is gone, not what status that
+    # deserves. ``api/trips.py::_trip_to_response`` translates it to 404, the
+    # same answer every other missing-trip path gives.
     raise KeyError(f"Trip {row.id} no longer exists")
 
 
