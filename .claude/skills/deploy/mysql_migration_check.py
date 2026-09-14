@@ -183,9 +183,13 @@ def seed_row(conn, sa, table: str) -> str:
 
 
 def alembic(url: str, *args: str) -> subprocess.CompletedProcess:
+    # Same interpreter as this script, not whatever `alembic` is first on PATH:
+    # the import check in main() runs here, so a bare `alembic` could be a
+    # different install (e.g. Homebrew's) that can't import flyfun_common and
+    # reports a false FAIL.
     env = dict(os.environ, DATABASE_URL=url)
     return subprocess.run(
-        ["alembic", *args], capture_output=True, text=True, env=env,
+        [sys.executable, "-m", "alembic", *args], capture_output=True, text=True, env=env,
     )
 
 
