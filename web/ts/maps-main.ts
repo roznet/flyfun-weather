@@ -964,8 +964,11 @@ function updateBasemapInfo(
   const gap = gapHours < 0.5
     ? 'matched to Hewson valid time'
     : `${gapHours < 10 ? gapHours.toFixed(1) : gapHours.toFixed(0)} h gap from Hewson valid time`;
+  // The chart's own model run when the source records one: DWD forecasts come
+  // from an earlier run than the cycle that names the manifest.
+  const runLabel = chart.init_time ? `${chart.init_time.slice(0, 13)}Z` : source.run_cycle;
   el.textContent =
-    `Basemap: ${source.label} ${offsetLabel} · ${source.run_cycle} run · valid ${validLabel} · ${gap}`;
+    `Basemap: ${source.label} ${offsetLabel} · ${runLabel} run · valid ${validLabel} · ${gap}`;
 }
 
 function wireSynopticControls(): void {

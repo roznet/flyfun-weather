@@ -382,6 +382,12 @@ export interface PackMeta {
   dwd_charts_default_id?: string | null;
   dwd_charts_in_coverage?: boolean;
   dwd_charts_within_horizon?: boolean;
+  // Per forecast chart id: the ICON run it was drawn from and its valid time
+  // (ISO 8601 Z), read off the chart. Absent/empty for older cached cycles.
+  dwd_charts_times?: Record<
+    string,
+    { init_time: string; lead_h: number; valid_time: string; time_source: string }
+  >;
   metoffice_charts_run_cycle?: string | null;
   metoffice_charts_default_id?: string | null;
   metoffice_charts_in_coverage?: boolean;

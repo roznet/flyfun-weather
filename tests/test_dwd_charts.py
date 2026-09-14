@@ -366,3 +366,79 @@ def test_build_route_overlay_handles_empty_waypoints():
     overlay = build_route_overlay([])
     assert overlay["analysis"]["waypoints"] == []
     assert overlay["icon"]["waypoints"] == []
+
+
+# ---------------------------------------------------------------------------
+# forecast run / valid time stamps
+# ---------------------------------------------------------------------------
+
+
+@responses.activate
+def test_refresh_stamps_forecast_run_and_valid_time(tmp_path: Path):
+    from weatherbrief.fetch.dwd_charts import forecast_stamps
+
+    # The analysis rolled to 18Z but the forecasts are the 00Z run, published at
+    # 05:18. Test bytes aren't a real chart, so OCR reads nothing and the stamp
+    # comes from each forecast's own Last-Modified.
+    _add_chart_response("ana", "Mon, 14 Sep 2026 18:30:00 GMT")
+    for cid in CHART_IDS:
+        if cid != "ana":
+            _add_chart_response(cid, "Mon, 14 Sep 2026 05:18:13 GMT")
+
+    report = refresh_charts(tmp_path)
+
+    assert report.run_cycle == "2026-09-14T18Z"
+    assert "valid_time" not in chart_meta(tmp_path, report.run_cycle, "ana")
+    assert sorted(forecast_stamps(tmp_path, report.run_cycle)) == ["036", "048", "060", "084", "108"]
+    m108 = chart_meta(tmp_path, report.run_cycle, "108")
+    assert m108["init_time"] == "2026-09-14T00:00:00Z"
+    assert m108["lead_h"] == 108
+    assert m108["valid_time"] == "2026-09-18T12:00:00Z"
+    assert m108["time_source"] == "last_modified"
+
+
+@responses.activate
+def test_refresh_keeps_stamps_on_304_and_backfills_unstamped_entries(tmp_path: Path, monkeypatch):
+    import json
+
+    from weatherbrief.fetch import dwd_charts
+    from weatherbrief.fetch.dwd_charts import forecast_stamps
+
+    lm = "Mon, 14 Sep 2026 05:18:13 GMT"
+    for cid in CHART_IDS:
+        _add_chart_response(cid, lm, etag=f'"{cid}-1"')
+    report = refresh_charts(tmp_path)
+    cdir = cycle_dir(tmp_path, report.run_cycle)
+
+    # A cache written before stamping existed: strip one entry's stamp.
+    meta = json.loads((cdir / "meta.json").read_text())
+    for key in ("init_time", "lead_h", "valid_time", "time_source"):
+        meta["036"].pop(key)
+    (cdir / "meta.json").write_text(json.dumps(meta))
+
+    real = dwd_charts.read_forecast_stamp
+    read: list[str] = []
+
+    def spy(path, **kwargs):
+        read.append(path.stem)
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(dwd_charts, "read_forecast_stamp", spy)
+
+    responses.reset()
+    for cid in CHART_IDS:
+        _add_chart_response(cid, lm, status=304, etag=f'"{cid}-1"')
+    refresh_charts(tmp_path)
+
+    assert read == ["036"]  # stamped entries aren't re-read on a 304
+    assert sorted(forecast_stamps(tmp_path, report.run_cycle)) == ["036", "048", "060", "084", "108"]
+
+
+def test_select_default_uses_recorded_valid_times_over_cycle_offsets():
+    # Cycle named by an 18Z analysis; forecasts from the 00Z run. An ETD 48h
+    # after the cycle is 18Z two days on: +60h (valid 12Z) is nearest, not +48h.
+    run = datetime(2026, 9, 14, tzinfo=timezone.utc)
+    valid = {cid: run + timedelta(hours=h) for cid, h in FORECAST_OFFSETS_H.items() if cid != "ana"}
+    etd = datetime(2026, 9, 16, 18, tzinfo=timezone.utc)
+    assert select_default_chart_id(etd, "2026-09-14T18Z") == "048"
+    assert select_default_chart_id(etd, "2026-09-14T18Z", valid_times=valid) == "060"

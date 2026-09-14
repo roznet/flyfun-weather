@@ -127,7 +127,9 @@ catch standalone than after the renderer exists.
 
 - `GET /api/synoptic-charts/manifest` → `{ sources: [ { slug, label,
   attribution_html, run_cycle, issued_at, charts: [ { id, offset_h, chart_type,
-  native_size, valid_time } ] } ] }` (built by `build_source_manifest`). DWD
+  native_size, valid_time, init_time } ] } ] }` (built by
+  `build_source_manifest`; see *DWD forecast chart times* for where the times
+  come from). DWD
   always included; Met Office only if `source_allowed`. A source with no cached
   cycle is omitted entirely. Latest cycle per source via `list_cycles`.
 - `GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}` (as built: no
@@ -230,6 +232,39 @@ Two items deferred from the plan, by choice:
   when the Hewson valid time is beyond a source's horizon, we always render the
   closest chart and surface the gap in the info line (`… 36 h gap from Hewson
   valid time`). Simpler and still honest; revisit if the mismatch confuses.
+
+## DWD forecast chart times
+
+The cycle key (`run_cycle`) is the **analysis** chart's `Last-Modified` floored
+to a synoptic hour, and every chart is filed under it. It is not the run the
+forecast charts come from: every forecast chart observed (2026-09-09..14) is the
+**00Z ICON run**, published ~03:30–06:00 UTC, while the analysis rolls on through
+12Z/18Z. `run_cycle + offset` put forecast valid times 0, 12 or 18h late — wrong
+label, wrong basemap picked for a Hewson valid time, wrong default tab and
+horizon on the briefing.
+
+The chart prints its own timing in the bottom band —
+`VT: 12 UTC Fr. 18 Sept. [ICON 2026-09-14 00 UTC + 108 h]` — and
+`fetch/dwd_chart_stamp.py` reads it:
+
+- **OCR** the bracket with Tesseract (`pytesseract`). The band needs a 3×
+  upscale and a black/white threshold, or `00` reads as `OO`. Valid time = run
+  + lead; the `VT:` prefix carries no year and is not parsed.
+- **Plausibility gate**: run hour on 00/06/12/18 and at most 48h before the
+  chart's `Last-Modified`, so a misread digit falls back instead of landing.
+- **Fallback**: the chart's own `Last-Modified` floored to 00Z — agreed with OCR
+  on all 40 cached charts checked. Also the path when the tesseract binary is
+  absent (a dev machine without it).
+
+`refresh_charts` stores `init_time`, `lead_h`, `valid_time` and `time_source`
+(`ocr` | `last_modified`) on each forecast chart's `meta.json` entry, only when
+the entry has none — once per downloaded chart; a 304 keeps it. Consumers prefer
+the recorded times and fall back to `run_cycle + offset` for unstamped entries
+(analysis, Met Office, cycles cached before stamping): the manifest
+(`valid_time`, `init_time`), `select_default_chart_id(valid_times=…)`, the
+horizon in `run_dwd_charts`, and the pack response's `dwd_charts_times` — read
+from the shared cache, not stored on the pack — which the briefing caption shows
+as "Valid … · ICON … run +Nh".
 
 ## Open (non-blocking) questions
 

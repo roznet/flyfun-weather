@@ -48,6 +48,10 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
+      # tesseract reads the model run off DWD forecast charts; without it the
+      # OCR test skips and only the Last-Modified fallback is exercised.
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
       - name: Install
         run: |
           python -m venv venv

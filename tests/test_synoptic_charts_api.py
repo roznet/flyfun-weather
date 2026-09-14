@@ -178,3 +178,26 @@ def test_serve_metoffice_when_public(client, data_dir, monkeypatch):
     assert resp.headers["content-type"] == "image/gif"
     assert resp.content == _GIF
     assert "immutable" in resp.headers["cache-control"]
+
+
+def test_manifest_uses_recorded_forecast_run_and_valid_time(client, data_dir):
+    cycle = "2026-09-14T18Z"
+    _write(dwd_charts, data_dir, cycle, "ana", _PNG)
+    _write(dwd_charts, data_dir, cycle, "108", _PNG)
+    meta_path = dwd_charts.cycle_dir(data_dir, cycle) / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["108"].update({
+        "init_time": "2026-09-14T00:00:00Z",
+        "lead_h": 108,
+        "valid_time": "2026-09-18T12:00:00Z",
+        "time_source": "ocr",
+    })
+    meta_path.write_text(json.dumps(meta))
+
+    dwd = client.get("/api/synoptic-charts/manifest").json()["sources"][0]
+    charts = {c["id"]: c for c in dwd["charts"]}
+    assert charts["108"]["valid_time"] == "2026-09-18T12:00:00Z"
+    assert charts["108"]["init_time"] == "2026-09-14T00:00:00Z"
+    # No stamp on the analysis: its valid time is still the cycle.
+    assert charts["ana"]["valid_time"] == "2026-09-14T18:00:00Z"
+    assert charts["ana"]["init_time"] is None

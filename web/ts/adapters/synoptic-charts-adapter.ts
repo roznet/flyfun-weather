@@ -10,6 +10,7 @@ export interface SynopticChartEntry {
   chart_type: string; // 'analysis' | 'icon' | 'colour'
   native_size: [number, number] | null;
   valid_time: string | null; // ISO 8601 Z
+  init_time?: string | null; // ISO 8601 Z — the chart's own model run, when recorded
 }
 
 export interface SynopticChartSource {
