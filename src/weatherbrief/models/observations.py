@@ -30,8 +30,25 @@ class AirportObservation(BaseModel):
     metar_dewpoint_c: int | None = None
     metar_qnh: float | None = None
     taf_raw: str | None = None
+    # Validity window of the TAF, and whether it contains this airport's ETA.
+    # aviationweather.gov returns the latest TAF however old, so False is common
+    # at fields that issue TAFs only in opening hours: the raw text is kept and
+    # every at-ETA field stays empty. None on packs built before #610.
+    taf_valid_from: datetime | None = None
+    taf_valid_to: datetime | None = None
+    taf_valid_at_eta: bool | None = None
+    # Worse of the prevailing and temporary categories at ETA.
     taf_flight_category_at_eta: str | None = None
+    # What sets taf_flight_category_at_eta: the temporary group's label when it
+    # is worse ("TEMPO", "PROB30 TEMPO"), else the latest BECMG/FM applied.
     taf_trend_type: str | None = None
+    # Main body with completed BECMG / started FM groups applied.
+    taf_prevailing_category_at_eta: str | None = None
+    # Worst TEMPO/PROB group at ETA — set only when worse than prevailing.
+    taf_temporary_category_at_eta: str | None = None
+    taf_temporary_type: str | None = None
+    # TS, FG, FZ*, SN, GR… and CB/TCU in the prevailing or temporary conditions.
+    taf_significant_weather: list[str] = Field(default_factory=list)
     taf_wind_dir: int | None = None
     taf_wind_speed_kt: int | None = None
     taf_wind_gust_kt: int | None = None
@@ -48,6 +65,36 @@ class AirportObservation(BaseModel):
     has_metar: bool = False
     has_taf: bool = False
     eta_hour_offset: int | None = None  # rounded hours after departure
+
+    def taf_at_eta_line(self) -> str:
+        """One-line TAF reading at ETA, shared by the LLM context and the text digest.
+
+        ``TAF at ETA [MVFR], TEMPO [IFR] (TSRA CB)`` — prevailing category, the
+        worse temporary group if any, significant weather. An expired TAF says
+        so with its validity, so the digest cannot quote it as current.
+        """
+        if self.taf_valid_at_eta is False:
+            window = ""
+            if self.taf_valid_from is not None and self.taf_valid_to is not None:
+                window = (
+                    f" (latest TAF valid {self.taf_valid_from:%d/%H}Z"
+                    f"-{self.taf_valid_to:%d/%H}Z)"
+                )
+            return f"TAF: none valid at ETA{window}"
+        if self.taf_valid_at_eta is None:
+            # Packs built before #610 carry only the single-group reading.
+            category = f" [{self.taf_flight_category_at_eta}]" if self.taf_flight_category_at_eta else ""
+            trend = f" ({self.taf_trend_type})" if self.taf_trend_type else ""
+            return f"TAF at ETA{category}{trend}"
+
+        line = "TAF at ETA"
+        if self.taf_prevailing_category_at_eta:
+            line += f" [{self.taf_prevailing_category_at_eta}]"
+        if self.taf_temporary_category_at_eta:
+            line += f", {self.taf_temporary_type or 'TEMPO'} [{self.taf_temporary_category_at_eta}]"
+        if self.taf_significant_weather:
+            line += f" ({' '.join(self.taf_significant_weather)})"
+        return line
 
 
 class ObservationComparison(BaseModel):

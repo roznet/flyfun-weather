@@ -4572,3 +4572,91 @@ change, replay a pack store and measure how often `mixed_layer_top_source` comes
 back `"model"`, and what happens to the low-level SEVERE count on nocturnal
 legs — the change should remove BL-internal severes and leave free-atmosphere
 layers alone. A nocturnal LLJ case is the one to look for.
+
+---
+
+## 32. A TAF is read at ETA as prevailing plus the worst temporary group, and only while it is valid
+
+**Date:** 2026-09-14 · **Issue:** #610 · **Refines:** §12 (outside the alternate window)
+
+Pilot feedback on an LFRM→EGSC briefing: watch point 1 said *"The EGSC TAF is
+currently VFR at ETA"* on a day Cambridge issued no TAF. The per-airport line the
+digest reads (`TAF at ETA [cat] (trend)`) was wrong in three independent ways.
+
+### What the old reading did
+
+1. **Expired TAFs were used.** aviationweather.gov returns an airport's most recent
+   TAF however old it is, and nothing checked the TAF's own validity. The EGSC TAF
+   was `TAF EGSC 111404Z 1115/1117 29006KT 9999 SCT035` — valid 11 Sep 15–17Z —
+   and was read as "VFR at ETA" for 13 Sep. Four of 20 TAFs on that route were
+   expired (EGSC, EGUW, EGUL, EGYM), one of 12 on an LFRM→EDDK route (ETNN). Fields
+   that issue TAFs only in opening hours make this routine.
+2. **The last-listed group won.** A later group with no ceiling or visibility — a
+   wind-only `BECMG`, `BECMG SCT020`, a bare `PROB30 TEMPO +SHRA` — beat an IFR
+   `TEMPO` at the same time and, having no category itself, blanked the line. Four
+   of 20 on the EGSC route, including EGSS 2 nm from the route with a LIFR METAR.
+   A `BECMG` stopped applying once its transition period ended.
+3. **Significant weather was dropped.** A `TEMPO … BKN008CB` at ETA reached the
+   digest as `[IFR] (TEMPO)`.
+
+### The reading now (euro_aip `WeatherAnalyzer.taf_conditions_at`)
+
+- **Validity first.** A TAF whose validity does not contain the ETA gives no reading.
+  The line says `TAF: none valid at ETA (latest TAF valid 11/15Z-11/17Z)`, so the
+  digest can say there is no current TAF rather than quote an old one.
+- **Prevailing** is the main body with change groups applied in time order. `FM`
+  replaces the forecast from its start. `BECMG` applies fully once its period has
+  ended; *during* the period the field-wise worse of the before and after states is
+  used (lower ceiling with its layers, lower visibility, union of weather). An
+  improving `BECMG` cannot be counted on before it is due, and a deteriorating one
+  must be planned for from its start.
+- **Temporary** groups (`TEMPO`, `PROB`, `INTER`) valid at ETA are each laid over
+  prevailing, so a group that states only weather inherits the cloud and visibility
+  it does not restate — it always has a category. The worst one is reported beside
+  prevailing only when it is strictly worse: `TAF at ETA [VFR], TEMPO [IFR]`.
+- **Category at ETA** (`taf_flight_category_at_eta`, used by the UI badge, worst-TAF
+  summary and refresh delta) is the worse of the two — the same conservative
+  direction as §12.
+- **PROB30 is included here and labelled** (`PROB30 TEMPO [IFR]`). §12 disregards
+  PROB30 because it answers a legal question (is an alternate required); this line
+  is situational awareness, and the label lets the reader weigh it.
+- **Significant weather:** TS, FG, FZ, SN, GR, GS, PL, SQ, FC (substring match, so
+  VCTS, FZFG, SHSN qualify) and CB/TCU cloud types, from prevailing or temporary
+  conditions at ETA: `TAF at ETA [MVFR], TEMPO [IFR] (CB)`.
+- **Wind** fields take the strongest of prevailing and temporary (gust first), so a
+  `TEMPO` gust reaches the runway crosswind advisory.
+
+### Not done: a window around ETA
+
+Listing every group within ETA±1h (±3h at departure/destination) was measured on
+three production packs (40 TAFs): one airport had anything worse within ±1h that
+was not already at ETA, and only MVFR, while one line per group would add 2–9% to
+the digest context on dense routes. The single instant is kept; revisit if pilot
+feedback shows a miss the window would have caught.
+
+### Known limitation
+
+The TAF parser does not surface `NSW`, so weather a `BECMG` ends can linger in the
+prevailing state and in significant weather — an overstatement, the safe direction.
+
+### Applied beyond the digest line
+
+- **METAR/TAF verification:** a TAF that does not cover the METAR's observation time
+  is not attached to it, so an expired forecast is never scored. The applicable-group
+  selection used for scoring is unchanged, keeping existing statistics comparable.
+- **Alternate requirement (§12):** the TAF is parsed relative to the ETA, and when it
+  covers none of the ETA−1h…ETA+1h samples the destination falls back to NWP
+  consensus. §12's windowing policy is unchanged.
+
+### Files changed
+
+- euro_aip `briefing/weather/analysis.py` — `TafConditions`, `taf_covers`,
+  `taf_conditions_at`, `trend_label`; `WeatherReport.from_taf(reference=)`.
+- `models/observations.py` — `taf_valid_from/_to`, `taf_valid_at_eta`,
+  `taf_prevailing_category_at_eta`, `taf_temporary_category_at_eta`,
+  `taf_temporary_type`, `taf_significant_weather`; `AirportObservation.taf_at_eta_line()`.
+- `tasks/route_weather.py` — `_apply_taf_at_eta`; `airports_with_taf` counts TAFs
+  valid at ETA.
+- `digest/prompt_builder.py`, `digest/text.py` — both render `taf_at_eta_line()`.
+- `tasks/verification.py`, `tasks/alternate_requirement.py` — validity gate.
+- Tests: `tests/test_taf_at_eta.py`; euro_aip `tests/briefing/test_weather/test_taf_conditions.py`.

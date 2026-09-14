@@ -18,7 +18,7 @@ dependencies = [
     # verification repair script needs.
     # 0.16.0 stores airports under their current ICAO code (Enstone EGTN was
     # missing; Logroño is LERJ) and resolves the previous code via alt_ident.
-    "euro-aip>=0.16.0",
+    "euro-aip>=0.17.0",
     "metpy>=1.5",
     "numpy>=1.24",
     "matplotlib>=3.7",

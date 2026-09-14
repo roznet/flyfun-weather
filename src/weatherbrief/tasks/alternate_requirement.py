@@ -244,14 +244,20 @@ def _build_destination_window(
     """
     if taf_raw:
         try:
+            from euro_aip.briefing.weather.analysis import WeatherAnalyzer
             from euro_aip.briefing.weather.models import WeatherReport
 
-            taf = WeatherReport.from_taf(taf_raw)
+            # Resolve the TAF's day-of-month fields against the ETA, not "now":
+            # a stored TAF re-read later would otherwise land in the wrong month.
+            taf = WeatherReport.from_taf(taf_raw, reference=eta)
             sample_times = [eta + timedelta(minutes=m) for m in _WINDOW_OFFSETS_MIN]
-            instants = _taf_instant_trends(taf, sample_times, ref=eta)
-            window = build_window(instants, source="taf")
-            if window.has_forecast:
-                return window, _extract_conditionals(taf, eta)
+            # An expired (or not yet valid) TAF says nothing about the ETA
+            # window — fall through to NWP rather than windowing its base (#610).
+            if taf is not None and any(WeatherAnalyzer.taf_covers(taf, t) for t in sample_times):
+                instants = _taf_instant_trends(taf, sample_times, ref=eta)
+                window = build_window(instants, source="taf")
+                if window.has_forecast:
+                    return window, _extract_conditionals(taf, eta)
         except Exception:
             logger.warning(
                 "alternate_requirement: TAF parse/window failed; falling back to NWP",

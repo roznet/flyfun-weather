@@ -683,9 +683,7 @@ def _format_observations_context(obs: RouteObservations) -> str:
             cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""
             parts.append(f"  METAR{cat_str}: {apt.metar_raw}")
         if apt.has_taf:
-            cat_str = f" [{apt.taf_flight_category_at_eta}]" if apt.taf_flight_category_at_eta else ""
-            trend_str = f" ({apt.taf_trend_type})" if apt.taf_trend_type else ""
-            parts.append(f"  TAF at ETA{cat_str}{trend_str}")
+            parts.append(f"  {apt.taf_at_eta_line()}")
 
         lines.append("\n".join(parts))
 
