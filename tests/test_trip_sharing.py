@@ -429,6 +429,14 @@ class TestShareCodeMinting:
         from that code is pasted into a message and 404s for the recipient
         forever. The conditional UPDATE means exactly one writer wins and the
         loser reads back the winner's code.
+
+        **What this cannot cover**: the loser's re-read is ``FOR UPDATE``
+        because MySQL at REPEATABLE READ would otherwise serve it from a
+        snapshot predating the winner's commit. SQLite ignores ``FOR UPDATE``
+        and has no snapshot to be stale, so this passes either way — dropping
+        the lock would regress production only. The reasoning lives in
+        ``ensure_share_code``'s docstring; treat it as load-bearing rather than
+        assuming a green suite has checked it.
         """
         from weatherbrief.db.models import FlightTripRow
         from weatherbrief.storage.trips import ensure_share_code
