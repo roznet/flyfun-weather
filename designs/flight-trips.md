@@ -579,7 +579,17 @@ first consistent read, which the caller has already done, so a plain re-read
 would still see NULL and the loser would report the trip as gone — a 500 on the
 exact race the conditional UPDATE exists to survive. SQLite ignores `FOR UPDATE`,
 so **no test can catch its removal**; the reasoning in the docstring is the only
-guard. `/api/trips/by-share/{code}` is the same resolution for a client
+guard.
+
+**Migration 096 carries the same `share_code IS NULL` guard on its own UPDATE**,
+and for a reason specific to how this is deployed: the sequence is
+`docker compose up -d --build && … alembic upgrade head`, so the new app is
+already serving — lazy mint included — while the backfill runs. A request that
+claims a code between the migration's SELECT and that row's UPDATE would be
+silently overwritten by an unconditional write, and the link already copied out
+of that window would 404 for its recipient forever. Conditional, the backfill
+no-ops on any row the app has claimed. `tests/test_migration_096_share_codes.py`
+drives the real `upgrade()` and reproduces that window. `/api/trips/by-share/{code}` is the same resolution for a client
 that holds the code rather than a URL bar; iOS routes it as
 `PendingNavigation.tripShare`, which needs `/t/*` in the domain's AASA `paths`
 (`deploy/weather.flyfun.aero.caddy`) deployed *before* the build that handles it.
