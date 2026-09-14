@@ -19,6 +19,11 @@ previous synoptic hour (00/06/12/18 UTC). Forecast charts are stored in
 the same cycle dir; their individual ``Last-Modified`` is recorded in
 ``meta.json`` so callers can render an honest "Issued Xh ago" caption.
 
+Each forecast entry also carries ``init_time``, ``lead_h``, ``valid_time`` and
+``time_source``: the ICON run the chart was drawn from, read off the image
+(:mod:`weatherbrief.fetch.dwd_chart_stamp`). The cycle key is *not* that run —
+forecasts come from the 00Z run while the analysis rolls on through 12Z/18Z.
+
 Shared cache/projection/fetch machinery lives in
 :mod:`weatherbrief.fetch.chart_cache`; this module configures a
 :class:`~weatherbrief.fetch.chart_cache.ChartCache` for the DWD source and
@@ -29,6 +34,7 @@ from __future__ import annotations
 
 import email.utils
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +48,7 @@ from weatherbrief.fetch.chart_cache import (
     parse_http_datetime,
     parse_run_cycle_dt,  # re-exported for back-compat
 )
+from weatherbrief.fetch.dwd_chart_stamp import ForecastStamp, read_forecast_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -167,15 +174,18 @@ def select_default_chart_id(
     departure_time: datetime,
     run_cycle: str,
     available_ids: set[str] | None = None,
+    valid_times: Mapping[str, datetime] | None = None,
 ) -> str:
     """Pick the chart whose estimated valid time best brackets the flight ETD.
 
     ETD < ~3h after issuance -> analysis; else the nearest available forecast
     offset (tie-break toward the earlier offset). ``available_ids`` constrains
     the choice to charts that were actually fetched (DWD's server is flaky and
-    individual forecast charts can fail independently).
+    individual forecast charts can fail independently). ``valid_times`` (from
+    :func:`forecast_stamps`) replaces the ``run_cycle + offset`` estimate for
+    every chart whose run is known.
     """
-    return _cache.select_default_chart_id(departure_time, run_cycle, available_ids)
+    return _cache.select_default_chart_id(departure_time, run_cycle, available_ids, valid_times)
 
 
 def chart_type_for(chart_id: str) -> str:
@@ -225,6 +235,23 @@ def chart_meta(data_dir: Path, run_cycle: str, chart_id: str) -> dict | None:
     return _cache.chart_meta(data_dir, run_cycle, chart_id)
 
 
+def forecast_stamps(data_dir: Path, run_cycle: str) -> dict[str, ForecastStamp]:
+    """Each forecast chart's ICON run, lead and valid time, as recorded at refresh.
+
+    Charts without a stamp — fetch failed, or cached before stamping existed and
+    not refreshed since — are omitted; callers fall back to ``run_cycle + offset``.
+    """
+    meta = _cache.read_meta(_cache.cycle_dir(data_dir, run_cycle))
+    stamps: dict[str, ForecastStamp] = {}
+    for cid in CHART_IDS:
+        if cid == "ana":
+            continue
+        stamp = ForecastStamp.from_meta(meta.get(cid))
+        if stamp is not None:
+            stamps[cid] = stamp
+    return stamps
+
+
 def evict_old_cycles(data_dir: Path, *, keep: int = _DEFAULT_KEEP_CYCLES) -> list[str]:
     """Delete all but the most recent ``keep`` cycle dirs. Returns evicted names."""
     return _cache.evict_old_cycles(data_dir, keep=keep)
@@ -254,7 +281,8 @@ def refresh_charts(
          cycle name. If 200: derive a new cycle from the response.
       2. Parallel-fetch the 5 forecasts into the resolved cycle dir with
          conditional headers based on that cycle's existing meta.
-      3. Update meta.json and run eviction.
+      3. Stamp each new forecast chart's run + valid time (OCR, with its
+         Last-Modified as fallback), update meta.json and run eviction.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -364,6 +392,7 @@ def refresh_charts(
         results = {cid: fut.result() for cid, fut in futures.items()}
 
     _cache.apply_results_to_meta(results, report, new_meta)
+    _stamp_forecast_times(cdir, new_meta, forecast_ids)
     _cache.write_meta(cdir, new_meta)
 
     try:
@@ -372,3 +401,37 @@ def refresh_charts(
         logger.warning("DWD chart eviction failed", exc_info=True)
 
     return report
+
+
+def _stamp_forecast_times(cdir: Path, meta: dict[str, dict], forecast_ids: tuple[str, ...]) -> None:
+    """Record each forecast chart's run, lead and valid time on its meta entry.
+
+    A downloaded chart's entry is rebuilt without a stamp, so it is read afresh;
+    a 304 keeps the prior stamp. An entry cached before stamping existed has none
+    and is stamped on its next refresh. Each OCR is its own tesseract process,
+    so the charts are read in parallel.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    pending = [
+        cid for cid in forecast_ids
+        if cid in meta and "valid_time" not in meta[cid] and (cdir / f"{cid}.png").exists()
+    ]
+    if not pending:
+        return
+
+    def _read(cid: str) -> ForecastStamp | None:
+        lm = meta[cid].get("last_modified")
+        return read_forecast_stamp(
+            cdir / f"{cid}.png",
+            lead_h=FORECAST_OFFSETS_H[cid],
+            last_modified=datetime.fromisoformat(lm) if lm else None,
+        )
+
+    with ThreadPoolExecutor(max_workers=len(pending)) as pool:
+        stamps = dict(zip(pending, pool.map(_read, pending)))
+    for cid, stamp in stamps.items():
+        if stamp is None:
+            logger.warning("DWD chart %s: no run time from OCR or Last-Modified", cid)
+            continue
+        meta[cid].update(stamp.to_meta())

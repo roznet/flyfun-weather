@@ -302,6 +302,7 @@ class ChartCache:
         departure_time: datetime,
         run_cycle: str,
         available_ids: set[str] | None = None,
+        valid_times: Mapping[str, datetime] | None = None,
     ) -> str:
         """Pick the chart whose valid time best brackets the flight ETD.
 
@@ -312,6 +313,10 @@ class ChartCache:
         fetched, so a default never points at a chart whose bytes were never
         cached (which would 410 at render time). Falls back to ``"ana"`` when no
         forecast charts are available.
+
+        ``valid_times`` overrides ``run_cycle + offset`` for the charts a source
+        has actual valid times for — DWD's forecasts come from an earlier run
+        than the analysis that names the cycle.
         """
         issued = parse_run_cycle_dt(run_cycle)
         if issued is None:
@@ -326,13 +331,15 @@ class ChartCache:
         )
         if not forecast_ids:
             return "ana"
-        return min(
-            forecast_ids,
-            key=lambda cid: (
-                abs(self.forecast_offsets_h[cid] - delta_hours),
-                self.forecast_offsets_h[cid],
-            ),
-        )
+        known = valid_times or {}
+
+        def gap_hours(cid: str) -> float:
+            valid = known.get(cid)
+            if valid is None:
+                return abs(self.forecast_offsets_h[cid] - delta_hours)
+            return abs((valid - departure_time).total_seconds()) / 3600.0
+
+        return min(forecast_ids, key=lambda cid: (gap_hours(cid), self.forecast_offsets_h[cid]))
 
     # -- georeferencing -----------------------------------------------------
 

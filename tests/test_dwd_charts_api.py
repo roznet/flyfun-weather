@@ -244,3 +244,28 @@ def test_dwd_chart_overlay_404_when_briefing_missing(client, app_db, tmp_path: P
     ts = meta.fetch_timestamp.isoformat()
     resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/dwd-chart-overlay")
     assert resp.status_code == 404
+
+
+def test_pack_meta_response_includes_dwd_forecast_times(client, app_db, tmp_path):
+    """Forecast run/valid times come from the shared cache, not the pack row."""
+    import json
+
+    flight, _meta = _seed_flight_and_pack(app_db)
+    # Nothing cached for the cycle yet -> no times.
+    assert client.get(f"/api/flights/{flight.id}/packs").json()[0]["dwd_charts_times"] == {}
+
+    stamp = {
+        "init_time": "2026-05-08T00:00:00Z",
+        "lead_h": 48,
+        "valid_time": "2026-05-10T00:00:00Z",
+        "time_source": "ocr",
+    }
+    cdir = cycle_dir(tmp_path / "data", _RUN_CYCLE)
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "meta.json").write_text(json.dumps({
+        "ana": {"last_modified": "2026-05-08T06:30:00+00:00"},
+        "048": {"last_modified": "2026-05-08T04:43:00+00:00", **stamp},
+    }))
+
+    pack = client.get(f"/api/flights/{flight.id}/packs").json()[0]
+    assert pack["dwd_charts_times"] == {"048": stamp}

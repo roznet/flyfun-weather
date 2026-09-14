@@ -171,7 +171,9 @@ def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, An
 
     Lists every chart-id present on disk for the latest cycle, each with its
     forecast offset, chart_type (which calibration / native size it uses),
-    native pixel size, and valid time (run_cycle + offset).
+    native pixel size, valid time and model run. The times are the chart's own
+    when its meta entry records them (DWD forecasts, read off the image);
+    otherwise valid time is estimated as run_cycle + offset and init_time is None.
     """
     module = spec.module
     cycles = module.list_cycles(data_dir)
@@ -192,8 +194,9 @@ def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, An
         chart_type = module.chart_type_for(chart_id)
         offset_h = module.FORECAST_OFFSETS_H.get(chart_id, 0)
         native = module.CHART_NATIVE_SIZE.get(chart_type)
-        valid_time = None
-        if issued is not None:
+        chart_meta = module.chart_meta(data_dir, run_cycle, chart_id) or {}
+        valid_time = chart_meta.get("valid_time")
+        if valid_time is None and issued is not None:
             valid_time = (issued + timedelta(hours=offset_h)).isoformat().replace("+00:00", "Z")
         charts.append({
             "id": chart_id,
@@ -201,6 +204,7 @@ def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, An
             "chart_type": chart_type,
             "native_size": list(native) if native else None,
             "valid_time": valid_time,
+            "init_time": chart_meta.get("init_time"),
         })
 
     if not charts:

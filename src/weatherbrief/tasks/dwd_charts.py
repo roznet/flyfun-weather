@@ -6,7 +6,9 @@ conditional GETs), and computes the per-briefing reference fields.
 
 Eligibility:
   - in_coverage: route region is Europe (reuses ``detect_region``).
-  - within_horizon: ETD <= run_cycle + 108h at refresh time.
+  - within_horizon: ETD <= forecast run + 108h at refresh time. The run is
+    the one read off the forecast charts, not the analysis-derived cycle key
+    (which can be 18h later); the cycle key only when no chart is stamped.
 
 Bytes are NOT stored on the pack — the briefing only stores
 (run_cycle, default_chart_id, eligibility flags). The renderer reads
@@ -22,6 +24,7 @@ from pathlib import Path
 
 from weatherbrief.fetch.dwd_charts import (
     FORECAST_OFFSETS_H,
+    forecast_stamps,
     parse_run_cycle_dt,
     refresh_charts,
     select_default_chart_id,
@@ -81,8 +84,13 @@ def run_dwd_charts(
         # a malformed run_cycle shouldn't crash the pipeline.
         return DwdChartsResult(in_coverage=True)
 
+    # Forecast charts carry their own ICON run (read off the image at refresh);
+    # the cycle key is the analysis's, often 12-18h later than that run.
+    stamps = forecast_stamps(data_dir, report.run_cycle)
+    forecast_run = max((s.init_time for s in stamps.values()), default=issued)
+
     horizon_h = max(FORECAST_OFFSETS_H.values())  # 108
-    within_horizon = departure_time <= issued + timedelta(hours=horizon_h)
+    within_horizon = departure_time <= forecast_run + timedelta(hours=horizon_h)
     if not within_horizon:
         # Still record the cycle for debugging, but the renderer will
         # show the "beyond +108h horizon" placeholder instead of charts.
@@ -98,7 +106,10 @@ def run_dwd_charts(
     # would 410 at render time.
     available = set(report.charts_refreshed) | set(report.charts_unchanged)
     default_id = select_default_chart_id(
-        departure_time, report.run_cycle, available_ids=available
+        departure_time,
+        report.run_cycle,
+        available_ids=available,
+        valid_times={cid: s.valid_time for cid, s in stamps.items()},
     )
 
     if report.charts_failed:
