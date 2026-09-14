@@ -21,6 +21,12 @@ enum PendingNavigation: Equatable, Sendable {
     /// rather than one leg is the unit of attention — and from a `/trip.html?id=`
     /// Universal Link.
     case trip(id: String)
+    /// Open a shared trip by its share code (`/t/{code}`). The sibling of
+    /// ``share(code:)``, and deliberately simpler: a trip needs no
+    /// preview-before-subscribe screen, because the trip screen itself *is* the
+    /// read-only view. The code resolves to a trip id, then this becomes an
+    /// ordinary ``trip(id:)``.
+    case tripShare(code: String)
 
     /// The target flight id, when this navigation names one.
     var flightId: String? {
@@ -110,6 +116,7 @@ struct PendingNavigationStore {
         case .forecastMap(let dl): "forecastMap:" + encodeMap(dl)
         case .share(let code): "share:\(code)"
         case .trip(let id): "trip:\(id)"
+        case .tripShare(let code): "tripShare:\(code)"
         }
     }
 
@@ -125,6 +132,11 @@ struct PendingNavigationStore {
         if raw.hasPrefix("share:") {
             let code = String(raw.dropFirst("share:".count))
             return code.isEmpty ? nil : .share(code: code)
+        }
+        // Before the `trip:` check — "tripShare:" also starts with "trip".
+        if raw.hasPrefix("tripShare:") {
+            let code = String(raw.dropFirst("tripShare:".count))
+            return code.isEmpty ? nil : .tripShare(code: code)
         }
         if raw.hasPrefix("trip:") {
             let id = String(raw.dropFirst("trip:".count))

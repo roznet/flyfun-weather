@@ -952,5 +952,20 @@
   "trips.notesLabel": "Notizen",
   "trips.keepInTrip": "In Reise „{name}“ behalten",
   "trips.decidableFrom": "Hochaufgelöste Vorhersage ab {date}",
-  "trips.legOf": "Etappe {position}/{total}"
+  "trips.legOf": "Etappe {position}/{total}",
+  "trips.share": "Reise teilen",
+  "trips.shareTitle": "Link zu dieser Reise kopieren",
+  "trips.shareCopied": "Link kopiert",
+  "trips.shareBlocked": "Alle Etappen freigeben, um diese Reise zu teilen",
+  "trips.shareBlockedHint": "Mindestens eine Etappe ist privat. Öffnen Sie das Briefing jeder Etappe und aktivieren Sie die Freigabe.",
+  "trips.shareLinkTitle": "Flugreise",
+  "trips.shareLinkFallback": "Diesen Link zum Teilen kopieren:",
+  "trips.shareLinkAlert": "Ein Link zu dieser Reise wurde in die Zwischenablage kopiert. Fügen Sie ihn in Ihrer bevorzugten App ein (E-Mail, Nachricht usw.).",
+  "trips.sharedBy": "Geteilt von {owner}",
+  "trips.sharedByUnknown": "Geteilte Reise",
+  "trips.btnFollow": "Diese Flüge zu meiner Liste hinzufügen",
+  "trips.btnUnfollow": "Aus meiner Liste entfernen",
+  "trips.followed": "Alle {count} Etappen sind in Ihrer Liste",
+  "trips.unfollowConfirm": "Diese geteilten Flüge aus Ihrer Liste entfernen? Sie können sie über den Reise-Link wieder hinzufügen.",
+  "trips.viewerNote": "Sie sehen eine geteilte Reise. Nur ihre Eigentümerin oder ihr Eigentümer kann sie aktualisieren oder bearbeiten."
 }

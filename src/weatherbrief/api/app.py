@@ -741,6 +741,25 @@ def create_app() -> FastAPI:
             f"/briefing.html?{urlencode(params)}", status_code=302,
         )
 
+    # Short trip share-link redirect: /t/{code} → /trip.html?id=<trip_id>.
+    # The sibling of /s/{code} above and unauthenticated for the same reason:
+    # it only resolves a code to an id. Whether the trip may actually be *read*
+    # is decided on the destination — a trip is readable by a non-owner exactly
+    # when every one of its legs is (storage/trips.py::is_shareable), so this
+    # route introduces no access of its own.
+    from weatherbrief.storage.trips import lookup_trip_id_by_share_code
+
+    @app.get("/t/{code}")
+    def trip_share_redirect(code: str, db=Depends(_get_db_for_share)):
+        if not SHARE_CODE_RE.match(code):
+            raise _HTTPException(status_code=404, detail="Unknown share link")
+        trip_id = lookup_trip_id_by_share_code(db, code)
+        if trip_id is None:
+            raise _HTTPException(status_code=404, detail="Unknown share link")
+        return RedirectResponse(
+            f"/trip.html?{urlencode({'id': trip_id})}", status_code=302,
+        )
+
     # Clean, shareable deep link to the "What's New" tab of the help page.
     # The help page is a single client-rendered document with tabs selected
     # via ``?tab=``; copying the address bar from the tab yields a bare

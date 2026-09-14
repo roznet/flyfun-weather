@@ -952,5 +952,20 @@
   "trips.notesLabel": "Notes",
   "trips.keepInTrip": "Conserver dans le voyage « {name} »",
   "trips.decidableFrom": "Guidage haute résolution à partir du {date}",
-  "trips.legOf": "Étape {position}/{total}"
+  "trips.legOf": "Étape {position}/{total}",
+  "trips.share": "Partager le voyage",
+  "trips.shareTitle": "Copier un lien vers ce voyage",
+  "trips.shareCopied": "Lien copié",
+  "trips.shareBlocked": "Rendez chaque étape partageable pour partager ce voyage",
+  "trips.shareBlockedHint": "Une ou plusieurs étapes sont privées. Ouvrez le briefing de chaque étape et activez le partage.",
+  "trips.shareLinkTitle": "Voyage",
+  "trips.shareLinkFallback": "Copiez ce lien pour le partager :",
+  "trips.shareLinkAlert": "Un lien vers ce voyage a été copié dans votre presse-papiers. Collez-le dans votre application de partage préférée (e-mail, message, etc.).",
+  "trips.sharedBy": "Partagé par {owner}",
+  "trips.sharedByUnknown": "Voyage partagé",
+  "trips.btnFollow": "Ajouter ces vols à ma liste",
+  "trips.btnUnfollow": "Retirer de ma liste",
+  "trips.followed": "Les {count} étapes sont dans votre liste",
+  "trips.unfollowConfirm": "Retirer ces vols partagés de votre liste ? Vous pourrez les rajouter depuis le lien du voyage.",
+  "trips.viewerNote": "Vous consultez un voyage partagé. Seul son propriétaire peut l’actualiser ou le modifier."
 }

@@ -89,6 +89,31 @@ export async function fetchTripRefreshStatus(
   );
 }
 
+export interface TripSubscribeResult {
+  trip_id: string;
+  changed: number;
+  total_legs: number;
+  is_subscribed: boolean;
+}
+
+/** Follow a shared trip: subscribes to each of its legs.
+ *
+ * There is no trip-level subscription — following a trip is a loop over its
+ * legs, so the legs land in the recipient's own flights list exactly as a
+ * single shared leg does.
+ */
+export async function subscribeTrip(tripId: string): Promise<TripSubscribeResult> {
+  return apiFetch<TripSubscribeResult>(
+    `/trips/${encodeURIComponent(tripId)}/subscribe`, { method: 'POST' },
+  );
+}
+
+export async function unsubscribeTrip(tripId: string): Promise<TripSubscribeResult> {
+  return apiFetch<TripSubscribeResult>(
+    `/trips/${encodeURIComponent(tripId)}/subscribe`, { method: 'DELETE' },
+  );
+}
+
 export interface TripAiSummary {
   trip_id: string;
   text: string | null;

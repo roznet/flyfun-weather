@@ -133,6 +133,12 @@ final class AppState {
         productionBaseURL.appendingPathComponent("s").appendingPathComponent(code)
     }
 
+    /// The canonical share URL for a *trip's* share code (`/t/{code}`). Always
+    /// production, for the same reason as the flight link above.
+    static func tripShareURL(forShareCode code: String) -> URL {
+        productionBaseURL.appendingPathComponent("t").appendingPathComponent(code)
+    }
+
     #if DEBUG
     @ObservationIgnored
     static var serverEnvironment: ServerEnvironment {
@@ -435,6 +441,14 @@ final class AppState {
             if comps.path.hasPrefix("/s/") {
                 let code = String(comps.path.dropFirst("/s/".count))
                 if isValidShareCode(code) { return .share(code: code) }
+            }
+            // Short trip share link `/t/{code}`. Same shape rule and the same
+            // AASA caveat as `/s/*`: the Caddy `paths` entry must be deployed
+            // before a build handling this ships, or the link keeps opening
+            // Safari until iOS next re-reads the association file.
+            if comps.path.hasPrefix("/t/") {
+                let code = String(comps.path.dropFirst("/t/".count))
+                if isValidShareCode(code) { return .tripShare(code: code) }
             }
             return nil
         }

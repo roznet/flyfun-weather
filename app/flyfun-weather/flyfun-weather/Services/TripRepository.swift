@@ -63,6 +63,20 @@ protocol TripRepository: Sendable {
     /// a debrief changes, or a departure passes and flips a leg's state — not
     /// when a view appears, and not as `days_out` ticks down.
     func tripAiSummary(tripId: String) async throws -> TripAiSummaryResponse
+
+    /// Resolve a `/t/{code}` share token to its trip. A code for a trip the
+    /// caller may not read is a 404, same as an unknown code.
+    func tripByShareCode(_ code: String) async throws -> TripResponse
+
+    /// Follow a shared trip: subscribe to each of its legs, so they join the
+    /// caller's own flight list. Owner-refusing (409) — their legs are already
+    /// there. No trip-level subscription exists; see ``TripSubscribeResponse``.
+    func subscribeTrip(tripId: String) async throws -> TripSubscribeResponse
+
+    /// Stop following a shared trip: unsubscribe from every leg. Works even once
+    /// the trip has stopped being shareable, so legs can never be stranded in
+    /// the follower's list.
+    func unsubscribeTrip(tripId: String) async throws -> TripSubscribeResponse
 }
 
 // MARK: - Offline cache

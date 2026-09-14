@@ -474,19 +474,26 @@ export function flightShareUrl(
  *  toolbar flash (share sheet shown / share sheet aborted), or when
  *  the clipboard copy succeeded; ``false`` only when we fell all the
  *  way back to ``prompt()``. */
-export async function copyFlightShareLink(
-  flightId: string,
-  packTimestamp?: string | null,
-  shareCode?: string | null,
-): Promise<boolean> {
-  const url = flightShareUrl(flightId, packTimestamp, shareCode);
+export interface ShareCopy {
+  /** Title for the OS share sheet. */
+  title: string;
+  /** Confirmation shown after a clipboard copy. */
+  alert: string;
+  /** Prompt label on the last-resort tier. */
+  fallback: string;
+}
 
+/** The three-tier share of one URL. The wording is the caller's.
+ *
+ *  Shared by the flight and trip share buttons rather than duplicated: the
+ *  tiering (and the AbortError rule that a dismissed sheet must not silently
+ *  fall through to the clipboard) is the part that is easy to get subtly wrong,
+ *  and there should be exactly one copy of it.
+ */
+export async function shareUrl(url: string, copy: ShareCopy): Promise<boolean> {
   if (typeof navigator.share === 'function') {
     try {
-      await navigator.share({
-        title: t('flightDetail.copyShareLinkTitle'),
-        url,
-      });
+      await navigator.share({ title: copy.title, url });
       return true;
     } catch (err) {
       // User cancelled the sheet — don't fall back to clipboard, they
@@ -501,12 +508,47 @@ export async function copyFlightShareLink(
 
   try {
     await navigator.clipboard.writeText(url);
-    alert(t('flightDetail.copyShareLinkAlert'));
+    alert(copy.alert);
     return true;
   } catch {
-    prompt(t('flightDetail.copyShareLinkFallback'), url);
+    prompt(copy.fallback, url);
     return false;
   }
+}
+
+export async function copyFlightShareLink(
+  flightId: string,
+  packTimestamp?: string | null,
+  shareCode?: string | null,
+): Promise<boolean> {
+  return shareUrl(flightShareUrl(flightId, packTimestamp, shareCode), {
+    title: t('flightDetail.copyShareLinkTitle'),
+    alert: t('flightDetail.copyShareLinkAlert'),
+    fallback: t('flightDetail.copyShareLinkFallback'),
+  });
+}
+
+/** The `/t/{code}` short link for a trip, falling back to the long page URL.
+ *
+ *  The fallback matters: a trip created before share codes existed has none
+ *  until the server mints one on the next read, and the long URL resolves just
+ *  as well — the code is a shortener, never the permission.
+ */
+export function tripShareUrl(tripId: string, shareCode?: string | null): string {
+  if (shareCode) {
+    return `${window.location.origin}/t/${encodeURIComponent(shareCode)}`;
+  }
+  return `${window.location.origin}/trip.html?id=${encodeURIComponent(tripId)}`;
+}
+
+export async function copyTripShareLink(
+  tripId: string, shareCode?: string | null,
+): Promise<boolean> {
+  return shareUrl(tripShareUrl(tripId, shareCode), {
+    title: t('trips.shareLinkTitle'),
+    alert: t('trips.shareLinkAlert'),
+    fallback: t('trips.shareLinkFallback'),
+  });
 }
 
 /** Auto-dismiss timeout for status messages (ms). */

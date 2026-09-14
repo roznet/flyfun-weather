@@ -31,7 +31,13 @@ from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.api.flight_search import MAX_QUERY_LEN, matches as _search_matches, parse_query
 from weatherbrief.api.preferences import load_flight_order
-from weatherbrief.api.trips import TripLegRef, bulk_trip_refs, trip_ref_for
+from weatherbrief.api.trips import (
+    TripLegRef,
+    bulk_trip_refs,
+    shared_trip_refs,
+    trip_ref_for,
+    viewer_trip_ref_for,
+)
 from weatherbrief.storage.trips import load_trip_row, prune_empty_trips
 from weatherbrief.storage.flights import (
     SHARE_CODE_RE,
@@ -537,9 +543,14 @@ def _flight_to_response(
         latest_briefing = latest_briefing.model_copy(update={"unseen": True})
 
     # Single-flight endpoints resolve the trip ref here; the list endpoint
-    # computes them all in two queries and passes them in.
-    if trip is None and flight.trip_id and effective_role == "owner":
-        trip = trip_ref_for(db, flight.trip_id, flight.id)
+    # computes them all in two queries and passes them in. A subscriber gets
+    # one too, but only for a trip that is shareable — otherwise the badge
+    # would link them to a trip page that 404s.
+    if trip is None and flight.trip_id:
+        if effective_role == "owner":
+            trip = trip_ref_for(db, flight.trip_id, flight.id)
+        else:
+            trip = viewer_trip_ref_for(db, flight.trip_id, flight.id)
 
     return FlightResponse(
         id=flight.id,
@@ -765,6 +776,12 @@ def list_all_flights(
     # Two queries for the whole list — the trip card groups from these rather
     # than joining ``flight_trips`` into the hot flights query.
     trip_refs = bulk_trip_refs(db, user_id)
+    # The recipient side: a leg someone shared carries a badge back to its trip
+    # when that trip is shareable as a whole. Scoped to the subscribed ids, so
+    # this is two more queries only when the list actually holds shared legs.
+    shared_refs = shared_trip_refs(
+        db, [f.id for f, role, _ in paired if role == "subscriber"],
+    )
 
     owned_pairs: list[tuple[Flight, FlightDebrief | None]] = [
         (f, debrief_map.get(f.id)) for f, role, _ in paired if role == "owner"
@@ -795,7 +812,9 @@ def list_all_flights(
             debrief=debrief,
             section=section,
             unseen=f.id in unseen_ids,
-            trip=trip_refs.get(f.id) if role == "owner" else None,
+            trip=(
+                trip_refs.get(f.id) if role == "owner" else shared_refs.get(f.id)
+            ),
         )
         if section == "past":
             past.append(resp)

@@ -128,6 +128,10 @@ final class TripDetailViewModel {
     /// decision and derived state; a key hit makes no model call), which is why
     /// no debounce beyond `aiRequested` is needed.
     private func ensureAiSummary(for trip: TripResponse) async {
+        // A shared trip never asks: the paragraph was paid for under the owner's
+        // AI-digest consent, the server refuses a viewer's POST, and the
+        // deterministic headline beside it already says which leg decides.
+        guard trip.isOwned else { return }
         let needsAsking = trip.aiSummaryStale || (trip.aiSummary ?? "").isEmpty
         guard needsAsking, aiRequested.insert(trip.id).inserted else { return }
         do {
@@ -204,10 +208,51 @@ final class TripDetailViewModel {
     /// Legs refreshing right now, including refreshes started outside any trip
     /// run. Best-effort: this is an indicator, so a failure leaves it as-is.
     func pollActiveLegRefreshes() async {
+        // Reads the *caller's* active refreshes. A viewer has none for someone
+        // else's legs and cannot start one, so the poll would only ever return
+        // an empty intersection.
+        guard trip?.isOwned ?? true else { return }
         guard let briefingRepository else { return }
         guard let entries = try? await briefingRepository.activeRefreshes() else { return }
         let memberIds = Set(trip?.summary.legs.map(\.flightId) ?? [])
         refreshingLegIds = Set(entries.map(\.flightId)).intersection(memberIds)
+    }
+
+    // MARK: - Following a shared trip
+
+    /// True when this trip belongs to someone else and arrived via a share link.
+    var isSharedWithMe: Bool { trip.map { !$0.isOwned } ?? false }
+
+    /// Add every leg of a shared trip to the viewer's own flight list.
+    ///
+    /// Re-reads the trip rather than flipping `isSubscribed` locally: the server
+    /// derives it from the legs on each read, so a leg the owner added since
+    /// leaves the action un-pressed instead of claiming a leg that is not in
+    /// fact followed.
+    func follow() async {
+        guard let trip, !trip.isOwned else { return }
+        do {
+            _ = try await repository.subscribeTrip(tripId: trip.id)
+            await load()
+        } catch {
+            Self.logger.warning("Trip \(trip.id) subscribe failed: \(error)")
+            actionError = Self.message(
+                for: error, fallback: "Couldn’t add these flights to your list.",
+            )
+        }
+    }
+
+    func unfollow() async {
+        guard let trip, !trip.isOwned else { return }
+        do {
+            _ = try await repository.unsubscribeTrip(tripId: trip.id)
+            await load()
+        } catch {
+            Self.logger.warning("Trip \(trip.id) unsubscribe failed: \(error)")
+            actionError = Self.message(
+                for: error, fallback: "Couldn’t remove these flights from your list.",
+            )
+        }
     }
 
     private func apply(_ status: TripRefreshStatus) {

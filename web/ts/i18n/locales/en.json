@@ -1113,5 +1113,20 @@
   "trips.notesLabel": "Notes",
   "trips.keepInTrip": "Keep in trip “{name}”",
   "trips.decidableFrom": "High-resolution guidance from {date}",
-  "trips.legOf": "Leg {position}/{total}"
+  "trips.legOf": "Leg {position}/{total}",
+  "trips.share": "Share trip",
+  "trips.shareTitle": "Copy a link to this trip",
+  "trips.shareCopied": "Link copied",
+  "trips.shareBlocked": "Make every leg shareable to share this trip",
+  "trips.shareBlockedHint": "One or more legs are private. Open each leg's briefing and turn sharing on.",
+  "trips.shareLinkTitle": "Flight trip",
+  "trips.shareLinkFallback": "Copy this link to share:",
+  "trips.shareLinkAlert": "A link to this trip has been copied to your clipboard. Paste it in your favorite sharing app (email, message, etc.).",
+  "trips.sharedBy": "Shared by {owner}",
+  "trips.sharedByUnknown": "Shared trip",
+  "trips.btnFollow": "Add these flights to my list",
+  "trips.btnUnfollow": "Remove from my list",
+  "trips.followed": "All {count} legs are in your list",
+  "trips.unfollowConfirm": "Remove these shared flights from your list? You can add them again from the trip link.",
+  "trips.viewerNote": "You are viewing a shared trip. Only its owner can refresh or edit it."
 }
