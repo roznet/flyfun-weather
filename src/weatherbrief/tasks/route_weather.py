@@ -346,8 +346,11 @@ def _apply_taf_at_eta(obs: AirportObservation, taf, eta: datetime) -> None:
     prevailing = conditions.prevailing
     if prevailing.flight_category is not None:
         obs.taf_prevailing_category_at_eta = prevailing.flight_category.value
-    if conditions.temporary_is_worse:
-        worst = conditions.worst_temporary
+    # worst_temporary skips groups without a category, so temporary_is_worse
+    # implies one; checked anyway so a surprise costs this field, not the
+    # whole route's observations.
+    worst = conditions.worst_temporary
+    if conditions.temporary_is_worse and worst is not None and worst.flight_category is not None:
         obs.taf_temporary_category_at_eta = worst.flight_category.value
         obs.taf_temporary_type = WeatherAnalyzer.trend_label(worst)
         obs.taf_trend_type = obs.taf_temporary_type

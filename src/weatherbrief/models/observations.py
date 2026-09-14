@@ -52,7 +52,6 @@ class AirportObservation(BaseModel):
     taf_wind_dir: int | None = None
     taf_wind_speed_kt: int | None = None
     taf_wind_gust_kt: int | None = None
-    taf_applicable_text: str | None = None
     taf_applicable_lines: list[int] = Field(default_factory=list)
     metar_wind_advisory: str | None = None
     metar_best_runway_id: str | None = None

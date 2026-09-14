@@ -176,7 +176,6 @@ struct AirportObservation: Codable, Identifiable, Sendable {
     let tafWindDir: Int?
     let tafWindSpeedKt: Int?
     let tafWindGustKt: Int?
-    let tafApplicableText: String?
     /// Line indices of the base forecast + the BECMG/TEMPO groups active at the
     /// ETA — used to highlight the applicable lines in the raw TAF.
     let tafApplicableLines: [Int]?

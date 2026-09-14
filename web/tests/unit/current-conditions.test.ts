@@ -55,7 +55,7 @@ function makeAirport(overrides: Partial<AirportObservation> = {}): AirportObserv
     metar_weather: [], metar_temperature_c: 12, metar_dewpoint_c: 10, metar_qnh: 1012,
     taf_raw: null, taf_flight_category_at_eta: null, taf_trend_type: null,
     taf_wind_dir: null, taf_wind_speed_kt: null, taf_wind_gust_kt: null,
-    taf_applicable_text: null, taf_applicable_lines: [],
+    taf_applicable_lines: [],
     metar_wind_advisory: null, metar_best_runway_id: null,
     metar_crosswind_kt: null, metar_headwind_kt: null,
     taf_wind_advisory: null, taf_best_runway_id: null,
