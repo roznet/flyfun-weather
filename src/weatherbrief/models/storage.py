@@ -112,7 +112,9 @@ class FlightTrip(BaseModel):
     # default (follow the leg / account decision) | notify | mute. Sits between
     # the per-flight override and the account scope in precedence.
     notify_override: Literal["default", "notify", "mute"] = "default"
-    # Reserved for trip sharing (v2) — the column exists before the feature.
+    # The short ``/t/{code}`` token. Allocated at create and lazily on first
+    # read; a link shortener, never the permission — whether a non-owner may
+    # read the trip is ``storage.trips.is_shareable``'s answer.
     share_code: str | None = None
     # Persisted AI paragraph + the member-(flight_id, fetch_timestamp) key it
     # was generated from, so unchanged inputs never pay for a second call.
