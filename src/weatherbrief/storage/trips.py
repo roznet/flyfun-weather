@@ -101,29 +101,40 @@ def ensure_share_code(session: Session, row: FlightTripRow) -> str:
     its code — and a link built from it, pasted into a message, would 404 for
     the recipient forever. ``WHERE share_code IS NULL`` makes exactly one writer
     win; the loser re-reads and returns the code that actually landed.
+
+    That re-read is **locking**, and not belt-and-braces — the same hazard, and
+    the same fix, as ``api/trip_refresh.py::start``. Prod is MySQL at REPEATABLE
+    READ, where the transaction's snapshot is established at its first
+    consistent read; callers here have already done one (``_trip_to_response``
+    fetches the row before asking). A plain re-read is served from that
+    snapshot, so the loser would still see NULL even though the winner has
+    committed a code — and fall through to the "row is gone" branch, turning
+    the exact concurrent-first-read this function exists to handle into a 500.
+    The UPDATE itself is unaffected: writes always operate on the latest
+    committed version, which is why it correctly matches zero rows. SQLite
+    ignores ``FOR UPDATE``, so dev and the test suite cannot reproduce the
+    difference — hence this comment carrying the reasoning.
     """
     if row.share_code:
         return row.share_code
 
     candidate = allocate_share_code(session)
-    result = session.execute(
+    session.execute(
         update(FlightTripRow)
         .where(FlightTripRow.id == row.id, FlightTripRow.share_code.is_(None))
         .values(share_code=candidate)
     )
     session.flush()
-    if result.rowcount == 1:
-        # Keep the identity-mapped instance in step with the row we just wrote.
-        session.refresh(row, ["share_code"])
-        return row.share_code
-
-    # Someone else minted first. Their code is the real one.
-    session.refresh(row, ["share_code"])
+    # One locking read for both outcomes rather than a branch on ``rowcount``:
+    # it takes the latest committed row whether we won or lost, so there is no
+    # path where the answer depends on which version the snapshot happened to
+    # hold. Winning already holds the exclusive lock, so re-acquiring is free.
+    session.refresh(row, ["share_code"], with_for_update=True)
     if row.share_code:
         return row.share_code
-    # The UPDATE matched nothing and the column is still NULL: the row is gone
-    # (a trip deleted mid-read). Say so rather than returning a code that
-    # names nothing.
+    # Still NULL against the *current* row, so the UPDATE matched nothing
+    # because the row is gone (a trip deleted mid-read) — not because someone
+    # else won. Say so rather than returning a code that names nothing.
     raise KeyError(f"Trip {row.id} no longer exists")
 
 

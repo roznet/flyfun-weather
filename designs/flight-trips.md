@@ -571,7 +571,15 @@ read-modify-write. Two first-reads of the same trip can race (the web page and
 the app opened together); both would see NULL, mint different codes and write
 them. Last commit wins in the DB, but the loser has already *returned* its code
 — and a link built from it, pasted into a message, 404s for the recipient
-forever. One writer wins; the loser re-reads and returns the code that landed. `/api/trips/by-share/{code}` is the same resolution for a client
+forever. One writer wins; the loser re-reads and returns the code that landed.
+
+That re-read is `with_for_update=True`, for the same reason `trip_refresh.start`
+needs one: at MySQL's REPEATABLE READ the transaction's snapshot is fixed at its
+first consistent read, which the caller has already done, so a plain re-read
+would still see NULL and the loser would report the trip as gone — a 500 on the
+exact race the conditional UPDATE exists to survive. SQLite ignores `FOR UPDATE`,
+so **no test can catch its removal**; the reasoning in the docstring is the only
+guard. `/api/trips/by-share/{code}` is the same resolution for a client
 that holds the code rather than a URL bar; iOS routes it as
 `PendingNavigation.tripShare`, which needs `/t/*` in the domain's AASA `paths`
 (`deploy/weather.flyfun.aero.caddy`) deployed *before* the build that handles it.
