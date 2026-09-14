@@ -341,6 +341,50 @@ class TestShareCode:
         ).headers["location"] == f"/trip.html?id={created['id']}"
 
 
+class TestATripThatVanishesMidRequest:
+    def test_a_trip_deleted_while_minting_is_a_404_not_a_500(
+        self, owner, chain, app_db, monkeypatch,
+    ):
+        """The narrow window inside ``ensure_share_code``, answered honestly.
+
+        Its conditional UPDATE matches nothing and the row is still code-less
+        only when the trip was deleted between this request reading it and
+        minting. Letting the storage ``KeyError`` propagate would be a 500,
+        which says the server broke; nothing did. 404 is what every other
+        missing-trip path answers.
+        """
+        from weatherbrief.db.models import FlightTripRow
+        import weatherbrief.storage.trips as trip_storage
+
+        created = owner.post(
+            "/api/trips", json={"flight_ids": [f.id for f in chain]},
+        ).json()
+        s = app_db()
+        s.get(FlightTripRow, created["id"]).share_code = None
+        s.commit()
+        s.close()
+
+        real_allocate = trip_storage.allocate_share_code
+
+        def _delete_then_allocate(session):
+            # Stands in for a concurrent DELETE landing between the read and
+            # the mint — the only way to reach the raise.
+            session.execute(
+                FlightTripRow.__table__.delete().where(
+                    FlightTripRow.id == created["id"]
+                )
+            )
+            session.flush()
+            return real_allocate(session)
+
+        monkeypatch.setattr(
+            trip_storage, "allocate_share_code", _delete_then_allocate,
+        )
+
+        r = owner.get(f"/api/trips/{created['id']}")
+        assert r.status_code == 404, f"expected 404, got {r.status_code}: {r.text}"
+
+
 class TestFollowingASharedTrip:
     def test_subscribing_adds_every_leg_to_the_friends_list(
         self, friend, trip, chain,

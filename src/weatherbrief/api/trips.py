@@ -342,6 +342,23 @@ def subscribed_member_ids(
     return set(rows)
 
 
+def _share_code_or_404(db: Session, row: FlightTripRow | None) -> str | None:
+    """The trip's share code, 404-ing if the trip vanished while we minted it.
+
+    ``ensure_share_code`` raises ``KeyError`` when its conditional UPDATE
+    matches nothing and the row is still code-less — i.e. the trip was deleted
+    between this request reading it and minting. Left to propagate that is a
+    500, which claims the server broke; nothing did, the trip stopped existing
+    mid-request. 404 is the same answer every other missing-trip path gives.
+    """
+    if row is None:
+        return None
+    try:
+        return trip_storage.ensure_share_code(db, row)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+
 def _subscribed_to_all(db: Session, flight_ids: list[str], user_id: str) -> bool:
     """True when the viewer already follows every member leg."""
     if not flight_ids:
@@ -450,7 +467,7 @@ def _trip_to_response(
         refresh=trip_refresh.status(row) if row is not None else None,
         role="owner",
         # Minted lazily so a trip created before sharing existed still shares.
-        share_code=trip_storage.ensure_share_code(db, row) if row is not None else None,
+        share_code=_share_code_or_404(db, row),
         is_shareable=(
             shareable
             if shareable is not None

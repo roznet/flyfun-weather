@@ -581,6 +581,16 @@ exact race the conditional UPDATE exists to survive. SQLite ignores `FOR UPDATE`
 so **no test can catch its removal**; the reasoning in the docstring is the only
 guard.
 
+A trip deleted *while* a request mints its code is a **404, not a 500**.
+`ensure_share_code` raises `KeyError` (the storage idiom `delete_flight` and
+`subscribe_flight` use) and `_trip_to_response` translates it, so a vanished
+trip answers the same as every other missing-trip path. The branch that
+actually fires is the `refresh` failure, not the post-refresh guard — a gone
+row raises before any value can be read back — and because SQLAlchemy raises a
+bare `InvalidRequestError` there for some instance states, the handler
+re-queries for the row and only calls it gone when it really is. Otherwise a
+session bug would be dressed up as a missing trip.
+
 **Migration 096 carries the same `share_code IS NULL` guard on its own UPDATE**,
 and for a reason specific to how this is deployed: the sequence is
 `docker compose up -d --build && … alembic upgrade head`, so the new app is
