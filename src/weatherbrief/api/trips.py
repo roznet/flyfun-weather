@@ -669,7 +669,11 @@ def get_trip_by_share_code(
     holds the code rather than a URL bar. A code for a trip the caller may not
     read is a 404, indistinguishable from an unknown code.
 
-    Registered before ``/{trip_id}`` so the literal segment always wins.
+    Sits above ``/{trip_id}`` for readability only. It does **not** need to:
+    ``{trip_id}`` matches a single path segment, so a two-segment
+    ``/by-share/{code}`` cannot collide with it whatever the declaration order.
+    Said plainly because the opposite claim invites a future route to rely on
+    registration order for a disambiguation that was never happening.
     """
     if not SHARE_CODE_RE.match(code):
         raise HTTPException(status_code=404, detail="Unknown share link")
