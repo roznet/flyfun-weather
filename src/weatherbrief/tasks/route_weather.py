@@ -195,7 +195,6 @@ def run_route_weather(
     Returns:
         RouteObservations with per-airport METAR/TAF data.
     """
-    from euro_aip.briefing.weather.analysis import WeatherAnalyzer
     from euro_aip.briefing.weather.route_weather import RouteWeatherService
 
     from weatherbrief.airports import _load_airport_model
@@ -266,22 +265,9 @@ def run_route_weather(
         taf = raw.latest_taf
         if taf is not None:
             obs.has_taf = True
-            obs.taf_raw = taf.raw_text
-            applicable = WeatherAnalyzer.find_applicable_taf(taf, airport_time)
-            if applicable is not None:
-                if applicable.flight_category is not None:
-                    obs.taf_flight_category_at_eta = applicable.flight_category.value
-                    obs.taf_trend_type = applicable.trend_type
-                    taf_categories.append(applicable.flight_category.value)
-                obs.taf_wind_dir = applicable.wind_direction
-                obs.taf_wind_speed_kt = applicable.wind_speed
-                obs.taf_wind_gust_kt = applicable.wind_gust
-                obs.taf_applicable_text = applicable.raw_text
-
-            # Build list of applicable TAF line indices for highlighting
-            obs.taf_applicable_lines = _applicable_taf_lines(
-                taf, airport_time,
-            )
+            _apply_taf_at_eta(obs, taf, airport_time)
+            if obs.taf_flight_category_at_eta is not None:
+                taf_categories.append(obs.taf_flight_category_at_eta)
 
         airports.append(obs)
 
@@ -329,12 +315,59 @@ def run_route_weather(
         fetch_time=datetime.now(timezone.utc),
         airports_found=len(airports),
         airports_with_metar=sum(1 for a in airports if a.has_metar),
-        airports_with_taf=sum(1 for a in airports if a.has_taf),
+        # Count TAFs that say something about the flight, not expired ones.
+        airports_with_taf=sum(1 for a in airports if a.has_taf and a.taf_valid_at_eta),
         airports=airports,
         worst_metar_category=_worst_category(metar_categories),
         worst_taf_category=_worst_category(taf_categories),
         phenomena_along_route=unique_phenomena,
     )
+
+
+def _apply_taf_at_eta(obs: AirportObservation, taf, eta: datetime) -> None:
+    """Fill ``obs``'s TAF fields from ``taf`` read at the airport's ETA.
+
+    Reads the TAF the way a pilot does (euro_aip ``taf_conditions_at``):
+    prevailing conditions with BECMG/FM applied, the worst TEMPO/PROB group
+    at ETA, and significant weather. A TAF whose validity does not contain
+    the ETA keeps its raw text and validity window, and leaves every at-ETA
+    field empty (#610).
+    """
+    from euro_aip.briefing.weather.analysis import WeatherAnalyzer
+
+    obs.taf_raw = taf.raw_text
+    obs.taf_valid_from = taf.validity_start
+    obs.taf_valid_to = taf.validity_end
+    conditions = WeatherAnalyzer.taf_conditions_at(taf, eta)
+    obs.taf_valid_at_eta = conditions is not None
+    if conditions is None:
+        return
+
+    prevailing = conditions.prevailing
+    if prevailing.flight_category is not None:
+        obs.taf_prevailing_category_at_eta = prevailing.flight_category.value
+    if conditions.temporary_is_worse:
+        worst = conditions.worst_temporary
+        obs.taf_temporary_category_at_eta = worst.flight_category.value
+        obs.taf_temporary_type = WeatherAnalyzer.trend_label(worst)
+        obs.taf_trend_type = obs.taf_temporary_type
+    elif conditions.prevailing_change is not None:
+        obs.taf_trend_type = conditions.prevailing_change.trend_type
+    if conditions.flight_category is not None:
+        obs.taf_flight_category_at_eta = conditions.flight_category.value
+    obs.taf_significant_weather = list(conditions.significant_weather)
+
+    # Strongest wind at ETA (prevailing on ties) — a TEMPO gust is what the
+    # runway crosswind advisory needs to see.
+    wind = max(
+        [prevailing, *conditions.temporary],
+        key=lambda r: max(r.wind_gust or 0, r.wind_speed or 0),
+    )
+    obs.taf_wind_dir = wind.wind_direction
+    obs.taf_wind_speed_kt = wind.wind_speed
+    obs.taf_wind_gust_kt = wind.wind_gust
+
+    obs.taf_applicable_lines = _applicable_taf_lines(taf, eta)
 
 
 def _classify_discrepancy(

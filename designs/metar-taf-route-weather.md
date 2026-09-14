@@ -64,9 +64,10 @@ surfaces rather than being swallowed as a fetch failure.
 
 `AirportObservation` stores flat, serializable METAR/TAF fields (no euro_aip `WeatherReport` objects):
 - METAR: raw text, flight category, ceiling, visibility, wind (dir/speed/gust), weather phenomena, temp, dewpoint, QNH
-- TAF: raw text, flight category at ETA, applicable trend type, wind (dir/speed/gust)
+- TAF: raw text, validity window + `taf_valid_at_eta` (False for an expired / not-yet-valid TAF: raw kept, every at-ETA field empty; None on pre-#610 packs), flight category at ETA (worse of prevailing and temporary), `taf_prevailing_category_at_eta`, `taf_temporary_category_at_eta` + `taf_temporary_type` (only when the TEMPO/PROB group is worse), `taf_significant_weather`, trend type behind the category, wind (strongest of prevailing/temporary)
+- `AirportObservation.taf_at_eta_line()` — the one shared TAF line for both digests: `TAF at ETA [VFR], TEMPO [IFR] (CB)`, or `TAF: none valid at ETA (latest TAF valid 11/15Z-11/17Z)`; pre-#610 packs keep the legacy `TAF at ETA [IFR] (TEMPO)`
 - Wind advisories: `metar_wind_advisory`, `taf_wind_advisory` — lowercase `green`/`amber`/`red` (from `_wind_advisory_status()`) — with best runway and crosswind values
-- TAF highlighting: `taf_applicable_lines: list[int]` — line indices for base + applicable BECMG/TEMPO groups
+- TAF highlighting: `taf_applicable_lines: list[int]` — line indices for base + applicable BECMG/TEMPO groups (empty when the TAF is not valid at ETA)
 - ETA: `eta_hour_offset: int | None` — rounded hours after departure (from enroute distance interpolation)
 - Metadata: ICAO, distance from route, enroute distance, nearest waypoint
 
@@ -88,7 +89,7 @@ Added to `ForecastSnapshot` as `route_observations: RouteObservations | None`.
 2. Call `RouteWeatherService().fetch_route_weather(route_icaos, corridor_nm, model)`
 3. For each `RouteAirportWeather`, compute per-airport ETA via `_interpolate_airport_time(departure, duration, enroute_dist, total_dist)` — uses `enroute_distance_nm` from euro_aip spatial query and `flight_duration_hours` from `RouteConfig`
 4. Extract structured fields into `AirportObservation`, including `eta_hour_offset` (rounded hours)
-5. For TAFs, use `WeatherAnalyzer.find_applicable_taf(taf, airport_time)` to get active group at the interpolated ETA (not departure)
+5. For TAFs, `_apply_taf_at_eta` reads the TAF at the interpolated ETA (not departure) with euro_aip `WeatherAnalyzer.taf_conditions_at`: nothing when the TAF's validity does not contain the ETA; otherwise prevailing (main body + completed BECMG / started FM, worse-of while a BECMG is in transition), the worst TEMPO/PROB group laid over prevailing, and significant weather. Reasoning in [meteorology-decisions.md §32](meteorology-decisions.md). `airports_with_taf` / `worst_taf_category` count only TAFs valid at ETA
 6. Map each airport to nearest waypoint via cumulative great-circle distance
 
 ### Comparison (`run_observation_comparison`)
@@ -116,9 +117,9 @@ Two callers share this seam:
 
 ### Digest Integration
 
-**LLM prompt** (`digest/prompt_builder.py`): `=== METAR/TAF OBSERVATIONS ===` section between MODEL COMPARISON and TEXT FORECASTS. Includes per-airport METAR raw + category, TAF at ETA, and comparison annotations for non-confirming airports.
+**LLM prompt** (`digest/prompt_builder.py`): `=== METAR/TAF OBSERVATIONS ===` section between MODEL COMPARISON and TEXT FORECASTS. Includes per-airport METAR raw + category, the `taf_at_eta_line()` reading, and comparison annotations for non-confirming airports. No raw TAF text reaches the LLM — the line is the whole TAF signal, which is why expiry and group selection are decided in code.
 
-**Text digest** (`digest/text.py`): `--- METAR/TAF Observations ---` section with summary stats, per-airport METAR/TAF lines, and conflict flags.
+**Text digest** (`digest/text.py`): `--- METAR/TAF Observations ---` section with summary stats, per-airport METAR lines + `taf_at_eta_line()`, and conflict flags.
 
 ### Web UI (`briefing-ui.ts`)
 
