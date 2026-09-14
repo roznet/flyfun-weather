@@ -125,3 +125,44 @@ def test_run_dwd_charts_analysis_5xx_marks_unavailable(tmp_path: Path):
     assert result.in_coverage is True
     assert result.within_horizon is False
     assert result.run_cycle is None
+
+
+def _seed_split_run_responses():
+    """Analysis rolled to 18Z; the forecasts are the 00Z run, published 05:18."""
+    for cid in CHART_IDS:
+        lm = "Mon, 14 Sep 2026 18:30:00 GMT" if cid == "ana" else "Mon, 14 Sep 2026 05:18:13 GMT"
+        responses.add(
+            responses.GET,
+            f"{DWD_BASE_URL}/{_FILENAMES[cid]}",
+            body=_PNG,
+            status=200,
+            headers={"Last-Modified": lm, "ETag": f'"{cid}-1"'},
+        )
+
+
+@responses.activate
+def test_run_dwd_charts_defaults_by_the_forecasts_own_run(tmp_path: Path):
+    _seed_split_run_responses()
+    # 18Z two days on: +60h of the 00Z run (valid 12Z) is nearest. The cycle key
+    # plus offset would have picked +48h, valid 00Z that day.
+    result = run_dwd_charts(
+        route=_eu_route(),
+        departure_time=datetime(2026, 9, 16, 18, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+    )
+    assert result.run_cycle == "2026-09-14T18Z"
+    assert result.default_chart_id == "060"
+
+
+@responses.activate
+def test_run_dwd_charts_horizon_ends_at_the_forecast_runs_108h(tmp_path: Path):
+    _seed_split_run_responses()
+    # 00Z run + 108h = 18 Sep 12Z. The cycle key (18Z) + 108h would still have
+    # admitted this 19 Sep 06Z departure.
+    result = run_dwd_charts(
+        route=_eu_route(),
+        departure_time=datetime(2026, 9, 19, 6, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+    )
+    assert result.in_coverage is True
+    assert result.within_horizon is False

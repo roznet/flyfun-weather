@@ -2657,9 +2657,10 @@ interface ChartSource {
    * Caption prefix for a given chart, replacing the default "Issued Nh ago".
    * TEMSI needs this: its charts carry no meaningful issue time (AEROWEB
    * reports date_run == date_echeance), so what matters — and what the tab
-   * selects — is the validity, not how old the run is.
+   * selects — is the validity, not how old the run is. Returning null keeps
+   * the default for that chart.
    */
-  captionFor?: (chartId: string) => string;
+  captionFor?: (chartId: string) => string | null;
 }
 
 function makeDwdSource(flight: FlightResponse, pack: PackMeta): ChartSource {
@@ -2672,6 +2673,15 @@ function makeDwdSource(flight: FlightResponse, pack: PackMeta): ChartSource {
     chartUrl: (id) => api.dwdChartUrl(flight.id, pack.fetch_timestamp, id),
     overlayUrl: () => api.dwdChartOverlayUrl(flight.id, pack.fetch_timestamp),
     overlayKeyFor: (id) => (id === 'ana' ? 'analysis' : 'icon'),
+    // Forecast charts come from their own ICON run, not the analysis cycle the
+    // pack records — name that run and when the chart is valid.
+    captionFor: (id) => {
+      const t = pack.dwd_charts_times?.[id];
+      if (!t) return null;
+      const valid = formatUtcCaption(new Date(t.valid_time));
+      const run = formatUtcCaption(new Date(t.init_time));
+      return `Valid ${valid} · ICON ${run} run +${t.lead_h}h · `;
+    },
     attributionHtml: `Source: <a href="${DWD_PAGE_URL}" target="_blank" rel="noopener">Deutscher Wetterdienst (DWD)</a>, CC BY 4.0`,
   };
 }
@@ -2892,8 +2902,9 @@ function mountChartPanel(el: HTMLElement, sources: ChartSource[]): void {
       };
 
       let issuedCaption = '';
-      if (src.captionFor) {
-        issuedCaption = escapeHtml(src.captionFor(chartId));
+      const customCaption = src.captionFor ? src.captionFor(chartId) : null;
+      if (customCaption !== null) {
+        issuedCaption = escapeHtml(customCaption);
       } else if (issuedDate) {
         const ago = formatHoursAgo(Date.now() - issuedDate.getTime());
         issuedCaption = `Issued ${ago} (${escapeHtml(formatUtcCaption(issuedDate))}) · `;

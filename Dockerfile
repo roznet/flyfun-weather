@@ -9,8 +9,9 @@ RUN npm run build
 # Stage 2: Python application
 FROM python:3.13-slim
 
-# System deps for weasyprint (PDF generation)
-# and eccodes (GRIB2 decoding via cfgrib)
+# System deps for weasyprint (PDF generation),
+# eccodes (GRIB2 decoding via cfgrib)
+# and tesseract (reading the model run off DWD forecast charts)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
@@ -18,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libcairo2 \
     libeccodes-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 2000 to match infra convention)

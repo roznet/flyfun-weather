@@ -75,6 +75,10 @@ dependencies = [
     # via matplotlib today, but imported directly by observed/imagery.py — the
     # same reason pyproj is pinned explicitly above.
     "Pillow>=10.0",
+    # Reads the ICON run + lead off DWD forecast charts (fetch/dwd_chart_stamp.py).
+    # Needs the tesseract binary (apt tesseract-ocr); without it the times fall
+    # back to each chart's Last-Modified.
+    "pytesseract>=0.3.10",
 ]
 
 [project.optional-dependencies]

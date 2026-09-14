@@ -510,6 +510,15 @@ def _provider_label(source: str) -> str:
     return source.split(":", 1)[-1].title()
 
 
+class ChartTimeResponse(BaseModel):
+    """A forecast chart's model run and valid time (ISO 8601 Z)."""
+
+    init_time: str
+    lead_h: int
+    valid_time: str
+    time_source: str  # "ocr" | "last_modified"
+
+
 class PackMetaResponse(BaseModel):
     """Pack metadata in API responses."""
 
@@ -550,6 +559,11 @@ class PackMetaResponse(BaseModel):
     dwd_charts_default_id: str | None = None
     dwd_charts_in_coverage: bool = False
     dwd_charts_within_horizon: bool = False
+    # Per forecast chart id: the ICON run it was drawn from and its valid time,
+    # read off the chart at refresh. Not stored on the pack — looked up in the
+    # shared cache the bytes come from. Empty when the cycle predates stamping
+    # or was evicted; the caption then falls back to "Issued Xh ago".
+    dwd_charts_times: dict[str, ChartTimeResponse] = Field(default_factory=dict)
     # Met Office surface-pressure charts — second front-chart source.
     # ``metoffice_charts_public`` is env-derived (same for all users); the
     # frontend shows the source toggle when (admin OR this flag).
@@ -611,6 +625,20 @@ def _live_meteofrance_options(
     return live, default
 
 
+def _dwd_chart_times(meta: BriefingPackMeta) -> dict[str, ChartTimeResponse]:
+    """The pack's DWD forecast charts' run and valid times, from the shared cache."""
+    if not meta.dwd_charts_run_cycle:
+        return {}
+
+    from weatherbrief.fetch.dwd_charts import forecast_stamps
+
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    return {
+        cid: ChartTimeResponse(**stamp.to_meta())
+        for cid, stamp in forecast_stamps(data_dir, meta.dwd_charts_run_cycle).items()
+    }
+
+
 def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
@@ -645,6 +673,7 @@ def _meta_to_response(
         dwd_charts_default_id=meta.dwd_charts_default_id,
         dwd_charts_in_coverage=meta.dwd_charts_in_coverage,
         dwd_charts_within_horizon=meta.dwd_charts_within_horizon,
+        dwd_charts_times=_dwd_chart_times(meta),
         metoffice_charts_run_cycle=meta.metoffice_charts_run_cycle,
         metoffice_charts_default_id=meta.metoffice_charts_default_id,
         metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
