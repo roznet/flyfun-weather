@@ -330,7 +330,10 @@ def _build_observation(
     if metar.flight_category is not None:
         obs.flight_category = metar.flight_category.value
 
-    if taf is not None:
+    # A TAF whose validity does not contain the observation is not a forecast
+    # for it — aviationweather.gov hands back the latest TAF however old, so
+    # scoring it against this METAR would grade an expired forecast (#610).
+    if taf is not None and WeatherAnalyzer.taf_covers(taf, _as_utc(metar.observation_time)):
         obs.taf_raw = taf.raw_text
         if taf.observation_time is not None:
             # `_as_utc` here is load-bearing, not belt-and-braces: this

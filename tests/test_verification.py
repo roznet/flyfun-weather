@@ -595,12 +595,15 @@ class TestFetchObservationsBatchNormalisesParserTimes:
     covering it — and nothing exercised that call site until this test.
     """
 
-    def _run(self, taf_issue_time):
+    def _run(self, taf_issue_time, valid_hours=(-6, 18)):
         now = datetime.now(timezone.utc)
         metar = _fake_metar(now - timedelta(minutes=20))
         taf = SimpleNamespace(
             observation_time=taf_issue_time,
             raw_text="TAF EGTK 011100Z 0112/0212 27010KT 9999 FEW040",
+            # Only a TAF valid at the METAR's time is attached (#610).
+            validity_start=now + timedelta(hours=valid_hours[0]),
+            validity_end=now + timedelta(hours=valid_hours[1]),
         )
         airport = _fake_airport("EGTK", [metar], taf=taf)
 
@@ -641,6 +644,17 @@ class TestFetchObservationsBatchNormalisesParserTimes:
         observations = self._run(aware)
 
         assert observations[0].taf_issue_time == aware
+
+    def test_expired_taf_is_not_attached(self):
+        """A TAF whose validity ended before the METAR is not scored against it (#610)."""
+        issued = datetime.now(timezone.utc) - timedelta(days=2)
+
+        observations = self._run(issued, valid_hours=(-47, -45))
+
+        assert len(observations) == 1
+        assert observations[0].metar_raw is not None
+        assert observations[0].taf_raw is None
+        assert observations[0].taf_issue_time is None
 
 
 class TestStoreObservationsSurvivesBadValue:

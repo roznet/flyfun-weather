@@ -357,8 +357,7 @@ def _format_route_observations(obs: RouteObservations) -> list[str]:
         if apt.metar_raw:
             lines.append(f"    METAR: {apt.metar_raw}")
         if apt.has_taf:
-            taf_cat = f" [{apt.taf_flight_category_at_eta}]" if apt.taf_flight_category_at_eta else ""
-            lines.append(f"    TAF at ETA{taf_cat}")
+            lines.append(f"    {apt.taf_at_eta_line()}")
 
     for comp in obs.comparisons:
         if comp.category_match != "CONFIRMING":

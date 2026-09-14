@@ -229,7 +229,7 @@ def _resolve_airport_coords(icao: str, airports_db_path: str) -> tuple[float, fl
     from weatherbrief.airports import _load_airport_model
 
     model = _load_airport_model(airports_db_path)
-    apt = model.airports.get(icao)
+    apt = model.find_airport_by_code(icao)
     if apt is None:
         return None
     # euro_aip's Airport model field name varies — try common spellings.

@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-09-11",
+    "title": "iOS 1.8 — Trips, observed conditions and a new layer bar",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- Trips: flights you group into a trip on the web now appear together in your flight list, with the trip's remaining legs gathered under it. The trip screen shows which leg is most likely to decide the whole trip (often the return) and refreshes every leg with one tap.\n- A new layer bar on the cross-section. Turn layers on and off right on the chart and compare without a sheet getting in the way, with a layout made for iPad and a full-screen view in iPhone landscape. Focus and Emulate presets now work together instead of cancelling each other.\n- Observed conditions on the cross-section: satellite-measured cloud tops, and optionally radar echoes and lightning, drawn over the forecast with how old each source is. Refreshing on the day of the flight brings them up to date.\n- Scrolling over the cross-section scrolls the page again. Drag sideways or press and hold to scrub along the route.\n- Advisory summaries now quote the model reporting the largest affected stretch, and convection that can't be shown to be avoidable no longer leaves VFR feasibility green. Storm cells of unknown height are no longer drawn as full-height towers; estimated tops are shown dashed.\n- Fewer spurious severe clear-air turbulence reports near the ground at night, now that the boundary-layer height comes from the model's own diagnosis.\n- Model Comparison shows the unit on every row, and the model's own freezing level is now given in feet like every other altitude."
+  }
+]

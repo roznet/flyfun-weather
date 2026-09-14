@@ -680,7 +680,6 @@ export interface AirportObservation {
   taf_wind_dir: number | null;
   taf_wind_speed_kt: number | null;
   taf_wind_gust_kt: number | null;
-  taf_applicable_text: string | null;
   taf_applicable_lines: number[];
   metar_wind_advisory: string | null;
   metar_best_runway_id: string | null;

@@ -320,6 +320,8 @@ Forecast cycles do Open-Meteo (+ECMWF GRIB) fetch, sounding enrichment, and GRIB
 
 The **committed `configs/airport_watchlist.json` is the operational source of truth**, not `DEFAULT_PREFIXES` — the loop reads the file, `discover` rewrites it. Currently ~620 ICAOs (an airport only lands in the file if aviationweather actually returned a METAR for it, so the file is much smaller than the prefix candidate set). Quote the file's count, not the prefix list, when reasoning about scale.
 
+**An airport's METAR can be issued under a code it is no longer stored under.** nav.db stores airports under their current ICAO code and keeps a superseded one as `alt_ident` (euro_aip 0.16.0): Logroño is `LERJ` in the Spanish AIP but its METAR/TAF are still issued as `LELO`. `discover_airports` therefore asks aviationweather for both codes and counts a report under `alt_ident` as the airport reporting; `load_watchlist_with_coords` accepts either code and returns the current one, so an older watchlist entry keeps working; and euro_aip's `RouteWeatherService` does the same for the observation fetch. Verification rows for such an airport are keyed by the current code from then on — Logroño's earlier rows sit under `LELO`.
+
 Only the EU region is onboarded. `run_standalone_cycle(region=...)` accepts `eu|us|all`, but `us` raises — a US watchlist and model set would have to be added first (see the US-expansion work).
 
 ### Standalone Cycle Flow

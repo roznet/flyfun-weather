@@ -58,6 +58,8 @@ def test_resolve_waypoints_navaid_gets_kind_not_a_name(mock_load):
     gwc = MagicMock(latitude=50.8553, longitude=-0.7567)
     sitet = MagicMock(latitude=50.1, longitude=0.0)
     fake_route = MagicMock()
+    fake_route.departure = "EGTK"
+    fake_route.destination = "LSGS"
     fake_route.departure_coords = (51.8361, -1.32)
     fake_route.destination_coords = (46.2192, 7.3267)
     fake_route.waypoints = ["GWC", "SITET"]
@@ -103,6 +105,8 @@ def test_resolve_waypoints_unknown_kind_falls_back_to_code(mock_load):
 
     mystery = MagicMock(latitude=49.0, longitude=3.0)
     fake_route = MagicMock()
+    fake_route.departure = "EGTK"
+    fake_route.destination = "LSGS"
     fake_route.departure_coords = (51.8361, -1.32)
     fake_route.destination_coords = (46.2192, 7.3267)
     fake_route.waypoints = ["ZAPPO"]
@@ -132,6 +136,8 @@ def test_resolve_waypoints_rejects_off_route_middle(mock_load):
     mock_load.return_value = mock_model(airports)
 
     fake_route = MagicMock()
+    fake_route.departure = "EGTK"
+    fake_route.destination = "LSGS"
     fake_route.departure_coords = (51.8361, -1.32)
     fake_route.destination_coords = (46.2192, 7.3267)
     fake_route.waypoints = []  # ABB rejected — not in resolved middles
@@ -172,6 +178,8 @@ def test_resolve_waypoints_unknown_middle_goes_to_rejected(mock_load):
     mock_load.return_value = mock_model(airports)
 
     fake_route = MagicMock()
+    fake_route.departure = "EGTK"
+    fake_route.destination = "LSGS"
     fake_route.departure_coords = (51.8361, -1.32)
     fake_route.destination_coords = (46.2192, 7.3267)
     fake_route.waypoints = []  # IFR neither placed nor rejected
@@ -188,6 +196,28 @@ def test_resolve_waypoints_unknown_middle_goes_to_rejected(mock_load):
 
     assert rejected == [RejectedWaypoint(name="IFR", reason="unknown")]
     assert [wp.icao for wp in result] == ["EGTK", "LSGS"]
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_previous_code_resolves_to_current(mock_load):
+    """An airport typed by the code it was previously listed under (Logroño's
+    LELO) resolves, and is stored under its current code (LERJ), whether it is
+    an endpoint or a middle point — and a middle is not reported unknown."""
+    airports = {
+        "LEMD": mock_airport("LEMD", "Madrid Barajas", 40.4719, -3.5626),
+        "LERJ": mock_airport("LERJ", "Logroño-Agoncillo", 42.4610, -2.3222, alt_ident="LELO"),
+        "LFBO": mock_airport("LFBO", "Toulouse Blagnac", 43.6291, 1.3638),
+    }
+    mock_load.return_value = mock_model(airports)
+
+    result, rejected = resolve_waypoints(["LELO", "LFBO"], "/fake/db.sqlite")
+    assert rejected == []
+    assert [wp.icao for wp in result] == ["LERJ", "LFBO"]
+    assert result[0].name == "Logroño-Agoncillo"
+
+    result, rejected = resolve_waypoints(["LEMD", "LELO", "LFBO"], "/fake/db.sqlite")
+    assert rejected == []
+    assert [wp.icao for wp in result] == ["LEMD", "LERJ", "LFBO"]
 
 
 @patch("weatherbrief.airports._load_airport_model")

@@ -16,7 +16,9 @@ dependencies = [
     # timestamp inference (#519). Anything older silently mis-dates reports
     # collected just after a month rolls over, and lacks the kwarg the
     # verification repair script needs.
-    "euro-aip>=0.15.1",
+    # 0.16.0 stores airports under their current ICAO code (Enstone EGTN was
+    # missing; Logroño is LERJ) and resolves the previous code via alt_ident.
+    "euro-aip>=0.17.0",
     "metpy>=1.5",
     "numpy>=1.24",
     "matplotlib>=3.7",
