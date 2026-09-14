@@ -59,7 +59,19 @@ def upgrade() -> None:
             code = _gen_code()
         used.add(code)
         bind.execute(
-            sa.update(trips).where(trips.c.id == trip_id).values(share_code=code)
+            sa.update(trips)
+            # ``share_code IS NULL`` as well as the id, for the same reason
+            # ``storage/trips.py::ensure_share_code`` needs it. The deploy
+            # sequence (designs/multi-user-deployment.md) is
+            # ``docker compose up -d --build && … alembic upgrade head``: the
+            # new app is already serving, lazy mint included, while this runs.
+            # A request that mints a code for one of these rows between the
+            # SELECT above and this UPDATE would otherwise be silently
+            # overwritten — and a link copied out in that window 404s for its
+            # recipient forever. Conditional, this is a no-op on any row the
+            # app has already claimed.
+            .where(trips.c.id == trip_id, trips.c.share_code.is_(None))
+            .values(share_code=code)
         )
 
 
