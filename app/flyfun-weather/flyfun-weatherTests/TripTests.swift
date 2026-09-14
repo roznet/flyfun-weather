@@ -817,6 +817,37 @@ struct TripSharedViewModelTests {
         #expect(model.trip?.isOwned == false)
     }
 
+    @Test("An unrecognised role degrades to a viewer, never to an owner")
+    func unknownRoleIsNotTreatedAsOwner() throws {
+        // `isOwned` was `role != .viewer`, which is *true* for `.unknown` — the
+        // opposite of the safe default this enum exists for. Every owner gate
+        // reads it, so a role a future server sends and this build does not know
+        // would have offered refresh (admitted against, and billed to, the real
+        // owner's slots), rename, delete and unlink.
+        let json = Data("""
+        {"id":"t","user_id":"u1","name":"Trip","role":"co_owner",
+         "summary":{"trip_id":"t"}}
+        """.utf8)
+        let trip = try JSONDecoder.weatherBrief.decode(TripResponse.self, from: json)
+
+        #expect(trip.role == .unknown)
+        #expect(trip.isOwned == false)
+    }
+
+    @Test("A server predating sharing still yields an owned trip")
+    func absentRoleIsOwner() throws {
+        // Distinct from `.unknown`: no `role` key at all. Such a server only
+        // ever returned the caller's own trips, so defaulting to viewer would
+        // strip the controls off every trip the pilot owns.
+        let json = Data("""
+        {"id":"t","user_id":"u1","name":"Trip","summary":{"trip_id":"t"}}
+        """.utf8)
+        let trip = try JSONDecoder.weatherBrief.decode(TripResponse.self, from: json)
+
+        #expect(trip.role == .owner)
+        #expect(trip.isOwned)
+    }
+
     @Test("Following a shared trip subscribes to it and re-reads")
     func followSubscribes() async {
         let (model, repo) = await sharedModel()
