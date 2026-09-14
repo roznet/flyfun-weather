@@ -396,7 +396,8 @@ def _trip_to_response(
     viewer_id: str | None = None,
     role: Literal["owner", "viewer"] = "owner",
     shareable: bool | None = None,
-) -> TripResponse:
+    missing_ok: bool = False,
+) -> TripResponse | None:
     """The wire payload, narrowed to what ``role`` is allowed to see.
 
     A viewer gets the chain and the legs — the whole point of the share — and
@@ -414,6 +415,12 @@ def _trip_to_response(
     ``shareable`` lets a caller with many trips pass the answer in from one
     batched ``shareable_trip_ids`` rather than have this run a grouped query per
     trip — the N+1 the batched helper exists to avoid. Omitted, it is looked up.
+
+    ``missing_ok`` returns ``None`` instead of raising when the trip is deleted
+    mid-request. A single-trip endpoint wants the 404 (the thing the caller
+    asked for is gone); a *list* does not — one trip pruned by another tab
+    would otherwise fail the whole response and take the caller's other,
+    perfectly healthy trips with it. Only the list passes it.
     """
     from weatherbrief.api import trip_refresh
 
@@ -442,6 +449,13 @@ def _trip_to_response(
             ),
         )
 
+    try:
+        share_code = _share_code_or_404(db, row)
+    except HTTPException:
+        if missing_ok:
+            return None
+        raise
+
     stale = bool(trip.ai_summary_text) and trip.ai_summary_key != ai_summary_key(leg_inputs)
     # The consent gate applies to *reads* too, not just to generation. Turning
     # AI off on a leg touches no pack, so the key is unchanged and `stale` is
@@ -467,7 +481,7 @@ def _trip_to_response(
         refresh=trip_refresh.status(row) if row is not None else None,
         role="owner",
         # Minted lazily so a trip created before sharing existed still shares.
-        share_code=_share_code_or_404(db, row),
+        share_code=share_code,
         is_shareable=(
             shareable
             if shareable is not None
@@ -629,10 +643,15 @@ def list_trips(
     # is the N+1 ``shareable_trip_ids`` was made batched to avoid, and the list
     # endpoint is the only caller that holds more than one trip.
     shareable = trip_storage.shareable_trip_ids(db, [t.id for t in trips])
-    return [
-        _trip_to_response(db, trip, shareable=trip.id in shareable)
+    # ``missing_ok``: a trip deleted between listing and rendering (another tab,
+    # or ``prune_empty_trips`` firing on a flight delete) drops out of the list
+    # rather than 404-ing the whole response. The single-trip endpoints keep the
+    # 404 — there, the vanished trip *is* what was asked for.
+    rendered = [
+        _trip_to_response(db, trip, shareable=trip.id in shareable, missing_ok=True)
         for trip in trips
     ]
+    return [r for r in rendered if r is not None]
 
 
 @router.post("", response_model=TripResponse, status_code=201)

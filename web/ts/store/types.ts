@@ -203,7 +203,11 @@ export interface TripResponse {
   ai_summary_stale: boolean;
   refresh: TripRefreshStatus | null;
   /** Who is asking. `viewer` opened a share link: read-only, and every owner
-   *  control (refresh, rename, delete, unlink) must be left off the page. */
+   *  control (refresh, rename, delete, unlink) must be left off the page.
+   *
+   *  Narrow the *positive* case when reading this (`=== 'owner'`), never the
+   *  negative (`!== 'viewer'`): the union is what today's server sends, not a
+   *  runtime guarantee, so a role added later must not be mistaken for owner. */
   role: 'owner' | 'viewer';
   /** Viewer only, and only when the owner has set one. */
   owner_display_name: string | null;

@@ -21,6 +21,7 @@ import * as ui from './managers/trip-ui';
 import {
   copyTripShareLink, errorToMessage, redirectToLogin, renderUserInfo,
 } from './utils';
+import { isTripOwner } from './helpers/trip-role';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 
@@ -84,8 +85,14 @@ const ownerHandlers: ui.ControlHandlers = {
   onShare: handleShare,
 };
 
+/** Whether to offer the owner's controls on the trip currently loaded.
+ *
+ * The rule itself is `helpers/trip-role.ts`, shared and tested; this only
+ * applies it to module state. `!trip` keeps the pre-load default unchanged —
+ * nothing renders before the first fetch resolves.
+ */
 function isOwner(): boolean {
-  return !trip || trip.role !== 'viewer';
+  return !trip || isTripOwner(trip.role);
 }
 
 function renderLegRows(): void {

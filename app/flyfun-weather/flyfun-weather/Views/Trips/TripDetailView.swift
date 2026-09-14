@@ -292,6 +292,15 @@ struct TripSharedBanner: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+            // The web viewer says this in place of the controls it removes
+            // (`trips.viewerNote`). iOS removes the whole toolbar instead, which
+            // is *more* likely to read as a bug to a pilot who knows what their
+            // own trip screen looks like — so say why rather than leave the
+            // absence to be inferred.
+            Text("You are viewing a shared trip. Only its owner can refresh or edit it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             if trip.isSubscribed {
                 HStack(spacing: Theme.spacingS) {
                     Text(followedText)
