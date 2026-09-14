@@ -385,6 +385,53 @@ class TestATripThatVanishesMidRequest:
         assert r.status_code == 404, f"expected 404, got {r.status_code}: {r.text}"
 
 
+    def test_one_vanished_trip_does_not_fail_the_whole_list(
+        self, owner, chain, app_db, monkeypatch,
+    ):
+        """A trip deleted mid-request drops out; it does not 404 the list.
+
+        `GET /api/trips` renders each trip in turn, and the 404-on-vanish that
+        is right for a *single* trip would, inside the list, let one trip pruned
+        by another tab (or by `prune_empty_trips` on a flight delete) take the
+        caller's other, perfectly healthy trips down with it.
+        """
+        from weatherbrief.db.models import FlightTripRow
+        import weatherbrief.storage.trips as trip_storage
+
+        doomed = owner.post(
+            "/api/trips", json={"flight_ids": [chain[0].id], "name": "Doomed"},
+        ).json()
+        survivor = owner.post(
+            "/api/trips", json={"flight_ids": [chain[1].id], "name": "Survivor"},
+        ).json()
+
+        s = app_db()
+        s.get(FlightTripRow, doomed["id"]).share_code = None
+        s.commit()
+        s.close()
+
+        real_allocate = trip_storage.allocate_share_code
+
+        def _delete_doomed_then_allocate(session):
+            session.execute(
+                FlightTripRow.__table__.delete().where(
+                    FlightTripRow.id == doomed["id"]
+                )
+            )
+            session.flush()
+            return real_allocate(session)
+
+        monkeypatch.setattr(
+            trip_storage, "allocate_share_code", _delete_doomed_then_allocate,
+        )
+
+        r = owner.get("/api/trips")
+        assert r.status_code == 200, f"the list 404'd: {r.text}"
+        listed = {t["id"] for t in r.json()}
+        assert doomed["id"] not in listed
+        assert survivor["id"] in listed
+
+
 class TestFollowingASharedTrip:
     def test_subscribing_adds_every_leg_to_the_friends_list(
         self, friend, trip, chain,
