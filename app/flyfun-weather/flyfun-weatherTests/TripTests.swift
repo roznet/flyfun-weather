@@ -51,7 +51,10 @@ private enum TripFixture {
         bindingLegId: String? = nil,
         headline: String = "Sunday's LSGS → EGTF decides this trip.",
         aiSummary: String? = nil,
-        aiSummaryStale: Bool = false
+        aiSummaryStale: Bool = false,
+        role: TripRole = .owner,
+        ownerDisplayName: String? = nil,
+        isSubscribed: Bool = false
     ) -> TripResponse {
         TripResponse(
             id: id,
@@ -68,7 +71,10 @@ private enum TripFixture {
                 headline: headline
             ),
             aiSummary: aiSummary,
-            aiSummaryStale: aiSummaryStale
+            aiSummaryStale: aiSummaryStale,
+            role: role,
+            ownerDisplayName: ownerDisplayName,
+            isSubscribed: isSubscribed
         )
     }
 
@@ -741,5 +747,197 @@ struct TripDetailGoneTests {
         #expect(!model.isGone)
         #expect(model.trip != nil)
         #expect(model.actionError != nil)
+    }
+}
+
+// MARK: - A trip someone else shared
+
+/// What the trip screen may do with a trip it does not own.
+///
+/// The server refuses every owner action on someone else's trip, so none of
+/// this is a security boundary — it is about not *offering* actions that can
+/// only fail, and not spending the owner's money or the viewer's patience on
+/// requests that were never going to be answered.
+@Suite("A shared trip is read-only")
+@MainActor
+struct TripSharedViewModelTests {
+
+    private func sharedModel(
+        isSubscribed: Bool = false
+    ) async -> (TripDetailViewModel, MockBriefingRepository) {
+        let repo = MockBriefingRepository()
+        repo.tripResult = .success(TripFixture.trip(
+            legs: [TripFixture.leg(id: "a"), TripFixture.leg(id: "b")],
+            role: .viewer,
+            ownerDisplayName: "Alice Pilot",
+            isSubscribed: isSubscribed
+        ))
+        // `briefingRepository` passed deliberately: without it
+        // `pollActiveLegRefreshes` returns early on its own guard and the
+        // role check below would pass for the wrong reason.
+        let model = TripDetailViewModel(
+            tripId: "trip-1", repository: repo, briefingRepository: repo
+        )
+        await model.load()
+        return (model, repo)
+    }
+
+    @Test("A viewer's load never asks for the AI paragraph")
+    func viewerDoesNotPostForAi() async {
+        // The server withholds `aiSummary` from a viewer, so the "missing, ask
+        // for it" branch would fire on every open — against an endpoint that
+        // refuses them, for a paragraph the owner paid for under their own
+        // consent. `tripAiSummaryResult` is unstubbed, so a call would also
+        // throw and set `aiUnavailableReason`.
+        let (model, repo) = await sharedModel()
+        #expect(model.trip?.aiSummary == nil)
+        #expect(repo.tripAiSummaryCallCount == 0)
+        #expect(model.aiUnavailableReason == nil)
+    }
+
+    @Test("An owner's load still asks when the paragraph is missing")
+    func ownerStillPostsForAi() async {
+        // The guard above must key on the role, not on "aiSummary is nil".
+        let repo = MockBriefingRepository()
+        repo.tripResult = .success(TripFixture.trip(legs: [TripFixture.leg(id: "a")]))
+        repo.tripAiSummaryResult = .success(
+            TripAiSummaryResponse(tripId: "trip-1", text: "Sunday is the leg to watch.")
+        )
+        let model = TripDetailViewModel(tripId: "trip-1", repository: repo)
+        await model.load()
+
+        #expect(repo.tripAiSummaryCallCount == 1)
+        #expect(model.trip?.aiSummary == "Sunday is the leg to watch.")
+    }
+
+    @Test("A viewer is reported as not owning the trip")
+    func viewerIsNotOwner() async {
+        let (model, _) = await sharedModel()
+        #expect(model.isSharedWithMe)
+        #expect(model.trip?.isOwned == false)
+    }
+
+    @Test("Following a shared trip subscribes to it and re-reads")
+    func followSubscribes() async {
+        let (model, repo) = await sharedModel()
+        repo.subscribeTripResult = .success(TripSubscribeResponse(
+            tripId: "trip-1", changed: 2, totalLegs: 2, isSubscribed: true
+        ))
+        // The re-read is the point: `isSubscribed` is derived server-side from
+        // the legs, so the screen must take the server's answer rather than
+        // flipping a local flag that a leg added since would make a lie.
+        repo.tripResult = .success(TripFixture.trip(
+            legs: [TripFixture.leg(id: "a"), TripFixture.leg(id: "b")],
+            role: .viewer, ownerDisplayName: "Alice Pilot", isSubscribed: true
+        ))
+
+        await model.follow()
+
+        #expect(repo.subscribedTripIds == ["trip-1"])
+        #expect(model.trip?.isSubscribed == true)
+        #expect(model.actionError == nil)
+    }
+
+    @Test("A leg added since leaves the trip reported as unfollowed")
+    func followIsASnapshot() async {
+        let (model, repo) = await sharedModel()
+        repo.subscribeTripResult = .success(TripSubscribeResponse(
+            tripId: "trip-1", changed: 2, totalLegs: 2, isSubscribed: true
+        ))
+        // The owner added a third leg between the subscribe and the re-read;
+        // the server says so, and the screen must not overrule it.
+        repo.tripResult = .success(TripFixture.trip(
+            legs: [TripFixture.leg(id: "a"), TripFixture.leg(id: "b"),
+                   TripFixture.leg(id: "c")],
+            role: .viewer, ownerDisplayName: "Alice Pilot", isSubscribed: false
+        ))
+
+        await model.follow()
+
+        #expect(model.trip?.isSubscribed == false)
+    }
+
+    @Test("Unfollowing drops the legs and re-reads")
+    func unfollowUnsubscribes() async {
+        let (model, repo) = await sharedModel(isSubscribed: true)
+        repo.unsubscribeTripResult = .success(TripSubscribeResponse(
+            tripId: "trip-1", changed: 2, totalLegs: 2, isSubscribed: false
+        ))
+        repo.tripResult = .success(TripFixture.trip(
+            legs: [TripFixture.leg(id: "a"), TripFixture.leg(id: "b")],
+            role: .viewer, ownerDisplayName: "Alice Pilot", isSubscribed: false
+        ))
+
+        await model.unfollow()
+
+        #expect(repo.unsubscribedTripIds == ["trip-1"])
+        #expect(model.trip?.isSubscribed == false)
+    }
+
+    @Test("A failed follow says so and keeps the trip on screen")
+    func followFailureIsReported() async {
+        let (model, _) = await sharedModel()
+        // `subscribeTripResult` is unstubbed, so the call throws.
+        await model.follow()
+
+        #expect(model.actionError != nil)
+        #expect(model.trip != nil, "a failed follow is not a reason to blank the trip")
+        #expect(!model.isGone)
+    }
+
+    @Test("An owner cannot follow or unfollow their own trip")
+    func ownerCannotFollow() async {
+        // Guarded client-side as well as server-side (409): the button is never
+        // shown to an owner, so reaching here at all would be a bug — and it
+        // must not spend a request finding that out.
+        let repo = MockBriefingRepository()
+        repo.tripResult = .success(TripFixture.trip(legs: [TripFixture.leg(id: "a")],
+                                                    aiSummary: "Stored."))
+        let model = TripDetailViewModel(tripId: "trip-1", repository: repo)
+        await model.load()
+
+        await model.follow()
+        await model.unfollow()
+
+        #expect(repo.subscribedTripIds.isEmpty)
+        #expect(repo.unsubscribedTripIds.isEmpty)
+        #expect(model.actionError == nil)
+    }
+
+    @Test("A viewer never polls for leg refreshes")
+    func viewerDoesNotPollLegRefreshes() async {
+        // The poll reads the *caller's* active refreshes; a viewer has none for
+        // someone else's legs and cannot start one, so it could only ever
+        // intersect to empty.
+        let (model, repo) = await sharedModel()
+        repo.activeRefreshesResult = [
+            ActiveRefreshResponse(flightId: "a", status: "refreshing", stage: nil, detail: nil),
+        ]
+
+        await model.pollActiveLegRefreshes()
+
+        #expect(repo.activeRefreshesCallCount == 0)
+        #expect(model.refreshingLegIds.isEmpty)
+    }
+
+    @Test("An owner still polls for leg refreshes")
+    func ownerStillPollsLegRefreshes() async {
+        // The guard above must key on the role, not disable the poll outright.
+        let repo = MockBriefingRepository()
+        repo.tripResult = .success(TripFixture.trip(
+            legs: [TripFixture.leg(id: "a")], aiSummary: "Stored."
+        ))
+        repo.activeRefreshesResult = [
+            ActiveRefreshResponse(flightId: "a", status: "refreshing", stage: nil, detail: nil),
+        ]
+        let model = TripDetailViewModel(
+            tripId: "trip-1", repository: repo, briefingRepository: repo
+        )
+        await model.load()
+
+        await model.pollActiveLegRefreshes()
+
+        #expect(repo.activeRefreshesCallCount == 1)
+        #expect(model.refreshingLegIds == ["a"])
     }
 }

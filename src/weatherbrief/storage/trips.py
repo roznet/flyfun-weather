@@ -18,7 +18,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Literal
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import FlightRow, FlightTripRow
@@ -93,11 +93,38 @@ def ensure_share_code(session: Session, row: FlightTripRow) -> str:
     them, but a row restored from an older dump would not), and the column is
     nullable so a bare ``FlightTripRow(...)`` in a test still works. Minting
     lazily means no caller has to care which of those it is holding.
+
+    The mint is a **conditional UPDATE**, not a read-modify-write, because two
+    first-reads of the same trip can race (the web page and the iOS app opened
+    together, or two tabs). Both would see NULL, generate different codes and
+    write them; last commit wins in the DB, but the loser has already *returned*
+    its code — and a link built from it, pasted into a message, would 404 for
+    the recipient forever. ``WHERE share_code IS NULL`` makes exactly one writer
+    win; the loser re-reads and returns the code that actually landed.
     """
-    if not row.share_code:
-        row.share_code = allocate_share_code(session)
-        session.flush()
-    return row.share_code
+    if row.share_code:
+        return row.share_code
+
+    candidate = allocate_share_code(session)
+    result = session.execute(
+        update(FlightTripRow)
+        .where(FlightTripRow.id == row.id, FlightTripRow.share_code.is_(None))
+        .values(share_code=candidate)
+    )
+    session.flush()
+    if result.rowcount == 1:
+        # Keep the identity-mapped instance in step with the row we just wrote.
+        session.refresh(row, ["share_code"])
+        return row.share_code
+
+    # Someone else minted first. Their code is the real one.
+    session.refresh(row, ["share_code"])
+    if row.share_code:
+        return row.share_code
+    # The UPDATE matched nothing and the column is still NULL: the row is gone
+    # (a trip deleted mid-read). Say so rather than returning a code that
+    # names nothing.
+    raise KeyError(f"Trip {row.id} no longer exists")
 
 
 def lookup_trip_id_by_share_code(session: Session, code: str) -> str | None:
@@ -139,22 +166,15 @@ def load_trip(session: Session, trip_id: str, user_id: str) -> FlightTrip | None
     return _row_to_trip(row) if row else None
 
 
-def trip_share_state(session: Session, trip_id: str) -> tuple[int, int]:
-    """``(leg_count, private_leg_count)`` for one trip, in one query."""
-    total, private_count = session.execute(
-        select(
-            func.count(FlightRow.id),
-            func.sum(case((FlightRow.private.is_(True), 1), else_=0)),
-        ).where(FlightRow.trip_id == trip_id)
-    ).one()
-    return int(total or 0), int(private_count or 0)
+def shareable_trip_ids(session: Session, trip_ids: list[str]) -> set[str]:
+    """Which of ``trip_ids`` may be read by someone who does not own them.
 
-
-def is_shareable(session: Session, trip_id: str) -> bool:
-    """True when a trip may be read by someone who does not own it.
-
-    **All-or-nothing**, and that is the whole rule: a trip is shareable only
-    when it has at least one leg and *every* leg is shareable (not private).
+    **The single definition of the all-or-nothing rule**: a trip is shareable
+    only when it has at least one leg and *every* leg is shareable (not
+    private). Everything that gates on sharing — the trip read path, the
+    recipient's trip badge, the share button — resolves through here or through
+    :func:`is_shareable`, so the rule cannot be tightened in one place and
+    missed in another.
 
     The alternative — show the recipient the subset of legs that are public —
     is unsafe for this feature specifically. A trip is a conjunctive chain whose
@@ -162,9 +182,33 @@ def is_shareable(session: Session, trip_id: str) -> bool:
     headline is not merely incomplete but wrong in the dangerous direction,
     because hiding the red return leg leaves the recipient reading a green
     chain. See designs/flight-trips.md.
+
+    Batched so the flights list can gate a whole page of shared legs in one
+    query instead of one per trip.
     """
-    total, private_count = trip_share_state(session, trip_id)
-    return total > 0 and private_count == 0
+    if not trip_ids:
+        return set()
+    rows = session.execute(
+        select(
+            FlightRow.trip_id,
+            func.count(FlightRow.id),
+            func.sum(case((FlightRow.private.is_(True), 1), else_=0)),
+        )
+        .where(FlightRow.trip_id.in_(trip_ids))
+        .group_by(FlightRow.trip_id)
+    ).all()
+    # A trip with no legs never appears in the grouped result, and that is the
+    # right answer: nothing to read is not shareable.
+    return {
+        trip_id
+        for trip_id, total, private_count in rows
+        if int(total or 0) > 0 and int(private_count or 0) == 0
+    }
+
+
+def is_shareable(session: Session, trip_id: str) -> bool:
+    """Whether one trip may be read by a non-owner. See :func:`shareable_trip_ids`."""
+    return trip_id in shareable_trip_ids(session, [trip_id])
 
 
 def load_trip_row_for_viewer(
