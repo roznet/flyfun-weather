@@ -11,8 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from flyfun_common.db import DEV_USER_ID, current_user_id, get_db
 from flyfun_common.db.models import UserPreferencesRow, UserRow
+from flyfun_common import autorouter as autorouter_module
 from weatherbrief.api.app import create_app
-from weatherbrief.api import flights as flights_module
 
 
 @pytest.fixture
@@ -195,7 +195,9 @@ class TestAutorouterRoutes:
             cleared["called"] = True
             cleared["user_id"] = user_id
 
-        monkeypatch.setattr(flights_module, "_clear_autorouter_oauth_token", _fake_clear)
+        monkeypatch.setattr(
+            autorouter_module, "clear_autorouter_token", _fake_clear
+        )
         r = client.get("/api/flights/autorouter-routes")
         assert r.status_code == 409
         assert r.json()["detail"] == "autorouter_not_linked"
@@ -289,24 +291,27 @@ class TestParseFplAutorouterFormat:
         assert body["altitude_ft"] == 10000
 
 
-class TestClearAutorouterOauthToken:
+class TestClearAutorouterToken:
+    """The helper itself now lives in flyfun-common, where flyfun-forms shares
+    it; these cover that this app still gets the behaviour it relied on."""
+
     def test_preserves_other_creds(self, db_session, dev_user):
+        from flyfun_common.autorouter import clear_autorouter_token
         from flyfun_common.credentials import (
             load_encrypted_creds,
             save_encrypted_creds,
         )
-        from weatherbrief.api.flights import _clear_autorouter_oauth_token
 
         save_encrypted_creds(db_session, dev_user, {
             "autorouter": {"access_token": "stale"},
             "other_service": {"key": "value"},
         })
-        _clear_autorouter_oauth_token(db_session, dev_user)
+        clear_autorouter_token(db_session, dev_user)
         remaining = load_encrypted_creds(db_session, dev_user)
         assert remaining == {"other_service": {"key": "value"}}
 
     def test_no_op_when_unset(self, db_session, dev_user):
-        from weatherbrief.api.flights import _clear_autorouter_oauth_token
+        from flyfun_common.autorouter import clear_autorouter_token
 
         # Should not raise even if no creds exist.
-        _clear_autorouter_oauth_token(db_session, dev_user)
+        clear_autorouter_token(db_session, dev_user)
