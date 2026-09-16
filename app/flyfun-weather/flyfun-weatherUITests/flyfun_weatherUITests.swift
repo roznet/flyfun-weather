@@ -98,6 +98,43 @@ final class flyfun_weatherUITests: XCTestCase {
         waitForBriefingLoaded(app)
     }
 
+    /// #616: feedback sent from a briefing is the linked form, reached from the
+    /// pack menu, and submits (the fixture repository accepts it).
+    @MainActor
+    func testBriefingFeedbackFromPackMenu() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+
+        let packMenu = app.buttons["packToolbarMenu"].firstMatch
+        XCTAssertTrue(packMenu.waitForExistence(timeout: Self.uiTimeout), "the pack menu should be in the toolbar")
+        packMenu.tap()
+
+        var feedback = app.buttons["briefingFeedbackButton"].firstMatch
+        if !feedback.waitForExistence(timeout: Self.probeTimeout) {
+            feedback = app.buttons["Send Feedback on This Briefing"].firstMatch
+        }
+        XCTAssertTrue(feedback.waitForExistence(timeout: Self.uiTimeout), "the pack menu should offer briefing feedback")
+        feedback.tap()
+
+        XCTAssertTrue(app.staticTexts["feedbackBriefingLinkNote"].waitForExistence(timeout: Self.uiTimeout),
+                      "the form should say the report links to this briefing")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "briefing-feedback-form"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        var field = app.textViews["feedbackCommentField"].firstMatch
+        if !field.waitForExistence(timeout: Self.probeTimeout) {
+            field = app.textFields["feedbackCommentField"].firstMatch
+        }
+        XCTAssertTrue(field.waitForExistence(timeout: Self.uiTimeout), "the comment field should be shown")
+        field.tap()
+        field.typeText("No TAF at EGSC today")
+        app.buttons["feedbackSubmitButton"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Thanks for your feedback!"].waitForExistence(timeout: Self.uiTimeout),
+                      "submitting should show the thanks state")
+    }
+
     /// Switch the open briefing to a named internal tab. Both idioms render a
     /// native `TabView` (#437): a bottom tab bar on iPhone, a top tab bar on
     /// iPad. XCUI surfaces the iPad one as plain buttons rather than a

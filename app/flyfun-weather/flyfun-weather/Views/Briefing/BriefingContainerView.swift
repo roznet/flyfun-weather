@@ -46,6 +46,9 @@ struct BriefingContainerView: View {
     @State private var notifyOverride: FlightNotifyOverride = .default
     @State private var notifyOverrideBusy = false
     @State private var showingShareSheet = false
+    /// Free-text feedback opened from the pack menu, pinned to the flight and
+    /// the pack on screen at the moment it was opened (#616).
+    @State private var feedbackTarget: BriefingFeedbackTarget?
 
     private static let dayTimeUTC: DateFormatter = {
         let fmt = DateFormatter()
@@ -117,7 +120,13 @@ struct BriefingContainerView: View {
             // refresh/download/track actions — none apply until it's in range.
             if let viewModel, flight.coverage == nil {
                 ToolbarItem(placement: .topBarLeading) {
-                    BriefingPackToolbar(viewModel: viewModel)
+                    BriefingPackToolbar(viewModel: viewModel) {
+                        if let timestamp = viewModel.pack?.fetchTimestamp {
+                            feedbackTarget = BriefingFeedbackTarget(
+                                flightId: viewModel.flight.id, packTimestamp: timestamp
+                            )
+                        }
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
@@ -171,6 +180,9 @@ struct BriefingContainerView: View {
                     .presentationDetents([.medium, .large])
                     .ignoresSafeArea()
             }
+        }
+        .sheet(item: $feedbackTarget) { target in
+            FeedbackFormView(flightId: target.flightId, packTimestamp: target.packTimestamp)
         }
         .sheet(isPresented: $showingPirepSheet) {
             if let viewModel, let repo = appState.repository {
@@ -666,11 +678,21 @@ private struct BriefingContentView: View {
     }
 }
 
+/// The briefing a feedback report is about. Captured when the sheet opens, so
+/// switching pack underneath it can't change which pack the report links to.
+private struct BriefingFeedbackTarget: Identifiable {
+    let flightId: String
+    let packTimestamp: String
+    var id: String { "\(flightId)@\(packTimestamp)" }
+}
+
 /// Toolbar control merging freshness + pack (D-N) history into one menu (#310):
 /// a freshness dot + current pack label opens the pack-history picker, with the
 /// detailed freshness line as a non-interactive header.
 private struct BriefingPackToolbar: View {
     @Bindable var viewModel: BriefingViewModel
+    /// Opens free-text feedback about the pack on screen (#616).
+    var onSendFeedback: () -> Void
 
     // Anchors here now (was the trailing download button, which is gone).
     // Auto-download means this chip is almost always already `.downloaded`, and
@@ -709,6 +731,17 @@ private struct BriefingPackToolbar: View {
                     Section { Text(freshnessText) }
                 }
                 offlineSection
+                // Feedback about *this* pack (#616): the menu that names the pack
+                // is where "report something about it" belongs, and it keeps the
+                // already-crowded trailing toolbar unchanged on iPhone.
+                Section {
+                    Button {
+                        onSendFeedback()
+                    } label: {
+                        Label("Send Feedback on This Briefing", systemImage: "exclamationmark.bubble")
+                    }
+                    .accessibilityIdentifier("briefingFeedbackButton")
+                }
             } label: {
                 label
             }
