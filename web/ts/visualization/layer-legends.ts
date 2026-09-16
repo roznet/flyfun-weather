@@ -258,14 +258,20 @@ function observedTopsLegend(theme: CrossSectionTheme): LegendEntry[] {
   return entries;
 }
 
-/** Observed radar & lightning (#574). */
+/** Observed radar & lightning (#574).
+ *
+ * Bands and words are the NWS VIP levels, matching `echoColor` and the
+ * `observed/intensity.py` bands the server classifies and colours from, so the
+ * legend, the strip, the map overlay and the "Observed now" sentence all name
+ * a given echo the same way. The old 20/35/45/55/65 ramp said "very heavy" at
+ * 55 where VIP is already intense/extreme, and the sentence said nothing. */
 function observedSurfaceLegend(theme: CrossSectionTheme): LegendEntry[] {
   return [
-    { label: '20 dBZ', color: '#3cbe5a', meaning: 'light echo' },
-    { label: '35 dBZ', color: '#f0d23c', meaning: 'moderate' },
-    { label: '45 dBZ', color: '#f08c28', meaning: 'heavy' },
-    { label: '55 dBZ', color: '#e13c3c', meaning: 'very heavy' },
-    { label: '65 dBZ', color: '#be3cbe', meaning: 'extreme' },
+    { label: '18 dBZ', color: '#3cbe5a', meaning: 'light echo (VIP 1)' },
+    { label: '30 dBZ', color: '#f0d23c', meaning: 'moderate (VIP 2)' },
+    { label: '41 dBZ', color: '#f08c28', meaning: 'heavy (VIP 3) — AIM: avoid level 3+' },
+    { label: '46 dBZ', color: '#e13c3c', meaning: 'very heavy (VIP 4)' },
+    { label: '50 dBZ', color: '#be3cbe', meaning: 'extreme (VIP 5-6)' },
     {
       label: 'no coverage',
       color: theme.observed.noCoverageColor,

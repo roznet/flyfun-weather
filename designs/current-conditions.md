@@ -435,9 +435,35 @@ points", not "no echo"); every clause carries its own age; and it grades
 nothing — there is no "severe" or "significant" anywhere in it, and a test
 asserts that.
 
+**The intensity word is a deliberate carve-out from "grades nothing"**
+(2026-09-16, `observed/intensity.py`, decision §33 in
+`designs/meteorology-decisions.md`). The clauses now read "heavy echo, peak
+44 dBZ" and "Precip rate to 18.0 mm/h (heavy)", where before they gave the
+number alone and left dBZ to be converted in the reader's head.
+
+The line the carve-out draws: **a published class is a restatement of the
+measurement; a grade is a claim about this flight.** "Heavy" here is NWS VIP
+level 3, the same scale AIM references and the airborne radar in the panel
+approximates. It says what the radar saw, not what it means for the route, and
+three rules keep it that way:
+
+- The measured number always stays in the sentence, so the word is a gloss and
+  never a replacement. A test pins that.
+- The word is phase-neutral — "echo" and "precip", never "rain". OPERA carries
+  no phase, and the same reflectivity is a third of the water as snow.
+- Nothing in the intensity path touches `HighlightSeverity` or any advisory
+  status. The category is a machine value on `ObservedSummaryEntry.category`
+  for clients to style rows from; it is not a severity and does not aggregate.
+
+"Severe" and "significant" remain barred, and the test that asserts it stands.
+
 The LLM prompt gets the same string plus per-source ages, and is *not* asked
 to reconcile it with the forecast: a model invited to do that would invent
-exactly the comparison phase 2 exists to compute properly.
+exactly the comparison phase 2 exists to compute properly. It is also told
+explicitly that the intensity words are reflectivity classes rather than a
+hazard assessment — an unqualified "heavy" is exactly the phrase a model will
+launder into "heavy precipitation is expected", which would smuggle the verdict
+back in through the digest.
 
 ## Configuration
 

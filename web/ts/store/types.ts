@@ -909,8 +909,9 @@ export interface ObservedConditions {
   summary: string;
   /** Structured form of the readout: one entry per clause, tagged with the
    *  source it came from and the metric-catalog card that explains it. The
-   *  clauses are not uniformly shaped ("Radar: peak 38 dBZ…" vs "Rain rate to
-   *  1.8 mm/h…"), so never recover the source by parsing the prose. */
+   *  clauses are not uniformly shaped ("Radar: heavy echo, peak 44 dBZ…" vs
+   *  "Precip rate to 18.0 mm/h (heavy)…"), so never recover the source — or
+   *  the intensity, which is on `category` — by parsing the prose. */
   summary_entries: ObservedSummaryEntry[];
   summary_lines: string[];
   sources: ObservedSourceStatus[];
@@ -923,6 +924,14 @@ export interface ObservedSummaryEntry {
   text: string;
   /** Metric-catalog id for the (i) popup; empty when no card explains it. */
   metric_id: string;
+  /** Intensity class this clause reports: light | moderate | heavy |
+   *  very_heavy | extreme, on the NWS VIP ladder. Empty on clauses that carry
+   *  no intensity (lightning, cloud tops, coverage) and on a detection too
+   *  faint for the scale to name. The word is already inside `text`; this is
+   *  here so a row can be styled, or the word re-rendered from a locale file,
+   *  without parsing prose. It is a class, never a severity — see
+   *  `observed/intensity.py`. */
+  category?: string;
 }
 
 /** What got worse since the previous real-time refresh (deterministic, no LLM). */

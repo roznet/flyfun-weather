@@ -386,7 +386,7 @@ describe('observed-surface layer', () => {
   it('ramps echo colour with intensity', () => {
     expect(echoColor(10)).not.toBe(echoColor(30));
     expect(echoColor(30)).not.toBe(echoColor(50));
-    expect(echoColor(60)).toBe('#e13c3c');
+    expect(echoColor(60)).toBe('#be3cbe');  // VIP 5-6, extreme
   });
 
   it('names the source that actually supplied the badge timestamp', () => {
@@ -632,24 +632,33 @@ describe('observed layers actually draw', () => {
 });
 
 describe('echo palette', () => {
-  it('covers every server stop, including 65 dBZ', () => {
+  it('covers every server stop, including the extreme one', () => {
     // The server's _DBZ_STOPS has six stops; the client had five, so the most
     // intense echo on the map rendered as ordinary red on the cross-section.
-    const stops = [5, 20, 35, 45, 55, 65];
+    const stops = [5, 18, 30, 41, 46, 50];
     const colours = stops.map((dbz) => echoColor(dbz));
     expect(new Set(colours).size).toBe(stops.length);
-    expect(echoColor(70)).toBe(echoColor(65));
-    expect(echoColor(65)).not.toBe(echoColor(55));
+    expect(echoColor(70)).toBe(echoColor(50));
+    expect(echoColor(50)).not.toBe(echoColor(46));
   });
 
   it('matches the server palette values', () => {
-    // Mirrors observed/imagery.py::_DBZ_STOPS exactly.
-    expect(echoColor(5)).toBe('#5aa0dc');
-    expect(echoColor(20)).toBe('#3cbe5a');
-    expect(echoColor(35)).toBe('#f0d23c');
-    expect(echoColor(45)).toBe('#f08c28');
-    expect(echoColor(55)).toBe('#e13c3c');
-    expect(echoColor(65)).toBe('#be3cbe');
+    // Mirrors observed/imagery.py::_DBZ_STOPS exactly, which the server in
+    // turn builds from observed/intensity.py::DBZ_BANDS — the VIP levels.
+    expect(echoColor(5)).toBe('#5aa0dc');   // below the scale
+    expect(echoColor(18)).toBe('#3cbe5a');  // VIP 1  light
+    expect(echoColor(30)).toBe('#f0d23c');  // VIP 2  moderate
+    expect(echoColor(41)).toBe('#f08c28');  // VIP 3  heavy
+    expect(echoColor(46)).toBe('#e13c3c');  // VIP 4  very heavy
+    expect(echoColor(50)).toBe('#be3cbe');  // VIP 5-6 extreme
+  });
+
+  it('does not read a notch optimistic against an airborne radar', () => {
+    // A pilot's own radar has been red since 40 dBZ and magenta since 50. The
+    // previous 45/55 ramp still showed 44 dBZ as yellow-orange and 49 as red,
+    // one notch softer than the box in the panel for the same cell.
+    expect(echoColor(44)).toBe('#f08c28');  // heavy, not moderate yellow
+    expect(echoColor(52)).toBe('#be3cbe');  // extreme, not ordinary red
   });
 });
 

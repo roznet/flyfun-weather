@@ -18,7 +18,10 @@ Three things the wording is careful about:
   instant and the summary does not pretend otherwise.
 * **It describes, it does not grade.**  Phase 1 computes no verdict, so there
   is no "significant" or "hazardous" anywhere in here — just what was
-  measured, where, and how long ago.
+  measured, where, and how long ago.  The intensity word ("heavy echo") is a
+  published reflectivity class, not a judgement about this flight; the measured
+  number always stays beside it so the word reads as a gloss rather than a
+  replacement.  See ``observed/intensity.py``.
 """
 
 from __future__ import annotations
@@ -32,9 +35,16 @@ from weatherbrief.models.observed import (
     ObservedTopsField,
 )
 
+from .intensity import classify_dbz, classify_rate, intensity_label
+
 # Reflectivity at which an echo is worth naming in a one-line summary.  Below
 # this is cloud and drizzle returns that a pilot would not route around; the
 # annuli carry every value regardless, this only governs the prose.
+#
+# Deliberately 20 rather than the VIP-1 floor of 18 (``intensity.DBZ_BANDS``):
+# it was tuned on real frames, where 93% of detections in a sample box sat
+# below it and drawing them at full strength made a dry France read as wet.
+# The two-dBZ gap is inside VIP 1, so an echo we do mention always has a class.
 ECHO_MENTION_DBZ = 20.0
 
 
@@ -55,13 +65,16 @@ def build_summary_entries(conditions: ObservedConditions) -> list[ObservedSummar
     """One clause per available source, in order of operational bite.
 
     Structured rather than plain strings because the clauses are not uniformly
-    shaped — "Radar: peak 38 dBZ…" against "Rain rate to 1.8 mm/h…" — so a
-    client rendering them as per-source rows cannot recover the source from the
-    prose without guessing.
+    shaped — "Radar: heavy echo, peak 44 dBZ…" against "Precip rate to
+    18.0 mm/h (heavy)…" — so a client rendering them as per-source rows cannot
+    recover the source from the prose without guessing.
     """
     by_station = {s.id: s for s in conditions.stations}
     widest = max(conditions.radii_nm) if conditions.radii_nm else 0.0
 
+    # Each clause yields (text, category).  Only the two intensity-bearing
+    # clauses ever set a category; the rest pass "" so the field stays a
+    # reliable "this row has a class" signal rather than a best guess.
     clauses = (
         ("lightning", _lightning_clause(conditions.lightning, by_station, widest)),
         ("reflectivity", _reflectivity_clause(conditions.reflectivity, by_station, widest)),
@@ -70,8 +83,13 @@ def build_summary_entries(conditions: ObservedConditions) -> list[ObservedSummar
         ("coverage", _coverage_clause(conditions.reflectivity, widest)),
     )
     entries = [
-        ObservedSummaryEntry(kind=kind, text=text, metric_id=_METRIC_FOR_KIND.get(kind, ""))
-        for kind, text in clauses
+        ObservedSummaryEntry(
+            kind=kind,
+            text=text,
+            metric_id=_METRIC_FOR_KIND.get(kind, ""),
+            category=category,
+        )
+        for kind, (text, category) in clauses
         if text
     ]
 
@@ -95,7 +113,9 @@ def build_summary(conditions: ObservedConditions) -> list[str]:
 # --- per-source clauses ----------------------------------------------------
 
 
-def _reflectivity_clause(field: ObservedField | None, by_station, widest) -> str:
+def _reflectivity_clause(
+    field: ObservedField | None, by_station, widest
+) -> tuple[str, str]:
     """Peak echo, or a coverage-scoped statement that there is none.
 
     The two halves are asymmetric on purpose, because the evidence is:
@@ -111,46 +131,61 @@ def _reflectivity_clause(field: ObservedField | None, by_station, widest) -> str
       the claim is scoped to the part of the route the radar can actually see.
     """
     if field is None:
-        return ""
+        return "", ""
     best = _peak(field, widest)
     if best is None or best[1].max_value is None or best[1].max_value < ECHO_MENTION_DBZ:
         looked = _stations_with_coverage(field, widest)
         total = _station_count(field, widest)
         if looked == 0:
-            return ""
+            return "", ""
         if looked == total:
             return (
                 f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ along the "
-                f"route ({_age(field)})."
+                f"route ({_age(field)}).",
+                "",
             )
         return (
             f"Radar: no echo above {ECHO_MENTION_DBZ:.0f} dBZ where the radar "
-            f"covers the route ({looked} of {total} points, {_age(field)})."
+            f"covers the route ({looked} of {total} points, {_age(field)}).",
+            "",
         )
     station_id, annulus = best
     caveat = " (partial radar coverage there)" if annulus.insufficient_coverage else ""
+    # "echo", never "rain": DBZH carries no phase, and the same dBZ is far less
+    # water as snow.  The number stays beside the word (see the module note).
+    intensity = classify_dbz(annulus.max_value)
+    lead = f"{intensity_label(intensity)} echo, peak" if intensity else "peak"
     return (
-        f"Radar: peak {annulus.max_value:.0f} dBZ within {widest:.0f} NM of "
-        f"{_where(station_id, by_station)}{caveat} ({_age(field)})."
+        f"Radar: {lead} {annulus.max_value:.0f} dBZ within {widest:.0f} NM of "
+        f"{_where(station_id, by_station)}{caveat} ({_age(field)}).",
+        intensity.value if intensity else "",
     )
 
 
-def _rain_rate_clause(field: ObservedField | None, by_station, widest) -> str:
+def _rain_rate_clause(
+    field: ObservedField | None, by_station, widest
+) -> tuple[str, str]:
     if field is None:
-        return ""
+        return "", ""
     best = _peak(field, widest)
     if best is None or not best[1].max_value:
-        return ""
+        return "", ""
     station_id, annulus = best
+    # RATE is liquid-equivalent with no phase either, so this says "precip".
+    intensity = classify_rate(annulus.max_value)
+    qualifier = f" ({intensity_label(intensity)})" if intensity else ""
     return (
-        f"Rain rate to {annulus.max_value:.1f} mm/h near "
-        f"{_where(station_id, by_station)} ({_age(field)})."
+        f"Precip rate to {annulus.max_value:.1f} mm/h{qualifier} near "
+        f"{_where(station_id, by_station)} ({_age(field)}).",
+        intensity.value if intensity else "",
     )
 
 
-def _lightning_clause(field: ObservedFlashField | None, by_station, widest) -> str:
+def _lightning_clause(
+    field: ObservedFlashField | None, by_station, widest
+) -> tuple[str, str]:
     if field is None:
-        return ""
+        return "", ""
     total = 0
     nearest: float | None = None
     nearest_station: str | None = None
@@ -165,19 +200,25 @@ def _lightning_clause(field: ObservedFlashField | None, by_station, widest) -> s
                     nearest_station = station.station_id
     window = field.window_minutes or 10.0
     if total == 0:
-        return f"Lightning: none within {widest:.0f} NM in the last {window:.0f} min."
+        return (
+            f"Lightning: none within {widest:.0f} NM in the last {window:.0f} min.",
+            "",
+        )
     # Discs overlap, so a flash near two adjacent route points is counted
     # twice; say "detections" rather than implying a flash census.
     return (
         f"Lightning: {total} flash detections within {widest:.0f} NM of the route "
         f"in the last {window:.0f} min, nearest {nearest:.0f} NM at "
-        f"{_where(nearest_station, by_station)} ({_age(field)})."
+        f"{_where(nearest_station, by_station)} ({_age(field)}).",
+        "",
     )
 
 
-def _tops_clause(field: ObservedTopsField | None, by_station, widest) -> str:
+def _tops_clause(
+    field: ObservedTopsField | None, by_station, widest
+) -> tuple[str, str]:
     if field is None:
-        return ""
+        return "", ""
     highest: float | None = None
     highest_station: str | None = None
     multilayer = 0
@@ -200,9 +241,9 @@ def _tops_clause(field: ObservedTopsField | None, by_station, widest) -> str:
             if int(annulus.quality_method.get("9", 0)) > 0:
                 multilayer += 1
     if covered == 0:
-        return ""
+        return "", ""
     if highest is None:
-        return f"Cloud tops: clear over the whole corridor ({_age(field)})."
+        return f"Cloud tops: clear over the whole corridor ({_age(field)}).", ""
     parts = [
         f"Cloud tops to FL{highest:.0f} near {_where(highest_station, by_station)}"
     ]
@@ -212,13 +253,13 @@ def _tops_clause(field: ObservedTopsField | None, by_station, widest) -> str:
         # quality_method 9 is the retrieval's own multi-layer-suspect flag —
         # the case where a single cloud-top number is least trustworthy.
         parts.append(f"multi-layer suspected at {multilayer} of {covered}")
-    return f"{', '.join(parts)} ({_age(field)})."
+    return f"{', '.join(parts)} ({_age(field)}).", ""
 
 
-def _coverage_clause(field: ObservedField | None, widest) -> str:
+def _coverage_clause(field: ObservedField | None, widest) -> tuple[str, str]:
     """Say where the radar cannot see, distinctly from where it sees nothing."""
     if field is None:
-        return ""
+        return "", ""
     total = 0
     blind = 0
     for station in field.stations:
@@ -229,10 +270,10 @@ def _coverage_clause(field: ObservedField | None, widest) -> str:
             if annulus.insufficient_coverage:
                 blind += 1
     if total == 0 or blind == 0:
-        return ""
+        return "", ""
     if blind == total:
-        return "Radar: no coverage anywhere along this route."
-    return f"Radar: no coverage over {blind} of {total} route points."
+        return "Radar: no coverage anywhere along this route.", ""
+    return f"Radar: no coverage over {blind} of {total} route points.", ""
 
 
 # --- helpers ---------------------------------------------------------------

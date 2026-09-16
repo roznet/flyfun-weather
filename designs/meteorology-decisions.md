@@ -4660,3 +4660,141 @@ prevailing state and in significant weather — an overstatement, the safe direc
 - `digest/prompt_builder.py`, `digest/text.py` — both render `taf_at_eta_line()`.
 - `tasks/verification.py`, `tasks/alternate_requirement.py` — validity gate.
 - Tests: `tests/test_taf_at_eta.py`; euro_aip `tests/briefing/test_weather/test_taf_conditions.py`.
+
+---
+
+## 33. Observed echo intensity is one VIP ladder, with the rain rate derived from it
+
+**Date:** 2026-09-16
+**Status:** Implemented (`observed/intensity.py`).
+
+### Background
+
+The "Observed now" section reported bare numbers: "Radar: peak 44 dBZ", "Rain
+rate to 18 mm/h". Precise, and for a pilot scanning a briefing at D-0, close to
+unreadable — dBZ is not a unit anyone converts in their head.
+
+Attaching a word exposed that the app already held **three** disagreeing
+intensity scales:
+
+| Scale | Breaks | Where |
+|---|---|---|
+| Reflectivity ramp | 5 / 20 / 35 / 45 / 55 / 65 dBZ | `observed/imagery.py`, mirrored in TS and Swift |
+| Rain-rate ramp | 0.2 / 1 / 4 / 10 / 30 mm/h | `observed/imagery.py` |
+| Model precipitation | <1 light, 1–4 moderate, >4 heavy | `analysis/sounding/precipitation.py` |
+
+Only the reflectivity ramp carried words, and only in the web legend. A 35 dBZ
+echo was "moderate" there while its ~5.6 mm/h Marshall-Palmer equivalent was
+`HEAVY` to `_classify_intensity` — one cell, two verdicts. At the top the two
+observed ramps diverged by a factor of 2–3: the 45 dBZ orange is ~24 mm/h,
+where the rate ramp's orange starts at 10.
+
+### The decision
+
+**(a) The categories are the NWS VIP levels**, with 5 and 6 merged:
+
+| Word | dBZ | VIP |
+|---|---|---|
+| light | 18–30 | 1 |
+| moderate | 30–41 | 2 |
+| heavy | 41–46 | 3 |
+| very heavy | 46–50 | 4 |
+| extreme | ≥50 | 5–6 |
+
+**(b) The rain-rate boundaries are derived from (a)** through Marshall-Palmer
+`Z = 200 R^1.6`, then rounded: 0.5 / 2.5 / 10 / 30 / 50 mm/h. Exact values are
+0.49 / 2.73 / 13.3 / 27.3 / 48.6, so rounding costs at most ~2 dBZ.
+
+**(c) The ramps are built from the bands**, not written out beside them.
+`_DBZ_STOPS` and `_RATE_STOPS` are generated from `DBZ_BANDS`/`RATE_BANDS` with
+one colour per class, so a colour means the same class on either layer.
+
+**(d) The word is phase-neutral**: "heavy echo", "heavy precip", never "rain".
+
+**(e) It is not regional**, unlike `weatherbrief.units`.
+
+**(f) It is a class, not a grade.** Phase 1 still computes no verdict; see the
+carve-out recorded in `designs/current-conditions.md`.
+
+### Reasoning
+
+**Why VIP.** It is the only published word-scale for reflectivity in aviation
+use, AIM references it ("avoid level 3 or greater"), and the ARINC 708 colours
+on a pilot's own airborne radar approximate it. The old ramp was measurably
+optimistic against that box: a pilot's radar is red from 40 dBZ and magenta
+from 50, where ours stayed yellow-orange to 45 and red to 55. A briefing that
+reads one notch softer than the panel is the wrong direction to be wrong in.
+
+**Why derive the rate rather than cite a surface-obs table.** Both candidate
+tables are real and they disagree by ~2× (WMO/FMH-1 light ≤2.5, moderate to
+7.6, heavy above; UK Met Office slight <0.5, moderate 0.5–4, heavy 4–8). Either
+would have left the two clauses contradicting each other, which is the bug we
+started with. Deriving from the dBZ ladder guarantees agreement, and lands on
+the published numbers anyway: 2.5 mm/h is exactly WMO's light/moderate line and
+10/30/50 track the UK *shower* table. So the ladder is standards-compatible
+without being a copy of any one standard.
+
+**Why no dBZ→mm/h converter in our code.** OPERA ships RATE with its own
+conversion already applied. Recomputing a rate from DBZH would second-guess the
+product we chose to read, and the Z-R spread is wide enough that our answer
+would differ: convective `300 R^1.4` and snow `2000 R^2.0` give very different
+rates for one reflectivity. The relation appears in this module only as the
+*consistency check* between two boundary sets, pinned by a test.
+
+**Why phase-neutral.** OPERA RATE is liquid-equivalent and the observed payload
+carries no phase field at all. The same 30 dBZ is ~2.7 mm/h as rain and roughly
+a third of that as snow, while snow is the far bigger visibility problem —
+`enroute_precip` weights it accordingly and remains the only surface that knows
+the phase.
+
+**Why not regional.** OPERA is pan-European with no US coverage, so a US table
+would never be exercised on this data; there is no European dBZ word-scale to
+switch to, only per-service colour choices; and an observation should not
+change its name based on who is reading it.
+
+### What we decided against
+
+- **Regional ladders keyed off the route, like `units.py`.** Rejected: dead
+  code for the only region where the alternative table applies (see above).
+- **Aligning `_classify_intensity` (model precip, 1/4 mm/h) to the same
+  ladder.** Deferred deliberately. It feeds `_SIGNIFICANT` in `enroute_precip`,
+  so moving it changes advisory grades and needs an eval-corpus re-run. Its
+  lower bar is defensible on its own terms — an hourly grid-box mean smooths
+  the peaks a radar sees — but the divergence is now documented rather than
+  accidental. **This is the open item from this decision.**
+- **Six words (VIP 5 "intense" separate from VIP 6 "extreme").** A one-line
+  summary does not earn six; both mean the same thing operationally.
+- **Lowering `ECHO_MENTION_DBZ`/`FAINT_ECHO_DBZ` from 20 to the VIP-1 floor of
+  18.** The 20 was measured against real frames and fixed a visible bug (93% of
+  detections in a sample box sat below it, and drawing them at full strength
+  made a dry France read as wet). The 18–20 sliver draws in the light-echo
+  green but faintly, which is honest on both counts.
+
+### Real-world validation needed
+
+- A frontal day with widespread stratiform rain: does "light echo" over most of
+  the route read as reassuring when it should? The concern is the opposite of
+  the usual one — the ladder is convective-oriented, and 25 dBZ of steady rain
+  in IMC is a real ceiling/visibility problem that the word "light" understates.
+- A snow event: confirm the phase-neutral wording does not get read as rain by
+  a pilot, and decide whether the observed clause should borrow
+  `PrecipitationAssessment.surface_phase` from the nearest route point.
+- Check the LLM digest does not restate "heavy echo" as a forecast severity
+  despite the prompt note in `_format_observed_context`.
+
+### Files changed
+
+- `observed/intensity.py` (new) — `EchoIntensity`, `DBZ_BANDS`, `RATE_BANDS`,
+  `classify_dbz`, `classify_rate`, `intensity_label`.
+- `observed/summary.py` — clauses return `(text, category)`; the reflectivity
+  and rain-rate clauses carry the word; "Rain rate" became "Precip rate".
+- `observed/imagery.py` — `_DBZ_STOPS`/`_RATE_STOPS` generated from the bands.
+- `models/observed.py` — `ObservedSummaryEntry.category`.
+- `digest/prompt_builder.py` — class-not-verdict note in the observed context.
+- `web/ts/visualization/cross-section/layers/observed-surface.ts`,
+  `web/ts/visualization/layer-legends.ts`,
+  `app/.../Views/CrossSection/Layers/ObservedSurfaceLayer.swift` — the ramp.
+- `web/ts/data/metrics-catalog.json` + the iOS copy — the `observed_surface`
+  card's `thresholds` (previously empty) and its theory text.
+- Tests: `tests/observed/test_intensity.py`, plus updates to
+  `tests/observed/test_payload.py` and `web/tests/unit/observed-conditions.test.ts`.

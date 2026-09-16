@@ -234,6 +234,13 @@ struct ObservedSummaryEntry: Codable, Sendable, Identifiable {
     let text: String
     /// Metric-catalog card that explains the clause, for the (i) affordance.
     let metricId: String?
+    /// Intensity class this clause reports: light | moderate | heavy |
+    /// very_heavy | extreme, on the NWS VIP ladder. Nil or empty on clauses
+    /// with no intensity (lightning, cloud tops, coverage) and on a detection
+    /// too faint for the scale to name. The word is already inside `text`;
+    /// this is here so a row can be styled without parsing prose. It is a
+    /// class, never a severity — see `observed/intensity.py`.
+    let category: String?
 
     var id: String { kind + text }
 }

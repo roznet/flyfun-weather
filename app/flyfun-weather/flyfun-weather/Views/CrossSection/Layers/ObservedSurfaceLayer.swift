@@ -23,21 +23,28 @@ struct ObservedSurfaceLayer: CrossSectionLayerProtocol {
     private static let flashTickHeightPx: CGFloat = 9
     private static let maxFlashTicks = 4
 
-    /// dBZ → strip colour.
+    /// dBZ → strip colour, on the NWS VIP levels.
     ///
     /// Mirrors `_DBZ_STOPS` in `observed/imagery.py` stop for stop, so the map
     /// overlay and the cross-section strip cannot disagree about what a given
-    /// reflectivity looks like. Keep the two lists in step — the 65 dBZ magenta
+    /// reflectivity looks like. Keep the lists in step — the 65 dBZ magenta
     /// was once missing from the web layer while the server had it, so the most
     /// intense echo on the map rendered as ordinary red on the cross-section, the
-    /// one case where the difference matters most.
+    /// one case where the difference matters most. The server builds its copy
+    /// from the intensity bands in `observed/intensity.py`, the source of truth
+    /// for all three; `observed-surface.ts` carries the web copy.
+    ///
+    /// Breaks are the VIP boundaries rather than round numbers: a pilot's own
+    /// airborne radar has been red since 40 dBZ and magenta since 50, so the
+    /// previous 45/55 ramp read one notch optimistic against the box in the
+    /// panel. Below 18 dBZ is below VIP 1 — drawn, but in the unclassified blue.
     static func echoColor(_ dbz: Double) -> Color {
-        if dbz >= 65 { return Color(red: 0.745, green: 0.235, blue: 0.745) }  // #be3cbe
-        if dbz >= 55 { return Color(red: 0.882, green: 0.235, blue: 0.235) }  // #e13c3c
-        if dbz >= 45 { return Color(red: 0.941, green: 0.549, blue: 0.157) }  // #f08c28
-        if dbz >= 35 { return Color(red: 0.941, green: 0.824, blue: 0.235) }  // #f0d23c
-        if dbz >= 20 { return Color(red: 0.235, green: 0.745, blue: 0.353) }  // #3cbe5a
-        return Color(red: 0.353, green: 0.627, blue: 0.863)                   // #5aa0dc
+        if dbz >= 50 { return Color(red: 0.745, green: 0.235, blue: 0.745) }  // #be3cbe VIP 5-6 extreme
+        if dbz >= 46 { return Color(red: 0.882, green: 0.235, blue: 0.235) }  // #e13c3c VIP 4 very heavy
+        if dbz >= 41 { return Color(red: 0.941, green: 0.549, blue: 0.157) }  // #f08c28 VIP 3 heavy
+        if dbz >= 30 { return Color(red: 0.941, green: 0.824, blue: 0.235) }  // #f0d23c VIP 2 moderate
+        if dbz >= 18 { return Color(red: 0.235, green: 0.745, blue: 0.353) }  // #3cbe5a VIP 1 light
+        return Color(red: 0.353, green: 0.627, blue: 0.863)                   // #5aa0dc below the scale
     }
 
     /// How many flash ticks to draw for a disc's flash count.
