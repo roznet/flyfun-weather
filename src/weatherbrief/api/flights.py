@@ -16,6 +16,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
+from flyfun_common.autorouter import (
+    AutorouterNotLinked,
+    AutorouterRoute as AutorouterRouteSummary,
+    AutorouterRoutesResponse,
+    AutorouterUnavailable,
+    fetch_recent_routes,
+)
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
@@ -1322,67 +1329,6 @@ def parse_flight_plan(
     )
 
 
-AUTOROUTER_LOGS_URL = "https://api.autorouter.aero/v1.0/router/logs"
-
-
-class AutorouterRouteSummary(BaseModel):
-    """One row in the Autorouter recent-routes picker."""
-
-    routeid: str
-    departure: str
-    destination: str
-    departure_name: str | None = None
-    destination_name: str | None = None
-    departure_time: str | None = None  # ISO 8601 UTC, derived from Unix epoch
-    fplan: str  # raw ICAO FPL — fed into /parse-fpl on selection
-    route_distance_nm: int | None = None
-    aircraft_description: str | None = None
-    callsign: str | None = None
-
-
-class AutorouterRoutesResponse(BaseModel):
-    routes: list[AutorouterRouteSummary] = []
-
-
-def _clear_autorouter_oauth_token(db: Session, user_id: str) -> None:
-    """Remove the stored Autorouter OAuth access token after a 401.
-
-    Only touches the ``autorouter`` key inside the encrypted-creds blob, so
-    any other per-user secrets (and dev-mode username/password fallbacks)
-    are preserved. After this returns, ``has_autorouter_creds`` flips to
-    false and the user will be prompted to re-link.
-    """
-    from flyfun_common.credentials import load_encrypted_creds, save_encrypted_creds
-
-    creds = load_encrypted_creds(db, user_id) or {}
-    if "autorouter" in creds:
-        del creds["autorouter"]
-        save_encrypted_creds(db, user_id, creds)
-
-
-def _epoch_to_iso(epoch: object) -> str | None:
-    """Convert an Autorouter Unix-epoch field to ISO 8601 UTC."""
-    if epoch is None:
-        return None
-    try:
-        ts = float(epoch)
-    except (TypeError, ValueError):
-        return None
-    try:
-        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def _coerce_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
 @router.get("/autorouter-routes", response_model=AutorouterRoutesResponse)
 def list_autorouter_routes(
     limit: int = 25,
@@ -1391,114 +1337,23 @@ def list_autorouter_routes(
 ) -> AutorouterRoutesResponse:
     """List the user's recent Autorouter routes for the "Import from Autorouter" picker.
 
-    Maps the upstream ``/v1.0/router/logs`` response onto a slim payload the
-    Flights page can render directly. On a 401 from Autorouter we clear the
-    stored OAuth token and surface a 409 so the frontend can prompt re-link.
+    The fetch, the payload normalisation and the clear-the-token-on-401 rule all
+    live in ``flyfun_common.autorouter``, because flyfun-forms offers the same
+    picker and the two apps share the linked account. This endpoint stays only
+    to keep the existing ``/api/flights/autorouter-routes`` path working and to
+    pass weather's own token loader, which additionally exchanges dev
+    username/password credentials for a token.
     """
-    import httpx
-
     from weatherbrief.api.preferences import load_autorouter_token
 
-    token = load_autorouter_token(db, user_id)
-    if not token:
-        raise HTTPException(status_code=409, detail="autorouter_not_linked")
-
-    capped = max(1, min(int(limit), 100))
-
     try:
-        resp = httpx.get(
-            AUTOROUTER_LOGS_URL,
-            params={"limit": capped, "order": "desc", "sort": "departuretime"},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15.0,
+        routes = fetch_recent_routes(
+            db, user_id, limit, token_loader=load_autorouter_token
         )
-    except httpx.HTTPError as exc:
-        logger.warning("Autorouter /logs request failed for user %s: %s", user_id, exc)
-        raise HTTPException(status_code=502, detail="autorouter_unreachable")
-
-    if resp.status_code == 401:
-        _clear_autorouter_oauth_token(db, user_id)
+    except AutorouterNotLinked:
         raise HTTPException(status_code=409, detail="autorouter_not_linked")
-
-    if resp.status_code >= 400:
-        logger.warning(
-            "Autorouter /logs returned %s for user %s: %s",
-            resp.status_code,
-            user_id,
-            resp.text[:200],
-        )
-        raise HTTPException(status_code=502, detail="autorouter_upstream_error")
-
-    try:
-        payload = resp.json()
-    except ValueError:
-        logger.warning("Autorouter /logs returned non-JSON for user %s", user_id)
-        raise HTTPException(status_code=502, detail="autorouter_upstream_error")
-
-    # The /logs endpoint historically returned a bare JSON array, but the
-    # current implementation wraps it in a dict (e.g. ``{"logs": [...]}`` or
-    # ``{"items": [...]}``). Accept either: bare list, or — for a dict — the
-    # routes list under one of the known wrapper keys, with a defensive
-    # fallback to the first list value if none match. Checking known keys
-    # first avoids silently picking up an unrelated list (e.g. pagination
-    # links) if Autorouter ever adds one alongside the routes list.
-    _ROUTES_LIST_KEYS = ("logs", "items", "routes", "data", "results")
-    if isinstance(payload, list):
-        entries = payload
-    elif isinstance(payload, dict):
-        entries = next(
-            (
-                payload[k]
-                for k in _ROUTES_LIST_KEYS
-                if isinstance(payload.get(k), list)
-            ),
-            None,
-        )
-        if entries is None:
-            entries = next(
-                (v for v in payload.values() if isinstance(v, list)),
-                None,
-            )
-        if entries is None:
-            logger.warning(
-                "Autorouter /logs returned dict without a list value for user %s; keys=%r",
-                user_id,
-                list(payload.keys()),
-            )
-            raise HTTPException(status_code=502, detail="autorouter_upstream_error")
-    else:
-        logger.warning(
-            "Autorouter /logs returned unexpected payload shape for user %s: %r",
-            user_id,
-            type(payload).__name__,
-        )
-        raise HTTPException(status_code=502, detail="autorouter_upstream_error")
-
-    routes: list[AutorouterRouteSummary] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        fplan = entry.get("fplan")
-        routeid = entry.get("routeid")
-        departure = entry.get("departure")
-        destination = entry.get("destination")
-        if not (fplan and routeid and departure and destination):
-            # Skip rows without the fields we need to render or import.
-            continue
-        routes.append(
-            AutorouterRouteSummary(
-                routeid=str(routeid),
-                departure=str(departure),
-                destination=str(destination),
-                departure_name=entry.get("departurename") or None,
-                destination_name=entry.get("destinationname") or None,
-                departure_time=_epoch_to_iso(entry.get("departuretime")),
-                fplan=str(fplan),
-                route_distance_nm=_coerce_int(entry.get("routedistance")),
-                aircraft_description=entry.get("aircraftdescription") or None,
-                callsign=entry.get("callsign") or None,
-            )
-        )
+    except AutorouterUnavailable as exc:
+        raise HTTPException(status_code=502, detail=exc.detail)
 
     return AutorouterRoutesResponse(routes=routes)
 
