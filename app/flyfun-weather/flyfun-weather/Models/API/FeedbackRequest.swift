@@ -42,9 +42,10 @@ struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
 /// modal (`help-main.ts::showFeedbackModal`). No `sentiment`, so the server
 /// requires a non-empty `comment` (`FeedbackRequest.require_comment_unless_thumb`).
 ///
-/// `flightId` / `packTimestamp` stay empty for app-level feedback (the web sends
-/// the same empty strings); they exist so a future in-briefing entry point can
-/// pin the report to a pack without a second request type.
+/// `flightId` / `packTimestamp` pin the report to a briefing when it is sent from
+/// a briefing's pack menu (#616), so the admin email and page link to the pack.
+/// They stay empty for app-level feedback from the flight list (the web help
+/// page sends the same empty strings).
 struct GeneralFeedbackRequest: Encodable, Sendable, Equatable {
     let flightId: String
     let packTimestamp: String

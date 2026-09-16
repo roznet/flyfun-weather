@@ -5,10 +5,20 @@ import SwiftUI
 /// `POST /api/feedback` with `target = "general"`, so a report filed here lands
 /// in the same admin queue (and triggers the same notification email) as a web one.
 ///
+/// Two entry points:
+/// - the flight list's overflow menu — app-level feedback, no briefing context;
+/// - a briefing's pack menu — pinned to that flight + pack timestamp (#616), the
+///   iOS equivalent of the web briefing page's Feedback button. Without the link
+///   a report about a briefing reaches admin with nothing to open.
+///
 /// Distinct from `DigestFeedbackView`, which is the per-pack 👍/👎 on a briefing's
-/// AI digest: that one is pinned to a flight + pack timestamp and carries a
-/// `sentiment`; this one is app-level and requires text.
+/// AI digest: that one always carries a `sentiment`; this one requires text.
 struct FeedbackFormView: View {
+    /// The briefing this report is about, when opened from one. Sent as
+    /// `flight_id` / `pack_timestamp`; nil for app-level feedback.
+    private let flightId: String?
+    private let packTimestamp: String?
+
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
@@ -18,6 +28,11 @@ struct FeedbackFormView: View {
     @State private var state: SubmitState = .idle
 
     private enum SubmitState: Equatable { case idle, sending, sent, failed(String) }
+
+    init(flightId: String? = nil, packTimestamp: String? = nil) {
+        self.flightId = flightId
+        self.packTimestamp = packTimestamp
+    }
 
     /// Server caps the comment at 2000 chars (`FeedbackRequest.comment`); mirror
     /// it client-side so a long paste is caught before the round trip.
@@ -29,6 +44,7 @@ struct FeedbackFormView: View {
     private var canSubmit: Bool {
         state != .sending && !trimmedComment.isEmpty && !commentTooLong
     }
+    private var isAboutBriefing: Bool { flightId != nil && packTimestamp != nil }
 
     var body: some View {
         NavigationStack {
@@ -39,7 +55,7 @@ struct FeedbackFormView: View {
                     form
                 }
             }
-            .navigationTitle("Send Feedback")
+            .navigationTitle(isAboutBriefing ? "Briefing Feedback" : "Send Feedback")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -58,7 +74,12 @@ struct FeedbackFormView: View {
                     }
                 }
             } footer: {
-                Text("Report an issue or suggest an improvement.")
+                if isAboutBriefing {
+                    Text("Sent with a link to this briefing, so we can see exactly what you saw.")
+                        .accessibilityIdentifier("feedbackBriefingLinkNote")
+                } else {
+                    Text("Report an issue or suggest an improvement.")
+                }
             }
 
             Section {
@@ -122,7 +143,9 @@ struct FeedbackFormView: View {
         let request = GeneralFeedbackRequest(
             category: category,
             comment: trimmedComment,
-            contactOk: contactOk
+            contactOk: contactOk,
+            flightId: flightId ?? "",
+            packTimestamp: packTimestamp ?? ""
         )
         do {
             try await repo.submitGeneralFeedback(request)
