@@ -34,6 +34,7 @@ from .frames import (
     SOURCE_OPERA_RATE,
     GridFrame,
 )
+from .intensity import DBZ_BANDS, RATE_BANDS, EchoIntensity
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +44,40 @@ MAX_OVERLAY_PIXELS = 1600
 
 # Colour stops per quantity: (threshold, R, G, B).  A value takes the colour of
 # the highest stop it reaches.  Alpha is applied separately.
-_DBZ_STOPS: tuple[tuple[float, int, int, int], ...] = (
-    (5.0, 90, 160, 220),
-    (20.0, 60, 190, 90),
-    (35.0, 240, 210, 60),
-    (45.0, 240, 140, 40),
-    (55.0, 225, 60, 60),
-    (65.0, 190, 60, 190),
-)
-_RATE_STOPS: tuple[tuple[float, int, int, int], ...] = (
-    (0.2, 120, 175, 225),
-    (1.0, 60, 190, 120),
-    (4.0, 240, 210, 60),
-    (10.0, 240, 140, 40),
-    (30.0, 225, 60, 60),
-)
+#
+# The reflectivity and rain-rate ramps are BUILT FROM THE SAME INTENSITY BANDS
+# (``observed.intensity``) rather than written out twice, so one colour means
+# one class on both.  Before this they were independent tables and disagreed:
+# the 45 dBZ orange was ~24 mm/h under Marshall-Palmer, well past the rate
+# ramp's own 10 mm/h orange, so the same cell drew two different colours
+# depending on which layer a pilot had switched on.
+_INTENSITY_RGB: dict[EchoIntensity, tuple[int, int, int]] = {
+    EchoIntensity.LIGHT: (60, 190, 90),
+    EchoIntensity.MODERATE: (240, 210, 60),
+    EchoIntensity.HEAVY: (240, 140, 40),
+    EchoIntensity.VERY_HEAVY: (225, 60, 60),
+    EchoIntensity.EXTREME: (190, 60, 190),
+}
+
+# Detections the published scale does not name (below VIP 1 / below 0.5 mm/h)
+# are still real measurements and are still drawn, in a blue that reads as
+# "present, unclassified" rather than as the bottom of the intensity ramp.
+_BELOW_SCALE_DBZ = (5.0, 90, 160, 220)
+_BELOW_SCALE_RATE = (0.2, 120, 175, 225)
+
+
+def _stops_from_bands(
+    bands: tuple[tuple[float, EchoIntensity], ...],
+    below_scale: tuple[float, int, int, int],
+) -> tuple[tuple[float, int, int, int], ...]:
+    """Colour stops for an intensity ladder, floor first."""
+    return (below_scale,) + tuple(
+        (floor,) + _INTENSITY_RGB[intensity] for floor, intensity in bands
+    )
+
+
+_DBZ_STOPS = _stops_from_bands(DBZ_BANDS, _BELOW_SCALE_DBZ)
+_RATE_STOPS = _stops_from_bands(RATE_BANDS, _BELOW_SCALE_RATE)
 # Cloud-top height in metres, binned to match the payload's FL histogram.
 _CTTH_STOPS: tuple[tuple[float, int, int, int], ...] = (
     (0.0, 175, 185, 195),      # FL000-050 low stratus
@@ -123,6 +143,11 @@ DETECTION_ALPHA = 190
 # drawn, but faintly: painting it at full strength made a France that Windy
 # renders dry read as widely wet, because 93% of detections in a sample box
 # were below this line.
+#
+# Deliberately NOT lowered to the VIP-1 floor of 18 when the ramp moved there.
+# That 20 was measured against real frames and fixed a visible bug; the 18-20
+# sliver draws in the light-echo green but faintly, which is honest on both
+# counts (it IS VIP 1, and it IS not worth routing around).
 FAINT_ECHO_DBZ = 20.0
 FAINT_ALPHA = 70
 

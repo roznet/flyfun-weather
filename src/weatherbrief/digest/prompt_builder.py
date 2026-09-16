@@ -1016,9 +1016,22 @@ def _format_observed_context(observed) -> str:
     Each source's own age travels with it. Without that the model would read
     four measurements as one instant, and a radar composite is a rolling
     10-minute maximum plus delivery lag — up to ~30 NM of own-ship at 120 kt.
+
+    The intensity note is load-bearing. The clauses now carry a word ("heavy
+    echo, peak 44 dBZ") that is a published reflectivity class, and a model
+    handed an unqualified "heavy" will happily launder it into "heavy
+    precipitation is expected" — a forecast verdict, from a surface that is
+    explicitly not allowed to grade (``designs/current-conditions.md``).
     """
     lines = ["OBSERVED CONDITIONS ALONG ROUTE (measured, not forecast):"]
     lines.extend(f"- {line}" for line in observed.summary_lines)
+    if any(entry.category for entry in observed.summary_entries):
+        lines.append(
+            "  Intensity words above (light/moderate/heavy/very heavy/extreme) "
+            "are NWS VIP reflectivity classes describing the echo that was "
+            "measured. They are not a hazard assessment and not a forecast — "
+            "do not restate them as an expected condition or a severity."
+        )
     ages = []
     for field in (
         observed.reflectivity,

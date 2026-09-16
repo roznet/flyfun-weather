@@ -25,21 +25,28 @@ const MARK_HALF_WIDTH_NM = 4;
 const FLASH_TICK_HEIGHT_PX = 9;
 const MAX_FLASH_TICKS = 4;
 
-/** dBZ → strip colour.
+/** dBZ → strip colour, on the NWS VIP levels.
  *
  * Mirrors `_DBZ_STOPS` in `observed/imagery.py` stop for stop, so the map
  * overlay and the cross-section strip cannot disagree about what a given
  * reflectivity looks like. The 65 dBZ magenta was missing here while the
  * server had it, so the most intense echo on the map rendered as ordinary red
  * on the cross-section — the one case where the difference matters most.
- * Keep the two lists in step. */
+ * Keep the two lists in step; the server builds its copy from the intensity
+ * bands in `observed/intensity.py`, which is the source of truth for both, and
+ * `ObservedSurfaceLayer.swift` carries the third copy.
+ *
+ * Breaks are the VIP boundaries rather than round numbers: a pilot's own
+ * airborne radar has been red since 40 dBZ and magenta since 50, so the
+ * previous 45/55 ramp read one notch optimistic against the box in the panel.
+ * Below 18 dBZ is below VIP 1 — drawn, but in the unclassified blue. */
 export function echoColor(dbz: number): string {
-  if (dbz >= 65) return '#be3cbe';
-  if (dbz >= 55) return '#e13c3c';
-  if (dbz >= 45) return '#f08c28';
-  if (dbz >= 35) return '#f0d23c';
-  if (dbz >= 20) return '#3cbe5a';
-  return '#5aa0dc';
+  if (dbz >= 50) return '#be3cbe';  // VIP 5-6  extreme
+  if (dbz >= 46) return '#e13c3c';  // VIP 4    very heavy
+  if (dbz >= 41) return '#f08c28';  // VIP 3    heavy
+  if (dbz >= 30) return '#f0d23c';  // VIP 2    moderate
+  if (dbz >= 18) return '#3cbe5a';  // VIP 1    light
+  return '#5aa0dc';                 // below the scale
 }
 
 /** How many flash ticks to draw for a disc's flash count. */

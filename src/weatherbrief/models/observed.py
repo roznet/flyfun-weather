@@ -271,11 +271,22 @@ class ObservedSummaryEntry(BaseModel):
     ``coverage`` is the one kind that belongs to no single source: it reports
     how much of the corridor the radar could see at all, which qualifies every
     radar clause above it.
+
+    ``category`` is the intensity class the clause reports, as a machine value
+    from :class:`~weatherbrief.observed.intensity.EchoIntensity`.  The word is
+    already inside ``text``; the field exists so a client can colour the row,
+    or render the word from its own locale files, without parsing the prose.
+    It is empty on clauses that carry no intensity (lightning, cloud tops,
+    coverage) and on a detection too faint for the scale to name.
+
+    It is a class, never a grade: see ``observed/intensity.py`` on why that
+    distinction is load-bearing for a surface that is not allowed to judge.
     """
 
     kind: str  # lightning | reflectivity | rain_rate | cloud_tops | coverage
     text: str
     metric_id: str = ""
+    category: str = ""  # EchoIntensity value, "" when the clause has no class
 
 
 class ObservedSourceStatus(BaseModel):
@@ -316,10 +327,10 @@ class ObservedConditions(BaseModel):
     # is the same content as plain strings for the PDF and the digest, and
     # ``summary`` is those joined into a paragraph.
     #
-    # The clauses are deliberately not uniformly shaped ("Radar: peak 38 dBZ…"
-    # but "Rain rate to 1.8 mm/h…"), so a client that wants to render them as
-    # per-source rows must not recover the source by parsing the prose.  That
-    # is what the entries are for.
+    # The clauses are deliberately not uniformly shaped ("Radar: heavy echo,
+    # peak 44 dBZ…" but "Precip rate to 18.0 mm/h (heavy)…"), so a client
+    # rendering them as per-source rows must not recover the source — or the
+    # intensity — by parsing the prose.  That is what the entries are for.
     summary: str = ""
     summary_entries: list[ObservedSummaryEntry] = Field(default_factory=list)
     summary_lines: list[str] = Field(default_factory=list)

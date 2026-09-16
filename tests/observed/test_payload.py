@@ -291,9 +291,24 @@ def test_summary_lines_stay_derived_from_the_entries(stocked_store):
 
 def test_summary_names_the_echo_and_its_age(stocked_store):
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
-    radar = next(line for line in conditions.summary_lines if line.startswith("Radar: peak"))
+    radar = next(line for line in conditions.summary_lines if "peak" in line)
     assert "dBZ" in radar
     assert "observed 5 min ago" in radar
+
+
+def test_summary_classes_the_echo_without_losing_the_measurement(stocked_store):
+    """The intensity word is a gloss on the number, never a substitute for it.
+
+    A reader who does not know the VIP scale still gets the dBZ; a reader who
+    does not want to convert dBZ in their head still gets the word.  The
+    matching ``category`` is what a client styles the row from — parsing this
+    prose is explicitly barred (see ``ObservedSummaryEntry``).
+    """
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    entry = next(e for e in conditions.summary_entries if e.kind == "reflectivity")
+    assert "dBZ" in entry.text
+    assert entry.category, f"a named echo carries no class: {entry.text}"
+    assert f"{entry.category.replace('_', ' ')} echo" in entry.text
 
 
 def test_summary_reports_missing_coverage_distinctly_from_no_echo(stocked_store):
@@ -331,7 +346,14 @@ def test_summary_is_deterministic(stocked_store):
 
 
 def test_summary_grades_nothing(stocked_store):
-    """Phase 1 displays observations; it computes no verdict."""
+    """Phase 1 displays observations; it computes no verdict.
+
+    The intensity words ("heavy echo") are deliberately NOT in the forbidden
+    list: a published VIP class restates the measurement, where these words
+    would claim something about the flight.  That carve-out is recorded in
+    ``designs/current-conditions.md`` and ``observed/intensity.py`` — do not
+    "fix" this list by adding them, and do not widen the wording to earn them.
+    """
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     forbidden = ("severe", "hazard", "significant", "amber", "red", "warning")
     lowered = conditions.summary.lower()
