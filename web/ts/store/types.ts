@@ -937,7 +937,7 @@ export interface ObservedSummaryEntry {
    *  here so a row can be styled, or the word re-rendered from a locale file,
    *  without parsing prose. It is a class, never a severity — see
    *  `observed/intensity.py`. */
-  category?: string;
+  category: string;
 }
 
 /** What got worse since the previous real-time refresh (deterministic, no LLM). */
