@@ -578,6 +578,124 @@ struct RouteGraphSeriesTests {
     }
 }
 
+// MARK: - Zero-reference placement
+
+/// The web draws a zero line per METRIC (`renderer.ts` calls `drawZeroLine` for
+/// the left and right metric independently), and iOS drew one only for the left —
+/// so `cloud-cover` + `crosswind` rendered a signed axis with no zero reference
+/// at all. Same left-only class as the marker bug, one round later, which is why
+/// the predicate now lives on `RouteGraphScale` where a test can reach it.
+@Suite("Zero-reference placement")
+struct ZeroLineTests {
+
+    private func scale(_ m: RouteGraphMetric, _ values: [Double]) -> RouteGraphScale {
+        RouteGraphScale(samples: values.map { MetricSample.value($0) }, metric: m)
+    }
+
+    @Test("every signed metric the web gives a zero line declares one here")
+    func signedMetricsDeclareZeroLine() {
+        // From ROUTE_GRAPH_METRICS: these four set showZeroLine on the web.
+        for id in ["headwind", "crosswind", "temperature", "isa-dev", "cin"] {
+            #expect(metric(id).showZeroLine, "\(id) lost its zero line")
+        }
+    }
+
+    @Test("a signed metric gets a zero line on its own axis")
+    func leftAxisZeroLine() {
+        let m = metric("crosswind")
+        let s = scale(m, [-15, 20])
+        #expect(s.zeroLineY(for: m, in: s) != nil)
+    }
+
+    /// The regression: the same metric as the RIGHT axis must still get a zero
+    /// line, placed in the host domain.
+    @Test("a signed metric gets a zero line as the right axis too")
+    func rightAxisZeroLine() {
+        let m = metric("crosswind")
+        let own = scale(m, [-15, 20])
+        let host = scale(metric("cloud-cover"), [10, 80])
+        guard let y = own.zeroLineY(for: m, in: host) else {
+            Issue.record("a signed right-axis metric must still get a zero reference")
+            return
+        }
+        // Drawn inside the host's domain, at the host's height for the right
+        // metric's zero — which is NOT the host's own zero.
+        #expect(y >= host.lower && y <= host.upper)
+    }
+
+    @Test("the right axis's zero sits at its own height, not the host's")
+    func rightZeroIsNotHostZero() {
+        // crosswind −5…20 puts its zero low in its own range; cloud-cover's zero
+        // is at its floor. Mapping must land the former above the latter.
+        let m = metric("crosswind")
+        let own = scale(m, [-5, 20])
+        let host = scale(metric("cloud-cover"), [0, 100])
+        guard let y = own.zeroLineY(for: m, in: host) else {
+            Issue.record("expected a zero line")
+            return
+        }
+        #expect(y > host.lower)
+    }
+
+    @Test("an unsigned metric gets no zero line on either axis")
+    func unsignedMetricsHaveNone() {
+        let m = metric("qnh")
+        let s = scale(m, [1008, 1020])
+        #expect(m.showZeroLine == false)
+        #expect(s.zeroLineY(for: m, in: s) == nil)
+    }
+
+    /// The invariant that makes the reference dependable: a metric declaring
+    /// `showZeroLine` ALWAYS ends up with zero inside its domain, whatever the
+    /// data does, because the padding step plus the explicit zero-line correction
+    /// guarantee it. So the line is never silently skipped for a signed metric.
+    ///
+    /// CIN is the interesting case — it pins −300…0, where zero is the range's
+    /// own boundary, and the 10% padding is what lifts the domain above it.
+    @Test("a signed metric's domain always straddles zero, whatever the data")
+    func signedDomainsAlwaysStraddleZero() {
+        let shapes: [[Double]] = [
+            [],                  // no data at all
+            [-200],              // all negative
+            [5, 12, 20],         // all positive
+            [-15, 20],           // both sides
+            [0],                 // exactly zero
+        ]
+        for id in ["headwind", "crosswind", "temperature", "isa-dev", "cin"] {
+            let m = metric(id)
+            for shape in shapes {
+                let s = RouteGraphScale(samples: shape.map { MetricSample.value($0) }, metric: m)
+                #expect(s.lower < 0 && s.upper > 0,
+                        "\(id) with \(shape) gave \(s.lower)…\(s.upper), excluding zero")
+                #expect(s.zeroLineY(for: m, in: s) != nil, "\(id) with \(shape) lost its reference")
+            }
+        }
+    }
+
+    /// `zeroLineY`'s domain guard still mirrors web `drawZeroLine`'s early return
+    /// for the case the invariant above does not cover: a metric that does not ask
+    /// for a zero line gets none even when its domain happens to straddle zero.
+    @Test("the guard is the metric's own declaration, not the domain's shape")
+    func guardFollowsDeclaration() {
+        let m = metric("precipitation")   // 0…5, unsigned
+        let s = RouteGraphScale(samples: [.value(-1), .value(3)], metric: m)
+        #expect(s.lower < 0 && s.upper > 0)   // domain straddles zero...
+        #expect(s.zeroLineY(for: m, in: s) == nil)  // ...but the metric wants no line
+    }
+
+    @Test("the zero line round-trips to zero in the metric's own units")
+    func zeroLineIsActuallyZero() {
+        let m = metric("headwind")
+        let own = scale(m, [-10, 25])
+        let host = scale(metric("cape"), [0, 900])
+        guard let y = own.zeroLineY(for: m, in: host) else {
+            Issue.record("expected a zero line")
+            return
+        }
+        #expect(abs(own.unmapped(y, from: host)) < 1e-9)
+    }
+}
+
 // MARK: - Skew-T side-panel catalog ↔ web
 
 @Suite("Skew-T variable catalog ↔ web")

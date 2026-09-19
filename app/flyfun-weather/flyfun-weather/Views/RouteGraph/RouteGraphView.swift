@@ -88,6 +88,18 @@ struct RouteGraphScale {
         lower + (y - target.lower) / target.span * span
     }
 
+    /// Where `metric`'s zero reference is drawn, in `host`'s domain — or nil when
+    /// the metric has no zero line, or its own domain excludes zero (web
+    /// `drawZeroLine`'s `scale.min > 0 || scale.max < 0` guard).
+    ///
+    /// Lives here rather than inline in the `Chart` body so the rule is reachable
+    /// from a test: the body is not unit-testable, which is why the right axis
+    /// silently had no zero line at all.
+    func zeroLineY(for metric: RouteGraphMetric, in host: RouteGraphScale) -> Double? {
+        guard metric.showZeroLine, lower < 0, upper > 0 else { return nil }
+        return mapped(0, into: host)
+    }
+
     /// A 1/2/5×10ⁿ step that lands near `targetTicks` divisions. Port of web
     /// `niceTickInterval`.
     private static func niceTickInterval(_ range: Double, targetTicks: Int) -> Double {
@@ -196,97 +208,18 @@ struct RouteGraphView: View {
         }()
 
         Chart {
-            ForEach(left.values) { pt in
-                if leftMetric.renderType == .bar {
-                    BarMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
-                        .foregroundStyle(leftMetric.color.opacity(0.6))
-                } else {
-                    LineMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
-                        .foregroundStyle(leftMetric.color)
-                        .lineStyle(StrokeStyle(lineWidth: 2))
-                }
-            }
-
-            // Capped markers ride the top edge of the pinned axis.
-            ForEach(left.capped) { pt in
-                PointMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
-                    .symbol(.triangle)
-                    .symbolSize(40)
-                    .foregroundStyle(leftMetric.color)
-            }
-
-            // Coverage holes sit on the floor as hollow marks — distinct from a
-            // bar of zero, which would read as a confident "nothing here".
-            ForEach(left.holes) { pt in
-                PointMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
-                    .symbol(.cross)
-                    .symbolSize(30)
-                    .foregroundStyle(.secondary.opacity(0.5))
-            }
+            // ONE drawing path per axis. Both axes go through `axisContent`
+            // because building a metric's marks per call site is how this view
+            // lost the capped/coverage markers on the right axis, and then the
+            // right axis's zero line, in two successive rounds. Anything a metric
+            // contributes to the chart belongs in there, so a new state or a new
+            // axis cannot be half-implemented.
+            axisContent(metric: leftMetric, series: left,
+                        scale: leftScale, host: leftScale, style: .primary)
 
             if let rm = rightMetric, let rs = rightScale, let right {
-                // A right-axis bar must start from the RIGHT metric's own zero
-                // mapped into the left domain — `BarMark(y:)` would baseline it at
-                // the left metric's zero, which is a different height entirely and
-                // would draw bars growing from the wrong place.
-                let rightBaseline = rs.mapped(max(rs.lower, min(rs.upper, 0)), into: leftScale)
-                ForEach(right.values) { pt in
-                    if rm.renderType == .bar {
-                        BarMark(x: .value("Distance", pt.distance),
-                                yStart: .value(rm.label, rightBaseline),
-                                yEnd: .value(rm.label, pt.plotValue))
-                            .foregroundStyle(rm.color.opacity(0.4))
-                    } else {
-                        LineMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.plotValue))
-                            .foregroundStyle(rm.color)
-                            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                    }
-                }
-
-                // The right axis gets the same two marker layers as the left. A
-                // ceiling above the cap or a radar hole on THIS axis is the same
-                // claim about the same weather, and `cloud-cover` + `ceiling-nwp`
-                // is the web Clouds lens's own pairing — so it is a selection
-                // pilots will actually make, not a corner case. Hollow symbols
-                // keep them readable against the left metric's solid markers.
-                ForEach(right.capped) { pt in
-                    PointMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.plotValue))
-                        .symbol(.triangle)
-                        .symbolSize(30)
-                        .foregroundStyle(rm.color.opacity(0.7))
-                }
-                ForEach(right.holes) { pt in
-                    PointMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.plotValue))
-                        .symbol(.cross)
-                        .symbolSize(22)
-                        .foregroundStyle(.secondary.opacity(0.4))
-                }
-            }
-
-            // Zero reference for the signed metrics (head/tailwind, crosswind,
-            // ISA dev, CIN). A signed axis with no labelled zero is the one thing
-            // these readings must not be: "12 kt" tells a pilot nothing about
-            // which side it is coming from.
-            //
-            // Drawn as two coincident rules rather than one mark with two
-            // annotations: a mark takes a single `.annotation`, so stacking two
-            // would keep only the last. The second rule adds no visible ink.
-            if leftMetric.showZeroLine, leftScale.lower < 0, leftScale.upper > 0 {
-                RuleMark(y: .value("Zero", 0))
-                    .foregroundStyle(.gray.opacity(0.5))
-                    .lineStyle(StrokeStyle(lineWidth: 0.5))
-                    .annotation(position: .top, alignment: .leading) {
-                        if let labels = leftMetric.zeroLineLabels {
-                            Text(labels.above).font(.system(size: 8)).foregroundStyle(.secondary)
-                        }
-                    }
-                if let labels = leftMetric.zeroLineLabels {
-                    RuleMark(y: .value("Zero", 0))
-                        .foregroundStyle(.clear)
-                        .annotation(position: .bottom, alignment: .leading) {
-                            Text(labels.below).font(.system(size: 8)).foregroundStyle(.secondary)
-                        }
-                }
+                axisContent(metric: rm, series: right,
+                            scale: rs, host: leftScale, style: .secondary)
             }
 
             ForEach(vizData.waypointMarkers, id: \.icao) { wp in
@@ -351,6 +284,108 @@ struct RouteGraphView: View {
     /// gutter narrow enough to match the cross-section's left margin.
     private static func axisLabel(_ v: Double) -> String {
         v == v.rounded() ? String(Int(v)) : String(format: "%.1f", v)
+    }
+
+    /// Per-axis drawing weights. The right axis is deliberately lighter so the
+    /// two series stay tellable apart on one shared domain, but it draws every
+    /// element the left one does — the difference is ink, never content.
+    private struct AxisStyle {
+        let lineWidth: CGFloat
+        let dash: [CGFloat]
+        let barOpacity: Double
+        let cappedSize: CGFloat
+        let cappedOpacity: Double
+        let holeSize: CGFloat
+        let holeOpacity: Double
+
+        static let primary = AxisStyle(
+            lineWidth: 2, dash: [], barOpacity: 0.6,
+            cappedSize: 40, cappedOpacity: 1.0, holeSize: 30, holeOpacity: 0.5)
+        static let secondary = AxisStyle(
+            lineWidth: 1.5, dash: [4, 3], barOpacity: 0.4,
+            cappedSize: 30, cappedOpacity: 0.7, holeSize: 22, holeOpacity: 0.4)
+    }
+
+    /// Everything one metric contributes to the chart: its line or bars, its
+    /// above-scale and coverage-hole markers, and its own zero reference.
+    ///
+    /// `scale` is the metric's own domain; `host` is the domain the chart draws in
+    /// (the left metric's). For the left metric they are the same object, so the
+    /// mapping is the identity and this costs nothing.
+    @ChartContentBuilder
+    private func axisContent(
+        metric: RouteGraphMetric,
+        series: RouteGraphSeries,
+        scale: RouteGraphScale,
+        host: RouteGraphScale,
+        style: AxisStyle
+    ) -> some ChartContent {
+        // Bars baseline from THIS metric's own zero mapped into the host domain.
+        // `BarMark(y:)` would baseline every bar at the host's zero, which for a
+        // right-axis metric is a different height entirely.
+        let baseline = scale.mapped(max(scale.lower, min(scale.upper, 0)), into: host)
+
+        ForEach(series.values) { pt in
+            if metric.renderType == .bar {
+                BarMark(x: .value("Distance", pt.distance),
+                        yStart: .value(metric.label, baseline),
+                        yEnd: .value(metric.label, pt.plotValue))
+                    .foregroundStyle(metric.color.opacity(style.barOpacity))
+            } else {
+                LineMark(x: .value("Distance", pt.distance),
+                         y: .value(metric.label, pt.plotValue))
+                    .foregroundStyle(metric.color)
+                    .lineStyle(StrokeStyle(lineWidth: style.lineWidth, dash: style.dash))
+            }
+        }
+
+        // Capped markers ride the top edge of the pinned axis: "higher than that
+        // number", not a gap.
+        ForEach(series.capped) { pt in
+            PointMark(x: .value("Distance", pt.distance),
+                      y: .value(metric.label, pt.plotValue))
+                .symbol(.triangle)
+                .symbolSize(style.cappedSize)
+                .foregroundStyle(metric.color.opacity(style.cappedOpacity))
+        }
+
+        // Coverage holes sit on the floor — distinct from a bar of zero, which
+        // would read as a confident "nothing measured here".
+        ForEach(series.holes) { pt in
+            PointMark(x: .value("Distance", pt.distance),
+                      y: .value(metric.label, pt.plotValue))
+                .symbol(.cross)
+                .symbolSize(style.holeSize)
+                .foregroundStyle(.secondary.opacity(style.holeOpacity))
+        }
+
+        // Zero reference for the signed metrics (head/tailwind, crosswind, ISA
+        // dev, CIN). A signed axis with no labelled zero is the one thing these
+        // readings must not be: "12 kt" tells a pilot nothing about which side it
+        // is coming from. Each axis gets its OWN zero at its own height, as web
+        // `renderer.ts` draws one per metric — skipped when the domain excludes
+        // zero, matching web `drawZeroLine`'s guard.
+        //
+        // Two coincident rules rather than one mark with two annotations: a mark
+        // honours a single `.annotation`, so stacking two keeps only the last. The
+        // second rule is drawn clear and adds no ink.
+        if let zeroY = scale.zeroLineY(for: metric, in: host) {
+            RuleMark(y: .value("Zero", zeroY))
+                .foregroundStyle(.gray.opacity(0.5))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .annotation(position: .top, alignment: .leading) {
+                    if let labels = metric.zeroLineLabels {
+                        Text(labels.above).font(.system(size: 8)).foregroundStyle(.secondary)
+                    }
+                }
+            if let labels = metric.zeroLineLabels {
+                RuleMark(y: .value("Zero", zeroY))
+                    .foregroundStyle(.clear)
+                    .annotation(position: .bottom, alignment: .leading) {
+                        Text(labels.below).font(.system(size: 8)).foregroundStyle(.secondary)
+                    }
+            }
+        }
     }
 
     private func metricPicker(selection: Binding<String>, label: String) -> some View {
