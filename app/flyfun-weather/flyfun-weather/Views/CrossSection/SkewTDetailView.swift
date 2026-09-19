@@ -311,20 +311,31 @@ struct SkewTDetailView: View {
         .padding(.horizontal, Theme.cardPadding)
     }
 
+    /// Picker row text, mirroring the web's "<shortLabel> — <label>" option.
+    private static func menuLabel(_ v: SkewTVariable) -> String {
+        let short = SkewTVariableCatalog.shortLabel[v.id]
+        let name = short.map { "\($0) — \(v.label)" } ?? v.label
+        return v.unit.isEmpty ? name : "\(name) (\(v.unit))"
+    }
+
     private func varMenu(fallback: String, selection: Binding<String?>, available: [SkewTVariable]) -> some View {
         let current = available.first { $0.id == selection.wrappedValue }
         return Menu {
             ForEach(availableGroups) { group in
                 Section(group.label) {
                     ForEach(group.variables) { v in
-                        Button(v.unit.isEmpty ? v.label : "\(v.label) (\(v.unit))") { selection.wrappedValue = v.id }
+                        // Web dropdown shape: "<shortLabel> — <label>", with the
+                        // unit appended where there is one.
+                        Button(Self.menuLabel(v)) { selection.wrappedValue = v.id }
                     }
                 }
             }
         } label: {
             HStack(spacing: 4) {
                 Circle().fill(current?.color ?? .clear).frame(width: 8, height: 8)
-                Text(current?.label ?? fallback).font(.caption)
+                // Collapsed chip is tight, so it shows the terse form.
+                Text(current.map { SkewTVariableCatalog.shortLabel[$0.id] ?? $0.label } ?? fallback)
+                    .font(.caption)
                 Image(systemName: "chevron.down").font(.caption2)
             }
             .foregroundStyle(Theme.text)

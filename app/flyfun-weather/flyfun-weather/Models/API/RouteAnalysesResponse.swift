@@ -24,6 +24,11 @@ struct RoutePointAnalysis: Codable, Sendable {
     let windComponents: [String: WindComponent]
     let sounding: [String: SoundingAnalysis]
     let modelDivergence: [ModelDivergence]
+    /// Per-model temperature (°C) interpolated at the elected cruise level.
+    /// Optional because packs built before the field existed omit it entirely —
+    /// the route graph's ISA-deviation metric reads nil there rather than
+    /// deriving a deviation from a surface temperature.
+    let cruiseTemperatureC: [String: Double]?
 }
 
 /// Full sounding analysis for cross-section rendering.

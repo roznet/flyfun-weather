@@ -83,6 +83,31 @@ struct TerrainPoint {
     let elevationFt: Double
 }
 
+extension Array where Element == TerrainPoint {
+    /// Terrain elevation (ft MSL) at an along-route distance, linearly
+    /// interpolated between the two bracketing samples and clamped to the
+    /// profile's ends. Port of web `interpolateTerrainElevation`
+    /// (`web/ts/visualization/data-extract.ts`).
+    ///
+    /// Interpolating rather than snapping matters for the AGL ceiling metrics:
+    /// route points and elevation samples are on different grids, so a snap can
+    /// put a ceiling several hundred feet off over rising ground — enough to
+    /// flip which side of a VFR minimum it reads as.
+    func elevationFt(atDistanceNm distanceNm: Double) -> Double {
+        guard let first, let last else { return 0 }
+        if distanceNm <= first.distanceNm { return first.elevationFt }
+        if distanceNm >= last.distanceNm { return last.elevationFt }
+        for (a, b) in zip(self, dropFirst())
+        where distanceNm >= a.distanceNm && distanceNm <= b.distanceNm {
+            let span = b.distanceNm - a.distanceNm
+            guard span > 0 else { return a.elevationFt }
+            let t = (distanceNm - a.distanceNm) / span
+            return a.elevationFt + t * (b.elevationFt - a.elevationFt)
+        }
+        return 0
+    }
+}
+
 // MARK: - Per-point data
 
 struct VizPoint {
@@ -119,10 +144,56 @@ struct VizPoint {
     let nwpCloudDiag: VizCloudDiag?
     let temperatureC: Double?
     let precipitationMm: Double?
+    /// Surface-based CIN (J/kg) — companion to `capeSurfaceJkg`, and like it read
+    /// straight off the selected model's sounding indices rather than
+    /// `model_divergence`. Convention-negative: energy that inhibits convection.
+    ///
+    /// `var` with a default, like the trailing fields below: the extractor always
+    /// supplies a real value, but the test fixtures build points field-by-field
+    /// and a `let` default would be dropped from the memberwise initializer.
+    var cinSurfaceJkg: Double = 0
+    /// Sounding-derived ceiling (ft MSL), nil when the point has no sounding.
+    /// The route graph converts to AGL against `terrainElevationFt`.
+    var soundingCeilingFt: Double? = nil
+    /// Terrain elevation at this point (ft MSL), for AGL conversion. Linearly
+    /// interpolated from the elevation profile, matching the web extractor —
+    /// unlike the observed strip's deliberate nearest-neighbour snap, which
+    /// wants the sampled ground it draws on, not a value between samples.
+    var terrainElevationFt: Double = 0
+    /// ISA deviation (°C) at the elected cruise level: actual − ISA standard.
+    /// Positive = warmer than standard (higher density altitude, degraded
+    /// TAS/climb). nil when the pack carries no cruise temperature.
+    var isaDevC: Double? = nil
+    /// QNH (hPa, canonical) from `model_divergence.pressure_msl_hpa`.
+    var qnhHpa: Double? = nil
     /// The observed sample matched to this point by along-route distance, so a
     /// hover can report everything measured here without re-deriving the match.
     /// nil when no observed station fell within `observedMatchToleranceNm`.
     var observed: VizObservedPoint? = nil
+
+    // MARK: Observed convenience accessors
+    //
+    // The web extractor mirrors the measured scalars onto VizPoint itself so a
+    // metric getter is a one-liner; iOS keeps them nested under `observed`.
+    // These bridge the two shapes so the route-graph metric table reads the same
+    // on both platforms rather than reaching through an optional inline.
+
+    /// Observed radar rain rate (mm/h). nil means EITHER the radar looked and
+    /// found nothing OR it does not cover this point — `observedRadarNoCoverage`
+    /// is what disambiguates, and a renderer must not collapse the two.
+    var observedRateMmH: Double? { observed?.rateMmH }
+
+    /// True when the radar does not cover enough of this disc to say anything.
+    /// Either coverage flag alone is enough: if the composite does not reach here
+    /// there is no rate to derive either, so both gate the rate metric — matching
+    /// the web extractor's `radarNoCoverage || rateNoCoverage`.
+    var observedRadarNoCoverage: Bool {
+        guard let observed else { return false }
+        return observed.radarNoCoverage || observed.rateNoCoverage
+    }
+
+    /// Flashes per 1000 km² per minute — comparable between corridor widths.
+    var observedFlashRate: Double? { observed?.flashRate }
 }
 
 struct AltitudeLines {

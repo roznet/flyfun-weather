@@ -1,0 +1,502 @@
+//
+//  RouteGraphMetricsTests.swift
+//  flyfun-weatherTests
+//
+//  Web↔iOS parity for the route-graph metric registry and the Skew-T side-panel
+//  catalog — the two hand-copied surfaces that drifted silently because nothing
+//  compared them (see .claude/skills/sync-ios-web).
+//
+//  These are the silent-regression class in the strongest sense: every
+//  divergence fixed here rendered *plausibly* rather than failing. A declared
+//  suggestedRange that nothing read still drew a chart; a ceiling above the
+//  display cap still drew a gap; a help pointer aimed at the wrong metric still
+//  opened a popup with confident, wrong text. So the assertions pin the
+//  vocabulary and the state machine, not the pixels.
+//
+
+import Testing
+import SwiftUI
+@testable import flyfun_weather
+
+// MARK: - Fixtures
+
+private func point(
+    distanceNm: Double = 0,
+    terrainElevationFt: Double = 0,
+    soundingCeilingFt: Double? = nil,
+    nwpCeilingFt: Double? = nil,
+    cinSurfaceJkg: Double = 0,
+    isaDevC: Double? = nil,
+    qnhHpa: Double? = nil,
+    observed: VizObservedPoint? = nil
+) -> VizPoint {
+    VizPoint(
+        distanceNm: distanceNm,
+        lat: 0, lon: 0,
+        time: "2026-06-24T12:00:00Z",
+        altitudeLines: AltitudeLines(
+            freezingLevelFt: nil, minus10cLevelFt: nil, minus20cLevelFt: nil,
+            lclAltitudeFt: nil, lfcAltitudeFt: nil, elAltitudeFt: nil
+        ),
+        cloudLayers: [],
+        nwpCloudLayers: nil,
+        icingZones: [], icingOgimetNwpZones: [], sfipZones: [],
+        catLayers: [], inversions: [],
+        convectiveRisk: "none", convectiveBaseFt: nil, convectiveTopFt: nil,
+        nwpConvectiveRisk: "none",
+        nwpConvectiveBaseFt: nil, nwpConvectiveTopFt: nil,
+        nwpConvectiveCoverPct: nil, nwpConvectiveMethod: nil,
+        hasNwpConvective: false,
+        cloudCoverTotalPct: 0, cloudCoverLowPct: 0, cloudCoverMidPct: 0,
+        headwindKt: 0, crosswindKt: 0,
+        capeSurfaceJkg: 0,
+        worstModelAgreement: "good",
+        nwpCloudDiag: nwpCeilingFt.map {
+            VizCloudDiag(
+                low: VizCloudDiagBand(coverPct: nil, baseFt: nil, topFt: nil),
+                mid: VizCloudDiagBand(coverPct: nil, baseFt: nil, topFt: nil),
+                high: VizCloudDiagBand(coverPct: nil, baseFt: nil, topFt: nil),
+                ceilingFt: $0)
+        },
+        temperatureC: nil,
+        precipitationMm: nil,
+        cinSurfaceJkg: cinSurfaceJkg,
+        soundingCeilingFt: soundingCeilingFt,
+        terrainElevationFt: terrainElevationFt,
+        isaDevC: isaDevC,
+        qnhHpa: qnhHpa,
+        observed: observed
+    )
+}
+
+private func metric(_ id: String) -> RouteGraphMetric {
+    guard let m = RouteGraphMetrics.metric(byId: id) else {
+        fatalError("no route-graph metric '\(id)' — the registry lost a web metric")
+    }
+    return m
+}
+
+// MARK: - Registry parity with the web
+
+@Suite("Route-graph registry ↔ web")
+struct RouteGraphRegistryTests {
+
+    /// The metric IDs and their order, verbatim from `ROUTE_GRAPH_METRICS` in
+    /// web/ts/visualization/route-graph/metrics.ts.
+    ///
+    /// Order is asserted, not just membership: it is the picker's order on both
+    /// clients, and an id present on only one silently breaks the web advisory
+    /// lens that names it in its `routeGraph` directive.
+    static let webIds = [
+        "observed-rain-rate", "observed-flash-rate",
+        "headwind", "crosswind", "temperature", "isa-dev",
+        "precipitation", "cloud-cover", "cape", "cin", "qnh",
+        "freezing-level", "ceiling-dd", "ceiling-nwp",
+    ]
+
+    @Test("every web metric exists on iOS, in the same order")
+    func idsMatchWeb() {
+        #expect(RouteGraphMetrics.all.map(\.id) == Self.webIds)
+    }
+
+    /// Every metric a web advisory lens names in `routeGraph`, including the
+    /// `enroute_precip` override. `ceiling-nwp` is the one this suite exists for:
+    /// three lenses point at it, and iOS had no such metric at all.
+    @Test("metrics the web lenses target all resolve")
+    func lensTargetsResolve() {
+        for id in ["freezing-level", "ceiling-nwp", "cloud-cover", "cape",
+                   "precipitation", "headwind", "crosswind"] {
+            #expect(RouteGraphMetrics.metric(byId: id) != nil, "lens target '\(id)' missing")
+        }
+    }
+
+    /// The pinned ranges from the web registry. A range that exists but is not
+    /// honoured is worse than none: the same numbers then render at a different
+    /// magnitude on each client with nothing on screen saying so.
+    @Test("suggested ranges match the web registry")
+    func rangesMatchWeb() {
+        #expect(metric("precipitation").suggestedRange == 0...5)
+        #expect(metric("cloud-cover").suggestedRange == 0...100)
+        #expect(metric("cape").suggestedRange == 0...1000)
+        #expect(metric("cin").suggestedRange == -300...0)
+        #expect(metric("ceiling-dd").suggestedRange == 0...5000)
+        #expect(metric("ceiling-nwp").suggestedRange == 0...5000)
+        // Auto-scaled on the web too.
+        #expect(metric("headwind").suggestedRange == nil)
+        #expect(metric("qnh").suggestedRange == nil)
+    }
+
+    @Test("only the ceiling metrics cap, and both declare a range to cap against")
+    func aboveScaleMetrics() {
+        let capped = RouteGraphMetrics.all.filter(\.aboveScale).map(\.id)
+        #expect(capped == ["ceiling-dd", "ceiling-nwp"])
+        for m in RouteGraphMetrics.all where m.aboveScale {
+            #expect(m.suggestedRange != nil, "\(m.id) caps with no range to cap against")
+        }
+    }
+
+    @Test("only the radar metric claims a coverage state")
+    func noCoverageMetrics() {
+        let sensed = RouteGraphMetrics.all.filter { $0.isNoCoverage != nil }.map(\.id)
+        #expect(sensed == ["observed-rain-rate"])
+    }
+}
+
+// MARK: - The four-state sample model
+
+@Suite("Metric sampling states")
+struct MetricSampleTests {
+
+    @Test("a ceiling above the cap is above-scale, never a gap")
+    func ceilingAboveCapIsAboveScale() {
+        let m = metric("ceiling-dd")
+        // 12,000 ft MSL over 1,000 ft terrain = 11,000 ft AGL, well past the cap.
+        let sample = m.sample(at: point(terrainElevationFt: 1000, soundingCeilingFt: 12000))
+        guard case .aboveScale(let v) = sample else {
+            Issue.record("expected .aboveScale, got \(sample)")
+            return
+        }
+        #expect(v == 11000)
+        // Reported from the CAP, not the value: we state the limit we can draw,
+        // we do not disclose a number we declined to plot. Compared against the
+        // metric's own formatting of the cap rather than a literal, because the
+        // thousands separator is locale-dependent (as `toLocaleString()` is on
+        // the web) and must not make this test locale-sensitive.
+        #expect(m.formatSample(sample) == "> " + m.formatValue(5000))
+        #expect(m.formatSample(sample) != "> " + m.formatValue(11000))
+    }
+
+    @Test("no sounding is unavailable — the state above-scale must not be confused with")
+    func noSoundingIsUnavailable() {
+        let m = metric("ceiling-dd")
+        let sample = m.sample(at: point(soundingCeilingFt: nil))
+        guard case .unavailable = sample else {
+            Issue.record("expected .unavailable, got \(sample)")
+            return
+        }
+        #expect(m.formatSample(sample) == "N/A")
+    }
+
+    @Test("a ceiling inside the cap is an ordinary value")
+    func ceilingInsideCapIsValue() {
+        let m = metric("ceiling-dd")
+        let sample = m.sample(at: point(terrainElevationFt: 500, soundingCeilingFt: 3500))
+        guard case .value(let v) = sample else {
+            Issue.record("expected .value, got \(sample)")
+            return
+        }
+        #expect(v == 3000)
+    }
+
+    @Test("a ceiling below terrain floors at 0 rather than going negative")
+    func ceilingBelowTerrainFloors() {
+        let m = metric("ceiling-dd")
+        guard case .value(let v) = m.sample(at: point(terrainElevationFt: 4000, soundingCeilingFt: 3000)) else {
+            Issue.record("expected .value")
+            return
+        }
+        #expect(v == 0)
+    }
+
+    /// `ceiling-nwp` is the metric three web lenses target, so its getter gets
+    /// the same AGL treatment as its DD sibling rather than a looser one.
+    @Test("the NWP ceiling converts to AGL and caps like the DD ceiling")
+    func nwpCeilingBehavesLikeDd() {
+        let m = metric("ceiling-nwp")
+        guard case .value(let v) = m.sample(at: point(terrainElevationFt: 800, nwpCeilingFt: 3800)) else {
+            Issue.record("expected .value")
+            return
+        }
+        #expect(v == 3000)
+        guard case .aboveScale = m.sample(at: point(terrainElevationFt: 0, nwpCeilingFt: 25000)) else {
+            Issue.record("expected .aboveScale past the cap")
+            return
+        }
+        guard case .unavailable = m.sample(at: point(nwpCeilingFt: nil)) else {
+            Issue.record("no NWP diagnostics → unavailable")
+            return
+        }
+    }
+
+    @Test("a radar coverage hole is no-coverage, not zero rain and not absent data")
+    func radarHoleIsNoCoverage() {
+        let m = metric("observed-rain-rate")
+        var obs = VizObservedPoint(distanceNm: 0)
+        obs.rateNoCoverage = true
+        let sample = m.sample(at: point(observed: obs))
+        guard case .noCoverage = sample else {
+            Issue.record("expected .noCoverage, got \(sample)")
+            return
+        }
+        #expect(m.formatSample(sample) == "No coverage")
+    }
+
+    /// The distinction the whole state machine exists for: the radar looked and
+    /// measured nothing (`unavailable`) versus the radar not looking at all
+    /// (`noCoverage`). Rendering both as a gap reads as "no rain" in half the
+    /// OPERA grid.
+    @Test("the radar looking and finding nothing is NOT a coverage hole")
+    func radarLookedAndFoundNothing() {
+        let m = metric("observed-rain-rate")
+        var obs = VizObservedPoint(distanceNm: 0)
+        obs.rateNoCoverage = false
+        obs.radarNoCoverage = false
+        obs.rateMmH = nil
+        guard case .unavailable = m.sample(at: point(observed: obs)) else {
+            Issue.record("a looking-but-empty radar must not read as no-coverage")
+            return
+        }
+    }
+
+    /// Either coverage flag gates the rate — mirrors the web extractor's
+    /// `radarNoCoverage || rateNoCoverage`.
+    @Test("a composite that does not reach here gates the rate too")
+    func compositeCoverageGatesRate() {
+        var obs = VizObservedPoint(distanceNm: 0)
+        obs.radarNoCoverage = true
+        obs.rateMmH = nil
+        #expect(point(observed: obs).observedRadarNoCoverage)
+    }
+
+    @Test("measured zero rain is a value, never a gap")
+    func measuredZeroIsAValue() {
+        var obs = VizObservedPoint(distanceNm: 0)
+        obs.rateMmH = 0
+        guard case .value(let v) = metric("observed-rain-rate").sample(at: point(observed: obs)) else {
+            Issue.record("a measured 0 mm/h is data")
+            return
+        }
+        #expect(v == 0)
+    }
+
+    @Test("a point with no observed sample at all is unavailable, not no-coverage")
+    func noObservedSample() {
+        guard case .unavailable = metric("observed-rain-rate").sample(at: point(observed: nil)) else {
+            Issue.record("expected .unavailable")
+            return
+        }
+    }
+}
+
+// MARK: - Axis scaling
+
+@Suite("Route-graph Y scale")
+struct RouteGraphScaleTests {
+
+    @Test("a capping metric pins its axis verbatim — no padding, no rounding")
+    func pinnedAxisIsVerbatim() {
+        let m = metric("ceiling-dd")
+        let samples = [MetricSample.value(1200), .value(3000)]
+        let scale = RouteGraphScale(samples: samples, metric: m)
+        #expect(scale.lower == 0)
+        #expect(scale.upper == 5000)
+    }
+
+    /// The regression that mattered most: `suggestedRange` used to be declared
+    /// and never read, so a route with 10–20% cloud filled the plot.
+    @Test("a suggested range is honoured rather than auto-fitting the data")
+    func suggestedRangeIsHonoured() {
+        let scale = RouteGraphScale(
+            samples: [.value(10), .value(20)], metric: metric("cloud-cover"))
+        #expect(scale.lower <= 0)
+        #expect(scale.upper >= 100)
+    }
+
+    @Test("data beyond a suggested range expands the axis to fit it")
+    func rangeExpandsForOutliers() {
+        let scale = RouteGraphScale(
+            samples: [.value(0), .value(2400)], metric: metric("cape"))
+        #expect(scale.upper >= 2400)
+    }
+
+    @Test("above-scale samples do not expand a pinned axis")
+    func aboveScaleDoesNotExpand() {
+        let scale = RouteGraphScale(
+            samples: [.value(1000), .aboveScale(40000)], metric: metric("ceiling-dd"))
+        #expect(scale.upper == 5000)
+    }
+
+    @Test("a zero-line metric always includes zero")
+    func zeroLineIncludesZero() {
+        // All-positive headwinds would otherwise auto-fit to a window above zero,
+        // leaving the head/tail reference line off-screen.
+        let scale = RouteGraphScale(
+            samples: [.value(12), .value(20)], metric: metric("headwind"))
+        #expect(scale.lower <= 0)
+        #expect(scale.upper >= 0)
+    }
+
+    @Test("an empty series still yields a usable domain")
+    func emptySeries() {
+        let scale = RouteGraphScale(samples: [], metric: metric("headwind"))
+        #expect(scale.lower < scale.upper)
+    }
+
+    @Test("an all-unavailable series does not collapse the axis")
+    func allUnavailable() {
+        let scale = RouteGraphScale(
+            samples: [.unavailable, .noCoverage], metric: metric("qnh"))
+        #expect(scale.lower < scale.upper)
+    }
+
+    /// The right metric is drawn in the left metric's domain, so the mapping has
+    /// to be an exact round trip or the trailing axis labels lie about the line.
+    @Test("mapping into another domain round-trips")
+    func mappingRoundTrips() {
+        let left = RouteGraphScale(samples: [.value(0), .value(100)], metric: metric("cloud-cover"))
+        let right = RouteGraphScale(samples: [.value(0), .value(5)], metric: metric("precipitation"))
+        for v in [0.0, 1.25, 2.5, 5.0] {
+            let plotted = right.mapped(v, into: left)
+            #expect(abs(right.unmapped(plotted, from: left) - v) < 1e-9)
+        }
+    }
+
+    @Test("a mapped value keeps its fractional position in the domain")
+    func mappingPreservesPosition() {
+        let left = RouteGraphScale(samples: [.value(0), .value(100)], metric: metric("cloud-cover"))
+        let right = RouteGraphScale(samples: [.value(0), .value(5)], metric: metric("precipitation"))
+        // The right metric's midpoint must land at the left domain's midpoint.
+        let mid = right.lower + right.span / 2
+        let plotted = right.mapped(mid, into: left)
+        #expect(abs(plotted - (left.lower + left.span / 2)) < 1e-9)
+    }
+}
+
+// MARK: - Value formatting
+
+@Suite("Route-graph formatting ↔ web")
+struct RouteGraphFormattingTests {
+
+    @Test("temperature keeps the web's one decimal place")
+    func temperaturePrecision() {
+        #expect(metric("temperature").formatValue(12.34) == "12.3°C")
+    }
+
+    @Test("altitudes are thousand-separated, as toLocaleString() does on the web")
+    func altitudeGrouping() {
+        #expect(metric("freezing-level").formatValue(8500).contains("8"))
+        #expect(metric("freezing-level").formatValue(8500).hasSuffix(" ft"))
+        // The separator itself is locale-dependent; what matters is that the
+        // digits are grouped rather than run together.
+        #expect(metric("freezing-level").formatValue(8500) != "8500 ft")
+    }
+
+    @Test("crosswind reports the side it blows from")
+    func crosswindCarriesDirection() {
+        #expect(metric("crosswind").formatValue(12) == "12 kt R")
+        #expect(metric("crosswind").formatValue(-12) == "12 kt L")
+    }
+
+    @Test("head/tailwind reports which it is")
+    func headwindCarriesSense() {
+        #expect(metric("headwind").formatValue(15) == "15 kt HW")
+        #expect(metric("headwind").formatValue(-15) == "15 kt TW")
+    }
+
+    /// The web derives the sign from the ROUNDED value so a small negative
+    /// deviation reads "ISA±0", never the nonsensical "ISA−0".
+    @Test("a near-zero ISA deviation reads ±0, never −0")
+    func isaDevNearZero() {
+        #expect(metric("isa-dev").formatValue(-0.3) == "ISA±0 (−0.3°C)")
+        #expect(metric("isa-dev").formatValue(0.0) == "ISA±0 (±0.0°C)")
+    }
+
+    @Test("ISA deviation carries an explicit sign either way")
+    func isaDevSigns() {
+        #expect(metric("isa-dev").formatValue(7.2) == "ISA+7 (+7.2°C)")
+        #expect(metric("isa-dev").formatValue(-7.2) == "ISA−7 (−7.2°C)")
+    }
+
+    @Test("a zero flash rate reads as none rather than 0.00")
+    func flashRateZero() {
+        #expect(metric("observed-flash-rate").formatValue(0) == "none")
+        #expect(metric("observed-flash-rate").formatValue(1.5) == "1.50")
+    }
+
+    /// Documented iOS divergence: hPa-only until `UnitsRegion` is plumbed in.
+    @Test("QNH is hPa on iOS")
+    func qnhUnit() {
+        #expect(metric("qnh").unit == "hPa")
+        #expect(metric("qnh").formatValue(1013.2) == "1013 hPa")
+    }
+}
+
+// MARK: - Terrain interpolation
+
+@Suite("Terrain elevation lookup")
+struct TerrainElevationTests {
+    private let profile = [
+        TerrainPoint(distanceNm: 0, elevationFt: 0),
+        TerrainPoint(distanceNm: 10, elevationFt: 1000),
+        TerrainPoint(distanceNm: 20, elevationFt: 500),
+    ]
+
+    @Test("interpolates between samples rather than snapping to the nearest")
+    func interpolates() {
+        #expect(profile.elevationFt(atDistanceNm: 5) == 500)
+        #expect(profile.elevationFt(atDistanceNm: 15) == 750)
+    }
+
+    @Test("lands exactly on a sample")
+    func onSample() {
+        #expect(profile.elevationFt(atDistanceNm: 10) == 1000)
+    }
+
+    @Test("clamps to the profile's ends instead of extrapolating")
+    func clamps() {
+        #expect(profile.elevationFt(atDistanceNm: -5) == 0)
+        #expect(profile.elevationFt(atDistanceNm: 99) == 500)
+    }
+
+    @Test("an empty or single-point profile is safe")
+    func degenerate() {
+        #expect([TerrainPoint]().elevationFt(atDistanceNm: 5) == 0)
+        #expect([TerrainPoint(distanceNm: 3, elevationFt: 700)].elevationFt(atDistanceNm: 5) == 700)
+    }
+}
+
+// MARK: - Skew-T side-panel catalog ↔ web
+
+@Suite("Skew-T variable catalog ↔ web")
+struct SkewTVariableCatalogTests {
+
+    /// Every iOS variable id, and the web `metricId` its web twin points at.
+    /// Copied from `VARIABLE_REGISTRY` in web/ts/visualization/skewt/variable-panel.ts.
+    static let webMetricIdByIosId = [
+        "headwind": "skewt_headwind_crosswind",
+        "wind_speed": "wind_speed_kt",
+        "dewpoint_depression": "dewpoint_depression_c",
+        "rh": "skewt_relative_humidity",
+        "cloud": "skewt_cloud_area_fraction",
+        "clw": "skewt_cloud_liquid_water",
+        "ice": "skewt_ice_mixing_ratio",
+        "icing-dd": "icing_risk",
+        "icing-nwp": "icing_ogimet_nwp_risk",
+        "sfip": "sfip_risk",
+        "lapse": "lapse_rate_c_km",
+        "ri": "richardson_number",
+        "w": "skewt_vertical_velocity",
+        "thetae": "equivalent_potential_temperature_k",
+    ]
+
+    @Test("every help pointer matches the web registry's metricId")
+    func helpPointersMatchWeb() {
+        #expect(SkewTVariableCatalog.helpMetricId == Self.webMetricIdByIosId)
+    }
+
+    /// The bug this suite was written for. `cloud_cover_pct` is the TOTAL-COLUMN
+    /// metric — its own limitations text says it "doesn't tell you at which
+    /// altitude the clouds are" — so pointing a per-level variable at it opened a
+    /// popup with confident, wrong help rather than failing visibly.
+    @Test("the per-level cloud variable points at the per-level metric")
+    func cloudHelpIsPerLevel() {
+        #expect(SkewTVariableCatalog.helpMetricId["cloud"] == "skewt_cloud_area_fraction")
+        #expect(SkewTVariableCatalog.helpMetricId["cloud"] != "cloud_cover_pct")
+    }
+
+    @Test("every variable has a short label for the collapsed chip")
+    func shortLabelsCoverEveryVariable() {
+        #expect(Set(SkewTVariableCatalog.shortLabel.keys)
+                == Set(SkewTVariableCatalog.helpMetricId.keys))
+    }
+}

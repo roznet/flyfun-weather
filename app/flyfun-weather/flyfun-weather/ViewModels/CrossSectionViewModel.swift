@@ -546,10 +546,21 @@ final class CrossSectionViewModel {
         var points: [VizPoint] = []
         var waypointMarkers: [WaypointMarker] = []
 
+        // Built before the point loop: the AGL ceiling metrics need this point's
+        // terrain elevation, so `extractPoint` interpolates against it the way the
+        // web extractor does rather than resolving terrain at render time.
+        let terrainProfile = elevation?.points.map {
+            TerrainPoint(distanceNm: $0.distanceNm, elevationFt: $0.elevationFt)
+        }
+
         for rpa in manifest.analyses {
             let sounding = rpa.sounding[model]
             let wind = rpa.windComponents[model]
-            points.append(extractPoint(rpa: rpa, sounding: sounding, wind: wind, model: model))
+            points.append(extractPoint(
+                rpa: rpa, sounding: sounding, wind: wind, model: model,
+                terrainElevationFt: terrainProfile?
+                    .elevationFt(atDistanceNm: rpa.distanceFromOriginNm) ?? 0,
+                cruiseAltitudeFt: Double(manifest.cruiseAltitudeFt)))
 
             if let icao = rpa.waypointIcao {
                 waypointMarkers.append(WaypointMarker(
@@ -562,9 +573,6 @@ final class CrossSectionViewModel {
         }
 
         let actualCeiling = Double(manifest.cruiseAltitudeFt)
-        let terrainProfile = elevation?.points.map {
-            TerrainPoint(distanceNm: $0.distanceNm, elevationFt: $0.elevationFt)
-        }
 
         // Observed discs (#574) resolve to the same route the analyses walk, so
         // an observed value and the model column above it describe one place.
@@ -586,11 +594,19 @@ final class CrossSectionViewModel {
         )
     }
 
+    /// ISA standard temperature (°C) at an altitude. Port of web `isaTemperatureC`
+    /// — troposphere lapse to the tropopause, isothermal above it.
+    private static func isaTemperatureC(_ altitudeFt: Double) -> Double {
+        altitudeFt <= 36089 ? 15 - 1.9812 * (altitudeFt / 1000) : -56.5
+    }
+
     private static func extractPoint(
         rpa: RoutePointAnalysis,
         sounding: SoundingAnalysis?,
         wind: WindComponent?,
-        model: String
+        model: String,
+        terrainElevationFt: Double,
+        cruiseAltitudeFt: Double
     ) -> VizPoint {
         let indices = sounding?.indices
 
@@ -659,6 +675,12 @@ final class CrossSectionViewModel {
 
         let temperatureC = divergenceValue(rpa.modelDivergence, variable: "temperature_c", model: model)
         let precipitationMm = divergenceValue(rpa.modelDivergence, variable: "precipitation_mm", model: model)
+        let qnhHpa = divergenceValue(rpa.modelDivergence, variable: "pressure_msl_hpa", model: model)
+
+        // The backend interpolated cruise temp AT `cruiseAltitudeFt`, so the ISA
+        // reference must use the same altitude or the deviation is against the
+        // wrong standard.
+        let isaDevC = (rpa.cruiseTemperatureC?[model]).map { $0 - isaTemperatureC(cruiseAltitudeFt) }
 
         let convNwp = sounding?.convectiveNwp
 
@@ -693,7 +715,14 @@ final class CrossSectionViewModel {
             worstModelAgreement: worstModelAgreement,
             nwpCloudDiag: nwpCloudDiag,
             temperatureC: temperatureC,
-            precipitationMm: precipitationMm
+            precipitationMm: precipitationMm,
+            // Mirrors the web extractor's fallback chain: the indices value, then
+            // the convective assessment's own CIN, then 0.
+            cinSurfaceJkg: indices?.cinSurfaceJkg ?? sounding?.convective?.cinJkg ?? 0,
+            soundingCeilingFt: indices?.soundingCeilingFt,
+            terrainElevationFt: terrainElevationFt,
+            isaDevC: isaDevC,
+            qnhHpa: qnhHpa
         )
     }
 

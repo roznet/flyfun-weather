@@ -868,6 +868,8 @@
   "graph.none": "None",
   "graph.headwindUp": "Headwind ↑",
   "graph.tailwindDown": "Tailwind ↓",
+  "graph.crosswindRight": "From Right →",
+  "graph.crosswindLeft": "From Left ←",
   "graph.isaWarmer": "Warmer than ISA ↑",
   "graph.isaColder": "Colder than ISA ↓",
   "map.cloud-cover-total": "Cloud Cover (Total)",
