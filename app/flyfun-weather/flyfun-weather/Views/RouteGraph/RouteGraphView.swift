@@ -4,7 +4,7 @@ import SwiftUI
 /// Data point for chart rendering. `plotValue` is what Charts draws; for the
 /// right metric it is the value mapped into the left metric's domain (see
 /// `RouteGraphScale`), and `value` stays the real number for readouts.
-private struct ChartDataPoint: Identifiable {
+struct RouteGraphPoint: Identifiable {
     let id: Int
     let distance: Double
     let value: Double
@@ -100,6 +100,49 @@ struct RouteGraphScale {
     }
 }
 
+/// One metric's points, already mapped into the domain the chart draws in.
+///
+/// All three sets are built together, for BOTH axes, deliberately: the capped and
+/// coverage-hole markers exist so those states cannot read as "no data", and
+/// building them per-axis by hand is how the right axis silently lost them once
+/// already. A metric on the right gets the same treatment as one on the left
+/// because there is one builder, not two call sites to keep in step.
+struct RouteGraphSeries {
+    /// Plottable values — the line or bars.
+    let values: [RouteGraphPoint]
+    /// Known values off the top of a pinned axis, pinned to the cap.
+    let capped: [RouteGraphPoint]
+    /// Points the sensor does not cover, pinned to the floor.
+    let holes: [RouteGraphPoint]
+
+    /// `scale` is the metric's own domain; `target` is the domain the chart draws
+    /// in (the left metric's). They are the same object for the left metric.
+    init(points: [VizPoint], metric: RouteGraphMetric,
+         scale: RouteGraphScale, into target: RouteGraphScale) {
+        var values: [RouteGraphPoint] = []
+        var capped: [RouteGraphPoint] = []
+        var holes: [RouteGraphPoint] = []
+        for (i, point) in points.enumerated() {
+            switch metric.sample(at: point) {
+            case .value(let v):
+                values.append(RouteGraphPoint(id: i, distance: point.distanceNm, value: v,
+                                              plotValue: scale.mapped(v, into: target)))
+            case .aboveScale(let v):
+                capped.append(RouteGraphPoint(id: i, distance: point.distanceNm, value: v,
+                                              plotValue: scale.mapped(scale.upper, into: target)))
+            case .noCoverage:
+                holes.append(RouteGraphPoint(id: i, distance: point.distanceNm, value: 0,
+                                             plotValue: scale.mapped(scale.lower, into: target)))
+            case .unavailable:
+                continue
+            }
+        }
+        self.values = values
+        self.capped = capped
+        self.holes = holes
+    }
+}
+
 /// Route graph using Swift Charts — scalar metrics along the route.
 struct RouteGraphView: View {
     let viewModel: BriefingViewModel
@@ -137,23 +180,23 @@ struct RouteGraphView: View {
     private func chartView(vizData: VizRouteData, leftMetric: RouteGraphMetric) -> some View {
         let leftSamples = vizData.points.map { leftMetric.sample(at: $0) }
         let leftScale = RouteGraphScale(samples: leftSamples, metric: leftMetric)
-        let leftData = chartPoints(vizData.points, samples: leftSamples, scale: leftScale, into: leftScale)
+        let left = RouteGraphSeries(points: vizData.points, metric: leftMetric,
+                                    scale: leftScale, into: leftScale)
 
         let rightMetric = self.rightMetric
-        let rightSamples = rightMetric.map { m in vizData.points.map { m.sample(at: $0) } } ?? []
-        let rightScale = rightMetric.map { RouteGraphScale(samples: rightSamples, metric: $0) }
-        let rightData = rightScale.map {
-            chartPoints(vizData.points, samples: rightSamples, scale: $0, into: leftScale)
-        } ?? []
-
-        // Above-scale and no-coverage points plot nothing on the line, but they are
-        // NOT gaps: each gets its own marker so "better than the cap" and "the
-        // sensor does not look here" cannot read as "no data".
-        let leftCapped = markerPoints(vizData.points, samples: leftSamples, kind: .aboveScale, scale: leftScale, into: leftScale)
-        let leftHoles = markerPoints(vizData.points, samples: leftSamples, kind: .noCoverage, scale: leftScale, into: leftScale)
+        // The right metric's own domain, then its points mapped into the left one —
+        // Charts has a single Y scale, so everything is drawn in the left domain and
+        // the trailing axis labels invert the mapping.
+        let rightScale = rightMetric.map { m in
+            RouteGraphScale(samples: vizData.points.map { m.sample(at: $0) }, metric: m)
+        }
+        let right: RouteGraphSeries? = {
+            guard let m = rightMetric, let rs = rightScale else { return nil }
+            return RouteGraphSeries(points: vizData.points, metric: m, scale: rs, into: leftScale)
+        }()
 
         Chart {
-            ForEach(leftData) { pt in
+            ForEach(left.values) { pt in
                 if leftMetric.renderType == .bar {
                     BarMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
                         .foregroundStyle(leftMetric.color.opacity(0.6))
@@ -165,7 +208,7 @@ struct RouteGraphView: View {
             }
 
             // Capped markers ride the top edge of the pinned axis.
-            ForEach(leftCapped) { pt in
+            ForEach(left.capped) { pt in
                 PointMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
                     .symbol(.triangle)
                     .symbolSize(40)
@@ -174,20 +217,20 @@ struct RouteGraphView: View {
 
             // Coverage holes sit on the floor as hollow marks — distinct from a
             // bar of zero, which would read as a confident "nothing here".
-            ForEach(leftHoles) { pt in
+            ForEach(left.holes) { pt in
                 PointMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
                     .symbol(.cross)
                     .symbolSize(30)
                     .foregroundStyle(.secondary.opacity(0.5))
             }
 
-            if let rm = rightMetric, let rs = rightScale {
+            if let rm = rightMetric, let rs = rightScale, let right {
                 // A right-axis bar must start from the RIGHT metric's own zero
                 // mapped into the left domain — `BarMark(y:)` would baseline it at
                 // the left metric's zero, which is a different height entirely and
                 // would draw bars growing from the wrong place.
                 let rightBaseline = rs.mapped(max(rs.lower, min(rs.upper, 0)), into: leftScale)
-                ForEach(rightData) { pt in
+                ForEach(right.values) { pt in
                     if rm.renderType == .bar {
                         BarMark(x: .value("Distance", pt.distance),
                                 yStart: .value(rm.label, rightBaseline),
@@ -198,6 +241,25 @@ struct RouteGraphView: View {
                             .foregroundStyle(rm.color)
                             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                     }
+                }
+
+                // The right axis gets the same two marker layers as the left. A
+                // ceiling above the cap or a radar hole on THIS axis is the same
+                // claim about the same weather, and `cloud-cover` + `ceiling-nwp`
+                // is the web Clouds lens's own pairing — so it is a selection
+                // pilots will actually make, not a corner case. Hollow symbols
+                // keep them readable against the left metric's solid markers.
+                ForEach(right.capped) { pt in
+                    PointMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.plotValue))
+                        .symbol(.triangle)
+                        .symbolSize(30)
+                        .foregroundStyle(rm.color.opacity(0.7))
+                }
+                ForEach(right.holes) { pt in
+                    PointMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.plotValue))
+                        .symbol(.cross)
+                        .symbolSize(22)
+                        .foregroundStyle(.secondary.opacity(0.4))
                 }
             }
 
@@ -289,45 +351,6 @@ struct RouteGraphView: View {
     /// gutter narrow enough to match the cross-section's left margin.
     private static func axisLabel(_ v: Double) -> String {
         v == v.rounded() ? String(Int(v)) : String(format: "%.1f", v)
-    }
-
-    /// The plottable samples, mapped from `scale` into `target`'s domain.
-    private func chartPoints(
-        _ points: [VizPoint], samples: [MetricSample],
-        scale: RouteGraphScale, into target: RouteGraphScale
-    ) -> [ChartDataPoint] {
-        var out: [ChartDataPoint] = []
-        for (i, point) in points.enumerated() {
-            guard i < samples.count, case .value(let v) = samples[i] else { continue }
-            out.append(ChartDataPoint(id: i, distance: point.distanceNm, value: v,
-                                      plotValue: scale.mapped(v, into: target)))
-        }
-        return out
-    }
-
-    private enum MarkerKind { case aboveScale, noCoverage }
-
-    /// The non-plottable states that still need to be drawn: above-scale pinned to
-    /// the cap, no-coverage pinned to the floor.
-    private func markerPoints(
-        _ points: [VizPoint], samples: [MetricSample], kind: MarkerKind,
-        scale: RouteGraphScale, into target: RouteGraphScale
-    ) -> [ChartDataPoint] {
-        var out: [ChartDataPoint] = []
-        for (i, point) in points.enumerated() {
-            guard i < samples.count else { continue }
-            switch (kind, samples[i]) {
-            case (.aboveScale, .aboveScale(let v)):
-                out.append(ChartDataPoint(id: i, distance: point.distanceNm, value: v,
-                                          plotValue: scale.mapped(scale.upper, into: target)))
-            case (.noCoverage, .noCoverage):
-                out.append(ChartDataPoint(id: i, distance: point.distanceNm, value: 0,
-                                          plotValue: scale.mapped(scale.lower, into: target)))
-            default:
-                continue
-            }
-        }
-        return out
     }
 
     private func metricPicker(selection: Binding<String>, label: String) -> some View {

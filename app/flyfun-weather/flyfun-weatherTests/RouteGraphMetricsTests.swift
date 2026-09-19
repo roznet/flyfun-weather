@@ -455,6 +455,129 @@ struct TerrainElevationTests {
     }
 }
 
+// MARK: - Per-axis series building
+
+/// `RouteGraphSeries` exists so the chart's three point sets are built ONCE per
+/// axis rather than per call site. The first cut built the capped/no-coverage
+/// markers for the left metric only, so a `ceiling-nwp` on the right axis drew a
+/// bare gap — reintroducing #384's confusion on the other axis. These tests pin
+/// the symmetry, because it is invisible in a screenshot until you pick the
+/// pairing that exposes it.
+@Suite("Route-graph series building")
+struct RouteGraphSeriesTests {
+
+    /// A route with one ordinary ceiling, one above the cap, and one with no
+    /// sounding at all.
+    private var ceilingRoute: [VizPoint] {
+        [
+            point(distanceNm: 0, terrainElevationFt: 0, soundingCeilingFt: 2000),
+            point(distanceNm: 10, terrainElevationFt: 0, soundingCeilingFt: 30000),
+            point(distanceNm: 20, terrainElevationFt: 0, soundingCeilingFt: nil),
+        ]
+    }
+
+    private func series(_ m: RouteGraphMetric, _ points: [VizPoint],
+                        into target: RouteGraphScale? = nil) -> RouteGraphSeries {
+        let scale = RouteGraphScale(samples: points.map { m.sample(at: $0) }, metric: m)
+        return RouteGraphSeries(points: points, metric: m, scale: scale, into: target ?? scale)
+    }
+
+    @Test("each sample state lands in exactly one bucket")
+    func statesArePartitioned() {
+        let s = series(metric("ceiling-dd"), ceilingRoute)
+        #expect(s.values.map(\.distance) == [0])
+        #expect(s.capped.map(\.distance) == [10])
+        #expect(s.holes.isEmpty)
+        // The no-sounding point is in no bucket — unavailable is the one state
+        // that legitimately draws nothing.
+        #expect(s.values.count + s.capped.count + s.holes.count == 2)
+    }
+
+    @Test("a capped point is pinned to the cap, not to its real value")
+    func cappedPinnedToCap() {
+        let m = metric("ceiling-dd")
+        let s = series(m, ceilingRoute)
+        guard let capped = s.capped.first else {
+            Issue.record("expected a capped point")
+            return
+        }
+        // The real value is preserved for readouts...
+        #expect(capped.value == 30000)
+        // ...but it is DRAWN at the cap, so it rides the top edge.
+        #expect(capped.plotValue == RouteGraphMetrics.ceilingAglCapFt)
+    }
+
+    @Test("a coverage hole is pinned to the floor")
+    func holePinnedToFloor() {
+        var obs = VizObservedPoint(distanceNm: 0)
+        obs.rateNoCoverage = true
+        let m = metric("observed-rain-rate")
+        let pts = [point(observed: obs)]
+        let scale = RouteGraphScale(samples: pts.map { m.sample(at: $0) }, metric: m)
+        let s = RouteGraphSeries(points: pts, metric: m, scale: scale, into: scale)
+        #expect(s.values.isEmpty)
+        #expect(s.holes.count == 1)
+        #expect(s.holes.first?.plotValue == scale.lower)
+    }
+
+    /// The regression the review caught: the right axis must produce the same
+    /// three buckets as the left, for the same metric on the same route.
+    @Test("the right axis buckets identically to the left")
+    func rightAxisMatchesLeft() {
+        let m = metric("ceiling-nwp")
+        let route = [
+            point(distanceNm: 0, nwpCeilingFt: 2000),
+            point(distanceNm: 10, nwpCeilingFt: 30000),
+            point(distanceNm: 20, nwpCeilingFt: nil),
+        ]
+        // As the left metric: drawn in its own domain.
+        let asLeft = series(m, route)
+        // As the right metric beside cloud-cover: drawn in cloud-cover's domain.
+        let hostScale = RouteGraphScale(
+            samples: route.map { metric("cloud-cover").sample(at: $0) },
+            metric: metric("cloud-cover"))
+        let asRight = series(m, route, into: hostScale)
+
+        #expect(asRight.values.map(\.distance) == asLeft.values.map(\.distance))
+        #expect(asRight.capped.map(\.distance) == asLeft.capped.map(\.distance))
+        #expect(asRight.holes.map(\.distance) == asLeft.holes.map(\.distance))
+        // Specifically: the capped point is NOT dropped on the right axis.
+        #expect(asRight.capped.count == 1)
+    }
+
+    @Test("a right-axis capped marker is drawn at the top of the host domain")
+    func rightCappedRidesHostTop() {
+        let m = metric("ceiling-nwp")
+        let route = [point(distanceNm: 0, nwpCeilingFt: 30000)]
+        let hostScale = RouteGraphScale(samples: [.value(0), .value(100)],
+                                        metric: metric("cloud-cover"))
+        let s = series(m, route, into: hostScale)
+        // ceiling-nwp pins 0…5000, so its cap is the top of ITS domain, which maps
+        // to the top of the host domain — the same top edge the left axis uses.
+        #expect(abs((s.capped.first?.plotValue ?? 0) - hostScale.upper) < 1e-9)
+    }
+
+    @Test("real values keep their own units while being drawn in the host domain")
+    func valuesKeepUnits() {
+        let m = metric("ceiling-nwp")
+        let route = [point(distanceNm: 0, terrainElevationFt: 500, nwpCeilingFt: 3000)]
+        let hostScale = RouteGraphScale(samples: [.value(0), .value(100)],
+                                        metric: metric("cloud-cover"))
+        let s = series(m, route, into: hostScale)
+        // 3000 MSL − 500 terrain = 2500 AGL, reported in feet...
+        #expect(s.values.first?.value == 2500)
+        // ...but plotted somewhere inside the host's domain, not at 2500.
+        let plotted = s.values.first?.plotValue ?? .nan
+        #expect(plotted >= hostScale.lower && plotted <= hostScale.upper)
+    }
+
+    @Test("an empty route yields empty buckets rather than crashing")
+    func emptyRoute() {
+        let s = series(metric("headwind"), [])
+        #expect(s.values.isEmpty && s.capped.isEmpty && s.holes.isEmpty)
+    }
+}
+
 // MARK: - Skew-T side-panel catalog ↔ web
 
 @Suite("Skew-T variable catalog ↔ web")
