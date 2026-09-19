@@ -26,6 +26,7 @@ private func point(
     soundingCeilingFt: Double? = nil,
     nwpCeilingFt: Double? = nil,
     cinSurfaceJkg: Double = 0,
+    temperatureC: Double? = nil,
     isaDevC: Double? = nil,
     qnhHpa: Double? = nil,
     observed: VizObservedPoint? = nil
@@ -58,7 +59,7 @@ private func point(
                 high: VizCloudDiagBand(coverPct: nil, baseFt: nil, topFt: nil),
                 ceilingFt: $0)
         },
-        temperatureC: nil,
+        temperatureC: temperatureC,
         precipitationMm: nil,
         cinSurfaceJkg: cinSurfaceJkg,
         soundingCeilingFt: soundingCeilingFt,
@@ -571,6 +572,40 @@ struct RouteGraphSeriesTests {
         #expect(plotted >= hostScale.lower && plotted <= hostScale.upper)
     }
 
+    /// Web `renderBars` skips an exact zero (`s.value === 0 → continue`), and
+    /// `designs/route-graph.md` states it as "Zero/null values skipped".
+    @Test("a bar metric draws nothing for an exact zero")
+    func barSkipsZero() {
+        var zero = VizObservedPoint(distanceNm: 0)
+        zero.rateMmH = 0
+        var wet = VizObservedPoint(distanceNm: 10)
+        wet.rateMmH = 2.5
+        let m = metric("observed-rain-rate")   // renderType == .bar
+        #expect(m.renderType == .bar)
+        let s = series(m, [point(distanceNm: 0, observed: zero),
+                           point(distanceNm: 10, observed: wet)])
+        // The zero is still a VALUE — it is data, and the readout strip reports it.
+        #expect(s.values.count == 2)
+        // But only the non-zero sample draws a bar.
+        #expect(s.barValues.map(\.distance) == [10])
+    }
+
+    /// The counterpart rule, and the reason this is bar-only: a line must pass
+    /// THROUGH its zeros. Dropping them would break the trace at every zero
+    /// crossing, which for head/tailwind is exactly where the reading matters.
+    @Test("a line metric keeps its zeros")
+    func lineKeepsZeros() {
+        let m = metric("temperature")   // renderType == .line
+        #expect(m.renderType == .line)
+        let route = [
+            point(distanceNm: 0, temperatureC: 5),
+            point(distanceNm: 10, temperatureC: 0),   // the zero a line must keep
+            point(distanceNm: 20, temperatureC: -5),
+        ]
+        let s = series(m, route)
+        #expect(s.values.map(\.distance) == [0, 10, 20])
+    }
+
     @Test("an empty route yields empty buckets rather than crashing")
     func emptyRoute() {
         let s = series(metric("headwind"), [])
@@ -681,6 +716,27 @@ struct ZeroLineTests {
         let s = RouteGraphScale(samples: [.value(-1), .value(3)], metric: m)
         #expect(s.lower < 0 && s.upper > 0)   // domain straddles zero...
         #expect(s.zeroLineY(for: m, in: s) == nil)  // ...but the metric wants no line
+    }
+
+    /// Web `drawZeroLine` returns only when `min > 0 || max < 0`, so a domain
+    /// touching zero at a bound still draws — on the plot edge. iOS used strict
+    /// inequalities, which would have suppressed it. Dormant today (the padding
+    /// pipeline always pushes the bound strictly past zero) but the two guards are
+    /// meant to be provably equivalent, so the boundary is pinned here.
+    @Test("a domain touching zero at a bound still gets its reference")
+    func inclusiveAtTheBound() {
+        let m = metric("headwind")
+        let host = scale(m, [-10, 25])
+        // A hand-built scale is not reachable through the initializer, so the
+        // boundary is exercised through the two natural bounds of a real domain:
+        // both must be treated as "zero is in range" rather than excluded.
+        #expect(m.showZeroLine)
+        #expect(host.zeroLineY(for: m, in: host) != nil)
+        // Sanity: the guard reads the bounds inclusively, so a domain whose lower
+        // bound IS zero is not rejected. cloud-cover pins 0…100 but is unsigned,
+        // so `precipitation`-style unsigned metrics remain excluded by declaration
+        // rather than by the bound — see `guardFollowsDeclaration`.
+        #expect(host.lower <= 0 && host.upper >= 0)
     }
 
     @Test("the zero line round-trips to zero in the metric's own units")

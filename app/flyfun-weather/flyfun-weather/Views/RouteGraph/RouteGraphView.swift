@@ -89,14 +89,18 @@ struct RouteGraphScale {
     }
 
     /// Where `metric`'s zero reference is drawn, in `host`'s domain — or nil when
-    /// the metric has no zero line, or its own domain excludes zero (web
-    /// `drawZeroLine`'s `scale.min > 0 || scale.max < 0` guard).
+    /// the metric has no zero line, or its own domain excludes zero.
+    ///
+    /// The domain bound is INCLUSIVE, matching web `drawZeroLine`'s
+    /// `if (scale.min > 0 || scale.max < 0) return` — which draws whenever
+    /// `min <= 0 <= max`. A domain landing exactly on zero at either bound still
+    /// gets its reference, on the edge of the plot, as it does on the web.
     ///
     /// Lives here rather than inline in the `Chart` body so the rule is reachable
     /// from a test: the body is not unit-testable, which is why the right axis
     /// silently had no zero line at all.
     func zeroLineY(for metric: RouteGraphMetric, in host: RouteGraphScale) -> Double? {
-        guard metric.showZeroLine, lower < 0, upper > 0 else { return nil }
+        guard metric.showZeroLine, lower <= 0, upper >= 0 else { return nil }
         return mapped(0, into: host)
     }
 
@@ -120,8 +124,17 @@ struct RouteGraphScale {
 /// already. A metric on the right gets the same treatment as one on the left
 /// because there is one builder, not two call sites to keep in step.
 struct RouteGraphSeries {
-    /// Plottable values — the line or bars.
+    /// Plottable values — the line, or the bars once zeros are dropped.
     let values: [RouteGraphPoint]
+
+    /// The subset a BAR metric draws: an exact zero draws nothing, matching web
+    /// `renderBars` (`if (s.kind !== 'value' || s.value === 0) continue`) and
+    /// `designs/route-graph.md` ("Zero/null values skipped").
+    ///
+    /// Bar-only on purpose. A LINE keeps its zeros — a trace that skipped them
+    /// would break at every zero crossing, which for a signed metric like
+    /// head/tailwind is exactly where the reading matters most.
+    var barValues: [RouteGraphPoint] { values.filter { $0.value != 0 } }
     /// Known values off the top of a pinned axis, pinned to the cap.
     let capped: [RouteGraphPoint]
     /// Points the sensor does not cover, pinned to the floor.
@@ -325,13 +338,17 @@ struct RouteGraphView: View {
         // right-axis metric is a different height entirely.
         let baseline = scale.mapped(max(scale.lower, min(scale.upper, 0)), into: host)
 
-        ForEach(series.values) { pt in
-            if metric.renderType == .bar {
+        // Branched once rather than per point: the two render types draw from
+        // different sets, since a bar skips an exact zero and a line does not.
+        if metric.renderType == .bar {
+            ForEach(series.barValues) { pt in
                 BarMark(x: .value("Distance", pt.distance),
                         yStart: .value(metric.label, baseline),
                         yEnd: .value(metric.label, pt.plotValue))
                     .foregroundStyle(metric.color.opacity(style.barOpacity))
-            } else {
+            }
+        } else {
+            ForEach(series.values) { pt in
                 LineMark(x: .value("Distance", pt.distance),
                          y: .value(metric.label, pt.plotValue))
                     .foregroundStyle(metric.color)
