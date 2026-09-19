@@ -64,7 +64,57 @@ intentionally lacks `ieng-icing-bands`, `e-shear-bands`, `sld-bands`,
 drop them on iOS, so don't flag that as drift (the `CrossSectionPresets.swift`
 header documents this).
 
-### 3. API DTO contracts
+### 3. Route-graph metric registry
+
+The two clients draw the same scalar-metric graph below the cross-section from
+hand-copied registries. Compare `web/ts/visualization/route-graph/metrics.ts`
+(`ROUTE_GRAPH_METRICS`, `CEILING_AGL_CAP_FT`, `MetricSample`, `sampleMetric`,
+`formatSample`) against
+`app/flyfun-weather/flyfun-weather/Views/RouteGraph/RouteGraphMetrics.swift`, and
+the axis rules in `route-graph/axes.ts` (`computeYScale`, `niceTickInterval`)
+against `.../RouteGraph/RouteGraphView.swift` (`RouteGraphScale`).
+
+Check, in this order of consequence:
+
+1. **The metric set.** A metric present on only one client is not cosmetic — the
+   advisory lenses in `advisory-presets.ts` name metric ids in their `routeGraph`
+   directives, so a missing id silently breaks that lens on that client.
+2. **`suggestedRange` per metric**, and that the client *honours* it. A pinned
+   range that is declared but never read is the worst case: the same numbers
+   render at different magnitudes with nothing on screen saying so.
+3. **The `aboveScale` / no-coverage states.** Both must distinguish "above the
+   display cap" and "the sensor does not look here" from "no data" (#384, #574).
+   Collapsing either back to a gap makes good news and absent data identical.
+4. **`formatValue` precision and units** (decimal places, thousands separators,
+   direction suffixes) — a silent per-client difference in the same reading.
+
+Web is the source of truth for the registry; iOS copies the English `graph.<id>`
+strings from `web/ts/i18n/locales/en.json` because it is not localized.
+
+**Known iOS divergence:** `qnh` is hPa-only on iOS (the web switches to
+Altimeter/inHg for the US region). `UnitsRegion` is not plumbed into iOS — don't
+re-flag it until it is.
+
+### 4. Skew-T side-panel variable registry
+
+Compare `web/ts/visualization/skewt/variable-panel.ts` (`VARIABLE_REGISTRY`,
+`VARIABLE_GROUPS`) against
+`app/flyfun-weather/flyfun-weather/Views/CrossSection/SkewTVariableCatalog.swift`:
+the variable set, group membership and within-group order, `fixedRange`,
+`zeroLine`, colours, `shortLabel`, and the `metricId` → `helpMetricId` pointers.
+
+The help pointers deserve their own pass: both ids can exist in the catalog, so a
+wrong one renders an (i) button with plausible but wrong text rather than failing
+visibly. Check that a per-level variable points at a per-level metric.
+
+**Known iOS divergence (do not re-flag):** the iOS variable ids are shorter than
+the web's (`rh` / `relative_humidity`, `w` / `vertical_velocity`, `ri` /
+`richardson`, `lapse` / `lapse_rate`, `thetae` / `theta_e`, `cloud` /
+`cloud_area_fraction`, `clw` / `cloud_liquid_water`, `ice` / `ice_mixing_ratio`,
+`icing-dd` / `icing_index`, `icing-nwp` / `icing_index_nwp`). This is why the web
+`skewtSidePanel` preset directive cannot be ported as-is.
+
+### 5. API DTO contracts
 
 iOS `Models/API/*Response.swift` Codable types mirror backend JSON. A server
 shape change breaks iOS decode **at runtime** with no compile-time signal. For
@@ -78,7 +128,7 @@ Report field name / optionality / nesting mismatches. Prioritise fields present
 in the backend (or web) but **missing or non-optional in Swift** — those are the
 runtime-decode hazards. A field the server may omit must be `Optional` on iOS.
 
-### 4. Debrief taxonomy — three-way copy
+### 6. Debrief taxonomy — three-way copy
 
 The debrief vocabulary (condition tags + labels/descriptions, decisions, outcome
 values, advisory→tag map, note limit) is a **three-way** copy. Python is the
@@ -101,7 +151,7 @@ Python edit needs a manual TS + Swift-baseline update (source of truth = Python)
 The `KEYWORD_MAP` matcher is web-only by design (iOS dropped `matchTagsInText` for
 v1) — don't flag its absence on iOS.
 
-### 5. Release-stream category rendering
+### 7. Release-stream category rendering
 
 Both clients render the same `/api/messages` stream, and both decide *per client*
 how a category is presented. The category set is server-owned
@@ -121,7 +171,7 @@ web emits it under `app_release` entries from `APP_STORE_URL` (`web/ts/utils.ts`
 a reader already inside the app has nothing to install, so its absence on iOS is
 not a divergence.
 
-### 6. Shared form logic ports
+### 8. Shared form logic ports
 
 Small pure-logic helpers ported by hand between the clients because the server
 has no say in them — they shape what a *form* does with a stored value, not what
@@ -141,16 +191,27 @@ and whichever form the pilot saves from writes its own reading back.
 ceiling through its dropdown markup (built from `splitDurationCeil`, read back on
 Save), so its absence from the TS module is not a gap.
 
-### 7. Known parity gaps (informational)
+### 9. Known parity gaps (informational)
 
 List these so they are **not** re-flagged as new divergences, and note any *new*
 gap the branch introduced:
 
 - iOS-missing cross-section layers: `ieng-icing-bands`, `e-shear-bands`,
-  `sld-bands`, `surface-obscuration-bands`.
+  `sld-bands`, `surface-obscuration-bands`. Also web-only and equally expected:
+  `current-conditions` (D-0 METAR/SIGMET overlay), `fronts-markers`,
+  `night-shading` — iOS has no `obscuration` or `fronts` layer group, and
+  `CrossSectionTheme.swift` documents the theme-level omissions.
 - Cross-section color themes (web-only; tracked in #320).
+- Skew-T overlay bands: the web has seven (`clouds-nwp`/`clouds-dd`,
+  `icing-nwp`/`icing-dd`/`icing-sfip`, `inversions`, `convective`); iOS collapses
+  them into three chips (Cloud / Icing / Inversion) with no method choice and no
+  convective band. Defaults for the three iOS has match the web.
+- Lens directives not wired on iOS: the web `AdvisoryPreset`'s `routeGraph`, `map`,
+  `skewtOverlays` and `skewtSidePanel` fields, and its `interpretation` blurb.
+  `CrossSectionPresets.swift` ports the cross-section directives only, so tapping
+  a lens on iOS leaves the route graph and Skew-T on the pilot's last choice.
 
-### 8. SYNC-comment integrity
+### 10. SYNC-comment integrity
 
 Verify reciprocity for each `SYNC`-commented file pair:
 
@@ -169,13 +230,15 @@ Produce a **task list grouped by surface**. Each task is:
 
 - **What diverged** — the concrete symbol/field/file.
 - **Which side to change** — and why that's the source of truth (web is source
-  of truth for preset tables and the metrics catalog; the Python backend is
-  source of truth for DTO shapes).
+  of truth for preset tables, the metrics catalog, and the route-graph and
+  Skew-T variable registries; the Python backend is source of truth for DTO
+  shapes).
 - **One-line why** — the user-facing or runtime consequence if left unsynced
   (e.g. "iOS will fail to decode this endpoint on device").
 
 If every surface is in sync, say so plainly (e.g. "metrics-catalog IDENTICAL,
-presets in sync, DTOs aligned; known parity gaps unchanged") rather than padding.
+presets in sync, route-graph + Skew-T registries in sync, DTOs aligned; known
+parity gaps unchanged") rather than padding.
 
 ## Then offer next steps
 

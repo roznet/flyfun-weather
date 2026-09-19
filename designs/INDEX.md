@@ -92,7 +92,7 @@ Key exports: `compute_frontal_zones_dual`, `classify_front_type`, `build_zone_ti
 ## Visualization & briefing UI
 
 ### visualization
-Four synchronized client visualizations: canvas cross-section (28 registered layers incl. advisory highlight + night shading), canvas route graph (12 scalar metrics), Leaflet route map (13 metrics, altitude slider, front + airport-forecast overlays), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable themes with theme-aware legends; four layout modes (cross-section, compare, split, map); model-availability NWP fallback, shared color scales and hover sync. Compare mode renders one layer across all models with four band modes.
+Four synchronized client visualizations: canvas cross-section (28 registered layers incl. advisory highlight + night shading), canvas route graph (14 scalar metrics), Leaflet route map (13 metrics, altitude slider, front + airport-forecast overlays), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable themes with theme-aware legends; four layout modes (cross-section, compare, split, map); model-availability NWP fallback, shared color scales and hover sync. Compare mode renders one layer across all models with four band modes.
 Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `SkewTRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
@@ -102,7 +102,7 @@ Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `SkewT
 → Full doc: skewt-canvas.md
 
 ### route-graph
-2D chart below the cross-section for scalar weather values along the route. Dual Y-axes, extensible metric registry (12 metrics incl. CIN, region-aware QNH/Altimeter, AGL ceilings with an above-scale state), line and bar render types, hover sync with the cross-section, and metrics driven by advisory presets.
+2D chart below the cross-section for scalar weather values along the route. Dual Y-axes, extensible metric registry (14 metrics incl. the two observed measurements, CIN, region-aware QNH/Altimeter, AGL ceilings with an above-scale state), line and bar render types, hover sync with the cross-section, and metrics driven by advisory presets.
 Key exports: `RouteGraphRenderer`, `attachRouteGraphInteraction`, `ROUTE_GRAPH_METRICS`, `sampleMetric`, `getMetricById`, `renderRouteGraphControls`
 → Full doc: route-graph.md
 

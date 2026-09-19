@@ -634,7 +634,7 @@ A separate canvas-based chart rendered below the cross-section for scalar weathe
 
 - **X-axis aligned** with cross-section (same `distanceToX` transform and margins)
 - **Dual Y-axes**: left and right metrics independently selectable
-- **12 metrics**: headwind, crosswind, temperature, ISA deviation, precipitation, cloud cover, CAPE, CIN, QNH (region-aware unit), freezing level, ceiling-DD (sounding AGL), ceiling-NWP (NWP AGL)
+- **14 metrics**: observed rain rate (radar) and observed flash rate (both measurements, #574), headwind, crosswind, temperature, ISA deviation, precipitation, cloud cover, CAPE, CIN, QNH (region-aware unit), freezing level, ceiling-DD (sounding AGL), ceiling-NWP (NWP AGL)
 - **Render types**: line (monotone cubic spline) and bar charts
 - **State**: `VizSettings` extended with `routeGraphVisible`, `routeGraphLeftMetric`, `routeGraphRightMetric`, persisted to localStorage
 - **Controls**: dropdown selectors below the graph, integrated into the controls panel

@@ -84,9 +84,14 @@ struct CrossSectionReadoutView: View {
     /// colour-keyed to the graph below.
     private func graphChips(_ pt: VizPoint) -> [(text: String, color: Color)] {
         routeGraphMetricIds.compactMap { id in
-            guard id != "none", let m = RouteGraphMetrics.metric(byId: id),
-                  let v = m.getValue(pt) else { return nil }
-            return (text: "\(m.label): \(m.formatValue(v))", color: m.color)
+            guard id != RouteGraphMetrics.metricNone, let m = RouteGraphMetrics.metric(byId: id) else { return nil }
+            // Read through `sample`/`formatSample` rather than `getValue`, so the
+            // strip reports the same four states the chart draws: an above-scale
+            // ceiling reads "> 5,000 ft AGL" and a radar hole reads "No coverage",
+            // where a bare getValue silently dropped the chip for both.
+            let sample = m.sample(at: pt)
+            if case .unavailable = sample { return nil }
+            return (text: "\(m.label): \(m.formatSample(sample))", color: m.color)
         }
     }
 

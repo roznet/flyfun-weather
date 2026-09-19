@@ -1,11 +1,103 @@
 import Charts
 import SwiftUI
 
-/// Data point for chart rendering.
+/// Data point for chart rendering. `plotValue` is what Charts draws; for the
+/// right metric it is the value mapped into the left metric's domain (see
+/// `RouteGraphScale`), and `value` stays the real number for readouts.
 private struct ChartDataPoint: Identifiable {
     let id: Int
     let distance: Double
     let value: Double
+    let plotValue: Double
+}
+
+/// A metric's Y domain and the mapping into it. Port of web `computeYScale`
+/// (`web/ts/visualization/route-graph/axes.ts`) — the padding, zero-line
+/// inclusion and nice-rounding rules must match or the two clients draw the same
+/// numbers at different magnitudes.
+///
+/// Swift Charts has a single Y scale per chart, so the right metric is mapped
+/// into the left metric's domain and its trailing axis labels invert the mapping.
+/// That is what makes a dual-metric graph readable at all: CAPE (0…1000) and
+/// precipitation (0…5) on one shared domain renders the precipitation bars as a
+/// flat line on the floor.
+struct RouteGraphScale {
+    let lower: Double
+    let upper: Double
+
+    var span: Double { max(upper - lower, .leastNonzeroMagnitude) }
+
+    init(samples: [MetricSample], metric: RouteGraphMetric) {
+        // Pinned axis: the range verbatim — no padding, no nice-rounding, no
+        // expanding to fit — so the top tick *is* the cap and a marker riding the
+        // top edge unambiguously reads "higher than that number".
+        if metric.aboveScale, let range = metric.suggestedRange {
+            lower = range.lowerBound
+            upper = range.upperBound
+            return
+        }
+
+        // Only plottable values drive the scale. Above-scale samples deliberately
+        // do not — expanding the axis to fit them is what the cap exists to avoid.
+        let nums: [Double] = samples.compactMap { sample -> Double? in
+            guard case .value(let v) = sample else { return nil }
+            return v
+        }
+        let dataMin = nums.min()
+        let dataMax = nums.max()
+
+        var lo: Double
+        var hi: Double
+        if let range = metric.suggestedRange {
+            lo = min(range.lowerBound, dataMin ?? range.lowerBound)
+            hi = max(range.upperBound, dataMax ?? range.upperBound)
+        } else if let dataMin, let dataMax {
+            lo = dataMin
+            hi = dataMax
+        } else {
+            lo = 0
+            hi = 1
+        }
+
+        let padding = (hi - lo == 0 ? 1 : hi - lo) * 0.1
+        lo -= padding
+        hi += padding
+
+        if metric.showZeroLine {
+            if lo > 0 { lo = -padding }
+            if hi < 0 { hi = padding }
+        }
+
+        let step = Self.niceTickInterval(hi - lo, targetTicks: 4)
+        lo = (lo / step).rounded(.down) * step
+        hi = (hi / step).rounded(.up) * step
+        if lo == hi { hi = lo + step }
+
+        lower = lo
+        upper = hi
+    }
+
+    /// Map a value from this scale into `target`'s domain, preserving position.
+    func mapped(_ v: Double, into target: RouteGraphScale) -> Double {
+        target.lower + (v - lower) / span * target.span
+    }
+
+    /// Invert `mapped` — a position in `target`'s domain back to this metric's
+    /// own units, for the trailing axis labels.
+    func unmapped(_ y: Double, from target: RouteGraphScale) -> Double {
+        lower + (y - target.lower) / target.span * span
+    }
+
+    /// A 1/2/5×10ⁿ step that lands near `targetTicks` divisions. Port of web
+    /// `niceTickInterval`.
+    private static func niceTickInterval(_ range: Double, targetTicks: Int) -> Double {
+        guard range > 0, targetTicks > 0 else { return 1 }
+        let rough = range / Double(targetTicks)
+        let magnitude = pow(10, (log10(rough)).rounded(.down))
+        let normalized = rough / magnitude
+        let nice: Double = normalized <= 1.5 ? 1 : normalized <= 3.5 ? 2 : normalized <= 7.5 ? 5 : 10
+        return nice * magnitude
+    }
 }
 
 /// Route graph using Swift Charts — scalar metrics along the route.
@@ -22,7 +114,9 @@ struct RouteGraphView: View {
     @Binding var rightMetricId: String
 
     private var leftMetric: RouteGraphMetric? { RouteGraphMetrics.metric(byId: leftMetricId) }
-    private var rightMetric: RouteGraphMetric? { RouteGraphMetrics.metric(byId: rightMetricId) }
+    private var rightMetric: RouteGraphMetric? {
+        rightMetricId == RouteGraphMetrics.metricNone ? nil : RouteGraphMetrics.metric(byId: rightMetricId)
+    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -41,34 +135,95 @@ struct RouteGraphView: View {
 
     @ViewBuilder
     private func chartView(vizData: VizRouteData, leftMetric: RouteGraphMetric) -> some View {
-        let leftData = extractData(points: vizData.points, metric: leftMetric)
-        let rightData: [ChartDataPoint] = {
-            guard rightMetricId != "none", let rm = rightMetric else { return [] }
-            return extractData(points: vizData.points, metric: rm)
-        }()
+        let leftSamples = vizData.points.map { leftMetric.sample(at: $0) }
+        let leftScale = RouteGraphScale(samples: leftSamples, metric: leftMetric)
+        let leftData = chartPoints(vizData.points, samples: leftSamples, scale: leftScale, into: leftScale)
+
+        let rightMetric = self.rightMetric
+        let rightSamples = rightMetric.map { m in vizData.points.map { m.sample(at: $0) } } ?? []
+        let rightScale = rightMetric.map { RouteGraphScale(samples: rightSamples, metric: $0) }
+        let rightData = rightScale.map {
+            chartPoints(vizData.points, samples: rightSamples, scale: $0, into: leftScale)
+        } ?? []
+
+        // Above-scale and no-coverage points plot nothing on the line, but they are
+        // NOT gaps: each gets its own marker so "better than the cap" and "the
+        // sensor does not look here" cannot read as "no data".
+        let leftCapped = markerPoints(vizData.points, samples: leftSamples, kind: .aboveScale, scale: leftScale, into: leftScale)
+        let leftHoles = markerPoints(vizData.points, samples: leftSamples, kind: .noCoverage, scale: leftScale, into: leftScale)
 
         Chart {
             ForEach(leftData) { pt in
                 if leftMetric.renderType == .bar {
-                    BarMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.value))
+                    BarMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
                         .foregroundStyle(leftMetric.color.opacity(0.6))
                 } else {
-                    LineMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.value))
+                    LineMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
                         .foregroundStyle(leftMetric.color)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                 }
             }
 
-            if let rm = rightMetric, rightMetricId != "none" {
+            // Capped markers ride the top edge of the pinned axis.
+            ForEach(leftCapped) { pt in
+                PointMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
+                    .symbol(.triangle)
+                    .symbolSize(40)
+                    .foregroundStyle(leftMetric.color)
+            }
+
+            // Coverage holes sit on the floor as hollow marks — distinct from a
+            // bar of zero, which would read as a confident "nothing here".
+            ForEach(leftHoles) { pt in
+                PointMark(x: .value("Distance", pt.distance), y: .value(leftMetric.label, pt.plotValue))
+                    .symbol(.cross)
+                    .symbolSize(30)
+                    .foregroundStyle(.secondary.opacity(0.5))
+            }
+
+            if let rm = rightMetric, let rs = rightScale {
+                // A right-axis bar must start from the RIGHT metric's own zero
+                // mapped into the left domain — `BarMark(y:)` would baseline it at
+                // the left metric's zero, which is a different height entirely and
+                // would draw bars growing from the wrong place.
+                let rightBaseline = rs.mapped(max(rs.lower, min(rs.upper, 0)), into: leftScale)
                 ForEach(rightData) { pt in
                     if rm.renderType == .bar {
-                        BarMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.value))
+                        BarMark(x: .value("Distance", pt.distance),
+                                yStart: .value(rm.label, rightBaseline),
+                                yEnd: .value(rm.label, pt.plotValue))
                             .foregroundStyle(rm.color.opacity(0.4))
                     } else {
-                        LineMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.value))
+                        LineMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.plotValue))
                             .foregroundStyle(rm.color)
                             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                     }
+                }
+            }
+
+            // Zero reference for the signed metrics (head/tailwind, crosswind,
+            // ISA dev, CIN). A signed axis with no labelled zero is the one thing
+            // these readings must not be: "12 kt" tells a pilot nothing about
+            // which side it is coming from.
+            //
+            // Drawn as two coincident rules rather than one mark with two
+            // annotations: a mark takes a single `.annotation`, so stacking two
+            // would keep only the last. The second rule adds no visible ink.
+            if leftMetric.showZeroLine, leftScale.lower < 0, leftScale.upper > 0 {
+                RuleMark(y: .value("Zero", 0))
+                    .foregroundStyle(.gray.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 0.5))
+                    .annotation(position: .top, alignment: .leading) {
+                        if let labels = leftMetric.zeroLineLabels {
+                            Text(labels.above).font(.system(size: 8)).foregroundStyle(.secondary)
+                        }
+                    }
+                if let labels = leftMetric.zeroLineLabels {
+                    RuleMark(y: .value("Zero", 0))
+                        .foregroundStyle(.clear)
+                        .annotation(position: .bottom, alignment: .leading) {
+                            Text(labels.below).font(.system(size: 8)).foregroundStyle(.secondary)
+                        }
                 }
             }
 
@@ -90,6 +245,10 @@ struct RouteGraphView: View {
         // this, Charts auto-domains to the data's min/max distance and the cursor
         // drifts out of register with the cross-section above (#6, iOS feedback).
         .chartXScale(domain: 0...max(vizData.totalDistanceNm, 1))
+        // Pin the Y domain too, so a metric that declares a `suggestedRange`
+        // renders at the same magnitude as on the web. Before this, the axis
+        // always auto-fit and a 20% cloud cover filled the plot.
+        .chartYScale(domain: leftScale.lower...leftScale.upper)
         .chartXAxisLabel("Distance (nm)")
         .chartYAxis {
             AxisMarks(position: .leading) { value in
@@ -106,6 +265,18 @@ struct RouteGraphView: View {
                 }
                 .foregroundStyle(leftMetric.color)
             }
+            // Trailing axis in the RIGHT metric's own units: the tick sits at a
+            // position in the left domain, the label inverts the mapping back.
+            if let rm = rightMetric, let rs = rightScale {
+                AxisMarks(position: .trailing) { value in
+                    AxisValueLabel {
+                        if let y = value.as(Double.self) {
+                            Text(Self.axisLabel(rs.unmapped(y, from: leftScale)))
+                        }
+                    }
+                    .foregroundStyle(rm.color)
+                }
+            }
         }
         .frame(height: 150)
         // Reserve the cross-section's right margin so the plot's right edge lines
@@ -120,17 +291,49 @@ struct RouteGraphView: View {
         v == v.rounded() ? String(Int(v)) : String(format: "%.1f", v)
     }
 
-    private func extractData(points: [VizPoint], metric: RouteGraphMetric) -> [ChartDataPoint] {
-        points.enumerated().compactMap { (i, pt) in
-            guard let val = metric.getValue(pt) else { return nil }
-            return ChartDataPoint(id: i, distance: pt.distanceNm, value: val)
+    /// The plottable samples, mapped from `scale` into `target`'s domain.
+    private func chartPoints(
+        _ points: [VizPoint], samples: [MetricSample],
+        scale: RouteGraphScale, into target: RouteGraphScale
+    ) -> [ChartDataPoint] {
+        var out: [ChartDataPoint] = []
+        for (i, point) in points.enumerated() {
+            guard i < samples.count, case .value(let v) = samples[i] else { continue }
+            out.append(ChartDataPoint(id: i, distance: point.distanceNm, value: v,
+                                      plotValue: scale.mapped(v, into: target)))
         }
+        return out
+    }
+
+    private enum MarkerKind { case aboveScale, noCoverage }
+
+    /// The non-plottable states that still need to be drawn: above-scale pinned to
+    /// the cap, no-coverage pinned to the floor.
+    private func markerPoints(
+        _ points: [VizPoint], samples: [MetricSample], kind: MarkerKind,
+        scale: RouteGraphScale, into target: RouteGraphScale
+    ) -> [ChartDataPoint] {
+        var out: [ChartDataPoint] = []
+        for (i, point) in points.enumerated() {
+            guard i < samples.count else { continue }
+            switch (kind, samples[i]) {
+            case (.aboveScale, .aboveScale(let v)):
+                out.append(ChartDataPoint(id: i, distance: point.distanceNm, value: v,
+                                          plotValue: scale.mapped(scale.upper, into: target)))
+            case (.noCoverage, .noCoverage):
+                out.append(ChartDataPoint(id: i, distance: point.distanceNm, value: 0,
+                                          plotValue: scale.mapped(scale.lower, into: target)))
+            default:
+                continue
+            }
+        }
+        return out
     }
 
     private func metricPicker(selection: Binding<String>, label: String) -> some View {
         Menu {
             if label == "Right" {
-                Button("None") { selection.wrappedValue = "none" }
+                Button("None") { selection.wrappedValue = RouteGraphMetrics.metricNone }
                 Divider()
             }
             ForEach(RouteGraphMetrics.all) { metric in

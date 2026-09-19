@@ -1,4 +1,18 @@
-/** Route graph metric registry — extensible definitions for plottable values. */
+/**
+ * Route graph metric registry — extensible definitions for plottable values.
+ *
+ * SYNC: the iOS app mirrors ROUTE_GRAPH_METRICS (ids, units, colours, render
+ * types, suggested ranges, aboveScale/no-coverage states and the value
+ * formatting) in
+ * app/flyfun-weather/flyfun-weather/Views/RouteGraph/RouteGraphMetrics.swift,
+ * and the axis rules below in .../RouteGraph/RouteGraphView.swift. Metric IDs are
+ * shared vocabulary, not per-client names: the advisory lenses in
+ * cross-section/advisory-presets.ts name them in their `routeGraph` directives,
+ * so an id that exists on only one client silently breaks that lens there. Keep
+ * both files in lockstep when editing here; the iOS file carries the reciprocal
+ * comment. iOS is not localized, so it copies the English `graph.<id>` strings
+ * from i18n/locales/en.json.
+ */
 
 import type { VizPoint } from '../types';
 import { t } from '../../i18n/i18n';
@@ -100,9 +114,13 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     unit: 'kt',
     renderType: 'line',
     color: '#7c3aed',
+    // Signed, so the sign carries which side it blows from — and an unlabelled
+    // signed axis is the one thing a crosswind reading must not be. The tooltip
+    // and the zero-line labels both say the side, matching iOS.
     showZeroLine: true,
+    get zeroLineLabels(): [string, string] { return [t('graph.crosswindRight'), t('graph.crosswindLeft')]; },
     getValue: (p) => p.crosswindKt,
-    formatValue: (v) => `${Math.abs(v).toFixed(0)} kt`,
+    formatValue: (v) => `${Math.abs(v).toFixed(0)} kt ${v >= 0 ? 'R' : 'L'}`,
   },
   {
     id: 'temperature',

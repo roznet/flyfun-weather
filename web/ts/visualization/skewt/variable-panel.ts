@@ -6,6 +6,14 @@
  * - Secondary: line + top X-axis labels (optional)
  *
  * HW/XW (headwind/crosswind) is included as a variable option.
+ *
+ * SYNC: the iOS app mirrors VARIABLE_REGISTRY + VARIABLE_GROUPS (variable set,
+ * group membership and within-group order, fixed ranges, zero lines, colours,
+ * short labels and the `metricId` help pointers) in
+ * app/flyfun-weather/flyfun-weather/Views/CrossSection/SkewTVariableCatalog.swift.
+ * Keep them in lockstep when editing here; the iOS file carries the reciprocal
+ * comment and documents the one known divergence (its variable ids are shorter,
+ * which is why the `skewtSidePanel` preset directive cannot be ported yet).
  */
 
 import { SkewTTransform } from './skewt-transform';
