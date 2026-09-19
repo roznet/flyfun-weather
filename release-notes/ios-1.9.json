@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-09-19",
+    "title": "iOS 1.9 — Shared trips and observed radar intensity",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Trips can now be shared. Send someone a trip link and they open the whole chain — every leg, and which one is deciding it — then add those flights to their own list in one tap. A trip opens for someone else only when every one of its legs is shared.\n- \"Open Trip\" added to a flight’s menu, so a leg that belongs to a trip is never a dead end.\n- Observed radar now says what it means: \"heavy echo, peak 44 dBZ\" instead of a bare number, with precipitation rate qualified the same way.\n- The cross-section's observed radar strip now uses the same intensity steps as a cockpit weather radar, so red and magenta appear where you'd expect them rather than a notch late.\n- You can send feedback about a specific briefing from the pack menu — the report arrives with that flight and briefing attached."
+  }
+]
