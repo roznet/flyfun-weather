@@ -880,6 +880,57 @@ final class flyfun_weatherUITests: XCTestCase {
             .firstMatch
     }
 
+    /// Journey 2b — "Paste Flight Plan": the paste sheet must open over the
+    /// add-flight form, and a successful parse must fill the route field and
+    /// leave the form standing, ready for the pilot to tap Create. Regression:
+    /// the paste sheet was anchored to a lazy `Form` row, so tapping Paste Flight
+    /// Plan dismissed the whole form and left the app on whatever briefing was
+    /// last selected, with no flight created.
+    @MainActor
+    func testPasteFlightPlanFillsFormAndKeepsItOpen() throws {
+        let app = launchMockApp()
+        // Open a briefing first: on iPad that leaves it in the detail pane behind
+        // the add-flight sheet, which is the state the bug was reported from —
+        // the form vanishing reads as "the app went back to an old briefing".
+        openFixture1Briefing(app)
+        // iPhone pushes the briefing over the list, so getting back needs the
+        // back-tap `returnToFlightList` knows about; on iPad it is a no-op.
+        returnToFlightList(app)
+
+        app.buttons["addFlightButton"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["waypointsField"].waitForExistence(timeout: Self.uiTimeout),
+                      "add-flight form should appear")
+
+        let paste = app.buttons["pasteFplButton"].firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: Self.uiTimeout),
+                      "the Import section should offer Paste Flight Plan")
+        paste.tap()
+
+        let editor = app.textViews["fplTextEditor"].firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: Self.uiTimeout),
+                      "the FPL paste sheet should show its text editor")
+        editor.tap()
+        // One line: XCUI's typeText sends a newline as Return, which the sheet's
+        // TextEditor accepts but which makes the typed text diverge from the
+        // pasted original. The parse fixture only keys off the (FPL- prefix.
+        editor.typeText("(FPL-N122DR-ZG-S22T/L-SBDGORVY/LB2-LSGS0800-N0178A110 SAPRE1D SAPRE/N0189F180 IFR L615 DJL A6 SOMDA T11 VATRI B3 BILGO H20 XORBI H40 ABB N20 ELDAX M8 WAFFU Y8 GWC-EGTF0257-PBN/A1B2C2D2L1O2 DOF/260927)")
+
+        app.buttons["parseFplButton"].firstMatch.tap()
+
+        // The form must still be up — this is the regression the journey guards.
+        let waypoints = app.textFields["waypointsField"]
+        XCTAssertTrue(waypoints.waitForExistence(timeout: Self.uiTimeout),
+                      "the add-flight form should still be open after Parse & Fill")
+        let value = (waypoints.value as? String) ?? ""
+        XCTAssertTrue(value.contains("LSGS") && value.contains("EGTF"),
+                      "the parsed route should be filled into the route field, got: \(value)")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "after-parse-fill"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     /// Launch cost of the app the journeys exercise — i.e. mock mode.
     ///
     /// Mocked on purpose, and not only for determinism: an unmocked launch

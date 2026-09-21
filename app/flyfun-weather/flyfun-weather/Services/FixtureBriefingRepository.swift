@@ -259,7 +259,44 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw FixtureError.notProvided("updateFlight") }
     func deleteFlight(id: String) async throws { throw FixtureError.notProvided("deleteFlight") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("createAircraft") }
-    func parseFpl(_ text: String) async throws -> ParseFplResponse { throw FixtureError.notProvided("parseFpl") }
+    /// Canned FPL parse for the paste-flight-plan journey. The real endpoint
+    /// runs `euro_aip.parse_icao_fpl` server-side; a fixture only has to prove
+    /// the client half — a successful parse must fill the form and leave the
+    /// add-flight sheet standing. Anything that isn't a `(FPL-...)` block comes
+    /// back as the server's error string so the failure branch is exercisable too.
+    func parseFpl(_ text: String) async throws -> ParseFplResponse {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("(FPL-") else {
+            return ParseFplResponse(
+                waypoints: [], date: nil, timeUtc: nil, altitudeFt: nil,
+                durationHours: nil, flightRules: nil, aircraftType: nil,
+                rawRoute: nil,
+                error: "Could not parse flight plan. Expected (FPL-...) format."
+            )
+        }
+        return ParseFplResponse(
+            waypoints: ["LSGS", "DJL", "SOMDA", "VATRI", "BILGO", "XORBI",
+                        "ABB", "ELDAX", "WAFFU", "GWC", "EGTF"],
+            date: Self.fixtureFplDate,
+            timeUtc: "08:00",
+            altitudeFt: 11000,
+            durationHours: 3,
+            flightRules: "Z",
+            aircraftType: "S22T",
+            rawRoute: "SAPRE1D SAPRE/N0189F180 IFR L615 DJL A6 SOMDA T11 VATRI B3 BILGO H20 XORBI H40 ABB N20 ELDAX M8 WAFFU Y8 GWC",
+            error: nil
+        )
+    }
+
+    /// Far-future so the parsed flight lands in the list's "Future" group and
+    /// clears the server's past-departure guard, like every other fixture flight.
+    private static let fixtureFplDate: String = {
+        let d = Calendar(identifier: .gregorian).date(byAdding: .day, value: 30, to: Date()) ?? Date()
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: d)
+    }()
     /// Echo the typed tokens back as a clean interpretation. The create/edit flow
     /// now interprets the route on the server *at submit time* before it will
     /// create (`AddFlightViewModel.interpretRouteForSubmit`), so a fixture that

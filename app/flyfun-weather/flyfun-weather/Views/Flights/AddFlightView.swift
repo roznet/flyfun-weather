@@ -144,6 +144,22 @@ struct AddFlightView: View {
                 guard !Task.isCancelled else { return }
                 routeFieldFocused = true
             }
+            // Every sheet this form presents hangs off the Form, never off one of
+            // its rows — the aircraft, Autorouter and interpret sheets below
+            // already do. This one used to hang off `importSection`, and a
+            // `Form` is a lazy `List`: once the open-time focus pins the scroll
+            // to the route field four sections down, the Import row's content
+            // is torn down and the `.sheet` anchored to it goes with it.
+            // Tapping Paste Flight Plan then dismissed the whole add-flight
+            // sheet instead of presenting the paste sheet — on iPad that lands
+            // the pilot back on the briefing behind it with no flight created,
+            // which is what it was reported as. Covered by
+            // `testPasteFlightPlanFillsFormAndKeepsItOpen`.
+            .sheet(isPresented: $showFplSheet) {
+                FplPasteSheet(viewModel: viewModel) {
+                    showFplSheet = false
+                }
+            }
             .sheet(isPresented: $showAircraftSheet) {
                 AircraftFormSheet(viewModel: viewModel) {
                     showAircraftSheet = false
@@ -358,6 +374,7 @@ struct AddFlightView: View {
             } label: {
                 Label("Paste Flight Plan", systemImage: "doc.on.clipboard")
             }
+            .accessibilityIdentifier("pasteFplButton")
 
             Button {
                 showAutorouterSheet = true
@@ -369,11 +386,6 @@ struct AddFlightView: View {
             Text("Import")
         } footer: {
             Text("Start from a recent route, an ICAO flight plan, or your Autorouter history.")
-        }
-        .sheet(isPresented: $showFplSheet) {
-            FplPasteSheet(viewModel: viewModel) {
-                showFplSheet = false
-            }
         }
     }
 
@@ -822,6 +834,7 @@ private struct FplPasteSheet: View {
                     TextEditor(text: $viewModel.fplText)
                         .frame(minHeight: 120)
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("fplTextEditor")
                 } header: {
                     Text("ICAO Flight Plan")
                 } footer: {
@@ -845,6 +858,7 @@ private struct FplPasteSheet: View {
                             }
                         }
                     }
+                    .accessibilityIdentifier("parseFplButton")
                     .disabled(viewModel.fplText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isParsing)
                 }
 
