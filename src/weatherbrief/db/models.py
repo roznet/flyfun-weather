@@ -505,6 +505,11 @@ class FeedbackRow(Base):
     contact_ok: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="1", default=True
     )
+    # 'ios' / 'web' / 'other', classified from the submitting request's
+    # User-Agent (api/client_info.py); the raw agent is kept alongside for the
+    # app build and mobile-vs-desktop browser. NULL on rows that predate 097.
+    client: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

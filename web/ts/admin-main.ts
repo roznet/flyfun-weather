@@ -127,6 +127,12 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
   DEFER_TO_HUMAN: 'Defer to Human',
 };
 
+const CLIENT_LABELS: Record<string, string> = {
+  ios: 'iOS app',
+  web: 'Web',
+  other: 'Other',
+};
+
 async function loadFeedback(): Promise<void> {
   const container = document.getElementById('feedback-list')!;
   try {
@@ -188,6 +194,9 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
   const consentBadge = fb.contact_ok
     ? ''
     : '<span title="User opted out of email replies" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">🔕 no reply</span>';
+  const clientBadge = fb.client
+    ? `<span title="${escapeHtml(fb.user_agent ?? '')}" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">${escapeHtml(CLIENT_LABELS[fb.client] ?? fb.client)}</span>`
+    : '';
   const confidenceText = fb.confidence != null
     ? `<span style="font-size:11px;color:var(--text-muted);margin-left:6px;">${Math.round(fb.confidence * 100)}% confidence</span>`
     : '';
@@ -261,6 +270,7 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
       <summary style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         ${renderStatusBadge(fb.status)}
         ${sentimentBadge}
+        ${clientBadge}
         ${consentBadge}
         ${classificationBadge}
         ${confidenceText}
@@ -479,7 +489,8 @@ function renderRatingRow(fb: FeedbackEntry): string {
     detail += `<div style="background:var(--surface);border-radius:6px;padding:10px;white-space:pre-wrap;margin-bottom:8px;">${escapeHtml(fb.comment)}</div>`;
   }
   const consentNote = fb.contact_ok ? '' : ' · 🔕 opted out of replies';
-  detail += `<div style="color:var(--text-muted);font-size:12px;">${escapeHtml(fb.user_email)}${fb.flight_id ? ' · ' + escapeHtml(fb.flight_id) : ''}${fb.created_at ? ' · ' + escapeHtml(formatDate(fb.created_at)) : ''}${consentNote}</div>`;
+  const clientNote = fb.client ? ' · ' + escapeHtml(CLIENT_LABELS[fb.client] ?? fb.client) : '';
+  detail += `<div style="color:var(--text-muted);font-size:12px;">${escapeHtml(fb.user_email)}${fb.flight_id ? ' · ' + escapeHtml(fb.flight_id) : ''}${fb.created_at ? ' · ' + escapeHtml(formatDate(fb.created_at)) : ''}${clientNote}${consentNote}</div>`;
 
   if (canReply) {
     detail += `

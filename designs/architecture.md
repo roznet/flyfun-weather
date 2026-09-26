@@ -202,6 +202,7 @@ src/weatherbrief/
 │   ├── usage.py       # Usage summary + daily rate limits
 │   ├── credits.py     # Cost summary, charge, admin cost config, transparency endpoint
 │   ├── feedback.py    # User feedback submission, admin workflow (status/reply/send/notes)
+│   ├── client_info.py # Classify a request as ios/web/other from its User-Agent (stored on feedback)
 │   ├── security.py    # Audit logging (admin actions, pack access), HMAC integrity helpers
 │   ├── admin.py       # Admin: user list, approval, usage overview, per-user costs, API agent/token mgmt
 │   ├── deps.py        # Shared FastAPI dependencies (auth, DB session)
@@ -438,7 +439,7 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/admin/cost-config` | GET/PUT | View/update cost configuration (admin) |
 | `/api/admin/cost-config/history` | GET | Cost config version history (admin) |
 | `/api/transparency` | GET | Public pricing structure (no auth) |
-| `/api/feedback` | POST | Submit user feedback on a briefing |
+| `/api/feedback` | POST | Submit user feedback on a briefing (records `client` ios/web/other + raw `user_agent` from the request) |
 | `/api/feedback/admin` | GET | List all feedback with optional status filter (admin only) |
 | `/api/feedback/admin/{id}/status` | PUT | Update feedback workflow status (admin) |
 | `/api/feedback/admin/{id}/reply` | PUT | Save draft reply text (admin) |
