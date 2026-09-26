@@ -22,6 +22,9 @@ struct PreferencesResponse: Codable, Sendable {
     // UserDefaults and decoded at launch, so a non-optional addition would fail
     // that decode and silently reset every cached flag to `.empty`.
     let flightOrder: String?
+    // Whether an Autorouter token is stored (#625). Optional for the same
+    // cached-decode reason as `flightOrder`.
+    let hasAutorouterCreds: Bool?
 
     var pushEnabled: Bool { notifyPush ?? false }
     var emailEnabled: Bool { notifyEmail ?? true }
@@ -32,6 +35,7 @@ struct PreferencesResponse: Codable, Sendable {
     var hasPushDevice: Bool { deviceCount > 0 }
     /// Upcoming-flights ordering, defaulting to today's behaviour on an older
     /// server (or an unknown value written by a future one).
+    var autorouterLinked: Bool { hasAutorouterCreds ?? false }
     var flightOrderPreference: FlightOrder { FlightOrder(rawValue: flightOrder ?? "") ?? .furthestFirst }
 
     /// "Briefing updates" 3-stop — folds scope + change-only into one control
@@ -46,7 +50,8 @@ struct PreferencesResponse: Codable, Sendable {
     static let empty = PreferencesResponse(
         pirepCanView: false, pirepCanPublish: false,
         notifyEmail: nil, notifyPush: nil, notifyScope: nil, notifyChangeOnly: nil,
-        notifyDecayNotice: nil, pushDeviceCount: nil, flightOrder: nil
+        notifyDecayNotice: nil, pushDeviceCount: nil, flightOrder: nil,
+        hasAutorouterCreds: nil
     )
 }
 
