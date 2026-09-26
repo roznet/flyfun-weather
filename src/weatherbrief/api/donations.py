@@ -743,6 +743,10 @@ class UsageFootprintResponse(BaseModel):
 
 class DonationMeResponse(BaseModel):
     total_usd: float
+    # The donor's total in the ``fx`` display currency, for the headline. Not
+    # ``total_usd * fx.rate``: each gift was converted at its own day's rate, so
+    # that round-trip drifts with FX even when every gift was in this currency.
+    total_local: float
     impact: DonationImpactResponse
     personal: PersonalImpactResponse
     usage: UsageFootprintResponse
@@ -794,6 +798,7 @@ def get_my_donations(
         ),
     }
 
+    rows = list_user_donations(db, viewer_id, service=SERVICE)
     history = [
         DonationHistoryItem(
             date=row.created_at.isoformat(),
@@ -801,12 +806,19 @@ def get_my_donations(
             currency=row.currency,
             amount_usd=round(row.amount_usd, 2),
         )
-        for row in list_user_donations(db, viewer_id, service=SERVICE)
+        for row in rows
     ]
 
     fx_block = fx_block_for_currency(currency) if currency else fx_block_for_user(db, viewer_id)
+    # A gift charged in the display currency counts at what was actually paid;
+    # only foreign-currency gifts go through USD at today's rate (#622).
+    total_local = sum(
+        row.amount if row.currency.upper() == fx_block.currency else row.amount_usd * fx_block.rate
+        for row in rows
+    )
     return DonationMeResponse(
         total_usd=round(total, 2),
+        total_local=round(total_local, 2),
         impact=impact_to_dict(impact),
         personal=personal_to_dict(personal),
         usage=usage,

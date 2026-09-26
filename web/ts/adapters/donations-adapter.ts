@@ -79,6 +79,7 @@ export interface UsageFootprint {
 
 export interface DonationMe {
   total_usd: number;
+  total_local: number; // in fx.currency — gifts in that currency count at face value
   impact: DonationImpact;
   personal: PersonalImpact;
   usage: UsageFootprint;

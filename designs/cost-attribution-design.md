@@ -378,6 +378,13 @@ cost_per_briefing    = monthly_run_cost_usd / (num_briefings * scale) # margin-e
   months active — see "The ledger is not the true cost" below) vs lifetime
   donations (`get_user_total_usd`).
 
+**Displayed donor total ≠ `total_usd × fx.rate`.** Each gift's `amount_usd` is
+frozen at its own day's rate, so round-tripping the USD sum through today's rate
+drifts with FX (#622: 2×100 € read 201,66 €). `/donations/me` therefore also
+returns `total_local` — gifts in the display currency at face value, others via
+USD at today's rate — and the donate-page headline renders that. The impact math
+stays on `total_usd`.
+
 #### Personal panel — retrospective with forward overflow
 
 `impact.personal_impact()` returns a `PersonalImpact` with a `band`:
