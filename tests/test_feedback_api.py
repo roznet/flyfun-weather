@@ -394,3 +394,42 @@ def test_send_reply_allowed_with_consent(client, monkeypatch):
     assert resp.json()["status"] == "replied"
     assert len(sent) == 1
     assert sent[0]["to_email"] == "dev@localhost"
+
+
+# ---------------------------------------------------------------------------
+# Client (iOS / web) recorded from the User-Agent
+# ---------------------------------------------------------------------------
+
+IOS_AGENT = "flyfun-weather/15 CFNetwork/3826.500.131 Darwin/25.0.0"
+MOBILE_SAFARI_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1"
+)
+
+
+@pytest.mark.parametrize("agent, expected", [
+    (IOS_AGENT, "ios"),
+    (MOBILE_SAFARI_AGENT, "web"),
+])
+def test_submit_records_client_from_user_agent(client, app_db, agent, expected):
+    resp = client.post(
+        "/api/feedback",
+        json={"category": "digest_rating", "comment": "", "sentiment": "up", "target": "digest"},
+        headers={"User-Agent": agent},
+    )
+    assert resp.status_code == 200, resp.text
+    row = _get_row(app_db, resp.json()["id"])
+    assert row.client == expected
+    assert row.user_agent == agent
+
+
+def test_admin_list_includes_client(client):
+    fb_id = client.post(
+        "/api/feedback",
+        json={"category": "data_issue", "comment": "Autorouter linking was confusing."},
+        headers={"User-Agent": IOS_AGENT},
+    ).json()["id"]
+    entries = client.get("/api/feedback/admin").json()
+    entry = next(e for e in entries if e["id"] == fb_id)
+    assert entry["client"] == "ios"
+    assert entry["user_agent"] == IOS_AGENT

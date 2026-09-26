@@ -205,6 +205,8 @@ CATEGORY_LABELS = {
     "digest_rating": "Digest Rating",
 }
 
+CLIENT_LABELS = {"ios": "iOS app", "web": "Web", "other": "Other"}
+
 
 def send_feedback_notification(
     user_email: str,
@@ -215,13 +217,15 @@ def send_feedback_notification(
     comment: str,
     base_url: str,
     sentiment: str | None = None,
+    client: str | None = None,
 ) -> None:
     """Notify admins when a user submits feedback.
 
     ``sentiment`` ('up'/'down') marks a quick digest thumb rating; it gives
     the email a distinct subject so thumb ratings are easy to recognise and
-    filter apart from detailed feedback. In dev mode (no ADMIN_EMAILS set),
-    logs instead.
+    filter apart from detailed feedback. ``client`` ('ios'/'web'/'other') says
+    which surface it came from; the row is omitted when unknown. In dev mode
+    (no ADMIN_EMAILS set), logs instead.
     """
     from flyfun_common.auth import is_dev_mode
 
@@ -238,6 +242,13 @@ def send_feedback_notification(
         return
 
     category_label = CATEGORY_LABELS.get(category, category)
+    client_label = CLIENT_LABELS.get(client or "", client or "")
+    client_row = (
+        '<tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Client</td>'
+        f"<td>{html.escape(client_label)}</td></tr>"
+        if client_label
+        else ""
+    )
 
     if pack_timestamp:
         briefing_url = (
@@ -260,6 +271,7 @@ def send_feedback_notification(
   <table style="border-collapse:collapse;margin-bottom:16px;">
     <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">From</td><td>{html.escape(user_name)} ({html.escape(user_email)})</td></tr>
     <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Category</td><td>{html.escape(category_label)}</td></tr>
+    {client_row}
     <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Flight</td><td style="font-family:monospace;font-size:12px;">{html.escape(flight_id)}</td></tr>
   </table>
   <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin-bottom:16px;">
@@ -277,7 +289,8 @@ def send_feedback_notification(
         f"{heading}\n\n"
         f"From: {user_name} ({user_email})\n"
         f"Category: {category_label}\n"
-        f"Flight: {flight_id}\n\n"
+        + (f"Client: {client_label}\n" if client_label else "")
+        + f"Flight: {flight_id}\n\n"
         f"Comment:\n{comment}\n\n"
         f"Briefing: {briefing_url}\n"
         f"Admin page: {base_url}/admin.html\n"

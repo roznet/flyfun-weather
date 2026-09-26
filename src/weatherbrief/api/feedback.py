@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
+from weatherbrief.api.client_info import request_client
 from weatherbrief.api.throttle import (
     digest_rating_burst_limiter,
     digest_rating_daily_limiter,
@@ -136,6 +137,8 @@ def submit_feedback(
         except ValueError:
             pack_ts = None
 
+    client, user_agent = request_client(request)
+
     row = FeedbackRow(
         user_id=user_id,
         flight_id=body.flight_id or None,
@@ -145,10 +148,15 @@ def submit_feedback(
         sentiment=body.sentiment,
         target=body.target,
         contact_ok=body.contact_ok,
+        client=client,
+        user_agent=user_agent,
     )
     db.add(row)
     db.flush()
-    logger.info("Feedback #%d from user %s on flight %s", row.id, user_id, body.flight_id)
+    logger.info(
+        "Feedback #%d from user %s on flight %s (client=%s)",
+        row.id, user_id, body.flight_id, client,
+    )
 
     # Mirror digest thumb ratings to LangSmith as run feedback (issue #244).
     # Fire-and-forget: look up the pack's digest_trace_id and attach the rating
@@ -190,6 +198,7 @@ def submit_feedback(
             comment=body.comment,
             base_url=base_url,
             sentiment=body.sentiment,
+            client=client,
         )
     except Exception:
         logger.warning("Failed to send feedback notification email", exc_info=True)
@@ -241,6 +250,8 @@ def _serialize_feedback(
         "sentiment": fb.sentiment,
         "target": fb.target,
         "contact_ok": fb.contact_ok,
+        "client": fb.client,
+        "user_agent": fb.user_agent,
         "created_at": fb.created_at.isoformat() if fb.created_at else None,
         "status": fb.status,
         "classification": fb.classification,
