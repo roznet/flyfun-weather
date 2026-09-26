@@ -173,6 +173,14 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.autorouterRoutes(limit: limit)
     }
 
+    func autorouterLinkURL(scheme: String) async throws -> URL {
+        try await online.autorouterLinkURL(scheme: scheme)
+    }
+
+    func unlinkAutorouter() async throws {
+        try await online.unlinkAutorouter()
+    }
+
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
         try await online.searchAircraftTypes(query)
     }

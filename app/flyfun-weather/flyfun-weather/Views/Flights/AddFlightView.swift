@@ -987,18 +987,42 @@ private struct AircraftFormSheet: View {
 // MARK: - Autorouter Picker Sheet
 
 /// Lists the user's recent Autorouter routes; selecting one imports its flight
-/// plan. Shows a helpful message when the account isn't linked or has no routes.
+/// plan. When the account isn't linked it offers to connect it right here
+/// (in-app browser, straight back to the list) instead of sending the pilot to
+/// the website (#625). Shows a message when there are no routes.
 private struct AutorouterPickerSheet: View {
     @Bindable var viewModel: AddFlightViewModel
     let onSelect: (AutorouterRoute) -> Void
     let onCancel: () -> Void
 
+    @Environment(AppState.self) private var appState
+    @State private var linker = AutorouterLinker()
+
     var body: some View {
         NavigationStack {
             Group {
-                if viewModel.isLoadingAutorouter {
+                if viewModel.isLinkingAutorouter {
+                    ProgressView("Connecting to Autorouter\u{2026}")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if viewModel.isLoadingAutorouter {
                     ProgressView("Loading routes\u{2026}")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if viewModel.autorouterNeedsLink {
+                    ContentUnavailableView {
+                        Label("Connect Autorouter", systemImage: "link")
+                    } description: {
+                        Text("Import the routes you've planned on autorouter.aero. You'll sign in there and come straight back here.")
+                        if let linkError = viewModel.autorouterLinkError {
+                            Text(linkError)
+                                .foregroundStyle(.red)
+                        }
+                    } actions: {
+                        Button("Connect Autorouter") {
+                            Task { await connect() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("connectAutorouterButton")
+                    }
                 } else if let error = viewModel.autorouterError {
                     ContentUnavailableView {
                         Label("Autorouter", systemImage: "arrow.down.doc")
@@ -1030,6 +1054,14 @@ private struct AutorouterPickerSheet: View {
                     Button("Cancel") { onCancel() }
                 }
             }
+        }
+    }
+
+    private func connect() async {
+        guard await viewModel.connectAutorouter(using: linker) else { return }
+        // Keep Settings' Autorouter row in step with the link just made.
+        if let client = appState.apiClient {
+            await appState.userPreferences.refresh(using: client)
         }
     }
 }
