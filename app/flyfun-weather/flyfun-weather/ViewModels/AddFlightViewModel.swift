@@ -652,9 +652,17 @@ final class AddFlightViewModel {
 
     private(set) var autorouterRoutes: [AutorouterRoute] = []
     private(set) var isLoadingAutorouter: Bool = false
-    /// User-facing message when Autorouter import can't proceed (not linked, empty,
-    /// or unreachable). Nil when routes loaded successfully.
+    /// User-facing message when Autorouter import can't proceed (empty or
+    /// unreachable). Nil when routes loaded, or when the account just needs
+    /// linking — that state is `autorouterNeedsLink`, which offers a button.
     var autorouterError: String?
+    /// The account isn't linked (never, or the token expired / was revoked —
+    /// the server answers both with `409 autorouter_not_linked`). The picker
+    /// shows a Connect button instead of the route list (#625).
+    private(set) var autorouterNeedsLink: Bool = false
+    private(set) var isLinkingAutorouter: Bool = false
+    /// Why the last Connect attempt failed; nil after success or a cancel.
+    private(set) var autorouterLinkError: String?
 
     /// Recently-flown routes, derived client-side from the flight list (most recent
     /// distinct waypoint sequences) — same source as the web's recent-route dropdown.
@@ -666,6 +674,7 @@ final class AddFlightViewModel {
         defer { isLoadingAutorouter = false }
         do {
             autorouterRoutes = try await repository.autorouterRoutes(limit: 25)
+            autorouterNeedsLink = false
             if autorouterRoutes.isEmpty {
                 autorouterError = "No recent routes found in your Autorouter account."
             }
@@ -674,12 +683,31 @@ final class AddFlightViewModel {
             // Specifically the "not linked" 409 — other 409s fall through to the
             // generic handler so we don't mislabel an unrelated conflict.
             autorouterRoutes = []
-            autorouterError = "Link your Autorouter account on the web app to import routes here."
+            autorouterNeedsLink = true
         } catch {
             autorouterRoutes = []
             autorouterError = "Could not load Autorouter routes: \(error.localizedDescription)"
             Self.logger.debug("Autorouter routes unavailable: \(error)")
         }
+    }
+
+    /// Link Autorouter in an in-app browser, then load the routes the pilot came
+    /// for. Returns true when the account was linked (the caller refreshes the
+    /// cached preferences so Settings agrees). A cancel is silent.
+    @discardableResult
+    func connectAutorouter(using linker: any AutorouterLinking) async -> Bool {
+        isLinkingAutorouter = true
+        autorouterLinkError = nil
+        defer { isLinkingAutorouter = false }
+        do {
+            guard try await linker.connect(via: repository) else { return false }
+        } catch {
+            autorouterLinkError = AutorouterLinker.message(for: error)
+            Self.logger.debug("Autorouter link failed: \(error)")
+            return false
+        }
+        await loadAutorouterRoutes()
+        return true
     }
 
     /// Import a selected Autorouter route by running its ICAO flight plan through

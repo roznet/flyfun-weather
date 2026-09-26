@@ -44,3 +44,16 @@ struct AutorouterRoute: Codable, Identifiable, Hashable, Sendable {
 struct AutorouterRoutesResponse: Codable, Sendable {
     let routes: [AutorouterRoute]
 }
+
+/// `POST /autorouter/link-ticket` body: the app's callback scheme, which the
+/// server checks against its allowlist and binds into the ticket.
+struct AutorouterLinkTicketRequest: Encodable, Sendable {
+    let scheme: String
+}
+
+/// `POST /autorouter/link-ticket` response: a short-lived URL that starts the
+/// Autorouter OAuth flow without the web session cookie.
+struct AutorouterLinkTicketResponse: Decodable, Sendable {
+    let url: String
+    let expiresIn: Int?
+}
