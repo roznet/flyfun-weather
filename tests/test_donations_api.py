@@ -526,6 +526,31 @@ class TestMe:
         assert body["fx"]["currency"] == "NOK"
         assert body["fx"]["rate"] == pytest.approx(10.0)
 
+    def test_total_local_uses_charged_amount_for_display_currency(
+        self, make_client, session_factory
+    ):
+        # #622: two 100 EUR gifts converted at different day rates must still
+        # total exactly 200 EUR, not (sum of USD) x today's rate.
+        s = session_factory()
+        for ref, day_rate in (("pi_sep12", 0.86266), ("pi_sep26", 0.87696)):
+            s.add(DonationRow(
+                user_id=DEV_USER_ID, service=SERVICE, amount=100.0, currency="EUR",
+                amount_usd=100.0 / day_rate, fx_rate=day_rate, recurring=False,
+                status="succeeded", provider="stripe", provider_ref=ref,
+                created_at=datetime.now(timezone.utc),
+            ))
+        s.commit()
+        s.close()
+        _record_donation(session_factory, 10.0, provider_ref="pi_usd")  # foreign gift
+        _record_donation(session_factory, 50.0, provider_ref="pi_ref", status="refunded")
+
+        body = make_client().get("/api/donations/me").json()
+        assert body["fx"]["currency"] == "EUR"
+        # 200 EUR at face value + 10 USD at today's stubbed 0.9; refund excluded.
+        assert body["total_local"] == pytest.approx(209.0)
+        # The naive round-trip is what the page used to show.
+        assert body["total_usd"] * body["fx"]["rate"] != pytest.approx(209.0, abs=0.01)
+
     def test_donation_history_newest_first_excludes_refunds(self, make_client, session_factory):
         _record_donation(session_factory, 10.0, provider_ref="pi_a", year=2025)
         _record_donation(session_factory, 25.0, provider_ref="pi_b", year=2026)

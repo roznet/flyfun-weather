@@ -201,7 +201,9 @@ function renderPersonal(me: DonationMe): void {
 
   title.textContent = t('donate.usage.donorTitle');
   intro.textContent = t('donate.usage.donorIntro');
-  headline.textContent = formatMoney(me.total_usd, me.fx);
+  // Not formatMoney(total_usd): each gift was converted at its own day's rate,
+  // so a USD round-trip drifts with FX (#622 — 2×100 € showed as 201,66 €).
+  headline.textContent = formatCharged(me.total_local, me.fx.currency);
   // Prefer the retrospective personal panel; fall back to program-average impact.
   const phrase = me.personal && !me.personal.empty ? me.personal.summary : me.impact.summary;
   sub.textContent = phrase ? `Your support ${phrase}.` : 'Thank you for your support.';
