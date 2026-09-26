@@ -482,8 +482,15 @@ function formatAutorouterRouteSubtitle(r: AutorouterRouteSummary): string {
   return parts.join(' · ');
 }
 
-/** Show the "Link Autorouter in Settings" prompt for users who haven't linked. */
+/** Query flag the Autorouter link flow appends when it returns here. */
+const AUTOROUTER_LINKED_PARAM = 'autorouter';
+
+/** Prompt to connect Autorouter. The button runs the link flow directly and
+ *  comes back to this page, which then opens the route picker (see
+ *  resumeAutorouterImportAfterLink) — no detour through Settings. */
 function showAutorouterNotLinkedModal(): void {
+  const next = window.location.pathname + window.location.search;
+  const linkHref = `/autorouter/link?next=${encodeURIComponent(next)}`;
   const backdrop = document.createElement('div');
   backdrop.className = 'metric-popup-backdrop active';
   const modal = document.createElement('div');
@@ -494,7 +501,7 @@ function showAutorouterNotLinkedModal(): void {
     <p>${escapeHtml(t('flights.autorouter.notLinkedBody'))}</p>
     <div style="margin-top:0.75rem;display:flex;gap:0.5rem;justify-content:flex-end;">
       <button type="button" id="ar-cancel-btn" class="btn btn-outline btn-sm">${t('flights.fpl.cancel')}</button>
-      <a href="/settings.html#autorouter-section" class="btn btn-primary btn-sm">${escapeHtml(t('flights.autorouter.openSettings'))}</a>
+      <a href="${escapeHtml(linkHref)}" class="btn btn-primary btn-sm">${escapeHtml(t('flights.autorouter.connect'))}</a>
     </div>
   `;
   backdrop.appendChild(modal);
@@ -580,6 +587,22 @@ async function handleImportFromAutorouter(): Promise<void> {
     ui.renderError(t('flights.autorouter.fetchError'));
     console.error('Autorouter routes fetch failed:', err);
   }
+}
+
+/** Back from a successful link (`?autorouter=linked`): drop the flag from the
+ *  URL so a reload doesn't reopen the picker, then carry on with the import the
+ *  pilot started. */
+function resumeAutorouterImportAfterLink(): void {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get(AUTOROUTER_LINKED_PARAM) !== 'linked') return;
+  params.delete(AUTOROUTER_LINKED_PARAM);
+  const query = params.toString();
+  window.history.replaceState(
+    null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash,
+  );
+  hasAutorouterCreds = true;
+  updateAutorouterButtonState();
+  void handleImportFromAutorouter();
 }
 
 /** Refresh the Import-from-Autorouter button's tooltip from hasAutorouterCreds. */
@@ -991,6 +1014,7 @@ async function init(): Promise<void> {
   // stayed at its `false` default), matching what the user would see on a
   // first visit before linking Autorouter.
   updateAutorouterButtonState();
+  resumeAutorouterImportAfterLink();
 
   // --- Guided tour (#400): help icon + ?tour=1 auto-start ---
   document.getElementById('tour-btn')?.addEventListener('click', () => startFlightsTour());

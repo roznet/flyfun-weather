@@ -59,6 +59,11 @@ protocol BriefingRepository: Sendable {
     func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute]
+    /// Short-lived signed URL that starts linking Autorouter in an in-app
+    /// browser (`AutorouterLinker`), returning to `scheme://autorouter/callback`.
+    func autorouterLinkURL(scheme: String) async throws -> URL
+    /// Remove the stored Autorouter token (Settings → Disconnect).
+    func unlinkAutorouter() async throws
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
     // Flight sharing (#446) — all online-only.
@@ -235,6 +240,19 @@ final class OnlineBriefingRepository: BriefingRepository {
             "/api/flights/autorouter-routes?limit=\(limit)"
         )
         return response.routes
+    }
+
+    func autorouterLinkURL(scheme: String) async throws -> URL {
+        let body = try JSONEncoder.weatherBrief.encode(AutorouterLinkTicketRequest(scheme: scheme))
+        let response: AutorouterLinkTicketResponse = try await client.request(
+            "/autorouter/link-ticket", method: "POST", body: body
+        )
+        guard let url = URL(string: response.url) else { throw APIError.networkError(URLError(.badURL)) }
+        return url
+    }
+
+    func unlinkAutorouter() async throws {
+        _ = try await client.requestData("/autorouter/unlink", method: "POST")
     }
 
     func packs(flightId: String) async throws -> [PackMetaResponse] {

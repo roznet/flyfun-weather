@@ -18,6 +18,9 @@ struct SettingsView: View {
     @State private var pushBusy = false
     @State private var notifyBusy = false
     @State private var flightOrderBusy = false
+    @State private var autorouterBusy = false
+    @State private var autorouterError: String?
+    @State private var autorouterLinker = AutorouterLinker()
     @State private var showPushDeniedAlert = false
     #if DEBUG
     /// Transient footer message for the Developer sections (tips overrides, copy).
@@ -101,6 +104,36 @@ struct SettingsView: View {
                     Text("Flights")
                 } footer: {
                     Text("“Furthest first” puts the flight departing last at the top, so newly added flights appear first. “Soonest first” puts the flight departing next at the top. Applies to upcoming flights only — past flights always stay most-recent-first.")
+                }
+
+                Section {
+                    if notifyPrefs.autorouterLinked {
+                        LabeledContent("Autorouter") {
+                            Label("Connected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        }
+                        Button("Disconnect Autorouter", role: .destructive) {
+                            Task { await disconnectAutorouter() }
+                        }
+                        .disabled(autorouterBusy || appState.repository == nil)
+                    } else {
+                        Button {
+                            Task { await connectAutorouter() }
+                        } label: {
+                            Label("Connect Autorouter", systemImage: "link")
+                        }
+                        .disabled(autorouterBusy || appState.repository == nil)
+                        .accessibilityIdentifier("settingsConnectAutorouter")
+                    }
+                    if let autorouterError {
+                        Text(autorouterError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Services")
+                } footer: {
+                    Text("Connect your autorouter.aero account to import the routes you've planned there when adding a flight.")
                 }
 
                 Section {
@@ -355,6 +388,41 @@ struct SettingsView: View {
             await appState.userPreferences.updateFlightOrder(order, using: client)
             flightOrderBusy = false
         }
+    }
+
+    /// Link Autorouter in an in-app browser (#625), then refresh preferences so
+    /// the row flips to Connected. A cancel is silent.
+    private func connectAutorouter() async {
+        guard let repository = appState.repository else { return }
+        autorouterBusy = true
+        autorouterError = nil
+        defer { autorouterBusy = false }
+        do {
+            guard try await autorouterLinker.connect(via: repository) else { return }
+        } catch {
+            autorouterError = AutorouterLinker.message(for: error)
+            return
+        }
+        await refreshPreferences()
+    }
+
+    private func disconnectAutorouter() async {
+        guard let repository = appState.repository else { return }
+        autorouterBusy = true
+        autorouterError = nil
+        defer { autorouterBusy = false }
+        do {
+            try await repository.unlinkAutorouter()
+        } catch {
+            autorouterError = "Couldn't disconnect Autorouter: \(error.localizedDescription)"
+            return
+        }
+        await refreshPreferences()
+    }
+
+    private func refreshPreferences() async {
+        guard let client = appState.apiClient else { return }
+        await appState.userPreferences.refresh(using: client)
     }
 
     /// Dismiss the one-time decay notice when the user leaves Settings.

@@ -184,7 +184,17 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         return try interpretRouteResult.get()
     }
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw MockError.notStubbed("routeDistance") }
-    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
+    var autorouterRoutesResults: [Result<[AutorouterRoute], Error>] = []
+    private(set) var autorouterRoutesCallCount = 0
+    /// Pops the next stubbed result per call; `[]` once they run out.
+    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] {
+        autorouterRoutesCallCount += 1
+        guard !autorouterRoutesResults.isEmpty else { return [] }
+        return try autorouterRoutesResults.removeFirst().get()
+    }
+    var autorouterLinkURLResult: Result<URL, Error> = .failure(MockError.notStubbed("autorouterLinkURL"))
+    func autorouterLinkURL(scheme: String) async throws -> URL { try autorouterLinkURLResult.get() }
+    func unlinkAutorouter() async throws {}
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
