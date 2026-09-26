@@ -292,6 +292,9 @@ export interface FeedbackEntry {
   sentiment: 'up' | 'down' | null;
   target: string | null;
   contact_ok: boolean;
+  /** Surface that submitted it, from the User-Agent; null on pre-097 rows. */
+  client: 'ios' | 'web' | 'other' | null;
+  user_agent: string | null;
   created_at: string | null;
   status: FeedbackStatus;
   classification: string | null;
