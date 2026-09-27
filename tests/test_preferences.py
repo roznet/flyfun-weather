@@ -107,6 +107,38 @@ class TestPreferencesAPI:
         assert load_flight_order(s, DEV_USER_ID) == "soonest_first"
         s.close()
 
+    def test_new_flight_defaults_default_to_browser_plus_two_hours(self, client):
+        body = client.get("/api/user/preferences").json()
+        assert body["default_departure_tz"] == "browser"
+        assert body["default_departure_lead_hours"] == 2
+
+    def test_new_flight_defaults_round_trip(self, client):
+        resp = client.put(
+            "/api/user/preferences",
+            json={"default_departure_tz": "utc", "default_departure_lead_hours": 0},
+        )
+        assert resp.status_code == 200
+        body = client.get("/api/user/preferences").json()
+        assert body["default_departure_tz"] == "utc"
+        assert body["default_departure_lead_hours"] == 0
+
+    def test_new_flight_defaults_reject_invalid(self, client):
+        assert client.put("/api/user/preferences", json={"default_departure_tz": "local"}).status_code == 422
+        assert client.put("/api/user/preferences", json={"default_departure_lead_hours": 3}).status_code == 422
+
+    def test_new_flight_defaults_normalize_bad_stored_values(self, client, app_db):
+        client.get("/api/user/preferences")  # ensure the row exists
+        s = app_db()
+        row = s.get(UserPreferencesRow, DEV_USER_ID)
+        data = json.loads(row.app_prefs_json or "{}")
+        data.update(default_departure_tz="mars", default_departure_lead_hours=True)
+        row.app_prefs_json = json.dumps(data)
+        s.commit()
+        s.close()
+        body = client.get("/api/user/preferences").json()
+        assert body["default_departure_tz"] == "browser"
+        assert body["default_departure_lead_hours"] == 2
+
     def test_flight_order_rejects_invalid(self, client):
         resp = client.put("/api/user/preferences", json={"flight_order": "chronological"})
         assert resp.status_code == 422

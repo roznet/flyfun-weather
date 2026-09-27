@@ -53,6 +53,10 @@ export interface PreferencesResponse {
   // Ordering of the upcoming-flights section only (#536):
   // 'furthest_first' (default, historical) | 'soonest_first'.
   flight_order: string;
+  // New-flight form defaults: timezone the departure is entered in
+  // ('browser' = viewer's own zone | 'utc') and pre-filled lead (now + 0/1/2 h).
+  default_departure_tz: string;
+  default_departure_lead_hours: number;
   display_currency: string;
   synoptic_forecast_map_enabled: boolean;
   defer_email_for_model_update: boolean;
@@ -87,6 +91,8 @@ export interface PreferencesUpdate {
   locale?: string;
   units_region?: string;
   flight_order?: string;
+  default_departure_tz?: 'browser' | 'utc';
+  default_departure_lead_hours?: 0 | 1 | 2;
   display_currency?: string;
   synoptic_forecast_map_enabled?: boolean;
   defer_email_for_model_update?: boolean;

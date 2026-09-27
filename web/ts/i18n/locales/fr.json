@@ -65,6 +65,7 @@
   "flightDetail.copyShareLinkTitle": "Briefing de vol",
   "flightDetail.sharingPrivateNote": "Les vols privés ne sont pas visibles des abonnés. Basculez dans les paramètres pour partager.",
   "flights.form.errorDate": "Veuillez saisir une date.",
+  "flights.form.tzLocal": "local",
   "flights.form.errorWaypoints": "La route doit comporter au moins 2 points de passage séparés par des espaces (ex. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Chaque point de passage doit comporter 2 à 5 caractères alphanumériques (aérodromes, navaids ou fixes). Invalide(s) : {codes}",
   "flights.form.defaultTag": " (par défaut)",

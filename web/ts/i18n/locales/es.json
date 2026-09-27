@@ -65,6 +65,7 @@
   "flightDetail.copyShareLinkTitle": "Briefing de vuelo",
   "flightDetail.sharingPrivateNote": "Los vuelos privados no son visibles para los suscriptores. Cambia en ajustes para compartir.",
   "flights.form.errorDate": "Introduzca una fecha.",
+  "flights.form.tzLocal": "local",
   "flights.form.errorWaypoints": "La ruta debe ser una lista de al menos 2 puntos de ruta separados por espacios (ej. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Cada punto de ruta debe tener de 2 a 5 caracteres alfanuméricos (aeropuertos, navaids o fixes). Inválidos: {codes}",
   "flights.form.defaultTag": " (por defecto)",

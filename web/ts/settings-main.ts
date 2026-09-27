@@ -860,6 +860,13 @@ function populateAccountForm(prefs: PreferencesResponse): void {
   if (flightOrderSelect) {
     flightOrderSelect.value = prefs.flight_order === 'soonest_first' ? 'soonest_first' : 'furthest_first';
   }
+  const departureTzSelect = document.getElementById('input-default-departure-tz') as HTMLSelectElement | null;
+  if (departureTzSelect) departureTzSelect.value = prefs.default_departure_tz === 'utc' ? 'utc' : 'browser';
+  const departureLeadSelect = document.getElementById('input-default-departure-lead') as HTMLSelectElement | null;
+  if (departureLeadSelect) {
+    departureLeadSelect.value = [0, 1, 2].includes(prefs.default_departure_lead_hours)
+      ? String(prefs.default_departure_lead_hours) : '2';
+  }
 
   // Display-currency picker — "auto" or an ISO code (cost/donation display only)
   const currencySelect = document.getElementById('input-display-currency') as HTMLSelectElement;
@@ -1702,6 +1709,10 @@ async function handleSave(): Promise<void> {
   const selectedDisplayCurrency = (document.getElementById('input-display-currency') as HTMLSelectElement)?.value || 'auto';
   const flightOrderVal = (document.getElementById('input-flight-order') as HTMLSelectElement)?.value;
   const selectedFlightOrder = flightOrderVal === 'soonest_first' ? 'soonest_first' : 'furthest_first';
+  const departureTzVal = (document.getElementById('input-default-departure-tz') as HTMLSelectElement)?.value;
+  const selectedDepartureTz = departureTzVal === 'utc' ? 'utc' : 'browser';
+  const leadVal = parseInt((document.getElementById('input-default-departure-lead') as HTMLSelectElement)?.value ?? '2', 10);
+  const selectedDepartureLead = (leadVal === 0 || leadVal === 1 ? leadVal : 2) as 0 | 1 | 2;
 
   try {
     // Save profile settings
@@ -1724,6 +1735,8 @@ async function handleSave(): Promise<void> {
       locale: selectedLocale,
       units_region: selectedUnitsRegion,
       flight_order: selectedFlightOrder,
+      default_departure_tz: selectedDepartureTz,
+      default_departure_lead_hours: selectedDepartureLead,
       display_currency: selectedDisplayCurrency,
       synoptic_forecast_map_enabled: synopticEnabled,
       defer_email_for_model_update: deferModelUpdate,

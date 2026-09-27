@@ -32,7 +32,8 @@ import {
   buildDurationHourOptions, buildDurationMinuteOptions,
 } from './utils/duration';
 import {
-  buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
+  buildTimezoneOptions, nearestMinuteOption, defaultDepartureInstant,
+  instantToLocalFields, localFieldsToInstant, browserTimeZone, timezoneLabel,
 } from './utils/timezone';
 import { track, EVENTS } from './analytics/track';
 import { startFlightsTour, maybeAutoStartFlightsTour } from './tour/flights-tour';
@@ -65,17 +66,28 @@ function getRefDate(): Date {
   return new Date(`${dateStr}T12:00:00Z`);
 }
 
-/** Populate the timezone dropdown with unique timezones from waypoints. */
+/** The viewer's own timezone (browser), always offered in the dropdown. */
+const localTz = browserTimeZone();
+
+/** Account defaults for the new-flight form (Settings → Account). */
+let departureTzPref: 'browser' | 'utc' = 'browser';
+let departureLeadHours = 2;
+
+/** Populate the timezone dropdown: UTC, the viewer's local zone, then waypoint zones. */
 function populateTimezones(waypoints: WaypointInfo[]): void {
   const select = document.getElementById('input-timezone') as HTMLSelectElement;
   if (!select) return;
 
   const currentValue = select.value;
-  const tzEntries = buildTimezoneOptions(waypoints, getRefDate());
+  const refDate = getRefDate();
+  const localSuffix = ` · ${t('flights.form.tzLocal')}`;
 
   let html = '<option value="UTC">UTC</option>';
-  for (const entry of tzEntries) {
-    if (entry.tz === 'UTC') continue;
+  if (localTz !== 'UTC') {
+    html += `<option value="${escapeHtml(localTz)}">${escapeHtml(timezoneLabel(localTz, refDate) + localSuffix)}</option>`;
+  }
+  for (const entry of buildTimezoneOptions(waypoints, refDate)) {
+    if (entry.tz === 'UTC' || entry.tz === localTz) continue;
     html += `<option value="${escapeHtml(entry.tz)}">${escapeHtml(entry.label)}</option>`;
   }
 
@@ -86,31 +98,33 @@ function populateTimezones(waypoints: WaypointInfo[]): void {
   }
 }
 
-/** Convert the currently displayed local time to UTC hour + minute. */
-function localTimeToUtc(): { hour: number; minute: number } {
-  const hourSel = document.getElementById('input-hour') as HTMLSelectElement;
-  const minSel = document.getElementById('input-minute') as HTMLSelectElement;
-  const tzSel = document.getElementById('input-timezone') as HTMLSelectElement;
-  const localHour = parseInt(hourSel?.value ?? '9', 10);
-  const localMinute = parseInt(minSel?.value ?? '0', 10);
-  const tz = tzSel?.value ?? 'UTC';
-  return localToUtc(localHour, localMinute, tz, getRefDate());
+function selectedTz(): string {
+  return (document.getElementById('input-timezone') as HTMLSelectElement | null)?.value || 'UTC';
 }
 
-/** Convert UTC hour + minute to the currently selected timezone and update the selects. */
-function utcToLocalDisplay(utcHour: number, utcMinute: number): void {
-  const hourSel = document.getElementById('input-hour') as HTMLSelectElement;
-  const minSel = document.getElementById('input-minute') as HTMLSelectElement;
-  const tzSel = document.getElementById('input-timezone') as HTMLSelectElement;
-  const tz = tzSel?.value ?? 'UTC';
-  const { hour, minute } = utcToLocal(utcHour, utcMinute, tz, getRefDate());
-  hourSel.value = String(hour);
-  minSel.value = String(minute);
+/** Read the date + time selects as a wall-clock time in the selected timezone. */
+function readDepartureInputs(): Date | null {
+  const date = (document.getElementById('input-date') as HTMLInputElement | null)?.value;
+  const hour = parseInt((document.getElementById('input-hour') as HTMLSelectElement | null)?.value ?? '', 10);
+  const minute = parseInt((document.getElementById('input-minute') as HTMLSelectElement | null)?.value ?? '', 10);
+  if (!date || Number.isNaN(hour) || Number.isNaN(minute)) return null;
+  return localFieldsToInstant(date, hour, minute, selectedTz());
 }
 
-/** Internal UTC time — stored so TZ changes can re-display the same instant. */
-let internalUtcHour = 9;
-let internalUtcMinute = 0;
+/** Show `departureInstant` in the selected timezone (date, hour and minute). */
+function renderDeparture(): void {
+  const { date, hour, minute } = instantToLocalFields(departureInstant, selectedTz());
+  const dateInput = document.getElementById('input-date') as HTMLInputElement | null;
+  const hourSel = document.getElementById('input-hour') as HTMLSelectElement | null;
+  const minSel = document.getElementById('input-minute') as HTMLSelectElement | null;
+  if (dateInput) dateInput.value = date;
+  if (hourSel) hourSel.value = String(hour);
+  if (minSel) minSel.value = String(nearestMinuteOption(minute));
+}
+
+/** Departure instant — the source of truth, so a TZ change re-displays the same
+ *  moment (date included). Re-seeded at init from the account's lead-time default. */
+let departureInstant = defaultDepartureInstant();
 
 /** Get the currently selected profile, if any. */
 function getSelectedProfile(): ProfileResponse | undefined {
@@ -365,8 +379,9 @@ async function applyParsedFpl(text: string): Promise<void> {
         const snapped = nearestMinuteOption(m);
         minSel.value = String(snapped);
       }
-      internalUtcHour = h;
-      internalUtcMinute = nearestMinuteOption(m);
+    }
+    if (parsed.date || parsed.time_utc) {
+      departureInstant = readDepartureInputs() ?? departureInstant;
     }
 
     // Altitude
@@ -384,9 +399,9 @@ async function applyParsedFpl(text: string): Promise<void> {
     // Trigger route distance fetch to populate timezones and validate
     await fetchRouteAndUpdateUI();
 
-    // If time was set and we now have timezone options, re-display in UTC
-    if (parsed.time_utc) {
-      utcToLocalDisplay(internalUtcHour, internalUtcMinute);
+    // Re-display the pasted departure now that the timezone options are rebuilt
+    if (parsed.date || parsed.time_utc) {
+      renderDeparture();
     }
   } catch (err) {
     ui.renderError(t('flights.fpl.parseError'));
@@ -787,6 +802,11 @@ async function init(): Promise<void> {
     populateAircraftSelector(loadedAircraft);
     hasAutorouterCreds = !!prefs?.has_autorouter_creds;
     updateAutorouterButtonState();
+    if (prefs) {
+      departureTzPref = prefs.default_departure_tz === 'utc' ? 'utc' : 'browser';
+      departureLeadHours = [0, 1, 2].includes(prefs.default_departure_lead_hours)
+        ? prefs.default_departure_lead_hours : 2;
+    }
   } catch {
     // Selectors stay empty; flights still work without them
   }
@@ -798,10 +818,16 @@ async function init(): Promise<void> {
       const opt = document.createElement('option');
       opt.value = String(h);
       opt.textContent = h.toString().padStart(2, '0');
-      if (h === 9) opt.selected = true;
       hourSelect.appendChild(opt);
     }
   }
+
+  // --- Default departure (now + account lead) in the account's default timezone ---
+  populateTimezones([]);
+  const defaultTzSelect = document.getElementById('input-timezone') as HTMLSelectElement | null;
+  if (defaultTzSelect) defaultTzSelect.value = departureTzPref === 'utc' ? 'UTC' : localTz;
+  departureInstant = defaultDepartureInstant(new Date(), departureLeadHours);
+  renderDeparture();
 
   // --- Populate duration dropdowns from the shared helpers (default 0h00) ---
   const durHoursSelect = document.getElementById('input-duration-hours') as HTMLSelectElement | null;
@@ -839,8 +865,12 @@ async function init(): Promise<void> {
       e.preventDefault();
 
       const wpRaw = (document.getElementById('input-waypoints') as HTMLInputElement).value.trim();
-      const targetDate = (document.getElementById('input-date') as HTMLInputElement).value;
-      const { hour: utcHour, minute: utcMinute } = localTimeToUtc();
+      // The date + time are entered in the selected timezone; convert both to UTC
+      // (a local time just after midnight is the previous UTC day, and vice versa).
+      const departure = readDepartureInputs();
+      const targetDate = departure ? departure.toISOString().slice(0, 10) : '';
+      const utcHour = departure?.getUTCHours() ?? 0;
+      const utcMinute = departure?.getUTCMinutes() ?? 0;
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
       const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value || '18000', 10);
       let duration = getDurationHours();
@@ -935,22 +965,18 @@ async function init(): Promise<void> {
     fetchRouteAndUpdateUI();
   });
 
-  // --- Timezone change: re-display the same UTC instant in the new timezone ---
+  // --- Timezone change: re-display the same instant (date included) in the new timezone ---
   const tzSelect = document.getElementById('input-timezone') as HTMLSelectElement;
   tzSelect?.addEventListener('change', () => {
-    utcToLocalDisplay(internalUtcHour, internalUtcMinute);
+    renderDeparture();
   });
 
-  // --- Hour/minute change: update internal UTC time ---
-  const hourInput = document.getElementById('input-hour') as HTMLSelectElement;
-  const minuteInput = document.getElementById('input-minute') as HTMLSelectElement;
+  // --- Date/hour/minute change: update the departure instant ---
   const onTimeChange = () => {
-    const { hour, minute } = localTimeToUtc();
-    internalUtcHour = hour;
-    internalUtcMinute = minute;
+    departureInstant = readDepartureInputs() ?? departureInstant;
   };
-  hourInput?.addEventListener('change', onTimeChange);
-  minuteInput?.addEventListener('change', onTimeChange);
+  document.getElementById('input-hour')?.addEventListener('change', onTimeChange);
+  document.getElementById('input-minute')?.addEventListener('change', onTimeChange);
 
   // --- Re-compute TZ offset labels when date changes (DST may differ) ---
   const dateInput = document.getElementById('input-date') as HTMLInputElement;
@@ -963,9 +989,8 @@ async function init(): Promise<void> {
     dateInput.max = maxDate.toISOString().slice(0, 10);
   }
   dateInput?.addEventListener('change', () => {
-    if (lastWaypoints.length > 0) {
-      populateTimezones(lastWaypoints);
-    }
+    onTimeChange();
+    populateTimezones(lastWaypoints);
   });
 
   // --- Track manual duration edits ---

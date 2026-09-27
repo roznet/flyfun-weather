@@ -50,6 +50,23 @@ def _normalize_flight_order(value: object) -> str:
     return value if value in ("furthest_first", "soonest_first") else DEFAULT_FLIGHT_ORDER
 
 
+#: New-flight form defaults: which timezone the date/time are entered in
+#: ("browser" = the viewer's own zone), and how far ahead of now the departure
+#: is pre-filled.
+DepartureTz = Literal["browser", "utc"]
+DEFAULT_DEPARTURE_TZ: str = "browser"
+DepartureLeadHours = Literal[0, 1, 2]
+DEFAULT_DEPARTURE_LEAD_HOURS: int = 2
+
+
+def _normalize_departure_tz(value: object) -> str:
+    return value if value in ("browser", "utc") else DEFAULT_DEPARTURE_TZ
+
+
+def _normalize_departure_lead_hours(value: object) -> int:
+    return value if value in (0, 1, 2) and not isinstance(value, bool) else DEFAULT_DEPARTURE_LEAD_HOURS
+
+
 class FxBlock(BaseModel):
     """Display-currency block carried on USD-canonical cost/donation responses.
 
@@ -103,6 +120,8 @@ class PreferencesResponse(BaseModel):
     # the next departure at the top. Past/Recent stay most-recent-first under
     # both — past pagination is offset-based over that order.
     flight_order: str
+    default_departure_tz: str  # "browser" | "utc" — new-flight form timezone
+    default_departure_lead_hours: int  # 0 | 1 | 2 — new-flight departure = now + N h
     display_currency: str  # ISO 4217 or "auto" (cost/donation display only)
     synoptic_forecast_map_enabled: bool
     defer_email_for_model_update: bool
@@ -150,6 +169,8 @@ class PreferencesUpdate(BaseModel):
     locale: str | None = None
     units_region: Literal["auto", "europe", "us"] | None = None
     flight_order: FlightOrder | None = None
+    default_departure_tz: DepartureTz | None = None
+    default_departure_lead_hours: DepartureLeadHours | None = None
     display_currency: str | None = None  # "auto" or an ISO 4217 code (e.g. "EUR")
     synoptic_forecast_map_enabled: bool | None = None
     defer_email_for_model_update: bool | None = None
@@ -259,6 +280,8 @@ def _parse_service_toggles(raw: str) -> dict:
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
         "flight_order": _normalize_flight_order(data.get("flight_order")),
+        "default_departure_tz": _normalize_departure_tz(data.get("default_departure_tz")),
+        "default_departure_lead_hours": _normalize_departure_lead_hours(data.get("default_departure_lead_hours")),
         "display_currency": data.get("display_currency", "auto"),
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
         "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
@@ -413,6 +436,10 @@ def update_preferences(
         data["units_region"] = body.units_region
     if body.flight_order is not None:
         data["flight_order"] = body.flight_order
+    if body.default_departure_tz is not None:
+        data["default_departure_tz"] = body.default_departure_tz
+    if body.default_departure_lead_hours is not None:
+        data["default_departure_lead_hours"] = body.default_departure_lead_hours
     if body.display_currency is not None:
         # Already normalized by the PreferencesUpdate field validator.
         data["display_currency"] = body.display_currency
@@ -722,7 +749,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "units_region": "auto", "flight_order": DEFAULT_FLIGHT_ORDER, "display_currency": "auto", "defer_email_for_model_update": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "units_region": "auto", "flight_order": DEFAULT_FLIGHT_ORDER, "default_departure_tz": DEFAULT_DEPARTURE_TZ, "default_departure_lead_hours": DEFAULT_DEPARTURE_LEAD_HOURS, "display_currency": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 
