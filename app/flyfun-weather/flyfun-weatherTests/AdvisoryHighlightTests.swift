@@ -185,80 +185,82 @@ private let sampleHighlights = AdvisoryHighlights(
 
 // MARK: - Store clearing rules
 
-@MainActor @Suite struct HighlightClearingTests {
+extension CrossSectionSharedStateTests {
+    @MainActor @Suite struct HighlightClearingTests {
 
-    /// The view model persists its layer config to shared `UserDefaults`, and
-    /// other suites (e.g. CrossSectionThemeTests' boot-default test) construct
-    /// fresh view models expecting clean defaults. Run each test body against
-    /// cleared keys and clear again in a `defer` — the body is synchronous
-    /// main-actor code, so no other main-actor test can observe the dirty state
-    /// mid-flight.
-    private static let persistedKeys = CrossSectionViewModel.persistedDefaultsKeys
+        /// The view model persists its layer config to shared `UserDefaults`, and
+        /// other suites (e.g. CrossSectionThemeTests' boot-default test) construct
+        /// fresh view models expecting clean defaults. Run each test body against
+        /// cleared keys and clear again in a `defer` — the body is synchronous
+        /// main-actor code, so no other main-actor test can observe the dirty state
+        /// mid-flight.
+        private static let persistedKeys = CrossSectionViewModel.persistedDefaultsKeys
 
-    private func withCleanDefaults(_ body: (CrossSectionViewModel) -> Void) {
-        let clear = { for key in Self.persistedKeys { UserDefaults.standard.removeObject(forKey: key) } }
-        clear()
-        defer { clear() }
-        body(CrossSectionViewModel())
-    }
-
-    @Test func activationForcesVisibility() {
-        withCleanDefaults { vm in
-            vm.setHighlightVisible(false)
-            vm.setHighlightAdvisory("convective")
-            #expect(vm.activeHighlightAdvisoryId == "convective")
-            #expect(vm.highlightVisible)   // fresh intent — never an invisible highlight
+        private func withCleanDefaults(_ body: (CrossSectionViewModel) -> Void) {
+            let clear = { for key in Self.persistedKeys { UserDefaults.standard.removeObject(forKey: key) } }
+            clear()
+            defer { clear() }
+            body(CrossSectionViewModel())
         }
-    }
 
-    @Test func visibilityToggleIsNotACustomEdit() {
-        withCleanDefaults { vm in
-            vm.applyAdvisoryPreset(CrossSectionPresets.advisory["convective"]!)
-            vm.setHighlightAdvisory("convective")
-            vm.setHighlightVisible(false)
-            // Hiding the highlight clears neither the highlight nor the lens.
-            #expect(vm.activeHighlightAdvisoryId == "convective")
-            #expect(vm.activeAdvisoryPreset == "convective")
+        @Test func activationForcesVisibility() {
+            withCleanDefaults { vm in
+                vm.setHighlightVisible(false)
+                vm.setHighlightAdvisory("convective")
+                #expect(vm.activeHighlightAdvisoryId == "convective")
+                #expect(vm.highlightVisible)   // fresh intent — never an invisible highlight
+            }
         }
-    }
 
-    @Test func manualLayerEditsClearTheHighlight() {
-        withCleanDefaults { vm in
-            vm.setHighlightAdvisory("convective")
-            vm.toggleLayer("freezing-level")
-            #expect(vm.activeHighlightAdvisoryId == nil)
-
-            vm.setHighlightAdvisory("convective")
-            vm.toggleLayer("icing-bands")
-            #expect(vm.activeHighlightAdvisoryId == nil)
-
-            vm.setHighlightAdvisory("convective")
-            vm.applyEmulation("gramet")
-            #expect(vm.activeHighlightAdvisoryId == nil)
+        @Test func visibilityToggleIsNotACustomEdit() {
+            withCleanDefaults { vm in
+                vm.applyAdvisoryPreset(CrossSectionPresets.advisory["convective"]!)
+                vm.setHighlightAdvisory("convective")
+                vm.setHighlightVisible(false)
+                // Hiding the highlight clears neither the highlight nor the lens.
+                #expect(vm.activeHighlightAdvisoryId == "convective")
+                #expect(vm.activeAdvisoryPreset == "convective")
+            }
         }
-    }
 
-    @Test func lensChangesClearTheHighlight() {
-        withCleanDefaults { vm in
-            vm.setHighlightAdvisory("convective")
-            // A bare lens from the picker clears it (the chip path re-sets it after).
-            vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
-            #expect(vm.activeHighlightAdvisoryId == nil)
+        @Test func manualLayerEditsClearTheHighlight() {
+            withCleanDefaults { vm in
+                vm.setHighlightAdvisory("convective")
+                vm.toggleLayer("freezing-level")
+                #expect(vm.activeHighlightAdvisoryId == nil)
 
-            vm.setHighlightAdvisory("convective")
-            vm.clearAdvisoryPreset()
-            #expect(vm.activeHighlightAdvisoryId == nil)
+                vm.setHighlightAdvisory("convective")
+                vm.toggleLayer("icing-bands")
+                #expect(vm.activeHighlightAdvisoryId == nil)
+
+                vm.setHighlightAdvisory("convective")
+                vm.applyEmulation("gramet")
+                #expect(vm.activeHighlightAdvisoryId == nil)
+            }
         }
-    }
 
-    /// Model switches must NOT clear the highlight — there is deliberately no
-    /// model hook in the view model; geometry re-derives per model. Guard the
-    /// persistence contract instead: a relaunch restores the tracked advisory.
-    @Test func persistedHighlightRestores() {
-        withCleanDefaults { vm in
-            vm.setHighlightAdvisory("convective")
-            let restored = CrossSectionViewModel()
-            #expect(restored.activeHighlightAdvisoryId == "convective")
+        @Test func lensChangesClearTheHighlight() {
+            withCleanDefaults { vm in
+                vm.setHighlightAdvisory("convective")
+                // A bare lens from the picker clears it (the chip path re-sets it after).
+                vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
+                #expect(vm.activeHighlightAdvisoryId == nil)
+
+                vm.setHighlightAdvisory("convective")
+                vm.clearAdvisoryPreset()
+                #expect(vm.activeHighlightAdvisoryId == nil)
+            }
+        }
+
+        /// Model switches must NOT clear the highlight — there is deliberately no
+        /// model hook in the view model; geometry re-derives per model. Guard the
+        /// persistence contract instead: a relaunch restores the tracked advisory.
+        @Test func persistedHighlightRestores() {
+            withCleanDefaults { vm in
+                vm.setHighlightAdvisory("convective")
+                let restored = CrossSectionViewModel()
+                #expect(restored.activeHighlightAdvisoryId == "convective")
+            }
         }
     }
 }

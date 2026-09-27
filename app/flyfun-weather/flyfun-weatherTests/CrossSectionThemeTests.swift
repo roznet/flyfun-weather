@@ -12,120 +12,124 @@
 //  the shared `CrossSectionTheme._active` global, and Swift Testing parallelises
 //  suites by default. Serializing (and pinning to the main actor, which is where
 //  the renderer/view model mutate the global in production) removes the cross-
-//  test race the active-theme assertions would otherwise hit.
+//  test race the active-theme assertions would otherwise hit. Other suites that
+//  build a view model race on the same state, so this one is nested under
+//  `CrossSectionSharedStateTests` to serialize against them too.
 //
 
 import Testing
 import Foundation
 @testable import flyfun_weather
 
-@MainActor
-@Suite(.serialized) struct CrossSectionThemeTests {
+extension CrossSectionSharedStateTests {
+    @MainActor
+    @Suite(.serialized) struct CrossSectionThemeTests {
 
-    /// Runs before each test (Swift Testing builds a fresh suite instance per
-    /// test). Clears the persisted theme so a test that switches+persists a theme
-    /// (#320) doesn't leak into the next test's boot-default expectation.
-    init() {
-        for key in CrossSectionViewModel.persistedDefaultsKeys {
-            UserDefaults.standard.removeObject(forKey: key)
+        /// Runs before each test (Swift Testing builds a fresh suite instance per
+        /// test). Clears the persisted theme so a test that switches+persists a theme
+        /// (#320) doesn't leak into the next test's boot-default expectation.
+        init() {
+            for key in CrossSectionViewModel.persistedDefaultsKeys {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
         }
-    }
 
-    // MARK: Registry
+        // MARK: Registry
 
-    @Test func registryHasAllFourThemesMatchingWeb() {
-        // IDs (and their raw values) mirror the web `ThemeId` union so a route
-        // renders identically and the two files diff cleanly.
-        #expect(Set(CrossSectionTheme.all.keys) == Set(CrossSectionThemeID.allCases))
-        #expect(CrossSectionThemeID.standard.rawValue == "standard")
-        #expect(CrossSectionThemeID.highContrast.rawValue == "high-contrast")
-        #expect(CrossSectionThemeID.gramet.rawValue == "gramet")
-        #expect(CrossSectionThemeID.light.rawValue == "light")
-    }
-
-    @Test func eachThemeHasItsOwnIdAndLabel() {
-        for id in CrossSectionThemeID.allCases {
-            #expect(id.theme.id == id)
-            #expect(id.theme.label.isEmpty == false)
+        @Test func registryHasAllFourThemesMatchingWeb() {
+            // IDs (and their raw values) mirror the web `ThemeId` union so a route
+            // renders identically and the two files diff cleanly.
+            #expect(Set(CrossSectionTheme.all.keys) == Set(CrossSectionThemeID.allCases))
+            #expect(CrossSectionThemeID.standard.rawValue == "standard")
+            #expect(CrossSectionThemeID.highContrast.rawValue == "high-contrast")
+            #expect(CrossSectionThemeID.gramet.rawValue == "gramet")
+            #expect(CrossSectionThemeID.light.rawValue == "light")
         }
-    }
 
-    @Test func standardThemePortsWebRgbValuesVerbatim() {
-        let std = CrossSectionTheme.standard
-        // Cloud ramp: dense [140,140,150] → thin [250,250,255] (web Standard).
-        #expect((std.cloudDense.r, std.cloudDense.g, std.cloudDense.b) == (140, 140, 150))
-        #expect((std.cloudThin.r, std.cloudThin.g, std.cloudThin.b) == (250, 250, 255))
-        // Inversion base #e91e63 with floor/cap.
-        #expect((std.inversionBase.r, std.inversionBase.g, std.inversionBase.b) == (233, 30, 99))
-        #expect(std.inversionFloor == 0.15)
-        #expect(std.inversionCap == 0.65)
-    }
+        @Test func eachThemeHasItsOwnIdAndLabel() {
+            for id in CrossSectionThemeID.allCases {
+                #expect(id.theme.id == id)
+                #expect(id.theme.label.isEmpty == false)
+            }
+        }
 
-    @Test func grametInheritsStandardCloudRampLightOverridesNwpOpacity() {
-        // Derived themes are built by copy-and-override, so GRAMET keeps the
-        // Standard cloud ramp (only sky/terrain/icing/etc. change)…
-        #expect(CrossSectionTheme.gramet.cloudDense.r == CrossSectionTheme.standard.cloudDense.r)
-        // …while Light bumps the NWP cloud opacity scale (0.55 → 0.70).
-        #expect(CrossSectionTheme.light.nwpOpacityScale == 0.70)
-        #expect(CrossSectionTheme.standard.nwpOpacityScale == 0.55)
-    }
+        @Test func standardThemePortsWebRgbValuesVerbatim() {
+            let std = CrossSectionTheme.standard
+            // Cloud ramp: dense [140,140,150] → thin [250,250,255] (web Standard).
+            #expect((std.cloudDense.r, std.cloudDense.g, std.cloudDense.b) == (140, 140, 150))
+            #expect((std.cloudThin.r, std.cloudThin.g, std.cloudThin.b) == (250, 250, 255))
+            // Inversion base #e91e63 with floor/cap.
+            #expect((std.inversionBase.r, std.inversionBase.g, std.inversionBase.b) == (233, 30, 99))
+            #expect(std.inversionFloor == 0.15)
+            #expect(std.inversionCap == 0.65)
+        }
 
-    // MARK: Active-theme indirection
+        @Test func grametInheritsStandardCloudRampLightOverridesNwpOpacity() {
+            // Derived themes are built by copy-and-override, so GRAMET keeps the
+            // Standard cloud ramp (only sky/terrain/icing/etc. change)…
+            #expect(CrossSectionTheme.gramet.cloudDense.r == CrossSectionTheme.standard.cloudDense.r)
+            // …while Light bumps the NWP cloud opacity scale (0.55 → 0.70).
+            #expect(CrossSectionTheme.light.nwpOpacityScale == 0.70)
+            #expect(CrossSectionTheme.standard.nwpOpacityScale == 0.55)
+        }
 
-    @Test func setActiveSwitchesTheThemeColorScalesResolvesAgainst() {
-        let original = CrossSectionTheme.active.id
-        defer { CrossSectionTheme.setActive(original) }
+        // MARK: Active-theme indirection
 
-        CrossSectionTheme.setActive(.light)
-        #expect(CrossSectionTheme.active.id == .light)
+        @Test func setActiveSwitchesTheThemeColorScalesResolvesAgainst() {
+            let original = CrossSectionTheme.active.id
+            defer { CrossSectionTheme.setActive(original) }
 
-        CrossSectionTheme.setActive(.gramet)
-        #expect(CrossSectionTheme.active.id == .gramet)
-    }
+            CrossSectionTheme.setActive(.light)
+            #expect(CrossSectionTheme.active.id == .light)
 
-    // MARK: Preset → theme wiring (CrossSectionViewModel)
+            CrossSectionTheme.setActive(.gramet)
+            #expect(CrossSectionTheme.active.id == .gramet)
+        }
 
-    @Test func bootDefaultsToGrametThemeMatchingTheGrametEmulation() {
-        let vm = CrossSectionViewModel()
-        // The booted emulation is GRAMET, so the theme agrees on boot.
-        #expect(vm.themeId == .gramet)
-        #expect(vm.activeEmulation == "gramet")
-        #expect(CrossSectionTheme.active.id == .gramet)
-    }
+        // MARK: Preset → theme wiring (CrossSectionViewModel)
 
-    @Test func selectingAnEmulationAlsoAppliesItsTheme() {
-        let vm = CrossSectionViewModel()
+        @Test func bootDefaultsToGrametThemeMatchingTheGrametEmulation() {
+            let vm = CrossSectionViewModel()
+            // The booted emulation is GRAMET, so the theme agrees on boot.
+            #expect(vm.themeId == .gramet)
+            #expect(vm.activeEmulation == "gramet")
+            #expect(CrossSectionTheme.active.id == .gramet)
+        }
 
-        vm.applyEmulation("windy")
-        #expect(vm.themeId == .light)          // web mapping: windy → light
-        #expect(CrossSectionTheme.active.id == .light)
+        @Test func selectingAnEmulationAlsoAppliesItsTheme() {
+            let vm = CrossSectionViewModel()
 
-        vm.applyEmulation("foreflight")
-        #expect(vm.themeId == .highContrast)   // web mapping: foreflight → high-contrast
-        #expect(CrossSectionTheme.active.id == .highContrast)
+            vm.applyEmulation("windy")
+            #expect(vm.themeId == .light)          // web mapping: windy → light
+            #expect(CrossSectionTheme.active.id == .light)
 
-        vm.applyEmulation("gramet")
-        #expect(vm.themeId == .gramet)
-    }
+            vm.applyEmulation("foreflight")
+            #expect(vm.themeId == .highContrast)   // web mapping: foreflight → high-contrast
+            #expect(CrossSectionTheme.active.id == .highContrast)
 
-    @Test func setThemeIsOrthogonalToTheEmulation() {
-        let vm = CrossSectionViewModel()
-        // Changing the theme alone must NOT disturb the layer set / preset label
-        // (mirrors web `setVizTheme`, which leaves the preset alone).
-        vm.setTheme(.standard)
-        #expect(vm.themeId == .standard)
-        #expect(CrossSectionTheme.active.id == .standard)
-        #expect(vm.activeEmulation == "gramet")   // layers untouched → still GRAMET
-        #expect(vm.enabledLayers == CrossSectionPresets.bootDefaults)
-    }
+            vm.applyEmulation("gramet")
+            #expect(vm.themeId == .gramet)
+        }
 
-    @Test func themeChoiceIsPersistedAcrossViewModelInstances() {
-        // The suite's init() cleared the persisted key, so this starts from the
-        // GRAMET boot default.
-        let vm1 = CrossSectionViewModel()
-        vm1.setTheme(.highContrast)
-        // A fresh instance (next launch / a re-created CrossSectionView) restores it.
-        let vm2 = CrossSectionViewModel()
-        #expect(vm2.themeId == .highContrast)
+        @Test func setThemeIsOrthogonalToTheEmulation() {
+            let vm = CrossSectionViewModel()
+            // Changing the theme alone must NOT disturb the layer set / preset label
+            // (mirrors web `setVizTheme`, which leaves the preset alone).
+            vm.setTheme(.standard)
+            #expect(vm.themeId == .standard)
+            #expect(CrossSectionTheme.active.id == .standard)
+            #expect(vm.activeEmulation == "gramet")   // layers untouched → still GRAMET
+            #expect(vm.enabledLayers == CrossSectionPresets.bootDefaults)
+        }
+
+        @Test func themeChoiceIsPersistedAcrossViewModelInstances() {
+            // The suite's init() cleared the persisted key, so this starts from the
+            // GRAMET boot default.
+            let vm1 = CrossSectionViewModel()
+            vm1.setTheme(.highContrast)
+            // A fresh instance (next launch / a re-created CrossSectionView) restores it.
+            let vm2 = CrossSectionViewModel()
+            #expect(vm2.themeId == .highContrast)
+        }
     }
 }
