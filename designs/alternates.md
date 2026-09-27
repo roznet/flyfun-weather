@@ -103,9 +103,11 @@ column names (NOT the ORM row):
 - `best_ceiling(snap, *, field_elevation_ft=None)` — `min(sounding_ceiling_ft,
   nwp_ceiling_ft)` when either primary estimate is present (the conservative
   reconciliation shared with `analysis.airport_conditions.reconcile_ceiling`),
-  else falls back to `cloud_base_ft` then `lcl_ft`. When `field_elevation_ft` is
+  else falls back to `cloud_base_ft`, else `None` (no ceiling → VFR). `lcl_ft`
+  is **not** a rung — it turned clear-sky forecasts into IFR and made this card
+  disagree with the arrival card (meteorology-decisions §1, Revision 2026-09-27). When `field_elevation_ft` is
   given, each estimate is converted to **AGL** first (sounding/GFS/ICON are MSL
-  → subtract elevation; ECMWF NWP and `lcl_ft` are already AGL) via the shared
+  → subtract elevation; ECMWF NWP is already AGL) via the shared
   `to_agl_ceiling` helper, so the ceiling matches the AGL flight-category
   thresholds and METAR — the model for the ECMWF exception is read from
   `snap["model"]`. Callers (`map_queries`, `alternates`) pass the airport's

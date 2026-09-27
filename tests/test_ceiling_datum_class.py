@@ -49,12 +49,36 @@ def test_flight_category_uses_agl():
     assert flight_category(snap) == "VFR"  # legacy over-reads
 
 
-def test_lcl_fallback_is_agl_not_subtracted():
-    # lcl_ft (Espy surface T/Td approximation) is already AGL — must pass
-    # through unchanged even at an elevated field, NOT double-subtracted to 0.
-    snap = _snap("gfs", lcl_ft=2000.0)  # only the LCL fallback rung is present
-    assert best_ceiling(snap, field_elevation_ft=3000.0) == 2000.0
-    assert flight_category(snap, field_elevation_ft=3000.0) == "MVFR"  # not LIFR
+def test_lcl_alone_is_not_a_ceiling():
+    # lcl_ft is a surface T/Td spread, not a cloud: with no sounding/NWP
+    # ceiling and no cloud base there is no ceiling at all, like
+    # airport_conditions.reconcile_ceiling. (Meteorology decisions §1,
+    # Revision 2026-09-27.)
+    snap = _snap("gfs", lcl_ft=2000.0)
+    assert best_ceiling(snap, field_elevation_ft=3000.0) is None
+    assert best_ceiling(snap) is None
+    assert flight_category(snap, field_elevation_ft=3000.0) == "VFR"
+
+
+def test_clear_sky_small_spread_is_vfr_on_alternates_and_arrival_card():
+    # KSFO 2026-09-24 11Z regression: ECMWF forecast no cloud at all
+    # (0 % cover, no NWP ceiling, no cloud base) with a 1.92 °C T/Td spread.
+    # The old LCL rung turned that into a 767 ft "ceiling" → IFR on the
+    # alternates card while the arrival card showed VFR for the same model.
+    from weatherbrief.analysis.airport_conditions import reconcile_ceiling
+
+    snap = _snap("ecmwf", lcl_ft=400 * 1.918, visibility_m=13360.7)
+    assert best_ceiling(snap, field_elevation_ft=13.0) is None
+    assert flight_category(snap, field_elevation_ft=13.0) == "VFR"
+
+    # The arrival-card path agrees: no sounding and no NWP ceiling → None.
+    assert reconcile_ceiling(None, None, field_elevation_ft=13.0, model="ecmwf") is None
+
+
+def test_cloud_base_still_used_when_lcl_present():
+    # Dropping the LCL rung must not drop the cloud-base rung ahead of it.
+    snap = _snap("ecmwf", cloud_base_ft=1500.0, lcl_ft=400.0)
+    assert best_ceiling(snap, field_elevation_ft=13.0) == 1500.0
 
 
 def test_cloud_base_fallback_follows_model_datum():

@@ -240,6 +240,50 @@ diagnostic ceiling as a proper second estimate" — live since 2026-04-20.
   comparability with stored history, so it needs its own decision rather than
   riding along with this one.
 
+
+### Revision 2026-09-27 — the LCL is not a ceiling on the alternates / forecast-map path
+
+**Status:** Implemented.
+
+**Trigger.** KSEA→KSFO briefing for 2026-09-24: the alternates card graded the
+KSFO destination **IFR, ceiling 767 ft** while the arrival card showed VFR for
+every pack model. ECMWF at KSFO, 11Z, forecast no cloud at all (0 % low/mid/high,
+no NWP ceiling, no cloud base) with a surface T/Td spread of 1.92 °C.
+
+**The bug.** `airport_consensus.best_ceiling` (shared by the alternates stage and
+the forecast map) ended its fallback chain on `lcl_ft` — the Espy surface
+approximation `400 × (T2m − Td2m)`. With every cloud rung empty it returned
+400 × 1.918 = 767.2 ft, so a clear-sky model voted IFR. On a three-way model
+split, majority mode's worst-category tiebreak then made that the consensus.
+`reconcile_ceiling` (the arrival-card path) never had this rung, so the two
+surfaces the alternates design pins as identical disagreed.
+
+**Decision.** Drop the `lcl_ft` rung: with no sounding/NWP ceiling and no cloud
+base, `best_ceiling` returns `None` (no ceiling → VFR), matching
+`reconcile_ceiling`. A lifted-parcel condensation height says where cloud *would*
+form if surface air were lifted; it is not a forecast of a deck, and in a moist
+marine boundary layer the spread is routinely 1–2 °C under a clear sky.
+
+**Validation (Tier A, verification Parquet archive, 2026-08-09 → 08-31, Europe).**
+212,457 watchlist snapshot rows reached the LCL rung; on 70,165 (33 %) it changed
+the category, i.e. graded MVFR/IFR/LIFR off the spread alone. Against the nearest
+METAR within ±30 min (66,327 rows, 18,197 airport-hours, 615 airports) the
+airport was actually **VFR 95.6 %** of the time (ECMWF 95.9 %, ICON 94.7 %, GFS
+91.6 %). Even the most favourable slices stay mostly VFR — spread < 1 °C 88.9 %,
+low cloud > 50 % 82.1 %, D-0 97.1 % — so no gated LCL rule is worth keeping. The
+cost: of the 4,265 LCL-rung rows where METAR was sub-VFR, the old rung flagged
+69 % and the new chain 1.7 % — but those hits came with ~64 k false alarms (a
+~4 % hit rate among its alarms, about twice the base rate: weak skill,
+not a usable ceiling). The triggering case confirms it: KSFO 24/09 09–13Z was
+`10SM FEW200 16/12` throughout. Script: `scratch/lcl-ceiling-validation/lcl_flip.py`
+(gitignored).
+
+**Scope.** `lcl_ft` stays on the snapshot row — verification scoring still
+records `lcl_delta_ft` against observed ceilings. Verification grading does not
+use `best_ceiling`, so stored history is unaffected. The forecast map changes
+along with alternates (clear-sky airports with a small spread go from
+MVFR/IFR to VFR); purge the `forecast_map:*` response cache after deploy.
+
 ---
 
 ## 2. Ogimet icing zone width: convective contribution at moderate CAPE

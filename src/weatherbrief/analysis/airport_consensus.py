@@ -37,8 +37,11 @@ from weatherbrief.units import M_PER_SM as _M_PER_SM
 
 # Ceiling estimate priority: min(sounding_ceiling_ft, nwp_ceiling_ft) when
 # either primary is present (conservative, matching
-# ``airport_conditions.reconcile_ceiling``), else cloud_base_ft, then lcl_ft.
-# All are converted to a common AGL datum first (see best_ceiling).
+# ``airport_conditions.reconcile_ceiling``), else cloud_base_ft, else None (no
+# ceiling → VFR). lcl_ft is deliberately NOT a rung: it is a surface T/Td
+# spread, not a cloud, and turned clear-sky forecasts into IFR (see
+# meteorology-decisions.md §1, Revision 2026-09-27). All are converted to a
+# common AGL datum first (see best_ceiling).
 def best_ceiling(
     snap: dict[str, Any],
     *,
@@ -48,8 +51,10 @@ def best_ceiling(
 
     Takes ``min(sounding_ceiling_ft, nwp_ceiling_ft)`` when either primary
     estimate is present (the conservative reconciliation shared with
-    ``reconcile_ceiling``), otherwise falls back to ``cloud_base_ft`` then
-    ``lcl_ft``. ``snap`` keys are the ``AirportForecastSnapshotRow`` column names.
+    ``reconcile_ceiling``), otherwise falls back to ``cloud_base_ft``, else
+    ``None`` — no ceiling, like ``reconcile_ceiling``. ``lcl_ft`` is never used:
+    a small surface T/Td spread under a clear sky is not a cloud deck.
+    ``snap`` keys are the ``AirportForecastSnapshotRow`` column names.
 
     Datum (#441 finding #3): when ``field_elevation_ft`` is given, each estimate
     is converted to AGL before the min so the returned ceiling matches the AGL
@@ -61,20 +66,15 @@ def best_ceiling(
     nwp_is_agl = _nwp_ceiling_is_agl(snap.get("model"))
 
     # Per-estimate datum. sounding_ceiling_ft is geopotential-height MSL; NWP
-    # ceiling and cloud base follow the model's datum (AGL for ECMWF). lcl_ft is
-    # the Espy surface T/Td approximation (_LCL_CONSTANT_FT * (T2m - Td2m)) — a
-    # height ABOVE THE STATION, i.e. already AGL, so it must NOT have field
-    # elevation subtracted. (#441 finding #3)
+    # ceiling and cloud base follow the model's datum (AGL for ECMWF).
+    # (#441 finding #3)
     sounding = to_agl_ceiling(snap.get("sounding_ceiling_ft"), fe, source_is_agl=False)
     nwp = to_agl_ceiling(snap.get("nwp_ceiling_ft"), fe, source_is_agl=nwp_is_agl)
     primary = [v for v in (sounding, nwp) if v is not None]
     if primary:
         return min(primary)
 
-    cloud_base = to_agl_ceiling(snap.get("cloud_base_ft"), fe, source_is_agl=nwp_is_agl)
-    if cloud_base is not None:
-        return cloud_base
-    return to_agl_ceiling(snap.get("lcl_ft"), fe, source_is_agl=True)
+    return to_agl_ceiling(snap.get("cloud_base_ft"), fe, source_is_agl=nwp_is_agl)
 
 
 def flight_category(
