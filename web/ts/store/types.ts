@@ -898,6 +898,8 @@ export interface ObservedSourceStatus {
   available: boolean;
   reason: string | null;
   latest_valid_time: string | null;
+  /** Share of route stations inside the source's domain; absent on older packs. */
+  covered_fraction?: number | null;
 }
 
 export interface ObservedConditions {

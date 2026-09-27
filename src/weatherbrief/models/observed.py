@@ -301,6 +301,11 @@ class ObservedSourceStatus(BaseModel):
     available: bool
     reason: str | None = None
     latest_valid_time: datetime | None = None
+    # Share of the route's stations inside the source's geographic domain
+    # (``observed/coverage.py``).  Below 1.0 the field carries only the
+    # covered stations; 0.0 means the route is entirely outside it.  None on
+    # payloads built before domains existed.
+    covered_fraction: float | None = None
 
 
 class ObservedConditions(BaseModel):

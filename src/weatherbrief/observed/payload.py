@@ -45,6 +45,7 @@ from .frames import (
     FrameStore,
     StoredFrame,
 )
+from .coverage import covers, domain_name
 from .grid import compute_window, nm_to_km
 from .sampler import DEFAULT_RADII_NM, SampleStation, sample, sample_flashes
 from .summary import build_summary_entries
@@ -232,18 +233,50 @@ def build_observed_conditions(
     statuses: list[ObservedSourceStatus] = []
     fields: dict[str, object] = {}
 
+    lats = [s.lat for s in stations]
+    lons = [s.lon for s in stations]
+
     for source in wanted:
+        # Domain first, before any frame is touched: a station the product
+        # cannot see must not be sampled at all.  For the grids that would
+        # read an empty window; for lightning it would report "no flashes"
+        # over a continent the imager has never looked at.
+        in_domain = covers(source, lats, lons) if stations else None
+        covered_fraction = (
+            float(in_domain.mean()) if in_domain is not None else None
+        )
+        if in_domain is not None and not in_domain.any():
+            statuses.append(
+                ObservedSourceStatus(
+                    source=source,
+                    available=False,
+                    reason=f"route is outside coverage: {domain_name(source) or source}",
+                    covered_fraction=0.0,
+                )
+            )
+            continue
+        covered = (
+            [s for s, ok in zip(stations, in_domain) if ok]
+            if in_domain is not None
+            else stations
+        )
+
         stored, reason = _usable_frame(store, source, now)
         if stored is None:
             statuses.append(
-                ObservedSourceStatus(source=source, available=False, reason=reason)
+                ObservedSourceStatus(
+                    source=source,
+                    available=False,
+                    reason=reason,
+                    covered_fraction=covered_fraction,
+                )
             )
             continue
         try:
             if source == SOURCE_EUMETSAT_LI:
-                fields[source] = _lightning_field(stored, stations, radii_nm, now)
+                fields[source] = _lightning_field(stored, covered, radii_nm, now)
             else:
-                fields[source] = _grid_field(stored, source, stations, radii_nm, now)
+                fields[source] = _grid_field(stored, source, covered, radii_nm, now)
         except Exception as exc:
             # A malformed frame must not take the other three sources with it.
             logger.warning("Observed sampling failed for %s", source, exc_info=True)
@@ -253,12 +286,16 @@ def build_observed_conditions(
                     available=False,
                     reason=f"frame unreadable: {exc}",
                     latest_valid_time=stored.valid_time,
+                    covered_fraction=covered_fraction,
                 )
             )
             continue
         statuses.append(
             ObservedSourceStatus(
-                source=source, available=True, latest_valid_time=stored.valid_time
+                source=source,
+                available=True,
+                latest_valid_time=stored.valid_time,
+                covered_fraction=covered_fraction,
             )
         )
 

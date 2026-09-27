@@ -17,6 +17,7 @@ advisory; the cross-check is visual, with ``observed-tops`` rendered over the
 NWP cloud bands.  Computing that comparison is phase 2.
 """
 
+from .coverage import covering_sources, covers, has_radar  # noqa: F401
 from .frames import (  # noqa: F401
     ALL_SOURCES,
     SOURCE_EUMETSAT_CTTH,
@@ -50,6 +51,9 @@ __all__ = [
     "SourceSpec",
     "StoredFrame",
     "compute_window",
+    "covering_sources",
+    "covers",
+    "has_radar",
     "sample",
     "sample_flashes",
 ]

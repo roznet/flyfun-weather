@@ -414,3 +414,53 @@ def test_a_detection_is_reported_even_from_a_poorly_covered_disc(stocked_store):
     peak = [line for line in conditions.summary_lines if "peak" in line]
     assert peak, conditions.summary_lines
     assert "dBZ" in peak[0]
+
+
+def test_a_route_outside_every_domain_samples_nothing(stocked_store, caplog):
+    """KFHU-KTUS-KPHX crashed the radar and CTTH readers in prod and would
+    have claimed "no lightning" over a continent MTG cannot see."""
+    us = RouteConfig(
+        name="KFHU-KPHX",
+        waypoints=[
+            Waypoint(icao="KFHU", name="Sierra Vista", lat=31.588, lon=-110.344),
+            Waypoint(icao="KPHX", name="Phoenix", lat=33.434, lon=-112.012),
+        ],
+    )
+    with caplog.at_level("WARNING"):
+        conditions = build_observed_conditions(us, store=stocked_store, now=NOW)
+    assert not conditions.has_any_field
+    assert "sampling failed" not in caplog.text
+    for status in conditions.sources:
+        assert status.available is False
+        assert "outside coverage" in status.reason
+        assert status.covered_fraction == 0.0
+    assert "Lightning: none" not in conditions.summary
+
+
+def test_a_partly_covered_route_samples_only_its_covered_stations(tmp_path, li_path):
+    store = FrameStore(tmp_path / "observed")
+    store.write(SOURCE_EUMETSAT_LI, SAT_TIME, li_path.read_bytes(), {})
+    transatlantic = RouteConfig(
+        name="EGLL-KJFK",
+        waypoints=[
+            Waypoint(icao="EGLL", name="Heathrow", lat=51.477, lon=-0.461),
+            Waypoint(icao="KJFK", name="Kennedy", lat=40.640, lon=-73.779),
+        ],
+    )
+    conditions = build_observed_conditions(
+        transatlantic, store=store, now=NOW, sources=(SOURCE_EUMETSAT_LI,)
+    )
+    status = conditions.sources[0]
+    assert status.available is True
+    assert 0.0 < status.covered_fraction < 1.0
+    sampled = {s.station_id for s in conditions.lightning.stations}
+    assert 0 < len(sampled) < len(conditions.stations)
+    assert conditions.stations[0].id in sampled
+    assert conditions.stations[-1].id not in sampled
+    assert "part of the route is outside lightning coverage" in conditions.summary
+
+
+def test_a_fully_covered_route_reports_full_coverage(stocked_store):
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    assert all(s.covered_fraction == 1.0 for s in conditions.sources)
+    assert "outside lightning coverage" not in conditions.summary

@@ -199,9 +199,13 @@ def _lightning_clause(
                     nearest = annulus.nearest_flash_nm
                     nearest_station = station.station_id
     window = field.window_minutes or 10.0
+    # Stations outside the imager's disc are left out of the field (see
+    # ``observed/coverage.py``), so "none" must not be claimed for them.
+    partial = len(field.stations) < len(by_station)
+    scope = " (part of the route is outside lightning coverage)" if partial else ""
     if total == 0:
         return (
-            f"Lightning: none within {widest:.0f} NM in the last {window:.0f} min.",
+            f"Lightning: none within {widest:.0f} NM in the last {window:.0f} min{scope}.",
             "",
         )
     # Discs overlap, so a flash near two adjacent route points is counted
@@ -209,7 +213,7 @@ def _lightning_clause(
     return (
         f"Lightning: {total} flash detections within {widest:.0f} NM of the route "
         f"in the last {window:.0f} min, nearest {nearest:.0f} NM at "
-        f"{_where(nearest_station, by_station)} ({_age(field)}).",
+        f"{_where(nearest_station, by_station)} ({_age(field)}){scope}.",
         "",
     )
 

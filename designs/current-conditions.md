@@ -202,6 +202,34 @@ observation of clear sky. Collapsing them loses both.
 Empirical method table:
 `designs/future/satellite-cloud-top-validation.md#quality_method-codes-fci-l2-ctth`.
 
+### 6. Each source declares its domain, and is gated on it before any read
+
+Every source has a fixed geographic domain (`observed/coverage.py`): OPERA is
+its Lambert grid's exact footprint (32–67°N, ~40°W–58°E corners — Europe, not
+the Canaries or North Africa), CTTH and LI are the MTG disc cut at 75° of arc
+from the 0° sub-satellite point (keeps Iceland and Nordkapp, drops the
+Americas). `build_observed_conditions` masks the route's stations against it
+**before** opening a frame:
+
+- no station inside → the source is `available=False`, reason
+  `route is outside coverage: <domain>`, and nothing is read;
+- some inside → only those stations are sampled; the rest are absent from the
+  field (both clients already skip stations a field does not carry);
+- `ObservedSourceStatus.covered_fraction` carries the share either way.
+
+Without it a US route crashed the radar reader (an empty window) and the CTTH
+reader (a `full_width` window mismatch) — and, worse, sampled lightning as
+"none within 20 NM" over a continent MTG cannot see, which went into the
+summary and the digest. The lightning clause now says when part of the route
+is outside coverage.
+
+Domain is a level *above* `nodata`, not a replacement: Moscow is inside the
+OPERA domain but has no member radar, and that is still per-pixel `nodata`.
+`covering_sources(lat, lon)` / `has_radar(lat, lon)` answer "is there radar
+here?" from coordinates alone, for any other caller. A new source (e.g. a US
+mosaic) needs only a domain entry in `SOURCE_DOMAINS`; a source with none
+covers nothing.
+
 ## Architecture
 
 ```
@@ -227,7 +255,8 @@ monkeypatches `socket.connect` to assert it.
 | `observed/lightning.py` | MTG LI L2 flash reader (tolerant of baseline variable renames; raises rather than reporting a quiet zero). |
 | `observed/collect.py` | OPERA S3 + eumdac fetchers, retention purge, `due_sources`. |
 | `observed/sampler.py` | `sample(frame, window, stations, radii)` — one primitive, two call sites. |
-| `observed/payload.py` | Builds `ObservedConditions` for a route. |
+| `observed/coverage.py` | Per-source geographic domain: `covers`, `covering_sources`, `has_radar`, `SOURCE_DOMAINS`. |
+| `observed/payload.py` | Builds `ObservedConditions` for a route; gates each source on its domain first. |
 | `observed/summary.py` | Deterministic "Observed now" text. No LLM. |
 | `observed/imagery.py` | Frame → plate-carrée RGBA PNG for the map overlay. |
 | `api/observed.py` | `/status`, `/overlay/{source}.png`, `/flashes`. |
