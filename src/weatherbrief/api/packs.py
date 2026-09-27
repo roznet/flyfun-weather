@@ -3775,9 +3775,11 @@ def recalculate_advisories(
     # independent per-profile fronts toggle (enabled_map, model B).
     if auto_front_detection:
         try:
-            from weatherbrief.tasks.fronts import run_fronts_from_pack
+            # A new altitude only relabels each model's primary level; the
+            # detection itself is altitude-independent and costs ~20 s.
+            from weatherbrief.tasks.fronts import refresh_fronts_for_altitude
 
-            run_fronts_from_pack(
+            refresh_fronts_for_altitude(
                 pack_dir,
                 advisory_models=adv_models,
                 cruise_altitude_ft=cruise_altitude_ft,

@@ -760,3 +760,78 @@ class TestPerModelPrimaryLevel:
         # ecmwf has 700 (nearest to FL110); gfs only exposes 850, so its own
         # nearest-cruise primary is 850 — not flattened to ecmwf's 700.
         assert manifest.per_model_primary_hPa == {"ecmwf": 700, "gfs": 850}
+
+
+class TestAltitudeOnlyRecalculation:
+    """A new cruise altitude relabels primary levels; it does not re-detect."""
+
+    @staticmethod
+    def _compute(out_dir, cruise_ft):
+        analyses = _route_analyses()
+        return compute_route_fronts(
+            [(a.lat, a.lon) for a in analyses],
+            [a.interpolated_time for a in analyses],
+            route_name="r", cruise_altitude_ft=cruise_ft,
+            advisory_models=["ecmwf", "gfs"], output_dir=out_dir,
+        )
+
+    def test_repick_matches_a_full_recompute(self, tmp_path):
+        from weatherbrief.tasks.fronts import repick_primary_levels
+
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir, model="ecmwf", levels=(925, 850, 700))
+        _write_front_snapshot(out_dir, model="gfs", levels=(850,))
+        low = self._compute(out_dir, 2500)
+        high = self._compute(out_dir, 11000)
+        assert low.per_model_primary_hPa != high.per_model_primary_hPa
+
+        repicked = repick_primary_levels(low, 11000)
+        skip = {"generated_at"}
+        assert repicked.model_dump(exclude=skip) == high.model_dump(exclude=skip)
+
+    def test_refresh_reuses_the_saved_manifest(self, tmp_path, monkeypatch):
+        from weatherbrief.tasks import fronts as fronts_mod
+        from weatherbrief.tasks.artifacts import save_front_artifacts
+
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir, model="ecmwf")
+        _write_front_snapshot(out_dir, model="gfs")
+        pack = tmp_path / "pack"
+        save_front_artifacts(pack, self._compute(out_dir, 2500))
+
+        def _no_redetect(*a, **kw):
+            raise AssertionError("altitude change must not re-run detection")
+
+        monkeypatch.setattr(fronts_mod, "compute_route_fronts", _no_redetect)
+        manifest = fronts_mod.refresh_fronts_for_altitude(
+            pack, advisory_models=["ecmwf", "gfs"], cruise_altitude_ft=11000,
+        )
+        assert manifest.per_model_primary_hPa == {"ecmwf": 700, "gfs": 700}
+        assert load_route_fronts(pack).primary_level_hPa == 700
+
+    @pytest.mark.parametrize("saved_models", [None, ["ecmwf"]])
+    def test_refresh_recomputes_when_nothing_matches(self, tmp_path, monkeypatch, saved_models):
+        from weatherbrief.tasks import fronts as fronts_mod
+        from weatherbrief.tasks.artifacts import save_front_artifacts
+
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir, model="ecmwf")
+        pack = tmp_path / "pack"
+        if saved_models is not None:
+            analyses = _route_analyses()
+            save_front_artifacts(pack, compute_route_fronts(
+                [(a.lat, a.lon) for a in analyses],
+                [a.interpolated_time for a in analyses],
+                route_name="r", cruise_altitude_ft=5000,
+                advisory_models=saved_models, output_dir=out_dir,
+            ))
+
+        calls = []
+        monkeypatch.setattr(
+            fronts_mod, "run_fronts_from_pack",
+            lambda *a, **kw: calls.append(kw) or "recomputed",
+        )
+        result = fronts_mod.refresh_fronts_for_altitude(
+            pack, advisory_models=["ecmwf", "gfs"], cruise_altitude_ft=5000,
+        )
+        assert result == "recomputed" and calls

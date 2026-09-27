@@ -857,6 +857,83 @@ def run_fronts_from_pack(
     return manifest
 
 
+def repick_primary_levels(
+    manifest: RouteFrontsManifest, cruise_altitude_ft: int,
+) -> RouteFrontsManifest:
+    """Re-derive the cruise-dependent part of a manifest for a new altitude.
+
+    Detection runs every stored level regardless of cruise; the altitude only
+    chooses which level each model is graded on.  So a new altitude needs this
+    relabel, not the ~20 s re-detection (dominated by terrain-filling every
+    θe grid).
+    """
+    per_model_primary = {
+        model: nearest_cruise_level(
+            cruise_altitude_ft, [a.level_hPa for a in analyses],
+        )
+        for model, analyses in manifest.per_model.items()
+        if analyses
+    }
+    primary = (
+        Counter(per_model_primary.values()).most_common(1)[0][0]
+        if per_model_primary
+        else manifest.primary_level_hPa
+    )
+    gate_config = dict(manifest.gate_config)
+    if "level_hPa" in gate_config:
+        gate_config["level_hPa"] = primary
+    return manifest.model_copy(update={
+        "primary_level_hPa": primary,
+        "per_model_primary_hPa": per_model_primary,
+        "gate_config": gate_config,
+    })
+
+
+def refresh_fronts_for_altitude(
+    pack_dir: Path,
+    *,
+    advisory_models: Sequence[str] | None = None,
+    cruise_altitude_ft: int | None = None,
+) -> RouteFrontsManifest | None:
+    """Bring a pack's fronts up to date for an advisory recalculation.
+
+    Reuses the persisted ``route_fronts.json`` when it was built for the same
+    model set — only the primary levels are re-picked.  Falls back to a full
+    :func:`run_fronts_from_pack` when there is nothing to reuse (the pref was
+    just switched on) or the requested models differ from what it holds.
+    """
+    from weatherbrief.tasks.artifacts import (
+        load_route_analyses,
+        load_route_fronts,
+        save_front_artifacts,
+    )
+
+    existing = load_route_fronts(pack_dir)
+    if existing is not None:
+        if advisory_models is None:
+            try:
+                advisory_models = load_route_analyses(pack_dir).models
+            except FileNotFoundError:
+                advisory_models = None
+        requested = {m for m in (advisory_models or FRONT_MODELS) if m in FRONT_MODELS}
+        held = set(existing.models) | set(existing.models_without_snapshot)
+        if requested == held:
+            if cruise_altitude_ft is None:
+                try:
+                    cruise_altitude_ft = load_route_analyses(pack_dir).cruise_altitude_ft
+                except FileNotFoundError:
+                    return existing
+            manifest = repick_primary_levels(existing, cruise_altitude_ft)
+            save_front_artifacts(pack_dir, manifest)
+            return manifest
+
+    return run_fronts_from_pack(
+        pack_dir,
+        advisory_models=advisory_models,
+        cruise_altitude_ft=cruise_altitude_ft,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
