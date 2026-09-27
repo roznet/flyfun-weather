@@ -2,6 +2,9 @@
 
 import numpy as np
 import pytest
+from scipy.interpolate import griddata
+
+import weatherbrief.frontal.grid as grid_mod
 
 from weatherbrief.frontal.grid import (
     build_grid_coords,
@@ -9,6 +12,7 @@ from weatherbrief.frontal.grid import (
     wind_to_uv,
     prepare_field,
     fill_terrain,
+    clear_fill_terrain_cache,
     compute_theta_e,
     terrain_mask_for_level,
 )
@@ -137,6 +141,155 @@ class TestFillTerrain:
         result = fill_terrain(field, mask)
         # All valid cells should be unchanged
         np.testing.assert_array_equal(result[mask], field[mask])
+
+
+def _fill_terrain_reference(field: np.ndarray, terrain_mask: np.ndarray) -> np.ndarray:
+    """The pre-#627 implementation: griddata (fresh Delaunay) on every call."""
+    valid = terrain_mask
+    if valid.all():
+        return field
+    coords_valid = np.argwhere(valid)
+    coords_invalid = np.argwhere(~valid)
+    filled = field.copy()
+    filled[~valid] = griddata(
+        coords_valid, field[valid], coords_invalid, method="linear",
+    )
+    still_nan = np.isnan(filled)
+    if still_nan.any():
+        filled[still_nan] = griddata(
+            coords_valid, field[valid], np.argwhere(still_nan), method="nearest",
+        )
+    return filled
+
+
+def _terrain_like_mask(shape=(41, 61), seed=0) -> np.ndarray:
+    """Blobby interior holes plus masked edges/corners (outside the hull)."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    mask = np.ones(shape, dtype=bool)
+    for _ in range(6):
+        cy, cx = rng.integers(5, shape[0] - 5), rng.integers(5, shape[1] - 5)
+        r = rng.uniform(1.5, 4.5)
+        mask &= (yy - cy) ** 2 + (xx - cx) ** 2 > r ** 2
+    mask[0, :8] = False       # top edge run
+    mask[-3:, -3:] = False    # corner block
+    mask[10:20, 0] = False    # left edge run
+    return mask
+
+
+class TestFillTerrainMatchesGriddata:
+    """#627: cached triangulation must be bit-identical to per-call griddata."""
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        clear_fill_terrain_cache()
+        yield
+        clear_fill_terrain_cache()
+
+    @staticmethod
+    def _field(shape, seed, dtype=np.float64):
+        rng = np.random.default_rng(seed)
+        yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+        f = 280 + 0.3 * yy - 0.1 * xx + rng.normal(0, 0.5, shape)
+        return f.astype(dtype)
+
+    def _assert_identical(self, field, mask):
+        expected = _fill_terrain_reference(field, mask)
+        # Twice: first call builds the cache entry, second reuses it.
+        for _ in range(2):
+            got = fill_terrain(field, mask)
+            assert got.dtype == expected.dtype
+            assert np.array_equal(got, expected, equal_nan=True)
+
+    def test_interior_holes(self):
+        mask = np.ones((30, 40), dtype=bool)
+        mask[5:9, 10:15] = False
+        mask[20:23, 25:33] = False
+        mask[15, 5] = False
+        self._assert_identical(self._field(mask.shape, 1), mask)
+
+    def test_outside_convex_hull_uses_nearest(self):
+        mask = _terrain_like_mask()
+        field = self._field(mask.shape, 2)
+        # Sanity: the linear pass alone leaves NaN, so the fallback is exercised.
+        lin = griddata(np.argwhere(mask), field[mask], np.argwhere(~mask), method="linear")
+        assert np.isnan(lin).any()
+        self._assert_identical(field, mask)
+
+    def test_all_valid_early_return(self):
+        mask = np.ones((10, 12), dtype=bool)
+        field = self._field(mask.shape, 3)
+        assert fill_terrain(field, mask) is field
+        self._assert_identical(field, mask)
+
+    def test_nan_in_valid_values(self):
+        mask = _terrain_like_mask(seed=4)
+        field = self._field(mask.shape, 4)
+        field[3, 30] = np.nan               # isolated valid NaN
+        field[25:28, 40:44] = np.nan        # valid NaN block (poisons simplices)
+        field[0, 8] = np.nan                # valid NaN next to masked edge
+        assert mask[3, 30] and mask[0, 8]
+        self._assert_identical(field, mask)
+
+    def test_float32_field(self):
+        mask = _terrain_like_mask(seed=5)
+        self._assert_identical(self._field(mask.shape, 5, np.float32), mask)
+
+    def test_many_fields_same_mask(self):
+        mask = _terrain_like_mask(seed=6)
+        for seed in range(5):
+            self._assert_identical(self._field(mask.shape, 100 + seed), mask)
+
+
+class TestFillTerrainCache:
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        clear_fill_terrain_cache()
+        yield
+        clear_fill_terrain_cache()
+
+    def test_recreated_equal_mask_hits_cache(self, monkeypatch):
+        calls = []
+        real = grid_mod._build_fill_geometry
+        monkeypatch.setattr(
+            grid_mod, "_build_fill_geometry", lambda v: calls.append(1) or real(v),
+        )
+        field = np.arange(400, dtype=float).reshape(20, 20)
+        fill_terrain(field, _terrain_like_mask((20, 20), seed=7))
+        fill_terrain(field + 1, _terrain_like_mask((20, 20), seed=7).copy())
+        assert len(calls) == 1
+
+    def test_different_masks_same_shape_do_not_share(self):
+        field = np.random.default_rng(8).normal(size=(25, 25))
+        a = _terrain_like_mask((25, 25), seed=8)
+        b = a.copy()
+        b[12, 12] = not b[12, 12]
+        b[1, 1] = not b[1, 1]
+        ra = fill_terrain(field, a)
+        rb = fill_terrain(field, b)
+        assert len(grid_mod._fill_cache) == 2
+        assert np.array_equal(ra, _fill_terrain_reference(field, a), equal_nan=True)
+        assert np.array_equal(rb, _fill_terrain_reference(field, b), equal_nan=True)
+
+    def test_cache_is_bounded(self, monkeypatch):
+        monkeypatch.setattr(grid_mod, "_FILL_CACHE_MAX", 3)
+        field = np.zeros((10, 10))
+        for k in range(6):
+            mask = np.ones((10, 10), dtype=bool)
+            mask[4, k + 2] = False
+            fill_terrain(field, mask)
+        assert len(grid_mod._fill_cache) == 3
+
+    def test_concurrent_calls_are_correct(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        masks = [_terrain_like_mask(seed=s) for s in (10, 11, 12)]
+        fields = [np.random.default_rng(s).normal(280, 3, masks[0].shape) for s in range(12)]
+        jobs = [(fields[i], masks[i % 3]) for i in range(12)]
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            results = list(ex.map(lambda fm: fill_terrain(*fm), jobs))
+        for (f, m), r in zip(jobs, results):
+            assert np.array_equal(r, _fill_terrain_reference(f, m), equal_nan=True)
 
 
 class TestTerrainMaskForLevel:

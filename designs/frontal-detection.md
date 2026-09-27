@@ -213,6 +213,7 @@ These informed our pivot away from zone-level detection toward per-leg Hewson ad
 - **NaN must be resolved before gradient computation** — `gaussian_filter` silently corrupts neighbors (treats NaN as zero), `np.gradient` propagates NaN to ~12+ adjacent cells. Always call `prepare_field()` first.
 - **Wind direction is circular** — never interpolate raw direction. Convert to u/v first via `wind_to_uv()`, then fill/smooth u/v components.
 - **Terrain mask fills, not removes** — `fill_terrain()` interpolates across terrain cells so gradients at terrain boundaries are smooth, not artificial edges. The mask is applied to results only.
+- **`fill_terrain()` caches geometry per mask content** (#627) — the Delaunay triangulation and nearest-neighbour fallback indices depend only on the mask, so they live in a 16-entry LRU keyed by a hash of the mask bytes (`mask_cache_key`), ~4 MB per entry on the 0.25° grid. Output is bit-identical to per-call `griddata`. Never mutate a mask in place expecting the cache to notice mid-call; build a new array (the key is content, so equal rebuilt masks hit). `SnapshotFieldSource` also memoises `dT_dx`/`dT_dy` per `(level, idx, mask key)`, so returned `HewsonGrids` arrays are shared and must be treated as read-only.
 - **Grid spacing is lat-dependent** — dlon_km varies with cos(lat). The code handles this per-row.
 
 ## References
