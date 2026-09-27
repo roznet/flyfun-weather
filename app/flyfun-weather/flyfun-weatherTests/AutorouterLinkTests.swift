@@ -89,6 +89,19 @@ struct AutorouterPickerStateTests {
         #expect(repo.autorouterRoutesCallCount == 2)
     }
 
+    @Test func reloadFailingAfterLinkShowsTheErrorNotConnect() async {
+        // Linked fine, but the follow-up route load hits a network error:
+        // the pilot must see that error, not be asked to connect again.
+        let (vm, _) = makeViewModel(routes: [.failure(notLinked), .failure(URLError(.timedOut))])
+        await vm.loadAutorouterRoutes()
+
+        let linked = await vm.connectAutorouter(using: FakeLinker(result: .success("code-1")))
+
+        #expect(linked)
+        #expect(!vm.autorouterNeedsLink)
+        #expect(vm.autorouterError != nil)
+    }
+
     @Test func refusedRedemptionStaysOnConnect() async {
         // Server says the code isn't this account's (403): nothing linked.
         let (vm, repo) = makeViewModel(routes: [.failure(notLinked)])

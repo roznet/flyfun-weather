@@ -686,7 +686,10 @@ final class AddFlightViewModel {
             autorouterRoutes = []
             autorouterNeedsLink = true
         } catch {
+            // Not a link problem — show the real error, not a stale Connect
+            // screen (e.g. a network blip on the reload right after linking).
             autorouterRoutes = []
+            autorouterNeedsLink = false
             autorouterError = "Could not load Autorouter routes: \(error.localizedDescription)"
             Self.logger.debug("Autorouter routes unavailable: \(error)")
         }

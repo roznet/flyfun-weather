@@ -33,9 +33,9 @@ struct PreferencesResponse: Codable, Sendable {
     var decayNotice: Bool { notifyDecayNotice ?? false }
     var deviceCount: Int { pushDeviceCount ?? 0 }
     var hasPushDevice: Bool { deviceCount > 0 }
+    var autorouterLinked: Bool { hasAutorouterCreds ?? false }
     /// Upcoming-flights ordering, defaulting to today's behaviour on an older
     /// server (or an unknown value written by a future one).
-    var autorouterLinked: Bool { hasAutorouterCreds ?? false }
     var flightOrderPreference: FlightOrder { FlightOrder(rawValue: flightOrder ?? "") ?? .furthestFirst }
 
     /// "Briefing updates" 3-stop — folds scope + change-only into one control
