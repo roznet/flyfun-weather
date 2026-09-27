@@ -32,7 +32,12 @@ test('not linked: the import prompt links Autorouter directly and returns here',
   await mockFlightsPage(page, { linked: false });
   await page.goto('http://localhost:8000/');
 
-  await page.locator('#btn-import-autorouter').click();
+  // The click handler is wired after preferences load; the localised
+  // not-linked tooltip is painted right after, so wait for it before clicking
+  // (a click on the bare static button does nothing).
+  const importBtn = page.locator('#btn-import-autorouter');
+  await expect(importBtn).toHaveAttribute('title', 'Connect Autorouter to import routes');
+  await importBtn.click();
 
   const connect = page.getByRole('link', { name: 'Connect Autorouter' });
   await expect(connect).toBeVisible();
