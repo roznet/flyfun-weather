@@ -12,11 +12,16 @@ grid points, eliminating cross-source interpolation noise.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.interpolate import griddata
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, griddata
+from scipy.spatial import Delaunay
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
@@ -236,6 +241,96 @@ def terrain_mask_for_level(
     return ~(elev > threshold_m)
 
 
+@dataclass(frozen=True)
+class _FillGeometry:
+    """Mask-only state for :func:`fill_terrain`, reused across fields (#627).
+
+    ``tri`` is the Delaunay triangulation ``griddata(method="linear")`` would
+    rebuild on every call; ``nearest_idx[k]`` is the index (into
+    ``field[valid]``) of the valid cell ``griddata(method="nearest")`` would
+    pick for the k-th invalid cell. Both depend only on the mask.
+    """
+
+    tri: Delaunay
+    coords_invalid: np.ndarray
+    nearest_idx: np.ndarray
+
+    @property
+    def nbytes(self) -> int:
+        tri = self.tri
+        return (
+            tri.points.nbytes + tri.simplices.nbytes + tri.neighbors.nbytes
+            + tri.equations.nbytes + tri.transform.nbytes
+            + self.coords_invalid.nbytes + self.nearest_idx.nbytes
+        )
+
+
+_FILL_CACHE_MAX = 16
+_fill_cache: OrderedDict[tuple, _FillGeometry] = OrderedDict()
+_fill_cache_lock = threading.Lock()
+
+
+def _build_fill_geometry(valid: np.ndarray) -> _FillGeometry:
+    coords_valid = np.argwhere(valid).astype(np.float64)
+    coords_invalid = np.argwhere(~valid).astype(np.float64)
+    # Same default Qhull options LinearNDInterpolator uses when it
+    # triangulates raw points itself, so the triangulation is identical.
+    tri = Delaunay(coords_valid)
+    # ``transform`` is computed lazily on first evaluation; touch it here so
+    # concurrent readers of a cached entry never race to initialise it.
+    tri.transform  # noqa: B018
+    # Run the exact nearest lookup griddata performs, with the value being the
+    # valid-cell index. Query results are per point, so looking up every
+    # invalid cell once gives the same pick as querying a subset later.
+    nearest = NearestNDInterpolator(
+        coords_valid, np.arange(len(coords_valid), dtype=np.float64),
+    )(coords_invalid)
+    return _FillGeometry(
+        tri=tri, coords_invalid=coords_invalid,
+        nearest_idx=nearest.astype(np.intp),
+    )
+
+
+def mask_cache_key(mask: np.ndarray | None) -> tuple | None:
+    """Content-based cache key for a terrain mask (``None`` for no mask).
+
+    Callers rebuild equal masks per request/level, so ``id()`` would never
+    hit; hashing ~20k bools costs microseconds.
+    """
+    if mask is None:
+        return None
+    return (
+        mask.shape, mask.dtype.str,
+        hashlib.blake2b(np.ascontiguousarray(mask).tobytes(), digest_size=16).digest(),
+    )
+
+
+def _fill_geometry(valid: np.ndarray) -> _FillGeometry:
+    """Cached :class:`_FillGeometry` for a mask, keyed by its content.
+
+    Bounded LRU; a concurrent miss may build twice (benign, identical).
+    """
+    key = mask_cache_key(valid)
+    with _fill_cache_lock:
+        geom = _fill_cache.get(key)
+        if geom is not None:
+            _fill_cache.move_to_end(key)
+            return geom
+    geom = _build_fill_geometry(valid)
+    with _fill_cache_lock:
+        _fill_cache[key] = geom
+        _fill_cache.move_to_end(key)
+        while len(_fill_cache) > _FILL_CACHE_MAX:
+            _fill_cache.popitem(last=False)
+    return geom
+
+
+def clear_fill_terrain_cache() -> None:
+    """Drop cached terrain-fill triangulations (tests / memory pressure)."""
+    with _fill_cache_lock:
+        _fill_cache.clear()
+
+
 def fill_terrain(field: np.ndarray, terrain_mask: np.ndarray) -> np.ndarray:
     """Replace terrain-masked cells with values interpolated from valid neighbors.
 
@@ -243,23 +338,27 @@ def fill_terrain(field: np.ndarray, terrain_mask: np.ndarray) -> np.ndarray:
     terrain-adjacent valid cells reflect the large-scale field, not
     below-ground extrapolation artifacts. Filled values never appear
     in results — the terrain mask is applied to the frontal_mask at the end.
+
+    Bit-identical to ``griddata(method="linear")`` with a
+    ``griddata(method="nearest")`` fallback for cells outside the convex hull,
+    but the triangulation and nearest lookup are cached per mask (#627).
+    NaN cells of a valid (unmasked) position stay NaN, as before: their
+    nearest valid neighbour is themselves.
     """
     valid = terrain_mask  # True = below 1500m
     if valid.all():
         return field
 
-    coords_valid = np.argwhere(valid)
-    coords_invalid = np.argwhere(~valid)
+    geom = _fill_geometry(valid)
+    values = field[valid]
     filled = field.copy()
-    filled[~valid] = griddata(
-        coords_valid, field[valid], coords_invalid, method="linear",
-    )
+    filled[~valid] = LinearNDInterpolator(geom.tri, values)(geom.coords_invalid)
     # Fall back to nearest for points outside convex hull (domain edges)
-    still_nan = np.isnan(filled)
+    invalid_vals = filled[~valid]
+    still_nan = np.isnan(invalid_vals)
     if still_nan.any():
-        filled[still_nan] = griddata(
-            coords_valid, field[valid], np.argwhere(still_nan), method="nearest",
-        )
+        invalid_vals[still_nan] = values[geom.nearest_idx[still_nan]]
+        filled[~valid] = invalid_vals
     return filled
 
 

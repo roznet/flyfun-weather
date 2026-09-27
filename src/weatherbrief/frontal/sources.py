@@ -32,6 +32,7 @@ Callers pass hours in the source's frame and stay internally consistent.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,7 @@ from weatherbrief.frontal.detect import (
     compute_hewson_diagnostics,
     theta_e_gradient_components,
 )
+from weatherbrief.frontal.grid import mask_cache_key
 
 
 @dataclass(frozen=True)
@@ -282,6 +284,12 @@ class SnapshotFieldSource(HewsonFieldSource):
             self._n_time = int(npz["valid_times"].shape[0])
         # (level, metric) -> (n_time, n_lat, n_lon) stack, materialised on first use.
         self._stack_cache: dict[tuple[int, str], np.ndarray] = {}
+        # (level, idx, mask key) -> (dT_dx, dT_dy). Route sampling and the
+        # front extractor ask for the same hour repeatedly (#627). Keyed on the
+        # mask's content because callers reassign ``terrain_mask`` per level.
+        self._components_cache: OrderedDict[tuple, tuple[np.ndarray, np.ndarray]] = (
+            OrderedDict()
+        )
 
     @property
     def init_time_unix(self) -> int:
@@ -317,9 +325,7 @@ class SnapshotFieldSource(HewsonFieldSource):
         theta_e = self._slice(level, "theta_e", idx)
         if theta_e is None:
             return None
-        dT_dx, dT_dy = theta_e_gradient_components(
-            theta_e, self.lat, self.lon, terrain_mask=self.terrain_mask,
-        )
+        dT_dx, dT_dy = self._gradient_components(level, idx, theta_e)
         return HewsonGrids(
             theta_e=theta_e,
             gradient=self._slice(level, "gradient", idx),
@@ -351,6 +357,25 @@ class SnapshotFieldSource(HewsonFieldSource):
             raise ValueError(
                 f"snapshot source holds {self._model_name!r}, asked for {model!r}"
             )
+
+    _COMPONENTS_CACHE_MAX = 32  # 2 float64 grids each, ~0.3 MB on the 0.25° grid
+
+    def _gradient_components(
+        self, level: int, idx: int, theta_e: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Memoised :func:`theta_e_gradient_components` for one stored frame."""
+        key = (level, idx, mask_cache_key(self.terrain_mask))
+        hit = self._components_cache.get(key)
+        if hit is not None:
+            self._components_cache.move_to_end(key)
+            return hit
+        comps = theta_e_gradient_components(
+            theta_e, self.lat, self.lon, terrain_mask=self.terrain_mask,
+        )
+        self._components_cache[key] = comps
+        while len(self._components_cache) > self._COMPONENTS_CACHE_MAX:
+            self._components_cache.popitem(last=False)
+        return comps
 
     def _slice(self, level: int, metric: str, idx: int) -> np.ndarray | None:
         """One ``(n_lat, n_lon)`` grid for ``metric`` at ``level`` / time ``idx``.
