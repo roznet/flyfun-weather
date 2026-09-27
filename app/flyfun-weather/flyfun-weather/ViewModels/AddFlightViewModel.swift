@@ -671,6 +671,7 @@ final class AddFlightViewModel {
     func loadAutorouterRoutes() async {
         isLoadingAutorouter = true
         autorouterError = nil
+        autorouterLinkError = nil
         defer { isLoadingAutorouter = false }
         do {
             autorouterRoutes = try await repository.autorouterRoutes(limit: 25)

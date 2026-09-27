@@ -194,6 +194,12 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     var autorouterLinkURLResult: Result<URL, Error> = .failure(MockError.notStubbed("autorouterLinkURL"))
     func autorouterLinkURL(scheme: String) async throws -> URL { try autorouterLinkURLResult.get() }
+    private(set) var completedAutorouterLinkCodes: [String] = []
+    var completeAutorouterLinkError: Error?
+    func completeAutorouterLink(code: String) async throws {
+        if let completeAutorouterLinkError { throw completeAutorouterLinkError }
+        completedAutorouterLinkCodes.append(code)
+    }
     func unlinkAutorouter() async throws {}
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }

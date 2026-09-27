@@ -62,6 +62,9 @@ protocol BriefingRepository: Sendable {
     /// Short-lived signed URL that starts linking Autorouter in an in-app
     /// browser (`AutorouterLinker`), returning to `scheme://autorouter/callback`.
     func autorouterLinkURL(scheme: String) async throws -> URL
+    /// Redeem the code from the link callback; the server stores the token
+    /// only if the code was issued for this same account.
+    func completeAutorouterLink(code: String) async throws
     /// Remove the stored Autorouter token (Settings → Disconnect).
     func unlinkAutorouter() async throws
     func packs(flightId: String) async throws -> [PackMetaResponse]
@@ -249,6 +252,11 @@ final class OnlineBriefingRepository: BriefingRepository {
         )
         guard let url = URL(string: response.url) else { throw APIError.networkError(URLError(.badURL)) }
         return url
+    }
+
+    func completeAutorouterLink(code: String) async throws {
+        let body = try JSONEncoder.weatherBrief.encode(AutorouterLinkCompleteRequest(code: code))
+        _ = try await client.requestData("/autorouter/link-complete", method: "POST", body: body)
     }
 
     func unlinkAutorouter() async throws {
