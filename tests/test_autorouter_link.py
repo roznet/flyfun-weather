@@ -12,6 +12,7 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from flyfun_common import autorouter as autorouter_module
@@ -57,6 +58,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret-long-enough-for-hs256-signing")
     monkeypatch.setenv("AUTOROUTER_CLIENT_ID", "flyfun_weather")
     monkeypatch.setenv("AUTOROUTER_CLIENT_SECRET", "secret")
+    # The app-path link code encrypts the token, which production requires a
+    # real key for; set one here rather than relying on a developer's .env.
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     app = create_app()
     app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
     app.dependency_overrides[optional_user_id] = lambda: DEV_USER_ID
