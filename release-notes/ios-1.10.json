@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-09-27",
+    "title": "iOS 1.10 — Connect Autorouter in the app",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- Connect your Autorouter account without leaving the app. If you import a route before linking, a Connect button signs you in and your routes load straight away. A new Services section in Settings lets you connect or disconnect.\n- The cross-section route graph now offers all 14 readings the website has. New ones are observed rain rate, lightning rate, CIN, model and sounding ceilings, QNH, and temperature deviation from standard (ISA).\n- When two readings are shown, the right-hand one now gets its own zero line and its off-scale and no-coverage markers. A gap in the line now always means no data.\n- Pasting a flight plan no longer closes the add-flight form."
+  }
+]
