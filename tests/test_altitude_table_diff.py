@@ -192,3 +192,29 @@ def test_options_to_improve_altitude_only_when_no_tactical():
     assert block is not None
     assert "Altitude (one choice" in block
     assert "Tactical" not in block
+
+
+def _scored(alt: int, red: int, amber: int) -> AltitudeAdvisoryRow:
+    return AltitudeAdvisoryRow(altitude_ft=alt, statuses={}, red_count=red, amber_count=amber)
+
+
+def test_best_altitude_tie_goes_to_closest_to_cruise():
+    """EGTF-LFAT shape: 2,000-8,000 ft tie below a 12,000 ft cruise; the pick
+    is the smallest descent (8,000), not the lowest row (2,000)."""
+    from weatherbrief.analysis.advisories.altitude_table import _find_best
+
+    cruise = 12000
+    rows = [
+        _scored(18000, 3, 2), _scored(16000, 3, 2), _scored(14000, 3, 1),
+        _scored(12000, 3, 1), _scored(10000, 3, 2),
+        _scored(8000, 1, 0), _scored(6000, 1, 0), _scored(4000, 1, 0), _scored(2000, 1, 0),
+    ]
+    assert _find_best(rows, lambda r: r.altitude_ft < cruise, cruise) == 8000
+    assert _find_best(rows, lambda r: r.altitude_ft >= cruise, cruise) == 12000
+
+
+def test_best_altitude_score_still_beats_proximity():
+    from weatherbrief.analysis.advisories.altitude_table import _find_best
+
+    rows = [_scored(8000, 1, 1), _scored(4000, 1, 0), _scored(2000, 1, 0)]
+    assert _find_best(rows, lambda r: r.altitude_ft < 10000, 10000) == 4000

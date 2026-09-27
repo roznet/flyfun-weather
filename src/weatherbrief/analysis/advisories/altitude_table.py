@@ -200,8 +200,12 @@ def compute_altitude_table(
         ))
 
     # Find best altitudes below and above cruise
-    best_below = _find_best(rows, lambda r: r.altitude_ft < cruise_altitude_ft)
-    best_above = _find_best(rows, lambda r: r.altitude_ft >= cruise_altitude_ft)
+    best_below = _find_best(
+        rows, lambda r: r.altitude_ft < cruise_altitude_ft, cruise_altitude_ft
+    )
+    best_above = _find_best(
+        rows, lambda r: r.altitude_ft >= cruise_altitude_ft, cruise_altitude_ft
+    )
 
     # Sort rows descending by altitude (highest first — natural for pilots)
     rows.sort(key=lambda r: r.altitude_ft, reverse=True)
@@ -221,13 +225,23 @@ def compute_altitude_table(
 def _find_best(
     rows: list[AltitudeAdvisoryRow],
     predicate: Callable[[AltitudeAdvisoryRow], bool],
+    cruise_altitude_ft: int,
 ) -> int | None:
     """Find the altitude with the best score among rows matching predicate.
 
-    Best = fewest reds, then fewest ambers. Ties broken by lower altitude.
+    Best = fewest reds, then fewest ambers. Ties go to the altitude closest to
+    cruise: the smallest change from the plan that buys the same picture.
+    Breaking ties by *lowest* sent a pilot to 2,000 ft over the Channel when
+    8,000 ft cleared the same icing (EGTF-LFAT, 2026-09-28).
     """
     candidates = [r for r in rows if predicate(r)]
     if not candidates:
         return None
-    candidates.sort(key=lambda r: (r.red_count, r.amber_count, r.altitude_ft))
+    candidates.sort(
+        key=lambda r: (
+            r.red_count,
+            r.amber_count,
+            abs(r.altitude_ft - cruise_altitude_ft),
+        )
+    )
     return candidates[0].altitude_ft
