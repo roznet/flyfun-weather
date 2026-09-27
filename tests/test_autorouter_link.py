@@ -84,9 +84,27 @@ def test_ios_app_links_and_returns_to_the_app(client, linked):
     )
 
     assert resp.status_code == 302
-    assert resp.headers["location"] == "flyfunweather://autorouter/callback?status=linked"
+    location = resp.headers["location"]
+    assert location.startswith("flyfunweather://autorouter/callback?status=authorized&code=")
+    # Nothing stored until the app redeems the code with its own bearer.
+    assert "user_id" not in linked
+
+    code = parse_qs(urlsplit(location).query)["code"][0]
+    resp = client.post("/autorouter/link-complete", json={"code": code})
+    assert resp.status_code == 200, resp.text
     assert linked["user_id"] == DEV_USER_ID
     assert linked["token"] == "ar-token"
+
+
+def test_ios_app_cannot_redeem_another_accounts_link(client, linked):
+    """A link started from someone else's ticket must not land on their account."""
+    from flyfun_common.auth.config import get_jwt_secret
+    from flyfun_common.autorouter import create_link_code
+
+    code = create_link_code("someone-else", {"access_token": "victim-token"}, get_jwt_secret())
+    resp = client.post("/autorouter/link-complete", json={"code": code})
+    assert resp.status_code == 403
+    assert "user_id" not in linked
 
 
 def test_web_picker_links_and_returns_to_the_flights_page(client, linked):

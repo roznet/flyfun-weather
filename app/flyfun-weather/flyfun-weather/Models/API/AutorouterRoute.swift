@@ -51,6 +51,11 @@ struct AutorouterLinkTicketRequest: Encodable, Sendable {
     let scheme: String
 }
 
+/// `POST /autorouter/link-complete` body: the code from the link callback.
+struct AutorouterLinkCompleteRequest: Encodable, Sendable {
+    let code: String
+}
+
 /// `POST /autorouter/link-ticket` response: a short-lived URL that starts the
 /// Autorouter OAuth flow without the web session cookie.
 struct AutorouterLinkTicketResponse: Decodable, Sendable {

@@ -11,22 +11,28 @@ private let logger = Logger(subsystem: "aero.flyfun.weather", category: "Autorou
 /// app's bearer token — so the app first asks for a short-lived signed URL
 /// (`POST /autorouter/link-ticket`, via the repository), opens it in an
 /// `ASWebAuthenticationSession`, and the server sends the pilot back to
-/// `flyfunweather://autorouter/callback?status=linked|error&reason=…`.
+/// `flyfunweather://autorouter/callback?status=authorized&code=…` (or
+/// `status=error&reason=…`). The token is only stored when the app redeems
+/// that code with its own bearer (`POST /autorouter/link-complete`) — the
+/// server checks the code was issued for this same account, which is what
+/// stops a link started by someone else from landing on theirs.
 /// Before this the only path was signing in to the website and linking from
 /// its Settings page.
 protocol AutorouterLinking {
-    /// Runs the in-app sign-in at `url`. Returns `false` when the pilot
-    /// cancelled; throws `AutorouterLinkError` when the server reported a
-    /// failure.
-    @MainActor func link(at url: URL) async throws -> Bool
+    /// Runs the in-app sign-in at `url`. Returns the link code to redeem, or
+    /// `nil` when the pilot cancelled; throws `AutorouterLinkError` when the
+    /// server reported a failure.
+    @MainActor func link(at url: URL) async throws -> String?
 }
 
 extension AutorouterLinking {
-    /// Fetch a link URL from the server and run the in-app sign-in. `true` =
-    /// linked, `false` = the pilot cancelled.
+    /// Fetch a link URL, run the in-app sign-in, and redeem the resulting code.
+    /// `true` = linked, `false` = the pilot cancelled.
     @MainActor func connect(via repository: any BriefingRepository) async throws -> Bool {
         let url = try await repository.autorouterLinkURL(scheme: AutorouterLinker.callbackScheme)
-        return try await link(at: url)
+        guard let code = try await link(at: url) else { return false }
+        try await repository.completeAutorouterLink(code: code)
+        return true
     }
 
     /// Pilot-facing text for a failed `connect`.
@@ -60,7 +66,7 @@ final class AutorouterLinker: NSObject, AutorouterLinking, ASWebAuthenticationPr
     /// Strong reference so the session isn't deallocated mid-flow.
     private var session: ASWebAuthenticationSession?
 
-    func link(at url: URL) async throws -> Bool {
+    func link(at url: URL) async throws -> String? {
         defer { session = nil }
         let callbackURL: URL
         do {
@@ -77,7 +83,8 @@ final class AutorouterLinker: NSObject, AutorouterLinking, ASWebAuthenticationPr
                     } else if let url {
                         continuation.resume(returning: url)
                     } else {
-                        continuation.resume(throwing: URLError(.cancelled))
+                        // Neither URL nor error: nothing came back — a cancel.
+                        continuation.resume(throwing: ASWebAuthenticationSessionError(.canceledLogin))
                     }
                 }
                 session.presentationContextProvider = self
@@ -85,16 +92,21 @@ final class AutorouterLinker: NSObject, AutorouterLinking, ASWebAuthenticationPr
                 // reused — linking is then one tap on Allow.
                 session.prefersEphemeralWebBrowserSession = false
                 self.session = session
-                session.start()
+                // start() returns false without ever calling the completion
+                // (no anchor, or another session already showing); resume
+                // here or the Connecting spinner never clears.
+                if !session.start() {
+                    continuation.resume(throwing: AutorouterLinkError(reason: "not_started"))
+                }
             }
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
-            return false
+            return nil
         }
         return try Self.outcome(from: callbackURL)
     }
 
-    /// Interpret the server's callback URL. `true` = linked.
-    nonisolated static func outcome(from url: URL) throws -> Bool {
+    /// Interpret the server's callback URL: the link code to redeem.
+    nonisolated static func outcome(from url: URL) throws -> String {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         guard components?.host == "autorouter" else {
             logger.error("Unexpected Autorouter callback: \(url)")
@@ -102,7 +114,9 @@ final class AutorouterLinker: NSObject, AutorouterLinking, ASWebAuthenticationPr
         }
         let items = components?.queryItems ?? []
         let status = items.first { $0.name == "status" }?.value
-        if status == "linked" { return true }
+        if status == "authorized", let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty {
+            return code
+        }
         let reason = items.first { $0.name == "reason" }?.value ?? "unknown"
         logger.info("Autorouter link failed: \(reason)")
         throw AutorouterLinkError(reason: reason)

@@ -177,6 +177,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.autorouterLinkURL(scheme: scheme)
     }
 
+    func completeAutorouterLink(code: String) async throws {
+        try await online.completeAutorouterLink(code: code)
+    }
+
     func unlinkAutorouter() async throws {
         try await online.unlinkAutorouter()
     }

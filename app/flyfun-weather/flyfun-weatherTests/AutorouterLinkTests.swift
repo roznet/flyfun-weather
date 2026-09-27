@@ -13,9 +13,16 @@ import Foundation
 // MARK: - Callback parsing
 
 struct AutorouterCallbackTests {
-    @Test func linkedCallbackIsSuccess() throws {
-        let url = URL(string: "flyfunweather://autorouter/callback?status=linked")!
-        #expect(try AutorouterLinker.outcome(from: url))
+    @Test func authorizedCallbackYieldsTheCodeToRedeem() throws {
+        let url = URL(string: "flyfunweather://autorouter/callback?status=authorized&code=abc.def")!
+        #expect(try AutorouterLinker.outcome(from: url) == "abc.def")
+    }
+
+    @Test func authorizedWithoutACodeIsAFailure() {
+        let url = URL(string: "flyfunweather://autorouter/callback?status=authorized")!
+        #expect(throws: AutorouterLinkError.self) {
+            try AutorouterLinker.outcome(from: url)
+        }
     }
 
     @Test func errorCallbackCarriesReason() {
@@ -37,8 +44,9 @@ struct AutorouterCallbackTests {
 // MARK: - AddFlightViewModel
 
 private struct FakeLinker: AutorouterLinking {
-    let result: Result<Bool, Error>
-    func link(at url: URL) async throws -> Bool { try result.get() }
+    /// A code = approved; nil = cancelled.
+    let result: Result<String?, Error>
+    func link(at url: URL) async throws -> String? { try result.get() }
 }
 
 private let notLinked = APIError.serverError(409, "autorouter_not_linked")
@@ -72,19 +80,34 @@ struct AutorouterPickerStateTests {
         let (vm, repo) = makeViewModel(routes: [.failure(notLinked), .success([sampleRoute])])
         await vm.loadAutorouterRoutes()
 
-        let linked = await vm.connectAutorouter(using: FakeLinker(result: .success(true)))
+        let linked = await vm.connectAutorouter(using: FakeLinker(result: .success("code-1")))
 
         #expect(linked)
+        #expect(repo.completedAutorouterLinkCodes == ["code-1"])
         #expect(!vm.autorouterNeedsLink)
         #expect(vm.autorouterRoutes == [sampleRoute])
         #expect(repo.autorouterRoutesCallCount == 2)
+    }
+
+    @Test func refusedRedemptionStaysOnConnect() async {
+        // Server says the code isn't this account's (403): nothing linked.
+        let (vm, repo) = makeViewModel(routes: [.failure(notLinked)])
+        repo.completeAutorouterLinkError = APIError.serverError(403, "Link code belongs to another account")
+        await vm.loadAutorouterRoutes()
+
+        let linked = await vm.connectAutorouter(using: FakeLinker(result: .success("someone-elses")))
+
+        #expect(!linked)
+        #expect(vm.autorouterNeedsLink)
+        #expect(vm.autorouterLinkError != nil)
+        #expect(repo.autorouterRoutesCallCount == 1)
     }
 
     @Test func cancellingStaysOnConnectWithoutAnError() async {
         let (vm, repo) = makeViewModel(routes: [.failure(notLinked)])
         await vm.loadAutorouterRoutes()
 
-        let linked = await vm.connectAutorouter(using: FakeLinker(result: .success(false)))
+        let linked = await vm.connectAutorouter(using: FakeLinker(result: .success(nil)))
 
         #expect(!linked)
         #expect(vm.autorouterNeedsLink)
