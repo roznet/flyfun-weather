@@ -3,6 +3,8 @@
 All endpoints require authentication (current_user_id).
 
   GET /maps/forecast              — forecast overview for all watchlist airports
+  GET /maps/historical            — METAR/TAF/model runs at a past instant (#629)
+  GET /maps/historical/range      — what the historical pickers can offer
   GET /maps/airport-weather       — forecast + observations for specific airports
 
 The legacy ``GET /maps/verification`` (per-airport accuracy map) was
@@ -16,10 +18,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
+
+from weatherbrief.tasks.historical_map import MAX_LEAD_DAYS as _HIST_MAX_LEAD
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +167,56 @@ def get_available_days(
     as exactly that instead of as a map with silent gaps in it.
     """
     return {"days": compute_day_availability(db), "max_day": MAX_FORECAST_DAY}
+
+
+# ---------------------------------------------------------------------------
+# Historical map (#629) — METAR / TAF / model runs at a past instant
+# ---------------------------------------------------------------------------
+
+@router.get("/historical")
+def get_historical_map(
+    response: Response,
+    at: datetime = Query(..., description="UTC instant; floored to the 30-min grid"),
+    lead: int = Query(default=0, ge=0, le=_HIST_MAX_LEAD),
+    _user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+    airports_db: str = Depends(_airports_db),
+):
+    """Per-airport METAR, TAF and model forecasts at a past instant.
+
+    ``lead`` selects the model runs: 0 = the latest run fetched at or before
+    ``at``; N = the latest run fetched at or before ``at - N days``. All
+    selection happens server-side (see ``tasks/historical_map.py``); the
+    response says, per source, what it is based on or why it is empty.
+    A naive ``at`` is taken as UTC.
+    """
+    from weatherbrief.tasks.historical_map import (
+        get_historical_map_cached,
+        is_final,
+        snap_time,
+    )
+
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if at > now + timedelta(minutes=30):
+        raise HTTPException(status_code=400, detail="`at` is in the future")
+    data = get_historical_map_cached(db, at, lead, airports_db)
+    # A final past instant never changes: let the browser keep it.
+    if is_final(snap_time(min(at, now)), now):
+        response.headers["Cache-Control"] = "private, max-age=86400, immutable"
+    return data
+
+
+@router.get("/historical/range")
+def get_historical_range(
+    _user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """What the historical pickers can offer: date range, leads, time step."""
+    from weatherbrief.tasks.historical_map import compute_historical_range
+
+    return compute_historical_range(db)
 
 
 # ---------------------------------------------------------------------------

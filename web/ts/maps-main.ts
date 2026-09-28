@@ -1,4 +1,4 @@
-/** Maps page — forecast overview + synoptic forecast + accuracy stats. */
+/** Maps page — forecast overview + historical + synoptic forecast + accuracy stats. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
@@ -24,6 +24,10 @@ import {
 } from './adapters/synoptic-charts-adapter';
 import { makeChartProjection } from './visualization/chart-projection';
 import { ClimatologyTab } from './visualization/climatology-tab';
+import {
+  HistoricalTab, HISTORICAL_SOURCES, HISTORICAL_LEADS,
+  type HistoricalSource, type HistoricalState,
+} from './visualization/historical-tab';
 import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderHewsonInfo } from './helpers/hewson-info';
@@ -37,7 +41,8 @@ import { track, EVENTS } from './analytics/track';
 let forecastMap: WeatherMap | null = null;
 let synopticMap: SynopticMap | null = null;
 let climatologyTab: ClimatologyTab | null = null;
-type Tab = 'forecast' | 'synoptic' | 'climatology' | 'stats';
+let historicalTab: HistoricalTab | null = null;
+type Tab = 'forecast' | 'historical' | 'synoptic' | 'climatology' | 'stats';
 let currentTab: Tab = 'forecast';
 let statsLoaded = false;
 
@@ -107,7 +112,7 @@ let airportPanelView: ApViewMode = 'card';
 // Defaults match the module-level state above and the HTML's pre-active
 // buttons, so an untouched view yields a bare `/maps.html` URL.
 const mapsUrlState = createUrlState({
-  tab:         { default: 'forecast' as Tab, values: ['forecast', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
+  tab:         { default: 'forecast' as Tab, values: ['forecast', 'historical', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
   'fc.day':    { default: 0,  values: [0, 1, 2, 3, 4, 5, 6] as readonly number[] },
   'fc.hour':   { default: 12, values: [6, 9, 12, 15, 18] as readonly number[] },
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
@@ -124,7 +129,29 @@ const mapsUrlState = createUrlState({
   // Panel view: card (default) | cross | skewt. Lets a shared link land
   // straight on the cross-section; bare links open the summary card.
   'fc.apView': { default: 'card', values: ['card', 'cross', 'skewt'] as readonly string[] },
+  // Historical tab (#629). Empty date/time = the latest available slot.
+  'hist.date':   { default: '' },
+  'hist.time':   { default: '' },
+  'hist.lead':   { default: 0, values: HISTORICAL_LEADS },
+  'hist.source': {
+    default: 'metar' as HistoricalSource,
+    values: HISTORICAL_SOURCES as readonly HistoricalSource[],
+  },
+  'hist.metric': {
+    default: 'flight_category' as ForecastMetric,
+    values: FORECAST_METRICS as readonly ForecastMetric[],
+  },
+  'hist.apt':    { default: '' },
 });
+
+// Historical state as hydrated from the URL; the tab owns it once created.
+let histInit: HistoricalState | null = null;
+
+function historicalState(): HistoricalState {
+  return historicalTab?.getState() ?? histInit ?? {
+    date: '', time: '', lead: 0, source: 'metar', metric: 'flight_category', apt: '',
+  };
+}
 
 function syncUrl(): void {
   mapsUrlState.write({
@@ -136,7 +163,20 @@ function syncUrl(): void {
     'fc.apt':    airportPanelIcao ?? '',
     'fc.apModel': airportPanel?.getModel() ?? 'ecmwf',
     'fc.apView': airportPanelView,
+    ...historicalUrlValues(),
   });
+}
+
+function historicalUrlValues() {
+  const h = historicalState();
+  return {
+    'hist.date':   h.date,
+    'hist.time':   h.time,
+    'hist.lead':   h.lead,
+    'hist.source': h.source,
+    'hist.metric': h.metric,
+    'hist.apt':    h.apt,
+  };
 }
 
 // --- Helpers ---
@@ -1109,6 +1149,9 @@ function switchTab(tab: Tab): void {
     if (!forecastData) loadForecast();
     else rerender();
     setTimeout(() => forecastMap?.invalidateSize(), 100);
+  } else if (tab === 'historical') {
+    if (!historicalTab) historicalTab = new HistoricalTab(historicalState(), () => syncUrl());
+    void historicalTab.show();
   } else if (tab === 'synoptic') {
     setTimeout(() => { initSynopticTab(); }, 50);
   } else if (tab === 'climatology') {
@@ -1202,6 +1245,10 @@ async function main(): Promise<void> {
   fcHour      = init['fc.hour'];
   fcModel     = init['fc.model'];
   fcMetric    = init['fc.metric'];
+  histInit = {
+    date: init['hist.date'], time: init['hist.time'], lead: init['hist.lead'],
+    source: init['hist.source'], metric: init['hist.metric'], apt: init['hist.apt'],
+  };
 
   if (!urlParams.has('fc.hour')) {
     const nowHour = new Date().getUTCHours();

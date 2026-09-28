@@ -242,6 +242,74 @@ def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any
     return _shared_consensus(per_model, mode)
 
 
+def assemble_map_airports(
+    by_airport: dict[str, dict[str, dict]],
+    airports_db_path: str,
+    observed: dict[str, dict[str, dict]] | None = None,
+) -> list[dict[str, Any]]:
+    """Turn per-airport, per-model forecast dicts into map airport entries.
+
+    ``by_airport`` maps ICAO → model → the ``snap_to_dict`` output. Each
+    entry gets runway crosswind/headwind, the FAA/EASA alternate-required
+    flags, coordinates, and both baked consensus blocks. Shared by the
+    forecast map and the historical map so a snapshot renders identically in
+    both.
+
+    ``observed`` (historical map only) maps ICAO → source (``metar``/``taf``)
+    → a dict with the same value keys. Observed sources get the same wind and
+    alternate enrichment but are carried under ``observed`` and **never** feed
+    the consensus, which is a statement about the models. When it is given,
+    airports with observations but no model data are included too, with
+    ``consensus: None`` rather than the empty-input "VFR" default.
+    """
+    coords = _get_coords(airports_db_path)
+    runways = _get_runways(airports_db_path)
+    approaches = _get_approach_classes(airports_db_path)
+
+    icaos = set(by_airport)
+    if observed is not None:
+        icaos |= set(observed)
+
+    airports = []
+    for icao in sorted(icaos):
+        if icao not in coords:
+            continue
+        lat, lon = coords[icao]
+        atype, has_iap = approaches.get(icao, (None, False))
+        rwy_ends = runways.get(icao, [])
+        models_data = by_airport.get(icao, {})
+        observed_data = observed.get(icao, {}) if observed is not None else {}
+        # Runway crosswind/headwind, then per-source FAA/EASA alternate-required
+        # flags (the airport colour is aggregated worst-of-models client-side;
+        # the popup shows the spread).
+        for source_dict in (*models_data.values(), *observed_data.values()):
+            _enrich_wind(source_dict, rwy_ends)
+            flag = _alt_required(
+                source_dict.get("ceiling_ft"), source_dict.get("visibility_m"),
+                atype, has_iap,
+            )
+            if flag is not None:
+                source_dict["alt_required"] = flag
+        entry: dict[str, Any] = {
+            "icao": icao,
+            "lat": lat,
+            "lon": lon,
+            "approach_type": atype,
+            "models": models_data,
+            # Both consensus modes are baked so the clients (web + iOS) carry
+            # zero consensus logic — they read whichever block matches the
+            # selected Worst/Majority mode. See designs/forecast-page.md and #419.
+            "consensus": _consensus(models_data, "worst") if models_data else None,
+            "consensus_majority": (
+                _consensus(models_data, "majority") if models_data else None
+            ),
+        }
+        if observed is not None:
+            entry["observed"] = observed_data
+        airports.append(entry)
+    return airports
+
+
 def get_forecast_map_data(
     db: Session,
     forecast_hour: datetime,
@@ -254,8 +322,6 @@ def get_forecast_map_data(
     (``consensus``) and majority (``consensus_majority``) consensus baked in, so
     the clients render without recomputing either.
     """
-    coords = _get_coords(airports_db_path)
-
     # Find latest model_init_time per model that has snapshots for this hour
     init_times: dict[str, datetime] = {}
     for model in _MODELS:
@@ -297,42 +363,7 @@ def get_forecast_map_data(
             snap, field_elevation_ft=elevations.get(snap.icao),
         )
 
-    # Enrich per-model data with runway crosswind/headwind
-    runways = _get_runways(airports_db_path)
-    for icao, models_data in by_airport.items():
-        rwy_ends = runways.get(icao, [])
-        for model_dict in models_data.values():
-            _enrich_wind(model_dict, rwy_ends)
-
-    # Build response with coords, consensus, and FAA/EASA alternate-required flags
-    approaches = _get_approach_classes(airports_db_path)
-    airports = []
-    for icao, models_data in sorted(by_airport.items()):
-        if icao not in coords:
-            continue
-        lat, lon = coords[icao]
-        atype, has_iap = approaches.get(icao, (None, False))
-        # Per-model FAA/EASA alternate-required flags (the airport colour is
-        # aggregated worst-of-models client-side; the popup shows the spread).
-        for model_dict in models_data.values():
-            flag = _alt_required(
-                model_dict.get("ceiling_ft"), model_dict.get("visibility_m"),
-                atype, has_iap,
-            )
-            if flag is not None:
-                model_dict["alt_required"] = flag
-        airports.append({
-            "icao": icao,
-            "lat": lat,
-            "lon": lon,
-            "approach_type": atype,
-            "models": models_data,
-            # Both consensus modes are baked so the clients (web + iOS) carry
-            # zero consensus logic — they read whichever block matches the
-            # selected Worst/Majority mode. See designs/forecast-page.md and #419.
-            "consensus": _consensus(models_data, "worst"),
-            "consensus_majority": _consensus(models_data, "majority"),
-        })
+    airports = assemble_map_airports(by_airport, airports_db_path)
 
     return {
         "forecast_time": forecast_hour.replace(tzinfo=timezone.utc).isoformat(),

@@ -892,3 +892,57 @@ def snapshot_day_archived(db: Session, day: date_t) -> tuple[bool, str]:
     what earns its keep here.
     """
     return period_fully_archived(db, "snapshots", day.isoformat())
+
+
+# ---------------------------------------------------------------------------
+# Reading (#629 — historical map)
+# ---------------------------------------------------------------------------
+#
+# The only read path the application itself uses: the historical map serves
+# snapshots (and, once raw pruning is on, observations) older than the MySQL
+# window straight from the archived files. Everything else reads the archive
+# ad hoc with DuckDB.
+
+
+def archive_file_path(table_name: str, period: str) -> Path:
+    """Where the archived file for one period lives (it may not exist)."""
+    return archive_root() / ARCHIVE_SPECS[table_name].name / f"{period}.parquet"
+
+
+def read_archived_rows(
+    table_name: str,
+    period: str,
+    *,
+    columns: list[str] | None = None,
+    filters: list[tuple] | None = None,
+) -> list[dict] | None:
+    """Rows of one archived period as plain dicts, or ``None`` if not archived.
+
+    ``columns`` and ``filters`` are passed to ``pyarrow.parquet.read_table``
+    so only the needed columns and matching row groups are materialised.
+    Datetimes come back as UTC-aware ``datetime`` (the files store
+    ``timestamp[us, UTC]``), matching what the ORM hands back through
+    ``TZDateTime``, so callers can treat both sources the same way.
+
+    ``None`` (not ``[]``) for a missing file, so a caller can tell "this
+    period was never archived — try the database" from "archived, and nothing
+    matched".
+    """
+    path = archive_file_path(table_name, period)
+    if not path.exists():
+        return None
+    _, pq = _require_pyarrow()
+    table = pq.read_table(path, columns=columns, filters=filters)
+    return [
+        {k: _as_utc(v) for k, v in row.items()}
+        for row in table.to_pylist()
+    ]
+
+
+def earliest_archived_period(db: Session, table_name: str) -> str | None:
+    """The oldest period with a manifest for ``table_name``, or ``None``."""
+    return db.execute(
+        select(func.min(ArchiveManifestRow.period)).where(
+            ArchiveManifestRow.table_name == table_name,
+        )
+    ).scalar()
