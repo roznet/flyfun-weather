@@ -1,6 +1,6 @@
 # Forecast Page
 
-> Pan-European weather overview map with per-airport forecast visualization, powered by standalone verification snapshots.
+> Pan-European weather overview map with per-airport forecast visualization, powered by standalone verification snapshots, plus a Historical tab replaying METAR / TAF / model runs at any past instant.
 
 ## Intent
 
@@ -18,6 +18,7 @@ api/maps.py                                maps.html (template)
 │   → cache or map_queries.get_forecast_   ├── state mgmt (day/hour/model/metric)
 │     map_data() — per-model + BOTH        ├── 4 tabs: forecast/synoptic/
 │     consensus blocks baked in            │           climatology/stats
+│                                          │   (+ historical, see below)
 ├── GET /maps/forecast/days                └── data loading + client rerender
 │   → per day: which hours + which         adapters/maps-adapter.ts (API client)
 │     models have data (D+0..D+6)          ├── fetchForecastMap(day,hour)
@@ -43,7 +44,7 @@ Data source:
 
 ## Tabs
 
-The page hosts four tabs (`forecast`, `synoptic`, `climatology`, `stats`). Only the forecast tab is owned by this doc; the others are surfaced here but the analysis behind them lives in their own docs.
+The page hosts five tabs (`forecast`, `historical`, `synoptic`, `climatology`, `stats`). The forecast and historical tabs are owned by this doc; the others are surfaced here but the analysis behind them lives in their own docs.
 
 ### Forecast Overview
 - ~620 airport markers (watchlist) on a Leaflet map, color-coded by selectable metric
@@ -60,6 +61,21 @@ The page hosts four tabs (`forecast`, `synoptic`, `climatology`, `stats`). Only 
 - Clicking a metric row in the card calls back into `setMetric()`, i.e. it **recolours the whole map** to that metric. The card's consensus column mirrors the map's mode (`panelConsensusMode()`), falling back to `worst`.
 - Open ICAO (`fc.apt`), panel model (`fc.apModel`) and view mode (`fc.apView`) are all deep-linked, so a shared URL re-opens the panel on the right view. A deep-linked model the selected day has no data for is constrained via `setAvailableModels()` **before** the load, not after.
 
+### Historical (#629)
+
+Replays, for a past instant `T` (30-min grid, UTC), what every watchlist airport's METAR showed, what its TAF said, and what each model predicted — on the same markers and metric catalog as the forecast tab.
+
+- **Backend**: `tasks/historical_map.py` (`get_historical_map_data`, `compute_historical_range`), served by `GET /maps/historical?at=<ISO>&lead=<N>` and `GET /maps/historical/range`. **All selection logic is server-side** so an iOS tab later is rendering only.
+- **Selection rules** (constants at the top of the module):
+  - METAR: latest report (routine or SPECI) with `observation_time` in `(T - 90 min, T]`. Older → no METAR (never a stale report shown as current).
+  - TAF: the `taf_raw` on the latest observation row within 6 h before `T`, **re-read at `T`** with `analysis/taf_reading.read_taf_at` (euro_aip `taf_conditions_at`: prevailing with BECMG/FM, worst TEMPO/PROB, strongest wind incl. TEMPO gusts) — the same reading the route briefing uses. The stored `taf_*` columns (from `find_applicable_taf`, last group wins) are deliberately not used. A TAF whose validity doesn't contain `T` is dropped.
+  - Models: valid time = latest sample hour ≤ `T` on the same UTC day and ≤ 3 h old (so nothing 19Z–05Z: the snapshot grid is 06/09/12/15/18Z). Run = latest run **fetched** (`fetched_at`) in `(T - N days - 24 h, T - N days]` — lead `N=0` is "what the models said just before T", `N=1..6` "N days before". Selecting on `fetched_at`, not the latest init, keeps forecasts made after `T` out. A newer slot the run doesn't carry falls back to the previous one (ECMWF past 144 h is 6-hourly).
+  - Per-model `reason` when empty: `beyond_horizon` (lead > `MAP_FORECAST_DAYS[model]`), `no_valid_time`, `no_run`.
+- **Payload**: airport entries share the forecast map's shape via `map_queries.assemble_map_airports` (runway winds, alternate-required, both consensus blocks), with METAR/TAF under `observed` — same value keys, same enrichment, **never part of the consensus** (consensus is a statement about the models; `null` when an airport has no model data). `sources` gives per-source provenance (run, valid time, lead hours, counts) or the reason.
+- **Storage**: observations from MySQL (raw prune off); if `VERIFICATION_RAW_RETENTION_DAYS` is ever set, months past the window are read from the monthly Parquet archive. Snapshots are pruned at 10 days, so fetch days older than `SNAPSHOT_LIVE_DAYS` (9) are read from the daily Parquet archive (`archive.read_archived_rows`, pyarrow with column + row-group filters), falling back to MySQL for a day never archived. Model history therefore starts ~10 days before the archive was switched on; `/historical/range` reports `earliest_observation` and `earliest_model` separately and the date list marks older days "METAR/TAF only".
+- **Caching**: a past instant is immutable once `FINAL_AFTER` (2 h) has passed (a late snapshot ingest restamps `fetched_at`, so it can't enter a past cutoff). Final payloads go into a small in-process LRU plus `Cache-Control: immutable`. Deliberately **not** `verification_cache`: every (slot, lead) of every past day is a possible key and that table shouldn't grow with browsing.
+- **Frontend**: `visualization/historical-tab.ts` (`HistoricalTab`) reuses `WeatherMap`. METAR/TAF are presented to it as the per-airport "model" being shown; airports with nothing for the selected source are left off. Source/metric changes are client rerenders; only date/time/lead fetch. Unavailable sources stay clickable and explain themselves. Clicking a marker opens a side panel comparing all five sources plus the raw METAR/TAF. Deep-linked via `hist.date`, `hist.time`, `hist.lead`, `hist.source`, `hist.metric`, `hist.apt`.
+
 ### Synoptic
 - Hewson frontal-analysis overlay (`synoptic-map.ts` + hewson adapters/colormaps). Inner controls (model/init/level/metric) are NOT yet deep-linked — only the `tab=synoptic` switch is preserved. See [frontal-detection.md](./frontal-detection.md).
 
@@ -75,7 +91,7 @@ The forecast tab deep-links via the URL query string so any view can be shared a
 
 - **Encoder/decoder**: `web/ts/utils/url-state.ts` (`createUrlState`) — a schema of `{key: {default, values?}}` parses + serialises the current view to/from `URLSearchParams`. `maps-main.ts` defines `mapsUrlState` with keys: `tab`, `fc.day`, `fc.hour`, `fc.model`, `fc.metric`, `fc.apt` (open airport-profile ICAO), `fc.apModel`, `fc.apView` (`card|cross|skewt`). State changes write back via `history.replaceState` (no history pollution). Keys whose value equals the default are omitted, so an untouched view yields a bare `/maps.html`.
 - **Share button**: `web/ts/utils/share-link.ts` — copies the canonical URL for the current view to the clipboard with a transient toast.
-- **`tab=` is the dispatch key** with values `forecast | synoptic | climatology | stats`. Only the forecast tab's inner controls are deep-linked; synoptic/climatology/stats preserve the tab switch but not their inner state.
+- **`tab=` is the dispatch key** with values `forecast | historical | synoptic | climatology | stats`. The forecast and historical tabs' inner controls are deep-linked (`fc.*`, `hist.*`); synoptic/climatology/stats preserve the tab switch but not their inner state.
 - **Backwards-compatible**: bookmarks without `tab=` default to forecast tab with the page-level defaults.
 
 Pattern: any new control on the forecast tab that affects the rendered view should be added to the `mapsUrlState` schema so the share-link round-trip stays lossless.
@@ -148,6 +164,7 @@ The colour ramps, thresholds, metric labels and legends are **served data**, not
 - Consensus parity guardrail: `tests/test_consensus_parity.py` + `tests/fixtures/consensus_vectors.json`.
 - Map-metrics catalog (colours/thresholds/labels/legends): `web/ts/data/map-metrics-catalog.json`, served via `src/weatherbrief/api/help.py` (`maps` section).
 - Frequent airports (#419): `src/weatherbrief/api/flights.py` (`compute_frequent_airports`, `GET /flights/frequent-airports`). Only the iOS forecast map consumes it (`ForecastMapViewModel`) — the web page has no caller.
+- Historical tab (#629): `src/weatherbrief/tasks/historical_map.py`, `src/weatherbrief/analysis/taf_reading.py`, `archive.read_archived_rows`, `web/ts/visualization/historical-tab.ts`; tests `tests/test_historical_map.py`.
 - API: `src/weatherbrief/api/maps.py`, `src/weatherbrief/api/airport_profile.py` (airport-profile SSE)
 - Queries: `src/weatherbrief/tasks/map_queries.py`; cache key: `src/weatherbrief/tasks/cache_builder.py` (`forecast_map_cache_key`, `FORECAST_MAP_CACHE_VERSION`)
 - Frontend: `web/ts/maps-main.ts`, `web/ts/visualization/weather-map.ts`, `web/ts/visualization/weather-map-format.ts` (catalog interpreter + `getConsensus`), `web/ts/visualization/weather-map-consensus.ts` (shared helpers/orderings), `web/ts/visualization/airport-profile-panel.ts` + `web/ts/visualization/airport-summary-card.ts`, `web/ts/visualization/synoptic-map.ts`, `web/ts/visualization/climatology-tab.ts`

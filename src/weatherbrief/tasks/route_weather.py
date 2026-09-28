@@ -327,48 +327,31 @@ def run_route_weather(
 def _apply_taf_at_eta(obs: AirportObservation, taf, eta: datetime) -> None:
     """Fill ``obs``'s TAF fields from ``taf`` read at the airport's ETA.
 
-    Reads the TAF the way a pilot does (euro_aip ``taf_conditions_at``):
-    prevailing conditions with BECMG/FM applied, the worst TEMPO/PROB group
-    at ETA, and significant weather. A TAF whose validity does not contain
-    the ETA keeps its raw text and validity window, and leaves every at-ETA
-    field empty (#610).
+    Reads the TAF the way a pilot does (``analysis.taf_reading.read_taf_at``,
+    shared with the historical map): prevailing conditions with BECMG/FM
+    applied, the worst TEMPO/PROB group at ETA, and significant weather. A
+    TAF whose validity does not contain the ETA keeps its raw text and
+    validity window, and leaves every at-ETA field empty (#610).
     """
-    from euro_aip.briefing.weather.analysis import WeatherAnalyzer
+    from weatherbrief.analysis.taf_reading import read_taf_at
 
     obs.taf_raw = taf.raw_text
     obs.taf_valid_from = taf.validity_start
     obs.taf_valid_to = taf.validity_end
-    conditions = WeatherAnalyzer.taf_conditions_at(taf, eta)
-    obs.taf_valid_at_eta = conditions is not None
-    if conditions is None:
+    reading = read_taf_at(taf, eta)
+    obs.taf_valid_at_eta = reading is not None
+    if reading is None:
         return
 
-    prevailing = conditions.prevailing
-    if prevailing.flight_category is not None:
-        obs.taf_prevailing_category_at_eta = prevailing.flight_category.value
-    # worst_temporary skips groups without a category, so temporary_is_worse
-    # implies one; checked anyway so a surprise costs this field, not the
-    # whole route's observations.
-    worst = conditions.worst_temporary
-    if conditions.temporary_is_worse and worst is not None and worst.flight_category is not None:
-        obs.taf_temporary_category_at_eta = worst.flight_category.value
-        obs.taf_temporary_type = WeatherAnalyzer.trend_label(worst)
-        obs.taf_trend_type = obs.taf_temporary_type
-    elif conditions.prevailing_change is not None:
-        obs.taf_trend_type = conditions.prevailing_change.trend_type
-    if conditions.flight_category is not None:
-        obs.taf_flight_category_at_eta = conditions.flight_category.value
-    obs.taf_significant_weather = list(conditions.significant_weather)
-
-    # Strongest wind at ETA (prevailing on ties) — a TEMPO gust is what the
-    # runway crosswind advisory needs to see.
-    wind = max(
-        [prevailing, *conditions.temporary],
-        key=lambda r: max(r.wind_gust or 0, r.wind_speed or 0),
-    )
-    obs.taf_wind_dir = wind.wind_direction
-    obs.taf_wind_speed_kt = wind.wind_speed
-    obs.taf_wind_gust_kt = wind.wind_gust
+    obs.taf_prevailing_category_at_eta = reading.prevailing_category
+    obs.taf_temporary_category_at_eta = reading.temporary_category
+    obs.taf_temporary_type = reading.temporary_type
+    obs.taf_trend_type = reading.trend_type
+    obs.taf_flight_category_at_eta = reading.flight_category
+    obs.taf_significant_weather = reading.significant_weather
+    obs.taf_wind_dir = reading.wind_dir
+    obs.taf_wind_speed_kt = reading.wind_speed_kt
+    obs.taf_wind_gust_kt = reading.wind_gust_kt
 
     obs.taf_applicable_lines = _applicable_taf_lines(taf, eta)
 

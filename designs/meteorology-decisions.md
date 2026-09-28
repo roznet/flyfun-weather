@@ -4701,6 +4701,9 @@ prevailing state and in significant weather — an overstatement, the safe direc
   `taf_temporary_type`, `taf_significant_weather`; `AirportObservation.taf_at_eta_line()`.
 - `tasks/route_weather.py` — `_apply_taf_at_eta`; `airports_with_taf` counts TAFs
   valid at ETA.
+- (#629) The value-picking half of `_apply_taf_at_eta` (category, governing
+  ceiling/visibility, strongest wind) moved to `analysis/taf_reading.read_taf_at`,
+  shared with the historical map.
 - `digest/prompt_builder.py`, `digest/text.py` — both render `taf_at_eta_line()`.
 - `tasks/verification.py`, `tasks/alternate_requirement.py` — validity gate.
 - Tests: `tests/test_taf_at_eta.py`; euro_aip `tests/briefing/test_weather/test_taf_conditions.py`.

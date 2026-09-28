@@ -107,8 +107,8 @@ Key exports: `RouteGraphRenderer`, `attachRouteGraphInteraction`, `ROUTE_GRAPH_M
 → Full doc: route-graph.md
 
 ### forecast-page
-Pan-European weather overview map with per-airport forecast visualization (10 metrics incl. alternate-required, visibility and runway crosswind/headwind, server-baked consensus modes). Cache layer serves pre-computed JSON with staleness tracking, falling back to live queries.
-Key exports: `get_forecast_map_data`, `WeatherMap`, `fetchForecastMap`
+Pan-European weather overview map with per-airport forecast visualization (10 metrics incl. alternate-required, visibility and runway crosswind/headwind, server-baked consensus modes). Cache layer serves pre-computed JSON with staleness tracking, falling back to live queries. Historical tab (#629) replays METAR / TAF (re-read at T) / model runs fetched before T (lead D-0..D-6) at any past 30-min instant, reading pruned snapshots from the Parquet archive.
+Key exports: `get_forecast_map_data`, `assemble_map_airports`, `get_historical_map_data`, `compute_historical_range`, `read_taf_at`, `WeatherMap`, `HistoricalTab`, `fetchForecastMap`
 → Full doc: forecast-page.md
 
 ### briefing-sidebar
