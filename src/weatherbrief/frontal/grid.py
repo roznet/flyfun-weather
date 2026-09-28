@@ -322,6 +322,13 @@ def _fill_geometry(valid: np.ndarray) -> _FillGeometry:
         _fill_cache.move_to_end(key)
         while len(_fill_cache) > _FILL_CACHE_MAX:
             _fill_cache.popitem(last=False)
+        entries = len(_fill_cache)
+    # Rare (one per distinct mask per process), so INFO: it is the only place
+    # the cache's real memory footprint shows up in prod logs.
+    logger.info(
+        "Terrain-fill geometry cached: grid %s, %d filled cells, %.1f KB (%d/%d entries)",
+        valid.shape, len(geom.coords_invalid), geom.nbytes / 1024, entries, _FILL_CACHE_MAX,
+    )
     return geom
 
 

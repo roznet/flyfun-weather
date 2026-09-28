@@ -242,3 +242,59 @@ class TestSnapshotFrontRegression:
         # The full candidate/decision trace is stamped in.
         assert res.decisions
         assert any(d.accepted for d in res.decisions)
+
+
+class TestSnapshotGradientMemo:
+    """``grids_at_hour`` memoises the re-derived dT_dx/dT_dy per frame (#627)."""
+
+    @staticmethod
+    def _source(tmp_path, monkeypatch):
+        import weatherbrief.frontal.sources as sources_mod
+
+        lat, lon, theta, u, v = _build_field_stacks()
+        snap = tmp_path / "snap.npz"
+        _write_snapshot_from_case(snap, lat, lon, theta, u, v)
+        calls: list[int] = []
+        real = sources_mod.theta_e_gradient_components
+
+        def _counting(*a, **kw):
+            calls.append(1)
+            return real(*a, **kw)
+
+        monkeypatch.setattr(sources_mod, "theta_e_gradient_components", _counting)
+        return SnapshotFieldSource(snap, model_name="ecmwf"), calls, lat, lon
+
+    def test_repeat_request_hits_the_memo(self, tmp_path, monkeypatch):
+        src, calls, _, _ = self._source(tmp_path, monkeypatch)
+        first = src.grids_at_hour("ecmwf", 2, 850)
+        second = src.grids_at_hour("ecmwf", 2, 850)
+        assert len(calls) == 1
+        assert second.dT_dx is first.dT_dx and second.dT_dy is first.dT_dy
+
+    def test_mask_change_recomputes_and_equal_mask_hits(self, tmp_path, monkeypatch):
+        src, calls, lat, lon = self._source(tmp_path, monkeypatch)
+        unmasked = src.grids_at_hour("ecmwf", 2, 850)
+
+        mask = np.ones((lat.size, lon.size), dtype=bool)
+        mask[6:10, 8:12] = False  # an interior "mountain"
+        src.terrain_mask = mask
+        masked = src.grids_at_hour("ecmwf", 2, 850)
+        assert len(calls) == 2
+        assert not np.array_equal(masked.dT_dx, unmasked.dT_dx)
+
+        # Callers rebuild the per-level mask each time: an equal copy must hit.
+        src.terrain_mask = mask.copy()
+        again = src.grids_at_hour("ecmwf", 2, 850)
+        assert len(calls) == 2
+        assert again.dT_dx is masked.dT_dx
+
+    def test_oldest_entry_is_evicted(self, tmp_path, monkeypatch):
+        src, calls, _, _ = self._source(tmp_path, monkeypatch)
+        monkeypatch.setattr(SnapshotFieldSource, "_COMPONENTS_CACHE_MAX", 2)
+        for hour in (0, 1, 2):
+            src.grids_at_hour("ecmwf", hour, 850)
+        assert len(calls) == 3
+        src.grids_at_hour("ecmwf", 2, 850)  # still cached
+        assert len(calls) == 3
+        src.grids_at_hour("ecmwf", 0, 850)  # evicted when hour 2 arrived
+        assert len(calls) == 4
