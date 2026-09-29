@@ -229,6 +229,12 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func frequentAirports() async throws -> FrequentAirportsResponse {
         throw FixtureError.notProvided("frequentAirports")
     }
+    func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse {
+        throw FixtureError.notProvided("historicalMap")
+    }
+    func historicalRange() async throws -> HistoricalRangeResponse {
+        throw FixtureError.notProvided("historicalRange")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.advisories

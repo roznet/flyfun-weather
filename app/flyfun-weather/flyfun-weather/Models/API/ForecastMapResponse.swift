@@ -73,6 +73,21 @@ struct ForecastAirport: Decodable, Sendable, Identifiable {
         case consensusMajority = "consensus_majority"
     }
 
+    /// Built client-side by the historical map (#629), which presents one source
+    /// (METAR, TAF, a model or a consensus) to the same marker layer.
+    init(icao: String, lat: Double, lon: Double, approachType: String?,
+         models: [String: ForecastModelEntry], consensus: ForecastConsensus,
+         consensusMajority: ForecastConsensus, observation: ForecastObservation? = nil) {
+        self.icao = icao
+        self.lat = lat
+        self.lon = lon
+        self.approachType = approachType
+        self.models = models
+        self.consensus = consensus
+        self.consensusMajority = consensusMajority
+        self.observation = observation
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         icao = try c.decode(String.self, forKey: .icao)
@@ -216,6 +231,25 @@ struct ForecastConsensus: Decodable, Sendable, ForecastCellData {
         case headwindKt = "headwind_kt"
         case cloudCoverPct = "cloud_cover_pct"
         case windDirDeg = "wind_dir_deg"
+    }
+
+    /// A block with no values: stands in for the consensus of a historical airport
+    /// that has observations but no model data (#629). Only read when a consensus
+    /// mode is active, and such airports are never shown in one.
+    static let empty = ForecastConsensus()
+
+    private init() {
+        flightCategory = nil
+        agreement = [:]
+        convectiveRisk = nil
+        windSpeedKt = nil
+        ceilingFt = nil
+        capeJkg = nil
+        visibilityM = nil
+        crosswindKt = nil
+        headwindKt = nil
+        cloudCoverPct = nil
+        windDirDeg = nil
     }
 
     init(from decoder: Decoder) throws {

@@ -94,11 +94,8 @@ private extension TimeZone {
 
 // MARK: - Airport-card presentation (iPad inspector · iPhone bottom sheet)
 
-/// Presents the tapped-airport card as a trailing `.inspector` column on iPad
-/// (regular width) and a bottom sheet on iPhone. The compact sheet keeps the map
-/// pannable + live-recolouring underneath via
-/// `.presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.45)))` —
-/// the whole "step the hour and watch both update" interaction depends on it.
+/// The forecast map's tapped-airport card, presented by `MapCardPresenter`
+/// (iPad inspector, iPhone bottom sheet with the map live underneath).
 struct AirportCardPresenter: ViewModifier {
     let viewModel: ForecastMapViewModel
     let catalog: ForecastMapCatalog?
@@ -109,18 +106,7 @@ struct AirportCardPresenter: ViewModifier {
             get: { viewModel.selectedIcao != nil },
             set: { if !$0 { viewModel.deselect() } }
         )
-        if isCompact {
-            content.sheet(isPresented: isPresented) {
-                card
-                    .presentationDetents([.fraction(0.45), .large])
-                    .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.45)))
-                    .presentationDragIndicator(.visible)
-            }
-        } else {
-            content.inspector(isPresented: isPresented) {
-                card.inspectorColumnWidth(min: 320, ideal: 360, max: 440)
-            }
-        }
+        content.modifier(MapCardPresenter(isPresented: isPresented, isCompact: isCompact) { card })
     }
 
     @ViewBuilder private var card: some View {

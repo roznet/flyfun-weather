@@ -6,11 +6,19 @@ import TipKit
 /// the flight case drives the briefing detail as before.
 enum SidebarSelection: Hashable {
     case forecastMap
+    /// The historical map (#629): METAR / TAF / model runs at a past instant.
+    case historicalMap
     case flight(FlightResponse)
     /// A trip's screen (#607). Carries only the id: the trip screen loads its own
     /// data, and holding a whole `TripResponse` in the selection would make the
     /// detail pane go stale the moment a refresh advanced a leg.
     case trip(id: String)
+}
+
+/// The two pan-European maps the flight list can present.
+private enum MapKind {
+    case forecast
+    case historical
 }
 
 /// Main screen showing the user's saved flights with sidebar/detail split on iPad.
@@ -46,6 +54,10 @@ struct FlightListView: View {
     /// the deep-link state it opens with.
     @State private var showMapCover = false
     @State private var mapDeepLink: MapDeepLink?
+    /// Which map the compact cover shows. One cover serves both, so switching
+    /// between them swaps its content instead of stacking a second cover.
+    @State private var mapCoverKind: MapKind = .forecast
+    @State private var historicalDeepLink: HistoricalMapDeepLink?
     /// A shared flight resolved from a `/s/{code}` deep link, presented as a
     /// preview-before-subscribe cover (#446). nil when no shared link is open.
     @State private var sharedPreviewFlight: FlightResponse?
@@ -222,6 +234,13 @@ struct FlightListView: View {
                             } label: {
                                 Label("Open Website", systemImage: "safari")
                             }
+
+                            Button {
+                                openHistoricalMap(deepLink: nil)
+                            } label: {
+                                Label("Historical Map", systemImage: "clock.arrow.circlepath")
+                            }
+                            .accessibilityIdentifier("historicalMapMenuItem")
 
                             Button {
                                 showHelp = true
@@ -416,7 +435,16 @@ struct FlightListView: View {
                 // back to the list.
                 if let repo = appState.repository {
                     ForecastMapView(repository: repo, deepLink: mapDeepLink,
-                                    onToggleSidebar: toggleSidebar)
+                                    onToggleSidebar: toggleSidebar,
+                                    onShowHistorical: { openHistoricalMap(deepLink: nil) })
+                        .id(mapOpenToken)
+                }
+            case .historicalMap:
+                // Same containers and sidebar escape hatch as the forecast map.
+                if let repo = appState.repository {
+                    HistoricalMapView(repository: repo, deepLink: historicalDeepLink,
+                                      onToggleSidebar: toggleSidebar,
+                                      onShowForecast: { openForecastMap(deepLink: nil) })
                         .id(mapOpenToken)
                 }
             case nil:
@@ -426,10 +454,18 @@ struct FlightListView: View {
         }
         .fullScreenCover(isPresented: $showMapCover) {
             if let repo = appState.repository {
-                ForecastMapView(repository: repo, deepLink: mapDeepLink) {
-                    showMapCover = false
+                switch mapCoverKind {
+                case .forecast:
+                    ForecastMapView(repository: repo, deepLink: mapDeepLink,
+                                    onClose: { showMapCover = false },
+                                    onShowHistorical: { openHistoricalMap(deepLink: nil) })
+                        .id(mapOpenToken)
+                case .historical:
+                    HistoricalMapView(repository: repo, deepLink: historicalDeepLink,
+                                      onClose: { showMapCover = false },
+                                      onShowForecast: { openForecastMap(deepLink: nil) })
+                        .id(mapOpenToken)
                 }
-                .id(mapOpenToken)
             }
         }
         .fullScreenCover(item: $sharedPreviewFlight) { flight in
@@ -586,6 +622,9 @@ struct FlightListView: View {
             appState.clearPendingNavigation()
         case .forecastMap(let deepLink):
             openForecastMap(deepLink: deepLink.isEmpty ? nil : deepLink)
+            appState.clearPendingNavigation()
+        case .historicalMap(let deepLink):
+            openHistoricalMap(deepLink: deepLink.isEmpty ? nil : deepLink)
             appState.clearPendingNavigation()
         case .trip(let tripId):
             // The coalesced trip push carries `trip_id` and no `flight_id` — the
@@ -767,21 +806,38 @@ struct FlightListView: View {
         // button, or opening from closed) must NOT bump the token: doing so would
         // tear down the VM and its (day,hour) LRU cache — the thing that makes
         // `‹ ›` stepping instant — and re-fetch on a no-op tap.
-        let alreadyOpen = selection == .forecastMap || showMapCover
+        let alreadyOpen = selection == .forecastMap || (showMapCover && mapCoverKind == .forecast)
         if deepLink != nil, alreadyOpen {
             mapOpenToken &+= 1
         }
         mapDeepLink = deepLink
-        // Present in exactly one container. If the size class flipped since a prior
-        // open (iPad Split View / Stage Manager resize), the other container could
-        // still describe "the map is open"; clear only the map's own state (never a
-        // flight `selection`) so the two presentations can't both be live.
+        presentMap(.forecast)
+    }
+
+    /// Open the historical map (#629) in the same containers as the forecast map.
+    /// The token rule is the forecast map's: only a new deep link into an
+    /// already-open historical map forces a fresh view.
+    private func openHistoricalMap(deepLink: HistoricalMapDeepLink?) {
+        let alreadyOpen = selection == .historicalMap || (showMapCover && mapCoverKind == .historical)
+        if deepLink != nil, alreadyOpen {
+            mapOpenToken &+= 1
+        }
+        historicalDeepLink = deepLink
+        presentMap(.historical)
+    }
+
+    /// Present a map in exactly one container. If the size class flipped since a
+    /// prior open (iPad Split View / Stage Manager resize), the other container
+    /// could still describe "a map is open"; clear only the maps' own state (never
+    /// a flight `selection`) so the two presentations can't both be live.
+    private func presentMap(_ kind: MapKind) {
         if isCompact {
-            if selection == .forecastMap { selection = nil }
+            if selection == .forecastMap || selection == .historicalMap { selection = nil }
+            mapCoverKind = kind
             showMapCover = true
         } else {
             showMapCover = false
-            selection = .forecastMap
+            selection = kind == .forecast ? .forecastMap : .historicalMap
         }
     }
 

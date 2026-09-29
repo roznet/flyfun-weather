@@ -37,6 +37,8 @@ Single-flight Delete (swipe / context menu, owner-only, behind a confirmation al
 
 **Forecast map** (`Views/ForecastMap/`, flight-list level not briefing level): the app's port of the web forecast map — MapKit, metric catalog from `Resources/metrics-catalog.json` (`MapMetricsCatalog`), tappable airport cards, and an iPad sidebar toggle so the sidebar can't strand the user. Reached from More → Forecast Map and from the `maps.html` universal link.
 
+**Historical map** (`HistoricalMapView`, #629): the web's Historical tab, on the same marker layer and catalog. Pick a past UTC date + 30-min time, a model lead (Latest / D-1…D-6) and a source (METAR / TAF / Worst / Majority / GFS / ICON / ECMWF); unavailable sources stay tappable and say why. Tapping an airport compares all five sources plus the raw METAR/TAF. Reached from More → Historical Map, the clock button on the forecast map, and `/maps.html?tab=historical&hist.*`. All selection logic is server-side ([forecast-page.md](./forecast-page.md#historical-629)).
+
 **Flight sharing**: owner shares a `/s/{code}` link via `ShareActivitySheet` (not `ShareLink` — that entry point needs the sheet's control). A recipient lands in `SharedFlightPreviewView` and subscribes. Subscriber rows are read-only: no delete, not bulk-selectable, Unsubscribe instead, and refresh is gated (see Pack management).
 
 **Post-flight debrief**: `DebriefFormView` + `DebriefViewModel` over `/api/flights/{id}/debrief` (GET/PUT/DELETE), taxonomy from `DebriefTaxonomy` / the help catalog. Entry is a card on the Advisory tab; saving signals the flight list so the "Debriefed ✓" glyph updates without waiting for a foreground reload. Digest 👍/👎 (`DigestFeedbackView`) sits alongside.

@@ -316,6 +316,16 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.frequentAirports()
     }
 
+    // Historical map (#629) — online-only. A final past instant is sent with
+    // `Cache-Control: immutable` and the VM keeps its own small LRU.
+    func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse {
+        try await online.historicalMap(at: at, lead: lead)
+    }
+
+    func historicalRange() async throws -> HistoricalRangeResponse {
+        try await online.historicalRange()
+    }
+
     // Flight sharing (#446) — always online: resolving a code, subscribing, and
     // unsubscribing are live account actions, never part of the offline bundle.
     func flightByShareCode(_ code: String) async throws -> FlightResponse {

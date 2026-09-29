@@ -12,6 +12,9 @@ enum PendingNavigation: Equatable, Sendable {
     /// Open the forecast map, optionally in a shared `fc.*` state (#420). A map
     /// link shared from desktop opens the phone on the same day/hour/metric/airport.
     case forecastMap(MapDeepLink)
+    /// Open the historical map (#629), optionally in a shared `hist.*` state
+    /// (`/maps.html?tab=historical&hist.date=…`).
+    case historicalMap(HistoricalMapDeepLink)
     /// Open a shared flight by its share code (`/s/{code}`) as a preview with a
     /// Subscribe banner (#446). The flight isn't in `/api/flights` until the
     /// viewer subscribes, so the UI resolves the code via the by-share endpoint.
@@ -52,6 +55,28 @@ struct MapDeepLink: Equatable, Sendable {
 
     var isEmpty: Bool {
         day == nil && hour == nil && model == nil && metric == nil && airport == nil
+    }
+}
+
+/// Historical-map deep-link state parsed from `/maps.html?tab=historical&hist.*`.
+/// Tokens are the web's verbatim (`hist.date` = `YYYY-MM-DD`, `hist.time` =
+/// `HH:MM`, both UTC); an empty date/time means the latest available slot.
+struct HistoricalMapDeepLink: Equatable, Sendable {
+    var date: String?
+    var time: String?
+    var lead: Int?
+    var source: String?
+    var metric: String?
+    var airport: String?
+
+    var isEmpty: Bool {
+        date == nil && time == nil && lead == nil && source == nil && metric == nil && airport == nil
+    }
+
+    /// The linked instant; nil (→ latest) unless both date and time are given, as on the web.
+    var instant: Date? {
+        guard let date, let time else { return nil }
+        return HistoricalTime.instant(date: date, time: time)
     }
 }
 
@@ -114,6 +139,7 @@ struct PendingNavigationStore {
         case .flightList: "flightList"
         case .briefing(let id): "briefing:\(id)"
         case .forecastMap(let dl): "forecastMap:" + encodeMap(dl)
+        case .historicalMap(let dl): "historicalMap:" + encodeHistorical(dl)
         case .share(let code): "share:\(code)"
         case .trip(let id): "trip:\(id)"
         case .tripShare(let code): "tripShare:\(code)"
@@ -128,6 +154,9 @@ struct PendingNavigationStore {
         }
         if raw.hasPrefix("forecastMap:") {
             return .forecastMap(decodeMap(String(raw.dropFirst("forecastMap:".count))))
+        }
+        if raw.hasPrefix("historicalMap:") {
+            return .historicalMap(decodeHistorical(String(raw.dropFirst("historicalMap:".count))))
         }
         if raw.hasPrefix("share:") {
             let code = String(raw.dropFirst("share:".count))
@@ -153,6 +182,36 @@ struct PendingNavigationStore {
         if let mt = dl.metric { parts.append("metric=\(mt)") }
         if let a = dl.airport { parts.append("apt=\(a)") }
         return parts.joined(separator: "&")
+    }
+
+    private static func encodeHistorical(_ dl: HistoricalMapDeepLink) -> String {
+        var parts: [String] = []
+        if let d = dl.date { parts.append("date=\(d)") }
+        if let t = dl.time { parts.append("time=\(t)") }
+        if let l = dl.lead { parts.append("lead=\(l)") }
+        if let s = dl.source { parts.append("source=\(s)") }
+        if let m = dl.metric { parts.append("metric=\(m)") }
+        if let a = dl.airport { parts.append("apt=\(a)") }
+        return parts.joined(separator: "&")
+    }
+
+    private static func decodeHistorical(_ query: String) -> HistoricalMapDeepLink {
+        var dl = HistoricalMapDeepLink()
+        for pair in query.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2 else { continue }
+            let value = String(kv[1])
+            switch String(kv[0]) {
+            case "date": dl.date = value
+            case "time": dl.time = value
+            case "lead": dl.lead = Int(value)
+            case "source": dl.source = value
+            case "metric": dl.metric = value
+            case "apt": dl.airport = value
+            default: break
+            }
+        }
+        return dl
     }
 
     private static func decodeMap(_ query: String) -> MapDeepLink {

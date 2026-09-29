@@ -424,7 +424,13 @@ final class AppState {
                   !flight.isEmpty else { return nil }
             return .briefing(flightId: flight)
         case "/maps.html":
-            return .forecastMap(mapDeepLink(from: comps.queryItems ?? []))
+            let items = comps.queryItems ?? []
+            // `tab=historical` (#629) opens the historical map; every other tab
+            // (forecast, or one iOS doesn't have) lands on the forecast map.
+            if items.first(where: { $0.name == "tab" })?.value == "historical" {
+                return .historicalMap(historicalMapDeepLink(from: items))
+            }
+            return .forecastMap(mapDeepLink(from: items))
         case "/trip.html":
             // #607. Requires `/trip.html` in the domain's AASA `paths` — iOS
             // caches that file per-install, so the Caddy change must be deployed
@@ -475,6 +481,22 @@ final class AppState {
             model: value("fc.model"),
             metric: value("fc.metric"),
             airport: value("fc.apt")
+        )
+    }
+
+    /// Read the historical map's `hist.*` share-state keys from a `/maps.html` query.
+    nonisolated static func historicalMapDeepLink(from items: [URLQueryItem]) -> HistoricalMapDeepLink {
+        func value(_ name: String) -> String? {
+            let v = items.first { $0.name == name }?.value
+            return (v?.isEmpty == false) ? v : nil
+        }
+        return HistoricalMapDeepLink(
+            date: value("hist.date"),
+            time: value("hist.time"),
+            lead: value("hist.lead").flatMap(Int.init),
+            source: value("hist.source"),
+            metric: value("hist.metric"),
+            airport: value("hist.apt")
         )
     }
 
