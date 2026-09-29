@@ -129,10 +129,19 @@ struct HistoricalMapView: View {
                 Spacer(minLength: 0)
             }
             if let status = viewModel.statusLine {
-                Text(status)
-                    .font(.caption2)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(2)
+                HStack(spacing: Theme.spacingS) {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(2)
+                    // A failed reload keeps the pickers; this re-fetches the same instant.
+                    if viewModel.loadError != nil, viewModel.didLoadOnce, !viewModel.isLoading {
+                        Spacer(minLength: 0)
+                        Button("Retry") { viewModel.retryReload() }
+                            .font(.caption2.weight(.semibold))
+                            .accessibilityIdentifier("historicalRetryButton")
+                    }
+                }
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                     .frame(maxWidth: .infinity, alignment: .leading)

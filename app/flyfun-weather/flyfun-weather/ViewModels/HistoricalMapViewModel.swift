@@ -63,6 +63,10 @@ final class HistoricalMapViewModel {
     private var requestedInstant: Date?
     private var pendingOpenIcao: String?
     private var loadTask: Task<Void, Never>?
+    /// The fetch for the current instant/lead after the first load. Cancelled
+    /// when the selection moves on, so rapid stepping aborts superseded requests
+    /// (each one is heavy server-side) instead of letting them all run.
+    private var reloadTask: Task<Void, Never>?
 
     init(repository: any BriefingRepository,
          deepLink: HistoricalMapDeepLink? = nil,
@@ -118,6 +122,19 @@ final class HistoricalMapViewModel {
         start()
     }
 
+    /// Fetch the current selection, cancelling any superseded fetch.
+    private func reload() {
+        reloadTask?.cancel()
+        reloadTask = Task { await load() }
+    }
+
+    /// Retry the current instant after a failed reload (the full-screen Retry
+    /// only covers the first load).
+    func retryReload() {
+        guard didLoadOnce, selectedInstant != nil else { return }
+        reload()
+    }
+
     private func load() async {
         guard let at = selectedInstant else { return }
         let key = SlotKey(at: at, lead: lead)
@@ -136,8 +153,11 @@ final class HistoricalMapViewModel {
             // The user may have stepped on while this was in flight.
             if isCurrent() { setPayload(resp) }
         } catch let error as APIError where error.isCancellation {
-            // benign
+            // Superseded: the fetch that replaced this one owns `isLoading`.
+            // (A-B-A stepping makes this key current again, so don't clear it.)
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             Self.logger.warning("historical map failed: \(error.localizedDescription)")
             if isCurrent() {
                 // Don't leave the previous instant on screen under the new title.
@@ -164,6 +184,11 @@ final class HistoricalMapViewModel {
             )
         }
         payloadRevision &+= 1
+        // Close the card when its airport isn't in the new payload (a METAR-only
+        // day, or a failed reload) rather than leave an empty sheet up.
+        if let icao = selectedIcao, payload?.airports.contains(where: { $0.icao == icao }) != true {
+            selectedIcao = nil
+        }
     }
 
     private func store(_ resp: HistoricalMapResponse, for key: SlotKey) {
@@ -235,7 +260,7 @@ final class HistoricalMapViewModel {
         let at = clamp(date)
         guard at != selectedInstant else { return }
         selectedInstant = at
-        Task { await load() }
+        reload()
     }
 
     /// Pick a UTC day, keeping the time of day (then clamping, so choosing today
@@ -266,7 +291,7 @@ final class HistoricalMapViewModel {
     func selectLead(_ newLead: Int) {
         guard newLead != lead, Self.leads.contains(newLead) else { return }
         lead = newLead
-        Task { await load() }
+        reload()
     }
 
     /// Models the server stores at a lead (a model past its map horizon isn't).

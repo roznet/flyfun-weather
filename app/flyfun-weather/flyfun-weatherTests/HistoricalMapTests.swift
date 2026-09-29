@@ -269,6 +269,30 @@ struct HistoricalMapTests {
         #expect(vm.selectedInstant == Self.date("2026-09-25T12:00:00Z"))
     }
 
+    @Test func failedReloadClosesTheCardAndRetryRecovers() async throws {
+        let (vm, repo) = try await Self.loadedViewModel()
+        vm.select(icao: "EGLL", biasForSheet: false)
+        #expect(vm.selectedAirport?.icao == "EGLL")
+
+        let payload = try Self.payload()
+        repo.historicalMapHandler = { _, _ in throw MockError.notStubbed("offline") }
+        vm.step(-1)
+        for _ in 0..<1000 where vm.loadError == nil { await Task.yield() }
+        #expect(vm.loadError != nil)
+        #expect(vm.mapPayload == nil, "the old instant isn't left under the new title")
+        #expect(vm.selectedIcao == nil, "no empty card left open")
+        #expect(vm.didLoadOnce, "pickers stay; recovery is the status-line Retry")
+
+        repo.historicalMapHandler = { _, _ in payload }
+        let before = repo.historicalMapRequests.count
+        vm.retryReload()
+        for _ in 0..<1000 where vm.loadError != nil { await Task.yield() }
+        #expect(repo.historicalMapRequests.count == before + 1)
+        #expect(repo.historicalMapRequests.last?.at == Self.date("2026-09-29T11:30:00Z"))
+        #expect(vm.loadError == nil)
+        #expect(vm.mapPayload?.airports.isEmpty == false)
+    }
+
     // MARK: - Universal link routing
 
     @Test func historicalMapsLinkRoutesWithState() {
