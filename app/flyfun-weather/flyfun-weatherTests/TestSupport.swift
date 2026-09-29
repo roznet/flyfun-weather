@@ -224,6 +224,19 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse { throw MockError.notStubbed("forecastMap") }
     func forecastDays() async throws -> ForecastDaysResponse { throw MockError.notStubbed("forecastDays") }
     func frequentAirports() async throws -> FrequentAirportsResponse { throw MockError.notStubbed("frequentAirports") }
+    /// Stub for the historical map VM tests; records every (at, lead) requested.
+    var historicalMapHandler: (@Sendable (Date, Int) throws -> HistoricalMapResponse)?
+    var historicalRangeHandler: (@Sendable () throws -> HistoricalRangeResponse)?
+    private(set) var historicalMapRequests: [(at: Date, lead: Int)] = []
+    func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse {
+        historicalMapRequests.append((at, lead))
+        if let h = historicalMapHandler { return try h(at, lead) }
+        throw MockError.notStubbed("historicalMap")
+    }
+    func historicalRange() async throws -> HistoricalRangeResponse {
+        if let h = historicalRangeHandler { return try h() }
+        throw MockError.notStubbed("historicalRange")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         if let h = advisoriesHandler { return try h() }
         throw MockError.notStubbed("advisories")

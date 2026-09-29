@@ -28,14 +28,18 @@ struct ForecastMapView: View {
     /// collapse the sidebar over the map and be stranded there with no way back to
     /// the flight list.
     private let onToggleSidebar: (() -> Void)?
+    /// Swap this screen for the historical map (#629), the web's Historical tab.
+    private let onShowHistorical: (() -> Void)?
 
     init(repository: any BriefingRepository,
          deepLink: MapDeepLink? = nil,
          onClose: (() -> Void)? = nil,
-         onToggleSidebar: (() -> Void)? = nil) {
+         onToggleSidebar: (() -> Void)? = nil,
+         onShowHistorical: (() -> Void)? = nil) {
         _viewModel = State(initialValue: ForecastMapViewModel(repository: repository, deepLink: deepLink))
         self.onClose = onClose
         self.onToggleSidebar = onToggleSidebar
+        self.onShowHistorical = onShowHistorical
     }
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
@@ -125,8 +129,14 @@ struct ForecastMapView: View {
                     Text(navSubtitle).font(.caption).foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
-                // Balance the leading control so the title stays centred.
-                if hasLeadingControl { Color.clear.frame(width: 36, height: 36) }
+                if let onShowHistorical {
+                    MapChrome.circleButton(systemImage: "clock.arrow.circlepath", action: onShowHistorical)
+                        .accessibilityLabel("Historical map")
+                        .accessibilityIdentifier("mapHistoricalButton")
+                } else if hasLeadingControl {
+                    // Balance the leading control so the title stays centred.
+                    Color.clear.frame(width: 36, height: 36)
+                }
             }
             HStack(spacing: Theme.spacingS) {
                 dayCapsule
@@ -143,24 +153,18 @@ struct ForecastMapView: View {
         .padding(.top, isCompact ? Theme.spacingM : Theme.spacingS)
     }
 
-    /// Menu row with a leading checkmark only when selected (avoids a blank SF
-    /// Symbol slot for the unselected rows).
-    @ViewBuilder private func menuRow(_ title: String, selected: Bool) -> some View {
-        if selected { Label(title, systemImage: "checkmark") } else { Text(title) }
-    }
-
     private var dayCapsule: some View {
         Menu {
             ForEach(viewModel.days) { day in
                 Button {
                     viewModel.selectDay(day.day)
                 } label: {
-                    menuRow(Self.dayMenuLabel(day), selected: day.day == viewModel.selectedDay)
+                    MapChrome.menuRow(Self.dayMenuLabel(day), selected: day.day == viewModel.selectedDay)
                 }
                 .disabled(!day.available)
             }
         } label: {
-            capsuleLabel(text: shortDayLabel, systemImage: "calendar")
+            MapChrome.capsuleLabel(text: shortDayLabel, systemImage: "calendar")
         }
     }
 
@@ -173,7 +177,7 @@ struct ForecastMapView: View {
                     Button {
                         viewModel.selectHour(hr)
                     } label: {
-                        menuRow(String(format: "%02dZ", hr), selected: hr == viewModel.selectedHour)
+                        MapChrome.menuRow(String(format: "%02dZ", hr), selected: hr == viewModel.selectedHour)
                     }
                 }
             } label: {
@@ -194,7 +198,7 @@ struct ForecastMapView: View {
             Spacer()
             HStack(alignment: .bottom) {
                 if let cat = catalog, let legend = cat.legend(metric: viewModel.metric) {
-                    legendCapsule(legend)
+                    MapChrome.legendCapsule(legend)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: Theme.spacingS) {
@@ -216,24 +220,24 @@ struct ForecastMapView: View {
                             Button {
                                 viewModel.metric = item.metric
                             } label: {
-                                menuRow(item.label, selected: item.metric == viewModel.metric)
+                                MapChrome.menuRow(item.label, selected: item.metric == viewModel.metric)
                             }
                         }
                     }
                 }
             }
         } label: {
-            capsuleLabel(text: catalog?.label(metric: viewModel.metric) ?? "Metric", systemImage: "paintpalette")
+            MapChrome.capsuleLabel(text: catalog?.label(metric: viewModel.metric) ?? "Metric", systemImage: "paintpalette")
         }
     }
 
     private var modelMenu: some View {
         Menu {
             Button { viewModel.mode = .worst } label: {
-                menuRow("Worst of models", selected: viewModel.mode == .worst)
+                MapChrome.menuRow("Worst of models", selected: viewModel.mode == .worst)
             }
             Button { viewModel.mode = .majority } label: {
-                menuRow("Majority of models", selected: viewModel.mode == .majority)
+                MapChrome.menuRow("Majority of models", selected: viewModel.mode == .majority)
             }
             Section("Individual model") {
                 ForEach(["gfs", "icon", "ecmwf"], id: \.self) { m in
@@ -248,13 +252,13 @@ struct ForecastMapView: View {
                             unavailableModel = m.uppercased()
                         }
                     } label: {
-                        menuRow(m.uppercased() + (available ? "" : " (no data this day)"),
-                                selected: viewModel.mode == .model(m))
+                        MapChrome.menuRow(m.uppercased() + (available ? "" : " (no data this day)"),
+                                          selected: viewModel.mode == .model(m))
                     }
                 }
             }
         } label: {
-            capsuleLabel(text: modeShortLabel, systemImage: "square.stack.3d.up")
+            MapChrome.capsuleLabel(text: modeShortLabel, systemImage: "square.stack.3d.up")
         }
     }
 
@@ -268,37 +272,6 @@ struct ForecastMapView: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .accessibilityLabel("Centre on my location")
-    }
-
-    private func legendCapsule(_ legend: ForecastMapCatalog.Legend) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(legend.title).font(.caption2.weight(.semibold)).foregroundStyle(Theme.textMuted)
-            // Wrap the swatches so a long ramp doesn't overflow narrow phones.
-            FlowLayout(spacing: 6) {
-                ForEach(legend.items) { item in
-                    HStack(spacing: 3) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.catalog(item.color))
-                            .frame(width: 12, height: 8)
-                        Text(item.label).font(.system(size: 10)).foregroundStyle(Theme.text)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .frame(maxWidth: 220, alignment: .leading)
-    }
-
-    private func capsuleLabel(text: String, systemImage: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: systemImage)
-            Text(text)
-            Image(systemName: "chevron.down").font(.caption2)
-        }
-        .font(.subheadline.weight(.medium))
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: Capsule())
     }
 
     private var loadingOverlay: some View {

@@ -73,7 +73,7 @@ One file per server response. Names below are the actual Swift type names.
   `PreferencesResponse`, `RefreshEvent` (SSE) + `ActiveRefreshResponse`, `SoundingProfileResponse`,
   `AdvisoryDetailResponse`, `AirportWeatherResponse`, `AlternatesResponse`, `AutorouterRoute`,
   `BulkDeleteResponse`, `DebriefResponse`, `DebriefTaxonomy`, `FeedbackRequest`,
-  `ForecastDaysResponse`, `ForecastMapResponse`, `FrequentAirportsResponse`, `HelpCatalogResponse`,
+  `ForecastDaysResponse`, `ForecastMapResponse`, `HistoricalMapResponse`, `HistoricalRangeResponse`, `FrequentAirportsResponse`, `HelpCatalogResponse`,
   `NotificationModels`, `ProfileResponse`, `RouteInterpretation`, `SystemMessageResponse`,
   `TimeOptionsResponse`, `UsageSummaryResponse`. (Full list = `ls Models/API/`.)
 

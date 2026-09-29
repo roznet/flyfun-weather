@@ -95,6 +95,12 @@ protocol BriefingRepository: Sendable {
     func forecastDays() async throws -> ForecastDaysResponse
     /// Top-5 departure/destination airports from history — cold-open map centring (#419).
     func frequentAirports() async throws -> FrequentAirportsResponse
+    // Historical map (#629) — online-only. Every selection rule is server-side.
+    /// METAR / TAF / model runs at a past instant. `at` is floored to the 30-min
+    /// grid server-side; `lead` 0 = latest runs before `at`, N = runs from N days before.
+    func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse
+    /// What the historical pickers can offer: date range, time step, leads.
+    func historicalRange() async throws -> HistoricalRangeResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
@@ -305,6 +311,31 @@ final class OnlineBriefingRepository: BriefingRepository {
     func forecastDays() async throws -> ForecastDaysResponse {
         try await client.request("/api/maps/forecast/days")
     }
+
+    func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse {
+        // Plain decoder, like `forecastMap`: the payload's dictionary keys must
+        // survive verbatim. See `HistoricalMapResponse.decode(from:)`.
+        let iso = Self.utcInstantFormatter.string(from: at)
+        let data = try await client.requestDataURL(
+            "/api/maps/historical?at=\(Self.queryValueEncoded(iso))&lead=\(lead)")
+        do {
+            return try HistoricalMapResponse.decode(from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func historicalRange() async throws -> HistoricalRangeResponse {
+        try await client.request("/api/maps/historical/range")
+    }
+
+    /// `2026-09-28T14:30:00Z` — explicit UTC so the server never reads a naive time.
+    private static let utcInstantFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
 
     func frequentAirports() async throws -> FrequentAirportsResponse {
         try await client.request("/api/flights/frequent-airports")
