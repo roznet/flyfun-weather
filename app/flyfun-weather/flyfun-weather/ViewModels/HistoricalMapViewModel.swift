@@ -100,8 +100,10 @@ final class HistoricalMapViewModel {
         }
         selectedInstant = clamp(requestedInstant ?? latest)
         await load()
-        // A failed first payload keeps the full-screen error (with Retry) up.
+        // A failed first payload keeps the full-screen error (with Retry) up,
+        // including a cancelled fetch, which would otherwise spin forever.
         didLoadOnce = payload != nil
+        if payload == nil, loadError == nil { loadError = "The historical map didn't load." }
         loadTask = nil
         if let apt = pendingOpenIcao, payload?.airports.contains(where: { $0.icao == apt }) == true {
             select(icao: apt, biasForSheet: false)
@@ -315,9 +317,15 @@ final class HistoricalMapViewModel {
     var statusLine: String? {
         if let loadError { return "Couldn't load this time: \(loadError)" }
         guard let payload else { return nil }
+        // The previous instant stays on screen while the next one loads (so an
+        // open airport sheet isn't dismissed); say so rather than let it pass
+        // for the new time in the title.
+        if isLoading, let at = selectedInstant, HistoricalTime.parse(payload.at) != at {
+            return "Loading \(HistoricalTime.timeLabel(at))… showing \(HistoricalTime.timeLabel(payload.at))"
+        }
         guard sourceAvailable(source) else { return unavailableText(source) }
         let shown = mapPayload?.airports.count ?? 0
-        return "\(shown) airports · " + provenance(source, in: payload)
+        return "\(shown) airport\(shown == 1 ? "" : "s") · " + provenance(source, in: payload)
     }
 
     private func provenance(_ s: HistoricalSource, in payload: HistoricalMapResponse) -> String {
