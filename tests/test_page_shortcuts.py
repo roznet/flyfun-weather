@@ -55,3 +55,23 @@ class TestPageShortcuts:
     def test_unknown_page_is_not_redirected(self):
         resp = _client().get("/definitely-not-a-page", follow_redirects=False)
         assert resp.status_code != 302
+
+
+class TestStaticRevalidation:
+    """Static files must revalidate, or a deploy's new JS isn't picked up."""
+
+    def test_html_and_bundle_are_no_cache(self):
+        client = _client()
+        for path in ("/maps.html", "/dist/maps.js"):
+            resp = client.get(path)
+            if resp.status_code == 404:  # dist/ is a build output, absent in CI
+                continue
+            assert resp.status_code == 200, path
+            assert resp.headers.get("cache-control") == "no-cache", path
+
+    def test_revalidation_returns_304_with_header(self):
+        client = _client()
+        first = client.get("/maps.html")
+        again = client.get("/maps.html", headers={"If-None-Match": first.headers["etag"]})
+        assert again.status_code == 304
+        assert again.headers.get("cache-control") == "no-cache"

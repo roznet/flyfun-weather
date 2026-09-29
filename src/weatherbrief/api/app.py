@@ -339,6 +339,23 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(lambda: shutdown_decode_pool(drain_dispatcher=True))
 
 
+class _RevalidatingStaticFiles(StaticFiles):
+    """Static mount that makes browsers revalidate every file on use.
+
+    Bundles are served at stable names (``/dist/maps.js``), so without a
+    ``Cache-Control`` header browsers fall back to heuristic freshness (a
+    fraction of the file's age) and keep running the previous deploy's JS for
+    hours — e.g. a ``?tab=historical`` link landing on the forecast tab because
+    the cached bundle predates that tab. ``no-cache`` still caches; it just
+    forces an ETag check, which Starlette answers with a cheap 304.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     load_dotenv()
@@ -806,7 +823,7 @@ def create_app() -> FastAPI:
                 include_in_schema=False,
             )
 
-        app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
+        app.mount("/", _RevalidatingStaticFiles(directory=str(web_dir), html=True), name="web")
 
     return app
 
