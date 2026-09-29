@@ -6,10 +6,8 @@
  */
 
 import * as L from 'leaflet';
+import { createBaseTileLayer, applyBaseTileTheme } from './map-tiles';
 
-const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
 
 function isDark(): boolean {
   return document.documentElement.dataset.theme === 'dark';
@@ -101,13 +99,11 @@ export class ClimatologyMap {
       zoom: 5,
       worldCopyJump: true,
     });
-    this.tileLayer = L.tileLayer(isDark() ? DARK_TILES : LIGHT_TILES, {
-      attribution: ATTR, maxZoom: 10,
-    }).addTo(this.map);
+    this.tileLayer = createBaseTileLayer(isDark(), 10).addTo(this.map);
     this.markersLayer = L.layerGroup().addTo(this.map);
 
     this.themeObserver = new MutationObserver(() => {
-      this.tileLayer.setUrl(isDark() ? DARK_TILES : LIGHT_TILES);
+      applyBaseTileTheme(this.map, this.tileLayer, isDark());
     });
     this.themeObserver.observe(document.documentElement, {
       attributes: true, attributeFilter: ['data-theme'],

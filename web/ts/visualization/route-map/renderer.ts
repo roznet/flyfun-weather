@@ -12,6 +12,7 @@ import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
 import { isDarkTheme } from '../interaction-utils';
+import { createBaseTileLayer, applyBaseTileTheme } from '../map-tiles';
 import { frontColor, frontKindLabel, frontTooltip, frontOfftrackTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
 import type { HewsonFront } from '../../adapters/hewson-map-adapter';
 import type { FrontKind } from '../../types/fronts';
@@ -41,10 +42,6 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): nu
   return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
-const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const LIGHT_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
-const DARK_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
 export class RouteMapRenderer {
   private container: HTMLElement;
@@ -284,10 +281,7 @@ export class RouteMapRenderer {
 
     const dark = isDarkTheme();
     this.currentTileTheme = dark ? 'dark' : 'light';
-    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
-      maxZoom: 18,
-    }).addTo(this.map);
+    this.tileLayer = createBaseTileLayer(dark).addTo(this.map);
 
     // Switch tiles when theme changes
     window.addEventListener('theme-changed', ((e: CustomEvent<string>) => {
@@ -324,10 +318,7 @@ export class RouteMapRenderer {
     const target = dark ? 'dark' : 'light';
     if (!this.map || !this.tileLayer || this.currentTileTheme === target) return;
     this.currentTileTheme = target;
-    this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
-    this.map.attributionControl.remove();
-    L.control.attribution().addTo(this.map);
-    this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
+    applyBaseTileTheme(this.map, this.tileLayer, dark);
     this.renderWaypoints();
   }
 

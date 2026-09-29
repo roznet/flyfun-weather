@@ -6,6 +6,7 @@ import type {
 } from '../adapters/maps-adapter';
 import { getUnitsRegion } from '../units';
 import { isConsensusMode, type ConsensusMode } from './weather-map-consensus';
+import { createBaseTileLayer, applyBaseTileTheme } from './map-tiles';
 import {
   getForecastColor, getConsensus, getAgreementForMetric, formatMetricValue,
   METRIC_LABEL, altLabel, aggAltRequired, AGREEMENT_COLORS,
@@ -17,9 +18,6 @@ import {
 export type { ForecastMetric };
 export { FORECAST_METRICS } from './weather-map-format';
 
-const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
 
 function isDark(): boolean {
   return document.documentElement.dataset.theme === 'dark';
@@ -173,18 +171,14 @@ export class WeatherMap {
       zoomControl: true,
     });
 
-    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: ATTR,
-      maxZoom: 18,
-    }).addTo(this.map);
+    this.tileLayer = createBaseTileLayer(dark).addTo(this.map);
 
     this.markersGroup = L.layerGroup().addTo(this.map);
 
     // Theme switching
     document.addEventListener('theme-changed', () => {
       if (!this.map || !this.tileLayer) return;
-      const url = isDark() ? DARK_TILES : LIGHT_TILES;
-      this.tileLayer.setUrl(url);
+      applyBaseTileTheme(this.map, this.tileLayer, isDark());
     });
   }
 

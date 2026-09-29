@@ -4,11 +4,8 @@
 import * as L from 'leaflet';
 import type { WaypointInfo } from '../adapters/api-adapter';
 import { isDarkTheme } from '../visualization/interaction-utils';
+import { createBaseTileLayer, applyBaseTileTheme } from '../visualization/map-tiles';
 
-const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const LIGHT_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
-const DARK_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
 export class RouteMapInset {
   private container: HTMLElement;
@@ -97,10 +94,7 @@ export class RouteMapInset {
     });
 
     const dark = isDarkTheme();
-    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
-      maxZoom: 18,
-    }).addTo(this.map);
+    this.tileLayer = createBaseTileLayer(dark).addTo(this.map);
 
     // Listen for theme changes
     this.themeListener = ((e: CustomEvent<string>) => {
@@ -111,7 +105,6 @@ export class RouteMapInset {
 
   private updateTiles(dark: boolean): void {
     if (!this.map || !this.tileLayer) return;
-    this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
-    this.tileLayer.options.attribution = dark ? DARK_ATTR : LIGHT_ATTR;
+    applyBaseTileTheme(this.map, this.tileLayer, dark);
   }
 }

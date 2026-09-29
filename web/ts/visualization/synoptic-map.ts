@@ -5,7 +5,7 @@
  * Lives in the "Synoptic Forecast" tab on the forecast page.
  *
  * Two basemap modes:
- *   - 'osm'   — OSM/CARTO tiles (default), Web Mercator.
+ *   - 'osm'   — OSM / Esri base tiles (default), Web Mercator.
  *   - 'chart' — a DWD / Met Office surface chart as the basemap, via
  *               `L.CRS.Simple` + an image overlay, with the Hewson grid and
  *               front polylines re-projected into the chart's polar-stereo
@@ -18,6 +18,7 @@
  */
 
 import * as L from 'leaflet';
+import { createBaseTileLayer, applyBaseTileTheme } from './map-tiles';
 import type { HewsonAllMetricsSlice, HewsonFront, HewsonSlice } from '../adapters/hewson-map-adapter';
 import { COLORMAPS, gradientCss, type HewsonMetric } from './hewson-colormaps';
 import { HewsonGridLayer } from './hewson-grid-layer';
@@ -35,13 +36,6 @@ const HEWSON_METRIC_ORDER: HewsonMetric[] = [
   'theta_e', 'gradient', 'neg_laplacian', 'tfp', 'advection', 'tendency',
 ];
 
-const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-// CARTO's terms require their attribution alongside OSM when serving from
-// basemaps.cartocdn.com. Mirror the per-theme split used in
-// route-map-inset.ts / route-map/renderer.ts.
-const LIGHT_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
-const DARK_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
 function isDark(): boolean {
   return document.documentElement.dataset.theme === 'dark';
@@ -186,11 +180,7 @@ export class SynopticMap {
 
   private buildOsmMap(geo: GeoBounds | null): void {
     this.map = L.map(this.container, { center: [48, 10], zoom: 5, zoomControl: true });
-    const dark = isDark();
-    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
-      maxZoom: 18,
-    }).addTo(this.map);
+    this.tileLayer = createBaseTileLayer(isDark()).addTo(this.map);
     if (geo) this.fitGeoBounds(geo);
   }
 
@@ -523,12 +513,7 @@ export class SynopticMap {
     document.addEventListener('theme-changed', () => {
       // Charts have no dark variant — only OSM tiles swap on theme change.
       if (this.mode !== 'osm' || !this.tileLayer || !this.map) return;
-      const dark = isDark();
-      this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
-      this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
-      this.map.attributionControl.removeAttribution(LIGHT_ATTR);
-      this.map.attributionControl.removeAttribution(DARK_ATTR);
-      this.map.attributionControl.addAttribution(dark ? DARK_ATTR : LIGHT_ATTR);
+      applyBaseTileTheme(this.map, this.tileLayer, isDark());
     });
   }
 }

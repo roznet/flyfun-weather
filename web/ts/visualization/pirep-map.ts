@@ -6,13 +6,11 @@
  */
 
 import * as L from 'leaflet';
+import { createBaseTileLayer } from './map-tiles';
 import type { PirepResponse } from '../adapters/pirep-adapter';
 import { SEVERITY_COLORS, maxSeverity, hazardIconsRaw as hazardIcon } from '../utils/pirep-helpers';
 import { renderPirepDetailCard } from '../managers/pirep-ui';
 
-const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
 
 /** Fog-of-war radius around each PIREP in metres (~20 nm). */
 const FOG_HOLE_RADIUS_M = 37040;
@@ -152,10 +150,7 @@ export class PirepMap {
       zoomControl: true,
     });
 
-    L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: ATTR,
-      maxZoom: 18,
-    }).addTo(this.map);
+    createBaseTileLayer(dark).addTo(this.map);
 
     this.fogLayer = new FogOfWarLayer();
     this.fogLayer.addTo(this.map);
