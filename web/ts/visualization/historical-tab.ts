@@ -351,7 +351,7 @@ export class HistoricalTab {
       if (OBSERVED.includes(source)) {
         const obs = apt.observed[source as 'metar' | 'taf'];
         if (!obs) continue;
-        airports.push({ ...apt, models: { [source]: obs }, consensus: apt.consensus! } as unknown as ForecastAirport);
+        airports.push({ ...apt, models: { [source]: obs } } as unknown as ForecastAirport);
       } else if (isConsensusMode(source)) {
         if (!apt.consensus) continue;
         airports.push(apt as unknown as ForecastAirport);
