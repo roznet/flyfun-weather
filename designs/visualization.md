@@ -439,7 +439,10 @@ Three-way page theme support via `web/ts/theme.ts` (separate from cross-section 
 - **FOUC prevention**: inline `<script>` in every HTML `<head>` (before stylesheets) reads localStorage and sets `data-theme` before first paint
 - **Toggle UI**: 3-segment button injected into `.header-right` by `initTheme()`
 - **Canvas re-rendering**: `CrossSectionRenderer` and `RouteGraphRenderer` listen for `theme-changed` custom event to re-render with updated colors
-- **Map tiles**: `RouteMapRenderer` switches between OSM (light) and CartoDB Dark Matter (dark) tiles on theme change
+- **Map tiles**: every Leaflet map (route map, route inset, forecast/historical, synoptic, PIREP, climatology) takes its base layer from `visualization/map-tiles.ts` (`createBaseTileLayer` / `applyBaseTileTheme`) and swaps it on theme change. Light = OSM standard (`tile.openstreetmap.org`); dark = **Stadia Maps Alidade Smooth Dark** (`tiles.stadiamaps.com`).
+  - **Stadia auth is by domain, not a key**: registered origins are managed in the Stadia client dashboard (https://client.stadiamaps.com/) — `flyfun.aero` and `localhost.ro-z.me`; plain `localhost` is always allowed. A new serving origin must be added there first.
+  - **Symptom → cause**: dark maps showing a "401 Invalid Authentication" tile = origin not registered in Stadia (or the free tier's limits hit; check the dashboard). Tiles missing with CSP errors in the console = the `img-src` list in the Caddy config (see multi-user-deployment.md) doesn't include the tile host.
+  - **History**: dark was CARTO `dark_all` until 2026-09, when CARTO began serving an "API KEY REQUIRED" placeholder for every tile. Esri's keyless dark canvas works but has no roads, so it was rejected.
 - **Server-generated images**: Skew-T and hodograph PNGs get CSS `filter: invert(0.88) hue-rotate(180deg)` in dark mode; GRAMET images are left unchanged
 
 ## Convective Tower Rendering
@@ -697,7 +700,7 @@ Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `clou
 
 - **Segments**: One `L.polyline` per adjacent point pair, colored/sized by metric via `computeSegmentStyles()`. Midpoint averaging of endpoint values for stable visuals.
 - **Waypoints**: Circle markers (theme-aware colors) with ICAO tooltip on hover.
-- **Tiles**: OSM standard (light) or CartoDB Dark Matter (dark), switched via `theme-changed` event.
+- **Tiles**: OSM standard (light) or Stadia Alidade Smooth Dark (dark) from `map-tiles.ts`, switched via `theme-changed` event (see "Dark / Light / System Theme" → Map tiles).
 - **Highlight**: Temporary weight increase (+3px) on hovered segment.
 - **Auto-fit**: Bounds fit route with 30px padding on data load.
 

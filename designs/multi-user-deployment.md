@@ -38,7 +38,7 @@ Caddy injects CSP headers via `deploy/weather.flyfun.aero.caddy`. Key directives
 |-----------|-------|-----|
 | `script-src` | `'self' 'unsafe-inline'` | Bundled JS + inline theme/login scripts |
 | `style-src` | `'self' 'unsafe-inline'` | Local CSS + inline styles in admin/costs pages |
-| `img-src` | `'self' data: blob: *.tile.openstreetmap.org *.basemaps.cartocdn.com` | Leaflet map tiles (light/dark themes) |
+| `img-src` | `'self' data: blob: *.tile.openstreetmap.org tiles.stadiamaps.com` | Leaflet map tiles (light/dark themes) |
 | `connect-src` | `'self' *.flyfun.aero` | API calls + cross-subdomain (forms.flyfun.aero) |
 | `form-action` | `'self' accounts.google.com` | Google OAuth redirect |
 | `frame-ancestors` | `'self'` | No cross-origin embedding (also sets `font-src 'self'`, `base-uri 'self'`) |

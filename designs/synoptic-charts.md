@@ -15,7 +15,7 @@ the deltas and the implementation of the **two-source** version.
 In the maps page's **Synoptic Forecast** tab, add a basemap picker so the
 Hewson gridded overlay (θe / |∇θe| / -∇²θe / TFP / advection / tendency) **and
 the gate-detected front polylines** render on top of a surface-analysis / front
-chart instead of OSM/CARTO tiles. The chart can come from **DWD** or **Met
+chart instead of OSM/Stadia tiles. The chart can come from **DWD** or **Met
 Office**, picked whose valid time is closest to the user-selected Hewson valid
 time. Grid cells and front lines are re-projected into the chart's
 polar-stereographic pixel space so they align with the chart's isobars/fronts.
