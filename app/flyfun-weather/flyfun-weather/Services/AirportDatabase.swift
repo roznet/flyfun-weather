@@ -31,8 +31,8 @@ final class AirportDatabase {
     private var db: FMDatabase?
     private var loadTask: Task<Void, Never>?
 
-    private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AirportDatabase")
-    private static let etagKey = "airportsDB.etag"
+    private nonisolated static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AirportDatabase")
+    private nonisolated static let etagKey = "airportsDB.etag"
 
     private init() {}
 

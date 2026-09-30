@@ -5,7 +5,7 @@ import Foundation
 /// consumes only the consensus category + wind and the latest METAR, so this DTO
 /// decodes just those fields (unknown keys, including the full per-model `models`
 /// block, are ignored). Mirrors the MCP `get_airport_weather` tool.
-struct AirportWeatherResponse: Decodable, Sendable {
+nonisolated struct AirportWeatherResponse: Decodable, Sendable {
     let day: Int?
     let hourUtc: Int?
     let airports: [AirportWeatherEntry]
@@ -13,7 +13,7 @@ struct AirportWeatherResponse: Decodable, Sendable {
 }
 
 /// One airport's forecast consensus + optional observation.
-struct AirportWeatherEntry: Decodable, Sendable {
+nonisolated struct AirportWeatherEntry: Decodable, Sendable {
     let icao: String
     let consensus: AirportWeatherConsensus?
     /// Present for D-0 only (latest cached METAR/TAF, up to ~3h old).
@@ -25,7 +25,7 @@ struct AirportWeatherEntry: Decodable, Sendable {
 }
 
 /// Cross-model consensus (worst/majority computed server-side).
-struct AirportWeatherConsensus: Decodable, Sendable {
+nonisolated struct AirportWeatherConsensus: Decodable, Sendable {
     let flightCategory: String?
     let windSpeedKt: Double?
     let windDirDeg: Double?
@@ -34,7 +34,7 @@ struct AirportWeatherConsensus: Decodable, Sendable {
 }
 
 /// Latest METAR-derived observation (D-0).
-struct AirportWeatherObservation: Decodable, Sendable {
+nonisolated struct AirportWeatherObservation: Decodable, Sendable {
     let metarRaw: String?
     let flightCategory: String?
     let windSpeedKt: Double?

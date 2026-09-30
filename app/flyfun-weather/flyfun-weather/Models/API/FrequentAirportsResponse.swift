@@ -6,13 +6,13 @@ import Foundation
 /// cold open on the pilot's usual departure area. Either array may be empty.
 ///
 /// Decoded with `JSONDecoder.weatherBrief` (snake→camel); no dynamic-key dicts.
-struct FrequentAirportsResponse: Decodable, Sendable {
+nonisolated struct FrequentAirportsResponse: Decodable, Sendable {
     let departures: [FrequentAirport]
     let destinations: [FrequentAirport]
 }
 
 /// One ranked airport: ICAO plus how many of the user's flights used it.
-struct FrequentAirport: Decodable, Sendable, Identifiable {
+nonisolated struct FrequentAirport: Decodable, Sendable, Identifiable {
     let icao: String
     let count: Int
 

@@ -31,7 +31,7 @@ final class NetworkMonitor {
             let connected = path.status == .satisfied
             let expensive = path.isExpensive
             let constrained = path.isConstrained
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.apply(connected: connected, expensive: expensive, constrained: constrained)
             }
         }

@@ -236,7 +236,7 @@ struct UpcomingFilterTests {
 
 /// Records the candidates it was offered and returns a canned id — stands in for
 /// the on-device model so the grounded-selection tier is testable without a device.
-private final class FakePhraseResolver: FlightPhraseResolving, @unchecked Sendable {
+nonisolated private final class FakePhraseResolver: FlightPhraseResolving, @unchecked Sendable {
     let idToReturn: String?
     private(set) var receivedCandidates: [FlightCandidate] = []
     init(idToReturn: String?) { self.idToReturn = idToReturn }

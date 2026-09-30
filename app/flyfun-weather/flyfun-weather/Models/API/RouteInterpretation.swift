@@ -1,7 +1,7 @@
 import Foundation
 
 /// A resolved waypoint with coordinates and timezone (server `WaypointInfo`).
-struct RouteWaypointInfo: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct RouteWaypointInfo: Codable, Hashable, Sendable, Identifiable {
     let icao: String
     let name: String
     let lat: Double
@@ -13,7 +13,7 @@ struct RouteWaypointInfo: Codable, Hashable, Sendable, Identifiable {
 
 /// Result of `POST /api/flights/interpret-route` — what the server understood
 /// from a free-typed route, what it skipped, and what it dropped as off-route.
-struct InterpretRouteResponse: Codable, Sendable {
+nonisolated struct InterpretRouteResponse: Codable, Sendable {
     let originalTokens: [String]
     let interpreted: [String]
     /// Tokens the server couldn't place at all (typos / unsupported formats).
@@ -28,17 +28,17 @@ struct InterpretRouteResponse: Codable, Sendable {
 }
 
 /// Request body for `interpret-route`.
-struct InterpretRouteRequest: Encodable {
+nonisolated struct InterpretRouteRequest: Encodable {
     let rawRoute: String
 }
 
 /// Result of `POST /api/flights/route-distance`.
-struct RouteDistanceResponse: Codable, Sendable {
+nonisolated struct RouteDistanceResponse: Codable, Sendable {
     let totalDistanceNm: Double
     let waypoints: [RouteWaypointInfo]
 }
 
 /// Request body for `route-distance`.
-struct RouteDistanceRequest: Encodable {
+nonisolated struct RouteDistanceRequest: Encodable {
     let waypoints: [String]
 }

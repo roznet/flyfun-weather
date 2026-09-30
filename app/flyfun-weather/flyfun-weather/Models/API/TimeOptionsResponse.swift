@@ -9,21 +9,21 @@ import Foundation
 /// `ecmwf_run_ts`, `valid_times` on the scan window, …).
 ///
 /// Poll shape: `{ "status": <TimeScanStatus>|null, "scan": <TimeWindowScan>|null }`.
-struct TimeOptionsResponse: Codable, Sendable {
+nonisolated struct TimeOptionsResponse: Codable, Sendable {
     let status: TimeScanStatusDTO?
     let scan: TimeWindowScanDTO?
 }
 
 /// Body for the on-tap multi-model confirm — identifies the candidate by its
 /// departure time (`departure_time` on the wire).
-struct ConfirmTimeOptionRequest: Encodable, Sendable {
+nonisolated struct ConfirmTimeOptionRequest: Encodable, Sendable {
     let departureTime: String
 }
 
 /// Small polling-status sidecar. `.skipped` carries a machine `reason`
 /// (`"no_alternate_time"`, `"flexibility_none"`, …) so the panel can tell
 /// "nothing to show" from "still looking".
-struct TimeScanStatusDTO: Codable, Sendable {
+nonisolated struct TimeScanStatusDTO: Codable, Sendable {
     let status: TimeScanJobStatus
     let flexibility: FlexibilityMode
     let reason: String
@@ -49,7 +49,7 @@ struct TimeScanStatusDTO: Codable, Sendable {
 
 /// Job lifecycle. `.pending`/`.running` are non-terminal (keep polling);
 /// `.done`/`.failed`/`.skipped` are terminal.
-enum TimeScanJobStatus: String, Codable, Sendable {
+nonisolated enum TimeScanJobStatus: String, Codable, Sendable {
     case pending
     case running
     case done
@@ -59,7 +59,7 @@ enum TimeScanJobStatus: String, Codable, Sendable {
 
 /// Result of a multi-model check of one candidate (slice-4 on-tap confirm, or
 /// filled at scan time when the candidate is in-window).
-struct TimeConfirmationDTO: Codable, Sendable {
+nonisolated struct TimeConfirmationDTO: Codable, Sendable {
     let modelsChecked: [String]
     let assessment: String            // GREEN / AMBER / RED
     let assessmentReason: String
@@ -94,14 +94,14 @@ struct TimeConfirmationDTO: Codable, Sendable {
 /// `.confirmedInWindow` (free, in every model's window), `.ecmwfOnly`
 /// (provisional, shows the "Check all models" affordance), `.confirmed`
 /// (user-tapped multi-model check, may be a designed downgrade).
-enum TimeConfidence: String, Codable, Sendable {
+nonisolated enum TimeConfidence: String, Codable, Sendable {
     case confirmedInWindow = "confirmed_in_window"
     case ecmwfOnly = "ecmwf_only"
     case confirmed
 }
 
 /// One graded departure time.
-struct TimeCandidateDTO: Codable, Identifiable, Sendable {
+nonisolated struct TimeCandidateDTO: Codable, Identifiable, Sendable {
     let departureTime: String
     let departureShiftHours: Double
     /// Per-route-point ETAs the grade actually read (audit trail).
@@ -149,7 +149,7 @@ struct TimeCandidateDTO: Codable, Identifiable, Sendable {
 }
 
 /// The searched departure window and what clipped it.
-struct TimeWindowDTO: Codable, Sendable {
+nonisolated struct TimeWindowDTO: Codable, Sendable {
     let start: String
     let end: String
     let daylightClipped: Bool
@@ -173,7 +173,7 @@ struct TimeWindowDTO: Codable, Sendable {
 
 /// The planned departure graded through the same path as the candidates — the
 /// diff denominator.
-struct TimeBaselineDTO: Codable, Sendable {
+nonisolated struct TimeBaselineDTO: Codable, Sendable {
     let departureTime: String
     let assessment: String
     let assessmentReason: String
@@ -202,7 +202,7 @@ struct TimeBaselineDTO: Codable, Sendable {
 }
 
 /// The `time_options.json` artifact — everything the scenario panel renders.
-struct TimeWindowScanDTO: Codable, Sendable {
+nonisolated struct TimeWindowScanDTO: Codable, Sendable {
     let flexibility: FlexibilityMode
     let baseline: TimeBaselineDTO
     let window: TimeWindowDTO?      // null for pure "alternate" mode
@@ -234,7 +234,7 @@ struct TimeWindowScanDTO: Codable, Sendable {
 
 /// Wrapper whose decode never throws, so decoding `[LenientCandidate]` survives a
 /// malformed element (it becomes `nil`) instead of aborting the whole array.
-private struct LenientCandidate: Decodable {
+nonisolated private struct LenientCandidate: Decodable {
     let value: TimeCandidateDTO?
     init(from decoder: Decoder) throws {
         value = try? TimeCandidateDTO(from: decoder)

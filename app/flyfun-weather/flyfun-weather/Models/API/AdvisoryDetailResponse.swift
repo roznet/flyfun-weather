@@ -4,7 +4,7 @@ import Foundation
 /// shaping in `connectors/views.py` exposed over REST in Phase 5 — the same
 /// data the MCP/ChatGPT connectors consume. The convective advisory carries
 /// the richest fill (CAPE-vs-cover reconciliation).
-struct AdvisoryDetailResponse: Codable, Sendable {
+nonisolated struct AdvisoryDetailResponse: Codable, Sendable {
     let advisoryId: String
     let aggregateStatus: String
     let aggregateDetail: String
@@ -23,7 +23,7 @@ struct AdvisoryDetailResponse: Codable, Sendable {
     let convectiveNote: String?
 }
 
-struct ModelAdvisoryDetail: Codable, Identifiable, Sendable {
+nonisolated struct ModelAdvisoryDetail: Codable, Identifiable, Sendable {
     let model: String
     let status: String
     let detail: String
@@ -41,7 +41,7 @@ struct ModelAdvisoryDetail: Codable, Identifiable, Sendable {
     var id: String { model }
 }
 
-struct ConvectiveModelDetail: Codable, Sendable {
+nonisolated struct ConvectiveModelDetail: Codable, Sendable {
     /// "thermo" or "nwp" — which derivation graded the route, or nil.
     let assessmentMethod: String?
     let methodCounts: [String: Int]?
@@ -49,13 +49,13 @@ struct ConvectiveModelDetail: Codable, Sendable {
     let nwp: ConvectiveNwp?
 }
 
-struct ConvectiveThermo: Codable, Sendable {
+nonisolated struct ConvectiveThermo: Codable, Sendable {
     /// [min, max] CAPE across the route.
     let capeRangeJkg: [Double]?
     let peak: ConvectivePeak?
 }
 
-struct ConvectivePeak: Codable, Sendable {
+nonisolated struct ConvectivePeak: Codable, Sendable {
     let capeJkg: Double?
     /// Parcel equilibrium level — the "convective tops" the digest narrates
     /// (NOT the model's convective cloud field).
@@ -67,7 +67,7 @@ struct ConvectivePeak: Codable, Sendable {
     let eta: String?
 }
 
-struct ConvectiveNwp: Codable, Sendable {
+nonisolated struct ConvectiveNwp: Codable, Sendable {
     /// The model's own convective cover — ~0 means "blue sky".
     let maxCoverPct: Double?
     let peakTopFt: Double?

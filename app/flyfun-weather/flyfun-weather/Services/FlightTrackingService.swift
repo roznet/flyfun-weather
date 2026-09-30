@@ -2,7 +2,7 @@ import CoreLocation
 import OSLog
 import RZFlight
 
-private let logger = Logger(subsystem: "aero.flyfun.weather", category: "FlightTracking")
+nonisolated private let logger = Logger(subsystem: "aero.flyfun.weather", category: "FlightTracking")
 
 /// Projected aircraft position onto the flight route.
 struct ProjectedPosition {
@@ -229,7 +229,7 @@ final class FlightTrackingService: NSObject {
 
 // MARK: - CLLocationManagerDelegate
 
-extension FlightTrackingService: @preconcurrency CLLocationManagerDelegate {
+extension FlightTrackingService: CLLocationManagerDelegate {
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in

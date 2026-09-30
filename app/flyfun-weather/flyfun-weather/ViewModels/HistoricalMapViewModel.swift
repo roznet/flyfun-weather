@@ -396,7 +396,7 @@ final class HistoricalMapViewModel {
 
 /// Parsing and labels for the historical map's UTC instants, shared by the VM,
 /// the map screen and the airport card.
-enum HistoricalTime {
+nonisolated enum HistoricalTime {
     static let utcCalendar: Calendar = {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = TimeZone(identifier: "UTC")!

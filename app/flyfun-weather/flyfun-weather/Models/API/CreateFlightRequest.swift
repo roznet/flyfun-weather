@@ -1,7 +1,7 @@
 import Foundation
 
 /// Request body for creating a new flight via POST /api/flights.
-struct CreateFlightRequest: Encodable {
+nonisolated struct CreateFlightRequest: Encodable {
     let waypoints: [String]
     let departureTime: String
     var routeName: String = ""
@@ -27,7 +27,7 @@ struct CreateFlightRequest: Encodable {
 /// Only the keys we set are sent; the server diffs them and returns a
 /// `FlightInvalidation` hint describing how much of the briefing is now stale.
 /// `aircraftId == 0` is the server's "detach aircraft" sentinel.
-struct UpdateFlightRequest: Encodable {
+nonisolated struct UpdateFlightRequest: Encodable {
     var aircraftId: Int? = nil
     var waypoints: [String]? = nil
     /// Field-15 text, sent ONLY when the pilot actually edited the route input.
@@ -62,7 +62,7 @@ struct UpdateFlightRequest: Encodable {
 /// Every field is optional and inherits from the source flight when omitted.
 /// `departureTime` **must** carry a timezone offset — the server rejects a naive
 /// datetime — so always build it with `AddFlightViewModel.iso8601(_:)`.
-struct MoveFlightRequest: Encodable {
+nonisolated struct MoveFlightRequest: Encodable {
     var departureTime: String? = nil
     var waypoints: [String]? = nil
     var cruiseAltitudeFt: Int? = nil
@@ -77,7 +77,7 @@ struct MoveFlightRequest: Encodable {
 
 /// How much of the briefing an edit invalidated, returned alongside the updated
 /// flight from PATCH /api/flights/{id}.
-enum FlightInvalidation: String, Codable, Sendable {
+nonisolated enum FlightInvalidation: String, Codable, Sendable {
     case none
     case advisoriesOnly = "advisories_only"
     case refetchNeeded = "refetch_needed"
@@ -91,7 +91,7 @@ enum FlightInvalidation: String, Codable, Sendable {
 /// The flight fields decode at the top level (same shape as `FlightResponse`); the
 /// extra `invalidation` key is decoded separately so we keep a single source of
 /// truth for the flight model.
-struct UpdateFlightResponse: Decodable, Sendable {
+nonisolated struct UpdateFlightResponse: Decodable, Sendable {
     let flight: FlightResponse
     let invalidation: FlightInvalidation
 
@@ -107,7 +107,7 @@ struct UpdateFlightResponse: Decodable, Sendable {
 }
 
 /// Aircraft type suggestion from GET /api/aircraft/types?q=…
-struct AircraftTypeResponse: Codable, Identifiable, Hashable, Sendable {
+nonisolated struct AircraftTypeResponse: Codable, Identifiable, Hashable, Sendable {
     var id: String { icao }
 
     let icao: String
@@ -125,7 +125,7 @@ struct AircraftTypeResponse: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// Saved aircraft from GET /api/aircraft, used to populate the create/edit picker.
-struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
+nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
     let id: Int
     let icaoType: String
     let typeName: String
@@ -157,7 +157,7 @@ struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// Request body for POST /api/aircraft.
-struct CreateAircraftRequest: Encodable {
+nonisolated struct CreateAircraftRequest: Encodable {
     let icaoType: String
     var tailNumber: String? = nil
     var nickname: String? = nil
@@ -169,12 +169,12 @@ struct CreateAircraftRequest: Encodable {
 }
 
 /// Request body for parsing an ICAO flight plan string.
-struct ParseFplRequest: Encodable {
+nonisolated struct ParseFplRequest: Encodable {
     let fplText: String
 }
 
 /// Parsed ICAO flight plan fields returned by the server.
-struct ParseFplResponse: Decodable {
+nonisolated struct ParseFplResponse: Decodable {
     let waypoints: [String]
     let date: String?       // YYYY-MM-DD
     let timeUtc: String?    // HH:MM

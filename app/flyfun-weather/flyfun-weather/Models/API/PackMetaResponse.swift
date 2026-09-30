@@ -1,6 +1,6 @@
 import Foundation
 
-struct PackMetaResponse: Codable, Sendable {
+nonisolated struct PackMetaResponse: Codable, Sendable {
     let flightId: String
     let fetchTimestamp: String
     let daysOut: Int
@@ -30,7 +30,7 @@ struct PackMetaResponse: Codable, Sendable {
     let flexibility: FlexibilityMode?
 }
 
-struct DataStatus: Codable, Sendable {
+nonisolated struct DataStatus: Codable, Sendable {
     let fresh: Bool
     let staleModels: [String]
     let modelInitTimes: [String: Int]

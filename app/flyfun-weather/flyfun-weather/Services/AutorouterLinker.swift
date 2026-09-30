@@ -3,7 +3,7 @@ import Foundation
 import OSLog
 import UIKit
 
-private let logger = Logger(subsystem: "aero.flyfun.weather", category: "AutorouterLinker")
+nonisolated private let logger = Logger(subsystem: "aero.flyfun.weather", category: "AutorouterLinker")
 
 /// Links the pilot's autorouter.aero account from inside the app (#625).
 ///
@@ -128,8 +128,9 @@ final class AutorouterLinker: NSObject, AutorouterLinking, ASWebAuthenticationPr
                 .compactMap { $0 as? UIWindowScene }
                 .first
             if let key = scene?.keyWindow { return key }
-            if let scene { return ASPresentationAnchor(windowScene: scene) }
-            return ASPresentationAnchor()
+            // Linking starts from a button on screen, so a window scene exists.
+            guard let scene else { preconditionFailure("Autorouter link with no window scene") }
+            return ASPresentationAnchor(windowScene: scene)
         }
     }
 }

@@ -16,7 +16,7 @@ import Foundation
 /// Decode with a **plain** `JSONDecoder` (`HistoricalMapResponse.decode(from:)`)
 /// for the same reason as `ForecastMapResponse`: `.convertFromSnakeCase` would
 /// rewrite the `models`/`sources`/`agreement` dictionary keys.
-struct HistoricalMapResponse: Decodable, Sendable {
+nonisolated struct HistoricalMapResponse: Decodable, Sendable {
     /// The snapped instant (ISO8601 UTC).
     let at: String
     let leadDays: Int
@@ -48,7 +48,7 @@ struct HistoricalMapResponse: Decodable, Sendable {
 }
 
 /// What one source is based on, or why it has nothing.
-struct HistoricalSourceInfo: Decodable, Sendable, Equatable {
+nonisolated struct HistoricalSourceInfo: Decodable, Sendable, Equatable {
     let available: Bool
     /// Models only: `beyond_horizon` | `no_valid_time` | `no_run`.
     let reason: String?
@@ -97,7 +97,7 @@ struct HistoricalSourceInfo: Decodable, Sendable, Equatable {
 }
 
 /// One airport at the historical instant.
-struct HistoricalAirport: Decodable, Sendable, Identifiable {
+nonisolated struct HistoricalAirport: Decodable, Sendable, Identifiable {
     let icao: String
     let lat: Double
     let lon: Double
@@ -195,7 +195,7 @@ struct HistoricalAirport: Decodable, Sendable, Identifiable {
 }
 
 /// Provenance of one model entry.
-struct HistoricalModelRun: Decodable, Sendable {
+nonisolated struct HistoricalModelRun: Decodable, Sendable {
     let validTime: String?
     let modelInitTime: String?
 
@@ -208,7 +208,7 @@ struct HistoricalModelRun: Decodable, Sendable {
 /// The METAR shown for the instant: the latest report no older than the
 /// server's max age. `values` carries the model-shaped keys (category, ceiling,
 /// visibility, wind, runway components, alternate-required).
-struct HistoricalMetar: Decodable, Sendable {
+nonisolated struct HistoricalMetar: Decodable, Sendable {
     let values: ForecastModelEntry
     let observationTime: String?
     let ageMin: Int?
@@ -243,7 +243,7 @@ struct HistoricalMetar: Decodable, Sendable {
 /// The TAF read at the instant (`analysis/taf_reading.read_taf_at`): prevailing
 /// conditions with the worst TEMPO/PROB group, the governing ceiling/visibility
 /// and the strongest wind. `values.flightCategory` is the governing category.
-struct HistoricalTaf: Decodable, Sendable {
+nonisolated struct HistoricalTaf: Decodable, Sendable {
     let values: ForecastModelEntry
     let prevailingCategory: String?
     let temporaryCategory: String?
@@ -279,7 +279,7 @@ struct HistoricalTaf: Decodable, Sendable {
 
 /// Response of `GET /api/maps/historical/range`: what the pickers can offer.
 /// Decoded with `JSONDecoder.weatherBrief` (snake→camel); no dynamic-key dicts.
-struct HistoricalRangeResponse: Decodable, Sendable {
+nonisolated struct HistoricalRangeResponse: Decodable, Sendable {
     /// Latest selectable instant (the server's 30-min floor of "now").
     let latest: String
     /// Oldest METAR/TAF; nil when there are none.
@@ -296,7 +296,7 @@ struct HistoricalRangeResponse: Decodable, Sendable {
     let leads: [HistoricalLead]
 }
 
-struct HistoricalLead: Decodable, Sendable {
+nonisolated struct HistoricalLead: Decodable, Sendable {
     let leadDays: Int
     let models: [String]
 }
@@ -305,7 +305,7 @@ struct HistoricalLead: Decodable, Sendable {
 
 /// What the historical map colours from. Raw values are the web's
 /// `hist.source` tokens (and the payload's source keys).
-enum HistoricalSource: String, CaseIterable, Sendable {
+nonisolated enum HistoricalSource: String, CaseIterable, Sendable {
     case metar, taf, worst, majority, gfs, icon, ecmwf
 
     static let observed: [HistoricalSource] = [.metar, .taf]

@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Route-level visualization data
 
-struct VizRouteData {
+nonisolated struct VizRouteData {
     /// `var` because changing the observed corridor width re-resolves the discs
     /// and re-folds them onto these points in place — every sampled radius already
     /// shipped with the pack, so it must not cost a rebuild from the API response.
@@ -32,7 +32,7 @@ struct VizRouteData {
 /// Domain mirror of the API `AdvisoryHighlights` (#374). `Equatable` because the
 /// static cross-section scene's redraw gate compares it by value — the geometry
 /// is re-derived on every body evaluation, so identity can't be used.
-struct VizAdvisoryHighlights: Equatable {
+nonisolated struct VizAdvisoryHighlights: Equatable {
     struct Segment: Equatable {
         let distFromNm: Double
         let distToNm: Double
@@ -71,19 +71,19 @@ struct VizAdvisoryHighlights: Equatable {
     }
 }
 
-struct WaypointMarker {
+nonisolated struct WaypointMarker {
     let distanceNm: Double
     let icao: String
     let lat: Double
     let lon: Double
 }
 
-struct TerrainPoint {
+nonisolated struct TerrainPoint {
     let distanceNm: Double
     let elevationFt: Double
 }
 
-extension Array where Element == TerrainPoint {
+nonisolated extension Array where Element == TerrainPoint {
     /// Terrain elevation (ft MSL) at an along-route distance, linearly
     /// interpolated between the two bracketing samples and clamped to the
     /// profile's ends. Port of web `interpolateTerrainElevation`
@@ -110,7 +110,7 @@ extension Array where Element == TerrainPoint {
 
 // MARK: - Per-point data
 
-struct VizPoint {
+nonisolated struct VizPoint {
     let distanceNm: Double
     let lat: Double
     let lon: Double
@@ -196,7 +196,7 @@ struct VizPoint {
     var observedFlashRate: Double? { observed?.flashRate }
 }
 
-struct AltitudeLines {
+nonisolated struct AltitudeLines {
     let freezingLevelFt: Double?
     let minus10cLevelFt: Double?
     let minus20cLevelFt: Double?
@@ -207,7 +207,7 @@ struct AltitudeLines {
 
 // MARK: - Layer data
 
-struct VizCloudLayer {
+nonisolated struct VizCloudLayer {
     let baseFt: Double
     let topFt: Double
     let coverage: String
@@ -218,14 +218,14 @@ struct VizCloudLayer {
     let meanCloudCoverPct: Double?
 }
 
-struct VizIcingZone {
+nonisolated struct VizIcingZone {
     let baseFt: Double
     let topFt: Double
     let risk: String
     let type: String
 }
 
-struct VizSfipZone {
+nonisolated struct VizSfipZone {
     let baseFt: Double
     let topFt: Double
     let risk: String
@@ -234,26 +234,26 @@ struct VizSfipZone {
     let variant: String
 }
 
-struct VizCATLayer {
+nonisolated struct VizCATLayer {
     let baseFt: Double
     let topFt: Double
     let risk: String
 }
 
-struct VizInversionLayer {
+nonisolated struct VizInversionLayer {
     let baseFt: Double
     let topFt: Double
     let strengthC: Double
 }
 
-struct VizCloudDiag {
+nonisolated struct VizCloudDiag {
     let low: VizCloudDiagBand
     let mid: VizCloudDiagBand
     let high: VizCloudDiagBand
     let ceilingFt: Double?
 }
 
-struct VizCloudDiagBand {
+nonisolated struct VizCloudDiagBand {
     let coverPct: Double?
     let baseFt: Double?
     let topFt: Double?
@@ -269,7 +269,7 @@ struct VizCloudDiagBand {
 // corridor is a client-side re-resolve with no request.
 
 /// One populated flight-level band of the cloud-top histogram.
-struct VizObservedTopBin {
+nonisolated struct VizObservedTopBin {
     let label: String
     let loFt: Double
     let hiFt: Double
@@ -296,7 +296,7 @@ struct VizObservedTopBin {
 /// `radarNoCoverage == false` means the radar looked and found no echo, while
 /// `radarNoCoverage == true` means it does not see there at all. Collapsing the
 /// two would paint about half the OPERA grid as clear sky.
-struct VizObservedPoint {
+nonisolated struct VizObservedPoint {
     let distanceNm: Double
     /// Peak reflectivity (dBZ), or nil when nothing was detected.
     var dbz: Double? = nil
@@ -329,7 +329,7 @@ struct VizObservedPoint {
 /// Per-source identity and age. There is no combined timestamp on purpose —
 /// the four streams are minutes apart and nothing here lets a client pretend
 /// otherwise.
-struct VizObservedSource {
+nonisolated struct VizObservedSource {
     let source: String
     let label: String
     let validTime: String
@@ -339,7 +339,7 @@ struct VizObservedSource {
     let attribution: String
 }
 
-struct VizObserved {
+nonisolated struct VizObserved {
     /// All sampled radii — switching between them is a client-side pick.
     let radiiNm: [Double]
     /// The radius these `points` were resolved at.

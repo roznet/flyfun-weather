@@ -55,7 +55,7 @@ let observedCoarseTopBands: [(label: String, loFt: Double, hiFt: Double)] = [
 /// Provenance for one observed field, read from the frame itself (the producer
 /// varies — one sampled OPERA composite was built by Météo-France rather than
 /// centrally by EUMETNET).
-struct ObservedAttribution: Codable, Sendable {
+nonisolated struct ObservedAttribution: Codable, Sendable {
     let producer: String?
     let license: String?
     let url: String?
@@ -69,7 +69,7 @@ struct ObservedAttribution: Codable, Sendable {
 /// The pixel counts partition the disc exactly:
 ///     totalPx == validPx + nodataPx
 ///     validPx == detectedPx + undetectPx
-struct ObservedAnnulus: Codable, Sendable {
+nonisolated struct ObservedAnnulus: Codable, Sendable {
     let radiusNm: Double
     let totalPx: Int
     let validPx: Int
@@ -91,7 +91,7 @@ struct ObservedAnnulus: Codable, Sendable {
 }
 
 /// Cloud-top disc: adds the two histograms the tops question needs.
-struct ObservedTopsAnnulus: Codable, Sendable {
+nonisolated struct ObservedTopsAnnulus: Codable, Sendable {
     let radiusNm: Double
     let totalPx: Int
     let validPx: Int
@@ -132,7 +132,7 @@ struct ObservedTopsAnnulus: Codable, Sendable {
 /// Lightning disc. No `nodata`/`undetect` split: lightning is a point product
 /// and the imager sees the whole disc, so an absence of flashes is a real
 /// observation.
-struct ObservedFlashAnnulus: Codable, Sendable {
+nonisolated struct ObservedFlashAnnulus: Codable, Sendable {
     let radiusNm: Double
     let flashCount: Int
     let areaKm2: Double?
@@ -153,7 +153,7 @@ struct ObservedFlashAnnulus: Codable, Sendable {
 /// A corridor station the sampler measured around. Shared across fields so the
 /// four sources agree on *where* they sampled even though they disagree on
 /// *when*.
-struct ObservedStationRef: Codable, Sendable {
+nonisolated struct ObservedStationRef: Codable, Sendable {
     let id: String
     let name: String?
     let lat: Double
@@ -162,24 +162,24 @@ struct ObservedStationRef: Codable, Sendable {
     let distanceFromRouteNm: Double?
 }
 
-struct ObservedStationSamples: Codable, Sendable {
+nonisolated struct ObservedStationSamples: Codable, Sendable {
     let stationId: String
     let annuli: [ObservedAnnulus]
 }
 
-struct ObservedTopsStationSamples: Codable, Sendable {
+nonisolated struct ObservedTopsStationSamples: Codable, Sendable {
     let stationId: String
     let annuli: [ObservedTopsAnnulus]
 }
 
-struct ObservedFlashStationSamples: Codable, Sendable {
+nonisolated struct ObservedFlashStationSamples: Codable, Sendable {
     let stationId: String
     let annuli: [ObservedFlashAnnulus]
 }
 
 /// Frame identity for one observed field. There is deliberately no payload-level
 /// "observed at" — invariant 2.
-protocol ObservedFieldMeta {
+nonisolated protocol ObservedFieldMeta {
     var source: String { get }
     var quantity: String { get }
     var units: String? { get }
@@ -192,7 +192,7 @@ protocol ObservedFieldMeta {
     var attribution: ObservedAttribution? { get }
 }
 
-struct ObservedField: Codable, Sendable, ObservedFieldMeta {
+nonisolated struct ObservedField: Codable, Sendable, ObservedFieldMeta {
     let source: String
     let quantity: String
     let units: String?
@@ -203,7 +203,7 @@ struct ObservedField: Codable, Sendable, ObservedFieldMeta {
     let stations: [ObservedStationSamples]
 }
 
-struct ObservedTopsField: Codable, Sendable, ObservedFieldMeta {
+nonisolated struct ObservedTopsField: Codable, Sendable, ObservedFieldMeta {
     let source: String
     let quantity: String
     let units: String?
@@ -214,7 +214,7 @@ struct ObservedTopsField: Codable, Sendable, ObservedFieldMeta {
     let stations: [ObservedTopsStationSamples]
 }
 
-struct ObservedFlashField: Codable, Sendable, ObservedFieldMeta {
+nonisolated struct ObservedFlashField: Codable, Sendable, ObservedFieldMeta {
     let source: String
     let quantity: String
     let units: String?
@@ -228,7 +228,7 @@ struct ObservedFlashField: Codable, Sendable, ObservedFieldMeta {
 /// One clause of the "Observed now" readout, with its provenance. `kind` names
 /// the source so a client can pair the clause with that source's own frame age —
 /// which must never be blended across sources — rather than parsing the prose.
-struct ObservedSummaryEntry: Codable, Sendable, Identifiable {
+nonisolated struct ObservedSummaryEntry: Codable, Sendable, Identifiable {
     /// lightning | reflectivity | rain_rate | cloud_tops | coverage
     let kind: String
     let text: String
@@ -248,7 +248,7 @@ struct ObservedSummaryEntry: Codable, Sendable, Identifiable {
 /// Why a source is missing, when it is. A source that is absent must say so
 /// distinctly from a source that is present and saw nothing — the same
 /// three-state discipline as the pixel counts, one level up.
-struct ObservedSourceStatus: Codable, Sendable, Identifiable {
+nonisolated struct ObservedSourceStatus: Codable, Sendable, Identifiable {
     let source: String
     let available: Bool
     let reason: String?
@@ -258,7 +258,7 @@ struct ObservedSourceStatus: Codable, Sendable, Identifiable {
 }
 
 /// Observed conditions along the route corridor (D-0).
-struct ObservedConditions: Codable, Sendable {
+nonisolated struct ObservedConditions: Codable, Sendable {
     /// When the payload was ASSEMBLED. Deliberately not an observation time —
     /// never render this as an age (invariant 2).
     let computedAt: String?

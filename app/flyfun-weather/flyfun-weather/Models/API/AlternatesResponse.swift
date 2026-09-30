@@ -5,7 +5,7 @@ import Foundation
 /// field on `SnapshotResponse`. We decode the display subset — the regulatory
 /// `faa`/`easa` qual is reduced to verdict + reason (the full criterion bands
 /// stay web-only). See `designs/future/alternates.md`.
-struct RouteAlternates: Codable, Sendable {
+nonisolated struct RouteAlternates: Codable, Sendable {
     let destinationIcao: String
     let destinationCategory: String
     let destinationCrosswindKt: Double?
@@ -24,7 +24,7 @@ struct RouteAlternates: Codable, Sendable {
     let alternateRequirement: AlternateRequirement?
 }
 
-struct AlternateAirport: Codable, Identifiable, Sendable {
+nonisolated struct AlternateAirport: Codable, Identifiable, Sendable {
     let icao: String
     let name: String?
 
@@ -82,7 +82,7 @@ struct AlternateAirport: Codable, Identifiable, Sendable {
 /// A non-weather operational-friction signal on a divert candidate (#344).
 /// Swift mirror of `models/alternates.py:OperationalFlag`. Rendered as a
 /// severity ⚠ chip + "Operational notes" detail in `AlternatesView`.
-struct OperationalFlag: Codable, Identifiable, Sendable {
+nonisolated struct OperationalFlag: Codable, Identifiable, Sendable {
     let code: String              // stable machine key, e.g. "cross_border"
     let label: String             // short chip text, e.g. "Cross-border"
     let detail: String            // expandable explanation
@@ -92,7 +92,7 @@ struct OperationalFlag: Codable, Identifiable, Sendable {
 }
 
 /// The nearest improving alternate for one deficient axis.
-struct AlternateAxisPick: Codable, Identifiable, Sendable {
+nonisolated struct AlternateAxisPick: Codable, Identifiable, Sendable {
     let axis: String              // "category" | "wind" | "crosswind"
     let icao: String?
     let distanceFromDestNm: Double?
@@ -113,7 +113,7 @@ struct AlternateAxisPick: Codable, Identifiable, Sendable {
 
 /// Per-candidate alternate-minima qualification (display subset of
 /// `models/alternate_requirement.py:AlternateQual`).
-struct AlternateQual: Codable, Sendable {
+nonisolated struct AlternateQual: Codable, Sendable {
     let regime: String            // "faa" | "easa"
     let verdict: String           // likely | marginal | unlikely | not_required | required
     let reason: String?
@@ -121,13 +121,13 @@ struct AlternateQual: Codable, Sendable {
 
 /// Destination "is a filed alternate required?" (display subset of
 /// `AlternateRequirement` + its per-regime `RegAlternateTrigger`).
-struct AlternateRequirement: Codable, Sendable {
+nonisolated struct AlternateRequirement: Codable, Sendable {
     let destinationIcao: String?
     let faa: RegAlternateTrigger?
     let easa: RegAlternateTrigger?
 }
 
-struct RegAlternateTrigger: Codable, Sendable {
+nonisolated struct RegAlternateTrigger: Codable, Sendable {
     let regime: String            // "faa" | "easa"
     let status: String            // not_required | required | likely | marginal | unlikely
     let reason: String?

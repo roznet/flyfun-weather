@@ -8,7 +8,7 @@ import Foundation
 /// (`.convertToSnakeCase`), so the camelCase properties become `flight_id`,
 /// `pack_timestamp`, `contact_ok` on the wire. No dictionary keys here, so the
 /// snake strategy is safe (unlike `DebriefRequest`).
-struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
+nonisolated struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
     /// The rated flight.
     let flightId: String
     /// The rated briefing pack's `fetch_timestamp` (ISO 8601) — the rating is
@@ -46,7 +46,7 @@ struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
 /// a briefing's pack menu (#616), so the admin email and page link to the pack.
 /// They stay empty for app-level feedback from the flight list (the web help
 /// page sends the same empty strings).
-struct GeneralFeedbackRequest: Encodable, Sendable, Equatable {
+nonisolated struct GeneralFeedbackRequest: Encodable, Sendable, Equatable {
     let flightId: String
     let packTimestamp: String
     /// One of the server's `ALLOWED_CATEGORIES` minus `digest_rating` — see
@@ -73,7 +73,7 @@ struct GeneralFeedbackRequest: Encodable, Sendable, Equatable {
 /// The categories the feedback form offers. Raw values mirror the server's
 /// `ALLOWED_CATEGORIES` and the labels mirror the web `feedback.cat.*` strings,
 /// so a report filed from iOS lands in the same admin bucket as a web one.
-enum FeedbackCategory: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum FeedbackCategory: String, CaseIterable, Identifiable, Sendable {
     case dataIssue = "data_issue"
     case tooConservative = "too_conservative"
     case tooOptimistic = "too_optimistic"

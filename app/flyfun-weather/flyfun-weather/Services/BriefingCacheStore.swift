@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 /// Tracks a downloaded pack in the cache index.
-struct CachedPackEntry: Codable, Sendable, Identifiable {
+nonisolated struct CachedPackEntry: Codable, Sendable, Identifiable {
     let flightId: String
     let timestamp: String
     let flightTitle: String

@@ -35,7 +35,7 @@ struct SkewTVarGroup: Identifiable {
 /// `SoundingLevel` carries p/alt/T/Td/wind, so closures needing an extended field
 /// (RH, θe, icing, cloud…) look it up by pressure from the host response; HW/XW is
 /// derived from the level's own wind + the route point's track.
-enum SkewTVariableCatalog {
+nonisolated enum SkewTVariableCatalog {
     /// Variables grouped for display, in the same order/grouping as the web panel.
     /// Variables with no data for *this* sounding are dropped (and empty groups
     /// with them) so the picker only lists ones that actually plot.
@@ -46,11 +46,11 @@ enum SkewTVariableCatalog {
             response.levels.map { (Int($0.pressureHpa), $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        func ext(_ level: SoundingLevel) -> SoundingProfileLevel? { byPressure[Int(level.pressureHPa.rounded())] }
+        @Sendable func ext(_ level: SoundingLevel) -> SoundingProfileLevel? { byPressure[Int(level.pressureHPa.rounded())] }
 
         // Headwind / crosswind component relative to track (positive HW = into
         // the nose; positive XW = from the right). nil when track or wind absent.
-        func component(_ level: SoundingLevel, cross: Bool) -> Double? {
+        @Sendable func component(_ level: SoundingLevel, cross: Bool) -> Double? {
             guard let ws = level.windSpeedKt, let wd = level.windDirectionDeg, let track = trackDeg else { return nil }
             let rel = (wd - track) * .pi / 180
             return ws * (cross ? sin(rel) : cos(rel))

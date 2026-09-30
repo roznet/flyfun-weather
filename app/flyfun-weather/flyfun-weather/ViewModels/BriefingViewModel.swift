@@ -484,7 +484,7 @@ final class BriefingViewModel {
                 packMeta: pack,
                 departureTime: flight.departureTime
             ) { [weak self] fraction, received, total in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     self?.downloadState = .downloading(progress: fraction, receivedBytes: received, totalBytes: total)
                 }
             }

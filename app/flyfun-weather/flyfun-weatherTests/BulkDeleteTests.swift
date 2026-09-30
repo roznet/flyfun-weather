@@ -121,6 +121,7 @@ struct BulkDeleteChunkingTests {
     }
 }
 
+@MainActor
 @Suite("BulkDeleteCacheEviction")
 struct BulkDeleteCacheEvictionTests {
 

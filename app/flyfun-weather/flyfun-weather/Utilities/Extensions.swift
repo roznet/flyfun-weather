@@ -1,6 +1,6 @@
 import Foundation
 
-extension JSONDecoder {
+nonisolated extension JSONDecoder {
     /// Shared decoder configured for the WeatherBrief API (snake_case keys, ISO 8601 dates).
     static nonisolated let weatherBrief: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -10,7 +10,7 @@ extension JSONDecoder {
     }()
 }
 
-extension JSONEncoder {
+nonisolated extension JSONEncoder {
     /// Shared encoder matching the WeatherBrief decoder (snake_case keys, ISO 8601 dates).
     static nonisolated let weatherBrief: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -20,7 +20,7 @@ extension JSONEncoder {
     }()
 }
 
-extension DateFormatter {
+nonisolated extension DateFormatter {
     /// Short date format for flight cards (e.g. "Mar 15").
     static let shortDate: DateFormatter = {
         let f = DateFormatter()
@@ -37,7 +37,7 @@ extension DateFormatter {
     }()
 }
 
-extension Date {
+nonisolated extension Date {
     /// Parse an ISO-8601 timestamp, tolerating the optional fractional seconds
     /// the server includes. The server sends `datetime.isoformat()`, which
     /// carries microseconds (e.g. `2026-06-28T08:46:00.123456+00:00`), and the
@@ -56,7 +56,7 @@ extension Date {
     private static let isoParserPlain = ISO8601DateFormatter()
 }
 
-extension String {
+nonisolated extension String {
     /// Short display name for weather models — used in compact badges where space is tight.
     var shortModelName: String {
         switch self.lowercased() {
@@ -68,7 +68,7 @@ extension String {
     }
 }
 
-extension Int {
+nonisolated extension Int {
     /// Zero-pad a compass heading/bearing to 3 digits (10° → "010"). Does NOT
     /// append the ° symbol — call sites add °/@ as they do today. Single source
     /// of truth for heading display (AirportConditionsView, PirepListView).
@@ -81,7 +81,7 @@ extension Int {
 /// `formatWindComponent` in `web/ts/units.ts`. Standard `dir@speedGgust`
 /// notation with a zero-padded 3-digit direction; the gust is dropped when
 /// absent or within `gustDisplayMinExcessKt` kt of the sustained value.
-enum WindFormat {
+nonisolated enum WindFormat {
     /// A gust is shown only when it exceeds the sustained value by at least this
     /// many knots (comparing rounded, displayed numbers). A gust within a few kt
     /// of the mean isn't operationally meaningful and just adds noise ("5G6" →
@@ -112,7 +112,7 @@ enum WindFormat {
     }
 }
 
-extension URL {
+nonisolated extension URL {
     /// Extract a query parameter value by name.
     func queryParam(_ name: String) -> String? {
         URLComponents(url: self, resolvingAgainstBaseURL: false)?

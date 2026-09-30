@@ -1,7 +1,7 @@
 import Foundation
 
 /// Raw sounding profile from the API for client-side Skew-T rendering.
-struct SoundingProfileResponse: Codable, Sendable {
+nonisolated struct SoundingProfileResponse: Codable, Sendable {
     let pointIndex: Int
     let lat: Double
     let lon: Double
@@ -17,7 +17,7 @@ struct SoundingProfileResponse: Codable, Sendable {
     let inversionLayers: [InversionLayer]?
 }
 
-struct SoundingProfileLevel: Codable, Sendable {
+nonisolated struct SoundingProfileLevel: Codable, Sendable {
     let pressureHpa: Int
     let altitudeFt: Double?
     let temperatureC: Double

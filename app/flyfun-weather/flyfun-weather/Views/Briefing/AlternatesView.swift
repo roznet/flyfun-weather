@@ -108,15 +108,12 @@ struct AlternatesView: View {
                 ForEach(valid) { pick in
                     HStack(alignment: .firstTextBaseline, spacing: Theme.spacingXS) {
                         Image(systemName: "arrow.triangle.branch").font(.caption2).foregroundStyle(Theme.primary)
-                        (
-                            Text("Nearest \(pick.axisLabel): ")
-                                .font(.caption).foregroundStyle(Theme.textMuted)
-                            + Text(pick.icao ?? "—").font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
-                            + Text(pick.distanceFromDestNm.map { " \(Int($0.rounded()))nm" } ?? "")
-                                .font(.caption).foregroundStyle(Theme.textMuted)
-                            + Text(pick.position.map { " \($0)" } ?? "")
-                                .font(.caption).foregroundStyle(Theme.textMuted)
-                        )
+                        Text("""
+                            \(Text("Nearest \(pick.axisLabel): ").font(.caption).foregroundStyle(Theme.textMuted))\
+                            \(Text(pick.icao ?? "—").font(.caption.weight(.semibold)).foregroundStyle(Theme.text))\
+                            \(Text(pick.distanceFromDestNm.map { " \(Int($0.rounded()))nm" } ?? "").font(.caption).foregroundStyle(Theme.textMuted))\
+                            \(Text(pick.position.map { " \($0)" } ?? "").font(.caption).foregroundStyle(Theme.textMuted))
+                            """)
                         // One layout unit; let it wrap instead of truncating on narrow widths.
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -304,10 +301,7 @@ private struct AlternateCard: View {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
                                 .foregroundStyle(operationalFlagColor(flag.severity))
-                            (
-                                Text("\(flag.label): ").font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
-                                + Text(flag.detail).font(.caption).foregroundStyle(Theme.textMuted)
-                            )
+                            Text("\(Text("\(flag.label): ").font(.caption.weight(.semibold)).foregroundStyle(Theme.text))\(Text(flag.detail).font(.caption).foregroundStyle(Theme.textMuted))")
                             .fixedSize(horizontal: false, vertical: true)
                         }
                     }

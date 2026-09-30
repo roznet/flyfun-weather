@@ -1,6 +1,6 @@
 import Foundation
 
-struct FlightResponse: Codable, Identifiable, Sendable {
+nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
     let id: String
     let userId: String
     let profileId: Int?
@@ -206,7 +206,7 @@ struct FlightResponse: Codable, Identifiable, Sendable {
 }
 
 /// Whether the signed-in user owns this flight or is a read-only subscriber.
-enum FlightRole: String, Codable, Sendable {
+nonisolated enum FlightRole: String, Codable, Sendable {
     case owner
     case subscriber
 }
@@ -214,7 +214,7 @@ enum FlightRole: String, Codable, Sendable {
 /// Server-assigned logbook bucket for the flight list (mirrors the web
 /// `section`). `recent` is the debrief-nudge window: recent past flights not yet
 /// debriefed (bounded server-side), so a `recent` flight is the one to debrief.
-enum FlightSection: String, Codable, Sendable {
+nonisolated enum FlightSection: String, Codable, Sendable {
     case future
     case recent
     case past
@@ -224,7 +224,7 @@ enum FlightSection: String, Codable, Sendable {
 /// `Flight.notify_override`). `default` follows the account "Briefing updates"
 /// setting; `notify` fires on any update to this flight even if the account is
 /// Off; `mute` never notifies. Delivery still uses the global channels.
-enum FlightNotifyOverride: String, Codable, Sendable, CaseIterable, Identifiable {
+nonisolated enum FlightNotifyOverride: String, Codable, Sendable, CaseIterable, Identifiable {
     case `default`
     case notify
     case mute
@@ -254,7 +254,7 @@ enum FlightNotifyOverride: String, Codable, Sendable, CaseIterable, Identifiable
 /// the web `FlexibilityMode`). Raw values match the wire format verbatim — they
 /// decode from string *values*, which the decoder's snake-case key strategy does
 /// not touch, so `sameDay` must carry the explicit `"same_day"` raw value.
-enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
+nonisolated enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
     case none
     case alternate
     case sameDay = "same_day"
@@ -290,7 +290,7 @@ enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
 /// Present on `FlightResponse.coverage` only while no model reaches the flight
 /// date yet; the UI shows a neutral pending state instead of an assessment.
 /// `Equatable` so `FlightCardView` can diff on it (see its `==`).
-struct CoveragePending: Codable, Sendable, Equatable {
+nonisolated struct CoveragePending: Codable, Sendable, Equatable {
     /// ISO date (yyyy-MM-dd) — first (early-outlook) briefing appears.
     let availableDate: String
     /// ISO date — full GRIB briefing, if resolved. nil when unresolved.
@@ -316,7 +316,7 @@ struct CoveragePending: Codable, Sendable, Equatable {
 }
 
 /// Aircraft summary embedded in a flight, used for the list card label.
-struct AircraftInfo: Codable, Hashable, Sendable {
+nonisolated struct AircraftInfo: Codable, Hashable, Sendable {
     let id: Int
     let icaoType: String
     let typeName: String
@@ -337,7 +337,7 @@ struct AircraftInfo: Codable, Hashable, Sendable {
 /// `Equatable` so `FlightCardView` diffs on the briefing content (the card's
 /// only source of truth) rather than `FlightResponse`'s id-only identity, which
 /// would otherwise make a same-id/new-briefing update look unchanged (#426).
-struct BriefingStatusInfo: Codable, Sendable, Equatable {
+nonisolated struct BriefingStatusInfo: Codable, Sendable, Equatable {
     /// GREEN / AMBER / RED traffic-light verdict (short-range, within the GRIB
     /// horizon). nil when only a long-range `outlook` is available.
     let assessment: String?
@@ -365,7 +365,7 @@ struct BriefingStatusInfo: Codable, Sendable, Equatable {
 }
 
 /// Compact RED/AMBER advisory breakdown for the flights-list card chips.
-struct AdvisorySummary: Codable, Sendable, Equatable {
+nonisolated struct AdvisorySummary: Codable, Sendable, Equatable {
     let red: Int
     let amber: Int
     /// Severity-ordered named concerns, capped at 3 server-side.
@@ -373,7 +373,7 @@ struct AdvisorySummary: Codable, Sendable, Equatable {
 }
 
 /// One named advisory concern for the summary chips.
-struct AdvisoryChip: Codable, Sendable, Equatable {
+nonisolated struct AdvisoryChip: Codable, Sendable, Equatable {
     let status: String  // "RED" | "AMBER"
     let name: String
 }
@@ -382,7 +382,7 @@ struct AdvisoryChip: Codable, Sendable, Equatable {
 ///
 /// Position and total are derived server-side from `departure_time` — there is
 /// no stored leg position, so a rescheduled leg needs no client-side fixup.
-struct TripLegRef: Codable, Sendable, Equatable {
+nonisolated struct TripLegRef: Codable, Sendable, Equatable {
     let id: String
     let name: String
     /// 1-based index in departure-time order.

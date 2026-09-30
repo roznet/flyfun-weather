@@ -185,7 +185,7 @@ struct BriefingContainerView: View {
             FeedbackFormView(flightId: target.flightId, packTimestamp: target.packTimestamp)
         }
         .sheet(isPresented: $showingPirepSheet) {
-            if let viewModel, let repo = appState.repository {
+            if viewModel != nil, let repo = appState.repository {
                 PirepReportingView(viewModel: PirepViewModel(flight: flight, repository: repo,
                                                                       offlineStore: appState.pirepOfflineStore),
                                    trackingService: trackingService)

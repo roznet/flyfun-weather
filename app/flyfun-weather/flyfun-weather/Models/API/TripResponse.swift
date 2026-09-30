@@ -24,7 +24,7 @@ import Foundation
 
 /// Where a leg sits relative to now. Clock time is primary; a debrief refines it
 /// (a cancelled leg is not "remaining" even when it is still in the future).
-enum TripLegState: String, Codable, Sendable {
+nonisolated enum TripLegState: String, Codable, Sendable {
     case flown
     case cancelled
     case monitoring
@@ -54,7 +54,7 @@ enum TripLegState: String, Codable, Sendable {
 /// `unavailable` (briefed, but the pack could not be graded) and `needsBriefing`
 /// (never briefed) are different facts implying different actions, and telling a
 /// pilot a leg has no briefing when it has one that failed to grade is false.
-enum TripGradeKind: String, Codable, Sendable {
+nonisolated enum TripGradeKind: String, Codable, Sendable {
     /// A real GREEN/AMBER/RED traffic light.
     case assessment
     /// Beyond the GRIB horizon: a tendency, never a verdict.
@@ -78,7 +78,7 @@ enum TripGradeKind: String, Codable, Sendable {
 /// per-flight privacy switch a shared leg link answers to), and all-or-nothing
 /// because a chain summarised over a visible subset would name the wrong
 /// binding leg. See `designs/flight-trips.md`.
-enum TripRole: String, Codable, Sendable {
+nonisolated enum TripRole: String, Codable, Sendable {
     case owner
     case viewer
     /// An unrecognised role is treated as a viewer by ``TripResponse/isOwned``,
@@ -94,7 +94,7 @@ enum TripRole: String, Codable, Sendable {
 
 /// What the server picked the binding leg on. `outlook` means *no* remaining leg
 /// was gradeable, so there is deliberately no `chainStatus` alongside it.
-enum TripBindingBasis: String, Codable, Sendable {
+nonisolated enum TripBindingBasis: String, Codable, Sendable {
     case assessment
     case outlook
     case unknown
@@ -110,7 +110,7 @@ enum TripBindingBasis: String, Codable, Sendable {
 /// Leg *k*'s destination is not leg *k+1*'s origin. Soft by design — pilots
 /// reposition, and a move is allowed to break the chain — but usually a mistake
 /// worth seeing.
-struct ContinuityWarning: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct ContinuityWarning: Codable, Sendable, Equatable, Identifiable {
     let afterFlightId: String
     let beforeFlightId: String
     let arrives: String
@@ -120,7 +120,7 @@ struct ContinuityWarning: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// One leg as the trip view renders it.
-struct TripLeg: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct TripLeg: Codable, Sendable, Equatable, Identifiable {
     let flightId: String
     /// "EGTF → LSGS", built server-side from the waypoints.
     let label: String
@@ -157,7 +157,7 @@ struct TripLeg: Codable, Sendable, Equatable, Identifiable {
 
 /// The deterministic trip picture. Computed per read on the server and **never
 /// persisted** — it is stale the moment any leg refreshes.
-struct TripSummary: Codable, Sendable, Equatable {
+nonisolated struct TripSummary: Codable, Sendable, Equatable {
     let tripId: String
     var name: String = ""
     var legs: [TripLeg] = []
@@ -213,7 +213,7 @@ struct TripSummary: Codable, Sendable, Equatable {
 /// Progress of the server's serial trip-refresh driver. One leg is in flight at
 /// a time; the chain survives the app being backgrounded because the server
 /// drives it, so this is purely a progress readout.
-struct TripRefreshStatus: Codable, Sendable, Equatable {
+nonisolated struct TripRefreshStatus: Codable, Sendable, Equatable {
     let tripId: String
     var refreshId: String? = nil
     var active: Bool = false
@@ -252,7 +252,7 @@ struct TripRefreshStatus: Codable, Sendable, Equatable {
 }
 
 /// A trip container plus its derived summary.
-struct TripResponse: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct TripResponse: Codable, Sendable, Equatable, Identifiable {
     let id: String
     let userId: String
     var name: String = ""
@@ -321,7 +321,7 @@ struct TripResponse: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// Response of `POST /api/trips/{id}/ai-summary`.
-struct TripAiSummaryResponse: Codable, Sendable, Equatable {
+nonisolated struct TripAiSummaryResponse: Codable, Sendable, Equatable {
     let tripId: String
     var text: String? = nil
     var generatedAt: String? = nil
@@ -342,7 +342,7 @@ struct TripAiSummaryResponse: Codable, Sendable, Equatable {
 /// flip removes it, deleting the flight takes it with it), and a second
 /// trip-shaped concept would have to be reconciled with it on every membership
 /// change.
-struct TripSubscribeResponse: Codable, Sendable, Equatable {
+nonisolated struct TripSubscribeResponse: Codable, Sendable, Equatable {
     let tripId: String
     /// Legs actually added or removed. Zero is a success, not a failure: it
     /// means they were already all followed.
@@ -351,7 +351,7 @@ struct TripSubscribeResponse: Codable, Sendable, Equatable {
     var isSubscribed: Bool = false
 }
 
-extension TripSubscribeResponse {
+nonisolated extension TripSubscribeResponse {
     enum CodingKeys: String, CodingKey {
         case tripId, changed, totalLegs, isSubscribed
     }
@@ -367,18 +367,18 @@ extension TripSubscribeResponse {
 
 // MARK: - Requests
 
-struct CreateTripRequest: Encodable, Sendable {
+nonisolated struct CreateTripRequest: Encodable, Sendable {
     var name: String? = nil
     var flightIds: [String] = []
 }
 
-struct AddTripLegsRequest: Encodable, Sendable {
+nonisolated struct AddTripLegsRequest: Encodable, Sendable {
     var flightIds: [String] = []
 }
 
 /// PATCH body. Every field is optional — the server merges only what is sent, so
 /// never populate a field you are not deliberately changing.
-struct UpdateTripRequest: Encodable, Sendable {
+nonisolated struct UpdateTripRequest: Encodable, Sendable {
     var name: String? = nil
     var notes: String? = nil
     var autoRefresh: Bool? = nil
@@ -388,7 +388,7 @@ struct UpdateTripRequest: Encodable, Sendable {
 
 // MARK: - Formatting
 
-extension DateFormatter {
+nonisolated extension DateFormatter {
     /// Parses the bare `YYYY-MM-DD` the server sends for `decidable_from`. Fixed
     /// POSIX locale so a user's regional calendar can't reinterpret the digits.
     static let tripDay: DateFormatter = {
@@ -422,7 +422,7 @@ extension DateFormatter {
 /// ordinary already-refreshing conflict. Substring matching is deliberately
 /// loose: if the server rewords the sentence this degrades to treating it as an
 /// ordinary conflict, which is the pre-existing behaviour, not a new failure.
-enum TripRefreshConflict {
+nonisolated enum TripRefreshConflict {
     private static let marker = "part of a trip refresh"
 
     /// Whether a message is the claimed-leg refusal.
@@ -454,7 +454,7 @@ enum TripRefreshConflict {
 /// `.convertFromSnakeCase` strategy transforms the incoming JSON key before it is
 /// matched, so `pending_coverage_leg_ids` arrives as `pendingCoverageLegIds`.
 
-extension TripLeg {
+nonisolated extension TripLeg {
     enum CodingKeys: String, CodingKey {
         case flightId, label, origin, destination, departureTime, durationHours
         case state, gradeKind, assessment, assessmentReason, outlook, outlookReason
@@ -488,7 +488,7 @@ extension TripLeg {
     }
 }
 
-extension TripSummary {
+nonisolated extension TripSummary {
     enum CodingKeys: String, CodingKey {
         case tripId, name, legs, totalLegs, remainingLegs
         case chainStatus, bindingLegId, bindingBasis
@@ -526,7 +526,7 @@ extension TripSummary {
     }
 }
 
-extension TripRefreshStatus {
+nonisolated extension TripRefreshStatus {
     enum CodingKeys: String, CodingKey {
         case tripId, refreshId, active, total, completed, currentFlightId, results, message
         case finishedAt
@@ -546,7 +546,7 @@ extension TripRefreshStatus {
     }
 }
 
-extension TripResponse {
+nonisolated extension TripResponse {
     enum CodingKeys: String, CodingKey {
         case id, userId, name, notes, autoRefresh, autoRefreshHour, notifyOverride
         case createdAt, flightIds, summary, aiSummary, aiSummaryAt, aiSummaryStale, refresh
@@ -580,7 +580,7 @@ extension TripResponse {
     }
 }
 
-extension TripAiSummaryResponse {
+nonisolated extension TripAiSummaryResponse {
     enum CodingKeys: String, CodingKey {
         case tripId, text, generatedAt, unavailableReason
     }

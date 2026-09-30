@@ -1,7 +1,7 @@
 import Foundation
 
 /// SSE event from the refresh stream endpoint.
-struct RefreshEvent: Codable, Sendable {
+nonisolated struct RefreshEvent: Codable, Sendable {
     let type: String // "progress", "briefing_ready", "complete", "error"
 
     // Progress fields
@@ -39,7 +39,7 @@ struct RefreshEvent: Codable, Sendable {
 }
 
 /// Outcome of the server-side refresh gate, attached to the `complete` event.
-struct RefreshDecision: Codable, Sendable {
+nonisolated struct RefreshDecision: Codable, Sendable {
     let mode: String // "full" | "realtime" | "none"
     let reason: String?
     let etaUseful: String?
@@ -47,7 +47,7 @@ struct RefreshDecision: Codable, Sendable {
 }
 
 /// Status response from the refresh status endpoint.
-struct RefreshStatusResponse: Codable, Sendable {
+nonisolated struct RefreshStatusResponse: Codable, Sendable {
     let active: Bool
     let status: String?
     let stage: String?

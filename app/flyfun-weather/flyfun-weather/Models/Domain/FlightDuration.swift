@@ -8,7 +8,7 @@ import Foundation
 /// `flight_duration_hours` as decimal hours; both clients present it as a
 /// whole-hour picker plus a quarter-hour picker, so a 1h15 flight round-trips as
 /// 1.25 rather than being coerced to the nearest half hour.
-enum FlightDuration {
+nonisolated enum FlightDuration {
     /// Selectable minute values — quarter-hour granularity.
     static let minuteOptions = [0, 15, 30, 45]
 

@@ -150,7 +150,7 @@ final class OneShotLocator: NSObject {
     }
 }
 
-extension OneShotLocator: @preconcurrency CLLocationManagerDelegate {
+extension OneShotLocator: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         if status == .authorizedWhenInUse || status == .authorizedAlways {

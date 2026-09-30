@@ -2,7 +2,7 @@ import Foundation
 
 /// Structured LLM digest JSON response.
 /// Note: The server may return some fields as either strings or arrays depending on the LLM output.
-struct DigestResponse: Codable, Sendable {
+nonisolated struct DigestResponse: Codable, Sendable {
     let assessment: String?
     let assessmentReason: String?
     let synoptic: String?
@@ -69,7 +69,7 @@ struct DigestResponse: Codable, Sendable {
 }
 
 /// Decodes a JSON value that could be either a string or an array of strings.
-struct FlexibleStringArray: Codable, Sendable {
+nonisolated struct FlexibleStringArray: Codable, Sendable {
     let values: [String]
 
     init(from decoder: Decoder) throws {

@@ -302,10 +302,10 @@ struct RouteMapKitView: UIViewRepresentable {
     }
 }
 
-// MapKit calls the delegate on the main thread; `@preconcurrency` lets the
-// `@MainActor` coordinator satisfy the non-isolated delegate protocol (same
-// pattern as `ForecastMapKitView` / `FlightTrackingService`).
-extension RouteMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
+// MapKit calls the delegate on the main thread; the `@MainActor` coordinator
+// satisfies the non-isolated delegate protocol through an inferred isolated
+// conformance (same pattern as `ForecastMapKitView` / `FlightTrackingService`).
+extension RouteMapKitView.Coordinator: MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
         guard let line = overlay as? ColoredPolyline else {
             return MKOverlayRenderer(overlay: overlay)

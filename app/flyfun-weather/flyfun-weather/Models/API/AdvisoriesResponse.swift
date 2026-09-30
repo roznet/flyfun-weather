@@ -1,6 +1,6 @@
 import Foundation
 
-struct AdvisoriesResponse: Codable, Sendable {
+nonisolated struct AdvisoriesResponse: Codable, Sendable {
     let advisories: [RouteAdvisoryResult]
     let catalog: [AdvisoryCatalogEntry]
     let routeName: String
@@ -12,7 +12,7 @@ struct AdvisoriesResponse: Codable, Sendable {
     let airportConditions: AirportConditions?
 }
 
-struct RouteAdvisoryResult: Codable, Identifiable, Sendable {
+nonisolated struct RouteAdvisoryResult: Codable, Identifiable, Sendable {
     let advisoryId: String
     let aggregateStatus: String
     let aggregateDetail: String
@@ -33,7 +33,7 @@ struct RouteAdvisoryResult: Codable, Identifiable, Sendable {
     var id: String { advisoryId }
 }
 
-struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
+nonisolated struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     let model: String
     let status: String
     let detail: String
@@ -75,7 +75,7 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
 /// Cross-section highlight geometry for one advisory × one model (#374).
 /// The backend owns the geometry; the client only renders it — so any advisory
 /// that gains an emitter server-side lights up here with no app change.
-struct AdvisoryHighlights: Codable, Sendable {
+nonisolated struct AdvisoryHighlights: Codable, Sendable {
     /// 1-D route verdict. Segments tile `[0, total_nm]` exactly (gapless).
     let ribbon: [RibbonSegment]
     /// 2-D scrim cutouts — where the hazard physically is (flagged areas only).
@@ -85,14 +85,14 @@ struct AdvisoryHighlights: Codable, Sendable {
 }
 
 /// One run of the 1-D route verdict strip.
-struct RibbonSegment: Codable, Sendable {
+nonisolated struct RibbonSegment: Codable, Sendable {
     let distFromNm: Double
     let distToNm: Double
     let severity: String  // "green" | "amber" | "red" | "unavailable"
 }
 
 /// One scrim cutout. `baseFt`/`topFt` both nil = full column (terrain-to-top).
-struct HighlightRegion: Codable, Sendable {
+nonisolated struct HighlightRegion: Codable, Sendable {
     let distFromNm: Double
     let distToNm: Double
     let baseFt: Double?
@@ -109,7 +109,7 @@ struct HighlightRegion: Codable, Sendable {
 /// tag (never displayed raw); `detail` is already localized server-side.
 /// Keys arrive snake_case and map via the decoder's `.convertFromSnakeCase`
 /// strategy (`mitigated_status`, `altitude_ft`, `distance_nm`).
-struct Mitigation: Codable, Identifiable, Sendable {
+nonisolated struct Mitigation: Codable, Identifiable, Sendable {
     let kind: String            // "altitude" | "route_position" | "timing"
     let addresses: String       // machine tag, e.g. "cruise_imc" — not for display
     let detail: String          // localized human phrasing
@@ -121,7 +121,7 @@ struct Mitigation: Codable, Identifiable, Sendable {
     var id: String { "\(kind)-\(addresses)-\(detail)" }
 }
 
-struct AdvisoryCatalogEntry: Codable, Identifiable, Sendable {
+nonisolated struct AdvisoryCatalogEntry: Codable, Identifiable, Sendable {
     let id: String
     let name: String
     let shortDescription: String
@@ -132,7 +132,7 @@ struct AdvisoryCatalogEntry: Codable, Identifiable, Sendable {
     let parameters: [AdvisoryParameterDef]
 }
 
-struct AdvisoryParameterDef: Codable, Sendable {
+nonisolated struct AdvisoryParameterDef: Codable, Sendable {
     let key: String
     let label: String
     let description: String
@@ -144,24 +144,24 @@ struct AdvisoryParameterDef: Codable, Sendable {
     let step: Double?
 }
 
-struct AirportConditions: Codable, Sendable {
+nonisolated struct AirportConditions: Codable, Sendable {
     let departure: AirportConditionsSummary
     let arrival: AirportConditionsSummary
 }
 
-struct AirportConditionsSummary: Codable, Sendable {
+nonisolated struct AirportConditionsSummary: Codable, Sendable {
     let icao: String
     let name: String
     let runwayEnds: [RunwayEnd]
     let conditions: [AirportModelCondition]
 }
 
-struct RunwayEnd: Codable, Sendable {
+nonisolated struct RunwayEnd: Codable, Sendable {
     let id: String
     let headingDeg: Double
 }
 
-struct AirportModelCondition: Codable, Identifiable, Sendable {
+nonisolated struct AirportModelCondition: Codable, Identifiable, Sendable {
     let model: String
     let flightCategory: String
     let ceilingFt: Int?
@@ -175,14 +175,14 @@ struct AirportModelCondition: Codable, Identifiable, Sendable {
     var id: String { model }
 }
 
-struct RunwayWind: Codable, Sendable {
+nonisolated struct RunwayWind: Codable, Sendable {
     let runwayId: String
     let headingDeg: Double
     let crosswindKt: Double
     let headwindKt: Double
 }
 
-extension RouteAdvisoryResult {
+nonisolated extension RouteAdvisoryResult {
     /// The model whose verdict the card quotes: the server's
     /// `representative_model` (the model holding `aggregateStatus` with the
     /// largest flagged extent). Old packs lack it, so fall back to the first

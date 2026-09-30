@@ -4,7 +4,7 @@ import Foundation
 /// App Intents (Siri / Shortcuts / Spotlight), reusing the same seam `onOpenURL`
 /// already relies on. Foregrounding intents set one of these; the UI consumes it
 /// on the next `.active` scene phase and routes.
-enum PendingNavigation: Equatable, Sendable {
+nonisolated enum PendingNavigation: Equatable, Sendable {
     /// Show the flight list root (no selection).
     case flightList
     /// Open a specific flight's briefing by id.
@@ -46,7 +46,7 @@ enum PendingNavigation: Equatable, Sendable {
 
 /// Forecast-map deep-link state parsed from `/maps.html?fc.*`. All fields are
 /// optional — an unqualified `/maps.html` opens the map at its cold-open default.
-struct MapDeepLink: Equatable, Sendable {
+nonisolated struct MapDeepLink: Equatable, Sendable {
     var day: Int?
     var hour: Int?
     var model: String?
@@ -61,7 +61,7 @@ struct MapDeepLink: Equatable, Sendable {
 /// Historical-map deep-link state parsed from `/maps.html?tab=historical&hist.*`.
 /// Tokens are the web's verbatim (`hist.date` = `YYYY-MM-DD`, `hist.time` =
 /// `HH:MM`, both UTC); an empty date/time means the latest available slot.
-struct HistoricalMapDeepLink: Equatable, Sendable {
+nonisolated struct HistoricalMapDeepLink: Equatable, Sendable {
     var date: String?
     var time: String?
     var lead: Int?

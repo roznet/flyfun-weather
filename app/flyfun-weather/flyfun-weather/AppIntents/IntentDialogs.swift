@@ -105,7 +105,7 @@ enum IntentDialogs {
 
     // MARK: - Formatting
 
-    private static func humanize(_ raw: String) -> String {
+    private nonisolated static func humanize(_ raw: String) -> String {
         raw.replacingOccurrences(of: "_", with: " ").lowercased()
     }
 

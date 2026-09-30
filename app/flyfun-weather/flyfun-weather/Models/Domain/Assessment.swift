@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Route-level assessment severity.
-enum Assessment: String, Codable, CaseIterable {
+nonisolated enum Assessment: String, Codable, CaseIterable {
     case green
     case amber
     case red

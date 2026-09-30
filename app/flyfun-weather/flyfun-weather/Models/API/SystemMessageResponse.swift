@@ -6,7 +6,7 @@ import Foundation
 /// entries (a new advisory, a threshold change) reach app users the moment the
 /// server deploys, with no app release involved. `app_release` marks the entries
 /// that *are* an App Store version, whose body is the App Store "What's New" text.
-struct SystemMessage: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct SystemMessage: Codable, Identifiable, Equatable, Sendable {
     let id: Int
     /// Applicable date, `YYYY-MM-DD`. The stream is ordered by this rather than
     /// by insert order, so a backfilled entry interleaves chronologically.
@@ -59,7 +59,7 @@ struct SystemMessage: Codable, Identifiable, Equatable, Sendable {
 /// `GET /api/messages/status` — the unseen badge. The count includes **only**
 /// highlighted entries, so a routine fix or a backfilled historical release
 /// appears in the stream without lighting the dot.
-struct MessagesStatus: Codable, Sendable {
+nonisolated struct MessagesStatus: Codable, Sendable {
     let unseenCount: Int
     let latestMessageDate: String?
 }

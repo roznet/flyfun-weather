@@ -2,7 +2,7 @@ import Foundation
 
 /// Subset of the server's user preferences that the iOS app cares about.
 /// Additional server fields are silently ignored by the decoder.
-struct PreferencesResponse: Codable, Sendable {
+nonisolated struct PreferencesResponse: Codable, Sendable {
     let pirepCanView: Bool
     let pirepCanPublish: Bool
     // Briefing-refresh notification channels/scope. Optional so an older server
@@ -58,7 +58,7 @@ struct PreferencesResponse: Codable, Sendable {
 /// How the *upcoming* flights section is ordered (#536). Past and Recent are
 /// always most-recent-first, under both values. Raw values mirror the server's
 /// `flight_order` preference key.
-enum FlightOrder: String, CaseIterable, Sendable, Identifiable {
+nonisolated enum FlightOrder: String, CaseIterable, Sendable, Identifiable {
     case furthestFirst = "furthest_first"
     case soonestFirst = "soonest_first"
 
@@ -75,7 +75,7 @@ enum FlightOrder: String, CaseIterable, Sendable, Identifiable {
 /// The three "Briefing updates" stops. Off silences default-resolution flights;
 /// changes notifies only when the assessment/outlook moves; every notifies on
 /// every completion. Maps to the stored `notify_scope` + `notify_change_only`.
-enum BriefingUpdates: String, CaseIterable, Sendable, Identifiable {
+nonisolated enum BriefingUpdates: String, CaseIterable, Sendable, Identifiable {
     case off
     case changes
     case every

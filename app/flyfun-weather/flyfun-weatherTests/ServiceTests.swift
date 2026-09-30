@@ -222,6 +222,7 @@ import Foundation
 /// A deleted flight's downloaded packs can never be refreshed or re-downloaded,
 /// so the caching layer drops them (index entries + sidecar directory) once the
 /// server confirms — but only then.
+@MainActor
 @Suite struct CachingRepositoryDeleteFlightTests {
 
     private let all = CachedPackEntry.requiredEndpoints
@@ -334,6 +335,7 @@ import Foundation
 /// by *viewing* a flight — those flights never enter the pack index, so the
 /// index-driven pack loop can't reach them. The repository is built with the
 /// DEBUG cache-testing factory (its network layer is never touched here).
+@MainActor
 @Suite struct CacheEvictionSweepTests {
 
     private let all = CachedPackEntry.requiredEndpoints
@@ -408,6 +410,7 @@ import Foundation
 
 // MARK: - PirepOfflineStore (offline queue, temp file)
 
+@MainActor
 @Suite struct PirepOfflineStoreTests {
 
     @Test func enqueueIncrementsPendingCount() async {

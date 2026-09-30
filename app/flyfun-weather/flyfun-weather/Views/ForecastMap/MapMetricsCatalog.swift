@@ -12,7 +12,7 @@ import UIKit
 /// lookup, the gray ramp, `m_to_sm`, `alternate_needed`, and the per-metric
 /// agreement key. Decode with a **plain** `JSONDecoder` (keys are snake_case
 /// field names used verbatim as dictionary keys); see `ForecastMapResponse`.
-struct ForecastMapCatalog: Decodable, Sendable {
+nonisolated struct ForecastMapCatalog: Decodable, Sendable {
     let version: Int
     let scales: Scales
     let metrics: [String: MetricSpec]
@@ -119,7 +119,7 @@ struct ForecastMapCatalog: Decodable, Sendable {
 
 // MARK: - Colour evaluation (port of getForecastColor / bandColor)
 
-extension ForecastMapCatalog {
+nonisolated extension ForecastMapCatalog {
     /// The fill colour for one airport under the active metric + model mode —
     /// the single function markers, card cells and legends all agree on.
     func color(metric: String, airport: ForecastAirport, mode: ForecastModelMode) -> UIColor {
@@ -245,7 +245,7 @@ extension ForecastMapCatalog {
     }
 }
 
-extension ForecastMapCatalog.ColorSpec {
+nonisolated extension ForecastMapCatalog.ColorSpec {
     var fallbackUIColor: UIColor {
         fallbackColor.flatMap(UIColor.parse) ?? ForecastMapCatalog.muted
     }
@@ -253,7 +253,7 @@ extension ForecastMapCatalog.ColorSpec {
 
 // MARK: - Alt-required aggregation (aggAltRequired)
 
-extension ForecastAirport {
+nonisolated extension ForecastAirport {
     /// Aggregate per-model FAA/EASA alternate-required flags for a consensus mode
     /// (`aggAltRequired`): worst = any model says yes; majority = modal with a
     /// worst tiebreak. nil when no present model carries the flag.
@@ -278,7 +278,7 @@ extension ForecastAirport {
 
 // MARK: - Colour parsing (hex + rgb())
 
-extension UIColor {
+nonisolated extension UIColor {
     convenience init(rgbHex: UInt32) {
         self.init(
             red: CGFloat((rgbHex >> 16) & 0xff) / 255,

@@ -9,7 +9,7 @@ import Foundation
 /// drift from the backend or the web. Decoded with a plain `JSONDecoder` (no
 /// snake-case key conversion, like the rest of the help catalog), so the
 /// snake_case wire keys are mapped by explicit `CodingKeys`.
-struct DebriefTaxonomy: Codable, Sendable, Equatable {
+nonisolated struct DebriefTaxonomy: Codable, Sendable, Equatable {
     /// One decision button (`flown` / `cancelled` / `monitoring`).
     struct DecisionOption: Codable, Sendable, Equatable, Identifiable {
         let id: String

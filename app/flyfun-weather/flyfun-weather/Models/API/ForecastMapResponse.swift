@@ -17,7 +17,7 @@ import Foundation
 /// (`wind_speed_kt` → `windSpeedKt`) and break the per-metric agreement lookup —
 /// the same trap `HelpCatalogResponse` documents. Every struct here carries
 /// explicit snake_case `CodingKeys` so a plain decoder reads it verbatim.
-struct ForecastMapResponse: Decodable, Sendable {
+nonisolated struct ForecastMapResponse: Decodable, Sendable {
     /// Valid time of this slot (ISO8601 UTC).
     let forecastTime: String?
     /// Per-model init time (ISO8601 UTC); keys are a subset of gfs/icon/ecmwf.
@@ -50,7 +50,7 @@ struct ForecastMapResponse: Decodable, Sendable {
 }
 
 /// One airport in the forecast map payload.
-struct ForecastAirport: Decodable, Sendable, Identifiable {
+nonisolated struct ForecastAirport: Decodable, Sendable, Identifiable {
     let icao: String
     let lat: Double
     let lon: Double
@@ -123,7 +123,7 @@ struct ForecastAirport: Decodable, Sendable, Identifiable {
 
 /// Fields common to a per-model entry and a consensus block, addressed by the
 /// catalog's string field names so colour evaluation is data-driven.
-protocol ForecastCellData: Sendable {
+nonisolated protocol ForecastCellData: Sendable {
     /// A banded numeric field (wind_speed_kt, ceiling_ft, …), nil when absent.
     func numericField(_ name: String) -> Double?
     /// A categorical field (flight_category / convective_risk).
@@ -134,7 +134,7 @@ protocol ForecastCellData: Sendable {
 
 /// One model's forecast for an airport. Numeric fields are nullable; the wind
 /// components and `alt_required` are key-absent (not null) when unavailable.
-struct ForecastModelEntry: Decodable, Sendable, ForecastCellData {
+nonisolated struct ForecastModelEntry: Decodable, Sendable, ForecastCellData {
     let ceilingFt: Double?
     let visibilityM: Double?
     let windSpeedKt: Double?
@@ -203,7 +203,7 @@ struct ForecastModelEntry: Decodable, Sendable, ForecastCellData {
 /// Cross-model consensus (worst or majority, both baked server-side). Numeric
 /// fields are key-absent when no model supplied the value; `flight_category`
 /// and `agreement` are always present.
-struct ForecastConsensus: Decodable, Sendable, ForecastCellData {
+nonisolated struct ForecastConsensus: Decodable, Sendable, ForecastCellData {
     let flightCategory: String?
     /// field name → "consistent" | "mixed" | "divergent"; variable key set.
     let agreement: [String: String]
@@ -297,14 +297,14 @@ struct ForecastConsensus: Decodable, Sendable, ForecastCellData {
 }
 
 /// FAA/EASA alternate-required flags.
-struct AltRequired: Decodable, Sendable {
+nonisolated struct AltRequired: Decodable, Sendable {
     let faa: Bool
     let easa: Bool
 }
 
 /// D-0 METAR/TAF block carried on the wire. Decoded for a future card row
 /// (see design "Free data already on the wire"); not rendered in v1.
-struct ForecastObservation: Decodable, Sendable {
+nonisolated struct ForecastObservation: Decodable, Sendable {
     let metarRaw: String?
     let observationTime: String?
     let flightCategory: String?
@@ -326,7 +326,7 @@ struct ForecastObservation: Decodable, Sendable {
 
 /// How the map/card colours: a consensus reduction or one individual model.
 /// Raw values are the wire/URL tokens (`fc.model`): worst/majority/gfs/icon/ecmwf.
-enum ForecastModelMode: Equatable, Sendable, Hashable {
+nonisolated enum ForecastModelMode: Equatable, Sendable, Hashable {
     case worst
     case majority
     case model(String)

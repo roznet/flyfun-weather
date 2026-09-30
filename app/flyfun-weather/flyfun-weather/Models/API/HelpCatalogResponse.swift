@@ -18,7 +18,7 @@ import Foundation
 /// `MetricHelp` carries explicit snake_case `CodingKeys`), and the advisory list
 /// with `JSONDecoder.weatherBrief` (so `short_description` → `shortDescription`
 /// matches `AdvisoryCatalogEntry`). See `decode(from:)`.
-struct HelpCatalogResponse: Sendable {
+nonisolated struct HelpCatalogResponse: Sendable {
     /// Content-hash version, mirrored by the server's `ETag`.
     let version: String
     /// Metric help keyed by metric id.
@@ -92,7 +92,7 @@ struct HelpCatalogResponse: Sendable {
 
 /// Help content for one weather metric (the `metrics-catalog.json` entry shape).
 /// English-only; `CodingKeys` map snake_case so a plain decoder reads it.
-struct MetricHelp: Codable, Sendable {
+nonisolated struct MetricHelp: Codable, Sendable {
     let name: String
     let unit: String?
     let vibe: String?
@@ -113,7 +113,7 @@ struct MetricHelp: Codable, Sendable {
 }
 
 /// One band in a metric's threshold ladder (e.g. CAPE None/Low/Moderate/…).
-struct MetricThreshold: Codable, Sendable, Identifiable {
+nonisolated struct MetricThreshold: Codable, Sendable, Identifiable {
     let label: String
     let min: Double?
     let max: Double?

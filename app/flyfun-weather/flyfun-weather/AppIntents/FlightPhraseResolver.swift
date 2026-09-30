@@ -34,7 +34,7 @@ protocol FlightPhraseResolving: Sendable {
 /// which we range-check and map back to a real id, so it can never surface a
 /// flight that doesn't exist. Gated on model availability; nil → the resolver
 /// falls straight to Siri disambiguation.
-struct FoundationModelsPhraseResolver: FlightPhraseResolving {
+nonisolated struct FoundationModelsPhraseResolver: FlightPhraseResolving {
     nonisolated func pick(phrase: String, today: String, candidates: [FlightCandidate]) async -> String? {
         #if canImport(FoundationModels)
         guard !candidates.isEmpty,

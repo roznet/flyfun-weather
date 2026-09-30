@@ -14,7 +14,7 @@ import Foundation
 /// `outcomes` is keyed by condition-tag ids (`IMC`, `ICE`, …). Those have no
 /// underscores, and `.convertFromSnakeCase` leaves single-word keys untouched,
 /// so the dict decodes verbatim. (Encoding is different — see `DebriefRequest`.)
-struct DebriefResponse: Codable, Sendable, Equatable {
+nonisolated struct DebriefResponse: Codable, Sendable, Equatable {
     let flightId: String
     /// `flown` | `cancelled` | `monitoring`.
     let decision: String
@@ -33,7 +33,7 @@ struct DebriefResponse: Codable, Sendable, Equatable {
 /// shared `.convertToSnakeCase` strategy would lowercase the `outcomes` tag-id
 /// keys (`IMC` → `imc`) and the server would reject them. The field names are
 /// already the lowercase words the server expects, so a plain encoder is exact.
-struct DebriefRequest: Encodable, Sendable, Equatable {
+nonisolated struct DebriefRequest: Encodable, Sendable, Equatable {
     let decision: String
     let reasons: [String]
     let outcomes: [String: String]

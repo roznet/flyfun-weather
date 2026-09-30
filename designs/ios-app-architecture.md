@@ -12,6 +12,7 @@
 | **Networking** | **URLSession + async/await** | Built-in, no third-party dep. SSE refresh via `URLSession.bytes`. |
 | **Maps** | **MapKit (`MKMapView` via `UIViewRepresentable`)** | Both the briefing route map and the forecast map are `MKMapView`-backed (converged in #428) so the airport-forecast marker layer is shared, not duplicated per map — the SwiftUI `Map` API janks at the forecast map's ~620-annotation scale. |
 | **Architecture** | **MVVM + Repository** | Natural fit for SwiftUI. Repos abstract API vs cache — offline-ready from day one. |
+| **Concurrency** | **Default `MainActor` isolation** (`SWIFT_DEFAULT_ACTOR_ISOLATION`), Swift 5 mode | Views/VMs are main-actor for free. Data that crosses to `APIClient`/`BriefingCacheStore` (actors) must opt out: every type in `Models/` is declared `nonisolated`, as are pure helpers (`Extensions.swift`, `HistoricalTime`, catalog/colour parsing, deep-link types). A new DTO without `nonisolated` compiles but warns "main actor-isolated conformance … cannot be used in actor-isolated context" — an error in Swift 6 mode. Keep the build warning-free. |
 | **Cross-section** | **SwiftUI Canvas** | Immediate-mode 2D, equivalent to HTML Canvas. No WKWebView. |
 | **Route graph** | **Swift Charts** | 2D charts, dual axes, extensible. |
 | **Auth** | **ASWebAuthenticationSession + Sign in with Apple**, driven by `FlyFunAuthService` (FlyFunCommon) | Native OAuth, no token-paste friction. Shared auth/session code across flyfun apps. |

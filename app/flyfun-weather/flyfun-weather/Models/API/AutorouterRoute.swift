@@ -3,7 +3,7 @@ import Foundation
 /// One recent route from the user's linked Autorouter account
 /// (`GET /api/flights/autorouter-routes`). Selecting one feeds its ICAO flight
 /// plan through the same parse→fill path as "Paste Flight Plan".
-struct AutorouterRoute: Codable, Identifiable, Hashable, Sendable {
+nonisolated struct AutorouterRoute: Codable, Identifiable, Hashable, Sendable {
     var id: String { routeid }
 
     let routeid: String
@@ -41,24 +41,24 @@ struct AutorouterRoute: Codable, Identifiable, Hashable, Sendable {
     }()
 }
 
-struct AutorouterRoutesResponse: Codable, Sendable {
+nonisolated struct AutorouterRoutesResponse: Codable, Sendable {
     let routes: [AutorouterRoute]
 }
 
 /// `POST /autorouter/link-ticket` body: the app's callback scheme, which the
 /// server checks against its allowlist and binds into the ticket.
-struct AutorouterLinkTicketRequest: Encodable, Sendable {
+nonisolated struct AutorouterLinkTicketRequest: Encodable, Sendable {
     let scheme: String
 }
 
 /// `POST /autorouter/link-complete` body: the code from the link callback.
-struct AutorouterLinkCompleteRequest: Encodable, Sendable {
+nonisolated struct AutorouterLinkCompleteRequest: Encodable, Sendable {
     let code: String
 }
 
 /// `POST /autorouter/link-ticket` response: a short-lived URL that starts the
 /// Autorouter OAuth flow without the web session cookie.
-struct AutorouterLinkTicketResponse: Decodable, Sendable {
+nonisolated struct AutorouterLinkTicketResponse: Decodable, Sendable {
     let url: String
     let expiresIn: Int?
 }

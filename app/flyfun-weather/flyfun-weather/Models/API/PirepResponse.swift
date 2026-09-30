@@ -1,6 +1,6 @@
 import Foundation
 
-struct PirepResponse: Codable, Identifiable, Sendable {
+nonisolated struct PirepResponse: Codable, Identifiable, Sendable {
     let id: Int
     let clientUuid: String?
     let submittedAt: String
@@ -59,12 +59,12 @@ struct PirepResponse: Codable, Identifiable, Sendable {
     }
 }
 
-struct PirepListResponse: Codable, Sendable {
+nonisolated struct PirepListResponse: Codable, Sendable {
     let items: [PirepResponse]
     let count: Int
 }
 
-struct SubmitPirepRequest: Codable, Sendable {
+nonisolated struct SubmitPirepRequest: Codable, Sendable {
     var clientUuid: String?
     var observedAt: String
     var latitude: Double

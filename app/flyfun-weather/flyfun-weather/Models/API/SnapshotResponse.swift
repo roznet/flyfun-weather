@@ -6,7 +6,7 @@ import Foundation
 /// in place on an otherwise-unchanged pack — see
 /// `BriefingViewModel.applyRealtimeRefresh`. Everything else is fixed at pack
 /// build and stays `let`.
-struct SnapshotResponse: Codable, Sendable {
+nonisolated struct SnapshotResponse: Codable, Sendable {
     let route: RouteConfig
     let targetDate: String
     let daysOut: Int
@@ -28,7 +28,7 @@ struct SnapshotResponse: Codable, Sendable {
     let alternates: RouteAlternates?
 }
 
-struct RouteConfig: Codable, Sendable {
+nonisolated struct RouteConfig: Codable, Sendable {
     let name: String
     let waypoints: [Waypoint]
     let cruiseAltitudeFt: Int
@@ -36,7 +36,7 @@ struct RouteConfig: Codable, Sendable {
     let flightDurationHours: Double
 }
 
-struct Waypoint: Codable, Sendable, Identifiable {
+nonisolated struct Waypoint: Codable, Sendable, Identifiable {
     let icao: String
     let name: String
     let lat: Double
@@ -45,14 +45,14 @@ struct Waypoint: Codable, Sendable, Identifiable {
     var id: String { icao }
 }
 
-struct WaypointAnalysis: Codable, Sendable {
+nonisolated struct WaypointAnalysis: Codable, Sendable {
     let waypoint: Waypoint
     let targetTime: String?
     let windComponents: [String: WindComponent]?
     let sounding: [String: SoundingAnalysisSummary]?
 }
 
-struct WindComponent: Codable, Sendable {
+nonisolated struct WindComponent: Codable, Sendable {
     let windSpeedKt: Double
     let windDirectionDeg: Double
     let trackDeg: Double
@@ -61,14 +61,14 @@ struct WindComponent: Codable, Sendable {
 }
 
 /// Minimal sounding fields needed for airport conditions display.
-struct SoundingAnalysisSummary: Codable, Sendable {
+nonisolated struct SoundingAnalysisSummary: Codable, Sendable {
     let indices: ThermodynamicIndicesSummary?
     let cloudCoverLowPct: Double?
     let cloudCoverMidPct: Double?
     let cloudCoverHighPct: Double?
 }
 
-struct ThermodynamicIndicesSummary: Codable, Sendable {
+nonisolated struct ThermodynamicIndicesSummary: Codable, Sendable {
     let freezingLevelFt: Double?
     let capeSurfaceJkg: Double?
     let soundingCeilingFt: Double?
@@ -84,7 +84,7 @@ struct ThermodynamicIndicesSummary: Codable, Sendable {
 ///
 /// SYNC: `web/ts/managers/briefing-ui.ts` (`renderRouteObservations`) renders
 /// the same shape; `src/weatherbrief/models/observations.py` defines it.
-struct RouteObservations: Codable, Sendable {
+nonisolated struct RouteObservations: Codable, Sendable {
     let corridorNm: Double?
     let fetchTime: String?
     let airportsFound: Int?
@@ -148,7 +148,7 @@ struct RouteObservations: Codable, Sendable {
     }
 }
 
-struct AirportObservation: Codable, Identifiable, Sendable {
+nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     let icao: String
     let name: String?
     let distanceFromRouteNm: Double?
@@ -200,7 +200,7 @@ struct AirportObservation: Codable, Identifiable, Sendable {
 
 /// One airport's observation-vs-model reconciliation.
 /// Mirrors `models/observations.py::ObservationComparison`.
-struct ObservationComparison: Codable, Sendable {
+nonisolated struct ObservationComparison: Codable, Sendable {
     let icao: String
     let obsCategory: String?
     let modelCategory: String?
@@ -229,7 +229,7 @@ struct ObservationComparison: Codable, Sendable {
 ///
 /// SYNC: `web/ts/managers/briefing-ui.ts` (`renderRouteSigmets`);
 /// `src/weatherbrief/models/observations.py` defines the shape.
-struct RouteSigmets: Codable, Sendable {
+nonisolated struct RouteSigmets: Codable, Sendable {
     let corridorNm: Double?
     let fetchTime: String?
     /// The band the fetch filtered on: surface to cruise + 5,000 ft.
@@ -271,7 +271,7 @@ struct RouteSigmets: Codable, Sendable {
 /// the vertical band are deliberately retained by the server so a later map /
 /// cross-section overlay can be drawn without re-fetching — the table itself
 /// doesn't use the polygon.
-struct SigmetAlongRoute: Codable, Identifiable, Sendable {
+nonisolated struct SigmetAlongRoute: Codable, Identifiable, Sendable {
     let firId: String
     let firName: String?
     /// TURB / ICE / TS / MTW / VA …

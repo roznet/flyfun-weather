@@ -1,7 +1,7 @@
 import Foundation
 
 /// Request body for `POST /api/flights/bulk-delete`.
-struct BulkDeleteRequest: Codable, Sendable {
+nonisolated struct BulkDeleteRequest: Codable, Sendable {
     let ids: [String]
 }
 
@@ -10,7 +10,7 @@ struct BulkDeleteRequest: Codable, Sendable {
 /// of failing the request, so a *partial* success is a normal response shape, not
 /// an error — callers must surface it. Keys arrive snake_case (`not_found`) and
 /// map via the shared decoder's `.convertFromSnakeCase`.
-struct BulkDeleteResponse: Codable, Sendable {
+nonisolated struct BulkDeleteResponse: Codable, Sendable {
     let deleted: [String]
     let notFound: [String]
 }
@@ -20,12 +20,12 @@ struct BulkDeleteResponse: Codable, Sendable {
 /// gone server-side*, so a plain rethrow would strand those flights in the local
 /// list (tappable, 404 on open) with their packs orphaned on disk. `partial`
 /// carries the confirmed result so callers can still evict and drop them.
-struct BulkDeletePartialFailure: Error {
+nonisolated struct BulkDeletePartialFailure: Error {
     let partial: BulkDeleteResponse
     let underlying: Error
 }
 
-extension BulkDeleteResponse {
+nonisolated extension BulkDeleteResponse {
     /// Server cap on `ids` per request (`BulkDeleteRequest.ids`, `max_length=200`
     /// in `api/flights.py`). A "Select All" over a long logbook exceeds it, so
     /// requests are split rather than rejected.

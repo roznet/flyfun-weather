@@ -164,10 +164,10 @@ struct ForecastMapKitView: UIViewRepresentable {
     }
 }
 
-// MapKit calls these on the main thread; `@preconcurrency` lets the `@MainActor`
-// coordinator satisfy the (non-isolated) delegate protocol (same pattern as
-// `FlightTrackingService`'s `CLLocationManagerDelegate`).
-extension ForecastMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
+// MapKit calls these on the main thread; the `@MainActor` coordinator satisfies
+// the (non-isolated) delegate protocol through an inferred isolated conformance
+// (same pattern as `FlightTrackingService`'s `CLLocationManagerDelegate`).
+extension ForecastMapKitView.Coordinator: MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         guard let a = annotation as? ForecastAnnotation else { return nil }  // user location → default
         guard let view = mapView.dequeueReusableAnnotationView(

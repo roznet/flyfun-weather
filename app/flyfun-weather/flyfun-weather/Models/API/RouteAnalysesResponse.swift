@@ -1,7 +1,7 @@
 import Foundation
 
 /// Route analyses manifest — per-point sounding + wind data for all models.
-struct RouteAnalysesResponse: Codable, Sendable {
+nonisolated struct RouteAnalysesResponse: Codable, Sendable {
     let routeName: String
     let targetDate: String
     let departureTime: String
@@ -12,7 +12,7 @@ struct RouteAnalysesResponse: Codable, Sendable {
     let analyses: [RoutePointAnalysis]
 }
 
-struct RoutePointAnalysis: Codable, Sendable {
+nonisolated struct RoutePointAnalysis: Codable, Sendable {
     let pointIndex: Int
     let lat: Double
     let lon: Double
@@ -32,7 +32,7 @@ struct RoutePointAnalysis: Codable, Sendable {
 }
 
 /// Full sounding analysis for cross-section rendering.
-struct SoundingAnalysis: Codable, Sendable {
+nonisolated struct SoundingAnalysis: Codable, Sendable {
     let indices: ThermodynamicIndices?
     let cloudLayers: [EnhancedCloudLayer]?
     /// Native NWP cloud envelope. nil = no NWP source for this model;
@@ -51,7 +51,7 @@ struct SoundingAnalysis: Codable, Sendable {
     let nwpCloudDiagnostics: NWPCloudDiagnostics?
 }
 
-struct ThermodynamicIndices: Codable, Sendable {
+nonisolated struct ThermodynamicIndices: Codable, Sendable {
     let freezingLevelFt: Double?
     let minus10cLevelFt: Double?
     let minus20cLevelFt: Double?
@@ -72,7 +72,7 @@ struct ThermodynamicIndices: Codable, Sendable {
     let liftedIndex: Double?
 }
 
-struct EnhancedCloudLayer: Codable, Sendable {
+nonisolated struct EnhancedCloudLayer: Codable, Sendable {
     let baseFt: Double
     let topFt: Double
     let coverage: String
@@ -82,14 +82,14 @@ struct EnhancedCloudLayer: Codable, Sendable {
     let meanCloudCoverPct: Double?
 }
 
-struct IcingZone: Codable, Sendable {
+nonisolated struct IcingZone: Codable, Sendable {
     let baseFt: Double
     let topFt: Double
     let risk: String
     let icingType: String
 }
 
-struct SfipZone: Codable, Sendable {
+nonisolated struct SfipZone: Codable, Sendable {
     let baseFt: Double
     let topFt: Double
     let risk: String
@@ -98,13 +98,13 @@ struct SfipZone: Codable, Sendable {
     let variant: String
 }
 
-struct InversionLayer: Codable, Sendable {
+nonisolated struct InversionLayer: Codable, Sendable {
     let baseFt: Double
     let topFt: Double
     let strengthC: Double
 }
 
-struct ConvectiveAssessment: Codable, Sendable {
+nonisolated struct ConvectiveAssessment: Codable, Sendable {
     let riskLevel: String
     let baseFt: Double?
     let topFt: Double?
@@ -114,7 +114,7 @@ struct ConvectiveAssessment: Codable, Sendable {
     let method: String?
 }
 
-struct VerticalMotionAssessment: Codable, Sendable {
+nonisolated struct VerticalMotionAssessment: Codable, Sendable {
     let classification: String?
     let catRiskLayers: [CATRiskLayer]?
     /// Top of the detected surface well-mixed layer (#533); CAT layers below
@@ -132,7 +132,7 @@ struct VerticalMotionAssessment: Codable, Sendable {
     let modelSurfaceAltitudeFt: Double?
 }
 
-struct CATRiskLayer: Codable, Sendable {
+nonisolated struct CATRiskLayer: Codable, Sendable {
     let baseFt: Double
     let topFt: Double
     let risk: String
@@ -142,20 +142,20 @@ struct CATRiskLayer: Codable, Sendable {
     let boundaryLayer: Bool?
 }
 
-struct NWPCloudDiagnostics: Codable, Sendable {
+nonisolated struct NWPCloudDiagnostics: Codable, Sendable {
     let low: NWPCloudLayerDiag
     let mid: NWPCloudLayerDiag
     let high: NWPCloudLayerDiag
     let ceilingFt: Double?
 }
 
-struct NWPCloudLayerDiag: Codable, Sendable {
+nonisolated struct NWPCloudLayerDiag: Codable, Sendable {
     let coverPct: Double?
     let baseFt: Double?
     let topFt: Double?
 }
 
-struct ModelDivergence: Codable, Sendable {
+nonisolated struct ModelDivergence: Codable, Sendable {
     let variable: String
     let modelValues: [String: Double]
     let mean: Double

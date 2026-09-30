@@ -72,7 +72,7 @@ struct RouteGraphMetric: Identifiable {
     let getValue: (VizPoint) -> Double?
     let formatValue: (Double) -> String
 
-    enum RenderType {
+    nonisolated enum RenderType {
         case line
         case bar
     }
