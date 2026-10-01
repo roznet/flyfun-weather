@@ -726,15 +726,6 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
         for row in rows
     }
 
-    try:
-        from weatherbrief.storage.flights import _resolve_artifact_path
-        from weatherbrief.tasks.live_layer import live_updated_at_for_pack
-
-        ts = live_updated_at_for_pack(_resolve_artifact_path(artifact_path))
-        return ts.isoformat() if ts is not None else None
-    except Exception:
-        return None
-
 
 def _live_updated_at_iso(artifact_path: str | None) -> str | None:
     from weatherbrief.tasks.live_layer import live_updated_at_iso

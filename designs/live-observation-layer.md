@@ -67,7 +67,9 @@ The tick resolves each flight's corridor airports with euro_aip's own
 `fetch_route_weather` against a *recording* source (so aliases and route airports
 match the network path exactly), tops up only what verification did not cover in
 one batch, and serves every flight through `SharedReportSource`. SIGMETs: one
-`fetch_isigmet` per tick (`SharedSigmetSource`). Worst case per tick: two
+`fetch_isigmet` per tick (`SharedSigmetSource`); a failure is logged once and
+cached, and every flight then gets `SigmetSourceUnavailable`, which
+`run_realtime_refresh` skips quietly (stored SIGMETs kept). Worst case per tick: two
 METAR/TAF batches and one SIGMET call, whatever the flight count. Observed
 radar/lightning/tops are re-sampled from local frames (no network).
 
@@ -118,7 +120,8 @@ digest, alternate requirement.
   kept as strings). `BriefingRepository.liveLayer(flightId:)` on all conformers.
 - **Per-flight live cache** `<flightId>/live.json` in `BriefingCacheStore`, separate
   from the immutable pack bundle; newest wins (checked inside the actor); survives
-  relaunch and serves offline. Encoded with plain `JSONEncoder`, not
+  relaunch and serves offline (any error but 401/403/404 — an auth failure or a
+  deleted flight is rethrown, not masked by stale observations). Encoded with plain `JSONEncoder`, not
   `.weatherBrief` — snake-casing would corrupt `ObservedConditions` dictionary keys
   like `"FL000-050"`. Removed with the flight directory.
 - `BriefingViewModel.applyLive(_:to:packTimestamp:)` (pure): applies only when the

@@ -23,6 +23,14 @@ from weatherbrief.models.observations import (
 
 logger = logging.getLogger(__name__)
 
+
+class SigmetSourceUnavailable(Exception):
+    """A shared SIGMET source that already logged its upstream failure.
+
+    :func:`run_realtime_refresh` skips the SIGMET step quietly on this, so a
+    once-per-tick outage isn't re-logged with a traceback for every flight.
+    """
+
 # Flight category severity: higher index = worse conditions
 _CATEGORY_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 
@@ -844,6 +852,8 @@ def run_realtime_refresh(
             airports_db_path=db_path,
             source=sigmet_source,
         )
+    except SigmetSourceUnavailable:
+        logger.debug("Route SIGMET refresh skipped: source already reported down")
     except Exception:
         logger.warning("Route SIGMET refresh failed", exc_info=True)
 

@@ -39,6 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, FlightRow
+from weatherbrief.tasks.route_weather import SigmetSourceUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,10 @@ class SharedReportSource:
 class SharedSigmetSource:
     """Fetches international SIGMETs once per tick, whatever the flight count.
 
-    A failure is cached too and re-raised for every later flight, so an
-    unhealthy upstream costs one call per tick, not one per flight (each
-    flight then keeps its stored SIGMETs).
+    A failure is logged once and cached; every flight then gets a
+    :class:`SigmetSourceUnavailable`, which the refresh skips quietly. An
+    unhealthy upstream costs one call and one traceback per tick, not one per
+    flight (each flight keeps its stored SIGMETs).
     """
 
     def __init__(self, upstream=None) -> None:
@@ -167,10 +169,14 @@ class SharedSigmetSource:
                     region=region, hazard=hazard, level=level, date=date,
                 )
             except Exception as exc:
+                logger.warning(
+                    "Live tick SIGMET fetch failed — flights keep stored SIGMETs this tick",
+                    exc_info=True,
+                )
                 self._cache[key] = exc
         cached = self._cache[key]
         if isinstance(cached, BaseException):
-            raise cached
+            raise SigmetSourceUnavailable(str(cached)) from cached
         return cached
 
 
@@ -287,10 +293,8 @@ class LiveTick:
 
 
 def _cloud_source(db: Session, flight: FlightRow) -> str | None:
-    """The flight profile's cloud grading source — same rule as the ↻ path."""
-    try:
-        from weatherbrief.api.profiles import load_profile_settings
+    """The flight profile's cloud grading source — the ↻ path's own helper, so
+    a lookup failure degrades (and logs) the same way."""
+    from weatherbrief.api.packs import _profile_cloud_source
 
-        return load_profile_settings(db, flight.profile_id, flight.user_id).get("cloud_source")
-    except Exception:
-        return None
+    return _profile_cloud_source(db, flight, flight.user_id)

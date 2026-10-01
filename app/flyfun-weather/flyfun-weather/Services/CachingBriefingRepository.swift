@@ -312,6 +312,14 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
             await storeLiveLayer(layer, flightId: flightId)
             return layer
         } catch {
+            // Auth failures and a deleted flight are answers, not "offline":
+            // serving stale observations there would hide them.
+            if let apiError = error as? APIError {
+                switch apiError {
+                case .unauthorized, .forbidden, .notFound: throw error
+                default: break
+                }
+            }
             if let cached = await cache.readLiveLayer(flightId: flightId) {
                 Self.logger.info("Serving live layer from cache for \(flightId) (offline)")
                 return cached

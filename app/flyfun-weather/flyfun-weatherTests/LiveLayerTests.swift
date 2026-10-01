@@ -354,6 +354,20 @@ private func makeSnapshot(liveUpdatedAt: String? = nil, daysOut: Int = 0) throws
         }
     }
 
+    /// A deleted flight or an auth failure is an answer, not "offline" — the
+    /// cached layer must not mask it.
+    @Test func notFoundIsNotServedFromCache() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let online = MockBriefingRepository()
+        online.liveLayerHandler = { throw APIError.notFound }
+        let repo = CachingBriefingRepository.makeForTesting(online: online, cache: BriefingCacheStore(cacheDir: dir))
+        #expect(await repo.storeLiveLayer(try makeLiveLayer(), flightId: "ZZ-flt") == true)
+        await #expect(throws: APIError.self) {
+            _ = try await repo.liveLayer(flightId: "ZZ-flt")
+        }
+    }
+
     @Test func newestWinsInTheCache() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

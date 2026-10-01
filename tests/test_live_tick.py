@@ -17,6 +17,7 @@ from weatherbrief.tasks.live_tick import (
     find_live_flights,
     in_live_window,
 )
+from weatherbrief.tasks.route_weather import SigmetSourceUnavailable
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -238,6 +239,6 @@ def test_shared_sigmet_source_caches_failure():
     upstream.fetch_isigmet.side_effect = RuntimeError("down")
     src = SharedSigmetSource(upstream)
     for _ in range(3):
-        with pytest.raises(RuntimeError):
+        with pytest.raises(SigmetSourceUnavailable):
             src.fetch_isigmet(region="eur")
     upstream.fetch_isigmet.assert_called_once()
