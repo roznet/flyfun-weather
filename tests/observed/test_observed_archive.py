@@ -267,3 +267,66 @@ def test_archive_reads_no_forecast_data(store, root, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", _refuse)
     result = run_observed_archive(STATIONS, store=store, root=root, now=NOW)
     assert not result.errors
+
+
+def _compact_with_crash_before_part_cleanup(store, root, monkeypatch, *, lose_manifest):
+    """Compact, but die before the parts are deleted (timeout / OOM kill)."""
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+
+    def _killed(*_a, **_k):
+        raise KeyboardInterrupt("child killed")
+
+    monkeypatch.setattr(observed_archive.shutil, "rmtree", _killed)
+    with pytest.raises(KeyboardInterrupt):
+        observed_archive.compact_day(root, SOURCE_OPERA_DBZH, "2026-08-25")
+    monkeypatch.undo()
+    if lose_manifest:
+        # The other crash window: day file renamed, manifest not yet written.
+        manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").unlink()
+    assert part_path(root, SOURCE_OPERA_DBZH, FRAME_TIME).exists()
+
+
+@pytest.mark.parametrize("lose_manifest", [False, True])
+def test_recompaction_after_a_crash_does_not_duplicate_rows(
+    store, root, monkeypatch, lose_manifest
+):
+    _compact_with_crash_before_part_cleanup(
+        store, root, monkeypatch, lose_manifest=lose_manifest
+    )
+
+    result = run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+
+    assert result.compacted[SOURCE_OPERA_DBZH] == ["2026-08-25"]
+    table = pq.read_table(day_path(root, SOURCE_OPERA_DBZH, "2026-08-25"))
+    assert table.num_rows == IN_DOMAIN * RADII
+    keys = list(zip(
+        table.column("icao").to_pylist(), table.column("radius_nm").to_pylist(),
+    ))
+    assert len(keys) == len(set(keys))
+    manifest = json.loads(manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").read_text())
+    assert manifest["rows"] == IN_DOMAIN * RADII
+    assert manifest["frames"] == ["20260825T1400"]
+    assert not (root / "parts" / SOURCE_OPERA_DBZH / "2026-08-25").exists()
+    assert all(r["ok"] for r in verify_observed_archive(root))
+
+
+def test_an_unreadable_manifest_is_reported_not_fatal(store, root):
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+    manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").write_text("")
+
+    report = verify_observed_archive(root)
+
+    bad = [r for r in report if not r["ok"]]
+    assert [(r["source"], r["problem"]) for r in bad] == [
+        (SOURCE_OPERA_DBZH, "manifest unreadable")
+    ]
+    # The other sources' days are still checked.
+    assert len(report) == 4
+
+
+def test_a_day_sealed_with_missing_frames_is_logged(store, root, caplog):
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    with caplog.at_level("WARNING", logger="weatherbrief.tasks.observed_archive"):
+        run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+    assert any("143 of 144 frames missing" in m for m in caplog.messages)
