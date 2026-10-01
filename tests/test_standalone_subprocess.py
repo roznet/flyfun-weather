@@ -430,3 +430,59 @@ def test_failed_cycle_ignores_rows_from_before_launch(db_engine, monkeypatch):
         session.query(VerificationCycleRow).delete()
         session.commit()
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Observed-conditions archive (#575) riding the METAR ingest tick
+# ---------------------------------------------------------------------------
+
+
+def _enable_observed_archive(monkeypatch):
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_OBSERVED_ARCHIVE_ENABLED", "1")
+
+
+def test_observed_archive_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("WB_OBSERVED_ARCHIVE_ENABLED", raising=False)
+    monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    captured = _patch_exec(monkeypatch, FakeProc())
+    asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
+    assert captured == {}
+
+
+def test_observed_archive_needs_the_collector(monkeypatch):
+    monkeypatch.setenv("WB_OBSERVED_ARCHIVE_ENABLED", "1")
+    monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+    captured = _patch_exec(monkeypatch, FakeProc())
+    asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
+    assert captured == {}
+
+
+def test_observed_archive_runs_the_cli_in_a_child(monkeypatch):
+    _enable_observed_archive(monkeypatch)
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    captured = _patch_exec(monkeypatch, FakeProc(returncode=0))
+    asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
+    assert captured["cmd"][1:] == [
+        "-m", "weatherbrief.verify", "observed-archive", "run", "--background",
+    ]
+
+
+def test_observed_archive_failure_never_reaches_the_metar_loop(monkeypatch):
+    """A failing archive must not push METAR ingest into its error back-off."""
+    _enable_observed_archive(monkeypatch)
+
+    async def boom(*_a, **_k):
+        raise OSError("cannot spawn")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boom)
+    asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
+
+
+def test_observed_archive_child_is_killed_on_timeout(monkeypatch):
+    _enable_observed_archive(monkeypatch)
+    proc = FakeProc(hang=True)
+    _patch_exec(monkeypatch, proc)
+    monkeypatch.setattr(scheduler, "_OBSERVED_ARCHIVE_TIMEOUT_S", 0.01)
+    asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
+    assert proc.terminated

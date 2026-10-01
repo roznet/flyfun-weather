@@ -84,6 +84,9 @@ _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 _METAR_INGEST_INTERVAL_SECONDS = 1800  # 30 minutes
 _METAR_INGEST_OFFSET_SECONDS = 0  # fire at :00/:30 sharp
 _METAR_INGEST_STARTUP_DELAY_SECONDS = 200  # land before standalone (240s)
+# Observed-conditions archive (#575) rides the METAR ingest tick. A normal run
+# is a few frames per source; the cap only bounds a wedged child.
+_OBSERVED_ARCHIVE_TIMEOUT_S = 20 * 60
 # Verification scoring fires 15 min past each synoptic hour, giving the HH:00
 # ingest plenty of margin (METAR fetch is ~30-60s) and ensuring freshly-stored
 # METARs are scored against snapshots already in DB.
@@ -1017,11 +1020,89 @@ async def run_metar_ingest_loop(app_state) -> None:
             )
             await asyncio.sleep(sleep_secs)
             await asyncio.to_thread(_run_metar_ingest_once, app_state)
+            await _run_observed_archive_after_ingest(app_state)
             # Advance past the current bucket so we don't re-trigger immediately
             await asyncio.sleep(60)
         except Exception:
             logger.error("METAR ingest cycle failed", exc_info=True)
             await asyncio.sleep(900)
+
+
+async def _run_observed_archive_after_ingest(app_state) -> None:
+    """Archive observed conditions at the watchlist (#575), after METAR ingest.
+
+    Rides the ingest tick so observations of both kinds land on the same
+    30-minute cadence. Every 30 min is also what the frame store's retention
+    demands: CTTH frames are kept for one hour, so a slower cadence would lose
+    cloud tops outright.
+
+    Never raises: a failure here must not push the METAR loop into its
+    15-minute error back-off. Runs in a child process for the same reason the
+    standalone cycles do (#236) — a sampled frame's window is tens to hundreds
+    of MB transient, and the uvicorn heap never gives a peak back.
+    """
+    from weatherbrief.tasks.verification_tiering import observed_archive_enabled
+
+    if not observed_archive_enabled():
+        return
+    try:
+        if not _standalone_subprocess_enabled():
+            await asyncio.to_thread(_run_observed_archive_once, app_state)
+            return
+        cmd = [
+            sys.executable, "-m", "weatherbrief.verify",
+            "observed-archive", "run", "--background",
+        ]
+        proc = await asyncio.create_subprocess_exec(*cmd)
+        try:
+            returncode = await asyncio.wait_for(
+                proc.wait(), timeout=_OBSERVED_ARCHIVE_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Observed archive subprocess exceeded %ds, killed",
+                _OBSERVED_ARCHIVE_TIMEOUT_S,
+            )
+            await _terminate_subprocess(proc)
+            return
+        except asyncio.CancelledError:
+            if proc.returncode is None:
+                proc.terminate()
+            raise
+        if returncode != 0:
+            logger.error("Observed archive subprocess exited with code %d", returncode)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.error("Observed archive run failed", exc_info=True)
+
+
+def _run_observed_archive_once(app_state) -> None:
+    """In-process observed archive run (``STANDALONE_SUBPROCESS=0`` rollback)."""
+    db_path = getattr(app_state, "db_path", "")
+    if not db_path:
+        logger.warning("Observed archive: no AIRPORTS_DB configured")
+        return
+
+    from weatherbrief.tasks.airport_watchlist import (
+        get_configs_dir,
+        load_watchlist_with_coords,
+    )
+    from weatherbrief.tasks.observed_archive import (
+        run_observed_archive,
+        stations_from_watchlist,
+    )
+
+    stations = stations_from_watchlist(
+        load_watchlist_with_coords(get_configs_dir(), db_path)
+    )
+    if not stations:
+        return
+    result = run_observed_archive(stations)
+    logger.info(
+        "Observed archive: frames %s, compacted %s, %d errors",
+        result.frames, result.compacted, len(result.errors),
+    )
 
 
 def _seconds_until_next_30min_boundary(offset_seconds: int) -> float:

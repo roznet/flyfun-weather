@@ -49,6 +49,13 @@ ships the code changes nothing):
     ``SNAPSHOT_INBOX_DIR``. ``0`` (the shipping default) keeps them forever,
     matching today's behaviour; Phase 3 sets it to 30.
 
+``WB_OBSERVED_ARCHIVE_ENABLED``
+    #575, alongside Phase 2. ``1`` samples the observed-frame store (radar,
+    lightning, cloud tops) at the watchlist airports on every METAR ingest
+    tick and writes the rows under ``DATA_DIR/archive/observed/``. Needs
+    ``WB_OBSERVED_ENABLED`` too — without the collector there are no frames.
+    The CLI (``verify observed-archive run``) works regardless.
+
 ``VERIFICATION_MONTHLY_ROLLUP_ENABLED``
     Phase 4. ``1`` rolls completed months into ``verification_monthly_stats``
     from the daily table in the retention loop.
@@ -125,6 +132,22 @@ def data_dir() -> Path:
 def archive_root() -> Path:
     """Root of the row-level Parquet archive: ``DATA_DIR/archive/verification``."""
     return data_dir() / "archive" / "verification"
+
+
+def observed_archive_enabled() -> bool:
+    """Whether the METAR ingest loop also archives observed conditions (#575).
+
+    Requires the observed-frame collector to be on as well: the archive only
+    reads frames the collector has already written.
+    """
+    from weatherbrief.observed.collect import observed_enabled
+
+    return _flag("WB_OBSERVED_ARCHIVE_ENABLED", False) and observed_enabled()
+
+
+def observed_archive_root() -> Path:
+    """Root of the observed-conditions archive: ``DATA_DIR/archive/observed``."""
+    return data_dir() / "archive" / "observed"
 
 
 # ---------------------------------------------------------------------------

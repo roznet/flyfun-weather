@@ -111,6 +111,12 @@ tasks/archive.py                        ← row-level Parquet archive (#522)
 ├── verify_archives()                   ← recheck sha256 + live counts
 └── month_archive_ok() / snapshot_day_archived()  ← the gates retention consults
 
+tasks/observed_archive.py               ← observed radar/lightning/cloud tops at the watchlist (#575)
+├── run_observed_archive()              ← every pending frame → per-frame part; compact final days
+├── frame_rows()                        ← one frame × in-domain airports × {5,10,20} NM
+└── verify_observed_archive()           ← recheck sha256 + row counts of compacted days
+                                          (rides the METAR ingest tick; see designs/current-conditions.md)
+
 tasks/cache_builder.py                  ← pre-computed API response cache
 ├── rebuild_stats_cache()               ← stats:{source}:{period} (24h/7d/30d)
 ├── rebuild_bias_leaderboard_cache()    ← bias_leaderboard:{model}:{d}:{period}
