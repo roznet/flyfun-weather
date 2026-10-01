@@ -17,6 +17,7 @@ import type {
   FlightResponse,
   ForecastSnapshot,
   IcingRisk,
+  LiveChange,
   ModelSourceDetail,
   ObservationComparison,
   OperationalFlag,
@@ -52,6 +53,15 @@ import * as api from '../adapters/api-adapter';
 import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, modelSlotLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
 import { showRoutePopup } from '../components/route-interpret';
+import {
+  OBSERVED_STALE_MIN,
+  changedIcaos,
+  changedSigmetKeys,
+  formatHhmmZ,
+  minutesAgo,
+  observedAsOf,
+  sigmetChangeKey,
+} from '../helpers/live-layer';
 
 // --- Header ---
 
@@ -1239,14 +1249,11 @@ export function renderRouteObservations(
     compMap.set(c.icao, c);
   }
 
-  // Fetch time label
-  let fetchLabel = '';
-  if (obs.fetch_time) {
-    try {
-      const d = new Date(obs.fetch_time);
-      fetchLabel = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 'Z';
-    } catch { /* ignore */ }
-  }
+  // Fetch time label — UTC (the "Z" suffix promises it; toLocaleTimeString
+  // printed the browser's local time).
+  const fetchLabel = formatHhmmZ(obs.fetch_time);
+  // Airports whose METAR/TAF category changed since the briefing (#637).
+  const liveIcaos = changedIcaos(snapshot?.live_changes);
 
   // Refresh button (D-0 only, when callback provided)
   const refreshBtn = (onRefresh && snapshot?.days_out === 0)
@@ -1274,7 +1281,11 @@ export function renderRouteObservations(
     .map((apt) => {
       const comp = compMap.get(apt.icao);
       const isConflict = comp?.category_match === 'CONFLICTING';
-      const rowClass = isConflict ? ' class="obs-conflict-row"' : '';
+      const classes = [
+        isConflict ? 'obs-conflict-row' : '',
+        liveIcaos.has(apt.icao.toUpperCase()) ? 'live-changed' : '',
+      ].filter(Boolean).join(' ');
+      const rowClass = classes ? ` class="${classes}"` : '';
 
       // Wind tooltips
       const mTip = windTooltip(apt.metar_best_runway_id, apt.metar_crosswind_kt);
@@ -1322,8 +1333,10 @@ export function renderRouteObservations(
     </div>
   `;
 
-  // Wire click handlers via event delegation
-  el.addEventListener('click', (e) => {
+  // Wire click handlers via event delegation. Assign (not addEventListener):
+  // live polling (#637) re-renders this section, and stacked listeners would
+  // fire the refresh once per past render.
+  el.onclick = (e) => {
     const target = e.target as HTMLElement;
 
     // (i) info button
@@ -1349,7 +1362,7 @@ export function renderRouteObservations(
         refreshBtn.textContent = t('observations.refresh');
       });
     }
-  });
+  };
 }
 
 // --- Weather-based alternates (D-2 inward) ---
@@ -2117,13 +2130,9 @@ export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
   }
   if (wrapper) wrapper.style.display = '';
 
-  let fetchLabel = '';
-  if (sig.fetch_time) {
-    try {
-      const d = new Date(sig.fetch_time);
-      fetchLabel = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 'Z';
-    } catch { /* ignore */ }
-  }
+  const fetchLabel = formatHhmmZ(sig.fetch_time);
+  // SIGMETs issued/escalated since the briefing (#637), keyed like the server.
+  const liveKeys = changedSigmetKeys(snapshot?.live_changes);
 
   const hazards = sig.hazards.length > 0
     ? `${t('sigmets.hazards')}${escapeHtml(sig.hazards.join(', '))}`
@@ -2138,7 +2147,11 @@ export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
   const rows = sig.sigmets.map((s, i) => {
     const head = [s.qualifier, s.hazard].filter(Boolean).join(' ') || 'SIGMET';
     const isSevere = (s.qualifier ?? '').toUpperCase() === 'SEV';
-    const rowClass = isSevere ? ' class="obs-conflict-row"' : '';
+    const classes = [
+      isSevere ? 'obs-conflict-row' : '',
+      liveKeys.size > 0 && liveKeys.has(sigmetChangeKey(s)) ? 'live-changed' : '',
+    ].filter(Boolean).join(' ');
+    const rowClass = classes ? ` class="${classes}"` : '';
     const move = s.direction && s.speed_kt ? `${escapeHtml(s.direction)} ${s.speed_kt}kt` : '—';
     return `
       <tr${rowClass}>
@@ -2193,30 +2206,159 @@ const RD_WARN_ICON =
 // MVFR/LIFR win over VFR/IFR; \b boundaries keep MVFR from matching VFR).
 const RD_CAT_RE = /\b(LIFR|MVFR|VFR|IFR)\b/g;
 
+/** "12 min ago" / "1 h 05 min ago" for an ISO time; '' when unparseable. */
+function liveAgeText(iso: string | null | undefined, now: number = Date.now()): string {
+  const min = minutesAgo(iso, now);
+  if (min == null) return '';
+  if (min < 1) return t('live.justNow');
+  if (min < 60) return t('live.minAgo', { n: min });
+  return t('live.hAgo', { h: Math.floor(min / 60), m: String(min % 60).padStart(2, '0') });
+}
+
+/** "Observed as of HH:MMZ (N min ago)", stale-tinted past 30 min. Carries the
+ *  ISO in `data-live-asof` so {@link refreshLiveAges} can re-age it in place. */
+function observedAsOfHtml(iso: string, now: number = Date.now()): string {
+  const min = minutesAgo(iso, now);
+  const stale = min != null && min > OBSERVED_STALE_MIN ? ' live-asof-stale' : '';
+  return `<div class="live-asof${stale}" data-live-asof="${escapeHtml(iso)}">`
+    + `${escapeHtml(t('live.observedAsOf', { time: formatHhmmZ(iso), age: liveAgeText(iso, now) }))}</div>`;
+}
+
+function liveSourceLabel(source: string): string {
+  const key = `live.source.${source}`;
+  const label = t(key);
+  return label === key ? source : label;
+}
+
+function liveChangeRow(c: LiveChange, now: number): string {
+  const worse = c.direction === 'worse';
+  const arrow = worse ? '\u2191' : '\u2193';
+  const dirLabel = t(worse ? 'refreshDelta.worse' : 'refreshDelta.better');
+  const alert = c.tier === 'alert';
+  const msg = escapeHtml(c.message).replace(RD_CAT_RE, (cat) => flightCatBadge(cat));
+  const age = c.observed_at
+    ? `<span class="rd-age" data-live-age="${escapeHtml(c.observed_at)}">${escapeHtml(liveAgeText(c.observed_at, now))}</span>`
+    : '';
+  return `<li class="rd-row ${worse ? 'rd-worse' : 'rd-better'}${alert ? ' rd-alert' : ''}"`
+    + `${alert ? ` title="${escapeHtml(t('refreshDelta.alert'))}"` : ''}>`
+    + `<span class="rd-arrow" role="img" aria-label="${escapeHtml(dirLabel)}" title="${escapeHtml(dirLabel)}">${arrow}</span>`
+    + `<span class="rd-src rd-src-${escapeHtml(c.source.toLowerCase())}">${escapeHtml(liveSourceLabel(c.source))}</span>`
+    + `<span class="rd-msg">${msg}</span>${age}</li>`;
+}
+
 /**
- * Banner warning that conditions worsened since the last real-time refresh.
- * Only shown when something actually got worse; the digest is NOT regenerated
- * on a realtime refresh, so this is the user's signal that the AI text may be
- * behind. Hidden (and cleared) otherwise.
+ * "Since this briefing" panel (#637): the live layer's significant changes
+ * since the pack was fetched — both directions, alert tier (departure /
+ * destination / alternates) emphasised — plus the "Observed as of" label.
+ * The digest is NOT regenerated on a live update, so this is the pilot's
+ * signal that the AI text may be behind.
+ *
+ * Falls back to the pre-#637 worsened-only list when the snapshot carries
+ * only a legacy `last_refresh_delta`. Hidden when there is nothing to say.
  */
-export function renderRefreshDelta(snapshot: ForecastSnapshot | null): void {
+export function renderRefreshDelta(
+  snapshot: ForecastSnapshot | null,
+  packTimestamp: string | null = null,
+  now: number = Date.now(),
+): void {
   const el = $('refresh-delta-banner');
   if (!el) return;
 
-  const delta = snapshot?.last_refresh_delta;
-  if (!delta || !delta.worsened || delta.messages.length === 0) {
+  const hide = () => {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    el.className = 'refresh-delta-banner';
+  };
+  if (!snapshot) { hide(); return; }
+
+  // "Observed as of" — D-0 only, and only when there are observations.
+  const asOf = snapshot.days_out === 0 && snapshot.route_observations
+    ? observedAsOf(snapshot)
+    : null;
+  const asOfHtml = asOf ? observedAsOfHtml(asOf, now) : '';
+  const baselineIso = snapshot.live_changes?.baseline_at ?? packTimestamp;
+  const baseline = formatHhmmZ(baselineIso);
+
+  const live = snapshot.live_changes;
+  if (live && live.changes.length > 0) {
+    const worse = live.worsened_count > 0 || live.changes.some(c => c.direction === 'worse');
+    const title = baseline
+      ? t('refreshDelta.sinceBriefing', { time: baseline })
+      : t('refreshDelta.sinceBriefingNoTime');
+    el.className = `refresh-delta-banner rd-live${worse ? '' : ' rd-live-better'}`;
+    el.innerHTML = `
+      <div class="rd-title">${worse ? RD_WARN_ICON : ''}<span>${escapeHtml(title)}</span></div>
+      ${asOfHtml}
+      <ul class="rd-list rd-live-list">${live.changes.map(c => liveChangeRow(c, now)).join('')}</ul>
+    `;
+    el.style.display = '';
+    return;
+  }
+
+  const delta = snapshot.last_refresh_delta;
+  if (!live && delta && delta.worsened && delta.messages.length > 0) {
+    // Legacy (pre-#637) worsened-only rendering.
+    const items = delta.messages
+      .map(m => `<li>${escapeHtml(m).replace(RD_CAT_RE, (cat) => flightCatBadge(cat))}</li>`)
+      .join('');
+    el.className = 'refresh-delta-banner';
+    el.innerHTML = `
+      <div class="rd-title">${RD_WARN_ICON}<span>${t('refreshDelta.title')}</span></div>
+      ${asOfHtml}
+      <ul class="rd-list">${items}</ul>
+    `;
+    el.style.display = '';
+    return;
+  }
+
+  // A live layer with nothing significant → one quiet line.
+  const quiet = (live || snapshot.live_updated_at) && baseline
+    ? `<div class="rd-quiet">${escapeHtml(t('refreshDelta.noChange', { time: baseline }))}</div>`
+    : '';
+  if (!quiet && !asOfHtml) { hide(); return; }
+  el.className = 'refresh-delta-banner rd-quiet-banner';
+  el.innerHTML = `${asOfHtml}${quiet}`;
+  el.style.display = '';
+}
+
+/** Re-age the "Observed as of" label and the change rows in place, without a
+ *  re-render — called on the live-poll tick (#637). */
+export function refreshLiveAges(now: number = Date.now()): void {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll<HTMLElement>('[data-live-asof]').forEach((node) => {
+    const iso = node.dataset.liveAsof ?? '';
+    const min = minutesAgo(iso, now);
+    node.textContent = t('live.observedAsOf', { time: formatHhmmZ(iso), age: liveAgeText(iso, now) });
+    node.classList.toggle('live-asof-stale', min != null && min > OBSERVED_STALE_MIN);
+  });
+  document.querySelectorAll<HTMLElement>('[data-live-age]').forEach((node) => {
+    node.textContent = liveAgeText(node.dataset.liveAge, now);
+  });
+}
+
+/**
+ * AI-digest caveat (#637): the digest and the assessment sentence were written
+ * against the pack's observations; when the live layer has since recorded
+ * changes, say so — "Written at HH:MMZ, before N changes". Hidden otherwise.
+ */
+export function renderDigestLiveCaveat(
+  pack: PackMeta | null,
+  snapshot: ForecastSnapshot | null,
+): void {
+  const el = $('digest-live-caveat');
+  if (!el) return;
+  const n = snapshot?.live_changes?.changes.length ?? 0;
+  const hasAiText = !!pack && (pack.has_digest || !!pack.assessment_reason || !!pack.outlook_reason);
+  const time = formatHhmmZ(snapshot?.live_changes?.baseline_at ?? pack?.fetch_timestamp);
+  if (!pack || !hasAiText || n === 0 || !time) {
     el.style.display = 'none';
     el.innerHTML = '';
     return;
   }
-
-  const items = delta.messages
-    .map(m => `<li>${escapeHtml(m).replace(RD_CAT_RE, (cat) => flightCatBadge(cat))}</li>`)
-    .join('');
-  el.innerHTML = `
-    <div class="rd-title">${RD_WARN_ICON}<span>${t('refreshDelta.title')}</span></div>
-    <ul class="rd-list">${items}</ul>
-  `;
+  const msg = n === 1
+    ? t('digest.liveCaveatOne', { time })
+    : t('digest.liveCaveat', { time, n });
+  el.innerHTML = `<span class="digest-live-caveat-text">${escapeHtml(msg)}</span>`;
   el.style.display = '';
 }
 

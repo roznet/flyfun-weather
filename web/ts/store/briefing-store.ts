@@ -1,7 +1,7 @@
 /** Zustand vanilla store for the Briefing report page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, LiveLayer, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
 import type { RouteWindOverlay, TimeOptionsResponse } from '../adapters/api-adapter';
@@ -15,6 +15,7 @@ import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-sec
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
+import { applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
 
 // --- localStorage persistence helpers ---
 
@@ -158,6 +159,10 @@ export interface BriefingState {
    * job, polled after pack load until the status is terminal. null when the
    * flight has Flexibility "none" (section hidden). */
   timeOptions: TimeOptionsResponse | null;
+  /** Last live layer (#637) applied on top of the current pack's snapshot.
+   *  null until `loadLive` applies one (the latest pack's snapshot already
+   *  carries the server-side overlay at load time). */
+  live: LiveLayer | null;
 
   // Actions
   loadFlight: (id: string) => Promise<void>;
@@ -191,6 +196,14 @@ export interface BriefingState {
   changeFlightProfile: (profileId: number) => Promise<void>;
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
+  /** Fetch the live layer (#637) and fold it into the snapshot when it is for
+   *  the pack being viewed and newer than what is applied. Out-of-order and
+   *  stale responses are dropped. */
+  loadLive: () => Promise<void>;
+  /** Poll step (#637): re-read the latest pack meta. A new pack → select it;
+   *  same pack with a different live_updated_at → `loadLive()`. No-op unless
+   *  the user is viewing the latest pack. */
+  syncLatest: () => Promise<void>;
   /** Generate the AI summary on demand for a pack whose profile had AI off. */
   generateDigest: () => Promise<void>;
   sendEmail: () => Promise<void>;
@@ -354,6 +367,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   altitudeTableLoading: false,
   emailing: false,
   error: null,
+  live: null,
 
   loadFlight: async (id: string) => {
     set({ loading: true, error: null });
@@ -444,7 +458,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, live: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
@@ -857,10 +871,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   refreshObservations: async () => {
-    const { flight, currentPack, snapshot } = get();
-    if (!flight || !currentPack || !snapshot) return;
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack || !get().snapshot) return;
     try {
       const result = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
+      // Fold into the snapshot as it is NOW (a live poll may have landed
+      // meanwhile), and only if the user is still on the same pack.
+      const snapshot = get().snapshot;
+      if (!snapshot || get().currentPack?.fetch_timestamp !== currentPack.fetch_timestamp) return;
       // Only overwrite SIGMETs when the server actually returned them; a null
       // means the SIGMET fetch failed server-side — keep the existing ones
       // rather than silently blanking the section.
@@ -877,10 +895,66 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // lightning / cloud-top picture, and the client was discarding it.
           ...(result.observed != null ? { observed_conditions: result.observed } : {}),
           last_refresh_delta: result.delta ?? null,
+          // #637: changes since the briefing + the live-layer stamp, so the
+          // "Since this briefing" panel and "Observed as of" label follow.
+          ...(result.changes !== undefined ? { live_changes: result.changes } : {}),
+          ...(result.live_updated_at ? { live_updated_at: result.live_updated_at } : {}),
         },
       });
     } catch (err) {
       set({ error: `Observation refresh failed: ${err}` });
+    }
+  },
+
+  loadLive: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    const flightId = flight.id;
+    const packTs = currentPack.fetch_timestamp;
+    let live: LiveLayer;
+    try {
+      live = await api.fetchLive(flightId);
+    } catch {
+      return; // Non-critical: the pack's own observations stay on screen.
+    }
+    // Drop responses for a flight/pack that is no longer the one on screen.
+    const now = get();
+    if (now.flight?.id !== flightId || now.currentPack?.fetch_timestamp !== packTs || !now.snapshot) return;
+    // Drop a response older than (or equal to) the one already applied —
+    // a slow poll landing after a newer one must not roll the overlay back.
+    const appliedMs = isoToMs(now.live?.live_updated_at);
+    if (!isNaN(appliedMs) && !(isoToMs(live.live_updated_at) > appliedMs)) return;
+    const next = applyLiveToSnapshot(now.snapshot, live, packTs);
+    if (!next) return;
+    set({ snapshot: next, live });
+  },
+
+  syncLatest: async () => {
+    const { flight, currentPack, packs, refreshing } = get();
+    if (!flight || !currentPack || refreshing) return;
+    // Only follow along when the user is on the latest pack — never yank
+    // them off an older pack they picked from the dropdown.
+    const latestKnown = packs[0]?.fetch_timestamp;
+    if (latestKnown && !sameInstant(latestKnown, currentPack.fetch_timestamp)) return;
+    let meta: PackMeta;
+    try {
+      meta = await api.fetchLatestPack(flight.id);
+    } catch {
+      return;
+    }
+    const now = get();
+    if (now.flight?.id !== flight.id || now.currentPack?.fetch_timestamp !== currentPack.fetch_timestamp) return;
+    if (!sameInstant(meta.fetch_timestamp, currentPack.fetch_timestamp)) {
+      // A newer briefing landed (auto-refresh, another device): reload the
+      // list and select it via the normal flow.
+      await get().loadPacks();
+      if (get().currentPack?.fetch_timestamp !== currentPack.fetch_timestamp) return;
+      await get().selectPack(meta.fetch_timestamp);
+      return;
+    }
+    const applied = now.snapshot?.live_updated_at ?? null;
+    if (meta.live_updated_at && !sameInstant(meta.live_updated_at, applied)) {
+      await get().loadLive();
     }
   },
 

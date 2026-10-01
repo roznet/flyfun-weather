@@ -402,6 +402,10 @@ export interface PackMeta {
   meteofrance_charts_default_id?: string | null;
   meteofrance_charts_in_coverage?: boolean;
   meteofrance_charts_within_horizon?: boolean;
+  /** Newest live-layer update (#637). Non-null only on the pack that owns the
+   *  live layer (the latest pack). A realtime refresh does not change
+   *  fetch_timestamp, so compare this to detect new observations. */
+  live_updated_at?: string | null;
 }
 
 export interface ModelDivergence {
@@ -714,6 +718,11 @@ export interface AirportObservation {
   has_metar: boolean;
   has_taf: boolean;
   eta_hour_offset: number | null;
+  /** #637 — "METAR" or "SPECI"; absent on older packs. */
+  metar_report_type?: string | null;
+  metar_previous_flight_category?: string | null;
+  metar_previous_time?: string | null;
+  taf_issue_time?: string | null;
 }
 
 export interface ObservationComparison {
@@ -969,6 +978,70 @@ export interface RealtimeRefreshResult {
   /** Re-sampled from locally-held frames, which is why the refresh button
    *  updates the observed panel without any provider fetch. */
   observed?: ObservedConditions | null;
+  /** #637 — newest live-layer update and the changes since the briefing. */
+  live_updated_at?: string | null;
+  changes?: LiveChanges | null;
+}
+
+// --- Live observation layer (#637) ------------------------------------------
+
+export type LiveChangeKind =
+  | 'metar_category'
+  | 'taf_category'
+  | 'sigmet_issued'
+  | 'sigmet_cancelled'
+  | 'lightning'
+  | 'radar';
+
+export type LiveChangeSource = 'METAR' | 'SPECI' | 'TAF' | 'SIGMET' | 'LIGHTNING' | 'RADAR';
+
+/** One significant change since the briefing (server-side hysteresis applied). */
+export interface LiveChange {
+  /** "metar:EGLL" | "taf:EGLL" | "sigmet:LFFF|3" | "lightning:route" | "radar:route" */
+  key: string;
+  kind: LiveChangeKind;
+  source: LiveChangeSource;
+  direction: 'worse' | 'better';
+  /** alert = departure/destination/alternate airport. */
+  tier: 'highlight' | 'alert';
+  role: 'departure' | 'destination' | 'alternate' | 'route';
+  icao: string | null;
+  station_id: string | null;
+  from_value: string | null;
+  to_value: string | null;
+  observed_at: string | null;
+  enroute_distance_nm: number | null;
+  /** Deterministic, language-neutral shorthand, e.g. "EGLL METAR: VFR → IFR". */
+  message: string;
+  new_alert?: boolean;
+}
+
+/** Changes since the briefing (vs the pack's own observations). Already sorted. */
+export interface LiveChanges {
+  /** = pack fetch timestamp (what the assessment/digest saw). */
+  baseline_at: string | null;
+  computed_at: string;
+  changes: LiveChange[];
+  worsened_count: number;
+  improved_count: number;
+  alert_count: number;
+}
+
+/** GET /flights/{id}/live — the latest pack's live overlay. */
+export interface LiveLayer {
+  flight_id: string;
+  /** The latest pack this layer is relative to. */
+  pack_timestamp: string;
+  /** null => no live data yet; keep the pack's own observations. */
+  live_updated_at: string | null;
+  route_observations: RouteObservations | null;
+  observations_updated_at: string | null;
+  route_sigmets: RouteSigmets | null;
+  sigmets_updated_at: string | null;
+  observed_conditions: ObservedConditions | null;
+  observed_updated_at: string | null;
+  changes: LiveChanges | null;
+  last_refresh_delta: RefreshDelta | null;
 }
 
 /** One weather-based divert candidate (issue #210). */
@@ -1119,6 +1192,9 @@ export interface ForecastSnapshot {
   observed_conditions?: ObservedConditions | null;
   alternates?: RouteAlternates | null;
   last_refresh_delta?: RefreshDelta | null;
+  /** #637 — set when the snapshot carries the live overlay. */
+  live_updated_at?: string | null;
+  live_changes?: LiveChanges | null;
 }
 
 export interface WindComponent {
