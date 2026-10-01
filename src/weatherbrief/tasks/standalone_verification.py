@@ -8,14 +8,15 @@ at multiple lead times (D-0 through D-7).
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from itertools import batched
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import requests
 from sqlalchemy import func, select, tuple_
@@ -43,6 +44,7 @@ from weatherbrief.tasks.forecast_grid import (
 if TYPE_CHECKING:
     from weatherbrief.analysis.sounding.edr import EdrAccumulator
     from weatherbrief.fetch.grib import DecodePriority
+    from weatherbrief.tasks.standalone_grib import AirportGribDiagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +403,7 @@ def _fetch_forecasts_for_model(
     edr_acc: "EdrAccumulator | None" = None,
     days: int | None = None,
     pool_soundings: bool = False,
+    grib_diag: "Callable[[], _GribDiagLookup | None] | None" = None,
 ) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
@@ -415,6 +418,15 @@ def _fetch_forecasts_for_model(
 
     ``days`` likewise defaults to the alternates horizon; the map cycle passes
     its own, longer per-model horizon.
+
+    ``grib_diag`` returns the model's GRIB cloud diagnostics (or None). Each
+    chunk calls it after its Open-Meteo response arrives and before its
+    sounding pass, and attaches the matching diagnostics to the hour so the
+    convective NWP track runs on the model's own scheme output (#635). It is a
+    callable rather than a value so the GRIB fetch can run concurrently with
+    the Open-Meteo fetch — see :func:`fetch_model_snapshots`, the entry point
+    that wires it. ``session`` is not used here (Open-Meteo has its own client),
+    which is what lets that concurrent GRIB fetch own it.
     """
     from weatherbrief.models.analysis import ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
@@ -430,7 +442,7 @@ def _fetch_forecasts_for_model(
     hour_filter = explicit_hours if explicit_hours is not None else set(all_sample_hours())
 
     model_source = ModelSource(model)
-    forecast_days = days if days is not None else MODEL_FORECAST_DAYS.get(model, 7)
+    forecast_days = _forecast_days(model, days)
 
     start_date = init_time.strftime("%Y-%m-%d")
     end_dt = init_time + timedelta(days=forecast_days)
@@ -514,6 +526,9 @@ def _fetch_forecasts_for_model(
         pooled = _pooled_soundings_active(pool_soundings)
         pending_soundings: list[tuple[int, dict]] = []
         init_date = init_time.date()
+        # Blocks until the concurrent GRIB fetch is done. Has to sit before
+        # the loop: the sounding pass below is where the diagnostics are read.
+        lookup = grib_diag() if grib_diag is not None else None
         for airport, wpf in zip(chunk_list, forecasts):
             # Filter to sample hours only
             for hourly in wpf.hourly:
@@ -560,6 +575,17 @@ def _fetch_forecasts_for_model(
                     "lcl_ft": lcl_ft,
                 }
 
+                # Model-native diagnostics on the hour before the sounding pass,
+                # as the ECMWF GRIB-first path does, so `assess_convective_nwp`
+                # runs on GFS/ICON's own convective scheme (#635). Via attach,
+                # never direct assignment (it mirrors the freezing level). The
+                # pooled payload dumps the whole hour, diagnostics included, so
+                # both branches below see them.
+                if lookup is not None:
+                    cd = lookup.get(airport.icao, hourly.time)
+                    if cd is not None and cd.diagnostics is not None:
+                        hourly.attach_nwp_diagnostics(cd.diagnostics)
+
                 # Sounding analysis on pressure levels (already fetched):
                 # pooled → defer to a process-pool batch; else inline.
                 if pooled and getattr(hourly, "pressure_levels", None):
@@ -591,7 +617,7 @@ def _fetch_forecasts_for_model(
         if pending_soundings:
             from weatherbrief.fetch.grib import DecodePriority
 
-            # Explicit BACKGROUND, mirroring _enrich_with_grib: pooled
+            # Explicit BACKGROUND, mirroring the GRIB leg: pooled
             # soundings only run for the standalone cycle (see
             # _pooled_soundings_active), and the subprocess path never sets
             # the decode-priority ContextVar.
@@ -685,34 +711,97 @@ def _grib_step_snapper(model: str):
     return _snap_to_icon_eu_grid
 
 
-def _enrich_with_grib(
-    snapshots: list[dict],
+# Models whose cloud diagnostics come from the Open-Meteo-leg GRIB fetch.
+# ECMWF is not here: it takes the GRIB-first path (fetch_ecmwf_grib_snapshots),
+# and its Open-Meteo fallback has no cloud-diag GRIB feed at all.
+_GRIB_DIAG_MODELS = frozenset({"gfs", "icon"})
+
+
+def _forecast_days(model: str, days: int | None) -> int:
+    """Horizon in days for *model*: ``days`` when given, else the alternates default."""
+    return days if days is not None else MODEL_FORECAST_DAYS.get(model, 7)
+
+
+def _planned_valid_times(
+    init_time: datetime, forecast_days: int, sample_hours: list[int] | None,
+) -> list[datetime]:
+    """Valid times ``_fetch_forecasts_for_model`` will keep, known up front.
+
+    Mirrors that function's per-hour filter (day offset within the horizon,
+    hour in the flat list or the per-day grid) so the GRIB fetch can be planned
+    before the Open-Meteo response exists. Hours before ``init_time`` are
+    dropped, as the GRIB planning always did.
+    """
+    init_date = init_time.date()
+    out: list[datetime] = []
+    for day_offset in range(forecast_days + 1):
+        hours = (
+            sorted(set(sample_hours)) if sample_hours is not None
+            else sample_hours_for_day(day_offset)
+        )
+        day = init_date + timedelta(days=day_offset)
+        for hour in hours:
+            valid = datetime.combine(day, dt_time(hour), tzinfo=init_time.tzinfo)
+            if valid >= init_time:
+                out.append(valid)
+    return out
+
+
+@dataclass
+class _GribDiagLookup:
+    """One model run's GRIB cloud diagnostics, addressable by (ICAO, valid time).
+
+    Owns the step snap so every reader resolves a valid time to the same
+    published GRIB step. ``by_fhour`` is keyed by the *snapped* step; looking
+    an hour up by its raw offset would miss every hour that got snapped and
+    silently drop data already downloaded.
+    """
+
+    init_time: datetime
+    snap_step: Callable[[int], int]
+    icao_to_idx: dict[str, int]
+    by_fhour: dict[int, list["AirportGribDiagnostics"]]
+
+    def get(self, icao: str, valid_time: datetime) -> "AirportGribDiagnostics | None":
+        idx = self.icao_to_idx.get(icao)
+        if idx is None:
+            return None
+        offset = int((valid_time - self.init_time).total_seconds() / 3600)
+        if offset < 0:
+            return None
+        rows = self.by_fhour.get(self.snap_step(offset))
+        if rows is None or idx >= len(rows):
+            return None
+        return rows[idx]
+
+
+def _fetch_grib_diagnostics(
     model: str,
     init_time: datetime,
     airports: list[WatchlistAirport],
     session: requests.Session,
+    valid_times: list[datetime],
     priority: "int | DecodePriority | None" = None,
-) -> None:
-    """Enrich snapshot dicts with GRIB ceiling/cloud_base data in-place.
+) -> _GribDiagLookup | None:
+    """Fetch and decode GFS/ICON GRIB cloud diagnostics for *valid_times*.
 
-    Fetches GRIB cloud diagnostics for the model's forecast hours
-    and maps nwp_ceiling_ft and cloud_base_ft onto the matching snapshot dicts.
+    Returns None for a model without this feed, when no hour is in range, or
+    when the fetch fails (logged). Never raises: a missing GRIB leg costs the
+    native columns and the NWP convective track, never the snapshots.
 
     ``priority`` is forwarded to the GFS/ICON cloud-diag fetchers. ``None``
     (default) falls through to the decode-priority ContextVar — the interactive
     alternates path inherits INTERACTIVE; the standalone cycle passes
     ``DecodePriority.BACKGROUND`` explicitly.
     """
+    if model not in _GRIB_DIAG_MODELS:
+        return None
+
     from weatherbrief.tasks.standalone_grib import (
         datetime_to_init_parts,
         fetch_gfs_cloud_diag,
         fetch_icon_cloud_diag,
     )
-
-    if model == "ecmwf":
-        # ECMWF GRIB ceiling is populated inline by fetch_ecmwf_grib_snapshots —
-        # the Open-Meteo fallback path doesn't have a usable cloud-diag GRIB feed.
-        return
 
     init_date, init_hour = datetime_to_init_parts(init_time)
 
@@ -724,23 +813,22 @@ def _enrich_with_grib(
     # at all. Snapping to the nearest real step costs an hour of currency at
     # four days out and returns actual data.
     #
-    # GFS needs no equivalent here: it is hourly through +120 h and this grid
-    # never samples past ~100 h (MODEL_FORECAST_DAYS = 4), so its coarse region
-    # is out of reach. If that horizon ever grows, GFS needs the same snap via
-    # ``grib_fetch._snap_to_gfs_grid``.
+    # GFS needs no equivalent today, though the map cycle does reach its coarse
+    # region (MAP_FORECAST_DAYS["gfs"] = 6, so offsets run to ~160 h, past the
+    # hourly-to-+120 h limit): every sample hour (FINE/COARSE_SAMPLE_HOURS) is a
+    # multiple of 3 and GFS inits are 6-hourly, so each offset already lands on
+    # GFS's 3-hourly grid. An off-grid sample hour would need
+    # ``grib_fetch._snap_to_gfs_grid`` here.
     snap_step = _grib_step_snapper(model)
 
     fhour_set: set[int] = set()
-    for snap in snapshots:
-        if snap["model"] != model:
-            continue
-        delta = snap["forecast_hour"] - init_time
-        offset = int(delta.total_seconds() / 3600)
+    for valid in valid_times:
+        offset = int((valid - init_time).total_seconds() / 3600)
         if offset >= 0:
             fhour_set.add(snap_step(offset))
 
     if not fhour_set:
-        return
+        return None
 
     forecast_hours = sorted(fhour_set)
 
@@ -759,13 +847,10 @@ def _enrich_with_grib(
             )
             forecast_hours = [h for h in forecast_hours if h <= max_hour]
         if not forecast_hours:
-            return
+            return None
 
     lats = [a.lat for a in airports]
     lons = [a.lon for a in airports]
-
-    # Build ICAO → index mapping
-    icao_to_idx = {a.icao: i for i, a in enumerate(airports)}
 
     fetch_fn = fetch_gfs_cloud_diag if model == "gfs" else fetch_icon_cloud_diag
 
@@ -776,51 +861,146 @@ def _enrich_with_grib(
         )
     except Exception:
         logger.warning("GRIB enrichment failed for %s", model, exc_info=True)
-        return
+        return None
 
-    # Map GRIB data back to snapshots. MUST apply the same snap as the fetch
-    # above — ``grib_data`` is keyed by the snapped step, so recomputing the
-    # raw offset here would miss every hour that got snapped and silently drop
-    # the data we just paid to download.
+    return _GribDiagLookup(
+        init_time=init_time,
+        snap_step=snap_step,
+        icao_to_idx={a.icao: i for i, a in enumerate(airports)},
+        by_fhour=grib_data,
+    )
+
+
+def _apply_grib_columns(
+    snapshots: list[dict], model: str, lookup: _GribDiagLookup,
+) -> None:
+    """Copy the persisted GRIB columns onto the snapshot dicts in-place.
+
+    Runs after the sounding pass (inline and pooled alike), so where the GRIB
+    carried a value it is what the row records — the model's own number, as it
+    always was for GFS/ICON, even where the native assessment reported a
+    different envelope (e.g. an ICON top below the LCL, which the assessment
+    drops). ``nwp_conv_method`` is the sounding pass's and is never touched.
+    """
     for snap in snapshots:
         if snap["model"] != model:
             continue
-        delta = snap["forecast_hour"] - init_time
-        fhour = snap_step(int(delta.total_seconds() / 3600))
-        airport_idx = icao_to_idx.get(snap["icao"])
+        cd = lookup.get(snap["icao"], snap["forecast_hour"])
+        if cd is None:
+            continue
+        snap["nwp_ceiling_ft"] = cd.nwp_ceiling_ft
+        snap["cloud_base_ft"] = cd.cloud_base_ft
 
-        if fhour in grib_data and airport_idx is not None:
-            ceiling_data = grib_data[fhour]
-            if airport_idx < len(ceiling_data):
-                cd = ceiling_data[airport_idx]
-                snap["nwp_ceiling_ft"] = cd.nwp_ceiling_ft
-                snap["cloud_base_ft"] = cd.cloud_base_ft
+        # Convective ingredients (#565/#566). Written only when the GRIB
+        # actually carried a value, so an hour the cloud-diag fetch missed
+        # leaves the field alone instead of blanking it with None. (Never
+        # ECMWF — its diagnostics arrive inline from the GRIB-first path.)
+        # `getattr` defaults, not direct access: this loop must not raise on a
+        # DTO that predates these fields.
+        for key, attr in (
+            ("nwp_conv_cover_pct", "convective_cover_pct"),
+            ("nwp_conv_base_ft", "convective_base_ft"),
+            ("nwp_conv_top_ft", "convective_top_ft"),
+            ("nwp_conv_precip_mm_h", "convective_precip_mm_h"),
+            ("nwp_ml_cape_jkg", "ml_cape_jkg"),
+            ("nwp_ml_cin_jkg", "ml_cin_jkg"),
+        ):
+            value = getattr(cd, attr, None)
+            if value is not None:
+                snap[key] = value
 
-                # Convective ingredients (#565/#566). Written only when the
-                # GRIB actually carried a value, so an hour the cloud-diag
-                # fetch missed leaves the field alone instead of blanking it
-                # with None. (This loop never sees ECMWF — `_enrich_with_grib`
-                # returns at the top for it, since its diagnostics arrive
-                # inline from the GRIB-first path.)
-                #
-                # This is also why `nwp_conv_method` stays NULL for GFS/ICON:
-                # the convective *assessment* ran inside the Open-Meteo fetch,
-                # before these diagnostics existed. The ingredients are recorded
-                # here; grading them natively needs the fetch reordered, which
-                # is a separate change.
-                # `getattr` defaults, not direct access: this loop must not
-                # raise on a DTO that predates these fields.
-                for key, attr in (
-                    ("nwp_conv_cover_pct", "convective_cover_pct"),
-                    ("nwp_conv_base_ft", "convective_base_ft"),
-                    ("nwp_conv_top_ft", "convective_top_ft"),
-                    ("nwp_conv_precip_mm_h", "convective_precip_mm_h"),
-                    ("nwp_ml_cape_jkg", "ml_cape_jkg"),
-                    ("nwp_ml_cin_jkg", "ml_cin_jkg"),
-                ):
-                    value = getattr(cd, attr, None)
-                    if value is not None:
-                        snap[key] = value
+
+def _enrich_with_grib(
+    snapshots: list[dict],
+    model: str,
+    init_time: datetime,
+    airports: list[WatchlistAirport],
+    session: requests.Session,
+    priority: "int | DecodePriority | None" = None,
+) -> None:
+    """Fetch GRIB cloud diagnostics for existing snapshots and copy the columns.
+
+    The after-the-fact half only: the hours' sounding pass has already run, so
+    this records the GRIB columns but cannot feed the convective NWP track.
+    The cycle and alternates go through :func:`fetch_model_snapshots`, which
+    attaches the diagnostics before the sounding pass (#635).
+    """
+    valid_times = sorted({s["forecast_hour"] for s in snapshots if s["model"] == model})
+    lookup = _fetch_grib_diagnostics(
+        model, init_time, airports, session, valid_times, priority=priority,
+    )
+    if lookup is not None:
+        _apply_grib_columns(snapshots, model, lookup)
+
+
+def fetch_model_snapshots(
+    model: str,
+    init_time: datetime,
+    airports: list[WatchlistAirport],
+    session: requests.Session,
+    sample_hours: list[int] | None = None,
+    edr_acc: "EdrAccumulator | None" = None,
+    days: int | None = None,
+    pool_soundings: bool = False,
+    priority: "int | DecodePriority | None" = None,
+) -> tuple[list[dict], int]:
+    """Open-Meteo snapshots for one model, graded with its GRIB diagnostics.
+
+    The GFS/ICON entry point for both the standalone cycle and alternates.
+    The GRIB cloud-diag fetch does not depend on Open-Meteo, so it starts
+    first on its own thread and runs alongside the Open-Meteo chunk fetches;
+    each chunk waits for it only just before its sounding pass, which reads the
+    diagnostics (#635). Wall time is therefore max(GRIB, Open-Meteo) + the
+    sounding pass, where the old order paid all three in series.
+
+    Before #635 the GRIB leg ran after the sounding pass, so GFS/ICON rows had
+    no native convective assessment (``nwp_conv_method`` NULL) while ECMWF's
+    GRIB-first path did — the cross-model columns compared methods, not just
+    models. Other models (and ECMWF's Open-Meteo fallback) pass straight
+    through to ``_fetch_forecasts_for_model``.
+
+    Arguments are ``_fetch_forecasts_for_model``'s, plus ``priority`` for the
+    GRIB decodes (see :func:`_fetch_grib_diagnostics`).
+    """
+    if model not in _GRIB_DIAG_MODELS:
+        return _fetch_forecasts_for_model(
+            model, init_time, airports, session, sample_hours,
+            edr_acc=edr_acc, days=days, pool_soundings=pool_soundings,
+        )
+
+    valid_times = _planned_valid_times(
+        init_time, _forecast_days(model, days), sample_hours,
+    )
+
+    def _resolve(future: "concurrent.futures.Future") -> _GribDiagLookup | None:
+        # _fetch_grib_diagnostics already never raises; this guards the thread
+        # plumbing itself so a failure there degrades like a GRIB miss.
+        try:
+            return future.result()
+        except Exception:
+            logger.warning("GRIB diagnostics thread failed for %s", model, exc_info=True)
+            return None
+
+    # copy_context: the GRIB thread must see the caller's decode-priority
+    # ContextVar (alternates relies on it to decode at INTERACTIVE).
+    ctx = contextvars.copy_context()
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix=f"grib-diag-{model}",
+    ) as executor:
+        future = executor.submit(
+            ctx.run, _fetch_grib_diagnostics,
+            model, init_time, airports, session, valid_times, priority,
+        )
+        snapshots, api_calls = _fetch_forecasts_for_model(
+            model, init_time, airports, session, sample_hours,
+            edr_acc=edr_acc, days=days, pool_soundings=pool_soundings,
+            grib_diag=lambda: _resolve(future),
+        )
+        lookup = _resolve(future)
+
+    if lookup is not None:
+        _apply_grib_columns(snapshots, model, lookup)
+    return snapshots, api_calls
 
 
 # ---------------------------------------------------------------------------
@@ -1189,7 +1369,7 @@ def fetch_ecmwf_grib_snapshots(
             # Ingredient columns straight off the diagnostics, so a row whose
             # a2 file is missing (no pressure levels → no sounding pass) still
             # records what the a1 GRIB delivered. Written only where the GRIB
-            # carried a value, mirroring `_enrich_with_grib` for GFS/ICON; the
+            # carried a value, mirroring `_apply_grib_columns` for GFS/ICON; the
             # sounding pass below re-derives the same numbers from the same
             # diagnostics when it does run.
             if diag is not None:
@@ -1853,19 +2033,17 @@ def run_standalone_cycle(
                 else:
                     logger.info("Fetching %s forecasts (init %s) for %d airports",
                                 model, init_time, len(airports))
-                    snapshots, api_calls = _fetch_forecasts_for_model(
+                    # GFS/ICON GRIB diagnostics are fetched alongside and
+                    # attached before the sounding pass (#635).
+                    snapshots, api_calls = fetch_model_snapshots(
                         model, init_time, airports, session, edr_acc=edr_acc,
                         days=map_days,
                         pool_soundings=pool_soundings,
+                        priority=DecodePriority.BACKGROUND,
                     )
                     total_api_calls += api_calls
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
                                 model, len(snapshots), api_calls)
-
-                    _enrich_with_grib(
-                        snapshots, model, init_time, airports, session,
-                        priority=DecodePriority.BACKGROUND,
-                    )
 
                 stored = _store_snapshots(snapshots, db, region=region)
                 db.commit()

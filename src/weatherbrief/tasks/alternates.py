@@ -117,10 +117,9 @@ def _fetch_eta_snapshots(
     from weatherbrief.fetch.model_status import fetch_model_metadata
     from weatherbrief.tasks.standalone_verification import (
         MODEL_FORECAST_DAYS,
-        _enrich_with_grib,
-        _fetch_forecasts_for_model,
         _select_ecmwf_grib_run,
         fetch_ecmwf_grib_snapshots,
+        fetch_model_snapshots,
     )
 
     sample_hours = [eta_dt.hour]
@@ -159,15 +158,15 @@ def _fetch_eta_snapshots(
                     "Alternates: no local ECMWF GRIB run; falling back to "
                     "Open-Meteo (no ECMWF visibility)"
                 )
-                snaps, _ = _fetch_forecasts_for_model(
+                snaps, _ = fetch_model_snapshots(
                     model, om_init_time, airports, session, sample_hours,
                 )
-                _enrich_with_grib(snaps, model, om_init_time, airports, session)
         else:
-            snaps, _ = _fetch_forecasts_for_model(
+            # GFS/ICON: GRIB diagnostics fetched alongside Open-Meteo and
+            # attached before the sounding pass (#635) — no added serial leg.
+            snaps, _ = fetch_model_snapshots(
                 model, om_init_time, airports, session, sample_hours,
             )
-            _enrich_with_grib(snaps, model, om_init_time, airports, session)
 
         result: dict[str, dict] = {}
         for snap in snaps:

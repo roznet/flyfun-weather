@@ -29,6 +29,7 @@ from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cache
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
+    from weatherbrief.models.analysis import NWPCloudDiagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,11 @@ class AirportGribDiagnostics:
     decode already produced convective cover, base, top, precipitation rate and
     mixed-layer CAPE/CIN, and every one of them was thrown away here — after
     being downloaded and decoded (#565/#566).
+
+    ``diagnostics`` keeps the full object the scalars were projected from, so
+    the standalone cycle can attach it to the hour *before* the sounding pass
+    and grade GFS/ICON through the native convective track, as ECMWF does
+    (#635). It is not persisted itself.
     """
 
     nwp_ceiling_ft: float | None = None
@@ -53,6 +59,7 @@ class AirportGribDiagnostics:
     convective_precip_mm_h: float | None = None
     ml_cape_jkg: float | None = None
     ml_cin_jkg: float | None = None
+    diagnostics: "NWPCloudDiagnostics | None" = None
 
 
 def _diagnostics_from(diag) -> AirportGribDiagnostics:
@@ -71,6 +78,7 @@ def _diagnostics_from(diag) -> AirportGribDiagnostics:
         convective_precip_mm_h=diag.convective_precip_mm_h,
         ml_cape_jkg=diag.ml_cape_jkg,
         ml_cin_jkg=diag.ml_cin_jkg,
+        diagnostics=diag,
     )
 
 

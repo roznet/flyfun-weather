@@ -709,12 +709,12 @@ class TestRunStandaloneCycle:
     @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
     @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=5)
     @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
-    @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
+    @patch("weatherbrief.tasks.standalone_verification._fetch_grib_diagnostics", return_value=None)
     @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=([{"dummy": True}], 1))
     @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
     @patch("flyfun_common.db.SessionLocal")
     def test_full_cycle_orchestration(
-        self, mock_session_local, mock_meta, mock_fetch, mock_enrich,
+        self, mock_session_local, mock_meta, mock_fetch, mock_grib,
         mock_store_snap, mock_score, mock_prune,
     ):
         from weatherbrief.tasks.standalone_verification import run_standalone_cycle
@@ -799,12 +799,12 @@ class TestRunStandaloneCycle:
     @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
     @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=5)
     @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
-    @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
+    @patch("weatherbrief.tasks.standalone_verification._fetch_grib_diagnostics", return_value=None)
     @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=([{"dummy": True}], 1))
     @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
     @patch("flyfun_common.db.SessionLocal")
     def test_full_cycle_returns_cycle_type(
-        self, mock_session_local, mock_meta, mock_fetch, mock_enrich,
+        self, mock_session_local, mock_meta, mock_fetch, mock_grib,
         mock_store_snap, mock_score, mock_prune,
     ):
         """Full cycle sets cycle_type='full' in result."""
@@ -979,7 +979,8 @@ class TestPoolSoundingsGating:
                    return_value=None), \
              patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model",
                    return_value=([], 0)) as mock_fetch, \
-             patch("weatherbrief.tasks.standalone_verification._enrich_with_grib"), \
+             patch("weatherbrief.tasks.standalone_verification._fetch_grib_diagnostics",
+                   return_value=None), \
              patch("weatherbrief.tasks.standalone_verification._store_snapshots",
                    return_value=0), \
              patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots",
