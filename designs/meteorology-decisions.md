@@ -4845,3 +4845,78 @@ change its name based on who is reading it.
   card's `thresholds` (previously empty) and its theory text.
 - Tests: `tests/observed/test_intensity.py`, plus updates to
   `tests/observed/test_payload.py` and `web/tests/unit/observed-conditions.test.ts`.
+
+---
+
+## 34. "Significant since the briefing": category crossings with hysteresis, against the briefing, both directions
+
+**Date:** 2026-10-01 · **Issue:** #637 · **Replaces:** the worsening-only refresh delta (#168 follow-on)
+
+On flight day the live layer (`tasks/live_layer.py`) always *displays* the newest
+METAR/TAF, SIGMETs and observed radar/lightning, with no thresholds. Separately,
+`tasks/live_significance.py::classify_changes` decides which changes are
+*significant* — the rows highlighted, the "Since this briefing" panel, and the
+alert tier push delivery (#638) will consume. Neither touches a grade.
+
+### Choices
+
+- **Baseline = the briefing's own observations** (the immutable pack), not the
+  previous refresh. The old delta diffed refresh-to-refresh, so a deterioration
+  showed for one refresh and vanished at the next; with a 10-minute server tick it
+  would have flashed for ten minutes. "What moved since the assessment was
+  written" is what the pilot can weigh against the digest.
+- **Both directions.** Fog lifting at the destination is as decision-relevant as fog
+  forming. The old banner was worsening-only by design; the panel shows both, with
+  an arrow. `last_refresh_delta` is still written (the worsening half) for clients
+  that only know the banner.
+- **METAR: flight-category crossing, with hysteresis.** A crossing counts once two
+  consecutive reports sit on the same side of the baseline category, or the newest
+  report is a SPECI (issued *because* a threshold was crossed). The previous report
+  comes from the 3 h METAR window the fetch already returns. When the report before
+  the newest *is* the briefing's own report, only a SPECI confirms. A confirmed
+  crossing is then held until the return to the baseline category is itself
+  confirmed — one odd report neither raises nor clears it. Cost: a routine-METAR
+  station shows a real deterioration ~30 min late; that is the price of not
+  alerting on a single gusty/showery report.
+- **TAF at ETA: category change, no hysteresis.** A TAF is a deliberate issuance
+  (AMD or a new TAF), not a noisy sample. Both sides must have a reading valid at
+  ETA (§32); a TAF appearing or lapsing is not a crossing.
+- **SIGMETs:** new, escalated to SEV, or no longer active (identity: FIR + sequence,
+  as before). Highlight tier only — a SIGMET is an area, not an airport.
+- **Observed radar/lightning on the route still ahead.** Lightning: any flash in the
+  innermost ring (5 NM) of a route point not yet passed (distance flown from
+  scheduled departure at planned speed). Radar: a VIP-3 "heavy" echo (≥ 41 dBZ, the
+  AIM "avoid level 3 or greater" line, §33's ladder) in the innermost ring, only on
+  ≥ 35 % radar coverage (a blind pixel is never read as clear or as an echo). Each
+  is reported as appearing/disappearing relative to the briefing's observed block;
+  a briefing without one (observed collector off) skips the dimension. Highlight
+  tier only.
+- **Two tiers.** `alert` = departure, destination and the top 3 ranked divert
+  candidates (`ALERT_ALTERNATES`); everything else is `highlight`. An alert carries
+  `new_alert` once per value (last-alerted memory on the live layer; a key that
+  returns to the baseline is forgotten so a recurrence alerts afresh; a failed
+  fetch keeps the memory).
+
+### Rejected
+
+- **Personal minima instead of flight categories.** Flight category is crude for an
+  IFR pilot (MVFR→IFR at a well-equipped destination is not an event) — but per-user
+  minima do not exist yet. The alternate-requirement band (§ alternate-requirement
+  doc) was considered as a stand-in and rejected for now: it is a planning-time
+  regulatory test, not a "did it move" signal. **Open question in #637.**
+- **Raw thresholds (ceiling −500 ft, visibility halved).** Noisy and unit-heavy; the
+  category is the operational unit already used everywhere else (comparison,
+  alternates).
+- **An LLM pass per tick.** Messages are deterministic, language-neutral shorthand;
+  the AI digest instead gets a caveat ("written at 07:10, before N changes").
+- **Alerting on corridor fields.** A 30 NM corridor routinely holds 20–30 reporting
+  fields; alerting on all of them would bury the three that matter.
+
+### Real-world validation needed
+
+- A showery day: does the two-report rule suppress the flip-flopping it targets
+  without hiding a real, persistent deterioration?
+- Stations that never issue SPECI and report hourly: the confirmation delay doubles
+  to ~1 h. Consider a "two reports or 45 min" rule if that bites.
+- Lightning in the 5 NM ring at a point the aircraft passed early (a delayed
+  departure makes the "ahead" estimate optimistic — it assumes an on-time start).

@@ -33,6 +33,7 @@ are the load-bearing part.
 | `/api/flights/{id}/packs/{ts}/sounding-profile/{point_index}/{model}` | GET | Raw sounding profile for client Skew-T |
 | `/api/flights/{id}/packs/{ts}/gramet.png` | GET | GRAMET image |
 | `/api/flights/{id}/packs/{ts}/bundle` | GET | Gzipped single-JSON offline bundle (see Phase 2) |
+| `/api/flights/{id}/live` | GET | Flight-day live observation layer (#637): newest METAR/TAF, SIGMETs, observed conditions + changes since the briefing — see below |
 
 Also consumed by the app, documented with their own subsystems rather than here:
 `/api/flights/interpret-route`, `/api/flights/parse-fpl`, `/api/flights/badge`,
@@ -142,6 +143,21 @@ comes from the flight list's `/api/refresh/active` poll and the APNs push, not
 from a stream nobody is looking at. (It can also answer **200 `already_fresh`**;
 the pack-params gate that stops that from happening right after a parameter edit
 is described in `freshness-markers.md`, under "Tiered Refresh Gate".)
+
+### Live observation layer: sync on `live_updated_at`, not `fetch_timestamp` (#637)
+
+A realtime refresh (a D-0 ↻ press, or the server's 10-min tick from departure
+−3 h to arrival +1 h) does **not** create a pack, so `fetch_timestamp` never
+changes. Pack meta (`/packs`, `/packs/latest`, `/packs/{ts}`, the SSE `complete`
+event's `pack`) and the flight list's `latest_briefing` therefore carry
+`live_updated_at`; a client holding a different value fetches
+`GET /api/flights/{id}/live`. That response is 200 with all-null blocks when
+nothing live exists yet for the latest pack, and each block has its own
+`*_updated_at`. Clients apply it only when its `pack_timestamp` is the pack on
+screen (compare instants, not strings) and it is newer than what they hold —
+newest wins. `GET …/snapshot` and `/bundle` serve the pack overlaid with its live
+layer (plus `live_updated_at` / `live_changes` keys), so older app versions keep
+the newest observations. Full design: [live-observation-layer.md](live-observation-layer.md).
 
 ### Timing scenarios: a separate, poll-until-terminal endpoint
 

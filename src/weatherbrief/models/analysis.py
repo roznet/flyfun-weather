@@ -1500,6 +1500,7 @@ class ForecastSnapshot(BaseModel):
     # Weather-based divert candidates (D-2 inward, opt-in via compute_alternates).
     # None outside that window so the web section stays hidden (#210).
     alternates: RouteAlternates | None = None
-    # Worsening summary from the last cheap real-time refresh (no digest re-run);
-    # None after a full pipeline run (clean slate — the digest covers changes).
+    # Worsening summary of the live changes since this briefing (#637). Never
+    # written into the pack any more: it arrives through the live-layer overlay
+    # on the snapshot. None in a pack written by the pipeline.
     last_refresh_delta: RefreshDelta | None = None
