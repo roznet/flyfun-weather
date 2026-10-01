@@ -2156,7 +2156,7 @@ class RefreshAccepted(BaseModel):
     sigmets: RouteSigmets | None = None  # updated SIGMETs (realtime mode)
     delta: RefreshDelta | None = None  # worsening summary (realtime mode)
     # Re-sampled observed conditions (#574).  ``run_realtime_refresh`` computes
-    # this on every gated D-0 press and writes it to ``briefing.json``; carrying
+    # this on every gated D-0 press and writes it to the live layer; carrying
     # it here is what lets a client update the radar / lightning / cloud-top
     # picture from the refresh response instead of re-fetching the snapshot —
     # which, on iOS, a cached pack would have served stale anyway.
@@ -3010,12 +3010,16 @@ def get_snapshot(
     # The pack is immutable; when the flight's live layer (#637) belongs to
     # this pack, serve the newest observations over it, as the in-place patch
     # used to — clients that only read the snapshot keep working.
-    from weatherbrief.tasks.live_layer import live_for_pack, load_briefing_with_live
+    from weatherbrief.tasks.artifacts import load_briefing
+    from weatherbrief.tasks.live_layer import live_for_pack, overlay_live
 
-    if live_for_pack(pack_dir) is not None:
-        data = load_briefing_with_live(pack_dir)
+    layer = live_for_pack(pack_dir)
+    if layer is not None:
+        data = load_briefing(pack_dir)
         if data is not None:
-            return JSONResponse(content=json_mod.loads(json_mod.dumps(data, default=str)))
+            return JSONResponse(
+                content=json_mod.loads(json_mod.dumps(overlay_live(data, layer), default=str))
+            )
     # Prefer briefing.json, fall back to legacy snapshot.json for old packs
     briefing_path = pack_dir / "briefing.json"
     if briefing_path.exists():

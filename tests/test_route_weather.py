@@ -784,3 +784,46 @@ def test_comparison_does_not_mutate_the_caller_analyses(two_wp_route):
     s = analyses[0].sounding["gfs"]
     assert s.indices.sounding_ceiling_ft == 503.0
     assert s.cloud_layers[0].base_ft == 503
+
+
+def test_metar_history_records_speci_and_previous_report():
+    """#637 hysteresis inputs, from real euro_aip parsing of a 3 h window."""
+    from datetime import timezone
+
+    from euro_aip.briefing.weather.collection import WeatherCollection
+    from euro_aip.briefing.weather.parser import WeatherParser
+
+    from weatherbrief.models.observations import AirportObservation
+    from weatherbrief.tasks.route_weather import _apply_metar_history
+
+    ref = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+    reports = [
+        WeatherParser.parse_metar("METAR ZZAA 010820Z 24010KT 9999 FEW040 12/05 Q1015", reference=ref),
+        WeatherParser.parse_metar("SPECI ZZAA 010841Z 24010KT 2000 BR OVC004 11/10 Q1015", reference=ref),
+        # Same bulletin twice (an alias code) must not count as a second opinion.
+        WeatherParser.parse_metar("SPECI ZZAA 010841Z 24010KT 2000 BR OVC004 11/10 Q1015", reference=ref),
+    ]
+    raw = SimpleNamespace(reports=WeatherCollection([r for r in reports if r is not None]))
+    obs = AirportObservation(icao="ZZAA", distance_from_route_nm=0, nearest_waypoint_icao="ZZAA")
+    _apply_metar_history(obs, raw)
+
+    assert obs.metar_report_type == "SPECI"
+    assert obs.metar_previous_flight_category == "VFR"
+    assert obs.metar_previous_time == datetime(2026, 10, 1, 8, 20, tzinfo=timezone.utc)
+
+
+def test_metar_history_single_report_has_no_previous():
+    from datetime import timezone
+
+    from euro_aip.briefing.weather.collection import WeatherCollection
+    from euro_aip.briefing.weather.parser import WeatherParser
+
+    from weatherbrief.models.observations import AirportObservation
+    from weatherbrief.tasks.route_weather import _apply_metar_history
+
+    ref = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+    r = WeatherParser.parse_metar("METAR ZZAA 010820Z 24010KT 9999 FEW040 12/05 Q1015", reference=ref)
+    obs = AirportObservation(icao="ZZAA", distance_from_route_nm=0, nearest_waypoint_icao="ZZAA")
+    _apply_metar_history(obs, SimpleNamespace(reports=WeatherCollection([r])))
+    assert obs.metar_report_type == "METAR"
+    assert obs.metar_previous_flight_category is None

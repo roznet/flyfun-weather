@@ -25,7 +25,7 @@ tasks/route_weather.py
 └── run_realtime_refresh()       ← cheap real-time refresh seam (issue #167)
       load_briefing/forecasts/route_analyses from pack_dir
       run_route_weather() + run_observation_comparison()
-      patch route_observations back into briefing.json
+      commit into the per-flight live layer (#637) — the pack is NOT patched
 
 models/observations.py
 ├── AirportObservation     ← per-airport METAR/TAF data (flat, serializable)
@@ -33,11 +33,11 @@ models/observations.py
 ├── RouteObservations      ← collection + summary stats
 ├── SigmetAlongRoute       ← per-SIGMET record (issue #168)
 ├── RouteSigmets           ← SIGMET collection + computed count/hazards/has_severe
-├── RefreshDelta           ← deterministic "conditions worsened" diff (no LLM)
-└── RealtimeRefreshResult  ← {observations, sigmets, delta} from the refresh seam
+├── RefreshDelta           ← worsening-only view of the live changes (kept for old clients)
+└── RealtimeRefreshResult  ← {observations, sigmets, delta, observed, live_updated_at, changes}
 
-tasks/refresh_delta.py
-└── compute_refresh_delta() ← diff old vs new obs+sigmets → RefreshDelta (worsening only)
+tasks/live_significance.py   (#637, replaces tasks/refresh_delta.py)
+└── classify_changes()      ← changes since the *briefing*, both directions → LiveChanges
 ```
 
 ### Pipeline Position (step 3.5)
@@ -109,11 +109,14 @@ For each airport with a METAR:
 
 ### Real-time refresh seam (`run_realtime_refresh`)
 
-`run_realtime_refresh(pack_dir, db_path)` is the **cheap** refresh path (issue #167 Part A): re-fetch METAR/TAF (and route SIGMETs, see below), recompute the comparison from a pack's **stored** forecasts, then patch `route_observations`, `route_sigmets`, and `last_refresh_delta` back into `briefing.json`. **No** model fetch, **no** GRIB, **no** LLM. It reads `briefing.json` (route + stored `corridor_nm` + target time via `parse_target_time`), `forecasts.json`, and `route_analyses.json` off disk, calls `run_route_weather()` + `run_observation_comparison()` + `run_route_sigmets()`, computes a `RefreshDelta` (see below), and writes the result back. Returns a `RealtimeRefreshResult{observations, sigmets, delta}`. Raises `FileNotFoundError` if the pack has no briefing data.
+`run_realtime_refresh(pack_dir, db_path, *, persist=True, …)` is the **cheap** refresh path (issue #167 Part A): re-fetch METAR/TAF (and route SIGMETs, see below), recompute the comparison from a pack's **stored** forecasts, re-sample observed conditions, and commit the result into the flight's **live layer** ([live-observation-layer.md](live-observation-layer.md), #637). **No** model fetch, **no** GRIB, **no** LLM, and since #637 **no write to the pack**: `briefing.json` keeps the observations the assessment saw, which is the significance baseline. It reads `briefing.json` (route + stored `corridor_nm` + target time via `parse_target_time`), `forecasts.json`, and `route_analyses.json` off disk, calls `run_route_weather()` + `run_observation_comparison()` + `run_route_sigmets()`, and returns a `RealtimeRefreshResult{observations, sigmets, delta, observed, live_updated_at, changes}`. `persist=False` (an older pack) classifies against the baseline but writes nothing. `report_source` / `sigmet_source` let the live tick serve all flights from one shared fetch. Raises `FileNotFoundError` if the pack has no briefing data.
 
-Two callers share this seam:
-- `POST .../observations/refresh` — the standalone METAR/TAF refresh button (a thin endpoint wrapper that adds auth + the D-0 400 guard).
+Three callers share this seam:
+- `POST .../observations/refresh` — the standalone METAR/TAF refresh button (a thin endpoint wrapper that adds auth + the D-0 400 guard; persists only for the flight's latest pack).
 - The tiered refresh gate's `realtime` mode (`api/packs.decide_refresh`) — when a D-0 manual refresh isn't worth a full pipeline run, both refresh-button endpoints invoke `run_realtime_refresh` instead so a D-0 press is always at least cheap-useful. See [freshness-markers.md](freshness-markers.md) for the gate.
+- The server live-window tick (`tasks/live_tick.py`), every 10 min from departure − 3 h to arrival + 1 h.
+
+`run_route_weather` also records, per airport, the latest report's type (`METAR`/`SPECI`) and the previous report's category and time from the 3 h fetch window, plus the TAF issue time — the hysteresis inputs of the classifier.
 
 ### Digest Integration
 
@@ -285,28 +288,30 @@ since SIGMET areas are large).
 ### Real-time refresh seam
 
 `run_realtime_refresh` fetches SIGMETs **alongside** METAR/TAF and returns a
-`RealtimeRefreshResult{observations, sigmets, delta}`, patching `route_observations`,
-`route_sigmets`, and `last_refresh_delta` into `briefing.json`. The SIGMET fetch is wrapped
-in try/except so a SIGMET source failure never blocks the cheap METAR/TAF refresh. Both
+`RealtimeRefreshResult{observations, sigmets, delta, …}`, committing them to the flight's
+live layer (the pack is not patched since #637; a `None` SIGMET block keeps the stored one).
+The SIGMET fetch is wrapped in try/except so a SIGMET source failure never blocks the cheap
+METAR/TAF refresh. Both
 refresh-button endpoints (`refresh_briefing`, `refresh_briefing_stream`) and the standalone
 `observations/refresh` endpoint carry `sigmets` in their responses (`RefreshAccepted.sigmets`,
 SSE `complete` event, and the endpoint's `{observations, sigmets}` body respectively).
 
-### Refresh worsening delta (`tasks/refresh_delta.py`)
+### Changes since the briefing (`tasks/live_significance.py`, #637)
 
-The cheap refresh re-fetches obs+SIGMETs but does **not** regenerate the LLM digest, so a
-freshly-appeared hazard would otherwise show in the tables while the AI assessment stays
-silent. `compute_refresh_delta(old_obs, new_obs, old_sigmets, new_sigmets)` closes that gap
-deterministically (no tokens): it diffs the previous on-disk state against the new one and
-reports **only what got worse** — degraded flight category, new/escalated SIGMETs — as a
-`RefreshDelta{worsened, messages, computed_at}`. Improvements are intentionally not reported
-(the banner only warns). `messages` use language-neutral aviation shorthand (ICAO, flight
-categories, FIR/SIGMET ids) so they need no per-locale translation. SIGMET identity across
-refreshes is keyed by FIR + parsed sequence id (falling back to FIR + hazard + validity) so a
-re-issued SIGMET isn't mistaken for new. The delta is **always** persisted as
-`last_refresh_delta` (even when nothing worsened) so a stale banner from a prior refresh
-clears on the next load. The web UI (`briefing-ui.ts:renderRefreshDelta` →
-`refresh-delta-banner`) shows the banner when `worsened` and there are messages.
+The cheap refresh does **not** regenerate the LLM digest, so a freshly-appeared
+hazard would otherwise show in the tables while the AI assessment stays silent.
+Until #637 `compute_refresh_delta` closed that gap by diffing each refresh against
+the *previous* one and reporting only worsening. It is replaced by
+`classify_changes`, which diffs against the **briefing's own observations**, in
+**both directions**, with hysteresis on METAR category crossings, TAF-at-ETA
+changes, SIGMET issued/escalated/no longer active, and heavy radar echo /
+lightning on the route ahead — see [meteorology-decisions.md §34](meteorology-decisions.md)
+and [live-observation-layer.md](live-observation-layer.md). Messages stay
+deterministic, language-neutral shorthand (no tokens, no per-locale text).
+`last_refresh_delta` is still produced (the worsening half, `worsening_delta`) and
+overlaid on the snapshot, so a client that only knows the old banner keeps
+working. SIGMET identity is unchanged: FIR + parsed sequence id, falling back to
+FIR + hazard + validity.
 
 ### Digest / Report / Web UI
 
@@ -395,12 +400,12 @@ No re-fetch needed — everything required is already serialized on the snapshot
 ## References
 
 - Key code: `src/weatherbrief/tasks/route_weather.py` (incl. `run_realtime_refresh`, `run_route_sigmets`), `src/weatherbrief/models/observations.py`
-- Worsening delta: `src/weatherbrief/tasks/refresh_delta.py:compute_refresh_delta`
+- Changes since the briefing: `src/weatherbrief/tasks/live_significance.py:classify_changes`; live store `tasks/live_layer.py`
 - Pipeline integration: `src/weatherbrief/pipeline.py` (step 3.5)
 - Realtime seam + tiered gate: `tasks/route_weather.py:run_realtime_refresh`, `api/packs.py:refresh_observations` (thin wrapper), `api/packs.py:decide_refresh`; shared helper `tasks/artifacts.py:parse_target_time`
 - Digest: `src/weatherbrief/digest/prompt_builder.py`, `src/weatherbrief/digest/text.py`
 - Report: `src/weatherbrief/report/templates/briefing.html`, `src/weatherbrief/report/render.py`
 - Web UI: `web/ts/managers/briefing-ui.ts` (`renderRouteSigmets`, `renderRefreshDelta`)
 - iOS UI: `app/flyfun-weather/flyfun-weather/Views/Briefing/RouteObservationsView.swift`, `RouteSigmetsView.swift`; DTOs in `Models/API/SnapshotResponse.swift`; tests `flyfun-weatherTests/RouteObservationsTests.swift`, `RouteSigmetsTests.swift`
-- Tests: `tests/test_route_weather.py` (incl. `TestRunRealtimeRefresh`), `tests/test_refresh_delta.py`, `tests/test_packs.py::TestDecideRefresh`
+- Tests: `tests/test_route_weather.py` (incl. `TestRunRealtimeRefresh`), `tests/test_live_significance.py`, `tests/test_live_layer.py`, `tests/test_packs.py::TestDecideRefresh`
 - euro_aip weather module: [briefing_weather.md](rzflight design doc)

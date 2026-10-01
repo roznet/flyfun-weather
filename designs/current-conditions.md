@@ -334,8 +334,10 @@ shown?", and that is the valid time of the frame we hold.
 ## Payload
 
 `ObservedConditions` sits inline on `briefing.json` beside
-`route_observations`, and `run_realtime_refresh` recomputes it so the ↻ button
-updates it. That re-sample costs no network I/O — the collector has been
+`route_observations` — that copy is what the briefing saw. `run_realtime_refresh`
+recomputes it into the flight's **live layer** (#637,
+[live-observation-layer.md](live-observation-layer.md)), on a ↻ press and every
+10 min from departure − 3 h, and the snapshot/bundle overlay the newest copy. That re-sample costs no network I/O — the collector has been
 writing frames all along — which is why it can ride on the cheap refresh path.
 
 **Imagery is served, never in JSON.** A 2 km composite clipped to a corridor is
@@ -392,11 +394,15 @@ discarding it — and the client folds all three into the loaded snapshot *after
 the pack reload, rather than fetching anything again. The web is unaffected: it
 has no client cache and reloads the snapshot from the server anyway.
 
-**Refresh stays a button, on both platforms.** No poll loop. The four sources
-update every 5–15 minutes and a re-sample is ~6–12 KB gzipped, so polling would
-be affordable — but a briefing that changes under the pilot without being asked
-is a different product decision, and the age badges make "how old is this?"
-answerable without one.
+**Superseded by #637: the live layer now updates without a press.** This
+section used to say refresh stays a button, because a briefing changing under
+the pilot was "a different product decision". #637 made that decision: the
+*observations* update on their own on flight day (server tick every 10 min,
+clients poll `/live` every ~5 min while the briefing is open), while the
+*assessment* still never changes without a full refresh. The age badges remain
+the way to answer "how old is this?". The fold-after-reload described above
+still applies to a ↻ press; on top of it, iOS keeps a per-flight live cache so
+the newest copy survives relaunch.
 
 The ports that have to stay in step are the resolver (`ObservedResolver` ⇄
 `buildObserved`), the two layers, and — most easily got wrong, because all three
