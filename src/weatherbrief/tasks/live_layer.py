@@ -126,6 +126,25 @@ def live_updated_at_for_pack(pack_dir: Path | str | None) -> datetime | None:
     return _parse_dt(meta.get("live_updated_at"))
 
 
+def live_updated_at_iso(artifact_path: str | None) -> str | None:
+    """ISO ``live_updated_at`` for a stored ``artifact_path``, or None.
+
+    The one helper behind every pack-meta / flight-list field: resolves the
+    path against the current DATA_DIR and never raises (a live-layer problem
+    must not fail a listing).
+    """
+    if not artifact_path:
+        return None
+    try:
+        from weatherbrief.storage.flights import _resolve_artifact_path
+
+        ts = live_updated_at_for_pack(_resolve_artifact_path(artifact_path))
+        return ts.isoformat() if ts is not None else None
+    except Exception:
+        logger.warning("live_updated_at lookup failed for %s", artifact_path, exc_info=True)
+        return None
+
+
 def overlay_live(briefing_data: dict, layer: LiveLayer | None) -> dict:
     """Briefing JSON with the live blocks laid over the pack's own.
 
@@ -291,6 +310,12 @@ def commit_live_update(
             route_icaos = [wp.icao for wp in route.waypoints]
             departure = parse_target_time(briefing_data)
         except Exception:
+            # Without a route there are no roles: every airport would be
+            # classified as a corridor field and alerts silently suppressed.
+            logger.warning(
+                "Live update for %s: briefing route unreadable — alert tier disabled this tick",
+                flight_id, exc_info=True,
+            )
             route, route_icaos, departure = None, [], None
 
         base_obs, base_sigmets, base_observed = _baseline_blocks(briefing_data)

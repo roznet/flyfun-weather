@@ -720,17 +720,12 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             # keeps the two representations of the same field identical.
             fetch_timestamp=ensure_utc(row.fetch_timestamp).isoformat(),
             has_advisories=pack_has_advisories(row.artifact_path),
-            live_updated_at=_live_updated_at(row.artifact_path),
+            live_updated_at=_live_updated_at_iso(row.artifact_path),
             advisory_summary=parse_advisory_summary(row.advisory_summary_json),
         )
         for row in rows
     }
 
-
-def _live_updated_at(artifact_path: str | None) -> str | None:
-    """ISO ``live_updated_at`` for a latest pack, or None. Never raises."""
-    if not artifact_path:
-        return None
     try:
         from weatherbrief.storage.flights import _resolve_artifact_path
         from weatherbrief.tasks.live_layer import live_updated_at_for_pack
@@ -739,6 +734,12 @@ def _live_updated_at(artifact_path: str | None) -> str | None:
         return ts.isoformat() if ts is not None else None
     except Exception:
         return None
+
+
+def _live_updated_at_iso(artifact_path: str | None) -> str | None:
+    from weatherbrief.tasks.live_layer import live_updated_at_iso
+
+    return live_updated_at_iso(artifact_path)
 
 
 def _reorder_future_soonest_first(
