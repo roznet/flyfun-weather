@@ -57,6 +57,14 @@ Detect, don't assume, and remember the answers for the brief:
    - **Meteorology** — anything that changes a grade, threshold, advisory or digest
      judgement. Check `designs/meteorology-decisions.md`.
    Most issues are a mix; estimate the split.
+
+   These four are a starting vocabulary, **not a closed list**. If part of the change
+   carries a kind of risk they don't name, add your own label and treat it with the
+   care it deserves — e.g. **privacy / data leaving the system** (a vendor, a log, a
+   share link), **security / auth**, **cost** (LLM tokens, API quotas, droplet
+   memory/disk), **user data** (migrations or deletes on rows users created). A new
+   label is a signal to the owner, so prefer naming it over folding it into
+   "plumbing".
 5. **Meteorology or a real product choice, attended:** before implementing, give a
    5-line plan (what you'll change, the 1–3 choices that are theirs, your
    recommendation) and wait. Unattended: implement the conservative option and flag
@@ -129,10 +137,31 @@ on one phone screen or two — **≤ ~30 lines**, plain words, no code unless a 
 the clearest handle. The user will ask for detail; this is the map, not the
 territory. Omit a section only when it is genuinely empty, and then say "none".
 
+**Before writing it, re-read your own diff against this checklist.** These are the
+gaps independent reviews of real briefs (PRs #632–634) found most often — an
+honest agent still misses them because they live outside what it set out to do:
+
+1. **Unbounded growth.** Anything that grows without limit — archives, tables,
+   caches, logs, downloads per cycle. State the retention (or "none, kept forever")
+   as a decision, and the expected size/rate if you can estimate it.
+2. **Departures from the issue.** Every place the implementation differs from what
+   the issue or its thread asked — including *reversals* (issue said "refuse X", you
+   keep X flagged), not just changes of approach. Each is a decision for the owner.
+3. **Inherited numbers.** Any figure, interval or premise copied from an old comment,
+   docstring or design doc ("samples are ~24 h apart"): re-derive it from the code
+   before repeating it in the brief, docstrings or tests.
+4. **Other surfaces showing the same thing.** If you changed how a value is computed
+   or displayed, grep for every other place that shows it (HTML report, refresh
+   deltas, the other client, MCP, digest) and say whether they now disagree.
+5. **Verified vs claimed.** Only count what's reproducible: tests in the diff, and CI
+   on the **head** commit (check it; say "pending" if it is). Live checks you did in
+   the session are "checked once, not in the repo". Unanswered review-bot findings
+   on the head commit are listed, not ignored.
+
 ```
 ## Owner's brief — #<n> <title>
 
-**Kind:** ~70% plumbing · 20% data collection · 10% pilot-facing   (rough split)
+**Kind:** ~60% plumbing · 25% meteorology · 15% pilot-facing   (rough split; use whichever labels fit, incl. new ones)
 **In one line:** <what this PR does, in pilot/owner terms>
 
 **What changes for the pilot**
@@ -166,6 +195,6 @@ Rules for the brief:
   replaced theirs, a number you picked, a behaviour that changed silently. Never
   generic ("Do the tests pass?").
 - **Depth follows the classification:** pure plumbing can be a few lines; anything
-  touching meteorology or pilot-facing output gets the full treatment, with the
-  decisions spelled out.
+  touching meteorology, pilot-facing output or a risk label you added (privacy,
+  cost, user data…) gets the full treatment, with the decisions spelled out.
 - Be honest: an unverified Swift change is "written, not compiled", not "done".
