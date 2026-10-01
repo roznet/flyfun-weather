@@ -366,6 +366,8 @@ def _build_observation(
 def fetch_observations_batch(
     icaos: list[str],
     airports_db_path: str,
+    *,
+    report_sink=None,
 ) -> list[VerificationObservation]:
     """Fetch current METAR/TAF for a list of ICAOs.
 
@@ -381,6 +383,10 @@ def fetch_observations_batch(
 
     De-duplication against what is already stored is ``store_observations``'
     job — this function is a pure read.
+
+    ``report_sink(icao, reports)`` (optional) receives every fetched airport's
+    raw euro_aip reports, so the live-layer tick (#637) can reuse this fetch
+    instead of making its own. It changes nothing about what is returned.
     """
     from euro_aip.briefing.weather.route_weather import RouteWeatherService
     from weatherbrief.airports import _load_airport_model
@@ -408,6 +414,11 @@ def fetch_observations_batch(
             continue
 
         for raw in result.airports:
+            if report_sink is not None:
+                try:
+                    report_sink(raw.icao, raw.reports.all())
+                except Exception:
+                    logger.warning("report_sink failed for %s", raw.icao, exc_info=True)
             # `.metars()` is METAR *and* SPECI; chronological keeps the
             # insertion order deterministic for the bucket filter downstream.
             reports = raw.reports.metars().chronological().all()
@@ -714,8 +725,13 @@ def collect_and_store(
     db: Session,
     airports_db_path: str,
     corridor_nm: float = _DEFAULT_CORRIDOR_NM,
+    *,
+    report_sink=None,
 ) -> dict:
     """Run one complete collection cycle.
+
+    ``report_sink`` is forwarded to :func:`fetch_observations_batch` (the
+    live-layer tick shares this cycle's fetch).
 
     Returns summary dict with counts.
     """
@@ -761,7 +777,9 @@ def collect_and_store(
 
     # Phase B — fetch METARs
     t0 = time.monotonic()
-    observations = fetch_observations_batch(unique_icaos, airports_db_path)
+    observations = fetch_observations_batch(
+        unique_icaos, airports_db_path, report_sink=report_sink,
+    )
     timings["fetch"] = _ms_since(t0)
 
     # Phase C — store observations
