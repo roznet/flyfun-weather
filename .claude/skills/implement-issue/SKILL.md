@@ -97,6 +97,26 @@ or say explicitly which one is left.
 Keep scope to the issue. Things you notice but don't do go under "Follow-ups" in the
 brief rather than into the diff.
 
+### Design docs, in the same PR
+
+Once the code is settled, update the design docs **for the code you touched**,
+not the whole set:
+
+- Find them through `designs/INDEX.md` (and the docs you read in Step 1). Update
+  what the change made stale: architecture, key exports, gotchas, and above all
+  **choices and their rationale**. The decisions you'll list in the brief belong
+  here too, so the next agent doesn't redo or contradict them. A meteorology choice
+  also goes in `designs/meteorology-decisions.md`.
+- New component with no doc → add one and its `INDEX.md` entry. Work that completes
+  something in `designs/future/` → fix that doc's status line, or move the as-built
+  part into `designs/`.
+- Keep docs small (< ~300 lines), and write them as notes for a future agent:
+  intent, structure, choices, gotchas. Not a changelog.
+- Locally, the user-level `/sync-designs <doc path>` skill does this well when it's
+  available. Point it at the specific docs, never a full sync. In the cloud it isn't
+  installed, so apply the rules above directly.
+- No doc needed updating? Say so in the brief. Don't invent edits.
+
 ## Step 4 — Verify what this machine can verify
 
 Run only what's relevant, once each, and record the real outcome (counts, not
@@ -182,6 +202,7 @@ honest agent still misses them because they live outside what it set out to do:
 **Worth making sure you understand**   (2–4 questions you'd want answered)
 - <e.g. "Why is the threshold 30 % and not the 25 % in the issue?">
 
+**Design docs:** <docs updated + what was recorded, or "none needed — why">
 **Deploy notes:** <migration / env var / prod command / backfill / app release — or "none">
 
 **Pick up on a Mac**   (only what wasn't run here)

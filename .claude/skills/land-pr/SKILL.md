@@ -103,8 +103,11 @@ not, for `Addresses`).
 - **Memory:** grep the memory dir for the issue/PR numbers. Any note that still
   calls this work pending, open, unmerged or "approved, not started" → update it to
   the landed state, or delete it if it's now only history.
-- **Design docs:** if the work completes something in `designs/future/`, or makes a
-  doc's status line stale, say so (or fix the status line in the follow-up commit).
+- **Design docs (safety net):** `/implement-issue` should have updated the docs in
+  the PR. Check the diff did. If it didn't, or your on-main fixes changed documented
+  behaviour or choices, update the affected docs in the follow-up commit, scoped to
+  what changed (locally `/sync-designs <doc path>`, never a full sync). Also fix any
+  `designs/future/` status line the work made stale.
 - **Local worktree** for the PR branch: if it's clean and merged, remove it
   (`git worktree remove`); if it's dirty, leave it and say so.
 
