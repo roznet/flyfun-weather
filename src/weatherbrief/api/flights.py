@@ -174,6 +174,10 @@ class BriefingStatusInfo(BaseModel):
     days_out: int | None = None
     fetch_timestamp: str | None = None
     has_advisories: bool = False
+    # When the flight's live observation layer (#637) last changed, for this
+    # (latest) pack. A realtime refresh keeps ``fetch_timestamp``, so clients
+    # sync on this too. None when nothing live exists yet.
+    live_updated_at: str | None = None
     # Compact RED/AMBER advisory breakdown + top named categories for the
     # flights-list card chips. Read straight from the denormalized pack column
     # (no per-flight route_advisories.json parse). None for old packs.
@@ -716,10 +720,25 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             # keeps the two representations of the same field identical.
             fetch_timestamp=ensure_utc(row.fetch_timestamp).isoformat(),
             has_advisories=pack_has_advisories(row.artifact_path),
+            live_updated_at=_live_updated_at(row.artifact_path),
             advisory_summary=parse_advisory_summary(row.advisory_summary_json),
         )
         for row in rows
     }
+
+
+def _live_updated_at(artifact_path: str | None) -> str | None:
+    """ISO ``live_updated_at`` for a latest pack, or None. Never raises."""
+    if not artifact_path:
+        return None
+    try:
+        from weatherbrief.storage.flights import _resolve_artifact_path
+        from weatherbrief.tasks.live_layer import live_updated_at_for_pack
+
+        ts = live_updated_at_for_pack(_resolve_artifact_path(artifact_path))
+        return ts.isoformat() if ts is not None else None
+    except Exception:
+        return None
 
 
 def _reorder_future_soonest_first(

@@ -337,7 +337,7 @@ def _route_title(flight: Flight) -> str:
 def build_alert_body(pack: BriefingPackMeta, delta: RefreshDelta | None) -> str:
     """Human body: the new assessment plus the worst worsening detail, if any.
 
-    Language-neutral aviation shorthand from ``compute_refresh_delta`` needs no
+    Language-neutral aviation shorthand from the live layer's classifier needs no
     per-locale translation; we surface at most the first message to keep the
     banner short.
     """

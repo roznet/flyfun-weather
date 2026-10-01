@@ -92,12 +92,14 @@ def test_realtime_refresh_resamples_observed_conditions(tmp_path):
     """The ↻ button updates the observed panel — no provider fetch involved."""
     from weatherbrief.tasks.route_weather import run_realtime_refresh
 
-    (tmp_path / "briefing.json").write_text(json.dumps({
+    pack_dir = tmp_path / "flight" / "pack"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "briefing.json").write_text(json.dumps({
         "route": ROUTE.model_dump(mode="json"),
         "departure_time": "2026-08-25T14:00:00+00:00",
         "days_out": 0,
     }))
-    (tmp_path / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+    (pack_dir / "forecasts.json").write_text(json.dumps({"forecasts": []}))
 
     fresh_obs = RouteObservations(
         corridor_nm=30.0,
@@ -114,23 +116,30 @@ def test_realtime_refresh_resamples_observed_conditions(tmp_path):
         "weatherbrief.observed.payload.build_observed_conditions",
         return_value=_conditions(),
     ) as mock_build:
-        result = run_realtime_refresh(tmp_path, "/fake/db")
+        result = run_realtime_refresh(pack_dir, "/fake/db")
 
     mock_build.assert_called_once()
     assert result.observed is not None
-    patched = json.loads((tmp_path / "briefing.json").read_text())
-    assert patched["observed_conditions"]["corridor_nm"] == 20.0
+    # Lands in the flight's live layer (#637); the pack itself is immutable.
+    from weatherbrief.tasks.live_layer import live_for_pack
+
+    layer = live_for_pack(pack_dir)
+    assert layer.observed_conditions.corridor_nm == 20.0
+    assert layer.observed_updated_at is not None
+    assert "observed_conditions" not in json.loads((pack_dir / "briefing.json").read_text())
 
 
 def test_realtime_refresh_skips_observed_when_not_enabled(tmp_path):
     from weatherbrief.tasks.route_weather import run_realtime_refresh
 
-    (tmp_path / "briefing.json").write_text(json.dumps({
+    pack_dir = tmp_path / "flight" / "pack"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "briefing.json").write_text(json.dumps({
         "route": ROUTE.model_dump(mode="json"),
         "departure_time": "2026-08-25T14:00:00+00:00",
         "days_out": 0,
     }))
-    (tmp_path / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+    (pack_dir / "forecasts.json").write_text(json.dumps({"forecasts": []}))
 
     fresh_obs = RouteObservations(
         corridor_nm=30.0,
@@ -144,11 +153,12 @@ def test_realtime_refresh_skips_observed_when_not_enabled(tmp_path):
     ), patch(
         "weatherbrief.observed.collect.observed_enabled", return_value=False,
     ):
-        result = run_realtime_refresh(tmp_path, "/fake/db")
+        result = run_realtime_refresh(pack_dir, "/fake/db")
 
     assert result.observed is None
-    patched = json.loads((tmp_path / "briefing.json").read_text())
-    assert "observed_conditions" not in patched
+    from weatherbrief.tasks.live_layer import live_for_pack
+
+    assert live_for_pack(pack_dir).observed_conditions is None
 
 
 # --- Text digest -----------------------------------------------------------

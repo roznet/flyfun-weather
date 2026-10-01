@@ -382,7 +382,7 @@ def test_text_digest_no_observations_when_none():
 
 class TestRunRealtimeRefresh:
     """The cheap real-time refresh seam: re-fetch obs from stored forecasts,
-    patch briefing.json, return RouteObservations. No model/GRIB/LLM.
+    fold them into the flight's live layer, return them. No model/GRIB/LLM.
     """
 
     def _write_pack(self, pack_dir, two_wp_route):
@@ -396,12 +396,18 @@ class TestRunRealtimeRefresh:
         (pack_dir / "briefing.json").write_text(json.dumps(briefing))
         (pack_dir / "forecasts.json").write_text(json.dumps({"forecasts": []}))
 
-    def test_patches_briefing_and_returns_obs(self, tmp_path, two_wp_route):
+    def test_writes_live_layer_and_leaves_pack_untouched(self, tmp_path, two_wp_route):
+        """#637: the pack is immutable — the refresh lands in the per-flight
+        live layer beside it, and briefing.json keeps the briefing's view."""
         import json
 
+        from weatherbrief.tasks.live_layer import live_for_pack
         from weatherbrief.tasks.route_weather import run_realtime_refresh
 
-        self._write_pack(tmp_path, two_wp_route)
+        pack_dir = tmp_path / "flight-1" / "2026-05-20T07-00-00p00-00"
+        pack_dir.mkdir(parents=True)
+        self._write_pack(pack_dir, two_wp_route)
+        before = (pack_dir / "briefing.json").read_text()
         fresh = RouteObservations(
             corridor_nm=30.0,
             fetch_time=datetime(2026, 5, 20, 9),
@@ -422,25 +428,56 @@ class TestRunRealtimeRefresh:
         ) as mock_sigmet, patch(
             "weatherbrief.airports.get_runway_ends", return_value={},
         ):
-            result = run_realtime_refresh(tmp_path, "/fake/db")
+            result = run_realtime_refresh(
+                pack_dir, "/fake/db",
+                flight_id="flight-1", pack_timestamp="2026-05-20T07:00:00+00:00",
+            )
 
         # Returned the refreshed observations + SIGMETs.
         assert result.observations.corridor_nm == 30.0
         assert result.observations.airports_found == 1
         assert result.sigmets is not None
         assert result.sigmets.count == 1
-        # Used the pack's stored corridor/route and target time (not network).
         mock_fetch.assert_called_once()
         mock_sigmet.assert_called_once()
-        # Patched briefing.json on disk (both observations and SIGMETs).
-        patched = json.loads((tmp_path / "briefing.json").read_text())
-        assert patched["route_observations"]["airports_found"] == 1
-        assert patched["route_sigmets"]["count"] == 1
-        # A worsening delta is always persisted (no prior SIGMETs on this pack,
-        # so the first realtime refresh reports nothing worsened).
+        # The pack on disk is byte-for-byte what the briefing wrote.
+        assert (pack_dir / "briefing.json").read_text() == before
+        # The live layer holds the refresh, relative to this pack.
+        layer = live_for_pack(pack_dir)
+        assert layer is not None
+        assert layer.flight_id == "flight-1"
+        assert layer.route_observations.airports_found == 1
+        assert layer.route_sigmets.count == 1
+        assert result.live_updated_at == layer.live_updated_at
+        # No baseline SIGMETs on this pack, so nothing is reported as changed.
         assert result.delta is not None
         assert result.delta.worsened is False
-        assert patched["last_refresh_delta"]["worsened"] is False
+        assert result.changes is not None and result.changes.changes == []
+        meta = json.loads((pack_dir.parent / "live_meta.json").read_text())
+        assert meta["pack_dir_name"] == pack_dir.name
+
+    def test_persist_false_writes_nothing(self, tmp_path, two_wp_route):
+        """Refreshing an older pack returns data but leaves the store alone."""
+        from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+        pack_dir = tmp_path / "flight-1" / "old-pack"
+        pack_dir.mkdir(parents=True)
+        self._write_pack(pack_dir, two_wp_route)
+        fresh = RouteObservations(
+            corridor_nm=30.0, fetch_time=datetime(2026, 5, 20, 9),
+            airports_found=0, airports_with_metar=0, airports_with_taf=0, airports=[],
+        )
+        with patch(
+            "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
+        ), patch(
+            "weatherbrief.tasks.route_weather.run_route_sigmets", return_value=None,
+        ), patch(
+            "weatherbrief.airports.get_runway_ends", return_value={},
+        ):
+            result = run_realtime_refresh(pack_dir, "/fake/db", persist=False)
+
+        assert result.live_updated_at is None
+        assert not (pack_dir.parent / "live.json").exists()
 
     def test_uses_stored_corridor_nm(self, tmp_path, two_wp_route):
         import json
@@ -459,8 +496,10 @@ class TestRunRealtimeRefresh:
                 "airports_with_taf": 0,
             },
         }
-        (tmp_path / "briefing.json").write_text(json.dumps(briefing))
-        (tmp_path / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+        pack_dir = tmp_path / "flight" / "pack"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "briefing.json").write_text(json.dumps(briefing))
+        (pack_dir / "forecasts.json").write_text(json.dumps({"forecasts": []}))
         fresh = RouteObservations(
             corridor_nm=45.0, fetch_time=datetime(2026, 5, 20, 9),
             airports_found=0, airports_with_metar=0, airports_with_taf=0, airports=[],
@@ -473,7 +512,7 @@ class TestRunRealtimeRefresh:
         ), patch(
             "weatherbrief.airports.get_runway_ends", return_value={},
         ):
-            run_realtime_refresh(tmp_path, "/fake/db")
+            run_realtime_refresh(pack_dir, "/fake/db")
 
         assert mock_fetch.call_args.kwargs["corridor_nm"] == 45.0
 

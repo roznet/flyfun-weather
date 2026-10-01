@@ -1541,11 +1541,13 @@ class TestRefreshEndpoint:
     ):
         """End-to-end realtime gate: the endpoint resolves the pack's
         ``artifact_path``, runs the *real* ``run_realtime_refresh`` seam (only
-        the network fetch is mocked) and patches ``briefing.json`` on disk.
+        the network fetch is mocked) and writes the flight's live layer beside
+        the pack (#637), leaving ``briefing.json`` untouched.
 
         Guards the endpoint->seam contract the other gate tests don't cover
         (they mock ``run_realtime_refresh``): that ``latest.artifact_path`` is
-        the directory the seam reads from and writes back to.
+        the directory the seam reads from, and that ``GET /live`` and the
+        snapshot then serve what it stored.
         """
         from weatherbrief.api.packs import DataStatus, RefreshDecision
         from weatherbrief.models import BriefingPackMeta
@@ -1569,14 +1571,16 @@ class TestRefreshEndpoint:
             "departure_time": "2026-05-20T09:00:00+00:00",
             "days_out": 0,
         }
-        (tmp_path / "briefing.json").write_text(json.dumps(briefing))
-        (tmp_path / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+        pack_dir = tmp_path / "flight" / "pack"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "briefing.json").write_text(json.dumps(briefing))
+        (pack_dir / "forecasts.json").write_text(json.dumps({"forecasts": []}))
 
         mock_list.return_value = [BriefingPackMeta(
             flight_id=sample_flight.id,
             fetch_timestamp=datetime.now(timezone.utc),
             days_out=0,
-            artifact_path=str(tmp_path),
+            artifact_path=str(pack_dir),
         )]
         mock_status.return_value = DataStatus(fresh=True)
         mock_decide.return_value = RefreshDecision(
@@ -1601,10 +1605,15 @@ class TestRefreshEndpoint:
             assert data["status"] == "realtime"
             assert data["observations"]["airports_found"] == 1
             assert data["sigmets"]["count"] == 1
-            # The real seam patched briefing.json at the pack's artifact_path.
-            patched = json.loads((tmp_path / "briefing.json").read_text())
-            assert patched["route_observations"]["airports_found"] == 1
-            assert patched["route_sigmets"]["count"] == 1
+            assert data["live_updated_at"] is not None
+            # The pack is untouched; the live layer holds the refresh.
+            on_disk = json.loads((pack_dir / "briefing.json").read_text())
+            assert "route_observations" not in on_disk
+            live = client.get(f"/api/flights/{sample_flight.id}/live").json()
+            assert live["route_observations"]["airports_found"] == 1
+            assert live["route_sigmets"]["count"] == 1
+            assert live["live_updated_at"] is not None
+            assert live["changes"] is not None
         finally:
             client.app.state.db_path = ""
 
@@ -2329,3 +2338,67 @@ class TestInterpretRoute:
         # All three positions resolve to real coordinates.
         icaos = [w["icao"] for w in data["waypoints"]]
         assert icaos == ["EGBJ", "EGTK", "EGBJ"]
+
+
+class TestLiveLayerEndpoint:
+    """``GET /api/flights/{id}/live`` and the live overlay on pack reads (#637)."""
+
+    def _commit(self, pack_dir, *, airports_found=4):
+        from weatherbrief.models.observations import RouteObservations
+        from weatherbrief.tasks.live_layer import commit_live_update
+
+        return commit_live_update(
+            pack_dir,
+            briefing_data={"route": {}},
+            observations=RouteObservations(
+                corridor_nm=30.0, fetch_time=_NOW, airports_found=airports_found,
+                airports_with_metar=0, airports_with_taf=0,
+            ),
+            sigmets=None,
+            observed=None,
+            started_at=datetime.now(timezone.utc),
+            pack_timestamp=(_NOW - timedelta(hours=6)).isoformat(),
+        )
+
+    def test_no_live_data_returns_nulls(self, client, app_db, sample_flight, tmp_path):
+        _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        resp = client.get(f"/api/flights/{sample_flight.id}/live")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["live_updated_at"] is None
+        assert data["route_observations"] is None
+        assert data["pack_timestamp"]
+
+    def test_no_pack_is_404(self, client, sample_flight):
+        assert client.get(f"/api/flights/{sample_flight.id}/live").status_code == 404
+
+    def test_live_data_served_and_overlaid(self, client, app_db, sample_flight, tmp_path):
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        layer = self._commit(pack_dir)
+
+        live = client.get(f"/api/flights/{sample_flight.id}/live").json()
+        assert live["route_observations"]["airports_found"] == 4
+        assert live["observations_updated_at"] is not None
+        assert live["changes"]["changes"] == []
+
+        # Pack meta (latest + list) and the flight list carry live_updated_at.
+        latest = client.get(f"/api/flights/{sample_flight.id}/packs/latest").json()
+        assert latest["live_updated_at"] == layer.live_updated_at.isoformat()
+        flights = client.get("/api/flights").json()
+        mine = next(f for f in flights if f["id"] == sample_flight.id)
+        assert mine["latest_briefing"]["live_updated_at"] == layer.live_updated_at.isoformat()
+
+        # The snapshot serves the newest observations over the immutable pack.
+        ts = latest["fetch_timestamp"]
+        snap = client.get(f"/api/flights/{sample_flight.id}/packs/{ts}/snapshot").json()
+        assert snap["route_observations"]["airports_found"] == 4
+        assert snap["live_updated_at"] is not None
+        assert json.loads((pack_dir / "briefing.json").read_text()) == {"route": {}}
+
+    def test_delete_flight_removes_live_files(self, client, app_db, sample_flight, tmp_path):
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        self._commit(pack_dir)
+        assert (pack_dir.parent / "live.json").exists()
+        assert client.delete(f"/api/flights/{sample_flight.id}").status_code in (200, 204)
+        assert not (pack_dir.parent / "live.json").exists()
+        assert not (pack_dir.parent / "live_meta.json").exists()

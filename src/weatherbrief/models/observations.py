@@ -29,7 +29,17 @@ class AirportObservation(BaseModel):
     metar_temperature_c: int | None = None
     metar_dewpoint_c: int | None = None
     metar_qnh: float | None = None
+    # "METAR" or "SPECI" for the latest report, plus the category and time of
+    # the report before it (within the 3 h fetch window). The live layer's
+    # significance classifier (#637) needs them for hysteresis: a category
+    # crossing counts once two consecutive reports agree, or on a SPECI.
+    # None on packs built before #637.
+    metar_report_type: str | None = None
+    metar_previous_flight_category: str | None = None
+    metar_previous_time: datetime | None = None
     taf_raw: str | None = None
+    # Issue time of the TAF the at-ETA reading came from (None before #637).
+    taf_issue_time: datetime | None = None
     # Validity window of the TAF, and whether it contains this airport's ETA.
     # aviationweather.gov returns the latest TAF however old, so False is common
     # at fields that issue TAFs only in opening hours: the raw text is kept and
@@ -220,3 +230,12 @@ class RealtimeRefreshResult(BaseModel):
     sigmets: RouteSigmets | None = None
     delta: RefreshDelta | None = None
     observed: ObservedConditions | None = None
+    # Set when the refresh was persisted to the flight's live layer (#637):
+    # the stored layer's timestamp and its changes since the briefing.
+    live_updated_at: datetime | None = None
+    changes: "LiveChanges | None" = None
+
+
+from weatherbrief.models.live import LiveChanges  # noqa: E402  (cycle: live imports this module)
+
+RealtimeRefreshResult.model_rebuild()

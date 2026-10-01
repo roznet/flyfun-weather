@@ -5,7 +5,6 @@ Only used on D-0 (day of flight) when real observations add value.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -183,6 +182,8 @@ def run_route_weather(
     target_time: datetime,
     corridor_nm: float,
     airports_db_path: str,
+    *,
+    source=None,
 ) -> RouteObservations:
     """Fetch METAR/TAF for airports along a route via euro_aip RouteWeatherService.
 
@@ -191,6 +192,9 @@ def run_route_weather(
         target_time: Flight departure/target time (for TAF matching).
         corridor_nm: Corridor half-width for airport search.
         airports_db_path: Path to euro_aip SQLite database.
+        source: Optional euro_aip weather source (``fetch_weather``). The
+            live tick passes a cache-backed one so every flight is served from
+            one shared fetch; default is aviationweather.gov.
 
     Returns:
         RouteObservations with per-airport METAR/TAF data.
@@ -206,7 +210,7 @@ def run_route_weather(
     total_distance = route_distances[-1] if route_distances else 0.0
     duration_hours = route.flight_duration_hours
 
-    service = RouteWeatherService()
+    service = RouteWeatherService(source=source)
     result = service.fetch_route_weather(
         route_icaos=route_icaos,
         corridor_nm=corridor_nm,
@@ -261,10 +265,12 @@ def run_route_weather(
             obs.metar_dewpoint_c = metar.dewpoint
             obs.metar_qnh = metar.altimeter
             all_phenomena.extend(metar.weather_conditions)
+            _apply_metar_history(obs, raw)
 
         taf = raw.latest_taf
         if taf is not None:
             obs.has_taf = True
+            obs.taf_issue_time = taf.observation_time
             _apply_taf_at_eta(obs, taf, airport_time)
             if obs.taf_flight_category_at_eta is not None:
                 taf_categories.append(obs.taf_flight_category_at_eta)
@@ -322,6 +328,41 @@ def run_route_weather(
         worst_taf_category=_worst_category(taf_categories),
         phenomena_along_route=unique_phenomena,
     )
+
+
+def _apply_metar_history(obs: AirportObservation, raw) -> None:
+    """Record the latest report's type and the report before it.
+
+    ``raw.reports`` holds the whole fetch window (3 h of METAR/SPECI), so the
+    previous report comes for free. The live layer's hysteresis reads these
+    (#637); nothing else does. Defensive throughout: one odd report must not
+    cost the airport its observation.
+    """
+    try:
+        reports = raw.reports.metars().chronological().all()
+    except Exception:
+        return
+    if not reports:
+        return
+    latest = reports[-1]
+    raw_type = getattr(latest, "report_type", None)
+    report_type = getattr(raw_type, "value", raw_type)
+    if isinstance(report_type, str) and report_type:
+        obs.metar_report_type = report_type.upper()
+    # The report before the latest *in time*: a duplicate of the latest (the
+    # same bulletin under an alias code) is not a second opinion.
+    latest_time = getattr(latest, "observation_time", None)
+    earlier = [
+        r for r in reports[:-1]
+        if latest_time is None
+        or (r.observation_time is not None and r.observation_time < latest_time)
+    ]
+    if earlier:
+        prev = earlier[-1]
+        cat = getattr(prev, "flight_category", None)
+        if cat is not None:
+            obs.metar_previous_flight_category = getattr(cat, "value", cat)
+        obs.metar_previous_time = getattr(prev, "observation_time", None)
 
 
 def _apply_taf_at_eta(obs: AirportObservation, taf, eta: datetime) -> None:
@@ -613,6 +654,7 @@ def run_route_sigmets(
     airports_db_path: str,
     *,
     now: datetime | None = None,
+    source=None,
 ) -> RouteSigmets:
     """Fetch SIGMETs affecting a route via euro_aip RouteSigmetService.
 
@@ -627,6 +669,8 @@ def run_route_sigmets(
         corridor_nm: Corridor half-width for the intersection test.
         airports_db_path: Path to euro_aip SQLite database.
         now: Override for "now" (testing).
+        source: Optional euro_aip SIGMET source (``fetch_isigmet``); the live
+            tick shares one fetch across flights.
 
     Returns:
         RouteSigmets listing route-relevant SIGMETs, sorted by enroute distance.
@@ -641,7 +685,7 @@ def run_route_sigmets(
     low_ft, high_ft = _sigmet_altitude_band(route)
     win_from, win_to = _departure_day_window(target_time, now=now)
 
-    service = RouteSigmetService()
+    service = RouteSigmetService(source=source)
     result = service.fetch_route_sigmets(
         route_icaos=route_icaos,
         corridor_nm=corridor_nm,
@@ -696,19 +740,28 @@ def run_realtime_refresh(
     default_corridor_nm: float = 30.0,
     default_sigmet_corridor_nm: float = 50.0,
     cloud_source: str | None = None,
+    persist: bool = True,
+    flight_id: str | None = None,
+    pack_timestamp: str | None = None,
+    report_source=None,
+    sigmet_source=None,
 ) -> RealtimeRefreshResult:
-    """Re-fetch METAR/TAF and recompute the obs-vs-model comparison from a
-    pack's *stored* forecasts, then patch ``briefing.json`` in place.
+    """Re-fetch METAR/TAF + route SIGMETs, recompute the obs-vs-model
+    comparison from a pack's *stored* forecasts, re-sample observed conditions,
+    and fold the result into the flight's live layer (#637).
 
-    This is the cheap real-time path: no model fetch, no
-    GRIB, no LLM.  Shared by the observations refresh button endpoint and the
-    tiered refresh gate's ``realtime`` mode.
+    This is the cheap real-time path: no model fetch, no GRIB, no LLM. Shared
+    by the observations refresh button, the tiered refresh gate's ``realtime``
+    mode, and the server live-window tick.
 
-    Reads the pack's route, forecasts and route analyses off disk, fetches
-    fresh observations *and route SIGMETs* for the route corridor, recomputes
-    the comparison against the stored forecasts, writes both back into
-    ``briefing.json`` (or legacy ``snapshot.json``), and returns a
-    :class:`RealtimeRefreshResult` carrying the updated observations and SIGMETs.
+    The pack itself is **not** modified: ``briefing.json`` keeps the
+    observations the assessment saw, which is the significance baseline. With
+    ``persist`` (the caller asserts the pack is the flight's latest) the result
+    is committed to the per-flight live store; otherwise changes are computed
+    against the baseline and returned but nothing is written.
+
+    ``report_source`` / ``sigmet_source`` let the live tick serve every flight
+    from one shared fetch instead of one network call per flight.
 
     Raises :class:`FileNotFoundError` if the pack has no briefing data on disk.
     """
@@ -719,6 +772,7 @@ def run_realtime_refresh(
         parse_target_time,
     )
 
+    started_at = datetime.now(timezone.utc)
     pack_dir = Path(pack_dir)
     briefing_data = load_briefing(pack_dir)
     if not briefing_data:
@@ -743,6 +797,7 @@ def run_realtime_refresh(
         target_time=target_dt,
         corridor_nm=corridor_nm,
         airports_db_path=db_path,
+        source=report_source,
     )
 
     # Compare observations against the pack's *stored* forecasts.
@@ -787,22 +842,10 @@ def run_realtime_refresh(
             target_time=target_dt,
             corridor_nm=sigmet_corridor_nm,
             airports_db_path=db_path,
+            source=sigmet_source,
         )
     except Exception:
         logger.warning("Route SIGMET refresh failed", exc_info=True)
-
-    # Diff against the previous on-disk state (before we overwrite it) so the
-    # UI can warn when conditions worsened — the digest is NOT regenerated here.
-    from weatherbrief.tasks.refresh_delta import compute_refresh_delta
-
-    old_obs = RouteObservations.model_validate(stored_obs) if stored_obs else None
-    old_sigmets = RouteSigmets.model_validate(stored_sigmets) if stored_sigmets else None
-    delta = compute_refresh_delta(
-        old_obs=old_obs,
-        new_obs=new_obs,
-        old_sigmets=old_sigmets,
-        new_sigmets=new_sigmets,
-    )
 
     # Re-sample observed conditions from the frames on disk.  This is why the
     # ↻ button updates the radar/lightning/tops panel: the collector has been
@@ -819,22 +862,54 @@ def run_realtime_refresh(
     except Exception:
         logger.warning("Observed conditions refresh failed", exc_info=True)
 
-    # Patch observations (and SIGMETs, when fetched) back into the briefing.
-    briefing_data["route_observations"] = new_obs.model_dump(mode="json")
-    if new_observed is not None:
-        briefing_data["observed_conditions"] = new_observed.model_dump(mode="json")
-    if new_sigmets is not None:
-        briefing_data["route_sigmets"] = new_sigmets.model_dump(mode="json")
-    # Always persist the delta (even when nothing worsened) so a stale banner
-    # from a prior refresh is cleared on the next load.
-    briefing_data["last_refresh_delta"] = delta.model_dump(mode="json")
-    briefing_path = pack_dir / "briefing.json"
-    target_path = briefing_path if briefing_path.exists() else pack_dir / "snapshot.json"
-    target_path.write_text(json.dumps(briefing_data, indent=2, default=str))
+    from weatherbrief.tasks.live_layer import commit_live_update, live_for_pack
+
+    layer = None
+    if persist:
+        layer = commit_live_update(
+            pack_dir,
+            briefing_data=briefing_data,
+            observations=new_obs,
+            sigmets=new_sigmets,
+            observed=new_observed,
+            started_at=started_at,
+            flight_id=flight_id,
+            pack_timestamp=pack_timestamp,
+        )
+        if layer is None:
+            # Refused as stale (a newer pack or a newer write): report what is
+            # stored rather than a result that was not kept.
+            layer = live_for_pack(pack_dir)
+
+    if layer is not None and layer.changes is not None:
+        changes = layer.changes
+        delta = layer.last_refresh_delta
+    else:
+        # Not persisted (an older pack): classify against the baseline only.
+        from weatherbrief.tasks.live_layer import _baseline_blocks
+        from weatherbrief.tasks.live_significance import (
+            airport_roles,
+            classify_changes,
+            worsening_delta,
+        )
+
+        base_obs, base_sigmets, base_observed = _baseline_blocks(briefing_data)
+        changes, _ = classify_changes(
+            baseline_obs=base_obs,
+            latest_obs=new_obs,
+            baseline_sigmets=base_sigmets,
+            latest_sigmets=new_sigmets,
+            baseline_observed=base_observed,
+            latest_observed=new_observed,
+            roles=airport_roles([wp.icao for wp in route.waypoints]),
+        )
+        delta = worsening_delta(changes)
 
     return RealtimeRefreshResult(
         observations=new_obs,
         sigmets=new_sigmets,
         delta=delta,
         observed=new_observed,
+        live_updated_at=layer.live_updated_at if layer is not None else None,
+        changes=changes,
     )

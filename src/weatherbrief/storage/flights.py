@@ -662,6 +662,7 @@ def delete_flight(
         raise KeyError(f"Flight not found: {flight_id}")
 
     artifact_paths = [pack.artifact_path for pack in row.packs if pack.artifact_path]
+    artifact_paths += _live_files(artifact_paths)
     if remove_artifacts:
         for path in artifact_paths:
             _rmtree(Path(path))
@@ -730,7 +731,7 @@ def bulk_delete_flights(
     )
     session.flush()
 
-    for path in artifact_paths:
+    for path in artifact_paths + _live_files(artifact_paths):
         _rmtree(Path(path))
 
     return list(owned_ids)
@@ -1043,6 +1044,25 @@ def pack_dir_for(user_id: str, flight_id: str, fetch_timestamp: str | datetime) 
 
 
 def _rmtree(path: Path) -> None:
-    """Recursively remove a directory tree."""
-    if path.exists():
+    """Recursively remove a directory tree (or a single file)."""
+    if path.is_dir():
         shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def _live_files(artifact_paths: Sequence[str]) -> list[str]:
+    """The per-flight live-layer files (#637) beside these packs.
+
+    They live in the flight directory, not in any pack directory, so removing
+    the packs alone would orphan them. Returned as paths for the same
+    deferred-cleanup list the pack directories go through.
+    """
+    from weatherbrief.tasks.live_layer import LIVE_FILE, LIVE_META_FILE
+
+    flight_dirs = {str(Path(p).parent) for p in artifact_paths if p}
+    return [
+        str(Path(d) / name)
+        for d in sorted(flight_dirs)
+        for name in (LIVE_FILE, LIVE_META_FILE)
+    ]

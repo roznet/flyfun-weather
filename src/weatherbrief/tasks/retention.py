@@ -138,6 +138,10 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
                 if freed > 0:
                     stats.packs_t1 += 1
                     stats.bytes_freed += freed
+            if age_days >= config.t1_days:
+                # The flight's live observation layer (#637) is flight-day
+                # state; past T1 it has no reader worth its disk.
+                stats.bytes_freed += _purge_live_layer(pack_dir, config.dry_run)
         except Exception:
             logger.error("Retention error for pack %s (flight %s)", pack.id, pack.flight_id, exc_info=True)
             stats.errors += 1
@@ -157,6 +161,33 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
 # ---------------------------------------------------------------------------
 # Tier helpers
 # ---------------------------------------------------------------------------
+
+
+def _purge_live_layer(pack_dir: Path | None, dry_run: bool) -> int:
+    """Remove the flight's live-layer files when they belong to this pack.
+
+    The layer sits in the flight directory (one per flight, overwritten each
+    tick), so it is bounded per flight but would otherwise live as long as the
+    flight row. Returns bytes freed.
+    """
+    if pack_dir is None:
+        return 0
+    from weatherbrief.tasks.live_layer import LIVE_FILE, LIVE_META_FILE, load_live_meta
+
+    flight_dir = pack_dir.parent
+    meta = load_live_meta(flight_dir)
+    if not meta or meta.get("pack_dir_name") != pack_dir.name:
+        return 0
+    freed = 0
+    for name in (LIVE_FILE, LIVE_META_FILE):
+        p = flight_dir / name
+        if p.exists():
+            freed += p.stat().st_size
+            if dry_run:
+                logger.info("DRY-RUN: would delete %s", p)
+            else:
+                p.unlink()
+    return freed
 
 
 def _purge_heavy_artifacts(pack: BriefingPackRow, pack_dir: Path | None, dry_run: bool) -> int:

@@ -87,9 +87,12 @@ def _build_template_context(
     digest = _load_json(pack_dir / "digest.json")
 
     # Load split files (briefing.json + forecasts.json), fallback to snapshot.json
-    from weatherbrief.tasks.artifacts import load_briefing, load_forecasts
+    from weatherbrief.tasks.artifacts import load_forecasts
+    from weatherbrief.tasks.live_layer import load_briefing_with_live
 
-    briefing = load_briefing(pack_dir)
+    # Newest observations when this pack owns the flight's live layer (#637),
+    # matching what the briefing page shows.
+    briefing = load_briefing_with_live(pack_dir)
     forecasts_data = load_forecasts(pack_dir)
 
     # GRAMET image — try PNG first (embeddable in HTML <img>), then convert PDF
