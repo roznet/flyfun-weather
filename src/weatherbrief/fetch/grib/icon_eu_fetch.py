@@ -458,6 +458,13 @@ def icon_model_level_fetch_variables(variant: IconVariant) -> tuple[str, ...]:
 # verification) so the four call sites can never drift apart.
 ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V3"
 
+# Cache-key label for a rain_con-ONLY single-level blob (#585). The standalone
+# verification cycle samples hours ~24 h apart, so each needs its predecessor
+# step purely to de-accumulate rain_con; fetching the full twelve-variable set
+# for that would cost twelve files where one does. Kept under its own key so a
+# partial blob can never be served as the full cloud-diag blob above.
+ICON_EU_RAIN_CON_CACHE_KEY = "ICON_EU_RAIN_CON_V1"
+
 
 def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     """Cache-key label for a variant's single-level cloud-diagnostic blob.

@@ -188,12 +188,23 @@ def fetch_icon_cloud_diag(
 
     Same interface as fetch_gfs_cloud_diag (incl. the ``priority`` pass-through)
     but uses DWD ICON-EU data source.
+
+    ``rain_con`` (cfgrib ``crr``) is accumulated since init, so a sampled hour
+    on its own yields no convective precipitation rate. Each sampled hour is
+    paired with its predecessor step on the ICON grid and de-accumulated the
+    same way the briefing path's enrichment loop does (#585). The verification
+    grid samples ~24 h apart, so the predecessor is almost never itself a
+    sampled hour; it is fetched as a ``rain_con``-only blob (one file, not the
+    twelve of the full cloud-diag set) unless a full blob is already cached.
     """
     from weatherbrief.fetch.grib import _dispatch_decode_parallel
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_CLOUD_DIAG_CACHE_KEY,
+        ICON_EU_RAIN_CON_CACHE_KEY,
         fetch_icon_eu_single_level,
+        icon_eu_conv_rain_rate_mm_h,
+        icon_eu_previous_step,
     )
 
     if data_dir is None:
@@ -230,31 +241,100 @@ def fetch_icon_cloud_diag(
         )
         job_fhours.append(fhour)
 
+    # Predecessor steps, only to seed the rain_con de-accumulation, and only
+    # for hours that are actually going to be decoded. A failure here costs
+    # the rate for one sampled hour and nothing else.
+    predecessor_of: dict[int, int] = {}
+    for fhour in job_fhours:
+        prev = icon_eu_previous_step(fhour)
+        if prev is not None:
+            predecessor_of[fhour] = prev
+    extra_steps = sorted(set(predecessor_of.values()) - set(job_fhours))
+
+    pred_jobs: list[tuple[str, tuple]] = []
+    pred_fhours: list[int] = []
+    for fhour in extra_steps:
+        full_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+        ck = (
+            full_ck if is_cached(run_dir, full_ck)
+            else cache_key(fhour, ICON_EU_RAIN_CON_CACHE_KEY)
+        )
+        if not is_cached(run_dir, ck):
+            try:
+                fetched = fetch_icon_eu_single_level(
+                    init_date, init_hour, [fhour],
+                    variables=["rain_con"], session=session,
+                )
+                grib_bytes = fetched.get(fhour)
+                if not grib_bytes:
+                    continue
+                put_cached(run_dir, ck, grib_bytes)
+                del grib_bytes
+            except Exception:
+                logger.warning(
+                    "ICON rain_con predecessor fetch failed f%03d", fhour,
+                    exc_info=True,
+                )
+                continue
+        pred_jobs.append(
+            ("decode_icon_cloud_diag", (str(run_dir / ck), lats, lons)),
+        )
+        pred_fhours.append(fhour)
+
     if not decode_jobs:
         return result
 
     # Phase 2: fan the decodes out through the pool. TOCTOU window accepted —
     # see the GFS branch above.
     decoded_all = _dispatch_decode_parallel(
-        decode_jobs, priority=priority, return_exceptions=True,
+        decode_jobs + pred_jobs, priority=priority, return_exceptions=True,
     )
 
-    for fhour, decoded in zip(job_fhours, decoded_all):
+    # Decoded raw dicts by step, sampled and predecessor alike, so a sampled
+    # hour whose predecessor is itself sampled reuses that decode.
+    raw_by_step: dict[int, list[dict]] = {}
+    for fhour, decoded in zip(job_fhours + pred_fhours, decoded_all):
         if isinstance(decoded, Exception):
             logger.warning(
                 "ICON cloud diag decode failed f%03d", fhour, exc_info=decoded,
             )
             continue
+        if decoded:
+            raw_by_step[fhour] = decoded
+
+    for fhour in job_fhours:
+        decoded = raw_by_step.get(fhour)
         if not decoded:
             continue
 
+        prev_step = predecessor_of.get(fhour)
+        prev_decoded = (
+            raw_by_step.get(prev_step) if prev_step is not None else None
+        )
+        # Same init, so the window is the step difference: 1 h inside ICON's
+        # hourly region, 3 h past +78 h.
+        window_h = (fhour - prev_step) if prev_decoded else None
+
         airport_data: list[AirportGribDiagnostics] = []
-        for raw in decoded:
+        for i, raw in enumerate(decoded):
             diag = build_icon_cloud_diagnostics(raw)
             if diag is None:
                 airport_data.append(AirportGribDiagnostics())
-            else:
-                airport_data.append(_diagnostics_from(diag))
+                continue
+            prev_raw = (
+                prev_decoded[i]
+                if prev_decoded is not None and i < len(prev_decoded)
+                else {}
+            )
+            rate = icon_eu_conv_rain_rate_mm_h(
+                raw.get("conv_rain_kg_m2"), prev_raw.get("conv_rain_kg_m2"),
+                window_h,
+            )
+            if rate is not None:
+                # Rebuild rather than mutate, matching the briefing path's
+                # immutability contract for NWPCloudDiagnostics.
+                diag = diag.model_copy(update={"convective_precip_mm_h": rate})
+            airport_data.append(_diagnostics_from(diag))
         result[fhour] = airport_data
 
     return result

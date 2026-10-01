@@ -66,6 +66,10 @@ CLOUD_DIAG_VARIABLES: dict[str, set[str]] = {
     # ECMWF `cp` and ICON `crr` — both accumulated since init — CPRAT needs no
     # de-accumulation, only kg/m2/s -> mm/h.
     #
+    # Only the idx half was verified here. cfgrib decodes CPRAT under the
+    # shortName `cpr`, not `cprat`, which left the field NULL until #585 keyed
+    # `_CLOUD_DIAG_FIELD_MAP` on it.
+    #
     # 180-0 mb is GFS's mixed-layer parcel; ECMWF's `mlcape100` is the lowest
     # 100 hPa and ICON's `cape_ml` its own. All three are mixed-layer, but the
     # depths differ — far closer than surface-vs-most-unstable, yet not

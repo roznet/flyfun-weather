@@ -53,7 +53,9 @@ def test_icon_cloud_diag_batches_and_isolates_failures():
 
     def fake_parallel(jobs, *, priority=None, return_exceptions=False, max_inflight=None):
         captured["jobs"] = list(jobs)
-        return [ValueError("boom f3"), [{"i": 1}]]
+        # Sampled hours first (f3 fails, f6 ok), then the rain_con predecessor
+        # steps f2 and f5 (#585) in the same batch.
+        return [ValueError("boom f3"), [{"i": 1}], [{"i": 2}], [{"i": 5}]]
 
     with patch("weatherbrief.tasks.standalone_grib.is_cached", return_value=True), \
          patch("weatherbrief.fetch.grib._dispatch_decode_parallel", fake_parallel), \
@@ -63,7 +65,8 @@ def test_icon_cloud_diag_batches_and_isolates_failures():
          ):
         result = fetch_icon_cloud_diag("20260618", 0, fhours, [50.0], [0.0])
 
-    assert [name for name, _ in captured["jobs"]] == ["decode_icon_cloud_diag"] * 2
+    # One batch: the two sampled hours plus their two predecessors.
+    assert [name for name, _ in captured["jobs"]] == ["decode_icon_cloud_diag"] * 4
     assert set(result) == {6}
 
 
