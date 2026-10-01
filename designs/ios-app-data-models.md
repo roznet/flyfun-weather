@@ -172,3 +172,12 @@ persisted entity.
   Its persistence row agrees: file-based JSON + UserDefaults, no SwiftData.
 - [Server API](./ios-app-server-api.md) — server-side shapes these structs decode.
 - [Sync & Prompting](./ios-app-sync-prompting.md) — PIREP offline-sync flow.
+
+## Live observation cache (#637)
+
+`BriefingCacheStore` also keeps a per-flight `<flightId>/live.json`
+(`readLiveLayer` / `writeLiveLayer`): the newest `LiveLayerResponse` from
+`GET /api/flights/{id}/live`, newest-wins, independent of the immutable pack
+bundle so flight-day observations survive relaunch and are available offline.
+Plain `JSONEncoder` on purpose (see live-observation-layer.md). Applied over the
+snapshot by `BriefingViewModel.applyLive`.

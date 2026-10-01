@@ -20,6 +20,9 @@ import SwiftUI
 /// SYNC: `web/ts/managers/briefing-ui.ts::renderRouteSigmets`.
 struct RouteSigmetsView: View {
     let viewModel: BriefingViewModel
+    /// "Since this briefing" changes (#637). Rows matching a `sigmet_issued`
+    /// change (`sigmet:{fir}|{seq}`) are marked new. nil off D-0.
+    var liveChanges: LiveChanges? = nil
 
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var detail: SigmetAlongRoute?
@@ -134,8 +137,10 @@ struct RouteSigmetsView: View {
                         if showsMovement { columnHeader("Move") }
                     }
                     Divider().gridCellUnsizedAxes(.horizontal).gridCellColumns(showsMovement ? 5 : 4)
+                    // Build the key set once per render, not per row.
+                    let issuedKeys = liveChanges?.issuedSigmetKeys ?? []
                     ForEach(block.matched) { s in
-                        row(s)
+                        row(s, isNew: s.matchesLiveChange(keys: issuedKeys))
                     }
                 }
                 .padding(.vertical, Theme.spacingXS)
@@ -154,16 +159,26 @@ struct RouteSigmetsView: View {
     }
 
     @ViewBuilder
-    private func row(_ s: SigmetAlongRoute) -> some View {
+    private func row(_ s: SigmetAlongRoute, isNew: Bool) -> some View {
         // Red is this table's flag colour (a SEV hazard); the Observations table
-        // passes amber. `tableCell` owns the shared tint strength.
-        let highlight: Color? = s.isSevere ? Theme.red : nil
+        // passes amber. `tableCell` owns the shared tint strength. A bulletin
+        // issued since the briefing (#637) gets the accent tint unless SEV
+        // already claims it.
+        let highlight: Color? = s.isSevere ? Theme.red : (isNew ? Theme.primary : nil)
         GridRow {
             Button { detail = s } label: {
                 HStack(spacing: Theme.spacingXS) {
                     Text(s.headline)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(s.isSevere ? Theme.red : Theme.text)
+                    if isNew {
+                        Text("NEW")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .background(Color.orange, in: Capsule())
+                            .accessibilityLabel(String(localized: "Issued since the briefing"))
+                    }
                     Image(systemName: "info.circle")
                         .font(.caption2)
                         .foregroundStyle(Theme.primary)

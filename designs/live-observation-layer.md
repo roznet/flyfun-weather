@@ -110,3 +110,29 @@ digest, alternate requirement.
 - `tasks/route_weather.py::run_realtime_refresh` — the seam (no longer patches the pack)
 - `api/packs.py` — `live_router` (`/flights/{id}/live`), overlay in snapshot/bundle
 - Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`
+
+## Clients
+
+**iOS** (written without Xcode in the authoring session — verify on a Mac):
+- `LiveLayerResponse` / `LiveChanges` / `LiveChange` DTOs decode tolerantly (enums
+  kept as strings). `BriefingRepository.liveLayer(flightId:)` on all conformers.
+- **Per-flight live cache** `<flightId>/live.json` in `BriefingCacheStore`, separate
+  from the immutable pack bundle; newest wins (checked inside the actor); survives
+  relaunch and serves offline. Encoded with plain `JSONEncoder`, not
+  `.weatherBrief` — snake-casing would corrupt `ObservedConditions` dictionary keys
+  like `"FL000-050"`. Removed with the flight directory.
+- `BriefingViewModel.applyLive(_:to:packTimestamp:)` (pure): applies only when the
+  layer's pack is the same *instant* as the pack on screen and it is newer. Cached
+  layer applied first, then fetched. `syncLatestPack` fetches when
+  `latest.liveUpdatedAt` moved; pull-to-refresh always fetches; a 300 s poll runs
+  while the briefing is visible and in the live window.
+- UI: "Observed as of HH:MMZ" row (orange past 30 min), "Since this briefing"
+  panel + digest caveat on the Advisory tab, changed rows marked in the
+  Observations / SIGMET tables. Mock: `FLYFUN_MOCK_LIVE=1`.
+
+**Web**: `store.loadLive` / `syncLatest`, 5-min poll in the live window (skipped
+while hidden) + `visibilitychange` re-sync, the same panel / label / caveat /
+row highlight (`helpers/live-layer.ts`, unit-tested).
+
+Parity gap: a SIGMET with no sequence number keys on Python's `str(datetime)`;
+the web reproduces it, iOS matches on FIR + hazard only.

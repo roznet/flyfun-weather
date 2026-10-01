@@ -96,6 +96,13 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     /// the `notStubbed` throw below.
     var latestPackHandler: (@Sendable () throws -> PackMetaResponse)?
     var advisoriesHandler: (@Sendable () throws -> AdvisoriesResponse)?
+    var snapshotHandler: (@Sendable () throws -> SnapshotResponse)?
+    /// Live observation layer (#637). nil → `notStubbed` throw (the view model
+    /// swallows it, so suites that don't care need not stub it).
+    var liveLayerHandler: (@Sendable () throws -> LiveLayerResponse)?
+    /// One per `liveLayer` call — lets a test prove a sync did (or didn't)
+    /// fetch the live layer.
+    private(set) var liveLayerCallCount = 0
 
     // Call counters + captured args for behaviour assertions.
     private(set) var flightsCallCount = 0
@@ -220,6 +227,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let h = latestPackHandler { return try h() }
         throw MockError.notStubbed("latestPack")
     }
+    func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        liveLayerCallCount += 1
+        if let h = liveLayerHandler { return try h() }
+        throw MockError.notStubbed("liveLayer")
+    }
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse { throw MockError.notStubbed("airportWeather") }
     func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse { throw MockError.notStubbed("forecastMap") }
     func forecastDays() async throws -> ForecastDaysResponse { throw MockError.notStubbed("forecastDays") }
@@ -247,7 +259,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws { throw MockError.notStubbed("confirmTimeOption") }
     func rescanTimeOptions(flightId: String, timestamp: String) async throws { throw MockError.notStubbed("rescanTimeOptions") }
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse { throw MockError.notStubbed("digest") }
-    func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse { throw MockError.notStubbed("snapshot") }
+    func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        if let h = snapshotHandler { return try h() }
+        throw MockError.notStubbed("snapshot")
+    }
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse { throw MockError.notStubbed("routeAnalyses") }
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse { throw MockError.notStubbed("elevation") }
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw MockError.notStubbed("skewtImage") }
@@ -354,13 +369,16 @@ func makeBriefingStatus(
 func makePackMeta(
     flightId: String = "flt-1",
     fetchTimestamp: String = "2026-06-24T09:00:00Z",
-    daysOut: Int = 3
+    daysOut: Int = 3,
+    liveUpdatedAt: String? = nil
 ) throws -> PackMetaResponse {
+    let liveJSON = liveUpdatedAt.map { "\"\($0)\"" } ?? "null"
     let json = """
     {
       "flight_id": "\(flightId)",
       "fetch_timestamp": "\(fetchTimestamp)",
       "days_out": \(daysOut),
+      "live_updated_at": \(liveJSON),
       "is_historical": false,
       "has_gramet": true, "has_skewt": true, "has_digest": true, "has_advisories": true,
       "model_init_times": {}, "grib_init_times": {}, "models_skipped_region": []

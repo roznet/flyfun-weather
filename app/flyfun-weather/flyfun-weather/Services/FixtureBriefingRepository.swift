@@ -217,6 +217,17 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func packs(flightId: String) async throws -> [PackMetaResponse] {
         isBriefed(flightId) ? FixtureBriefingData.packs : []
     }
+    /// A null layer by default (what the server returns before any live data),
+    /// so the existing journeys render exactly as before. `FLYFUN_MOCK_LIVE=1`
+    /// serves a populated layer instead, so the "Since this briefing" panel,
+    /// the observed-as-of row and the row highlights can be exercised in mock
+    /// mode (#637).
+    func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return ProcessInfo.processInfo.environment["FLYFUN_MOCK_LIVE"] == "1"
+            ? FixtureBriefingData.liveLayer
+            : FixtureBriefingData.nullLiveLayer
+    }
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
         throw FixtureError.notProvided("airportWeather")
     }

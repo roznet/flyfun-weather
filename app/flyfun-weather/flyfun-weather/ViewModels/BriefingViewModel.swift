@@ -119,6 +119,19 @@ final class BriefingViewModel {
     private(set) var timeOptionsOffline = false
     @ObservationIgnored private var timeOptionsPollTask: Task<Void, Never>?
 
+    // Live observation layer (#637) — the newest layer applied to the snapshot
+    // on screen (nil until one is). The patched blocks themselves live in
+    // `snapshotState`, so every observation view keeps reading one source.
+    private(set) var liveLayer: LiveLayerResponse?
+    /// D-0 live poll (every `livePollInterval` while the briefing is visible and
+    /// the scene active). Non-observed — internal only.
+    @ObservationIgnored private var livePollTask: Task<Void, Never>?
+    /// Collapses overlapping live fetches (load + poll + push landing together).
+    @ObservationIgnored private var isFetchingLive = false
+    /// The server refreshes the layer every ~10 min; polling at half that keeps
+    /// the worst-case lag near one server tick without hammering it.
+    static let livePollInterval: Duration = .seconds(300)
+
     // Refresh state
     private(set) var refreshState: RefreshState = .idle
     /// Guards against overlapping `syncLatestPack()` runs when several triggers
@@ -251,7 +264,13 @@ final class BriefingViewModel {
     /// foreground, and a refresh push. Best-effort: on any failure the current
     /// pack stays on screen. The reload runs `quiet` so an update swaps in place
     /// instead of flashing the sections back to spinners.
-    func syncLatestPack() async {
+    ///
+    /// A realtime refresh (from this device, the web, or the server's own D-0
+    /// tick) keeps `fetchTimestamp` but moves `liveUpdatedAt`, so an unchanged
+    /// pack still fetches the live layer when the server reports newer live
+    /// data than is on screen. `forceLive` (pull-to-refresh) fetches it
+    /// regardless.
+    func syncLatestPack(forceLive: Bool = false) async {
         // Nothing to sync for a pending-coverage flight (no pack yet). While a
         // generation is in flight, its completion installs the newer pack itself.
         // `isSyncing` collapses overlapping triggers (e.g. foreground + push).
@@ -273,8 +292,14 @@ final class BriefingViewModel {
             Self.logger.debug("syncLatestPack: latestPack fetch failed, keeping current pack: \(error)")
             return
         }
-        // Already showing the newest pack — seamless no-op (the frequent case).
-        guard latest.fetchTimestamp != pack?.fetchTimestamp else { return }
+        // Already showing the newest pack — seamless no-op for the pack itself
+        // (the frequent case). Its observations may still have moved.
+        guard latest.fetchTimestamp != pack?.fetchTimestamp else {
+            if forceLive || LiveTime.isNewer(latest.liveUpdatedAt, than: appliedLiveUpdatedAt) {
+                await fetchLiveLayer(timestamp: latest.fetchTimestamp)
+            }
+            return
+        }
         Self.logger.info("syncLatestPack: newer pack \(latest.fetchTimestamp) available — adopting")
         await applyPack(latest, quiet: true)
     }
@@ -539,7 +564,7 @@ final class BriefingViewModel {
                     // stale copy the press was meant to replace. Overwriting it
                     // here with what the server just computed is what makes ↻
                     // move the METAR/TAF and observed picture in flight.
-                    applyRealtimeRefresh(event)
+                    await applyRealtimeRefresh(event)
                     // Clear the transient banner after a delay.
                     try? await Task.sleep(for: .seconds(10))
                     switch refreshState {
@@ -574,7 +599,12 @@ final class BriefingViewModel {
     /// collector switched off), and keeping what the pack loaded with beats
     /// blanking a panel — the observed ages on screen stay honest either way,
     /// because every source carries its own.
-    private func applyRealtimeRefresh(_ event: RefreshEvent) {
+    ///
+    /// Since #637 the event also carries the live layer's `changes` and
+    /// `liveUpdatedAt`; both are folded in, and the result is written through to
+    /// the on-disk live cache so reopening / relaunching (or going offline)
+    /// shows what ↻ fetched rather than the download-time observations.
+    private func applyRealtimeRefresh(_ event: RefreshEvent) async {
         guard event.refreshDecision?.mode == "realtime" else { return }
         guard case .loaded(var snapshot) = snapshotState else {
             // The preceding reload failed or is still running, so there is no
@@ -600,8 +630,38 @@ final class BriefingViewModel {
             snapshot.observedConditions = observed
             changed = true
         }
+        if let changes = event.changes {
+            snapshot.liveChanges = changes
+            changed = true
+        }
+        if let liveUpdatedAt = event.liveUpdatedAt {
+            snapshot.liveUpdatedAt = liveUpdatedAt
+            changed = true
+        }
         guard changed else { return }
         snapshotState = .loaded(snapshot)
+
+        // Write through. Only with a server `liveUpdatedAt`: without one the
+        // cache's newest-wins ordering can't place the layer (and an older
+        // server wouldn't send `changes` either).
+        guard let liveUpdatedAt = event.liveUpdatedAt, let timestamp = pack?.fetchTimestamp else { return }
+        let layer = LiveLayerResponse(
+            flightId: flight.id,
+            packTimestamp: timestamp,
+            liveUpdatedAt: liveUpdatedAt,
+            routeObservations: snapshot.routeObservations,
+            observationsUpdatedAt: nil,
+            routeSigmets: snapshot.routeSigmets,
+            sigmetsUpdatedAt: nil,
+            observedConditions: snapshot.observedConditions,
+            observedUpdatedAt: nil,
+            changes: snapshot.liveChanges,
+            lastRefreshDelta: event.delta
+        )
+        liveLayer = layer
+        if let caching = repository as? CachingBriefingRepository {
+            await caching.storeLiveLayer(layer, flightId: flight.id)
+        }
     }
 
     /// Build the user-facing message for a gated no-op refresh. Prefer the
@@ -680,6 +740,152 @@ final class BriefingViewModel {
         // drops any prior pack's scan so a pack switch can't briefly render
         // another run's candidates until the new poll lands.
         startTimeOptionsPolling(timestamp: timestamp, resetExisting: true)
+        // Live observation layer (#637): the cached layer first (instant, and
+        // all there is offline), then the network. Must run after the snapshot
+        // loaded — the layer patches it.
+        await applyCachedLiveLayer(timestamp: timestamp)
+        await fetchLiveLayer(timestamp: timestamp)
+    }
+
+    // MARK: - Live observation layer (#637)
+
+    /// Patch `live` into `snapshot`, or nil when it must not be applied:
+    /// - it belongs to a different pack (compared as instants — the layer's
+    ///   `packTimestamp` and the pack meta's `fetchTimestamp` can differ in
+    ///   format: "+00:00" vs "Z", fractional seconds);
+    /// - it is not newer than what the snapshot already carries (the server
+    ///   overlays the live layer on an online snapshot; nil counts as oldest);
+    ///   a null layer (`liveUpdatedAt == nil`) is never newer.
+    /// Only non-nil blocks replace the snapshot's — a nil block means "no newer
+    /// data for that source", and the pack's own copy beats a blank panel.
+    /// Pure + static so the gate is unit-testable.
+    static func applyLive(
+        _ live: LiveLayerResponse,
+        to snapshot: SnapshotResponse,
+        packTimestamp: String
+    ) -> SnapshotResponse? {
+        guard LiveTime.sameInstant(live.packTimestamp, packTimestamp) else { return nil }
+        guard LiveTime.isNewer(live.liveUpdatedAt, than: snapshot.liveUpdatedAt) else { return nil }
+        var patched = snapshot
+        if let observations = live.routeObservations { patched.routeObservations = observations }
+        if let sigmets = live.routeSigmets { patched.routeSigmets = sigmets }
+        if let observed = live.observedConditions { patched.observedConditions = observed }
+        if let changes = live.changes { patched.liveChanges = changes }
+        patched.liveUpdatedAt = live.liveUpdatedAt
+        return patched
+    }
+
+    /// The live timestamp of what is on screen: the snapshot's (server overlay
+    /// or a patched-in layer), else the last adopted layer's.
+    private var appliedLiveUpdatedAt: String? {
+        if case .loaded(let snapshot) = snapshotState, let at = snapshot.liveUpdatedAt { return at }
+        return liveLayer?.liveUpdatedAt
+    }
+
+    /// Apply `layer` to the loaded snapshot if `applyLive` allows it.
+    @discardableResult
+    private func adoptLiveLayer(_ layer: LiveLayerResponse, timestamp: String) -> Bool {
+        guard pack?.fetchTimestamp == timestamp,
+              case .loaded(let snapshot) = snapshotState,
+              let patched = Self.applyLive(layer, to: snapshot, packTimestamp: timestamp)
+        else { return false }
+        snapshotState = .loaded(patched)
+        liveLayer = layer
+        return true
+    }
+
+    /// Disk-only: the last live layer this device saw. A downloaded pack's
+    /// snapshot is frozen at download time, so without this a relaunch (or an
+    /// offline cockpit) would fall back to download-time observations.
+    private func applyCachedLiveLayer(timestamp: String) async {
+        guard let caching = repository as? CachingBriefingRepository,
+              let cached = await caching.cachedLiveLayer(flightId: flight.id) else { return }
+        adoptLiveLayer(cached, timestamp: timestamp)
+    }
+
+    /// Fetch the live layer and apply it. Only for the latest pack (the layer is
+    /// relative to it), and not offline — the cached layer already applied is
+    /// all there is, and a doomed request would only add latency. Best-effort:
+    /// failures keep what is on screen.
+    private func fetchLiveLayer(timestamp: String) async {
+        guard flight.coverage == nil, !isFetchingLive else { return }
+        guard Self.isViewingLatestPack(current: timestamp, history: packHistory) else { return }
+        if let networkMonitor, !networkMonitor.isConnected { return }
+        isFetchingLive = true
+        defer { isFetchingLive = false }
+        do {
+            let layer = try await repository.liveLayer(flightId: flight.id)
+            adoptLiveLayer(layer, timestamp: timestamp)
+        } catch {
+            Self.logger.debug("Live layer fetch failed, keeping current observations: \(error)")
+        }
+    }
+
+    /// Start (or restart) the D-0 live poll. Each tick runs the same seamless
+    /// `syncLatestPack()` as foreground/push — it adopts a newer pack, or fetches
+    /// the live layer when `liveUpdatedAt` moved — but only inside the flight's
+    /// live-observation window, while connected; `syncLatestPack` itself skips a
+    /// pilot viewing a historical pack. The view starts it on appear / scene
+    /// activation and stops it on disappear / background. Ends on its own once
+    /// the window is over.
+    func startLivePolling() {
+        livePollTask?.cancel()
+        livePollTask = nil
+        guard flight.coverage == nil, !flight.hasLiveObservationWindowEnded() else { return }
+        livePollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: BriefingViewModel.livePollInterval)
+                guard !Task.isCancelled, let self else { return }
+                if self.flight.hasLiveObservationWindowEnded() { return }
+                await self.pollLiveOnce()
+            }
+        }
+    }
+
+    /// Cancel the live poll (view disappeared / app backgrounded).
+    func stopLivePolling() {
+        livePollTask?.cancel()
+        livePollTask = nil
+    }
+
+    private func pollLiveOnce() async {
+        guard flight.isInLiveObservationWindow() else { return }
+        if let networkMonitor, !networkMonitor.isConnected { return }
+        await syncLatestPack()
+    }
+
+    /// Pull-to-refresh: adopt a newer pack *and* re-fetch the live layer.
+    func pullToRefresh() async {
+        await syncLatestPack(forceLive: true)
+    }
+
+    /// "Since this briefing" changes on screen, nil when the pack carries no
+    /// live layer (non-D-0, or no live data yet).
+    var liveChanges: LiveChanges? {
+        if case .loaded(let snapshot) = snapshotState { return snapshot.liveChanges }
+        return nil
+    }
+
+    /// The "Observed as of" instant for the loaded snapshot, or nil when the row
+    /// should be hidden.
+    var observedAsOf: Date? {
+        guard case .loaded(let snapshot) = snapshotState else { return nil }
+        return Self.observedAsOfDate(for: snapshot)
+    }
+
+    /// Newest of the live layer's update time and the observations' own fetch
+    /// time — shown on D-0 (or whenever live data is applied) when METAR/TAF
+    /// observations exist. Pure, for testing.
+    static func observedAsOfDate(for snapshot: SnapshotResponse) -> Date? {
+        guard let observations = snapshot.routeObservations,
+              snapshot.daysOut == 0 || snapshot.liveUpdatedAt != nil else { return nil }
+        return LiveTime.newest([snapshot.liveUpdatedAt, observations.fetchTime])
+    }
+
+    /// When the AI digest / assessment was written: the changes' baseline, else
+    /// the pack's fetch timestamp.
+    var liveBaselineDate: Date? {
+        LiveTime.newest([liveChanges?.baselineAt]) ?? pack.flatMap { Date.parseISO8601($0.fetchTimestamp) }
     }
 
     // MARK: - Timing scenarios (#357)

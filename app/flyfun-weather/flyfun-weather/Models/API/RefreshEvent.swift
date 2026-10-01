@@ -36,6 +36,15 @@ nonisolated struct RefreshEvent: Codable, Sendable {
 
     // Error fields
     let message: String?
+
+    // Live layer (#637), on the realtime `complete` event. `var … = nil` so the
+    // memberwise init (the SSE salvage frame in `APIClient`) keeps compiling.
+    /// Worsening-only delta of this refresh (pre-#637 banner shape).
+    var delta: RefreshDelta? = nil
+    /// The live layer's timestamp after this refresh.
+    var liveUpdatedAt: String? = nil
+    /// "Since this briefing" changes after this refresh.
+    var changes: LiveChanges? = nil
 }
 
 /// Outcome of the server-side refresh gate, attached to the `complete` event.

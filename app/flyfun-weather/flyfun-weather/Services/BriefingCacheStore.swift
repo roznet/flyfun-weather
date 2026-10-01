@@ -107,6 +107,40 @@ actor BriefingCacheStore {
         return try? Data(contentsOf: file)
     }
 
+    // MARK: - Live observation layer (#637)
+
+    /// Per-flight sidecar name: `<flightId>/live.json`. Inside the flight
+    /// directory, so flight delete/move/eviction (`removeFlightDirectory`) drops
+    /// it with the rest. Deliberately not part of any pack directory: the
+    /// offline pack bundle stays exactly what was downloaded.
+    private static let liveLayerName = "live"
+
+    /// The cached live layer for a flight, or nil when absent/undecodable.
+    ///
+    /// Plain `JSONDecoder` (not `.weatherBrief`) to match `writeLiveLayer`: the
+    /// layer is re-encoded from the decoded DTO, and `.convertToSnakeCase`
+    /// would also rewrite (lower-case) dictionary keys inside
+    /// `ObservedConditions` (e.g. "FL000-050"), corrupting the round trip.
+    func readLiveLayer(flightId: String) -> LiveLayerResponse? {
+        guard let data = readFlightMetadata(flightId: flightId, name: Self.liveLayerName) else { return nil }
+        return try? JSONDecoder().decode(LiveLayerResponse.self, from: data)
+    }
+
+    /// Persist a live layer, **newest wins**: a layer that does not supersede
+    /// the cached one (older pack, or same pack with an older `liveUpdatedAt`)
+    /// is dropped, so a slow response or a stale realtime event can never roll
+    /// the offline copy back. The compare-and-write runs inside the actor, so
+    /// two concurrent writers can't interleave. Returns whether it was written.
+    @discardableResult
+    func writeLiveLayer(_ layer: LiveLayerResponse, flightId: String) throws -> Bool {
+        if let existing = readLiveLayer(flightId: flightId), !layer.supersedes(existing) {
+            return false
+        }
+        let data = try JSONEncoder().encode(layer)
+        try writeFlightMetadata(data, flightId: flightId, name: Self.liveLayerName)
+        return true
+    }
+
     // MARK: - Index management
 
     func isPackCached(flightId: String, timestamp: String) -> Bool {

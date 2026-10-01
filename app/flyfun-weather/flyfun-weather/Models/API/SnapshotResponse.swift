@@ -26,6 +26,14 @@ nonisolated struct SnapshotResponse: Codable, Sendable {
     /// Present only on marginal D-0/D-1/D-2 packs; nil otherwise. Mirrors
     /// `models/alternates.py` / `designs/future/alternates.md`.
     let alternates: RouteAlternates?
+    /// "Since this briefing" (#637): what moved vs the pack's own observations.
+    /// The server adds it when it overlays the live layer on the latest pack's
+    /// snapshot; the client also patches it in from `GET …/live` (see
+    /// `BriefingViewModel.applyLive`). nil on packs that don't own a live layer.
+    var liveChanges: LiveChanges?
+    /// When the overlaid live data was last updated (ISO). nil = the D-0 blocks
+    /// are the pack's own; any live layer is newer than that.
+    var liveUpdatedAt: String?
 }
 
 nonisolated struct RouteConfig: Codable, Sendable {
@@ -209,6 +217,15 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     let hasTaf: Bool?
     /// Rounded hours after departure that the flight passes this airport.
     let etaHourOffset: Int?
+
+    // Live layer (#637) — all optional; absent on older packs.
+    /// "METAR" or "SPECI".
+    let metarReportType: String?
+    /// The category of the report before this one, and its time — lets a
+    /// reader see a SPECI's step.
+    let metarPreviousFlightCategory: String?
+    let metarPreviousTime: String?
+    let tafIssueTime: String?
 
     var id: String { icao }
 

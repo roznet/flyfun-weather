@@ -165,6 +165,24 @@ nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
         return now >= start && now <= end
     }
 
+    /// Whether `now` falls in the server's live-observation window (#637):
+    /// departure −3h to departure + duration + 1h, the span in which the server
+    /// refreshes the flight's live layer every ~10 min. Gates the briefing's
+    /// D-0 live poll — outside it `/live` only moves on a manual refresh.
+    /// `now` is a parameter for deterministic testing.
+    func isInLiveObservationWindow(now: Date = Date()) -> Bool {
+        guard let departure = departureDate else { return false }
+        let start = departure.addingTimeInterval(-3 * 3600)
+        return now >= start && !hasLiveObservationWindowEnded(now: now)
+    }
+
+    /// Whether the live-observation window is over (arrival + 1h has passed),
+    /// so a poll loop can stop for good rather than idling.
+    func hasLiveObservationWindowEnded(now: Date = Date()) -> Bool {
+        guard let departure = departureDate else { return true }
+        return now > departure.addingTimeInterval((flightDurationHours + 1) * 3600)
+    }
+
     /// Whether a refresh would take the server's *historical* (admin-only) path.
     ///
     /// Mirrors `_classify_refresh_time` in `api/packs.py`: a flight stays a live
@@ -362,6 +380,10 @@ nonisolated struct BriefingStatusInfo: Codable, Sendable, Equatable {
     /// badge. Optional (no default — like `fetchTimestamp`, so it still decodes)
     /// and absent on older servers → nil (treated as not-unseen).
     let unseen: Bool?
+    /// The latest pack's live-layer timestamp (#637); nil when there is no live
+    /// data. `var … = nil` so the synthesized memberwise init keeps existing call
+    /// sites compiling while still decoding.
+    var liveUpdatedAt: String? = nil
 }
 
 /// Compact RED/AMBER advisory breakdown for the flights-list card chips.

@@ -494,6 +494,67 @@ enum FixtureBriefingData {
     }
     """)
 
+    // MARK: - Live observation layer (#637)
+
+    /// What `/live` returns before any live data exists: every block null.
+    static let nullLiveLayer: LiveLayerResponse = decode(LiveLayerResponse.self, """
+    {
+      "flight_id": "fixture-1",
+      "pack_timestamp": "2099-06-30T06:00:00Z",
+      "live_updated_at": null,
+      "route_observations": null,
+      "route_sigmets": null,
+      "observed_conditions": null,
+      "changes": null,
+      "last_refresh_delta": null
+    }
+    """)
+
+    /// A populated layer (served under `FLYFUN_MOCK_LIVE=1`). Display blocks are
+    /// null so the pack's own observations stay on screen; only the
+    /// "since this briefing" changes are added. `pack_timestamp` deliberately
+    /// uses "+00:00" where the pack meta uses "Z" — they denote the same instant.
+    /// The SIGMET change keys the pack's `LFMM SIGMET T04` bulletin.
+    static let liveLayer: LiveLayerResponse = decode(LiveLayerResponse.self, """
+    {
+      "flight_id": "fixture-1",
+      "pack_timestamp": "2099-06-30T06:00:00+00:00",
+      "live_updated_at": "2099-06-30T08:10:00Z",
+      "route_observations": null,
+      "route_sigmets": null,
+      "observed_conditions": null,
+      "changes": {
+        "baseline_at": "2099-06-30T06:00:00Z",
+        "computed_at": "2099-06-30T08:10:00Z",
+        "changes": [
+          {
+            "key": "metar:LFMD", "kind": "metar_category", "source": "SPECI",
+            "direction": "worse", "tier": "alert", "role": "departure",
+            "icao": "LFMD", "station_id": null, "from_value": "VFR", "to_value": "IFR",
+            "observed_at": "2099-06-30T08:05:00Z", "enroute_distance_nm": 0.0,
+            "message": "LFMD SPECI: VFR → IFR", "new_alert": true
+          },
+          {
+            "key": "sigmet:LFMM|T04", "kind": "sigmet_issued", "source": "SIGMET",
+            "direction": "worse", "tier": "highlight", "role": "route",
+            "icao": null, "station_id": null, "from_value": null, "to_value": "SEV TURB",
+            "observed_at": "2099-06-30T06:00:00Z", "enroute_distance_nm": 30.0,
+            "message": "LFMM T04: SEV TURB issued", "new_alert": false
+          },
+          {
+            "key": "taf:LFML", "kind": "taf_category", "source": "TAF",
+            "direction": "better", "tier": "alert", "role": "destination",
+            "icao": "LFML", "station_id": null, "from_value": "MVFR", "to_value": "VFR",
+            "observed_at": "2099-06-30T07:55:00Z", "enroute_distance_nm": 78.0,
+            "message": "LFML TAF: MVFR → VFR", "new_alert": false
+          }
+        ],
+        "worsened_count": 2, "improved_count": 1, "alert_count": 2
+      },
+      "last_refresh_delta": { "worsened": true, "messages": ["LFMD SPECI: VFR → IFR"], "computed_at": "2099-06-30T08:10:00Z" }
+    }
+    """)
+
     // MARK: - Route analyses (5 points × ecmwf/gfs — drives the cross-section)
 
     static let routeAnalyses: RouteAnalysesResponse = decode(RouteAnalysesResponse.self, routeAnalysesJSON)
