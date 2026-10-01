@@ -540,12 +540,7 @@ def _fetch_forecasts_for_model(
                 # honour end_date. The horizons are load-bearing now — ICON is
                 # cut at 4 days because its ceiling GRIB stops at 120h — so a
                 # row past the horizon is a bug, not a bonus.
-                if day_offset < 0 or day_offset > forecast_days:
-                    continue
-                if explicit_hours is not None:
-                    if utc_hour not in explicit_hours:
-                        continue
-                elif utc_hour not in sample_hours_for_day(day_offset):
+                if not _keeps_hour(day_offset, utc_hour, forecast_days, explicit_hours):
                     continue
 
                 # Compute LCL from T-Td
@@ -722,25 +717,41 @@ def _forecast_days(model: str, days: int | None) -> int:
     return days if days is not None else MODEL_FORECAST_DAYS.get(model, 7)
 
 
+def _keeps_hour(
+    day_offset: int, utc_hour: int, forecast_days: int,
+    explicit_hours: "set[int] | None",
+) -> bool:
+    """Is (day offset, UTC hour) a sample ``_fetch_forecasts_for_model`` keeps?
+
+    Within the horizon, and in the flat ``explicit_hours`` list when given,
+    else in the map's per-day grid. The one filter both the Open-Meteo loop and
+    the GRIB planner (:func:`_planned_valid_times`) read, so the GRIB hours
+    cannot drift from the hours that get a snapshot (#635).
+    """
+    if day_offset < 0 or day_offset > forecast_days:
+        return False
+    if explicit_hours is not None:
+        return utc_hour in explicit_hours
+    return utc_hour in sample_hours_for_day(day_offset)
+
+
 def _planned_valid_times(
     init_time: datetime, forecast_days: int, sample_hours: list[int] | None,
 ) -> list[datetime]:
     """Valid times ``_fetch_forecasts_for_model`` will keep, known up front.
 
-    Mirrors that function's per-hour filter (day offset within the horizon,
-    hour in the flat list or the per-day grid) so the GRIB fetch can be planned
-    before the Open-Meteo response exists. Hours before ``init_time`` are
+    Shares that function's per-hour filter (:func:`_keeps_hour`) so the GRIB
+    fetch can be planned before the Open-Meteo response exists. Hours before ``init_time`` are
     dropped, as the GRIB planning always did.
     """
     init_date = init_time.date()
+    explicit_hours = set(sample_hours) if sample_hours is not None else None
     out: list[datetime] = []
     for day_offset in range(forecast_days + 1):
-        hours = (
-            sorted(set(sample_hours)) if sample_hours is not None
-            else sample_hours_for_day(day_offset)
-        )
         day = init_date + timedelta(days=day_offset)
-        for hour in hours:
+        for hour in range(24):
+            if not _keeps_hour(day_offset, hour, forecast_days, explicit_hours):
+                continue
             valid = datetime.combine(day, dt_time(hour), tzinfo=init_time.tzinfo)
             if valid >= init_time:
                 out.append(valid)
@@ -983,6 +994,10 @@ def fetch_model_snapshots(
 
     # copy_context: the GRIB thread must see the caller's decode-priority
     # ContextVar (alternates relies on it to decode at INTERACTIVE).
+    # If the Open-Meteo leg raises, leaving this block still waits for the GRIB
+    # thread: a running future can't be cancelled (cancel_futures only drops
+    # queued ones), and it owns ``session``. So a slow GRIB decode delays the
+    # error by up to that decode, never past it.
     ctx = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=1, thread_name_prefix=f"grib-diag-{model}",
