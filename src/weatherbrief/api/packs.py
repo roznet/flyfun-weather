@@ -61,6 +61,7 @@ from weatherbrief.storage.sounding_profiles import (
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
 from weatherbrief.models.live import LiveChanges, LiveLayerResponse
+from weatherbrief.tasks.live_layer import live_updated_at_iso
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.observed.collect import observed_enabled
@@ -692,14 +693,9 @@ def _meta_to_response(
         meteofrance_charts_in_coverage=meta.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=meta.meteofrance_charts_within_horizon,
         flexibility=flexibility,
-        live_updated_at=_live_updated_at(meta.artifact_path),
+        live_updated_at=live_updated_at_iso(meta.artifact_path),
     )
 
-
-def _live_updated_at(artifact_path: str | None) -> str | None:
-    """ISO ``live_updated_at`` for a pack, or None. Never raises."""
-    if not artifact_path:
-        return None
     try:
         from weatherbrief.storage.flights import _resolve_artifact_path
         from weatherbrief.tasks.live_layer import live_updated_at_for_pack
@@ -3068,7 +3064,13 @@ def refresh_observations(
     # pack returns fresh data without overwriting the latest one's layer.
     packs = list_packs(db, flight_id)
     latest = packs[0] if packs else None
-    is_latest = latest is not None and Path(latest.artifact_path).name == Path(pack_dir).name
+    from weatherbrief.storage.flights import _resolve_artifact_path
+
+    is_latest = (
+        latest is not None
+        and bool(latest.artifact_path)
+        and Path(_resolve_artifact_path(latest.artifact_path)).name == Path(pack_dir).name
+    )
 
     try:
         result = run_realtime_refresh(

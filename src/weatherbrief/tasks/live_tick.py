@@ -43,6 +43,11 @@ from weatherbrief.db.models import BriefingPackRow, FlightRow
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 400  # aviationweather.gov limit per request
+# Planning (local corridor discovery + a briefing.json read) and the cheap
+# refresh run per flight per tick. Fine for tens of flights; above this, warn
+# so a growing user base shows up in the logs before it shows up as a slow
+# verification cycle.
+_SCALE_WARN_FLIGHTS = 50
 
 
 def live_enabled() -> bool:
@@ -104,13 +109,30 @@ class _RecordingSource:
         return []
 
 
-class SharedReportSource:
-    """Serves METAR/TAF reports from the tick's one shared fetch."""
+class UncoveredAirportsError(RuntimeError):
+    """The shared fetch did not cover some airports (it failed for them)."""
 
-    def __init__(self, reports: dict[str, list]) -> None:
+
+class SharedReportSource:
+    """Serves METAR/TAF reports from the tick's one shared fetch.
+
+    Raises for airports the fetch did not cover. Returning ``[]`` would read
+    as "no reports": the flight's METAR table would be blanked and the
+    classifier fed empty data on a transient upstream failure. Raising makes
+    the tick skip that flight, so its stored observations stay as they were.
+    """
+
+    def __init__(self, reports: dict[str, list], covered: set[str] | None = None) -> None:
         self._reports = reports
+        self._covered = covered
 
     def fetch_weather(self, icaos, metar_hours: float = 3):
+        if self._covered is not None:
+            missing = sorted({i.upper() for i in icaos} - self._covered)
+            if missing:
+                raise UncoveredAirportsError(
+                    f"{len(missing)} airport(s) not fetched this tick: {', '.join(missing[:5])}"
+                )
         out: list = []
         seen: set[int] = set()
         for icao in icaos:
@@ -122,23 +144,34 @@ class SharedReportSource:
 
 
 class SharedSigmetSource:
-    """Fetches international SIGMETs once per tick, whatever the flight count."""
+    """Fetches international SIGMETs once per tick, whatever the flight count.
+
+    A failure is cached too and re-raised for every later flight, so an
+    unhealthy upstream costs one call per tick, not one per flight (each
+    flight then keeps its stored SIGMETs).
+    """
 
     def __init__(self, upstream=None) -> None:
         self._upstream = upstream
-        self._cache: dict[tuple, list] = {}
+        self._cache: dict[tuple, list | BaseException] = {}
 
     def fetch_isigmet(self, region: str = "eur", hazard=None, level=None, date=None):
         key = (region, hazard, level, date)
         if key not in self._cache:
-            if self._upstream is None:
-                from euro_aip.briefing.sources.avwx import AvWxSource
+            try:
+                if self._upstream is None:
+                    from euro_aip.briefing.sources.avwx import AvWxSource
 
-                self._upstream = AvWxSource()
-            self._cache[key] = self._upstream.fetch_isigmet(
-                region=region, hazard=hazard, level=level, date=date,
-            )
-        return self._cache[key]
+                    self._upstream = AvWxSource()
+                self._cache[key] = self._upstream.fetch_isigmet(
+                    region=region, hazard=hazard, level=level, date=date,
+                )
+            except Exception as exc:
+                self._cache[key] = exc
+        cached = self._cache[key]
+        if isinstance(cached, BaseException):
+            raise cached
+        return cached
 
 
 # --- The tick ----------------------------------------------------------------
@@ -193,6 +226,12 @@ class LiveTick:
         flights = find_live_flights(db, now)
         if not flights:
             return {"flights": 0, "updated": 0, "fetched": 0}
+        if len(flights) > _SCALE_WARN_FLIGHTS:
+            logger.warning(
+                "Live tick: %d flights in window (> %d) — per-flight planning and "
+                "refresh run serially every cycle; consider batching",
+                len(flights), _SCALE_WARN_FLIGHTS,
+            )
 
         model = _load_airport_model(airports_db_path)
         plans: list[tuple[FlightRow, object, Path]] = []
@@ -219,7 +258,7 @@ class LiveTick:
                 logger.warning("Live tick: could not plan flight %s", flight.id, exc_info=True)
 
         fetched = self._top_up(needed)
-        source = SharedReportSource(self._reports)
+        source = SharedReportSource(self._reports, covered=self._covered)
 
         updated = 0
         for flight, latest, pack_dir in plans:
@@ -233,6 +272,10 @@ class LiveTick:
                     sigmet_source=self._sigmets,
                 )
                 updated += 1
+            except UncoveredAirportsError as exc:
+                # The shared fetch failed for this flight's airports: keep its
+                # stored observations rather than blanking them.
+                logger.warning("Live tick: skipped flight %s — %s", flight.id, exc)
             except Exception:
                 logger.warning("Live tick: refresh failed for flight %s", flight.id, exc_info=True)
 

@@ -196,3 +196,48 @@ def test_scheduler_skips_tick_when_disabled(monkeypatch):
     monkeypatch.setattr(scheduler, "SessionLocal", lambda: MagicMock())
     scheduler._run_verification_once(SimpleNamespace(db_path="/fake/db"))
     assert collect.call_args.kwargs["report_sink"] is None
+
+
+def test_shared_source_raises_for_uncovered_airports():
+    from weatherbrief.tasks.live_tick import UncoveredAirportsError
+
+    src = SharedReportSource({"ZZAA": []}, covered={"ZZAA"})
+    assert src.fetch_weather(["ZZAA"]) == []
+    with pytest.raises(UncoveredAirportsError):
+        src.fetch_weather(["ZZAA", "ZZBB"])
+
+
+def test_failed_top_up_skips_the_flight_instead_of_blanking_it(db_session, dev_user, tmp_path):
+    """A transient upstream failure must not commit empty observations."""
+    pack_dir = _write_pack(tmp_path)
+    _flight(db_session, dev_user, "zz-soon", NOW + timedelta(hours=1), artifact_path=str(pack_dir))
+    upstream = MagicMock()
+    upstream.fetch_weather.side_effect = RuntimeError("aviationweather.gov down")
+    tick = LiveTick(upstream=upstream, sigmet_upstream=MagicMock())
+
+    def fake_route_weather(self, route_icaos, corridor_nm, model, metar_hours=3):
+        self._get_source().fetch_weather(route_icaos)
+        return SimpleNamespace(airports=[])
+
+    with patch(
+        "euro_aip.briefing.weather.route_weather.RouteWeatherService.fetch_route_weather",
+        fake_route_weather,
+    ), patch(
+        "weatherbrief.airports._load_airport_model", return_value=MagicMock(),
+    ), patch(
+        "weatherbrief.tasks.live_layer.commit_live_update",
+    ) as mock_commit:
+        result = tick.run(db_session, "/fake/db", now=NOW)
+
+    assert result["updated"] == 0
+    mock_commit.assert_not_called()
+
+
+def test_shared_sigmet_source_caches_failure():
+    upstream = MagicMock()
+    upstream.fetch_isigmet.side_effect = RuntimeError("down")
+    src = SharedSigmetSource(upstream)
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            src.fetch_isigmet(region="eur")
+    upstream.fetch_isigmet.assert_called_once()
