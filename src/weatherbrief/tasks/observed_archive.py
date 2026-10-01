@@ -584,6 +584,44 @@ def archive_frame(
 # ---------------------------------------------------------------------------
 
 
+def sealed_at(day: date_t) -> datetime:
+    """When day ``day`` stops accepting frames (see :data:`DAY_FINALITY`)."""
+    midnight = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    return midnight + timedelta(days=1) + DAY_FINALITY
+
+
+def _read_manifest(path: Path) -> dict | None:
+    """A day manifest, or ``None`` if it is missing or unreadable."""
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Observed archive: unreadable manifest %s", path, exc_info=True)
+        return None
+
+
+def _write_manifest(path: Path, manifest: dict) -> None:
+    """Atomic, durable manifest write: same discipline as the Parquet files."""
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(manifest, indent=2))
+        _fsync(tmp)
+        os.replace(tmp, path)
+        _fsync(path.parent)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _frame_keys(table) -> set[tuple]:
+    """Distinct ``(product_id, frame_valid_time)`` pairs in a table."""
+    return set(zip(
+        table.column("product_id").to_pylist(),
+        table.column("frame_valid_time").to_pylist(),
+    ))
+
+
 def final_days(root: Path, source: str, now: datetime) -> list[str]:
     """Days with parts on disk that can no longer receive a frame."""
     parts_dir = root / "parts" / source
@@ -597,8 +635,7 @@ def final_days(root: Path, source: str, now: datetime) -> list[str]:
             day = date_t.fromisoformat(day_dir.name)
         except ValueError:
             continue
-        sealed_at = datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1) + DAY_FINALITY
-        if now >= sealed_at:
+        if now >= sealed_at(day):
             out.append(day_dir.name)
     return out
 
@@ -613,8 +650,17 @@ def compact_day(root: Path, source: str, day: str) -> int:
 
     An existing day file is merged in rather than overwritten, so a part that
     somehow arrives after compaction is folded into the day instead of being
-    lost or clobbering it. Parts are deleted only after the merged file is
-    written and verified. Returns the day's row count.
+    lost or clobbering it. Parts are deleted only after the merged file and
+    its manifest are written and verified. Returns the day's row count.
+
+    Idempotent across a crash at any point. If a previous compaction died
+    after writing the day file but before deleting the parts (a timeout or
+    OOM kill of the child), those parts are still on disk and their rows are
+    already in the day file. A part whose frame (``product_id`` and
+    ``frame_valid_time``) is already present in the day file is therefore
+    skipped. Keyed on the data itself rather than on the manifest, because a
+    crash between the Parquet rename and the manifest write leaves a manifest
+    that does not yet list those frames.
     """
     pa, pq = _require_pyarrow()
     schema = arrow_schema()
@@ -623,15 +669,29 @@ def compact_day(root: Path, source: str, day: str) -> int:
 
     target = day_path(root, source, day)
     meta_path = manifest_path(root, source, day)
-    previous = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    previous = _read_manifest(meta_path) or {}
 
     tables = []
-    if target.exists():
-        tables.append(pq.read_table(target, schema=schema))
     frames = set(previous.get("frames", []))
+    already_in_day: set[tuple] = set()
+    if target.exists():
+        existing = pq.read_table(target, schema=schema)
+        tables.append(existing)
+        already_in_day = _frame_keys(existing)
+    skipped = 0
     for part in part_files:
-        tables.append(pq.read_table(part, schema=schema))
         frames.add(part.stem)
+        table = pq.read_table(part, schema=schema)
+        if table.num_rows and _frame_keys(table) <= already_in_day:
+            skipped += 1
+            continue
+        tables.append(table)
+    if skipped:
+        logger.warning(
+            "Observed archive: %s %s: %d leftover part(s) already in the day "
+            "file (interrupted compaction), not merged again",
+            source, day, skipped,
+        )
     if not tables:
         return 0
 
@@ -639,22 +699,27 @@ def compact_day(root: Path, source: str, day: str) -> int:
         [("frame_valid_time", "ascending"), ("icao", "ascending"), ("radius_nm", "ascending")]
     )
     digest = _write_verified(merged, target)
-    manifest = {
+    missing = max(0, expected_frame_count(source) - len(frames))
+    _write_manifest(meta_path, {
         "source": source,
         "day": day,
         "rows": merged.num_rows,
         "sha256": digest,
         "frames": sorted(frames),
         "frames_expected": expected_frame_count(source),
-        "frames_missing": max(0, expected_frame_count(source) - len(frames)),
+        "frames_missing": missing,
         "algorithm_versions": sorted(
             {v for v in merged.column("algorithm_version").to_pylist() if v}
         ),
         "compacted_at": datetime.now(timezone.utc).isoformat(),
-    }
-    tmp = meta_path.with_name(f".{meta_path.name}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(json.dumps(manifest, indent=2))
-    os.replace(tmp, meta_path)
+    })
+    if missing:
+        # A lost frame cannot be recovered once the store has purged it, so
+        # say so when it is sealed rather than only in a `verify` printout.
+        logger.warning(
+            "Observed archive: %s %s sealed with %d of %d frames missing",
+            source, day, missing, expected_frame_count(source),
+        )
 
     shutil.rmtree(parts_dir, ignore_errors=True)
     return merged.num_rows
@@ -672,9 +737,13 @@ def verify_observed_archive(root: Path | None = None) -> list[dict]:
         for meta_path in sorted(source_dir.glob("*.json")):
             day = meta_path.stem
             problem = ""
-            manifest = json.loads(meta_path.read_text())
+            manifest = _read_manifest(meta_path)
             target = day_path(root, source, day)
-            if not target.exists():
+            if manifest is None:
+                # One bad manifest must not abort the report for every day.
+                manifest = {}
+                problem = "manifest unreadable"
+            elif not target.exists():
                 problem = "parquet file missing"
             elif _sha256(target) != manifest.get("sha256"):
                 problem = "sha256 mismatch"

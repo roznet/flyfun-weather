@@ -970,6 +970,9 @@ def cmd_observed_archive(args):
             sys.exit(1)
 
     if args.action == "verify":
+        if args.dry_run:
+            print("ERROR: --dry-run applies to run only", file=sys.stderr)
+            sys.exit(2)
         report = verify_observed_archive()
         if not report:
             print(f"No compacted days under {observed_archive_root()}.")
