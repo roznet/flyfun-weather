@@ -289,11 +289,14 @@ def test_summary_lines_stay_derived_from_the_entries(stocked_store):
     assert conditions.summary == " ".join(conditions.summary_lines)
 
 
-def test_summary_names_the_echo_and_its_age(stocked_store):
+def test_summary_names_the_echo_and_its_frame_time(stocked_store):
+    """Absolute time, not "N min ago" — the text outlives the moment it was built."""
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     radar = next(line for line in conditions.summary_lines if "peak" in line)
     assert "dBZ" in radar
-    assert "observed 5 min ago" in radar
+    frame = (NOW - timedelta(minutes=5)).astimezone(timezone.utc)
+    assert f"observed {frame:%H:%M}Z" in radar
+    assert "min ago" not in conditions.summary
 
 
 def test_summary_classes_the_echo_without_losing_the_measurement(stocked_store):

@@ -14,11 +14,12 @@ Three things the wording is careful about:
 * **It never asserts a clear sky it did not see.**  Where coverage is
   insufficient the line says "no radar coverage over N of M points"; it does
   not say "no echo".
-* **Every clause carries its own age.**  The four sources do not share an
-  instant and the summary does not pretend otherwise.
+* **Every clause carries its own frame time.**  The four sources do not share
+  an instant and the summary does not pretend otherwise.  Absolute (``HH:MMZ``),
+  never "N min ago": the text outlives the moment it was built.
 * **It describes, it does not grade.**  Phase 1 computes no verdict, so there
   is no "significant" or "hazardous" anywhere in here — just what was
-  measured, where, and how long ago.  The intensity word ("heavy echo") is a
+  measured, where, and when.  The intensity word ("heavy echo") is a
   published reflectivity class, not a judgement about this flight; the measured
   number always stays beside it so the word reads as a gloss rather than a
   replacement.  See ``observed/intensity.py``.
@@ -326,7 +327,16 @@ def _where(station_id: str | None, by_station) -> str:
 
 
 def _age(field) -> str:
-    minutes = field.age_minutes
-    if minutes < 1:
-        return "observed just now"
-    return f"observed {minutes:.0f} min ago"
+    """The clause's own frame time, absolute.
+
+    A relative age ("observed 8 min ago") is true only at the instant the
+    payload is built; the live layer keeps a briefing open for hours and the
+    PDF/digest are read later still, so the sentence went stale while looking
+    current. Clients that want a running age compute it from ``valid_time``.
+    """
+    from datetime import timezone
+
+    valid = field.valid_time
+    if valid.tzinfo is not None:
+        valid = valid.astimezone(timezone.utc)
+    return f"observed {valid:%H:%M}Z"

@@ -2012,9 +2012,10 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
     ? observed.summary_entries
     : observed.summary_lines.map((text) => ({ kind: '', text, metric_id: '' }));
 
-  // Each clause pairs with its OWN source's frame time. The prose already
-  // carries a relative age ("observed 8 min ago"); the chip adds the absolute
-  // valid time, which the panel otherwise never shows. Never a shared clock.
+  // Each clause pairs with its OWN source's frame time. The prose carries the
+  // absolute valid time ("observed 22:05Z"); the chip adds the running age,
+  // re-aged in place by refreshLiveAges (the page stays open for hours on
+  // flight day, so a baked "N min ago" would go stale). Never a shared clock.
   const fieldFor: Record<string, { valid_time: string } | null | undefined> = {
     reflectivity: observed.reflectivity,
     rain_rate: observed.rain_rate,
@@ -2069,9 +2070,11 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
     const rolling = f!.window_minutes > 0
       ? `, ${Math.round(f!.window_minutes)} min window`
       : '';
-    const age = f!.age_minutes < 1 ? 'just now' : `${Math.round(f!.age_minutes)} min ago`;
+    // Aged from valid_time, not the payload's age_minutes (true only when the
+    // payload was built), and re-aged in place by refreshLiveAges.
+    const age = `<span data-live-age="${escapeHtml(f!.valid_time)}">${escapeHtml(liveAgeText(f!.valid_time))}</span>`;
     return `<span class="observed-source">${attributionHtml(f!.attribution)}`
-      + `<span class="observed-source-age">${escapeHtml(age)}${escapeHtml(rolling)}</span></span>`;
+      + `<span class="observed-source-age">${age}${escapeHtml(rolling)}</span></span>`;
   });
 
   const sourcesHtml = `
@@ -2085,12 +2088,11 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
 }
 
 /** "10:20Z" — a frame's own valid time, per source. Never a shared clock. */
-function observedStampHtml(validTime: string): string {
-  const d = new Date(validTime);
-  if (Number.isNaN(d.getTime())) return '';
-  const hh = String(d.getUTCHours()).padStart(2, '0');
-  const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  return `<span class="observed-stamp" title="${escapeHtml(t('observed.frameValidTime'))}">${hh}:${mm}Z</span>`;
+function observedStampHtml(validTime: string, now: number = Date.now()): string {
+  if (Number.isNaN(new Date(validTime).getTime())) return '';
+  const title = `${t('observed.frameValidTime')}: ${formatHhmmZ(validTime)}`;
+  return `<span class="observed-stamp" data-live-age="${escapeHtml(validTime)}" title="${escapeHtml(title)}">`
+    + `${escapeHtml(liveAgeText(validTime, now))}</span>`;
 }
 
 /** Human label for a raw source key, so a missing source does not read as a
@@ -2321,8 +2323,8 @@ export function renderRefreshDelta(
   el.style.display = '';
 }
 
-/** Re-age the "Observed as of" label and the change rows in place, without a
- *  re-render — called on the live-poll tick (#637). */
+/** Re-age the "Observed as of" label, the change rows and the Observed Now
+ *  frame ages in place, without a re-render — called on the live-poll tick (#637). */
 export function refreshLiveAges(now: number = Date.now()): void {
   if (typeof document === 'undefined') return;
   document.querySelectorAll<HTMLElement>('[data-live-asof]').forEach((node) => {

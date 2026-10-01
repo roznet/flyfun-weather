@@ -466,7 +466,9 @@ no per-locale translation, matching `RefreshDelta`.
 
 Three things the wording is careful about: it never asserts a clear sky it did
 not see (an insufficient-coverage disc reads "no radar coverage over N of M
-points", not "no echo"); every clause carries its own age; and it grades
+points", not "no echo"); every clause carries its own frame time — absolute
+(`observed 22:05Z`), never "N min ago", because the text outlives the moment it
+was built (live layer, PDF, digest; clients re-age from `valid_time`); and it grades
 nothing — there is no "severe" or "significant" anywhere in it, and a test
 asserts that.
 
