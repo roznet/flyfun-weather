@@ -127,6 +127,17 @@ _CLOUD_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
     ("cape", "pressureFromGroundLayer"): "ml_cape_jkg",
     ("cin", "pressureFromGroundLayer"): "ml_cin_jkg",
     # kg/m2/s, instantaneous — converted to mm/h by _kg_m2_s_to_mm_h.
+    #
+    # The idx name is CPRAT but cfgrib names the decoded variable `cpr`
+    # (paramId 260033, "Convective precipitation rate"), verified by decoding
+    # a live gfs.20260930/00z f006 message with eccodes 2.49 (#585). Keyed on
+    # `cprat` alone, as #566 shipped it, the field matched nothing and
+    # nwp_conv_precip_mm_h stayed NULL for every GFS row. The averaged twin
+    # ALSO decodes as `cpr` (stepType=avg, no `avg_` prefix), so the two cannot
+    # be told apart here; the idx selection keeping only the instantaneous
+    # message is what guarantees which one arrives. `cprat` is kept as an
+    # alias for older eccodes tables.
+    ("cpr", "surface"): "conv_precip_rate_kg_m2_s",
     ("cprat", "surface"): "conv_precip_rate_kg_m2_s",
     ("avg_cprat", "surface"): "conv_precip_rate_kg_m2_s",
     # Cloud boundary pressures (Pa) — mostly time-averaged in GFS
