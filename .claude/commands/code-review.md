@@ -180,6 +180,27 @@ The cross-section renders in an immediate-mode `SwiftUI.Canvas`, which has **no 
 
 ---
 
+## Operational & consistency
+
+Apply to every PR, briefly. These catch system-level problems a line-by-line read
+misses (each one was found on a real PR the review had passed):
+
+- **Growth and cost.** Anything that grows without bound (archive, table, cache,
+  log) needs a retention or prune path, or an explicit "kept forever" in the PR.
+  New per-cycle work (downloads, decodes, LLM calls) — is the count reasonable for
+  the real schedule? Flag missing bounds as Important.
+- **Silent failure paths.** A failure that is logged and skipped, a late item
+  dropped, a stuck state that retries forever, a log line that can't be told apart
+  from another failure. Prefer loud, distinguishable failures.
+- **Same value, other surfaces.** If the PR changes how a value is computed or
+  displayed, check every other place showing it (HTML report, refresh deltas, the
+  other client, MCP tools, digest context) — not only the web↔iOS parity list below.
+- **Comments and docs that assert facts.** New or touched docstrings, design-doc
+  lines and test fixtures must match the code ("samples are ~24 h apart" when they
+  are 3 h apart is a finding).
+
+---
+
 ## Cross-platform parity (web ↔ iOS)
 
 Web and iOS share several **hand-copied** surfaces. If the diff touches any of them on one platform, flag that the counterpart on the other platform likely needs a matching change, and recommend running `/sync-ios-web` to enumerate the divergences:

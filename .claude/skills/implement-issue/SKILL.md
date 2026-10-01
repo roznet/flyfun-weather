@@ -129,6 +129,8 @@ Anything you could not run is **unverified** — the brief must say so.
   full Owner's brief below**. The PR is where the user will read it later, so it must
   stand alone there.
 - Pushing triggers the review bot. Don't wait on it here — point to `/process-review`.
+- If the change includes meteorology, data collection, user data or another risk
+  label, end by suggesting `/brief-check <pr>` for an independent second opinion.
 
 ## Step 6 — The Owner's brief
 
