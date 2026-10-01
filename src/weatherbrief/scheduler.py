@@ -670,26 +670,45 @@ async def run_verification_loop(app_state) -> None:
 
 
 def _run_verification_once(app_state) -> None:
-    """Execute a single verification collection cycle (called in a thread)."""
+    """Execute a single verification collection cycle (called in a thread).
+
+    The live-layer tick (#637) rides the same cycle: verification's METAR/TAF
+    fetch feeds the tick's shared cache, then every flight in its live window
+    gets its live layer refreshed from it. The tick runs even when the
+    verification pass raised, and its own failure never fails the cycle.
+    """
     db_path = getattr(app_state, "db_path", "")
     if not db_path:
         return
 
+    from weatherbrief.tasks.live_tick import LiveTick, live_enabled
     from weatherbrief.tasks.verification import collect_and_store
 
+    tick = LiveTick() if live_enabled() else None
     db = SessionLocal()
     try:
-        result = collect_and_store(db, db_path)
-        if result["flights"] > 0:
-            logger.info(
-                "Verification cycle: %d flight(s), %d airport(s), "
-                "%d observation(s) stored, %d finalized",
-                result["flights"], result["airports"],
-                result["observations"], result["finalized"],
+        try:
+            result = collect_and_store(
+                db, db_path, report_sink=tick.sink if tick is not None else None,
             )
-    except Exception:
-        db.rollback()
-        raise
+            if result["flights"] > 0:
+                logger.info(
+                    "Verification cycle: %d flight(s), %d airport(s), "
+                    "%d observation(s) stored, %d finalized",
+                    result["flights"], result["airports"],
+                    result["observations"], result["finalized"],
+                )
+        except Exception:
+            db.rollback()
+            if tick is None:
+                raise
+            logger.error("Verification cycle failed; running the live tick anyway", exc_info=True)
+        if tick is not None:
+            try:
+                tick.run(db, db_path)
+            except Exception:
+                db.rollback()
+                logger.error("Live tick failed", exc_info=True)
     finally:
         db.close()
 
