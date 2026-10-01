@@ -129,7 +129,7 @@ Per-model split reuses `tasks/standalone_verification.py`:
 
 | Model | Source |
 |-------|--------|
-| GFS, ICON | Open-Meteo multi-point + GFS/ICON GRIB ceiling (`_fetch_forecasts_for_model` + `_enrich_with_grib`) |
+| GFS, ICON | Open-Meteo multi-point + GFS/ICON GRIB cloud diagnostics (`fetch_model_snapshots`: the GRIB fetch runs alongside Open-Meteo and is attached to each hour before the sounding pass, #635) |
 | ECMWF | local GRIB a1 (surface incl. **visibility**) + a2 (pressure) (`fetch_ecmwf_grib_snapshots`) |
 
 ECMWF visibility is GRIB-only (Open-Meteo doesn't republish it); when no local
@@ -411,8 +411,8 @@ no-TAF path — it is an input to the regulatory layer, not an output of it.
 ## References
 - Geometry: `euro_aip` `find_airports_near_route`, `NavPoint.haversine_distance`;
   `analysis/route_geometry.py:compute_route_distances`
-- Fetch reuse: `tasks/standalone_verification.py` (`_fetch_forecasts_for_model`,
-  `_enrich_with_grib`, `_enrich_with_sounding`, `fetch_ecmwf_grib_snapshots`)
+- Fetch reuse: `tasks/standalone_verification.py` (`fetch_model_snapshots`,
+  `_fetch_forecasts_for_model`, `_enrich_with_sounding`, `fetch_ecmwf_grib_snapshots`)
 - Shared assembly: `analysis/airport_consensus.py`; consumed by
   `tasks/map_queries.py`
 - Pipeline / prefs: `pipeline.py`, `api/profiles.py`, `api/packs.py`

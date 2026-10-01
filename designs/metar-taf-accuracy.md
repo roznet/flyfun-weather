@@ -54,9 +54,10 @@ tasks/scoring.py                        ← flight-based scoring (model + TAF)
 tasks/standalone_verification.py        ← standalone airport monitoring
 ├── run_metar_ingest_cycle()            ← fetch METAR/TAF → verification_observations (source 'metar_ingest')
 ├── run_standalone_cycle()              ← forecast / light / full (legacy) cycle
+├── fetch_model_snapshots()             ← GFS/ICON entry: GRIB cloud diag alongside Open-Meteo, attached before soundings (#635)
 ├── _fetch_forecasts_for_model()        ← Open-Meteo multi-point (batches of 100)
 ├── _enrich_with_sounding()             ← pressure-level sounding analysis
-├── _enrich_with_grib()                 ← GFS/ICON cloud diagnostics for ceiling
+├── _fetch_grib_diagnostics() / _apply_grib_columns()  ← GFS/ICON cloud diagnostics + ceiling columns
 └── _record_failed_cycle()              ← error capture on failure
 
 tasks/verification_stats.py             ← shared queries for digest + dashboard

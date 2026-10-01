@@ -2,7 +2,7 @@
 
 > Per-model convective data pipeline, dual-method assessment, source inconsistencies, and recommendations.
 
-_Code references verified against the repo on 2026-08-15._
+_Code references verified against the repo on 2026-08-15 (standalone-path section: 2026-10-01)._
 
 > 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [meteorology-decisions.md](./meteorology-decisions.md) §4–§5; the NWP-native grade + DD-trigger amber cap in §18, the ICON-D2 explicit-convection firing table in §19, the single-grading-formula extraction in §22, and the absent-NWP-track cap + embedded population floor in §26 — read before changing thresholds or the DD/NWP boundary.
 
@@ -317,6 +317,16 @@ One row per model: what feeds the DD/thermo track, what feeds the NWP track, and
 | **Météo-France / GEM** | nothing convective | — | None — MetPy-only, no model-native CAPE to validate against |
 
 The DD/thermo track is identical everywhere: MetPy SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT from 13–28 pressure levels. Level count matters — ECMWF's 13 levels can miss thin unstable layers GFS's 28 resolve, which is why `cape_raw_vs_calc_divergent` exists (see bug #3).
+
+### On the standalone verification / alternates path (#635)
+
+The table above holds for the snapshot rows too, for all three GRIB models. Before #635 it held only for ECMWF: GFS/ICON ran their lite sounding pass inside the Open-Meteo fetch, before their cloud-diag GRIB was fetched, so `assess_convective_nwp` saw no diagnostics and `nwp_conv_method` was NULL on every GFS/ICON row. `fetch_model_snapshots` (`tasks/standalone_verification.py`), the GFS/ICON entry point for the cycle and for alternates, now starts `_fetch_grib_diagnostics` on its own thread alongside the Open-Meteo chunk fetches; each chunk waits for it just before its sounding pass and `attach_nwp_diagnostics` the matching hour (same ICON step snap as the fetch, via `_GribDiagLookup`). Wall time is max(GRIB, Open-Meteo) + soundings instead of the sum. The pooled path carries the diagnostics in `build_sounding_payload` (the hour is dumped whole), and `tests/test_conv_precip_fill_rate.py` asserts both paths fill `nwp_conv_method` and agree row for row.
+
+What this does **not** change:
+
+- **The scored grade.** `sounding_convective_risk` — what `_build_sounding_proxy` scores and `airport_consensus` shows on alternates and the forecast map — is `SoundingAnalysis.convective`, which `analyze_sounding_lite` always fills from the **thermo** track, for ECMWF as well. The NWP track is recorded (`nwp_conv_method` + ingredients), not graded, on this path. Grading verification on the NWP track would be its own meteorology decision, and would move the verification baseline.
+- **The ingredient columns.** `_apply_grib_columns` still writes the GRIB's own cover/base/top/precip/ML-CAPE/CIN after the sounding pass wherever the GRIB carried a value, so GFS/ICON history stays continuous. ECMWF's rows instead keep the assessment's envelope (base = LCL proxy on `nwp_lcl_top`), so a cross-model comparison of `nwp_conv_base_ft` must split on `nwp_conv_method`.
+- **History boundary.** Rows written before #635 have `nwp_conv_method` NULL for GFS/ICON; split any analysis of that column (or of `nwp_layer_ceiling_ft` / `nwp_layer_source`, which now also fill for GFS/ICON because the native cloud-layer builder sees the diagnostics) on it.
 
 
 ---

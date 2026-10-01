@@ -76,12 +76,12 @@ class TestFieldsAreProducedByTheRealPath:
     def test_no_native_diagnostics_means_no_convective_method(self):
         """Absence is the honest signal, and it is load-bearing.
 
-        In the standalone cycle the sounding analysis runs inside the
-        Open-Meteo fetch, *before* `_enrich_with_grib` supplies GFS/ICON cloud
-        diagnostics — so those two models have no native convective assessment
-        at snapshot time and `nwp_conv_method` is NULL. A reader must take that
-        as "not graded natively here", not as "no convection". ECMWF takes the
-        GRIB-first path and does carry diagnostics.
+        An hour with no GRIB diagnostics (an Open-Meteo-only model, or a
+        GFS/ICON hour whose cloud-diag fetch missed) has no native convective
+        assessment, and `nwp_conv_method` is NULL. A reader must take that as
+        "not graded natively here", not as "no convection". Before #635 this
+        was every GFS/ICON row: the sounding pass ran before their GRIB
+        diagnostics were fetched.
         """
         fields = compute_snapshot_sounding_fields(_hourly(), "gfs")
         assert fields.get("nwp_conv_method") is None
@@ -106,6 +106,31 @@ class TestFieldsAreProducedByTheRealPath:
         assert fields.get("nwp_conv_top_ft") == pytest.approx(28000.0)
         assert fields.get("nwp_conv_precip_mm_h") == pytest.approx(2.5)
         assert fields.get("nwp_ml_cape_jkg") == pytest.approx(1450.0)
+
+    def test_attaching_diagnostics_leaves_the_scored_columns_alone(self):
+        """#635 moved GFS/ICON diagnostics ahead of the sounding pass. That must
+        add the native-track columns without moving what verification scores
+        (`sounding_convective_risk` is the thermo track) or the DD ceiling."""
+        from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
+
+        before = compute_snapshot_sounding_fields(_hourly(), "gfs")
+        hourly = _hourly()
+        hourly.attach_nwp_diagnostics(build_cloud_diagnostics({
+            "low_cover_pct": 80.0, "mid_cover_pct": 40.0, "high_cover_pct": 20.0,
+            "total_cover_pct": 90.0, "convective_cover_pct": 40.0,
+            "low_base_pa": 90000.0, "low_top_pa": 85000.0,
+            "convective_base_pa": 88000.0, "convective_top_pa": 45000.0,
+        }))
+        after = compute_snapshot_sounding_fields(hourly, "gfs")
+
+        assert after["nwp_conv_method"] == "nwp"
+        assert after["nwp_layer_source"] is not None
+        for key in (
+            "sounding_convective_risk", "sounding_ceiling_ft",
+            "sounding_cloud_base_ft", "freezing_level_ft",
+            "sounding_cape_jkg", "sounding_cin_jkg",
+        ):
+            assert after.get(key) == before.get(key), key
 
     def test_no_bulk_shear_column_is_emitted(self):
         """`compute_indices_extended` is skipped by the lite path, so a bulk

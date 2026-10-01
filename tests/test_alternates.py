@@ -437,14 +437,17 @@ def test_fetch_eta_snapshots_runs_models_concurrently_and_inherits_priority():
         snap = {"icao": airports[0].icao, "model": model, "forecast_hour": eta}
         return [snap], 0
 
-    def fake_enrich(snaps, model, init_time, airports, session, priority=None):
+    def fake_grib(model, init_time, airports, session, valid_times, priority=None):
+        # Runs on fetch_model_snapshots' own GRIB thread (#635) — a second
+        # thread hop the ContextVar has to survive.
         with lock:
             resolved[model] = _resolve_priority(priority)
+        return None
 
     sv = "weatherbrief.tasks.standalone_verification"
     with patch("weatherbrief.fetch.model_status.fetch_model_metadata", return_value=meta_map), \
          patch(f"{sv}._fetch_forecasts_for_model", fake_fetch_forecasts), \
-         patch(f"{sv}._enrich_with_grib", fake_enrich), \
+         patch(f"{sv}._fetch_grib_diagnostics", fake_grib), \
          patch(f"{sv}._select_ecmwf_grib_run", return_value=None):
         # Run inside a copied context so set_decode_priority can't leak out.
         ctx = copy_context()
@@ -457,8 +460,11 @@ def test_fetch_eta_snapshots_runs_models_concurrently_and_inherits_priority():
 
     # All three models contributed (barrier did not time out → ran concurrently).
     assert set(by_icao["EGTE"].keys()) == set(alt_mod._MODELS)
-    # The INTERACTIVE ContextVar reached every worker thread.
-    assert resolved == {m: int(DecodePriority.INTERACTIVE) for m in alt_mod._MODELS}
+    # The INTERACTIVE ContextVar reached every GRIB decode. ECMWF has none on
+    # this path (its Open-Meteo fallback carries no cloud-diag GRIB feed).
+    assert resolved == {
+        m: int(DecodePriority.INTERACTIVE) for m in alt_mod._MODELS if m != "ecmwf"
+    }
 
 
 def test_grib_helper_priority_resolves_contextvar_vs_explicit():

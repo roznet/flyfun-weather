@@ -162,8 +162,10 @@ class TestNothingDecodedIsSilentlyDropped:
     """
 
     #: DTO fields that are ceiling/cloud rather than convective ingredients;
-    #: they take a different route onto the snapshot.
-    _NON_CONVECTIVE = {"nwp_ceiling_ft", "cloud_base_ft"}
+    #: they take a different route onto the snapshot. ``diagnostics`` is the
+    #: full object the scalars came from: it is attached to the hour for the
+    #: sounding pass (#635), not persisted.
+    _NON_CONVECTIVE = {"nwp_ceiling_ft", "cloud_base_ft", "diagnostics"}
 
     def _enrich_loop_pairs(self) -> dict[str, str]:
         import re
