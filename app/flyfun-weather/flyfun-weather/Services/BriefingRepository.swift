@@ -69,6 +69,13 @@ protocol BriefingRepository: Sendable {
     func unlinkAutorouter() async throws
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
+    /// The flight's live observation layer (#637) — `GET /api/flights/{id}/live`:
+    /// the newest METAR/TAF, route SIGMETs and observed conditions plus the
+    /// "since this briefing" changes, relative to the latest pack. Cheap (a
+    /// stored file server-side). 404 only when the flight has no pack. The
+    /// caching layer is network-first and keeps the last layer on disk so an
+    /// offline cockpit still shows the newest observations it ever saw.
+    func liveLayer(flightId: String) async throws -> LiveLayerResponse
     // Flight sharing (#446) — all online-only.
     /// Resolve a share code (`/s/{code}`) to its flight for the preview-before-
     /// subscribe on-ramp. Throws `APIError.notFound` (404) for an unknown/invalid
@@ -275,6 +282,11 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
         try await client.request("/api/flights/\(flightId)/packs/latest")
+    }
+
+    func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        // Polled every 5 min on flight day — keep it out of the request log.
+        try await client.request("/api/flights/\(flightId)/live", quietLog: true)
     }
 
     func flightByShareCode(_ code: String) async throws -> FlightResponse {

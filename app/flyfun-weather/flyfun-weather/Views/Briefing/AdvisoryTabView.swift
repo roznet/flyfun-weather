@@ -21,6 +21,15 @@ struct AdvisoryTabView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 heroSection
                     .spyAnchor("hero")
+                // Live layer (#637): the digest caveat, then what moved since
+                // the briefing — read-me-first on flight day, so straight
+                // under the hero.
+                if let liveChanges = viewModel.liveChanges {
+                    DigestLiveCaveat(changeCount: liveChanges.items.count,
+                                     writtenAt: viewModel.liveBaselineDate)
+                    LiveChangesView(changes: liveChanges, baseline: viewModel.liveBaselineDate)
+                        .spyAnchor("live")
+                }
                 digestAltitudeWarningSection
                 digestFeedbackSection
                 debriefSection
@@ -29,11 +38,11 @@ struct AdvisoryTabView: View {
                 AirportConditionsView(viewModel: viewModel)
                     .spyAnchor("conditions")
                 if hasObservations {
-                    RouteObservationsView(viewModel: viewModel)
+                    RouteObservationsView(viewModel: viewModel, liveChanges: viewModel.liveChanges)
                         .spyAnchor("observations")
                 }
                 if hasSigmets {
-                    RouteSigmetsView(viewModel: viewModel)
+                    RouteSigmetsView(viewModel: viewModel, liveChanges: viewModel.liveChanges)
                         .spyAnchor("sigmets")
                 }
                 if hasAlternates {
@@ -183,6 +192,7 @@ struct AdvisoryTabView: View {
 
     private var spySections: [SpySection] {
         var sections = [SpySection("hero", "Summary")]
+        if viewModel.liveChanges != nil { sections.append(SpySection("live", "Since Briefing")) }
         sections.append(SpySection("advisories", "Advisories"))
         sections.append(SpySection("conditions", "Conditions"))
         if hasObservations { sections.append(SpySection("observations", "Observations")) }

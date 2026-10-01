@@ -105,6 +105,12 @@ struct BriefingContainerView: View {
                         onOpenTrip: onOpenTrip
                     )
                     DownloadBannerView(state: viewModel.downloadState)
+                    // D-0: how fresh the observations on screen are (#637).
+                    // Always visible when present, so an offline cockpit's
+                    // aging data is never silently presented as current.
+                    if let observedAsOf = viewModel.observedAsOf {
+                        ObservedAsOfRow(date: observedAsOf)
+                    }
                     BriefingContentView(viewModel: viewModel, trackingService: trackingService,
                                         onAddPirep: { showingPirepSheet = true })
                 }
@@ -210,6 +216,10 @@ struct BriefingContainerView: View {
             )
             viewModel = vm
             await vm.loadBriefing()
+            // D-0 live observations (#637): keep the layer moving while the
+            // briefing stays open (no-op outside the live window). Started
+            // before `checkActiveRefresh`, which can poll for minutes.
+            vm.startLivePolling()
             await vm.checkActiveRefresh()
             // Only load PIREPs when the user may view them — the query 403s for a
             // publish-only account, which would strand the PIREPs tab on an error
@@ -227,6 +237,10 @@ struct BriefingContainerView: View {
             // reload — the open briefing shouldn't stay frozen on a stale pack.
             if scenePhase == .active {
                 Task { await viewModel?.syncLatestPack() }
+                viewModel?.startLivePolling()
+            } else if scenePhase == .background {
+                // No live poll while backgrounded; restarted on activation.
+                viewModel?.stopLivePolling()
             }
         }
         .onChange(of: appState.externalSync) {
@@ -241,6 +255,7 @@ struct BriefingContainerView: View {
             // until the scan reaches a terminal state. Re-entry recreates the VM
             // via `.task` and restarts polling.
             viewModel?.stopTimeOptionsPolling()
+            viewModel?.stopLivePolling()
         }
     }
 
@@ -535,6 +550,34 @@ private struct RefreshErrorBanner: View {
     }
 }
 
+/// Slim D-0 row: "Observed as of 05:50Z · 12 min ago" (#637). Re-renders every
+/// minute so the age keeps counting; turns orange past `LiveTime.staleAfter` so
+/// stale observations (offline, or a stalled server) are visible, never silent.
+private struct ObservedAsOfRow: View {
+    let date: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let stale = context.date.timeIntervalSince(date) > LiveTime.staleAfter
+            HStack(spacing: 6) {
+                Image(systemName: stale ? "clock.badge.exclamationmark" : "dot.radiowaves.left.and.right")
+                    .font(.caption)
+                Text("Observed as of \(LiveTime.zulu(date))")
+                    .font(.caption.weight(.semibold))
+                Text(LiveTime.ageLabel(from: date, now: context.date))
+                    .font(.caption)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(stale ? Color.orange : Theme.textMuted)
+            .padding(.horizontal)
+            .padding(.vertical, 4)
+            .background(stale ? Color.orange.opacity(0.12) : Color.clear)
+            .accessibilityElement(children: .combine)
+        }
+        .accessibilityIdentifier("observedAsOfRow")
+    }
+}
+
 /// Banner showing pack download progress (size + percentage) while downloading.
 private struct DownloadBannerView: View {
     let state: DownloadState
@@ -635,7 +678,9 @@ private struct BriefingContentView: View {
             // ↻ button's full regeneration). The action propagates via the
             // environment to whichever tab's vertical ScrollView is visible
             // (Advisory / Discussion); the canvas tabs simply don't offer a pull.
-            .refreshable { await viewModel.syncLatestPack() }
+            // On D-0 it also re-fetches the live observation layer (#637), which
+            // moves on an unchanged pack.
+            .refreshable { await viewModel.pullToRefresh() }
     }
 
     private var content: some View {

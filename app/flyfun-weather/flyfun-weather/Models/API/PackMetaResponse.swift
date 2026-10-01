@@ -28,6 +28,11 @@ nonisolated struct PackMetaResponse: Codable, Sendable {
     /// last fetched). `nil` on older packs whose server didn't send it — callers
     /// then fall back to `flight.effectiveFlexibility`.
     let flexibility: FlexibilityMode?
+    /// When the flight's live observation layer was last updated (#637). Non-nil
+    /// only on the pack that owns the layer (the latest). A realtime refresh
+    /// keeps `fetchTimestamp`, so this is how a client notices new observations
+    /// on an unchanged pack.
+    let liveUpdatedAt: String?
 }
 
 nonisolated struct DataStatus: Codable, Sendable {

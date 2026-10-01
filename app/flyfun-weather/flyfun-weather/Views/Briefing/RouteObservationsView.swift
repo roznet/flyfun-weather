@@ -16,6 +16,9 @@ import SwiftUI
 /// SYNC: `web/ts/managers/briefing-ui.ts::renderRouteObservations`.
 struct RouteObservationsView: View {
     let viewModel: BriefingViewModel
+    /// "Since this briefing" changes (#637). Rows whose METAR/TAF category
+    /// moved get a direction marker and a subtle tint. nil off D-0.
+    var liveChanges: LiveChanges? = nil
 
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var axis: ObservationAxis = .condition
@@ -184,7 +187,8 @@ struct RouteObservationsView: View {
                     }
                     Divider().gridCellUnsizedAxes(.horizontal).gridCellColumns(gridColumnCount)
                     ForEach(displayed) { apt in
-                        row(apt, comparison: comparisons[apt.icao])
+                        row(apt, comparison: comparisons[apt.icao],
+                            liveDirection: liveChanges?.airportDirection(icao: apt.icao))
                     }
                 }
                 .padding(.vertical, Theme.spacingXS)
@@ -273,17 +277,26 @@ struct RouteObservationsView: View {
     }
 
     @ViewBuilder
-    private func row(_ apt: AirportObservation, comparison: ObservationComparison?) -> some View {
+    private func row(
+        _ apt: AirportObservation,
+        comparison: ObservationComparison?,
+        liveDirection: LiveChange.Direction?
+    ) -> some View {
         let conflicting = comparison?.categoryMatch == "CONFLICTING"
         // Amber is this table's flag colour (a model conflict); the Area Hazards
-        // table passes red. `tableCell` owns the shared tint strength.
-        let highlight: Color? = conflicting ? Theme.amber : nil
+        // table passes red. `tableCell` owns the shared tint strength. A row
+        // that changed since the briefing (#637) gets the accent tint unless
+        // the conflict flag already claims it.
+        let highlight: Color? = conflicting ? Theme.amber : (liveDirection != nil ? Theme.primary : nil)
         GridRow {
             Button { detail = apt } label: {
                 HStack(spacing: Theme.spacingXS) {
                     Text(apt.icao)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.text)
+                    if let liveDirection {
+                        LiveDirectionMarker(direction: liveDirection)
+                    }
                     Image(systemName: "info.circle")
                         .font(.caption2)
                         .foregroundStyle(Theme.primary)
@@ -388,6 +401,21 @@ struct RouteObservationsView: View {
         let c = cal.dateComponents([.hour, .minute], from: date)
         guard let h = c.hour, let m = c.minute else { return nil }
         return String(format: "%02d%02dZ", h, m)
+    }
+}
+
+/// ↑/↓ marker for a table row that changed since the briefing (#637): worse in
+/// orange, better in green.
+struct LiveDirectionMarker: View {
+    let direction: LiveChange.Direction
+
+    var body: some View {
+        Image(systemName: direction == .worse ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+            .font(.caption2)
+            .foregroundStyle(direction == .worse ? Color.orange : Theme.green)
+            .accessibilityLabel(direction == .worse
+                                ? String(localized: "Worse since the briefing")
+                                : String(localized: "Better since the briefing"))
     }
 }
 

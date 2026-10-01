@@ -297,6 +297,50 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         }
     }
 
+    // MARK: - Live observation layer (#637)
+
+    /// Network-first, unlike the pack endpoints: the whole point of the layer
+    /// is that it moves on an unchanged pack, so a cache-first read would freeze
+    /// it exactly like the bug this fixes. A successful fetch is persisted
+    /// (newest wins — see `BriefingCacheStore.writeLiveLayer`); on a network
+    /// failure the last cached layer is served so an offline cockpit keeps the
+    /// newest observations it ever saw. The caller still checks the layer's
+    /// `packTimestamp` against the pack on screen before applying it.
+    func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        do {
+            let layer = try await online.liveLayer(flightId: flightId)
+            await storeLiveLayer(layer, flightId: flightId)
+            return layer
+        } catch {
+            if let cached = await cache.readLiveLayer(flightId: flightId) {
+                Self.logger.info("Serving live layer from cache for \(flightId) (offline)")
+                return cached
+            }
+            throw error
+        }
+    }
+
+    /// The cached live layer, disk only (no network) — applied instantly when a
+    /// briefing opens, before the network fetch, and the offline fallback.
+    func cachedLiveLayer(flightId: String) async -> LiveLayerResponse? {
+        await cache.readLiveLayer(flightId: flightId)
+    }
+
+    /// Write a layer through to the live cache, newest wins. Used by the
+    /// network path above and by the ↻ realtime refresh, whose SSE `complete`
+    /// event carries the same data. A null layer (no live data yet) is not
+    /// worth a file and never supersedes real data, so it is skipped.
+    @discardableResult
+    func storeLiveLayer(_ layer: LiveLayerResponse, flightId: String) async -> Bool {
+        guard layer.hasData else { return false }
+        do {
+            return try await cache.writeLiveLayer(layer, flightId: flightId)
+        } catch {
+            Self.logger.warning("Failed to cache live layer for \(flightId): \(error)")
+            return false
+        }
+    }
+
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
         // Online-only — airport weather isn't part of the offline pack bundle.
         try await online.airportWeather(icao: icao, day: day, hour: hour)
