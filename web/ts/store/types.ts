@@ -685,8 +685,20 @@ export interface AirportObservation {
   metar_dewpoint_c: number | null;
   metar_qnh: number | null;
   taf_raw: string | null;
+  // Validity of the TAF and whether it contains the ETA (#610). False keeps
+  // the raw text but leaves every at-ETA field empty; absent on older packs.
+  taf_valid_from?: string | null;
+  taf_valid_to?: string | null;
+  taf_valid_at_eta?: boolean | null;
+  /** Worse of the prevailing and temporary categories at ETA. */
   taf_flight_category_at_eta: string | null;
   taf_trend_type: string | null;
+  taf_prevailing_category_at_eta?: string | null;
+  /** Worst TEMPO/PROB group at ETA, set only when worse than prevailing. */
+  taf_temporary_category_at_eta?: string | null;
+  taf_temporary_type?: string | null;
+  /** TS, FG, FZ*, SN, GR… and CB/TCU at ETA. */
+  taf_significant_weather?: string[];
   taf_wind_dir: number | null;
   taf_wind_speed_kt: number | null;
   taf_wind_gust_kt: number | null;

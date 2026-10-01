@@ -123,6 +123,7 @@ export function renderHeader(
 // --- Stale-pack banner ---
 
 import { computeStalePackBanner } from '../helpers/stale-pack-banner';
+import { readTafAtEta, shortTemporaryLabel, type TafAtEta } from '../helpers/taf-at-eta';
 import { autoRefreshControl, hourPatchValue } from '../helpers/auto-refresh-control';
 import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel, temsiValidityOffset } from '../utils/temsi';
 
@@ -1102,6 +1103,57 @@ function formatWindStr(dir: number | null, speed: number | null, gust: number | 
   return formatWind(speed, dir, gust);
 }
 
+function tafNotValidText(window: string | null): string {
+  return window
+    ? t('observations.tafNotValidWindow', { window })
+    : t('observations.tafNotValid');
+}
+
+/** TAF column of the observations table: the prevailing category, the worse
+ *  TEMPO/PROB group beside it, and significant weather. A TAF that does not
+ *  cover the ETA says so instead of a bare dash (#613). */
+function tafAtEtaCell(reading: TafAtEta): string {
+  switch (reading.kind) {
+    case 'noTaf':
+      return '\u2014';
+    case 'notValid':
+      return `<span class="obs-taf-none" title="${escapeHtml(tafNotValidText(reading.window))}">${t('observations.tafNotValidShort')}</span>`;
+    case 'reading': {
+      let html = flightCatBadge(reading.prevailing);
+      if (reading.legacyTrend) {
+        html = `<span title="${escapeHtml(reading.legacyTrend)}">${html}</span>`;
+      }
+      if (reading.temporary) {
+        const { category, type } = reading.temporary;
+        html += ` <span class="obs-taf-temp" title="${escapeHtml(`${type} ${category}`)}"><span class="obs-taf-temp-label">${escapeHtml(shortTemporaryLabel(type))}</span>${flightCatBadge(category)}</span>`;
+      }
+      if (reading.significantWeather.length > 0) {
+        html += ` <span class="obs-taf-wx">${escapeHtml(reading.significantWeather.join(' '))}</span>`;
+      }
+      return html;
+    }
+  }
+}
+
+/** The popup's "At ETA" line under the raw TAF: the full temporary label and
+ *  the no-valid-TAF sentence with the latest TAF's validity. */
+function tafAtEtaSummary(reading: TafAtEta): string {
+  if (reading.kind === 'noTaf') return '';
+  if (reading.kind === 'notValid') {
+    return `<p class="obs-taf-at-eta obs-taf-none">${escapeHtml(tafNotValidText(reading.window))}</p>`;
+  }
+  if (!reading.prevailing && !reading.temporary) return '';
+  let html = `${t('observations.tafAtEta')} ${flightCatBadge(reading.prevailing)}`;
+  if (reading.legacyTrend) html += ` ${escapeHtml(reading.legacyTrend)}`;
+  if (reading.temporary) {
+    html += `, ${escapeHtml(reading.temporary.type)} ${flightCatBadge(reading.temporary.category)}`;
+  }
+  if (reading.significantWeather.length > 0) {
+    html += ` <span class="obs-taf-wx">${escapeHtml(reading.significantWeather.join(' '))}</span>`;
+  }
+  return `<p class="obs-taf-at-eta">${html}</p>`;
+}
+
 function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | undefined): string {
   // METAR raw
   const metarBlock = apt.metar_raw
@@ -1117,7 +1169,7 @@ function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | u
       const escaped = escapeHtml(line);
       return applicable.has(i) ? `<mark>${escaped}</mark>` : escaped;
     }).join('\n');
-    tafBlock = `<h4>${t('observations.taf')}</h4><code class="obs-popup-taf">${tafHtml}</code>`;
+    tafBlock = `<h4>${t('observations.taf')}</h4><code class="obs-popup-taf">${tafHtml}</code>${tafAtEtaSummary(readTafAtEta(apt))}`;
   } else {
     tafBlock = `<h4>${t('observations.taf')}</h4><p class="muted">${t('observations.notAvailable')}</p>`;
   }
@@ -1235,7 +1287,7 @@ export function renderRouteObservations(
           <td>${Math.round(apt.distance_from_route_nm)}nm</td>
           <td>${apt.eta_hour_offset != null ? `+${apt.eta_hour_offset}h` : '\u2014'}</td>
           <td class="obs-group-start">${flightCatBadge(apt.metar_flight_category)}</td>
-          <td>${flightCatBadge(apt.taf_flight_category_at_eta)}</td>
+          <td class="obs-taf-cell">${tafAtEtaCell(readTafAtEta(apt))}</td>
           <td>${flightCatBadge(comp?.model_category ?? null)}</td>
           <td>${comp ? matchIcon(comp.category_match) : '\u2014'}</td>
           <td class="obs-group-start">${windAdvisoryBadge(apt.metar_wind_advisory, mTip)}</td>

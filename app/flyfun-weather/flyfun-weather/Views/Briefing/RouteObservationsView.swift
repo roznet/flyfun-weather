@@ -242,7 +242,7 @@ struct RouteObservationsView: View {
     }
 
     private var legendText: String {
-        let condition = "Condition: flight category from the METAR, the TAF at ETA, and the model."
+        let condition = "Condition: flight category from the METAR, the TAF at ETA (with any worse TEMPO/PROB group), and the model."
         let wind = "Wind: crosswind (kt) on the best runway, coloured by wind advisory."
         let agreement = "✓ agrees · ⚠ one category apart · ✗ conflicts."
         if showsBothAxes { return "\(condition) \(wind) \(agreement)" }
@@ -308,7 +308,7 @@ struct RouteObservationsView: View {
                 switch a {
                 case .condition:
                     categoryCell(apt.metarFlightCategory, highlight: highlight)
-                    categoryCell(apt.tafFlightCategoryAtEta, highlight: highlight)
+                    tafCell(apt.tafAtEta, highlight: highlight)
                     categoryCell(comparison?.modelCategory, highlight: highlight)
                     AgreementIcon(match: comparison?.categoryMatch).tableCell(highlight: highlight)
                 case .wind:
@@ -337,6 +337,46 @@ struct RouteObservationsView: View {
                 .font(.caption2)
                 .foregroundStyle(Theme.textMuted)
                 .tableCell(highlight: highlight)
+        }
+    }
+
+    /// The TAF condition cell (#613): prevailing category, the worse
+    /// TEMPO/PROB group beside it, and significant weather. A TAF that does
+    /// not cover the ETA says "No TAF" rather than a bare dash, with the
+    /// validity in the detail sheet.
+    @ViewBuilder
+    private func tafCell(_ taf: TafAtEta, highlight: Color?) -> some View {
+        switch taf {
+        case .noTaf:
+            categoryCell(nil, highlight: highlight)
+        case .notValid:
+            Text("No TAF")
+                .font(.caption2)
+                .italic()
+                .foregroundStyle(Theme.textMuted)
+                .accessibilityLabel("No TAF valid at ETA")
+                .tableCell(highlight: highlight)
+        case .reading(let r):
+            HStack(spacing: Theme.spacingXS) {
+                if let prevailing = r.prevailing, !prevailing.isEmpty {
+                    FlightCategoryBadge(category: prevailing)
+                } else {
+                    Text("—").font(.caption2).foregroundStyle(Theme.textMuted)
+                }
+                if let temp = r.temporary {
+                    Text(temp.shortLabel)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textMuted)
+                    FlightCategoryBadge(category: temp.category)
+                }
+                if !r.significantWeather.isEmpty {
+                    Text(r.significantWeather.joined(separator: " "))
+                        .font(.system(.caption2, design: .monospaced).weight(.bold))
+                        .foregroundStyle(Theme.amber)
+                }
+            }
+            .fixedSize()
+            .tableCell(highlight: highlight)
         }
     }
 
@@ -516,23 +556,56 @@ private struct ObservationDetailSheet: View {
                             )
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if let cat = airport.tafFlightCategoryAtEta {
-                        HStack(spacing: Theme.spacingXS) {
-                            Text("At ETA")
-                                .font(.caption2)
-                                .foregroundStyle(Theme.textMuted)
-                            FlightCategoryBadge(category: cat)
-                            if let trend = airport.tafTrendType {
-                                Text(trend)
-                                    .font(.caption2)
-                                    .foregroundStyle(Theme.textMuted)
-                            }
-                        }
+                    tafAtEtaSummary
                         .padding(.top, Theme.spacingXS)
-                    }
                 }
             } else {
                 unavailable
+            }
+        }
+    }
+
+    /// The reading under the raw TAF: prevailing, the worse temporary group
+    /// with its full label, significant weather, or why there is none (#613).
+    @ViewBuilder
+    private var tafAtEtaSummary: some View {
+        switch airport.tafAtEta {
+        case .noTaf:
+            EmptyView()
+        case .notValid(let window):
+            Label(
+                window.map { "No TAF valid at ETA (latest valid \($0))" } ?? "No TAF valid at ETA",
+                systemImage: "clock.badge.exclamationmark"
+            )
+            .font(.caption)
+            .foregroundStyle(Theme.amber)
+            .fixedSize(horizontal: false, vertical: true)
+        case .reading(let r):
+            if r.prevailing != nil || r.temporary != nil {
+                HStack(spacing: Theme.spacingXS) {
+                    Text("At ETA")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textMuted)
+                    if let prevailing = r.prevailing {
+                        FlightCategoryBadge(category: prevailing)
+                    }
+                    if let trend = r.legacyTrend {
+                        Text(trend)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textMuted)
+                    }
+                    if let temp = r.temporary {
+                        Text(temp.type)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textMuted)
+                        FlightCategoryBadge(category: temp.category)
+                    }
+                    if !r.significantWeather.isEmpty {
+                        Text(r.significantWeather.joined(separator: " "))
+                            .font(.system(.caption2, design: .monospaced).weight(.bold))
+                            .foregroundStyle(Theme.amber)
+                    }
+                }
             }
         }
     }

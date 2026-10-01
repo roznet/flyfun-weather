@@ -128,6 +128,7 @@ Observations section on the briefing page with:
 - **Two-row grouped table headers**: ICAO, Dist, ETA (+0h/+1h/etc.), Conditions group (METAR/TAF/Model categories + agreement) and Wind group (METAR/TAF/Model wind + advisory match)
 - **Info button**: ⓘ in ICAO cell opens detailed airport popup
 - **TAF highlighting**: `taf_applicable_lines` indices highlight the base forecast + applicable BECMG/TEMPO lines in the TAF raw text
+- **TAF at ETA** (#613): the TAF condition cell shows the prevailing category, the worse TEMPO/PROB group beside it (compact label, e.g. `PROB30`), and significant weather; a TAF not valid at ETA shows "No TAF" (tooltip carries the latest validity) instead of a bare dash. The popup adds an "At ETA" line under the raw TAF with the full temporary label, or "No TAF valid at ETA (latest valid 11/15Z-11/17Z)". The rules live in `helpers/taf-at-eta.ts::readTafAtEta` (unit-tested), mirrored on iOS by `AirportObservation.tafAtEta`
 - **Wind advisory icons**: `green`/`amber`/`red` badges (rendered G/A/R) with crosswind values per source
 - **Agreement column**: CONFIRMING/SIGNIFICANT/CONFLICTING badges for both conditions and wind
 - **Refresh button**: re-fetches METAR/TAF via `POST .../observations/refresh` endpoint, updates snapshot in place
@@ -175,7 +176,12 @@ Other parity notes:
   itself has to be the label. A legend under the table states the unit, the
   colour meaning, and the ✓/⚠/✗ agreement key.
 - **Detail sheet** replaces the web's ⓘ popup: raw METAR, raw TAF with
-  `taf_applicable_lines` emphasised, and the per-source runway-wind breakdown.
+  `taf_applicable_lines` emphasised, the "At ETA" reading (or "No TAF valid at
+  ETA" with the latest validity), and the per-source runway-wind breakdown.
+- **TAF cell** (#613) follows the web: prevailing badge, `TEMPO`/`PROB30` + the
+  worse temporary badge, significant weather in amber, "No TAF" for a TAF not
+  valid at ETA. Driven by `AirportObservation.tafAtEta` (SYNC with
+  `web/ts/helpers/taf-at-eta.ts`).
 - **Table cells** run at `Grid(horizontalSpacing: 0)` with the gutter inside each
   cell, so a CONFLICTING row's per-cell shading tiles into one continuous band
   (Grid applies a row background per cell, not across the row).
@@ -205,6 +211,7 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | Three-tier classification (no MINOR_DELTA) | Implemented as CONFIRMING/SIGNIFICANT/CONFLICTING; MINOR_DELTA was dropped for simplicity |
 | Sounding ceiling for model category | `reconcile_ceiling()` on the route analyses' per-model sounding when available (AGL, via the airport's field elevation), falling back to visibility-only |
 | Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; `green`/`amber`/`red` thresholds |
+| Clients read structured TAF-at-ETA fields, not `taf_at_eta_line()` (#613) | The web UI is localised (en/fr/de/es) and renders categories as badges; a server-built English string would bypass both. `taf_at_eta_line()` stays the single text form for the LLM and text digests, and `readTafAtEta` / `tafAtEta` mirror its rules (SYNC comments on all three) |
 | TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
 | Per-airport time interpolation | TAF matching and model comparison use `enroute_distance / total_distance * flight_duration` to estimate when the flight passes each airport; falls back to departure time when `flight_duration_hours == 0` |
 | Graceful failure (try/except in pipeline) | Network failures shouldn't block the NWP-based briefing |
