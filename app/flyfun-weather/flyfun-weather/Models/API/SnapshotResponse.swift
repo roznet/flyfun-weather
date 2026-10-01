@@ -171,8 +171,23 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
 
     // TAF
     let tafRaw: String?
+    /// Validity of the TAF and whether it contains the ETA (#610). `false`
+    /// keeps the raw text but leaves every at-ETA field empty; nil on packs
+    /// built before #610. Read through `tafAtEta`, not directly.
+    let tafValidFrom: String?
+    let tafValidTo: String?
+    let tafValidAtEta: Bool?
+    /// Worse of the prevailing and temporary categories at ETA.
     let tafFlightCategoryAtEta: String?
     let tafTrendType: String?
+    /// Main body with completed BECMG / started FM groups applied.
+    let tafPrevailingCategoryAtEta: String?
+    /// Worst TEMPO/PROB group at ETA, set only when worse than prevailing.
+    let tafTemporaryCategoryAtEta: String?
+    /// "TEMPO", "PROB30 TEMPO"…
+    let tafTemporaryType: String?
+    /// TS, FG, FZ*, SN, GR… and CB/TCU at ETA.
+    let tafSignificantWeather: [String]?
     let tafWindDir: Int?
     let tafWindSpeedKt: Int?
     let tafWindGustKt: Int?
@@ -196,6 +211,88 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     let etaHourOffset: Int?
 
     var id: String { icao }
+
+    /// The TAF read at this airport's ETA, for the observations table and the
+    /// detail sheet (#613).
+    ///
+    /// SYNC: `web/ts/helpers/taf-at-eta.ts::readTafAtEta`; the server's
+    /// English one-liner is `models/observations.py::taf_at_eta_line`.
+    var tafAtEta: TafAtEta {
+        guard hasTaf == true || !(tafRaw ?? "").isEmpty else { return .noTaf }
+
+        if tafValidAtEta == false {
+            return .notValid(window: TafAtEta.validityWindow(from: tafValidFrom, to: tafValidTo))
+        }
+
+        guard tafValidAtEta == true else {
+            // Packs built before #610 carry only the single-group reading.
+            return .reading(TafAtEta.Reading(
+                prevailing: tafFlightCategoryAtEta,
+                temporary: nil,
+                significantWeather: [],
+                legacyTrend: tafTrendType
+            ))
+        }
+
+        let temporary = tafTemporaryCategoryAtEta.map { category in
+            TafAtEta.Temporary(category: category, type: tafTemporaryType.flatMap { $0.isEmpty ? nil : $0 } ?? "TEMPO")
+        }
+        return .reading(TafAtEta.Reading(
+            // A reading with no prevailing category (no visibility/ceiling in
+            // the base group) still has the combined one to show.
+            prevailing: tafPrevailingCategoryAtEta ?? tafFlightCategoryAtEta,
+            temporary: temporary,
+            significantWeather: tafSignificantWeather ?? [],
+            legacyTrend: nil
+        ))
+    }
+}
+
+/// An airport's TAF read at its ETA. See `AirportObservation.tafAtEta`.
+nonisolated enum TafAtEta: Equatable, Sendable {
+    /// No TAF at all for this airport.
+    case noTaf
+    /// A TAF exists but its validity does not contain the ETA, e.g. a field
+    /// that issues TAFs only in opening hours. `window` is "11/15Z-11/17Z".
+    case notValid(window: String?)
+    case reading(Reading)
+
+    struct Temporary: Equatable, Sendable {
+        let category: String
+        /// "TEMPO", "PROB30 TEMPO"…
+        let type: String
+
+        /// Compact label for a table cell: "PROB30 TEMPO" → "PROB30".
+        var shortLabel: String {
+            guard type.hasPrefix("PROB") else { return type }
+            return String(type.prefix { !$0.isWhitespace })
+        }
+    }
+
+    struct Reading: Equatable, Sendable {
+        /// Prevailing category; on pre-#610 packs the combined one.
+        let prevailing: String?
+        /// The worst TEMPO/PROB group, only when worse than prevailing.
+        let temporary: Temporary?
+        let significantWeather: [String]
+        /// Pre-#610 packs: the trend label that set the combined category.
+        let legacyTrend: String?
+    }
+
+    /// "11/15Z-11/17Z" (day/hour UTC), the server's `taf_at_eta_line` format.
+    static func validityWindow(from: String?, to: String?) -> String? {
+        guard let a = from.flatMap(dayHourZ), let b = to.flatMap(dayHourZ) else { return nil }
+        return "\(a)-\(b)"
+    }
+
+    private static func dayHourZ(_ iso: String) -> String? {
+        guard let date = Date.parseISO8601(iso) else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let c = cal.dateComponents([.day, .hour], from: date)
+        guard let d = c.day, let h = c.hour else { return nil }
+        return String(format: "%02d/%02dZ", d, h)
+    }
 }
 
 /// One airport's observation-vs-model reconciliation.

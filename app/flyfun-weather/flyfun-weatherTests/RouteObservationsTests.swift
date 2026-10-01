@@ -378,3 +378,80 @@ import Foundation
         #expect(RouteObservationsView.zuluTime("not a date") == nil)
     }
 }
+
+// MARK: - TAF at ETA (#613)
+
+/// Mirrors `web/tests/unit/taf-at-eta.test.ts`: the same rules decide what the
+/// TAF cell and the detail sheet show on both clients.
+@Suite struct TafAtEtaTests {
+
+    private func airport(_ fields: String) throws -> AirportObservation {
+        let json = #"{ "icao": "EGSC", "distance_from_route_nm": 0.0, "nearest_waypoint_icao": "EGSC", "#
+            + fields + " }"
+        return try JSONDecoder.weatherBrief.decode(AirportObservation.self, from: Data(json.utf8))
+    }
+
+    @Test func noTafWithoutOne() throws {
+        #expect(try airport(#""has_taf": false"#).tafAtEta == .noTaf)
+    }
+
+    /// EGSC on 13 Sep: the latest TAF was issued on the 11th, valid 15-17Z.
+    @Test func expiredTafReportsItsValidity() throws {
+        let apt = try airport(#"""
+            "has_taf": true, "taf_raw": "TAF EGSC 111404Z 1115/1117 29006KT 9999 SCT035",
+            "taf_valid_at_eta": false,
+            "taf_valid_from": "2026-09-11T15:00:00Z", "taf_valid_to": "2026-09-11T17:00:00Z",
+            "taf_flight_category_at_eta": null
+            """#)
+        #expect(apt.tafAtEta == .notValid(window: "11/15Z-11/17Z"))
+    }
+
+    @Test func splitsPrevailingFromWorseTemporary() throws {
+        let apt = try airport(#"""
+            "has_taf": true, "taf_valid_at_eta": true,
+            "taf_flight_category_at_eta": "IFR",
+            "taf_prevailing_category_at_eta": "MVFR",
+            "taf_temporary_category_at_eta": "IFR",
+            "taf_temporary_type": "PROB30 TEMPO",
+            "taf_significant_weather": ["TSRA", "CB"]
+            """#)
+        guard case .reading(let r) = apt.tafAtEta else {
+            Issue.record("expected a reading")
+            return
+        }
+        #expect(r.prevailing == "MVFR")
+        #expect(r.temporary == TafAtEta.Temporary(category: "IFR", type: "PROB30 TEMPO"))
+        #expect(r.temporary?.shortLabel == "PROB30")
+        #expect(r.significantWeather == ["TSRA", "CB"])
+        #expect(r.legacyTrend == nil)
+    }
+
+    @Test func untypedTemporaryIsTempo() throws {
+        let apt = try airport(#"""
+            "has_taf": true, "taf_valid_at_eta": true,
+            "taf_prevailing_category_at_eta": "VFR",
+            "taf_temporary_category_at_eta": "IFR"
+            """#)
+        guard case .reading(let r) = apt.tafAtEta else {
+            Issue.record("expected a reading")
+            return
+        }
+        #expect(r.temporary?.type == "TEMPO")
+        #expect(r.temporary?.shortLabel == "TEMPO")
+    }
+
+    /// Packs built before #610 have no validity flag: keep the combined category.
+    @Test func legacyPackFallsBackToCombinedCategory() throws {
+        let apt = try airport(#"""
+            "has_taf": true, "taf_flight_category_at_eta": "IFR", "taf_trend_type": "TEMPO"
+            """#)
+        #expect(apt.tafAtEta == .reading(TafAtEta.Reading(
+            prevailing: "IFR", temporary: nil, significantWeather: [], legacyTrend: "TEMPO"
+        )))
+    }
+
+    @Test func validityWindowNeedsBothEnds() {
+        #expect(TafAtEta.validityWindow(from: "2026-09-11T15:00:00+00:00", to: "2026-09-12T00:00:00Z") == "11/15Z-12/00Z")
+        #expect(TafAtEta.validityWindow(from: nil, to: "2026-09-11T17:00:00Z") == nil)
+    }
+}

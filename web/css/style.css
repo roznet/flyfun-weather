@@ -5364,6 +5364,44 @@ html {
   border-radius: 2px;
 }
 
+.obs-taf-cell {
+  white-space: nowrap;
+}
+
+.obs-taf-temp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.obs-taf-temp-label {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+}
+
+.obs-taf-temp .flight-cat-badge {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.3rem;
+}
+
+.obs-taf-wx {
+  font-family: monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--amber, #b8860b);
+}
+
+.obs-taf-none {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.obs-taf-at-eta {
+  margin: -0.4rem 0 0.75rem;
+  font-size: 0.8rem;
+}
+
 .obs-wind-summary {
   font-family: monospace;
   font-size: 0.8rem;
