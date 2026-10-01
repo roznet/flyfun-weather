@@ -973,7 +973,7 @@ def cmd_observed_archive(args):
         if args.dry_run:
             print("ERROR: --dry-run applies to run only", file=sys.stderr)
             sys.exit(2)
-        report = verify_observed_archive()
+        report = verify_observed_archive(sources=sources)
         if not report:
             print(f"No compacted days under {observed_archive_root()}.")
             return
@@ -1014,6 +1014,9 @@ def cmd_observed_archive(args):
 
     t0 = time.monotonic()
     result = run_observed_archive(stations, sources=sources)
+    if result.skipped_locked:
+        print("Another observed-archive run holds the lock; nothing done.")
+        return
     for source, frames in result.frames.items():
         compacted = result.compacted.get(source, [])
         print(f"  {source}: {frames} frames, {result.rows.get(source, 0)} rows"

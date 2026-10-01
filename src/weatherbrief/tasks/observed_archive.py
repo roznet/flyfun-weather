@@ -83,6 +83,9 @@ Querying with DuckDB
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
+import functools
 import hashlib
 import json
 import logging
@@ -101,6 +104,7 @@ from weatherbrief.models.observed import (
     ObservedTopsAnnulus,
 )
 from weatherbrief.observed.coverage import covers
+from weatherbrief.observed.ctth import sub_satellite_angle_deg
 from weatherbrief.observed.frames import (
     SOURCE_EUMETSAT_CTTH,
     SOURCE_EUMETSAT_LI,
@@ -172,6 +176,7 @@ class ObservedArchiveResult:
     rows: dict[str, int] = field(default_factory=dict)
     compacted: dict[str, list[str]] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    skipped_locked: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -379,9 +384,12 @@ def _bands(stations: list[ArchiveStation]) -> list[list[ArchiveStation]]:
     return [ordered[i:i + BAND_STATIONS] for i in range(0, len(ordered), BAND_STATIONS)]
 
 
-def _where(station: ArchiveStation, source: str, radius_nm: float) -> dict:
-    from weatherbrief.observed.ctth import sub_satellite_angle_deg
+@functools.lru_cache(maxsize=4096)
+def _view_angle(lat: float, lon: float) -> float:
+    return round(sub_satellite_angle_deg(lat, lon), 3)
 
+
+def _where(station: ArchiveStation, source: str, radius_nm: float) -> dict:
     satellite = source in (SOURCE_EUMETSAT_CTTH, SOURCE_EUMETSAT_LI)
     radius_km = nm_to_km(radius_nm)
     return {
@@ -389,7 +397,7 @@ def _where(station: ArchiveStation, source: str, radius_nm: float) -> dict:
         "lat": station.lat,
         "lon": station.lon,
         "satellite_view_angle_deg": (
-            round(sub_satellite_angle_deg(station.lat, station.lon), 3)
+            _view_angle(station.lat, station.lon)
             if satellite
             else None
         ),
@@ -614,12 +622,15 @@ def _write_manifest(path: Path, manifest: dict) -> None:
         raise
 
 
-def _frame_keys(table) -> set[tuple]:
-    """Distinct ``(product_id, frame_valid_time)`` pairs in a table."""
-    return set(zip(
-        table.column("product_id").to_pylist(),
-        table.column("frame_valid_time").to_pylist(),
-    ))
+def _frame_keys(table) -> set[datetime]:
+    """Distinct frame valid times in a table.
+
+    A day file holds one source, and a source has one frame per valid time,
+    so the valid time alone identifies a frame. It is read from the frame's
+    own content, unlike ``product_id``, which falls back to a filename when
+    the sidecar lacks one and so could differ for a re-ingested frame.
+    """
+    return set(table.column("frame_valid_time").to_pylist())
 
 
 def final_days(root: Path, source: str, now: datetime) -> list[str]:
@@ -656,9 +667,8 @@ def compact_day(root: Path, source: str, day: str) -> int:
     Idempotent across a crash at any point. If a previous compaction died
     after writing the day file but before deleting the parts (a timeout or
     OOM kill of the child), those parts are still on disk and their rows are
-    already in the day file. A part whose frame (``product_id`` and
-    ``frame_valid_time``) is already present in the day file is therefore
-    skipped. Keyed on the data itself rather than on the manifest, because a
+    already in the day file. A part whose frame (its ``frame_valid_time``)
+    is already present in the day file is therefore skipped. Keyed on the data itself rather than on the manifest, because a
     crash between the Parquet rename and the manifest write leaves a manifest
     that does not yet list those frames.
     """
@@ -699,13 +709,18 @@ def compact_day(root: Path, source: str, day: str) -> int:
         [("frame_valid_time", "ascending"), ("icao", "ascending"), ("radius_nm", "ascending")]
     )
     digest = _write_verified(merged, target)
-    missing = max(0, expected_frame_count(source) - len(frames))
+    # Counted from the data as well as the part names: a crash between the
+    # Parquet rename and the manifest write loses the manifest's frame list,
+    # and the parts left over do not cover frames merged on an earlier day.
+    present = max(len(frames), len(_frame_keys(merged)))
+    missing = max(0, expected_frame_count(source) - present)
     _write_manifest(meta_path, {
         "source": source,
         "day": day,
         "rows": merged.num_rows,
         "sha256": digest,
         "frames": sorted(frames),
+        "frames_present": present,
         "frames_expected": expected_frame_count(source),
         "frames_missing": missing,
         "algorithm_versions": sorted(
@@ -725,24 +740,35 @@ def compact_day(root: Path, source: str, day: str) -> int:
     return merged.num_rows
 
 
-def verify_observed_archive(root: Path | None = None) -> list[dict]:
-    """Recheck every compacted day against its manifest (sha256 + row count)."""
+def verify_observed_archive(
+    root: Path | None = None, sources: tuple[str, ...] | None = None,
+) -> list[dict]:
+    """Recheck every compacted day against its manifest (sha256 + row count).
+
+    Days are discovered from the Parquet files *and* the manifests, so a day
+    file whose manifest is missing is reported rather than silently skipped:
+    every permanent data file gets checked.
+    """
     _, pq = _require_pyarrow()
     root = root or observed_archive_root()
     report: list[dict] = []
-    for source in ARCHIVE_STRIDE:
+    for source in sources or tuple(ARCHIVE_STRIDE):
         source_dir = root / source
         if not source_dir.is_dir():
             continue
-        for meta_path in sorted(source_dir.glob("*.json")):
-            day = meta_path.stem
+        days = sorted(
+            {p.stem for p in source_dir.glob("*.json")}
+            | {p.stem for p in source_dir.glob("*.parquet")}
+        )
+        for day in days:
+            meta_path = manifest_path(root, source, day)
+            target = day_path(root, source, day)
             problem = ""
             manifest = _read_manifest(meta_path)
-            target = day_path(root, source, day)
             if manifest is None:
                 # One bad manifest must not abort the report for every day.
+                problem = "manifest missing" if not meta_path.exists() else "manifest unreadable"
                 manifest = {}
-                problem = "manifest unreadable"
             elif not target.exists():
                 problem = "parquet file missing"
             elif _sha256(target) != manifest.get("sha256"):
@@ -765,6 +791,28 @@ def verify_observed_archive(root: Path | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
+def _archive_lock(root: Path):
+    """Exclusive, non-blocking lock on the archive root.
+
+    The scheduler child and a manual CLI run could otherwise overlap: both
+    write the same part, or one deletes a parts directory while the other is
+    compacting it. A second run simply yields ``False`` and does nothing; the
+    next tick picks the work up. Released by the OS if the holder is killed.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / ".lock", "w") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def run_observed_archive(
     stations: list[ArchiveStation],
     *,
@@ -781,10 +829,30 @@ def run_observed_archive(
     A frame or a source that fails is logged and skipped — the rest of the
     run carries on, and the frame is retried next run while it is still on
     disk.
+
+    Holds :func:`_archive_lock` for the whole run; if another run holds it,
+    returns at once with ``skipped_locked`` set.
     """
-    store = store or FrameStore()
     root = root or observed_archive_root()
-    now = now or datetime.now(timezone.utc)
+    with _archive_lock(root) as acquired:
+        if not acquired:
+            logger.info("Observed archive: another run holds the lock, skipping")
+            return ObservedArchiveResult(skipped_locked=True)
+        return _run_locked(
+            stations, store=store or FrameStore(), root=root, sources=sources,
+            radii_nm=radii_nm, now=now or datetime.now(timezone.utc),
+        )
+
+
+def _run_locked(
+    stations: list[ArchiveStation],
+    *,
+    store: FrameStore,
+    root: Path,
+    sources: tuple[str, ...] | None,
+    radii_nm: tuple[float, ...],
+    now: datetime,
+) -> ObservedArchiveResult:
     wanted = sources if sources is not None else tuple(ARCHIVE_STRIDE)
     result = ObservedArchiveResult()
 
