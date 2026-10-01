@@ -566,7 +566,8 @@ time-alignment fork (§4.6); annotate-only notes on `enroute_precip` / `cloud_to
 
 Writing observed rows needs **no forecast alignment** — that belongs to scoring. So:
 
-- **C1 — write observed rows at ingest.** Same sampler, pointed at the standalone
+- **C1 — write observed rows at ingest.** *Built in #575, see
+  `designs/current-conditions.md#verification-collection-575`.* Same sampler, pointed at the standalone
   ~620-airport window. This is the half the backfill argument applies to: neither
   migration 092's convective ingredient columns nor OPERA's 24-hour cache can be
   recovered later. Cheap enough to ride along with phase 1.

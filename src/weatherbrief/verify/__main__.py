@@ -9,6 +9,7 @@ Usage:
     python -m weatherbrief.verify digest [--period 24h|7d] [--send] [--json]
     python -m weatherbrief.verify archive run|backfill|list|verify [--table T]
     python -m weatherbrief.verify prune-raw [--retain-days N] [--apply]
+    python -m weatherbrief.verify observed-archive run|verify [--source S]
 """
 
 from __future__ import annotations
@@ -941,6 +942,85 @@ def cmd_archive(args):
         db.close()
 
 
+def cmd_observed_archive(args):
+    """Archive observed conditions at the watchlist airports (#575)."""
+    if getattr(args, "background", False):
+        _enter_background_mode()
+    load_dotenv()
+
+    from weatherbrief.observed.frames import FrameStore
+    from weatherbrief.tasks.observed_archive import (
+        ARCHIVE_STRIDE,
+        pending_frames,
+        run_observed_archive,
+        stations_from_watchlist,
+        verify_observed_archive,
+    )
+    from weatherbrief.tasks.verification_tiering import observed_archive_root
+
+    sources = tuple(args.source) if args.source else None
+    if sources:
+        unknown = [s for s in sources if s not in ARCHIVE_STRIDE]
+        if unknown:
+            print(
+                f"ERROR: unknown source(s) {', '.join(unknown)}; "
+                f"expected one of {', '.join(ARCHIVE_STRIDE)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if args.action == "verify":
+        report = verify_observed_archive()
+        if not report:
+            print(f"No compacted days under {observed_archive_root()}.")
+            return
+        bad = [r for r in report if not r["ok"]]
+        for r in report:
+            mark = "ok " if r["ok"] else "BAD"
+            print(f"{mark} {r['source']:<14} {r['day']:<11} {r['rows']:>10}  "
+                  f"missing={r['frames_missing']:<4} {r['problem']}")
+        print(f"\n{len(report) - len(bad)}/{len(report)} days verified.")
+        if bad:
+            sys.exit(1)
+        return
+
+    if args.dry_run:
+        store = FrameStore()
+        root = observed_archive_root()
+        print(f"Archive root: {root}")
+        for source in sources or tuple(ARCHIVE_STRIDE):
+            print(f"  {source}: {len(pending_frames(store, source, root))} pending frames")
+        return
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if not airports_db:
+        print("ERROR: AIRPORTS_DB environment variable not set", file=sys.stderr)
+        sys.exit(1)
+    from weatherbrief.tasks.airport_watchlist import get_configs_dir, load_watchlist_with_coords
+
+    try:
+        stations = stations_from_watchlist(
+            load_watchlist_with_coords(get_configs_dir(), airports_db)
+        )
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not stations:
+        print("ERROR: empty watchlist", file=sys.stderr)
+        sys.exit(1)
+
+    t0 = time.monotonic()
+    result = run_observed_archive(stations, sources=sources)
+    for source, frames in result.frames.items():
+        compacted = result.compacted.get(source, [])
+        print(f"  {source}: {frames} frames, {result.rows.get(source, 0)} rows"
+              + (f", compacted {', '.join(compacted)}" if compacted else ""))
+    print(f"{len(stations)} airports in {time.monotonic() - t0:.1f}s")
+    if result.errors:
+        print(f"ERRORS: {len(result.errors)} (see log)", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_prune_raw(args):
     """Report or apply the raw-verification prune (#522 Phase 3).
 
@@ -1300,6 +1380,31 @@ def main():
         help="Actually delete. Without it this only reports what would go.",
     )
 
+    # observed-archive
+    p_obs = subparsers.add_parser(
+        "observed-archive",
+        help="Persist observed radar/lightning/cloud tops at the watchlist (#575)",
+    )
+    p_obs.add_argument(
+        "action", choices=["run", "verify"],
+        help=(
+            "run: sample every pending frame and compact final days. "
+            "verify: re-check compacted days against their manifests."
+        ),
+    )
+    p_obs.add_argument(
+        "--source", action="append",
+        help="Limit to one source (repeatable). Default: all four.",
+    )
+    p_obs.add_argument(
+        "--dry-run", action="store_true",
+        help="run only: list how many frames are pending per source.",
+    )
+    p_obs.add_argument(
+        "--background", action="store_true",
+        help="Lower priority and prefer this process as OOM victim (scheduler use).",
+    )
+
     # digest
     p_digest = subparsers.add_parser(
         "digest",
@@ -1352,6 +1457,8 @@ def main():
         cmd_archive(args)
     elif args.command == "prune-raw":
         cmd_prune_raw(args)
+    elif args.command == "observed-archive":
+        cmd_observed_archive(args)
     elif args.command == "digest":
         cmd_digest(args)
 

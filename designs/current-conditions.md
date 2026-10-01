@@ -501,6 +501,7 @@ back in through the digest.
 | `WB_OBSERVED_ENABLED` | Master gate. Off by default — the collector needs EUMETSAT credentials and ~440 MB of disk, so a deployment opts in. Gates the scheduler loop, the API router, the registry rows and the pipeline stage. |
 | `WB_OBSERVED_SOURCES` | Comma-separated subset. Radar without EUMETSAT credentials is half the feature working, not a broken one. |
 | `EUMETSAT_CONSUMER_KEY` / `_SECRET` | Data Store OAuth credentials. |
+| `WB_OBSERVED_ARCHIVE_ENABLED` | Verification collection (#575): archive the watchlist samples on every METAR ingest tick. Needs `WB_OBSERVED_ENABLED` as well. |
 
 ## Testing
 
@@ -524,6 +525,69 @@ skipped unless `WB_OBSERVED_LIVE_TESTS=1`. It catches the class of bug a
 fixture cannot: a renamed variable, a re-cut OPERA domain, a changed LI
 baseline, a nodata fraction that has drifted far from the 49.4% the whole
 three-state design was calibrated against.
+
+## Verification collection (#575)
+
+The second call site of `sample()`: the same frames, sampled at the ~620
+standalone-verification watchlist airports and persisted as Parquet, so a
+later phase can score forecasts against them. **Observations only** — no
+forecast is read and nothing is scored; that needs its own observation-time
+alignment and belongs with the phase-2 verdicts. It ships now because neither
+side of the pairing can be backfilled: OPERA's open cache is 24 h deep and the
+local store keeps 1–3 h.
+
+`tasks/observed_archive.py`, CLI `verify observed-archive run|verify`. Runs
+after every METAR ingest tick (30 min) in a child process, gated on
+`WB_OBSERVED_ARCHIVE_ENABLED` (plus `WB_OBSERVED_ENABLED`).
+
+```
+DATA_DIR/archive/observed/
+  parts/<source>/YYYY-MM-DD/YYYYMMDDTHHMM.parquet   one per frame, transient
+  <source>/YYYY-MM-DD.parquet                        compacted day
+  <source>/YYYY-MM-DD.json                           rows, sha256, frames, frames_missing
+```
+
+Decisions worth keeping:
+
+- **Every frame on disk, at a per-source stride** — not just the newest one
+  per tick. Lightning is a 10-minute accumulation; sampling one frame per
+  half hour would drop two thirds of the flashes. Only DBZH is thinned, to the
+  :00/:10/… frames: it is a rolling 10-minute *maximum*, so those frames tile
+  the timeline without overlap and the others add no new maxima. That gives
+  144 DBZH + 96 RATE + 144 LI + 144 CTTH frames a day, × in-domain airports ×
+  three radii ≈ 1M rows a day. On-disk size is unmeasured.
+- **Per-frame parts, then a daily compaction.** "Is this frame done?" is a
+  file-existence check, a crash costs at most one frame, and the long-run
+  file count stays at four a day. A day is sealed 4 h after midnight, which is
+  more than any source's retention plus delivery lag. Compaction merges into
+  an existing day file instead of overwriting it, and parts are deleted only
+  once the merged file has been written and verified.
+- **Latitude bands of 100 airports, one window read per band.** A single
+  Europe-wide CTTH read is ~1,500 full-width rows × seven float64 variables,
+  several hundred MB transient. Banding cuts that peak for a few extra file
+  opens per frame. It is still never a per-station open, and a test pins that
+  banded and single-read samples are identical. The read itself is
+  `payload.read_grid_frame`, shared with the briefing, so the parallax pad and
+  full-width rules are not duplicated.
+- **Out-of-domain airports get no rows; in-domain no-radar airports do.**
+  Same rule as the briefing. "No flashes" is never written for an airport the
+  imager cannot see, but "radar did not cover this airport" is a real outcome
+  and is recorded with its coverage counts.
+- **Statistics are kept below the coverage floor.** Every row carries the five
+  pixel counts, `coverage_fraction`, `insufficient_coverage` and the
+  `coverage_floor` it was judged against. The floor (0.35) is still an open
+  calibration item. Nulling values below it would fix today's number into the
+  data for good, so the refusal to grade happens at scoring time, on a column
+  that cannot be missed.
+- **Schema carries the calibration caveats.** CTTH has the full
+  `quality_method` histogram as a map column, with `qm_multilayer_px` (code 9)
+  broken out. Satellite rows store `satellite_view_angle_deg` (the angle from
+  MTG-I1 at 0°), so lightning detection efficiency can be normalised across
+  latitude later. Every row carries `product_id`, frame valid time, ingest
+  time, retrieval latency, attribution and `ALGORITHM_VERSION`.
+- **A missed tick is survivable, two are not, for CTTH.** It keeps one hour
+  of frames. A gap shows up as `frames_missing` in the day manifest rather
+  than going unnoticed.
 
 ## Out of scope
 

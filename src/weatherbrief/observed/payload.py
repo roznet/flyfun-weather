@@ -109,6 +109,58 @@ def _usable_frame(
     return newest, None
 
 
+def read_grid_frame(
+    stored: StoredFrame,
+    source: str,
+    lats: list[float],
+    lons: list[float],
+    radius_km: float,
+):
+    """Read the one window of ``stored`` that covers ``radius_km`` around every point.
+
+    Returns ``(frame, window)`` ready for :func:`~.sampler.sample`.  Shared by
+    both call sites — the briefing (a route) and the verification archive (a
+    latitude band of watchlist airports) — so the window rules live in one
+    place: radar is ground-projected and needs only a few pixels of slack;
+    CTTH needs the parallax pad and full-width strips.
+    """
+    from . import ctth, opera
+
+    spec = SOURCE_SPECS[source]
+    if source in (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE):
+        grid = opera.read_grid(stored.path)
+        window = compute_window(
+            grid, lats, lons, radius_km=radius_km, pad_km=RADAR_WINDOW_PAD_KM
+        )
+        frame = opera.read_window(
+            stored.path, spec.quantity, window, source=source, units=spec.units
+        )
+        return frame, window
+
+    import netCDF4
+
+    with netCDF4.Dataset(str(stored.path)) as dataset:
+        grid = ctth.read_grid(dataset)
+    window = compute_window(
+        grid,
+        lats,
+        lons,
+        radius_km=radius_km,
+        # Parallax first: the pixels that belong over these stations sit
+        # tens of km away in the imagery, so the read must reach them.
+        # Scaled to the stations' own viewing geometry — the 75 km figure is
+        # a 50°N-on-the-meridian measurement, and a Scandinavian or eastern
+        # route needs more than that or its high cloud is silently
+        # truncated.  Latitude alone under-reads it; longitude counts too.
+        pad_km=ctth.parallax_pad_km(lats, lons),
+        # Granule chunks are full-width strips; narrowing columns costs a
+        # partial-chunk decompression and saves nothing.
+        full_width=True,
+    )
+    frame = ctth.read_window(stored.path, window, source=source)
+    return frame, window
+
+
 def _grid_field(
     stored: StoredFrame,
     source: str,
@@ -117,44 +169,13 @@ def _grid_field(
     now: datetime,
 ):
     """Sample one gridded source and return its populated field model."""
-    from . import ctth, opera
-
-    spec = SOURCE_SPECS[source]
-    max_radius_km = nm_to_km(max(radii_nm))
-    lats = [s.lat for s in stations]
-    lons = [s.lon for s in stations]
-
-    if source in (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE):
-        grid = opera.read_grid(stored.path)
-        window = compute_window(
-            grid, lats, lons, radius_km=max_radius_km, pad_km=RADAR_WINDOW_PAD_KM
-        )
-        frame = opera.read_window(
-            stored.path, spec.quantity, window, source=source, units=spec.units
-        )
-    else:
-        import netCDF4
-
-        with netCDF4.Dataset(str(stored.path)) as dataset:
-            grid = ctth.read_grid(dataset)
-        window = compute_window(
-            grid,
-            lats,
-            lons,
-            radius_km=max_radius_km,
-            # Parallax first: the pixels that belong over these stations sit
-            # tens of km away in the imagery, so the read must reach them.
-            # Scaled to the route's own viewing geometry — the 75 km figure is
-            # a 50°N-on-the-meridian measurement, and a Scandinavian or eastern
-            # route needs more than that or its high cloud is silently
-            # truncated.  Latitude alone under-reads it; longitude counts too.
-            pad_km=ctth.parallax_pad_km(lats, lons),
-            # Granule chunks are full-width strips; narrowing columns costs a
-            # partial-chunk decompression and saves nothing.
-            full_width=True,
-        )
-        frame = ctth.read_window(stored.path, window, source=source)
-
+    frame, window = read_grid_frame(
+        stored,
+        source,
+        [s.lat for s in stations],
+        [s.lon for s in stations],
+        nm_to_km(max(radii_nm)),
+    )
     samples = sample(frame, window, stations, radii_nm)
     common = dict(
         source=source,
