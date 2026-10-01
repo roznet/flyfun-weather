@@ -60,6 +60,7 @@ from weatherbrief.storage.sounding_profiles import (
     read_sounding_sidecar,
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
+from weatherbrief.models.live import LiveChanges, LiveLayerResponse
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.observed.collect import observed_enabled
@@ -76,6 +77,7 @@ from weatherbrief.models import (
 )
 from weatherbrief.storage.flights import (
     compute_flight_params_hash,
+    ensure_utc,
     list_packs,
     load_pack_meta,
     pack_dir_for,
@@ -586,6 +588,12 @@ class PackMetaResponse(BaseModel):
     # pack. None on legacy/un-enriched responses; clients then fall back to the
     # flight object's own flexibility.
     flexibility: FlexibilityMode | None = None
+    # When the flight's live observation layer (#637) belongs to this pack:
+    # when it last changed. Read off a small sidecar at serve time, never
+    # stored on the pack. Clients compare it to what they hold to decide
+    # whether to fetch ``GET /flights/{id}/live`` — a realtime refresh keeps
+    # the pack timestamp, so ``fetch_timestamp`` alone cannot signal it.
+    live_updated_at: str | None = None
 
 
 def _live_meteofrance_options(
@@ -684,7 +692,23 @@ def _meta_to_response(
         meteofrance_charts_in_coverage=meta.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=meta.meteofrance_charts_within_horizon,
         flexibility=flexibility,
+        live_updated_at=_live_updated_at(meta.artifact_path),
     )
+
+
+def _live_updated_at(artifact_path: str | None) -> str | None:
+    """ISO ``live_updated_at`` for a pack, or None. Never raises."""
+    if not artifact_path:
+        return None
+    try:
+        from weatherbrief.storage.flights import _resolve_artifact_path
+        from weatherbrief.tasks.live_layer import live_updated_at_for_pack
+
+        ts = live_updated_at_for_pack(_resolve_artifact_path(artifact_path))
+        return ts.isoformat() if ts is not None else None
+    except Exception:
+        logger.warning("live_updated_at lookup failed for %s", artifact_path, exc_info=True)
+        return None
 
 
 @router.get("", response_model=list[PackMetaResponse])
@@ -2137,6 +2161,10 @@ class RefreshAccepted(BaseModel):
     # picture from the refresh response instead of re-fetching the snapshot —
     # which, on iOS, a cached pack would have served stale anyway.
     observed: ObservedConditions | None = None
+    # The flight's live layer after this refresh (#637): its timestamp and the
+    # significant changes since the briefing (both directions).
+    live_updated_at: datetime | None = None
+    changes: LiveChanges | None = None
 
 
 def _profile_cloud_source(db, flight, user_id: str) -> str | None:
@@ -2265,6 +2293,8 @@ async def refresh_briefing(
                 sigmets = None
                 delta = None
                 observed = None
+                live_updated_at = None
+                changes = None
                 resp_status = "already_fresh"
                 resp_mode = decision.mode
                 if decision.mode == "realtime":
@@ -2272,11 +2302,15 @@ async def refresh_briefing(
                         result = await asyncio.to_thread(
                             run_realtime_refresh, Path(latest.artifact_path), db_path,
                             cloud_source=_profile_cloud_source(db, flight, user_id),
+                            flight_id=flight_id,
+                            pack_timestamp=ensure_utc(latest.fetch_timestamp).isoformat(),
                         )
                         observations = result.observations
                         sigmets = result.sigmets
                         delta = result.delta
                         observed = result.observed
+                        live_updated_at = result.live_updated_at
+                        changes = result.changes
                         resp_status = "realtime"
                     except Exception:
                         # Degrade to a no-op so status and mode agree.
@@ -2297,6 +2331,8 @@ async def refresh_briefing(
                         sigmets=sigmets,
                         delta=delta,
                         observed=observed,
+                        live_updated_at=live_updated_at,
+                        changes=changes,
                     ).model_dump_json(),
                     status_code=200,
                     media_type="application/json",
@@ -2519,12 +2555,16 @@ async def refresh_briefing_stream(
                     sigmets_payload = None
                     delta_payload = None
                     observed_payload = None
+                    live_updated_at_payload = None
+                    changes_payload = None
                     effective_mode = decision.mode
                     if decision.mode == "realtime":
                         try:
                             result = await asyncio.to_thread(
                                 run_realtime_refresh, Path(latest.artifact_path), db_path,
                                 cloud_source=_profile_cloud_source(db, flight, user_id),
+                                flight_id=flight_id,
+                                pack_timestamp=ensure_utc(latest.fetch_timestamp).isoformat(),
                             )
                             obs_payload = result.observations.model_dump(mode="json")
                             if result.sigmets is not None:
@@ -2533,6 +2573,10 @@ async def refresh_briefing_stream(
                                 delta_payload = result.delta.model_dump(mode="json")
                             if result.observed is not None:
                                 observed_payload = result.observed.model_dump(mode="json")
+                            if result.live_updated_at is not None:
+                                live_updated_at_payload = result.live_updated_at.isoformat()
+                            if result.changes is not None:
+                                changes_payload = result.changes.model_dump(mode="json")
                         except Exception:
                             # Degrade to a no-op so consumers don't treat the
                             # null observations as a successful realtime refresh.
@@ -2562,6 +2606,8 @@ async def refresh_briefing_stream(
                             "sigmets": sigmets_payload,
                             "delta": delta_payload,
                             "observed": observed_payload,
+                            "live_updated_at": live_updated_at_payload,
+                            "changes": changes_payload,
                         }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
@@ -2961,6 +3007,15 @@ def get_snapshot(
     """Get the briefing JSON for a pack (route + analyses + observations, no forecasts)."""
     audit_pack_access(user_id, flight_id, "get_snapshot", request)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    # The pack is immutable; when the flight's live layer (#637) belongs to
+    # this pack, serve the newest observations over it, as the in-place patch
+    # used to — clients that only read the snapshot keep working.
+    from weatherbrief.tasks.live_layer import live_for_pack, load_briefing_with_live
+
+    if live_for_pack(pack_dir) is not None:
+        data = load_briefing_with_live(pack_dir)
+        if data is not None:
+            return JSONResponse(content=json_mod.loads(json_mod.dumps(data, default=str)))
     # Prefer briefing.json, fall back to legacy snapshot.json for old packs
     briefing_path = pack_dir / "briefing.json"
     if briefing_path.exists():
@@ -2984,8 +3039,9 @@ def refresh_observations(
 
     Only available for D-0 briefings where observations are meaningful.
     Re-runs route_weather + observation_comparison and route SIGMETs using
-    existing forecast data, then patches the snapshot on disk.  Returns
-    ``{observations, sigmets}``.
+    existing forecast data, then folds the result into the flight's live
+    layer (#637) when this is the latest pack. The pack itself is not
+    modified. Returns the ``RealtimeRefreshResult``.
     """
     flight = _load_owned_flight(db, flight_id, user_id)  # authz: owner only
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -3004,10 +3060,19 @@ def refresh_observations(
     if not db_path:
         raise HTTPException(status_code=503, detail="Airport database not configured")
 
+    # Only the flight's latest pack owns the live layer; refreshing an older
+    # pack returns fresh data without overwriting the latest one's layer.
+    packs = list_packs(db, flight_id)
+    latest = packs[0] if packs else None
+    is_latest = latest is not None and Path(latest.artifact_path).name == Path(pack_dir).name
+
     try:
         result = run_realtime_refresh(
             pack_dir, db_path,
             cloud_source=_profile_cloud_source(db, flight, user_id),
+            persist=is_latest,
+            flight_id=flight_id,
+            pack_timestamp=ensure_utc(latest.fetch_timestamp).isoformat() if is_latest else None,
         )
         return result.model_dump(mode="json")
     except HTTPException:
@@ -4265,6 +4330,17 @@ def get_bundle(
                 bundle[endpoint] = json.loads(path.read_text())
                 break
 
+    # Same live overlay as GET .../snapshot, so a download carries the newest
+    # observations at download time (#637).
+    if isinstance(bundle.get("snapshot"), dict):
+        from weatherbrief.tasks.live_layer import live_for_pack, overlay_live
+
+        layer = live_for_pack(pack_dir)
+        if layer is not None:
+            bundle["snapshot"] = json.loads(
+                json.dumps(overlay_live(bundle["snapshot"], layer), default=str)
+            )
+
     # Sounding profiles for every (point, model) combination. Prefer the
     # gzipped sidecar written at refresh time (no MetPy recompute → the slow
     # "Preparing…" phase vanishes); fall back to building them on the fly for
@@ -4965,3 +5041,56 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str
     return pack_path
 
 
+
+
+# ---------------------------------------------------------------------------
+# Live observation layer (#637)
+# ---------------------------------------------------------------------------
+
+live_router = APIRouter(prefix="/flights", tags=["live"])
+
+
+@live_router.get("/{flight_id}/live", response_model=LiveLayerResponse)
+def get_live_layer(
+    flight_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """The newest observations for the flight's latest pack.
+
+    Display data (route METAR/TAF, SIGMETs, observed radar/lightning/tops),
+    each with its own ``*_updated_at``, plus the significant changes since the
+    briefing. Readable by anyone who can view the flight; cheap — no fetch,
+    just the stored layer. When nothing live exists for the latest pack yet,
+    every block is null and clients keep the pack's own observations.
+    """
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    audit_pack_access(user_id, flight_id, "get_live", request)
+    packs = list_packs(db, flight_id)
+    if not packs:
+        raise HTTPException(status_code=404, detail="No packs yet for this flight")
+    latest = packs[0]
+    pack_ts = ensure_utc(latest.fetch_timestamp).isoformat()
+
+    from weatherbrief.storage.flights import _resolve_artifact_path
+    from weatherbrief.tasks.live_layer import live_for_pack
+
+    layer = None
+    if latest.artifact_path:
+        layer = live_for_pack(_resolve_artifact_path(latest.artifact_path))
+    if layer is None:
+        return LiveLayerResponse(flight_id=flight_id, pack_timestamp=pack_ts)
+    return LiveLayerResponse(
+        flight_id=flight_id,
+        pack_timestamp=pack_ts,
+        live_updated_at=layer.live_updated_at,
+        route_observations=layer.route_observations,
+        observations_updated_at=layer.observations_updated_at,
+        route_sigmets=layer.route_sigmets,
+        sigmets_updated_at=layer.sigmets_updated_at,
+        observed_conditions=layer.observed_conditions,
+        observed_updated_at=layer.observed_updated_at,
+        changes=layer.changes,
+        last_refresh_delta=layer.last_refresh_delta,
+    )
