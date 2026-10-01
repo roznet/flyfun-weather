@@ -87,6 +87,8 @@ _METAR_INGEST_STARTUP_DELAY_SECONDS = 200  # land before standalone (240s)
 # Observed-conditions archive (#575) rides the METAR ingest tick. A normal run
 # is a few frames per source; the cap only bounds a wedged child.
 _OBSERVED_ARCHIVE_TIMEOUT_S = 20 * 60
+# Consecutive METAR ticks on which the previous archive run was still going.
+_observed_archive_skipped_ticks = 0
 # Verification scoring fires 15 min past each synoptic hour, giving the HH:00
 # ingest plenty of margin (METAR fetch is ~30-60s) and ensuring freshly-stored
 # METARs are scored against snapshots already in DB.
@@ -1041,10 +1043,20 @@ def _start_observed_archive(
     A separate task so a slow or wedged archive child cannot delay the next
     METAR tick. At most one at a time: if the previous run is still going,
     this tick's work is left to it (it picks up every pending frame anyway).
+    Two skipped ticks in a row is a warning: CTTH frames are kept for one hour,
+    so a run wedged that long is about to lose cloud tops.
     """
+    global _observed_archive_skipped_ticks
     if previous is not None and not previous.done():
-        logger.info("Observed archive: previous run still in progress, not starting another")
+        _observed_archive_skipped_ticks += 1
+        log = logger.warning if _observed_archive_skipped_ticks >= 2 else logger.info
+        log(
+            "Observed archive: previous run still in progress (%d tick(s) skipped), "
+            "not starting another",
+            _observed_archive_skipped_ticks,
+        )
         return previous
+    _observed_archive_skipped_ticks = 0
     return asyncio.create_task(_run_observed_archive_after_ingest(app_state))
 
 

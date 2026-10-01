@@ -294,7 +294,7 @@ def _compact_with_crash_before_part_cleanup(store, root, monkeypatch, *, lose_ma
     def _killed(*_a, **_k):
         raise KeyboardInterrupt("child killed")
 
-    monkeypatch.setattr(observed_archive.shutil, "rmtree", _killed)
+    monkeypatch.setattr(observed_archive, "_remove_merged_parts", _killed)
     with pytest.raises(KeyboardInterrupt):
         observed_archive.compact_day(root, SOURCE_OPERA_DBZH, "2026-08-25")
     monkeypatch.undo()
@@ -412,3 +412,20 @@ def test_a_concurrent_run_is_skipped_not_interleaved(store, root):
     assert not part_path(root, SOURCE_OPERA_DBZH, FRAME_TIME).exists()
     # Released: the next run does the work.
     assert run_observed_archive(STATIONS, store=store, root=root, now=NOW).frames[SOURCE_OPERA_DBZH] == 1
+
+
+def test_a_part_missing_from_the_merged_day_is_kept(store, root):
+    """Only parts whose frames are confirmed in the merged file are deleted."""
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    part = part_path(root, SOURCE_OPERA_DBZH, FRAME_TIME)
+
+    observed_archive._remove_merged_parts(
+        part.parent, [part], set(), SOURCE_OPERA_DBZH, "2026-08-25"
+    )
+    assert part.exists()
+
+    observed_archive._remove_merged_parts(
+        part.parent, [part], observed_archive._frame_keys(pq.read_table(part)),
+        SOURCE_OPERA_DBZH, "2026-08-25",
+    )
+    assert not part.parent.exists()

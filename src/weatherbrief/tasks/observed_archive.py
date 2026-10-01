@@ -91,7 +91,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import uuid
 from dataclasses import dataclass, field
 from datetime import date as date_t, datetime, timedelta, timezone
@@ -380,6 +379,12 @@ def _provenance(stored: StoredFrame, frame, sampled_at: datetime) -> dict:
 
 
 def _bands(stations: list[ArchiveStation]) -> list[list[ArchiveStation]]:
+    """Latitude bands of :data:`BAND_STATIONS` stations.
+
+    Longitude is not banded: each band still spans the watchlist's full
+    longitude range, which is what CTTH reads anyway (``full_width``) and only
+    makes an OPERA window wider than its stations strictly need.
+    """
     ordered = sorted(stations, key=lambda s: (s.lat, s.lon))
     return [ordered[i:i + BAND_STATIONS] for i in range(0, len(ordered), BAND_STATIONS)]
 
@@ -509,8 +514,8 @@ def frame_rows(
                     | _annulus_columns(annulus)
                 )
         # Release the band's arrays before the next read rather than holding
-        # two windows at once.
-        del frame
+        # two windows at once (the window and samples reference them too).
+        del frame, window, samples
     return rows
 
 
@@ -668,9 +673,13 @@ def compact_day(root: Path, source: str, day: str) -> int:
     after writing the day file but before deleting the parts (a timeout or
     OOM kill of the child), those parts are still on disk and their rows are
     already in the day file. A part whose frame (its ``frame_valid_time``)
-    is already present in the day file is therefore skipped. Keyed on the data itself rather than on the manifest, because a
-    crash between the Parquet rename and the manifest write leaves a manifest
-    that does not yet list those frames.
+    is already present in the day file is therefore skipped. Keyed on the
+    data itself rather than on the manifest, because a crash between the
+    Parquet rename and the manifest write leaves a manifest that does not yet
+    list those frames.
+
+    A part is deleted only once its frames are confirmed in the merged file;
+    anything else is left in place for the next run to merge.
     """
     pa, pq = _require_pyarrow()
     schema = arrow_schema()
@@ -736,8 +745,31 @@ def compact_day(root: Path, source: str, day: str) -> int:
             source, day, missing, expected_frame_count(source),
         )
 
-    shutil.rmtree(parts_dir, ignore_errors=True)
+    _remove_merged_parts(parts_dir, part_files, _frame_keys(merged), source, day)
     return merged.num_rows
+
+
+def _remove_merged_parts(
+    parts_dir: Path, part_files: list[Path], merged_keys: set[datetime],
+    source: str, day: str,
+) -> None:
+    """Delete the parts whose frames are confirmed in the merged day file."""
+    _, pq = _require_pyarrow()
+    kept = 0
+    for part in part_files:
+        if _frame_keys(pq.read_table(part, columns=["frame_valid_time"])) <= merged_keys:
+            part.unlink(missing_ok=True)
+        else:
+            kept += 1
+    if kept:
+        logger.warning(
+            "Observed archive: %s %s: %d part(s) not found in the merged day "
+            "file, kept for the next run",
+            source, day, kept,
+        )
+    else:
+        with contextlib.suppress(OSError):
+            parts_dir.rmdir()  # only if empty: never sweeps away an unlisted part
 
 
 def verify_observed_archive(

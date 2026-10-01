@@ -563,8 +563,9 @@ Decisions worth keeping:
   file-existence check, a crash costs at most one frame, and the long-run
   file count stays at four a day. A day is sealed 4 h after midnight, which is
   more than any source's retention plus delivery lag. Compaction merges into
-  an existing day file instead of overwriting it, and parts are deleted only
-  once the merged file has been written and verified. It is idempotent across
+  an existing day file instead of overwriting it, and a part is deleted only
+  once the merged file has been written and verified and the part's frames
+  are confirmed in it; any other part is kept for the next run. It is idempotent across
   a crash: a leftover part whose frame valid time is already in the day file
   is skipped. The check reads the data, not the manifest, because a crash can
   land between the Parquet rename and the manifest write. `verify` finds days
