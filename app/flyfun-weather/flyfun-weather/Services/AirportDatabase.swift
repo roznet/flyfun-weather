@@ -34,7 +34,13 @@ final class AirportDatabase {
     private nonisolated static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AirportDatabase")
     private nonisolated static let etagKey = "airportsDB.etag"
 
-    private init() {}
+    /// On-disk cache location. A `let` so the off-main `Task.detached` blocks can
+    /// read it; tests point it at a temp directory.
+    nonisolated let cacheURL: URL
+
+    init(cacheURL: URL = AirportDatabase.defaultCacheURL) {
+        self.cacheURL = cacheURL
+    }
 
     /// Boxes the non-`Sendable` SQLite handle + index so the off-main builder can
     /// hand them to the main actor as a single `Sendable` value. Safe because the
@@ -46,9 +52,8 @@ final class AirportDatabase {
         let known: KnownAirports
     }
 
-    /// On-disk cache location (persisted, not purgeable like Caches). `nonisolated`
-    /// so the off-main `Task.detached` blocks can read it (it only uses FileManager).
-    nonisolated private static var cacheURL: URL {
+    /// Default cache location (persisted, not purgeable like Caches).
+    nonisolated static var defaultCacheURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("airports.db")
     }
@@ -58,9 +63,9 @@ final class AirportDatabase {
     /// cache yet.
     func loadCached() {
         guard !isLoaded, loadTask == nil else { return }
+        let url = cacheURL
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            let url = Self.cacheURL
             guard FileManager.default.fileExists(atPath: url.path) else {
                 Self.logger.debug("No cached airports DB yet")
                 return
@@ -85,8 +90,9 @@ final class AirportDatabase {
     func refresh(using client: APIClient) async {
         // Read the cache state off the main actor (sync FileManager/UserDefaults
         // calls); only the resulting String? (Sendable) crosses back.
+        let cachePath = cacheURL.path
         let etagToSend = await Task.detached(priority: .userInitiated) { () -> String? in
-            let hasCache = FileManager.default.fileExists(atPath: Self.cacheURL.path)
+            let hasCache = FileManager.default.fileExists(atPath: cachePath)
             return hasCache ? UserDefaults.standard.string(forKey: Self.etagKey) : nil
         }.value
         do {
@@ -129,39 +135,65 @@ final class AirportDatabase {
 
     // MARK: - Private
 
-    /// Write the downloaded bytes to the cache path and open the new DB, all off
-    /// the main thread; assign the handles on the main actor.
-    private func install(data: Data, etag: String?) async {
-        let url = Self.cacheURL
-        await Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
+    /// Swap a downloaded DB in for the cached one. Internal for tests.
+    ///
+    /// The old handle is closed **before** its file is replaced: unlinking a file
+    /// SQLite still has open is an API violation ("vnode unlinked while in use")
+    /// that fails any read on that handle with a disk I/O error. Search returns
+    /// nothing for the moment in between, never an error. A launch-time
+    /// `loadCached()` still opening the old file is awaited first for the same
+    /// reason — at launch both start together (`AppState`).
+    func install(data: Data, etag: String?) async {
+        let url = cacheURL
+        await loadTask?.value
+
+        // Stage the download next to the cache, off-main, while the old DB
+        // keeps serving.
+        let staged = await Task.detached(priority: .userInitiated) { () -> URL? in
             do {
-                let dir = url.deletingLastPathComponent()
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 let tmp = url.appendingPathExtension("download")
                 try? FileManager.default.removeItem(at: tmp)
                 try data.write(to: tmp, options: .atomic)
+                return tmp
+            } catch {
+                Self.logger.error("Failed to persist airports DB: \(error.localizedDescription)")
+                return nil
+            }
+        }.value
+        guard let staged else { return }
+
+        knownAirports = nil
+        db?.close()
+        db = nil
+        isLoaded = false
+
+        // Swap, then open whatever is on disk — the new DB, or the old one if
+        // the swap failed (so a failed update never leaves autocomplete empty).
+        let (opened, swapped) = await Task.detached(priority: .userInitiated) { () -> (OpenedAirportDB?, Bool) in
+            var swapped = false
+            do {
                 if FileManager.default.fileExists(atPath: url.path) {
                     try FileManager.default.removeItem(at: url)
                 }
-                try FileManager.default.moveItem(at: tmp, to: url)
+                try FileManager.default.moveItem(at: staged, to: url)
+                swapped = true
             } catch {
-                Self.logger.error("Failed to persist airports DB: \(error.localizedDescription)")
-                return
+                Self.logger.error("Failed to swap in airports DB: \(error.localizedDescription)")
             }
+            guard FileManager.default.fileExists(atPath: url.path) else { return (nil, swapped) }
             let database = FMDatabase(path: url.path)
             guard database.open() else {
-                Self.logger.error("Failed to open downloaded airports DB")
-                return
+                Self.logger.error("Failed to open airports DB after update")
+                return (nil, swapped)
             }
-            let opened = OpenedAirportDB(db: database, known: KnownAirports(db: database))
-            await MainActor.run {
-                self.db?.close()
-                self.db = opened.db
-                self.knownAirports = opened.known
-                self.isLoaded = true
-                if let etag { UserDefaults.standard.set(etag, forKey: Self.etagKey) }
-            }
+            return (OpenedAirportDB(db: database, known: KnownAirports(db: database)), swapped)
         }.value
+        guard let opened else { return }
+        db = opened.db
+        knownAirports = opened.known
+        isLoaded = true
+        if swapped, let etag { UserDefaults.standard.set(etag, forKey: Self.etagKey) }
     }
 }
