@@ -536,9 +536,12 @@ alignment and belongs with the phase-2 verdicts. It ships now because neither
 side of the pairing can be backfilled: OPERA's open cache is 24 h deep and the
 local store keeps 1–3 h.
 
-`tasks/observed_archive.py`, CLI `verify observed-archive run|verify`. Runs
-after every METAR ingest tick (30 min) in a child process, gated on
-`WB_OBSERVED_ARCHIVE_ENABLED` (plus `WB_OBSERVED_ENABLED`).
+`tasks/observed_archive.py`, CLI `verify observed-archive run|verify`. Each
+METAR ingest tick (30 min) launches it as a separate task in a child process,
+so a slow run cannot delay the next ingest. It is gated on
+`WB_OBSERVED_ARCHIVE_ENABLED` (plus `WB_OBSERVED_ENABLED`). A run holds an
+exclusive non-blocking `flock` on the archive root, so a scheduler run and a
+manual CLI run can't interleave: the second one simply does nothing.
 
 ```
 DATA_DIR/archive/observed/
@@ -561,7 +564,12 @@ Decisions worth keeping:
   file count stays at four a day. A day is sealed 4 h after midnight, which is
   more than any source's retention plus delivery lag. Compaction merges into
   an existing day file instead of overwriting it, and parts are deleted only
-  once the merged file has been written and verified.
+  once the merged file has been written and verified. It is idempotent across
+  a crash: a leftover part whose frame valid time is already in the day file
+  is skipped. The check reads the data, not the manifest, because a crash can
+  land between the Parquet rename and the manifest write. `verify` finds days
+  from both the Parquet files and the manifests, so a day file without a
+  manifest fails verification.
 - **Latitude bands of 100 airports, one window read per band.** A single
   Europe-wide CTTH read is ~1,500 full-width rows × seven float64 variables,
   several hundred MB transient. Banding cuts that peak for a few extra file

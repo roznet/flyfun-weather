@@ -1010,22 +1010,42 @@ async def run_metar_ingest_loop(app_state) -> None:
     )
     await asyncio.sleep(_METAR_INGEST_STARTUP_DELAY_SECONDS)
 
-    while True:
-        try:
-            sleep_secs = _seconds_until_next_30min_boundary(
-                _METAR_INGEST_OFFSET_SECONDS,
-            )
-            logger.info(
-                "METAR ingest: sleeping %ds until next ingest tick", sleep_secs,
-            )
-            await asyncio.sleep(sleep_secs)
-            await asyncio.to_thread(_run_metar_ingest_once, app_state)
-            await _run_observed_archive_after_ingest(app_state)
-            # Advance past the current bucket so we don't re-trigger immediately
-            await asyncio.sleep(60)
-        except Exception:
-            logger.error("METAR ingest cycle failed", exc_info=True)
-            await asyncio.sleep(900)
+    archive_task: asyncio.Task | None = None
+    try:
+        while True:
+            try:
+                sleep_secs = _seconds_until_next_30min_boundary(
+                    _METAR_INGEST_OFFSET_SECONDS,
+                )
+                logger.info(
+                    "METAR ingest: sleeping %ds until next ingest tick", sleep_secs,
+                )
+                await asyncio.sleep(sleep_secs)
+                await asyncio.to_thread(_run_metar_ingest_once, app_state)
+                archive_task = _start_observed_archive(app_state, archive_task)
+                # Advance past the current bucket so we don't re-trigger immediately
+                await asyncio.sleep(60)
+            except Exception:
+                logger.error("METAR ingest cycle failed", exc_info=True)
+                await asyncio.sleep(900)
+    finally:
+        if archive_task is not None and not archive_task.done():
+            archive_task.cancel()
+
+
+def _start_observed_archive(
+    app_state, previous: asyncio.Task | None,
+) -> asyncio.Task | None:
+    """Launch the observed archive beside the ingest loop, never inline.
+
+    A separate task so a slow or wedged archive child cannot delay the next
+    METAR tick. At most one at a time: if the previous run is still going,
+    this tick's work is left to it (it picks up every pending frame anyway).
+    """
+    if previous is not None and not previous.done():
+        logger.info("Observed archive: previous run still in progress, not starting another")
+        return previous
+    return asyncio.create_task(_run_observed_archive_after_ingest(app_state))
 
 
 async def _run_observed_archive_after_ingest(app_state) -> None:

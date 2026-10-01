@@ -486,3 +486,30 @@ def test_observed_archive_child_is_killed_on_timeout(monkeypatch):
     monkeypatch.setattr(scheduler, "_OBSERVED_ARCHIVE_TIMEOUT_S", 0.01)
     asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
     assert proc.terminated
+
+
+def test_observed_archive_runs_beside_ingest_one_at_a_time(monkeypatch):
+    """A slow archive must neither block the ingest tick nor run twice."""
+    started = []
+    release = None
+
+    async def fake_run(_app_state):
+        started.append(1)
+        await release.wait()
+
+    monkeypatch.setattr(scheduler, "_run_observed_archive_after_ingest", fake_run)
+
+    async def scenario():
+        nonlocal release
+        release = asyncio.Event()
+        first = scheduler._start_observed_archive(_app_state(), None)
+        await asyncio.sleep(0)
+        second = scheduler._start_observed_archive(_app_state(), first)
+        assert second is first and len(started) == 1
+        release.set()
+        await first
+        third = scheduler._start_observed_archive(_app_state(), first)
+        await third
+        assert third is not first and len(started) == 2
+
+    asyncio.run(scenario())

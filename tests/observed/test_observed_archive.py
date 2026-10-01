@@ -232,14 +232,32 @@ def test_final_days_are_compacted_and_verifiable(store, root):
     assert pending_frames(store, SOURCE_OPERA_DBZH, root) == []
 
 
-def test_a_late_part_is_merged_into_its_compacted_day(store, root, dbzh_path):
-    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
-    run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+def _archive_late_frame(store, root, dbzh_path):
+    """Archive a second, distinct DBZH frame 10 min after the first.
+
+    The fixture has one granule, so a copy of it carries the same internal
+    valid time and is, correctly, treated as the same frame. Shift the part's
+    rows to make it a genuinely different frame.
+    """
+    import pyarrow as pa
 
     late = FRAME_TIME + timedelta(minutes=10)
     store.write(SOURCE_OPERA_DBZH, late, dbzh_path.read_bytes(), {})
     stored = next(f for f in store.list_frames(SOURCE_OPERA_DBZH) if f.valid_time == late)
     observed_archive.archive_frame(stored, STATIONS, root=root)
+    part = part_path(root, SOURCE_OPERA_DBZH, late)
+    table = pq.read_table(part)
+    idx = table.schema.get_field_index("frame_valid_time")
+    shifted = [t + timedelta(minutes=10) for t in table.column(idx).to_pylist()]
+    table = table.set_column(idx, table.schema.field(idx), pa.array(shifted, table.schema.field(idx).type))
+    pq.write_table(table, part)
+
+
+def test_a_late_part_is_merged_into_its_compacted_day(store, root, dbzh_path):
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+
+    _archive_late_frame(store, root, dbzh_path)
     observed_archive.compact_day(root, SOURCE_OPERA_DBZH, "2026-08-25")
 
     manifest = json.loads(manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").read_text())
@@ -330,3 +348,67 @@ def test_a_day_sealed_with_missing_frames_is_logged(store, root, caplog):
     with caplog.at_level("WARNING", logger="weatherbrief.tasks.observed_archive"):
         run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
     assert any("143 of 144 frames missing" in m for m in caplog.messages)
+
+
+def test_recompaction_ignores_a_drifted_product_id(store, root, monkeypatch):
+    """A re-ingested frame whose sidecar lost its product_id is still one frame."""
+    _compact_with_crash_before_part_cleanup(store, root, monkeypatch, lose_manifest=True)
+    part = part_path(root, SOURCE_OPERA_DBZH, FRAME_TIME)
+    table = pq.read_table(part)
+    import pyarrow as pa
+
+    drifted = table.set_column(
+        table.schema.get_field_index("product_id"), "product_id",
+        pa.array(["something-else.h5"] * table.num_rows),
+    )
+    pq.write_table(drifted, part)
+
+    observed_archive.compact_day(root, SOURCE_OPERA_DBZH, "2026-08-25")
+    assert pq.read_table(day_path(root, SOURCE_OPERA_DBZH, "2026-08-25")).num_rows == IN_DOMAIN * RADII
+
+
+def test_a_day_file_without_a_manifest_fails_verification(store, root):
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+    manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").unlink()
+
+    bad = [r for r in verify_observed_archive(root) if not r["ok"]]
+    assert [(r["source"], r["problem"]) for r in bad] == [
+        (SOURCE_OPERA_DBZH, "manifest missing")
+    ]
+
+
+def test_verify_can_be_scoped_to_one_source(store, root):
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+    manifest_path(root, SOURCE_EUMETSAT_CTTH, "2026-08-25").write_text("")
+
+    report = verify_observed_archive(root, sources=(SOURCE_OPERA_DBZH,))
+    assert [(r["source"], r["ok"]) for r in report] == [(SOURCE_OPERA_DBZH, True)]
+
+
+def test_frames_missing_counts_frames_already_in_the_day_file(store, root, dbzh_path):
+    """A lost manifest must not make the frames merged earlier look missing."""
+    run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    run_observed_archive(STATIONS, store=store, root=root, now=AFTER_FINALITY)
+    manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").unlink()
+
+    _archive_late_frame(store, root, dbzh_path)
+    observed_archive.compact_day(root, SOURCE_OPERA_DBZH, "2026-08-25")
+
+    manifest = json.loads(manifest_path(root, SOURCE_OPERA_DBZH, "2026-08-25").read_text())
+    # The part names show only the late frame; the earlier one is known only
+    # from the data in the day file.
+    assert manifest["frames"] == ["20260825T1410"]
+    assert manifest["frames_present"] == 2
+    assert manifest["frames_missing"] == 142
+
+
+def test_a_concurrent_run_is_skipped_not_interleaved(store, root):
+    with observed_archive._archive_lock(root) as held:
+        assert held
+        result = run_observed_archive(STATIONS, store=store, root=root, now=NOW)
+    assert result.skipped_locked
+    assert not part_path(root, SOURCE_OPERA_DBZH, FRAME_TIME).exists()
+    # Released: the next run does the work.
+    assert run_observed_archive(STATIONS, store=store, root=root, now=NOW).frames[SOURCE_OPERA_DBZH] == 1
