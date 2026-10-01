@@ -278,9 +278,12 @@ model, altitude_band_ft, from_datetime, to_datetime)` and maps `RouteSigmetResul
 - **Altitude band** = `(0, cruise_altitude_ft + 5000)` (`_sigmet_altitude_band`) — surface
   to cruise plus a climb/descent buffer; high-FL-only hazards irrelevant to a GA route
   are dropped. SIGMETs with unknown bounds always surface (`overlaps_altitude` is permissive).
-- **Time window** = `(now, end of departure day UTC)` (`_departure_day_window`) — the
-  departure-day window; wider than the flight window so SIGMETs issued/expiring around
-  the flight still surface.
+- **Time window** = `(now, max(end of departure day UTC, arrival + 3 h))`
+  (`_departure_day_window`) — wider than the flight window so SIGMETs issued/expiring
+  around the flight still surface. The arrival bound covers flights that cross 00:00Z:
+  the departure day alone dropped SIGMETs for the airborne part after midnight, and
+  the window collapsed while the live tick still ran (to arrival + 1 h), so every
+  briefing SIGMET read as "no longer active".
 
 Default corridor is `BriefingOptions.sigmet_corridor_nm = 50` (wider than METAR/TAF's 30,
 since SIGMET areas are large).

@@ -628,14 +628,25 @@ def _sigmet_altitude_band(route: RouteConfig) -> tuple[int, int]:
     return (0, int(route.cruise_altitude_ft) + _SIGMET_ALT_BUFFER_FT)
 
 
+# How long past arrival the SIGMET window stays open. Covers the live layer's
+# post-arrival hour (WB_LIVE_WINDOW_AFTER_H, default 1 h) with headroom: a
+# window that closes while the tick still runs returns zero SIGMETs, which the
+# classifier reads as every briefing SIGMET "no longer active".
+_SIGMET_POST_ARRIVAL = timedelta(hours=3)
+
+
 def _departure_day_window(
     target_time: datetime,
     now: datetime | None = None,
+    duration_h: float = 0.0,
 ) -> tuple[datetime, datetime]:
-    """SIGMET validity window: from *now* through the end of the departure day (UTC).
+    """SIGMET validity window: from *now* through the end of the departure day
+    (UTC), or arrival + :data:`_SIGMET_POST_ARRIVAL` if that is later.
 
     Wider than the flight window so SIGMETs issued or expiring around the
-    flight are still surfaced. Both bounds are aware UTC.
+    flight are still surfaced. The arrival bound matters for a flight that
+    crosses 00:00Z (a late-evening departure): the departure day alone would
+    drop SIGMETs for the airborne part after midnight. Both bounds are aware UTC.
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -644,15 +655,16 @@ def _departure_day_window(
     end_of_day = datetime(
         dep.year, dep.month, dep.day, 23, 59, 59, tzinfo=timezone.utc,
     )
+    end = max(end_of_day, dep + timedelta(hours=duration_h or 0) + _SIGMET_POST_ARRIVAL)
     # Guard against an inverted window (e.g. a late-evening fetch for a flight
-    # that already departed earlier today): clamp the start to end-of-day.
-    if now > end_of_day:
+    # that already landed earlier today): clamp the start to the window end.
+    if now > end:
         logger.debug(
-            "SIGMET window collapsed: now %s is past departure-day end %s; "
-            "expect zero SIGMETs", now.isoformat(), end_of_day.isoformat(),
+            "SIGMET window collapsed: now %s is past window end %s; "
+            "expect zero SIGMETs", now.isoformat(), end.isoformat(),
         )
-    start = min(now, end_of_day)
-    return (start, end_of_day)
+    start = min(now, end)
+    return (start, end)
 
 
 def run_route_sigmets(
@@ -691,7 +703,9 @@ def run_route_sigmets(
 
     route_icaos = [wp.icao for wp in route.waypoints]
     low_ft, high_ft = _sigmet_altitude_band(route)
-    win_from, win_to = _departure_day_window(target_time, now=now)
+    win_from, win_to = _departure_day_window(
+        target_time, now=now, duration_h=route.flight_duration_hours,
+    )
 
     service = RouteSigmetService(source=source)
     result = service.fetch_route_sigmets(

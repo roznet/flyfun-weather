@@ -553,6 +553,23 @@ def test_departure_day_window_guards_inverted_window():
     assert win_from == win_to == datetime(2026, 5, 20, 23, 59, 59, tzinfo=timezone.utc)
 
 
+def test_departure_day_window_extends_past_midnight_for_late_flight():
+    from datetime import timezone
+
+    # 22:15Z departure, 2 h flight: airborne until 00:15Z next day. The window
+    # must cover that, and stay open through the live layer's post-arrival
+    # hour — a collapsed window reads as every SIGMET "no longer active".
+    target = datetime(2026, 10, 1, 22, 15, tzinfo=timezone.utc)
+    before = datetime(2026, 10, 1, 21, 0, tzinfo=timezone.utc)
+    win_from, win_to = _departure_day_window(target, now=before, duration_h=2.0)
+    assert win_from == before
+    assert win_to == datetime(2026, 10, 2, 3, 15, tzinfo=timezone.utc)
+
+    after_midnight = datetime(2026, 10, 2, 0, 45, tzinfo=timezone.utc)
+    win_from, win_to = _departure_day_window(target, now=after_midnight, duration_h=2.0)
+    assert win_from == after_midnight < win_to
+
+
 def test_run_route_sigmets_maps_result(two_wp_route):
     """run_route_sigmets maps a RouteSigmetResult into the flat RouteSigmets model."""
     from datetime import timezone
