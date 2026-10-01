@@ -5294,6 +5294,113 @@ html {
   margin: 0.15rem 0;
 }
 
+/* --- Live layer (#637): "Since this briefing" panel ---------------------- */
+
+.refresh-delta-banner.rd-live-better {
+  border-color: var(--border);
+}
+
+.refresh-delta-banner.rd-live-better .rd-title {
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.refresh-delta-banner .rd-live-list {
+  background: var(--surface);
+  color: var(--text);
+  list-style: none;
+  padding: 0.4rem 0.75rem;
+}
+
+.refresh-delta-banner .rd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.refresh-delta-banner .rd-arrow {
+  font-weight: 700;
+  width: 1em;
+  text-align: center;
+}
+
+.refresh-delta-banner .rd-worse .rd-arrow { color: var(--red); }
+.refresh-delta-banner .rd-better .rd-arrow { color: var(--green); }
+
+.refresh-delta-banner .rd-src {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0 0.35rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.refresh-delta-banner .rd-msg { flex: 1 1 auto; }
+
+.refresh-delta-banner .rd-age {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+/* Alert tier: departure / destination / alternate airports. */
+.refresh-delta-banner .rd-alert .rd-msg { font-weight: 700; }
+.refresh-delta-banner .rd-alert.rd-worse {
+  background: var(--red-bg);
+  border-radius: 3px;
+  margin-left: -0.3rem;
+  margin-right: -0.3rem;
+  padding: 0 0.3rem;
+}
+
+.refresh-delta-banner.rd-quiet-banner {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.refresh-delta-banner .rd-quiet {
+  padding: 0.3rem 0.75rem 0.4rem;
+  color: var(--text-muted);
+}
+
+.live-asof {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.live-asof.live-asof-stale {
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+
+[data-theme="dark"] .live-asof.live-asof-stale {
+  color: var(--text);
+}
+
+/* Observation / SIGMET rows that changed since the briefing. */
+.obs-table tr.live-changed > td:first-child {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.obs-table tr.live-changed {
+  background: var(--amber-bg);
+}
+
+.digest-live-caveat {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  border-left: 3px solid var(--amber);
+  padding: 0.25rem 0.6rem;
+  margin: 0 0 0.75rem;
+}
+
 .obs-table th {
   font-size: 0.75rem;
 }

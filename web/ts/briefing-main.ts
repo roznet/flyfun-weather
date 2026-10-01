@@ -10,6 +10,8 @@ import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
+import { departureMs, isInLiveWindow, isLiveWindowPast, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
+import type { FlightResponse } from './store/types';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -2202,7 +2204,8 @@ async function init(): Promise<void> {
       ui.renderDigestAltitudeBanner(state.flight, state.snapshot?.route?.cruise_altitude_ft ?? null);
       ui.togglePackSections(!!state.currentPack);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
-      ui.renderRefreshDelta(state.snapshot);
+      ui.renderRefreshDelta(state.snapshot, state.currentPack?.fetch_timestamp ?? null);
+      ui.renderDigestLiveCaveat(state.currentPack, state.snapshot);
       ui.renderObservedConditions(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
@@ -2682,6 +2685,84 @@ async function init(): Promise<void> {
     });
   }
 
+  // --- Live observation layer (#637) ---
+  // The server refreshes the live layer every ~10 min from departure−3h to
+  // arrival+1h. While the page is open in that window, poll the latest pack
+  // meta every 5 min (store.syncLatest: a new pack → select it; a newer
+  // live_updated_at → fold the live layer into the snapshot). Hidden tabs
+  // skip ticks and re-sync as soon as they become visible again.
+  const LIVE_POLL_MS = 5 * 60_000;
+  const LIVE_AGE_TICK_MS = 60_000;
+  // Start the poll a little ahead of the window so a page left open before
+  // departure−3h picks the layer up when it begins (ticks no-op until then).
+  const LIVE_PREWINDOW_MS = 6 * 3600_000;
+  let livePollTimer: ReturnType<typeof setInterval> | null = null;
+  let liveAgeTimer: ReturnType<typeof setInterval> | null = null;
+  let liveSyncInFlight = false;
+  let liveVisibilityWired = false;
+
+  const liveDeparture = (f: FlightResponse) =>
+    f.departure_time || { target_date: f.target_date, target_time_utc: f.target_time_utc };
+
+  const stopLivePolling = () => {
+    if (livePollTimer !== null) { clearInterval(livePollTimer); livePollTimer = null; }
+    if (liveAgeTimer !== null) { clearInterval(liveAgeTimer); liveAgeTimer = null; }
+  };
+
+  const runLiveSync = async () => {
+    if (liveSyncInFlight || document.visibilityState === 'hidden') return;
+    const f = store.getState().flight;
+    if (!f) return;
+    const now = Date.now();
+    if (isLiveWindowPast(liveDeparture(f), f.flight_duration_hours, now)) {
+      stopLivePolling();
+      return;
+    }
+    if (!isInLiveWindow(liveDeparture(f), f.flight_duration_hours, now)) return;
+    liveSyncInFlight = true;
+    try {
+      await store.getState().syncLatest();
+    } catch {
+      /* non-critical: next tick retries */
+    } finally {
+      liveSyncInFlight = false;
+    }
+    ui.refreshLiveAges();
+  };
+
+  const startLiveLayer = () => {
+    const s = store.getState();
+    const f = s.flight;
+    if (!f || !s.currentPack) return;
+    const now = Date.now();
+    const dep = liveDeparture(f);
+    const inWindow = isInLiveWindow(dep, f.flight_duration_hours, now);
+    const viewingLatest = s.packs.length === 0
+      || s.packs[0].fetch_timestamp === s.currentPack.fetch_timestamp;
+    // One catch-up after the first load (the snapshot already carries the
+    // server overlay; this only picks up anything newer).
+    if (viewingLatest && (inWindow || s.currentPack.days_out === 0)) {
+      void s.loadLive();
+    }
+    if (isLiveWindowPast(dep, f.flight_duration_hours, now)) return;
+    const opensSoon = !inWindow && departureMs(dep) - LIVE_WINDOW_BEFORE_H * 3600_000 - now <= LIVE_PREWINDOW_MS;
+    if (!inWindow && !opensSoon) return;
+    if (livePollTimer === null) {
+      livePollTimer = setInterval(() => { void runLiveSync(); }, LIVE_POLL_MS);
+      liveAgeTimer = setInterval(() => {
+        if (document.visibilityState !== 'hidden') ui.refreshLiveAges();
+      }, LIVE_AGE_TICK_MS);
+    }
+    if (!liveVisibilityWired) {
+      liveVisibilityWired = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible' || livePollTimer === null) return;
+        ui.refreshLiveAges();
+        void runLiveSync();
+      });
+    }
+  };
+
   // --- Load flight data, then render even if no packs exist ---
   store.getState().loadFlight(flightId).then(async () => {
     // If a specific pack timestamp was requested via URL, select it
@@ -2723,7 +2804,8 @@ async function init(): Promise<void> {
     ui.renderDigestAltitudeBanner(s.flight, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.togglePackSections(!!s.currentPack);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
-    ui.renderRefreshDelta(s.snapshot);
+    ui.renderRefreshDelta(s.snapshot, s.currentPack?.fetch_timestamp ?? null);
+    ui.renderDigestLiveCaveat(s.currentPack, s.snapshot);
     ui.renderObservedConditions(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
@@ -2825,6 +2907,10 @@ async function init(): Promise<void> {
         store.getState().checkActiveRefresh();
       }
     }
+
+    // Live observation layer (#637): catch up once, then poll while the
+    // flight is in its live window.
+    startLiveLayer();
 
     document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
     maybeAutoStartBriefingTour();

@@ -98,6 +98,10 @@
          repeated here because this is the line people actually read. -->
     <div id="digest-altitude-banner" style="display: none;"></div>
 
+    <!-- Live layer (#637): the digest/assessment above were written before the
+         observed changes listed under "Since this briefing". -->
+    <div id="digest-live-caveat" class="digest-live-caveat" style="display: none;"></div>
+
     <!-- Route Advisories -->
     <div id="advisories-wrapper" class="section collapsible" data-section="advisories" style="display: none;">
       <h3>Route Advisories</h3>
@@ -131,7 +135,8 @@
       </div>
     </div>
 
-    <!-- Real-time refresh worsening banner (shown only when conditions degraded) -->
+    <!-- "Since this briefing" (#637): live-layer changes since the pack + "Observed as of"
+         (falls back to the legacy worsened-only refresh delta) -->
     <div id="refresh-delta-banner" class="refresh-delta-banner" style="display: none;"></div>
 
     <!-- Route SIGMETs (area hazards first — hidden entirely when none) -->

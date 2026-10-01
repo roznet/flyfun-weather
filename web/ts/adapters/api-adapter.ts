@@ -6,6 +6,7 @@ import type {
   ElevationProfile,
   FlightResponse,
   ForecastSnapshot,
+  LiveLayer,
   PackMeta,
   RealtimeRefreshResult,
   RouteAnalysesManifest,
@@ -801,6 +802,14 @@ export async function refreshObservations(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/observations/refresh`,
     { method: 'POST' },
   );
+}
+
+// --- Live observation layer (#637) ---
+
+/** The latest pack's live overlay (newest observations, SIGMETs, observed
+ *  conditions and the changes since the briefing). Cheap: a stored file. */
+export async function fetchLive(flightId: string): Promise<LiveLayer> {
+  return apiFetch<LiveLayer>(`/flights/${encodeURIComponent(flightId)}/live`);
 }
 
 // --- Elevation profile ---
