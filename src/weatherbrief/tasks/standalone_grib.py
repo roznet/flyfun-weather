@@ -314,6 +314,13 @@ def fetch_icon_cloud_diag(
         # Same init, so the window is the step difference: 1 h inside ICON's
         # hourly region, 3 h past +78 h.
         window_h = (fhour - prev_step) if prev_decoded else None
+        if prev_decoded and len(prev_decoded) < len(decoded):
+            # Same lats/lons on both decodes, so this should not happen; the
+            # missing points would otherwise go NULL with no trace (#585).
+            logger.warning(
+                "ICON rain_con predecessor f%03d decoded %d points, f%03d has %d",
+                prev_step, len(prev_decoded), fhour, len(decoded),
+            )
 
         airport_data: list[AirportGribDiagnostics] = []
         for i, raw in enumerate(decoded):
