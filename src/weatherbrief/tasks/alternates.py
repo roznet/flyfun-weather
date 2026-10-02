@@ -436,6 +436,7 @@ def run_alternates(
         _load_airport_model,
         get_airport_elevations,
         get_runway_ends,
+        route_navpoints,
     )
     from weatherbrief.analysis.route_geometry import compute_route_distances
 
@@ -443,7 +444,7 @@ def run_alternates(
     eta_dt = _eta_hour(target_time, route.flight_duration_hours)
 
     model = _load_airport_model(airports_db_path)
-    route_icaos = [wp.icao for wp in route.waypoints]
+    route_points = route_navpoints(route.waypoints)
     dest = route.destination
     origin = route.origin
 
@@ -473,7 +474,7 @@ def run_alternates(
     # --- 1. Candidate geometry: near-route corridor ∪ destination radius ---
     candidates: dict[str, dict] = {}
     try:
-        near = model.find_airports_near_route(route_icaos, distance_nm=corridor_nm)
+        near = model.find_airports_near_route(route_points, distance_nm=corridor_nm)
     except Exception:
         logger.warning("Alternates: find_airports_near_route failed", exc_info=True)
         near = []

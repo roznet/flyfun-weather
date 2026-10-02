@@ -18,6 +18,7 @@ from weatherbrief.models.airport_conditions import SOURCE_USER_DECLARED
 
 if TYPE_CHECKING:
     from euro_aip.briefing.models.route import Route
+    from euro_aip.models.navpoint import NavPoint
 
 
 RejectReason = Literal["detour", "unknown"]
@@ -142,6 +143,19 @@ def is_known_waypoint(code: str, db_path: str) -> bool:
     model = _load_airport_model(db_path)
     resolver = RouteResolver(model)
     return resolver.resolve_point(code.upper()) is not None
+
+
+def route_navpoints(waypoints: Iterable[Waypoint]) -> list[NavPoint]:
+    """Resolved waypoints as euro_aip NavPoints, for corridor queries.
+
+    euro_aip places a plain code only if it is an airport: a navaid or fix
+    passed by code is dropped (with a warning), so the corridor would run
+    straight between the airports instead of along the filed route. The
+    waypoints already carry their coordinates — pass those.
+    """
+    from euro_aip.models.navpoint import NavPoint
+
+    return [NavPoint(latitude=wp.lat, longitude=wp.lon, name=wp.icao) for wp in waypoints]
 
 
 def resolve_route(codes: list[str], db_path: str) -> Route:

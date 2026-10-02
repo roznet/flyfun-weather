@@ -223,7 +223,7 @@ class LiveTick:
         """Refresh the live layer of every flight in its live window."""
         from euro_aip.briefing.weather.route_weather import RouteWeatherService
 
-        from weatherbrief.airports import _load_airport_model
+        from weatherbrief.airports import _load_airport_model, route_navpoints
         from weatherbrief.models.analysis import RouteConfig
         from weatherbrief.storage.flights import _resolve_artifact_path, list_packs
         from weatherbrief.tasks.route_weather import run_realtime_refresh
@@ -254,7 +254,7 @@ class LiveTick:
                 corridor = (briefing.get("route_observations") or {}).get("corridor_nm", 30.0)
                 recorder = _RecordingSource()
                 RouteWeatherService(source=recorder).fetch_route_weather(
-                    route_icaos=[wp.icao for wp in route.waypoints],
+                    route_icaos=route_navpoints(route.waypoints),
                     corridor_nm=corridor,
                     model=model,
                 )

@@ -209,11 +209,11 @@ def run_route_weather(
     """
     from euro_aip.briefing.weather.route_weather import RouteWeatherService
 
-    from weatherbrief.airports import _load_airport_model
+    from weatherbrief.airports import _load_airport_model, route_navpoints
 
     model = _load_airport_model(airports_db_path)
 
-    route_icaos = [wp.icao for wp in route.waypoints]
+    route_icaos = route_navpoints(route.waypoints)
     route_distances = _compute_route_distances(route)
     total_distance = route_distances[-1] if route_distances else 0.0
     duration_hours = route.flight_duration_hours
@@ -697,11 +697,11 @@ def run_route_sigmets(
     """
     from euro_aip.briefing.weather.route_sigmet import RouteSigmetService
 
-    from weatherbrief.airports import _load_airport_model
+    from weatherbrief.airports import _load_airport_model, route_navpoints
 
     model = _load_airport_model(airports_db_path)
 
-    route_icaos = [wp.icao for wp in route.waypoints]
+    route_icaos = route_navpoints(route.waypoints)
     low_ft, high_ft = _sigmet_altitude_band(route)
     win_from, win_to = _departure_day_window(
         target_time, now=now, duration_h=route.flight_duration_hours,

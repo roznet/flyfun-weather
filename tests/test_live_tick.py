@@ -142,7 +142,12 @@ def test_run_refreshes_each_flight_from_one_shared_fetch(db_session, dev_user, t
     tick = LiveTick(upstream=upstream, sigmet_upstream=MagicMock())
 
     def fake_route_weather(self, route_icaos, corridor_nm, model, metar_hours=3):
-        self._get_source().fetch_weather(route_icaos + ["ZZMID"])
+        # The route arrives as NavPoints carrying the pack's coordinates, so
+        # navaids and fixes keep their place in the corridor geometry.
+        assert [(p.name, p.latitude, p.longitude) for p in route_icaos] == [
+            ("ZZAA", 50.0, 1.0), ("ZZBB", 51.0, 2.0),
+        ]
+        self._get_source().fetch_weather([p.name for p in route_icaos] + ["ZZMID"])
         return SimpleNamespace(airports=[])
 
     with patch(

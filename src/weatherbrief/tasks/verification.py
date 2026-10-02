@@ -163,7 +163,7 @@ def _resolve_corridor_airports(
 
     Returns list of (icao, distance_from_route_nm).
     """
-    from weatherbrief.airports import _load_airport_model
+    from weatherbrief.airports import _load_airport_model, resolve_waypoints, route_navpoints
 
     waypoints_raw = json.loads(flight_row.waypoints_json or "[]")
     if len(waypoints_raw) < 2:
@@ -174,8 +174,20 @@ def _resolve_corridor_airports(
         for wp in waypoints_raw
     ]
 
+    # Place navaids and fixes too, so the corridor follows the filed route
+    # (a code is otherwise placed only if it is an airport). Runs once per
+    # flight — the result is cached in flight_verification_map.
+    route_points: list = route_icaos
+    try:
+        route_points = route_navpoints(resolve_waypoints(route_icaos, airports_db_path)[0])
+    except KeyError:
+        logger.warning(
+            "Verification: could not resolve route %s; using its airports only",
+            "-".join(route_icaos),
+        )
+
     model = _load_airport_model(airports_db_path)
-    nearby = model.find_airports_near_route(route_icaos, distance_nm=corridor_nm)
+    nearby = model.find_airports_near_route(route_points, distance_nm=corridor_nm)
 
     airports: list[tuple[str, float]] = []
     for entry in nearby:

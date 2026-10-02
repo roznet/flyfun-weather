@@ -844,3 +844,76 @@ def test_metar_history_single_report_has_no_previous():
     _apply_metar_history(obs, SimpleNamespace(reports=WeatherCollection([r])))
     assert obs.metar_report_type == "METAR"
     assert obs.metar_previous_flight_category is None
+
+
+# --- Corridor geometry follows the filed route ---
+
+@pytest.fixture
+def navaid_route():
+    """Airport → navaid → airport: the navaid bends the route off the direct line."""
+    return RouteConfig(
+        name="Dogleg",
+        waypoints=[
+            Waypoint(icao="EGTF", name="Fairoaks", lat=51.348, lon=-0.559),
+            Waypoint(icao="LAM", name="LAM", lat=51.646, lon=0.152, kind="VORDME"),
+            Waypoint(icao="LFQA", name="Reims", lat=49.310, lon=3.620),
+        ],
+        cruise_altitude_ft=6000,
+        flight_duration_hours=2.0,
+    )
+
+
+def _route_triples(points):
+    return [(p.name, p.latitude, p.longitude) for p in points]
+
+
+def test_run_route_weather_passes_navaids_with_coordinates(navaid_route):
+    """A navaid is not an airport, so passed by code euro_aip would drop it
+    (and warn) and the METAR corridor would run straight EGTF→LFQA."""
+    from datetime import timezone
+
+    from weatherbrief.tasks.route_weather import run_route_weather
+
+    fake_service = MagicMock()
+    fake_service.fetch_route_weather.return_value = SimpleNamespace(airports=[])
+    with patch(
+        "euro_aip.briefing.weather.route_weather.RouteWeatherService",
+        return_value=fake_service,
+    ), patch(
+        "weatherbrief.airports._load_airport_model", return_value=MagicMock(),
+    ):
+        run_route_weather(
+            route=navaid_route,
+            target_time=datetime(2026, 5, 20, 9, tzinfo=timezone.utc),
+            corridor_nm=30.0,
+            airports_db_path="/fake/db",
+        )
+
+    route_points = fake_service.fetch_route_weather.call_args.kwargs["route_icaos"]
+    assert _route_triples(route_points) == [
+        ("EGTF", 51.348, -0.559), ("LAM", 51.646, 0.152), ("LFQA", 49.310, 3.620),
+    ]
+
+
+def test_run_route_sigmets_passes_navaids_with_coordinates(navaid_route):
+    from datetime import timezone
+
+    from weatherbrief.tasks.route_weather import run_route_sigmets
+
+    fake_service = MagicMock()
+    fake_service.fetch_route_sigmets.return_value = SimpleNamespace(route_firs=[], sigmets=[])
+    with patch(
+        "euro_aip.briefing.weather.route_sigmet.RouteSigmetService",
+        return_value=fake_service,
+    ), patch(
+        "weatherbrief.airports._load_airport_model", return_value=MagicMock(),
+    ):
+        run_route_sigmets(
+            route=navaid_route,
+            target_time=datetime(2026, 5, 20, 9, tzinfo=timezone.utc),
+            corridor_nm=50.0,
+            airports_db_path="/fake/db",
+        )
+
+    route_points = fake_service.fetch_route_sigmets.call_args.kwargs["route_icaos"]
+    assert [p.name for p in route_points] == ["EGTF", "LAM", "LFQA"]
