@@ -13,7 +13,7 @@
 
 Flyfun Weather fetches forecast data from multiple numerical weather prediction (NWP) models, performs aviation-specific analysis (icing, turbulence, convection, clouds), and presents everything side-by-side so pilots can compare models and start forming an early view of what conditions will look like from D-7 through D-0.
 
-> **Disclaimer** — Flyfun Weather is built to help and support flight planning and decision-making, giving pilots an early, multi-model picture of the weather and surfacing the factors that matter for a route. It relies on automated analysis and AI, which can make mistakes or miss things, and it has not been reviewed by a professional meteorologist. It is **not** a substitute for official weather briefings, MET reports, or professional meteorological advice. Always consult official sources before flying — the pilot in command remains the sole decision-maker.
+> **Disclaimer** — Flyfun Weather is built to help and support flight planning and decision-making, giving pilots an early, multi-model picture of the weather and surfacing the factors that matter for a route. It relies on automated analysis and AI, which can make mistakes or miss things, and it has not been reviewed by a professional meteorologist. It is **not** a substitute for official weather briefings, MET reports, or professional meteorological advice. Always consult official sources before flying — the pilot in command remains the sole decision-maker. The app is a free hobby project provided as is, and no liability is accepted for its use — see [TERMS.md](TERMS.md).
 
 ## What it does
 
