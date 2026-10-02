@@ -1052,17 +1052,17 @@ def _rmtree(path: Path) -> None:
 
 
 def _live_files(artifact_paths: Sequence[str]) -> list[str]:
-    """The per-flight live-layer files (#637) beside these packs.
+    """The per-flight live-layer files (#637, history #643) beside these packs.
 
     They live in the flight directory, not in any pack directory, so removing
     the packs alone would orphan them. Returned as paths for the same
     deferred-cleanup list the pack directories go through.
     """
-    from weatherbrief.tasks.live_layer import LIVE_FILE, LIVE_META_FILE
+    from weatherbrief.tasks.live_layer import LIVE_FILES
 
     flight_dirs = {str(Path(p).parent) for p in artifact_paths if p}
     return [
         str(Path(d) / name)
         for d in sorted(flight_dirs)
-        for name in (LIVE_FILE, LIVE_META_FILE)
+        for name in LIVE_FILES
     ]

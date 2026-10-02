@@ -23,7 +23,7 @@ from weatherbrief.models.observations import (
     RouteSigmets,
     SigmetAlongRoute,
 )
-from weatherbrief.tasks.live_layer import commit_live_update
+from weatherbrief.tasks.live_layer import change_identity, commit_live_update
 
 SCENARIOS = Path(__file__).parent / "fixtures" / "live_scenarios"
 
@@ -46,18 +46,24 @@ def _dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+def _known_by(o: dict, at: datetime) -> bool:
+    taf = o.get("taf_issue_time")
+    return _dt(o["metar_time"]) <= at and (taf is None or _dt(taf) <= at)
+
+
 def observations_at(scenario: dict, at: datetime) -> RouteObservations:
-    """The corridor fetch at ``at``: each airport's latest report so far."""
+    """The corridor fetch at ``at``: each airport's latest METAR and TAF so far
+    (the builder stores one observation per METAR or TAF, in time order)."""
     derived = scenario["derived"]
     airports = []
     for icao in derived["corridor"]:
-        seen = [o for o in derived["observations"].get(icao, []) if _dt(o["metar_time"]) <= at]
+        seen = [o for o in derived["observations"].get(icao, []) if _known_by(o, at)]
         if seen:
             airports.append(AirportObservation.model_validate(seen[-1]))
     return RouteObservations(
         corridor_nm=scenario["inputs"]["corridor_nm"], fetch_time=at,
         airports_found=len(derived["corridor"]), airports_with_metar=len(airports),
-        airports_with_taf=0, airports=airports,
+        airports_with_taf=sum(1 for a in airports if a.taf_raw), airports=airports,
     )
 
 
@@ -115,7 +121,8 @@ def replay(scenario: dict, flight_dir: Path) -> list[Tick]:
         assert layer is not None, f"tick {at} refused"
         # A change is the same change while its key, direction, value and tier
         # hold — the message may still move (a SPECI suffix, a new detail).
-        current = {(c.key, c.direction, c.to_value, c.tier): c for c in layer.changes.changes}
+        # The live history (#643) uses the same identity.
+        current = {change_identity(c): c for c in layer.changes.changes}
         ticks.append(Tick(
             at=at, pack=ts, layer=layer,
             appeared=[c for k, c in current.items() if k not in shown],

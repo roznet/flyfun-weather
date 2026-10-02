@@ -46,6 +46,23 @@ ChangeSource = Literal["METAR", "SPECI", "TAF", "SIGMET", "LIGHTNING", "RADAR"]
 ChangeRole = Literal["departure", "destination", "alternate", "route"]
 
 
+class LiveEvidencePoint(BaseModel):
+    """One route point that made a radar/lightning change fire (#643).
+
+    History-only: kept so ``live_history.jsonl`` can say *why* an observed
+    change fired. Never serialized onto ``LiveChange`` (see ``evidence``).
+    """
+
+    station_id: str
+    enroute_distance_nm: float | None = None
+    # The innermost ring the rule reads.
+    radius_nm: float
+    flash_count: int | None = None  # lightning
+    max_dbz: float | None = None  # radar
+    valid_px: int | None = None  # radar coverage: valid_px / total_px
+    total_px: int | None = None
+
+
 class LiveChange(BaseModel):
     """One significant change since the briefing.
 
@@ -78,6 +95,10 @@ class LiveChange(BaseModel):
     # value). Consumers that deliver alerts act on this, never on ``tier``
     # alone, so a change persisting across ticks alerts exactly once.
     new_alert: bool = False
+    # Radar/lightning only: the route points that triggered the change.
+    # Excluded from every dump (live.json, /live, snapshot overlay): only the
+    # history writer reads it, off the in-memory change (#643).
+    evidence: list[LiveEvidencePoint] | None = Field(default=None, exclude=True)
 
 
 class LiveChanges(BaseModel):

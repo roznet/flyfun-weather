@@ -28,7 +28,10 @@ The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
   through the production `commit_live_update` and pins the full timeline. A rule
   change shows up as a timeline diff to review. With `AIRPORTS_DB` set, a test
   also checks `derived` still matches a fresh build — rerun the script when it
-  does not.
+  does not. `derived.observations` holds one entry per (METAR, TAF) so the replay
+  serves TAF changes too (the LELL→LEMI fixture has no TAFs).
+- `tests/test_live_history.py`: the history records, and the LELL→LEMI replay's
+  history equals the pinned timeline.
 
 ## Storage: per flight, pack stays immutable
 
@@ -36,7 +39,8 @@ The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 DATA_DIR/packs/{user}/{flight}/
 ├── {pack_ts}/briefing.json   ← immutable: what the assessment saw (the baseline)
 ├── live.json                 ← LiveLayer (models/live.py)
-└── live_meta.json            ← {pack_dir_name, pack_timestamp, live_updated_at}
+├── live_meta.json            ← {pack_dir_name, pack_timestamp, live_updated_at}
+└── live_history.jsonl        ← append-only timeline of the flight day (#643)
 ```
 
 - **Why not keep patching `briefing.json`** (the pre-#637 behaviour): the patch
@@ -54,7 +58,54 @@ DATA_DIR/packs/{user}/{flight}/
   without parsing a payload that carries the full observed-conditions block.
 - **Lifetime:** one file per flight, overwritten each tick. Removed with the flight
   (`storage/flights.py::_live_files` joins the deferred cleanup list) and at
-  retention T1 (`retention._purge_live_layer`, 30 days post-departure).
+  retention T1 (`retention._purge_live_layer`, 30 days post-departure). Every
+  site uses `live_layer.LIVE_FILES`, so the history goes with them. A flight
+  move does not carry packs or live files: they are deleted with the old flight.
+
+## History (`live_history.jsonl`, #643)
+
+`live.json` only holds the latest tick, so nothing recorded what the pilot was
+shown, and when. `commit_live_update` appends to a per-flight JSON Lines file,
+inside the flight lock, after `live.json`/meta are written (`_record_history`).
+Every record has `type`, `tick_at`, `pack_timestamp`:
+
+| type | when | carries |
+|---|---|---|
+| `pack` | first write, and whenever the layer's pack differs from the last `pack` record | `pack_dir_name`, `previous_pack_timestamp`, `has_observations`, corridor widths |
+| `report` | a METAR/SPECI (ICAO + obs time), TAF (ICAO + issue time) or SIGMET (FIR + raw text) the first time it is seen | `raw`; SIGMETs also the structured `SigmetAlongRoute` minus raw text (nothing parses raw SIGMET text back); `seen_at` only when ≠ `tick_at` |
+| `event` | a change `appeared` / `cleared` vs the previous tick, identity `change_identity` = (key, direction, to_value, tier) | the change (nulls dropped; `new_alert` on appear; a clear carries the last message shown) |
+| `evidence` | right after a radar/lightning `appeared` event | the triggering route points (`LiveEvidencePoint`: station, along-route NM, inner ring, flash count or peak dBZ + valid/total px), frame time |
+
+Choices:
+- **Not full `live.json` snapshots** (60–400 KB × ~37 ticks, mostly the observed
+  block). Replaying a morning's radar under other thresholds is out of scope.
+- **One timeline across packs.** Events diff against the stored layer's last
+  `changes` even when the pack switched, so a rebuild shows as clears/appears at
+  that tick (the scenario replay does the same). The new pack's own
+  observations/SIGMETs are recorded as reports with its `pack` record, so its
+  baseline can be rebuilt.
+- **Dedupe from the file**, not an index on the layer (the layer resets on a pack
+  switch): each write reads the history (tens of KB) for seen report keys.
+- **History starting mid-flight** (no file yet, layer exists): what is on screen
+  is recorded as appearing at that tick.
+- **Only reports the tick saw**: the latest METAR per airport per tick. A METAR
+  superseded within one 10-min tick is not recorded (the pilot never saw it).
+- **Evidence stays off the API**: `LiveChange.evidence` is `exclude=True`, so it
+  is in memory for the writer only, never in `live.json`, `/live` or the overlay.
+- **Failure isolation**: any history error is logged (`Live history write
+  failed`) and the tick/↻ carries on. A truncated last line is skipped on read
+  and the next append starts on a fresh line.
+- **Size**: LELL→LEMI (busiest flight of 2026-10-02, no TAFs in the replay)
+  ≈ 50 KB, mostly METAR raw text; a test caps it at 100 KB. No retention beyond
+  the live files' own (T1).
+
+Readers: `live_layer.load_live_history(flight_dir)` (records oldest first) for
+admin/debug and the trend view (#640). `scripts/build_live_scenario.py
+--from-history <flight_dir> <fixture>` turns a flight's history into a scenario
+(`inputs_from_history`: raw METAR/TAF re-parsed with euro_aip anchored on the
+report time, SIGMETs issued when first seen, packs active from their first
+tick); with `AIRPORTS_DB` a test checks the round trip reproduces the pinned
+timeline.
 
 ## Writers
 
@@ -147,7 +198,7 @@ digest, alternate requirement.
 ## Key code
 
 - `models/live.py` — `LiveLayer`, `LiveChanges`, `LiveChange`, `LiveLayerResponse`
-- `tasks/live_layer.py` — store, `commit_live_update`, `overlay_live`, `live_updated_at_for_pack`
+- `tasks/live_layer.py` — store, `commit_live_update`, `overlay_live`, `live_updated_at_for_pack`, history (`load_live_history`, `change_identity`, `LIVE_FILES`)
 - `tasks/live_significance.py` — `classify_changes`, `airport_roles`, `worsening_delta`
 - `tasks/live_tick.py` — `LiveTick`, `find_live_flights`, shared sources
 - `tasks/route_weather.py::run_realtime_refresh` — the seam (no longer patches the pack)

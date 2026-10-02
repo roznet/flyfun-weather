@@ -167,19 +167,20 @@ def _purge_live_layer(pack_dir: Path | None, dry_run: bool) -> int:
     """Remove the flight's live-layer files when they belong to this pack.
 
     The layer sits in the flight directory (one per flight, overwritten each
-    tick), so it is bounded per flight but would otherwise live as long as the
-    flight row. Returns bytes freed.
+    tick; its history appended to, tens of KB per flight day), so it is
+    bounded per flight but would otherwise live as long as the flight row.
+    Returns bytes freed.
     """
     if pack_dir is None:
         return 0
-    from weatherbrief.tasks.live_layer import LIVE_FILE, LIVE_META_FILE, load_live_meta
+    from weatherbrief.tasks.live_layer import LIVE_FILES, load_live_meta
 
     flight_dir = pack_dir.parent
     meta = load_live_meta(flight_dir)
     if not meta or meta.get("pack_dir_name") != pack_dir.name:
         return 0
     freed = 0
-    for name in (LIVE_FILE, LIVE_META_FILE):
+    for name in LIVE_FILES:
         p = flight_dir / name
         if p.exists():
             freed += p.stat().st_size

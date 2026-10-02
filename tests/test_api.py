@@ -2399,6 +2399,8 @@ class TestLiveLayerEndpoint:
         pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
         self._commit(pack_dir)
         assert (pack_dir.parent / "live.json").exists()
+        assert (pack_dir.parent / "live_history.jsonl").exists()
         assert client.delete(f"/api/flights/{sample_flight.id}").status_code in (200, 204)
         assert not (pack_dir.parent / "live.json").exists()
         assert not (pack_dir.parent / "live_meta.json").exists()
+        assert not (pack_dir.parent / "live_history.jsonl").exists()
