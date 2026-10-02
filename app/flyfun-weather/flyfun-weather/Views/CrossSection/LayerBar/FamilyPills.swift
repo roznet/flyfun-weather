@@ -53,6 +53,7 @@ struct FamilyPills: View {
         ) {
             csVM.toggleLayer(id)
         }
+        .accessibilityIdentifier("layerPill-\(id)")
     }
 
     @ViewBuilder private var cloudPills: some View {

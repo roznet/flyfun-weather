@@ -201,11 +201,14 @@ final class CrossSectionViewModel {
         routeAnalyses: RouteAnalysesResponse,
         elevation: ElevationResponse?,
         model: String,
-        observed: ObservedConditions? = nil
+        observed: ObservedConditions? = nil,
+        routeObservations: RouteObservations? = nil,
+        routeSigmets: RouteSigmets? = nil
     ) {
         vizData = Self.extractVizData(
             from: routeAnalyses, model: model, elevation: elevation,
-            observed: observed, observedRadiusNm: observedRadiusNm
+            observed: observed, observedRadiusNm: observedRadiusNm,
+            routeObservations: routeObservations, routeSigmets: routeSigmets
         )
         dataVersion += 1
         recomputeEffectiveLayers()  // model/route/elevation changed → refresh the cache
@@ -541,7 +544,9 @@ final class CrossSectionViewModel {
         model: String,
         elevation: ElevationResponse?,
         observed observedConditions: ObservedConditions? = nil,
-        observedRadiusNm: Double? = nil
+        observedRadiusNm: Double? = nil,
+        routeObservations: RouteObservations? = nil,
+        routeSigmets: RouteSigmets? = nil
     ) -> VizRouteData {
         var points: [VizPoint] = []
         var waypointMarkers: [WaypointMarker] = []
@@ -590,7 +595,12 @@ final class CrossSectionViewModel {
             departureTime: manifest.departureTime,
             flightDurationHours: manifest.flightDurationHours,
             terrainProfile: terrainProfile,
-            observed: observed
+            observed: observed,
+            // METAR columns + SIGMET zones (current-conditions layer). Read from
+            // the snapshot the live layer patches, so a live tick lands here.
+            currentConditions: VizCurrentConditions.build(
+                observations: routeObservations, sigmets: routeSigmets,
+                terrainProfile: terrainProfile)
         )
     }
 

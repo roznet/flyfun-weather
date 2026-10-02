@@ -177,9 +177,14 @@ struct FamilyDot: View {
 
 extension LayerFamily {
     /// The families the loaded pack has something for. Observed disappears when
-    /// the pack carries no observed payload (a D-1+ pack, the collector off),
-    /// rather than offering a chip that opens an empty row.
+    /// the pack carries neither an observed payload nor any placeable METAR /
+    /// SIGMET (a D-1+ pack, the collector off), rather than offering a chip that
+    /// opens an empty row. Its individual pills grey out per source.
     static func visible(in csVM: CrossSectionViewModel) -> [LayerFamily] {
-        allCases.filter { $0 != .observed || csVM.vizData?.observed != nil }
+        allCases.filter {
+            $0 != .observed
+                || csVM.vizData?.observed != nil
+                || csVM.vizData?.currentConditions != nil
+        }
     }
 }

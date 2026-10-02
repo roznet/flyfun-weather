@@ -198,9 +198,12 @@ gap the branch introduced:
 
 - iOS-missing cross-section layers: `ieng-icing-bands`, `e-shear-bands`,
   `sld-bands`, `surface-obscuration-bands`. Also web-only and equally expected:
-  `current-conditions` (D-0 METAR/SIGMET overlay), `fronts-markers`,
+  `fronts-markers`,
   `night-shading` — iOS has no `obscuration` or `fronts` layer group, and
   `CrossSectionTheme.swift` documents the theme-level omissions.
+  `current-conditions` is ported since #641 (`CurrentConditionsLayer.swift`);
+  expected differences: iOS uses its own flight-category palette (MVFR blue,
+  web amber) and has no cross-section legend swatches.
 - Cross-section color themes (web-only; tracked in #320).
 - Skew-T overlay bands: the web has seven (`clouds-nwp`/`clouds-dd`,
   `icing-nwp`/`icing-dd`/`icing-sfip`, `inversions`, `convective`); iOS collapses

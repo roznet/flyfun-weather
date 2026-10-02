@@ -20,6 +20,12 @@ nonisolated struct VizRouteData {
     /// snapshot's `observedConditions`; nil on D-1+ packs, on a deployment with
     /// the collector switched off, and on any pack built before #574.
     var observed: VizObserved? = nil
+    /// D-0 METAR columns + route SIGMET zones for the current-conditions layer.
+    /// Built by `extractVizData` from the snapshot's `routeObservations` /
+    /// `routeSigmets` (which the live layer patches in place, so this is always
+    /// the latest live data once a tick has been applied). nil when neither
+    /// carries anything placeable — the layer then greys out.
+    var currentConditions: VizCurrentConditions? = nil
     /// Advisory highlight geometry (scrim + verdict ribbon, #374) for the
     /// tracked advisory × the rendered model. Unlike the fields above it is NOT
     /// built by `extractVizData` (the geometry lives in the advisories manifest,
@@ -350,4 +356,103 @@ nonisolated struct VizObserved {
     let cloudTops: VizObservedSource?
     let lightning: VizObservedSource?
     let summaryLines: [String]
+}
+
+// MARK: - Current conditions (METAR columns + SIGMET zones)
+//
+// SYNC — mirrors `VizMetarColumn` / `VizSigmetZone` / `VizCurrentConditions` in
+// web/ts/visualization/types.ts and `buildCurrentConditions` in
+// web/ts/visualization/data-extract.ts. Deliberately separate from
+// `VizObserved`: these are point reports and airspace notices, not
+// remotely-sensed samples resolved onto route points.
+
+/// METAR-reporting airport projected onto the cross-section X axis.
+nonisolated struct VizMetarColumn: Equatable {
+    let icao: String
+    /// Along-route distance (nm) → column centre on the X axis.
+    let enrouteDistanceNm: Double
+    /// Perpendicular offset from the route (nm) → draw order (closest on top).
+    /// A missing offset sorts as farthest.
+    let distanceFromRouteNm: Double
+    /// "VFR" | "MVFR" | "IFR" | "LIFR" (upper-cased) — drives the fill colour.
+    let flightCategory: String
+    /// Column base (ft MSL): terrain elevation under the column's X position
+    /// (field elevation is not serialized on the observation).
+    let baseFt: Double
+    // Readout detail (METAR ground truth).
+    let metarRaw: String?
+    let ceilingFt: Double?
+    let visibilityM: Double?
+    let windDir: Double?
+    let windSpeedKt: Double?
+    let windGustKt: Double?
+}
+
+/// Route SIGMET projected onto the cross-section (enroute span × vertical band).
+nonisolated struct VizSigmetZone: Equatable {
+    /// Enroute span start/end (nm) on the X axis, as served (not yet widened to
+    /// the 5 nm minimum — see `CurrentConditionsLayer.sigmetSpanNm`).
+    let enrouteFromNm: Double
+    let enrouteToNm: Double
+    /// Vertical band (ft MSL); nil → span the full plot height (unknown extent).
+    let baseFt: Double?
+    let topFt: Double?
+    /// Hazard word (TURB/ICE/TS/MTW/VA…); "SIGMET" when the source gave none.
+    let hazard: String
+    /// SEV/EMBD/… — drives the severe styling.
+    let qualifier: String?
+    let rawText: String?
+}
+
+nonisolated struct VizCurrentConditions: Equatable {
+    let airports: [VizMetarColumn]
+    let sigmets: [VizSigmetZone]
+
+    /// Map snapshot observations + SIGMETs into the route-distance-keyed structs
+    /// the current-conditions layer renders. Returns nil when neither source has
+    /// anything placeable (D-1+ snapshots, or D-0 with no reporting airports and
+    /// no SIGMETs with an enroute span) so the layer pill can grey out.
+    /// Port of web `buildCurrentConditions`.
+    static func build(
+        observations: RouteObservations?,
+        sigmets: RouteSigmets?,
+        terrainProfile: [TerrainPoint]?
+    ) -> VizCurrentConditions? {
+        var airports: [VizMetarColumn] = []
+        for a in observations?.airports ?? [] {
+            // Needs a flight category (the colour) and an along-route position.
+            guard let category = a.metarFlightCategory, let enroute = a.enrouteDistanceNm else { continue }
+            airports.append(VizMetarColumn(
+                icao: a.icao,
+                enrouteDistanceNm: enroute,
+                distanceFromRouteNm: a.distanceFromRouteNm ?? .greatestFiniteMagnitude,
+                flightCategory: category.uppercased(),
+                baseFt: terrainProfile?.elevationFt(atDistanceNm: enroute) ?? 0,
+                metarRaw: a.metarRaw,
+                ceilingFt: a.metarCeilingFt.map { Double($0) },
+                visibilityM: a.metarVisibilityM.map { Double($0) },
+                windDir: a.metarWindDir.map { Double($0) },
+                windSpeedKt: a.metarWindSpeedKt.map { Double($0) },
+                windGustKt: a.metarWindGustKt.map { Double($0) }
+            ))
+        }
+
+        var zones: [VizSigmetZone] = []
+        for s in sigmets?.matched ?? [] {
+            // Without an enroute span there is nothing to place on the X axis.
+            guard let from = s.enrouteDistanceFromNm, let to = s.enrouteDistanceToNm else { continue }
+            zones.append(VizSigmetZone(
+                enrouteFromNm: from,
+                enrouteToNm: to,
+                baseFt: s.baseFt.map { Double($0) },
+                topFt: s.topFt.map { Double($0) },
+                hazard: s.hazard ?? "SIGMET",
+                qualifier: s.qualifier,
+                rawText: s.rawText
+            ))
+        }
+
+        if airports.isEmpty && zones.isEmpty { return nil }
+        return VizCurrentConditions(airports: airports, sigmets: zones)
+    }
 }

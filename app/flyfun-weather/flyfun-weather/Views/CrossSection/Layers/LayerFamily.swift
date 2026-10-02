@@ -64,7 +64,7 @@ enum LayerFamily: String, CaseIterable, Identifiable {
         case .turbulence: "Clear-air turbulence read off the wind shear."
         case .levels: "Reference lines. Everything else on the chart is measured against these."
         case .stability: "Parcel levels read off the sounding: where it clouds up, and how far it gets."
-        case .observed: "Ground truth from radar and satellite — valid now, not a forecast."
+        case .observed: "Ground truth from radar, satellite and METAR — valid now, not a forecast."
         }
     }
 
@@ -76,7 +76,7 @@ enum LayerFamily: String, CaseIterable, Identifiable {
         case .convection: "The two schemes disagree in a patterned way, and the pattern is diagnostic: NWP tends to fire early on the day, the thermo scheme late."
         case .icing: "They split on one question: where does the cloud come from? Some read moisture out of the sounding, some take the model's word for it. Overlaying one of each is the useful comparison."
         case .stability: "LCL, LFC and EL are one narrative: where a rising parcel clouds up, where it stops needing help, and where it runs out."
-        case .observed: "Each instrument has its own age. They are not alternatives to each other, and never to the model — they are the check on it."
+        case .observed: "Three instruments, each with its own age. They are not alternatives to each other, and never to the model — they are the check on it."
         case .turbulence, .levels: nil
         }
     }

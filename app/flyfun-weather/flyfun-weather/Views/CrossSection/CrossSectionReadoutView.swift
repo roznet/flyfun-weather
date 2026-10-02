@@ -14,6 +14,10 @@ struct CrossSectionReadoutView: View {
     /// their value at the cursor is shown here too, so the strip and the graph
     /// share one cursor instead of two tooltips.
     var routeGraphMetricIds: [String] = []
+    /// Whether the current-conditions layer is drawn (effective, so an
+    /// unavailable layer reads as off). Its METAR / SIGMET lines appear only
+    /// then — they describe that layer's marks, as the web tooltip does.
+    var currentConditionsOn: Bool = false
 
     var body: some View {
         HStack(spacing: Theme.spacingM) {
@@ -140,6 +144,17 @@ struct CrossSectionReadoutView: View {
         }
         out += Self.observedChips(
             pt, sources: vizData.observed, scrubAltitudeFt: scrubAltitudeFt)
+        // Current conditions match on the CURSOR distance (route-global X span
+        // + Y band), not the nearest route point — same as the web tooltip.
+        if currentConditionsOn, let dist = scrubDistanceNm {
+            // De-duplicated: the chips are keyed by their text, and two zones
+            // (say LECB and LECM EMBD TS) can share a headline line.
+            for line in CurrentConditionsLayer.readoutLines(
+                vizData.currentConditions, distanceNm: dist, altitudeFt: scrubAltitudeFt)
+            where !out.contains(line) {
+                out.append(line)
+            }
+        }
         return out
     }
 

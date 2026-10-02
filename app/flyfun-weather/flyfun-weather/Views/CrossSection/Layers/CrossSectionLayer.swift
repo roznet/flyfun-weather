@@ -87,6 +87,9 @@ enum CrossSectionLayer {
         CATBandsLayer(),
         InversionBandsLayer(),
         TerrainLayer(),
+        // Current conditions sits above terrain (columns rest on the surface) but
+        // below the temperature/stability/reference lines so those stay readable.
+        CurrentConditionsLayer(),
         // Observed radar/lightning hugs the terrain, so it sits with the other
         // surface-referenced overlays rather than in the cloud stack — and above
         // the terrain fill, which would otherwise mask the strip.
@@ -107,6 +110,8 @@ enum CrossSectionLayer {
     /// A family chip switching on a group that is a set of independent lines —
     /// levels, stability, observed — brings back these, the same lines the web's
     /// compact chip does. Method groups resolve through the graded methods instead.
+    /// `current-conditions` is deliberately absent (web `defaultEnabled: false`):
+    /// it shows only when the pilot turns it on.
     static let defaultEnabled: Set<String> = [
         "terrain", "freezing-level", "minus-10c", "minus-20c", "reference-lines",
         "lcl", "lfc", "el", "observed-tops",
@@ -114,11 +119,11 @@ enum CrossSectionLayer {
     ]
 
     /// The layers of one group in pill order: render order, except the observed
-    /// layers read surface → tops as on the web (`PANEL_ORDER`).
+    /// layers read airports → surface → tops as on the web (`PANEL_ORDER`).
     static func layers(in group: LayerGroup) -> [any CrossSectionLayerProtocol] {
         let inGroup = allLayers.filter { $0.group == group }
         guard group == .conditions else { return inGroup }
-        let order = ["observed-surface", "observed-tops"]
+        let order = ["current-conditions", "observed-surface", "observed-tops"]
         let rank = { (id: String) in order.firstIndex(of: id) ?? order.count }
         return inGroup.sorted { rank($0.id) < rank($1.id) }
     }
@@ -154,6 +159,7 @@ enum CrossSectionLayer {
         "thermo-convective-bg": "convective_risk",
         "observed-tops": "observed_tops",
         "observed-surface": "observed_surface",
+        "current-conditions": "current_conditions",
     ]
 
     private static let labels: [String: String] = [
@@ -179,6 +185,7 @@ enum CrossSectionLayer {
         "reference-lines": "Cruise / Flight ceiling",
         "observed-tops": "Cloud tops",
         "observed-surface": "Rain & lightning",
+        "current-conditions": "Airport",
         "terrain": "Terrain",
     ]
 
@@ -193,5 +200,6 @@ enum CrossSectionLayer {
         "cat-bands": "Ri",
         "observed-surface": "radar",
         "observed-tops": "tops",
+        "current-conditions": "airports",
     ]
 }

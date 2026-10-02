@@ -10,7 +10,8 @@ import Foundation
 //          NWP_CLOUDS_SIGNAL, ALL_CLOUD_LAYER_IDS)
 //
 // iOS uses its own layer IDs and lacks a few web layers (ieng / sld / e-shear /
-// current-conditions / fronts) — those are intentionally absent here. When the
+// fronts) — those are intentionally absent here. Current conditions (METAR
+// columns + SIGMET zones) IS ported and gated below, as on the web. When the
 // web fallback logic changes, update this file, and note it on the web side
 // (both files carry the reciprocal SYNC comment).
 // =============================================================================
@@ -65,8 +66,7 @@ enum NwpFallback {
     /// Layer ids that lack data for the current model → disabled in the config
     /// sheet (and drive the DD substitution). Mirrors web `getUnavailableLayers`.
     ///
-    /// iOS omits the web layers it doesn't have (ieng / sld / e-shear /
-    /// current-conditions / fronts).
+    /// iOS omits the web layers it doesn't have (ieng / sld / e-shear / fronts).
     static func unavailableLayers(in data: VizRouteData) -> Set<String> {
         var unavailable = Set<String>()
 
@@ -84,6 +84,19 @@ enum NwpFallback {
         }
         if !hasSfip { unavailable.insert("sfip-bands") }
         if !hasNwpConvective { unavailable.insert("nwp-convective-bg") }
+
+        // Current conditions: unavailable when the snapshot carried no placeable
+        // METAR and no SIGMET with an enroute span. `VizCurrentConditions.build`
+        // returns nil (never an empty value) in that case.
+        if data.currentConditions == nil { unavailable.insert("current-conditions") }
+
+        // Observed layers (#574): each greys out when ITS OWN source is absent —
+        // they now share the Observed family with current conditions, so the
+        // family can be on screen without an observed payload at all.
+        if data.observed?.cloudTops == nil { unavailable.insert("observed-tops") }
+        if data.observed?.reflectivity == nil && data.observed?.lightning == nil {
+            unavailable.insert("observed-surface")
+        }
 
         return unavailable
     }

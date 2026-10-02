@@ -437,7 +437,8 @@ Colour stops start at the floor — a stop below it would be spent on bands
 that are never drawn — and run to about half the sky, which is where the
 surviving bands top out.
 
-The existing `current-conditions` layer (METAR columns + SIGMET zones) is
+The existing `current-conditions` layer (METAR columns + SIGMET zones; on iOS
+since #641, `CurrentConditionsLayer.swift`, also off by default) is
 untouched — these are siblings, not a replacement. Adding a second layer to
 the `conditions` group did require fixing `panel.ts`, which used to hide the
 whole group when one named layer was unavailable; it now hides a group only

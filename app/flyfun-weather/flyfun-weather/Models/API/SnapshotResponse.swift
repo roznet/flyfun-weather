@@ -473,3 +473,24 @@ nonisolated struct SigmetAlongRoute: Codable, Identifiable, Sendable {
         return String(format: "%02d%02d%02dZ", d, h, m)
     }
 }
+
+nonisolated extension SnapshotResponse {
+    /// Change token for the cross-section rebuild: moves whenever a live update
+    /// (`BriefingViewModel.applyLive`, or a gated D-0 refresh) replaces ANY of
+    /// the blocks the chart draws from — the observed payload, the METARs or the
+    /// SIGMETs. Keying on `observedConditions.computedAt` alone missed a tick
+    /// that only moved the SIGMETs, leaving the current-conditions layer stale.
+    ///
+    /// SIGMET identities are folded in as well as the fetch time, so a
+    /// replacement that keeps the fetch time but changes the bulletins still
+    /// rebuilds. Only ever compared, never displayed or parsed.
+    var crossSectionLiveToken: String {
+        [
+            liveUpdatedAt ?? "-",
+            observedConditions?.computedAt ?? "-",
+            routeObservations?.fetchTime ?? "-",
+            routeSigmets?.fetchTime ?? "-",
+            (routeSigmets?.matched ?? []).map(\.id).joined(separator: ","),
+        ].joined(separator: "|")
+    }
+}

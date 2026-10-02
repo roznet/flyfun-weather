@@ -115,6 +115,11 @@ has an **About** panel (popover on iPad, sheet on iPhone) built from the bundled
 metrics catalog via `CrossSectionLayer.metricIds`. The options sheet
 (`CrossSectionConfigSheet`) keeps only set-once settings: emulation, theme,
 observed corridor + source ages, and — on iPhone — every family's pills.
+The Observed family also holds **current conditions** (METAR columns + SIGMET
+zones, `CurrentConditionsLayer`, off by default as on the web, first pill): it
+redraws from the latest live tick because the view rebuilds on
+`SnapshotResponse.crossSectionLiveToken` (live / observed / METAR / SIGMET
+change), and its lines join the scrub readout only while it is drawn.
 
 **Scrub vs scroll.** `ScrubPanGesture` (a `UIGestureRecognizerRepresentable`)
 decides by direction when it would begin: a sideways drag scrubs, a hold (0.25 s)

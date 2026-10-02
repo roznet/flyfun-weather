@@ -967,8 +967,18 @@ final class flyfun_weatherUITests: XCTestCase {
     /// The mock flight is fixture-1 (LFMD→LFML) — its header says so — but the
     /// live layer replaces the observation and SIGMET tables wholesale, so those
     /// show the scenario's real corridor airports and SIGMETs.
+    ///
+    /// `conditions` names the ticks at which to open the Cross-Section tab, turn
+    /// the current-conditions layer on (it is off by default) and check the
+    /// canvas reports the expected SIGMET zones / METAR columns — the summary
+    /// the canvas carries as its accessibility value while the layer is drawn.
+    /// Returns the summary read at each of those ticks.
     @MainActor
-    private func runLiveScenario(_ scenario: String, ticks: [String]) throws {
+    @discardableResult
+    private func runLiveScenario(
+        _ scenario: String, ticks: [String], conditions: [String: String] = [:]
+    ) throws -> [String: String] {
+        var readSummaries: [String: String] = [:]
         for hhmm in ticks {
             try XCTContext.runActivity(named: "\(scenario) \(hhmm)Z") { _ in
                 let tick = try liveScenarioTick(scenario, hhmm)
@@ -1037,15 +1047,72 @@ final class flyfun_weatherUITests: XCTestCase {
                                        "\(hhmm): each newly issued SIGMET should be badged NEW in the hazards table")
                     }
                 }
+
+                if let expected = conditions[hhmm] {
+                    let summary = currentConditionsSummary(app, label: "Live-\(scenario)-\(hhmm)-4-cross-section")
+                    XCTAssertEqual(summary, expected,
+                                   "\(hhmm): the current-conditions layer should draw the tick's SIGMETs and METARs")
+                    readSummaries[hhmm] = summary
+                }
             }
         }
+        return readSummaries
+    }
+
+    /// Open the Cross-Section tab, make sure the current-conditions layer is on
+    /// (its pill sits in the Observed family's detail row — the family chip
+    /// alone would only bring back the default-on observed lines), and return
+    /// the canvas's accessibility value: "N SIGMET zones, M METAR columns"
+    /// while the layer is drawn, empty while it is off. Idempotent: the layer
+    /// state persists across launches, so a later tick may find it already on.
+    @MainActor
+    private func currentConditionsSummary(_ app: XCUIApplication, label: String) -> String {
+        switchToBriefingTab(app, "Cross-Section")
+        let canvas = app.descendants(matching: .any)["crossSectionCanvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: Self.uiTimeout), "cross-section canvas should render")
+
+        if ((canvas.value as? String) ?? "").isEmpty {
+            let chip = app.descendants(matching: .any)["layerFamily-observed"].firstMatch
+            XCTAssertTrue(chip.waitForExistence(timeout: Self.uiTimeout),
+                          "the Observed family should be on the bar when the live layer carries METARs/SIGMETs")
+            if !chip.isHittable { canvas.swipeUp() }  // iPhone: the chips sit under the chart
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                chip.tap()  // full chip: opens the family's detail row
+            } else {
+                chip.press(forDuration: 0.8)  // compact chip: hold opens the methods row
+            }
+            let pill = app.descendants(matching: .any)["layerPill-current-conditions"].firstMatch
+            XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout),
+                          "the Observed detail row should offer the current-conditions pill")
+            pill.tap()
+            let drawn = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value CONTAINS %@", "SIGMET zone"), object: canvas)
+            XCTAssertEqual(XCTWaiter.wait(for: [drawn], timeout: Self.uiTimeout), .completed,
+                           "turning the pill on should draw the current-conditions layer")
+        }
+        Thread.sleep(forTimeInterval: 0.8)
+        attachScreenshot(app, label)
+        return (canvas.value as? String) ?? ""
     }
 
     /// 2026-10-02 LELL→LEMI (dep 08:00Z): LEVC thunderstorms under the route,
     /// a one-report MVFR at the destination, LECB 3 / LECM 3 EMBD TS at LEMI.
     @MainActor
     func testLiveScenarioLellLemi() throws {
-        try runLiveScenario("2026-10-02_lell_lemi", ticks: ["0510", "0600", "0710", "0830", "0900", "1020"])
+        // Current conditions on the cross-section (#641). Counts are what the
+        // ticks' `route_sigmets` / `route_observations` carry with an enroute
+        // span / a category + enroute distance: at 05:10 one LECB EMBD TS; by
+        // 08:30 a second LECB and a LECM EMBD TS at LEMI, and LECH (LIFR) has
+        // started reporting. The live layer must reach the chart, not just the
+        // tables.
+        let summaries = try runLiveScenario(
+            "2026-10-02_lell_lemi", ticks: ["0510", "0600", "0710", "0830", "0900", "1020"],
+            conditions: [
+                "0510": "1 SIGMET zone, 8 METAR columns",
+                "0830": "3 SIGMET zones, 9 METAR columns",
+            ])
+        XCTAssertNotEqual(summaries["0510"], summaries["0830"],
+                          "the SIGMET zones drawn at 08:30 should differ from 05:10")
     }
 
     @MainActor
