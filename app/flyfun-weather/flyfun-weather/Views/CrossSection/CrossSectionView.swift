@@ -83,7 +83,9 @@ struct CrossSectionView: View {
         // replaces it in place without minting a new pack — so the chart has to
         // rebuild on a snapshot change, not only on a pack change (#574).
         .onChange(of: viewModel.snapshotState.isLoaded) { updateVizData() }
-        .onChange(of: observedComputedAt) { updateVizData() }
+        // Any live tick — observed payload, METARs or SIGMETs — must rebuild:
+        // a tick that only moves the SIGMETs leaves `observedConditions` alone.
+        .onChange(of: liveRebuildToken) { updateVizData() }
         .onChange(of: viewModel.focusIntent) { applyFocusIntent() }
         // What FlyFun, the compact chips and the advisory chip resolve through:
         // the methods this briefing actually graded with (#605).
@@ -143,7 +145,8 @@ struct CrossSectionView: View {
                         scrubDistanceNm: scrubDistanceNm,
                         scrubAltitudeFt: scrubAltitudeFt,
                         onSounding: goToSounding,
-                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
+                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId],
+                        currentConditionsOn: csVM.effectiveEnabledLayers["current-conditions"] == true
                     )
                     // "Tap any point" coachmark above the canvas (#312); cleared
                     // on the first scrub via `updateScrub`. Only render once
@@ -271,7 +274,8 @@ struct CrossSectionView: View {
                     scrubDistanceNm: scrubDistanceNm,
                     scrubAltitudeFt: scrubAltitudeFt,
                     onSounding: goToSounding,
-                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
+                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId],
+                    currentConditionsOn: csVM.effectiveEnabledLayers["current-conditions"] == true
                 )
                 HStack(spacing: Theme.spacingS) {
                     LayerBarView(
@@ -394,6 +398,13 @@ struct CrossSectionView: View {
                 // so no parent identifier can propagate over and clobber it.
                 .accessibilityElement()
                 .accessibilityIdentifier("crossSectionCanvas")
+                // What the current-conditions layer carries while it is drawn
+                // ("1 SIGMET zone, 8 METAR columns"); empty while it is off. The
+                // live-scenario UI journey reads it — Canvas content itself is
+                // not introspectable.
+                .accessibilityValue(layers["current-conditions"] == true
+                    ? CurrentConditionsLayer.accessibilitySummary(vizData.currentConditions)
+                    : "")
         } else {
             switch viewModel.routeAnalysesState {
             case .idle, .loading:
@@ -585,12 +596,10 @@ struct CrossSectionView: View {
         return nil
     }
 
-    /// Identity for the observed payload, so a re-sample that leaves the pack
-    /// timestamp alone still triggers a rebuild. `computedAt` is the payload's
-    /// *assembly* time — used here only as a change token, never rendered as an
-    /// observation age (each source carries its own).
-    private var observedComputedAt: String? {
-        snapshot?.observedConditions?.computedAt
+    /// Change token for everything a live update can replace on the snapshot,
+    /// so the chart rebuilds on any tick. See `SnapshotResponse.crossSectionLiveToken`.
+    private var liveRebuildToken: String {
+        snapshot?.crossSectionLiveToken ?? ""
     }
 
     private func updateVizData() {
@@ -603,7 +612,9 @@ struct CrossSectionView: View {
             csVM.update(
                 routeAnalyses: analyses, elevation: elevation,
                 model: viewModel.selectedModel,
-                observed: snapshot?.observedConditions
+                observed: snapshot?.observedConditions,
+                routeObservations: snapshot?.routeObservations,
+                routeSigmets: snapshot?.routeSigmets
             )
         }
     }
