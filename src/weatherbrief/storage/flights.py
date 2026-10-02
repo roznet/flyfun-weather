@@ -1011,15 +1011,20 @@ def _backfill_system_templates(session: Session, user_id: str) -> None:
     _seed_system_profiles(session, user_id, mark_first_default=False)
 
 
+# Flight IDs are built from safe_path_component(route) + date + hash, so this
+# is their full alphabet. One definition, so the sanitizer and the validators
+# that accept flight IDs from clients cannot drift apart.
+_FLIGHT_ID_CHARS = "A-Za-z0-9._-"
+FLIGHT_ID_RE = re.compile(f"[{_FLIGHT_ID_CHARS}]+")
+
+
 def safe_path_component(value: str) -> str:
     """Sanitize a string for use as a single path component.
 
     Strips path separators and traversal sequences, keeping only
     alphanumeric chars, hyphens, underscores, and dots (no leading dot).
     """
-    import re
-
-    sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", value)
+    sanitized = re.sub(f"[^{_FLIGHT_ID_CHARS}]", "_", value)
     sanitized = sanitized.lstrip(".")
     return sanitized or "_"
 

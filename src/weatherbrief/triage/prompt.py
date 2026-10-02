@@ -43,7 +43,11 @@ def load_prompt(item: dict, *, template: str = DEFAULT_TEMPLATE) -> str:
 
     def _trusted(key: str, default: str = "") -> str:
         value = str(item.get(key, default) or "")
-        return value if _TRUSTED_VALUE_RE.fullmatch(value) else "N/A (invalid)"
+        if _TRUSTED_VALUE_RE.fullmatch(value):
+            return value
+        # Distinguishable from a genuinely missing value in the logs.
+        logger.warning("triage: replaced non-identifier value of %s", key)
+        return "N/A (invalid)"
 
     replacements = {
         "untrusted_delimiter": delimiter,
