@@ -100,6 +100,10 @@ def test_convective_tags(raw, wx, expected):
     (["FZRA"], {"FZRA"}),
     (["-FZDZ"], {"FZDZ"}),
     (["+SHRA"], {"+SHRA"}),
+    (["+SN"], {"+SN"}),              # heavy snow (#640)
+    (["+RASN"], {"+RASN"}),
+    (["+SHSN"], {"+SHSN"}),
+    (["-SN", "SN"], set()),          # light / moderate snow: the category covers it
     (["+TSRA"], set()),              # a thunderstorm is reported once, as convective
     (["TSGR"], {"GR"}),
     (["SQ"], {"SQ"}),
@@ -171,6 +175,12 @@ def test_same_convective_level_is_not_a_change():
     b = "METAR ZZDS 020700Z 05010KT 9999 SCT020CB 20/15 Q1020"
     changes, _ = classify([apt("ZZDS", a)], [apt("ZZDS", b, t=T1)])
     assert [c for c in changes if c.kind == "metar_convective"] == []
+
+
+def test_heavy_snow_en_route_alerts():
+    changes, _ = classify([apt("ZZRT", enroute=100)], [apt("ZZRT", wx=["+SN"], t=T1, enroute=100)])
+    c = only(changes, "metar_weather")
+    assert (c.role, c.tier, c.to_value) == ("route", "alert", "+SN")
 
 
 def test_significant_weather_appearing_at_destination_alerts():

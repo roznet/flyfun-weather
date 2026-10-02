@@ -264,14 +264,15 @@ def _convective_level(tags: set[str]) -> int:
 
 def significant_weather(obs: AirportObservation) -> set[str]:
     """Significant present weather: freezing precipitation, hail, squall,
-    funnel cloud, and heavy showers (``+SH…``). A thunderstorm (``+TS…``) is
-    reported once, as convective (:func:`convective_tags`), not twice."""
+    funnel cloud, heavy showers (``+SH…``) and heavy snow (``+SN``, ``+RASN``…).
+    A thunderstorm (``+TS…``) is reported once, as convective
+    (:func:`convective_tags`), not twice."""
     out: set[str] = set()
     for c in _present_weather(obs):
         for code in _SIGNIFICANT_WX:
             if code in c:
                 out.add(code)
-        if c.startswith("+") and "SH" in c and "TS" not in c:
+        if c.startswith("+") and ("SH" in c or "SN" in c) and "TS" not in c:
             out.add(c)
     return out
 

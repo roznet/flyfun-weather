@@ -4997,8 +4997,9 @@ landing).
     group (read off the raw report, so packs from before this compare the same).
     Ranked TCU < CB < TS; a step up is a change, a step down an improvement.
     Recent weather (``RE…``) is history and ignored.
-  - *Significant weather*: FZRA, FZDZ, GR, SQ, FC at any intensity, and heavy
-    showers (``+SH…``) appearing; clearing is an improvement. A heavy
+  - *Significant weather*: FZRA, FZDZ, GR, SQ, FC at any intensity, heavy
+    showers (``+SH…``) and heavy snow (``+SN``, ``+RASN``…) appearing; clearing
+    is an improvement. Light/moderate snow is left to the category change. A heavy
     thunderstorm (``+TS…``) is reported once, as convective, not twice.
   - *Wind*: the airport wind advisory crossing green → amber → red — the
     advisory's own thresholds (best-runway crosswind 15 / 25 kt, gust 25 / 35 kt,
