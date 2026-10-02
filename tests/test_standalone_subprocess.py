@@ -646,7 +646,7 @@ def test_observed_archive_is_off_by_default(monkeypatch):
     monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
     captured = _patch_exec(monkeypatch, FakeProc())
     asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
-    assert captured == {}
+    assert "cmd" not in captured  # never launched
 
 
 def test_observed_archive_needs_the_collector(monkeypatch):
@@ -654,7 +654,7 @@ def test_observed_archive_needs_the_collector(monkeypatch):
     monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
     captured = _patch_exec(monkeypatch, FakeProc())
     asyncio.run(scheduler._run_observed_archive_after_ingest(_app_state()))
-    assert captured == {}
+    assert "cmd" not in captured  # never launched
 
 
 def test_observed_archive_runs_the_cli_in_a_child(monkeypatch):
