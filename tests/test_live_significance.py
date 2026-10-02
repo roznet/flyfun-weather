@@ -44,17 +44,24 @@ def _obs(airports):
     )
 
 
-def _apt(icao, metar=None, taf=None, *, t=T0, prev=None, prev_t=None, speci=False, enroute=None):
+def _apt(icao, metar=None, taf=None, *, t=T0, prev=None, prev_t=None, speci=False, enroute=None,
+         raw=None, wx=(), wind=None, xwind=None, gust=None, rwy=None):
     return AirportObservation(
         icao=icao,
         distance_from_route_nm=1.0,
         enroute_distance_nm=enroute,
         nearest_waypoint_icao=icao,
+        metar_raw=raw,
         metar_flight_category=metar,
         metar_time=t,
         metar_report_type="SPECI" if speci else "METAR",
         metar_previous_flight_category=prev,
         metar_previous_time=prev_t,
+        metar_weather=list(wx),
+        metar_wind_advisory=wind,
+        metar_crosswind_kt=xwind,
+        metar_wind_gust_kt=gust,
+        metar_best_runway_id=rwy,
         taf_flight_category_at_eta=taf,
     )
 
@@ -185,7 +192,7 @@ def test_corridor_airport_is_highlight_not_alert():
     assert c.new_alert is False
 
 
-def test_only_the_destination_alerts_among_airports():
+def test_terminal_airports_alert_alternates_highlight():
     t1 = T0 + timedelta(minutes=30)
     changes, _ = _classify(
         _obs([_apt("ZZAL", "MVFR"), _apt("ZZDP", "VFR"), _apt("ZZDS", "VFR")]),
@@ -194,10 +201,10 @@ def test_only_the_destination_alerts_among_airports():
     tiers = {c.icao: (c.role, c.tier) for c in changes.changes}
     assert tiers == {
         "ZZDS": ("destination", "alert"),
-        "ZZDP": ("departure", "highlight"),
+        "ZZDP": ("departure", "alert"),  # before take-off: departure_at unset
         "ZZAL": ("alternate", "highlight"),
     }
-    assert changes.alert_count == 1
+    assert changes.alert_count == 2
 
 
 def test_alert_fires_once_per_value():
@@ -250,11 +257,11 @@ def test_sigmet_issued_and_cancelled():
         bs=_sigmets([_sig("12")]),
         ls=_sigmets([_sig("13", qualifier="SEV", hazard="TURB")]),
     )
-    msgs = [c.message for c in changes.changes]
-    assert "New SEV SIGMET LTBB 13: SEV TURB" in msgs
-    assert "SIGMET LTBB 12: EMBD TS no longer active" in msgs
-    # Every SIGMET change on the route alerts.
-    assert all(c.tier == "alert" and c.role == "route" for c in changes.changes)
+    by = {c.message: c for c in changes.changes}
+    assert by["New SEV SIGMET LTBB 13: SEV TURB"].tier == "alert"
+    # A SIGMET ending is good news: highlight, never an alert.
+    assert by["SIGMET LTBB 12: EMBD TS no longer active"].tier == "highlight"
+    assert all(c.role == "route" for c in changes.changes)
 
 
 # Destination at (37.80 N, 1.13 W) — LEMI on 2026-10-02.

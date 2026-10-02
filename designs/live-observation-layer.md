@@ -14,7 +14,21 @@
 | Where | `live.json` blocks → `/live` → clients | `tasks/live_significance.py` (one server classifier, so web / iOS / push agree) |
 
 Meteorology choices (what counts as significant, tiers) are in
-[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35.
+[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–36.
+The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
+
+## Testing
+
+- `tests/test_live_airport_rules.py` pins every policy cell, trigger and timing
+  rule; `tests/test_live_significance.py` the SIGMET/observed/memory rules.
+- **Scenarios** (`tests/fixtures/live_scenarios/*.json`): a real flight morning
+  frozen as public METARs/SIGMETs plus the route. `scripts/build_live_scenario.py`
+  runs corridor discovery and the wind advisory (needs `AIRPORTS_DB`) and stores
+  the result as `derived`; `tests/test_live_scenarios.py` replays every tick
+  through the production `commit_live_update` and pins the full timeline. A rule
+  change shows up as a timeline diff to review. With `AIRPORTS_DB` set, a test
+  also checks `derived` still matches a fresh build — rerun the script when it
+  does not.
 
 ## Storage: per flight, pack stays immutable
 

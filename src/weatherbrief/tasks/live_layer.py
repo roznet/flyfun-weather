@@ -374,6 +374,7 @@ def commit_live_update(
             latest_observed=layer.observed_conditions,
             roles=airport_roles(route_icaos, _alternate_icaos(briefing_data)),
             destination=_destination(route),
+            departure_at=departure,
             baseline_at=layer.seeded_at if seeded else _parse_dt(pack_timestamp),
             flown_nm=_flown_nm(route, departure, now) if route is not None else None,
             memory=memory,

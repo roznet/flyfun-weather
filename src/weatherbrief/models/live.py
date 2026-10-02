@@ -33,6 +33,9 @@ from weatherbrief.models.observed import ObservedConditions
 
 ChangeKind = Literal[
     "metar_category",
+    "metar_convective",
+    "metar_weather",
+    "metar_wind",
     "taf_category",
     "sigmet_issued",
     "sigmet_cancelled",
@@ -51,7 +54,8 @@ class LiveChange(BaseModel):
     rebuild their own text from the structured fields.
     """
 
-    # Stable identity across ticks: "metar:EGLL", "taf:EGLL", "sigmet:LFFF|3",
+    # Stable identity across ticks: "metar:EGLL" (category), "conv:EGLL",
+    # "wx:EGLL", "wind:EGLL", "taf:EGLL", "sigmet:LFFF|3",
     # "lightning:<station>", "radar:<station>". The alert memory is keyed on it.
     key: str
     kind: ChangeKind
