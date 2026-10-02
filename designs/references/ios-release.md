@@ -160,6 +160,13 @@ guard it with a confirmation prompt — which is one stray "yes" away from firin
 capability simply does not exist in the tool. The pilot presses Submit in the web UI, having
 seen `asc.py status`. Do not add a submit path.
 
+**That press is the only gate: versions release automatically on approval.** `stage` and
+`ensure-version` default to `--release-type AFTER_APPROVAL` ("Automatically release this
+version") and enforce it on a reused version too, not only at creation. The pilot decided to
+ship by pressing Submit; a second manual Release press after Apple approves added a wait and
+no extra judgement. `MANUAL` and `SCHEDULED` remain available as explicit flags for a release
+that must be held.
+
 **Credentials never enter the repo.** This is a public checkout. `ASC_KEY_ID` and
 `ASC_ISSUER_ID` live in the gitignored `.env` (documented by name, with empty values, in
 `.env.sample`); the `.p8` itself lives outside the repo, defaulting to Apple's conventional

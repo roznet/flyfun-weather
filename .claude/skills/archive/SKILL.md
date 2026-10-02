@@ -324,11 +324,14 @@ source venv/bin/activate && python3 scripts/asc.py stage \
   --review-notes "flyfunweather://auth?token=…"
 ```
 
-Notes on behaviour — all three are normal, not errors:
+Notes on behaviour — all four are normal, not errors:
 
 - **Re-running is safe.** `stage` reuses an existing editable version, renames it if the
   marketing version changed, and overwrites What's New in place. Re-run it to correct a
   mistake or to push a second binary rather than trying to undo anything.
+- **It releases on approval.** The version is set to "Automatically release this version"
+  (`AFTER_APPROVAL`, enforced on reuse too), so Submit for Review is the only gate. Pass
+  `--release-type MANUAL` only if the user asks to hold a release. Rationale: §A7.
 - **It waits for Apple.** After upload the build sits in processing for ~5–30 minutes before
   it can be attached. Use a timeout of 600000ms (10 min) and, if it's still going, re-run
   `python3 scripts/asc.py wait-build --version X.Y --build N` — **do not re-upload**.

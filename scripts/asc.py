@@ -323,7 +323,7 @@ class Asc:
         return None
 
     def ensure_version(
-        self, version_string: str, release_type: str = "MANUAL"
+        self, version_string: str, release_type: str = "AFTER_APPROVAL"
     ) -> dict[str, Any]:
         """Get-or-create the editable App Store version for `version_string`.
 
@@ -331,31 +331,45 @@ class Asc:
         an editable version already exists with this number (reuse it), exists
         with a different number because the bump changed (rename it), or does
         not exist (create it).
+
+        `release_type` is enforced on a reused version too, not only at
+        creation: a version first created as MANUAL would otherwise keep
+        "Manually release this version" through every later re-stage.
         """
         existing = self.editable_version()
         if existing is not None:
-            current = existing["attributes"].get("versionString")
-            if current == version_string:
+            attrs = existing["attributes"]
+            current = attrs.get("versionString")
+            changes: dict[str, Any] = {}
+            if current != version_string:
+                print(
+                    f"Editable version is {current}, renaming it to {version_string}."
+                )
+                changes["versionString"] = version_string
+            else:
                 print(
                     f"Version {version_string} already exists and is editable "
                     f"({self.state_of(existing)}) — reusing it."
                 )
-                return existing
-            print(
-                f"Editable version is {current}, renaming it to {version_string}."
-            )
-            self.request(
-                "PATCH",
-                f"/appStoreVersions/{existing['id']}",
-                body={
-                    "data": {
-                        "id": existing["id"],
-                        "type": "appStoreVersions",
-                        "attributes": {"versionString": version_string},
-                    }
-                },
-            )
-            existing["attributes"]["versionString"] = version_string
+            if attrs.get("releaseType") != release_type:
+                print(
+                    f"Release type is {attrs.get('releaseType')}, setting it to "
+                    f"{release_type}."
+                )
+                changes["releaseType"] = release_type
+            if changes:
+                self.request(
+                    "PATCH",
+                    f"/appStoreVersions/{existing['id']}",
+                    body={
+                        "data": {
+                            "id": existing["id"],
+                            "type": "appStoreVersions",
+                            "attributes": changes,
+                        }
+                    },
+                )
+                attrs.update(changes)
             return existing
 
         # Nothing editable. If something is mid-review, stop — cancelling a
@@ -710,9 +724,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", required=True, help="marketing version, e.g. 1.5")
     p.add_argument(
         "--release-type",
-        default="MANUAL",
+        default="AFTER_APPROVAL",
         choices=["MANUAL", "AFTER_APPROVAL", "SCHEDULED"],
-        help="MANUAL (default) = you press Release after approval",
+        help="AFTER_APPROVAL (default) = released as soon as Apple approves; "
+        "MANUAL = you press Release after approval",
     )
     add_common(p)
 
@@ -753,8 +768,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--review-notes", help="App Review notes (reviewer sign-in link)")
     p.add_argument(
         "--release-type",
-        default="MANUAL",
+        default="AFTER_APPROVAL",
         choices=["MANUAL", "AFTER_APPROVAL", "SCHEDULED"],
+        help="AFTER_APPROVAL (default) = released as soon as Apple approves",
     )
     p.add_argument("--timeout", type=int, default=60)
     add_common(p)
