@@ -4998,8 +4998,8 @@ landing).
     Ranked TCU < CB < TS; a step up is a change, a step down an improvement.
     Recent weather (``RE…``) is history and ignored.
   - *Significant weather*: FZRA, FZDZ, GR, SQ, FC at any intensity, and heavy
-    showers / thunderstorms (``+SH…``, ``+TS…``) appearing; clearing is an
-    improvement.
+    showers (``+SH…``) appearing; clearing is an improvement. A heavy
+    thunderstorm (``+TS…``) is reported once, as convective, not twice.
   - *Wind*: the airport wind advisory crossing green → amber → red — the
     advisory's own thresholds (best-runway crosswind 15 / 25 kt, gust 25 / 35 kt,
     `route_weather._wind_advisory_status`), so the live layer and the briefing's
@@ -5034,6 +5034,9 @@ landing).
 - Convective flicker at a station reporting TS → VCTS → CB every SPECI: each
   step up re-alerts once per value (TS→CB→TS alerts twice). Watch it before push
   (#638) consumes the alert tier.
+- A SIGMET merged across FIRs keeps its alert when a partner issues late or one
+  lapses (the alert memory follows any shared member SIGMET), so one phenomenon
+  alerts once.
 - The "passed" estimate assumes an on-time departure at planned speed; a late
   departure drops en-route airports early.
 

@@ -33,6 +33,7 @@ never re-grades the briefing.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -61,6 +62,8 @@ from weatherbrief.models.observed import (
 # VFR < MVFR < IFR < LIFR — higher rank is worse.
 _CATEGORY_RANK = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 _SEQ_RE = re.compile(r"SIGMET\s+(\w+)", re.IGNORECASE)
+
+logger = logging.getLogger(__name__)
 
 #: How many of the ranked divert candidates are labelled "alternate". The
 #: briefing ranks candidates closest-first; beyond the first few the pilot is
@@ -261,13 +264,14 @@ def _convective_level(tags: set[str]) -> int:
 
 def significant_weather(obs: AirportObservation) -> set[str]:
     """Significant present weather: freezing precipitation, hail, squall,
-    funnel cloud, and heavy showers / thunderstorms (``+SH…``, ``+TS…``)."""
+    funnel cloud, and heavy showers (``+SH…``). A thunderstorm (``+TS…``) is
+    reported once, as convective (:func:`convective_tags`), not twice."""
     out: set[str] = set()
     for c in _present_weather(obs):
         for code in _SIGNIFICANT_WX:
             if code in c:
                 out.add(code)
-        if c.startswith("+") and ("SH" in c or "TS" in c):
+        if c.startswith("+") and "SH" in c and "TS" not in c:
             out.add(c)
     return out
 
@@ -359,6 +363,11 @@ def _airport_metar_changes(
     # Wind: the airport wind advisory (crosswind on the best runway, gust)
     bwr, lwr = _WIND_RANK.get(base.metar_wind_advisory or ""), _WIND_RANK.get(a.metar_wind_advisory or "")
     if bwr is None or lwr is None:
+        # No advisory on one side (an older pack, or no runway data for the
+        # airport): wind is not evaluated for this airport — distinct from
+        # "no change", so say so at debug level.
+        logger.debug("Live wind not evaluated for %s: baseline=%s latest=%s",
+                     icao, base.metar_wind_advisory, a.metar_wind_advisory)
         unknown.add(f"wind:{icao}")
     elif lwr != bwr:
         out.append((
@@ -766,7 +775,14 @@ def classify_changes(
         live_alert_keys.add(c.key)
         value = c.to_value or ""
         if alerted.get(c.key) != value:
-            c.new_alert = True
+            # A merged SIGMET's key changes when a partner FIR issues late or
+            # one of the pair lapses ("sigmet:A|3" ↔ "sigmet:A|3+sigmet:B|3"):
+            # the same phenomenon, already alerted, under its old key.
+            previous = _alerted_under_another_key(c.key, value, alerted)
+            if previous is not None:
+                del alerted[previous]
+            else:
+                c.new_alert = True
             alerted[c.key] = value
     for k in list(alerted):
         if k not in live_alert_keys and k not in unknown and any(k.startswith(p) for p in evaluated):
@@ -778,6 +794,18 @@ def classify_changes(
         changes=changes,
     )
     return result, ClassifierMemory(alerted=alerted)
+
+
+def _alerted_under_another_key(key: str, value: str, alerted: dict[str, str]) -> str | None:
+    """The alerted SIGMET key sharing a member SIGMET with ``key`` at the same
+    value, if any (merged keys join per-FIR keys with "+")."""
+    if not key.startswith("sigmet:"):
+        return None
+    parts = set(key.split("+"))
+    for k, v in alerted.items():
+        if k != key and k.startswith("sigmet:") and v == value and parts & set(k.split("+")):
+            return k
+    return None
 
 
 def worsening_delta(changes: LiveChanges) -> RefreshDelta:

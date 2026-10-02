@@ -209,7 +209,7 @@ def _flown_nm(route: RouteConfig, departure: datetime | None, now: datetime) -> 
     return max(0.0, min(1.0, frac)) * total
 
 
-def _destination(route: RouteConfig | None) -> tuple[float, float] | None:
+def route_destination(route: RouteConfig | None) -> tuple[float, float] | None:
     """(lat, lon) of the route's destination, for SIGMET-at-destination."""
     if route is None or not route.waypoints:
         return None
@@ -255,16 +255,18 @@ def _seed_missing_baselines(
     change on that tick, and changes from then on are "since live tracking
     began". Returns the four baselines plus whether the observations baseline
     (the one the panel's "since" refers to) came from the live start.
+
+    ``seeded_at`` is when the *observations* seeded — it becomes the panel's
+    ``baseline_at`` — so a SIGMET block seeding a tick earlier (the METAR fetch
+    failed that tick) does not make "since live tracking began" too early.
     """
     if base_obs is None and layer.seeded_observations is None and layer.route_observations is not None:
         layer.seeded_observations = layer.route_observations.model_copy(deep=True)
-        layer.seeded_at = layer.seeded_at or now
+        layer.seeded_at = now
     if base_sigmets is None and layer.seeded_sigmets is None and layer.route_sigmets is not None:
         layer.seeded_sigmets = layer.route_sigmets.model_copy(deep=True)
-        layer.seeded_at = layer.seeded_at or now
     if base_observed is None and layer.seeded_observed is None and layer.observed_conditions is not None:
         layer.seeded_observed = layer.observed_conditions.model_copy(deep=True)
-        layer.seeded_at = layer.seeded_at or now
     seeded = base_obs is None and layer.seeded_observations is not None
     return (
         base_obs if base_obs is not None else layer.seeded_observations,
@@ -373,7 +375,7 @@ def commit_live_update(
             baseline_observed=base_observed,
             latest_observed=layer.observed_conditions,
             roles=airport_roles(route_icaos, _alternate_icaos(briefing_data)),
-            destination=_destination(route),
+            destination=route_destination(route),
             departure_at=departure,
             baseline_at=layer.seeded_at if seeded else _parse_dt(pack_timestamp),
             flown_nm=_flown_nm(route, departure, now) if route is not None else None,

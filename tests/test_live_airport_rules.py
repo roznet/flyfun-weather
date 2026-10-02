@@ -100,7 +100,7 @@ def test_convective_tags(raw, wx, expected):
     (["FZRA"], {"FZRA"}),
     (["-FZDZ"], {"FZDZ"}),
     (["+SHRA"], {"+SHRA"}),
-    (["+TSRA"], {"+TSRA"}),
+    (["+TSRA"], set()),              # a thunderstorm is reported once, as convective
     (["TSGR"], {"GR"}),
     (["SQ"], {"SQ"}),
     (["FC"], {"FC"}),
@@ -211,10 +211,15 @@ def test_one_report_can_raise_several_kinds():
     latest = apt("ZZDS", "METAR ZZDS 020700Z 22025G38KT 3000 +TSRA BKN008CB 18/17 Q1012",
                  "IFR", wx=["+TSRA"], wind="red", t=T1)
     changes, _ = classify([apt("ZZDS")], [latest])
-    assert {c.kind for c in changes} == {
-        "metar_category", "metar_convective", "metar_weather", "metar_wind",
-    }
+    # +TSRA is convective only — one alert for the thunderstorm, not two.
+    assert {c.kind for c in changes} == {"metar_category", "metar_convective", "metar_wind"}
     assert all(c.tier == "alert" for c in changes)
+
+
+def test_heavy_shower_with_hail_is_significant_weather():
+    changes, _ = classify([apt("ZZDS")], [apt("ZZDS", wx=["+SHRAGR"], t=T1)])
+    c = only(changes, "metar_weather")
+    assert c.to_value == "+SHRAGR, GR"
 
 
 # --- Category at an en-route airport ----------------------------------------

@@ -434,3 +434,36 @@ def test_fetch_failure_keeps_alert_memory():
     )
     # The next good tick does not alert again.
     assert new_mem.alerted == {"metar:ZZDS": "IFR"}
+
+
+# --- Merged SIGMET alert memory (review of #642) ----------------------------
+
+
+def _merged(fir, seq, coords, vf):
+    return _sig(seq, fir=fir, coords=coords, valid_from=vf)
+
+
+def test_partner_fir_issuing_late_does_not_re_alert():
+    """LECB 3 issued first, LECM 3 for the same cell a tick later: the merged
+    change keeps its alert (one phenomenon, already alerted)."""
+    lecb = _merged("LECB", "3", _box(-1.8, 36.7, -0.7, 37.8), VF)
+    lecm = _merged("LECM", "3", _box(-2.2, 36.7, -1.3, 37.8), VF)
+    first, mem = _classify(None, None, bs=_sigmets([]), ls=_sigmets([lecb]), destination=DEST)
+    assert [c.new_alert for c in first.changes] == [True]
+    both, mem = _classify(None, None, bs=_sigmets([]), ls=_sigmets([lecb, lecm]), memory=mem, destination=DEST)
+    [c] = both.changes
+    assert c.key == "sigmet:LECB|3+sigmet:LECM|3" and c.new_alert is False
+    assert set(mem.alerted) == {"sigmet:LECB|3+sigmet:LECM|3"}
+    # One of the pair lapses: still the same phenomenon, still no new alert.
+    one, mem = _classify(None, None, bs=_sigmets([]), ls=_sigmets([lecm]), memory=mem, destination=DEST)
+    [c] = one.changes
+    assert c.key == "sigmet:LECM|3" and c.new_alert is False
+
+
+def test_a_different_sigmet_still_alerts():
+    lecb = _merged("LECB", "3", _box(-1.8, 36.7, -0.7, 37.8), VF)
+    other = _merged("LECB", "4", _box(1.0, 40.0, 2.0, 41.0), VF)
+    _, mem = _classify(None, None, bs=_sigmets([]), ls=_sigmets([lecb]))
+    again, _ = _classify(None, None, bs=_sigmets([]), ls=_sigmets([lecb, other]), memory=mem)
+    by = {c.key: c.new_alert for c in again.changes}
+    assert by == {"sigmet:LECB|3": False, "sigmet:LECB|4": True}

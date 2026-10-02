@@ -100,6 +100,29 @@ def test_pack_without_observations_seeds_its_baseline_from_the_first_tick(tmp_pa
     assert "route_observations" not in json.loads((pack / "briefing.json").read_text())
 
 
+def test_live_start_time_is_when_observations_seeded(tmp_path):
+    """SIGMETs seeding a tick before the observations (the METAR fetch failed
+    that tick) must not make "since live tracking began" too early."""
+    pack, briefing = _pack(tmp_path, "p1")
+    del briefing["route_observations"]
+    (pack / "briefing.json").write_text(json.dumps(briefing))
+    ts = "2026-10-01T07:00:00+00:00"
+    sig = RouteSigmets(corridor_nm=50.0, fetch_time=NOW, sigmets=[])
+    first = _commit(pack, briefing, None, ts=ts, sigmets=sig)
+    assert first.seeded_sigmets is not None and first.seeded_at is None
+    later = NOW + timedelta(minutes=10)
+    second = _commit(pack, briefing, _obs("VFR", later), ts=ts, now=later)
+    assert second.seeded_at == later
+    assert second.changes.baseline_at == later
+    assert second.changes.baseline_source == "live_start"
+
+
+def test_route_destination_handles_an_empty_route():
+    from weatherbrief.tasks.live_layer import route_destination
+
+    assert route_destination(None) is None
+
+
 def test_pack_with_observations_is_its_own_baseline(tmp_path):
     pack, briefing = _pack(tmp_path, "p1")
     layer = _commit(pack, briefing, _obs("VFR", NOW), ts="2026-10-01T07:00:00+00:00")
