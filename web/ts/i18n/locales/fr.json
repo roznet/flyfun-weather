@@ -215,6 +215,8 @@
   "refreshDelta.title": "Conditions dégradées depuis la dernière mise à jour",
   "refreshDelta.sinceBriefing": "Depuis ce briefing ({time})",
   "refreshDelta.sinceBriefingNoTime": "Depuis ce briefing",
+  "refreshDelta.sinceLiveStart": "Depuis le début du suivi en direct ({time})",
+  "refreshDelta.sinceLiveStartNoTime": "Depuis le début du suivi en direct",
   "refreshDelta.noChange": "Aucun changement significatif depuis le briefing ({time})",
   "refreshDelta.worse": "Dégradation",
   "refreshDelta.better": "Amélioration",

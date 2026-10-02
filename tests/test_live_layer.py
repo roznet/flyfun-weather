@@ -77,6 +77,36 @@ def test_confirmed_destination_change_alerts_once(tmp_path):
     assert again.changes.changes[0].new_alert is False
 
 
+def test_pack_without_observations_seeds_its_baseline_from_the_first_tick(tmp_path):
+    """A pack built the day before carries no observations (they are D-0 only):
+    the first live fetch becomes the starting point, without touching the pack."""
+    pack, briefing = _pack(tmp_path, "p1")
+    del briefing["route_observations"]
+    (pack / "briefing.json").write_text(json.dumps(briefing))
+    ts = "2026-10-01T07:00:00+00:00"
+    t1 = NOW - timedelta(minutes=20)
+
+    first = _commit(pack, briefing, _obs("VFR", t1), ts=ts)
+    assert first.changes.changes == []
+    assert first.changes.baseline_source == "live_start"
+    assert first.changes.baseline_at == NOW
+    assert first.seeded_at == NOW
+
+    later = NOW + timedelta(minutes=30)
+    second = _commit(pack, briefing, _obs("IFR", later), ts=ts, now=later)
+    [c] = second.changes.changes
+    assert (c.from_value, c.to_value) == ("VFR", "IFR") and c.tier == "alert"
+    assert second.changes.baseline_at == NOW  # the starting point does not move
+    assert "route_observations" not in json.loads((pack / "briefing.json").read_text())
+
+
+def test_pack_with_observations_is_its_own_baseline(tmp_path):
+    pack, briefing = _pack(tmp_path, "p1")
+    layer = _commit(pack, briefing, _obs("VFR", NOW), ts="2026-10-01T07:00:00+00:00")
+    assert layer.changes.baseline_source == "briefing"
+    assert layer.seeded_observations is None
+
+
 def test_none_block_keeps_previous_value(tmp_path):
     pack, briefing = _pack(tmp_path, "p1")
     sig = RouteSigmets(corridor_nm=50, fetch_time=NOW, sigmets=[SigmetAlongRoute(fir_id="ZZZZ")])

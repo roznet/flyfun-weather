@@ -2284,9 +2284,10 @@ export function renderRefreshDelta(
   const live = snapshot.live_changes;
   if (live && live.changes.length > 0) {
     const worse = live.worsened_count > 0 || live.changes.some(c => c.direction === 'worse');
+    const fromLiveStart = live.baseline_source === 'live_start';
     const title = baseline
-      ? t('refreshDelta.sinceBriefing', { time: baseline })
-      : t('refreshDelta.sinceBriefingNoTime');
+      ? t(fromLiveStart ? 'refreshDelta.sinceLiveStart' : 'refreshDelta.sinceBriefing', { time: baseline })
+      : t(fromLiveStart ? 'refreshDelta.sinceLiveStartNoTime' : 'refreshDelta.sinceBriefingNoTime');
     el.className = `refresh-delta-banner rd-live${worse ? '' : ' rd-live-better'}`;
     el.innerHTML = `
       <div class="rd-title">${worse ? RD_WARN_ICON : ''}<span>${escapeHtml(title)}</span></div>
@@ -2351,7 +2352,12 @@ export function renderDigestLiveCaveat(
   if (!el) return;
   const n = snapshot?.live_changes?.changes.length ?? 0;
   const hasAiText = !!pack && (pack.has_digest || !!pack.assessment_reason || !!pack.outlook_reason);
-  const time = formatHhmmZ(snapshot?.live_changes?.baseline_at ?? pack?.fetch_timestamp);
+  // "Written at": when the digest was written — the pack, even when the
+  // changes are measured from the live layer's own starting point.
+  const live = snapshot?.live_changes;
+  const time = formatHhmmZ(
+    live?.baseline_source === 'live_start' ? pack?.fetch_timestamp : (live?.baseline_at ?? pack?.fetch_timestamp),
+  );
   if (!pack || !hasAiText || n === 0 || !time) {
     el.style.display = 'none';
     el.innerHTML = '';

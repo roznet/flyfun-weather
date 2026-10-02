@@ -79,8 +79,11 @@ class LiveChange(BaseModel):
 class LiveChanges(BaseModel):
     """Everything significant that moved since the briefing was built."""
 
-    # What the assessment saw: the pack's fetch timestamp.
+    # What the changes are measured against: the pack's fetch timestamp, or —
+    # when the pack carries no observations (built before flight day) — when
+    # the live layer recorded its own starting point.
     baseline_at: datetime | None = None
+    baseline_source: Literal["briefing", "live_start"] = "briefing"
     computed_at: datetime
     changes: list[LiveChange] = Field(default_factory=list)
 
@@ -128,9 +131,16 @@ class LiveLayer(BaseModel):
     # change alerts again only when its value moves; a key that returns to the
     # briefing's state is dropped so a later recurrence alerts afresh.
     alerted: dict[str, str] = Field(default_factory=dict)
-    # Hysteresis memory: METAR change key -> last confirmed category, held
-    # while the newest report is unconfirmed (see live_significance).
-    held_categories: dict[str, str] = Field(default_factory=dict)
+
+    # Starting point for blocks the pack lacks. Observations and SIGMETs are
+    # only fetched for a D-0 briefing, so a flight briefed the day before has
+    # nothing to compare against: the first live fetch of such a block is kept
+    # here and changes are measured from it ("since live tracking began").
+    # Reset with the rest of the layer when a new pack arrives.
+    seeded_observations: RouteObservations | None = None
+    seeded_sigmets: RouteSigmets | None = None
+    seeded_observed: ObservedConditions | None = None
+    seeded_at: datetime | None = None
 
 
 class LiveLayerResponse(BaseModel):

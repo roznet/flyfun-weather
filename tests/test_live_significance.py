@@ -1,8 +1,8 @@
 """Significance classifier for the live layer (#637).
 
-Baseline is the briefing; both directions; hysteresis on METAR category
-crossings; alert tier for departure/destination/alternates; one alert per
-value. Replaces the worsening-only refresh delta tests.
+Baseline is the briefing; both directions; a METAR category crossing counts on
+the first report (no hysteresis, meteorology-decisions §35); alert tier for the
+destination and for every SIGMET change on the route; one alert per value.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -63,11 +63,16 @@ def _sigmets(sigmets):
     return RouteSigmets(corridor_nm=50.0, fetch_time=T0, sigmets=sigmets)
 
 
-def _sig(seq, qualifier="EMBD", hazard="TS", fir="LTBB"):
+def _sig(seq, qualifier="EMBD", hazard="TS", fir="LTBB", coords=None, valid_from=None):
     return SigmetAlongRoute(
         fir_id=fir, hazard=hazard, qualifier=qualifier,
         raw_text=f"{fir} SIGMET {seq} VALID 211644/211918",
+        coords=coords or [], valid_from=valid_from,
     )
+
+
+def _box(lon0, lat0, lon1, lat1):
+    return [(lon0, lat0), (lon1, lat0), (lon1, lat1), (lon0, lat1), (lon0, lat0)]
 
 
 ROLES = airport_roles(["ZZDP", "ZZDS"], ["ZZAL"])
@@ -81,16 +86,18 @@ def _classify(base, latest, memory=None, **kw):
     )
 
 
-# --- METAR hysteresis -------------------------------------------------------
+# --- METAR crossings (no hysteresis) ----------------------------------------
 
 
-def test_single_crossing_report_is_pending_not_a_change():
+def test_single_crossing_report_is_a_change_at_once():
     t1 = T0 + timedelta(minutes=30)
     changes, _ = _classify(
         _obs([_apt("ZZDS", "VFR")]),
         _obs([_apt("ZZDS", "IFR", t=t1, prev="VFR", prev_t=T0)]),
     )
-    assert changes.changes == []
+    [c] = changes.changes
+    assert (c.from_value, c.to_value) == ("VFR", "IFR")
+    assert c.tier == "alert" and c.new_alert is True
 
 
 def test_two_consecutive_reports_confirm_the_crossing():
@@ -116,7 +123,7 @@ def test_speci_confirms_on_its_own():
     [c] = changes.changes
     assert c.direction == "better"
     assert c.source == "SPECI"
-    assert c.role == "departure"
+    assert c.role == "departure" and c.tier == "highlight"
     assert c.message.endswith("(SPECI)")
 
 
@@ -136,25 +143,26 @@ def test_same_report_as_briefing_is_no_change():
     assert changes.changes == []
 
 
-def test_confirmed_change_is_held_through_one_odd_report():
-    t1, t2, t3 = (T0 + timedelta(minutes=m) for m in (30, 60, 90))
+def test_one_report_back_at_baseline_clears_the_change_and_alert_memory():
+    t1, t2 = T0 + timedelta(minutes=30), T0 + timedelta(minutes=60)
     base = _obs([_apt("ZZDS", "VFR")])
-    first, mem = _classify(base, _obs([_apt("ZZDS", "IFR", t=t2, prev="IFR", prev_t=t1)]))
-    assert first.changes[0].to_value == "IFR"
-    # One VFR report after two IFR: not a confirmed return — still IFR.
-    held, mem = _classify(base, _obs([_apt("ZZDS", "VFR", t=t3, prev="IFR", prev_t=t2)]), memory=mem)
-    [c] = held.changes
-    assert c.to_value == "IFR"
-    assert c.new_alert is False  # same value: no second alert
-
-
-def test_confirmed_return_clears_the_change_and_alert_memory():
-    t1, t2, t3, t4 = (T0 + timedelta(minutes=m) for m in (30, 60, 90, 120))
-    base = _obs([_apt("ZZDS", "VFR")])
-    _, mem = _classify(base, _obs([_apt("ZZDS", "IFR", t=t2, prev="IFR", prev_t=t1)]))
-    cleared, mem = _classify(base, _obs([_apt("ZZDS", "VFR", t=t4, prev="VFR", prev_t=t3)]), memory=mem)
+    _, mem = _classify(base, _obs([_apt("ZZDS", "IFR", t=t1)]))
+    cleared, mem = _classify(base, _obs([_apt("ZZDS", "VFR", t=t2, prev="IFR", prev_t=t1)]), memory=mem)
     assert cleared.changes == []
-    assert mem.alerted == {} and mem.held == {}
+    assert mem.alerted == {}
+
+
+def test_report_without_category_neither_raises_nor_clears():
+    t1, t2 = T0 + timedelta(minutes=30), T0 + timedelta(minutes=60)
+    base = _obs([_apt("ZZDS", "VFR")])
+    _, mem = _classify(base, _obs([_apt("ZZDS", "IFR", t=t1)]))
+    gap, mem = _classify(base, _obs([_apt("ZZDS", None, t=t2)]), memory=mem)
+    assert gap.changes == []
+    # Not a return: the alert memory survives, so the next IFR report does not
+    # alert a second time.
+    assert mem.alerted == {"metar:ZZDS": "IFR"}
+    again, _ = _classify(base, _obs([_apt("ZZDS", "IFR", t=t2 + timedelta(minutes=30))]), memory=mem)
+    assert again.changes[0].new_alert is False
 
 
 def test_airport_missing_from_baseline_is_skipped():
@@ -177,13 +185,18 @@ def test_corridor_airport_is_highlight_not_alert():
     assert c.new_alert is False
 
 
-def test_alternate_is_alert_tier():
-    t1, t2 = T0 + timedelta(minutes=30), T0 + timedelta(minutes=60)
+def test_only_the_destination_alerts_among_airports():
+    t1 = T0 + timedelta(minutes=30)
     changes, _ = _classify(
-        _obs([_apt("ZZAL", "MVFR")]),
-        _obs([_apt("ZZAL", "LIFR", t=t2, prev="IFR", prev_t=t1)]),
+        _obs([_apt("ZZAL", "MVFR"), _apt("ZZDP", "VFR"), _apt("ZZDS", "VFR")]),
+        _obs([_apt("ZZAL", "LIFR", t=t1), _apt("ZZDP", "IFR", t=t1), _apt("ZZDS", "IFR", t=t1)]),
     )
-    assert changes.changes[0].role == "alternate"
+    tiers = {c.icao: (c.role, c.tier) for c in changes.changes}
+    assert tiers == {
+        "ZZDS": ("destination", "alert"),
+        "ZZDP": ("departure", "highlight"),
+        "ZZAL": ("alternate", "highlight"),
+    }
     assert changes.alert_count == 1
 
 
@@ -240,7 +253,42 @@ def test_sigmet_issued_and_cancelled():
     msgs = [c.message for c in changes.changes]
     assert "New SEV SIGMET LTBB 13: SEV TURB" in msgs
     assert "SIGMET LTBB 12: EMBD TS no longer active" in msgs
-    assert all(c.tier == "highlight" for c in changes.changes)
+    # Every SIGMET change on the route alerts.
+    assert all(c.tier == "alert" and c.role == "route" for c in changes.changes)
+
+
+# Destination at (37.80 N, 1.13 W) — LEMI on 2026-10-02.
+DEST = (37.80, -1.13)
+VF = datetime(2026, 10, 2, 8, 35, tzinfo=timezone.utc)
+
+
+def test_sigmet_over_or_near_destination_takes_the_destination_role():
+    near = _sig("3", fir="LECM", coords=_box(-1.6, 37.3, -1.35, 37.6), valid_from=VF)   # ~15 NM SW
+    far = _sig("9", fir="LECB", hazard="TURB", qualifier="SEV",
+               coords=_box(1.0, 40.0, 2.0, 41.0), valid_from=VF)
+    changes, _ = _classify(
+        None, None, bs=_sigmets([]), ls=_sigmets([near, far]), destination=DEST,
+    )
+    by = {c.key: c for c in changes.changes}
+    assert by["sigmet:LECM|3"].role == "destination"
+    assert by["sigmet:LECM|3"].message.endswith("(at destination)")
+    assert by["sigmet:LECB|9"].role == "route"
+    assert all(c.tier == "alert" for c in changes.changes)
+
+
+def test_same_phenomenon_from_two_firs_is_one_change():
+    """LECB 3 + LECM 3, 2026-10-02: one TS cell issued by both FIRs."""
+    lecb = _sig("3", fir="LECB", coords=_box(-1.8, 36.7, -0.7, 37.8), valid_from=VF)
+    lecm = _sig("3", fir="LECM", coords=_box(-2.2, 36.7, -1.3, 37.8), valid_from=VF)
+    other = _sig("4", fir="LECM", coords=_box(-6.0, 40.0, -5.0, 41.0), valid_from=VF)
+    changes, _ = _classify(
+        None, None, bs=_sigmets([]), ls=_sigmets([lecb, lecm, other]), destination=DEST,
+    )
+    msgs = sorted(c.message for c in changes.changes)
+    assert msgs == [
+        "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)",
+        "New SIGMET LECM 4: EMBD TS",
+    ]
 
 
 def test_sigmet_escalation_to_sev():
@@ -371,12 +419,11 @@ def test_worsening_delta_keeps_only_worse_messages():
     assert delta.messages == ["ZZDS METAR: VFR → IFR"]
 
 
-def test_fetch_failure_keeps_held_state():
-    mem = ClassifierMemory(alerted={"metar:ZZDS": "IFR"}, held={"metar:ZZDS": "IFR"})
+def test_fetch_failure_keeps_alert_memory():
+    mem = ClassifierMemory(alerted={"metar:ZZDS": "IFR"})
     _, new_mem = classify_changes(
         baseline_obs=_obs([_apt("ZZDS", "VFR")]), latest_obs=None,
         baseline_sigmets=None, latest_sigmets=None, memory=mem,
     )
-    assert new_mem.held == {"metar:ZZDS": "IFR"}
-    # ...and the alert memory, so the next good tick does not alert again.
+    # The next good tick does not alert again.
     assert new_mem.alerted == {"metar:ZZDS": "IFR"}

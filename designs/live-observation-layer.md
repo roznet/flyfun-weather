@@ -9,12 +9,12 @@
 | | Display (live layer) | Significance (changes) |
 |---|---|---|
 | Rule | Always the newest data, no thresholds | Only changes that matter |
-| Hysteresis | None | Lives here only |
-| Baseline | None | The briefing (the pack's own observations) + last-alerted state |
+| Hysteresis | None | None since §35 (a crossing counts on its first report) |
+| Baseline | None | The briefing (the pack's own observations), or the layer's own starting point when the pack has none + last-alerted state |
 | Where | `live.json` blocks → `/live` → clients | `tasks/live_significance.py` (one server classifier, so web / iOS / push agree) |
 
-Meteorology choices (what counts as significant, hysteresis, tiers) are in
-[meteorology-decisions.md §34](meteorology-decisions.md).
+Meteorology choices (what counts as significant, tiers) are in
+[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35.
 
 ## Storage: per flight, pack stays immutable
 
@@ -96,10 +96,15 @@ digest, alternate requirement.
 
 - **Packs written before #637** were patched in place, so their "baseline" is
   whatever the last ↻ wrote. Harmless; new packs are clean.
-- **A D-1 pack as the latest on flight day** has no `route_observations` (D-0
-  only), so METAR/TAF changes are skipped (no baseline) while display still works.
-- **Alternates outside the 30 NM corridor are not fetched**, so they never reach
-  the alert tier even when ranked top-3. Follow-up.
+- **A D-1 pack as the latest on flight day** has no `route_observations` /
+  `route_sigmets` (D-0 only). The first live write keeps that fetch on the layer
+  (`seeded_observations` / `seeded_sigmets` / `seeded_observed`, `seeded_at`) and
+  changes are measured from it: `changes.baseline_source = "live_start"`,
+  `baseline_at = seeded_at`, and the web panel reads "Since live tracking began".
+  The pack is never touched; a new pack resets the seed with the rest of the layer.
+  iOS still labels it "Since this briefing" (time is the seed time) — follow-up.
+- **Alternates outside the 30 NM corridor are not fetched**, so their changes
+  never show (they are highlight tier anyway since §35). Follow-up.
 - `run_realtime_refresh` used `latest.artifact_path` raw (not re-rooted) before
   #637 too; the tick and `/live` resolve through `_resolve_artifact_path`.
 

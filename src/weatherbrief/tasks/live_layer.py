@@ -209,6 +209,14 @@ def _flown_nm(route: RouteConfig, departure: datetime | None, now: datetime) -> 
     return max(0.0, min(1.0, frac)) * total
 
 
+def _destination(route: RouteConfig | None) -> tuple[float, float] | None:
+    """(lat, lon) of the route's destination, for SIGMET-at-destination."""
+    if route is None or not route.waypoints:
+        return None
+    dest = route.waypoints[-1]
+    return dest.lat, dest.lon
+
+
 def _alternate_icaos(briefing_data: dict) -> list[str]:
     alts = (briefing_data.get("alternates") or {}).get("alternates") or []
     return [a.get("icao") for a in alts if isinstance(a, dict) and a.get("icao")]
@@ -229,6 +237,40 @@ def _baseline_blocks(briefing_data: dict):
         _v(RouteObservations, "route_observations"),
         _v(RouteSigmets, "route_sigmets"),
         _v(ObservedConditions, "observed_conditions"),
+    )
+
+
+def _seed_missing_baselines(
+    layer: LiveLayer,
+    base_obs: RouteObservations | None,
+    base_sigmets: RouteSigmets | None,
+    base_observed: ObservedConditions | None,
+    now: datetime,
+):
+    """Fill the baseline blocks the pack lacks from the layer's starting point.
+
+    A pack built before flight day carries no observations or SIGMETs (they
+    are D-0 only), so there is nothing to measure a change against. The first
+    live fetch of such a block becomes its baseline, kept on the layer: no
+    change on that tick, and changes from then on are "since live tracking
+    began". Returns the four baselines plus whether the observations baseline
+    (the one the panel's "since" refers to) came from the live start.
+    """
+    if base_obs is None and layer.seeded_observations is None and layer.route_observations is not None:
+        layer.seeded_observations = layer.route_observations.model_copy(deep=True)
+        layer.seeded_at = layer.seeded_at or now
+    if base_sigmets is None and layer.seeded_sigmets is None and layer.route_sigmets is not None:
+        layer.seeded_sigmets = layer.route_sigmets.model_copy(deep=True)
+        layer.seeded_at = layer.seeded_at or now
+    if base_observed is None and layer.seeded_observed is None and layer.observed_conditions is not None:
+        layer.seeded_observed = layer.observed_conditions.model_copy(deep=True)
+        layer.seeded_at = layer.seeded_at or now
+    seeded = base_obs is None and layer.seeded_observations is not None
+    return (
+        base_obs if base_obs is not None else layer.seeded_observations,
+        base_sigmets if base_sigmets is not None else layer.seeded_sigmets,
+        base_observed if base_observed is not None else layer.seeded_observed,
+        seeded,
     )
 
 
@@ -319,10 +361,10 @@ def commit_live_update(
             route, route_icaos, departure = None, [], None
 
         base_obs, base_sigmets, base_observed = _baseline_blocks(briefing_data)
-        memory = ClassifierMemory(
-            alerted=dict(prior.alerted) if prior else {},
-            held=dict(prior.held_categories) if prior else {},
+        base_obs, base_sigmets, base_observed, seeded = _seed_missing_baselines(
+            layer, base_obs, base_sigmets, base_observed, now,
         )
+        memory = ClassifierMemory(alerted=dict(prior.alerted) if prior else {})
         changes, memory = classify_changes(
             baseline_obs=base_obs,
             latest_obs=layer.route_observations,
@@ -331,15 +373,17 @@ def commit_live_update(
             baseline_observed=base_observed,
             latest_observed=layer.observed_conditions,
             roles=airport_roles(route_icaos, _alternate_icaos(briefing_data)),
-            baseline_at=_parse_dt(pack_timestamp),
+            destination=_destination(route),
+            baseline_at=layer.seeded_at if seeded else _parse_dt(pack_timestamp),
             flown_nm=_flown_nm(route, departure, now) if route is not None else None,
             memory=memory,
             now=now,
         )
+        if seeded:
+            changes.baseline_source = "live_start"
         layer.changes = changes
         layer.last_refresh_delta = worsening_delta(changes)
         layer.alerted = memory.alerted
-        layer.held_categories = memory.held
         layer.live_updated_at = now
 
         _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json())
