@@ -346,7 +346,7 @@ def _report_records(
         seen = _iso(observations.fetch_time)
         for a in observations.airports:
             if a.metar_raw and a.metar_time is not None:
-                out.append((("metar", a.icao, _iso(a.metar_time)), {
+                out.append((("metar", a.icao, _iso(a.metar_time), a.metar_raw), {
                     "kind": "metar", "icao": a.icao, "seen_at": seen,
                     "report_type": a.metar_report_type, "observed_at": _iso(a.metar_time),
                     "raw": a.metar_raw,
@@ -375,7 +375,7 @@ def _report_records(
 def _report_key(rec: dict) -> tuple | None:
     kind = rec.get("kind")
     if kind == "metar":
-        return ("metar", rec.get("icao"), rec.get("observed_at"))
+        return ("metar", rec.get("icao"), rec.get("observed_at"), rec.get("raw"))
     if kind == "taf":
         return ("taf", rec.get("icao"), rec.get("issued_at") or rec.get("raw"))
     if kind == "sigmet":
@@ -406,7 +406,7 @@ def _history_records(
     - ``evidence``: after a radar/lightning ``appeared`` event, the route
       points that triggered it.
 
-    ``shown`` is the change list the previous committed tick displayed.
+    ``shown`` is the change list the history last recorded as on screen.
     """
     base = {"tick_at": now.isoformat(), "pack_timestamp": layer.pack_timestamp}
     out: list[dict] = []
@@ -452,6 +452,29 @@ def _history_records(
     return out
 
 
+def _shown_from_history(history: list[dict], stored: LiveLayer | None) -> list[LiveChange]:
+    """The changes on screen as the history last recorded them: every
+    ``appeared`` not yet ``cleared``. Diffing against this rather than the
+    stored layer alone means a tick whose history write failed is not lost:
+    its events land, late, on the next tick that writes. The stored layer
+    still supplies each change's latest form (a cleared event carries the
+    last message shown, SPECI suffix included)."""
+    latest = {change_identity(c): c for c in (stored.changes.changes if stored and stored.changes else [])}
+    shown: dict[tuple, LiveChange] = {}
+    for r in history:
+        if r.get("type") != "event":
+            continue
+        c = LiveChange.model_validate(r["change"])
+        if r.get("event") == "appeared":
+            shown[change_identity(c)] = c
+        else:
+            shown.pop(change_identity(c), None)
+    # The display order where the layer has it; history-only changes after.
+    return [c for ident, c in latest.items() if ident in shown] + [
+        c for ident, c in shown.items() if ident not in latest
+    ]
+
+
 def _append_history(flight_dir: Path, records: list[dict]) -> None:
     if not records:
         return
@@ -477,11 +500,10 @@ def _record_history(
     not fail the tick or the ↻ press."""
     try:
         history = load_live_history(flight_dir)
-        # The previous tick's display — but when the history is only starting
-        # (first write, or a flight already live when #643 shipped), record
-        # everything on screen as appearing now.
-        shown = stored.changes.changes if (history and stored and stored.changes) else []
-        _append_history(flight_dir, _history_records(history, shown, layer, **kwargs))
+        # A history only starting (first write, or a flight already live
+        # when #643 shipped) shows nothing yet: everything on screen is
+        # recorded as appearing now.
+        _append_history(flight_dir, _history_records(history, _shown_from_history(history, stored), layer, **kwargs))
     except Exception:
         logger.warning("Live history write failed for %s — tick kept", flight_dir, exc_info=True)
 
@@ -626,10 +648,6 @@ LIVE_SUMMARY_MAX_SIGMETS = 20
 _TIER_ORDER = {"alert": 0, "highlight": 1}
 _DIRECTION_ORDER = {"worse": 0, "better": 1}
 _ROLE_ORDER = {"destination": 0, "departure": 1, "alternate": 2, "route": 3}
-
-
-def _iso(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt is not None else None
 
 
 def _nm(value: float | None) -> float | None:

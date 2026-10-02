@@ -271,6 +271,32 @@ def test_history_write_failure_does_not_fail_the_commit(tmp_path, monkeypatch, c
     assert "Live history write failed" in caplog.text
 
 
+def test_events_of_a_failed_history_write_land_on_the_next_tick(tmp_path, monkeypatch):
+    """The diff is against what the history last recorded, not the stored
+    layer: a tick whose write failed shows up late, not never."""
+    pack, briefing = _pack(tmp_path, "p1")
+    _commit(pack, briefing, _obs("VFR", NOW), at=NOW)
+    real = live_layer._append_history
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(live_layer, "_append_history", boom)
+    _commit(pack, briefing, _obs("IFR", NOW + timedelta(minutes=10)), at=NOW + timedelta(minutes=10))
+    monkeypatch.setattr(live_layer, "_append_history", real)
+    _commit(pack, briefing, _obs("IFR", NOW + timedelta(minutes=10)), at=NOW + timedelta(minutes=20))
+    assert _events(load_live_history(pack.parent)) == [("09:20", "appeared", "metar:ZZDS", "IFR")]
+
+
+def test_corrected_metar_with_the_same_observation_time_is_recorded(tmp_path):
+    pack, briefing = _pack(tmp_path, "p1")
+    _commit(pack, briefing, _obs("VFR", NOW), at=NOW)
+    _commit(pack, briefing, _obs("IFR", NOW, report_type="METAR COR"), at=NOW + timedelta(minutes=10))
+    metars = [r for r in _of(load_live_history(pack.parent), "report")
+              if r["kind"] == "metar" and r["observed_at"] == NOW.isoformat()]
+    assert [m["raw"].endswith(cat) for m, cat in zip(metars, ("VFR", "IFR"))] == [True, True]
+
+
 def test_truncated_line_is_skipped_and_not_glued_to_the_next(tmp_path):
     pack, briefing = _pack(tmp_path, "p1")
     _commit(pack, briefing, _obs("IFR", NOW), at=NOW)

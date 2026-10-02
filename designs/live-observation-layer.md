@@ -72,15 +72,16 @@ Every record has `type`, `tick_at`, `pack_timestamp`:
 | type | when | carries |
 |---|---|---|
 | `pack` | first write, and whenever the layer's pack differs from the last `pack` record | `pack_dir_name`, `previous_pack_timestamp`, `has_observations`, corridor widths |
-| `report` | a METAR/SPECI (ICAO + obs time), TAF (ICAO + issue time) or SIGMET (FIR + raw text) the first time it is seen | `raw`; SIGMETs also the structured `SigmetAlongRoute` minus raw text (nothing parses raw SIGMET text back); `seen_at` only when ≠ `tick_at` |
-| `event` | a change `appeared` / `cleared` vs the previous tick, identity `change_identity` = (key, direction, to_value, tier) | the change (nulls dropped; `new_alert` on appear; a clear carries the last message shown) |
+| `report` | a METAR/SPECI (ICAO + obs time + raw, so a COR at the same time is kept), TAF (ICAO + issue time) or SIGMET (FIR + raw text) the first time it is seen | `raw`; SIGMETs also the structured `SigmetAlongRoute` minus raw text (nothing parses raw SIGMET text back); `seen_at` only when ≠ `tick_at` |
+| `event` | a change `appeared` / `cleared` vs what the history last recorded as shown, identity `change_identity` = (key, direction, to_value, tier) | the change (nulls dropped; `new_alert` on appear; a clear carries the last message shown) |
 | `evidence` | right after a radar/lightning `appeared` event | the triggering route points (`LiveEvidencePoint`: station, along-route NM, inner ring, flash count or peak dBZ + valid/total px), frame time |
 
 Choices:
 - **Not full `live.json` snapshots** (60–400 KB × ~37 ticks, mostly the observed
   block). Replaying a morning's radar under other thresholds is out of scope.
-- **One timeline across packs.** Events diff against the stored layer's last
-  `changes` even when the pack switched, so a rebuild shows as clears/appears at
+- **One timeline across packs.** Events diff against the changes the history
+  last recorded as on screen (appeared, not yet cleared; each in the stored
+  layer's latest form and order) even when the pack switched, so a rebuild shows as clears/appears at
   that tick (the scenario replay does the same). The new pack's own
   observations/SIGMETs are recorded as reports with its `pack` record, so its
   baseline can be rebuilt.
@@ -93,7 +94,9 @@ Choices:
 - **Evidence stays off the API**: `LiveChange.evidence` is `exclude=True`, so it
   is in memory for the writer only, never in `live.json`, `/live` or the overlay.
 - **Failure isolation**: any history error is logged (`Live history write
-  failed`) and the tick/↻ carries on. A truncated last line is skipped on read
+  failed`) and the tick/↻ carries on. Because the diff runs against the history
+  itself, a failed tick's events are not lost: they land on the next tick that
+  writes, at that tick's time. A truncated last line is skipped on read
   and the next append starts on a fresh line.
 - **Size**: LELL→LEMI (busiest flight of 2026-10-02, no TAFs in the replay)
   ≈ 50 KB, mostly METAR raw text; a test caps it at 100 KB. No retention beyond
