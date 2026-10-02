@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -34,6 +35,9 @@ ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incor
 ALLOWED_STATUSES = {"pending", "ready", "replied", "ignored"}
 ALLOWED_SENTIMENTS = {"up", "down"}
 ALLOWED_TARGETS = {"digest", "general"}
+# Flight IDs are built from safe_path_component(route) + date + hash, so this
+# is their full alphabet. Free text here would reach the triage prompt.
+FLIGHT_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 class FeedbackRequest(BaseModel):
@@ -50,6 +54,14 @@ class FeedbackRequest(BaseModel):
     def validate_category(cls, v: str) -> str:
         if v not in ALLOWED_CATEGORIES:
             raise ValueError(f"category must be one of: {', '.join(sorted(ALLOWED_CATEGORIES))}")
+        return v
+
+    @field_validator("flight_id")
+    @classmethod
+    def validate_flight_id(cls, v: str) -> str:
+        v = v.strip()
+        if v and not FLIGHT_ID_RE.fullmatch(v):
+            raise ValueError("flight_id is not a valid flight ID")
         return v
 
     @field_validator("comment")

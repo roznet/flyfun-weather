@@ -2910,13 +2910,19 @@ def get_refresh_status(
     db: Session = Depends(get_db),
 ):
     """Get the refresh status for a specific flight."""
+    # Same visibility as the briefing itself: a private flight's refresh state
+    # is not anyone else's business.
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     entry = refresh_registry.get(flight_id)
     if entry is None:
         return _interrupted_refresh_status(db, flight_id, user_id) or {"active": False}
     # Polling this per-flight endpoint means the user is on THIS briefing
     # watching the refresh — record a watch-contact for notification presence.
-    # (The list poll, /refresh/active, deliberately does not.)
-    refresh_registry.touch_watch(flight_id)
+    # (The list poll, /refresh/active, deliberately does not.) Owner only: the
+    # watch suppresses the owner's completion notification, so a viewer's poll
+    # must not count as the owner being present.
+    if flight.user_id == user_id:
+        refresh_registry.touch_watch(flight_id)
     label = _STAGE_LABELS.get(entry.stage, entry.stage) if entry.stage else None
     # Mirror the fraction the SSE stream emits (_STAGE_PROGRESS) so a client that
     # polls status (e.g. after navigating away and back) can drive the progress
@@ -2942,10 +2948,38 @@ refresh_router = APIRouter(prefix="/refresh", tags=["refresh"])
 @refresh_router.get("/active")
 def get_active_refreshes(
     user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
 ):
-    """Return all currently active refreshes."""
+    """Return the caller's active refreshes: their own flights' plus the public
+    flights they subscribe to (both appear in their flight list).
+
+    Never other users' entries, and never ``user_id``: a global list would hand
+    every signed-in user the flight IDs (route + date) and user IDs of everyone
+    currently refreshing.
+    """
     entries = refresh_registry.get_all_active()
-    return [e.model_dump() for e in entries]
+    others = {e.flight_id for e in entries if e.user_id != user_id}
+    visible_subscribed: set[str] = set()
+    if others:
+        from weatherbrief.db.models import FlightRow, FlightSubscriptionRow
+
+        visible_subscribed = {
+            fid for (fid,) in (
+                db.query(FlightSubscriptionRow.flight_id)
+                .join(FlightRow, FlightRow.id == FlightSubscriptionRow.flight_id)
+                .filter(
+                    FlightSubscriptionRow.user_id == user_id,
+                    FlightSubscriptionRow.flight_id.in_(others),
+                    FlightRow.private.is_(False),
+                )
+                .all()
+            )
+        }
+    return [
+        e.model_dump(exclude={"user_id"})
+        for e in entries
+        if e.user_id == user_id or e.flight_id in visible_subscribed
+    ]
 
 
 @refresh_router.get("/stats")

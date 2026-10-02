@@ -171,7 +171,7 @@ tmux send-keys -t "$SESSION" "npm run dev" Enter
 tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT"
 tmux send-keys -t "$SESSION" \
   "source $VENV_PATH/bin/activate && uvicorn weatherbrief.api.app:app --reload \
-   --host :: --port 8443 \
+   --host ::1 --port 8443 \
    --ssl-keyfile /usr/local/etc/letsencrypt/live/ro-z.me/privkey.pem \
    --ssl-certfile /usr/local/etc/letsencrypt/live/ro-z.me/fullchain.pem" Enter
 tmux split-window -h -t "$SESSION" -c "$PROJECT_ROOT/web"
@@ -209,7 +209,7 @@ Include the cross-mode banner from Step 9 if applicable.
 - `uvicorn --reload` watches Python file changes; `npm run dev` rebuilds `web/dist/*.js` on TypeScript change.
 - Production: 8020 (docker, HTTP behind Caddy). Dev HTTP: 8000 (main) / 8001+ (worktrees). Dev HTTPS: 8443.
 - The `localhost.ro-z.me` host resolves to **both** `127.0.0.1` and `::1` (already configured) so the wildcard cert validates without DNS shenanigans.
-- **HTTPS mode must bind `--host ::`, not `0.0.0.0`.** Because the host resolves to both families and macOS/iOS prefer IPv6, the simulator dials `::1:8443` first. An IPv4-only listener refuses that, and URLSession does not reliably fall back — the app just reports the server as unreachable while `curl --ipv4` to the same URL works fine, which makes it look like a client bug. On macOS `net.inet6.ip6.v6only` is 0, so an `AF_INET6` socket bound to `::` accepts IPv4 too; exposure is the same as `0.0.0.0` (all interfaces). Symptom in the iOS log:
+- **HTTPS mode binds `--host ::1` (IPv6 loopback), not `::` or `0.0.0.0`.** Because the host resolves to both families and macOS/iOS prefer IPv6, the simulator dials `::1:8443` first. An IPv4-only listener refuses that, and URLSession does not reliably fall back: the app just reports the server as unreachable while `curl --ipv4` to the same URL works fine, which makes it look like a client bug. `::1` serves the simulator and keeps the server off the network: dev mode has no auth (every request is the admin dev user) and the env holds real API keys, so `::` (which on macOS also accepts IPv4 on every interface) would hand an admin server to anyone on the same Wi-Fi. Never bind `::` or `0.0.0.0` here. Symptom of an IPv4-only listener in the iOS log:
   ```
   nw_socket_handle_socket_event [C2.1.1.1:3] Socket SO_ERROR [61: Connection refused]
   nw_endpoint_flow_failed_with_error [C2.1.1.1 ::1.8443 ...]
