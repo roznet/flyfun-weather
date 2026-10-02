@@ -63,16 +63,18 @@ The serious findings are elsewhere, mostly in older code that earlier passes rev
 
 | ID | Status | Where |
 |----|--------|-------|
-| 2026-10-C1 | **FIXED** in `flyfun-common` 0.6.8 ([roznet/flyfun-common#12](https://github.com/roznet/flyfun-common/pull/12)); active once released and the weather pin is raised to `>=0.6.8` | `_user_with_email` compares `lower(email)` exactly, never `LIKE`; tests with `_`/`%` addresses. |
+| 2026-10-C1 | **FIXED** in `flyfun-common` 0.6.8 ([roznet/flyfun-common#12](https://github.com/roznet/flyfun-common/pull/12), published); weather requires `>=0.6.8` since `a00b054`, effective once that build is deployed | `_user_with_email` compares `lower(email)` exactly, never `LIKE`; tests with `_`/`%` addresses. |
 | 2026-10-C1b | **FIXED** in the same release. *New, found while reviewing #12:* prod MySQL uses `utf8mb4_unicode_ci`, which ignores accents, so even exact SQL equality matched `victim@gmäil.com` to `victim@gmail.com`; an attacker owning the IDN domain could sign in as any Gmail user. | Magic-link emails must be ASCII; SQL only narrows candidates and Python picks the exact case-folded match (also for OTP token rows). |
-| 2026-10-C2 | **FIXED** in `flyfun-common` 0.6.8 (#12) | Redirect pages escape `<`, `>`, `&` in the inline script; registration rejects URIs with whitespace, control or RFC 3986-forbidden characters. Verified with the original payload: one `<script>` element, registration refused. |
-| 2026-10-H3 | **PARTIAL** | Edge cap: Caddy `request_body max_size 1MB` (deploy `deploy/weather.flyfun.aero.caddy`). Still needed in `flyfun-common`: `max_length=254` on email fields and a linear regex; until then a body under 1 MB can still stall the worker for minutes. |
+| 2026-10-C2 | **FIXED** in `flyfun-common` 0.6.8 (#12); same pin and deploy note as C1 | Redirect pages escape `<`, `>`, `&` in the inline script; registration rejects URIs with whitespace, control or RFC 3986-forbidden characters. Verified with the original payload: one `<script>` element, registration refused. |
+| 2026-10-H3 | **PARTIAL** | Edge cap only: Caddy `request_body max_size 1MB` (`deploy/weather.flyfun.aero.caddy`, effective once copied to the shared Caddy config and reloaded). **Not in 0.6.8:** `_EMAIL_RE` is unchanged (still quadratic) and the email fields have no `max_length`, so a body just under 1 MB can still stall the single worker for minutes. Next `flyfun-common` release: reject emails over 254 characters before the regex runs, and use a linear pattern such as `^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$`. |
 | 2026-10-M1 | **FIXED (bypass)**, residual accepted | Feedback `flight_id` must match the flight-ID alphabet; trusted prompt fields are replaced unless they look like IDs/timestamps; substitution is single pass. The agent can still read its own key (`.env` in its working directory, same Unix user), which `designs/triage-sandbox.md` already records as accepted; scrubbing the subprocess env would not change that, so it was not done. |
 | 2026-10-M5 | **FIXED** | `/devserver --https` binds `::1`. |
 | M-new-9 | **FIXED** | `/refresh/active` returns only the caller's refreshes plus public flights they subscribe to, without `user_id`. |
 | 2026-10-L1 | **FIXED** | `/packs/refresh/status` checks visibility; only the owner's poll counts as watching. |
 
-Regression tests: `tests/test_security_2026_10.py` (fails on the previous code, 10 of 13).
+Regression tests: `tests/test_security_2026_10.py` (fails on the previous code, 10 of 13). Follow-up `5333d3c`: the feedback validator and `safe_path_component` now share one flight-ID alphabet (`FLIGHT_ID_RE` in `storage/flights.py`), and the triage prompt logs when it replaces a trusted field.
+
+Still to confirm after deploy (were C1/C2 used before the fix?): magic-link consumes where the token's email differs from the resolved user's email, and `oauth_clients` rows whose `redirect_uris` contain `<`, `"` or whitespace.
 
 ### Carry-forward statuses re-verified 2026-10-02
 
