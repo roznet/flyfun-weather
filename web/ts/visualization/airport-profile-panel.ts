@@ -801,15 +801,16 @@ export class AirportProfilePanel {
       narrow: true,
       cloudStyle: this.cloudStyle,
       // Only persist. The style dropdown is a native <select>, so it already
-      // shows the new value, and `wireCloudCompound` follows this with an
-      // `onToggle` per enabled source — each of which redraws. Redrawing here
-      // too would just do it twice more.
+      // shows the new value, and `wireCloudCompound` follows this with one
+      // `onLayersSet` for the swapped sources, which redraws. Redrawing here
+      // too would just do it twice.
       onCloudStyleChange: (style) => {
         this.cloudStyle = style;
         saveCloudStyle(style);
       },
-      // `None` and a compact family chip set several layers in one click; take
-      // them as one change so the chart draws once, not once per layer (#597).
+      // `None`, a compact family chip and a cloud source/style swap set several
+      // layers in one click; take them as one change so the chart draws once,
+      // not once per layer (#597).
       onLayersSet: (overrides) => this.applyLayers(overrides),
     });
   }
@@ -843,11 +844,10 @@ export class AirportProfilePanel {
 
   /** Redraw the layer controls once per burst of toggles.
    *
-   *  A single pill is one call, but a cloud style or source swap is not: it
-   *  goes through `onToggle` once per affected layer, so a redraw per call
-   *  would rebuild the subtree several times for one click and leave focus
-   *  wherever the last iteration put it. (`None` now arrives as one
-   *  `onLayersSet`, #597.) The burst is synchronous, so a
+   *  Every multi-layer edit now arrives as one `onLayersSet` (#597), so this
+   *  is a safety net: a caller without that hook falls back to an `onToggle`
+   *  per layer, and a redraw per call would rebuild the subtree several times
+   *  for one click and leave focus wherever the last iteration put it. The burst is synchronous, so a
    *  microtask coalesces it exactly — and the DOM the redraw reads its open
    *  family back from is still the previous render when the microtask runs. */
   private queueToggleRedraw(): void {

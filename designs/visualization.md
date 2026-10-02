@@ -787,7 +787,7 @@ Consensus and overlay-soft modes use a single base RGB per layer from the theme.
   since all six line layers are `defaultEnabled: true`, the three layer presets do
   **not** turn the parcel lines off. Fix the preset keys (not the layer ids) if this
   is revisited.
-- Multi-layer user edits (`None`, a compact family chip off) go through the panel's
+- Multi-layer user edits (`None`, a compact family chip off, a cloud source/style swap) go through the panel's
   `onLayersSet` → `setVizLayers` (one store update, dirties the lens like
   `toggleVizLayer`). `setLayersBatch` is the *programmatic* twin and deliberately
   leaves `activePreset` alone — don't swap them (#597).

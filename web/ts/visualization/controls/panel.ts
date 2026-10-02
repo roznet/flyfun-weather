@@ -482,7 +482,15 @@ function wireCloudCompound(
   enabledLayers: Record<string, boolean>,
   onToggle: (layerId: string) => void,
   onStyleChange?: (style: 'natural' | 'soft' | 'square') => void,
+  onLayersSet?: (overrides: Record<string, boolean>) => void,
 ): void {
+  // A swap is one user edit: one store update when the caller can take a batch
+  // (#597), else one flip per changed layer. Every id here is a real change —
+  // the off one is on and the on one is off — so flipping is safe.
+  const apply = (overrides: Record<string, boolean>): void => {
+    if (onLayersSet) onLayersSet(overrides);
+    else for (const id of Object.keys(overrides)) onToggle(id);
+  };
   const sourceCbs = container.querySelectorAll<HTMLButtonElement>('[data-cloud-source]');
   const styleSel = container.querySelector<HTMLSelectElement>('[data-cloud-style]');
   if (sourceCbs.length === 0 || !styleSel) return;
@@ -510,8 +518,9 @@ function wireCloudCompound(
       const wantOn = cb.getAttribute('aria-pressed') !== 'true';
       if (wantOn) {
         const targetId = CLOUD_LAYER_BY_AXES[source][style];
-        if (currentId && currentId !== targetId) onToggle(currentId);
-        if (currentId !== targetId) onToggle(targetId);
+        if (currentId !== targetId) {
+          apply(currentId ? { [currentId]: false, [targetId]: true } : { [targetId]: true });
+        }
       } else if (currentId) {
         onToggle(currentId);
       }
@@ -526,15 +535,17 @@ function wireCloudCompound(
     onStyleChange?.(newStyle);
     // For each source that's currently enabled, swap from its current
     // style-layer to the new style-layer. Sources that are off stay off.
+    const overrides: Record<string, boolean> = {};
     for (const source of ['dd', 'nwp'] as const) {
       const currentId = enabledIdFor(source);
       if (!currentId) continue;
       const targetId = CLOUD_LAYER_BY_AXES[source][newStyle];
       if (currentId !== targetId) {
-        onToggle(currentId);
-        onToggle(targetId);
+        overrides[currentId] = false;
+        overrides[targetId] = true;
       }
     }
+    if (Object.keys(overrides).length > 0) apply(overrides);
   });
 }
 
@@ -728,7 +739,7 @@ function wireToggleBlock(
   });
 
   wireHintSlot(root);
-  wireCloudCompound(root, enabledLayers, onToggle, opts.onCloudStyleChange);
+  wireCloudCompound(root, enabledLayers, onToggle, opts.onCloudStyleChange, opts.onLayersSet);
   wireLayerInfoButtons(root);
   wireLayerBar(root, enabledLayers, opts, onToggle, (next) => {
     wireToggleBlock(next, enabledLayers, opts, onToggle);
