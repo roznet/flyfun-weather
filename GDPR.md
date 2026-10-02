@@ -1,6 +1,6 @@
 # FlyFun Weather — GDPR Considerations
 
-*Last updated: 2026-06-20*
+*Last updated: 2026-10-02*
 
 ## Statement
 
@@ -26,15 +26,16 @@ If you spot something we've missed or got wrong, please open a
 |------|--------|
 | Privacy notice / transparency (Art. 13–14) | ✅ Implemented |
 | Data minimization (Art. 5) | ✅ Implemented |
+| Storage limitation / retention (Art. 5(1)(e)) | 🟡 Partial — automatic retention for briefing packs, sign-in records and raw usage events (§14); other records kept for the life of the account |
 | Right to erasure (Art. 17) | ✅ Implemented |
 | Lawful basis (Art. 6) | ✅ Believe fine |
 | Feedback contact basis (Art. 6) | ✅ Legitimate interest — pre-ticked, easily-declined contact box on user-initiated feedback |
 | Security of processing (Art. 32) | ✅ Implemented (PII log-masking shipped) |
 | Data residency (UK, EU-adequate) | ✅ Implemented |
-| International transfers (Art. 44–49) | ✅ All transfers under SCC-backed DPAs (Resend, DigitalOcean, Google, Anthropic) or independent controller (Apple); no PII to LLM providers |
-| Processor agreements / DPAs (Art. 28) | ✅ All DPAs in force (Resend, DigitalOcean, Google, Anthropic, OpenAI — auto-executed/incorporated); Apple handled as independent controller |
+| International transfers (Art. 44–49) | ✅ All transfers under SCC-backed DPAs (Resend, DigitalOcean, Google, Anthropic) or independent controller (Apple); no PII to LLM providers. 🟡 Stripe, Apple Push and the map-tile providers (added since) are disclosed; their transfer basis is still to be recorded (§8) |
+| Processor agreements / DPAs (Art. 28) | ✅ All DPAs in force (Resend, DigitalOcean, Google, Anthropic, OpenAI — auto-executed/incorporated); Apple handled as independent controller. 🟡 Stripe, Apple Push and the map-tile providers: role and terms to confirm (§9) |
 | Our role: controller, not processor | ✅ We are the controller; no one needs a DPA from us (revisit if org/team accounts or cross-app sharing ship) |
-| Right to data portability (Art. 20) | ✅ Implemented (self-service JSON export) |
+| Right to data portability (Art. 20) | ✅ Implemented (self-service JSON export; a test enforces that every user-linked table is covered) |
 | Breach notification process (Art. 33–34) | ✅ Implemented (runbook in `SECURITY.md`) |
 | Records of processing (Art. 30) | 🟡 Likely exempt (small scale) — this doc serves as informal record |
 | DPO / EU representative | 🟡 Believe not required (small scale, no large-scale special-category processing) |
@@ -69,9 +70,16 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
 
 ### 2. Data minimization (Art. 5) — ✅
 
-- We store only: email (or Apple private-relay address), display name, OAuth
-  provider, account timestamps, the user's own flights/briefings, preferences, and
-  optional feedback comments.
+- We store only: email (or Apple private-relay address), display name, sign-in
+  method (Google, Apple or email link), account timestamps, the user's own
+  flights/briefings, trips (name, optional notes), followed flights, aircraft
+  (type, optional tail number) and flight profiles, post-flight debriefs,
+  PIREPs (position, altitude, time, conditions, remarks), preferences, optional
+  feedback comments, push-device tokens, API tokens / connected-app grants, and
+  donation records (amount, currency, Stripe reference — no card data).
+- IP addresses are held briefly for email sign-in (24 h, §14), in
+  `oauth_clients.registered_ip` for dynamically registered OAuth clients, and in
+  server request logs.
 - **No third-party analytics, no tracking pixels, no advertising cookies** — only an
   authentication session cookie (`flyfun_auth`).
 - **Why we think we're fine:** we collect only what the service functionally needs;
@@ -107,10 +115,11 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
   permanently removes the account and all associated data (flights, briefings,
   preferences, credentials).
 - **Why we think we're fine:** erasure is self-service, complete, and irreversible.
-- *Note:* the planned PIREP feature will **anonymize** (null out `user_id`/`aircraft_id`)
-  rather than delete shared observation records, retaining them as anonymous data.
-  Anonymization is a recognized approach, but this is a future feature — flagged here
-  so it is reviewed when built.
+- *PIREPs* (shipped March 2026) are **anonymized** rather than deleted: account
+  deletion nulls `user_id`/`aircraft_id` (`_on_delete_user`, `api/app.py`) and keeps
+  the observation (position, altitude, time, conditions, remarks) as anonymous
+  weather data. Anonymization is a recognized approach; this is disclosed in
+  `PRIVACY.md`.
 
 ### 6. Security of processing (Art. 32) — ✅
 
@@ -163,9 +172,27 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
   an independent controller and is responsible for its own transfer mechanisms for the
   authentication it performs; we receive only a minimal identifier + email (see §9). The
   iOS Apple path verifies the token locally and sends Apple no user data.
+- **Stripe (donations only)** — Stripe Checkout receives the account email (pre-filled
+  unless the donor opts out), the account id and the amount; card details are entered
+  directly with Stripe. Stripe is US-headquartered. *Transfer basis to record:* Stripe's
+  DPA/SCCs and its independent-controller role for payment data.
+- **Apple Push Notification service (iOS, opt-in)** — push payloads carry the route
+  (e.g. `EGTF → LFAT`), the trip name for trip updates, the assessment and the
+  `flight_id`, plus the device token. *To record:* the arrangement under the Apple
+  Developer Program License Agreement.
+- **Map tiles (web)** — the user's browser fetches tiles directly from
+  OpenStreetMap (light theme) and Stadia Maps (dark theme, since 2026-09-29), exposing
+  the user's IP address and the map area viewed (`web/ts/visualization/map-tiles.ts`).
+  No other third-party browser requests: the CSP limits images to self + those two
+  hosts and fonts/scripts to self. *To decide:* rely on disclosure, or proxy tiles.
+- **AI assistant connectors (ChatGPT `/agent/v1`, Claude MCP)** — a **user-directed**
+  transfer: the user authorizes their own AI client (OAuth or API token) to read
+  their flights and briefings. OpenAI/Anthropic act for the user under the user's own
+  account, not as our processors; disclosed in `PRIVACY.md`.
 - **Why we think we're fine:** the PII leaving the EU goes to processors with SCC-backed
   DPAs already in force (Resend, Google), or to an independent controller (Apple) handling
-  its own compliance; no PII goes to the LLM providers. Hosting (DigitalOcean) is in the
+  its own compliance; no PII goes to the LLM providers. The newer flows above are
+  disclosed; their contractual basis is still to be recorded. Hosting (DigitalOcean) is in the
   UK (§7) and additionally covered by its auto-accepted DPA (§9).
 
 ### 9. Processor agreements / DPAs (Art. 28) — ✅
@@ -220,7 +247,15 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
   [OpenAI Data Processing Addendum](https://openai.com/policies/data-processing-addendum)
   can be downloaded for our records. As with Anthropic, **no personal data is sent to
   OpenAI** — only anonymized weather context. ✅
-- **Why we think we're fine:** every processor is now covered by a DPA already in force,
+- **Stripe (donations):** 🟡 to confirm — Stripe acts largely as an independent
+  controller for payment data, with its DPA incorporated into the Stripe Services
+  Agreement; verify and record.
+- **Apple Push Notification service:** 🟡 to confirm — governed by the Apple Developer
+  Program License Agreement; record whether Apple is treated as processor or
+  independent controller for push delivery.
+- **OpenStreetMap Foundation / Stadia Maps (tiles):** 🟡 to confirm — the browser
+  contacts them directly; record their roles and terms (OSMF is UK-based).
+- **Why we think we're fine (as of the June review):** every processor is now covered by a DPA already in force,
   auto-executed or auto-incorporated via the terms we accepted (Resend, DigitalOcean,
   Google, Anthropic, OpenAI); Apple is correctly handled as an independent controller with
   the relationship documented. No outstanding processor agreements remain.
@@ -257,14 +292,21 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
 - A self-service **"Download my data"** button in web Settings calls
   `GET /api/account/export` and downloads a single JSON document containing the
   user's account, preferences, flights (with briefing-pack metadata and
-  debriefs), aircraft, profiles, usage records, PIREPs, feedback and device
-  registrations.
-- The export mirrors the deletion inventory (`_on_delete_user`) so the data we
-  *return* matches the data we *hold*. Secrets and server-internal fields
-  (encrypted credentials, push-token values, integrity HMACs, AI-triage
-  internals, file paths, OAuth `provider_sub`) are deliberately excluded.
+  debriefs), trips, followed flights, briefing seen-state, refresh jobs,
+  aircraft, profiles, briefing usage, API usage, cost records, donations,
+  PIREPs, feedback, device registrations, API tokens and connected apps
+  (OAuth grants).
+- **Coverage is enforced, not hoped for:** every table carrying a `user_id`
+  column must be listed in `_USER_SECTIONS` (exported) or `_NOT_EXPORTED` (with a
+  reason — today only `oauth_authorization_codes`, a single-use credential living
+  for minutes). `test_every_user_linked_table_is_exported_or_exempted` fails when a
+  new user-linked table is added without a decision. Secrets and server-internal
+  fields (encrypted credentials, token hashes, push-token values, integrity HMACs,
+  AI-triage internals, trip refresh-driver state, file paths, OAuth `provider_sub`)
+  are deliberately excluded.
 - Code: `src/weatherbrief/api/account_export.py`; tests in
-  `tests/test_account_export.py`. Shipped 2026-06-20.
+  `tests/test_account_export.py`. Shipped 2026-06-20; extended to the tables added
+  since, with the coverage test, 2026-10-02.
 
 ### 11. Breach notification (Art. 33–34) — ✅
 
@@ -293,6 +335,24 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
   apply at this scale.
 - **To revisit** if the user base or data scope grows materially.
 
+### 14. Storage limitation / retention (Art. 5(1)(e)) — 🟡
+
+Automatic retention in force today:
+
+- **Briefing packs** (`src/weatherbrief/tasks/retention.py`, daily): T1 strips the heavy
+  files 30 days after departure; T2 deletes the pack and its row after 180 days (90 days
+  for users inactive for 30 days). Packs of debriefed flights are exempt from T2;
+  PIREP-linked packs are exempt from both. Thresholds are env-configurable
+  (`RETENTION_*`).
+- **Email sign-in records** (`magic_link_tokens`: email + requesting IP;
+  `magic_link_consume_attempts`: IP) — purged after 24 hours (scheduler).
+- **Raw usage-analytics events** (`analytics_events`) — purged after 60 days
+  (`src/weatherbrief/analytics/rollup.py`).
+
+Everything else (account, flights, trips, debriefs, feedback, usage records) is kept
+for the life of the account and removed by account deletion. Retention for the
+remaining record types is not yet defined.
+
 ---
 
 ## Outstanding items (action list)
@@ -309,7 +369,12 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
    (`SECURITY_AUDIT.md` 2026-06-L5), fixed 2026-06-11.
 5. ✅ **Breach-notification runbook** (Art. 33–34) — documented in `SECURITY.md`
    (UK GDPR / ICO, 72-hour process), shipped 2026-06-20.
-6. **Review PIREP anonymization** when that feature is built (Art. 17). *Future.*
+6. ✅ **PIREP anonymization** (Art. 17) — shipped with PIREPs (March 2026): deletion
+   nulls `user_id`/`aircraft_id`; disclosed in `PRIVACY.md`.
+7. ✅ **Export coverage** (Art. 15/20) — trips, followed flights, API tokens / connected
+   apps, donations, cost and API-usage records added; a test enforces coverage of every
+   user-linked table, 2026-10-02.
+8. 🟡 **Record the terms** for Stripe, Apple Push and the map-tile providers (§8–9).
 
 ---
 
@@ -318,6 +383,6 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
 > FlyFun Weather is privacy-by-design: UK-hosted (EU-adequate), data-minimizing, with a published
 > privacy policy and full self-service account deletion. No personal data is sent to
 > LLM providers — only anonymized weather context. We have not undergone a formal
-> legal review, but we have implemented everything we understand GDPR to require and
-> are openly tracking the remaining items (notably a data-export feature) in this
-> document. The codebase is open source so anyone can verify these claims.
+> legal review, but we have implemented everything we understand GDPR to require —
+> including self-service data export and account deletion — and are openly tracking the
+> remaining items in this document. The codebase is open source so anyone can verify these claims.

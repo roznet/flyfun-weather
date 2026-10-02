@@ -7,13 +7,22 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
-from flyfun_common.db.models import UserRow, UserPreferencesRow
+from flyfun_common.db.models import (
+    ApiTokenRow,
+    Base,
+    DonationRow,
+    UserPreferencesRow,
+    UserRow,
+)
+from flyfun_common.oauth.models import OAuthRefreshTokenRow
+from weatherbrief.api.account_export import _NOT_EXPORTED, _USER_SECTIONS
 from weatherbrief.api.admin import require_admin
 from weatherbrief.api.app import create_app
 from weatherbrief.db.models import (
     DeviceTokenRow,
     FeedbackRow,
     FlightRow,
+    FlightTripRow,
     UserAircraftRow,
 )
 from weatherbrief.privacy import mask_email
@@ -77,6 +86,19 @@ def app_db():
     s.add(DeviceTokenRow(
         user_id=DEV_USER_ID, token="SECRET_PUSH_TOKEN", environment="production",
     ))
+    s.add(FlightTripRow(
+        id="trip1", user_id=DEV_USER_ID, name="Summer tour", notes="Pack the life jackets",
+        refresh_state_json='{"internal": true}',
+    ))
+    s.add(ApiTokenRow(user_id=DEV_USER_ID, token_hash="SECRET_API_TOKEN_HASH", name="My script"))
+    s.add(OAuthRefreshTokenRow(
+        token_hash="SECRET_REFRESH_HASH", access_token_hash="SECRET_ACCESS_HASH",
+        client_id="client-1", user_id=DEV_USER_ID,
+    ))
+    s.add(DonationRow(
+        user_id=DEV_USER_ID, service="weather", amount=10.0, currency="GBP",
+        amount_usd=12.7, fx_rate=1.27, provider_ref="cs_test_123",
+    ))
     s.commit()
     s.close()
     yield TestSession
@@ -119,7 +141,7 @@ def test_export_contains_all_sections(client):
     for key in (
         "account", "preferences", "aircraft", "flight_profiles", "flights",
         "feedback", "usage", "pireps", "device_registrations",
-        "format_version", "exported_at", "user_id",
+        "format_version", "exported_at", "user_id", *_USER_SECTIONS,
     ):
         assert key in data, f"missing section {key}"
     assert data["account"]["email"] == "dev@localhost"
@@ -150,6 +172,40 @@ def test_export_excludes_secrets_and_internals(client):
     assert "INTERNAL AI NOTES" not in body
     assert "ai_analysis" not in data["feedback"][0]
     assert "triage_prompt" not in data["feedback"][0]
+    # Token hashes are credentials; trip refresh-driver state is internal.
+    for secret in ("SECRET_API_TOKEN_HASH", "SECRET_REFRESH_HASH", "SECRET_ACCESS_HASH"):
+        assert secret not in body
+    assert "refresh_state_json" not in data["trips"][0]
+
+
+def test_export_includes_user_authored_and_linked_records(client):
+    data = client.get("/api/account/export").json()
+    assert data["trips"][0]["name"] == "Summer tour"
+    assert data["trips"][0]["notes"] == "Pack the life jackets"
+    assert data["api_tokens"][0]["name"] == "My script"
+    assert data["connected_apps"][0]["client_id"] == "client-1"
+    assert data["donations"][0]["amount"] == 10.0
+
+
+def test_every_user_linked_table_is_exported_or_exempted():
+    """A new table carrying ``user_id`` must be added to the export.
+
+    Either list it in ``_USER_SECTIONS`` or, if it genuinely holds nothing the
+    user should get back, in ``_NOT_EXPORTED`` with a reason (GDPR Art. 15/20).
+    """
+    import weatherbrief.db.models  # noqa: F401 — register all tables on Base
+
+    handled = {"users", "user_preferences", "flights"}
+    handled |= {m.__tablename__ for m in _USER_SECTIONS.values()}
+    handled |= set(_NOT_EXPORTED)
+    user_linked = {
+        t.name for t in Base.metadata.tables.values() if "user_id" in t.c
+    }
+    missing = user_linked - handled
+    assert not missing, (
+        f"user-linked tables not in the account export: {sorted(missing)} — add "
+        "them to _USER_SECTIONS or _NOT_EXPORTED in api/account_export.py"
+    )
 
 
 def test_export_requires_existing_user(client, app_db):

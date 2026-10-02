@@ -1,6 +1,6 @@
 # FlyFun Weather — Privacy & Data Practices
 
-*Last updated: 2026-06-20*
+*Last updated: 2026-10-02*
 
 This document explains what data the app collects, why, and what I do (and don't do) with it.
 FlyFun Weather is a personal project — I'm a single developer, not a company.
@@ -18,6 +18,10 @@ When you sign in with Google, the server receives your **email address** and **d
 
 When you sign in with Apple, Apple's **Private Relay** system is used. The server receives a private relay email address — I never see your real email unless you choose to share it. Your display name may also be provided depending on your Apple ID settings. For the Apple part of the sign-in flow Apple acts as an independent data controller; see [Apple's Privacy Policy](https://www.apple.com/legal/privacy/) for how Apple handles that data.
 
+### Email Sign-In Link
+
+You can also sign in with just your email address: the app emails you a one-time sign-in link and code. To deliver and secure it, the server briefly stores your email address and the IP address of the request (and of any attempt to use the link). These records are deleted automatically after 24 hours.
+
 ---
 
 ## What Data Is Stored
@@ -26,14 +30,31 @@ When you sign in with Apple, Apple's **Private Relay** system is used. The serve
 
 - Email address (or Apple private relay address)
 - Display name
-- OAuth provider (Google or Apple)
+- Sign-in method (Google, Apple or email link)
 - Account creation and last login timestamps
 
 ### Flights & Briefings
 
 - Your saved routes, waypoints, departure times, and flight parameters
+- Trips you create (a name, optional notes, and which flights belong to them)
+- Flights of other pilots that you follow
+- Your aircraft (type and, if you enter it, tail number) and flight profiles
 - Generated briefing packs (weather data, advisories, GRAMET cross-sections, Skew-T charts, LLM digests)
 - Briefing artifacts are stored as files on the server, organized by user
+- Post-flight debriefs you write (how the flight went, free-text notes)
+
+### Pilot Reports (PIREPs)
+
+If you submit a PIREP, the report is stored with its position, altitude, time, conditions and any remarks, linked to your account. Because PIREPs are shared weather observations, they are **anonymized rather than deleted** when you delete your account (see Account Deletion).
+
+### Devices & Connected Apps
+
+- If you use the iOS app with notifications enabled, the device's push-notification token
+- API tokens you create, and AI assistants you connect (see AI Assistant Connectors), with when they were created and last used
+
+### Server Logs
+
+Like any web server, requests are logged with the requesting IP address, for security and troubleshooting.
 
 ### Preferences
 
@@ -45,6 +66,10 @@ When you sign in with Apple, Apple's **Private Relay** system is used. The serve
 
 If you submit feedback on a briefing, the comment and associated flight reference are stored.
 
+### Donations
+
+If you donate, payment is handled entirely by **Stripe** — card details go straight to Stripe and never reach this server. The app records the donation (amount, currency, whether it is recurring, and Stripe's payment reference) linked to your account if you were signed in. Your account email is pre-filled on the Stripe checkout page unless you choose not to.
+
 ---
 
 ## Briefing Sharing
@@ -53,6 +78,8 @@ Briefings are **shareable by direct link** to any authenticated user of the app.
 If you share a briefing URL with another pilot, they can view it.
 This is intentional — the app is designed for a small trusted community of pilots.
 If you don't want a briefing to be viewable by others, you can mark flights as private.
+
+Viewers see your display name (never your email). Your aircraft tail number, debriefs and trip notes are never shown to other users.
 
 ---
 
@@ -66,6 +93,16 @@ If you enable auto-refresh on a flight, the app will:
 Your email is used **solely** for delivering these briefing notifications and account-related messages (welcome email, etc.).
 
 **I will never use your email for marketing, newsletters, promotions, or share it with any third party.**
+
+### Push Notifications (iOS)
+
+If you allow notifications in the iOS app, briefing updates are delivered through the **Apple Push Notification service**. The notification content — the route (e.g. "EGTF → LFAT"), the trip name for trip updates, and the new assessment — passes through Apple to reach your device. You can turn notifications off in the app or in iOS Settings.
+
+---
+
+## AI Assistant Connectors
+
+You can choose to connect your FlyFun Weather account to an AI assistant such as **ChatGPT** or **Claude** (via the MCP connector). When you do, that assistant can read your flights and briefings and create or refresh flights on your behalf, using access you authorized. What the assistant then does with that data is governed by its provider's own privacy terms (OpenAI or Anthropic), under your account with them — not by this app. You can see and revoke connected assistants and API tokens from Settings.
 
 ---
 
@@ -108,7 +145,9 @@ The app tracks the real cost of each briefing (LLM tokens, infrastructure share,
 
 ## Data Retention & Deletion
 
-- **Briefing artifacts** (weather files, charts) are cleaned up automatically after a period to manage disk space
+- **Briefing packs** are trimmed in two stages: 30 days after the flight's departure the heavy files (charts, raw model data) are removed, and after 180 days the briefing is deleted entirely (90 days if you haven't used the app for 30 days). Briefings for flights you debriefed are not deleted (their heavy files are still trimmed), and briefings linked to a PIREP are kept in full.
+- **Email sign-in records** (email, IP address) are deleted after 24 hours.
+- **In-app usage events** (raw page events) are deleted after 60 days.
 - **Account data and flight history** are retained as long as your account exists
 - You can delete your account and all data at any time from the app settings (see Account Deletion below)
 
@@ -134,6 +173,9 @@ The app interacts with these external services during normal operation:
 | **LangSmith** (when LLM tracing is enabled) | The LLM run trace (same weather/route context) and your digest 👍/👎 rating and any comment | Digest quality monitoring |
 | **SMTP / Resend** | Your email + briefing summary | Email delivery |
 | **Google / Apple OAuth** | OAuth tokens | Authentication |
+| **Stripe** (only if you donate) | Your account email (unless you opt out), account id, amount; card details entered directly with Stripe | Payment processing |
+| **Apple Push Notification service** (iOS, if enabled) | Device push token + notification text (route, trip name, assessment) | Briefing notifications |
+| **OpenStreetMap / Stadia Maps** (map tiles) | Your browser loads map images directly from them, so they see your IP address and the map area displayed | Background map |
 
 No account identifiers (your name or email) are sent to LLM providers. The context that is sent describes the weather along your route — airports, dates and approximate positions — which carries no personal identifiers. Where LLM-quality tracing is enabled it goes to LangSmith under a data-processing agreement (EU data residency).
 
@@ -155,11 +197,11 @@ The complete source code is open source. You can verify every claim in this docu
 
 ## Data Export
 
-You can download a complete, machine-readable (JSON) copy of the personal data held about your account — account details, preferences, flights, briefings, feedback, and usage history — at any time:
+You can download a complete, machine-readable (JSON) copy of the personal data held about your account — account details, preferences, flights, briefings, trips, followed flights, debriefs, aircraft, PIREPs, feedback, usage history, devices, API tokens and connected apps, and donations — at any time:
 
 - **Web app:** Settings > Download my data
 
-Encrypted credentials (e.g. your Autorouter token) and server-internal values are intentionally excluded for security.
+Encrypted credentials (e.g. your Autorouter token), token values and server-internal values are intentionally excluded for security.
 
 ---
 
@@ -170,7 +212,7 @@ You can delete your account and all associated data (flights, briefings, prefere
 - **iOS app:** Settings > Delete Account
 - **Web app:** Settings > Delete Account
 
-This will permanently remove everything linked to your account and cannot be undone.
+This will permanently remove everything linked to your account and cannot be undone. PIREPs you submitted are kept as anonymous weather observations, with the link to you and your aircraft removed.
 
 ---
 
