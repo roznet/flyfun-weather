@@ -8,16 +8,15 @@ refresh against the previous one). Three things differ, all deliberately:
   every ten minutes the way a refresh-to-refresh diff does.
 - **Both directions.** Fog lifting at the destination matters as much as fog
   forming.
-- **Hysteresis lives here, and only here.** The display layer always shows the
-  newest METAR. A METAR flight-category crossing becomes a *change* only once
-  two consecutive reports agree on the side of the baseline it moved to, or the
-  newest report is a SPECI (issued *because* conditions crossed a threshold).
-  A confirmed change is then held until the return is itself confirmed, so one
-  odd report neither raises nor clears it.
+- **No hysteresis.** A METAR flight-category crossing is a change on the first
+  report that shows it (meteorology-decisions §35 dropped the two-report rule
+  of §34): a pilot would rather see a real deterioration at once than 30 min
+  late. A tick without a usable report neither raises nor clears a change.
 
-Two tiers: ``alert`` for the departure, destination and the top alternates
-(the tier push delivery, #638, consumes), ``highlight`` for everything else on
-the route. A last-alerted memory makes an alert fire once per value.
+Two tiers: ``alert`` for the destination's METAR/TAF and for any SIGMET change
+in the route corridor (the tier push delivery, #638, consumes), ``highlight``
+for every other airport and for observed radar/lightning. A last-alerted memory makes an alert fire
+once per value.
 
 Deterministic and language-neutral (ICAO codes, flight categories, FIR/SIGMET
 ids, NM): no LLM per tick, no per-locale strings. The live layer annotates; it
@@ -29,6 +28,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+from euro_aip.utils.geometry import (
+    bbox_intersects,
+    bbox_of_ring,
+    bbox_pad,
+    min_distance_point_to_multipolygon_nm,
+    point_in_multipolygon,
+)
 
 from weatherbrief.models.live import ChangeRole, LiveChange, LiveChanges
 from weatherbrief.models.observations import (
@@ -47,11 +54,23 @@ from weatherbrief.models.observed import (
 _CATEGORY_RANK = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 _SEQ_RE = re.compile(r"SIGMET\s+(\w+)", re.IGNORECASE)
 
-#: How many of the ranked divert candidates count as "the alternates" for the
-#: alert tier. The briefing ranks candidates closest-first; beyond the first
-#: few the pilot is not realistically planning on them, and alerting on every
-#: candidate would make the alert tier as noisy as the highlight tier.
+#: How many of the ranked divert candidates are labelled "alternate". The
+#: briefing ranks candidates closest-first; beyond the first few the pilot is
+#: not realistically planning on them.
 ALERT_ALTERNATES = 3
+
+#: A SIGMET whose area contains the destination or comes within this distance
+#: of it is labelled a destination impact: roughly the terminal area an
+#: arrival, a hold or a go-around flies through. (Every SIGMET change in the
+#: corridor alerts; this only sets its role.)
+DESTINATION_SIGMET_RADIUS_NM = 25.0
+
+#: Two FIRs issue the same phenomenon at their shared boundary as separate
+#: SIGMETs (LECB 3 + LECM 3). Same hazard and qualifier, validity starting
+#: within this window, and areas within ``_SAME_PHENOMENON_NM`` of each other
+#: read as one change.
+_SAME_PHENOMENON_START = 30 * 60
+_SAME_PHENOMENON_NM = 10.0
 
 #: Echo class at or above which an observed radar return on the route ahead is
 #: significant: VIP 3 "heavy" (41 dBZ), the AIM "avoid level 3 or greater" line.
@@ -64,9 +83,6 @@ class ClassifierMemory:
 
     # Change key -> to_value last alerted (alert tier only).
     alerted: dict[str, str] = field(default_factory=dict)
-    # METAR change key -> last *confirmed* category, so a pending report holds
-    # the change rather than flickering it off.
-    held: dict[str, str] = field(default_factory=dict)
 
 
 def category_rank(cat: str | None) -> int | None:
@@ -119,7 +135,7 @@ def airport_roles(
     route_icaos: list[str],
     alternate_icaos: list[str] | None = None,
 ) -> dict[str, ChangeRole]:
-    """ICAO -> role for the alert tier: departure, destination, alternates.
+    """ICAO -> role: departure, destination, the top alternates.
 
     Departure/destination win over alternate (a round trip's destination is
     also its departure — it is still that, not an alternate).
@@ -135,53 +151,38 @@ def airport_roles(
 
 
 def _tier(role: ChangeRole) -> str:
-    return "highlight" if role == "route" else "alert"
+    # Only an impact at the destination alerts for now; departure and
+    # alternates keep their role (shown) but are highlights.
+    return "alert" if role == "destination" else "highlight"
 
 
 # --- METAR ------------------------------------------------------------------
 
 
-def _metar_state(
-    base: AirportObservation, latest: AirportObservation,
-) -> tuple[str, int]:
-    """Classify the newest report against the baseline category.
-
-    Returns ``(status, side)`` where status is ``changed`` (crossing
-    confirmed), ``returned`` (back at the baseline category, confirmed),
-    ``pending`` (one report disagrees with the one before it) or ``none``
-    (no usable categories). ``side`` is +1 worse / -1 better / 0.
-    """
+def _metar_side(base: AirportObservation, latest: AirportObservation) -> int | None:
+    """+1 worse / -1 better / 0 same category as the baseline; None when there
+    is nothing to compare (no category on either side, or the newest report
+    is still the one the briefing saw)."""
     b = category_rank(base.metar_flight_category)
     l_ = category_rank(latest.metar_flight_category)
     if b is None or l_ is None:
-        return "none", 0
-    side = _sign(l_ - b)
-    is_speci = (latest.metar_report_type or "").upper() == "SPECI"
+        return None
     if base.metar_time is not None and latest.metar_time is not None and latest.metar_time <= base.metar_time:
-        # Still the report the briefing saw (or older): nothing has moved.
-        return ("returned" if side == 0 else "none"), side
-    p = category_rank(latest.metar_previous_flight_category)
-    agrees = p is not None and _sign(p - b) == side
-    # The report before the latest *is* the briefing's own report: the
-    # baseline is the only prior opinion, so a crossing needs a SPECI.
-    if (
-        base.metar_time is not None
-        and latest.metar_previous_time is not None
-        and latest.metar_previous_time <= base.metar_time
-    ):
-        agrees = side == 0
-    if is_speci or agrees:
-        return ("returned" if side == 0 else "changed"), side
-    return "pending", side
+        return 0
+    return _sign(l_ - b)
 
 
 def _metar_changes(
     baseline: RouteObservations,
     latest: RouteObservations,
     roles: dict[str, ChangeRole],
-    memory: ClassifierMemory,
-    new_held: dict[str, str],
+    unknown: set[str],
 ) -> list[LiveChange]:
+    """A category crossing on the newest report, with no confirmation wait.
+
+    Keys with no usable report this tick go into ``unknown``: not a change,
+    and not a return either (their alert memory is kept).
+    """
     out: list[LiveChange] = []
     base_by_icao = {a.icao: a for a in baseline.airports}
     for a in latest.airports:
@@ -189,20 +190,14 @@ def _metar_changes(
         if base is None:
             continue
         key = f"metar:{a.icao}"
-        status, side = _metar_state(base, a)
-        to_cat: str | None = None
-        if status == "changed":
-            to_cat = a.metar_flight_category
-        elif status in ("pending", "none") and key in memory.held:
-            # Hold the last confirmed crossing until the return is confirmed
-            # (a missing report this tick is not a return either).
-            to_cat = memory.held[key]
-            side = _sign((category_rank(to_cat) or 0) - (category_rank(base.metar_flight_category) or 0))
-        if to_cat is None or side == 0:
+        side = _metar_side(base, a)
+        if side is None:
+            unknown.add(key)
             continue
-        new_held[key] = to_cat
+        if side == 0:
+            continue
         role = roles.get(a.icao.upper(), "route")
-        source = "SPECI" if (a.metar_report_type or "").upper() == "SPECI" and status == "changed" else "METAR"
+        source = "SPECI" if (a.metar_report_type or "").upper() == "SPECI" else "METAR"
         suffix = " (SPECI)" if source == "SPECI" else ""
         out.append(LiveChange(
             key=key,
@@ -213,10 +208,10 @@ def _metar_changes(
             role=role,
             icao=a.icao,
             from_value=base.metar_flight_category,
-            to_value=to_cat,
+            to_value=a.metar_flight_category,
             observed_at=a.metar_time,
             enroute_distance_nm=a.enroute_distance_nm,
-            message=f"{a.icao} METAR: {base.metar_flight_category} → {to_cat}{suffix}",
+            message=f"{a.icao} METAR: {base.metar_flight_category} → {a.metar_flight_category}{suffix}",
         ))
     return out
 
@@ -269,60 +264,130 @@ def _taf_changes(
 # --- SIGMET -----------------------------------------------------------------
 
 
+def _sigmet_rings(s: SigmetAlongRoute) -> list | None:
+    return [[list(s.coords)]] if len(s.coords) >= 3 else None
+
+
+def _near_point(s: SigmetAlongRoute, point: tuple[float, float] | None, radius_nm: float) -> bool:
+    """The SIGMET area contains ``point`` (lat, lon) or comes within ``radius_nm``."""
+    rings = _sigmet_rings(s)
+    if point is None or rings is None:
+        return False
+    lat, lon = point
+    return (
+        point_in_multipolygon(lon, lat, rings)
+        or min_distance_point_to_multipolygon_nm(lon, lat, rings) <= radius_nm
+    )
+
+
+def _same_phenomenon(a: SigmetAlongRoute, b: SigmetAlongRoute) -> bool:
+    """Neighbouring FIRs' SIGMETs for one phenomenon (see _SAME_PHENOMENON_*)."""
+    if a.fir_id == b.fir_id:
+        return False
+    if (a.hazard or "", a.qualifier or "") != (b.hazard or "", b.qualifier or ""):
+        return False
+    if a.valid_from is None or b.valid_from is None:
+        return False
+    if abs((a.valid_from - b.valid_from).total_seconds()) > _SAME_PHENOMENON_START:
+        return False
+    if len(a.coords) < 3 or len(b.coords) < 3:
+        return False
+    return bbox_intersects(
+        bbox_pad(bbox_of_ring(a.coords), _SAME_PHENOMENON_NM), bbox_of_ring(b.coords),
+    )
+
+
+def _group_same_phenomenon(sigmets: list[SigmetAlongRoute]) -> list[list[SigmetAlongRoute]]:
+    groups: list[list[SigmetAlongRoute]] = []
+    for s in sigmets:
+        for g in groups:
+            if any(_same_phenomenon(s, m) for m in g):
+                g.append(s)
+                break
+        else:
+            groups.append([s])
+    return groups
+
+
+def _hazard_text(s: SigmetAlongRoute, default: str = "SIGMET") -> str:
+    return " ".join(p for p in (s.qualifier, s.hazard) if p) or default
+
+
+def _group_label(group: list[SigmetAlongRoute]) -> str:
+    """"LECB 3 / LECM 3: EMBD TS" — every issuing FIR, one hazard."""
+    firs = " / ".join(
+        f"{m.fir_id} {_sigmet_seq(m)}" if _sigmet_seq(m) else m.fir_id for m in group
+    )
+    return f"{firs}: {_hazard_text(group[0])}"
+
+
+def _sigmet_change(
+    group: list[SigmetAlongRoute],
+    *,
+    kind: str,
+    direction: str,
+    from_value: str | None,
+    to_value: str | None,
+    observed_at,
+    message: str,
+    destination: tuple[float, float] | None,
+) -> LiveChange:
+    at_dest = any(_near_point(m, destination, DESTINATION_SIGMET_RADIUS_NM) for m in group)
+    froms = [m.enroute_distance_from_nm for m in group if m.enroute_distance_from_nm is not None]
+    return LiveChange(
+        key="+".join(sorted(_sigmet_key_str(m) for m in group)),
+        kind=kind,
+        source="SIGMET",
+        direction=direction,
+        # Every SIGMET change on the route alerts; the role says where.
+        tier="alert",
+        role="destination" if at_dest else "route",
+        from_value=from_value,
+        to_value=to_value,
+        observed_at=observed_at,
+        enroute_distance_nm=min(froms) if froms else None,
+        message=message + (" (at destination)" if at_dest else ""),
+    )
+
+
 def _sigmet_changes(
-    baseline: RouteSigmets, latest: RouteSigmets,
+    baseline: RouteSigmets,
+    latest: RouteSigmets,
+    destination: tuple[float, float] | None = None,
 ) -> list[LiveChange]:
-    out: list[LiveChange] = []
+    """New, escalated to SEV, or no longer active — merged across FIRs."""
     base_by_key = {sigmet_key(s): s for s in baseline.sigmets}
-    latest_keys = set()
-    for s in latest.sigmets:
-        k = sigmet_key(s)
-        latest_keys.add(k)
-        prev = base_by_key.get(k)
-        if prev is None:
-            prefix = "New SEV SIGMET" if _is_severe(s) else "New SIGMET"
-            out.append(LiveChange(
-                key=_sigmet_key_str(s),
-                kind="sigmet_issued",
-                source="SIGMET",
-                direction="worse",
-                tier="highlight",
-                role="route",
-                from_value=None,
-                to_value=" ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET",
-                observed_at=s.valid_from,
-                enroute_distance_nm=s.enroute_distance_from_nm,
-                message=f"{prefix} {_sigmet_label(s)}",
-            ))
-        elif _is_severe(s) and not _is_severe(prev):
-            out.append(LiveChange(
-                key=_sigmet_key_str(s),
-                kind="sigmet_issued",
-                source="SIGMET",
-                direction="worse",
-                tier="highlight",
-                role="route",
-                from_value=" ".join(p for p in (prev.qualifier, prev.hazard) if p) or None,
-                to_value=" ".join(p for p in (s.qualifier, s.hazard) if p) or "SEV",
-                observed_at=s.valid_from,
-                enroute_distance_nm=s.enroute_distance_from_nm,
-                message=f"SIGMET {_sigmet_label(s)} escalated to SEV",
-            ))
-    for k, s in base_by_key.items():
-        if k in latest_keys:
-            continue
-        out.append(LiveChange(
-            key=_sigmet_key_str(s),
-            kind="sigmet_cancelled",
-            source="SIGMET",
-            direction="better",
-            tier="highlight",
-            role="route",
-            from_value=" ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET",
-            to_value=None,
-            observed_at=s.valid_to,
-            enroute_distance_nm=s.enroute_distance_from_nm,
-            message=f"SIGMET {_sigmet_label(s)} no longer active",
+    latest_keys = {sigmet_key(s) for s in latest.sigmets}
+    new = [s for s in latest.sigmets if sigmet_key(s) not in base_by_key]
+    escalated = [
+        s for s in latest.sigmets
+        if sigmet_key(s) in base_by_key and _is_severe(s) and not _is_severe(base_by_key[sigmet_key(s)])
+    ]
+    gone = [s for k, s in base_by_key.items() if k not in latest_keys]
+
+    out: list[LiveChange] = []
+    for g in _group_same_phenomenon(new):
+        prefix = "New SEV SIGMET" if _is_severe(g[0]) else "New SIGMET"
+        out.append(_sigmet_change(
+            g, kind="sigmet_issued", direction="worse",
+            from_value=None, to_value=_hazard_text(g[0]),
+            observed_at=g[0].valid_from,
+            message=f"{prefix} {_group_label(g)}", destination=destination,
+        ))
+    for g in _group_same_phenomenon(escalated):
+        prev = base_by_key[sigmet_key(g[0])]
+        out.append(_sigmet_change(
+            g, kind="sigmet_issued", direction="worse",
+            from_value=_hazard_text(prev, default="") or None, to_value=_hazard_text(g[0], default="SEV"),
+            observed_at=g[0].valid_from,
+            message=f"SIGMET {_group_label(g)} escalated to SEV", destination=destination,
+        ))
+    for g in _group_same_phenomenon(gone):
+        out.append(_sigmet_change(
+            g, kind="sigmet_cancelled", direction="better",
+            from_value=_hazard_text(g[0]), to_value=None,
+            observed_at=g[0].valid_to,
+            message=f"SIGMET {_group_label(g)} no longer active", destination=destination,
         ))
     return out
 
@@ -469,6 +534,7 @@ def classify_changes(
     baseline_observed: ObservedConditions | None = None,
     latest_observed: ObservedConditions | None = None,
     roles: dict[str, ChangeRole] | None = None,
+    destination: tuple[float, float] | None = None,
     baseline_at: datetime | None = None,
     flown_nm: float | None = None,
     memory: ClassifierMemory | None = None,
@@ -479,11 +545,12 @@ def classify_changes(
     A ``None`` on either side of a dimension skips it: no baseline means
     nothing to compare against (a pre-SIGMET pack), no latest means the fetch
     failed — neither is a change. ``flown_nm`` (distance already flown at
-    ``now``) limits radar/lightning to the route still ahead.
+    ``now``) limits radar/lightning to the route still ahead. ``destination``
+    (lat, lon) marks SIGMETs over or near it.
     """
     roles = roles or {}
     memory = memory or ClassifierMemory()
-    new_held: dict[str, str] = {}
+    unknown: set[str] = set()
     changes: list[LiveChange] = []
 
     # Key prefixes whose dimension was actually evaluated this tick. Memory for
@@ -491,13 +558,11 @@ def classify_changes(
     # neither clears an alert nor lets it fire twice.
     evaluated: set[str] = set()
     if baseline_obs is not None and latest_obs is not None:
-        changes += _metar_changes(baseline_obs, latest_obs, roles, memory, new_held)
+        changes += _metar_changes(baseline_obs, latest_obs, roles, unknown)
         changes += _taf_changes(baseline_obs, latest_obs, roles)
         evaluated |= {"metar:", "taf:"}
-    else:
-        new_held = dict(memory.held)
     if baseline_sigmets is not None and latest_sigmets is not None:
-        changes += _sigmet_changes(baseline_sigmets, latest_sigmets)
+        changes += _sigmet_changes(baseline_sigmets, latest_sigmets, destination)
         evaluated.add("sigmet:")
     changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
     evaluated |= {"lightning:", "radar:"}
@@ -523,7 +588,7 @@ def classify_changes(
             c.new_alert = True
             alerted[c.key] = value
     for k in list(alerted):
-        if k not in live_alert_keys and any(k.startswith(p) for p in evaluated):
+        if k not in live_alert_keys and k not in unknown and any(k.startswith(p) for p in evaluated):
             del alerted[k]
 
     result = LiveChanges(
@@ -531,7 +596,7 @@ def classify_changes(
         computed_at=now or datetime.now(timezone.utc),
         changes=changes,
     )
-    return result, ClassifierMemory(alerted=alerted, held=new_held)
+    return result, ClassifierMemory(alerted=alerted)
 
 
 def worsening_delta(changes: LiveChanges) -> RefreshDelta:

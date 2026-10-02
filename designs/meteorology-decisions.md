@@ -4920,3 +4920,58 @@ alert tier push delivery (#638) will consume. Neither touches a grade.
   to ~1 h. Consider a "two reports or 45 min" rule if that bites.
 - Lightning in the 5 NM ring at a point the aircraft passed early (a delayed
   departure makes the "ahead" estimate optimistic — it assumes an on-time start).
+
+---
+
+## 35. Live changes: no hysteresis, alert on the destination and every route SIGMET, a starting point when the pack has none
+
+**Date:** 2026-10-02 · **Issue:** #637 follow-up · **Amends:** §34
+
+Reviewed against the first real flight day (2026-10-02, 11 flights in the live
+window). Every METAR/TAF change §34 raised was right on the raw reports; three
+choices were not.
+
+### Choices
+
+- **No hysteresis.** A METAR flight-category crossing is a change on the first
+  report newer than the baseline's that shows it; one report back at the baseline
+  category clears it. A tick without a usable category neither raises nor clears a
+  change (its alert memory is kept, so the next report does not alert twice). The
+  pilot would rather see a deterioration at once than 30 min (an hourly station:
+  1 h) late; a later trend view will show the flip-flopping §34 was guarding
+  against, rather than hiding it.
+- **Alert tier = the destination's METAR/TAF, plus every SIGMET change in the route
+  corridor.** Departure and the top alternates keep their role label but are
+  highlights for now. A route-airport tier (e.g. TCU en route alerts, a ceiling
+  change does not) is a later refinement.
+- **SIGMETs alert, and say where.** New, escalated-to-SEV and no-longer-active
+  SIGMETs in the corridor are all alert tier. One whose area contains the
+  destination or comes within `DESTINATION_SIGMET_RADIUS_NM` (25 NM — the terminal
+  area an arrival, hold or go-around flies through) takes the `destination` role
+  and its message says "(at destination)". The case: LELL→LEMI, LECB 3 / LECM 3
+  EMBD TS TOP FL400, valid 08:35–10:35, ~10 NM from LEMI with a ~10:00 ETA — §34
+  showed it as two route highlights.
+- **One phenomenon issued by two FIRs is one change.** Different FIRs, same hazard
+  and qualifier, validity starting within 30 min, areas within 10 NM of each other
+  (padded bbox) → merged ("LECB 3 / LECM 3: EMBD TS"), keyed on both ids.
+- **A pack without observations gets a starting point.** Observations and SIGMETs
+  are fetched for D-0 briefings only, so a flight briefed the day before (6 of the
+  11 on 2026-10-02) could never show a change. The first live fetch of a block the
+  pack lacks is kept on the layer and changes are measured from it
+  (`baseline_source = "live_start"`, "since live tracking began") — no briefing
+  refresh, the pack stays immutable.
+
+### Rejected
+
+- **Keeping the two-report rule for push only.** Push (#638) is not built; decide
+  its flicker handling there, on top of the alert-once memory.
+- **Fetching observations for a D-1 briefing.** A 12–24 h old snapshot would make
+  almost everything a "change" by flight day.
+
+### Real-world validation needed
+
+- Showery or fog-burning-off mornings: how often a destination flips category
+  between consecutive reports, now that each flip shows.
+- Whether "every route SIGMET alerts" is too loud on long routes crossing several
+  FIRs with routine EMBD TS / MOD TURB.
+

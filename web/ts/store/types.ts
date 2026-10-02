@@ -1018,8 +1018,11 @@ export interface LiveChange {
 
 /** Changes since the briefing (vs the pack's own observations). Already sorted. */
 export interface LiveChanges {
-  /** = pack fetch timestamp (what the assessment/digest saw). */
+  /** = pack fetch timestamp (what the assessment/digest saw), or — when the
+   *  pack had no observations (briefed before flight day) — when the live
+   *  layer recorded its own starting point (`baseline_source: 'live_start'`). */
   baseline_at: string | null;
+  baseline_source?: 'briefing' | 'live_start';
   computed_at: string;
   changes: LiveChange[];
   worsened_count: number;

@@ -116,7 +116,7 @@ Three callers share this seam:
 - The tiered refresh gate's `realtime` mode (`api/packs.decide_refresh`) — when a D-0 manual refresh isn't worth a full pipeline run, both refresh-button endpoints invoke `run_realtime_refresh` instead so a D-0 press is always at least cheap-useful. See [freshness-markers.md](freshness-markers.md) for the gate.
 - The server live-window tick (`tasks/live_tick.py`), every 10 min from departure − 3 h to arrival + 1 h.
 
-`run_route_weather` also records, per airport, the latest report's type (`METAR`/`SPECI`) and the previous report's category and time from the 3 h fetch window, plus the TAF issue time — the hysteresis inputs of the classifier.
+`run_route_weather` also records, per airport, the latest report's type (`METAR`/`SPECI`) and the previous report's category and time from the 3 h fetch window, plus the TAF issue time (the hysteresis inputs before §35; the type still labels a SPECI change).
 
 ### Digest Integration
 
@@ -306,9 +306,10 @@ hazard would otherwise show in the tables while the AI assessment stays silent.
 Until #637 `compute_refresh_delta` closed that gap by diffing each refresh against
 the *previous* one and reporting only worsening. It is replaced by
 `classify_changes`, which diffs against the **briefing's own observations**, in
-**both directions**, with hysteresis on METAR category crossings, TAF-at-ETA
-changes, SIGMET issued/escalated/no longer active, and heavy radar echo /
-lightning on the route ahead — see [meteorology-decisions.md §34](meteorology-decisions.md)
+**both directions**: METAR category crossings (no hysteresis since §35), TAF-at-ETA
+changes, SIGMET issued/escalated/no longer active (merged across FIRs, all alert
+tier), and heavy radar echo / lightning on the route ahead — see
+[meteorology-decisions.md §34–35](meteorology-decisions.md)
 and [live-observation-layer.md](live-observation-layer.md). Messages stay
 deterministic, language-neutral shorthand (no tokens, no per-locale text).
 `last_refresh_delta` is still produced (the worsening half, `worsening_delta`) and

@@ -284,6 +284,8 @@
   "refreshDelta.title": "Conditions worsened since last update",
   "refreshDelta.sinceBriefing": "Since this briefing ({time})",
   "refreshDelta.sinceBriefingNoTime": "Since this briefing",
+  "refreshDelta.sinceLiveStart": "Since live tracking began ({time})",
+  "refreshDelta.sinceLiveStartNoTime": "Since live tracking began",
   "refreshDelta.noChange": "No significant change since the briefing ({time})",
   "refreshDelta.worse": "Worse",
   "refreshDelta.better": "Better",
