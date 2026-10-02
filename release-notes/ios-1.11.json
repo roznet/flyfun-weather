@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-01",
+    "title": "iOS 1.11 — Live observations on flight day",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- On flight day your briefing keeps itself current. From three hours before departure until an hour after you land, the latest METARs, TAFs and SIGMETs along your route refresh while the briefing is open. An \"Observed as of\" line shows how fresh they are.\n- A new Since this briefing panel on the Advisory tab shows what has changed since the briefing was built: an airport's flight category getting worse or better, or a new SIGMET on your route. Changed rows are marked in the Observations and SIGMET tables, and the latest observations stay available offline.\n- New historical map: see METARs, TAFs and model forecasts at any past date and time, to compare what was forecast with what happened.\n- The observations now show what each airport's TAF says for the time you'll be there.\n- Fixed: airport search could stop working after the app updated its airport database."
+  }
+]
