@@ -38,4 +38,24 @@ describe('migrateVizSettings', () => {
     expect(out.activeEmulation).toBe('windy');
     expect(out.activePreset).toBeNull();
   });
+
+  // #597: an emulation used to overwrite `vizTheme`, so a saved emulation
+  // carrying its own theme there is that write, not a choice — and keeping it
+  // would leave FlyFun with nothing to go back to.
+  it('clears a theme an emulation wrote over the user\'s own', () => {
+    const out = migrateVizSettings(settings({ activeEmulation: 'gramet', vizTheme: 'gramet' }));
+    expect(out.activeEmulation).toBe('gramet');
+    expect(out.vizTheme).toBeUndefined();
+  });
+
+  it('keeps a theme that differs from the active emulation\'s', () => {
+    const out = migrateVizSettings(settings({ activeEmulation: 'gramet', vizTheme: 'light' }));
+    expect(out.vizTheme).toBe('light');
+  });
+
+  it('keeps a theme when no emulation is active', () => {
+    // Indistinguishable from a deliberate pick, so it stays.
+    const out = migrateVizSettings(settings({ activeEmulation: null, vizTheme: 'gramet' }));
+    expect(out.vizTheme).toBe('gramet');
+  });
 });

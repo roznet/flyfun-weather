@@ -808,14 +808,20 @@ export class AirportProfilePanel {
         this.cloudStyle = style;
         saveCloudStyle(style);
       },
+      // `None` and a compact family chip set several layers in one click; take
+      // them as one change so the chart draws once, not once per layer (#597).
+      onLayersSet: (overrides) => this.applyLayers(overrides),
     });
   }
 
   private onLayerToggle(layerId: string): void {
     // Default-enabled layers are stored as `true`; flipping a missing
     // key to `false` is the explicit "off" signal the renderer checks.
-    const current = this.enabledLayers[layerId] !== false;
-    this.enabledLayers = { ...this.enabledLayers, [layerId]: !current };
+    this.applyLayers({ [layerId]: this.enabledLayers[layerId] === false });
+  }
+
+  private applyLayers(overrides: Record<string, boolean>): void {
+    this.enabledLayers = { ...this.enabledLayers, ...overrides };
     saveEnabledLayers(this.enabledLayers);
     if (this.crossRenderer) {
       this.crossRenderer.setLayers(getAllLayers(), this.enabledLayers);
@@ -837,10 +843,11 @@ export class AirportProfilePanel {
 
   /** Redraw the layer controls once per burst of toggles.
    *
-   *  A single pill is one call, but the None pill is not: it clears a group by
-   *  calling `onToggle` for every layer that is on, so a redraw per call would
-   *  rebuild the subtree up to four times for one click and leave focus
-   *  wherever the last iteration put it. The burst is synchronous, so a
+   *  A single pill is one call, but a cloud style or source swap is not: it
+   *  goes through `onToggle` once per affected layer, so a redraw per call
+   *  would rebuild the subtree several times for one click and leave focus
+   *  wherever the last iteration put it. (`None` now arrives as one
+   *  `onLayersSet`, #597.) The burst is synchronous, so a
    *  microtask coalesces it exactly — and the DOM the redraw reads its open
    *  family back from is still the previous render when the microtask runs. */
   private queueToggleRedraw(): void {

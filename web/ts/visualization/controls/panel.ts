@@ -57,6 +57,11 @@ export interface LayerTogglesOptions {
   /** Fired when the user picks a different cloud style. Wire to the store
    *  so the choice persists alongside other viz settings. */
   onCloudStyleChange?: (style: 'natural' | 'soft' | 'square') => void;
+  /** Set several layers in one user edit (`None`, a compact family chip off).
+   *  Without it each layer goes through `onToggle`, and on the briefing page
+   *  every one of those re-renders the whole panel (#597). Callers must treat
+   *  it as a user toggle — it dirties the lens — not as a programmatic batch. */
+  onLayersSet?: (overrides: Record<string, boolean>) => void;
   /** Layer groups to omit entirely from the toggle list. Used by the
    *  airport-profile drawer to drop the route-only `conditions` group. */
   hiddenGroups?: Set<LayerGroup>;
@@ -533,6 +538,25 @@ function wireCloudCompound(
   });
 }
 
+/** Switch `ids` to `on` in one user edit: through `onLayersSet` when the caller
+ *  has one, else one `onToggle` per layer that actually changes — `onToggle`
+ *  flips, so calling it for a layer already in the target state would undo it. */
+function setLayers(
+  ids: string[],
+  on: boolean,
+  enabledLayers: Record<string, boolean>,
+  opts: LayerTogglesOptions,
+  onToggle: (layerId: string) => void,
+): void {
+  const changing = ids.filter((id) => (enabledLayers[id] !== false) !== on);
+  if (changing.length === 0) return;
+  if (opts.onLayersSet) {
+    opts.onLayersSet(Object.fromEntries(changing.map((id) => [id, on])));
+  } else {
+    for (const id of changing) onToggle(id);
+  }
+}
+
 /** Wire the layer bar: family chips open/close the detail row, compact chips
  *  toggle a whole family on or off.
  *
@@ -613,12 +637,12 @@ function wireLayerBar(
 
       if (btn.getAttribute('aria-pressed') === 'true') {
         // Off: everything currently on in this family goes off.
-        for (const layer of enabledInFamily(info, enabledLayers)) onToggle(layer.id);
+        setLayers(enabledInFamily(info, enabledLayers).map((l) => l.id), false, enabledLayers, opts, onToggle);
       } else {
         // On: only the preferred layer of each group, which is the decision
         // compact mode makes for you.
         const targets = (btn.dataset.familyLayers ?? '').split(' ').filter(Boolean);
-        for (const id of targets) if (enabledLayers[id] === false) onToggle(id);
+        setLayers(targets, true, enabledLayers, opts, onToggle);
       }
     });
   });
@@ -699,11 +723,7 @@ function wireToggleBlock(
     pill.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      // Clear only what is actually on — `onToggle` flips, so calling it for an
-      // already-off layer would switch it ON, which is the opposite of None.
-      for (const id of (pill.dataset.noneGroup ?? '').split(' ').filter(Boolean)) {
-        if (enabledLayers[id] !== false) onToggle(id);
-      }
+      setLayers((pill.dataset.noneGroup ?? '').split(' ').filter(Boolean), false, enabledLayers, opts, onToggle);
     });
   });
 
@@ -746,6 +766,8 @@ export interface VizControlCallbacks {
    *  conventions. Separate from the focus lens because they compose (#591). */
   onEmulationChange?: (presetId: string | null) => void;
   onCloudStyleChange?: (style: 'natural' | 'soft' | 'square') => void;
+  /** See {@link LayerTogglesOptions.onLayersSet}. */
+  onLayersSet?: (overrides: Record<string, boolean>) => void;
 }
 
 export interface RouteGraphControlCallbacks {
@@ -919,6 +941,7 @@ export function renderVizControls(
     openFamily: openFamilyIn(container),
     aboutFamily: aboutFamilyIn(container),
     onCloudStyleChange: callbacks.onCloudStyleChange,
+    onLayersSet: callbacks.onLayersSet,
   };
   if (settings.layout !== 'map') {
     html += layerTogglesHtml(settings.enabledLayers, toggleOpts);
