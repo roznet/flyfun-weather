@@ -138,6 +138,14 @@ mcp = FastMCP(
         "5. get_airport_weather — quick forecast + METAR for specific airports\n\n"
         "Briefing generation takes ~2 minutes. If get_briefing returns "
         "status='processing', tell the user and check again shortly.\n\n"
+        "Flight day: get_briefing's 'live' block (null when the flight has none) "
+        "holds the newest METARs and route SIGMETs and the significant changes "
+        "since the briefing was built. Lead with its alert-tier changes (e.g. a "
+        "new SIGMET at the destination), then the briefing. The digest, "
+        "advisories and grade were written at the briefing time "
+        "(live.digest_written_at), before these observations: say so rather "
+        "than reconciling them, and never re-grade an advisory from live data "
+        "— the live layer annotates, it does not re-grade.\n\n"
         "When the user questions, doubts, or wants to understand an advisory "
         "(e.g. 'why is convective red when it looks like blue sky?'), call "
         "get_advisory_detail (and get_digest_context for the deepest context) "
@@ -456,6 +464,11 @@ def get_briefing(
     get_advisory_detail for the full objects — a mitigation is ADVICE ONLY and
     never changes the grade.
 
+    ``live`` (null unless the latest briefing has a flight-day live layer): the
+    newest METARs and route SIGMETs and the significant changes since the
+    briefing, alert tier first. The digest was written before them (``live.digest_written_at``) — lead with
+    live alerts and say the digest predates them; they never change a grade.
+
     Status values:
     - ready: briefing available with fresh data
     - stale: briefing exists but weather models have updated since
@@ -549,6 +562,14 @@ def get_briefing(
         alternates = client.get_alternates(flight_id, timestamp)
         if alternates:
             result["alternates"] = _alternates_hook(alternates)
+
+        # Flight-day live layer (#641); the API shapes it with the same
+        # live_layer.live_summary the ChatGPT action calls in-process.
+        try:
+            result["live"] = client.get_live_summary(flight_id)
+        except httpx.HTTPError:
+            logger.warning("Live summary unavailable for %s", flight_id, exc_info=True)
+            result["live"] = None
 
     return result
 

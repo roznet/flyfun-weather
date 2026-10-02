@@ -134,6 +134,15 @@ class WeatherbriefClient:
                 return None
             raise
 
+    def get_live_summary(self, flight_id: str) -> dict | None:
+        """The compact flight-day live block for the latest pack, or None."""
+        try:
+            return self._get(f"/flights/{flight_id}/live/summary").get("live")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     def get_digest_json(self, flight_id: str, timestamp: str) -> dict | None:
         try:
             return self._get(f"/flights/{flight_id}/packs/{timestamp}/digest/json")

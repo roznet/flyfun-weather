@@ -396,3 +396,148 @@ def commit_live_update(
             "live_updated_at": now.isoformat(),
         }))
         return layer
+
+
+# --- Agent summary (#641) ---------------------------------------------------
+
+#: Guardrail the agents see inside the ``live`` block (MCP ``get_briefing`` and
+#: the ChatGPT ``getBriefing`` action share it through :func:`live_summary`).
+LIVE_NOTE = (
+    "Newest observations since the briefing was built (METAR, route SIGMETs) "
+    "and the significant changes they show. The digest, advisories and grade "
+    "were written before these, at digest_written_at, and are never re-graded "
+    "by them: lead with any alert-tier change on flight day, and say the "
+    "digest predates it rather than reconciling the two."
+)
+
+#: Size limits — the block rides on every get_briefing call. SIGMETs on a
+#: route are few (a dozen is already a busy morning); the cap only bounds a
+#: pathological fetch.
+LIVE_SUMMARY_MAX_CHANGES = 12
+LIVE_SUMMARY_MAX_SIGMETS = 20
+
+_TIER_ORDER = {"alert": 0, "highlight": 1}
+_DIRECTION_ORDER = {"worse": 0, "better": 1}
+_ROLE_ORDER = {"destination": 0, "departure": 1, "alternate": 2, "route": 3}
+
+
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt is not None else None
+
+
+def _nm(value: float | None) -> float | None:
+    return round(value, 1) if value is not None else None
+
+
+def summarize_live(layer: LiveLayer, briefing_data: dict) -> dict:
+    """The compact ``live`` block an agent gets with a briefing.
+
+    Changes are ordered alert → highlight, worsening first, destination →
+    departure → alternate → route, newest evidence first; capped at
+    :data:`LIVE_SUMMARY_MAX_CHANGES` (``changes_total`` keeps the full count).
+    SIGMETs carry no polygon or raw text; airports are only the briefing's
+    departure, destination and top alternates (the classifier's own roles), in
+    that order, when the corridor fetch has them. No observed-conditions
+    arrays — this is a hook, the full picture is the web briefing.
+    """
+    from weatherbrief.tasks.live_significance import _sigmet_label, airport_roles
+
+    changes = layer.changes
+    out: dict = {
+        "note": LIVE_NOTE,
+        "live_updated_at": _iso(layer.live_updated_at),
+        "observations_updated_at": _iso(layer.observations_updated_at),
+        "sigmets_updated_at": _iso(layer.sigmets_updated_at),
+        "baseline_at": _iso(changes.baseline_at) if changes else None,
+        "baseline_source": changes.baseline_source if changes else None,
+        # The pack time: the digest and advisories were written from it.
+        "digest_written_at": _iso(_parse_dt(layer.pack_timestamp)) or layer.pack_timestamp,
+        "alert_count": changes.alert_count if changes else 0,
+        "worsened_count": changes.worsened_count if changes else 0,
+        "improved_count": changes.improved_count if changes else 0,
+    }
+
+    items = list(changes.changes) if changes else []
+    # Newest first, then a stable sort on the coarser keys keeps that order
+    # within each group.
+    items.sort(key=lambda c: c.observed_at.timestamp() if c.observed_at else 0.0, reverse=True)
+    items.sort(key=lambda c: (
+        _TIER_ORDER.get(c.tier, 9),
+        _DIRECTION_ORDER.get(c.direction, 9),
+        _ROLE_ORDER.get(c.role, 9),
+    ))
+    out["changes_total"] = len(items)
+    out["changes"] = [
+        {
+            "tier": c.tier,
+            "direction": c.direction,
+            "role": c.role,
+            "kind": c.kind,
+            "icao": c.icao,
+            "message": c.message,
+            "observed_at": _iso(c.observed_at),
+        }
+        for c in items[:LIVE_SUMMARY_MAX_CHANGES]
+    ]
+
+    sigmets = list(layer.route_sigmets.sigmets) if layer.route_sigmets else []
+    out["sigmets_total"] = len(sigmets)
+    out["sigmets"] = [
+        {
+            # Same "FIR seq: QUAL HAZARD" label the change messages use, so a
+            # change can be matched to its SIGMET.
+            "label": _sigmet_label(s),
+            "fir_id": s.fir_id,
+            "hazard": s.hazard,
+            "qualifier": s.qualifier,
+            "valid_from": _iso(s.valid_from),
+            "valid_to": _iso(s.valid_to),
+            "base_ft": s.base_ft,
+            "top_ft": s.top_ft,
+            "enroute_distance_from_nm": _nm(s.enroute_distance_from_nm),
+            "enroute_distance_to_nm": _nm(s.enroute_distance_to_nm),
+        }
+        for s in sigmets[:LIVE_SUMMARY_MAX_SIGMETS]
+    ]
+
+    route_icaos = [
+        (wp or {}).get("icao") for wp in ((briefing_data.get("route") or {}).get("waypoints") or [])
+        if isinstance(wp, dict)
+    ]
+    roles = airport_roles([i for i in route_icaos if i], _alternate_icaos(briefing_data))
+    by_icao = {
+        a.icao.upper(): a for a in (layer.route_observations.airports if layer.route_observations else [])
+    }
+    airports = []
+    for icao, role in sorted(roles.items(), key=lambda kv: _ROLE_ORDER.get(kv[1], 9)):
+        obs = by_icao.get(icao)
+        if obs is None or not (obs.has_metar or obs.metar_raw):
+            continue
+        airports.append({
+            "icao": obs.icao,
+            "role": role,
+            "metar_time": _iso(obs.metar_time),
+            "flight_category": obs.metar_flight_category,
+            "metar_raw": obs.metar_raw,
+        })
+    out["airports"] = airports
+    return out
+
+
+def live_summary(pack_dir: Path | str | None) -> dict | None:
+    """:func:`summarize_live` for this pack's live layer, or None when the
+    flight has none for this pack (never invented). Never raises: a live-layer
+    problem must not fail a briefing read."""
+    if not pack_dir:
+        return None
+    try:
+        from weatherbrief.tasks.artifacts import load_briefing
+
+        pack_dir = Path(pack_dir)
+        layer = live_for_pack(pack_dir)
+        if layer is None or layer.live_updated_at is None:
+            return None
+        return summarize_live(layer, load_briefing(pack_dir) or {})
+    except Exception:
+        logger.warning("Live summary failed for %s", pack_dir, exc_info=True)
+        return None

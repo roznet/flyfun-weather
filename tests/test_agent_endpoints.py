@@ -374,3 +374,94 @@ def test_list_flights_returns_all_sections(client, app_db):
 
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["flights"]) == 2
+
+
+# --- Flight-day live block (#641) -------------------------------------------
+
+
+def _commit_live(flight: Flight, ts: str) -> None:
+    """Write a live layer for the pack with one new SIGMET at the destination."""
+    from weatherbrief.models.observations import RouteSigmets, SigmetAlongRoute
+    from weatherbrief.tasks.live_layer import commit_live_update
+
+    pd = _pack_dir(flight, ts)
+    briefing = {
+        "route": {
+            "name": "zz",
+            "waypoints": [
+                {"icao": "EGTK", "name": "Dep", "lat": 51.8, "lon": -1.3},
+                {"icao": "LSGS", "name": "Dest", "lat": 46.2, "lon": 7.3},
+            ],
+            "cruise_altitude_ft": 8000, "flight_duration_hours": 4.5,
+        },
+        "departure_time": _DEP.isoformat(),
+        "route_sigmets": RouteSigmets(corridor_nm=30.0, fetch_time=_NOW).model_dump(mode="json"),
+    }
+    (pd / "briefing.json").write_text(json.dumps(briefing))
+    sig = SigmetAlongRoute(
+        fir_id="LSAS", hazard="TS", qualifier="EMBD", raw_text="LSAS SIGMET 2 VALID",
+        valid_from=_NOW, valid_to=_NOW + timedelta(hours=4),
+        coords=[(7.0, 46.0), (7.6, 46.0), (7.6, 46.5), (7.0, 46.5)],
+        enroute_distance_from_nm=380.0, enroute_distance_to_nm=420.0,
+    )
+    layer = commit_live_update(
+        pd, briefing_data=briefing, observations=None,
+        sigmets=RouteSigmets(corridor_nm=30.0, fetch_time=_NOW, sigmets=[sig]),
+        observed=None, started_at=_NOW, pack_timestamp=ts, flight_id=flight.id, now=_NOW,
+    )
+    assert layer is not None
+
+
+def test_get_briefing_live_is_null_without_a_layer(client, app_db):
+    flight = _seed_flight(app_db, suffix="nolive")
+    _pack_dir(flight, _seed_pack(app_db, flight))
+    resp = client.get(f"/agent/v1/flights/{flight.id}/briefing")
+    assert resp.status_code == 200, resp.text
+    assert "live" in resp.json() and resp.json()["live"] is None
+
+
+def test_get_briefing_carries_live_block(client, app_db):
+    flight = _seed_flight(app_db, suffix="live")
+    ts = _seed_pack(app_db, flight)
+    _commit_live(flight, ts)
+
+    resp = client.get(f"/agent/v1/flights/{flight.id}/briefing")
+    assert resp.status_code == 200, resp.text
+    live = resp.json()["live"]
+    assert live["alert_count"] == 1
+    assert live["changes"][0]["kind"] == "sigmet_issued"
+    assert live["changes"][0]["tier"] == "alert"
+    assert live["sigmets"][0]["label"] == "LSAS 2: EMBD TS"
+    assert "coords" not in live["sigmets"][0]
+    assert "digest" in live["note"]
+
+
+def test_live_summary_endpoint_matches_agent_block(client, app_db):
+    """The MCP server reads the same helper through /api/.../live/summary."""
+    flight = _seed_flight(app_db, suffix="livesum")
+    ts = _seed_pack(app_db, flight)
+
+    resp = client.get(f"/api/flights/{flight.id}/live/summary")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["live"] is None
+
+    _commit_live(flight, ts)
+    api_live = client.get(f"/api/flights/{flight.id}/live/summary").json()["live"]
+    agent_live = client.get(f"/agent/v1/flights/{flight.id}/briefing").json()["live"]
+    assert api_live == agent_live
+    assert api_live["changes"][0]["kind"] == "sigmet_issued"
+
+
+def test_live_summary_endpoint_404_for_private_other_user(client, app_db):
+    flight = _seed_flight(app_db, owner=_OTHER_USER, private=True, suffix="livepriv")
+    _seed_pack(app_db, flight, owner=_OTHER_USER)
+    resp = client.get(f"/api/flights/{flight.id}/live/summary")
+    assert resp.status_code == 404
+
+
+def test_agent_operation_descriptions_fit_gpt_limit(client):
+    """Custom GPT Actions truncate descriptions past 300 chars."""
+    schema = client.get("/agent/v1/openapi.json").json()
+    for path in schema["paths"].values():
+        for op in path.values():
+            assert len(op.get("description", "")) <= 300, (op["operationId"], len(op["description"]))
