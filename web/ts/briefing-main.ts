@@ -1,7 +1,7 @@
 /** Briefing page entry point — wires store, UI manager, and event handlers. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { briefingStore, type BriefingState } from './store/briefing-store';
+import { briefingStore, effectiveThemeId, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
@@ -92,7 +92,8 @@ function buildXsectionSnapshotProps(
     (id) => v.enabledLayers[id] !== false,
   );
   return {
-    theme: v.vizTheme ?? 'standard',
+    // What is drawn, not the stored preference: an emulation supplies its own.
+    theme: effectiveThemeId(v),
     preset: v.activePreset ?? 'custom',
     layout: v.layout,
     cloud_style: v.cloudStyle ?? 'square',
@@ -470,6 +471,13 @@ async function init(): Promise<void> {
     const preset = emulation ? getPreset(emulation) : undefined;
     if (!preset) return preferredMethods;
     return { ...preferredMethods, ...methodsFromPreset(preset).preferredMethods };
+  }
+
+  /** The layers "FlyFun" applies: the methods this briefing graded with, one
+   *  per family. Used wherever an emulation is left — the Emulate selector, and
+   *  a hand-picked theme, which drops the emulation (#597). */
+  function flyfunOverrides(): Record<string, boolean> {
+    return getCompactLayerOverrides(preferredMethods, store.getState().vizSettings.cloudStyle);
   }
 
   /** Recompute `preferredMethods` from the current manifest + engine defaults,
@@ -1786,7 +1794,7 @@ async function init(): Promise<void> {
         onCompareLayerChange: (layerId) => store.getState().setCompareLayer(layerId),
         onCompareModelToggle: (model, enabled) => store.getState().setCompareModel(model, enabled),
         onCompareBandModeChange: (mode) => store.getState().setCompareBandMode(mode),
-        onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
+        onThemeChange: (themeId) => store.getState().setVizTheme(themeId, flyfunOverrides()),
         onPresetChange: (presetId) => handlePresetChange(presetId),
       }, availableModels);
 
@@ -2028,7 +2036,7 @@ async function init(): Promise<void> {
         onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
         onLayoutChange: (l) => store.getState().setLayout(l),
         onModelChange: (model) => store.getState().setSelectedModel(model),
-        onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
+        onThemeChange: (themeId) => store.getState().setVizTheme(themeId, flyfunOverrides()),
         onPresetChange: (presetId) => handlePresetChange(presetId),
         // Emulation applies theme + method set; the focus lens above then
         // resolves against those methods rather than the graded defaults.
@@ -2036,9 +2044,10 @@ async function init(): Promise<void> {
         // are the methods this briefing graded with, one layer per family.
         onEmulationChange: (presetId) => store.getState().setVizPreset(
           presetId,
-          presetId ? undefined : getCompactLayerOverrides(preferredMethods, state.vizSettings.cloudStyle),
+          presetId ? undefined : flyfunOverrides(),
         ),
         onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
+        onLayersSet: (overrides) => store.getState().setVizLayers(overrides),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers, hiddenGroups);
 
       // Render route graph controls (below graph)

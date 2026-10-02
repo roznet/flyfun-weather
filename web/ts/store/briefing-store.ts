@@ -56,10 +56,32 @@ function loadTierVisibility(): Record<Tier, boolean> {
  *  Exported for test: this runs once per user and is invisible when it fails.
  */
 export function migrateVizSettings(settings: VizSettings): VizSettings {
-  if (settings.activePreset && getPreset(settings.activePreset)) {
-    return { ...settings, activeEmulation: settings.activePreset, activePreset: null };
+  let out = settings;
+  if (out.activePreset && getPreset(out.activePreset)) {
+    out = { ...out, activeEmulation: out.activePreset, activePreset: null };
   }
-  return settings;
+  // Before #597 an emulation wrote its theme into `vizTheme`, so a saved
+  // "GRAMET emulation + GRAMET theme" is almost certainly that write, not a
+  // choice. Clear it so going back to FlyFun lands on the default theme.
+  const emulation = out.activeEmulation ? getPreset(out.activeEmulation) : undefined;
+  if (emulation && out.vizTheme === emulation.themeId) {
+    out = { ...out, vizTheme: undefined };
+  }
+  return out;
+}
+
+/** The theme the cross-section draws with: the active emulation's, else the
+ *  user's own (#597).
+ *
+ *  `vizTheme` is the USER's choice and an emulation never writes it. Before
+ *  #597 GRAMET overwrote it, so going back to FlyFun had nothing to restore and
+ *  left GRAMET's look on our methods. Deriving the theme instead means FlyFun
+ *  restores it for free — nothing extra to store. */
+export function effectiveThemeId(settings: VizSettings): ThemeId {
+  const emulation = settings.activeEmulation ? getPreset(settings.activeEmulation) : undefined;
+  if (emulation && emulation.themeId in THEMES) return emulation.themeId as ThemeId;
+  if (settings.vizTheme && settings.vizTheme in THEMES) return settings.vizTheme as ThemeId;
+  return 'standard';
 }
 
 function loadVizSettings(): VizSettings {
@@ -183,6 +205,9 @@ export interface BriefingState {
   toggleTier: (tier: Tier) => void;
   toggleVizLayer: (layerId: string) => void;
   setLayersBatch: (overrides: Record<string, boolean>) => void;
+  /** A user edit of several layers at once (`None`, a compact family chip off).
+   *  Same lens semantics as {@link toggleVizLayer}, one store update (#597). */
+  setVizLayers: (overrides: Record<string, boolean>) => void;
   setCloudStyle: (style: 'natural' | 'soft' | 'square') => void;
   setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
@@ -245,7 +270,10 @@ export interface BriefingState {
   setCompareModel: (model: string, enabled: boolean) => void;
   setCompareBandMode: (mode: import('../visualization/types').CompareBandMode) => void;
   initCompareModels: (models: string[]) => void;
-  setVizTheme: (themeId: string) => void;
+  /** Set the user's own theme. A hand-picked theme drops any active emulation,
+   *  so the caller passes FlyFun's resolved methods exactly as for
+   *  `setVizPreset(null, …)` (#597). */
+  setVizTheme: (themeId: string, ownMethodOverrides?: Record<string, boolean>) => void;
   /** Apply a tool emulation (GRAMET / Windy / ForeFlight), or `null` for
    *  FlyFun — our own conventions, which the caller resolves into
    *  `ownMethodOverrides` because the graded methods come from the advisories
@@ -707,6 +735,24 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const current = get().vizSettings;
     const enabled = { ...current.enabledLayers, ...overrides };
     const updated = { ...current, enabledLayers: enabled };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setVizLayers: (overrides: Record<string, boolean>) => {
+    // The batch twin of toggleVizLayer, NOT of setLayersBatch: a `None` click
+    // is a user edit and must dirty the lens, which setLayersBatch deliberately
+    // does not. One update instead of one per layer, so one re-render (#597).
+    const ids = Object.keys(overrides);
+    if (ids.length === 0) return;
+    const current = get().vizSettings;
+    const enabled = { ...current.enabledLayers, ...overrides };
+    // Same Highlight exemption as toggleVizLayer, and only when it is the sole
+    // layer touched: mixed with anything else it is a lens edit.
+    const onlyHighlight = ids.every((id) => id === HIGHLIGHT_LAYER_ID);
+    const updated = onlyHighlight
+      ? { ...current, enabledLayers: enabled }
+      : { ...current, enabledLayers: enabled, activePreset: null, activeHighlightAdvisoryId: null };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
@@ -1265,14 +1311,24 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     saveVizSettings(updated);
   },
 
-  setVizTheme: (themeId: string) => {
-    if (themeId in THEMES) {
-      setActiveTheme(themeId as ThemeId);
-      const updated = { ...get().vizSettings, vizTheme: themeId };
-      set({ vizSettings: updated });
-      saveVizSettings(updated);
-      window.dispatchEvent(new Event('theme-changed'));
-    }
+  setVizTheme: (themeId: string, ownMethodOverrides?: Record<string, boolean>) => {
+    if (!(themeId in THEMES)) return;
+    const current = get().vizSettings;
+    // Picking a theme by hand while emulating drops the emulation, as a manual
+    // layer edit drops the Focus lens (#597): the chart is no longer GRAMET-
+    // shaped. It lands on FlyFun in full — our methods too — because leaving
+    // GRAMET's methods under a "FlyFun" label is the very mismatch #597 fixes.
+    const leavingEmulation = current.activeEmulation != null;
+    const enabled = leavingEmulation && ownMethodOverrides
+      ? { ...current.enabledLayers, ...ownMethodOverrides }
+      : current.enabledLayers;
+    const updated: VizSettings = leavingEmulation
+      ? { ...current, vizTheme: themeId, enabledLayers: enabled, activeEmulation: null, activeHighlightAdvisoryId: null }
+      : { ...current, vizTheme: themeId };
+    setActiveTheme(effectiveThemeId(updated));
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+    window.dispatchEvent(new Event('theme-changed'));
   },
 
   setVizPreset: (presetId: string | null, ownMethodOverrides?: Record<string, boolean>) => {
@@ -1280,8 +1336,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // tool in BOTH style and method set, so they set the theme and the layers
     // together and are recorded in `activeEmulation` rather than
     // `activePreset` (#591). Passing null clears the emulation back to our own
-    // conventions; it is a label change, not a factory reset, so layers and
-    // theme stay as the user left them.
+    // conventions — our methods and the user's own theme, which the emulation
+    // never overwrote (#597, `effectiveThemeId`).
     const current = get().vizSettings;
     if (!presetId) {
       // "FlyFun" — our own conventions. Not an absence: it applies the methods
@@ -1299,16 +1355,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         activeEmulation: null,
         activeHighlightAdvisoryId: null,
       };
+      setActiveTheme(effectiveThemeId(updated));
       set({ vizSettings: updated });
       saveVizSettings(updated);
+      window.dispatchEvent(new Event('theme-changed'));
       return;
     }
     const preset = getPreset(presetId);
     if (!preset) return;
-    const themeId = preset.themeId as ThemeId;
-    if (themeId in THEMES) {
-      setActiveTheme(themeId);
-    }
     const enabled = { ...current.enabledLayers, ...preset.enabledLayers };
     // The lens is deliberately left alone: an emulation supplies the methods
     // and a lens supplies which groups are on, so "GRAMET, focused on icing"
@@ -1317,10 +1371,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const updated = {
       ...current,
       enabledLayers: enabled,
-      vizTheme: preset.themeId,
+      // `vizTheme` is deliberately NOT written: it is the user's own theme and
+      // is what FlyFun goes back to. The emulation's look is derived.
       activeEmulation: presetId,
       activeHighlightAdvisoryId: null,
     };
+    setActiveTheme(effectiveThemeId(updated));
     set({ vizSettings: updated });
     saveVizSettings(updated);
     window.dispatchEvent(new Event('theme-changed'));
@@ -1358,10 +1414,6 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 }));
 
-// Initialize cross-section theme from saved settings
-{
-  const saved = briefingStore.getState().vizSettings.vizTheme;
-  if (saved && saved in THEMES) {
-    setActiveTheme(saved as ThemeId);
-  }
-}
+// Initialize cross-section theme from saved settings — the emulation's if one
+// is active, so a reload mid-GRAMET still draws GRAMET (#597).
+setActiveTheme(effectiveThemeId(briefingStore.getState().vizSettings));

@@ -180,7 +180,11 @@ Layer presets provide one-click configurations. Three presets (`PRESETS` in `lay
 - **Windy** — light theme, Natural NWP clouds + SFIP-NWP icing + NWP Convective + CAT (Ri) + freezing level + terrain + cruise.
 - **ForeFlight** — high-contrast theme, Square DD clouds + Ogimet-DD icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise.
 
-(SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides (merge, not clean-slate).
+(SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. These are the **Emulate** selector (`activeEmulation`), separate from the Focus lens (`activePreset`, #591). Store action `setVizPreset()` merges the layer overrides and records `activeEmulation`; `setVizPreset(null, ownMethods)` is "FlyFun" — our graded methods, one per family.
+
+**Theme ownership (#597).** `vizSettings.vizTheme` is the **user's** theme and an emulation never writes it; the drawn theme is derived by `effectiveThemeId(settings)` = the emulation's `themeId`, else `vizTheme`, else `'standard'`. So FlyFun restores the user's theme with nothing extra stored. A hand-picked theme while emulating drops the emulation **in full** (`setVizTheme(id, ownMethods)` applies FlyFun's methods too) — leaving GRAMET's methods under a "FlyFun" label is the mismatch #597 fixed. `migrateVizSettings` clears a saved `vizTheme` equal to the active emulation's theme (the pre-#597 overwrite). **iOS still has the pre-#597 behaviour** (`CrossSectionViewModel.applyEmulation` writes the theme, `setTheme` keeps the emulation) and boots with GRAMET as both default emulation and default theme.
+
+**No Style control.** The planned chrome-row "Style" (theme + cloud render) was dropped in #597: cloud render is a property of the Clouds family and stays in its detail row (as on iOS), and the airport-profile drawer keeps drawing with `STANDARD_THEME` with no theme control (`activeTheme` is a module global restored by briefing-store, which the maps bundle doesn't import).
 
 **SYNC with iOS.** These hand-copied surfaces carry `SYNC:` comments in the TS
 and must move together (the `sync-ios-web` skill audits them): the three layer
@@ -783,6 +787,10 @@ Consensus and overlay-soft modes use a single base RGB per layer from the theme.
   since all six line layers are `defaultEnabled: true`, the three layer presets do
   **not** turn the parcel lines off. Fix the preset keys (not the layer ids) if this
   is revisited.
+- Multi-layer user edits (`None`, a compact family chip off) go through the panel's
+  `onLayersSet` → `setVizLayers` (one store update, dirties the lens like
+  `toggleVizLayer`). `setLayersBatch` is the *programmatic* twin and deliberately
+  leaves `activePreset` alone — don't swap them (#597).
 - `setVizPreset()` merges (`{...current, ...preset.enabledLayers}`) while
   `resolveAdvisoryPreset()` is **clean-slate** (reset every resettable group off,
   then enable). Don't assume either behaviour when adding a preset family.
