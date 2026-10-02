@@ -102,6 +102,28 @@ the tick; a failing tick never fails the cycle.
 | Pack meta (`/packs`, `/packs/latest`, `/packs/{ts}`, SSE `complete.pack`) and flight list `latest_briefing` | `live_updated_at` — the sync signal. A realtime refresh keeps `fetch_timestamp`, so clients cannot rely on it alone. |
 | `GET …/snapshot`, `/bundle`, HTML/PDF report | The pack's `briefing.json` **overlaid** with its live layer (`overlay_live`), plus `live_updated_at` / `live_changes` keys. Keeps older app versions on the newest data, as the in-place patch used to. |
 | Realtime refresh responses | `live_updated_at` + `changes` alongside the existing `observations`/`sigmets`/`delta`/`observed`. |
+| Agents: MCP `get_briefing` and ChatGPT `getBriefing` (#641) | A compact `live` block (null when the latest pack has no layer), built by one helper, `live_layer.live_summary(pack_dir)`. The ChatGPT action calls it in-process; the MCP server (separate process, HTTP only) reads it from `GET /api/flights/{id}/live/summary`. |
+
+### The agent `live` block (#641)
+
+`summarize_live(layer, briefing_data)`: a `note` guardrail (`LIVE_NOTE`: lead
+with alert-tier changes; the digest/advisories/grade were written at
+`digest_written_at` = the pack time and are never re-graded), the `*_updated_at`
+times, `baseline_at` / `baseline_source`, the three counts, then:
+
+- `changes` — ordered alert → highlight, worse → better, destination → departure
+  → alternate → route, newest evidence first; capped at 12 (`changes_total`
+  keeps the count). Only tier/direction/role/kind/icao/message/observed_at.
+- `sigmets` — every current route SIGMET (cap 20, `sigmets_total`), with the
+  same `label` the change messages use ("LECB 3: EMBD TS") so an agent can tie
+  them; no polygon, no raw text.
+- `airports` — departure, destination and the top alternates only (the
+  classifier's `airport_roles`), when the corridor fetch has a METAR for them.
+
+Deliberately not in it: observed radar/lightning/tops arrays and
+`cross_section.json` (never exposed, #278). The layer outlives the live window
+(until retention T1), so an agent asked after the flight still sees the last
+tick — the timestamps say how old it is.
 
 Not overlaid (build-time, correctly the briefing's view): the LLM digest, the text
 digest, alternate requirement.
@@ -129,8 +151,9 @@ digest, alternate requirement.
 - `tasks/live_significance.py` — `classify_changes`, `airport_roles`, `worsening_delta`
 - `tasks/live_tick.py` — `LiveTick`, `find_live_flights`, shared sources
 - `tasks/route_weather.py::run_realtime_refresh` — the seam (no longer patches the pack)
-- `api/packs.py` — `live_router` (`/flights/{id}/live`), overlay in snapshot/bundle
-- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`
+- `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
+- `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
+- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
 
 ## Clients
 

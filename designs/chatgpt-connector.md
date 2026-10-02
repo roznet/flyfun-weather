@@ -99,6 +99,15 @@ which is where the "alternates are weather-improvement candidates, not
 operational alternates" warning also lives — a GPT reads that description even
 when it doesn't call the operation.
 
+> Flight-day `live` block (#641): both `getBriefing` and MCP `get_briefing`
+> carry `live` — newest METAR/route SIGMETs + significant changes since the
+> briefing, null when there is none — from the one helper
+> `tasks/live_layer.py::live_summary` (in-process here; the MCP server reads
+> `GET /api/flights/{id}/live/summary`). Its `note` and the MCP server
+> instructions / OpenAPI top-level description say: lead with alert-tier
+> changes, the digest predates them, live never re-grades. Details in
+> [live-observation-layer.md](live-observation-layer.md).
+
 > Note: `getBriefing` reads the **cached** `altitude_table.json` (the cheap GET
 > path persisted at refresh, #259) rather than recomputing the sweep; it is
 > omitted for packs that predate that artifact.
@@ -188,7 +197,9 @@ scoped `claude.ai`/`claude.com` CORS allowlist).
   `getAlternates` (happy path + `none` when not computed), `listFlights` (all
   sections, and the Query-sentinel regression), the ownership gate (a private
   flight owned by another user 404s on `getBriefing` / `getDigestContext` /
-  `getAlternates`), the advisory-not-found 404 (not a 500 when an advisory dict
+  `getAlternates`), the flight-day `live` block (null without a layer, equal
+  to `/api/.../live/summary` with one), the ≤300-char operation-description
+  limit, the advisory-not-found 404 (not a 500 when an advisory dict
   has no `advisory_id`), and that `getAdvisoryDetail` actually injects the
   cross-check guardrail text. Several of these were verified to fail against the
   pre-fix code — keep them when refactoring the router.

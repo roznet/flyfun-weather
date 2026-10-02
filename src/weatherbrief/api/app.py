@@ -664,7 +664,10 @@ def create_app() -> FastAPI:
                 "context for discussion, never a downgrade signal. For diversion "
                 "questions call getAlternates: these are weather-improvement "
                 "candidates, NOT operational alternates — verify with airport/AIP "
-                "data before recommending one."
+                "data before recommending one. On flight day getBriefing's 'live' "
+                "block holds the newest METAR/SIGMETs and significant changes "
+                "since the briefing: lead with its alert-tier changes and say the "
+                "digest was written before them (live annotates, never re-grades)."
             ),
             routes=agent_router.routes,
         )

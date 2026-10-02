@@ -284,10 +284,10 @@ def get_briefing(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Latest weather briefing for a flight: overall assessment
-    (GREEN/AMBER/RED/UNAVAILABLE), route advisories, AI digest, and a link to
-    the full briefing. Status: ready (fresh), stale (models updated since),
-    processing (generating), none (call refreshBriefing first).
+    """Latest briefing: assessment (GREEN/AMBER/RED/UNAVAILABLE), advisories,
+    AI digest, web link. Status: ready, stale, processing, none (call
+    refreshBriefing). On flight day `live` holds the newest METAR/SIGMETs and
+    alerts since the briefing; the digest predates them. Lead with live alerts.
     """
     pack, timestamp, status = _resolve_latest_pack(db, user_id, flight_id)
     if status is not None:
@@ -337,6 +337,12 @@ def get_briefing(
     alternates = (snapshot or {}).get("alternates")
     if alternates:
         result["alternates"] = views.alternates_hook(alternates)
+
+    # Flight-day live layer (#641): newest observations + significant changes
+    # since the briefing. Null when the pack has none — never invented.
+    from weatherbrief.tasks.live_layer import live_summary
+
+    result["live"] = live_summary(pack_dir)
 
     return result
 
