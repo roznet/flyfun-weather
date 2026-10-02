@@ -72,7 +72,7 @@ test.describe('Briefing tour — cross-section steps', () => {
   test.beforeEach(async ({ page }) => {
     await mockBriefingApi(page);
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
-    await expect(page.getByText('GREEN', { exact: true })).toBeVisible();
+    await expect(page.locator('#assessment-banner').getByText('GREEN', { exact: true })).toBeVisible();
     await page.locator('#tour-btn').click();
     await page.waitForTimeout(550);
   });
@@ -156,7 +156,7 @@ test.describe('Briefing tour — cross-section steps', () => {
   async function restartInFullMode(page: import('@playwright/test').Page) {
     await page.addInitScript(() => localStorage.setItem('wb_displayMode', 'full'));
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
-    await expect(page.getByText('GREEN', { exact: true })).toBeVisible();
+    await expect(page.locator('#assessment-banner').getByText('GREEN', { exact: true })).toBeVisible();
     await page.locator('#tour-btn').click();
     await page.waitForTimeout(550);
   }
