@@ -53,8 +53,13 @@ function loadTierVisibility(): Record<Tier, boolean> {
  *  the page to a Lens reading "Custom" and an Emulate reading "FlyFun" while
  *  the chart is still drawn GRAMET-style.
  *
- *  Exported for test: this runs once per user and is invisible when it fails.
+ *  Runs on every load, so each step must be idempotent or gated on
+ *  `settingsVersion`. Exported for test: it is invisible when it fails.
  */
+/** Bump when a migration below must run exactly once per saved state.
+ *  1 = #597 theme ownership. */
+export const VIZ_SETTINGS_VERSION = 1;
+
 export function migrateVizSettings(settings: VizSettings): VizSettings {
   let out = settings;
   if (out.activePreset && getPreset(out.activePreset)) {
@@ -63,9 +68,18 @@ export function migrateVizSettings(settings: VizSettings): VizSettings {
   // Before #597 an emulation wrote its theme into `vizTheme`, so a saved
   // "GRAMET emulation + GRAMET theme" is almost certainly that write, not a
   // choice. Clear it so going back to FlyFun lands on the default theme.
-  const emulation = out.activeEmulation ? getPreset(out.activeEmulation) : undefined;
-  if (emulation && out.vizTheme === emulation.themeId) {
-    out = { ...out, vizTheme: undefined };
+  //
+  // ONCE only: this function runs on every load, and after #597 the same
+  // shape is a real choice (pick Light, then Windy — whose theme is light).
+  // Re-running it would silently undo that pick on each reload.
+  if ((out.settingsVersion ?? 0) < 1) {
+    const emulation = out.activeEmulation ? getPreset(out.activeEmulation) : undefined;
+    if (emulation && out.vizTheme === emulation.themeId) {
+      out = { ...out, vizTheme: undefined };
+    }
+  }
+  if (out.settingsVersion !== VIZ_SETTINGS_VERSION) {
+    out = { ...out, settingsVersion: VIZ_SETTINGS_VERSION };
   }
   return out;
 }
@@ -111,17 +125,25 @@ function loadVizSettings(): VizSettings {
     activePreset: null,
     activeEmulation: null,
     activeHighlightAdvisoryId: null,
+    // A fresh state has nothing to migrate.
+    settingsVersion: VIZ_SETTINGS_VERSION,
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
     if (v) {
       const saved = JSON.parse(v);
-      return migrateVizSettings({
+      const migrated = migrateVizSettings({
         ...defaults,
         ...saved,
         enabledLayers: { ...defaults.enabledLayers, ...saved.enabledLayers },
         compareModels: { ...defaults.compareModels, ...saved.compareModels },
+        // The saved version, not the default's: a state saved before versions
+        // existed must read as 0, or its one-shot migrations would be skipped.
+        settingsVersion: saved.settingsVersion ?? 0,
       });
+      // Persist straight away so the version sticks even if nothing else saves.
+      if (migrated.settingsVersion !== saved.settingsVersion) saveVizSettings(migrated);
+      return migrated;
     }
   } catch { /* ignore */ }
   return defaults;

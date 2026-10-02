@@ -30,7 +30,12 @@ export interface VizSettings {
   compareLayer: string;
   compareModels: Record<string, boolean>;
   compareBandMode: CompareBandMode;
+  /** The user's own cross-section theme. An emulation never writes it; the
+   *  drawn theme is derived (`effectiveThemeId`, #597). */
   vizTheme?: string;
+  /** Version of the persisted shape, for one-shot migrations. Absent = saved
+   *  before #597. See `VIZ_SETTINGS_VERSION` in briefing-store. */
+  settingsVersion?: number;
   /** Which preset the cross-section currently reflects, or `null` for the
    *  "Custom" (dirty) state. Set when a preset is applied (GRAMET or an
    *  advisory preset); cleared to `null` by any user-initiated layer toggle
