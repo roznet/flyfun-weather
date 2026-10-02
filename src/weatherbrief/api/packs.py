@@ -5062,19 +5062,25 @@ def get_live_summary(
     request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
+    pack_timestamp: str | None = None,
 ) -> dict:
     """The compact live block agents get with a briefing (#641).
 
-    ``live_layer.live_summary`` for the flight's latest pack — the MCP server
-    reads it here; the ChatGPT action calls the helper in-process. ``live`` is
-    null when nothing live exists for the latest pack.
+    ``live_layer.live_summary`` for the flight's latest pack, or for
+    ``pack_timestamp`` when given — the MCP server passes the pack it already
+    resolved, so ``live.digest_written_at`` matches the digest the agent reads.
+    The ChatGPT action calls the helper in-process. ``live`` is null when
+    nothing live exists for that pack.
     """
     _load_flight_or_404(db, flight_id, viewer_id=user_id)
     audit_pack_access(user_id, flight_id, "get_live_summary", request)
-    packs = list_packs(db, flight_id)
-    if not packs:
-        raise HTTPException(status_code=404, detail="No packs yet for this flight")
-    pack_ts = ensure_utc(packs[0].fetch_timestamp).isoformat()
+    if pack_timestamp:
+        pack_ts = pack_timestamp
+    else:
+        packs = list_packs(db, flight_id)
+        if not packs:
+            raise HTTPException(status_code=404, detail="No packs yet for this flight")
+        pack_ts = ensure_utc(packs[0].fetch_timestamp).isoformat()
 
     from weatherbrief.tasks.live_layer import live_summary
 
@@ -5082,7 +5088,8 @@ def get_live_summary(
     # same layer.
     try:
         pack_dir = _get_pack_dir(db, flight_id, pack_ts, viewer_id=user_id)
-    except HTTPException:
+    except HTTPException as e:
+        logger.warning("Live summary: pack %s of flight %s unresolved (%s)", pack_ts, flight_id, e.detail)
         pack_dir = None
     return {"flight_id": flight_id, "pack_timestamp": pack_ts, "live": live_summary(pack_dir)}
 

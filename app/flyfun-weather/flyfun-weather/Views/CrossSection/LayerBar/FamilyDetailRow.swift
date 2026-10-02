@@ -24,6 +24,7 @@ struct FamilyDetailRow: View {
                 stacked(notes: notes)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("layerFamilyDetail-\(family.rawValue)")
     }
 

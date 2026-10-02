@@ -451,6 +451,16 @@ def test_live_summary_endpoint_matches_agent_block(client, app_db):
     assert api_live == agent_live
     assert api_live["changes"][0]["kind"] == "sigmet_issued"
 
+    # Pinned to an explicit pack (what the MCP server sends).
+    pinned = client.get(f"/api/flights/{flight.id}/live/summary", params={"pack_timestamp": ts}).json()
+    assert pinned["pack_timestamp"] == ts
+    assert pinned["live"] == api_live
+    # An unknown pack is "no live", never a 500.
+    missing = client.get(
+        f"/api/flights/{flight.id}/live/summary", params={"pack_timestamp": "2020-01-01T00:00:00+00:00"}
+    )
+    assert missing.status_code == 200 and missing.json()["live"] is None
+
 
 def test_live_summary_endpoint_404_for_private_other_user(client, app_db):
     flight = _seed_flight(app_db, owner=_OTHER_USER, private=True, suffix="livepriv")

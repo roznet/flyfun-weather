@@ -11,6 +11,10 @@
  *  - SIGMETs: a red diagonally-hatched zone spanning the enroute extent on X
  *    and the vertical band on Y, labeled with the hazard, deeper red for
  *    SEV/EMBD.
+ *
+ * SYNC: iOS ports this in `Views/CrossSection/Layers/CurrentConditionsLayer.swift`
+ * (data shapes in `Models/Domain/VizData.swift`). iOS deliberately keeps its own
+ * flight-category palette (MVFR blue, not amber) — mirror geometry, not colors.
  */
 
 import type { CrossSectionLayer, CoordTransform, VizMetarColumn, VizSigmetZone } from '../../types';

@@ -60,7 +60,8 @@ class FakeClient:
     def get_alternates(self, flight_id, ts):
         return None
 
-    def get_live_summary(self, flight_id):
+    def get_live_summary(self, flight_id, pack_timestamp):
+        self.live_pack_timestamp = pack_timestamp
         if self._live_error is not None:
             raise self._live_error
         return self._live
@@ -76,9 +77,12 @@ def patch_client(monkeypatch):
 
 
 def test_live_block_passed_through(patch_client):
-    patch_client(live=_LIVE)
+    client = patch_client(live=_LIVE)
     res = server.get_briefing("flight-1")
     assert res["live"] == _LIVE
+    assert "live_unavailable" not in res
+    # Pinned to the pack whose digest is returned, not re-resolved as latest.
+    assert client.live_pack_timestamp == "2026-10-02T06:52:55+00:00"
     assert res["digest"] == {"summary": "briefing-time digest"}
 
 
@@ -95,6 +99,15 @@ def test_live_failure_does_not_fail_briefing(patch_client):
     res = server.get_briefing("flight-1")
     assert res["assessment"] == "AMBER"
     assert res["live"] is None
+    assert res["live_unavailable"] is True
+
+
+def test_live_bad_json_does_not_fail_briefing(patch_client):
+    patch_client(live_error=ValueError("Expecting value"))
+    res = server.get_briefing("flight-1")
+    assert res["assessment"] == "AMBER"
+    assert res["live"] is None
+    assert res["live_unavailable"] is True
 
 
 def test_instructions_and_docstring_mention_live():

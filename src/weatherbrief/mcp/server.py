@@ -466,8 +466,10 @@ def get_briefing(
 
     ``live`` (null unless the latest briefing has a flight-day live layer): the
     newest METARs and route SIGMETs and the significant changes since the
-    briefing, alert tier first. The digest was written before them (``live.digest_written_at``) — lead with
-    live alerts and say the digest predates them; they never change a grade.
+    briefing, alert tier first. The digest was written before them
+    (``live.digest_written_at``) — lead with live alerts and say the digest
+    predates them; they never change a grade. ``live_unavailable: true`` means
+    the live data could not be fetched, not that there is none.
 
     Status values:
     - ready: briefing available with fresh data
@@ -565,11 +567,14 @@ def get_briefing(
 
         # Flight-day live layer (#641); the API shapes it with the same
         # live_layer.live_summary the ChatGPT action calls in-process.
+        # Pinned to the pack resolved above, so live.digest_written_at matches
+        # the digest returned here even if a refresh lands in between.
         try:
-            result["live"] = client.get_live_summary(flight_id)
-        except httpx.HTTPError:
+            result["live"] = client.get_live_summary(flight_id, timestamp)
+        except (httpx.HTTPError, ValueError):
             logger.warning("Live summary unavailable for %s", flight_id, exc_info=True)
             result["live"] = None
+            result["live_unavailable"] = True
 
     return result
 

@@ -102,7 +102,7 @@ the tick; a failing tick never fails the cycle.
 | Pack meta (`/packs`, `/packs/latest`, `/packs/{ts}`, SSE `complete.pack`) and flight list `latest_briefing` | `live_updated_at` — the sync signal. A realtime refresh keeps `fetch_timestamp`, so clients cannot rely on it alone. |
 | `GET …/snapshot`, `/bundle`, HTML/PDF report | The pack's `briefing.json` **overlaid** with its live layer (`overlay_live`), plus `live_updated_at` / `live_changes` keys. Keeps older app versions on the newest data, as the in-place patch used to. |
 | Realtime refresh responses | `live_updated_at` + `changes` alongside the existing `observations`/`sigmets`/`delta`/`observed`. |
-| Agents: MCP `get_briefing` and ChatGPT `getBriefing` (#641) | A compact `live` block (null when the latest pack has no layer), built by one helper, `live_layer.live_summary(pack_dir)`. The ChatGPT action calls it in-process; the MCP server (separate process, HTTP only) reads it from `GET /api/flights/{id}/live/summary`. |
+| Agents: MCP `get_briefing` and ChatGPT `getBriefing` (#641) | A compact `live` block (null when the latest pack has no layer), built by one helper, `live_layer.live_summary(pack_dir)`. The ChatGPT action calls it in-process; the MCP server (separate process, HTTP only) reads it from `GET /api/flights/{id}/live/summary?pack_timestamp=…`, pinned to the pack whose digest it returns (so `digest_written_at` matches even if a refresh lands mid-call). If that fetch fails, MCP returns `live: null` plus `live_unavailable: true`, so an agent can tell a failed fetch from "nothing live". |
 
 ### The agent `live` block (#641)
 
