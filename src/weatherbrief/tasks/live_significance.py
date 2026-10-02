@@ -46,7 +46,7 @@ from euro_aip.utils.geometry import (
     point_in_multipolygon,
 )
 
-from weatherbrief.models.live import ChangeRole, LiveChange, LiveChanges
+from weatherbrief.models.live import ChangeRole, LiveChange, LiveChanges, LiveEvidencePoint
 from weatherbrief.models.observations import (
     AirportObservation,
     RefreshDelta,
@@ -593,14 +593,15 @@ def _ahead(dist: float | None, flown_nm: float | None) -> bool:
 
 def _lightning_span(
     observed: ObservedConditions | None, flown_nm: float | None,
-) -> tuple[list[float], float | None, datetime | None] | None:
+) -> tuple[list[float], float | None, datetime | None, list[LiveEvidencePoint]] | None:
     """Along-track positions of route points ahead with flashes in the
-    innermost ring. None when the lightning field is absent (unknown, not
-    clear)."""
+    innermost ring, plus those points as evidence (#643). None when the
+    lightning field is absent (unknown, not clear)."""
     if observed is None or observed.lightning is None:
         return None
     pos = _station_positions(observed)
     hits: list[float] = []
+    evidence: list[LiveEvidencePoint] = []
     radius: float | None = None
     for st in observed.lightning.stations:
         if not st.annuli:
@@ -610,18 +611,24 @@ def _lightning_span(
         d = pos.get(st.station_id)
         if inner.flash_count > 0 and _ahead(d, flown_nm):
             hits.append(d if d is not None else -1.0)
-    return hits, radius, observed.lightning.valid_time
+            evidence.append(LiveEvidencePoint(
+                station_id=st.station_id, enroute_distance_nm=d,
+                radius_nm=inner.radius_nm, flash_count=inner.flash_count,
+            ))
+    return hits, radius, observed.lightning.valid_time, evidence
 
 
 def _radar_span(
     observed: ObservedConditions | None, flown_nm: float | None,
-) -> tuple[list[float], float | None, float | None, datetime | None] | None:
+) -> tuple[list[float], float | None, float | None, datetime | None, list[LiveEvidencePoint]] | None:
     """Along-track positions of route points ahead whose innermost ring has a
-    heavy-or-worse echo on adequate coverage. None when the field is absent."""
+    heavy-or-worse echo on adequate coverage, plus those points as evidence
+    (#643). None when the field is absent."""
     if observed is None or observed.reflectivity is None:
         return None
     pos = _station_positions(observed)
     hits: list[float] = []
+    evidence: list[LiveEvidencePoint] = []
     radius: float | None = None
     peak: float | None = None
     for st in observed.reflectivity.stations:
@@ -635,7 +642,12 @@ def _radar_span(
         if inner.max_value is not None and inner.max_value >= RADAR_SIGNIFICANT_DBZ and _ahead(d, flown_nm):
             hits.append(d if d is not None else -1.0)
             peak = inner.max_value if peak is None else max(peak, inner.max_value)
-    return hits, radius, peak, observed.reflectivity.valid_time
+            evidence.append(LiveEvidencePoint(
+                station_id=st.station_id, enroute_distance_nm=d,
+                radius_nm=inner.radius_nm, max_dbz=inner.max_value,
+                valid_px=inner.valid_px, total_px=inner.total_px,
+            ))
+    return hits, radius, peak, observed.reflectivity.valid_time, evidence
 
 
 def _span_text(hits: list[float]) -> str:
@@ -658,8 +670,8 @@ def _observed_changes(
     b_l = _lightning_span(baseline, flown_nm)
     l_l = _lightning_span(latest, flown_nm)
     if b_l is not None and l_l is not None:
-        b_hits, _, _ = b_l
-        l_hits, radius, valid = l_l
+        b_hits = b_l[0]
+        l_hits, radius, valid, evidence = l_l
         r = f"{radius:g} NM" if radius is not None else "the route"
         if l_hits and not b_hits:
             out.append(LiveChange(
@@ -668,6 +680,7 @@ def _observed_changes(
                 from_value="none", to_value=str(len(l_hits)), observed_at=valid,
                 enroute_distance_nm=min((h for h in l_hits if h >= 0), default=None),
                 message=f"Lightning within {r} of route{_span_text(l_hits)}",
+                evidence=evidence,
             ))
         elif b_hits and not l_hits:
             out.append(LiveChange(
@@ -681,7 +694,7 @@ def _observed_changes(
     l_r = _radar_span(latest, flown_nm)
     if b_r is not None and l_r is not None:
         b_hits = b_r[0]
-        l_hits, radius, peak, valid = l_r
+        l_hits, radius, peak, valid, evidence = l_r
         r = f"{radius:g} NM" if radius is not None else "the route"
         if l_hits and not b_hits:
             out.append(LiveChange(
@@ -694,6 +707,7 @@ def _observed_changes(
                     f"Heavy radar echo (peak {peak:.0f} dBZ) within {r} of route"
                     f"{_span_text(l_hits)}"
                 ),
+                evidence=evidence,
             ))
         elif b_hits and not l_hits:
             out.append(LiveChange(

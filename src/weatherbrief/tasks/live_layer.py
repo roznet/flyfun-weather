@@ -17,6 +17,10 @@ view), and writes via temp file + ``os.replace``.
 
 ``live_meta.json`` exists so list endpoints can surface ``live_updated_at``
 without parsing a payload that carries the full observed-conditions block.
+
+``live_history.jsonl`` (#643) is the append-only timeline beside them: what
+the pilot was shown, and when, over the whole flight day (pack switches
+included). See :func:`_history_records` for the record types.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig
-from weatherbrief.models.live import LiveLayer
+from weatherbrief.models.live import LiveChange, LiveLayer
 from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 
@@ -37,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 LIVE_FILE = "live.json"
 LIVE_META_FILE = "live_meta.json"
+LIVE_HISTORY_FILE = "live_history.jsonl"
+#: Every per-flight live file: what flight delete/move and retention remove.
+LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE)
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -181,9 +188,36 @@ def load_briefing_with_live(pack_dir: Path | str) -> dict | None:
     return overlay_live(data, live_for_pack(pack_dir))
 
 
+def load_live_history(flight_dir: Path | str) -> list[dict]:
+    """The flight's history records, oldest first (empty when none).
+
+    A line that does not parse (a write cut short) is skipped, not raised.
+    """
+    path = Path(flight_dir) / LIVE_HISTORY_FILE
+    if not path.exists():
+        return []
+    out = []
+    try:
+        text = path.read_text()
+    except OSError:
+        logger.warning("Unreadable live history %s — ignoring", path, exc_info=True)
+        return []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            logger.warning("Skipping unreadable line in %s", path)
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
 def remove_live(flight_dir: Path | str) -> None:
     """Delete a flight's live files (flight delete / move)."""
-    for name in (LIVE_FILE, LIVE_META_FILE):
+    for name in LIVE_FILES:
         try:
             (Path(flight_dir) / name).unlink(missing_ok=True)
         except OSError:
@@ -283,6 +317,175 @@ def _is_older_pack(candidate: str, than: str) -> bool:
     return a < b
 
 
+# --- History (#643) -----------------------------------------------------------
+
+
+def change_identity(c: LiveChange) -> tuple:
+    """A change is the same change while its key, direction, value and tier
+    hold: a message-only difference (a SPECI suffix, a new detail) is not a
+    new event. The scenario replay uses the same identity."""
+    return (c.key, c.direction, c.to_value, c.tier)
+
+
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt is not None else None
+
+
+def _report_records(
+    observations: RouteObservations | None, sigmets: RouteSigmets | None,
+) -> list[tuple[tuple, dict]]:
+    """(dedupe key, record body) for every raw report in these blocks.
+
+    ``seen_at`` is the block's fetch time: when the report was known to us
+    (the scenario rebuild uses it as the SIGMET issue time). It is written
+    only when it differs from the record's ``tick_at`` (a pack's own
+    baseline reports); readers default to ``tick_at``.
+    """
+    out: list[tuple[tuple, dict]] = []
+    if observations is not None:
+        seen = _iso(observations.fetch_time)
+        for a in observations.airports:
+            if a.metar_raw and a.metar_time is not None:
+                out.append((("metar", a.icao, _iso(a.metar_time)), {
+                    "kind": "metar", "icao": a.icao, "seen_at": seen,
+                    "report_type": a.metar_report_type, "observed_at": _iso(a.metar_time),
+                    "raw": a.metar_raw,
+                }))
+            if a.taf_raw:
+                issued = _iso(a.taf_issue_time)
+                out.append((("taf", a.icao, issued or a.taf_raw), {
+                    "kind": "taf", "icao": a.icao, "seen_at": seen,
+                    "issued_at": issued, "raw": a.taf_raw,
+                }))
+    if sigmets is not None:
+        seen = _iso(sigmets.fetch_time)
+        for sg in sigmets.sigmets:
+            # The raw text carries the polygon, but nothing here parses raw
+            # SIGMET text back, so the structured fields go along (a few
+            # SIGMETs per flight, ~1 KB each).
+            out.append((("sigmet", sg.fir_id, sg.raw_text or str(sg.valid_from)), {
+                "kind": "sigmet", "fir_id": sg.fir_id, "seen_at": seen,
+                "valid_from": _iso(sg.valid_from), "valid_to": _iso(sg.valid_to),
+                "raw": sg.raw_text,
+                "sigmet": sg.model_dump(mode="json", exclude={"raw_text"}),
+            }))
+    return out
+
+
+def _report_key(rec: dict) -> tuple | None:
+    kind = rec.get("kind")
+    if kind == "metar":
+        return ("metar", rec.get("icao"), rec.get("observed_at"))
+    if kind == "taf":
+        return ("taf", rec.get("icao"), rec.get("issued_at") or rec.get("raw"))
+    if kind == "sigmet":
+        return ("sigmet", rec.get("fir_id"), rec.get("raw") or rec.get("valid_from"))
+    return None
+
+
+def _history_records(
+    history: list[dict],
+    shown: list[LiveChange],
+    layer: LiveLayer,
+    *,
+    briefing_data: dict,
+    observations: RouteObservations | None,
+    sigmets: RouteSigmets | None,
+    now: datetime,
+) -> list[dict]:
+    """What this tick adds to the history, in order.
+
+    - ``pack``: the layer's pack is not the last one the history recorded
+      (the first write, or a full refresh). The briefing's own observations
+      and SIGMETs are recorded as reports with it, so its baseline can be
+      rebuilt even if a report was superseded before the next tick.
+    - ``report``: each METAR/SPECI, TAF and SIGMET the first time it is seen.
+    - ``event``: each change appearing (``appeared``, with ``new_alert``) or
+      clearing (``cleared``, carrying the last message shown) since the
+      previous tick, regardless of pack: one timeline for the flight day.
+    - ``evidence``: after a radar/lightning ``appeared`` event, the route
+      points that triggered it.
+
+    ``shown`` is the change list the previous committed tick displayed.
+    """
+    base = {"tick_at": now.isoformat(), "pack_timestamp": layer.pack_timestamp}
+    out: list[dict] = []
+
+    last_pack = next((r for r in reversed(history) if r.get("type") == "pack"), None)
+    reports = _report_records(observations, sigmets)
+    if last_pack is None or last_pack.get("pack_dir_name") != layer.pack_dir_name:
+        base_obs, base_sigmets, _ = _baseline_blocks(briefing_data)
+        out.append({
+            **base, "type": "pack", "pack_dir_name": layer.pack_dir_name,
+            "previous_pack_timestamp": last_pack.get("pack_timestamp") if last_pack else None,
+            "has_observations": base_obs is not None,
+            "corridor_nm": (observations or base_obs).corridor_nm if (observations or base_obs) else None,
+            "sigmet_corridor_nm": (sigmets or base_sigmets).corridor_nm if (sigmets or base_sigmets) else None,
+        })
+        reports = _report_records(base_obs, base_sigmets) + reports
+
+    seen = {_report_key(r) for r in history if r.get("type") == "report"}
+    for key, body in reports:
+        if key in seen:
+            continue
+        seen.add(key)
+        if body["seen_at"] == base["tick_at"]:
+            del body["seen_at"]  # the common case; readers default to tick_at
+        out.append({**base, "type": "report", **body})
+
+    current = layer.changes.changes if layer.changes is not None else []
+    before = {change_identity(c): c for c in shown}
+    after = {change_identity(c): c for c in current}
+    for ident, c in after.items():
+        if ident in before:
+            continue
+        out.append({**base, "type": "event", "event": "appeared", "change": c.model_dump(mode="json", exclude_none=True)})
+        if c.evidence:
+            out.append({
+                **base, "type": "evidence", "key": c.key, "kind": c.kind, "source": c.source,
+                "observed_at": _iso(c.observed_at),
+                "points": [p.model_dump(mode="json") for p in c.evidence],
+            })
+    for ident, c in before.items():
+        if ident not in after:
+            out.append({**base, "type": "event", "event": "cleared", "change": c.model_dump(mode="json", exclude_none=True)})
+    return out
+
+
+def _append_history(flight_dir: Path, records: list[dict]) -> None:
+    if not records:
+        return
+    path = flight_dir / LIVE_HISTORY_FILE
+    lines = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records)
+    with open(path, "a+b") as f:
+        # A previous append cut short would glue this record onto its tail.
+        f.seek(0, os.SEEK_END)
+        if f.tell() > 0:
+            f.seek(-1, os.SEEK_END)
+            if f.read(1) != b"\n":
+                lines = "\n" + lines
+        f.write(lines.encode())
+
+
+def _record_history(
+    flight_dir: Path,
+    stored: LiveLayer | None,
+    layer: LiveLayer,
+    **kwargs,
+) -> None:
+    """Append this tick to the history. Never raises: a history problem must
+    not fail the tick or the ↻ press."""
+    try:
+        history = load_live_history(flight_dir)
+        # The previous tick's display — but when the history is only starting
+        # (first write, or a flight already live when #643 shipped), record
+        # everything on screen as appearing now.
+        shown = stored.changes.changes if (history and stored and stored.changes) else []
+        _append_history(flight_dir, _history_records(history, shown, layer, **kwargs))
+    except Exception:
+        logger.warning("Live history write failed for %s — tick kept", flight_dir, exc_info=True)
+
+
 def commit_live_update(
     pack_dir: Path | str,
     *,
@@ -317,7 +520,7 @@ def commit_live_update(
     flight_id = flight_id or flight_dir.name
 
     with _lock_for(flight_dir):
-        prior = load_live(flight_dir)
+        prior = stored = load_live(flight_dir)
         if prior is not None and prior.pack_dir_name != pack_dir.name:
             if _is_older_pack(pack_timestamp, prior.pack_timestamp):
                 logger.info(
@@ -395,6 +598,10 @@ def commit_live_update(
             "pack_timestamp": layer.pack_timestamp,
             "live_updated_at": now.isoformat(),
         }))
+        _record_history(
+            flight_dir, stored, layer, briefing_data=briefing_data,
+            observations=observations, sigmets=sigmets, now=now,
+        )
         return layer
 
 

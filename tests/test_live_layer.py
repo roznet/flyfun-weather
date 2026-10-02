@@ -205,5 +205,7 @@ def test_retention_purges_live_layer(tmp_path):
     assert _purge_live_layer(other, dry_run=False) == 0  # not this pack's layer
     assert _purge_live_layer(pack, dry_run=True) > 0
     assert (pack.parent / "live.json").exists()
+    assert (pack.parent / "live_history.jsonl").exists()
     assert _purge_live_layer(pack, dry_run=False) > 0
     assert not (pack.parent / "live.json").exists()
+    assert not (pack.parent / "live_history.jsonl").exists()
