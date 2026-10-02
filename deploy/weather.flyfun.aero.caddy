@@ -47,6 +47,14 @@ weather.flyfun.aero {
     @client_sources path /ts/* *.map
     respond @client_sources 404
 
+    # No endpoint takes uploads; the largest legitimate JSON bodies (flight
+    # create, PIREP batch, bulk ids) are a few KB. Cap well above that so an
+    # anonymous oversized POST is refused at the edge (413) instead of being
+    # parsed and validated by the single uvicorn worker.
+    request_body {
+        max_size 1MB
+    }
+
     reverse_proxy localhost:8020 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto {scheme}
