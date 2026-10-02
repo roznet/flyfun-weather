@@ -68,8 +68,12 @@ nonisolated struct LiveLayerResponse: Codable, Sendable {
 /// Everything significant that moved since the briefing was built.
 /// Mirrors `models/live.py::LiveChanges`.
 nonisolated struct LiveChanges: Codable, Sendable {
-    /// What the assessment / digest saw: the pack's fetch timestamp.
+    /// What the changes are measured against: the pack's fetch timestamp, or —
+    /// when the pack had no observations (briefed before flight day) — when the
+    /// live layer recorded its own starting point (`baselineSource == "live_start"`).
     let baselineAt: String?
+    /// "briefing" (default) or "live_start".
+    let baselineSource: String?
     let computedAt: String?
     /// Already sorted server-side: alert tier first, then dep/dest/alternate/
     /// route, worse before better. Rendered in this order.
@@ -80,9 +84,12 @@ nonisolated struct LiveChanges: Codable, Sendable {
 
     var items: [LiveChange] { changes ?? [] }
     var isEmpty: Bool { items.isEmpty }
+    /// Changes are measured from the live layer's own starting point, not the
+    /// briefing's observations (a pack built before flight day has none).
+    var isFromLiveStart: Bool { baselineSource == "live_start" }
 
-    /// ICAOs whose METAR or TAF category moved — the observations table marks
-    /// these rows.
+    /// ICAOs with any change at the airport (category, convective weather,
+    /// significant weather, wind, TAF) — the observations table marks these rows.
     var changedAirportIcaos: Set<String> {
         Set(items.compactMap { change -> String? in
             guard change.isAirportChange, let icao = change.icao, !icao.isEmpty else { return nil }
@@ -92,8 +99,12 @@ nonisolated struct LiveChanges: Codable, Sendable {
 
     /// The `sigmet:` keys of newly issued SIGMETs — the hazards table marks
     /// rows whose `SigmetAlongRoute.liveChangeKey` is in this set.
+    /// One phenomenon issued by two FIRs is a single change keyed on both
+    /// ("sigmet:LECB|3+sigmet:LECM|3"), so the key is split back per SIGMET.
     var issuedSigmetKeys: Set<String> {
-        Set(items.filter { $0.kindValue == .sigmetIssued }.map(\.key))
+        Set(items.filter { $0.kindValue == .sigmetIssued }.flatMap { change in
+            change.key.split(separator: "+").map(String.init)
+        })
     }
 
     /// Direction of the change for one airport, worst first (a worse change
@@ -135,6 +146,9 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
 
     enum Kind: String, Sendable {
         case metarCategory = "metar_category"
+        case metarConvective = "metar_convective"
+        case metarWeather = "metar_weather"
+        case metarWind = "metar_wind"
         case tafCategory = "taf_category"
         case sigmetIssued = "sigmet_issued"
         case sigmetCancelled = "sigmet_cancelled"
@@ -153,14 +167,22 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
     var directionValue: Direction? { direction.flatMap { Direction(rawValue: $0.lowercased()) } }
     /// Alert tier = departure / destination / alternate airport.
     var isAlert: Bool { tier?.lowercased() == "alert" }
-    /// METAR/SPECI or TAF category change at an airport.
-    var isAirportChange: Bool { kindValue == .metarCategory || kindValue == .tafCategory }
+    /// A change at an airport (any METAR/TAF trigger), as opposed to an area
+    /// change (SIGMET, lightning, radar). Keyed on the airport so a kind the
+    /// server adds later still marks its row.
+    var isAirportChange: Bool {
+        guard let icao, !icao.isEmpty else { return false }
+        switch kindValue {
+        case .sigmetIssued, .sigmetCancelled, .lightning, .radar: return false
+        default: return true
+        }
+    }
 
     /// Badge text: the server's source, upper-cased; falls back to the kind.
     var sourceLabel: String {
         if let source, !source.isEmpty { return source.uppercased() }
         switch kindValue {
-        case .metarCategory: return "METAR"
+        case .metarCategory, .metarConvective, .metarWeather, .metarWind: return "METAR"
         case .tafCategory: return "TAF"
         case .sigmetIssued, .sigmetCancelled: return "SIGMET"
         case .lightning: return "LIGHTNING"

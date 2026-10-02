@@ -882,10 +882,20 @@ final class BriefingViewModel {
         return LiveTime.newest([snapshot.liveUpdatedAt, observations.fetchTime])
     }
 
-    /// When the AI digest / assessment was written: the changes' baseline, else
-    /// the pack's fetch timestamp.
+    /// What the changes are measured from: the changes' baseline (the pack, or
+    /// the live layer's own starting point), else the pack's fetch timestamp.
     var liveBaselineDate: Date? {
         LiveTime.newest([liveChanges?.baselineAt]) ?? pack.flatMap { Date.parseISO8601($0.fetchTimestamp) }
+    }
+
+    /// When the AI digest / assessment was written — always the pack. Differs
+    /// from `liveBaselineDate` when the changes run from the live start (a pack
+    /// built before flight day): "Written at 05:00Z" would be false.
+    var digestWrittenAtDate: Date? {
+        if liveChanges?.isFromLiveStart == true {
+            return pack.flatMap { Date.parseISO8601($0.fetchTimestamp) }
+        }
+        return liveBaselineDate
     }
 
     // MARK: - Timing scenarios (#357)

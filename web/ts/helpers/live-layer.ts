@@ -123,11 +123,16 @@ export function observedAsOf(snapshot: ForecastSnapshot | null | undefined): str
   return best;
 }
 
-/** ICAOs with a METAR/TAF category change (upper-case). */
+/** Change kinds about an area, not an airport (never highlight a row). */
+const AREA_KINDS: ReadonlySet<string> = new Set(['sigmet_issued', 'sigmet_cancelled', 'lightning', 'radar']);
+
+/** ICAOs with any change at the airport — category, convective weather,
+ *  significant weather, wind or TAF (upper-case). An airport kind the server
+ *  adds later still highlights its row. */
 export function changedIcaos(changes: LiveChanges | null | undefined): Set<string> {
   const out = new Set<string>();
   for (const c of changes?.changes ?? []) {
-    if ((c.kind === 'metar_category' || c.kind === 'taf_category') && c.icao) {
+    if (c.icao && !AREA_KINDS.has(c.kind)) {
       out.add(c.icao.toUpperCase());
     }
   }
@@ -138,7 +143,11 @@ export function changedIcaos(changes: LiveChanges | null | undefined): Set<strin
 export function changedSigmetKeys(changes: LiveChanges | null | undefined): Set<string> {
   const out = new Set<string>();
   for (const c of changes?.changes ?? []) {
-    if (c.kind === 'sigmet_issued' || c.kind === 'sigmet_cancelled') out.add(c.key);
+    // One phenomenon issued by two FIRs is one change keyed on both
+    // ("sigmet:LECB|3+sigmet:LECM|3"): split it back per SIGMET.
+    if (c.kind === 'sigmet_issued' || c.kind === 'sigmet_cancelled') {
+      for (const k of c.key.split('+')) out.add(k);
+    }
   }
   return out;
 }

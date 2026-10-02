@@ -221,10 +221,16 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// so the existing journeys render exactly as before. `FLYFUN_MOCK_LIVE=1`
     /// serves a populated layer instead, so the "Since this briefing" panel,
     /// the observed-as-of row and the row highlights can be exercised in mock
-    /// mode (#637).
+    /// mode (#637). `FLYFUN_MOCK_LIVE_JSON` serves that exact layer (a `/live`
+    /// response body) — the live-scenario UI tests feed one tick of a real
+    /// flight morning per launch this way.
     func liveLayer(flightId: String) async throws -> LiveLayerResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
-        return ProcessInfo.processInfo.environment["FLYFUN_MOCK_LIVE"] == "1"
+        let env = ProcessInfo.processInfo.environment
+        if let json = env["FLYFUN_MOCK_LIVE_JSON"], !json.isEmpty {
+            return try JSONDecoder.weatherBrief.decode(LiveLayerResponse.self, from: Data(json.utf8))
+        }
+        return env["FLYFUN_MOCK_LIVE"] == "1"
             ? FixtureBriefingData.liveLayer
             : FixtureBriefingData.nullLiveLayer
     }
