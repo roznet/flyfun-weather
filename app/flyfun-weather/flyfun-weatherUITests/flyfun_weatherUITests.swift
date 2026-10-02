@@ -984,14 +984,19 @@ final class flyfun_weatherUITests: XCTestCase {
                 let title = (changes["baseline_source"] as? String) == "live_start"
                     ? "Since live tracking began" : "Since this briefing"
                 XCTAssertTrue(app.staticTexts[title].firstMatch.exists, "\(hhmm): panel title should read \"\(title)\"")
-                // The digest was written with the pack (fixture-1: 06:00Z), even
-                // when the changes run from the live layer's own starting point.
-                // Matched on its text: the caveat's id also lands on its icon.
+                // "Written at" is when the digest was written: the briefing the
+                // changes are measured from, or — when they run from the live
+                // layer's own starting point — the pack (fixture-1: 06:00Z),
+                // never the live start. Matched on its text: the caveat's id
+                // also lands on its icon.
+                let fromLiveStart = (changes["baseline_source"] as? String) == "live_start"
+                let baselineHHMM = (changes["baseline_at"] as? String).map { String($0.dropFirst(11).prefix(5)) + "Z" }
+                let written = fromLiveStart ? "06:00Z" : (baselineHHMM ?? "06:00Z")
                 let caveat = app.staticTexts
                     .matching(NSPredicate(format: "label BEGINSWITH %@", "Written at")).firstMatch
                 if caveat.exists {
-                    XCTAssertTrue(caveat.label.contains("Written at 06:00Z"),
-                                  "\(hhmm): digest caveat should give the pack time, got \(caveat.label)")
+                    XCTAssertTrue(caveat.label.contains("Written at \(written)"),
+                                  "\(hhmm): digest caveat should read \"Written at \(written)\", got \(caveat.label)")
                 }
 
                 for change in (changes["changes"] as? [[String: Any]]) ?? [] {
@@ -1011,7 +1016,13 @@ final class flyfun_weatherUITests: XCTestCase {
                     let button = app.buttons[pill].firstMatch
                     guard button.waitForExistence(timeout: Self.probeTimeout) else { continue }
                     button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                    if app.descendants(matching: .any)[sectionId].waitForExistence(timeout: Self.uiTimeout) {
+                    let target = app.descendants(matching: .any)[sectionId].firstMatch
+                    if target.waitForExistence(timeout: Self.uiTimeout) {
+                        // The pill scrolls with an animation: wait for the
+                        // section to settle on screen before the screenshot.
+                        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                            predicate: NSPredicate(format: "isHittable == true"), object: target)], timeout: 5)
+                        Thread.sleep(forTimeInterval: 0.8)
                         attachScreenshot(app, "Live-\(scenario)-\(hhmm)-\(label)")
                     }
                     if sectionId == "sigmetsSection" {
