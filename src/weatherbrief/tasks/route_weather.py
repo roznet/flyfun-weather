@@ -927,6 +927,7 @@ def run_realtime_refresh(
             latest_observed=new_observed,
             roles=airport_roles([wp.icao for wp in route.waypoints]),
             destination=(route.waypoints[-1].lat, route.waypoints[-1].lon),
+            departure_at=target_dt,
         )
         delta = worsening_delta(changes)
 

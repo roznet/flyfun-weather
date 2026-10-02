@@ -4975,3 +4975,65 @@ choices were not.
 - Whether "every route SIGMET alerts" is too loud on long routes crossing several
   FIRs with routine EMBD TS / MOD TURB.
 
+---
+
+## 36. What counts as a change at an airport: weather, wind and timing, by role
+
+**Date:** 2026-10-02 · **Issue:** #637 follow-up · **Amends:** §34–35
+
+Replaying the 2026-10-02 LELL→LEMI morning (now a regression scenario,
+`tests/fixtures/live_scenarios/2026-10-02_lell_lemi.json`) showed the category
+rule's blind spot: LEVC, under the route, reported TS / VCTS / CB from 05:09 to
+07:30 at VFR/MVFR and the live layer never said so. It also alerted after the
+change stopped mattering (LELL going IFR 1 h 50 after take-off, LELC after
+landing).
+
+### Choices
+
+- **Four airport triggers**, each its own change (`conv:`, `wx:`, `wind:` and
+  `metar:` keys), on the first report newer than the baseline's (§35):
+  - *Flight category* crossing.
+  - *Convective*: ``TS`` or ``VCTS`` in present weather, ``CB`` / ``TCU`` in a cloud
+    group (read off the raw report, so packs from before this compare the same).
+    Ranked TCU < CB < TS; a step up is a change, a step down an improvement.
+    Recent weather (``RE…``) is history and ignored.
+  - *Significant weather*: FZRA, FZDZ, GR, SQ, FC at any intensity, and heavy
+    showers / thunderstorms (``+SH…``, ``+TS…``) appearing; clearing is an
+    improvement.
+  - *Wind*: the airport wind advisory crossing green → amber → red — the
+    advisory's own thresholds (best-runway crosswind 15 / 25 kt, gust 25 / 35 kt,
+    `route_weather._wind_advisory_status`), so the live layer and the briefing's
+    wind advisory never disagree about what "too windy" is.
+- **Tiers by role** (`AIRPORT_POLICY`):
+
+  | | Destination, departure (until take-off) | Alternate | En-route airport (ahead) |
+  |---|---|---|---|
+  | Category | alert (worse) | highlight | highlight, only into/out of IFR/LIFR |
+  | Convective | alert (worse) | highlight | **alert** (worse) |
+  | Significant weather | alert (worse) | highlight | **alert** (worse) |
+  | Wind advisory | alert (worse) | highlight | not reported |
+  | TAF at ETA | alert (worse) | highlight | highlight |
+
+  **Improvements never alert** (they are highlights), and a SIGMET ending is a
+  highlight too. Departure is back in the alert tier — until take-off.
+- **Only while it can still matter.** The departure until scheduled take-off;
+  an en-route airport until the aircraft has passed it (distance flown at
+  planned speed from an on-time departure, as for radar/lightning); the
+  destination and alternates until arrival (the live window ends 1 h after).
+  A change outside that is not reported at all.
+
+### Rejected
+
+- **Personal crosswind / gust limits.** No per-aircraft limit exists yet; the
+  advisory thresholds are the shared definition. Revisit with aircraft profiles.
+- **Wind at en-route airports.** Nobody lands there unless diverting, and the
+  alternates (which is where a diversion goes) are covered.
+
+### Real-world validation needed
+
+- Convective flicker at a station reporting TS → VCTS → CB every SPECI: each
+  step up re-alerts once per value (TS→CB→TS alerts twice). Watch it before push
+  (#638) consumes the alert tier.
+- The "passed" estimate assumes an on-time departure at planned speed; a late
+  departure drops en-route airports early.
+

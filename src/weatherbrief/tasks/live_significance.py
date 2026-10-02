@@ -13,9 +13,17 @@ refresh against the previous one). Three things differ, all deliberately:
   of §34): a pilot would rather see a real deterioration at once than 30 min
   late. A tick without a usable report neither raises nor clears a change.
 
-Two tiers: ``alert`` for the destination's METAR/TAF and for any SIGMET change
-in the route corridor (the tier push delivery, #638, consumes), ``highlight``
-for every other airport and for observed radar/lightning. A last-alerted memory makes an alert fire
+What counts at an airport goes beyond the flight category (§36): thunderstorm
+or CB/TCU appearing, significant weather (FZRA, hail, squall, heavy showers…),
+and the wind advisory (runway crosswind / gust, the airport wind advisory's own
+thresholds). Which of those are reported, and at which tier, depends on the
+airport's role — see :data:`AIRPORT_POLICY` — and a change is only reported
+while it can still matter: the departure until take-off, an en-route airport
+until it is passed, the destination and alternates until arrival.
+
+Two tiers: ``alert`` (the tier push delivery, #638, consumes) and
+``highlight``. Every SIGMET appearing on the route alerts; improvements never
+alert. A last-alerted memory makes an alert fire
 once per value.
 
 Deterministic and language-neutral (ICAO codes, flight categories, FIR/SIGMET
@@ -150,109 +158,276 @@ def airport_roles(
     return roles
 
 
-def _tier(role: ChangeRole) -> str:
-    # Only an impact at the destination alerts for now; departure and
-    # alternates keep their role (shown) but are highlights.
-    return "alert" if role == "destination" else "highlight"
+# --- Airport policy ---------------------------------------------------------
+
+#: What is reported at an airport, by role, kind and direction: the tier, or
+#: None (not reported). "terminal" = the destination, and the departure until
+#: take-off. Improvements never alert.
+#:
+#: - Category: a terminal change either way; at an en-route airport only a
+#:   move into or out of IFR/LIFR (see :func:`_category_matters`).
+#: - Convective (TS/VCTS/CB/TCU) and significant weather: alert at a terminal
+#:   and at an en-route airport still ahead — that is weather the route flies
+#:   through; highlight at an alternate.
+#: - Wind (the airport wind advisory, green/amber/red): terminal alert,
+#:   alternate highlight, not reported en route (nobody lands there).
+AIRPORT_POLICY: dict[str, dict[str, dict[str, str | None]]] = {
+    "terminal": {
+        "metar_category": {"worse": "alert", "better": "highlight"},
+        "taf_category": {"worse": "alert", "better": "highlight"},
+        "metar_convective": {"worse": "alert", "better": "highlight"},
+        "metar_weather": {"worse": "alert", "better": "highlight"},
+        "metar_wind": {"worse": "alert", "better": "highlight"},
+    },
+    "alternate": {
+        "metar_category": {"worse": "highlight", "better": "highlight"},
+        "taf_category": {"worse": "highlight", "better": "highlight"},
+        "metar_convective": {"worse": "highlight", "better": "highlight"},
+        "metar_weather": {"worse": "highlight", "better": "highlight"},
+        "metar_wind": {"worse": "highlight", "better": "highlight"},
+    },
+    "route": {
+        "metar_category": {"worse": "highlight", "better": "highlight"},
+        "taf_category": {"worse": "highlight", "better": "highlight"},
+        "metar_convective": {"worse": "alert", "better": "highlight"},
+        "metar_weather": {"worse": "alert", "better": "highlight"},
+        "metar_wind": {"worse": None, "better": None},
+    },
+}
+
+
+def _policy_role(role: ChangeRole) -> str:
+    return "terminal" if role in ("destination", "departure") else role
+
+
+def airport_tier(role: ChangeRole, kind: str, direction: str) -> str | None:
+    """The tier a change of ``kind`` gets at an airport of ``role``, or None."""
+    return AIRPORT_POLICY[_policy_role(role)].get(kind, {}).get(direction)
+
+
+def airport_relevant(
+    role: ChangeRole,
+    enroute_distance_nm: float | None,
+    *,
+    departed: bool,
+    flown_nm: float | None,
+) -> bool:
+    """Whether a change at this airport can still matter to the flight.
+
+    The departure until take-off; an en-route airport until it is passed (an
+    airport with no along-track position is kept — better a spurious row than
+    a hidden one); the destination and alternates until arrival (the live
+    window itself ends an hour after arrival).
+    """
+    if role == "departure":
+        return not departed
+    if role == "route":
+        return _ahead(enroute_distance_nm, flown_nm)
+    return True
 
 
 # --- METAR ------------------------------------------------------------------
 
+#: Convective evidence, worst last: towering cumulus, cumulonimbus, thunder
+#: (present ``TS`` in any group, or ``VCTS`` in the vicinity).
+_CONVECTIVE_RANK = {"TCU": 1, "CB": 2, "VCTS": 3, "TS": 3}
+_CONVECTIVE_LABEL = {0: "none", 1: "TCU", 2: "CB", 3: "TS"}
+_CLOUD_TYPE_RE = re.compile(r"\b(?:FEW|SCT|BKN|OVC|VV)(?:\d{3}|///)(CB|TCU)\b")
+#: Present-weather phenomena significant on their own, at any intensity.
+_SIGNIFICANT_WX = ("FZRA", "FZDZ", "GR", "SQ", "FC")
+_WIND_RANK = {"green": 0, "amber": 1, "red": 2}
 
-def _metar_side(base: AirportObservation, latest: AirportObservation) -> int | None:
-    """+1 worse / -1 better / 0 same category as the baseline; None when there
-    is nothing to compare (no category on either side, or the newest report
-    is still the one the briefing saw)."""
-    b = category_rank(base.metar_flight_category)
-    l_ = category_rank(latest.metar_flight_category)
+
+def _present_weather(obs: AirportObservation) -> list[str]:
+    """Present-weather groups, upper-cased; recent weather (``RE…``) excluded."""
+    return [c.upper() for c in obs.metar_weather if c and not c.upper().startswith("RE")]
+
+
+def convective_tags(obs: AirportObservation) -> set[str]:
+    """``TS`` / ``VCTS`` from present weather, ``CB`` / ``TCU`` from the cloud
+    groups (read off the raw report, so packs written before the field
+    existed compare the same way)."""
+    tags: set[str] = set()
+    for c in _present_weather(obs):
+        if "TS" in c:
+            tags.add("VCTS" if c.startswith("VC") else "TS")
+    tags.update(_CLOUD_TYPE_RE.findall(obs.metar_raw or ""))
+    return tags
+
+
+def _convective_level(tags: set[str]) -> int:
+    return max((_CONVECTIVE_RANK[t] for t in tags), default=0)
+
+
+def significant_weather(obs: AirportObservation) -> set[str]:
+    """Significant present weather: freezing precipitation, hail, squall,
+    funnel cloud, and heavy showers / thunderstorms (``+SH…``, ``+TS…``)."""
+    out: set[str] = set()
+    for c in _present_weather(obs):
+        for code in _SIGNIFICANT_WX:
+            if code in c:
+                out.add(code)
+        if c.startswith("+") and ("SH" in c or "TS" in c):
+            out.add(c)
+    return out
+
+
+def _has_report(obs: AirportObservation) -> bool:
+    return bool(obs.metar_raw) or obs.metar_flight_category is not None
+
+
+def _newer(base: AirportObservation, latest: AirportObservation) -> bool:
+    """The newest report is not still the one the briefing saw."""
+    return not (
+        base.metar_time is not None
+        and latest.metar_time is not None
+        and latest.metar_time <= base.metar_time
+    )
+
+
+def _category_matters(role: ChangeRole, b: int, l_: int) -> bool:
+    if _policy_role(role) != "route":
+        return True
+    ifr = _CATEGORY_RANK["IFR"]
+    return b >= ifr or l_ >= ifr
+
+
+def _wind_detail(a: AirportObservation) -> str:
+    parts = []
+    if a.metar_crosswind_kt is not None:
+        rwy = f" RWY {a.metar_best_runway_id}" if a.metar_best_runway_id else ""
+        parts.append(f"crosswind {a.metar_crosswind_kt:.0f} kt{rwy}")
+    if a.metar_wind_gust_kt is not None:
+        parts.append(f"gust {a.metar_wind_gust_kt} kt")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def _airport_metar_changes(
+    base: AirportObservation,
+    a: AirportObservation,
+    role: ChangeRole,
+) -> tuple[list[tuple[str, str, str | None, str | None, str]], set[str]]:
+    """(kind, direction, from, to, message) candidates for one airport, plus the
+    change keys whose state is unknown this tick (no usable report)."""
+    icao = a.icao
+    if not _has_report(a):
+        return [], {f"{p}:{icao}" for p in ("metar", "conv", "wx", "wind")}
+    if not _newer(base, a):
+        return [], set()
+    out: list[tuple[str, str, str | None, str | None, str]] = []
+    unknown: set[str] = set()
+    is_speci = (a.metar_report_type or "").upper() == "SPECI"
+    speci = " (SPECI)" if is_speci else ""
+
+    # Flight category
+    b, l_ = category_rank(base.metar_flight_category), category_rank(a.metar_flight_category)
     if b is None or l_ is None:
-        return None
-    if base.metar_time is not None and latest.metar_time is not None and latest.metar_time <= base.metar_time:
-        return 0
-    return _sign(l_ - b)
+        unknown.add(f"metar:{icao}")
+    elif l_ != b and _category_matters(role, b, l_):
+        out.append((
+            "metar_category", "worse" if l_ > b else "better",
+            base.metar_flight_category, a.metar_flight_category,
+            f"{icao} METAR: {base.metar_flight_category} → {a.metar_flight_category}{speci}",
+        ))
+
+    # Convective: TS / VCTS / CB / TCU appearing (or a step up), or clearing
+    bt, lt = convective_tags(base), convective_tags(a)
+    bl, ll = _convective_level(bt), _convective_level(lt)
+    if ll > bl:
+        out.append((
+            "metar_convective", "worse", _CONVECTIVE_LABEL[bl], _CONVECTIVE_LABEL[ll],
+            f"{icao} METAR: {', '.join(sorted(lt))} reported{speci}",
+        ))
+    elif ll < bl:
+        now = f"now {', '.join(sorted(lt))}" if lt else "no longer reported"
+        out.append((
+            "metar_convective", "better", _CONVECTIVE_LABEL[bl], _CONVECTIVE_LABEL[ll],
+            f"{icao} METAR: {', '.join(sorted(bt))} {now}{speci}",
+        ))
+
+    # Significant weather
+    bw, lw = significant_weather(base), significant_weather(a)
+    if lw - bw:
+        new = ", ".join(sorted(lw - bw))
+        out.append(("metar_weather", "worse", ", ".join(sorted(bw)) or None, new,
+                    f"{icao} METAR: {new} reported{speci}"))
+    elif bw and not lw:
+        gone = ", ".join(sorted(bw))
+        out.append(("metar_weather", "better", gone, None,
+                    f"{icao} METAR: {gone} no longer reported{speci}"))
+
+    # Wind: the airport wind advisory (crosswind on the best runway, gust)
+    bwr, lwr = _WIND_RANK.get(base.metar_wind_advisory or ""), _WIND_RANK.get(a.metar_wind_advisory or "")
+    if bwr is None or lwr is None:
+        unknown.add(f"wind:{icao}")
+    elif lwr != bwr:
+        out.append((
+            "metar_wind", "worse" if lwr > bwr else "better",
+            base.metar_wind_advisory, a.metar_wind_advisory,
+            f"{icao} wind: {base.metar_wind_advisory} → {a.metar_wind_advisory}{_wind_detail(a)}",
+        ))
+    return out, unknown
 
 
-def _metar_changes(
+_KEY_PREFIX = {
+    "metar_category": "metar",
+    "metar_convective": "conv",
+    "metar_weather": "wx",
+    "metar_wind": "wind",
+}
+
+
+def _airport_changes(
     baseline: RouteObservations,
     latest: RouteObservations,
     roles: dict[str, ChangeRole],
     unknown: set[str],
+    *,
+    departed: bool,
+    flown_nm: float | None,
 ) -> list[LiveChange]:
-    """A category crossing on the newest report, with no confirmation wait.
-
-    Keys with no usable report this tick go into ``unknown``: not a change,
-    and not a return either (their alert memory is kept).
-    """
+    """METAR and TAF-at-ETA changes at every airport still relevant, filtered
+    and tiered by :data:`AIRPORT_POLICY`. No confirmation wait (§35)."""
     out: list[LiveChange] = []
     base_by_icao = {a.icao: a for a in baseline.airports}
     for a in latest.airports:
         base = base_by_icao.get(a.icao)
         if base is None:
-            continue
-        key = f"metar:{a.icao}"
-        side = _metar_side(base, a)
-        if side is None:
-            unknown.add(key)
-            continue
-        if side == 0:
             continue
         role = roles.get(a.icao.upper(), "route")
-        source = "SPECI" if (a.metar_report_type or "").upper() == "SPECI" else "METAR"
-        suffix = " (SPECI)" if source == "SPECI" else ""
-        out.append(LiveChange(
-            key=key,
-            kind="metar_category",
-            source=source,
-            direction="worse" if side > 0 else "better",
-            tier=_tier(role),
-            role=role,
-            icao=a.icao,
-            from_value=base.metar_flight_category,
-            to_value=a.metar_flight_category,
-            observed_at=a.metar_time,
-            enroute_distance_nm=a.enroute_distance_nm,
-            message=f"{a.icao} METAR: {base.metar_flight_category} → {a.metar_flight_category}{suffix}",
-        ))
-    return out
-
-
-# --- TAF --------------------------------------------------------------------
-
-
-def _taf_changes(
-    baseline: RouteObservations,
-    latest: RouteObservations,
-    roles: dict[str, ChangeRole],
-) -> list[LiveChange]:
-    """TAF-at-ETA category moved (an amendment or a new TAF).
-
-    No hysteresis: a TAF is a deliberate issuance, not a noisy sample. Both
-    sides must have a reading valid at ETA — "no TAF covers ETA" is not a
-    category, so a TAF appearing or lapsing is not reported as a crossing.
-    """
-    out: list[LiveChange] = []
-    base_by_icao = {a.icao: a for a in baseline.airports}
-    for a in latest.airports:
-        base = base_by_icao.get(a.icao)
-        if base is None:
+        if not airport_relevant(role, a.enroute_distance_nm, departed=departed, flown_nm=flown_nm):
             continue
-        b = category_rank(base.taf_flight_category_at_eta)
-        l_ = category_rank(a.taf_flight_category_at_eta)
+        candidates, unk = _airport_metar_changes(base, a, role)
+        unknown |= unk
+        source = "SPECI" if (a.metar_report_type or "").upper() == "SPECI" else "METAR"
+        for kind, direction, from_v, to_v, message in candidates:
+            tier = airport_tier(role, kind, direction)
+            if tier is None:
+                continue
+            out.append(LiveChange(
+                key=f"{_KEY_PREFIX[kind]}:{a.icao}",
+                kind=kind, source=source, direction=direction, tier=tier, role=role,
+                icao=a.icao, from_value=from_v, to_value=to_v,
+                observed_at=a.metar_time, enroute_distance_nm=a.enroute_distance_nm,
+                message=message,
+            ))
+
+        # TAF at ETA: a deliberate issuance, not a noisy sample. Both sides
+        # must have a reading valid at ETA — a TAF appearing or lapsing is not
+        # a crossing.
+        b, l_ = category_rank(base.taf_flight_category_at_eta), category_rank(a.taf_flight_category_at_eta)
         if b is None or l_ is None or b == l_:
             continue
-        role = roles.get(a.icao.upper(), "route")
+        direction = "worse" if l_ > b else "better"
+        tier = airport_tier(role, "taf_category", direction)
+        if tier is None:
+            continue
         out.append(LiveChange(
             key=f"taf:{a.icao}",
-            kind="taf_category",
-            source="TAF",
-            direction="worse" if l_ > b else "better",
-            tier=_tier(role),
-            role=role,
+            kind="taf_category", source="TAF", direction=direction, tier=tier, role=role,
             icao=a.icao,
-            from_value=base.taf_flight_category_at_eta,
-            to_value=a.taf_flight_category_at_eta,
-            observed_at=a.taf_issue_time,
-            enroute_distance_nm=a.enroute_distance_nm,
+            from_value=base.taf_flight_category_at_eta, to_value=a.taf_flight_category_at_eta,
+            observed_at=a.taf_issue_time, enroute_distance_nm=a.enroute_distance_nm,
             message=(
                 f"{a.icao} TAF at ETA: {base.taf_flight_category_at_eta}"
                 f" → {a.taf_flight_category_at_eta}"
@@ -339,8 +514,9 @@ def _sigmet_change(
         kind=kind,
         source="SIGMET",
         direction=direction,
-        # Every SIGMET change on the route alerts; the role says where.
-        tier="alert",
+        # A SIGMET appearing or escalating on the route alerts; one ending is
+        # good news (highlight). The role says where.
+        tier="alert" if direction == "worse" else "highlight",
         role="destination" if at_dest else "route",
         from_value=from_value,
         to_value=to_value,
@@ -535,6 +711,7 @@ def classify_changes(
     latest_observed: ObservedConditions | None = None,
     roles: dict[str, ChangeRole] | None = None,
     destination: tuple[float, float] | None = None,
+    departure_at: datetime | None = None,
     baseline_at: datetime | None = None,
     flown_nm: float | None = None,
     memory: ClassifierMemory | None = None,
@@ -546,10 +723,13 @@ def classify_changes(
     nothing to compare against (a pre-SIGMET pack), no latest means the fetch
     failed — neither is a change. ``flown_nm`` (distance already flown at
     ``now``) limits radar/lightning to the route still ahead. ``destination``
-    (lat, lon) marks SIGMETs over or near it.
+    (lat, lon) marks SIGMETs over or near it. ``departure_at`` ends the
+    departure airport's relevance at take-off.
     """
     roles = roles or {}
     memory = memory or ClassifierMemory()
+    now = now or datetime.now(timezone.utc)
+    departed = departure_at is not None and now >= departure_at
     unknown: set[str] = set()
     changes: list[LiveChange] = []
 
@@ -558,9 +738,10 @@ def classify_changes(
     # neither clears an alert nor lets it fire twice.
     evaluated: set[str] = set()
     if baseline_obs is not None and latest_obs is not None:
-        changes += _metar_changes(baseline_obs, latest_obs, roles, unknown)
-        changes += _taf_changes(baseline_obs, latest_obs, roles)
-        evaluated |= {"metar:", "taf:"}
+        changes += _airport_changes(
+            baseline_obs, latest_obs, roles, unknown, departed=departed, flown_nm=flown_nm,
+        )
+        evaluated |= {"metar:", "taf:", "conv:", "wx:", "wind:"}
     if baseline_sigmets is not None and latest_sigmets is not None:
         changes += _sigmet_changes(baseline_sigmets, latest_sigmets, destination)
         evaluated.add("sigmet:")
