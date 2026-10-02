@@ -6,8 +6,9 @@ import SwiftUI
 /// One row per `LiveChange`, in the server's order (alert tier first, then
 /// departure/destination/alternate/route, worse before better): direction arrow,
 /// source badge, the server's language-neutral `message`, and the age of the
-/// evidence. Alert-tier rows (departure / destination / alternate) are
-/// emphasised. The layer annotates — it never re-grades the briefing, so the
+/// evidence. Alert-tier rows (what the pilot must not miss — destination and
+/// pre-departure weather, convective weather ahead, a new SIGMET on the route;
+/// meteorology-decisions §36) are emphasised. The layer annotates — it never re-grades the briefing, so the
 /// hero's traffic light above is untouched.
 ///
 /// Rendered only when the snapshot carries a live layer (`liveChanges != nil`);
@@ -41,12 +42,19 @@ struct LiveChangesView: View {
             .overlay(RoundedRectangle(cornerRadius: Theme.cornerRadius).stroke(Theme.border, lineWidth: 0.5))
         }
         .padding(.horizontal, Theme.cardPadding)
+        // A containing element, so the section id stays on the section: set on
+        // a plain container, SwiftUI copies it onto every child and each row's
+        // own `liveChangeRow-<key>` id is lost.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("liveChangesSection")
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.spacingS) {
-            Label("Since this briefing", systemImage: "dot.radiowaves.left.and.right")
+            Label(
+                changes.isFromLiveStart ? "Since live tracking began" : "Since this briefing",
+                systemImage: "dot.radiowaves.left.and.right"
+            )
                 .font(.headline)
                 .foregroundStyle(Theme.text)
             Spacer(minLength: 0)
@@ -70,6 +78,10 @@ struct LiveChangesView: View {
     }
 
     private var emptyText: String {
+        if changes.isFromLiveStart {
+            guard let baseline else { return String(localized: "No significant change since live tracking began") }
+            return String(localized: "No significant change since live tracking began (\(LiveTime.zulu(baseline)))")
+        }
         guard let baseline else { return String(localized: "No significant change since the briefing") }
         return String(localized: "No significant change since the briefing (\(LiveTime.zulu(baseline)))")
     }
@@ -112,6 +124,9 @@ private struct LiveChangeRow: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("liveChangeRow-\(change.key)")
+        // Tier + direction, so a UI test can assert how a change is rendered
+        // (an alert must look like one) and VoiceOver says which it is.
+        .accessibilityValue("\(change.isAlert ? "alert" : "highlight"), \(change.direction ?? "")")
     }
 
     private var arrowName: String {

@@ -26,7 +26,7 @@ struct AdvisoryTabView: View {
                 // under the hero.
                 if let liveChanges = viewModel.liveChanges {
                     DigestLiveCaveat(changeCount: liveChanges.items.count,
-                                     writtenAt: viewModel.liveBaselineDate)
+                                     writtenAt: viewModel.digestWrittenAtDate)
                     LiveChangesView(changes: liveChanges, baseline: viewModel.liveBaselineDate)
                         .spyAnchor("live")
                 }

@@ -987,6 +987,9 @@ export interface RealtimeRefreshResult {
 
 export type LiveChangeKind =
   | 'metar_category'
+  | 'metar_convective'
+  | 'metar_weather'
+  | 'metar_wind'
   | 'taf_category'
   | 'sigmet_issued'
   | 'sigmet_cancelled'
@@ -997,12 +1000,14 @@ export type LiveChangeSource = 'METAR' | 'SPECI' | 'TAF' | 'SIGMET' | 'LIGHTNING
 
 /** One significant change since the briefing (server-side hysteresis applied). */
 export interface LiveChange {
-  /** "metar:EGLL" | "taf:EGLL" | "sigmet:LFFF|3" | "lightning:route" | "radar:route" */
+  /** "metar:EGLL" (category) | "conv:EGLL" | "wx:EGLL" | "wind:EGLL" | "taf:EGLL"
+   *  | "sigmet:LFFF|3" | "lightning:route" | "radar:route" */
   key: string;
   kind: LiveChangeKind;
   source: LiveChangeSource;
   direction: 'worse' | 'better';
-  /** alert = departure/destination/alternate airport. */
+  /** alert = what the pilot must not miss (destination/departure weather,
+   *  convective weather ahead, a SIGMET on the route); see §36. */
   tier: 'highlight' | 'alert';
   role: 'departure' | 'destination' | 'alternate' | 'route';
   icao: string | null;

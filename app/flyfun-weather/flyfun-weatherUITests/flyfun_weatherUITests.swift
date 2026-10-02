@@ -62,12 +62,14 @@ final class flyfun_weatherUITests: XCTestCase {
     /// Launch the app as a UI test would: fake-authenticated + fixture-backed.
     /// `offline: true` also sets `FLYFUN_MOCK_OFFLINE` so the fixtures present as
     /// a cached list (offline banner + read-only rows) for the offline journey.
+    /// `environment` adds launch variables (e.g. `FLYFUN_MOCK_LIVE_JSON`).
     @MainActor
-    private func launchMockApp(offline: Bool = false) -> XCUIApplication {
+    private func launchMockApp(offline: Bool = false, environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["FLYFUN_UITEST"] = "1"
         app.launchEnvironment["FLYFUN_MOCK"] = "1"
         if offline { app.launchEnvironment["FLYFUN_MOCK_OFFLINE"] = "1" }
+        for (key, value) in environment { app.launchEnvironment[key] = value }
         app.launch()
         return app
     }
@@ -938,6 +940,103 @@ final class flyfun_weatherUITests: XCTestCase {
     /// airports-DB download among them), so what it measures is the runner's
     /// link to weather.flyfun.aero, not the app. It was also unbounded — see
     /// `launchMockApp` and the nightly note on `testLaunch`.
+    // MARK: - Live layer: a real flight morning, tick by tick (#637, §36)
+
+    /// One tick of a frozen flight morning, as the `/live` body the server
+    /// produced for it (tests/fixtures/live_scenarios, exported by
+    /// scripts/export_live_scenario_ios.py; the Python suite fails if these
+    /// drift from the server's rules).
+    private func liveScenarioTick(_ scenario: String, _ hhmm: String) throws -> (json: String, body: [String: Any]) {
+        let bundle = Bundle(for: flyfun_weatherUITests.self)
+        let name = "\(scenario)_\(hhmm)"
+        let url = try XCTUnwrap(
+            bundle.url(forResource: name, withExtension: "json")
+                ?? bundle.url(forResource: name, withExtension: "json", subdirectory: "LiveScenarios"),
+            "missing UI-test fixture \(name).json — run scripts/export_live_scenario_ios.py"
+        )
+        let data = try Data(contentsOf: url)
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return (String(decoding: data, as: UTF8.self), body)
+    }
+
+    /// Every change the server reported renders as a row, at its tier: an alert
+    /// must look like one, a highlight must not. Screenshots the panel and the
+    /// Observations / Hazards tables at each tick, so the morning can be read
+    /// as the pilot would have seen it.
+    ///
+    /// The mock flight is fixture-1 (LFMD→LFML) — its header says so — but the
+    /// live layer replaces the observation and SIGMET tables wholesale, so those
+    /// show the scenario's real corridor airports and SIGMETs.
+    @MainActor
+    private func runLiveScenario(_ scenario: String, ticks: [String]) throws {
+        for hhmm in ticks {
+            try XCTContext.runActivity(named: "\(scenario) \(hhmm)Z") { _ in
+                let tick = try liveScenarioTick(scenario, hhmm)
+                let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": tick.json])
+                defer { app.terminate() }
+                openFixture1Briefing(app)
+
+                let section = app.descendants(matching: .any)["liveChangesSection"]
+                XCTAssertTrue(section.waitForExistence(timeout: Self.uiTimeout),
+                              "\(hhmm): the live changes panel should render")
+
+                let changes = (tick.body["changes"] as? [String: Any]) ?? [:]
+                let title = (changes["baseline_source"] as? String) == "live_start"
+                    ? "Since live tracking began" : "Since this briefing"
+                XCTAssertTrue(app.staticTexts[title].firstMatch.exists, "\(hhmm): panel title should read \"\(title)\"")
+                // The digest was written with the pack (fixture-1: 06:00Z), even
+                // when the changes run from the live layer's own starting point.
+                // Matched on its text: the caveat's id also lands on its icon.
+                let caveat = app.staticTexts
+                    .matching(NSPredicate(format: "label BEGINSWITH %@", "Written at")).firstMatch
+                if caveat.exists {
+                    XCTAssertTrue(caveat.label.contains("Written at 06:00Z"),
+                                  "\(hhmm): digest caveat should give the pack time, got \(caveat.label)")
+                }
+
+                for change in (changes["changes"] as? [[String: Any]]) ?? [] {
+                    let key = change["key"] as? String ?? ""
+                    let expected = "\(change["tier"] as? String ?? ""), \(change["direction"] as? String ?? "")"
+                    let rows = app.descendants(matching: .any).matching(identifier: "liveChangeRow-\(key)")
+                    XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                                  "\(hhmm): \(change["message"] ?? key) should be listed")
+                    let values = rows.allElementsBoundByIndex.compactMap { $0.value as? String }
+                    XCTAssertTrue(values.contains(expected),
+                                  "\(hhmm): \(change["message"] ?? key) should render as \(expected), got \(values)")
+                }
+                attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes")
+
+                for (pill, sectionId, label) in [("Observations", "observationsSection", "2-observations"),
+                                                 ("Hazards", "sigmetsSection", "3-hazards")] {
+                    let button = app.buttons[pill].firstMatch
+                    guard button.waitForExistence(timeout: Self.probeTimeout) else { continue }
+                    button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    if app.descendants(matching: .any)[sectionId].waitForExistence(timeout: Self.uiTimeout) {
+                        attachScreenshot(app, "Live-\(scenario)-\(hhmm)-\(label)")
+                    }
+                    if sectionId == "sigmetsSection" {
+                        // Every SIGMET a "new SIGMET" change names (a merged
+                        // change names each FIR's) carries the NEW badge.
+                        let issued = ((changes["changes"] as? [[String: Any]]) ?? [])
+                            .filter { $0["kind"] as? String == "sigmet_issued" }
+                            .flatMap { ($0["key"] as? String ?? "").split(separator: "+") }
+                        let badges = app.descendants(matching: .any)
+                            .matching(NSPredicate(format: "label CONTAINS[c] %@", "Issued since the briefing"))
+                        XCTAssertEqual(badges.count, issued.count,
+                                       "\(hhmm): each newly issued SIGMET should be badged NEW in the hazards table")
+                    }
+                }
+            }
+        }
+    }
+
+    /// 2026-10-02 LELL→LEMI (dep 08:00Z): LEVC thunderstorms under the route,
+    /// a one-report MVFR at the destination, LECB 3 / LECM 3 EMBD TS at LEMI.
+    @MainActor
+    func testLiveScenarioLellLemi() throws {
+        try runLiveScenario("2026-10-02_lell_lemi", ticks: ["0510", "0600", "0710", "0830", "0900", "1020"])
+    }
+
     @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {

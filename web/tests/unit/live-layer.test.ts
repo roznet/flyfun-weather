@@ -175,14 +175,17 @@ describe('observedAsOf', () => {
 });
 
 describe('change matching', () => {
-  it('changedIcaos collects METAR/TAF changes only', () => {
+  it('changedIcaos collects every airport change, not area changes', () => {
     const set = changedIcaos(changes([
       change({}),
       change({ key: 'taf:ZZBB', kind: 'taf_category', source: 'TAF', icao: 'zzbb' }),
+      change({ key: 'conv:ZZCC', kind: 'metar_convective', icao: 'ZZCC', message: 'ZZCC METAR: CB, TS reported' }),
+      change({ key: 'wind:ZZEE', kind: 'metar_wind', icao: 'ZZEE' }),
+      change({ key: 'wx:ZZFF', kind: 'some_future_kind' as LiveChange['kind'], icao: 'ZZFF' }),
       change({ key: 'sigmet:ZZZZ|3', kind: 'sigmet_issued', source: 'SIGMET', icao: null }),
       change({ key: 'lightning:route', kind: 'lightning', source: 'LIGHTNING', icao: 'ZZDD' }),
     ]));
-    expect([...set].sort()).toEqual(['ZZAA', 'ZZBB']);
+    expect([...set].sort()).toEqual(['ZZAA', 'ZZBB', 'ZZCC', 'ZZEE', 'ZZFF']);
     expect(changedIcaos(null).size).toBe(0);
   });
 
@@ -191,8 +194,9 @@ describe('change matching', () => {
       change({}),
       change({ key: 'sigmet:ZZZZ|3', kind: 'sigmet_issued', source: 'SIGMET', icao: null }),
       change({ key: 'sigmet:ZZYY|TS|', kind: 'sigmet_cancelled', source: 'SIGMET', icao: null, direction: 'better' }),
+      change({ key: 'sigmet:ZZXA|3+sigmet:ZZXB|3', kind: 'sigmet_issued', source: 'SIGMET', icao: null }),
     ]));
-    expect([...set].sort()).toEqual(['sigmet:ZZYY|TS|', 'sigmet:ZZZZ|3']);
+    expect([...set].sort()).toEqual(['sigmet:ZZXA|3', 'sigmet:ZZXB|3', 'sigmet:ZZYY|TS|', 'sigmet:ZZZZ|3']);
   });
 });
 

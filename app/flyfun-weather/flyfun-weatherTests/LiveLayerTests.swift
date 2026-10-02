@@ -190,6 +190,65 @@ private func makeSnapshot(liveUpdatedAt: String? = nil, daysOut: Int = 0) throws
 
 @Suite struct LiveLayerHelperTests {
 
+    private func change(_ kind: String, icao: String?) throws -> LiveChange {
+        let icaoJSON = icao.map { "\"\($0)\"" } ?? "null"
+        let json = """
+        { "key": "k:\(icao ?? "-")", "kind": "\(kind)", "direction": "worse", "tier": "alert",
+          "role": "route", "icao": \(icaoJSON), "message": "m" }
+        """
+        return try JSONDecoder.weatherBrief.decode(LiveChange.self, from: Data(json.utf8))
+    }
+
+    /// §36: convective / significant-weather / wind changes mark the airport's
+    /// row like a category change; area changes never do; an airport kind the
+    /// server adds later still does.
+    @Test func everyAirportKindMarksItsRow() throws {
+        for kind in ["metar_category", "metar_convective", "metar_weather", "metar_wind", "taf_category",
+                     "some_future_airport_kind"] {
+            #expect(try change(kind, icao: "ZZAA").isAirportChange, "\(kind)")
+        }
+        for kind in ["sigmet_issued", "sigmet_cancelled", "lightning", "radar"] {
+            #expect(try !change(kind, icao: "ZZAA").isAirportChange, "\(kind)")
+        }
+        #expect(try !change("metar_convective", icao: nil).isAirportChange)
+    }
+
+    /// LECB 3 + LECM 3 (one TS cell, two FIRs) arrive as one change keyed on
+    /// both: each hazards row still matches its own key.
+    @Test func mergedSigmetChangeMarksEachFir() throws {
+        let changes = try JSONDecoder.weatherBrief.decode(LiveChanges.self, from: Data("""
+        { "computed_at": "2026-10-02T08:30:00Z", "changes": [
+          { "key": "sigmet:LECB|3+sigmet:LECM|3", "kind": "sigmet_issued", "direction": "worse",
+            "tier": "alert", "role": "destination", "message": "m" } ] }
+        """.utf8))
+        #expect(changes.issuedSigmetKeys == ["sigmet:LECB|3", "sigmet:LECM|3"])
+    }
+
+    @Test func newKindsDecodeAndBadgeAsMetar() throws {
+        let json = """
+        { "key": "conv:ZZAA", "kind": "metar_convective", "direction": "worse", "tier": "alert",
+          "role": "route", "icao": "ZZAA", "message": "ZZAA METAR: CB, TS reported" }
+        """
+        let c = try JSONDecoder.weatherBrief.decode(LiveChange.self, from: Data(json.utf8))
+        #expect(c.kindValue == .metarConvective)
+        #expect(c.sourceLabel == "METAR")
+        #expect(c.isAlert)
+    }
+
+    /// A pack built before flight day has no observations: the server measures
+    /// from the live layer's own starting point and says so.
+    @Test func baselineSourceLiveStart() throws {
+        let decode = { (src: String) in
+            try JSONDecoder.weatherBrief.decode(LiveChanges.self, from: Data("""
+            { "baseline_at": "2026-10-02T05:00:00Z", "baseline_source": \(src),
+              "computed_at": "2026-10-02T05:10:00Z", "changes": [] }
+            """.utf8))
+        }
+        #expect(try decode("\"live_start\"").isFromLiveStart)
+        #expect(try !decode("\"briefing\"").isFromLiveStart)
+        #expect(try !decode("null").isFromLiveStart)
+    }
+
     @Test func sigmetKeyMatchesServerFormat() throws {
         let snapshot = try makeSnapshot()
         let sigmet = try #require(snapshot.routeSigmets?.matched.first)
