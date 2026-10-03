@@ -4,6 +4,7 @@
     python -m weatherbrief.observed.cells replay --from 2026-10-03T06:00 --to 2026-10-03T12:00 --out /tmp/replay [--force]
     python -m weatherbrief.observed.cells render --time 2026-10-03T14:05 --out cells.png [--bbox S,W,N,E] [--scale 2]
     python -m weatherbrief.observed.cells status [--hours 24]
+    python -m weatherbrief.observed.cells retry-failed
 
 Needs ``WB_CELLS_ROOT``.  ``WB_CELLS_SOURCES`` narrows the sources
 (default ``opera_dbzh,opera_rate,eumetsat_li``; add ``eumetsat_ctth`` to opt
@@ -27,6 +28,7 @@ from .runner import (
     cells_sources,
     coverage_report,
     replay,
+    retry_failed,
     run_forever,
     run_tick,
 )
@@ -55,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     ren.add_argument("--root", type=Path, help="read catalogues from here (e.g. a replay)")
     st = sub.add_parser("status", help="frame coverage and catalogue count")
     st.add_argument("--hours", type=float, default=24.0)
+    sub.add_parser("retry-failed", help="clear failure markers so the loop retries those frames")
     args = parser.parse_args(argv)
 
     try:
@@ -85,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         ws = Workspace(args.root or root, frames_root=root / "frames")
         bbox = tuple(float(v) for v in args.bbox.split(",")) if args.bbox else None
         print(render_frame(ws, args.time, args.out, bbox=bbox, scale=args.scale))
+    elif args.command == "retry-failed":
+        print(f"cleared {retry_failed(Workspace(root))} failure marker(s)")
     elif args.command == "status":
         end = datetime.now(timezone.utc)
         report = coverage_report(Workspace(root), end - timedelta(hours=args.hours), end, sources)

@@ -130,14 +130,17 @@ restart every storm's history.
 **A failed frame is given up on, once.**  An exception or an unreadable DBZH
 file writes `catalogues/<day>/<stamp>.failed.json` (with the error) and one
 `error` row; the loop never retries it, `status` lists it under `failed`, and
-`replay` (which ignores markers) is how to re-try after a fix.  The next frame
+`retry-failed` clears the markers (or `replay`, which ignores them).  A
+scoring error after the catalogue is written is *not* a failed frame — it is
+recorded as `scoring_error` on the run row.  The next frame
 then has no predecessor, and its catalogue says so: `unavailable` carries a
 `lineage` entry whenever cells are "born" for lack of a predecessor rather
 than because the weather started.
 
 **Sweep state.**  `last_tick` means "the loop was alive" (the downtime gap);
-`last_sweep` only advances when the catch-up collected without failures, so
-a failed sweep is retried on the next tick.
+`last_sweep` only advances when the catch-up collected without failures; a
+failed sweep is retried after 5 minutes (`SWEEP_RETRY`), never on every tick,
+so one permanently broken file cannot hammer the providers.
 
 **Self-scoring.**  For each tier and lead (30, 60 min): cells issued at T−L
 with an available velocity, advected by v·L, against the tier's cells at T, on
