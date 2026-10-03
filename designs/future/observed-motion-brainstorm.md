@@ -10,7 +10,10 @@
 >
 > **2026-10-03: §10 supersedes the ordering in §8 and the compute placement in
 > §1/§9.** Cell analysis moves to an always-on loop on the Mac mini; the droplet
-> only relates the pushed cell catalogue to each flight.
+> only relates the pushed cell catalogue to each flight.  **Slice 1 (#650) is
+> built** — the loop, the analysis and self-scoring, as-built in
+> `designs/observed-cells.md`.  Correction to §3/§9: the OPERA DBZH composite is
+> a **1 km** grid (3800 × 4400), not 2 km; RATE is 2 km.
 
 Companion docs: `current-conditions.md` (phase 1 as built),
 `current-conditions-review.md` (decisions D1–D12, especially D2 and the

@@ -251,8 +251,12 @@ class FrameStore:
     linger in it.
     """
 
-    def __init__(self, root: Path | str | None = None) -> None:
+    def __init__(self, root: Path | str | None = None, *, retain_all: bool = False) -> None:
         self.root = Path(root) if root is not None else observed_root()
+        # An archive store (the observed-cells loop, #650) keeps every frame:
+        # the history is what the analysis is refined against.  ``purge``
+        # becomes a no-op so the shared collector can write into it unchanged.
+        self.retain_all = retain_all
 
     def source_dir(self, source: str) -> Path:
         return self.root / source
@@ -378,7 +382,14 @@ class FrameStore:
         retention: timedelta | None = None,
         now: datetime | None = None,
     ) -> int:
-        """Delete frames older than the source's retention.  Returns the count."""
+        """Delete frames older than the source's retention.  Returns the count.
+
+        Never deletes anything in a ``retain_all`` store — and never lists it,
+        which matters because an archive directory grows to tens of thousands
+        of sidecars that :meth:`list_frames` would parse one by one.
+        """
+        if self.retain_all:
+            return 0
         spec = SOURCE_SPECS[source]
         retention = retention if retention is not None else spec.retention
         now = now or datetime.now(timezone.utc)

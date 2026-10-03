@@ -408,21 +408,32 @@ def collect_once(
     *,
     now: datetime | None = None,
     sources: tuple[str, ...] | None = None,
+    lookback: timedelta = DEFAULT_LOOKBACK,
+    max_fetch: int | None = None,
 ) -> list[CollectResult]:
     """One collection tick across every enabled source.
 
     A source that fails does not stop the others: half the observed picture is
     worth more than none of it, and the payload says which half is missing.
+
+    ``lookback`` and ``max_fetch`` default to the briefing collector's short
+    backfill; the observed-cells archive loop (#650) widens both to catch up
+    after the machine slept.  ``max_fetch=None`` keeps each source's default.
     """
     store = store or FrameStore()
     now = now or datetime.now(timezone.utc)
+    budget = {} if max_fetch is None else {"max_fetch": max_fetch}
     results: list[CollectResult] = []
     for source in sources if sources is not None else enabled_sources():
         try:
             if source in (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE):
-                results.append(collect_opera(source, store, now=now))
+                results.append(
+                    collect_opera(source, store, now=now, lookback=lookback, **budget)
+                )
             else:
-                results.append(collect_eumetsat(source, store, now=now))
+                results.append(
+                    collect_eumetsat(source, store, now=now, lookback=lookback, **budget)
+                )
         except Exception as exc:
             logger.warning("Observed collection failed for %s", source, exc_info=True)
             results.append(CollectResult(source=source, failed=1, errors=[str(exc)]))
