@@ -273,3 +273,73 @@ def test_sweep_budget_is_per_family(monkeypatch, tmp_path):
     runner.collect_tick(ws, sources, T0, sweep=True, lookback=timedelta(hours=6), family=runner._EUMETSAT)
     assert seen == [(("opera_dbzh", "opera_rate"), runner.SWEEP_MAX_FETCH_OPERA),
                     (("eumetsat_li",), runner.SWEEP_MAX_FETCH_EUMETSAT)]
+
+
+# --- Review round 1 (#651): failures, lineage breaks, sweep state ------------
+
+
+def test_a_failing_frame_is_marked_once_and_not_retried(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.cells.catalogue import failure_path
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    calls = []
+
+    def boom(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(runner, "process_frame", boom)
+    later = T0 + timedelta(minutes=40)
+    for _ in range(3):
+        analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES)
+    assert len(calls) == 1
+    assert failure_path(tmp_path, T0).exists()
+    rows = [json.loads(x) for x in (tmp_path / "runs" / "20261003.jsonl").read_text().splitlines()]
+    assert [r["type"] for r in rows] == ["error"]
+    assert "synthetic failure" in rows[0]["error"]
+    report = coverage_report(ws, T0, T0, SOURCES)
+    assert report["failed"] == [T0.isoformat()]
+
+
+def test_an_unreadable_dbzh_frame_is_marked_once(tmp_path):
+    from weatherbrief.observed.cells.catalogue import failure_path
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    ws.frames.payload_path(SOURCE_OPERA_DBZH, T0).write_bytes(b"not an hdf5 file")
+    later = T0 + timedelta(minutes=40)
+    assert analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES) == 0
+    assert "unreadable" in json.loads(failure_path(tmp_path, T0).read_text())["error"]
+    analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES)
+    assert len((tmp_path / "runs" / "20261003.jsonl").read_text().splitlines()) == 1
+
+
+def test_a_lineage_break_is_stated_not_silent(processed):
+    first = _cat(processed, _times()[0])
+    reasons = {u["what"] for u in first["unavailable"]}
+    assert "lineage" in reasons
+    later = _cat(processed, _times()[3])
+    assert "lineage" not in {u["what"] for u in later["unavailable"]}
+
+
+def test_catalogue_carries_the_code_revision(processed):
+    from weatherbrief.observed.cells.runner import code_revision
+
+    assert _cat(processed, _times()[2])["code_revision"] == code_revision()
+
+
+def test_failed_sweep_is_retried_next_tick(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    ws = Workspace(tmp_path)
+    monkeypatch.setattr(runner, "collect_tick",
+                        lambda *a, **k: [collect.CollectResult(source="opera_dbzh", failed=1)])
+    runner.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=6), now=T0)
+    state = ws.load_state()
+    assert state["last_tick"] == T0.isoformat() and "last_sweep" not in state
+    monkeypatch.setattr(runner, "collect_tick", lambda *a, **k: [collect.CollectResult(source="opera_dbzh")])
+    runner.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=6),
+                    now=T0 + timedelta(minutes=1))
+    assert ws.load_state()["last_sweep"] == (T0 + timedelta(minutes=1)).isoformat()
