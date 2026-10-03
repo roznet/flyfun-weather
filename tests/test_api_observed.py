@@ -256,3 +256,112 @@ def test_flashes_outside_the_box_are_excluded(client, stocked):
     assert payload["count"] == 0
     # Absence of flashes is an observation, so the request still succeeds.
     assert payload["attribution"] or payload["newest_valid_time"]
+
+
+# --- Tiled layers (#652) -----------------------------------------------------------
+
+
+def _stamp(store, source):
+    from weatherbrief.observed.frames import frame_stamp
+
+    return frame_stamp(store.list_frames(source)[0].valid_time)
+
+
+def test_frames_lists_radar_frames_with_a_tile_template(client, stocked):
+    response = client.get(f"/api/observed/frames/{SOURCE_OPERA_DBZH}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["frames"] and body["frames"][0]["stamp"] == _stamp(stocked, SOURCE_OPERA_DBZH)
+    assert body["tile_url_template"].endswith("/{stamp}/{z}/{x}/{y}.png")
+    assert body["min_zoom"] < body["max_zoom"]
+    assert body["stale"] is False
+    assert body["attribution"]
+
+
+def test_frames_rejects_a_source_that_is_not_tiled(client, stocked):
+    assert client.get(f"/api/observed/frames/{SOURCE_EUMETSAT_CTTH}").status_code == 404
+
+
+def test_tile_is_an_immutable_png(client, stocked):
+    from weatherbrief.observed import tiles
+
+    stamp = _stamp(stocked, SOURCE_OPERA_DBZH)
+    x, y = tiles.lonlat_to_world_px(1.621, 50.517, 7)
+    response = client.get(
+        f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/{stamp}/7/{int(x // 256)}/{int(y // 256)}.png"
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert "immutable" in response.headers["cache-control"]
+    assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_tile_for_a_purged_frame_is_gone(client, stocked):
+    response = client.get(f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/20200101T0000/6/32/21.png")
+    assert response.status_code == 410
+
+
+def test_tile_rejects_bad_stamps_and_zooms(client, stocked):
+    stamp = _stamp(stocked, SOURCE_OPERA_DBZH)
+    assert client.get(f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/nope/6/32/21.png").status_code == 400
+    assert client.get(f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/{stamp}/14/0/0.png").status_code == 404
+    assert client.get(f"/api/observed/tiles/{SOURCE_EUMETSAT_CTTH}/{stamp}/6/32/21.png").status_code == 404
+
+
+def test_tiles_require_authentication(client_anon, stocked):
+    stamp = _stamp(stocked, SOURCE_OPERA_DBZH)
+    response = client_anon.get(f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/{stamp}/6/32/21.png")
+    assert response.status_code in (401, 403)
+
+
+@pytest.fixture
+def satellite_times(monkeypatch):
+    from weatherbrief.observed import satellite_ir
+
+    times = [
+        datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc),
+        datetime(2026, 10, 3, 15, 50, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(satellite_ir, "available_times", lambda: list(times))
+    fetched = []
+
+    def fake_fetch(cycle, z, x, y):
+        fetched.append((cycle, z, x, y))
+        return b"\x89PNG\r\n\x1a\nfake"
+
+    monkeypatch.setattr(satellite_ir, "fetch_tile", fake_fetch)
+    return fetched
+
+
+def test_satellite_frames_come_from_the_advertised_cycles(client, satellite_times):
+    body = client.get("/api/observed/frames/satellite_ir").json()
+    assert [f["stamp"] for f in body["frames"]] == ["20261003T1600", "20261003T1550"]
+    assert "EUMETSAT" in body["attribution"]["text"]
+
+
+def test_satellite_tile_is_proxied_for_an_advertised_cycle(client, satellite_times):
+    response = client.get("/api/observed/tiles/satellite_ir/20261003T1550/6/32/21.png")
+    assert response.status_code == 200
+    assert satellite_times == [(datetime(2026, 10, 3, 15, 50, tzinfo=timezone.utc), 6, 32, 21)]
+
+
+def test_satellite_proxy_refuses_unadvertised_cycles(client, satellite_times):
+    """Not a window onto EUMETView's whole archive."""
+    response = client.get("/api/observed/tiles/satellite_ir/20250101T0000/6/32/21.png")
+    assert response.status_code == 404
+    assert satellite_times == []
+
+
+def test_satellite_outage_is_503_not_500(client, monkeypatch):
+    from weatherbrief.observed import satellite_ir
+
+    def down():
+        raise satellite_ir.SatelliteUnavailable("down")
+
+    monkeypatch.setattr(satellite_ir, "available_times", down)
+    assert client.get("/api/observed/frames/satellite_ir").status_code == 503
+
+
+def test_satellite_can_be_switched_off(client, satellite_times, monkeypatch):
+    monkeypatch.setenv("WB_SATELLITE_IR", "0")
+    assert client.get("/api/observed/frames/satellite_ir").status_code == 404

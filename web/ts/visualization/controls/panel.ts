@@ -802,6 +802,8 @@ export interface MapControlCallbacks {
   onObservedOverlayChange?: (source: string) => void;
   /** Set the observed imagery opacity, 0–1. */
   onObservedOpacityChange?: (opacity: number) => void;
+  /** Satellite infrared underlay on/off (#652). */
+  onObservedSatelliteToggle?: (show: boolean) => void;
 }
 
 /** Which observed sources the current briefing actually carries. Options for
@@ -1247,6 +1249,17 @@ export function renderMapControls(
     }
     html += '</select>';
     html += '</label>';
+    // Satellite infrared under the selected layer (#652). Not one of the
+    // "one at a time" measurements above: it is the picture of the sky the
+    // radar sits on, drawn underneath and greyscale, so a colour on the map
+    // still has exactly one source.
+    {
+      const checked = settings.observedSatellite !== false ? ' checked' : '';
+      html += '<label class="map-control-label map-observed-satellite">';
+      html += `<input type="checkbox" id="map-observed-satellite"${checked}>`;
+      html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.satellite'))}</span>`;
+      html += '</label>';
+    }
     // Opacity, like the synoptic grid layer's. These rasters cover the whole
     // corridor, so a fixed value either buries the basemap or washes the data
     // out depending on the product — and the pilot needs to read place names
@@ -1294,6 +1307,13 @@ export function renderMapControls(
       const pct = Number(observedOpacity.value);
       if (readout) readout.textContent = `${pct}%`;
       callbacks.onObservedOpacityChange!(pct / 100);
+    });
+  }
+
+  const observedSatellite = container.querySelector('#map-observed-satellite') as HTMLInputElement | null;
+  if (observedSatellite && callbacks.onObservedSatelliteToggle) {
+    observedSatellite.addEventListener('change', () => {
+      callbacks.onObservedSatelliteToggle!(observedSatellite.checked);
     });
   }
 

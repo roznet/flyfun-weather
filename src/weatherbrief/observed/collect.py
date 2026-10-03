@@ -205,6 +205,7 @@ def collect_opera(
             continue
         meta["url"] = url
         store.write_sidecar(source, valid_time, meta)
+        _build_map_canvas(store, source, valid_time)
         result.fetched += 1
         result.bytes_in += len(payload)
         if result.latest_valid_time is None or valid_time > result.latest_valid_time:
@@ -228,6 +229,25 @@ def collect_opera(
 
     result.purged = store.purge(source, now=now)
     return result
+
+
+def _build_map_canvas(store: FrameStore, source: str, valid_time: datetime) -> None:
+    """Project a new radar frame onto the map tile canvas, once (#652).
+
+    After the sidecar, so the frame is already published if this fails — the
+    tile API builds a missing canvas on first request, so a failure here costs
+    the first viewer a second, never the frame.
+    """
+    from . import tiles
+
+    if source not in tiles.TILE_SOURCES or not tiles.tiles_enabled():
+        return
+    try:
+        tiles.write_canvas(store, source, valid_time)
+    except Exception:
+        logger.warning(
+            "Observed map canvas build failed for %s %s", source, valid_time, exc_info=True
+        )
 
 
 # --- EUMETSAT --------------------------------------------------------------

@@ -904,6 +904,7 @@
   "observed.corridor": "Corredor",
   "viz.observed.label": "Observado",
   "viz.observed.opacity": "Opacidad",
+  "viz.observed.satellite": "Satélite",
   "viz.observed.none": "Ninguno",
   "viz.observed.reflectivity": "Reflectividad de radar",
   "viz.observed.rainRate": "Tasa de lluvia",

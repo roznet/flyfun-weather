@@ -5,10 +5,12 @@
  *  1. **Corridor buffers** — the sampled discs drawn as a translucent band, so
  *     "within 20 NM of the route" is a shape on the map rather than a number
  *     in a tooltip.
- *  2. **The newest frame**, clipped to that corridor's bounding box, as a
- *     single `imageOverlay`. Not tiles, not an animation, and no time slider:
- *     the question this answers is "is that cell on my route right now?", and
- *     a looping tiled radar product is a different, much more expensive thing.
+ *  2. **The newest frame.** Radar is drawn as Europe-wide Web Mercator tiles
+ *     keyed by the frame's stamp (#652), so the map can be panned and a tile
+ *     URL always means one frame; cloud tops are still a single
+ *     `imageOverlay` clipped to the corridor box. Optionally, the satellite
+ *     infrared image is drawn under the radar, as Windy does. No animation
+ *     yet — the stamp-keyed URLs are what a loop (#653) will step through.
  *  3. **Lightning as points, faded by age.** A ten-minute accumulation drawn
  *     flat would suggest every flash happened at once; fading by each flash's
  *     own time keeps the trail readable as a trail.
@@ -24,16 +26,30 @@ import * as L from 'leaflet';
 import type { VizObserved, VizRouteData } from '../types';
 import {
   FLASH_TRAIL_MINUTES,
+  SATELLITE_SOURCE,
   boxParams,
   corridorBox,
+  currentFrame,
   flashOpacity,
   formatBadge,
+  frameBadgeField,
+  frameTileUrl,
+  isTiledSource,
   overlayUrl as overlayUrlForBox,
   type LatLonBox,
+  type ObservedFrame,
+  type ObservedFramesInfo,
 } from './observed-overlay-geometry';
 
 const CORRIDOR_COLOR = '#2563eb';
 const FLASH_COLOR = '#7c3aed';
+/** The satellite underlay is a picture of the whole sky; a fixed opacity lets
+ *  the muted basemap's coastlines read through it, and the radar opacity
+ *  slider stays about the radar. */
+const SATELLITE_OPACITY = 0.8;
+// Tile layers stack in Leaflet's tile pane: basemap (1) < satellite < radar.
+const SATELLITE_Z = 5;
+const RADAR_Z = 6;
 
 export { flashOpacity, corridorBox } from './observed-overlay-geometry';
 
@@ -44,6 +60,11 @@ export interface ObservedOverlayOptions {
   imageryOpacity?: number;
   /** Corridor width (NM) whose buffer is outlined. */
   radiusNm: number;
+  /** Frame listings per tiled source (`/api/observed/frames/{source}`). A
+   *  tiled source with no listing falls back to the corridor image. */
+  frames?: ReadonlyMap<string, ObservedFramesInfo>;
+  /** Draw the satellite infrared underlay. */
+  showSatellite?: boolean;
 }
 
 export interface ObservedFlashPoint {
@@ -96,22 +117,58 @@ export function renderObservedOverlay(
   flashes: readonly ObservedFlashPoint[],
   now: Date = new Date(),
 ): string {
-  group.clearLayers();
+  // Tile layers persist across renders (the map re-renders on every altitude
+  // drag); everything else is redrawn. Clear the rest now, before this render
+  // adds its own; `wanted` collects this render's tiles for `reconcileTiles`.
+  clearNonTileLayers(group);
+  const wanted: TileSpec[] = [];
+  const finish = (badge: string): string => {
+    reconcileTiles(group, wanted);
+    return badge;
+  };
   const observed = data.observed;
-  if (!observed) return '';
+  if (!observed) return finish('');
 
   const bounds = corridorBounds(data, options.radiusNm);
-  if (!bounds) return '';
+  if (!bounds) return finish('');
 
-  // 1. The frame itself, under everything else.
-  if (options.imagerySource) {
-    L.imageOverlay(overlayUrl(options.imagerySource, bounds), bounds, {
-      opacity: options.imageryOpacity ?? 0.75,
-      interactive: false,
-    }).addTo(group);
+  const badges: string[] = [];
+
+  // 1. Satellite infrared, under the radar.
+  if (options.showSatellite) {
+    const info = options.frames?.get(SATELLITE_SOURCE);
+    const frame = currentFrame(info);
+    if (info && frame) {
+      wanted.push(tileSpec(info, frame, SATELLITE_OPACITY, SATELLITE_Z));
+      badges.push(formatBadge(frameBadgeField(info, frame, now)));
+    }
   }
 
-  // 2. The corridor the numbers describe.
+  // 2. The radar / cloud-top frame itself.
+  if (options.imagerySource) {
+    const info = isTiledSource(options.imagerySource)
+      ? options.frames?.get(options.imagerySource)
+      : undefined;
+    const frame = currentFrame(info);
+    if (info && frame) {
+      wanted.push(tileSpec(info, frame, options.imageryOpacity ?? 0.75, RADAR_Z));
+      badges.unshift(formatBadge(frameBadgeField(info, frame, now)));
+    } else if (!isTiledSource(options.imagerySource) || !info) {
+      // Cloud tops, or a radar listing that has not arrived / failed: the
+      // corridor image, labelled from the briefing's own sample.
+      L.imageOverlay(overlayUrl(options.imagerySource, bounds), bounds, {
+        opacity: options.imageryOpacity ?? 0.75,
+        interactive: false,
+      }).addTo(group);
+      badges.unshift(badgeText(observed, options.imagerySource));
+    }
+    // A listing that says "stale" draws nothing: an old frame must not pass
+    // for the present sky, which is also what the corridor endpoint's 410 does.
+  } else {
+    badges.unshift(badgeText(observed, options.imagerySource));
+  }
+
+  // 3. The corridor the numbers describe.
   L.rectangle(bounds, {
     color: CORRIDOR_COLOR,
     weight: 1,
@@ -121,7 +178,7 @@ export function renderObservedOverlay(
     interactive: false,
   }).addTo(group);
 
-  // 3. Lightning, oldest first so recent flashes draw on top.
+  // 4. Lightning, oldest first so recent flashes draw on top.
   const dated = flashes
     .map((f) => ({ flash: f, ageMinutes: (now.getTime() - new Date(f.time).getTime()) / 60000 }))
     .filter((f) => Number.isFinite(f.ageMinutes) && f.ageMinutes < FLASH_TRAIL_MINUTES)
@@ -140,7 +197,110 @@ export function renderObservedOverlay(
     }).addTo(group);
   }
 
-  return badgeText(observed, options.imagerySource);
+  return finish(badges.filter(Boolean).join('\n'));
+}
+
+interface TileSpec {
+  url: string;
+  opacity: number;
+  zIndex: number;
+  minNativeZoom: number;
+  maxNativeZoom: number;
+}
+
+function tileSpec(
+  info: ObservedFramesInfo,
+  frame: ObservedFrame,
+  opacity: number,
+  zIndex: number,
+): TileSpec {
+  return {
+    url: frameTileUrl(info, frame),
+    opacity,
+    zIndex,
+    minNativeZoom: info.min_zoom,
+    maxNativeZoom: info.max_zoom,
+  };
+}
+
+// Live tile layers per group, keyed by URL (= source + frame stamp).
+const liveTiles = new WeakMap<L.LayerGroup, Map<string, L.TileLayer>>();
+
+function clearNonTileLayers(group: L.LayerGroup): void {
+  const tiles = new Set<L.Layer>(liveTiles.get(group)?.values() ?? []);
+  group.eachLayer((layer) => {
+    if (!tiles.has(layer)) group.removeLayer(layer);
+  });
+}
+
+/** Keep tile layers whose URL is still wanted (updating opacity), add new
+ *  ones, drop the rest. Recreating tile layers on every render would
+ *  re-request and flash every tile on each altitude-slider drag; a new frame
+ *  is a new URL, so it still swaps. Touches tile layers only. */
+function reconcileTiles(group: L.LayerGroup, wanted: TileSpec[]): void {
+  const live = liveTiles.get(group) ?? new Map<string, L.TileLayer>();
+  liveTiles.set(group, live);
+  const keep = new Set<L.Layer>();
+  for (const spec of wanted) {
+    let layer = live.get(spec.url);
+    if (layer && group.hasLayer(layer)) {
+      layer.setOpacity(spec.opacity);
+    } else {
+      layer = tileLayerFor(spec);
+      live.set(spec.url, layer);
+      layer.addTo(group);
+    }
+    keep.add(layer);
+  }
+  for (const [url, layer] of live) {
+    if (keep.has(layer)) continue;
+    group.removeLayer(layer);
+    live.delete(url);
+  }
+}
+
+function tileLayerFor(spec: TileSpec): L.TileLayer {
+  return L.tileLayer(spec.url, {
+    opacity: spec.opacity,
+    zIndex: spec.zIndex,
+    // Leaflet scales the nearest native zoom outside this range rather than
+    // requesting tiles the server refuses.
+    minNativeZoom: spec.minNativeZoom,
+    maxNativeZoom: spec.maxNativeZoom,
+    maxZoom: 18,
+    // No Leaflet attribution: the badge already carries each layer's own
+    // (per-frame) attribution, and these strings are long enough to wrap the
+    // attribution bar over the badge.
+  });
+}
+
+const FRAMES_TTL_MS = 60_000;
+const framesCache = new Map<string, { at: number; info: ObservedFramesInfo | null }>();
+
+/** Frame listing for a tiled source, cached briefly (a new radar frame lands
+ *  every 5 min). `null` when unavailable: the caller falls back or omits. */
+export async function fetchObservedFrames(
+  source: string,
+  now: number = Date.now(),
+): Promise<ObservedFramesInfo | null> {
+  const hit = framesCache.get(source);
+  if (hit && now - hit.at < FRAMES_TTL_MS) return hit.info;
+  let info: ObservedFramesInfo | null = null;
+  try {
+    const response = await fetch(`/api/observed/frames/${encodeURIComponent(source)}`);
+    if (response.ok) info = (await response.json()) as ObservedFramesInfo;
+  } catch {
+    info = null;
+  }
+  framesCache.set(source, { at: now, info });
+  return info;
+}
+
+/** Cached listing if fresh, without fetching (for synchronous renders). */
+export function cachedObservedFrames(source: string, now: number = Date.now()): ObservedFramesInfo | null | undefined {
+  const hit = framesCache.get(source);
+  if (!hit || now - hit.at >= FRAMES_TTL_MS) return undefined;
+  return hit.info;
 }
 
 /** Fetch lightning points inside the corridor. Failure is not fatal: the

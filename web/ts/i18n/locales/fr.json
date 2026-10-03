@@ -904,6 +904,7 @@
   "observed.corridor": "Couloir",
   "viz.observed.label": "Observé",
   "viz.observed.opacity": "Opacité",
+  "viz.observed.satellite": "Satellite",
   "viz.observed.none": "Aucun",
   "viz.observed.reflectivity": "Réflectivité radar",
   "viz.observed.rainRate": "Taux de pluie",

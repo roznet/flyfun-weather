@@ -128,3 +128,70 @@ export const OBSERVED_OVERLAY_OPTIONS: Array<{
 export function isPointsOverlay(id: string): boolean {
   return OBSERVED_OVERLAY_OPTIONS.some((o) => o.id === id && o.points === true);
 }
+
+// --- Tiled layers (#652) ------------------------------------------------------
+
+/** Radar sources drawn as Europe-wide tiles rather than a corridor image.
+ *  Cloud tops stay on the corridor image (the server renders them per box). */
+export const TILED_SOURCES: readonly string[] = ['opera_dbzh', 'opera_rate'];
+
+/** The satellite infrared underlay (EUMETView, proxied by the server). */
+export const SATELLITE_SOURCE = 'satellite_ir';
+
+export function isTiledSource(id: string | null | undefined): boolean {
+  return !!id && TILED_SOURCES.includes(id);
+}
+
+/** One frame of a tiled layer, as `/api/observed/frames/{source}` lists it. */
+export interface ObservedFrame {
+  stamp: string;
+  valid_time: string;
+  age_minutes: number;
+}
+
+/** `/api/observed/frames/{source}`. Every retained frame, newest first — the
+ *  map draws `frames[0]`; a loop (#653) steps through the rest. */
+export interface ObservedFramesInfo {
+  source: string;
+  label: string;
+  frames: ObservedFrame[];
+  stale: boolean;
+  window_minutes: number;
+  attribution: { text?: string | null } | null;
+  tile_url_template: string;
+  min_zoom: number;
+  max_zoom: number;
+}
+
+/** Tile URL for one frame. The stamp is in the path, so the URL is the frame:
+ *  a different frame is a different URL, never a re-fetch of the same one. */
+export function frameTileUrl(info: ObservedFramesInfo, frame: ObservedFrame): string {
+  return info.tile_url_template.replace('{stamp}', encodeURIComponent(frame.stamp));
+}
+
+/** The frame the map should draw now, or `null` when there is nothing current
+ *  — a stale radar frame is not drawn as if it were the present sky. */
+export function currentFrame(info: ObservedFramesInfo | null | undefined): ObservedFrame | null {
+  if (!info || info.stale || !info.frames.length) return null;
+  return info.frames[0];
+}
+
+/** Badge fields for a drawn frame, from the frame itself (not the briefing's
+ *  sample, which may be an older frame than the one on screen). */
+export function frameBadgeField(
+  info: ObservedFramesInfo,
+  frame: ObservedFrame,
+  now: Date = new Date(),
+): ObservedBadgeField {
+  const valid = new Date(frame.valid_time);
+  const ageMinutes = Number.isNaN(valid.getTime())
+    ? frame.age_minutes
+    : Math.max(0, (now.getTime() - valid.getTime()) / 60000);
+  return {
+    label: info.label,
+    validTime: frame.valid_time,
+    ageMinutes,
+    windowMinutes: info.window_minutes ?? 0,
+    attribution: info.attribution?.text ?? '',
+  };
+}

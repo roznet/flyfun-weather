@@ -20,6 +20,16 @@ Three endpoints:
       → lightning as points with their own times, so the client can fade them
         by age rather than showing a ten-minute accumulation as one instant.
 
+  GET /api/observed/frames/{source}
+      → the frames a tiled layer can draw, newest first, with the tile URL
+        template (#652).  Radar from the local store; ``satellite_ir`` from
+        EUMETView's advertised cycles.
+
+  GET /api/observed/tiles/{source}/{stamp}/{z}/{x}/{y}.png
+      → one Web Mercator tile of one frame.  Keyed by the frame stamp, so the
+        bytes never change and the response is cacheable for the frame's life
+        — and a loop (#653) is a different stamp, not a different pipeline.
+
 Auth mirrors the other flight-independent map endpoints: any authenticated
 user.  Nothing here is user-specific, but none of it is public either.
 """
@@ -36,6 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from flyfun_common.db import current_user_id
 from weatherbrief.observed.collect import observed_enabled
+from weatherbrief.observed import satellite_ir, tiles
 from weatherbrief.observed.frames import (
     SOURCE_EUMETSAT_CTTH,
     SOURCE_EUMETSAT_LI,
@@ -43,6 +54,8 @@ from weatherbrief.observed.frames import (
     SOURCE_OPERA_RATE,
     SOURCE_SPECS,
     FrameStore,
+    frame_stamp,
+    parse_frame_stamp,
 )
 from weatherbrief.observed.grid import compute_window
 from weatherbrief.observed.imagery import (
@@ -66,6 +79,9 @@ MAX_SPAN_DEG = 25.0
 # stamp, so a long cache is safe and the client re-requests when the stamp
 # advances.
 _CACHE_CONTROL = "private, max-age=240"
+# Tiles carry the frame stamp in their path, so their bytes are final.  A day
+# outlives every retention window; `immutable` stops revalidation on reload.
+_TILE_CACHE_CONTROL = "private, max-age=86400, immutable"
 
 IMAGE_SOURCES = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE, SOURCE_EUMETSAT_CTTH)
 
@@ -340,3 +356,127 @@ def _perimeter(bounds: OverlayBounds, steps: int = 16):
         [lons, lons, np.full(steps, bounds.west), np.full(steps, bounds.east)]
     )
     return perimeter_lats, perimeter_lons
+
+
+# --- Tiled layers (#652) -----------------------------------------------------------
+
+
+def _tile_url_template(source: str) -> str:
+    return f"/api/observed/tiles/{source}/{{stamp}}/{{z}}/{{x}}/{{y}}.png"
+
+
+@router.get("/frames/{source}")
+def observed_frames(
+    source: str,
+    _user_id: str = Depends(current_user_id),
+) -> dict[str, Any]:
+    """Frames a tiled layer can draw, newest first.
+
+    Every frame still retained is listed, not only the newest: the map draws
+    the first, and a loop (#653) steps through the rest.  Ages are each
+    frame's own.
+    """
+    _require_enabled()
+    now = datetime.now(timezone.utc)
+
+    if source == satellite_ir.SOURCE_ID:
+        if not satellite_ir.satellite_ir_enabled():
+            raise HTTPException(status_code=404, detail="Satellite imagery not enabled")
+        try:
+            times = satellite_ir.available_times()
+        except satellite_ir.SatelliteUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Satellite imagery unavailable") from exc
+        frames = [_frame_entry(satellite_ir.stamp(t), t, now) for t in times]
+        return {
+            "source": source,
+            "label": satellite_ir.LABEL,
+            "frames": frames,
+            "stale": not frames
+            or (now - times[0]) > satellite_ir.MAX_DISPLAY_AGE,
+            "window_minutes": 0.0,
+            "attribution": {"text": satellite_ir.ATTRIBUTION},
+            "tile_url_template": _tile_url_template(source),
+            "min_zoom": satellite_ir.MIN_ZOOM,
+            "max_zoom": satellite_ir.MAX_ZOOM,
+        }
+
+    if source not in tiles.TILE_SOURCES:
+        raise HTTPException(status_code=404, detail="Not a tiled source")
+    spec = SOURCE_SPECS[source]
+    stored = FrameStore().list_frames(source)
+    frames = [_frame_entry(frame_stamp(f.valid_time), f.valid_time, now) for f in stored]
+    newest = stored[0] if stored else None
+    return {
+        "source": source,
+        "label": spec.label,
+        "frames": frames,
+        "stale": newest is None
+        or (now - newest.valid_time) > spec.max_display_age,
+        "window_minutes": spec.window_minutes,
+        "attribution": newest.attribution.model_dump() if newest else {},
+        "tile_url_template": _tile_url_template(source),
+        "min_zoom": tiles.MIN_TILE_ZOOM,
+        "max_zoom": tiles.MAX_TILE_ZOOM,
+    }
+
+
+def _frame_entry(stamp: str, valid_time: datetime, now: datetime) -> dict[str, Any]:
+    return {
+        "stamp": stamp,
+        "valid_time": valid_time.isoformat(),
+        "age_minutes": round((now - valid_time).total_seconds() / 60.0, 1),
+    }
+
+
+@router.get("/tiles/{source}/{stamp}/{z}/{x}/{y}.png")
+def observed_tile(
+    source: str,
+    stamp: str,
+    z: int,
+    x: int,
+    y: int,
+    _user_id: str = Depends(current_user_id),
+) -> Response:
+    """One Web Mercator tile of one frame."""
+    _require_enabled()
+    try:
+        valid_time = parse_frame_stamp(stamp)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Bad frame stamp") from exc
+
+    if source == satellite_ir.SOURCE_ID:
+        if not satellite_ir.satellite_ir_enabled():
+            raise HTTPException(status_code=404, detail="Satellite imagery not enabled")
+        if not satellite_ir.valid_tile(z, x, y):
+            raise HTTPException(status_code=404, detail="Tile out of range")
+        try:
+            # Only cycles we advertise: the proxy is not a window onto
+            # EUMETView's whole archive.
+            if valid_time not in satellite_ir.available_times():
+                raise HTTPException(status_code=404, detail="Unknown satellite cycle")
+            png = satellite_ir.fetch_tile(valid_time, z, x, y)
+        except satellite_ir.SatelliteUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Satellite imagery unavailable") from exc
+        return _tile_response(png)
+
+    if source not in tiles.TILE_SOURCES:
+        raise HTTPException(status_code=404, detail="Not a tiled source")
+    if not tiles.valid_tile(z, x, y):
+        raise HTTPException(status_code=404, detail="Tile out of range")
+    try:
+        png = tiles.tile_png(FrameStore(), source, valid_time, z, x, y)
+    except FileNotFoundError as exc:
+        # Purged (older than retention) or never collected: gone, not broken.
+        raise HTTPException(status_code=410, detail="Frame not stored") from exc
+    except Exception as exc:
+        logger.warning("Observed tile render failed for %s %s", source, stamp, exc_info=True)
+        raise HTTPException(status_code=500, detail="Tile render failed") from exc
+    return _tile_response(png)
+
+
+def _tile_response(png: bytes) -> Response:
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": _TILE_CACHE_CONTROL},
+    )

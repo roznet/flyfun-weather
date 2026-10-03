@@ -7,6 +7,7 @@ import {
   type ObservedFlashPoint,
   type ObservedSourceStatus,
 } from './observed-overlay';
+import type { ObservedFramesInfo } from './observed-overlay-geometry';
 import { escapeHtml } from '../../utils';
 import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
@@ -51,9 +52,10 @@ export class RouteMapRenderer {
   private waypointGroup: L.LayerGroup | null = null;
   private frontsGroup: L.LayerGroup | null = null;
   private airportForecastGroup: L.LayerGroup | null = null;
-  // Observed conditions (#574): the newest frame, the corridor it describes,
-  // and age-faded lightning. Nothing here animates and there is no time
-  // slider — deliberately out of scope, not a first cut.
+  // Observed conditions (#574, #652): the newest frame (radar as stamp-keyed
+  // tiles, cloud tops as a corridor image), an optional satellite IR
+  // underlay, the corridor the numbers describe, and age-faded lightning.
+  // No animation yet; the stamp-keyed tiles are what a loop (#653) steps.
   private observedGroup: L.LayerGroup | null = null;
   private observedBadgeEl: HTMLElement | null = null;
   private observedSource: string | null = null;
@@ -61,6 +63,8 @@ export class RouteMapRenderer {
   private observedLegendEl: HTMLElement | null = null;
   private observedLegends: Map<string, ObservedSourceStatus> | null = null;
   private observedFlashes: ObservedFlashPoint[] = [];
+  private observedFrames: Map<string, ObservedFramesInfo> = new Map();
+  private observedSatellite = false;
   private highlightMarker: L.CircleMarker | null = null;
   private forecastLegendEl: HTMLElement | null = null;
   private forecastZoomHandler: (() => void) | null = null;
@@ -87,6 +91,8 @@ export class RouteMapRenderer {
   private selectedPointIndex = -1;
   private initialized = false;
   private currentTileTheme: 'light' | 'dark' = 'light';
+  // Whether the basemap is currently the muted variant (observed imagery on).
+  private tilesMuted = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -147,6 +153,17 @@ export class RouteMapRenderer {
    *  Each carries its own time so the overlay can fade the trail by age. */
   setObservedFlashes(flashes: ObservedFlashPoint[]): void {
     this.observedFlashes = flashes;
+  }
+
+  /** Frame listings for the tiled layers (`/api/observed/frames/{source}`),
+   *  fetched async by briefing-main. Replaces the whole set. */
+  setObservedFrames(frames: Map<string, ObservedFramesInfo>): void {
+    this.observedFrames = frames;
+  }
+
+  /** Draw the satellite infrared underlay (#652). */
+  setObservedSatellite(show: boolean): void {
+    this.observedSatellite = show;
   }
 
   /** Redraw just the observed overlay, after new flashes or a source change. */
@@ -318,7 +335,7 @@ export class RouteMapRenderer {
     const target = dark ? 'dark' : 'light';
     if (!this.map || !this.tileLayer || this.currentTileTheme === target) return;
     this.currentTileTheme = target;
-    applyBaseTileTheme(this.map, this.tileLayer, dark);
+    applyBaseTileTheme(this.map, this.tileLayer, dark, this.tilesMuted);
     this.renderWaypoints();
   }
 
@@ -371,11 +388,22 @@ export class RouteMapRenderer {
         imagerySource: this.observedSource,
         imageryOpacity: this.observedOpacity,
         radiusNm: this.data.observed?.radiusNm ?? 20,
+        frames: this.observedFrames,
+        showSatellite: this.observedSatellite,
       },
       this.observedFlashes,
     );
+    this.updateBaseMuted(!!this.data.observed && (!!this.observedSource || this.observedSatellite));
     this.updateObservedBadge(badge);
     this.updateObservedLegend();
+  }
+
+  /** Quiet basemap while observed imagery is drawn (#652). Only swaps tiles
+   *  when the state actually changes. */
+  private updateBaseMuted(muted: boolean): void {
+    if (!this.map || !this.tileLayer || this.tilesMuted === muted) return;
+    this.tilesMuted = muted;
+    applyBaseTileTheme(this.map, this.tileLayer, this.currentTileTheme === 'dark', muted);
   }
 
   /** The age badge rides on the map itself, not in a side panel: it labels a

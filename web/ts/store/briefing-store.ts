@@ -108,6 +108,9 @@ function loadVizSettings(): VizSettings {
     // actually collected.
     observedOverlay: 'opera_dbzh',
     observedOverlayOpacity: 0.75,
+    // On by default: radar over the satellite picture is the view pilots know
+    // from Windy, and the radar alone hides where the cloud is.
+    observedSatellite: true,
     mapWidthMetric: 'cloud-cover-total',
     mapAltitudeFt: null,
     routeGraphVisible: true,
@@ -277,6 +280,7 @@ export interface BriefingState {
   /** Which observed layer the map draws (#574), or '' for none. */
   setObservedOverlay: (source: string) => void;
   setObservedOverlayOpacity: (opacity: number) => void;
+  setObservedSatellite: (show: boolean) => void;
   setMapWidthMetric: (metricId: string) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
   setMapFrontsVisible: (visible: boolean) => void;
@@ -1250,6 +1254,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   setObservedOverlayOpacity: (opacity: number) => {
     const clamped = Math.max(0, Math.min(1, opacity));
     const updated = { ...get().vizSettings, observedOverlayOpacity: clamped };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setObservedSatellite: (show: boolean) => {
+    const updated = { ...get().vizSettings, observedSatellite: show };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
