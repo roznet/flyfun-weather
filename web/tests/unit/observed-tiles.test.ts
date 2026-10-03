@@ -10,6 +10,7 @@ import {
   frameBadgeField,
   frameTileUrl,
   isTiledSource,
+  resolveObservedSelection,
   type ObservedFramesInfo,
 } from '../../ts/visualization/route-map/observed-overlay-geometry';
 
@@ -81,5 +82,27 @@ describe('tiled observed layers', () => {
     const text = formatBadge(frameBadgeField(info, info.frames[0], new Date('2026-10-03T14:30:00Z')));
     expect(text).toContain('Satellite infrared 14:05Z');
     expect(text).not.toContain('rolling');
+  });
+});
+
+describe('observed layer selection', () => {
+  const all = { opera_dbzh: true, opera_rate: true, eumetsat_ctth: true, eumetsat_li: true };
+
+  it('"None" draws nothing, even when radar is available', () => {
+    expect(resolveObservedSelection('', all)).toBe('');
+  });
+
+  it('keeps an available pick', () => {
+    expect(resolveObservedSelection('eumetsat_ctth', all)).toBe('eumetsat_ctth');
+  });
+
+  it('falls back only when the pick was not collected', () => {
+    expect(resolveObservedSelection('eumetsat_ctth', { opera_dbzh: true })).toBe('opera_dbzh');
+    expect(resolveObservedSelection('opera_dbzh', { opera_rate: true })).toBe('opera_rate');
+    expect(resolveObservedSelection('opera_dbzh', {})).toBe('');
+  });
+
+  it('a never-set pick takes the default', () => {
+    expect(resolveObservedSelection(undefined, all)).toBe('opera_dbzh');
   });
 });

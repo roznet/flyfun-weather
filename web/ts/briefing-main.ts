@@ -44,7 +44,7 @@ import {
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
 import { corridorBounds, fetchObservedFlashes, fetchObservedFrames, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
-import { SATELLITE_SOURCE, isTiledSource, type ObservedFramesInfo } from './visualization/route-map/observed-overlay-geometry';
+import { SATELLITE_SOURCE, isTiledSource, resolveObservedSelection, type ObservedFramesInfo } from './visualization/route-map/observed-overlay-geometry';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -340,9 +340,7 @@ function updateObservedOverlay(
     eumetsat_ctth_temp: !!observed.cloudTops,
     eumetsat_li: !!observed.lightning,
   };
-  const wanted = chosen && availableFor[chosen] ? chosen : (
-    observed.reflectivity ? 'opera_dbzh' : observed.rainRate ? 'opera_rate' : ''
-  );
+  const wanted = resolveObservedSelection(chosen, availableFor);
   // Lightning is points, not a raster: selecting it draws no imagery at all.
   const showFlashes = wanted === 'eumetsat_li';
   const imagery = showFlashes || !wanted ? null : wanted;
