@@ -195,3 +195,19 @@ export function frameBadgeField(
     attribution: info.attribution?.text ?? '',
   };
 }
+
+/** The observed layer to draw for the pilot's pick.
+ *
+ *  `''` ("None") is a choice, not a missing value: it draws nothing. Only a
+ *  pick this briefing did not collect falls back — to reflectivity, else rain
+ *  rate, else nothing. (The fallback used to test the pick for truthiness, so
+ *  "None" fell back to radar.)
+ */
+export function resolveObservedSelection(
+  chosen: string | null | undefined,
+  available: Readonly<Record<string, boolean>>,
+): string {
+  if (chosen === '') return '';
+  if (chosen && available[chosen]) return chosen;
+  return available.opera_dbzh ? 'opera_dbzh' : available.opera_rate ? 'opera_rate' : '';
+}
