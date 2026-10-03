@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-03",
+    "title": "iOS 1.12 — Current conditions on the cross-section",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- New Current conditions layer on the cross-section: turn it on to see the latest METAR at each airport and the active SIGMET zones along your route, updated live on flight day.\n- Flight-day alerts now also flag thunderstorms, significant weather such as heavy snow, and strong wind at your departure, destination and alternates, and mark the matching airport row in Observations.\n- If live tracking starts after your briefing was built, the changes panel now reads \"Since live tracking began\", so it's clear what it compares against.\n- A SIGMET that spans several FIRs is now marked new in each one."
+  }
+]
