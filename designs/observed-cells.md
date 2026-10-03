@@ -1,0 +1,210 @@
+# Observed cells — detection, motion and self-scoring on a home compute node
+
+> Issue #650, slice 1 of the direction in
+> `designs/future/observed-motion-brainstorm.md` §10: **the home node owns the
+> field, the droplet owns the route.**  This slice is the loop and the
+> analysis only — nothing reaches the droplet, no pilot sees anything.
+> Next slices: push the catalogue to the droplet, route geometry against ETAs,
+> wording in the live layer and the agent block.
+
+## What it is
+
+A long-running loop (`python -m weatherbrief.observed.cells run`) that
+archives every OPERA radar, rain-rate and MTG lightning frame (CTTH opt-in) and
+writes one **cell catalogue** per radar frame: every rain area and convective
+core in Europe with its peak, extent, rain rate, lightning, cloud top, motion,
+identity across frames and 30-minute lifecycle trend.  It scores its own
+motion against what the radar shows 30 and 60 minutes later.
+
+It runs on the MacBook while the analysis is refined and on the Mac mini as
+the live loop.  **Never on the droplet** (memory: ~2.2 GB peak at full grid).
+
+## Layout
+
+```
+observed/cells/
+  policy.py      every tunable number, versioned (CellPolicy.policy_version)
+  detect.py      connected components per tier; footprints as run-length blocks
+  motion.py      masked NCC per tile → flow field; cell velocity from its tiles
+  lineage.py     identity across frames (advect, overlap, dominant link); trend
+  attributes.py  rain rate, lightning, parallax-corrected cloud top per cell
+  catalogue.py   wire format: deterministic gzipped JSON, one per DBZH frame
+  scoring.py     extrapolation vs persistence at 30/60 min → scores/<day>.jsonl
+  runner.py      archive store, collect + analyse tick, replay, coverage report
+  render.py      review PNG (radar, outlines, 30-min arrows, flashes, age/trend)
+  __main__.py    run [--once] | replay | render | status
+```
+
+Under `WB_CELLS_ROOT` (required, no default — fails loudly):
+`frames/<source>/` (archive, `FrameStore(retain_all=True)`),
+`catalogues/<YYYYMMDD>/<stamp>.json.gz`, `scores/<day>.jsonl`,
+`runs/<day>.jsonl` (one row per processed frame: seconds, peak RSS, bytes,
+cell counts, what was unavailable; plus `gap` rows), `state.json`.
+
+## Choices, and why
+
+**Reuse the briefing collector, unforked.**  `collect_once` gained
+`lookback` / `max_fetch` passthroughs and `FrameStore` a `retain_all` flag
+(`purge` becomes a no-op and never lists the archive directory).  Existing
+callers are unchanged.  The root is separate from `DATA_DIR/observed` so a dev
+server's collector and this loop never purge or race each other.
+
+**Separate source variable.**  `WB_CELLS_SOURCES` (default
+`opera_dbzh,opera_rate,eumetsat_li`), not `WB_OBSERVED_SOURCES`: a worktree's
+`.env` is shared with the dev server, whose collector defaults to every source
+including CTTH (~7–8 GB/day).  CTTH is opt-in until the EUMETSAT quota with
+several consumers is checked.
+
+**The DBZH composite is a 1 km grid (3800 × 4400), RATE 2 km (1900 × 2200).**
+Older docs said 2 km for both.  Every distance in the policy is in km and
+converted with the grid's own pixel size; RATE maps onto DBZH through the two
+affines (same projection, no reprojection).  Analysis is at native 1 km —
+small cores matter, and memory is cheap on the home nodes.
+
+**Three tiers, detected and tracked independently:** `rain20` (≥20 dBZ, rain
+areas and frontal bands), `core35` and `core41` (convective cores; both
+recorded so the archive settles the threshold — 41 matches the live layer's
+`RADAR_SIGNIFICANT_DBZ`).  8-connectivity.  A cell touching nodata or the grid
+edge is `truncated`.
+
+**Field motion, not object matching.**  128 km tiles, 64 km stride, masked
+normalised cross-correlation (Padfield 2012) via `scipy.signal.fftconvolve`:
+nodata pixels never take part under any shift, so a coverage edge cannot pull
+the estimate.  Gates per tile: coverage ≥ 50 %, echo ≥ 1 % (low on purpose — an
+isolated cell is the case that matters), NCC ≥ 0.5, forward/reverse agreement
+≤ 1.5 px (the reverse tile is clamped into the grid so edge tiles moving
+outward are still checked).  Pair spacing 10 min preferred (DBZH is a rolling
+10-minute maximum, so 5-minute pairs share half their window and barely
+move), then 15, then 5.  A cell's velocity is the pixel-weighted mean of its
+matched tiles; under 50 % support it is `unsupported`, never guessed.
+
+**Lineage: advect, overlap, dominant link.**  Last frame's cells are shifted by
+their own velocity before overlapping (a 40 kt cell moves ~6 km in 5 min,
+more than many cores).  Link at ≥ 20 % of the smaller area.  A cell inherits
+an id only when each side is the other's largest overlap — so the largest
+child of a split and the cell that absorbed a merge keep the storm's id and
+history, and every other child starts fresh with `parents`.  **Velocity is
+withheld on the frame of a split or merge** (`motion.status = "withheld"`).
+Ids are `<tier>-<birth stamp>-<label>`: deterministic, so replays agree.
+
+**Trend states: `developing` / `steady` / `decaying` / `mixed` / `new`.**
+From the cell's own history over ~30 min (≥ 15 min required): peak ±5 dB and
+area ×1.5 / ×0.6.  Opposite signals are `mixed`, never averaged into
+`steady` (the first real run had a 59 dBZ core whose area grew ×1.8 while its
+peak fell 5.5 dB).  "steady" rather than the issue's "mature" — the
+measurement is a trend, not a lifecycle stage.  Provisional thresholds.
+
+**Attributes at their own frame time, never advected.**  RATE slot = DBZH time
+floored to 15 min; LI slot floored to 10 min; flashes go to the nearest cell
+pixel within 5 km (the two frames are up to 10 min apart).  CTTH tops by
+corrected position (`lat + delta_latitude`), exactly as the corridor sampler
+does.  Every attribute is `None` when its source could not answer, and the
+catalogue's `unavailable` list says why.  LI flash positions are taken as
+published; whether they carry their own parallax is unverified.
+
+**Wait for attributes, but never out of order.**  A new frame waits up to
+15 min for its RATE and LI frames; older frames never wait.  The analysis
+stops at the first waiting frame rather than skipping it, so a later frame
+never starts its lineage without its predecessor.
+
+**Radar first, EUMETSAT after.**  Each tick collects OPERA, analyses, then
+collects EUMETSAT (≤ 12 products per sweep; ~20 s per LI product, a CTTH
+granule ~54 MB) and analyses again, so EUMETSAT downloads never hold the
+newest radar frame back.  Sweeps
+(every 15 min) reach back `WB_CELLS_CATCHUP_HOURS` (default 6; the OPERA open
+cache keeps 24 h).
+
+**Byte-for-byte catalogues.**  Sorted keys, rounded floats, no wall clock
+(timings go to `runs/`), gzip `mtime=0`.  `replay` of the same frames under
+the same policy reproduces every file exactly (pinned by a test), into a
+separate root it refuses to share with the live one.
+
+**`policy_version` = name + digest of every number.**  It does *not* see code.
+A change that alters output without touching a number must bump
+`CellPolicy.name` (`cells-1` → `cells-2`), or old and new catalogues will
+claim the same version.
+
+**Self-scoring.**  For each tier and lead (30, 60 min): cells issued at T−L
+with an available velocity, advected by v·L, against the tier's cells at T, on
+the footprint's own block grid, only where the radar covered the block and
+within 100 km of an issued or persisted footprint.  Persistence (same cells,
+unmoved) is scored identically — extrapolation is only worth showing where it
+beats "it stays put".  Plus median centroid error for cells whose id survived.
+
+## Portability (macOS arm64 now, Linux possible)
+
+numpy / `scipy.ndimage` / `scipy.fft` only — no OpenCV, no source builds, no
+process pools (macOS spawns, Linux forks).  `ru_maxrss` is bytes on macOS and
+KiB on Linux (`runner.peak_rss_mb`).  Linear-algebra results may differ in the
+last digits between Accelerate and OpenBLAS; the golden test
+(`tests/observed/test_cells_golden.py`, `WB_CELLS_GOLDEN_DIR`) compares with
+tolerances and exact structure.
+
+## Running it
+
+```
+WB_CELLS_ROOT=~/flyfun-data/observed-cells caffeinate -i \
+  ./venv/bin/python -m weatherbrief.observed.cells run
+python -m weatherbrief.observed.cells status --hours 24
+python -m weatherbrief.observed.cells render --time 2026-10-03T14:05 --out /tmp/c.png --bbox 43,-2,52,10 --scale 2
+python -m weatherbrief.observed.cells replay --from 2026-10-03T08:00 --to 2026-10-03T14:00 --out /tmp/replay
+```
+
+**A laptop sleeps.**  Without `caffeinate -i` (AC power) macOS idle-sleeps the
+loop for 10–15 minutes at a time; the first dev run lost most of an hour that
+way and it looked like slow downloads.
+
+**Moving to the mini** is configuration, not code: the same command under a
+launchd **KeepAlive** daemon (not a calendar job — it must run continuously
+and not shift with DST), `WB_CELLS_ROOT` on the mini's disk or the NAS,
+EUMETSAT credentials in its environment, `caffeinate`/`pmset` as for the
+forecast offload.  The plist belongs in the private config repo with the
+other mini daemons.
+
+## Open numbers (to settle from the archive)
+
+Core threshold 35 vs 41; tile size and pair spacing; minimum cell areas;
+lineage overlap fraction (20 % unmeasured, inherited from #600); trend
+thresholds; flash buffer.  Every one is in `policy.py`.
+
+## Gotchas
+
+- Archive growth is unbounded by design for now: ~2.0 MB per DBZH frame
+  (~570 MB/day), RATE ~0.6 MB/15 min, LI ~0.7 MB/10 min, catalogues
+  ~130–170 KB/frame (~40 MB/day).  Pruning policy is deferred (§10).
+- The frame directories are flat (288 DBZH files a day).  Fine for `has()`
+  lookups by name; anything that lists them (`FrameStore.list_frames`) will
+  slow down as they grow — the loop never lists.
+- First frame after a gap has no motion (`no_pair`) and starts fresh lineage.
+- A frame filled in late by a sweep is analysed after its successor; its
+  successor's lineage is not recomputed.  `replay` is the fix.
+
+## Numbers
+
+First real run, 2026-10-03 06:00–15:45Z, 71 frames, MacBook (Apple silicon),
+`opera_dbzh,opera_rate,eumetsat_li`.  One day of autumn weather — a baseline
+for the loop's cost, **not** a calibration of anything.
+
+| | median | max |
+|---|---:|---:|
+| Seconds per frame (full 1 km grid) | 8.8 | 10.0 |
+| Peak RSS | 2.16 GB | 2.16 GB |
+| Catalogue (gzip) | 134 KB | 167 KB |
+| Cells per frame: rain20 / core35 / core41 | 274 / 313 / 205 | |
+| Cells with an available velocity | 635 | 847 |
+
+Self-scoring, median over the run (CSI extrapolation vs persistence; median
+centroid error of surviving ids, km):
+
+| tier | lead | CSI extrap | CSI persist | centroid extrap | centroid persist |
+|---|---:|---:|---:|---:|---:|
+| rain20 | 30 | 0.31 | 0.21 | 4.7 | 14.1 |
+| rain20 | 60 | 0.25 | 0.15 | 9.1 | 26.7 |
+| core35 | 30 | 0.14 | 0.10 | 4.6 | 9.5 |
+| core35 | 60 | 0.08 | 0.06 | 8.5 | 17.7 |
+| core41 | 30 | 0.09 | 0.08 | 5.2 | 7.4 |
+| core41 | 60 | 0.04 | 0.04 | 10.7 | 12.3 |
+
+Early reading: extrapolation beats persistence everywhere on this day, by a
+wide margin for rain areas and barely for 41 dBZ cores at 60 minutes — the
+first hint of where a projection horizon (Tier 3) will sit.

@@ -293,6 +293,12 @@ CTTH keeps one hour only: a cloud-top field older than that answers nothing a
 pilot is asking at D-0, and at 74% of the total it is the only source whose
 retention is worth arguing about.
 
+An archive store (`FrameStore(root, retain_all=True)`) never purges — the
+observed-cells loop (#650, `observed-cells.md`) collects into one with the same
+collector, widening `collect_once(lookback=, max_fetch=)` to catch up after a
+home node slept.  Grid sizes for anyone working on the full composite: DBZH is
+**1 km, 3800 × 4400**; RATE is 2 km, 1900 × 2200.
+
 ### Collection
 
 OPERA keys are fully deterministic —
