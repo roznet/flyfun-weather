@@ -115,13 +115,17 @@ roughly a factor of four, which is why the product ships a correction field at
 all.
 
 **The map overlay applies it too.** This is not automatic: the overlay
-resamples a frame into a plate-carrée raster, and gathering each output pixel
+resamples a frame into a Web Mercator raster, and gathering each output pixel
 from its nominal source pixel would draw the cloud where the line of sight
 hits the ground rather than where the cloud is. The same briefing would then
 show a cell ~60 km from the position its own annuli reported. `render_overlay`
 therefore *scatters* detections to their corrected positions for a
 parallax-carrying frame (a gather for a ground-projected one, which needs no
-correction), painting lowest-first so the highest top wins an overlap.
+correction), resolving overlaps into a max-buffer so the highest top wins.
+Each detection paints a block sized from the frame's *own* geometry at that
+point (neighbour spacing in output pixels), not the nominal 2 km step: a
+geostationary pixel is ~1.5–2× taller than that at European latitudes, and
+nominal sizing left a one-pixel stipple grid (#652).
 `nodata` and `undetect` keep their nominal positions — neither carries a cloud
 to displace.
 
@@ -258,8 +262,10 @@ monkeypatches `socket.connect` to assert it.
 | `observed/coverage.py` | Per-source geographic domain: `covers`, `covering_sources`, `has_radar`, `SOURCE_DOMAINS`. |
 | `observed/payload.py` | Builds `ObservedConditions` for a route; gates each source on its domain first. |
 | `observed/summary.py` | Deterministic "Observed now" text. No LLM. |
-| `observed/imagery.py` | Frame → plate-carrée RGBA PNG for the map overlay. |
-| `api/observed.py` | `/status`, `/overlay/{source}.png`, `/flashes`. |
+| `observed/imagery.py` | Frame → Web Mercator PNG (corridor overlay); the shared paint (`sample_smooth`, `paint_smooth`, `encode_png`) the tiles use too. |
+| `observed/tiles.py` | Radar tiles (#652): per-frame Web Mercator value canvas (`{stamp}.canvas.npz`, built by the collector, purged with the frame), XYZ tiles sliced from it. |
+| `observed/satellite_ir.py` | Satellite IR underlay (#652): EUMETView WMS proxy, advertised cycles, tile cache. Display only. |
+| `api/observed.py` | `/status`, `/overlay/{source}.png`, `/flashes`, `/frames/{source}`, `/tiles/{source}/{stamp}/{z}/{x}/{y}.png`. |
 
 ### Frame store
 
@@ -372,7 +378,7 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 |---|---|
 | Cross-section `observed-tops` (group `conditions`, **default ON**) | FL-band histogram ticks + a solid highest-top cap per route point, over the NWP cloud bands. Hatched mark where the retrieval could not answer. Age badge. |
 | Cross-section `observed-surface` (group `conditions`, default off) | Echo colour strip along the terrain + lightning ticks. Hatched strip for no coverage. |
-| Route map | Corridor box, newest frame as a single `imageOverlay`, lightning points age-faded, age badge with attribution. |
+| Route map | Radar as Europe-wide tiles of the newest frame, satellite IR underneath (default on), cloud tops as a corridor `imageOverlay`; corridor box, lightning points age-faded, one age badge line per drawn layer, muted basemap while imagery is on. See [Map imagery](#map-imagery-652). |
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 | iOS cross-section (group `conditions`) | The same two layers, same defaults, same three-state marks. Corridor picker + per-source ages in the Layers sheet; measured values in the scrub readout, prefixed `Obs` so they never read as forecast. |
@@ -622,12 +628,44 @@ alignment fork.
 The iOS `/observed` endpoint listed here originally is **not needed and not
 built**: the payload already rides the snapshot and the bundle (see [The iOS
 surface needs no endpoint](#the-ios-surface-needs-no-endpoint)). Still absent on
-iOS: the map overlay (which *would* need `/api/observed/overlay`), the route-graph
+iOS: the map overlay (#654 — the tile endpoints are built for it), the route-graph
 metrics, and the "Observed now" summary panel.
 
-**Permanently out:** nowcasting, and a time slider. The map draws one frame,
-not a loop — a tiled animated radar product is a different, much more
-expensive thing than the question this layer answers.
+**Out:** nowcasting. A time slider / loop was listed here as "permanently out"
+because it needed a tiled product; #652 built that product for the static map,
+so the loop is now a planned follow-up (#653) rather than a cost question.
+
+### Map imagery (#652)
+
+Compared side by side with Windy on 2026-10-03, the map's radar was blocky and
+washed half of France pale blue, and "satellite" was the CTTH retrieval, which
+draws as blocks with holes. Changes:
+
+- **Web Mercator rows.** Leaflet stretches an `imageOverlay` linearly in
+  Mercator; the old plate-carrée PNG put its middle rows ~9 km (43–49°N) to
+  ~26 km (42–52°N) south of where the basemap draws them.
+- **Smoothed radar, class-anchored** (meteorology-decisions §33 addendum):
+  bilinear over detected pixels only, colour flat within a VIP class and
+  blended only just below a floor, weak returns fading in (alpha 0 at 5 dBZ,
+  faint to 20, full by 23) instead of a flat wash. Values are binned so a radar
+  image fits a lossless palette PNG (~3–5× smaller than RGBA).
+- **Tiles.** The collector projects each radar frame once into a z6 Web
+  Mercator byte canvas (~0.4 s warm, ~0.7 MB on disk; the grid lookup is built
+  once per process, ~180 MB transient, 63 MB held). Tiles slice it: bilinear
+  above z6, max-pooled below so a core survives zooming out; ~10 ms and
+  10–20 KB each, cached in process and `immutable` to the browser. A missing
+  canvas (old frames, `WB_OBSERVED_TILES=0`) is built on first request.
+  CTTH stays a corridor image: its read peaks ~1.1 GB and the IR underlay
+  replaces it as the picture.
+- **Satellite IR.** MTG FCI L1c IR 10.5 µm from EUMETView's WMS
+  (`mtg_fd:ir105_hrfi`, greyscale style pinned), proxied — the CSP allows only
+  basemap hosts, our cache shields EUMETView, and the URL shape matches the
+  radar's. Only advertised cycles (last 3 h, the radar's retention) are
+  proxied. Display only: no parallax correction, nothing sampled from it.
+  `WB_SATELLITE_IR=0` turns it off.
+- **Loop-ready.** `/frames/{source}` lists every retained frame and tile URLs
+  are keyed by stamp, so #653 changes a URL per step. iOS uses the same
+  endpoints in #654.
 
 ## Known limitations
 

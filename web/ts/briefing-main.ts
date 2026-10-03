@@ -43,7 +43,8 @@ import {
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
-import { corridorBounds, fetchObservedFlashes, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
+import { corridorBounds, fetchObservedFlashes, fetchObservedFrames, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
+import { SATELLITE_SOURCE, isTiledSource, type ObservedFramesInfo } from './visualization/route-map/observed-overlay-geometry';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -278,6 +279,43 @@ let observedFlashCache: ObservedFlashPoint[] | null = null;
 let observedFlashKey: string | null = null;
 let observedFlashPending = false;
 
+// Frame listings for the tiled layers (#652): the last one received per source
+// keeps drawing while a refresh is in flight, so a TTL expiry never flickers
+// the map back to the corridor image. Refreshed on render (60 s TTL inside
+// fetchObservedFrames) and by a light visible-tab tick, so a new radar frame
+// (every 5 min) appears without waiting for some other re-render.
+const observedFramesLast = new Map<string, ObservedFramesInfo>();
+let observedFramesPending = false;
+let observedFramesFetchedAt = 0;
+let observedFramesTimer: ReturnType<typeof setInterval> | null = null;
+// What the latest render wanted, for the tick (which has no render context).
+let observedFramesWanted: string[] = [];
+let observedFramesRerender: () => void = () => {};
+const OBSERVED_FRAMES_REFRESH_MS = 60_000;
+const OBSERVED_FRAMES_TICK_MS = 120_000;
+
+function refreshObservedFrames(sources: string[], requestRerender: () => void): void {
+  if (observedFramesPending || sources.length === 0) return;
+  if (Date.now() - observedFramesFetchedAt < OBSERVED_FRAMES_REFRESH_MS
+    && sources.every((s) => observedFramesLast.has(s))) return;
+  observedFramesPending = true;
+  Promise.all(sources.map(async (source) => [source, await fetchObservedFrames(source)] as const))
+    .then((results) => {
+      let changed = false;
+      for (const [source, info] of results) {
+        if (!info) continue;  // keep the last listing over a failed refresh
+        const before = observedFramesLast.get(source);
+        if (before?.frames[0]?.stamp !== info.frames[0]?.stamp || before?.stale !== info.stale) {
+          changed = true;
+        }
+        observedFramesLast.set(source, info);
+      }
+      observedFramesFetchedAt = Date.now();
+      if (changed) requestRerender();
+    })
+    .finally(() => { observedFramesPending = false; });
+}
+
 function updateObservedOverlay(
   data: VizRouteData,
   renderer: RouteMapRenderer,
@@ -307,8 +345,31 @@ function updateObservedOverlay(
   );
   // Lightning is points, not a raster: selecting it draws no imagery at all.
   const showFlashes = wanted === 'eumetsat_li';
-  renderer.setObservedSource(showFlashes || !wanted ? null : wanted);
+  const imagery = showFlashes || !wanted ? null : wanted;
+  renderer.setObservedSource(imagery);
   renderer.setObservedOpacity(briefingStore.getState().vizSettings.observedOverlayOpacity ?? 0.75);
+
+  // Tiled layers (#652): radar tiles + the satellite underlay draw from frame
+  // listings fetched here; until one arrives the radar uses the corridor image.
+  const showSatellite = briefingStore.getState().vizSettings.observedSatellite !== false;
+  renderer.setObservedSatellite(showSatellite);
+  const tiled = [
+    ...(isTiledSource(imagery) ? [imagery as string] : []),
+    ...(showSatellite ? [SATELLITE_SOURCE] : []),
+  ];
+  renderer.setObservedFrames(new Map(
+    tiled.filter((s) => observedFramesLast.has(s)).map((s) => [s, observedFramesLast.get(s)!]),
+  ));
+  observedFramesWanted = tiled;
+  observedFramesRerender = requestRerender;
+  refreshObservedFrames(tiled, requestRerender);
+  if (!observedFramesTimer && tiled.length) {
+    // Only re-renders when a listing's newest frame actually changed.
+    observedFramesTimer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      refreshObservedFrames(observedFramesWanted, observedFramesRerender);
+    }, OBSERVED_FRAMES_TICK_MS);
+  }
   // Fetched once and cached; a failure costs the scale, not the overlay.
   void fetchObservedLegends().then((legends) => {
     renderer.setObservedLegends(legends);
@@ -1989,6 +2050,7 @@ async function init(): Promise<void> {
           onForecastMetricChange: (metricId) => store.getState().setMapForecastMetric(metricId),
           onObservedOverlayChange: (source) => store.getState().setObservedOverlay(source),
           onObservedOpacityChange: (o) => store.getState().setObservedOverlayOpacity(o),
+          onObservedSatelliteToggle: (show) => store.getState().setObservedSatellite(show),
         }, data.fronts != null, forecastOverlayControls(state), {
           // Only offer what this briefing actually carries: an overlay that
           // renders an empty PNG is worse than an absent menu entry, because

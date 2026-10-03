@@ -202,6 +202,42 @@ def read_grid(path: Path | str) -> GridSpec:
         return _grid_from_where(handle["where"])
 
 
+def iter_row_blocks(path: Path | str, quantity: str, *, block_rows: int = 760):
+    """Yield ``(row0, values, nodata, undetect)`` over the full grid, in row blocks.
+
+    For whole-grid consumers (the map tile canvas) that must not hold the
+    float64 composite plus its decoded copy and masks at once — a full
+    ``read_window`` peaks near 600 MB.  Decoding follows ``read_window``
+    exactly: same gain/offset, same three-state masks, same pessimistic rule
+    when the two markers coincide.  760 rows matches the composite's HDF5
+    chunking, so each block is whole chunks.
+    """
+    import h5py
+
+    with h5py.File(str(path), "r") as handle:
+        grid = _grid_from_where(handle["where"])
+        _dataset, data = _find_data_group(handle, quantity)
+        what = data["what"]
+        gain = float(_attr(what, "gain") if _attr(what, "gain") is not None else 1.0)
+        offset = float(_attr(what, "offset") if _attr(what, "offset") is not None else 0.0)
+        nodata_raw = _attr(what, "nodata")
+        undetect_raw = _attr(what, "undetect")
+        for row0 in range(0, grid.ny, block_rows):
+            raw = np.asarray(data["data"][row0 : min(grid.ny, row0 + block_rows), :])
+            nodata = (
+                np.isclose(raw, float(nodata_raw)) if nodata_raw is not None
+                else np.zeros(raw.shape, dtype=bool)
+            )
+            undetect = (
+                np.isclose(raw, float(undetect_raw)) if undetect_raw is not None
+                else np.zeros(raw.shape, dtype=bool)
+            )
+            undetect &= ~nodata
+            values = offset + gain * raw.astype(np.float32)
+            values[nodata | undetect] = np.nan
+            yield row0, values, nodata, undetect
+
+
 def read_window(
     path: Path | str,
     quantity: str,

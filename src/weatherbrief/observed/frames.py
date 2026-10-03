@@ -200,6 +200,10 @@ class FlashFrame:
 
 _STAMP_FORMAT = "%Y%m%dT%H%M"
 
+#: Derived per-frame map canvas (``observed.tiles``), stored beside its frame
+#: and purged with it, so retention bounds the canvases as well.
+CANVAS_SUFFIX = ".canvas.npz"
+
 
 def frame_stamp(valid_time: datetime) -> str:
     """Filename stamp for a frame's valid time (UTC, minute resolution)."""
@@ -267,6 +271,10 @@ class FrameStore:
 
     def sidecar_path(self, source: str, valid_time: datetime) -> Path:
         return self.source_dir(source) / f"{frame_stamp(valid_time)}.json"
+
+    def canvas_path(self, source: str, valid_time: datetime) -> Path:
+        """The frame's derived map canvas (may not exist)."""
+        return self.source_dir(source) / f"{frame_stamp(valid_time)}{CANVAS_SUFFIX}"
 
     def has(self, source: str, valid_time: datetime) -> bool:
         """True only when *both* payload and sidecar are present.
@@ -398,7 +406,11 @@ class FrameStore:
         for frame in self.list_frames(source):
             if frame.valid_time >= cutoff:
                 continue
-            for path in (frame.path, self.sidecar_path(source, frame.valid_time)):
+            for path in (
+                frame.path,
+                self.sidecar_path(source, frame.valid_time),
+                self.canvas_path(source, frame.valid_time),
+            ):
                 try:
                     path.unlink()
                 except FileNotFoundError:
@@ -422,6 +434,18 @@ class FrameStore:
                 try:
                     payload.unlink()
                     removed += 1
+                except OSError:
+                    pass
+            # Canvases whose frame is gone (purged above, or never completed).
+            for canvas in directory.glob(f"*{CANVAS_SUFFIX}"):
+                try:
+                    valid_time = parse_frame_stamp(canvas.name[: -len(CANVAS_SUFFIX)])
+                except ValueError:
+                    continue
+                if valid_time >= cutoff and self.payload_path(source, valid_time).exists():
+                    continue
+                try:
+                    canvas.unlink()
                 except OSError:
                     pass
         return removed

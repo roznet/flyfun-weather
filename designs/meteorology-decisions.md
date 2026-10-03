@@ -4846,6 +4846,31 @@ change its name based on who is reading it.
 - Tests: `tests/observed/test_intensity.py`, plus updates to
   `tests/observed/test_payload.py` and `web/tests/unit/observed-conditions.test.ts`.
 
+### Addendum 2026-10-03 (#652): smoothed map paint keeps the classes
+
+The map's radar is now smoothed (bilinear between detected source pixels) so it
+reads like Windy rather than as 2 km blocks. Three rules keep (c) true:
+
+- **Colour is anchored on the class floors.** The ramp is flat inside a class;
+  the blend toward a class runs over the 3 dBZ (0.15 decade for mm/h)
+  *below* its floor. A value at or above a floor draws exactly that class's
+  colour, and the only intermediate colours belong to values just under the
+  next class, drawn one notch worse — the safe direction.
+- **Smoothing never invents a value.** The interpolation is a weighted mean
+  of *detected* neighbours only, so it cannot exceed the measured maximum or
+  borrow a low from an empty or unseen pixel; an empty neighbour fades the
+  alpha instead.
+- **Every quantisation rounds up.** The per-frame tile canvas stores values
+  rounded up to 0.5 dBZ / 0.025 decade, and the paint bins snap a value back to
+  any floor it reached, so 0.5 mm/h is never drawn as the 0.47 below it.
+
+Cloud tops are not smoothed (see `designs/current-conditions.md`). The legend
+stops are unchanged. Pinned by `tests/observed/test_imagery.py`
+(`test_a_class_floor_draws_exactly_its_class_colour`,
+`test_blending_happens_below_a_floor_never_above`,
+`test_smoothing_never_exceeds_the_measured_maximum`) and
+`tests/observed/test_tiles.py::test_a_class_floor_survives_the_canvas`.
+
 ---
 
 ## 34. "Significant since the briefing": category crossings with hysteresis, against the briefing, both directions

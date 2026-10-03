@@ -24,6 +24,10 @@ export interface VizSettings {
    *  either buries the basemap or washes the data out, depending on the
    *  product. */
   observedOverlayOpacity: number;
+  /** Draw the satellite infrared image under the observed layer (#652) —
+   *  the Windy-style "clouds under the radar" view. Display only: no number
+   *  in the briefing comes from it. */
+  observedSatellite: boolean;
   routeGraphVisible: boolean;
   routeGraphLeftMetric: string;
   routeGraphRightMetric: string;  // 'none' to disable right axis

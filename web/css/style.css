@@ -7012,6 +7012,8 @@ html {
   font-weight: 600;
   line-height: 1.3;
   pointer-events: none;
+  /* One line per drawn layer (radar, satellite). */
+  white-space: pre-line;
 }
 
 [data-theme="dark"] .map-observed-badge {

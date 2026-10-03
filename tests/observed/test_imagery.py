@@ -86,14 +86,162 @@ def test_area_outside_the_frame_reads_as_no_coverage(dbzh_path):
     assert np.all(image == np.array(NODATA_RGBA, dtype=np.uint8))
 
 
-def test_resampling_invents_no_intermediate_values(dbzh_path):
-    """Nearest-neighbour: every drawn colour is one of the palette stops."""
-    from weatherbrief.observed.imagery import _DBZ_STOPS
+def test_drawn_colours_are_class_colours_or_blends_just_below_a_floor(dbzh_path):
+    """Smoothing may add colours, but only pessimistic ones (§33).
+
+    Every drawn colour is either a class colour or the colour of a value within
+    the blend zone *under* the next class floor — never a colour that would
+    read as a weaker class than the value reached.
+    """
+    from weatherbrief.observed.imagery import (
+        _DBZ_BLEND,
+        _DBZ_STOPS,
+        smooth_colour,
+    )
 
     image = _decode(render_overlay(_full_frame(dbzh_path), BOUNDS)[0])
-    drawn = {tuple(row[:3]) for row in image[image[:, :, 3] == DETECTION_ALPHA]}
-    palette = {(r, g, b) for _v, r, g, b in _DBZ_STOPS}
-    assert drawn <= palette
+    drawn = {tuple(int(c) for c in row[:3]) for row in image[image[:, :, 3] > 0]}
+    drawn.discard(tuple(NODATA_RGBA[:3]))
+    allowed = {(r, g, b) for _v, r, g, b in _DBZ_STOPS}
+    for floor, *_rgb in _DBZ_STOPS[1:]:
+        zone = np.arange(floor - _DBZ_BLEND, floor, 0.5)
+        allowed |= {tuple(int(c) for c in np.rint(rgb)) for rgb in smooth_colour(SOURCE_OPERA_DBZH, zone)}
+    assert drawn <= allowed, drawn - allowed
+
+
+def test_a_class_floor_draws_exactly_its_class_colour():
+    """The legend and §33 promise one colour per class; smoothing keeps that."""
+    from weatherbrief.observed.frames import SOURCE_OPERA_RATE
+    from weatherbrief.observed.imagery import (
+        _DBZ_STOPS,
+        _RATE_STOPS,
+        _bin_values,
+        smooth_colour,
+    )
+
+    for source, stops in ((SOURCE_OPERA_DBZH, _DBZ_STOPS), (SOURCE_OPERA_RATE, _RATE_STOPS)):
+        for floor, r, g, b in stops[1:]:
+            for value in (floor, floor * 1.0001 + 1e-4):
+                rgb = smooth_colour(source, _bin_values(source, np.array([value])))[0]
+                assert tuple(int(c) for c in np.rint(rgb)) == (r, g, b), (source, value)
+
+
+def test_blending_happens_below_a_floor_never_above():
+    """Just under a floor is drawn toward the HIGHER class (the safe side)."""
+    from weatherbrief.observed.imagery import _DBZ_STOPS, smooth_colour
+
+    below_heavy = smooth_colour(SOURCE_OPERA_DBZH, np.array([40.0]))[0]
+    moderate = np.array(_DBZ_STOPS[2][1:], dtype=float)  # 30 dBZ
+    heavy = np.array(_DBZ_STOPS[3][1:], dtype=float)  # 41 dBZ
+    assert not np.allclose(below_heavy, moderate)
+    assert np.linalg.norm(below_heavy - heavy) < np.linalg.norm(moderate - heavy)
+    # And a mid-band value is the flat class colour.
+    assert np.allclose(smooth_colour(SOURCE_OPERA_DBZH, np.array([34.0]))[0], moderate)
+
+
+def test_smoothing_never_exceeds_the_measured_maximum():
+    """A weighted mean of detected neighbours only: no invented peaks."""
+    from weatherbrief.observed.imagery import sample_smooth
+
+    plane = np.array([[20.0, 45.0], [30.0, np.nan]], dtype=np.float32)
+    detected = np.array([[True, True], [True, False]])
+    rows, cols = np.meshgrid(np.linspace(0, 1, 9), np.linspace(0, 1, 9), indexing="ij")
+    values, coverage = sample_smooth(plane, detected, rows, cols)
+    finite = values[np.isfinite(values)]
+    assert finite.max() <= 45.0 + 1e-9
+    assert finite.min() >= 20.0 - 1e-9
+    # Exact at pixel centres.
+    assert values[0, 8] == pytest.approx(45.0)
+    # The empty corner fades the alpha (coverage), it does not drag the value
+    # toward an invented low: at the undetected centre there is no value.
+    assert coverage[8, 8] == pytest.approx(0.0)
+    assert np.isnan(values[8, 8])
+
+
+def test_overlay_rows_are_web_mercator():
+    """Leaflet stretches an imageOverlay linearly in Mercator, not in latitude.
+
+    Plate-carrée rows put the middle of a 43-49°N overlay ~9 km south of where
+    the basemap draws that latitude.
+    """
+    from weatherbrief.observed.imagery import MercatorRaster, inverse_mercator_y, mercator_y
+
+    bounds = OverlayBounds(south=43.0, west=0.0, north=49.0, east=8.0)
+    raster = MercatorRaster.for_bounds(bounds, 1600)
+    _lons, lats = raster.pixel_lonlat()
+    mid = raster.height // 2
+    expected = float(
+        inverse_mercator_y(
+            float(mercator_y(49.0)) - (mid + 0.5) * (float(mercator_y(49.0)) - float(mercator_y(43.0))) / raster.height
+        )
+    )
+    assert lats[mid, 0] == pytest.approx(expected, abs=1e-9)
+    plate_carree = 49.0 - (mid + 0.5) * 6.0 / raster.height
+    assert (lats[mid, 0] - plate_carree) * 111.0 > 7.0, "rows are still plate-carrée"
+    # Round trip: a row's centre latitude maps back onto that row's centre.
+    assert raster.rows_for(lats[mid, 0]) == pytest.approx(mid + 0.5)
+    # Square pixels in Mercator: width / height == x span / y span.
+    x_span = np.radians(8.0)
+    y_span = float(mercator_y(49.0) - mercator_y(43.0))
+    assert raster.width / raster.height == pytest.approx(x_span / y_span, rel=0.01)
+
+
+def _contiguous_cloud(frame):
+    """The fixture granule with a solid deck: rows 20-60, cols 20-60 cloudy.
+
+    The fixture's own detections are deliberately scattered (they are built for
+    the sampler), so any gap test on them would be measuring real clear sky.
+    Parallax is zeroed so the deck stays where its pixels are.
+    """
+    deck = np.zeros(frame.values.shape, dtype=bool)
+    deck[20:60, 20:60] = True
+    frame.nodata[:] = False
+    frame.undetect[:] = ~deck
+    frame.values[:] = np.where(deck, 9000.0, np.nan)
+    frame.aux["delta_latitude"] = np.zeros(frame.values.shape)
+    frame.aux["delta_longitude"] = np.zeros(frame.values.shape)
+    return frame
+
+
+def test_cloud_tops_are_not_stippled(ctth_path):
+    """Each detection's block covers its real footprint, so no gap rows.
+
+    The block used to be sized from the NOMINAL grid step; a geostationary
+    pixel's footprint is taller than that at European latitudes, which left a
+    one-pixel transparent line between rows of cloud.
+    """
+    from weatherbrief.observed.imagery import MercatorRaster, _source_pixel_block
+
+    frame = _contiguous_cloud(_ctth_frame(ctth_path))
+    lon, lat = frame.grid.colrow_to_lonlat(np.array([20, 59]), np.array([20, 59]))
+    bounds = OverlayBounds(
+        south=float(np.min(lat)) - 0.05, west=float(np.min(lon)) - 0.05,
+        north=float(np.max(lat)) + 0.05, east=float(np.max(lon)) + 0.05,
+    )
+    # A zoom where one source pixel is several output pixels but well under
+    # the block cap, so the test measures the footprint, not the cap.
+    max_pixels = 500
+    block = _source_pixel_block(frame, MercatorRaster.for_bounds(bounds, max_pixels))
+    assert 2 <= max(block) < 16
+    alpha = _decode(render_overlay(frame, bounds, max_pixels=max_pixels)[0])[:, :, 3]
+    painted = alpha == DETECTION_ALPHA
+    rows = np.nonzero(painted.any(axis=1))[0]
+    cols = np.nonzero(painted.any(axis=0))[0]
+    assert rows.size > 10 and cols.size > 10, "deck not painted"
+    # The deck is a parallelogram in lat/lon (the geostationary grid is
+    # skewed), so test its interior, not its bounding box.
+    trim_r = (rows.max() - rows.min()) // 6
+    trim_c = (cols.max() - cols.min()) // 6
+    inner = painted[rows.min() + trim_r : rows.max() - trim_r, cols.min() + trim_c : cols.max() - trim_c]
+    assert inner.all(), f"{(~inner).sum()} transparent pixels inside a solid deck"
+
+
+def test_radar_png_is_a_palette_image(dbzh_path):
+    """Binned paint fits a lossless palette: several times smaller than RGBA."""
+    from PIL import Image
+
+    png = render_overlay(_full_frame(dbzh_path), BOUNDS)[0]
+    assert Image.open(io.BytesIO(png)).mode == "P"
 
 
 def test_cloud_tops_render_too(ctth_path):
@@ -157,10 +305,14 @@ def _painted_latitudes(png: bytes, bounds: OverlayBounds, rgb) -> tuple[float, f
     match &= image[:, :, 3] == DETECTION_ALPHA
     rows = np.nonzero(match.any(axis=1))[0]
     assert rows.size, "expected some cirrus to be painted"
-    span = bounds.north - bounds.south
+    from weatherbrief.observed.imagery import inverse_mercator_y, mercator_y
+
+    # Rows are Web Mercator (see test_overlay_rows_are_web_mercator).
+    y_north = float(mercator_y(bounds.north))
+    y_span = y_north - float(mercator_y(bounds.south))
 
     def lat_of(row):
-        return bounds.north - (row + 0.5) * span / height
+        return float(inverse_mercator_y(y_north - (row + 0.5) * y_span / height))
 
     return lat_of(rows.max()), lat_of(rows.min())
 
@@ -319,11 +471,18 @@ def test_light_echo_is_drawn_faintly_not_at_full_strength(dbzh_path):
     """
     from weatherbrief.observed.imagery import FAINT_ALPHA
 
+    from weatherbrief.observed.imagery import smooth_alpha
+
     frame = _full_frame(dbzh_path)
     alpha = _decode(render_overlay(frame, BOUNDS)[0])[:, :, 3]
-    assert (alpha == FAINT_ALPHA).any(), "no faint echo drawn at all"
+    assert ((alpha > 0) & (alpha <= FAINT_ALPHA)).any(), "no faint echo drawn at all"
     assert (alpha == DETECTION_ALPHA).any(), "no full-strength echo drawn"
     assert FAINT_ALPHA < DETECTION_ALPHA
+    # The rule itself: nothing below the floor is drawn stronger than faint,
+    # and the weakest returns fade toward invisible rather than a flat wash.
+    below = smooth_alpha(SOURCE_OPERA_DBZH, np.array([5.0, 12.0, 19.9]))
+    assert (below <= FAINT_ALPHA).all()
+    assert below[0] < below[1] < below[2]
 
 
 def test_rain_rate_and_cloud_tops_are_not_dimmed(rate_path, ctth_path):
