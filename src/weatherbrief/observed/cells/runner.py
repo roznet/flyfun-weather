@@ -37,7 +37,7 @@ import numpy as np
 from .. import ctth as ctth_reader
 from .. import lightning as li_reader
 from .. import opera
-from ..collect import DEFAULT_LOOKBACK, collect_once, due_sources, expected_frame_times
+from ..collect import DEFAULT_LOOKBACK, collect_once, due_sources
 from ..frames import (
     SOURCE_EUMETSAT_CTTH,
     SOURCE_EUMETSAT_LI,
@@ -50,7 +50,7 @@ from ..frames import (
 )
 from ..grid import GridSpec, GridWindow, compute_window
 from .attributes import cloud_tops, flash_counts, rate_peaks, same_grid
-from .catalogue import SCHEMA, catalogue_path, r, read_catalogue, write_catalogue
+from .catalogue import SCHEMA, catalogue_path, failure_path, r, read_catalogue, write_catalogue
 from .detect import TierDetection, detect, footprint_runs, initial_bearing_deg, distance_km
 from .lineage import PreviousCell, link, trend, trim_history
 from .motion import FlowField, cell_motion, estimate_flow
@@ -125,6 +125,31 @@ def grid_to_dict(grid: GridSpec) -> dict:
 
 def grid_from_dict(data: dict) -> GridSpec:
     return GridSpec(**data)
+
+
+_REVISION: list[str | None] = []
+
+
+def code_revision() -> str | None:
+    """Short git SHA of the checkout running the loop, or ``None``.
+
+    Stamped on every catalogue because ``policy_version`` only sees the
+    numbers: a behaviour change that forgot to bump ``CellPolicy.name`` is
+    still traceable.  Informational only — lineage and scoring match on
+    ``policy_version``, or every deploy would restart every storm's history.
+    """
+    if not _REVISION:
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short=12", "HEAD"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            _REVISION.append(out.stdout.strip() or None)
+        except (OSError, subprocess.SubprocessError):
+            _REVISION.append(None)
+    return _REVISION[0]
 
 
 def peak_rss_mb() -> float:
@@ -373,6 +398,14 @@ def process_frame(
                 prev_t, prev_cat, prev_dets = t, cat, dets
                 break
     inputs["lineage_from"] = prev_t.isoformat() if prev_t else None
+    if prev_t is None:
+        # Say so: every cell below is "born" here because there was no
+        # predecessor to link to, not because the weather started now.
+        unavailable.append({
+            "what": "lineage",
+            "reason": f"no catalogue under this policy in the previous "
+                      f"{policy.lineage_max_gap_minutes} min (missing or failed frame, or a fresh start)",
+        })
 
     rate = li = ctth = None
     if SOURCE_OPERA_RATE in sources:
@@ -452,6 +485,7 @@ def process_frame(
     catalogue = {
         "schema": SCHEMA,
         "policy_version": policy.policy_version,
+        "code_revision": code_revision(),
         "policy": policy.as_dict(),
         "valid_time": valid_time.isoformat(),
         "window_minutes": frame.window_minutes,
@@ -534,16 +568,22 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
     for t in dbzh_slots(now - lookback, now):
         if catalogue_path(ws.root, t).exists() or not ws.frames.has(SOURCE_OPERA_DBZH, t):
             continue
+        if failure_path(ws.root, t).exists():
+            continue
         if now - t < ATTRIBUTE_WAIT and not attributes_ready(ws.frames, t, sources):
             # Stop here rather than skip: a later frame analysed first would
             # start its lineage without this one.
             break
+        error = None
         try:
             summary = process_frame(ws, t, policy, cache=cache, sources=sources)
-        except Exception:
+            if summary is None:
+                error = "DBZH frame present but unreadable"
+        except Exception as exc:
             logger.exception("Cell analysis failed for %s", t)
-            ws.log_run(t, {"type": "error", "valid_time": t.isoformat(),
-                           "processed_at": datetime.now(timezone.utc).isoformat()})
+            summary, error = None, repr(exc)
+        if error is not None:
+            mark_failed(ws, t, error)
             continue
         if summary:
             done += 1
@@ -554,6 +594,17 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
                 summary["catalogue_bytes"], ",".join(summary["unavailable"]) or "-",
             )
     return done
+
+
+def mark_failed(ws: Workspace, t: datetime, error: str) -> None:
+    """Record a frame the loop gave up on: once in the run log, once on disk."""
+    logger.error("Cell analysis gave up on %s: %s", frame_stamp(t), error)
+    row = {"type": "error", "valid_time": t.isoformat(), "error": error,
+           "processed_at": datetime.now(timezone.utc).isoformat()}
+    path = failure_path(ws.root, t)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(row, sort_keys=True))
+    ws.log_run(t, row)
 
 
 def record_downtime(ws: Workspace, state: dict, now: datetime, lookback: timedelta) -> None:
@@ -578,18 +629,25 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     sweep = not last_sweep or now - datetime.fromisoformat(last_sweep) >= SWEEP_EVERY
     # Radar first and analysed straight away; the slow EUMETSAT downloads come
     # after, so they never hold the newest radar frame back.
+    collected_ok = True
     for family in (_OPERA, _EUMETSAT):
         try:
             for res in collect_tick(ws, sources, now, sweep=sweep, lookback=lookback, family=family):
+                if res.failed:
+                    collected_ok = False
                 if res.fetched or res.failed:
                     logger.info("collect %s: fetched=%d missing=%d failed=%d %s", res.source,
                                 res.fetched, res.missing, res.failed, "; ".join(res.errors[:2]))
         except Exception:
+            collected_ok = False
             logger.exception("Collection failed for %s", ",".join(family))
         analyse_tick(ws, datetime.now(timezone.utc) if now_is_live else now, lookback,
                      policy, cache, sources)
+    # `last_tick` means "the loop was alive" (what the downtime gap measures);
+    # `last_sweep` only advances when the catch-up actually worked, so a failed
+    # sweep is retried on the next tick rather than 15 minutes later.
     state["last_tick"] = now.isoformat()
-    if sweep:
+    if sweep and collected_ok:
         state["last_sweep"] = now.isoformat()
     ws.save_state(state)
 
@@ -662,13 +720,14 @@ def coverage_report(ws: Workspace, start: datetime, end: datetime, sources: tupl
         if run_start is not None:
             gaps.append([run_start.isoformat(), (t - timedelta(minutes=step)).isoformat()])
         report[source] = {"expected": expected, "stored": stored, "gaps": gaps}
-    cats = sum(1 for t in dbzh_slots(start, end) if catalogue_path(ws.root, t).exists())
-    report["catalogues"] = cats
+    slots = dbzh_slots(start, end)
+    report["catalogues"] = sum(1 for t in slots if catalogue_path(ws.root, t).exists())
+    report["failed"] = [t.isoformat() for t in slots if failure_path(ws.root, t).exists()]
     return report
 
 
 __all__ = [
     "Workspace", "FrameCache", "process_frame", "run_tick", "run_forever", "replay",
     "coverage_report", "cells_root", "cells_sources", "catchup_lookback",
-    "grid_from_dict", "grid_to_dict", "expected_frame_times",
+    "grid_from_dict", "grid_to_dict", "code_revision",
 ]

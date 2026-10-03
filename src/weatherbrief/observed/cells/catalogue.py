@@ -38,6 +38,17 @@ def catalogue_path(root: Path, valid_time: datetime) -> Path:
     return root / "catalogues" / stamp[:8] / f"{stamp}.json.gz"
 
 
+def failure_path(root: Path, valid_time: datetime) -> Path:
+    """Marker for a frame the loop could not analyse — it is not retried.
+
+    Without it a failing or unreadable frame has no catalogue, so every tick
+    for the whole catch-up window would decode it again and log again.
+    ``replay`` ignores markers: it is the tool for re-trying after a fix.
+    """
+    stamp = frame_stamp(valid_time)
+    return root / "catalogues" / stamp[:8] / f"{stamp}.failed.json"
+
+
 def r(value, digits: int):
     """Round for the wire; NaN/inf become ``None`` (JSON has no NaN)."""
     if value is None:

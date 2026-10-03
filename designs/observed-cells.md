@@ -122,7 +122,22 @@ separate root it refuses to share with the live one.
 **`policy_version` = name + digest of every number.**  It does *not* see code.
 A change that alters output without touching a number must bump
 `CellPolicy.name` (`cells-1` → `cells-2`), or old and new catalogues will
-claim the same version.
+claim the same version.  Each catalogue also carries `code_revision` (the
+checkout's git SHA) so such a slip stays traceable; it is informational —
+lineage and scoring match on `policy_version` only, or every deploy would
+restart every storm's history.
+
+**A failed frame is given up on, once.**  An exception or an unreadable DBZH
+file writes `catalogues/<day>/<stamp>.failed.json` (with the error) and one
+`error` row; the loop never retries it, `status` lists it under `failed`, and
+`replay` (which ignores markers) is how to re-try after a fix.  The next frame
+then has no predecessor, and its catalogue says so: `unavailable` carries a
+`lineage` entry whenever cells are "born" for lack of a predecessor rather
+than because the weather started.
+
+**Sweep state.**  `last_tick` means "the loop was alive" (the downtime gap);
+`last_sweep` only advances when the catch-up collected without failures, so
+a failed sweep is retried on the next tick.
 
 **Self-scoring.**  For each tier and lead (30, 60 min): cells issued at T−L
 with an available velocity, advected by v·L, against the tier's cells at T, on
