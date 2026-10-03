@@ -176,6 +176,20 @@ export function currentFrame(info: ObservedFramesInfo | null | undefined): Obser
   return info.frames[0];
 }
 
+/** Badge line for a layer whose newest frame is too old to draw, so a pilot
+ *  can tell "radar hidden because stale" from "no echoes". `''` when there is
+ *  nothing to say (no listing, or a current frame). */
+export function staleBadge(info: ObservedFramesInfo | null | undefined, now: Date = new Date()): string {
+  if (!info || !info.stale) return '';
+  const newest = info.frames[0];
+  if (!newest) return `${info.label}: no current frame`;
+  const valid = new Date(newest.valid_time);
+  if (Number.isNaN(valid.getTime())) return `${info.label}: no current frame`;
+  const hhmm = `${String(valid.getUTCHours()).padStart(2, '0')}:${String(valid.getUTCMinutes()).padStart(2, '0')}Z`;
+  const age = Math.round((now.getTime() - valid.getTime()) / 60000);
+  return `${info.label}: not shown — newest frame ${hhmm} is ${age} min old`;
+}
+
 /** Badge fields for a drawn frame, from the frame itself (not the briefing's
  *  sample, which may be an older frame than the one on screen). */
 export function frameBadgeField(

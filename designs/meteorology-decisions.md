@@ -4861,8 +4861,10 @@ reads like Windy rather than as 2 km blocks. Three rules keep (c) true:
   borrow a low from an empty or unseen pixel; an empty neighbour fades the
   alpha instead.
 - **Every quantisation rounds up.** The per-frame tile canvas stores values
-  rounded up to 0.5 dBZ / 0.025 decade, and the paint bins snap a value back to
-  any floor it reached, so 0.5 mm/h is never drawn as the 0.47 below it.
+  rounded up to 0.5 dBZ / 0.025 decade, the paint bins round up to their upper
+  edge (#655 follow-up; they first took the lower edge, a <0.5 dBZ optimistic
+  slip), and a value never bins below a floor it reached, so 0.5 mm/h is
+  never drawn as the 0.47 below it.
 
 Cloud tops are not smoothed (see `designs/current-conditions.md`). The legend
 stops are unchanged. Pinned by `tests/observed/test_imagery.py`

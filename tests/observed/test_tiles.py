@@ -261,3 +261,87 @@ def test_tile_zoom_range_is_enforced():
     assert not tiles.valid_tile(tiles.MAX_TILE_ZOOM + 1, 0, 0)
     assert not tiles.valid_tile(5, 32, 0)
     assert not tiles.valid_tile(5, 0, -1)
+
+
+# --- Request-path builds (#655 review) --------------------------------------------
+
+
+def test_a_failed_build_is_remembered_not_retried_per_tile(store, monkeypatch):
+    calls = []
+
+    def broken(*_a, **_k):
+        calls.append(1)
+        raise ValueError("corrupt payload")
+
+    monkeypatch.setattr(tiles, "write_canvas", broken)
+    tiles._FAILED_BUILDS.clear()
+    for _ in range(3):
+        with pytest.raises(tiles.CanvasUnavailable):
+            tiles.load_canvas(store, SOURCE_OPERA_DBZH, VALID)
+    assert len(calls) == 1
+    tiles._FAILED_BUILDS.clear()
+
+
+def test_a_waiter_gives_up_instead_of_pinning_a_thread(store, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(tiles, "BUILD_WAIT_SECONDS", 0.05)
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with tiles._BUILD_LOCK:
+            held.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    held.wait(5)
+    try:
+        with pytest.raises(tiles.CanvasBusy):
+            tiles.load_canvas(store, SOURCE_OPERA_DBZH, VALID)
+    finally:
+        release.set()
+        thread.join()
+
+
+@pytest.mark.parametrize("z", [3, 4, 5])
+def test_strip_pooling_matches_pooling_in_one_go(store, monkeypatch, z):
+    """Strips bound the memory; they must not change a pixel."""
+    canvas = tiles.load_canvas(store, SOURCE_OPERA_DBZH, VALID)
+    x, y = _tile_of(*STATION, z)
+    monkeypatch.setattr(tiles, "_POOL_STRIP_PIXELS", 1 << 40)  # one strip
+    whole = tiles._pooled(canvas, z, x, y)
+    monkeypatch.setattr(tiles, "_POOL_STRIP_PIXELS", 1 << 14)  # many strips
+    strips = tiles._pooled(canvas, z, x, y)
+    for a, b in zip(whole, strips):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_an_archive_store_gets_no_canvases(tmp_path, dbzh_path, monkeypatch):
+    """The cells loop (#650) keeps every frame forever; nobody serves tiles
+    from it, so a canvas per frame there would be pure waste."""
+    monkeypatch.delenv("WB_OBSERVED_TILES", raising=False)
+    store = FrameStore(tmp_path / "archive", retain_all=True)
+    collect.collect_opera(
+        SOURCE_OPERA_DBZH, store, now=NOW, max_fetch=1,
+        session=_Session(dbzh_path.read_bytes()), lookback=timedelta(minutes=10),
+    )
+    frame = store.list_frames(SOURCE_OPERA_DBZH)[0]
+    assert not store.canvas_path(SOURCE_OPERA_DBZH, frame.valid_time).exists()
+
+
+def test_purge_sweeps_a_dead_writers_temp_file(store):
+    import os
+    import time as _time
+
+    directory = store.source_dir(SOURCE_OPERA_DBZH)
+    dead = directory / ".tmp-20260825T1400.canvas.npz"
+    live = directory / ".tmp-abc123"
+    dead.write_bytes(b"x")
+    live.write_bytes(b"x")
+    old = _time.time() - 3600
+    os.utime(dead, (old, old))
+    store.purge(SOURCE_OPERA_DBZH, now=datetime.now(timezone.utc))
+    assert not dead.exists()
+    assert live.exists(), "a temp file a writer may still own must survive"

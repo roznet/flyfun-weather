@@ -35,6 +35,7 @@ import {
   frameBadgeField,
   frameTileUrl,
   isTiledSource,
+  staleBadge,
   overlayUrl as overlayUrlForBox,
   type LatLonBox,
   type ObservedFrame,
@@ -141,6 +142,8 @@ export function renderObservedOverlay(
     if (info && frame) {
       wanted.push(tileSpec(info, frame, SATELLITE_OPACITY, SATELLITE_Z));
       badges.push(formatBadge(frameBadgeField(info, frame, now)));
+    } else {
+      badges.push(staleBadge(info, now));
     }
   }
 
@@ -164,6 +167,8 @@ export function renderObservedOverlay(
     }
     // A listing that says "stale" draws nothing: an old frame must not pass
     // for the present sky, which is also what the corridor endpoint's 410 does.
+    // The badge says so, so it does not read as "no echoes".
+    if (info && !frame) badges.unshift(staleBadge(info, now));
   } else {
     badges.unshift(badgeText(observed, options.imagerySource));
   }
@@ -226,10 +231,14 @@ function tileSpec(
 // Live tile layers per group, keyed by URL (= source + frame stamp).
 const liveTiles = new WeakMap<L.LayerGroup, Map<string, L.TileLayer>>();
 
+// Tile layers on their way out: an old frame kept until its successor loads.
+const retiringTiles = new WeakMap<L.LayerGroup, Set<L.Layer>>();
+
 function clearNonTileLayers(group: L.LayerGroup): void {
   const tiles = new Set<L.Layer>(liveTiles.get(group)?.values() ?? []);
+  const retiring = retiringTiles.get(group);
   group.eachLayer((layer) => {
-    if (!tiles.has(layer)) group.removeLayer(layer);
+    if (!tiles.has(layer) && !retiring?.has(layer)) group.removeLayer(layer);
   });
 }
 
@@ -241,6 +250,7 @@ function reconcileTiles(group: L.LayerGroup, wanted: TileSpec[]): void {
   const live = liveTiles.get(group) ?? new Map<string, L.TileLayer>();
   liveTiles.set(group, live);
   const keep = new Set<L.Layer>();
+  const added: { layer: L.TileLayer; zIndex: number }[] = [];
   for (const spec of wanted) {
     let layer = live.get(spec.url);
     if (layer && group.hasLayer(layer)) {
@@ -249,15 +259,36 @@ function reconcileTiles(group: L.LayerGroup, wanted: TileSpec[]): void {
       layer = tileLayerFor(spec);
       live.set(spec.url, layer);
       layer.addTo(group);
+      added.push({ layer, zIndex: spec.zIndex });
     }
     keep.add(layer);
   }
   for (const [url, layer] of live) {
     if (keep.has(layer)) continue;
-    group.removeLayer(layer);
     live.delete(url);
+    // A new frame of the same layer (same z-index) replaces this one: keep
+    // the old frame on screen until the new tiles have loaded, so the map
+    // does not blank once per radar cycle. Removed at the latest after
+    // FRAME_SWAP_TIMEOUT_MS (a successor whose tiles all fail never fires
+    // `load`). Re-renders in between leave it alone (`retiringTiles`).
+    const successor = added.find((a) => a.zIndex === layer.options.zIndex);
+    if (successor) {
+      const retiring = retiringTiles.get(group) ?? new Set<L.Layer>();
+      retiringTiles.set(group, retiring);
+      retiring.add(layer);
+      const drop = (): void => {
+        retiring.delete(layer);
+        group.removeLayer(layer);
+      };
+      successor.layer.once('load', drop);
+      setTimeout(drop, FRAME_SWAP_TIMEOUT_MS);
+    } else {
+      group.removeLayer(layer);
+    }
   }
 }
+
+const FRAME_SWAP_TIMEOUT_MS = 10_000;
 
 function tileLayerFor(spec: TileSpec): L.TileLayer {
   return L.tileLayer(spec.url, {

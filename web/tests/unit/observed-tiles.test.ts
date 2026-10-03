@@ -11,6 +11,7 @@ import {
   frameTileUrl,
   isTiledSource,
   resolveObservedSelection,
+  staleBadge,
   type ObservedFramesInfo,
 } from '../../ts/visualization/route-map/observed-overlay-geometry';
 
@@ -104,5 +105,26 @@ describe('observed layer selection', () => {
 
   it('a never-set pick takes the default', () => {
     expect(resolveObservedSelection(undefined, all)).toBe('opera_dbzh');
+  });
+});
+
+describe('stale layer badge', () => {
+  const now = new Date('2026-10-03T15:00:00Z');
+
+  it('says a stale layer is hidden, and how old its newest frame is', () => {
+    const text = staleBadge(listing({ stale: true }), now);
+    expect(text).toContain('Radar reflectivity');
+    expect(text).toContain('not shown');
+    expect(text).toContain('14:05Z');
+    expect(text).toContain('55 min old');
+  });
+
+  it('says nothing for a current layer or a missing listing', () => {
+    expect(staleBadge(listing(), now)).toBe('');
+    expect(staleBadge(null, now)).toBe('');
+  });
+
+  it('handles a stale listing with no frames at all', () => {
+    expect(staleBadge(listing({ stale: true, frames: [] }), now)).toContain('no current frame');
   });
 });

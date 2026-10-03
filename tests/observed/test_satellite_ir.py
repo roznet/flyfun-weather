@@ -110,3 +110,84 @@ def test_tile_request_pins_layer_style_crs_and_time():
     assert params["crs"] == "EPSG:3857"
     assert params["time"] == "2026-10-03T16:00:00Z"
     assert params["width"] == params["height"] == "256"
+
+
+# --- Upstream protection (#655 review) ---------------------------------------------
+
+
+@responses.activate
+def test_an_expired_list_is_served_stale_while_one_caller_refreshes(monkeypatch):
+    responses.add(
+        responses.GET, satellite_ir.CAPABILITIES_URL,
+        body=_caps("2024-09-23T00:00:00Z/2026-10-03T16:00:00Z/PT10M"),
+    )
+    first = satellite_ir.available_times()
+    # Expire the cache, and pretend another thread holds the refresh.
+    stamp_, times = satellite_ir._caps_cache
+    satellite_ir._caps_cache = (stamp_ - 10_000, times)
+    assert satellite_ir._caps_refresh_lock.acquire(blocking=False)
+    try:
+        assert satellite_ir.available_times() == first
+    finally:
+        satellite_ir._caps_refresh_lock.release()
+    assert len(responses.calls) == 1, "a waiting caller must not fetch capabilities too"
+
+
+@responses.activate
+def test_a_failing_upstream_is_not_hit_once_per_tile():
+    cycle = datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc)
+    responses.add(responses.GET, satellite_ir.WMS_URL, status=503)
+    for x in range(5):
+        with pytest.raises(satellite_ir.SatelliteUnavailable):
+            satellite_ir.fetch_tile(cycle, 6, 30 + x, 21)
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_a_young_cycles_tile_is_refetched_after_a_few_minutes(monkeypatch):
+    cycle = datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc)
+    responses.add(responses.GET, satellite_ir.WMS_URL, body=b"v1", content_type="image/png")
+    monkeypatch.setattr(satellite_ir, "is_young", lambda c, now=None: True)
+    assert satellite_ir.fetch_tile(cycle, 6, 32, 21) == b"v1"
+    key = (satellite_ir.stamp(cycle), 6, 32, 21)
+    body, fetched = satellite_ir._tile_cache[key]
+    satellite_ir._tile_cache[key] = (body, fetched - satellite_ir.YOUNG_TILE_TTL_SECONDS - 1)
+    responses.replace(responses.GET, satellite_ir.WMS_URL, body=b"v2", content_type="image/png")
+    assert satellite_ir.fetch_tile(cycle, 6, 32, 21) == b"v2"
+    # An old cycle's tile is final.
+    monkeypatch.setattr(satellite_ir, "is_young", lambda c, now=None: False)
+    body, fetched = satellite_ir._tile_cache[key]
+    satellite_ir._tile_cache[key] = (body, fetched - 10_000)
+    assert satellite_ir.fetch_tile(cycle, 6, 32, 21) == b"v2"
+    assert len(responses.calls) == 2
+
+
+def test_concurrent_misses_of_one_tile_share_one_fetch(monkeypatch):
+    import threading
+
+    cycle = datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc)
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow(*_a):
+        calls.append(1)
+        started.set()
+        release.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(satellite_ir, "_fetch_tile_upstream", slow)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(satellite_ir.fetch_tile(cycle, 6, 32, 21)))
+        for _ in range(4)
+    ]
+    threads[0].start()
+    started.wait(5)
+    for t in threads[1:]:
+        t.start()
+    release.set()
+    for t in threads:
+        t.join(5)
+    assert results == [b"png"] * 4
+    assert len(calls) == 1

@@ -497,3 +497,15 @@ def test_rain_rate_and_cloud_tops_are_not_dimmed(rate_path, ctth_path):
     rate = _full_frame(rate_path, quantity="RATE", source=SOURCE_OPERA_RATE)
     alpha = _decode(render_overlay(rate, BOUNDS)[0])[:, :, 3]
     assert not (alpha == FAINT_ALPHA).any(), "rain rate was dimmed like reflectivity"
+
+
+def test_binning_rounds_up_never_down():
+    """Bins take their upper edge, like the canvas codec: a blend-zone value
+    draws at most one bin toward the next class, never toward the one below."""
+    from weatherbrief.observed.frames import SOURCE_OPERA_RATE
+    from weatherbrief.observed.imagery import _bin_values
+
+    dbz = np.linspace(5.0, 60.0, 997)
+    assert (_bin_values(SOURCE_OPERA_DBZH, dbz) >= dbz - 1e-9).all()
+    rate = np.logspace(-1.5, 2.0, 997)
+    assert (_bin_values(SOURCE_OPERA_RATE, rate) >= rate * (1 - 1e-9)).all()

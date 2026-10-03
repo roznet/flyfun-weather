@@ -403,7 +403,14 @@ def observed_frames(
     if source not in tiles.TILE_SOURCES:
         raise HTTPException(status_code=404, detail="Not a tiled source")
     spec = SOURCE_SPECS[source]
-    stored = FrameStore().list_frames(source)
+    store = FrameStore()
+    stored = store.list_frames(source)
+    if tiles.tiles_enabled():
+        # The collector builds each canvas right after publishing the frame,
+        # so for a moment the listing could run ahead of it — and every tile
+        # of that frame would then build it in the request path. Offer only
+        # frames whose canvas is ready; the previous frame draws meanwhile.
+        stored = [f for f in stored if tiles.has_canvas(store, source, f.valid_time)]
     frames = [_frame_entry(frame_stamp(f.valid_time), f.valid_time, now) for f in stored]
     newest = stored[0] if stored else None
     return {
@@ -457,7 +464,10 @@ def observed_tile(
             png = satellite_ir.fetch_tile(valid_time, z, x, y)
         except satellite_ir.SatelliteUnavailable as exc:
             raise HTTPException(status_code=503, detail="Satellite imagery unavailable") from exc
-        return _tile_response(png)
+        # A young cycle may still have been completing upstream: cache it
+        # briefly, so a partial tile is not pinned in the browser for a day.
+        young = satellite_ir.is_young(valid_time)
+        return _tile_response(png, _CACHE_CONTROL if young else _TILE_CACHE_CONTROL)
 
     if source not in tiles.TILE_SOURCES:
         raise HTTPException(status_code=404, detail="Not a tiled source")
@@ -468,15 +478,24 @@ def observed_tile(
     except FileNotFoundError as exc:
         # Purged (older than retention) or never collected: gone, not broken.
         raise HTTPException(status_code=410, detail="Frame not stored") from exc
+    except tiles.CanvasBusy as exc:
+        raise HTTPException(
+            status_code=503, detail="Frame being prepared", headers={"Retry-After": "2"}
+        ) from exc
+    except tiles.CanvasUnavailable as exc:
+        # A frame whose canvas cannot be built is not coming back: answer
+        # "gone" (the build failure is remembered, so this costs no re-read).
+        logger.warning("Observed tile frame unusable for %s %s: %s", source, stamp, exc)
+        raise HTTPException(status_code=410, detail="Frame unreadable") from exc
     except Exception as exc:
         logger.warning("Observed tile render failed for %s %s", source, stamp, exc_info=True)
         raise HTTPException(status_code=500, detail="Tile render failed") from exc
     return _tile_response(png)
 
 
-def _tile_response(png: bytes) -> Response:
+def _tile_response(png: bytes, cache_control: str = _TILE_CACHE_CONTROL) -> Response:
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": _TILE_CACHE_CONTROL},
+        headers={"Cache-Control": cache_control},
     )

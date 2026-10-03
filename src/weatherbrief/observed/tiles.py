@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
@@ -308,27 +309,67 @@ _CANVAS_CACHE_SIZE = 4
 _CANVAS_LOCK = threading.Lock()
 _BUILD_LOCK = threading.Lock()
 
+#: How long a tile request waits for another request's canvas build before
+#: giving up with `CanvasBusy`.  A build is ~0.5-2 s warm; the bound stops a
+#: cold lookup (several seconds, ~180 MB) from pinning a threadpool full of
+#: tile requests behind one lock.
+BUILD_WAIT_SECONDS = 5.0
+#: A frame whose canvas build failed is not retried for this long: a corrupt
+#: payload stays corrupt, and every tile of the map would otherwise re-read it.
+FAILED_BUILD_TTL_SECONDS = 600.0
+_FAILED_BUILDS: dict[tuple[str, str], float] = {}
+
+
+class CanvasBusy(RuntimeError):
+    """Another request is building this canvas; ask again shortly."""
+
+
+class CanvasUnavailable(RuntimeError):
+    """The frame's canvas cannot be built (corrupt or unreadable frame)."""
+
+
+def has_canvas(store: FrameStore, source: str, valid_time: datetime) -> bool:
+    return canvas_path(store, source, valid_time).exists()
+
 
 def load_canvas(store: FrameStore, source: str, valid_time: datetime) -> Canvas:
     """The canvas for a stored frame, building it if the collector did not.
 
-    Raises ``FileNotFoundError`` when the frame itself is not in the store.
+    Raises ``FileNotFoundError`` when the frame itself is not in the store,
+    ``CanvasBusy`` when another request's build did not finish within
+    ``BUILD_WAIT_SECONDS``, and ``CanvasUnavailable`` when the build failed
+    (remembered for ``FAILED_BUILD_TTL_SECONDS``).
     """
     if not store.has(source, valid_time):
         raise FileNotFoundError(f"no {source} frame at {frame_stamp(valid_time)}")
     path = canvas_path(store, source, valid_time)
     canvas = _read_canvas(source, path)
-    if canvas is None:
-        # Frames stored before tiles existed, or a collector run with
-        # WB_OBSERVED_TILES=0.  One build at a time: concurrent tile requests
-        # for the same new frame must not all project it.
-        with _BUILD_LOCK:
-            canvas = _read_canvas(source, path)
-            if canvas is None:
+    if canvas is not None:
+        return canvas
+    key = (source, frame_stamp(valid_time))
+    failed_at = _FAILED_BUILDS.get(key)
+    if failed_at is not None and time.monotonic() - failed_at < FAILED_BUILD_TTL_SECONDS:
+        raise CanvasUnavailable(f"canvas build for {key} failed recently")
+    # Frames stored before tiles existed, or a collector run with
+    # WB_OBSERVED_TILES=0.  One build at a time, and a bounded wait for it:
+    # concurrent tile requests for the same new frame must neither all project
+    # it nor all sit on the threadpool behind the one that does.
+    if not _BUILD_LOCK.acquire(timeout=BUILD_WAIT_SECONDS):
+        raise CanvasBusy(f"canvas for {key} is being built")
+    try:
+        canvas = _read_canvas(source, path)
+        if canvas is None:
+            try:
                 write_canvas(store, source, valid_time)
-                canvas = _read_canvas(source, path)
+            except Exception as exc:
+                _FAILED_BUILDS[key] = time.monotonic()
+                raise CanvasUnavailable(f"canvas build for {key} failed: {exc}") from exc
+            canvas = _read_canvas(source, path)
+    finally:
+        _BUILD_LOCK.release()
     if canvas is None:
-        raise RuntimeError(f"canvas for {source} {frame_stamp(valid_time)} unreadable")
+        _FAILED_BUILDS[key] = time.monotonic()
+        raise CanvasUnavailable(f"canvas for {key} unreadable after build")
     return canvas
 
 
@@ -431,25 +472,44 @@ def _pooled(canvas: Canvas, z: int, x: int, y: int):
     span = TILE_SIZE * factor
     gx0 = x * span - canvas.x0
     gy0 = y * span - canvas.y0
-    block = np.full((span, span), _NODATA, dtype=np.uint8)
     h, w = canvas.shape
-    r0, r1 = max(0, gy0), min(h, gy0 + span)
-    c0, c1 = max(0, gx0), min(w, gx0 + span)
-    if r1 > r0 and c1 > c0:
-        block[r0 - gy0 : r1 - gy0, c0 - gx0 : c1 - gx0] = canvas.codes[r0:r1, c0:c1]
-    else:
+    if not (gy0 < h and gy0 + span > 0 and gx0 < w and gx0 + span > 0):
         return _empty_fields()
-    values, detected, nodata = _decoded(canvas, block)
-    shape = (TILE_SIZE, factor, TILE_SIZE, factor)
-    detected_share = detected.reshape(shape).mean(axis=(1, 3))
-    with np.errstate(invalid="ignore"):
-        pooled = np.nanmax(np.where(detected, values, -np.inf).reshape(shape), axis=(1, 3))
-    pooled = np.where(detected_share > 0, pooled, np.nan)
-    # Any detection in the block draws (coverage 1); a block that is mostly
-    # unseen and has nothing in it is a coverage hole.
-    coverage = np.where(detected_share > 0, 1.0, 0.0)
-    hole = (nodata.reshape(shape).mean(axis=(1, 3)) > 0.5) & (detected_share == 0)
+    pooled = np.full((TILE_SIZE, TILE_SIZE), np.nan)
+    coverage = np.zeros((TILE_SIZE, TILE_SIZE))
+    hole = np.ones((TILE_SIZE, TILE_SIZE), dtype=bool)
+    # In strips of output rows: a z3 tile covers 2048 x 2048 canvas pixels,
+    # and decoding that in one go costs ~50 MB of temporaries per uncached
+    # tile, several of which can run at once on a small droplet (measured:
+    # 48 MB in one strip, see `_POOL_STRIP_PIXELS`).
+    strip = max(1, _POOL_STRIP_PIXELS // (span * factor))
+    for out_r0 in range(0, TILE_SIZE, strip):
+        out_r1 = min(TILE_SIZE, out_r0 + strip)
+        rows = out_r1 - out_r0
+        block = np.full((rows * factor, span), _NODATA, dtype=np.uint8)
+        src_r0 = gy0 + out_r0 * factor
+        r0, r1 = max(0, src_r0), min(h, src_r0 + rows * factor)
+        c0, c1 = max(0, gx0), min(w, gx0 + span)
+        if r1 > r0 and c1 > c0:
+            block[r0 - src_r0 : r1 - src_r0, c0 - gx0 : c1 - gx0] = canvas.codes[r0:r1, c0:c1]
+        values, detected, nodata = _decoded(canvas, block)
+        shape = (rows, factor, TILE_SIZE, factor)
+        detected_share = detected.reshape(shape).mean(axis=(1, 3))
+        with np.errstate(invalid="ignore"):
+            peak = np.max(np.where(detected, values, -np.inf).reshape(shape), axis=(1, 3))
+        any_hit = detected_share > 0
+        pooled[out_r0:out_r1] = np.where(any_hit, peak, np.nan)
+        # Any detection in the block draws (coverage 1); a block that is
+        # mostly unseen and has nothing in it is a coverage hole.
+        coverage[out_r0:out_r1] = np.where(any_hit, 1.0, 0.0)
+        hole[out_r0:out_r1] = (nodata.reshape(shape).mean(axis=(1, 3)) > 0.5) & ~any_hit
     return pooled, coverage, hole
+
+
+#: Canvas pixels decoded per pooling strip.  Decoding costs ~12 bytes of
+#: temporaries per pixel (float values, masks), so 512 K pixels is ~6 MB;
+#: a z3 tile (2048 x 2048 canvas pixels) then runs in 8 strips, not ~50 MB.
+_POOL_STRIP_PIXELS = 1 << 19
 
 
 def _empty_fields():

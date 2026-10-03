@@ -204,6 +204,9 @@ _STAMP_FORMAT = "%Y%m%dT%H%M"
 #: and purged with it, so retention bounds the canvases as well.
 CANVAS_SUFFIX = ".canvas.npz"
 
+#: Age past which a ``.tmp-*`` file in a source directory is a dead writer's.
+_TMP_GRACE = timedelta(minutes=15)
+
 
 def frame_stamp(valid_time: datetime) -> str:
     """Filename stamp for a frame's valid time (UTC, minute resolution)."""
@@ -446,6 +449,16 @@ class FrameStore:
                     continue
                 try:
                     canvas.unlink()
+                except OSError:
+                    pass
+            # Temp files a killed writer left behind (`_atomic_write`, the
+            # canvas writer): their names carry no stamp, so nothing above
+            # reclaims them. Old enough that no live writer still owns one.
+            stale_before = now.timestamp() - _TMP_GRACE.total_seconds()
+            for tmp in directory.glob(".tmp-*"):
+                try:
+                    if tmp.stat().st_mtime < stale_before:
+                        tmp.unlink()
                 except OSError:
                     pass
         return removed

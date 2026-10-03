@@ -71,12 +71,30 @@ MAX_ZOOM = 9
 _TIMEOUT = 15
 _CAPS_TTL_SECONDS = 120
 _TILE_CACHE_SIZE = 768  # ~15 KB each
+#: Concurrent calls to EUMETView across all requests.  Tile requests run on
+#: the shared sync threadpool; without a cap, a slow upstream (15 s timeout)
+#: or a client scanning tiles could pin threads every other endpoint needs.
+_UPSTREAM_CONCURRENCY = 6
+#: After an upstream failure, fail fast for this long instead of hitting a
+#: struggling EUMETView once per tile.
+_FAILURE_BACKOFF_SECONDS = 30.0
+#: A cycle this young may have been advertised before its product was
+#: complete; its tiles are re-fetched after `YOUNG_TILE_TTL_SECONDS` and sent
+#: with a short browser cache (see `is_young`).
+YOUNG_CYCLE = timedelta(minutes=30)
+YOUNG_TILE_TTL_SECONDS = 300.0
 
 _session = requests.Session()
+_upstream = threading.BoundedSemaphore(_UPSTREAM_CONCURRENCY)
+_failed_until = 0.0
 _caps_lock = threading.Lock()
+_caps_refresh_lock = threading.Lock()
 _caps_cache: tuple[float, list[datetime]] | None = None
 _tile_lock = threading.Lock()
-_tile_cache: "OrderedDict[tuple[str, int, int, int], bytes]" = OrderedDict()
+# (stamp, z, x, y) -> (bytes, fetched_at monotonic)
+_tile_cache: "OrderedDict[tuple[str, int, int, int], tuple[bytes, float]]" = OrderedDict()
+# Per-tile in-flight fetches, so concurrent misses of one tile share a call.
+_tile_inflight: dict[tuple[str, int, int, int], threading.Event] = {}
 
 
 class SatelliteUnavailable(RuntimeError):
@@ -136,37 +154,81 @@ def _parse_period(value: str) -> timedelta | None:
 def available_times() -> list[datetime]:
     """The cycles we advertise, newest first.  Cached for a couple of minutes.
 
-    Raises ``SatelliteUnavailable`` when the capabilities cannot be read and
-    nothing is cached.
+    Single-flight: when the cache expires, one caller refreshes it and the
+    others keep getting the previous list rather than each fetching
+    capabilities.  Raises ``SatelliteUnavailable`` when the capabilities cannot
+    be read and nothing is cached.
     """
-    global _caps_cache
     now = time.monotonic()
     with _caps_lock:
-        if _caps_cache is not None and now - _caps_cache[0] < _CAPS_TTL_SECONDS:
-            return list(_caps_cache[1])
+        cached = _caps_cache
+    if cached is not None and now - cached[0] < _CAPS_TTL_SECONDS:
+        return list(cached[1])
+    if cached is not None and not _caps_refresh_lock.acquire(blocking=False):
+        # Someone else is refreshing: a stale list beats a thread parked on
+        # EUMETView, and the badge shows the age anyway.
+        return list(cached[1])
+    if cached is None:
+        _caps_refresh_lock.acquire()
     try:
-        response = _session.get(
+        with _caps_lock:
+            fresh = _caps_cache
+        if fresh is not None and time.monotonic() - fresh[0] < _CAPS_TTL_SECONDS:
+            return list(fresh[1])  # refreshed while we waited
+        return _refresh_capabilities(cached)
+    finally:
+        _caps_refresh_lock.release()
+
+
+def _refresh_capabilities(cached: tuple[float, list[datetime]] | None) -> list[datetime]:
+    global _caps_cache
+    try:
+        text = _upstream_get(
             CAPABILITIES_URL,
-            params={"service": "WMS", "request": "GetCapabilities", "version": "1.3.0"},
-            timeout=_TIMEOUT,
-        )
-        response.raise_for_status()
-        match = _DIMENSION_RE.search(response.text)
+            {"service": "WMS", "request": "GetCapabilities", "version": "1.3.0"},
+        ).text
+        match = _DIMENSION_RE.search(text)
         if not match:
             raise SatelliteUnavailable("capabilities carry no time dimension")
         times = parse_time_dimension(match.group(1))
         if not times:
             raise SatelliteUnavailable("time dimension is empty")
-    except (requests.RequestException, ValueError, SatelliteUnavailable) as exc:
-        with _caps_lock:
-            if _caps_cache is not None:
-                # A stale list beats no layer; the badge shows the age anyway.
-                logger.warning("EUMETView capabilities failed, serving cached times: %s", exc)
-                return list(_caps_cache[1])
+    except (ValueError, SatelliteUnavailable) as exc:
+        if cached is not None:
+            logger.warning("EUMETView capabilities failed, serving cached times: %s", exc)
+            return list(cached[1])
         raise SatelliteUnavailable(str(exc)) from exc
     with _caps_lock:
-        _caps_cache = (now, times)
+        _caps_cache = (time.monotonic(), times)
     return list(times)
+
+
+def _upstream_get(url: str, params: dict) -> requests.Response:
+    """One bounded, fail-fast call to EUMETView."""
+    global _failed_until
+    if time.monotonic() < _failed_until:
+        raise SatelliteUnavailable("EUMETView failing; backing off")
+    if not _upstream.acquire(timeout=_TIMEOUT):
+        raise SatelliteUnavailable("too many EUMETView requests in flight")
+    try:
+        response = _session.get(url, params=params, timeout=_TIMEOUT)
+        if response.status_code >= 500:
+            raise SatelliteUnavailable(f"EUMETView answered {response.status_code}")
+        response.raise_for_status()
+        return response
+    except (requests.RequestException, SatelliteUnavailable) as exc:
+        _failed_until = time.monotonic() + _FAILURE_BACKOFF_SECONDS
+        if isinstance(exc, SatelliteUnavailable):
+            raise
+        raise SatelliteUnavailable(str(exc)) from exc
+    finally:
+        _upstream.release()
+
+
+def is_young(cycle: datetime, now: datetime | None = None) -> bool:
+    """True while a cycle may still be completing on EUMETView's side."""
+    now = now or datetime.now(timezone.utc)
+    return now - cycle < YOUNG_CYCLE
 
 
 def stamp(when: datetime) -> str:
@@ -196,51 +258,70 @@ def tile_bbox_3857(z: int, x: int, y: int) -> tuple[float, float, float, float]:
 def fetch_tile(cycle: datetime, z: int, x: int, y: int) -> bytes:
     """PNG for one tile of one cycle, from cache or EUMETView."""
     key = (stamp(cycle), z, x, y)
-    with _tile_lock:
-        cached = _tile_cache.get(key)
-        if cached is not None:
-            _tile_cache.move_to_end(key)
-            return cached
-    minx, miny, maxx, maxy = tile_bbox_3857(z, x, y)
+    while True:
+        with _tile_lock:
+            cached = _tile_cache.get(key)
+            if cached is not None and not _expired(cycle, cached[1]):
+                _tile_cache.move_to_end(key)
+                return cached[0]
+            waiting = _tile_inflight.get(key)
+            if waiting is None:
+                _tile_inflight[key] = threading.Event()
+                break
+        # Another request is fetching this tile: wait for it, then re-read.
+        if not waiting.wait(timeout=_TIMEOUT + 1):
+            raise SatelliteUnavailable("tile fetch timed out")
     try:
-        response = _session.get(
-            WMS_URL,
-            params={
-                "service": "WMS",
-                "version": "1.3.0",
-                "request": "GetMap",
-                "layers": LAYER,
-                "styles": STYLE,
-                "crs": "EPSG:3857",
-                "bbox": f"{minx},{miny},{maxx},{maxy}",
-                "width": TILE_SIZE,
-                "height": TILE_SIZE,
-                "format": "image/png",
-                "transparent": "true",
-                "time": cycle.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            },
-            timeout=_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        raise SatelliteUnavailable(str(exc)) from exc
+        body = _fetch_tile_upstream(cycle, z, x, y)
+        with _tile_lock:
+            _tile_cache[key] = (body, time.monotonic())
+            _tile_cache.move_to_end(key)
+            while len(_tile_cache) > _TILE_CACHE_SIZE:
+                _tile_cache.popitem(last=False)
+        return body
+    finally:
+        with _tile_lock:
+            event = _tile_inflight.pop(key, None)
+        if event is not None:
+            event.set()
+
+
+def _expired(cycle: datetime, fetched_at: float) -> bool:
+    return is_young(cycle) and time.monotonic() - fetched_at > YOUNG_TILE_TTL_SECONDS
+
+
+def _fetch_tile_upstream(cycle: datetime, z: int, x: int, y: int) -> bytes:
+    minx, miny, maxx, maxy = tile_bbox_3857(z, x, y)
+    response = _upstream_get(
+        WMS_URL,
+        {
+            "service": "WMS",
+            "version": "1.3.0",
+            "request": "GetMap",
+            "layers": LAYER,
+            "styles": STYLE,
+            "crs": "EPSG:3857",
+            "bbox": f"{minx},{miny},{maxx},{maxy}",
+            "width": TILE_SIZE,
+            "height": TILE_SIZE,
+            "format": "image/png",
+            "transparent": "true",
+            "time": cycle.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    )
     content_type = response.headers.get("Content-Type", "")
     # A WMS error arrives as HTTP 200 with an XML ServiceException body;
     # caching that as a "tile" would pin a broken image for the cycle.
-    if response.status_code != 200 or not content_type.startswith("image/"):
-        raise SatelliteUnavailable(
-            f"GetMap answered {response.status_code} {content_type or '(no type)'}"
-        )
-    body = response.content
-    with _tile_lock:
-        _tile_cache[key] = body
-        while len(_tile_cache) > _TILE_CACHE_SIZE:
-            _tile_cache.popitem(last=False)
-    return body
+    if not content_type.startswith("image/"):
+        raise SatelliteUnavailable(f"GetMap answered {content_type or '(no type)'}")
+    return response.content
 
 
 def _reset_caches_for_tests() -> None:
-    global _caps_cache
+    global _caps_cache, _failed_until
     with _caps_lock:
         _caps_cache = None
     with _tile_lock:
         _tile_cache.clear()
+        _tile_inflight.clear()
+    _failed_until = 0.0

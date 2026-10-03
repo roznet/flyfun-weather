@@ -654,15 +654,34 @@ draws as blocks with holes. Changes:
   once per process, ~180 MB transient, 63 MB held). Tiles slice it: bilinear
   above z6, max-pooled below so a core survives zooming out; ~10 ms and
   10–20 KB each, cached in process and `immutable` to the browser. A missing
-  canvas (old frames, `WB_OBSERVED_TILES=0`) is built on first request.
-  CTTH stays a corridor image: its read peaks ~1.1 GB and the IR underlay
-  replaces it as the picture.
+  canvas (old frames, `WB_OBSERVED_TILES=0`) is built on first request, behind
+  one lock with a bounded wait (`CanvasBusy` → 503 + `Retry-After`); a failed
+  build is remembered for 10 min and answered 410, never a 500 per tile. When
+  the collector builds canvases, `/frames` lists only frames whose canvas
+  exists, so the listing never runs ahead of it. Below z6 tiles are pooled in
+  strips (a z3 tile peaks ~10 MB, not ~50). No canvases in a `retain_all`
+  (cells archive, #650) store: nothing serves tiles from it. CTTH stays a
+  corridor image: its read peaks ~1.1 GB and the IR underlay replaces it as the
+  picture.
 - **Satellite IR.** MTG FCI L1c IR 10.5 µm from EUMETView's WMS
   (`mtg_fd:ir105_hrfi`, greyscale style pinned), proxied — the CSP allows only
   basemap hosts, our cache shields EUMETView, and the URL shape matches the
   radar's. Only advertised cycles (last 3 h, the radar's retention) are
   proxied. Display only: no parallax correction, nothing sampled from it.
-  `WB_SATELLITE_IR=0` turns it off.
+  `WB_SATELLITE_IR=0` turns it off. Upstream calls are capped (6 concurrent,
+  shared threadpool), fail fast for 30 s after an error, and concurrent misses
+  of one tile share a fetch; capabilities refresh single-flight, others served
+  the cached list meanwhile. A cycle under 30 min old may have been advertised
+  before it was complete: its tiles are re-fetched after 5 min and sent with
+  the short browser cache, not `immutable`.
+- **Client.** Tile layers persist across re-renders (an altitude drag
+  re-requests nothing); a new frame's layer replaces the old one only once
+  its tiles load. A stale layer is not drawn and gets its own badge line
+  ("not shown — newest frame HH:MMZ is N min old"), so it does not read as
+  "no echoes".
+- **Contract change:** `/overlay/{source}.png` rows are now Web Mercator. A
+  client placing it must use Mercator (map-point) placement — on iOS
+  (#654) an `MKOverlay` in map points, not a lat/lon-linear image.
 - **Loop-ready.** `/frames/{source}` lists every retained frame and tile URLs
   are keyed by stamp, so #653 changes a URL per step. iOS uses the same
   endpoints in #654.

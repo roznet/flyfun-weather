@@ -285,8 +285,10 @@ let observedFlashPending = false;
 // fetchObservedFrames) and by a light visible-tab tick, so a new radar frame
 // (every 5 min) appears without waiting for some other re-render.
 const observedFramesLast = new Map<string, ObservedFramesInfo>();
-let observedFramesPending = false;
-let observedFramesFetchedAt = 0;
+// Per source: a refresh in flight for the radar must not swallow a request for
+// the satellite made by toggling it on mid-fetch.
+const observedFramesPending = new Set<string>();
+const observedFramesFetchedAt = new Map<string, number>();
 let observedFramesTimer: ReturnType<typeof setInterval> | null = null;
 // What the latest render wanted, for the tick (which has no render context).
 let observedFramesWanted: string[] = [];
@@ -295,25 +297,24 @@ const OBSERVED_FRAMES_REFRESH_MS = 60_000;
 const OBSERVED_FRAMES_TICK_MS = 120_000;
 
 function refreshObservedFrames(sources: string[], requestRerender: () => void): void {
-  if (observedFramesPending || sources.length === 0) return;
-  if (Date.now() - observedFramesFetchedAt < OBSERVED_FRAMES_REFRESH_MS
-    && sources.every((s) => observedFramesLast.has(s))) return;
-  observedFramesPending = true;
-  Promise.all(sources.map(async (source) => [source, await fetchObservedFrames(source)] as const))
-    .then((results) => {
-      let changed = false;
-      for (const [source, info] of results) {
-        if (!info) continue;  // keep the last listing over a failed refresh
+  const now = Date.now();
+  const due = sources.filter((source) => !observedFramesPending.has(source)
+    && (!observedFramesLast.has(source)
+      || now - (observedFramesFetchedAt.get(source) ?? 0) >= OBSERVED_FRAMES_REFRESH_MS));
+  for (const source of due) {
+    observedFramesPending.add(source);
+    fetchObservedFrames(source)
+      .then((info) => {
+        observedFramesFetchedAt.set(source, Date.now());
+        if (!info) return;  // keep the last listing over a failed refresh
         const before = observedFramesLast.get(source);
-        if (before?.frames[0]?.stamp !== info.frames[0]?.stamp || before?.stale !== info.stale) {
-          changed = true;
-        }
         observedFramesLast.set(source, info);
-      }
-      observedFramesFetchedAt = Date.now();
-      if (changed) requestRerender();
-    })
-    .finally(() => { observedFramesPending = false; });
+        if (before?.frames[0]?.stamp !== info.frames[0]?.stamp || before?.stale !== info.stale) {
+          requestRerender();
+        }
+      })
+      .finally(() => { observedFramesPending.delete(source); });
+  }
 }
 
 function updateObservedOverlay(

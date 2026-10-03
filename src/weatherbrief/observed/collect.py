@@ -240,6 +240,11 @@ def _build_map_canvas(store: FrameStore, source: str, valid_time: datetime) -> N
     """
     from . import tiles
 
+    # An archive store (the observed-cells loop, #650) keeps every frame and
+    # never purges, and nothing serves map tiles from it: a canvas per frame
+    # there would be ~0.7 MB x every frame, forever, for nobody.
+    if store.retain_all:
+        return
     if source not in tiles.TILE_SOURCES or not tiles.tiles_enabled():
         return
     try:

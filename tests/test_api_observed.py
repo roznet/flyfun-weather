@@ -268,6 +268,10 @@ def _stamp(store, source):
 
 
 def test_frames_lists_radar_frames_with_a_tile_template(client, stocked):
+    from weatherbrief.observed import tiles
+
+    frame = stocked.list_frames(SOURCE_OPERA_DBZH)[0]
+    tiles.write_canvas(stocked, SOURCE_OPERA_DBZH, frame.valid_time)
     response = client.get(f"/api/observed/frames/{SOURCE_OPERA_DBZH}")
     assert response.status_code == 200
     body = response.json()
@@ -365,3 +369,53 @@ def test_satellite_outage_is_503_not_500(client, monkeypatch):
 def test_satellite_can_be_switched_off(client, satellite_times, monkeypatch):
     monkeypatch.setenv("WB_SATELLITE_IR", "0")
     assert client.get("/api/observed/frames/satellite_ir").status_code == 404
+
+
+def test_frames_wait_for_the_canvas_when_the_collector_builds_them(client, stocked):
+    """A frame published a moment before its canvas must not be offered:
+    every tile of it would otherwise build the canvas in the request path."""
+    body = client.get(f"/api/observed/frames/{SOURCE_OPERA_DBZH}").json()
+    assert body["frames"] == []
+
+
+def test_frames_list_everything_when_canvases_are_built_lazily(client, stocked, monkeypatch):
+    monkeypatch.setenv("WB_OBSERVED_TILES", "0")
+    body = client.get(f"/api/observed/frames/{SOURCE_OPERA_DBZH}").json()
+    assert [f["stamp"] for f in body["frames"]] == [_stamp(stocked, SOURCE_OPERA_DBZH)]
+
+
+def test_a_canvas_being_built_is_a_retryable_503(client, stocked, monkeypatch):
+    from weatherbrief.observed import tiles
+
+    def busy(*_a, **_k):
+        raise tiles.CanvasBusy("building")
+
+    monkeypatch.setattr(tiles, "tile_png", busy)
+    stamp = _stamp(stocked, SOURCE_OPERA_DBZH)
+    response = client.get(f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/{stamp}/6/32/21.png")
+    assert response.status_code == 503
+    assert response.headers.get("retry-after") == "2"
+
+
+def test_an_unbuildable_frame_is_gone_not_a_500(client, stocked, monkeypatch):
+    from weatherbrief.observed import tiles
+
+    def broken(*_a, **_k):
+        raise tiles.CanvasUnavailable("corrupt")
+
+    monkeypatch.setattr(tiles, "tile_png", broken)
+    stamp = _stamp(stocked, SOURCE_OPERA_DBZH)
+    response = client.get(f"/api/observed/tiles/{SOURCE_OPERA_DBZH}/{stamp}/6/32/21.png")
+    assert response.status_code == 410
+
+
+def test_a_young_satellite_cycle_is_cached_briefly(client, satellite_times, monkeypatch):
+    """Advertised before complete? Then not pinned in the browser for a day."""
+    from weatherbrief.observed import satellite_ir
+
+    monkeypatch.setattr(satellite_ir, "is_young", lambda cycle, now=None: True)
+    response = client.get("/api/observed/tiles/satellite_ir/20261003T1600/6/32/21.png")
+    assert "immutable" not in response.headers["cache-control"]
+    monkeypatch.setattr(satellite_ir, "is_young", lambda cycle, now=None: False)
+    response = client.get("/api/observed/tiles/satellite_ir/20261003T1550/6/32/21.png")
+    assert "immutable" in response.headers["cache-control"]

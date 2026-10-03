@@ -202,10 +202,11 @@ SMOOTH_SOURCES = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE)
 _COVERAGE_MIN = 0.15
 _COVERAGE_FULL = 0.4
 
-# Smoothed values are binned before painting, colour taken at each bin's LOWER
-# edge.  Bins are aligned on the integer class floors, so a value at or past a
-# floor still draws exactly its class colour, and a value in a blend zone is
-# drawn at the (pessimistic) colour of the bin's start.  Binning is what keeps
+# Smoothed values are binned before painting, colour taken at each bin's UPPER
+# edge — rounding up, like the tile canvas codec, so a value in a blend zone
+# draws at most one bin toward the next class, never toward the one below
+# (meteorology-decisions §33).  A value at or past a class floor still draws
+# exactly its class colour: inside a class the ramp is flat.  Binning is what keeps
 # a smoothed radar image to a few hundred distinct RGBA values, which lets it
 # ship as a lossless palette PNG — ~5x smaller than RGBA, which matters for a
 # tile set and more again once frames are looped (#653).
@@ -512,7 +513,7 @@ def render_overlay(
 
 
 def _bin_values(source: str, values: np.ndarray) -> np.ndarray:
-    """Snap smoothed values to the lower edge of their bin (see `_VALUE_BIN`)."""
+    """Snap smoothed values up to the edge of their bin (see `_VALUE_BIN`)."""
     step = _VALUE_BIN.get(source)
     if not step:
         return values
@@ -521,10 +522,10 @@ def _bin_values(source: str, values: np.ndarray) -> np.ndarray:
             logs = np.log10(np.maximum(values, 1e-6))
         # The epsilon keeps an exact boundary (log10(10) == 1.0) in its own
         # bin despite float rounding in the division.
-        binned = np.power(10.0, np.floor(logs / step + 1e-9) * step)
+        binned = np.power(10.0, np.ceil(logs / step - 1e-9) * step)
         floors = np.asarray([v for v, *_rgb in _RATE_STOPS], dtype=float)
     else:
-        binned = np.floor(values / step + 1e-9) * step
+        binned = np.ceil(values / step - 1e-9) * step
         floors = np.asarray([v for v, *_rgb in _DBZ_STOPS], dtype=float)
     # Never bin a value back below a class floor it has reached: a log bin
     # grid does not line up with 0.5 / 2.5 / 30 mm/h, and a 0.5 mm/h echo
