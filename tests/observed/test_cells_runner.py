@@ -300,7 +300,8 @@ def test_a_failing_frame_is_marked_once_and_not_retried(tmp_path, monkeypatch):
     assert [r["type"] for r in rows] == ["error"]
     assert "synthetic failure" in rows[0]["error"]
     report = coverage_report(ws, T0, T0, SOURCES)
-    assert report["failed"] == [T0.isoformat()]
+    (failed,) = report["failed"]
+    assert failed["valid_time"] == T0.isoformat() and failed["attempts"] == 1
 
 
 def test_an_unreadable_dbzh_frame_is_marked_once(tmp_path):
@@ -396,3 +397,84 @@ def test_retry_failed_clears_markers(tmp_path):
 def test_archive_store_still_rejects_an_unknown_source(tmp_path):
     with pytest.raises(KeyError):
         FrameStore(tmp_path, retain_all=True).purge("opera_dbhz")
+
+
+# --- Follow-up to #651 (review round 3) ----------------------------------------
+
+
+def test_a_failed_frame_is_retried_once_then_final(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    calls = []
+    monkeypatch.setattr(runner, "process_frame",
+                        lambda *a, **k: calls.append(1) or (_ for _ in ()).throw(MemoryError()))
+    first = T0 + timedelta(minutes=40)
+    for minutes in (0, 10, 29, 30, 31, 90, 200):
+        analyse_tick(ws, first + timedelta(minutes=minutes), timedelta(hours=6), DEFAULT_POLICY,
+                     FrameCache(ws.frames), SOURCES)
+    assert len(calls) == 2  # first try, one retry 30 min later, then final
+    marker = runner.read_failure(ws, T0)
+    assert marker["attempts"] == 2 and marker["final"] is True
+
+
+def test_a_transient_failure_recovers_on_the_retry(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    real = runner.process_frame
+    state = {"n": 0}
+
+    def flaky(*a, **k):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise OSError("disk blip")
+        return real(*a, **k)
+
+    monkeypatch.setattr(runner, "process_frame", flaky)
+    first = T0 + timedelta(minutes=40)
+    analyse_tick(ws, first, timedelta(hours=6), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES)
+    assert not catalogue_path(tmp_path, T0).exists()
+    analyse_tick(ws, first + timedelta(minutes=30), timedelta(hours=6), DEFAULT_POLICY,
+                 FrameCache(ws.frames), SOURCES)
+    assert catalogue_path(tmp_path, T0).exists()
+
+
+def test_a_corrupt_catalogue_reads_as_missing(tmp_path):
+    path = catalogue_path(tmp_path, T0)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\x1f\x8b truncated")
+    assert read_catalogue(path) is None
+    path.write_bytes(gzip.compress(b"{not json"))
+    assert read_catalogue(path) is None
+
+
+def test_replay_survives_a_failing_frame(processed, tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    real = runner.process_frame
+
+    def sometimes(ws, t, *a, **k):
+        if t == _times()[2]:
+            raise ValueError("bad frame")
+        return real(ws, t, *a, **k)
+
+    monkeypatch.setattr(runner, "process_frame", sometimes)
+    out = tmp_path / "replay"
+    assert replay(processed, out, _times()[0], _times()[4], DEFAULT_POLICY, sources=SOURCES) == 4
+    rows = [json.loads(x) for x in (out / "runs" / "20261003.jsonl").read_text().splitlines()]
+    assert [r for r in rows if r["type"] == "error"][0]["error"] == "ValueError('bad frame')"
+
+
+def test_a_marker_write_error_does_not_escape(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells.runner import mark_failed
+
+    ws = Workspace(tmp_path)
+
+    def no_disk(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", no_disk)
+    mark_failed(ws, T0, "boom")  # logs, does not raise

@@ -91,6 +91,10 @@ SWEEP_MAX_FETCH_EUMETSAT = 12
 # radar.  Older frames (catch-up) never wait.
 ATTRIBUTE_WAIT = timedelta(minutes=15)
 TICK_SECONDS = 60
+# A failed frame is retried once, this long after its first failure; only a
+# second failure is final (until `retry-failed`).
+FAILURE_RETRY = timedelta(minutes=30)
+FAILURE_MAX_ATTEMPTS = 2
 _OPERA = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE)
 _EUMETSAT = (SOURCE_EUMETSAT_LI, SOURCE_EUMETSAT_CTTH)
 
@@ -584,7 +588,8 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
     for t in dbzh_slots(now - lookback, now):
         if catalogue_path(ws.root, t).exists() or not ws.frames.has(SOURCE_OPERA_DBZH, t):
             continue
-        if failure_path(ws.root, t).exists():
+        marker = read_failure(ws, t)
+        if marker is not None and not failure_retry_due(marker, now):
             continue
         if now - t < ATTRIBUTE_WAIT and not attributes_ready(ws.frames, t, sources):
             # Stop here rather than skip: a later frame analysed first would
@@ -599,7 +604,7 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
             logger.exception("Cell analysis failed for %s", t)
             summary, error = None, repr(exc)
         if error is not None:
-            mark_failed(ws, t, error)
+            mark_failed(ws, t, error, now)
             continue
         if summary:
             done += 1
@@ -621,15 +626,45 @@ def retry_failed(ws: Workspace) -> int:
     return removed
 
 
-def mark_failed(ws: Workspace, t: datetime, error: str) -> None:
-    """Record a frame the loop gave up on: once in the run log, once on disk."""
-    logger.error("Cell analysis gave up on %s: %s", frame_stamp(t), error)
-    row = {"type": "error", "valid_time": t.isoformat(), "error": error,
-           "processed_at": datetime.now(timezone.utc).isoformat()}
+def read_failure(ws: Workspace, t: datetime) -> dict | None:
     path = failure_path(ws.root, t)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(row, sort_keys=True))
-    ws.log_run(t, row)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        # An unreadable marker still means "failed": keep it final.
+        return {"attempts": FAILURE_MAX_ATTEMPTS}
+
+
+def failure_retry_due(marker: dict, now: datetime) -> bool:
+    if marker.get("attempts", FAILURE_MAX_ATTEMPTS) >= FAILURE_MAX_ATTEMPTS:
+        return False
+    failed_at = marker.get("processed_at")
+    return bool(failed_at) and now - datetime.fromisoformat(failed_at) >= FAILURE_RETRY
+
+
+def mark_failed(ws: Workspace, t: datetime, error: str, now: datetime | None = None) -> None:
+    """Record a failed attempt: once in the run log, once on disk.
+
+    Never raises — a disk-full or permission error here must not escape the
+    tick (the frame would then be retried every minute with no marker).
+    """
+    previous = read_failure(ws, t) or {}
+    attempts = int(previous.get("attempts", 0)) + 1
+    final = attempts >= FAILURE_MAX_ATTEMPTS
+    logger.error("Cell analysis failed on %s (attempt %d%s): %s", frame_stamp(t), attempts,
+                 ", giving up" if final else f", retrying in {FAILURE_RETRY}", error)
+    row = {"type": "error", "valid_time": t.isoformat(), "error": error, "attempts": attempts,
+           "final": final,
+           "processed_at": (now or datetime.now(timezone.utc)).isoformat()}
+    try:
+        path = failure_path(ws.root, t)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(row, sort_keys=True))
+        ws.log_run(t, row)
+    except OSError:
+        logger.exception("Could not record the failure of %s", frame_stamp(t))
 
 
 def record_downtime(ws: Workspace, state: dict, now: datetime, lookback: timedelta) -> None:
@@ -659,8 +694,10 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     # after, so they never hold the newest radar frame back.
     collected_ok = True
     for family in (_OPERA, _EUMETSAT):
+        fetched = 0
         try:
             for res in collect_tick(ws, sources, now, sweep=sweep, lookback=lookback, family=family):
+                fetched += res.fetched
                 if res.failed:
                     collected_ok = False
                     if sweep:
@@ -672,8 +709,16 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
         except Exception:
             collected_ok = False
             logger.exception("Collection failed for %s", ",".join(family))
-        analyse_tick(ws, datetime.now(timezone.utc) if now_is_live else now, lookback,
-                     policy, cache, sources)
+        # After EUMETSAT, only re-scan when it brought something a waiting
+        # frame could use.
+        if family == _OPERA or fetched:
+            analyse_tick(ws, datetime.now(timezone.utc) if now_is_live else now, lookback,
+                         policy, cache, sources)
+    if sweep:
+        failed = [t for t in dbzh_slots(now - lookback, now) if failure_path(ws.root, t).exists()]
+        if failed:
+            logger.warning("%d frame(s) in the last %s marked failed (status lists them; "
+                           "retry-failed clears them)", len(failed), lookback)
     # `last_tick` means "the loop was alive" (what the downtime gap measures);
     # `last_sweep` only advances when the catch-up actually worked, so a failed
     # sweep is retried after SWEEP_RETRY rather than 15 minutes later.
@@ -723,10 +768,19 @@ def replay(src_root: Path, out_root: Path, start: datetime, end: datetime,
             shutil.rmtree(p, ignore_errors=True)
     ws = Workspace(out_root, frames_root=src_root / "frames")
     cache = FrameCache(ws.frames)
-    done = 0
+    done = failed = 0
     for t in dbzh_slots(start, end):
-        if process_frame(ws, t, policy, cache=cache, sources=sources):
-            done += 1
+        try:
+            if process_frame(ws, t, policy, cache=cache, sources=sources):
+                done += 1
+        except Exception as exc:
+            # One bad frame must not lose a replay over days: count, log, go on.
+            failed += 1
+            logger.exception("Replay failed on %s", frame_stamp(t))
+            ws.log_run(t, {"type": "error", "valid_time": t.isoformat(), "error": repr(exc),
+                           "replay": True})
+    if failed:
+        logger.warning("Replay: %d frame(s) failed, see %s/runs", failed, out_root)
     return done
 
 
@@ -755,7 +809,10 @@ def coverage_report(ws: Workspace, start: datetime, end: datetime, sources: tupl
         report[source] = {"expected": expected, "stored": stored, "gaps": gaps}
     slots = dbzh_slots(start, end)
     report["catalogues"] = sum(1 for t in slots if catalogue_path(ws.root, t).exists())
-    report["failed"] = [t.isoformat() for t in slots if failure_path(ws.root, t).exists()]
+    report["failed"] = [
+        {"valid_time": t.isoformat(), **(read_failure(ws, t) or {})}
+        for t in slots if failure_path(ws.root, t).exists()
+    ]
     return report
 
 

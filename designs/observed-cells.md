@@ -127,10 +127,15 @@ checkout's git SHA) so such a slip stays traceable; it is informational —
 lineage and scoring match on `policy_version` only, or every deploy would
 restart every storm's history.
 
-**A failed frame is given up on, once.**  An exception or an unreadable DBZH
-file writes `catalogues/<day>/<stamp>.failed.json` (with the error) and one
-`error` row; the loop never retries it, `status` lists it under `failed`, and
-`retry-failed` clears the markers (or `replay`, which ignores them).  A
+**A failed frame is retried once, then given up on.**  An exception or an
+unreadable DBZH file writes `catalogues/<day>/<stamp>.failed.json` (error,
+attempt count) and one `error` row.  The loop retries it once after 30 min
+(`FAILURE_RETRY`) so a transient failure — memory, a disk blip — does not cost
+the frame; a second failure is final.  Each sweep logs how many frames in the
+lookback are marked; `status` lists them; `retry-failed` clears the markers
+(or `replay`, which ignores them and survives a failing frame).  A corrupt
+catalogue is read as missing (logged), so one bad file cannot fail the
+frames that use it as their lineage predecessor.  A
 scoring error after the catalogue is written is *not* a failed frame — it is
 recorded as `scoring_error` on the run row.  The next frame
 then has no predecessor, and its catalogue says so: `unavailable` carries a

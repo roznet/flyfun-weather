@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import math
 import os
 import tempfile
@@ -29,6 +30,8 @@ from datetime import datetime
 from pathlib import Path
 
 from ..frames import frame_stamp
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = "observed-cells/1"
 
@@ -39,11 +42,13 @@ def catalogue_path(root: Path, valid_time: datetime) -> Path:
 
 
 def failure_path(root: Path, valid_time: datetime) -> Path:
-    """Marker for a frame the loop could not analyse — it is not retried.
+    """Marker for a frame the loop could not analyse.
 
     Without it a failing or unreadable frame has no catalogue, so every tick
-    for the whole catch-up window would decode it again and log again.
-    ``replay`` ignores markers: it is the tool for re-trying after a fix.
+    for the whole catch-up window would decode it again and log again.  The
+    loop retries a marked frame once after ``FAILURE_RETRY`` (a transient
+    failure — memory, a disk blip — should not cost the frame); a second
+    failure is final.  ``retry-failed`` clears markers; ``replay`` ignores them.
     """
     stamp = frame_stamp(valid_time)
     return root / "catalogues" / stamp[:8] / f"{stamp}.failed.json"
@@ -83,7 +88,16 @@ def write_catalogue(path: Path, catalogue: dict) -> int:
 
 
 def read_catalogue(path: Path) -> dict | None:
+    """The catalogue at ``path``, or ``None`` if absent **or unreadable**.
+
+    A corrupt file is treated as missing (and logged) rather than raised: it is
+    read as the next frame's lineage predecessor, and an exception there would
+    fail the frames after it too.
+    """
     try:
         return json.loads(gzip.decompress(path.read_bytes()))
     except FileNotFoundError:
+        return None
+    except (OSError, EOFError, ValueError) as exc:  # BadGzipFile is an OSError
+        logger.warning("Unreadable cell catalogue %s, treated as missing: %r", path, exc)
         return None
