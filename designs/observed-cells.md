@@ -177,6 +177,10 @@ python -m weatherbrief.observed.cells replay --from 2026-10-03T08:00 --to 2026-1
 loop for 10–15 minutes at a time; the first dev run lost most of an hour that
 way and it looked like slow downloads.
 
+**Dead-man:** `WB_CELLS_HEALTHCHECK_URL` (healthchecks.io) is pinged after a
+tick that analysed at least one frame, at most every 5 minutes; its silence
+covers no radar arriving, a wedged loop and a dead daemon alike.
+
 **Moving to the mini** is configuration, not code: the same command under a
 launchd **KeepAlive** daemon (not a calendar job — it must run continuously
 and not shift with DST), `WB_CELLS_ROOT` on the mini's disk or the NAS,

@@ -62,6 +62,11 @@ logger = logging.getLogger(__name__)
 CELLS_ROOT_ENV = "WB_CELLS_ROOT"
 CELLS_SOURCES_ENV = "WB_CELLS_SOURCES"
 CELLS_CATCHUP_ENV = "WB_CELLS_CATCHUP_HOURS"
+# Dead-man URL (healthchecks.io), pinged after a tick that analysed at least one
+# frame, at most every HEALTHCHECK_EVERY. Unset → no ping. Its silence is the
+# alarm: no radar arriving, a wedged loop, or a dead daemon all look the same.
+CELLS_HEALTHCHECK_ENV = "WB_CELLS_HEALTHCHECK_URL"
+HEALTHCHECK_EVERY = timedelta(minutes=5)
 
 # CTTH is opt-in: ~54 MB a frame, ~7–8 GB a day, and the EUMETSAT data-volume
 # quota with several consumers is unchecked.  A separate variable from
@@ -667,6 +672,23 @@ def mark_failed(ws: Workspace, t: datetime, error: str, now: datetime | None = N
         logger.exception("Could not record the failure of %s", frame_stamp(t))
 
 
+def ping_healthcheck(state: dict, now: datetime) -> None:
+    """Ping the dead-man URL; never raises, never logs the URL (it is a secret)."""
+    url = os.environ.get(CELLS_HEALTHCHECK_ENV, "").strip()
+    if not url:
+        return
+    last = state.get("last_ping")
+    if last and now - datetime.fromisoformat(last) < HEALTHCHECK_EVERY:
+        return
+    try:
+        import requests
+
+        requests.get(url, timeout=10)
+        state["last_ping"] = now.isoformat()
+    except Exception as exc:
+        logger.warning("Healthcheck ping failed: %s", type(exc).__name__)
+
+
 def record_downtime(ws: Workspace, state: dict, now: datetime, lookback: timedelta) -> None:
     """Log a gap when the loop was down longer than a sweep can recover."""
     last = state.get("last_tick")
@@ -693,6 +715,7 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     # Radar first and analysed straight away; the slow EUMETSAT downloads come
     # after, so they never hold the newest radar frame back.
     collected_ok = True
+    analysed = 0
     for family in (_OPERA, _EUMETSAT):
         fetched = 0
         try:
@@ -712,8 +735,8 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
         # After EUMETSAT, only re-scan when it brought something a waiting
         # frame could use.
         if family == _OPERA or fetched:
-            analyse_tick(ws, datetime.now(timezone.utc) if now_is_live else now, lookback,
-                         policy, cache, sources)
+            analysed += analyse_tick(ws, datetime.now(timezone.utc) if now_is_live else now,
+                                     lookback, policy, cache, sources)
     if sweep:
         failed = [t for t in dbzh_slots(now - lookback, now) if failure_path(ws.root, t).exists()]
         if failed:
@@ -723,6 +746,8 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     # `last_sweep` only advances when the catch-up actually worked, so a failed
     # sweep is retried after SWEEP_RETRY rather than 15 minutes later.
     state["last_tick"] = now.isoformat()
+    if analysed:
+        ping_healthcheck(state, now)
     if sweep:
         state["last_sweep_attempt"] = now.isoformat()
         if collected_ok:

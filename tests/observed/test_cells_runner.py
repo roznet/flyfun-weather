@@ -478,3 +478,32 @@ def test_a_marker_write_error_does_not_escape(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "write_text", no_disk)
     mark_failed(ws, T0, "boom")  # logs, does not raise
+
+
+def test_healthcheck_pinged_only_after_analysis_and_throttled(tmp_path, monkeypatch):
+    import requests
+
+    from weatherbrief.observed.cells import runner
+
+    pings = []
+    monkeypatch.setattr(requests, "get", lambda url, timeout: pings.append(url))
+    monkeypatch.setenv("WB_CELLS_HEALTHCHECK_URL", "https://hc.example/ping")
+    monkeypatch.setattr(runner, "collect_tick", lambda *a, **k: [])
+    counts = iter([1, 0, 1, 1])
+    monkeypatch.setattr(runner, "analyse_tick", lambda *a, **k: next(counts, 0))
+    ws = Workspace(tmp_path)
+    for minute in (0, 1, 2, 6):  # OPERA pass per tick; EUMETSAT pass skipped (nothing fetched)
+        runner.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=6),
+                        now=T0 + timedelta(minutes=minute))
+    # analysed at 0 (ping), 1 (nothing), 2 (throttled), 6 (ping)
+    assert pings == ["https://hc.example/ping", "https://hc.example/ping"]
+
+
+def test_no_healthcheck_url_means_no_ping(tmp_path, monkeypatch):
+    import requests
+
+    from weatherbrief.observed.cells import runner
+
+    monkeypatch.delenv("WB_CELLS_HEALTHCHECK_URL", raising=False)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("pinged")))
+    runner.ping_healthcheck({}, T0)
