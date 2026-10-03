@@ -7,6 +7,10 @@
 > candidate implementation (draft PR #600, written by an autonomous agent from
 > a single prompt) was reviewed and is *not* the base; the parts of it worth
 > keeping are listed in §7 as options.
+>
+> **2026-10-03: §10 supersedes the ordering in §8 and the compute placement in
+> §1/§9.** Cell analysis moves to an always-on loop on the Mac mini; the droplet
+> only relates the pushed cell catalogue to each flight.
 
 Companion docs: `current-conditions.md` (phase 1 as built),
 `current-conditions-review.md` (decisions D1–D12, especially D2 and the
@@ -232,7 +236,7 @@ single 5 dBZ / 15,000 ft contours, the fixed 15-minute horizon, and the
 
 ---
 
-## 8. Possible direction (not yet a plan)
+## 8. Possible direction (not yet a plan) — superseded by §10
 
 1. **Phase-2 verdicts** as designed (D8, D9) plus the Parquet verification
    stream.
@@ -271,3 +275,85 @@ footprints are not an animation.
   pySTEPS optional and only if family B is chosen.
 - **Storage.** A per-frame object sidecar is kilobytes; nothing changes the
   0.5 GB frame budget.
+
+---
+
+## 10. Revised direction (2026-10-03): the mini owns the field, the droplet owns the route
+
+Discussion of 2026-10-03. Two things changed since §8 was written: the
+flight-day live layer shipped (#637, a 10-minute per-flight tick that already
+raises radar/lightning "appeared" events and logs evidence to
+`live_history.jsonl`), and the home compute node (M4 Mac mini) has run the
+forecast offload in production since 2026-07-27. Phase-2 verdicts (D8/D9) are
+still unbuilt and are no longer a prerequisite.
+
+### The split
+
+Detecting and tracking cells does not depend on any route. Relating a cell to
+a route depends on the flight's geometry, ETAs and, in flight, own-ship
+position, all of which live on the server. So:
+
+| Where | Does | Keeps |
+|---|---|---|
+| **Mac mini: a new, always-on loop** (separate from the forecast offload; launchd KeepAlive, not a calendar job) | Fetches OPERA and EUMETSAT itself. Processes every radar and satellite update over all of Europe: cells at two thresholds, attributes (peak, rate, flashes, tops), motion field, lineage and lifecycle, and self-scoring of its own projections against later frames. Pushes one small artifact per update to the droplet. | Full history (frames and catalogues) on the mini/NAS: the dataset for backtesting, refining thresholds and re-running the analysis. What to retain long-term is deferred: start by keeping it, prune once the analysis is trusted. Raw CTTH (~7–8 GB/day) is the first candidate to drop in favour of per-cell attributes. |
+| **Droplet** | Live tick reads the newest catalogue and does route geometry only: off-track distance and side, nearest named point, along-track position, closing speed, closest approach against each point's ETA. A few ms per flight. | Only the last few hours of artifacts, purged like the frame store. |
+
+The droplet's per-route radar processing (a crop analysis in the tick) is not
+built. The analysis function is still written over an arbitrary grid window.
+
+### The vocabulary this enables, by tier
+
+| Tier | Example | Nature | Gate |
+|---|---|---|---|
+| 0. Corridor trend | "heavy rain 10–20 NM left of route near LFLY, intensifying over 30 min" | observation | none beyond correctness |
+| 1. Static cells | "cell 8 NM right of route abeam LFLY, lightning, tops FL350" | observation | none beyond correctness |
+| 2. Observed motion and lifecycle | "moved NE at 25 kt over the last 30 min, growing" / "weakening" | observation (past tense) | none beyond correctness |
+| 3. Projection against ETA | "moving toward the route at 25 kt, near LFLY ~14:20Z, about 10 min before your ETA there" | forecast | horizon and acceptance from the mini's self-scoring history |
+
+Tiers 0–2 describe what was measured and can ship once correct; only Tier 3
+claims the future and waits on measured skill (§6.1, now running continuously
+on the mini instead of as a one-off offline harness).
+
+### Constraints carried over
+
+- Annotate-only (§1): nothing here moves a grade.
+- A stale or missing catalogue is reported explicitly ("cell analysis
+  unavailable since HH:MMZ"), never as an empty sky (three-state coverage).
+- Every artifact carries the analysis version (`policy_version`, §7), and
+  the deploy skill's node-drift check covers this loop as it does the forecast
+  node.
+
+### Decided
+
+- **Outage policy: dark, stated.** When the mini is down or its catalogue is
+  stale, cell analysis is unavailable and every surface says so ("cell analysis
+  unavailable since HH:MMZ"). This is a hobby service; the architecture is what
+  matters. No droplet crop fallback.
+- **Scaling path.** Robustness, if ever needed, comes from a more resilient
+  compute node (e.g. a DigitalOcean node running the same loop), which costs
+  money but leaves the architecture unchanged. The droplet stays a consumer.
+- **Dev collection on the MacBook.** The same loop runs on the dev machine to
+  collect frames and iterate on the analysis while the mini loop is built and
+  tested; nothing on the dev machine pushes to production.
+- **Runs identically on macOS and Linux.** The mini and the MacBook are macOS
+  (arm64), and a DigitalOcean node or CI is Linux (x86-64):
+  - Keep to libraries with wheels on both and no BLAS-sensitive core:
+    `scipy.ndimage` labelling and `scipy.fft` (pocketfft) behave identically
+    on both. numpy/scipy link Accelerate on macOS and OpenBLAS on Linux, which
+    only matters for linear algebra (last-digit differences).
+  - No OpenCV, and nothing that needs a source build on either platform.
+  - No process pools in the analysis, or force the `spawn` start method:
+    macOS defaults to `spawn` and Linux to `fork`, a classic portability trap.
+  - A golden-catalogue test (a few stored frames → expected cells and motion
+    within tolerance) runs on the Mac and in Linux CI.
+
+### Still open
+
+1. First surface: agent `live` block and live change events (text only), before
+   map outlines and arrows.
+2. Core threshold: 41 dBZ to match `RADAR_SIGNIFICANT_DBZ` vs. 35 dBZ for
+   earlier detection; the history will settle it.
+3. EUMETSAT data-volume quota with three consumers (droplet, mini, dev
+   machine): unchecked.
+4. Artifact format and push path (inbox rsync as in the forecast offload, or a
+   push endpoint), and the droplet's retention window.
