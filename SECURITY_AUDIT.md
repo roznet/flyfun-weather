@@ -74,7 +74,9 @@ The serious findings are elsewhere, mostly in older code that earlier passes rev
 
 Regression tests: `tests/test_security_2026_10.py` (fails on the previous code, 10 of 13). Follow-up `5333d3c`: the feedback validator and `safe_path_component` now share one flight-ID alphabet (`FLIGHT_ID_RE` in `storage/flights.py`), and the triage prompt logs when it replaces a trusted field.
 
-Still to confirm after deploy (were C1/C2 used before the fix?): magic-link consumes where the token's email differs from the resolved user's email, and `oauth_clients` rows whose `redirect_uris` contain `<`, `"` or whitespace.
+Weather requires `flyfun-common>=0.6.9` since 2026-10-03 ([roznet/flyfun-common#13](https://github.com/roznet/flyfun-common/pull/13): default-deny token scopes, session renewal only on authenticated requests, PKCE for native sign-in, legacy token-in-URL login removed). That release carries the 0.6.8 fixes; the findings it closes are tracked in the forms audit (N6, N7, N11). Weather needs no code change: it only issues `flights:read` and `mcp` scopes (prod 2026-10-03: 125 `mcp`, 7 `flights:read`, 32 unscoped), and iOS builds since 1.2 send `scheme` + `state`.
+
+Still to confirm after deploy (were C1/C2 used before the fix?): magic-link consumes where the token's email differs from the resolved user's email. Already checked 2026-10-03: no `oauth_clients` row (30) has a `redirect_uri` containing whitespace, control or `<>"`{}|\^` characters.
 
 ### Carry-forward statuses re-verified 2026-10-02
 
