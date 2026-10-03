@@ -5,6 +5,7 @@
     python -m weatherbrief.observed.cells render --time 2026-10-03T14:05 --out cells.png [--bbox S,W,N,E] [--scale 2]
     python -m weatherbrief.observed.cells status [--hours 24]
     python -m weatherbrief.observed.cells retry-failed
+    python -m weatherbrief.observed.cells map [--time latest] --out cells.html [--bbox S,W,N,E] [--open]
 
 Needs ``WB_CELLS_ROOT``.  ``WB_CELLS_SOURCES`` narrows the sources
 (default ``opera_dbzh,opera_rate,eumetsat_li``; add ``eumetsat_ctth`` to opt
@@ -58,6 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("status", help="frame coverage and catalogue count")
     st.add_argument("--hours", type=float, default=24.0)
     sub.add_parser("retry-failed", help="clear failure markers so the loop retries those frames")
+    mp = sub.add_parser("map", help="interactive HTML map of one frame (radar + cells)")
+    mp.add_argument("--time", help="frame time (default: newest catalogue)")
+    mp.add_argument("--out", required=True, type=Path)
+    mp.add_argument("--bbox", help="south,west,north,east in degrees (default: radar extent)")
+    mp.add_argument("--open", action="store_true", help="open it in the default browser")
     args = parser.parse_args(argv)
 
     try:
@@ -88,6 +94,26 @@ def main(argv: list[str] | None = None) -> int:
         ws = Workspace(args.root or root, frames_root=root / "frames")
         bbox = tuple(float(v) for v in args.bbox.split(",")) if args.bbox else None
         print(render_frame(ws, args.time, args.out, bbox=bbox, scale=args.scale))
+    elif args.command == "map":
+        from .webmap import render_map
+
+        ws = Workspace(root)
+        if args.time:
+            when = _utc(args.time)
+        else:
+            newest = sorted((root / "catalogues").glob("*/*.json.gz"))
+            if not newest:
+                raise SystemExit("no catalogues yet — run the loop first")
+            from ..frames import parse_frame_stamp
+
+            when = parse_frame_stamp(newest[-1].name.split(".")[0])
+        bbox = tuple(float(v) for v in args.bbox.split(",")) if args.bbox else None
+        out = render_map(ws, when, args.out, bbox=bbox)
+        print(out)
+        if args.open:
+            import webbrowser
+
+            webbrowser.open(out.resolve().as_uri())
     elif args.command == "retry-failed":
         print(f"cleared {retry_failed(Workspace(root))} failure marker(s)")
     elif args.command == "status":
