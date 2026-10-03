@@ -73,6 +73,10 @@ DEFAULT_CELLS_SOURCES = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE, SOURCE_EUMETSAT_L
 # 6 h covers a night of laptop sleep without hammering the provider.
 DEFAULT_CATCHUP = timedelta(hours=6)
 SWEEP_EVERY = timedelta(minutes=15)
+# After a sweep with failures: try again sooner than SWEEP_EVERY, but never on
+# every tick — one permanently broken file in the lookback must not turn the
+# loop into a once-a-minute full sweep against the providers.
+SWEEP_RETRY = timedelta(minutes=5)
 # Per-source fetch budget of one sweep.  OPERA files arrive in about a second
 # each; an LI product took ~20 s through the EUMETSAT Data Store (3 in 60 s
 # with the search, 2026-10-03) and a CTTH granule is ~54 MB, so the EUMETSAT
@@ -149,6 +153,10 @@ def code_revision() -> str | None:
             _REVISION.append(out.stdout.strip() or None)
         except (OSError, subprocess.SubprocessError):
             _REVISION.append(None)
+        if _REVISION[0] is None:
+            logger.warning("observed-cells: no git checkout found — catalogues will carry "
+                           "code_revision=null, so behaviour changes are traceable only "
+                           "through CellPolicy.name")
     return _REVISION[0]
 
 
@@ -502,9 +510,16 @@ def process_frame(
     }
     size = write_catalogue(catalogue_path(ws.root, valid_time), catalogue)
 
-    scores = score_frame(ws.root, valid_time, grid, detections, covered, catalogue,
-                         policy.score_leads_minutes, policy.policy_version, policy.score_margin_km)
-    append_scores(ws.root, valid_time, scores)
+    # The catalogue is written; a scoring failure must not turn it into a
+    # failed frame.  Recorded on the run row instead.
+    scoring_error = None
+    try:
+        scores = score_frame(ws.root, valid_time, grid, detections, covered, catalogue,
+                             policy.score_leads_minutes, policy.policy_version, policy.score_margin_km)
+        append_scores(ws.root, valid_time, scores)
+    except Exception as exc:
+        logger.exception("Scoring failed for %s", valid_time)
+        scores, scoring_error = [], repr(exc)
 
     summary = {
         "type": "frame",
@@ -518,6 +533,7 @@ def process_frame(
         "flow_tiles": [catalogue["coverage"]["flow_tiles_matched"], catalogue["coverage"]["flow_tiles_tried"]],
         "unavailable": [u["what"] for u in unavailable],
         "scores": len(scores),
+        "scoring_error": scoring_error,
         "policy_version": policy.policy_version,
     }
     ws.log_run(valid_time, summary)
@@ -596,6 +612,15 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
     return done
 
 
+def retry_failed(ws: Workspace) -> int:
+    """Clear every failure marker so the loop tries those frames again."""
+    removed = 0
+    for marker in (ws.root / "catalogues").glob("*/*.failed.json"):
+        marker.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
 def mark_failed(ws: Workspace, t: datetime, error: str) -> None:
     """Record a frame the loop gave up on: once in the run log, once on disk."""
     logger.error("Cell analysis gave up on %s: %s", frame_stamp(t), error)
@@ -626,7 +651,10 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     state = ws.load_state()
     record_downtime(ws, state, now, lookback)
     last_sweep = state.get("last_sweep")
+    last_try = state.get("last_sweep_attempt")
     sweep = not last_sweep or now - datetime.fromisoformat(last_sweep) >= SWEEP_EVERY
+    if sweep and last_try and now - datetime.fromisoformat(last_try) < SWEEP_RETRY:
+        sweep = False  # the last attempt failed recently: back off
     # Radar first and analysed straight away; the slow EUMETSAT downloads come
     # after, so they never hold the newest radar frame back.
     collected_ok = True
@@ -635,6 +663,9 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
             for res in collect_tick(ws, sources, now, sweep=sweep, lookback=lookback, family=family):
                 if res.failed:
                     collected_ok = False
+                    if sweep:
+                        logger.warning("sweep: %s failed %d item(s): %s", res.source, res.failed,
+                                       "; ".join(res.errors[:3]))
                 if res.fetched or res.failed:
                     logger.info("collect %s: fetched=%d missing=%d failed=%d %s", res.source,
                                 res.fetched, res.missing, res.failed, "; ".join(res.errors[:2]))
@@ -645,10 +676,12 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
                      policy, cache, sources)
     # `last_tick` means "the loop was alive" (what the downtime gap measures);
     # `last_sweep` only advances when the catch-up actually worked, so a failed
-    # sweep is retried on the next tick rather than 15 minutes later.
+    # sweep is retried after SWEEP_RETRY rather than 15 minutes later.
     state["last_tick"] = now.isoformat()
-    if sweep and collected_ok:
-        state["last_sweep"] = now.isoformat()
+    if sweep:
+        state["last_sweep_attempt"] = now.isoformat()
+        if collected_ok:
+            state["last_sweep"] = now.isoformat()
     ws.save_state(state)
 
 
@@ -728,6 +761,6 @@ def coverage_report(ws: Workspace, start: datetime, end: datetime, sources: tupl
 
 __all__ = [
     "Workspace", "FrameCache", "process_frame", "run_tick", "run_forever", "replay",
-    "coverage_report", "cells_root", "cells_sources", "catchup_lookback",
+    "coverage_report", "retry_failed", "cells_root", "cells_sources", "catchup_lookback",
     "grid_from_dict", "grid_to_dict", "code_revision",
 ]

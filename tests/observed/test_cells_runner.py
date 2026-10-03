@@ -330,7 +330,7 @@ def test_catalogue_carries_the_code_revision(processed):
     assert _cat(processed, _times()[2])["code_revision"] == code_revision()
 
 
-def test_failed_sweep_is_retried_next_tick(tmp_path, monkeypatch):
+def test_failed_sweep_is_retried_after_the_backoff(tmp_path, monkeypatch):
     from weatherbrief.observed.cells import runner
 
     ws = Workspace(tmp_path)
@@ -341,5 +341,58 @@ def test_failed_sweep_is_retried_next_tick(tmp_path, monkeypatch):
     assert state["last_tick"] == T0.isoformat() and "last_sweep" not in state
     monkeypatch.setattr(runner, "collect_tick", lambda *a, **k: [collect.CollectResult(source="opera_dbzh")])
     runner.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=6),
-                    now=T0 + timedelta(minutes=1))
-    assert ws.load_state()["last_sweep"] == (T0 + timedelta(minutes=1)).isoformat()
+                    now=T0 + runner.SWEEP_RETRY)
+    assert ws.load_state()["last_sweep"] == (T0 + runner.SWEEP_RETRY).isoformat()
+
+
+# --- Review round 2 (#651) -----------------------------------------------------
+
+
+def test_a_failing_sweep_backs_off_instead_of_retrying_every_tick(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    ws = Workspace(tmp_path)
+    sweeps = []
+
+    def failing(ws_, sources, now, *, sweep, lookback, family):
+        if sweep:
+            sweeps.append(now)
+        return [collect.CollectResult(source=family[0], failed=1, errors=["HTTP 500"])]
+
+    monkeypatch.setattr(runner, "collect_tick", failing)
+    for minute in range(12):
+        runner.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=6),
+                        now=T0 + timedelta(minutes=minute))
+    # Attempts at 0, 5 and 10 minutes — not 12.
+    assert sorted({t for t in sweeps}) == [T0, T0 + timedelta(minutes=5), T0 + timedelta(minutes=10)]
+
+
+def test_a_scoring_error_does_not_fail_a_written_frame(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.cells.catalogue import failure_path
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    monkeypatch.setattr(runner, "score_frame", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad score")))
+    analyse_tick(ws, T0 + timedelta(minutes=40), timedelta(hours=1), DEFAULT_POLICY,
+                 FrameCache(ws.frames), SOURCES)
+    assert catalogue_path(tmp_path, T0).exists()
+    assert not failure_path(tmp_path, T0).exists()
+    (row,) = [json.loads(x) for x in (tmp_path / "runs" / "20261003.jsonl").read_text().splitlines()]
+    assert row["type"] == "frame" and "bad score" in row["scoring_error"]
+
+
+def test_retry_failed_clears_markers(tmp_path):
+    from weatherbrief.observed.cells.catalogue import failure_path
+    from weatherbrief.observed.cells.runner import mark_failed, retry_failed
+
+    ws = Workspace(tmp_path)
+    mark_failed(ws, T0, "boom")
+    assert failure_path(tmp_path, T0).exists()
+    assert retry_failed(ws) == 1
+    assert not failure_path(tmp_path, T0).exists()
+
+
+def test_archive_store_still_rejects_an_unknown_source(tmp_path):
+    with pytest.raises(KeyError):
+        FrameStore(tmp_path, retain_all=True).purge("opera_dbhz")

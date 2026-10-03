@@ -388,9 +388,9 @@ class FrameStore:
         which matters because an archive directory grows to tens of thousands
         of sidecars that :meth:`list_frames` would parse one by one.
         """
+        spec = SOURCE_SPECS[source]  # an unknown source raises in every store
         if self.retain_all:
             return 0
-        spec = SOURCE_SPECS[source]
         retention = retention if retention is not None else spec.retention
         now = now or datetime.now(timezone.utc)
         cutoff = now - retention
