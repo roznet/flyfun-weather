@@ -61,8 +61,8 @@ import {
   minutesAgo,
   observedAsOf,
   sigmetChangeKey,
+  clearedRows,
   trailText,
-  visibleCleared,
 } from '../helpers/live-layer';
 
 // --- Header ---
@@ -2295,7 +2295,7 @@ export function renderRefreshDelta(
   const baseline = formatHhmmZ(baselineIso);
 
   const live = snapshot.live_changes;
-  const cleared = visibleCleared(live, now);
+  const cleared = clearedRows(live);
   if (live && live.changes.length > 0) {
     const worse = live.worsened_count > 0 || live.changes.some(c => c.direction === 'worse');
     const fromLiveStart = live.baseline_source === 'live_start';

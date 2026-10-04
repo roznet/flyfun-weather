@@ -35,6 +35,14 @@ struct LiveChangesView: View {
                         LiveChangeRow(change: change, now: context.date)
                     }
                 }
+                // #669: what cleared on the weather within the hour, plain,
+                // below the current rows. The server owns the window.
+                if !changes.clearedItems.isEmpty {
+                    Divider()
+                    ForEach(changes.clearedItems) { change in
+                        LiveChangeRow(change: change, now: context.date, cleared: true)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(Theme.spacingM)
@@ -87,46 +95,68 @@ struct LiveChangesView: View {
     }
 }
 
-/// One change: ↑/↓ arrow, source badge, message, age.
+/// One change: ↑/↓ arrow, source badge, message, age — and, when it says more
+/// than the row (#669), the trail line under it ("12:42–13:02Z, since 13:33Z ·
+/// 2nd time today", or a category row's report strip). A recently cleared row
+/// is plain (never alert-styled) with "cleared HH:MMZ" in place of the age.
 private struct LiveChangeRow: View {
     let change: LiveChange
     let now: Date
+    var cleared: Bool = false
+
+    /// Alert styling only for a change that is still true.
+    private var isAlert: Bool { change.isAlert && !cleared }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.spacingS) {
-            Image(systemName: arrowName)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(tint)
-                .accessibilityLabel(directionLabel)
-            Text(change.sourceLabel)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(badgeColor, in: Capsule())
-            Text(change.displayMessage)
-                .font(change.isAlert ? Font.subheadline.weight(.semibold) : Font.subheadline)
-                .foregroundStyle(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-            if let age {
-                Text(age)
-                    .font(.caption2)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.spacingS) {
+                Image(systemName: arrowName)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(cleared ? Theme.textMuted : tint)
+                    .accessibilityLabel(directionLabel)
+                Text(change.sourceLabel)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(cleared ? Theme.textMuted : badgeColor, in: Capsule())
+                Text(change.displayMessage)
+                    .font(isAlert ? Font.subheadline.weight(.semibold) : Font.subheadline)
+                    .foregroundStyle(cleared ? Theme.textMuted : Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if let stamp = cleared ? LiveTrailText.cleared(change) : age {
+                    Text(stamp)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textMuted)
+                        .fixedSize()
+                }
+            }
+            if let trail = LiveTrailText.line(change, cleared: cleared) {
+                Text(trail)
+                    .font(.caption2.monospacedDigit())
                     .foregroundStyle(Theme.textMuted)
-                    .fixedSize()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 22)
             }
         }
-        .padding(.vertical, change.isAlert ? 6 : 2)
-        .padding(.horizontal, change.isAlert ? Theme.spacingS : 0)
+        .padding(.vertical, isAlert ? 6 : 2)
+        .padding(.horizontal, isAlert ? Theme.spacingS : 0)
         .background(
-            change.isAlert ? tint.opacity(Theme.tableRowHighlightOpacity) : Color.clear,
+            isAlert ? tint.opacity(Theme.tableRowHighlightOpacity) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8)
         )
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("liveChangeRow-\(change.key)")
+        .accessibilityIdentifier(cleared ? "liveClearedRow-\(change.key)" : "liveChangeRow-\(change.key)")
         // Tier + direction, so a UI test can assert how a change is rendered
         // (an alert must look like one) and VoiceOver says which it is.
-        .accessibilityValue("\(change.isAlert ? "alert" : "highlight"), \(change.direction ?? "")")
+        .accessibilityValue(stateValue)
+    }
+
+    /// "alert, worse" / "highlight, better" / "cleared, worse".
+    private var stateValue: String {
+        let state = cleared ? "cleared" : (change.isAlert ? "alert" : "highlight")
+        return "\(state), \(change.direction ?? "")"
     }
 
     private var arrowName: String {

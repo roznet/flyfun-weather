@@ -542,3 +542,158 @@ private func makeSnapshot(liveUpdatedAt: String? = nil, daysOut: Int = 0) throws
         #expect(vm.liveChanges == nil)
     }
 }
+
+// MARK: - Trails (#669)
+
+/// The trail line reads exactly as the web's (`web/tests/unit/live-layer.test.ts`
+/// pins the same strings).
+@Suite struct LiveTrailTests {
+
+    private func decodeChange(_ json: String) throws -> LiveChange {
+        try JSONDecoder.weatherBrief.decode(LiveChange.self, from: Data(json.utf8))
+    }
+
+    @Test func decodesTrailAndRecentlyCleared() throws {
+        let json = """
+        { "baseline_at": "2026-10-04T09:00:00Z", "computed_at": "2026-10-04T13:40:00Z",
+          "changes": [
+            { "key": "conv:ZZMT", "kind": "metar_convective", "direction": "worse", "tier": "alert",
+              "role": "route", "icao": "ZZMT", "message": "ZZMT METAR: TS, CB reported",
+              "trail": { "spans": [ { "start": "2026-10-04T12:42:00Z", "end": "2026-10-04T13:02:00Z" },
+                                    { "start": "2026-10-04T13:33:00Z", "end": null } ],
+                         "times_today": 2, "reports": null, "baseline_source": "briefing" },
+              "cleared_at": null }
+          ],
+          "recently_cleared": [
+            { "key": "metar:ZZDP", "kind": "metar_category", "direction": "worse", "tier": "alert",
+              "role": "departure", "icao": "ZZDP", "from_value": "VFR", "to_value": "MVFR",
+              "message": "ZZDP METAR: VFR → MVFR", "cleared_at": "2026-10-04T11:41:00Z",
+              "trail": { "spans": [ { "start": "2026-10-04T11:05:00Z", "end": "2026-10-04T11:41:00Z" } ],
+                         "times_today": 1,
+                         "reports": [ { "at": "2026-10-04T11:00:00Z", "category": "MVFR", "report_type": "METAR" },
+                                      { "at": "2026-10-04T11:30:00Z", "category": "VFR", "report_type": "METAR" } ] } }
+          ],
+          "worsened_count": 1, "improved_count": 0, "alert_count": 1 }
+        """
+        let changes = try JSONDecoder.weatherBrief.decode(LiveChanges.self, from: Data(json.utf8))
+        let current = try #require(changes.items.first)
+        #expect(current.trail?.timesToday == 2)
+        #expect(current.trail?.spans?.count == 2)
+        #expect(current.trail?.spans?.last?.end == nil)
+        let cleared = try #require(changes.clearedItems.first)
+        #expect(cleared.clearedAt == "2026-10-04T11:41:00Z")
+        #expect(cleared.trail?.reports?.first?.reportType == "METAR")
+        // Counts are "what is true now": the cleared row is not in them.
+        #expect(changes.alertCount == 1)
+    }
+
+    /// The snapshot overlay carries no trail fields: still decodes.
+    @Test func overlayWithoutTrailsDecodes() throws {
+        let change = try decodeChange("""
+        { "key": "metar:ZZAA", "kind": "metar_category", "direction": "worse", "tier": "alert",
+          "role": "departure", "icao": "ZZAA", "message": "m" }
+        """)
+        #expect(change.trail == nil && change.clearedAt == nil)
+        #expect(LiveTrailText.line(change) == nil)
+    }
+
+    @Test func spansOrdinalsAndCount() throws {
+        #expect(LiveTrailText.span(LiveTrailSpan(start: "2026-10-04T12:42:00Z", end: "2026-10-04T13:02:00+00:00")) == "12:42–13:02Z")
+        #expect(LiveTrailText.span(LiveTrailSpan(start: "2026-10-04T13:33:00Z", end: nil)) == "since 13:33Z")
+        #expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 103, 111].map(LiveTrailText.ordinal)
+                == ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "103rd", "111th"])
+        #expect(LiveTrailText.timesToday(1) == nil)
+        #expect(LiveTrailText.timesToday(nil) == nil)
+        #expect(LiveTrailText.timesToday(2) == "2nd time today")
+    }
+
+    @Test func recurrenceLine() throws {
+        let change = try decodeChange("""
+        { "key": "conv:LFMT", "kind": "metar_convective", "direction": "worse", "tier": "alert",
+          "role": "route", "icao": "LFMT", "message": "LFMT METAR: TS, CB reported",
+          "trail": { "spans": [ { "start": "2026-10-04T12:42:00Z", "end": "2026-10-04T13:02:00Z" },
+                                { "start": "2026-10-04T13:33:00Z", "end": null } ], "times_today": 2 } }
+        """)
+        #expect(LiveTrailText.line(change) == "12:42–13:02Z, since 13:33Z · 2nd time today")
+    }
+
+    @Test func firstTimeSaysNothingMore() throws {
+        let change = try decodeChange("""
+        { "key": "conv:ZZAA", "kind": "metar_convective", "direction": "worse", "tier": "alert",
+          "role": "route", "message": "m",
+          "trail": { "spans": [ { "start": "2026-10-04T13:33:00Z", "end": null } ], "times_today": 1 } }
+        """)
+        #expect(LiveTrailText.line(change) == nil)
+    }
+
+    @Test func categoryStripAndClearedStamp() throws {
+        let json = { (baseline: String) in """
+        { "key": "metar:LFBZ", "kind": "metar_category", "direction": "worse", "tier": "alert",
+          "role": "departure", "icao": "LFBZ", "from_value": "VFR", "to_value": "MVFR",
+          "message": "LFBZ METAR: VFR → MVFR", "cleared_at": "2026-10-04T11:41:00Z",
+          "trail": { "spans": [ { "start": "2026-10-04T11:05:00Z", "end": "2026-10-04T11:41:00Z" } ],
+                     "times_today": 1, "baseline_source": "\(baseline)",
+                     "reports": [ { "at": "2026-10-04T11:00:00Z", "category": "MVFR", "report_type": "METAR" },
+                                  { "at": "2026-10-04T11:30:00Z", "category": "VFR", "report_type": "METAR" } ] } }
+        """ }
+        let briefed = try decodeChange(json("briefing"))
+        #expect(LiveTrailText.categoryStrip(briefed) == "briefed VFR · 11:00Z MVFR · 11:30Z VFR")
+        #expect(LiveTrailText.line(briefed, cleared: true) == "briefed VFR · 11:00Z MVFR · 11:30Z VFR")
+        #expect(LiveTrailText.cleared(briefed) == "cleared 11:41Z")
+        let fromStart = try decodeChange(json("live_start"))
+        #expect(LiveTrailText.categoryStrip(fromStart) == "at start VFR · 11:00Z MVFR · 11:30Z VFR")
+    }
+
+    @Test func clearedRowAlwaysGetsItsLine() throws {
+        let change = try decodeChange("""
+        { "key": "sigmet:LFMM|T01", "kind": "sigmet_issued", "direction": "worse", "tier": "alert",
+          "role": "route", "message": "New SIGMET LFMM T01: EMBD TS",
+          "trail": { "spans": [ { "start": "2026-10-04T11:05:00Z", "end": "2026-10-04T12:32:00Z" } ], "times_today": 1 } }
+        """)
+        #expect(LiveTrailText.line(change) == nil)
+        #expect(LiveTrailText.line(change, cleared: true) == "11:05–12:32Z")
+    }
+}
+
+@MainActor
+@Suite struct ApplyLiveTrailTests {
+
+    /// The server overlay never carries trails: the first /live of the same
+    /// tick still applies once, to bring them in; then it is a no-op again.
+    @Test func sameTickAppliesOnceForTrails() throws {
+        let snapshot = try makeSnapshot(liveUpdatedAt: "2026-06-24T10:00:00+00:00")
+        var layer = try makeLiveLayer(liveUpdatedAt: "2026-06-24T10:00:00Z")
+        #expect(BriefingViewModel.applyLive(layer, to: snapshot, packTimestamp: packTS) == nil)
+        layer = LiveLayerResponse(
+            flightId: layer.flightId, packTimestamp: layer.packTimestamp, liveUpdatedAt: layer.liveUpdatedAt,
+            routeObservations: layer.routeObservations, observationsUpdatedAt: layer.observationsUpdatedAt,
+            routeSigmets: layer.routeSigmets, sigmetsUpdatedAt: layer.sigmetsUpdatedAt,
+            observedConditions: layer.observedConditions, observedUpdatedAt: layer.observedUpdatedAt,
+            changes: try #require(layer.changes).withRecentlyCleared([]),
+            lastRefreshDelta: layer.lastRefreshDelta
+        )
+        let patched = try #require(BriefingViewModel.applyLive(layer, to: snapshot, packTimestamp: packTS))
+        #expect(patched.liveChanges?.recentlyCleared?.isEmpty == true)
+        #expect(BriefingViewModel.applyLive(layer, to: patched, packTimestamp: packTS) == nil)
+    }
+
+    @Test func olderTickNeverAppliesEvenWithTrails() throws {
+        let snapshot = try makeSnapshot(liveUpdatedAt: "2026-06-24T10:05:00Z")
+        let base = try makeLiveLayer(liveUpdatedAt: "2026-06-24T10:00:00Z")
+        let layer = LiveLayerResponse(
+            flightId: base.flightId, packTimestamp: base.packTimestamp, liveUpdatedAt: base.liveUpdatedAt,
+            routeObservations: nil, observationsUpdatedAt: nil, routeSigmets: nil, sigmetsUpdatedAt: nil,
+            observedConditions: nil, observedUpdatedAt: nil,
+            changes: try #require(base.changes).withRecentlyCleared([]), lastRefreshDelta: nil
+        )
+        #expect(BriefingViewModel.applyLive(layer, to: snapshot, packTimestamp: packTS) == nil)
+    }
+}
+
+private extension LiveChanges {
+    func withRecentlyCleared(_ rows: [LiveChange]) -> LiveChanges {
+        var copy = self
+        copy.recentlyCleared = rows
+        return copy
+    }
+}

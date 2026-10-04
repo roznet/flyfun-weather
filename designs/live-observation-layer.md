@@ -102,8 +102,68 @@ Choices:
   ≈ 50 KB, mostly METAR raw text; a test caps it at 100 KB. No retention beyond
   the live files' own (T1).
 
+METAR report records carry `flight_category` since #669 (for the trail's
+strip); records written before (2026-10-03/04 files) are re-parsed from `raw`
+on read, the way `inputs_from_history` does.
+
+### Trail (#640 option A, #669)
+
+Each change row shows its recent history, so the pilot can tell building
+from bouncing, and a change that cleared does not vanish without a trace.
+`tasks/live_trail.py::change_trails(history, changes, now, route, departure)`
+is one pure function; `trails_for_pack` wraps it (never raises: on error the
+changes come back without trails). Display only: the classifier, tiers,
+`new_alert`, alert memory and the counts are untouched; a flip-flop is shown,
+never suppressed (§35).
+
+- **Computed at read time** in `/live`, the realtime refresh result (so ↻ and
+  the next poll agree) and `live_summary`. Never stored: `live.json` is
+  written before the history, so a stored trail would lag a tick. `TRAIL_EXCLUDE`
+  keeps `trail` / `cleared_at` / `recently_cleared` out of `live.json` and the
+  snapshot overlay. The route/departure for the relevance check come from the
+  pack's briefing, cached per pack dir (packs are immutable).
+- **Model** (all optional): `LiveChange.trail` = `{spans: [{start, end|null}],
+  times_today, reports (metar_category: [{at, category, report_type}], latest
+  6 from the report that first showed the change), baseline_source}`;
+  `LiveChanges.recently_cleared` (rows with `cleared_at`, newest first; None =
+  not computed, [] = nothing recent). Span fields are `start`/`end`, not the
+  issue's `from`/`to` (`from` is a Python keyword and plain dumps skip aliases).
+- **Grouping is by key + direction**, not `change_identity`: a value/tier
+  change (MVFR → IFR) continues the span; a direction flip is another row, so
+  "New SIGMET X" then (after a rebuild absorbed it) "SIGMET X no longer
+  active" is not a "2nd time today". `times_today` counts that group's spans
+  over the whole history (one timeline across packs).
+- **What ends a span, and whether it is a cleared row** (only `weather` is):
+  - clear + appear of the same key/direction at one tick → continuous;
+  - clear at a tick with a `pack` record and no re-appear → `pack`: the new
+    briefing absorbed it;
+  - airport change, airport no longer relevant at that tick
+    (`live_significance.airport_relevant`: departure after take-off, en-route
+    airport passed) → `dropout`;
+  - airport change with no newer METAR (TAF for `taf_category`) for that ICAO
+    recorded by then → `gap` (fetch missed the airport); a re-appear continues
+    the span;
+  - anything else, incl. SIGMET expiry and radar/lightning → `weather`.
+- **Cleared rows**: last span ended `weather` within 60 min
+  (`RECENTLY_CLEARED_MINUTES`, inclusive), key not on screen in any direction,
+  and only the key's most recent span (a better reading replaced by a worse one
+  that later dropped out must not resurface). `new_alert` forced false; tier
+  kept as shown, clients style it plainly.
+- **Clients** show the server's list as is (no client-side hour re-filter, so
+  web and iOS always agree; each row says when it cleared). The trail line is
+  shown only when it says more than the row (N ≥ 2, ≥ 2 spans, ≥ 2 reports,
+  or a cleared row). Text: `web/ts/helpers/live-layer.ts::trailText` and iOS
+  `LiveTrailText` (same strings, pinned by both test suites). Both clients
+  accept a `/live` with the *same* `live_updated_at` once when it brings
+  trails the snapshot overlay lacks (`addsTrails`), else the first poll after a
+  pack load would be ignored.
+- Agents get only `times_today` per change and `recently_cleared` (key,
+  message, cleared_at; cap 6) — the fact, not the strip.
+- Not done: radar/lightning clears are always `weather`, even when the echo
+  was simply passed (the change's min along-track position cannot tell).
+
 Readers: `live_layer.load_live_history(flight_dir)` (records oldest first) for
-admin/debug and the trend view (#640). `scripts/build_live_scenario.py
+admin/debug and the trail (#669). `scripts/build_live_scenario.py
 --from-history <flight_dir> <fixture>` turns a flight's history into a scenario
 (`inputs_from_history`: raw METAR/TAF re-parsed with euro_aip anchored on the
 report time, SIGMETs issued when first seen, packs active from their first
@@ -152,10 +212,10 @@ the tick; a failing tick never fails the cycle.
 
 | Surface | What it gets |
 |---|---|
-| `GET /api/flights/{id}/live` | `LiveLayerResponse`: the blocks + `*_updated_at` + `changes` + `last_refresh_delta`. 200 with nulls when nothing live exists for the latest pack. |
+| `GET /api/flights/{id}/live` | `LiveLayerResponse`: the blocks + `*_updated_at` + `changes` (with read-time `trail` / `recently_cleared`, #669) + `last_refresh_delta`. 200 with nulls when nothing live exists for the latest pack. |
 | Pack meta (`/packs`, `/packs/latest`, `/packs/{ts}`, SSE `complete.pack`) and flight list `latest_briefing` | `live_updated_at` — the sync signal. A realtime refresh keeps `fetch_timestamp`, so clients cannot rely on it alone. |
 | `GET …/snapshot`, `/bundle`, HTML/PDF report | The pack's `briefing.json` **overlaid** with its live layer (`overlay_live`), plus `live_updated_at` / `live_changes` keys. Keeps older app versions on the newest data, as the in-place patch used to. |
-| Realtime refresh responses | `live_updated_at` + `changes` alongside the existing `observations`/`sigmets`/`delta`/`observed`. |
+| Realtime refresh responses | `live_updated_at` + `changes` (with trails) alongside the existing `observations`/`sigmets`/`delta`/`observed`. |
 | Agents: MCP `get_briefing` and ChatGPT `getBriefing` (#641) | A compact `live` block (null when the latest pack has no layer), built by one helper, `live_layer.live_summary(pack_dir)`. The ChatGPT action calls it in-process; the MCP server (separate process, HTTP only) reads it from `GET /api/flights/{id}/live/summary?pack_timestamp=…`, pinned to the pack whose digest it returns (so `digest_written_at` matches even if a refresh lands mid-call). If that fetch fails, MCP returns `live: null` plus `live_unavailable: true`, so an agent can tell a failed fetch from "nothing live". |
 
 ### The agent `live` block (#641)
@@ -167,7 +227,10 @@ times, `baseline_at` / `baseline_source`, the three counts, then:
 
 - `changes` — ordered alert → highlight, worse → better, destination → departure
   → alternate → route, newest evidence first; capped at 12 (`changes_total`
-  keeps the count). Only tier/direction/role/kind/icao/message/observed_at.
+  keeps the count). Only tier/direction/role/kind/icao/message/observed_at,
+  plus `times_today` (#669).
+- `recently_cleared` — what cleared on the weather in the last hour (key,
+  message, cleared_at; cap 6). `LIVE_NOTE` explains both.
 - `sigmets` — every current route SIGMET (cap 20, `sigmets_total`), with the
   same `label` the change messages use ("LECB 3: EMBD TS") so an agent can tie
   them; no polygon, no raw text.
@@ -206,8 +269,9 @@ digest, alternate requirement.
 - `tasks/live_tick.py` — `LiveTick`, `find_live_flights`, shared sources
 - `tasks/route_weather.py::run_realtime_refresh` — the seam (no longer patches the pack)
 - `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
+- `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
-- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
+- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
 
 ## Clients
 

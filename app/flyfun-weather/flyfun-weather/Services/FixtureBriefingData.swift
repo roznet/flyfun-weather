@@ -532,14 +532,29 @@ enum FixtureBriefingData {
             "direction": "worse", "tier": "alert", "role": "departure",
             "icao": "LFMD", "station_id": null, "from_value": "VFR", "to_value": "IFR",
             "observed_at": "2099-06-30T08:05:00Z", "enroute_distance_nm": 0.0,
-            "message": "LFMD SPECI: VFR → IFR", "new_alert": true
+            "message": "LFMD SPECI: VFR → IFR", "new_alert": true,
+            "trail": {
+              "spans": [
+                { "start": "2099-06-30T07:00:00Z", "end": "2099-06-30T07:30:00Z" },
+                { "start": "2099-06-30T08:10:00Z", "end": null }
+              ],
+              "times_today": 2,
+              "reports": [
+                { "at": "2099-06-30T07:00:00Z", "category": "MVFR", "report_type": "METAR" },
+                { "at": "2099-06-30T07:30:00Z", "category": "VFR", "report_type": "METAR" },
+                { "at": "2099-06-30T08:00:00Z", "category": "VFR", "report_type": "METAR" },
+                { "at": "2099-06-30T08:05:00Z", "category": "IFR", "report_type": "SPECI" }
+              ],
+              "baseline_source": "briefing"
+            }
           },
           {
             "key": "sigmet:LFMM|T04", "kind": "sigmet_issued", "source": "SIGMET",
             "direction": "worse", "tier": "highlight", "role": "route",
             "icao": null, "station_id": null, "from_value": null, "to_value": "SEV TURB",
             "observed_at": "2099-06-30T06:00:00Z", "enroute_distance_nm": 30.0,
-            "message": "LFMM T04: SEV TURB issued", "new_alert": false
+            "message": "LFMM T04: SEV TURB issued", "new_alert": false,
+            "trail": { "spans": [{ "start": "2099-06-30T06:10:00Z", "end": null }], "times_today": 1 }
           },
           {
             "key": "taf:LFML", "kind": "taf_category", "source": "TAF",
@@ -549,7 +564,18 @@ enum FixtureBriefingData {
             "message": "LFML TAF: MVFR → VFR", "new_alert": false
           }
         ],
-        "worsened_count": 2, "improved_count": 1, "alert_count": 2
+        "worsened_count": 2, "improved_count": 1, "alert_count": 2,
+        "recently_cleared": [
+          {
+            "key": "conv:LFML", "kind": "metar_convective", "source": "METAR",
+            "direction": "worse", "tier": "alert", "role": "destination",
+            "icao": "LFML", "station_id": null, "from_value": "none", "to_value": "TS",
+            "observed_at": "2099-06-30T07:30:00Z", "enroute_distance_nm": 78.0,
+            "message": "LFML METAR: TS reported", "new_alert": false,
+            "cleared_at": "2099-06-30T08:00:00Z",
+            "trail": { "spans": [{ "start": "2099-06-30T07:30:00Z", "end": "2099-06-30T08:00:00Z" }], "times_today": 1 }
+          }
+        ]
       },
       "last_refresh_delta": { "worsened": true, "messages": ["LFMD SPECI: VFR → IFR"], "computed_at": "2099-06-30T08:10:00Z" }
     }

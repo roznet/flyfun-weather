@@ -1102,6 +1102,24 @@ final class flyfun_weatherUITests: XCTestCase {
                     let values = rows.allElementsBoundByIndex.compactMap { $0.value as? String }
                     XCTAssertTrue(values.contains(expected),
                                   "\(hhmm): \(change["message"] ?? key) should render as \(expected), got \(values)")
+                    // #669: a change on screen for the Nth time says so.
+                    if let trail = change["trail"] as? [String: Any], (trail["times_today"] as? Int ?? 0) >= 2 {
+                        let labels = rows.allElementsBoundByIndex.map(\.label)
+                        XCTAssertTrue(labels.contains { $0.contains("time today") },
+                                      "\(hhmm): \(change["message"] ?? key) should carry its trail line, got \(labels)")
+                    }
+                }
+                // #669: every recently cleared change is listed, plainly, with
+                // when it cleared.
+                for row in (changes["recently_cleared"] as? [[String: Any]]) ?? [] {
+                    let key = row["key"] as? String ?? ""
+                    let element = app.descendants(matching: .any).matching(identifier: "liveClearedRow-\(key)").firstMatch
+                    XCTAssertTrue(element.waitForExistence(timeout: Self.uiTimeout),
+                                  "\(hhmm): cleared \(row["message"] ?? key) should be listed")
+                    XCTAssertTrue(element.label.contains("cleared"),
+                                  "\(hhmm): cleared \(row["message"] ?? key) should say when it cleared, got \(element.label)")
+                    XCTAssertEqual(element.value as? String, "cleared, \(row["direction"] as? String ?? "")",
+                                   "\(hhmm): a cleared row is never alert-styled")
                 }
                 attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes")
 
@@ -1216,6 +1234,14 @@ final class flyfun_weatherUITests: XCTestCase {
             ])
         XCTAssertNotEqual(summaries["0510"], summaries["0830"],
                           "the SIGMET zones drawn at 08:30 should differ from 05:10")
+        // #669: the 07:10 tick exercises both trail cases checked per tick
+        // above — the 06:00 LEMI MVFR blip as a cleared row, and LEVC TS/CB
+        // on screen for the 2nd time — so those checks are not vacuous.
+        let at0710 = (try liveScenarioTick("2026-10-02_lell_lemi", "0710").body["changes"] as? [String: Any]) ?? [:]
+        let cleared = (at0710["recently_cleared"] as? [[String: Any]]) ?? []
+        XCTAssertTrue(cleared.contains { $0["key"] as? String == "metar:LEMI" })
+        let current = (at0710["changes"] as? [[String: Any]]) ?? []
+        XCTAssertTrue(current.contains { (($0["trail"] as? [String: Any])?["times_today"] as? Int ?? 0) >= 2 })
     }
 
     @MainActor

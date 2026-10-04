@@ -220,18 +220,14 @@ export function minutesAgo(iso: string | null | undefined, now: Date | number = 
 // live history (tasks/live_trail.py); these helpers turn it into the line
 // under a row. Same text as iOS (LiveChangesView): keep the two in step.
 
-/** A cleared row stays this long (the server's RECENTLY_CLEARED_MINUTES).
- *  Re-checked here so a page left open after the live window ends drops it. */
-export const RECENTLY_CLEARED_MIN = 60;
 /** Spans shown on one line (the latest). */
 export const TRAIL_MAX_SPANS = 4;
 
-/** Rows that cleared within the hour as of `now`, newest first. */
-export function visibleCleared(changes: LiveChanges | null | undefined, now: number = Date.now()): LiveChange[] {
-  return (changes?.recently_cleared ?? []).filter((c) => {
-    const min = minutesAgo(c.cleared_at, now);
-    return min != null && min <= RECENTLY_CLEARED_MIN;
-  });
+/** The recently cleared rows, newest first. The server owns the 60-min
+ *  window (it re-applies it on every `/live` read); no client re-filter, so
+ *  web and iOS always show the same rows. Each says when it cleared. */
+export function clearedRows(changes: LiveChanges | null | undefined): LiveChange[] {
+  return changes?.recently_cleared ?? [];
 }
 
 /** "HH:MM" in UTC; '' when unparseable. */
