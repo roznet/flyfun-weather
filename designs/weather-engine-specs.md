@@ -429,6 +429,8 @@ ECMWF a1/a2 and ICON-EU/D2 model levels go through `grib_reader.py`, not cfgrib.
 - Variable name = `cfVarName` (so `avg_` stepType names keep their meaning), axes = eccodes `distinctLatitudes/Longitudes` in scan order (handles `jScansPositively`, the meridian-crossing Europe GRIB2 grid, D2's 356.06 west edge), values rounded through float32, `missingValue` = float32 max so only bitmap cells become NaN (a real 9999 stays).
 - **Edge rule (deliberate change):** a zero-weight corner never blanks a value (`gather_bilinear`). A target exactly on a row next to a masked cell keeps its row's value; xarray `.interp` (old a1 path) returned None there (EGVN 51.75°N). Everything else: a2/ICON bit-identical, a1 within ~1e-10.
 - Rollback: `WB_GRIB_DECODER=cfgrib` (read per call). The old functions are kept as `*_cfgrib` and are the parity oracle in `tests/test_grib_reader.py`; delete both once prod replays clean (`scripts/grib_decode_parity.py`).
+- **Real-data parity (2026-10-04):** all 226 files of ECMWF 20261004_12z and ICON-EU 20261004_06z f003/f048 → PARITY OK; a2/ICON bit-identical, a1 extras only edge-rule cells. Speedup on a laptop: a1 ~9.5×, a2 ~2.3×, ICON only ~1.5× per variable — ICON is now at the **unpack floor** (≈0.30 of 0.39 s/var is eccodes CCSDS decompression; the bytes→temp-file spill is ~5 ms). Only phase 2's chunked cache removes that floor.
+- A message whose value count disagrees with its grid is skipped with a WARNING (`GRIB message skipped: …`) — dropping a level can take a series below the 2-level floor and lose the variable.
 - Phase 2 (chunked zarr cache for ICON/GFS/D2) waits on #672/#673; their fixes belong in this shared path.
 
 ### ICON-EU

@@ -3337,6 +3337,15 @@ def _gather_series(
         if bw.inb_idx.size:
             values = msg.values(grid)
             if values is None:
+                # Value count disagrees with the grid header — a corrupt or
+                # truncated message. Dropping the level can take a series under
+                # the 2-level floor and lose the variable, so say so loudly
+                # rather than let it read as a genuinely absent field.
+                logger.warning(
+                    "GRIB message skipped: %s level %s value count != grid %s (%s)",
+                    msg.var, msg.level, grid.shape,
+                    source if isinstance(source, (str, Path)) else "bytes",
+                )
                 continue
             gathered = gather_bilinear(values, bw)
         s.levels.setdefault(msg.level, []).append((msg.header, gathered))
@@ -3431,8 +3440,11 @@ def _decode_ecmwf_surface_direct(
 
 
 # typeOfLevel values the ICON decoder treats as model levels (cfgrib named the
-# level dimension after the typeOfLevel; "" covers a message without one).
-_ICON_MODEL_LEVEL_TYPES = {"generalVerticalLayer", "generalVertical", "hybrid", ""}
+# level dimension after the typeOfLevel). Real ICON-EU/D2 model-level files
+# carry ``generalVerticalLayer``. A message with no typeOfLevel ("") is NOT
+# accepted: it would let a surface/single-level field through, held back only
+# by the ``len(levels) < 2`` rule below.
+_ICON_MODEL_LEVEL_TYPES = {"generalVerticalLayer", "generalVertical", "hybrid"}
 
 
 def _decode_icon_eu_single_var_direct(
