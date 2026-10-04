@@ -71,8 +71,10 @@ STALE_AFTER = timedelta(minutes=25)
 MAX_FILE_BYTES = 5_000_000
 MAX_JSON_BYTES = 40_000_000
 
-_NAME = re.compile(r"^(\d{8}T\d{4})(?:\.r(\d{1,2}))?\.json\.gz$")
-_KEY = re.compile(r"^(\d{8}T\d{4})(?:\.r(\d{1,2}))?$")
+# One spelling per revision ("one URL = one immutable body"): r0 is the bare
+# file name and `.r0` only as an API key; no leading zeros.
+_NAME = re.compile(r"^(\d{8}T\d{4})(?:\.r([1-9]\d?))?\.json\.gz$")
+_KEY = re.compile(r"^(\d{8}T\d{4})(?:\.r(0|[1-9]\d?))?$")
 _POLICY = re.compile(r"^[A-Za-z0-9._-]+\+[0-9a-f]{4,64}$")
 SUFFIX = ".json.gz"
 
@@ -327,6 +329,7 @@ _READ_CACHE_SIZE = 8
 
 @dataclass
 class IngestResult:
+    # File keys as pushed: `<stamp>` for revision 0, `<stamp>.r<n>` after.
     accepted: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
     expired: int = 0
@@ -362,7 +365,7 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
         except InvalidDisplay as exc:
             logger.warning("Rejected cell display %s: %s", path.name, exc)
             _reject(inbox, path)
-            result.rejected.append(stamp)
+            result.rejected.append(path.name.removesuffix(SUFFIX))
             continue
         except OSError:
             logger.warning("Could not read cell display %s", path, exc_info=True)
@@ -388,7 +391,7 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
                 logger.warning("Rejected cell display %s: revision already stored with different "
                                "bytes (served as immutable; keeping the first)", path.name)
                 _reject(inbox, path)
-                result.rejected.append(stamp)
+                result.rejected.append(path.name.removesuffix(SUFFIX))
             continue
         try:
             store.write(stamp, raw, revision)  # received_at = now (the file's mtime)
@@ -396,7 +399,7 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
         except OSError:
             logger.warning("Could not store cell display %s", path.name, exc_info=True)
             continue
-        result.accepted.append(path.name.removesuffix(SUFFIX))  # as pushed: <stamp>[.r<n>]
+        result.accepted.append(path.name.removesuffix(SUFFIX))
     return result
 
 

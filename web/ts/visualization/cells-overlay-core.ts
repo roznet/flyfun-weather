@@ -69,6 +69,10 @@ export interface DisplayCell {
   peak_dbz: number | null;
   rate_peak_mm_h: number | null;
   flashes: number | null;
+  /** True while the frame's lightning has not landed yet (#666): "pending", never "none". */
+  flashes_pending?: boolean;
+  /** The rain rate's own time when it is older than the radar (#666). */
+  rate_as_of?: string;
   top_fl: number | null;
   truncated: boolean;
   age_min: number | null;
@@ -91,6 +95,8 @@ export interface CellDisplay {
   rate_age_min?: number | null;
   /** 0 when first published; 1 once its lightning landed (#666). */
   revision?: number;
+  /** Inputs still on their way (`['lightning']` until its frame lands). */
+  pending?: string[];
   unavailable: Array<{ what: string; reason: string }>;
   rain_min_area_km2: number;
   arrow_minutes: number;
@@ -115,14 +121,6 @@ export function frameKey(frame: CellFrame): string {
   return frame.key ?? frame.stamp;
 }
 
-/** The rain rate's own time when it is not the radar's (#666: the newest
- *  RATE on disk is used rather than waiting for the frame's slot), else null. */
-export function rateAsOf(display: CellDisplay | null | undefined): string | null {
-  const rate = display?.times?.rate;
-  const radar = display?.times?.radar;
-  if (!rate || !radar) return null;
-  return new Date(rate).getTime() === new Date(radar).getTime() ? null : rate;
-}
 
 /** `/api/observed/cells/frames`. */
 export interface CellFramesInfo {
@@ -199,10 +197,13 @@ export function cellsBadge(match: CellMatch, display: CellDisplay | null, now: D
   const valid = match.frame.valid_time;
   const age = Math.max(0, Math.round((now.getTime() - new Date(valid).getTime()) / 60000));
   const count = display ? ` · ${display.cells.length} cells` : '';
+  // Never "no lightning": that reads as "none in these cells". Pending (on its
+  // way, #666) and unavailable (could not be read) are said as such.
+  const pending = display?.pending?.length ? ` · ${display.pending.join(', ')} pending` : '';
   const missing = display?.unavailable?.length
-    ? ` · no ${display.unavailable.map((u) => u.what).join(', ')}`
+    ? ` · ${display.unavailable.map((u) => u.what).join(', ')} unavailable`
     : '';
-  return `Cells ${hhmmZ(valid)} · ${age} min old${count}${missing} · experimental`;
+  return `Cells ${hhmmZ(valid)} · ${age} min old${count}${pending}${missing} · experimental`;
 }
 
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
@@ -245,13 +246,14 @@ function value(v: number | null | undefined, unit = ''): string {
 
 /** Popup for one cell: measurements, age and lineage, trend with its numbers,
  *  motion. Descriptive only. */
-export function cellPopupHtml(c: DisplayCell, rateTime: string | null = null): string {
+export function cellPopupHtml(c: DisplayCell): string {
   const tier = (TIER_LABEL as Record<string, string>)[c.tier] ?? c.tier;
-  const asOf = rateTime && c.rate_peak_mm_h != null ? ` (as of ${hhmmZ(rateTime)})` : '';
+  const asOf = c.rate_as_of && c.rate_peak_mm_h != null ? ` (as of ${hhmmZ(c.rate_as_of)})` : '';
+  const lightning = c.flashes == null && c.flashes_pending ? 'pending' : value(c.flashes);
   const lines = [
     `<b>${escapeHtml(tier)}</b> <span class="cells-exp">experimental</span>`,
     `peak <b>${value(c.peak_dbz, ' dBZ')}</b> · area ${value(c.area_km2, ' km²')}`,
-    `rain rate peak ${value(c.rate_peak_mm_h, ' mm/h')}${asOf} · lightning ${value(c.flashes)}`
+    `rain rate peak ${value(c.rate_peak_mm_h, ' mm/h')}${asOf} · lightning ${lightning}`
       + (c.top_fl != null ? ` · cloud top FL${c.top_fl}` : ''),
     `age ${value(c.age_min, ' min')} (${escapeHtml(c.event ?? '')}) · ${escapeHtml(trendText(c.trend))}`,
     escapeHtml(motionText(c.motion)),

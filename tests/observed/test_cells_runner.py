@@ -387,6 +387,127 @@ def test_lightning_lands_later_and_the_frame_is_amended_as_a_new_revision(tmp_pa
     assert amend_lightning(ws, T0 + timedelta(minutes=12), DEFAULT_POLICY, cache, sources) == 0
 
 
+def test_lightning_waiting_to_land_is_pending_never_none(tmp_path):
+    """#666 review: r0 must not read as "no lightning" while LI is on its way."""
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    analyse_tick(ws, T0 + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames),
+                 (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI))
+    r0 = _display_doc(tmp_path, T0)
+    assert r0["pending"] == ["lightning"]
+    assert "lightning" not in {u["what"] for u in r0["unavailable"]}
+    assert r0["cells"] and all(c["flashes"] is None and c["flashes_pending"] for c in r0["cells"])
+    # The catalogue keeps the plain fact (and the amend keys off it).
+    assert {"what": "lightning", "reason": "no lightning frame for this slot"} in _cat(tmp_path, T0)["unavailable"]
+
+
+def test_a_frame_with_its_lightning_has_no_pending_fields(tmp_path, monkeypatch):
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    _flashes_at(monkeypatch, {})
+    _li_on_disk(ws.frames, T0)
+    analyse_tick(ws, T0 + timedelta(minutes=12), timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames),
+                 (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI))
+    r0 = _display_doc(tmp_path, T0)
+    assert r0["pending"] == [] and all("flashes_pending" not in c for c in r0["cells"])
+    assert all(c["flashes"] == 0 for c in r0["cells"])
+
+
+def test_amend_refreshes_the_rain_rate_to_the_frames_own_slot(tmp_path, monkeypatch):
+    from weatherbrief.observed import opera
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI, SOURCE_OPERA_RATE
+
+    ws = Workspace(tmp_path)
+    t = T0 + timedelta(minutes=5)
+    write_dbzh(ws.frames, t, scene(120, [(60, 60, 50, 7)]))
+    like = runner.read_dbzh(ws.frames, t)
+    level = {T0 - timedelta(minutes=15): 2.0, T0: 9.0}
+
+    def read_window(path, quantity, *a, **k):
+        if quantity != "RATE":
+            return real_read_window(path, quantity, *a, **k)
+        when = datetime.strptime(path.name.split(".")[0], "%Y%m%dT%H%M").replace(tzinfo=timezone.utc)
+        return runner.GridFrame(**{**like.__dict__, "source": SOURCE_OPERA_RATE, "valid_time": when,
+                                   "values": np.full(like.values.shape, level[when], dtype=np.float32)})
+
+    real_read_window = opera.read_window
+    real_read_grid = opera.read_grid
+    monkeypatch.setattr(opera, "read_grid",
+                        lambda path: like.grid if "rate" in str(path) else real_read_grid(path))
+    monkeypatch.setattr(opera, "read_window", read_window)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE, SOURCE_EUMETSAT_LI)
+    _write_rate(ws.frames, T0 - timedelta(minutes=15))
+    cache = FrameCache(ws.frames)
+    analyse_tick(ws, t + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+    r0 = _display_doc(tmp_path, t)
+    assert r0["rate_age_min"] == 20.0
+    assert all(c["rate_peak_mm_h"] == 2.0 and c["rate_as_of"] == (T0 - timedelta(minutes=15)).isoformat()
+               for c in r0["cells"])
+
+    _write_rate(ws.frames, T0)  # lands at ~+10.1, just before the LI
+    _flashes_at(monkeypatch, {})
+    _li_on_disk(ws.frames, T0)
+    assert runner.amend_lightning(ws, t + timedelta(minutes=6), DEFAULT_POLICY, cache, sources) == 1
+    cat = _cat(tmp_path, t)
+    assert cat["inputs"][SOURCE_OPERA_RATE] == T0.isoformat() and cat["inputs"]["rate_age_min"] == 5.0
+    r1 = _display_doc(tmp_path, t, 1)
+    assert all(c["rate_peak_mm_h"] == 9.0 and c["rate_as_of"] == T0.isoformat() for c in r1["cells"])
+
+
+def test_an_amended_catalogue_equals_its_replay(tmp_path, monkeypatch):
+    """With the same inputs on disk, publish-then-amend ends where a replay
+    (everything present at analysis) does — byte for byte."""
+    from weatherbrief.observed.cells.runner import amend_lightning, replay
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path / "live")
+    sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
+    cache = FrameCache(ws.frames)
+    times = [T0 + timedelta(minutes=5 * i) for i in range(6)]
+    lightning = {}
+    for i, t in enumerate(times):
+        write_dbzh(ws.frames, t, scene(120, [(60, 60, 50, 7)], shift=(0, i)))
+        analyse_tick(ws, t + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+        if t.minute % 10 == 5:
+            slot = t - timedelta(minutes=5)
+            cell = next(c for c in _cat(ws.root, t)["cells"] if c["tier"] == "core41")
+            lightning[slot] = [(cell["lat"], cell["lon"])] * (1 + i)
+            _flashes_at(monkeypatch, lightning)
+            _li_on_disk(ws.frames, slot)
+            amend_lightning(ws, t + timedelta(minutes=6), DEFAULT_POLICY, cache, sources)
+    replay(ws.root, tmp_path / "replay", times[0], times[-1], DEFAULT_POLICY, sources=sources)
+    for t in times:
+        live = catalogue_path(ws.root, t).read_bytes()
+        again = catalogue_path(tmp_path / "replay", t).read_bytes()
+        assert live == again, t
+
+
+def test_a_crash_between_display_and_catalogue_reissues_the_revision(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.cells.catalogue import latest_display
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    cache = FrameCache(ws.frames)
+    analyse_tick(ws, T0 + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+    _flashes_at(monkeypatch, {})
+    _li_on_disk(ws.frames, T0)
+    real = runner.write_catalogue
+    monkeypatch.setattr(runner, "write_catalogue", lambda *a: (_ for _ in ()).throw(OSError("disk")))
+    assert runner.amend_lightning(ws, T0 + timedelta(minutes=11), DEFAULT_POLICY, cache, sources) == 0
+    assert latest_display(tmp_path, T0)[1] == 1  # written first
+    monkeypatch.setattr(runner, "write_catalogue", real)
+    assert runner.amend_lightning(ws, T0 + timedelta(minutes=12), DEFAULT_POLICY, cache, sources) == 1
+    assert latest_display(tmp_path, T0)[1] == 2  # retried, not lost
+
+
 def test_amend_is_bounded_to_recent_frames(tmp_path, monkeypatch):
     from weatherbrief.observed.cells.runner import LI_AMEND_WINDOW, amend_lightning
     from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
@@ -426,7 +547,11 @@ def test_an_unreadable_lightning_frame_is_recorded_and_not_retried(tmp_path, mon
     assert len(calls) == 1
     reasons = {u["what"]: u["reason"] for u in _cat(tmp_path, T0)["unavailable"]}
     assert "unreadable lightning frame" in reasons["lightning"]
-    assert latest_display(tmp_path, T0)[1] == 0
+    # A revision, so the maps stop saying "pending": now plainly unavailable.
+    assert latest_display(tmp_path, T0)[1] == 1
+    r1 = _display_doc(tmp_path, T0, 1)
+    assert r1["pending"] == [] and "lightning" in {u["what"] for u in r1["unavailable"]}
+    assert not any(c.get("flashes_pending") for c in r1["cells"])
 
 
 def test_successor_history_picks_up_the_amended_flashes(tmp_path, monkeypatch):

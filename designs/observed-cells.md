@@ -135,7 +135,8 @@ measurement is a trend, not a lifecycle stage.  Provisional thresholds.
 
 **Attributes at their own frame time, never advected.**  RATE = the newest
 frame on disk at or before the DBZH time floored to 15 min, up to 30 min older
-than the radar (`RATE_MAX_AGE`, #666) — its time is `inputs.opera_rate` and
+than the radar (`RATE_MAX_AGE`, #666; on 5-min stamps exactly 30 is the worst
+case taken, refreshed to the frame's own slot at the lightning amend) — its time is `inputs.opera_rate` and
 the gap `inputs.rate_age_min` (also on the display file); LI slot floored to
 10 min; flashes go to the nearest cell pixel within 5 km (the two frames are up
 to 10 min apart).  CTTH tops by
@@ -278,7 +279,11 @@ from the same detections, and writes `cells/display/<stamp>.json.gz`
   prototype and the web overlay cannot drift.
 - `times{radar, rate, lightning, cloud_top}` (each input's own time),
   `rate_age_min`, `revision` (0, then 1 once lightning is amended — each its
-  own file, `<stamp>.r1.json.gz`; #666), `unavailable`, `policy_version`,
+  own file, `<stamp>.r1.json.gz`; #666), `pending` (`["lightning"]` while it
+  is on its way — *not* under `unavailable`, which every client words as
+  "X unavailable"; cells then carry `flashes_pending: true`, and
+  `rate_as_of` when their rain rate is older than the radar), `unavailable`,
+  `policy_version`,
   `code_revision`, `window_minutes`.  Fields are additive under
   `observed-cells-display/1`, so an older droplet still accepts r0.
 - **No lightning flashes**: the droplet draws its own LI from
@@ -319,27 +324,40 @@ p90.  What changed, and the budget each step now has:
 | DBZH in hand | +4.2–4.4 (10-s poll from +4.0) | +4.9–5.0 (60-s tick) |
 | wait for attributes | none | RATE/LI, up to 15 min |
 | compute to display file | target ≤ 3 s (unmeasured on the mini) | 7–8 s |
+| whole chain | **target** ~4.5 min, median and p90 (unmeasured) | 6.3 / 11.4 |
 | push | right after the display file | after EUMETSAT (~20 s each) |
 | droplet ingest | ≤ 5 s | ≤ 30 s |
 
 **Rain rate is not waited for.**  The :00/:05 frames' RATE slot lands at
 +10.1, after them; they take the previous one (15–20 min older than the
-radar) and say so (`rate_age_min`, `times.rate`).  The web popup prints the
-rain rate "as of HH:MMZ" whenever it is not the radar's time.  Never amended:
-a rain rate 15 min old is a fair "as of" value, and amending it too would
-double the revisions.
+radar) and say so (`rate_age_min`, `times.rate`, per-cell `rate_as_of`).  An
+older RATE is sampled where the cells are *now*, so for a moving cell it is a
+mismatch, not just a stale value.  Hence the amend **refreshes it**: RATE
+HH:00 (+10.1) lands just before LI HH:00 (+10.5), so r1 almost always carries
+the frame's own RATE, at no extra revision (`_refresh_rate`).  Both clients
+print "(as of HH:MMZ)" from `rate_as_of`.
+
+**Pending, never "no lightning"** (#666 review).  r0 lists lightning under
+`pending`, cells carry `flashes_pending`, and the clients say "lightning
+pending" in the badge, popup and list.  The catalogue keeps the plain
+`unavailable` entry (the amend keys off it).  Deterministic without a clock:
+a frame past the 30-min amend window is past the 25-min stale cut-off on
+every map, so a "pending" that never resolves is never drawn.  An unreadable
+LI file writes a revision that says "lightning unavailable".
 
 **Lightning: publish on radar, amend when LI lands** (`amend_lightning`, every
 tick after the EUMETSAT collection).  For each frame of the last 30 min
 (`LI_AMEND_WINDOW`, so a late LI backfill does not rewrite history) whose
 catalogue says `lightning: no lightning frame for this slot` and whose LI
-slot is now on disk: flash counts are recomputed on the frame's own
+slot is now on disk: flash counts (and the rain rate, above) are recomputed on the frame's own
 detections (decoded again *outside* the frame cache, so the next radar
 frame's predecessor is not evicted), and the catalogue is rewritten with
 `flashes`, the cell's own history entry, its `trend` (incl. `d_flashes`) and
-`inputs.eumetsat_li`.  Then a **new display revision** `<stamp>.r1.json.gz`
-is written and pushed.  An unreadable LI frame replaces the reason (so it is
-not retried every tick) and writes no revision.
+`inputs.eumetsat_li`, with a **new display revision** `<stamp>.r1.json.gz`
+written *first*: the catalogue still saying "pending" is what makes the next
+tick retry, so a crash between the two re-issues r2 instead of losing r1.
+An amended catalogue equals its replay byte for byte when the inputs match
+(pinned by a test).
 
 **Revisions, not rewrites.**  The droplet serves each display file as
 immutable (#660 review), so an amend never changes bytes under an old name:
@@ -366,7 +384,8 @@ every storm's lineage for no change in the cells.
 **Compute.**  `masked_ncc` transforms each of its six inputs once and does
 one inverse per product (12 real FFTs instead of `fftconvolve`'s 18; same
 `next_fast_len` sizes and crop — bit-identical on a synthetic 2000² pair);
-the tile loop runs on a thread pool (`WB_CELLS_FLOW_THREADS`, default 4),
+the tile loop runs on a thread pool (`WB_CELLS_FLOW_THREADS`, default 2 —
+the only count measured faster; a bad value falls back with a warning),
 deterministic because each tile writes its own slot.  Per-cell peaks come
 from `np.maximum.at` over the labelled pixels already in hand, not
 `ndimage.maximum` (which argsorts the grid).  Scoring runs after the push.

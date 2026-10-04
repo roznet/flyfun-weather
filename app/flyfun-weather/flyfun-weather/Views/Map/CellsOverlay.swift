@@ -150,8 +150,13 @@ enum CellsOverlay {
                 .map { max(0, Int((now.timeIntervalSince($0) / 60).rounded())) } ?? 0
             var text = "Cells \(hhmmZ(frame.validTime)) · \(age) min old"
             if let display { text += " · \(display.cells.count) cells" }
+            // Never "no lightning" (reads as "none in these cells"): pending
+            // (on its way, #666) and unavailable are said as such — web `cellsBadge`.
+            if let pending = display?.pending, !pending.isEmpty {
+                text += " · " + pending.joined(separator: ", ") + " pending"
+            }
             if let missing = display?.unavailable, !missing.isEmpty {
-                text += " · no " + missing.map(\.what).joined(separator: ", ")
+                text += " · " + missing.map(\.what).joined(separator: ", ") + " unavailable"
             }
             return text + " · experimental"
         }
@@ -198,7 +203,7 @@ enum CellsOverlay {
     static func detailLines(_ c: DisplayCell) -> [String] {
         var lines = [
             "peak \(value(c.peakDbz, " dBZ")) · area \(value(c.areaKm2, " km²"))",
-            "rain rate peak \(value(c.ratePeakMmH, " mm/h")) · lightning \(value(c.flashes))"
+            "rain rate peak \(value(c.ratePeakMmH, " mm/h"))\(rateAsOfText(c)) · lightning \(lightningText(c))"
                 + (c.topFl.map { " · cloud top FL\(Int($0.rounded()))" } ?? ""),
             "age \(value(c.ageMin, " min")) (\(c.event ?? "")) · \(trendText(c.trend))",
             motionText(c.motion),
@@ -210,6 +215,17 @@ enum CellsOverlay {
     /// The caveat every cell surface carries.
     static let caveat = "Provisional thresholds: cells often flicker in as \"new\", rain rate can show "
         + "artefact peaks and lag the radar by ~10 min. Describes evolution, not safety."
+
+    /// "pending" while the frame's lightning is on its way (#666), else the count or "–".
+    static func lightningText(_ c: DisplayCell) -> String {
+        c.flashes == nil && c.flashesPending == true ? "pending" : value(c.flashes)
+    }
+
+    /// " (as of HH:MMZ)" when the rain rate is older than the radar (#666), else "".
+    static func rateAsOfText(_ c: DisplayCell) -> String {
+        guard c.ratePeakMmH != nil, let asOf = c.rateAsOf else { return "" }
+        return " (as of \(hhmmZ(asOf)))"
+    }
 
     static func value(_ v: Double?, _ unit: String = "") -> String {
         guard let v else { return "–" }

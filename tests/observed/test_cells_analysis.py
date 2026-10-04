@@ -180,6 +180,15 @@ def test_flow_does_not_depend_on_the_thread_count():
         assert np.array_equal(x, y, equal_nan=True)
 
 
+def test_a_bad_thread_setting_falls_back_instead_of_failing(monkeypatch):
+    from weatherbrief.observed.cells import motion
+
+    monkeypatch.setenv(motion.FLOW_THREADS_ENV, "four")
+    assert motion.flow_threads() >= 1
+    monkeypatch.setenv(motion.FLOW_THREADS_ENV, "3")
+    assert motion.flow_threads() == 3
+
+
 def test_peaks_per_cell_are_the_labelled_maxima():
     values = scene(200, BLOBS)
     det = detect(grid_frame(values, T0), CORE)

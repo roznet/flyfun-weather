@@ -108,9 +108,11 @@ badge gets its own line with the overlay's own time.  Never a shared "as of".
   outline styles (core35 white, core41 black, rain20 grey), `matchCellFrame`
   (the stamp rule above + the stale threshold from the listing),
   `cellsBadge`, popup / legend wording, `frameKey` (the URL key: newest
-  revision, else the bare stamp on an older server), `rateAsOf` (the popup's
-  rain rate reads "as of HH:MMZ" when its time is not the radar's — #666
-  takes the newest RATE on disk rather than waiting for the slot).  Withheld motion reads
+  revision, else the bare stamp on an older server); the popup's
+  rain rate reads "as of HH:MMZ" from the cell's `rate_as_of`.  The badge
+  never says "no X": `pending` inputs read "lightning pending" (#666 publishes
+  before lightning lands), `unavailable` ones "X unavailable"; a cell with
+  `flashes_pending` reads "lightning pending", not "–".  Withheld motion reads
   "split/merge this frame", unsupported "too little of the cell in matched
   tiles"; `truncated` reads "partly outside radar coverage".
 - `visualization/cells-overlay.ts`: `CellsLayer` (fetch listing with a 60 s
@@ -153,8 +155,9 @@ label only: off-track/abeam geometry stays the planned server-side step.
 `requestDataURL`, not `requestData`, so the bbox query survives.
 Paths use `CellFrame.displayKey` (#666, the newest revision; the bare stamp
 on an older server), so the 6-entry path cache never holds a superseded
-revision.  Not ported yet: the web's rain-rate "as of HH:MMZ" in the cell
-callout and the Observed tab list.
+revision.  Same wording as the web: "lightning pending" / "X unavailable" in
+the badge, `lightningText` / `rateAsOfText` in the callout, "lightning
+pending" in the Observed tab list.
 
 ## Gotchas
 

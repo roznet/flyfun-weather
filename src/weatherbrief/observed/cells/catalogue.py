@@ -76,13 +76,15 @@ def display_path(root: Path, valid_time: datetime, revision: int = 0) -> Path:
 
 
 def latest_display(root: Path, valid_time: datetime) -> tuple[Path, int] | None:
-    """The newest revision of a frame's display file, or ``None`` if none."""
+    """The newest revision of a frame's display file, or ``None`` if none.
+
+    Probes every revision rather than stopping at a gap, like the droplet's
+    ``DisplayStore.latest_revision``."""
     found = None
     for revision in range(MAX_DISPLAY_REVISION + 1):
         path = display_path(root, valid_time, revision)
-        if not path.exists():
-            break
-        found = (path, revision)
+        if path.exists():
+            found = (path, revision)
     return found
 
 

@@ -26,6 +26,7 @@ so the result does not depend on the thread count or the order tiles finish.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -37,22 +38,31 @@ from scipy import fft as sp_fft
 from ..frames import GridFrame
 from .policy import CellPolicy, px
 
+logger = logging.getLogger(__name__)
+
 KT_TO_MS = 0.514444
 
 # Threads for the tile loop.  Not in CellPolicy: it changes how fast, never
 # what (each tile is independent and lands in its own slot).  Threads, never a
 # process pool — macOS spawns and Linux forks, and the loop must run the same
-# on both.  Default 4 (the M4 mini's performance cores): oversubscribing is
+# on both.  Default 2, the only count measured faster: oversubscribing is
 # *slower* — in a 4-vCPU cloud sandbox 2 threads took 7.1 s, 4 took 11.2 s and
-# 1 took 10.2 s on the same synthetic pair — so measure before raising it.
+# 1 took 10.2 s on the same synthetic pair.  Raise it on the mini (4
+# performance cores) only after measuring there.
 FLOW_THREADS_ENV = "WB_CELLS_FLOW_THREADS"
-DEFAULT_FLOW_THREADS = 4
+DEFAULT_FLOW_THREADS = 2
 
 
 def flow_threads() -> int:
+    """Thread count for the tile loop.  A bad value falls back to the default
+    with a warning: a typo must never stop every frame from being analysed."""
     raw = os.environ.get(FLOW_THREADS_ENV, "").strip()
     if raw:
-        return max(1, int(raw))
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning("%s=%r is not a whole number; using %d", FLOW_THREADS_ENV, raw,
+                           DEFAULT_FLOW_THREADS)
     return max(1, min(DEFAULT_FLOW_THREADS, os.cpu_count() or 1))
 
 
