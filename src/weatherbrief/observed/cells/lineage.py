@@ -147,7 +147,8 @@ def trim_history(history: list, valid_time: datetime, policy: CellPolicy) -> lis
 def trend(history: list, now_entry: list, valid_time: datetime, policy: CellPolicy) -> dict:
     """Lifecycle over the trend window from the cell's own history.
 
-    ``history`` entries are ``[iso_time, peak_dbz, area_km2, flashes|None]``.
+    ``history`` entries are ``velocity.history_entry`` lists; only the first
+    four fields (``iso_time, peak_dbz, area_km2, flashes|None``) are read here.
     Compares now against the entry nearest ``trend_window_minutes`` ago that is
     at least ``trend_min_history_minutes`` old.  Provisional thresholds — the
     archive is what will calibrate them.

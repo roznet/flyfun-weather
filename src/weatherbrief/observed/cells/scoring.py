@@ -30,6 +30,7 @@ are what will set the projection horizon (Tier 3) and its acceptance gates.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -41,6 +42,11 @@ from .catalogue import catalogue_path, cells_dir, r, read_catalogue
 from .detect import TierDetection, distance_km, runs_to_pixels
 from .policy import MOTION_VARIANTS, CellPolicy, px
 
+logger = logging.getLogger(__name__)
+
+# Without a stored flow field these degrade to the smoothed straight line, so
+# a frame that had none must not count towards their medians.
+FIELD_VARIANTS = frozenset({"field", "field_anchored"})
 
 def _block_mask(rows, cols, shape, b, row0, col0):
     mask = np.zeros(shape, dtype=bool)
@@ -167,7 +173,8 @@ def summarise(rows: list[dict]) -> list[dict]:
 
     Medians over frames of each frame's CSI / POD / FAR and of each frame's
     median centroid error; ``frames`` counts the rows that had a value.
-    Persistence is listed as one more forecast.
+    Persistence is listed as one more forecast.  Rows whose issued catalogue
+    had no flow field are left out of the field variants.
     """
     groups: dict[tuple[str, int], list[dict]] = {}
     for row in rows:
@@ -179,6 +186,8 @@ def summarise(rows: list[dict]) -> list[dict]:
             variants = row.get("variants") or {
                 "raw": {**row["extrapolation"], "centroid_err_km_median": row.get("centroid_err_km_median")}}
             for name, sc in variants.items():
+                if name in FIELD_VARIANTS and not row.get("field_available", True):
+                    continue
                 forecasts.setdefault(name, []).append(sc)
             forecasts.setdefault("persistence", []).append(
                 {**row["persistence"], "centroid_err_km_median": row.get("persistence_centroid_err_km_median")})
@@ -201,7 +210,12 @@ def read_scores(root: Path, start: datetime, end: datetime) -> list[dict]:
             for line in path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                row = json.loads(line)
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    # A crash mid-append leaves a truncated last line.
+                    logger.warning("skipping unreadable score line in %s", path)
+                    continue
                 if start <= datetime.fromisoformat(row["verify_time"]) <= end:
                     rows.append(row)
         day += timedelta(days=1)

@@ -274,3 +274,28 @@ def test_display_arrow_follows_display_motion(processed):
         if a["arrow"]:
             assert b["arrow"] == pytest.approx(a["arrow"], abs=0.01)  # uniform flow: same place
             assert b["motion"]["speed_kt"] == pytest.approx(a["motion"]["speed_kt"], abs=1.0)
+
+
+def test_summarise_skips_field_variants_without_a_flow_field():
+    sc = {"csi": 0.5, "pod": 0.6, "far": 0.2, "centroid_err_km_median": 4.0}
+    row = {"tier": "core41", "lead_min": 30, "field_available": False,
+           "extrapolation": {k: sc[k] for k in ("csi", "pod", "far")},
+           "centroid_err_km_median": 4.0,
+           "persistence": {"csi": 0.1, "pod": 0.1, "far": 0.9},
+           "variants": {v: dict(sc) for v in MOTION_VARIANTS}}
+    frames = {t["forecast"]: t["frames"] for t in summarise([row, {**row, "field_available": True}])}
+    assert frames["field"] == frames["field_anchored"] == 1
+    assert frames["raw"] == frames["smoothed"] == 2
+
+
+def test_read_scores_skips_a_truncated_line(tmp_path):
+    from datetime import datetime, timezone
+
+    from weatherbrief.observed.cells.scoring import read_scores
+
+    t = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+    path = tmp_path / "cells" / "scores" / "20261003.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"verify_time": t.isoformat(), "tier": "core41"}) + '\n{"verify_ti\n')
+    rows = read_scores(tmp_path, t, t)
+    assert [r["tier"] for r in rows] == ["core41"]

@@ -222,7 +222,10 @@ and **all scored on the same cells and the same verification area**:
 - **How (1) and (2) combine — not decided, both scored.**  `field` ignores
   the cell's own vector except as fallback; `field_anchored` keeps the cell's
   smoothed velocity at the cell and takes only the *spatial variation* from
-  the field.  The issue proposed the second; the scores pick.
+  the field.  The issue proposed the second; the scores pick.  A frame whose
+  issued catalogue had no flow field (`field_available: false`) is left out
+  of both field variants' medians in `scores`.  Otherwise they would be
+  silently scored as the smoothed straight line.
 - **Footprints move per block**: displacement at each footprint block's centre
   (≤ 8 km), rounded, applied to its pixels — exactly the old whole-footprint
   integer shift for straight variants.  Scoring batches every cell of a tier
