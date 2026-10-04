@@ -41,13 +41,18 @@ final class CrossSectionViewModel {
     /// `Equatable` redraw gate on this counter instead of diffing the whole struct
     /// each scrub tick (#303).
     private(set) var dataVersion: Int = 0
-    /// Active cross-section colour theme (#320). Defaults to GRAMET to match the
-    /// booted GRAMET emulation, so the chart and the emulation agree on boot.
-    /// Theme is orthogonal to the layers: picking an emulation sets its theme,
-    /// but changing the theme never touches the layers or the emulation label —
-    /// mirrors the web, where `setVizTheme` leaves the preset alone. Persisted
-    /// across launches via `UserDefaults`.
-    private(set) var themeId: CrossSectionThemeID
+    /// The user's own colour theme (#320), or nil when they never picked one.
+    /// An emulation never writes it (#647, web #597): it is what FlyFun goes
+    /// back to, so GRAMET → FlyFun does not leave GRAMET's look on our methods.
+    /// Persisted across launches via `UserDefaults`.
+    private(set) var userThemeId: CrossSectionThemeID?
+    /// The theme the cross-section draws with: the active emulation's, else the
+    /// user's own, else standard. Derived, so nothing extra is stored for FlyFun
+    /// to restore (web `effectiveThemeId`). A fresh install boots GRAMET and so
+    /// draws GRAMET; FlyFun on a fresh install draws standard.
+    var themeId: CrossSectionThemeID {
+        CrossSectionPresets.emulation(activeEmulation)?.themeId ?? userThemeId ?? .standard
+    }
 
     /// Advisory whose cross-section highlight (scrim + verdict ribbon, #374) is
     /// tracked, or nil for none. Only the id is stored — the geometry is
@@ -62,8 +67,14 @@ final class CrossSectionViewModel {
     /// it must neither drop the Focus lens nor clear the highlight.
     private(set) var highlightVisible = true
 
-    /// `UserDefaults` key for the persisted theme choice.
+    /// `UserDefaults` key for the persisted theme choice — the user's own, never
+    /// an emulation's (#647).
     nonisolated private static let themeDefaultsKey = "crossSectionThemeId"
+    /// `UserDefaults` key for the settings version, which gates one-time
+    /// migrations of the stored keys (web `settingsVersion`). Absent reads as 0.
+    nonisolated private static let settingsVersionDefaultsKey = "crossSectionSettingsVersion"
+    /// 1 = #647 theme ownership.
+    nonisolated static let settingsVersion = 1
     /// `UserDefaults` key for the persisted layer enablement map.
     nonisolated private static let layersDefaultsKey = "crossSectionEnabledLayers"
     /// `UserDefaults` key for the persisted Focus lens id (absent when none).
@@ -85,20 +96,12 @@ final class CrossSectionViewModel {
     nonisolated static let persistedDefaultsKeys = [
         themeDefaultsKey, layersDefaultsKey, advisoryPresetDefaultsKey,
         highlightAdvisoryDefaultsKey, emulationDefaultsKey, cloudStyleDefaultsKey,
-        observedRadiusDefaultsKey,
+        observedRadiusDefaultsKey, settingsVersionDefaultsKey,
     ]
 
     init() {
-        // Restore the last-chosen theme; fall back to GRAMET (the boot
-        // emulation's theme) when nothing is stored or the value is unknown.
-        let stored = UserDefaults.standard.string(forKey: Self.themeDefaultsKey)
-        themeId = stored.flatMap(CrossSectionThemeID.init(rawValue:)) ?? .gramet
         cloudStylePreference = UserDefaults.standard.string(forKey: Self.cloudStyleDefaultsKey)
             .flatMap(CloudStyle.init(rawValue:)) ?? .natural
-        // Sync the module-level active theme so the very first frame (and the
-        // layer bar's swatches) render in the right palette even before the
-        // renderer runs.
-        CrossSectionTheme.setActive(themeId)
 
         // Restore the last layer config so a relaunch keeps the user's layers
         // (not just colours) — mirrors the web, which persists the whole viz
@@ -123,7 +126,38 @@ final class CrossSectionViewModel {
         activeAdvisoryPreset = UserDefaults.standard.string(forKey: Self.advisoryPresetDefaultsKey)
         activeHighlightAdvisoryId = UserDefaults.standard.string(forKey: Self.highlightAdvisoryDefaultsKey)
         activeEmulation = Self.restoredEmulation(layers: enabledLayers, restoredLayers: restoredLayers)
+        Self.migrateStoredSettings(activeEmulation: activeEmulation)
+        // Restore the user's own theme; unknown or absent → nil (the derived
+        // `themeId` then falls back to the emulation's, else standard).
+        userThemeId = UserDefaults.standard.string(forKey: Self.themeDefaultsKey)
+            .flatMap(CrossSectionThemeID.init(rawValue:))
+        // Sync the module-level active theme so the very first frame (and the
+        // layer bar's swatches) render in the right palette even before the
+        // renderer runs.
+        CrossSectionTheme.setActive(themeId)
         recomputeEffectiveLayers()
+    }
+
+    /// One-time migrations of the stored keys, gated on the settings version
+    /// (web `migrateVizSettings`).
+    ///
+    /// v1 (#647): before it, an emulation wrote its theme as the user's, so a
+    /// stored theme equal to the active emulation's theme is almost certainly
+    /// that write, not a choice. Clear it so FlyFun lands on the default theme.
+    /// ONCE only: after #647 the same shape is a real choice (pick Light, then
+    /// Windy — whose theme is light), and re-running would undo it each launch.
+    /// A fresh install has nothing to clear and is simply stamped current.
+    private static func migrateStoredSettings(activeEmulation: String?) {
+        let defaults = UserDefaults.standard
+        let version = defaults.integer(forKey: settingsVersionDefaultsKey)
+        if version < 1,
+           let emulation = CrossSectionPresets.emulation(activeEmulation),
+           defaults.string(forKey: themeDefaultsKey) == emulation.themeId.rawValue {
+            defaults.removeObject(forKey: themeDefaultsKey)
+        }
+        if version != settingsVersion {
+            defaults.set(settingsVersion, forKey: settingsVersionDefaultsKey)
+        }
     }
 
     /// The stored emulation. Before #605 there was none to store — the preset was
@@ -140,11 +174,21 @@ final class CrossSectionViewModel {
         }?.id
     }
 
-    /// Switch the colour theme. Independent of the layers and the emulation. Persisted.
+    /// Pick the user's own colour theme. Persisted.
+    ///
+    /// While emulating, a hand-picked theme drops the emulation in full, as a
+    /// manual layer edit drops the Focus lens (#647, web #597): it lands on
+    /// FlyFun with our graded methods too, because GRAMET's methods under a
+    /// "FlyFun" label is the mismatch this fixes. Outside an emulation it
+    /// touches colours only.
     func setTheme(_ id: CrossSectionThemeID) {
-        themeId = id
-        CrossSectionTheme.setActive(id)
+        userThemeId = id
         UserDefaults.standard.set(id.rawValue, forKey: Self.themeDefaultsKey)
+        if activeEmulation != nil {
+            applyEmulation(nil)  // also syncs the active theme
+        } else {
+            CrossSectionTheme.setActive(themeId)
+        }
     }
 
     /// Persist the layer set, both lens selectors and the highlight. Called after
@@ -417,15 +461,16 @@ final class CrossSectionViewModel {
     }
 
     /// Pick an emulation (nil = FlyFun). An emulation merges its method set and
-    /// sets its theme; FlyFun applies the graded methods, one layer per method
-    /// group, and leaves the theme alone. Either way an active Focus lens is
+    /// draws in its theme; FlyFun applies the graded methods, one layer per
+    /// method group, and draws in the user's own theme. Neither writes the
+    /// user's theme (#647) — the drawn one is derived (`themeId`). Either way an
+    /// active Focus lens is
     /// re-applied on top, so "Windy, focused on icing" means Windy's icing method
     /// with only the icing groups on — rather than the lens label surviving over
     /// a layer set that no longer matches it.
     func applyEmulation(_ id: String?) {
         if let preset = CrossSectionPresets.emulation(id) {
             enabledLayers.merge(preset.enabledLayers) { $1 }
-            setTheme(preset.themeId)
             activeEmulation = preset.id
         } else {
             enabledLayers.merge(
@@ -433,6 +478,7 @@ final class CrossSectionViewModel {
             ) { $1 }
             activeEmulation = nil
         }
+        CrossSectionTheme.setActive(themeId)
         activeHighlightAdvisoryId = nil  // an emulation change drops the highlight (#374)
         if let focus = activeAdvisoryPreset.flatMap({ CrossSectionPresets.advisory[$0] }) {
             applyLens(focus, methods: effectiveMethods)

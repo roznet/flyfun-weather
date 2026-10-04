@@ -111,25 +111,110 @@ extension CrossSectionSharedStateTests {
             #expect(vm.themeId == .gramet)
         }
 
-        @Test func setThemeIsOrthogonalToTheEmulation() {
+        // MARK: Theme ownership (#647, web #597)
+
+        @Test func anEmulationNeverWritesTheUsersTheme() {
             let vm = CrossSectionViewModel()
-            // Changing the theme alone must NOT disturb the layer set / preset label
-            // (mirrors web `setVizTheme`, which leaves the preset alone).
-            vm.setTheme(.standard)
+            vm.applyEmulation("windy")
+            #expect(vm.userThemeId == nil)
+            // Nothing persisted either: a relaunch on FlyFun would draw standard.
+            #expect(CrossSectionViewModel().userThemeId == nil)
+        }
+
+        @Test func flyFunOnAFreshInstallDrawsStandard() {
+            let vm = CrossSectionViewModel()
+            #expect(vm.themeId == .gramet)        // boot emulation's look
+            vm.applyEmulation(nil)
             #expect(vm.themeId == .standard)
             #expect(CrossSectionTheme.active.id == .standard)
-            #expect(vm.activeEmulation == "gramet")   // layers untouched → still GRAMET
-            #expect(vm.enabledLayers == CrossSectionPresets.bootDefaults)
+        }
+
+        @Test func flyFunRestoresTheUsersOwnTheme() {
+            let vm = CrossSectionViewModel()
+            vm.applyEmulation(nil)
+            vm.setTheme(.light)
+            vm.applyEmulation("gramet")
+            #expect(vm.themeId == .gramet)
+            vm.applyEmulation(nil)
+            #expect(vm.themeId == .light)
+            #expect(CrossSectionTheme.active.id == .light)
+        }
+
+        @Test func reopeningMidEmulationStillDrawsItsTheme() {
+            let vm1 = CrossSectionViewModel()
+            vm1.applyEmulation(nil)
+            vm1.setTheme(.light)
+            vm1.applyEmulation("foreflight")
+            let vm2 = CrossSectionViewModel()
+            #expect(vm2.activeEmulation == "foreflight")
+            #expect(vm2.themeId == .highContrast)
+            #expect(vm2.userThemeId == .light)
+        }
+
+        @Test func handPickedThemeWhileEmulatingDropsTheEmulationInFull() {
+            let vm = CrossSectionViewModel()
+            vm.setGradedMethods([.clouds: "dd", .icing: "sfip_nwp", .convection: "thermo"])
+            vm.setHighlightAdvisory("icing")
+            #expect(vm.activeEmulation == "gramet")
+            vm.setTheme(.standard)
+            #expect(vm.activeEmulation == nil)
+            #expect(vm.themeId == .standard)
+            #expect(CrossSectionTheme.active.id == .standard)
+            #expect(vm.activeHighlightAdvisoryId == nil)
+            // FlyFun's graded methods, not GRAMET's Ogimet-NWP icing.
+            #expect(vm.effectiveMethods[.icing] == "sfip_nwp")
+            let icingOn = CrossSectionLayer.allLayers
+                .filter { $0.group == .icing && vm.enabledLayers[$0.id] == true }.map(\.id)
+            #expect(icingOn == ["sfip-bands"])
+        }
+
+        @Test func setThemeOutsideAnEmulationTouchesColoursOnly() {
+            let vm = CrossSectionViewModel()
+            vm.applyEmulation(nil)
+            let layers = vm.enabledLayers
+            vm.setTheme(.highContrast)
+            #expect(vm.themeId == .highContrast)
+            #expect(vm.activeEmulation == nil)
+            #expect(vm.enabledLayers == layers)
         }
 
         @Test func themeChoiceIsPersistedAcrossViewModelInstances() {
-            // The suite's init() cleared the persisted key, so this starts from the
-            // GRAMET boot default.
             let vm1 = CrossSectionViewModel()
             vm1.setTheme(.highContrast)
             // A fresh instance (next launch / a re-created CrossSectionView) restores it.
             let vm2 = CrossSectionViewModel()
             #expect(vm2.themeId == .highContrast)
+            #expect(vm2.userThemeId == .highContrast)
+        }
+
+        // MARK: One-time migration of the pre-#647 theme write
+
+        @Test func migrationClearsAStoredThemeEqualToTheActiveEmulations() {
+            // Pre-#647 state: GRAMET emulation wrote "gramet" as the user's theme.
+            UserDefaults.standard.set("gramet", forKey: "crossSectionEmulation")
+            UserDefaults.standard.set("gramet", forKey: "crossSectionThemeId")
+            let vm = CrossSectionViewModel()
+            #expect(vm.userThemeId == nil)
+            #expect(vm.themeId == .gramet)        // still emulating
+            vm.applyEmulation(nil)
+            #expect(vm.themeId == .standard)
+        }
+
+        @Test func migrationKeepsAThemeThatDiffersFromTheEmulations() {
+            UserDefaults.standard.set("gramet", forKey: "crossSectionEmulation")
+            UserDefaults.standard.set("light", forKey: "crossSectionThemeId")
+            let vm = CrossSectionViewModel()
+            #expect(vm.userThemeId == .light)
+        }
+
+        @Test func migrationRunsOnlyOnce() {
+            // Post-#647 a matching pair is a real choice: Light, then Windy.
+            let vm1 = CrossSectionViewModel()   // stamps the settings version
+            vm1.applyEmulation(nil)
+            vm1.setTheme(.light)
+            vm1.applyEmulation("windy")         // windy draws light too
+            let vm2 = CrossSectionViewModel()
+            #expect(vm2.userThemeId == .light)
         }
     }
 }

@@ -107,6 +107,15 @@ methods this briefing graded with) *compose*: an emulation supplies the methods
 and theme, a lens asks for "the preferred layer of each group" and resolves
 through them; changing the emulation re-applies an active lens, and a manual
 layer edit drops the lens but keeps the emulation (`CrossSectionViewModel`).
+Theme ownership follows the web (#647, see visualization.md): `userThemeId` is
+the user's own and an emulation never writes it; the drawn `themeId` is derived
+(emulation's, else the user's, else standard), and a hand-picked theme while
+emulating drops the emulation via `applyEmulation(nil)` (graded methods, Focus
+re-applied). **First run:** iOS boots GRAMET, so it draws GRAMET; FlyFun on a
+fresh install draws **standard**, the same as the web — deliberately not GRAMET,
+which would put GRAMET's look on our methods. A one-time migration
+(`crossSectionSettingsVersion` = 1) clears a stored theme equal to the active
+emulation's (the pre-#647 write).
 Graded methods come from the advisories manifest's `primary_method_id`
 (`CrossSectionPresets.gradedMethods`), the same source the web uses; a
 manifest that lands (or recalculates) after a FlyFun lens was applied
