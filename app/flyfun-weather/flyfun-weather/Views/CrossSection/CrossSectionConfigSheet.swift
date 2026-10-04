@@ -92,7 +92,7 @@ struct CrossSectionConfigSheet: View {
         } header: {
             Text("Theme")
         } footer: {
-            Text("Colours only. Picking an emulation also sets its matching theme.")
+            Text("Colours only. An emulation draws in its own theme; picking a theme here switches back to FlyFun.")
         }
     }
 

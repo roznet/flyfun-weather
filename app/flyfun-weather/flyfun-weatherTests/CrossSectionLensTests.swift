@@ -130,8 +130,8 @@ extension CrossSectionSharedStateTests {
             #expect(vm.themeId == .light)
             vm.applyEmulation("foreflight")
             #expect(vm.themeId == .highContrast)
-            vm.applyEmulation(nil)  // FlyFun leaves the theme alone
-            #expect(vm.themeId == .highContrast)
+            vm.applyEmulation(nil)  // FlyFun draws the user's own theme (none → standard, #647)
+            #expect(vm.themeId == .standard)
             #expect(vm.activeEmulation == nil)
         }
 
