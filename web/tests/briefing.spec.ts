@@ -136,7 +136,7 @@ test.describe('Briefing page', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Sidebar layout — now the default. These assert the shell that
+// Sidebar layout. These assert the shell that
 // sidebar-layout.ts builds around the (unchanged) section rendering.
 // ---------------------------------------------------------------------------
 
@@ -187,16 +187,10 @@ test.describe('Briefing sidebar layout', () => {
     await expect(page.locator('.rail-focus-bar')).toBeHidden();
   });
 
-  test('classic opt-out renders no sidebar shell', async ({ page }) => {
+  test('a stale ?layout=classic link still gets the sidebar shell', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}&layout=classic`);
-
-    // Wait for the briefing to render, then assert the shell was never built.
-    await expect(page.getByRole('heading', { name: 'Synopsis' })).toBeVisible();
-    await expect(page.locator('.briefing-shell')).toHaveCount(0);
-    await expect(page.locator('.container.layout-sidebar')).toHaveCount(0);
-
-    // The toolbar offers a way back to the sidebar layout.
-    await expect(page.locator('#layout-optin-btn')).toBeVisible();
+    await expect(page.locator('.container.layout-sidebar')).toBeVisible();
+    await expect(page.locator('.layout-switch-btn')).toHaveCount(0);
   });
 });
 

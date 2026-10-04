@@ -742,21 +742,17 @@ export function renderFreshnessBar(
     linksHtml = `${forceLink}`;
   }
 
-  if (document.querySelector('.container.layout-sidebar')) {
-    // Collapsible disclosure: the status sentence stays visible with a caret;
-    // the action links, "Based on…" basis and diagnostics are tucked into the
-    // expandable details. Collapsed by default; state persisted.
-    const expanded = getFreshnessExpanded();
-    const actions = linksHtml ? `<div class="freshness-actions">${linksHtml}</div>` : '';
-    const detailsHtml = `${actions}${elapsedBadge}${basisLine}${diagHtml}`;
-    el.innerHTML =
-      `<button type="button" class="freshness-toggle" id="freshness-toggle" aria-expanded="${expanded}">`
-      + `<span class="freshness-caret" aria-hidden="true">›</span>`
-      + `<span class="freshness-status">${statusHtml}</span></button>`
-      + `<div class="freshness-details" id="freshness-details"${expanded ? '' : ' hidden'}>${detailsHtml}</div>`;
-  } else {
-    el.innerHTML = `<span>${statusHtml} ${linksHtml}</span>${elapsedBadge}${basisLine}${diagHtml}`;
-  }
+  // Collapsible disclosure: the status sentence stays visible with a caret;
+  // the action links, "Based on…" basis and diagnostics are tucked into the
+  // expandable details. Collapsed by default; state persisted.
+  const expanded = getFreshnessExpanded();
+  const actions = linksHtml ? `<div class="freshness-actions">${linksHtml}</div>` : '';
+  const detailsHtml = `${actions}${elapsedBadge}${basisLine}${diagHtml}`;
+  el.innerHTML =
+    `<button type="button" class="freshness-toggle" id="freshness-toggle" aria-expanded="${expanded}">`
+    + `<span class="freshness-caret" aria-hidden="true">›</span>`
+    + `<span class="freshness-status">${statusHtml}</span></button>`
+    + `<div class="freshness-details" id="freshness-details"${expanded ? '' : ' hidden'}>${detailsHtml}</div>`;
 
   // Wire event handlers
   const checkLink = document.getElementById('freshness-check-again');

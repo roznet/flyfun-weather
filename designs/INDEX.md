@@ -112,7 +112,7 @@ Key exports: `get_forecast_map_data`, `assemble_map_airports`, `get_historical_m
 → Full doc: forecast-page.md
 
 ### briefing-sidebar
-Default, reversible layout for the briefing page: fixed left rail (route identity, derived glance summary, scroll-spy nav, freshness, controls) + scrollable main pane, resizable, with per-section focus mode; classic is a one-click opt-out. The rail owns no data — it derives its summary from already-rendered DOM and builds its nav from the `NAV_GROUPS` whitelist of `data-section` keys, so it adds/removes without touching other managers.
+The briefing page layout (the only one; classic was removed): fixed left rail (route identity, derived glance summary, scroll-spy nav, freshness, controls) + scrollable main pane, resizable, with per-section focus mode. Main-pane section order matches `NAV_GROUPS` (unit-tested). The rail owns no data — it derives its summary from already-rendered DOM and builds its nav from the `NAV_GROUPS` whitelist of `data-section` keys, so it adds/removes without touching other managers.
 Key exports: `initBriefingLayout`, `getBriefingLayout`, `BriefingLayout`
 → Full doc: briefing-sidebar.md
 

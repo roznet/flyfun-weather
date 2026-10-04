@@ -1,41 +1,23 @@
 /**
- * Optional "sidebar" briefing layout — opt-in and fully reversible.
+ * Briefing page layout: a sticky left rail beside the main pane.
  *
- * Sidebar is the default layout; classic is an explicit opt-out via the footer
- * "Switch to classic layout" button (stored as `wb_layout=classic`) or
- * `?layout=classic`. In sidebar mode we
- * build a two-column shell and REPARENT existing rendered nodes (route header,
- * assessment, advisories, freshness, history, depth toggle) into a sticky left
- * rail, generate a scroll-spy SECTIONS nav, and add a per-section focus mode.
+ * We build a two-column shell and REPARENT existing rendered nodes (route
+ * header, freshness, history, depth toggle) into the rail, generate a
+ * scroll-spy SECTIONS nav, and add a per-section focus mode.
  *
  * No section rendering logic is touched — this is a shell. Every node we move
  * keeps its existing event listeners (direct or delegated), so refresh, the
  * Standard/Details toggle, collapsibles, history, etc. all keep working.
  */
 
-export type BriefingLayout = 'classic' | 'sidebar';
-const STORAGE_KEY = 'wb_layout';
 const RAIL_WIDTH_KEY = 'wb_rail_width';
 const RAIL_MIN_WIDTH = 260;
 const RAIL_MAX_WIDTH = 560;
 
-export function getBriefingLayout(): BriefingLayout {
-  const param = new URLSearchParams(location.search).get('layout');
-  if (param === 'sidebar' || param === 'classic') return param;
-  try {
-    // Sidebar is the default; only an explicit opt-out keeps classic.
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'sidebar' || stored === 'classic') return stored;
-  } catch { /* ignore */ }
-  return 'sidebar';
-}
-
-function setBriefingLayout(layout: BriefingLayout): void {
-  try { localStorage.setItem(STORAGE_KEY, layout); } catch { /* ignore */ }
-}
-
 // Friendly labels + grouping for the SECTIONS nav. Keys are data-section values.
-const NAV_GROUPS: { title: string; keys: string[] }[] = [
+// The main pane (web/briefing.html) lists these sections in the same order —
+// tests/unit/briefing-section-order.test.ts enforces it.
+export const NAV_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Explore', keys: ['cross-section', 'skewt'] },
   { title: 'Observations', keys: ['observed', 'observations', 'sigmets', 'pireps', 'alternates'] },
   { title: 'Discussion', keys: ['synopsis', 'dwd-charts', 'dwd-overview', 'gramet'] },
@@ -298,44 +280,13 @@ function buildRailFooter(): HTMLElement {
     footer.appendChild(row);
   }
 
-  const sw = document.createElement('button');
-  sw.type = 'button';
-  sw.className = 'btn btn-small layout-switch-btn';
-  sw.textContent = 'Switch to classic layout';
-  sw.addEventListener('click', () => {
-    setBriefingLayout('classic');
-    location.reload();
-  });
-  footer.appendChild(sw);
   return footer;
-}
-
-function injectClassicOptIn(): void {
-  const group = document.querySelector('.toolbar-end-group');
-  if (!group || document.getElementById('layout-optin-btn')) return;
-  const btn = document.createElement('button');
-  btn.id = 'layout-optin-btn';
-  btn.type = 'button';
-  btn.className = 'btn btn-small layout-switch-btn';
-  btn.textContent = '▦ Switch to sidebar layout';
-  btn.title = 'Switch back to the sidebar layout';
-  btn.addEventListener('click', () => {
-    setBriefingLayout('sidebar');
-    location.reload();
-  });
-  group.insertBefore(btn, group.firstChild);
 }
 
 /**
  * Entry point — call once after the page's sections and toolbar are wired.
- * No-op (beyond injecting the opt-in button) when layout is 'classic'.
  */
 export function initBriefingLayout(): void {
-  if (getBriefingLayout() !== 'sidebar') {
-    injectClassicOptIn();
-    return;
-  }
-
   const container = document.querySelector('.container') as HTMLElement | null;
   if (!container || container.classList.contains('layout-sidebar')) return;
   container.classList.add('layout-sidebar');

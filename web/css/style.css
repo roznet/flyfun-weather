@@ -8490,9 +8490,8 @@ html {
 }
 
 /* ====================================================================== */
-/* Optional sidebar briefing layout (opt-in via wb_layout=sidebar)         */
-/* Default 'classic' layout is unaffected — none of these rules apply      */
-/* unless .container has .layout-sidebar.                                   */
+/* Briefing sidebar layout (.container.layout-sidebar, built by           */
+/* sidebar-layout.ts)                                                       */
 /* ====================================================================== */
 .container.layout-sidebar {
   max-width: 1440px;
@@ -8753,7 +8752,6 @@ body.resizing-rail {
 .rail-footer-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .rail-footer-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
 .rail-footer #history-select { flex: 1 1 auto; min-width: 0; }
-.layout-switch-btn { font-size: 0.78rem; }
 
 /* Focus mode: show only the focused section in the main pane */
 .rail-focus-bar {

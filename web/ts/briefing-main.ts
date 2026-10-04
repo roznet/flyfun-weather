@@ -2742,9 +2742,9 @@ async function init(): Promise<void> {
     }
   });
 
-  // --- Optional sidebar layout (opt-in, reversible) ---
-  // Reparents header/assessment/advisories/freshness into a rail and adds a
-  // scroll-spy section nav + focus mode. No-op in the default classic layout.
+  // --- Sidebar layout ---
+  // Reparents header/freshness/controls into a rail and adds a scroll-spy
+  // section nav + focus mode.
   initBriefingLayout();
 
   // --- Wire image lightbox ---
