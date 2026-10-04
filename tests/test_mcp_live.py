@@ -114,3 +114,18 @@ def test_instructions_and_docstring_mention_live():
     assert "'live' block" in server.mcp.instructions
     assert "re-grade" in server.mcp.instructions
     assert "live" in server.get_briefing.__doc__
+
+
+def test_trail_facts_passed_through(patch_client):
+    """#669: the block carries times_today per change and recently_cleared
+    (built server-side); the tool must not drop or reshape them."""
+    live = {
+        **_LIVE,
+        "changes": [{**_LIVE["changes"][0], "times_today": 2}],
+        "recently_cleared": [{"key": "metar:ZZDS", "message": "ZZDS METAR: VFR → MVFR",
+                              "cleared_at": "2026-10-02T06:30:00+00:00"}],
+    }
+    patch_client(live=live)
+    res = server.get_briefing("flight-1")
+    assert res["live"]["changes"][0]["times_today"] == 2
+    assert res["live"]["recently_cleared"] == live["recently_cleared"]

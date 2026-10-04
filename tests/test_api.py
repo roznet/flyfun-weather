@@ -2395,6 +2395,57 @@ class TestLiveLayerEndpoint:
         assert snap["live_updated_at"] is not None
         assert json.loads((pack_dir / "briefing.json").read_text()) == {"route": {}}
 
+    def test_live_carries_trails_and_the_overlay_does_not(self, client, app_db, sample_flight, tmp_path):
+        """#669: /live adds each change's trail and the recently cleared rows,
+        computed from the history at read time; the snapshot overlay is
+        unchanged (no trail fields)."""
+        from weatherbrief.models.observations import AirportObservation, RouteObservations
+        from weatherbrief.tasks.live_layer import commit_live_update
+
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+
+        def obs(cat, t):
+            return RouteObservations(
+                corridor_nm=30.0, fetch_time=t, airports_found=1, airports_with_metar=1, airports_with_taf=0,
+                airports=[AirportObservation(
+                    icao="ZZDS", distance_from_route_nm=0.0, nearest_waypoint_icao="ZZDS",
+                    metar_raw=f"METAR ZZDS {t:%d%H%M}Z 24010KT 9999 {cat}", metar_time=t,
+                    metar_flight_category=cat, has_metar=True,
+                )],
+            )
+
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        briefing = {
+            "route": {"name": "ZZ", "cruise_altitude_ft": 6000, "flight_duration_hours": 1.0, "waypoints": [
+                {"icao": "ZZDP", "name": "Dep", "lat": 50.0, "lon": 1.0},
+                {"icao": "ZZDS", "name": "Dest", "lat": 51.0, "lon": 2.0},
+            ]},
+            "departure_time": (now + timedelta(hours=2)).isoformat(),
+            "route_observations": obs("VFR", now - timedelta(hours=1)).model_dump(mode="json"),
+        }
+        (pack_dir / "briefing.json").write_text(json.dumps(briefing))
+        pack_ts = (_NOW - timedelta(hours=6)).isoformat()
+        # Destination IFR, back to VFR, IFR again: on screen for the 2nd time.
+        for minutes, cat in ((30, "IFR"), (20, "VFR"), (10, "IFR")):
+            t = now - timedelta(minutes=minutes)
+            commit_live_update(pack_dir, briefing_data=briefing, observations=obs(cat, t), sigmets=None,
+                               observed=None, started_at=t, pack_timestamp=pack_ts, now=t)
+
+        live = client.get(f"/api/flights/{sample_flight.id}/live").json()
+        [c] = live["changes"]["changes"]
+        assert c["key"] == "metar:ZZDS" and c["trail"]["times_today"] == 2
+        assert [s["end"] is None for s in c["trail"]["spans"]] == [False, True]
+        assert [r["category"] for r in c["trail"]["reports"]] == ["IFR", "VFR", "IFR"]
+        assert live["changes"]["recently_cleared"] == []
+        assert live["changes"]["alert_count"] == 1
+
+        ts = client.get(f"/api/flights/{sample_flight.id}/packs/latest").json()["fetch_timestamp"]
+        snap = client.get(f"/api/flights/{sample_flight.id}/packs/{ts}/snapshot").json()
+        assert snap["live_changes"]["changes"][0]["key"] == "metar:ZZDS"
+        assert "trail" not in snap["live_changes"]["changes"][0]
+        assert "cleared_at" not in snap["live_changes"]["changes"][0]
+        assert "recently_cleared" not in snap["live_changes"]
+
     def test_delete_flight_removes_live_files(self, client, app_db, sample_flight, tmp_path):
         pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
         self._commit(pack_dir)

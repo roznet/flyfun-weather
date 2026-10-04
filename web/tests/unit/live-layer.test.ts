@@ -1,8 +1,21 @@
 /** Live observation layer helpers (#637). */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import en from '../../ts/i18n/locales/en.json';
+
+// The trail text is translated; pin the English strings (iOS reads the same).
+vi.mock('../../ts/i18n/i18n', () => ({
+  t: (key: string, params?: Record<string, string | number>) => {
+    let msg = (en as Record<string, string>)[key] ?? key;
+    for (const [k, v] of Object.entries(params ?? {})) msg = msg.split(`{${k}}`).join(String(v));
+    return msg;
+  },
+}));
 import {
+  RECENTLY_CLEARED_MIN,
+  addsTrails,
   applyLiveToSnapshot,
+  categoryStripText,
   changedIcaos,
   changedSigmetKeys,
   formatHhmmZ,
@@ -13,6 +26,11 @@ import {
   pythonDatetimeStr,
   sameInstant,
   sigmetChangeKey,
+  englishOrdinal,
+  timesTodayText,
+  trailSpanText,
+  trailText,
+  visibleCleared,
 } from '../../ts/helpers/live-layer';
 import type {
   ForecastSnapshot,
@@ -244,5 +262,110 @@ describe('formatting', () => {
   it('sameInstant ignores representation', () => {
     expect(sameInstant('2026-10-01T09:00:00Z', '2026-10-01T09:00:00.000+00:00')).toBe(true);
     expect(sameInstant('2026-10-01T09:00:00Z', null)).toBe(false);
+  });
+});
+
+// --- Trails (#669) -----------------------------------------------------------
+
+describe('applyLiveToSnapshot with trails', () => {
+  it('applies the same tick once when it brings the trails the overlay lacks', () => {
+    const snap = snapshot({ live_updated_at: '2026-10-01T11:00:00Z', live_changes: changes([change({})]) });
+    const trailed = live({ changes: { ...changes([change({})]), recently_cleared: [] } });
+    expect(addsTrails(snap.live_changes, trailed.changes)).toBe(true);
+    const out = applyLiveToSnapshot(snap, trailed, '2026-10-01T09:00:00Z');
+    expect(out?.live_changes?.recently_cleared).toEqual([]);
+    // Once applied, the same tick is a no-op again.
+    expect(applyLiveToSnapshot(out!, trailed, '2026-10-01T09:00:00Z')).toBeNull();
+  });
+
+  it('never rolls back to an older tick, trails or not', () => {
+    const snap = snapshot({ live_updated_at: '2026-10-01T11:10:00Z', live_changes: changes([]) });
+    const older = live({ changes: { ...changes([]), recently_cleared: [] } });
+    expect(applyLiveToSnapshot(snap, older, '2026-10-01T09:00:00Z')).toBeNull();
+  });
+});
+
+describe('trail text', () => {
+  it('spans read as Zulu ranges, open ones as "since"', () => {
+    expect(trailSpanText({ start: '2026-10-04T12:42:00Z', end: '2026-10-04T13:02:00+00:00' })).toBe('12:42–13:02Z');
+    expect(trailSpanText({ start: '2026-10-04T13:33:00Z', end: null })).toBe('since 13:33Z');
+  });
+
+  it('ordinals', () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 103, 111].map(englishOrdinal)).toEqual(
+      ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '103rd', '111th'],
+    );
+  });
+
+  it('"Nth time today" only from 2', () => {
+    expect(timesTodayText(1)).toBeNull();
+    expect(timesTodayText(undefined)).toBeNull();
+    expect(timesTodayText(2)).toBe('2nd time today');
+    expect(timesTodayText(3)).toBe('3rd time today');
+  });
+
+  it('recurrence on a non-category row: spans + count', () => {
+    const c = change({
+      key: 'conv:LFMT', kind: 'metar_convective', message: 'LFMT METAR: TS, CB reported',
+      trail: {
+        spans: [
+          { start: '2026-10-04T12:42:00Z', end: '2026-10-04T13:02:00Z' },
+          { start: '2026-10-04T13:33:00Z', end: null },
+        ],
+        times_today: 2,
+      },
+    });
+    expect(trailText(c)).toBe('12:42–13:02Z, since 13:33Z · 2nd time today');
+  });
+
+  it('first time on screen says nothing more than the row', () => {
+    const c = change({
+      kind: 'metar_convective',
+      trail: { spans: [{ start: '2026-10-04T13:33:00Z', end: null }], times_today: 1 },
+    });
+    expect(trailText(c)).toBeNull();
+    expect(trailText(change({}))).toBeNull(); // no trail (snapshot overlay)
+  });
+
+  it('category rows show the report strip, labelled by baseline', () => {
+    const reports = [
+      { at: '2026-10-04T11:00:00Z', category: 'MVFR', report_type: 'METAR' },
+      { at: '2026-10-04T11:30:00Z', category: 'VFR', report_type: 'METAR' },
+    ];
+    const c = change({
+      key: 'metar:LFBZ', from_value: 'VFR', to_value: 'MVFR',
+      trail: { spans: [{ start: '2026-10-04T11:05:00Z', end: '2026-10-04T11:41:00Z' }], times_today: 1, reports },
+    });
+    expect(categoryStripText(c)).toBe('briefed VFR · 11:00Z MVFR · 11:30Z VFR');
+    expect(trailText(c, true)).toBe('briefed VFR · 11:00Z MVFR · 11:30Z VFR');
+    const fromStart = change({ ...c, trail: { ...c.trail!, baseline_source: 'live_start' } });
+    expect(categoryStripText(fromStart)).toBe('at start VFR · 11:00Z MVFR · 11:30Z VFR');
+  });
+
+  it('a cleared row always gets its trail line', () => {
+    const c = change({
+      kind: 'sigmet_issued', key: 'sigmet:LFMM|T01',
+      trail: { spans: [{ start: '2026-10-04T11:05:00Z', end: '2026-10-04T12:32:00Z' }], times_today: 1 },
+    });
+    expect(trailText(c)).toBeNull();
+    expect(trailText(c, true)).toBe('11:05–12:32Z');
+  });
+});
+
+describe('visibleCleared', () => {
+  const cleared = (at: string) => change({ cleared_at: at });
+  const now = isoMs('2026-10-04T12:30:00Z');
+
+  function isoMs(s: string): number { return new Date(s).getTime(); }
+
+  it('keeps rows that cleared within the hour', () => {
+    const live = { ...changes([]), recently_cleared: [cleared('2026-10-04T11:31:00Z'), cleared('2026-10-04T11:29:00Z')] };
+    expect(visibleCleared(live, now).map(c => c.cleared_at)).toEqual(['2026-10-04T11:31:00Z']);
+    expect(RECENTLY_CLEARED_MIN).toBe(60);
+  });
+
+  it('is empty without trails', () => {
+    expect(visibleCleared(changes([]), now)).toEqual([]);
+    expect(visibleCleared(null, now)).toEqual([]);
   });
 });

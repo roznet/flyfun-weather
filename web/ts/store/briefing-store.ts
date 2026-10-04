@@ -15,7 +15,7 @@ import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-sec
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
-import { applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
+import { addsTrails, applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
 
 // --- localStorage persistence helpers ---
 
@@ -997,8 +997,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (now.flight?.id !== flightId || now.currentPack?.fetch_timestamp !== packTs || !now.snapshot) return;
     // Drop a response older than (or equal to) the one already applied —
     // a slow poll landing after a newer one must not roll the overlay back.
+    // Equal is fine once, when it brings the trails (#669) the snapshot
+    // overlay never carries.
     const appliedMs = isoToMs(now.live?.live_updated_at);
-    if (!isNaN(appliedMs) && !(isoToMs(live.live_updated_at) > appliedMs)) return;
+    const liveMs = isoToMs(live.live_updated_at);
+    if (!isNaN(appliedMs) && !(liveMs > appliedMs)
+        && !(liveMs === appliedMs && addsTrails(now.snapshot.live_changes, live.changes))) return;
     const next = applyLiveToSnapshot(now.snapshot, live, packTs);
     if (!next) return;
     set({ snapshot: next, live });

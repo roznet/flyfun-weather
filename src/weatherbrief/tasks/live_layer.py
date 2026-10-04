@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig
-from weatherbrief.models.live import LiveChange, LiveLayer
+from weatherbrief.models.live import TRAIL_EXCLUDE, LiveChange, LiveChanges, LiveLayer
 from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 
@@ -171,7 +171,8 @@ def overlay_live(briefing_data: dict, layer: LiveLayer | None) -> dict:
     if layer.last_refresh_delta is not None:
         out["last_refresh_delta"] = layer.last_refresh_delta.model_dump(mode="json")
     if layer.changes is not None:
-        out["live_changes"] = layer.changes.model_dump(mode="json")
+        # Never the read-time trail (#669): the overlay is what it was.
+        out["live_changes"] = layer.changes.model_dump(mode="json", exclude=TRAIL_EXCLUDE)
     if layer.live_updated_at is not None:
         out["live_updated_at"] = layer.live_updated_at.isoformat()
     return out
@@ -349,6 +350,9 @@ def _report_records(
                 out.append((("metar", a.icao, _iso(a.metar_time), a.metar_raw), {
                     "kind": "metar", "icao": a.icao, "seen_at": seen,
                     "report_type": a.metar_report_type, "observed_at": _iso(a.metar_time),
+                    # For the trail's category strip (#669); files written
+                    # before it are re-parsed from ``raw`` on read.
+                    "flight_category": a.metar_flight_category,
                     "raw": a.metar_raw,
                 }))
             if a.taf_raw:
@@ -614,7 +618,7 @@ def commit_live_update(
         layer.alerted = memory.alerted
         layer.live_updated_at = now
 
-        _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json())
+        _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
         _atomic_write(flight_dir / LIVE_META_FILE, json.dumps({
             "pack_dir_name": layer.pack_dir_name,
             "pack_timestamp": layer.pack_timestamp,
@@ -636,7 +640,9 @@ LIVE_NOTE = (
     "and the significant changes they show. The digest, advisories and grade "
     "were written before these, at digest_written_at, and are never re-graded "
     "by them: lead with any alert-tier change on flight day, and say the "
-    "digest predates it rather than reconciling the two."
+    "digest predates it rather than reconciling the two. times_today of 2 or "
+    "more means the change has come and gone today (bouncing, not building); "
+    "recently_cleared lists what cleared in the last hour."
 )
 
 #: Size limits — the block rides on every get_briefing call. SIGMETs on a
@@ -644,6 +650,8 @@ LIVE_NOTE = (
 #: pathological fetch.
 LIVE_SUMMARY_MAX_CHANGES = 12
 LIVE_SUMMARY_MAX_SIGMETS = 20
+#: Changes that cleared in the last hour (#669 D3).
+LIVE_SUMMARY_MAX_CLEARED = 6
 
 _TIER_ORDER = {"alert": 0, "highlight": 1}
 _DIRECTION_ORDER = {"worse": 0, "better": 1}
@@ -654,8 +662,15 @@ def _nm(value: float | None) -> float | None:
     return round(value, 1) if value is not None else None
 
 
-def summarize_live(layer: LiveLayer, briefing_data: dict) -> dict:
+def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges | None = None) -> dict:
     """The compact ``live`` block an agent gets with a briefing.
+
+    ``changes`` overrides the layer's with the read-time trails (#669): each
+    change then carries ``times_today`` (how often it has come on screen over
+    the flight day, so "bouncing" is visible) and ``recently_cleared`` lists
+    what cleared on the weather in the last hour (key, message, cleared_at;
+    capped at :data:`LIVE_SUMMARY_MAX_CLEARED`). No trails or report strips:
+    agents need the fact, not the picture.
 
     Changes are ordered alert → highlight, worsening first, destination →
     departure → alternate → route, newest evidence first; capped at
@@ -667,7 +682,7 @@ def summarize_live(layer: LiveLayer, briefing_data: dict) -> dict:
     """
     from weatherbrief.tasks.live_significance import _sigmet_label, airport_roles
 
-    changes = layer.changes
+    changes = changes if changes is not None else layer.changes
     out: dict = {
         "note": LIVE_NOTE,
         "live_updated_at": _iso(layer.live_updated_at),
@@ -701,8 +716,14 @@ def summarize_live(layer: LiveLayer, briefing_data: dict) -> dict:
             "icao": c.icao,
             "message": c.message,
             "observed_at": _iso(c.observed_at),
+            **({"times_today": c.trail.times_today} if c.trail is not None else {}),
         }
         for c in items[:LIVE_SUMMARY_MAX_CHANGES]
+    ]
+    cleared = (changes.recently_cleared if changes else None) or []
+    out["recently_cleared"] = [
+        {"key": c.key, "message": c.message, "cleared_at": _iso(c.cleared_at)}
+        for c in cleared[:LIVE_SUMMARY_MAX_CLEARED]
     ]
 
     sigmets = list(layer.route_sigmets.sigmets) if layer.route_sigmets else []
@@ -759,10 +780,15 @@ def live_summary(pack_dir: Path | str | None) -> dict | None:
         from weatherbrief.tasks.artifacts import load_briefing
 
         pack_dir = Path(pack_dir)
+        from weatherbrief.tasks.live_trail import trails_for_pack
+
         layer = live_for_pack(pack_dir)
         if layer is None or layer.live_updated_at is None:
             return None
-        return summarize_live(layer, load_briefing(pack_dir) or {})
+        briefing = load_briefing(pack_dir) or {}
+        return summarize_live(
+            layer, briefing, trails_for_pack(pack_dir, layer.changes, briefing_data=briefing),
+        )
     except Exception:
         logger.warning("Live summary failed for %s", pack_dir, exc_info=True)
         return None

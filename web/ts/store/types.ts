@@ -1019,6 +1019,36 @@ export interface LiveChange {
   /** Deterministic, language-neutral shorthand, e.g. "EGLL METAR: VFR → IFR". */
   message: string;
   new_alert?: boolean;
+  /** Recent history (#669), on `/live` and refresh responses only (never the
+   *  snapshot overlay). Display only. */
+  trail?: LiveChangeTrail | null;
+  /** Only on `recently_cleared` rows: when it left the screen. */
+  cleared_at?: string | null;
+}
+
+/** One period a change was on screen; `end` null while it still is. */
+export interface LiveTrailSpan {
+  start: string;
+  end: string | null;
+}
+
+/** One METAR/SPECI for a `metar_category` row's strip. */
+export interface LiveTrailReport {
+  at: string;
+  category: string | null;
+  report_type: string | null;
+}
+
+/** A change's recent history (#669), computed server-side from the flight's
+ *  live history (`tasks/live_trail.py`). Grouped by key + direction. */
+export interface LiveChangeTrail {
+  spans: LiveTrailSpan[];
+  /** Times on screen over the flight day, this one included. */
+  times_today: number;
+  /** `metar_category` only: the airport's category per report, oldest first. */
+  reports?: LiveTrailReport[] | null;
+  /** What `from_value` is measured against. */
+  baseline_source?: 'briefing' | 'live_start' | null;
 }
 
 /** Changes since the briefing (vs the pack's own observations). Already sorted. */
@@ -1030,6 +1060,9 @@ export interface LiveChanges {
   baseline_source?: 'briefing' | 'live_start';
   computed_at: string;
   changes: LiveChange[];
+  /** #669: cleared on the weather within the hour, newest first. Never
+   *  counted, never an alert. Absent on the snapshot overlay. */
+  recently_cleared?: LiveChange[] | null;
   worsened_count: number;
   improved_count: number;
   alert_count: number;

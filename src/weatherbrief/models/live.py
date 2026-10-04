@@ -63,6 +63,44 @@ class LiveEvidencePoint(BaseModel):
     total_px: int | None = None
 
 
+class LiveTrailSpan(BaseModel):
+    """One period a change was on screen (#669). ``end`` is None while it
+    still is."""
+
+    start: datetime
+    end: datetime | None = None
+
+
+class LiveTrailReport(BaseModel):
+    """One METAR/SPECI at the airport, for a ``metar_category`` row's strip."""
+
+    at: datetime
+    category: str | None = None  # VFR / MVFR / IFR / LIFR; None when unparsed
+    report_type: str | None = None  # METAR / SPECI
+
+
+class LiveChangeTrail(BaseModel):
+    """A change's recent history (#669): display only, computed at read time
+    from ``live_history.jsonl`` (``tasks/live_trail.py``), never stored in
+    ``live.json`` and never in the snapshot overlay.
+
+    Grouped by change ``key`` *and* direction: a value or tier change on the
+    same key (MVFR → IFR) continues the span, a pack switch that re-shows the
+    change at the same tick continues it too. Never feeds significance.
+    """
+
+    spans: list[LiveTrailSpan] = Field(default_factory=list)
+    # How many times this change has come on screen over the flight day,
+    # the current/last time included. Clients say "Nth time today" from 2.
+    times_today: int = 1
+    # metar_category only: the airport's category per METAR/SPECI, oldest
+    # first, from the report that first showed this change (latest 6).
+    reports: list[LiveTrailReport] | None = None
+    # What ``from_value`` is measured against for this change: the briefing's
+    # own observations, or the live layer's starting point.
+    baseline_source: Literal["briefing", "live_start"] | None = None
+
+
 class LiveChange(BaseModel):
     """One significant change since the briefing.
 
@@ -99,6 +137,12 @@ class LiveChange(BaseModel):
     # Excluded from every dump (live.json, /live, snapshot overlay): only the
     # history writer reads it, off the in-memory change (#643).
     evidence: list[LiveEvidencePoint] | None = Field(default=None, exclude=True)
+    # Read-time only (#669): set on ``GET /live`` and realtime refresh
+    # responses, never stored and never in the snapshot overlay (see
+    # ``TRAIL_EXCLUDE``).
+    trail: LiveChangeTrail | None = None
+    # Only on ``LiveChanges.recently_cleared`` rows: when it left the screen.
+    cleared_at: datetime | None = None
 
 
 class LiveChanges(BaseModel):
@@ -111,6 +155,11 @@ class LiveChanges(BaseModel):
     baseline_source: Literal["briefing", "live_start"] = "briefing"
     computed_at: datetime
     changes: list[LiveChange] = Field(default_factory=list)
+    # Read-time only (#669): changes that cleared on the weather within the
+    # last hour, newest first, each with ``cleared_at``. Display only: never
+    # counted below, never an alert. None = not computed (stored layer,
+    # snapshot overlay); [] = computed, nothing recent.
+    recently_cleared: list[LiveChange] | None = None
 
     @computed_field
     @property
@@ -126,6 +175,14 @@ class LiveChanges(BaseModel):
     @property
     def alert_count(self) -> int:
         return sum(1 for c in self.changes if c.tier == "alert")
+
+
+#: ``model_dump`` exclude for a ``LiveChanges``: the read-time trail fields,
+#: so ``live.json`` and the snapshot overlay stay exactly as before #669.
+TRAIL_EXCLUDE: dict = {
+    "recently_cleared": True,
+    "changes": {"__all__": {"trail", "cleared_at"}},
+}
 
 
 class LiveLayer(BaseModel):

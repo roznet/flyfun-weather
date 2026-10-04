@@ -5,6 +5,7 @@
   "baseline_source": "briefing",
   "changes": [
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 235.12697602257145,
     "from_value": null,
@@ -18,9 +19,21 @@
     "source": "SIGMET",
     "station_id": null,
     "tier": "alert",
-    "to_value": "EMBD TS"
+    "to_value": "EMBD TS",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T08:30:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 268.7,
     "from_value": "MVFR",
@@ -34,9 +47,42 @@
     "source": "METAR",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "VFR"
+    "to_value": "VFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T07:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T07:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 126.16,
     "from_value": "IFR",
@@ -50,9 +96,27 @@
     "source": "METAR",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "LIFR"
+    "to_value": "LIFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "LIFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T08:30:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 169.93,
     "from_value": "TCU",
@@ -66,11 +130,91 @@
     "source": "METAR",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "none"
+    "to_value": "none",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": "2026-10-02T07:00:00Z",
+       "start": "2026-10-02T06:20:00Z"
+      },
+      {
+       "end": null,
+       "start": "2026-10-02T08:00:00Z"
+      }
+     ],
+     "times_today": 2
+    }
    }
   ],
   "computed_at": "2026-10-02T08:30:00Z",
   "improved_count": 2,
+  "recently_cleared": [
+   {
+    "cleared_at": "2026-10-02T07:30:00Z",
+    "direction": "worse",
+    "enroute_distance_nm": 169.93,
+    "from_value": "MVFR",
+    "icao": "LEVC",
+    "key": "metar:LEVC",
+    "kind": "metar_category",
+    "message": "LEVC METAR: MVFR \u2192 IFR (SPECI)",
+    "new_alert": false,
+    "observed_at": "2026-10-02T07:18:00Z",
+    "role": "route",
+    "source": "SPECI",
+    "station_id": null,
+    "tier": "highlight",
+    "to_value": "IFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:10:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T07:18:00Z",
+       "category": "IFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T07:30:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:00:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:11:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": "2026-10-02T06:20:00Z",
+       "start": "2026-10-02T06:00:00Z"
+      },
+      {
+       "end": "2026-10-02T07:30:00Z",
+       "start": "2026-10-02T07:20:00Z"
+      }
+     ],
+     "times_today": 2
+    }
+   }
+  ],
   "worsened_count": 2
  },
  "flight_id": "fixture-1",
