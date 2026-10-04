@@ -2302,7 +2302,8 @@ _AROME_SHORTNAME_MAP: dict[str, str] = {
 # which are therefore selected by (discipline, parameterCategory,
 # parameterNumber) — the HRRR CIMIXR technique. (0, 1, 201) is graupel: ICE3
 # carries exactly five prognostic condensate species, and IP2 holds exactly
-# clwc + ciwc + crwc + cswc + one unknown in category 1 (moisture). The
+# clwc + ciwc + crwc + cswc + one unknown in category 1 (moisture) —
+# confirmed on a real 2026-10-04 06z IP2 file. The
 # reflectivity parameters (0, 16, 192/193) live in other packages and are not
 # fetched (#529 defers them).
 _AROME_LOCAL_PARAM_MAP: dict[tuple[int, int, int], str] = {
@@ -2322,6 +2323,12 @@ AROME_CONDENSATE_FIELDS: frozenset[str] = frozenset({
 # is almost certainly in g/kg (or mis-identified), so the message is dropped
 # rather than stored 1000× too large. Missing data, not wrong data.
 _AROME_CONDENSATE_MAX_KG_KG = 0.02
+
+# MF packs ``cc`` as a 0–1 fraction (units "(0 - 1)", max 1.0 on the real
+# 2026-10-04 06z file), so it is always ×100. A message above this is not a
+# fraction and is dropped like a mis-scaled condensate field — never guessed
+# per file, which would let two groups of one window pick different scales.
+_AROME_CC_FRACTION_MAX = 1.5
 
 
 def _arome_field_for_message(gid) -> str | None:
@@ -2374,16 +2381,12 @@ def decode_arome_pressure_per_point(
     that message — that is the authoritative domain check behind the band
     table, and the caller fails the slot on it.
 
-    ``cc`` units: eccodes calls the parameter a 0–1 fraction, but whether MF
-    packs fraction or percent was not verifiable. The decision is made once
-    per file from the largest ``cc`` value anywhere in it: ≤ 1.5 is a
-    fraction (×100), above is already percent. Per-message would misread a
-    nearly-clear stratospheric level in percent (max 0.8 %) as a fraction.
+    ``cc`` is a 0–1 fraction and is stored ×100 as a percentage; a ``cc``
+    message that isn't a fraction is dropped (see ``_AROME_CC_FRACTION_MAX``).
 
     Returns:
         ``{"points": {fhour: [{pressure_hpa: {field: value}}, ...]},
-        "finite_fraction": float | None, "cc_scale": float | None,
-        "dropped": [str, ...]}``.
+        "finite_fraction": float | None, "dropped": [str, ...]}``.
     """
     import numpy as np
 
@@ -2393,9 +2396,6 @@ def decode_arome_pressure_per_point(
     points: dict[int, list[dict[int, dict[str, float]]]] = {
         h: [{} for _ in range(n_points)] for h in wanted_hours
     }
-    # cc collected raw, scaled once the file-wide maximum is known.
-    cc_raw: list[tuple[int, int, int, float]] = []
-    cc_max = -math.inf
     finite_fraction: float | None = None
     dropped: list[str] = []
     weights_cache: dict[tuple, object] = {}
@@ -2442,13 +2442,14 @@ def decode_arome_pressure_per_point(
                 if bw is None or bw.inb_idx.size == 0:
                     continue
 
-                if field in AROME_CONDENSATE_FIELDS:
-                    vmax = float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
-                    if vmax > _AROME_CONDENSATE_MAX_KG_KG:
-                        dropped.append(f"{field}@{level}hPa/f{fhour:03d} max={vmax:.4g}")
-                        continue
-                elif field == "cloud_area_fraction_pct" and np.isfinite(values).any():
-                    cc_max = max(cc_max, float(np.nanmax(values)))
+                vmax = float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
+                limit = (
+                    _AROME_CC_FRACTION_MAX if field == "cloud_area_fraction_pct"
+                    else _AROME_CONDENSATE_MAX_KG_KG
+                )
+                if vmax > limit:
+                    dropped.append(f"{field}@{level}hPa/f{fhour:03d} max={vmax:.4g}")
+                    continue
 
                 interp = (
                     bw.w00 * values[bw.i0, bw.j0]
@@ -2462,7 +2463,9 @@ def decode_arome_pressure_per_point(
                     if math.isnan(v):
                         continue
                     if field == "cloud_area_fraction_pct":
-                        cc_raw.append((fhour, int(pt_idx), level, v))
+                        hour_points[int(pt_idx)].setdefault(level, {})[field] = (
+                            min(max(v * 100.0, 0.0), 100.0)
+                        )
                         continue
                     # Interpolation can't create negatives from non-negative
                     # corners, but packing noise can; a mixing ratio is >= 0.
@@ -2470,25 +2473,16 @@ def decode_arome_pressure_per_point(
             finally:
                 eccodes.codes_release(gid)
 
-    cc_scale: float | None = None
-    if cc_raw:
-        cc_scale = 100.0 if cc_max <= 1.5 else 1.0
-        for fhour, pt_idx, level, v in cc_raw:
-            pct = min(max(v * cc_scale, 0.0), 100.0)
-            points[fhour][pt_idx].setdefault(level, {})["cloud_area_fraction_pct"] = pct
-
     if dropped:
         logger.warning(
-            "AROME %s: dropped %d implausible condensate message(s) "
-            "(> %.3g kg/kg — units?), e.g. %s",
-            Path(file_path).name, len(dropped), _AROME_CONDENSATE_MAX_KG_KG,
-            dropped[0],
+            "AROME %s: dropped %d implausible condensate/cc message(s) "
+            "(units?), e.g. %s",
+            Path(file_path).name, len(dropped), dropped[0],
         )
 
     return {
         "points": points,
         "finite_fraction": finite_fraction,
-        "cc_scale": cc_scale,
         "dropped": dropped,
     }
 

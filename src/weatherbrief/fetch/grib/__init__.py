@@ -5292,16 +5292,17 @@ def _prefetch_arome_data(ctx: _AromeContext) -> None:
 
     Sequential: a typical window is one or two ~146 MB groups, and running
     them one at a time keeps AROME to a single connection beside the ICON
-    and GFS downloads sharing phase 1. Failures are logged; decode treats a
-    missing group as a failed slot.
+    and GFS downloads sharing phase 1. Stops at the first failed group: decode
+    fails the whole slot on a missing group, so the rest would be wasted.
     """
     from weatherbrief.fetch.grib.arome_fetch import download_arome_group
 
     with _grib_time("arome_download"):
         for label in ctx.groups:
-            download_arome_group(
+            if download_arome_group(
                 ctx.init_date, ctx.init_hour, label, ctx.run_dir, ctx.session,
-            )
+            ) is None:
+                return
 
 
 def _arome_hour_problem(

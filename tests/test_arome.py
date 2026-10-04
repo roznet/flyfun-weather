@@ -62,9 +62,9 @@ class TestDomainPredicate:
         ):
             assert dom.route_in_arome_domain([_Pt(*p) for p in route]), route
 
-    def test_checked_in_table_is_marked_provisional(self):
-        # Flip this when scripts/regen_arome_domain.py has been run.
-        assert dom.arome_domain_is_provisional()
+    def test_checked_in_table_is_derived_from_data(self):
+        # Regenerated from the 2026-10-04 06z IP2 file's bitmap.
+        assert not dom.arome_domain_is_provisional()
 
     def test_bands_are_well_formed(self):
         prev_north = None
@@ -390,19 +390,20 @@ class TestDecode:
         out = self._decode(_write(tmp_path, msgs), [3], [47.0], [2.0], levels=[850])
         assert set(out["points"][3][0]) == {850}
 
-    def test_cc_already_in_percent_is_not_rescaled(self, tmp_path):
+    def test_cc_not_a_fraction_is_dropped(self, tmp_path):
         msgs = _full_set(step=3, level=850, cc=40.0) + _full_set(step=3, level=200, cc=0.8)
         out = self._decode(_write(tmp_path, msgs), [3], [47.0], [2.0])
         pt = out["points"][3][0]
-        assert out["cc_scale"] == 1.0
-        assert pt[850]["cloud_area_fraction_pct"] == pytest.approx(40.0, rel=1e-3)
-        # The near-clear level stays 0.8 %, not 80 % — decided per FILE.
-        assert pt[200]["cloud_area_fraction_pct"] == pytest.approx(0.8, rel=1e-2)
+        # Percent-packed cc is dropped, never guessed; condensate still lands.
+        assert "cloud_area_fraction_pct" not in pt[850]
+        assert "cloud_liquid_water_kg_kg" in pt[850]
+        assert any(d.startswith("cloud_area_fraction_pct@850hPa") for d in out["dropped"])
+        # Decided per message: the near-clear level is still a fraction → 80 %.
+        assert pt[200]["cloud_area_fraction_pct"] == pytest.approx(80.0, rel=1e-2)
 
     def test_cc_fraction_is_scaled_to_percent(self, tmp_path):
         msgs = _full_set(step=3, level=850, cc=0.25)
         out = self._decode(_write(tmp_path, msgs), [3], [47.0], [2.0])
-        assert out["cc_scale"] == 100.0
         assert out["points"][3][0][850]["cloud_area_fraction_pct"] == pytest.approx(25.0, rel=1e-3)
 
     def test_stencil_touching_missing_cells_decodes_nothing(self, tmp_path):
@@ -553,7 +554,7 @@ class TestDecodeAndMerge:
         def fake_dispatch(worker, path, hours, lats, lons, levels):
             assert worker == "decode_arome_pressure"
             return {"points": {h: decoded_by_hour[h] for h in hours},
-                    "finite_fraction": 0.828, "cc_scale": 100.0, "dropped": []}
+                    "finite_fraction": 0.828, "dropped": []}
 
         monkeypatch.setattr(grib_mod, "_dispatch_decode", fake_dispatch)
         cs = _mf_section(self._times(*[h for hs in groups.values() for h in hs]))

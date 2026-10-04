@@ -45,9 +45,9 @@ logger = logging.getLogger(__name__)
 AROME_BASE_URL = "https://meteofrance-pnt.s3.rbx.io.cloud.ovh.net/pnt"
 
 # Off by default. The feature downloads ~146 MB per 6-hour group, GRIB
-# precache is already disabled in production after an OOM, and the domain
-# table may still be the provisional placeholder — so it is opt-in per
-# deployment rather than live on merge.
+# precache is already disabled in production after an OOM, and the feature
+# has only been checked against one real file, not a live briefing — so it
+# is opt-in per deployment rather than live on merge.
 AROME_ENABLED_ENV = "WB_AROME_ENABLED"
 
 
