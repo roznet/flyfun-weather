@@ -12,11 +12,11 @@ vi.mock('../../ts/i18n/i18n', () => ({
   },
 }));
 import {
-  RECENTLY_CLEARED_MIN,
   addsTrails,
   applyLiveToSnapshot,
   categoryStripText,
   changedIcaos,
+  clearedRows,
   changedSigmetKeys,
   formatHhmmZ,
   isInLiveWindow,
@@ -30,7 +30,6 @@ import {
   timesTodayText,
   trailSpanText,
   trailText,
-  visibleCleared,
 } from '../../ts/helpers/live-layer';
 import type {
   ForecastSnapshot,
@@ -352,20 +351,14 @@ describe('trail text', () => {
   });
 });
 
-describe('visibleCleared', () => {
-  const cleared = (at: string) => change({ cleared_at: at });
-  const now = isoMs('2026-10-04T12:30:00Z');
-
-  function isoMs(s: string): number { return new Date(s).getTime(); }
-
-  it('keeps rows that cleared within the hour', () => {
-    const live = { ...changes([]), recently_cleared: [cleared('2026-10-04T11:31:00Z'), cleared('2026-10-04T11:29:00Z')] };
-    expect(visibleCleared(live, now).map(c => c.cleared_at)).toEqual(['2026-10-04T11:31:00Z']);
-    expect(RECENTLY_CLEARED_MIN).toBe(60);
+describe('clearedRows', () => {
+  it('is the server list as is (the server owns the hour window)', () => {
+    const rows = [change({ cleared_at: '2026-10-04T11:31:00Z' }), change({ cleared_at: '2026-10-04T10:00:00Z' })];
+    expect(clearedRows({ ...changes([]), recently_cleared: rows })).toEqual(rows);
   });
 
   it('is empty without trails', () => {
-    expect(visibleCleared(changes([]), now)).toEqual([]);
-    expect(visibleCleared(null, now)).toEqual([]);
+    expect(clearedRows(changes([]))).toEqual([]);
+    expect(clearedRows(null)).toEqual([]);
   });
 });

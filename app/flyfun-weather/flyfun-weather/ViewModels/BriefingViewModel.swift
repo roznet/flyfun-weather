@@ -861,7 +861,9 @@ final class BriefingViewModel {
     ///   format: "+00:00" vs "Z", fractional seconds);
     /// - it is not newer than what the snapshot already carries (the server
     ///   overlays the live layer on an online snapshot; nil counts as oldest);
-    ///   a null layer (`liveUpdatedAt == nil`) is never newer.
+    ///   a null layer (`liveUpdatedAt == nil`) is never newer. The same tick
+    ///   still applies once when it brings the read-time trails (#669) the
+    ///   snapshot overlay never carries (`addsTrails`).
     /// Only non-nil blocks replace the snapshot's — a nil block means "no newer
     /// data for that source", and the pack's own copy beats a blank panel.
     /// Pure + static so the gate is unit-testable.
@@ -871,7 +873,10 @@ final class BriefingViewModel {
         packTimestamp: String
     ) -> SnapshotResponse? {
         guard LiveTime.sameInstant(live.packTimestamp, packTimestamp) else { return nil }
-        guard LiveTime.isNewer(live.liveUpdatedAt, than: snapshot.liveUpdatedAt) else { return nil }
+        guard LiveTime.isNewer(live.liveUpdatedAt, than: snapshot.liveUpdatedAt)
+                || (LiveTime.sameInstant(live.liveUpdatedAt, snapshot.liveUpdatedAt)
+                    && addsTrails(current: snapshot.liveChanges, incoming: live.changes))
+        else { return nil }
         var patched = snapshot
         if let observations = live.routeObservations { patched.routeObservations = observations }
         if let sigmets = live.routeSigmets { patched.routeSigmets = sigmets }
@@ -879,6 +884,13 @@ final class BriefingViewModel {
         if let changes = live.changes { patched.liveChanges = changes }
         patched.liveUpdatedAt = live.liveUpdatedAt
         return patched
+    }
+
+    /// `incoming` carries the trails (#669) and `current` does not: the server's
+    /// snapshot overlay never has them, so the first `/live` after a pack load
+    /// must apply at an equal timestamp. Pure, for testing.
+    static func addsTrails(current: LiveChanges?, incoming: LiveChanges?) -> Bool {
+        incoming?.recentlyCleared != nil && current?.recentlyCleared == nil
     }
 
     /// The live timestamp of what is on screen: the snapshot's (server overlay

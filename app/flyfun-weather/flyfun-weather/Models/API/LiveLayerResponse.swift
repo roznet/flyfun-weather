@@ -81,8 +81,14 @@ nonisolated struct LiveChanges: Codable, Sendable {
     let worsenedCount: Int?
     let improvedCount: Int?
     let alertCount: Int?
+    /// #669: changes that cleared on the weather within the hour, newest first,
+    /// each with `clearedAt`. Display only: never counted, never an alert. nil on
+    /// the snapshot overlay (it never carries trails); the server owns the hour
+    /// window and re-applies it on every `/live` read.
+    var recentlyCleared: [LiveChange]? = nil
 
     var items: [LiveChange] { changes ?? [] }
+    var clearedItems: [LiveChange] { recentlyCleared ?? [] }
     var isEmpty: Bool { items.isEmpty }
     /// Changes are measured from the live layer's own starting point, not the
     /// briefing's observations (a pack built before flight day has none).
@@ -139,6 +145,10 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
     let message: String?
     /// For push delivery (#638); the client ignores it.
     let newAlert: Bool?
+    /// #669: recent history, on `/live` and refresh responses only. Display only.
+    var trail: LiveChangeTrail? = nil
+    /// Only on `LiveChanges.recentlyCleared` rows: when it left the screen.
+    var clearedAt: String? = nil
 
     /// `key` alone is not unique if the server ever emits the same key twice
     /// (e.g. a worse and a better reading), so fold the direction in.
@@ -198,6 +208,114 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
         let subject = icao ?? stationId ?? key
         if let from = fromValue, let to = toValue { return "\(subject): \(from) → \(to)" }
         return subject
+    }
+}
+
+/// A change's recent history (#669). Mirrors `models/live.py::LiveChangeTrail`;
+/// computed server-side from the flight's live history (`tasks/live_trail.py`),
+/// grouped by change key + direction.
+nonisolated struct LiveChangeTrail: Codable, Sendable {
+    let spans: [LiveTrailSpan]?
+    /// Times on screen over the flight day, this one included.
+    let timesToday: Int?
+    /// `metar_category` only: the airport's category per report, oldest first.
+    let reports: [LiveTrailReport]?
+    /// What `fromValue` is measured against: "briefing" or "live_start".
+    let baselineSource: String?
+}
+
+/// One period a change was on screen; `end` nil while it still is.
+nonisolated struct LiveTrailSpan: Codable, Sendable {
+    let start: String?
+    let end: String?
+}
+
+/// One METAR/SPECI for a category row's strip.
+nonisolated struct LiveTrailReport: Codable, Sendable {
+    let at: String?
+    let category: String?
+    let reportType: String?
+}
+
+/// The trail line under a change row (#669). Pure; the same text as the web
+/// (`web/ts/helpers/live-layer.ts::trailText`) — keep the two in step.
+nonisolated enum LiveTrailText {
+    /// Spans shown on one line (the latest).
+    static let maxSpans = 4
+
+    /// "12:42–13:02Z" for a closed span, "since 13:33Z" for an open one; nil
+    /// when the start does not parse.
+    static func span(_ span: LiveTrailSpan) -> String? {
+        guard let start = span.start.flatMap(Date.parseISO8601) else { return nil }
+        if let end = span.end.flatMap(Date.parseISO8601) {
+            return "\(hhmm(start))–\(LiveTime.zulu(end))"
+        }
+        return String(localized: "since \(LiveTime.zulu(start))")
+    }
+
+    /// "1st", "2nd", "3rd", "11th".
+    static func ordinal(_ n: Int) -> String {
+        let mod100 = n % 100
+        if (11...13).contains(mod100) { return "\(n)th" }
+        switch n % 10 {
+        case 1: return "\(n)st"
+        case 2: return "\(n)nd"
+        case 3: return "\(n)rd"
+        default: return "\(n)th"
+        }
+    }
+
+    /// "2nd time today" from 2; nil below.
+    static func timesToday(_ n: Int?) -> String? {
+        guard let n, n >= 2 else { return nil }
+        return String(localized: "\(ordinal(n)) time today")
+    }
+
+    /// "briefed VFR · 11:00Z MVFR · 11:30Z VFR"; nil without reports.
+    static func categoryStrip(_ change: LiveChange) -> String? {
+        let reports = change.trail?.reports ?? []
+        guard !reports.isEmpty else { return nil }
+        var parts: [String] = []
+        if let from = change.fromValue, !from.isEmpty {
+            parts.append(change.trail?.baselineSource == "live_start"
+                         ? String(localized: "at start \(from)")
+                         : String(localized: "briefed \(from)"))
+        }
+        for report in reports {
+            let time = report.at.flatMap(Date.parseISO8601).map(LiveTime.zulu) ?? "?"
+            parts.append("\(time) \(report.category ?? "?")")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The line under a row, or nil when it would only repeat the row (first
+    /// time on screen, one span, one report). A cleared row always gets one.
+    /// Category rows show the report strip; other kinds the on/off periods;
+    /// "Nth time today" is appended from 2.
+    static func line(_ change: LiveChange, cleared: Bool = false) -> String? {
+        guard let trail = change.trail else { return nil }
+        let spans = trail.spans ?? []
+        let strip = change.kindValue == .metarCategory ? categoryStrip(change) : nil
+        let spanText = spans.suffix(maxSpans).compactMap(span).joined(separator: ", ")
+        let worth = cleared
+            || (trail.timesToday ?? 0) >= 2
+            || spans.count >= 2
+            || (trail.reports?.count ?? 0) >= 2
+        guard worth else { return nil }
+        let parts = [strip ?? (spanText.isEmpty ? nil : spanText), timesToday(trail.timesToday)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "cleared 06:30Z".
+    static func cleared(_ change: LiveChange) -> String? {
+        guard let at = change.clearedAt.flatMap(Date.parseISO8601) else { return nil }
+        return String(localized: "cleared \(LiveTime.zulu(at))")
+    }
+
+    /// "12:42" (no Z: the range's end carries it).
+    private static func hhmm(_ date: Date) -> String {
+        let zulu = LiveTime.zulu(date)
+        return zulu.hasSuffix("Z") ? String(zulu.dropLast()) : zulu
     }
 }
 
