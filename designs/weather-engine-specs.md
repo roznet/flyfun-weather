@@ -186,7 +186,8 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Surface (a1) — surface snapshot:** t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp → `build_ecmwf_surface_snapshot` (unit-converted). Consumed by BOTH the standalone verification pipeline and — via `_apply_ecmwf_surface_to_hourly` in `fetch/grib/__init__.py` — the user-facing briefing, which writes them straight onto `HourlyForecast` (ungated, overwriting Open-Meteo per covered point; uncovered points keep Open-Meteo). Two field classes: `_ECMWF_HOURLY_INSTANT_FIELDS` (T/dewpoint, wind/gust, vis, CAPE, surface pressure, nwp_k_index, nwp_total_totals) written only at the matching `valid_utc` and linearly interpolated later in `fill.py`; `_ECMWF_HOURLY_RATE_FIELDS` (`precipitation_mm`, `snowfall_cm`) step-differenced from the prior a1's cumulative value and spread evenly over the window — with no prior step, Open-Meteo's value stands. The surface write is **coupled to the cloud-diag write** at the same valid time: `fill.py` uses `nwp_cloud_diagnostics is not None` as its GRIB-anchor detector, so the two must stay in the same loop iteration.
 - **Surface (a1) — native convective indices:** kx, totalx → `nwp_k_index` / `nwp_total_totals` on `HourlyForecast`, copied onto `ThermodynamicIndices.nwp_k_index/nwp_total_totals` during sounding analysis. The convective character advisory prefers these over the MetPy-derived K/Total-Totals for ECMWF (issue #294). `kx` is delivered in Kelvin and normalized to °C via `_k_index_to_c` (#283); Total Totals is offset-immune and passes through unchanged.
 - **Surface (a1) — delivered but not yet processed:** 10fg, capes, degm10l, fzra, lsp, msl, ptype
-- **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
+- **Multi-grid:** Files may contain multiple geographic sub-grids (Europe, Nordic, US; GRIB1 and GRIB2 mixed); each is decoded on its own and the first grid with a value wins per point. Known gaps, not fixed by the #674 decoder: the 59.5–60°N seam (#672) and the US GRIB2 fields on a 0–360 axis (#673).
+- **Decode (#674 phase 1):** direct eccodes, not cfgrib — see *Direct eccodes decode* under Gotchas.
 - **No HTTP, no cache** — local disk I/O, no byte-range download needed
 
 ### C. DWD ICON-EU (Regional Europe) — IMPLEMENTED (full sounding)
@@ -422,10 +423,18 @@ Requires 2D wind fields (not just point values), so needs raw GRIB2 grid, not in
 - **CIN sign** — HRRR CIN is already negative J/kg (verified −745…0); do not renegate via `_normalize_model_cin`.
 - **Progressive publication** — a cycle's forecast hours appear over the delivery window; probe the last-needed fhour's .idx, not f00.
 
+### Direct eccodes decode (#674 phase 1)
+ECMWF a1/a2 and ICON-EU/D2 model levels go through `grib_reader.py`, not cfgrib. The rule is **same output as cfgrib**, so its dataset-layout behaviour is reproduced explicitly in `decode.py` (`_gather_series`):
+- Messages group into a series per (cfVarName, typeOfLevel, `md5GridSection`). A series with **one level** is dropped (cfgrib squeezed it to 2-D and the level-based decoders skipped it — this is how ECMWF `z` at 1 hPa stays out). A level with **more than one step/date/member** drops the series (cfgrib's extra dim).
+- Variable name = `cfVarName` (so `avg_` stepType names keep their meaning), axes = eccodes `distinctLatitudes/Longitudes` in scan order (handles `jScansPositively`, the meridian-crossing Europe GRIB2 grid, D2's 356.06 west edge), values rounded through float32, `missingValue` = float32 max so only bitmap cells become NaN (a real 9999 stays).
+- **Edge rule (deliberate change):** a zero-weight corner never blanks a value (`gather_bilinear`). A target exactly on a row next to a masked cell keeps its row's value; xarray `.interp` (old a1 path) returned None there (EGVN 51.75°N). Everything else: a2/ICON bit-identical, a1 within ~1e-10.
+- Rollback: `WB_GRIB_DECODER=cfgrib` (read per call). The old functions are kept as `*_cfgrib` and are the parity oracle in `tests/test_grib_reader.py`; delete both once prod replays clean (`scripts/grib_decode_parity.py`).
+- Phase 2 (chunked zarr cache for ICON/GFS/D2) waits on #672/#673; their fixes belong in this shared path.
+
 ### ICON-EU
 - **Model levels, not pressure levels** — QC/QI are on model levels (35–74). The P variable provides per-gridpoint pressure at each level. Must interpolate vertically using log-pressure.
 - **Longitude convention** — ICON-EU uses -180 to +180° (same as route points). No normalization needed (unlike GFS).
-- **Level coordinate names** — cfgrib may use `generalVerticalLayer`, `generalVertical`, `level`, or `hybrid` for model-level data. Check all variants.
+- **Level coordinate names** — model levels arrive as typeOfLevel `generalVerticalLayer` (or `generalVertical` for half-level `w`, `hybrid`). The direct reader accepts exactly these (`_ICON_MODEL_LEVEL_TYPES`).
 - **bz2 decompression** — Files are bz2-compressed. Decompress before passing to cfgrib.
 - **Data retention** — DWD deletes files after ~24h. Only the latest run per cycle is available.
 - **Download volume** — one file per (variable, level, forecast hour): 9 model-level vars × 40 levels = 360 files *per forecast hour* on EU (12 vars × 50 levels = 600 on D2). Parallel download essential.
