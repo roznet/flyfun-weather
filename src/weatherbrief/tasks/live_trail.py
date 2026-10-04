@@ -200,8 +200,12 @@ def _reparse_category(raw: str, observed_at: str | None) -> str | None:
         from euro_aip.briefing.weather.parser import WeatherParser
 
         rep = WeatherParser.parse_metar(raw, source="live_history", reference=_dt(observed_at))
-        return rep.flight_category.value if rep is not None and rep.flight_category is not None else None
+        if rep is not None and rep.flight_category is not None:
+            return rep.flight_category.value
+        logger.debug("Live trails: no flight category parsed from %r — strip shows ?", raw)
+        return None
     except Exception:
+        logger.debug("Live trails: unparseable METAR %r — strip shows ?", raw, exc_info=True)
         return None
 
 
@@ -302,13 +306,30 @@ def change_trails(
 # --- Readers ----------------------------------------------------------------
 
 
-@lru_cache(maxsize=64)
+#: Pack dir -> (route, departure), successful reads only (see below).
+_ROUTE_CACHE: dict[str, tuple[RouteConfig, datetime | None]] = {}
+_ROUTE_CACHE_MAX = 64
+
+
 def _route_context(pack_dir: str) -> tuple[RouteConfig | None, datetime | None]:
-    """The pack's route and departure. Packs are immutable, so this is read
-    once per process rather than on every 5-min ``/live`` poll."""
+    """The pack's route and departure. Packs are immutable, so a good read
+    is kept rather than redone on every 5-min ``/live`` poll. A failed one
+    (unreadable briefing, a read racing the pack write) is *not* kept:
+    without a route every airport counts as still relevant, and drop-outs
+    would show as cleared rows until the process restarts."""
     from weatherbrief.tasks.artifacts import load_briefing
 
-    return route_context(load_briefing(Path(pack_dir)) or {})
+    cached = _ROUTE_CACHE.get(pack_dir)
+    if cached is not None:
+        return cached
+    route, departure = route_context(load_briefing(Path(pack_dir)) or {})
+    if route is None:
+        logger.warning("Live trails: no route for %s — relevance drop-outs not detected this read", pack_dir)
+        return None, departure
+    if len(_ROUTE_CACHE) >= _ROUTE_CACHE_MAX:
+        _ROUTE_CACHE.pop(next(iter(_ROUTE_CACHE)))  # oldest first
+    _ROUTE_CACHE[pack_dir] = (route, departure)
+    return route, departure
 
 
 def route_context(briefing_data: dict) -> tuple[RouteConfig | None, datetime | None]:
