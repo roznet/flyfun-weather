@@ -458,6 +458,48 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
+    /// Journey (#654) — the route map's observed imagery controls. The pack has
+    /// no observed conditions, so a live layer supplies a radar sample (the
+    /// same patch path a D-0 briefing takes); the map then offers the Observed
+    /// menu. The fixture repository serves no frame listings, so the badge must
+    /// say the imagery is unavailable rather than leaving a blank map that reads
+    /// as "no echoes". iPhone + iPad.
+    @MainActor
+    func testRouteMapObservedImageryControls() throws {
+        let live = """
+        {"flight_id": "fixture-1", "pack_timestamp": "2099-06-30T06:00:00+00:00",
+         "live_updated_at": "2099-06-30T08:10:00Z",
+         "observed_conditions": {"radii_nm": [5, 10, 20],
+           "reflectivity": {"source": "opera_dbzh", "quantity": "DBZH", "units": "dBZ",
+             "valid_time": "2099-06-30T08:05:00Z", "age_minutes": 5, "window_minutes": 10,
+             "stations": []}}}
+        """
+        let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": live])
+        openFixture1Briefing(app)
+        switchToBriefingTab(app, "Map")
+
+        let menu = app.buttons["map.observedMenu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: Self.uiTimeout),
+                      "the route map should offer the Observed menu for a briefing with observed data")
+        let badge = app.descendants(matching: .any)["map.observedBadge"].firstMatch
+        XCTAssertTrue(badge.waitForExistence(timeout: Self.uiTimeout),
+                      "a failed frame listing should be named on the map, not left blank")
+        XCTAssertTrue(badge.label.contains("imagery unavailable"), "badge was: \(badge.label)")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "RouteMap-Observed-Mock"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["Satellite infrared"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "the menu should offer the satellite underlay toggle")
+        let open = XCTAttachment(screenshot: app.screenshot())
+        open.name = "RouteMap-Observed-Menu-Mock"
+        open.lifetime = .keepAlways
+        add(open)
+    }
+
     /// Journey (#605) — the cross-section layer bar in each layout mode, and the
     /// scroll-trap fix. iPhone portrait: a compact chip switches its family in
     /// place and press-and-hold opens the methods row. iPad: a full chip opens

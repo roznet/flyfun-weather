@@ -252,6 +252,15 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func historicalRange() async throws -> HistoricalRangeResponse {
         throw FixtureError.notProvided("historicalRange")
     }
+    func observedFrames(source: String) async throws -> ObservedFramesResponse {
+        throw FixtureError.notProvided("observedFrames")
+    }
+    func observedImageryStatus() async throws -> ObservedImageryStatusResponse {
+        throw FixtureError.notProvided("observedImageryStatus")
+    }
+    func observedTile(path: String) async throws -> Data {
+        throw FixtureError.notProvided("observedTile")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.advisories

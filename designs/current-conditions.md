@@ -382,6 +382,7 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 | iOS cross-section (group `conditions`) | The same two layers, same defaults, same three-state marks. Corridor picker + per-source ages in the Layers sheet; measured values in the scrub readout, prefixed `Obs` so they never read as forecast. |
+| iOS route map (#654) | Radar tiles (reflectivity or rain rate) over the satellite IR underlay, corridor box, muted basemap, legend + one age badge line per layer. No cloud tops or lightning. See [iOS route map](#ios-route-map-654). |
 
 ### The iOS surface needs no endpoint
 
@@ -628,8 +629,8 @@ alignment fork.
 The iOS `/observed` endpoint listed here originally is **not needed and not
 built**: the payload already rides the snapshot and the bundle (see [The iOS
 surface needs no endpoint](#the-ios-surface-needs-no-endpoint)). Still absent on
-iOS: the map overlay (#654 — the tile endpoints are built for it), the route-graph
-metrics, and the "Observed now" summary panel.
+iOS: the map's cloud-top image and lightning points (the radar/satellite tiles
+shipped in #654), the route-graph metrics, and the "Observed now" summary panel.
 
 **Out:** nowcasting. A time slider / loop was listed here as "permanently out"
 because it needed a tiled product; #652 built that product for the static map,
@@ -680,11 +681,49 @@ draws as blocks with holes. Changes:
   ("not shown — newest frame HH:MMZ is N min old"), so it does not read as
   "no echoes".
 - **Contract change:** `/overlay/{source}.png` rows are now Web Mercator. A
-  client placing it must use Mercator (map-point) placement — on iOS
-  (#654) an `MKOverlay` in map points, not a lat/lon-linear image.
+  client placing it must use Mercator (map-point) placement — on iOS an
+  `MKOverlay` in map points, not a lat/lon-linear image (iOS does not draw
+  it yet: #654 shipped only the tiles).
 - **Loop-ready.** `/frames/{source}` lists every retained frame and tile URLs
   are keyed by stamp, so #653 changes a URL per step. iOS uses the same
-  endpoints in #654.
+  endpoints (#654).
+
+### iOS route map (#654)
+
+`RouteMapKitView` reconciles `ObservedTileOverlay`s (an `MKTileOverlay`
+subclass); `ObservedMapImagery` holds every rule as pure, tested functions (the
+port of `observed-overlay-geometry.ts`); `RouteObservedImageryModel` owns the
+listings. Gotchas and choices:
+
+- **Auth.** `MKTileOverlay`'s own URL loading cannot add headers, so
+  `loadTile` fetches through the repository → `APIClient` (rolling bearer).
+  Zooms outside the listing's `min_zoom`/`max_zoom` are never requested;
+  `minimumZ`/`maximumZ` are set too, so MapKit draws nothing below the range
+  and scales the top zoom's tiles beyond it (the web's `maxNativeZoom`).
+- **Persistence across renders.** Route rebuilds remove only `ColoredPolyline`s
+  — they used to remove *every* overlay, which would refetch all tiles on each
+  altitude drag. Tile overlays are keyed `source|stamp`; an unchanged key only
+  updates the renderer's alpha.
+- **Frame swap.** MapKit has no "tiles loaded" signal, so the old frame stays
+  under its successor for a fixed 4 s rather than waiting for `load` (web).
+- **Stacking.** Satellite inserted at the bottom of `.aboveRoads`, radar above
+  it, corridor box above the tiles, route lines on top.
+- **Caching.** A process-wide `NSCache` (16 MB) of tile bytes keyed by path
+  (immutable per stamp); a satellite cycle under 30 min old is not cached, the
+  same reason the server sends it the short browser cache. Nothing on disk:
+  live imagery has no offline meaning.
+- **Muted basemap** swaps `preferredConfiguration`, which carries its own POI
+  filter — re-set `.excludingAll` or POIs reappear.
+- **Polling.** Listings: 60 s TTL, polled every 2 min by a `.task(id:)` that
+  only runs while the map tab is on screen; a failed refresh keeps the last
+  listing. With no listing at all the badge says "imagery unavailable" —
+  there is no corridor-image fallback on iOS (the web falls back to
+  `/overlay/{source}.png` for radar).
+- **Picks** persist in `@AppStorage` under the web's names (`mapObservedOverlay`,
+  `mapObservedOpacity`, `mapObservedSatellite`), same defaults. Opacity is a
+  menu of steps (40–100 %) rather than the web's slider. The corridor box
+  follows the cross-section's corridor pick
+  (`CrossSectionViewModel.observedRadiusDefaultsKey`).
 
 ## Known limitations
 

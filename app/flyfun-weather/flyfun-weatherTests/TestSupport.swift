@@ -249,6 +249,16 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let h = historicalRangeHandler { return try h() }
         throw MockError.notStubbed("historicalRange")
     }
+    /// Stub for the route map's observed imagery model; records each source asked for.
+    var observedFramesHandler: (@Sendable (String) throws -> ObservedFramesResponse)?
+    private(set) var observedFramesRequests: [String] = []
+    func observedFrames(source: String) async throws -> ObservedFramesResponse {
+        observedFramesRequests.append(source)
+        if let h = observedFramesHandler { return try h(source) }
+        throw MockError.notStubbed("observedFrames")
+    }
+    func observedImageryStatus() async throws -> ObservedImageryStatusResponse { throw MockError.notStubbed("observedImageryStatus") }
+    func observedTile(path: String) async throws -> Data { throw MockError.notStubbed("observedTile") }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         if let h = advisoriesHandler { return try h() }
         throw MockError.notStubbed("advisories")

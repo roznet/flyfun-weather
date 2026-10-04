@@ -15,7 +15,8 @@ import UIKit
 /// legend, altitude slider, waypoint sheet, deep-link focus) stay in
 /// `RouteMapView` as SwiftUI overlaid on top.
 ///
-/// Layer order (bottom → top): base tiles · route overlays (grey base line + the
+/// Layer order (bottom → top): base tiles · observed imagery tiles (satellite IR
+/// under radar, #654) · corridor box · route overlays (grey base line + the
 /// metric-coloured segments) · annotations (waypoints, active point, aircraft,
 /// and — in commit 2 — the airport-forecast dots). NOTE: MapKit always draws
 /// annotations above overlay renderers, so the airport dots added later sit
@@ -84,6 +85,21 @@ struct RouteMapKitView: UIViewRepresentable {
     /// metric/model switch leaves it and is a pure recolour.
     let forecastRevision: Int
 
+    // MARK: Observed imagery (#654)
+    //
+    // Radar / satellite tiles from `/api/observed/tiles`, already resolved to the
+    // frames to draw by `ObservedMapImagery.compose` — this view only reconciles
+    // them onto the map. Defaults draw nothing.
+
+    /// Tile layers to draw, underlay first. An unchanged `key` keeps its overlay.
+    var observedLayers: [ObservedMapImagery.TileLayerSpec] = []
+    /// Fetches one tile's bytes through the API client (bearer auth).
+    var observedTileFetcher: (@Sendable (String) async throws -> Data)?
+    /// Corridor box the sampled numbers describe, or nil.
+    var observedCorridor: ObservedMapImagery.LatLonBox?
+    /// Quiet base map while observed imagery is drawn (web parity).
+    var mutedBaseMap = false
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -129,6 +145,18 @@ struct RouteMapKitView: UIViewRepresentable {
         /// the model regained data rebuilds even when the payload is unchanged.
         private var markersShown = false
 
+        // Observed imagery state (#654).
+        /// Tile overlays currently wanted, by spec key (source + frame stamp).
+        private var liveTiles: [String: ObservedTileOverlay] = [:]
+        /// Previous frames kept on screen until their successor has had time to load.
+        private var retiringTiles: [ObservedTileOverlay] = []
+        private var corridorOverlay: ObservedCorridorOverlay?
+        private var appliedMuted: Bool?
+        /// How long an old frame stays under its successor. MapKit gives no
+        /// "all tiles loaded" signal (the web waits for Leaflet's `load`, capped
+        /// at 10 s), so a fixed delay stops the map blanking once per radar cycle.
+        static let frameSwapDelay: Duration = .seconds(4)
+
         /// The inputs the airport markers colour from — a recolour is only needed
         /// when one of these changes (not on every unrelated re-render).
         private struct ForecastColorKey: Equatable {
@@ -142,6 +170,9 @@ struct RouteMapKitView: UIViewRepresentable {
         func update(parent: RouteMapKitView) {
             self.parent = parent
             guard let map else { return }
+            updateBaseMap(on: map)
+            updateObservedTiles(on: map)
+            updateCorridor(on: map)
             updateRoute(on: map)
             updateForecastOverlay(on: map)
             updateWaypoints(on: map)
@@ -154,7 +185,9 @@ struct RouteMapKitView: UIViewRepresentable {
         private func updateRoute(on map: MKMapView) {
             guard renderedRouteSignature != parent.routeSignature else { return }
             renderedRouteSignature = parent.routeSignature
-            map.removeOverlays(map.overlays)
+            // Only the route's own lines: the observed tiles and corridor box
+            // persist across route rebuilds (an altitude drag re-fetches nothing).
+            map.removeOverlays(map.overlays.filter { $0 is ColoredPolyline })
 
             if parent.routeCoordinates.count >= 2 {
                 let base = ColoredPolyline(coordinates: parent.routeCoordinates,
@@ -168,6 +201,92 @@ struct RouteMapKitView: UIViewRepresentable {
                 line.color = seg.color
                 line.width = seg.width
                 map.addOverlay(line, level: .aboveRoads)
+            }
+        }
+
+        // MARK: Observed imagery (#654)
+
+        private func updateBaseMap(on map: MKMapView) {
+            guard appliedMuted != parent.mutedBaseMap else { return }
+            appliedMuted = parent.mutedBaseMap
+            let configuration = MKStandardMapConfiguration(
+                emphasisStyle: parent.mutedBaseMap ? .muted : .default)
+            // A new configuration carries its own POI filter: keep `makeUIView`'s.
+            configuration.pointOfInterestFilter = .excludingAll
+            map.preferredConfiguration = configuration
+        }
+
+        /// Keep overlays whose frame is still wanted (updating opacity), add new
+        /// ones in stacking order, retire the rest. A new radar frame is a new
+        /// key, so it swaps; the old one stays under it briefly.
+        private func updateObservedTiles(on map: MKMapView) {
+            let wanted = parent.observedTileFetcher == nil ? [] : parent.observedLayers
+            let wantedKeys = Set(wanted.map(\.key))
+            var added: [ObservedTileOverlay] = []
+
+            for spec in wanted {
+                if let existing = liveTiles[spec.key] {
+                    setOpacity(CGFloat(spec.opacity), of: existing, on: map)
+                    continue
+                }
+                guard let fetch = parent.observedTileFetcher else { continue }
+                let overlay = ObservedTileOverlay(spec: spec, fetch: fetch)
+                let predecessor = liveTiles.values.first {
+                    $0.spec.source == spec.source && !wantedKeys.contains($0.spec.key)
+                }
+                if let predecessor {
+                    // Same layer, newer frame: directly above the frame it replaces.
+                    map.insertOverlay(overlay, above: predecessor)
+                } else if !spec.isUnderlay,
+                          let underlay = (Array(liveTiles.values) + added).last(where: { $0.spec.isUnderlay }) {
+                    map.insertOverlay(overlay, above: underlay)
+                } else {
+                    // Bottom of the level: under the corridor box and route lines
+                    // (and, for the satellite, under any radar already drawn).
+                    map.insertOverlay(overlay, at: 0, level: .aboveRoads)
+                }
+                added.append(overlay)
+                liveTiles[spec.key] = overlay
+            }
+
+            for (key, overlay) in liveTiles where !wantedKeys.contains(key) {
+                liveTiles.removeValue(forKey: key)
+                let hasSuccessor = added.contains { $0.spec.source == overlay.spec.source }
+                if hasSuccessor {
+                    retire(overlay, on: map)
+                } else {
+                    map.removeOverlay(overlay)
+                }
+            }
+        }
+
+        private func retire(_ overlay: ObservedTileOverlay, on map: MKMapView) {
+            retiringTiles.append(overlay)
+            Task { @MainActor [weak self, weak map] in
+                try? await Task.sleep(for: Self.frameSwapDelay)
+                map?.removeOverlay(overlay)
+                self?.retiringTiles.removeAll { $0 === overlay }
+            }
+        }
+
+        private func setOpacity(_ opacity: CGFloat, of overlay: ObservedTileOverlay, on map: MKMapView) {
+            guard overlay.opacity != opacity else { return }
+            overlay.opacity = opacity
+            map.renderer(for: overlay)?.alpha = opacity
+        }
+
+        private func updateCorridor(on map: MKMapView) {
+            guard corridorOverlay?.box != parent.observedCorridor else { return }
+            if let old = corridorOverlay { map.removeOverlay(old) }
+            corridorOverlay = nil
+            guard let box = parent.observedCorridor else { return }
+            let overlay = ObservedCorridorOverlay.make(box)
+            corridorOverlay = overlay
+            // Above the imagery, below the route lines (re-added on top later).
+            if let topTile = map.overlays.last(where: { $0 is ObservedTileOverlay }) {
+                map.insertOverlay(overlay, above: topTile)
+            } else {
+                map.insertOverlay(overlay, at: 0, level: .aboveRoads)
             }
         }
 
@@ -307,6 +426,19 @@ struct RouteMapKitView: UIViewRepresentable {
 // conformance (same pattern as `ForecastMapKitView` / `FlightTrackingService`).
 extension RouteMapKitView.Coordinator: MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        if let tiles = overlay as? ObservedTileOverlay {
+            let r = MKTileOverlayRenderer(tileOverlay: tiles)
+            r.alpha = tiles.opacity
+            return r
+        }
+        if let corridor = overlay as? ObservedCorridorOverlay {
+            let r = MKPolygonRenderer(polygon: corridor)
+            r.strokeColor = UIColor(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255, alpha: 0.45)
+            r.lineWidth = 1
+            r.lineDashPattern = [5, 4]
+            r.fillColor = nil
+            return r
+        }
         guard let line = overlay as? ColoredPolyline else {
             return MKOverlayRenderer(overlay: overlay)
         }

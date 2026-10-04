@@ -378,6 +378,20 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.historicalRange()
     }
 
+    // Observed map imagery (#654) — online-only: live imagery has no offline
+    // meaning, and the tiles are immutable per stamp, so there is nothing to add.
+    func observedFrames(source: String) async throws -> ObservedFramesResponse {
+        try await online.observedFrames(source: source)
+    }
+
+    func observedImageryStatus() async throws -> ObservedImageryStatusResponse {
+        try await online.observedImageryStatus()
+    }
+
+    func observedTile(path: String) async throws -> Data {
+        try await online.observedTile(path: path)
+    }
+
     // Flight sharing (#446) — always online: resolving a code, subscribing, and
     // unsubscribing are live account actions, never part of the offline bundle.
     func flightByShareCode(_ code: String) async throws -> FlightResponse {
