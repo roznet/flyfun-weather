@@ -44,7 +44,7 @@ Data source:
 
 ## Tabs
 
-The page hosts five tabs (`forecast`, `historical`, `synoptic`, `climatology`, `stats`). The forecast and historical tabs are owned by this doc; the others are surfaced here but the analysis behind them lives in their own docs.
+The page hosts six tabs (`forecast`, `historical`, `now`, `synoptic`, `climatology`, `stats`). The forecast and historical tabs are owned by this doc; the others are surfaced here but the analysis behind them lives in their own docs.
 
 ### Forecast Overview
 - ~620 airport markers (watchlist) on a Leaflet map, color-coded by selectable metric
@@ -76,6 +76,32 @@ Replays, for a past instant `T` (30-min grid, UTC), what every watchlist airport
 - **Caching**: a past instant is immutable once `FINAL_AFTER` (2 h) has passed (a late snapshot ingest restamps `fetched_at`, so it can't enter a past cutoff). Final payloads go into a small in-process LRU plus `Cache-Control: immutable`. Deliberately **not** `verification_cache`: every (slot, lead) of every past day is a possible key and that table shouldn't grow with browsing.
 - **iOS**: `HistoricalMapView` + `HistoricalMapViewModel` + `HistoricalAirportCard` (`Views/ForecastMap/`), reached from More → Historical Map, from a clock button on the forecast map (and a map button back), and from `/maps.html?tab=historical&hist.*` links (`PendingNavigation.historicalMap`). It reuses the forecast map's MapKit marker layer: `HistoricalAirport.forecastAirport(for:)` presents one source as a `ForecastAirport` (METAR/TAF as the single "model", read through `.model("metar")`), so colours come from the same catalog code. Consensus sources keep NWP models only, because `aggregatedAltRequired` runs over `models` and an observation must not vote. Date is a UTC compact `DatePicker` (a long history doesn't fit a menu), time a 30-min stepper + menu; final instants (older than 2 h) sit in a small in-memory LRU. A new instant/lead cancels the superseded fetch (historical payloads are heavy server-side, so rapid stepping must not fan out requests). A failed reload blanks the map, closes a card whose airport is gone, and offers Retry in the status line. The card is oriented like the forecast card (metric rows × METAR/TAF/GFS/ICON/ECMWF columns) with per-source provenance and the raw reports; row tap recolours the map.
 - **Frontend**: `visualization/historical-tab.ts` (`HistoricalTab`) reuses `WeatherMap`. METAR/TAF are presented to it as the per-airport "model" being shown; airports with nothing for the selected source are left off. Source/metric changes are client rerenders; only date/time/lead fetch. Unavailable sources stay clickable and explain themselves. Clicking a marker opens a side panel comparing all five sources plus the raw METAR/TAF. Deep-linked via `hist.date`, `hist.time`, `hist.lead`, `hist.source`, `hist.metric`, `hist.apt`.
+
+### Now (#656)
+
+Current conditions across Europe — the only tab that is "now", which is why
+these layers are a tab and not extra layers on the forecast slider.
+
+- **Airports**: `GET /maps/now` (`historical_map.get_now_map_data`) — the
+  historical METAR selection (`select_observed`, ≤ 90 min) at the **current
+  instant**, not floored to the 30-min grid (which could hide a report up to
+  29 min newer); METAR only (a TAF is a forecast); same airport shape, drawn
+  through `WeatherMap` with METAR as the per-airport "model", as the
+  historical tab does. Click → panel with the raw METAR and its time.
+- **Layers, each toggleable** (`#controls-now`, remembered per browser in
+  `localStorage` `wb.now.layers`): METAR, radar (`opera_dbzh` tiles), satellite
+  IR underlay, lightning (`/api/observed/flashes` for the viewport, clamped to
+  80°, `minutes=60`), Cells and Rain areas (the shared overlay,
+  `cells-overlay.md`; rain off by default). Cloud tops have no layer: they show
+  in a cell's popup when the home node collects CTTH (a Europe-wide CTTH read
+  on the droplet is out, #655).
+- **Badge**: one line per drawn layer, each with its own time (radar frame,
+  overlay frame, satellite cycle, newest LI frame, METAR read time). A stale
+  or absent layer draws nothing and says so.
+- **Refresh**: every 5 min while the tab and the page are visible
+  (`NOW_REFRESH_MS`, a 30 s visibility-aware tick + `visibilitychange`);
+  lightning also refetches on pan/zoom. Only the `tab=now` switch is
+  deep-linked. Frontend: `visualization/now-tab.ts`. Not on iOS yet.
 
 ### Synoptic
 - Hewson frontal-analysis overlay (`synoptic-map.ts` + hewson adapters/colormaps). Inner controls (model/init/level/metric) are NOT yet deep-linked — only the `tab=synoptic` switch is preserved. See [frontal-detection.md](./frontal-detection.md).

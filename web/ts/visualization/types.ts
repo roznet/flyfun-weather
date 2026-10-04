@@ -28,6 +28,8 @@ export interface VizSettings {
    *  the Windy-style "clouds under the radar" view. Display only: no number
    *  in the briefing comes from it. */
   observedSatellite: boolean;
+  /** Draw the experimental radar cell overlay (#656) on the observed layers. */
+  observedCells?: boolean;
   routeGraphVisible: boolean;
   routeGraphLeftMetric: string;
   routeGraphRightMetric: string;  // 'none' to disable right axis

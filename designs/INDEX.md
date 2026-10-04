@@ -107,8 +107,8 @@ Key exports: `RouteGraphRenderer`, `attachRouteGraphInteraction`, `ROUTE_GRAPH_M
 → Full doc: route-graph.md
 
 ### forecast-page
-Pan-European weather overview map with per-airport forecast visualization (10 metrics incl. alternate-required, visibility and runway crosswind/headwind, server-baked consensus modes). Cache layer serves pre-computed JSON with staleness tracking, falling back to live queries. Historical tab (#629) replays METAR / TAF (re-read at T) / model runs fetched before T (lead D-0..D-6) at any past 30-min instant, reading pruned snapshots from the Parquet archive; ported to iOS as `HistoricalMapView` on the forecast map's marker layer.
-Key exports: `get_forecast_map_data`, `assemble_map_airports`, `get_historical_map_data`, `compute_historical_range`, `read_taf_at`, `WeatherMap`, `HistoricalTab`, `fetchForecastMap`, `HistoricalMapViewModel`
+Pan-European weather overview map with per-airport forecast visualization (10 metrics incl. alternate-required, visibility and runway crosswind/headwind, server-baked consensus modes). Cache layer serves pre-computed JSON with staleness tracking, falling back to live queries. Historical tab (#629) replays METAR / TAF (re-read at T) / model runs fetched before T (lead D-0..D-6) at any past 30-min instant, reading pruned snapshots from the Parquet archive; ported to iOS as `HistoricalMapView` on the forecast map's marker layer. "Now" tab (#656): latest METAR (`/maps/now`, unsnapped), radar + satellite IR tiles, lightning and the experimental cell overlay, each toggleable with its own time on the badge, refreshed every 5 min while visible (web only).
+Key exports: `get_forecast_map_data`, `assemble_map_airports`, `get_historical_map_data`, `get_now_map_data`, `compute_historical_range`, `read_taf_at`, `WeatherMap`, `HistoricalTab`, `NowTab`, `fetchForecastMap`, `HistoricalMapViewModel`
 → Full doc: forecast-page.md
 
 ### briefing-sidebar
@@ -144,8 +144,8 @@ Key exports: `CellPolicy`, `DEFAULT_POLICY`, `detect`, `estimate_flow`, `masked_
 → Full doc: observed-cells.md
 
 ### cells-overlay
-Droplet side of the cell overlay (#656): the home node's display files land in an rsync inbox (`CELLS_INBOX_DIR`), are validated (schema, policy_version, stamp) and moved into `DATA_DIR/observed/cells/display` (24 h), and served by `/api/observed/cells/frames` (stale state, "unavailable since") and `/api/observed/cells/{stamp}.json` (optional bbox, immutable). Gated on `WB_CELLS_INGEST_ENABLED`. Stale after 25 min of the overlay's own age; overlay paired to the drawn radar stamp, else newest at-or-before, labelled with its own time.
-Key exports: `DisplayStore`, `ingest`, `validate`, `frames_status`, `filter_bbox`, `cells_ingest_enabled`, `run_cells_ingest_loop`
+Droplet side of the cell overlay (#656): the home node's display files land in an rsync inbox (`CELLS_INBOX_DIR`), are validated (schema, policy_version, stamp) and moved into `DATA_DIR/observed/cells/display` (24 h), and served by `/api/observed/cells/frames` (stale state, "unavailable since") and `/api/observed/cells/{stamp}.json` (optional bbox, immutable). Gated on `WB_CELLS_INGEST_ENABLED`. Stale after 25 min of the overlay's own age; overlay paired to the drawn radar stamp, else newest at-or-before, labelled with its own time. Web: one shared Leaflet renderer (`CellsLayer`, pure rules in `cells-overlay-core.ts`) on the maps page's "Now" tab and the briefing route map's Cells toggle (off by default, corridor bbox + 50 NM).
+Key exports: `DisplayStore`, `ingest`, `validate`, `frames_status`, `filter_bbox`, `cells_ingest_enabled`, `run_cells_ingest_loop`, `CellsLayer`, `matchCellFrame`, `cellsBadge`, `drawCells`
 → Full doc: cells-overlay.md
 
 ## iOS app

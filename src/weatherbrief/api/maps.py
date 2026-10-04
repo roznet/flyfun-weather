@@ -5,6 +5,7 @@ All endpoints require authentication (current_user_id).
   GET /maps/forecast              — forecast overview for all watchlist airports
   GET /maps/historical            — METAR/TAF/model runs at a past instant (#629)
   GET /maps/historical/range      — what the historical pickers can offer
+  GET /maps/now                   — latest METAR per airport now ("Now" tab, #656)
   GET /maps/airport-weather       — forecast + observations for specific airports
 
 The legacy ``GET /maps/verification`` (per-airport accuracy map) was
@@ -206,6 +207,24 @@ def get_historical_map(
     if is_final(snap_time(min(at, now)), now):
         response.headers["Cache-Control"] = "private, max-age=86400, immutable"
     return data
+
+
+@router.get("/now")
+def get_now_map(
+    response: Response,
+    _user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+    airports_db: str = Depends(_airports_db),
+):
+    """Latest METAR per airport right now (the "Now" tab, #656).
+
+    The historical METAR read at the current instant rather than the 30-min
+    grid; no TAF, no models.
+    """
+    from weatherbrief.tasks.historical_map import get_now_map_data
+
+    response.headers["Cache-Control"] = "private, max-age=60"
+    return get_now_map_data(db, airports_db)
 
 
 @router.get("/historical/range")

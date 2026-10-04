@@ -287,6 +287,12 @@ export class WeatherMap {
     this.legendEl = el;
   }
 
+  /** The underlying Leaflet map, for hosts that add their own layers (the
+   *  "Now" tab's radar, lightning and cell overlay, #656). */
+  getLeafletMap(): L.Map | null {
+    return this.map;
+  }
+
   invalidateSize(): void {
     this.map?.invalidateSize();
   }

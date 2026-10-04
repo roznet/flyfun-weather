@@ -205,7 +205,7 @@ export function renderObservedOverlay(
   return finish(badges.filter(Boolean).join('\n'));
 }
 
-interface TileSpec {
+export interface TileSpec {
   url: string;
   opacity: number;
   zIndex: number;
@@ -213,7 +213,7 @@ interface TileSpec {
   maxNativeZoom: number;
 }
 
-function tileSpec(
+export function tileSpec(
   info: ObservedFramesInfo,
   frame: ObservedFrame,
   opacity: number,
@@ -246,7 +246,7 @@ function clearNonTileLayers(group: L.LayerGroup): void {
  *  ones, drop the rest. Recreating tile layers on every render would
  *  re-request and flash every tile on each altitude-slider drag; a new frame
  *  is a new URL, so it still swaps. Touches tile layers only. */
-function reconcileTiles(group: L.LayerGroup, wanted: TileSpec[]): void {
+export function reconcileTiles(group: L.LayerGroup, wanted: TileSpec[]): void {
   const live = liveTiles.get(group) ?? new Map<string, L.TileLayer>();
   liveTiles.set(group, live);
   const keep = new Set<L.Layer>();

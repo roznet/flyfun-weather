@@ -402,3 +402,37 @@ class TestEndpoints:
         resp = client.get("/api/maps/historical/range")
         assert resp.status_code == 200
         assert resp.json()["step_minutes"] == 30
+
+
+class TestNow:
+    """The "Now" tab's METAR read (#656): unsnapped, METAR only."""
+
+    def test_reads_the_newest_metar_without_the_half_hour_floor(self, db_session):
+        now = datetime(2026, 4, 5, 10, 59, tzinfo=timezone.utc)
+        _obs(db_session, time=datetime(2026, 4, 5, 10, 20, tzinfo=timezone.utc), raw="OLDER")
+        _obs(db_session, time=datetime(2026, 4, 5, 10, 50, tzinfo=timezone.utc), raw="NEWEST",
+             taf=TAF_TEMPO)
+        data = hm.get_now_map_data(db_session, "/fake/airports.db", now=now)
+        apt = _airport(data)
+        assert apt["observed"]["metar"]["raw"].startswith("NEWEST")
+        assert apt["observed"]["metar"]["age_min"] == 9
+        assert "taf" not in apt["observed"]
+        assert apt["models"] == {} and apt["consensus"] is None
+        assert data["sources"]["metar"]["count"] == 1
+
+    def test_stale_metars_are_left_out(self, db_session):
+        now = datetime(2026, 4, 5, 12, 0, tzinfo=timezone.utc)
+        _obs(db_session, time=now - hm.METAR_MAX_AGE - timedelta(minutes=1))
+        data = hm.get_now_map_data(db_session, "/fake/airports.db", now=now)
+        assert data["airports"] == [] and data["sources"]["metar"]["available"] is False
+
+    def test_now_endpoint(self, app_db, tmp_path, monkeypatch):
+        client = _client(app_db, tmp_path, monkeypatch)
+        session = app_db()
+        _obs(session, time=datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5))
+        session.commit()
+        session.close()
+        resp = client.get("/api/maps/now")
+        assert resp.status_code == 200
+        assert _airport(resp.json())["observed"]["metar"]["flight_category"] == "VFR"
+        assert "max-age=60" in resp.headers["cache-control"]

@@ -7,7 +7,9 @@ import {
   type ObservedFlashPoint,
   type ObservedSourceStatus,
 } from './observed-overlay';
-import type { ObservedFramesInfo } from './observed-overlay-geometry';
+import { corridorBox, type ObservedFramesInfo } from './observed-overlay-geometry';
+import { CellsLayer } from '../cells-overlay';
+import { cellsLegendHtml } from '../cells-overlay-core';
 import { escapeHtml } from '../../utils';
 import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
@@ -44,6 +46,10 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): nu
 }
 
 
+/** Cells are fetched for the corridor box widened by this much: a cell just
+ *  outside the sampled corridor and moving onto the route still matters. */
+const CELLS_MARGIN_NM = 50;
+
 export class RouteMapRenderer {
   private container: HTMLElement;
   private map: L.Map | null = null;
@@ -65,6 +71,12 @@ export class RouteMapRenderer {
   private observedFlashes: ObservedFlashPoint[] = [];
   private observedFrames: Map<string, ObservedFramesInfo> = new Map();
   private observedSatellite = false;
+  // Radar cell overlay (#656): the shared renderer, fetched for the corridor
+  // box plus a margin. Off by default (experimental).
+  private cellsLayer: CellsLayer | null = null;
+  private observedCells = false;
+  private observedBaseBadge = '';
+  private cellsLegendEl: HTMLElement | null = null;
   private highlightMarker: L.CircleMarker | null = null;
   private forecastLegendEl: HTMLElement | null = null;
   private forecastZoomHandler: (() => void) | null = null;
@@ -164,6 +176,11 @@ export class RouteMapRenderer {
   /** Draw the satellite infrared underlay (#652). */
   setObservedSatellite(show: boolean): void {
     this.observedSatellite = show;
+  }
+
+  /** Draw the radar cell overlay (#656). */
+  setObservedCells(show: boolean): void {
+    this.observedCells = show;
   }
 
   /** Redraw just the observed overlay, after new flashes or a source change. */
@@ -276,6 +293,8 @@ export class RouteMapRenderer {
     if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
     this.observedGroup = null;
     this.observedFlashes = [];
+    this.cellsLayer = null;
+    if (this.cellsLegendEl) { this.cellsLegendEl.remove(); this.cellsLegendEl = null; }
     this.segmentGroup = null;
     this.frontsGroup = null;
     this.airportForecastGroup = null;
@@ -308,6 +327,7 @@ export class RouteMapRenderer {
     // Observed imagery is the backdrop: it is a picture of the sky, and
     // everything the briefing computed must stay legible over it.
     this.observedGroup = L.layerGroup().addTo(this.map);
+    this.cellsLayer = new CellsLayer(this.map, false);
     // Airport forecast overlay sits at the bottom of the stack so the route
     // segments, fronts and waypoints always draw on top of the airport dots.
     this.airportForecastGroup = L.layerGroup().addTo(this.map);
@@ -394,8 +414,48 @@ export class RouteMapRenderer {
       this.observedFlashes,
     );
     this.updateBaseMuted(!!this.data.observed && (!!this.observedSource || this.observedSatellite));
-    this.updateObservedBadge(badge);
+    this.observedBaseBadge = badge;
+    this.updateObservedBadge(this.composeBadge());
     this.updateObservedLegend();
+    this.renderCells();
+  }
+
+  /** Cells beside the radar frame on screen (same stamp, else the newest at or
+   *  before it), for the corridor box plus a margin. Async: the badge gets
+   *  the overlay's own line when it lands. */
+  private renderCells(): void {
+    const layer = this.cellsLayer;
+    if (!layer || !this.data) return;
+    const want = this.observedCells && !!this.data.observed;
+    if (layer.isEnabled() !== want) layer.setEnabled(want);
+    this.updateCellsLegend(want);
+    if (!want) return;
+    const radarInfo = this.observedSource ? this.observedFrames.get(this.observedSource) : undefined;
+    const radarStamp = this.observedSource === 'opera_dbzh' && radarInfo && !radarInfo.stale
+      ? radarInfo.frames[0]?.stamp ?? null
+      : null;
+    const box = corridorBox(this.data.points, (this.data.observed?.radiusNm ?? 20) + CELLS_MARGIN_NM);
+    void layer.refresh(radarStamp, box).then(() => this.updateObservedBadge(this.composeBadge()));
+  }
+
+  /** Collapsible legend (closed by default) while the cell overlay is on. */
+  private updateCellsLegend(show: boolean): void {
+    if (!show) {
+      if (this.cellsLegendEl) { this.cellsLegendEl.remove(); this.cellsLegendEl = null; }
+      return;
+    }
+    if (this.cellsLegendEl) return;
+    this.cellsLegendEl = document.createElement('details');
+    this.cellsLegendEl.className = 'map-cells-legend';
+    this.cellsLegendEl.innerHTML = `<summary>Radar cells <span class="cells-exp">experimental</span></summary>${cellsLegendHtml()}`;
+    // Clicks on the legend must not reach the map underneath.
+    L.DomEvent.disableClickPropagation(this.cellsLegendEl);
+    this.container.appendChild(this.cellsLegendEl);
+  }
+
+  private composeBadge(): string {
+    const cells = this.cellsLayer?.badge() ?? '';
+    return [this.observedBaseBadge, cells].filter(Boolean).join('\n');
   }
 
   /** Quiet basemap while observed imagery is drawn (#652). Only swaps tiles

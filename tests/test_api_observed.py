@@ -521,3 +521,19 @@ def test_overlay_without_gzip_support_is_plain_json(client, cells_store):
     assert response.status_code == 200
     assert "content-encoding" not in response.headers
     assert len(response.json()["cells"]) == 2
+
+
+def test_flashes_accept_a_europe_wide_box_for_the_now_map(client, stocked):
+    europe = {"south": 30.0, "west": -25.0, "north": 72.0, "east": 45.0}
+    payload = client.get("/api/observed/flashes", params=europe).json()
+    assert payload["count"] > 0
+    # Imagery keeps its corridor-sized limit.
+    assert client.get("/api/observed/overlay/opera_dbzh.png", params=europe).status_code == 400
+
+
+def test_flashes_trail_can_be_shortened(client, stocked):
+    full = client.get("/api/observed/flashes", params={**BBOX, "minutes": 60}).json()
+    assert full["count"] > 0
+    none = client.get("/api/observed/flashes", params={**BBOX, "minutes": 0.001}).json()
+    assert none["count"] == 0
+    assert client.get("/api/observed/flashes", params={**BBOX, "minutes": 0}).status_code == 422

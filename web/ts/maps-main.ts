@@ -24,6 +24,7 @@ import {
 } from './adapters/synoptic-charts-adapter';
 import { makeChartProjection } from './visualization/chart-projection';
 import { ClimatologyTab } from './visualization/climatology-tab';
+import { NowTab } from './visualization/now-tab';
 import {
   HistoricalTab, HISTORICAL_SOURCES, HISTORICAL_LEADS,
   type HistoricalSource, type HistoricalState,
@@ -42,7 +43,8 @@ let forecastMap: WeatherMap | null = null;
 let synopticMap: SynopticMap | null = null;
 let climatologyTab: ClimatologyTab | null = null;
 let historicalTab: HistoricalTab | null = null;
-type Tab = 'forecast' | 'historical' | 'synoptic' | 'climatology' | 'stats';
+let nowTab: NowTab | null = null;
+type Tab = 'forecast' | 'historical' | 'now' | 'synoptic' | 'climatology' | 'stats';
 let currentTab: Tab = 'forecast';
 let statsLoaded = false;
 
@@ -112,7 +114,7 @@ let airportPanelView: ApViewMode = 'card';
 // Defaults match the module-level state above and the HTML's pre-active
 // buttons, so an untouched view yields a bare `/maps.html` URL.
 const mapsUrlState = createUrlState({
-  tab:         { default: 'forecast' as Tab, values: ['forecast', 'historical', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
+  tab:         { default: 'forecast' as Tab, values: ['forecast', 'historical', 'now', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
   'fc.day':    { default: 0,  values: [0, 1, 2, 3, 4, 5, 6] as readonly number[] },
   'fc.hour':   { default: 12, values: [6, 9, 12, 15, 18] as readonly number[] },
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
@@ -1144,6 +1146,9 @@ function switchTab(tab: Tab): void {
     panel.classList.toggle('active', panel.id === `panel-${tab}`);
   }
 
+  // The "Now" tab refreshes itself every 5 min, but only while it is shown.
+  if (tab !== 'now') nowTab?.hide();
+
   // Load data / init maps as needed
   if (tab === 'forecast') {
     if (!forecastData) loadForecast();
@@ -1152,6 +1157,9 @@ function switchTab(tab: Tab): void {
   } else if (tab === 'historical') {
     if (!historicalTab) historicalTab = new HistoricalTab(historicalState(), () => syncUrl());
     void historicalTab.show();
+  } else if (tab === 'now') {
+    if (!nowTab) nowTab = new NowTab();
+    void nowTab.show();
   } else if (tab === 'synoptic') {
     setTimeout(() => { initSynopticTab(); }, 50);
   } else if (tab === 'climatology') {

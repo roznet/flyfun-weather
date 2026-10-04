@@ -905,6 +905,8 @@
   "viz.observed.label": "Observé",
   "viz.observed.opacity": "Opacité",
   "viz.observed.satellite": "Satellite",
+  "viz.observed.cells": "Cellules",
+  "viz.observed.cellsHint": "Analyse expérimentale des cellules radar : contours, tendance et flèches de déplacement à 30 minutes",
   "viz.observed.none": "Aucun",
   "viz.observed.reflectivity": "Réflectivité radar",
   "viz.observed.rainRate": "Taux de pluie",

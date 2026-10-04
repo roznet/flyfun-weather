@@ -7021,6 +7021,28 @@ html {
   color: #e5e7eb;
 }
 
+/* Radar cell overlay (#656), shared by the briefing route map and the maps
+ * page's "Now" tab: legend swatches, the experimental pill, muted caveats. */
+.cells-sw { display: inline-block; width: 9px; height: 9px; border: 1px solid #333; margin: 0 2px 0 6px; vertical-align: middle; }
+.cells-exp { font-size: 0.65rem; padding: 0 0.3rem; border-radius: 3px; background: #f59e0b; color: #111; font-weight: 600; }
+.cells-muted { color: var(--text-muted); }
+.map-cells-legend {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 500;
+  max-width: min(320px, 60%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 7px;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+.map-cells-legend summary { cursor: pointer; font-weight: 600; }
+
 /* "Observed now" briefing section (#574). */
 /* --- Observed Now (#574) ---------------------------------------------------
    Styled to match .advisory-card so the briefing reads as one page. The one
