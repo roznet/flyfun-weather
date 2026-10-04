@@ -32,7 +32,8 @@ observed/cells/
   scoring.py     extrapolation vs persistence at 30/60 min → cells/scores/<day>.jsonl
   runner.py      archive store, collect + analyse tick, replay, coverage report
   render.py      review PNG (radar, outlines, 30-min arrows, flashes, age/trend)
-  __main__.py    run [--once] | replay | render | status
+  archive.py     nightly pack / verify / prune / nas-plan / restore (#658)
+  __main__.py    run [--once] | replay | render | status | map | archive …
 ```
 
 ## One tree everywhere
@@ -48,14 +49,16 @@ root has exactly one owner and only the owner purges it:
     display/<stamp>.json.gz            map file — built on the home node, pushed (#656)
     catalogues/<day>/<stamp>.json.gz   full analysis (+ <stamp>.failed.json markers)
     scores/<day>.jsonl  runs/<day>.jsonl  state.json
+    archive/verified/<day>.json        written by `archive verify` only; gates prune
+    archive/staging/…                  tonight's tars, NAS layout; cleared once verified
 ```
 
 | Machine | Root | Owner, retention |
 |---|---|---|
 | Droplet | `DATA_DIR/observed` | web app collector: frames 3 h; `cells/display` 24 h (#656) |
-| Mac mini | `~/flyfun-data/observed-archive` | cells loop; nightly archive job prunes (planned) |
+| Mac mini | `~/flyfun-data/observed-archive` | cells loop writes; nightly archive job prunes: frames 48 h, analysis 90 days |
 | MacBook (dev) | `main/data/observed-archive` | cells loop when testing; the dev server keeps `data/observed` |
-| NAS | `/volume1/backup/flyfun/weather/observed-archive` | archive job (planned) |
+| NAS | `/volume1/backup/flyfun/weather/observed-archive` | archive job: frame tars 12 months then event/pinned days only; analysis forever |
 
 `WB_CELLS_ROOT` names the home-node root (required, no default — fails
 loudly). It must never be `DATA_DIR/observed`: that store belongs to the web
@@ -215,6 +218,71 @@ EUMETSAT credentials in its environment, `caffeinate`/`pmset` as for the
 forecast offload.  The plist belongs in the private config repo with the
 other mini daemons.
 
+## Archive and retention (#658)
+
+Decided 2026-10-04.  **The loop never deletes and never talks to the NAS** — a
+slow or offline NAS must not stall live analysis.  A nightly job (ops repo:
+`digitalocean/tools/backup-observed-archive.sh`, dispatched by the mini's
+`flyfun-backup.sh observed-archive`) calls `archive …`, all pure over a root
+and a UTC day:
+
+| Step | Command | What it guarantees |
+|---|---|---|
+| 1 | `archive pending` → `pack --day D` | only days ended ≥ 30 min ago (`PACK_SETTLE`); refuses a day already verified |
+| 2 | (job) rsync staging → NAS | staging layout = NAS layout |
+| 3 | (job) `sha256sum` on the NAS → `verify --day D --remote-sums F` | every tar must match; then writes `cells/archive/verified/D.json` (holds the manifest) |
+| 4 | `prune --execute` | see below; dry run without `--execute` |
+| 5 | `nas-plan --manifests … --keep-days …/keep-days.json [--present F]` | prints tar paths; the job deletes them over ssh |
+
+NAS layout: `<source>/<YYYY>/<day>.tar` (plain tar — HDF5/netCDF are already
+compressed), `cells/<YYYY>/<day>.tar.gz` (catalogues incl. `.failed.json`,
+`scores`, `runs`), `manifest/<day>.json`, `keep-days.json`
+(`{"20260827": "reason"}`, pinned by hand).  Members are relative to the root,
+so `restore --day D --from <staging or NAS copy> --to <scratch>` rebuilds a tree
+that `replay`/`render`/`map` read unchanged.  Tars are deterministic (sorted,
+mtime 0, no owner): re-packing gives the same sha256.
+
+**Manifest:** per tar files/bytes/sha256; every member with its size; frames
+present vs expected per source with gap ranges (expected = `WB_CELLS_SOURCES`);
+`policy_version` and `code_revision` counts; failed markers; the event block.
+
+**Prune rules.**  Only verified days; never today or yesterday (UTC) whatever
+the markers say; a file goes only if the verified manifest lists it **with the
+same size** — a frame a late sweep filled in after packing, or a jsonl that
+grew, is reported as `kept (not in the verified archive)` and stays (it will
+never be archived: a re-pack of a verified day is refused because it would
+overwrite the full NAS tar with what is left).  Frames go per stamp
+(`< now − 48 h`); analysis per whole day once it ended 90 days ago.  The
+verified day's staging copy is removed on the same pass.  `cells/display` is
+not touched (#656 owns it); `state.json` and markers stay.
+
+**Event days** (`EventPolicy`, `events-1`, provisional): at some frame ≥ 3
+`core41` cells with ≥ 10 flashes each, or any cell (any tier) ≥ 55 dBZ with
+≥ 50 flashes.  `event: null` (unknown) when there are no catalogues or
+lightning was available in < 50 % of frames — `nas-plan` keeps unknowns.  The
+thresholds are stored in every manifest and `nas-plan` reads the stored
+answer, so changing the policy never reclassifies archived days.  The issue
+left N open; 3 was picked low on purpose (a wrong "event" costs ~0.9 GB, a
+wrong "not an event" loses the day).
+
+**`nas-plan` fails safe:** older than 365 days AND manifest readable AND
+`event: false` AND not in `keep-days.json`.  Missing/corrupt manifest → kept;
+missing or corrupt `keep-days.json` → the command fails (a dead mount must not
+turn into deleting pinned days); paths are rebuilt from the day, so only
+`<source>/<YYYY>/<day>.tar` can ever be printed, never a cells tar.
+
+**Restore + replay is byte-for-byte only from a lineage break.**  A cell's id,
+history and trend carry across midnight from the previous day's catalogues;
+replaying one restored day starts fresh lineage at 00:00, so cells alive then
+get new ids and the first ~30 min differ.  Restore the previous day as well
+and replay from a real gap (the start of the archive, or a downtime) for an
+exact match (`test_restore_then_replay_reproduces_the_days_catalogues` starts
+at 00:00 with no prior day).
+
+Sizes (mini, autumn 2026): DBZH ~650 MB/day, RATE ~130, LI ~80, catalogues
+~30 → ~315 GB/year of frame tars, ~11 GB/year of analysis on the NAS.  Mini
+steady state: ~2 days of frames (~1.7 GB) + 90 days of analysis (~3 GB).
+
 ## Open numbers (to settle from the archive)
 
 Core threshold 35 vs 41; tile size and pair spacing; minimum cell areas;
@@ -223,9 +291,9 @@ thresholds; flash buffer.  Every one is in `policy.py`.
 
 ## Gotchas
 
-- Archive growth is unbounded by design for now: ~2.0 MB per DBZH frame
-  (~570 MB/day), RATE ~0.6 MB/15 min, LI ~0.7 MB/10 min, catalogues
-  ~130–170 KB/frame (~40 MB/day).  Pruning policy is deferred (§10).
+- The hot root grows until the nightly archive job runs (see "Archive and
+  retention"); if the NAS is down nothing is verified, so nothing is pruned and
+  the mini fills at ~0.9 GB/day — the job's free-disk floor is the alarm.
 - The frame directories are flat (288 DBZH files a day).  Fine for `has()`
   lookups by name; anything that lists them (`FrameStore.list_frames`) will
   slow down as they grow — the loop never lists.
