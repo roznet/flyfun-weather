@@ -26,6 +26,7 @@ import gzip
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -131,7 +132,27 @@ def validate(raw: bytes, stamp: str) -> dict[str, Any]:
         raise InvalidDisplay(f"valid_time {data.get('valid_time')} does not match {stamp}")
     if not isinstance(data.get("cells"), list) or not isinstance(data.get("outlines"), dict):
         raise InvalidDisplay("cells/outlines missing")
+    # The fields the server itself reads (bbox filter) and every client draws
+    # from: one malformed entry must be refused here, not 500 every request.
+    for i, cell in enumerate(data["cells"]):
+        if not isinstance(cell, dict) or not _is_latlon([cell.get("lat"), cell.get("lon")]):
+            raise InvalidDisplay(f"cell {i} has no numeric lat/lon")
+    for tier, lines in data["outlines"].items():
+        if not isinstance(lines, list) or not all(
+            isinstance(line, list) and all(_is_latlon(pt) for pt in line) for line in lines
+        ):
+            raise InvalidDisplay(f"outlines[{tier}] is not a list of [lat, lon] polylines")
     return data
+
+
+def _is_latlon(point: Any) -> bool:
+    return (
+        isinstance(point, (list, tuple))
+        and len(point) == 2
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in point)
+        and -90 <= point[0] <= 90
+        and -180 <= point[1] <= 180
+    )
 
 
 @dataclass(frozen=True)
@@ -246,7 +267,8 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
            retention: timedelta = RETENTION) -> IngestResult:
     """Move every valid display file from ``inbox`` into ``store``.
 
-    Invalid files go to ``inbox/rejected/`` (kept for a look, logged once);
+    Invalid files go to ``inbox/rejected/`` (kept 24 h for a look, logged once;
+    ``purge_rejected``);
     files already past retention are dropped.  Temp files (rsync's
     ``.<name>.XXXXXX``) and anything not named ``<stamp>.json.gz`` are left
     alone.  Never raises for one bad file.
@@ -282,6 +304,24 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
             continue
         result.accepted.append(stamp)
     return result
+
+
+def purge_rejected(inbox: Path, now: datetime | None = None, retention: timedelta = RETENTION) -> int:
+    """Drop set-aside files older than ``retention`` (by mtime): kept for a
+    look, not forever — a broken node would otherwise add one every 5 min."""
+    directory = inbox / "rejected"
+    if not directory.is_dir():
+        return 0
+    cutoff = (now or datetime.now(timezone.utc)).timestamp() - retention.total_seconds()
+    removed = 0
+    for path in directory.iterdir():
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _reject(inbox: Path, path: Path) -> None:
