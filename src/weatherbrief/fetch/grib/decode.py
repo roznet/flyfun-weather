@@ -326,6 +326,34 @@ def _frac_grid_indices(
     return frac, ~np.isnan(frac)
 
 
+
+def _align_lons_to_axis(lon_arr, targets_lon) -> "np.ndarray":
+    """Express target longitudes in the convention of a dataset's longitude axis.
+
+    Each target is shifted by a whole number of turns into
+    ``[min(axis), min(axis) + 360)``, so a target inside the grid always lands
+    on the axis whatever the two conventions are. Grids differ even within one
+    file: an ECMWF ``a1`` US area carries its GRIB1 messages on −128 … −71 but
+    its GRIB2 messages (ceil, CAPE/CIN, KX, TOTALX, ptype) on 232 … 289, so a
+    −180/+180 route target missed every GRIB2 field (#673). Applying it per
+    dataset is what makes mixed files work; a per-decoder ``lon % 360`` cannot.
+
+    A no-op for targets already in the axis convention, and a target outside a
+    regional grid stays outside it (the window is one full turn wide), so the
+    out-of-domain → None semantics are unchanged. On a cyclic axis the window
+    ends exactly at the seam ``_is_cyclic_longitude`` closes. Single source of
+    truth for ``_bilinear_grid_weights`` and ``_interpolate_per_point``.
+    """
+    import numpy as np
+
+    targets = np.asarray(targets_lon, dtype=np.float64)
+    lons = np.asarray(lon_arr, dtype=np.float64)
+    if lons.size == 0:
+        return targets
+    lon_min = float(np.nanmin(lons))
+    return targets - 360.0 * np.floor((targets - lon_min) / 360.0)
+
+
 class _GridWeights(NamedTuple):
     """Bilinear corner indices + weights for target points on a lat/lon grid."""
     i0: np.ndarray
@@ -367,6 +395,9 @@ def _bilinear_grid_weights(
     H, W = lat_arr.size, lon_arr.size
     if H < 2 or W < 2:
         return None
+
+    # Per-dataset longitude convention (0–360 vs −180/+180, #673).
+    targets_lon = _align_lons_to_axis(lon_arr, targets_lon)
 
     wrap_lon = _is_cyclic_longitude(lon_arr)
     lon_axis = np.append(lon_arr, lon_arr[0] + 360.0) if wrap_lon else lon_arr
@@ -1230,6 +1261,8 @@ def _interpolate_per_point(
                 for v in interpolated.values
             ]
 
+        # Per-dataset longitude convention (0–360 vs −180/+180, #673).
+        longitudes = _align_lons_to_axis(data_array[lon_dim].values, longitudes)
         data_array = _close_cyclic_longitude(data_array, lon_dim, longitudes)
 
         lat_arr = xr.DataArray(latitudes, dims="points")
@@ -2927,8 +2960,8 @@ def _decode_ecmwf_pressure_per_point_cfgrib(
         logger.warning("cfgrib failed to open ECMWF file %s", file_path, exc_info=True)
         return results, covered
 
-    # No longitude normalization needed: ECMWF grids use -180/+180 convention,
-    # same as route points.  (GFS uses 0-360 and requires `lon % 360`.)
+    # No longitude normalization here: the shared interpolation path aligns
+    # targets to each dataset's own axis convention (#673).
     try:
         results, covered = _decode_pressure_vars_from_datasets(
             datasets, latitudes, longitudes,
