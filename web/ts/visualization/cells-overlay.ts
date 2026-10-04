@@ -14,6 +14,8 @@ import {
   ARROW_COLOUR,
   OUTLINE_STYLE,
   cellPopupHtml,
+  frameKey,
+  rateAsOf,
   cellsBadge,
   hasArrow,
   matchCellFrame,
@@ -52,8 +54,9 @@ export async function fetchCellFrames(now: number = Date.now()): Promise<CellFra
   return info;
 }
 
-export function cellDisplayUrl(info: CellFramesInfo, stamp: string, box: CellsBox | null): string {
-  const base = info.url_template.replace('{stamp}', encodeURIComponent(stamp));
+/** `key` is a frame's `frameKey` (newest revision), so a new revision is a new URL. */
+export function cellDisplayUrl(info: CellFramesInfo, key: string, box: CellsBox | null): string {
+  const base = info.url_template.replace('{stamp}', encodeURIComponent(key));
   if (!box) return base;
   const q = new URLSearchParams({
     south: box.south.toFixed(2), west: box.west.toFixed(2),
@@ -62,7 +65,7 @@ export function cellDisplayUrl(info: CellFramesInfo, stamp: string, box: CellsBo
   return `${base}?${q.toString()}`;
 }
 
-/** One display file. Immutable per URL, so cached by URL. */
+/** One display file. Immutable per URL (one revision), so cached by URL. */
 export async function fetchCellDisplay(url: string): Promise<CellDisplay | null> {
   const hit = displayCache.get(url);
   if (hit) return hit;
@@ -87,6 +90,7 @@ export function drawCells(
   // Leaflet does not pass a group's pane to its children: set it per layer.
   const pane = opts.pane ?? 'overlayPane';
   group.clearLayers();
+  const rateTime = rateAsOf(display);
   // Outlines first (rain20 under the cores), markers and arrows on top.
   for (const tier of ['rain20', 'core35', 'core41'] as CellTier[]) {
     if (tier === 'rain20' && !opts.showRain) continue;
@@ -106,7 +110,7 @@ export function drawCells(
       fillOpacity: 0.9,
       fillColor: trendColour(c.trend?.state),
       dashArray: c.tier === 'rain20' ? '3' : undefined,
-    }).bindPopup(cellPopupHtml(c)).addTo(group);
+    }).bindPopup(cellPopupHtml(c, rateTime)).addTo(group);
     // Arrows for cores only (as the prototype): a frontal band's centroid
     // motion is not a useful "where will it be".
     if (c.tier !== 'rain20' && hasArrow(c)) {
@@ -180,7 +184,7 @@ export class CellsLayer {
       this.lastBadge = cellsBadge(match, null, now);
       return this.lastBadge;
     }
-    const url = cellDisplayUrl(info, match.frame.stamp, box);
+    const url = cellDisplayUrl(info, frameKey(match.frame), box);
     const display = await fetchCellDisplay(url);
     if (token !== this.token || !this.enabled) return this.lastBadge;
     if (!display) {

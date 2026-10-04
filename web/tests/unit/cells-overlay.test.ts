@@ -4,9 +4,11 @@ import {
   cellPopupHtml,
   cellsBadge,
   cellsLegendHtml,
+  frameKey,
   hasArrow,
   matchCellFrame,
   motionText,
+  rateAsOf,
   trendColour,
   trendText,
   type CellFramesInfo,
@@ -99,6 +101,22 @@ describe('matchCellFrame (time alignment)', () => {
   });
 });
 
+describe('revisions (#666)', () => {
+  it('the display URL key is the newest revision, the bare stamp on an older server', () => {
+    const base = { stamp: '20261004T1145', valid_time: '2026-10-04T11:45:00+00:00', received_at: '', age_minutes: 15 };
+    expect(frameKey({ ...base, key: '20261004T1145.r1', revision: 1 })).toBe('20261004T1145.r1');
+    expect(frameKey(base)).toBe('20261004T1145');
+  });
+  it('rain rate time only when it differs from the radar', () => {
+    const times = (radar: string, rate: string | null) =>
+      ({ times: { radar, rate, lightning: null, cloud_top: null } }) as unknown as Parameters<typeof rateAsOf>[0];
+    expect(rateAsOf(times('2026-10-04T11:45:00+00:00', '2026-10-04T11:45:00+00:00'))).toBeNull();
+    expect(rateAsOf(times('2026-10-04T11:45:00+00:00', '2026-10-04T11:30:00+00:00'))).toBe('2026-10-04T11:30:00+00:00');
+    expect(rateAsOf(times('2026-10-04T11:45:00+00:00', null))).toBeNull();
+    expect(rateAsOf(null)).toBeNull();
+  });
+});
+
 describe('badge', () => {
   it('carries the overlay\'s own time and says experimental', () => {
     const m = matchCellFrame(info(['11:45']), '20261004T1150', NOW);
@@ -121,6 +139,11 @@ describe('words', () => {
   it('trend carries its numbers', () => {
     expect(trendText(cell().trend)).toBe('developing over 30 min (peak +6 dB, area ×1.6, flashes +2)');
     expect(trendText({ state: 'new', window_min: null })).toContain('new');
+  });
+  it('popup: the rain rate says its own time only when it is not the radar\'s', () => {
+    expect(cellPopupHtml(cell())).not.toContain('as of');
+    expect(cellPopupHtml(cell({ rate_peak_mm_h: 12 }), '2026-10-04T11:30:00+00:00')).toContain('12 mm/h (as of 11:30Z)');
+    expect(cellPopupHtml(cell({ rate_peak_mm_h: null }), '2026-10-04T11:30:00+00:00')).not.toContain('as of');
   });
   it('popup: coverage edge and cloud top only when present', () => {
     expect(cellPopupHtml(cell())).not.toContain('outside radar coverage');

@@ -161,8 +161,14 @@ def collect_opera(
     lookback: timedelta = DEFAULT_LOOKBACK,
     max_fetch: int = 4,
     session: requests.Session | None = None,
+    warn_if_empty: bool = True,
 ) -> CollectResult:
-    """Fetch any missing OPERA composites for ``source``."""
+    """Fetch any missing OPERA composites for ``source``.
+
+    ``warn_if_empty=False`` silences the "every expected frame missing"
+    warning for a caller that probes one not-yet-published slot on purpose
+    (the cells loop's tight radar poll, #666).
+    """
     from . import opera
 
     spec = SOURCE_SPECS[source]
@@ -216,7 +222,7 @@ def collect_opera(
     # not: that is a wrong URL, a renamed bucket, or a dead provider, and it is
     # indistinguishable from "quiet" unless we say so. This is exactly how an
     # AWS-shaped base URL hid a totally non-functional radar path.
-    if result.fetched == 0 and result.skipped == 0 and result.missing > 0:
+    if warn_if_empty and result.fetched == 0 and result.skipped == 0 and result.missing > 0:
         logger.warning(
             "OPERA %s: all %d expected frames missing over the last %s — "
             "nothing stored either. Check the endpoint (%s) before assuming "

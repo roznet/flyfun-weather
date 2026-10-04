@@ -561,7 +561,10 @@ def observed_cell_display(
 ) -> Response:
     """One frame's overlay, optionally clipped to a box (the route map's).
 
-    Keyed by stamp, so the body never changes: cacheable like the tiles.
+    ``stamp`` is a frame's listing ``key`` — ``<stamp>.r<n>``, one immutable
+    revision, cacheable like the tiles — or a bare stamp (clients from before
+    #666): the newest revision, ``no-cache`` because a later revision (the
+    frame's lightning landing) replaces it.
     """
     import json as _json
 
@@ -570,26 +573,30 @@ def observed_cell_display(
     if not cells_display.cells_ingest_enabled():
         raise HTTPException(status_code=404, detail="Cell analysis not enabled")
     try:
-        parse_frame_stamp(stamp)
+        frame, revision = cells_display.parse_key(stamp)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Bad frame stamp") from exc
     box = (south, west, north, east)
     if any(v is not None for v in box) and any(v is None for v in box):
         raise HTTPException(status_code=400, detail="Give all of south, west, north, east or none")
     store = cells_display.DisplayStore()
-    data = store.read(stamp)
+    explicit = revision is not None
+    if not explicit:
+        revision = store.latest_revision(frame)
+    data = store.read(frame, revision) if revision is not None else None
     if data is None:
         # Purged (older than retention), never received, or invalid.
         raise HTTPException(status_code=410, detail="Overlay not stored")
-    # Immutable caching: a stamp's display file is written once — ingest keeps
-    # the first copy and sets aside a re-push with different bytes.
-    headers = {"Cache-Control": _TILE_CACHE_CONTROL}
+    # Immutable caching only for an explicit revision: each revision's file is
+    # written once (ingest keeps the first copy and sets aside a re-push with
+    # different bytes). A bare stamp means "newest", which can change.
+    headers = {"Cache-Control": _TILE_CACHE_CONTROL if explicit else "no-cache"}
     if south is None and "gzip" in request.headers.get("accept-encoding", "").lower():
         # The whole of Europe (the "Now" tab): the stored file already is
         # gzipped JSON (~150 KB vs ~1 MB raw) and was validated just above, so
         # hand its bytes over as-is and let the browser inflate them.
         try:
-            raw = store.path(stamp).read_bytes()
+            raw = store.path(frame, revision).read_bytes()
         except OSError as exc:
             raise HTTPException(status_code=410, detail="Overlay not stored") from exc
         return Response(content=raw, media_type="application/json",

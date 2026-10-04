@@ -114,6 +114,44 @@ def test_masked_ncc_matches_brute_force():
     assert np.unravel_index(np.nanargmax(got), got.shape) == (5, 6)
 
 
+def _masked_ncc_fftconvolve(image, image_mask, template, template_mask, min_overlap_fraction=0.5):
+    """The pre-#666 formulation: six independent ``fftconvolve`` calls."""
+    from scipy.signal import fftconvolve
+
+    def xcorr(a, b):
+        return fftconvolve(a, b[::-1, ::-1], mode="valid")
+
+    f_m, t_m = image_mask.astype(float), template_mask.astype(float)
+    f1, t1 = image * f_m, template * t_m
+    overlap, sum_f, sum_f2 = xcorr(f_m, t_m), xcorr(f1, t_m), xcorr(f1 * image, t_m)
+    sum_t, sum_t2, sum_ft = xcorr(f_m, t1), xcorr(f_m, t1 * template), xcorr(f1, t1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = overlap >= max(min_overlap_fraction * template_mask.sum(), 1.0)
+        n = np.where(ok, overlap, 1.0)
+        num = sum_ft - sum_f * sum_t / n
+        var_f = sum_f2 - sum_f * sum_f / n
+        var_t = sum_t2 - sum_t * sum_t / n
+        denom = np.sqrt(np.clip(var_f, 0, None) * np.clip(var_t, 0, None))
+        eps = 1e-6 * max(float(np.abs(sum_f2).max(initial=0.0)), 1.0)
+        ok &= (var_f > eps) & (var_t > eps)
+        ncc = np.where(ok, num / np.where(denom > 0, denom, 1.0), np.nan)
+    return np.clip(ncc, -1.0, 1.0)
+
+
+def test_shared_transform_ncc_equals_the_fftconvolve_one():
+    """#666 halved the FFT count; the answer must not move (float tolerance)."""
+    rng = np.random.default_rng(11)
+    image = np.clip(rng.normal(10, 8, size=(180, 180)), 0, 50)
+    template = image[30:158, 22:150].copy()
+    i_mask = rng.random((180, 180)) > 0.3
+    t_mask = rng.random((128, 128)) > 0.3
+    got = masked_ncc(image, i_mask, template, t_mask)
+    ref = _masked_ncc_fftconvolve(image, i_mask, template, t_mask)
+    assert np.array_equal(np.isnan(got), np.isnan(ref))
+    np.testing.assert_allclose(got[np.isfinite(got)], ref[np.isfinite(ref)], atol=1e-9)
+    assert np.unravel_index(np.nanargmax(got), got.shape) == (30, 22)
+
+
 BLOBS = [(60, 60, 50, 7), (110, 140, 45, 10), (150, 70, 40, 5)]
 
 
@@ -130,6 +168,24 @@ def test_translated_scene_recovers_the_velocity():
         assert mo.support > 0.5
         assert mo.drow_per_min * 10 == pytest.approx(6, abs=0.3)
         assert mo.dcol_per_min * 10 == pytest.approx(-4, abs=0.3)
+
+
+def test_flow_does_not_depend_on_the_thread_count():
+    a = grid_frame(scene(200, BLOBS), T0)
+    b = grid_frame(scene(200, BLOBS, shift=(6, -4)), T0 + timedelta(minutes=10))
+    one = estimate_flow(a, b, DEFAULT_POLICY, 10, threads=1)
+    many = estimate_flow(a, b, DEFAULT_POLICY, 10, threads=4)
+    assert (one.tried, one.matched) == (many.tried, many.matched)
+    for x, y in ((one.dr, many.dr), (one.dc, many.dc), (one.ncc, many.ncc)):
+        assert np.array_equal(x, y, equal_nan=True)
+
+
+def test_peaks_per_cell_are_the_labelled_maxima():
+    values = scene(200, BLOBS)
+    det = detect(grid_frame(values, T0), CORE)
+    for cell in det.cells:
+        mask = det.labels == cell.label
+        assert cell.peak_dbz == float(np.float32(values[mask].max()))
 
 
 def test_a_moving_nodata_edge_does_not_bias_the_shift():

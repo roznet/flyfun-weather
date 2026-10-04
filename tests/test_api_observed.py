@@ -477,11 +477,40 @@ def test_cell_frames_report_stale_with_unavailable_since(client, observed_env, m
 
 
 def test_cell_display_is_immutable_json(client, cells_store):
-    response = client.get(f"/api/observed/cells/{cells_store[0]}.json")
+    response = client.get(f"/api/observed/cells/{cells_store[0]}.r0.json")
     assert response.status_code == 200
     assert "immutable" in response.headers["cache-control"]
     body = response.json()
     assert {c["id"] for c in body["cells"]} == {"core41-in", "core35-far"}
+
+
+def test_an_amended_frame_is_listed_at_its_newest_revision(client, cells_store, observed_env):
+    """#666: lightning landing later re-issues a frame as r1.  The listing
+    points at r1; r0 stays served (immutable) for anyone holding the old
+    listing; a bare stamp (a pre-#666 client) gets r1, never cached."""
+    from weatherbrief.observed import cells_display
+    from weatherbrief.observed.frames import parse_frame_stamp
+
+    from observed.cells_helpers import display_bytes, display_cell_doc, display_doc
+
+    store = cells_display.DisplayStore(observed_env / "observed" / "cells" / "display")
+    stamp = cells_store[0]
+    doc = display_doc(parse_frame_stamp(stamp), cells=[display_cell_doc("core41-in", 50.5, 1.5)])
+    store.write(stamp, display_bytes({**doc, "revision": 1}), revision=1)
+
+    body = client.get("/api/observed/cells/frames").json()
+    first = body["frames"][0]
+    assert first["stamp"] == stamp and first["key"] == f"{stamp}.r1" and first["revision"] == 1
+    assert body["frames"][1]["key"] == f"{cells_store[1]}.r0"
+    assert [f["stamp"] for f in body["frames"]] == cells_store  # one entry per frame
+
+    r1 = client.get(f"/api/observed/cells/{stamp}.r1.json")
+    assert "immutable" in r1.headers["cache-control"] and len(r1.json()["cells"]) == 1
+    r0 = client.get(f"/api/observed/cells/{stamp}.r0.json")
+    assert "immutable" in r0.headers["cache-control"] and len(r0.json()["cells"]) == 2
+    bare = client.get(f"/api/observed/cells/{stamp}.json")
+    assert bare.headers["cache-control"] == "no-cache" and len(bare.json()["cells"]) == 1
+    assert client.get(f"/api/observed/cells/{stamp}.r2.json").status_code == 410
 
 
 def test_cell_display_clips_to_the_route_box(client, cells_store):
@@ -495,6 +524,7 @@ def test_cell_display_rejects_partial_or_empty_boxes_and_bad_stamps(client, cell
     assert client.get(url, params={"south": 1, "west": 2}).status_code == 400
     assert client.get(url, params={"south": 51, "west": 0, "north": 50, "east": 2}).status_code == 400
     assert client.get("/api/observed/cells/notastamp.json").status_code == 400
+    assert client.get(f"/api/observed/cells/{cells_store[0]}.rx.json").status_code == 400
     # Wider than any route corridor (and than the "Now" map's flash box).
     huge = {"south": -80, "west": -170, "north": 80, "east": 170}
     assert client.get(url, params=huge).status_code == 400

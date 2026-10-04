@@ -74,8 +74,11 @@ identical on both sides and byte-identical files (checked 2026-10-04); they are
 the shared key that links the analysis to the droplet's own frames
 (`test_frame_names_are_the_shared_key`).
 
-`runs/<day>.jsonl` holds one row per processed frame (seconds, peak RSS, bytes,
-cell counts, what was unavailable) plus `error` and `gap` rows.
+`runs/<day>.jsonl` holds one row per processed frame (`analysis_seconds` up to
+the display file, `seconds` including push and scoring, `pushed_at`, peak RSS,
+bytes, cell counts, what was unavailable) plus `amend` (lightning re-attached,
+with its revision and `pushed_at`), `push` (end-of-tick batch), `error` and
+`gap` rows.  Frame → push latency is `pushed_at − valid_time`, no log parsing.
 
 ## Choices, and why
 
@@ -130,30 +133,42 @@ area ×1.5 / ×0.6.  Opposite signals are `mixed`, never averaged into
 peak fell 5.5 dB).  "steady" rather than the issue's "mature" — the
 measurement is a trend, not a lifecycle stage.  Provisional thresholds.
 
-**Attributes at their own frame time, never advected.**  RATE slot = DBZH time
-floored to 15 min; LI slot floored to 10 min; flashes go to the nearest cell
-pixel within 5 km (the two frames are up to 10 min apart).  CTTH tops by
+**Attributes at their own frame time, never advected.**  RATE = the newest
+frame on disk at or before the DBZH time floored to 15 min, up to 30 min older
+than the radar (`RATE_MAX_AGE`, #666) — its time is `inputs.opera_rate` and
+the gap `inputs.rate_age_min` (also on the display file); LI slot floored to
+10 min; flashes go to the nearest cell pixel within 5 km (the two frames are up
+to 10 min apart).  CTTH tops by
 corrected position (`lat + delta_latitude`), exactly as the corridor sampler
 does.  Every attribute is `None` when its source could not answer, and the
 catalogue's `unavailable` list says why.  LI flash positions are taken as
 published; whether they carry their own parallax is unverified.
 
-**Wait for attributes, but never out of order.**  A new frame waits up to
-15 min for its RATE and LI frames; older frames never wait.  The analysis
-stops at the first waiting frame rather than skipping it, so a later frame
-never starts its lineage without its predecessor.
+**Never wait for attributes (#666).**  A radar frame is analysed and
+published as soon as its DBZH is on disk.  Rain rate is the newest RATE on
+disk (above).  Lightning is published as missing and **amended** when the
+frame's LI slot lands — see "Latency" below.  Frames are still analysed
+oldest first, so a later frame never starts its lineage without its
+predecessor.
 
-**Radar first, EUMETSAT after.**  Each tick collects OPERA, analyses, then
-collects EUMETSAT (≤ 12 products per sweep; ~20 s per LI product, a CTTH
-granule ~54 MB) and analyses again, so EUMETSAT downloads never hold the
-newest radar frame back.  Sweeps
+**Radar first, EUMETSAT after.**  Each tick collects OPERA, analyses (pushing
+each live frame as soon as its display file exists), then collects EUMETSAT
+(≤ 12 products per sweep; ~20 s per LI product, a CTTH granule ~54 MB),
+analyses again if it brought anything, and amends lightning, so EUMETSAT
+downloads never hold the newest radar frame back.  Between ticks a **tight
+radar poll** checks for the due DBZH every 10 s from +4.0 min after its slot
+(`OPERA_DELIVERY_LAG`) until it lands or 2 min pass, then the next tick runs at
+once (`wait_for_next_tick`).  Sweeps
 (every 15 min) reach back `WB_CELLS_CATCHUP_HOURS` (default 6; the OPERA open
 cache keeps 24 h).
 
 **Byte-for-byte catalogues.**  Sorted keys, rounded floats, no wall clock
 (timings go to `cells/runs/`), gzip `mtime=0`.  `replay` of the same frames under
 the same policy reproduces every file exactly (pinned by a test), into a
-separate root it refuses to share with the live one.
+separate root it refuses to share with the live one.  Since #666 a *live*
+catalogue can differ from its replay where the live loop used an older RATE
+frame than replay finds on disk (`inputs.opera_rate` says which); an amended
+catalogue otherwise equals the replay's.
 
 **`policy_version` = name + digest of every number.**  It does *not* see code.
 A change that alters output without touching a number must bump
@@ -262,7 +277,10 @@ from the same detections, and writes `cells/display/<stamp>.json.gz`
   `webmap.py` reads this same reduced shape (`display_cell`), so the
   prototype and the web overlay cannot drift.
 - `times{radar, rate, lightning, cloud_top}` (each input's own time),
-  `unavailable`, `policy_version`, `code_revision`, `window_minutes`.
+  `rate_age_min`, `revision` (0, then 1 once lightning is amended — each its
+  own file, `<stamp>.r1.json.gz`; #666), `unavailable`, `policy_version`,
+  `code_revision`, `window_minutes`.  Fields are additive under
+  `observed-cells-display/1`, so an older droplet still accepts r0.
 - **No lightning flashes**: the droplet draws its own LI from
   `/api/observed/flashes`; the per-cell `flashes` count is in the cells.
 
@@ -273,33 +291,94 @@ never a failed frame (the catalogue, the lineage input, is already written).
 Issue estimate for all of Europe: ~150 KB/frame gzipped (not re-measured
 in this PR — no real frames in the cloud session).
 
-**Push** (`push.py`): at the end of every tick, `rsync -t --timeout=60
-<files> $WB_CELLS_PUSH_TARGET/` for display files in the tick's lookback not
-yet sent; the sent set lives in `state.json` (`pushed`, pruned to the
-lookback; `last_push`, `push_error`).  **Off when unset** — the MacBook never
-pushes unless asked.  A failure (exit code, 120 s timeout, rsync missing) is
-logged and retried next tick; it never raises.  Explicit file lists, not the
-directory: the home node keeps every display file and the droplet purges at
-24 h, so a directory rsync would grow with the archive and re-send purged
-files.  Plain flags only (macOS ships an old rsync / openrsync).
-SSH auth comes from the node's `~/.ssh/config`.
+**Push** (`push.py`): `rsync -t --timeout=60 <files> $WB_CELLS_PUSH_TARGET/`.
+A live frame (≤ 15 min old) is pushed the moment its display file is written,
+before scoring and before the EUMETSAT downloads (#666); at the end of every
+tick a batch push over the lookback is the retry path and takes catch-up
+frames (one rsync, not one per frame).  Only each frame's **newest revision**
+is a candidate; the sent set lives in `state.json` as display keys (`pushed`:
+`<stamp>` or `<stamp>.r<n>`, pruned to the lookback by the batch call;
+`last_push`, `push_error`).  A pre-#666 state file reads as "r0 sent".
+**Off when unset** — the MacBook never pushes unless asked.  A failure (exit
+code, 120 s timeout, rsync missing) is logged and retried next tick; it never
+raises.  Explicit file lists, not the directory: the home node keeps every
+display file and the droplet purges at 24 h, so a directory rsync would grow
+with the archive and re-send purged files.  Plain flags only (macOS ships an
+old rsync / openrsync).  SSH auth comes from the node's `~/.ssh/config`.
 
-**Latency choice: publish once, with lightning — `ATTRIBUTE_WAIT` unchanged
-(15 min).**  Measured by the owner on the mini (2026-10-03): the 21:00Z
-frame was analysed at 21:10Z (radar lands ~4 min after its slot, then the
-wait for the matching RATE/LI slot; the LI slot for HH:00 covers HH:00–HH:10
-so it cannot land before HH:10).  Frames at :05 share their predecessor's LI
-slot, so latency alternates ~10/~5 min.  Not shortened, and no
-"publish without lightning, re-publish later": a re-analysis would change a
-catalogue the next frame already used as its lineage predecessor, and the
-droplet's stale threshold (25 min, `cells_display.STALE_AFTER`) absorbs a
-10–15 min feed.  The LI lag itself was not re-measured here; `runs/` rows
-(`processed_at` vs `valid_time`) give it on the mini.
+## Latency (#666)
+
+Measured on the mini before #666 (2026-10-04, 89 frames): DBZH on S3 at
++4.2 min, in the loop at +4.9 (4-min lag + 60 s tick), analysis held for
+RATE (+10.1) or LI to +6.1 median / +10.9 p90, 7–8 s compute, push after the
+EUMETSAT downloads, droplet ingest every 30 s.  Target ~4.5 min, median and
+p90.  What changed, and the budget each step now has:
+
+| step | now | was |
+|---|---|---|
+| DBZH in hand | +4.2–4.4 (10-s poll from +4.0) | +4.9–5.0 (60-s tick) |
+| wait for attributes | none | RATE/LI, up to 15 min |
+| compute to display file | target ≤ 3 s (unmeasured on the mini) | 7–8 s |
+| push | right after the display file | after EUMETSAT (~20 s each) |
+| droplet ingest | ≤ 5 s | ≤ 30 s |
+
+**Rain rate is not waited for.**  The :00/:05 frames' RATE slot lands at
++10.1, after them; they take the previous one (15–20 min older than the
+radar) and say so (`rate_age_min`, `times.rate`).  The web popup prints the
+rain rate "as of HH:MMZ" whenever it is not the radar's time.  Never amended:
+a rain rate 15 min old is a fair "as of" value, and amending it too would
+double the revisions.
+
+**Lightning: publish on radar, amend when LI lands** (`amend_lightning`, every
+tick after the EUMETSAT collection).  For each frame of the last 30 min
+(`LI_AMEND_WINDOW`, so a late LI backfill does not rewrite history) whose
+catalogue says `lightning: no lightning frame for this slot` and whose LI
+slot is now on disk: flash counts are recomputed on the frame's own
+detections (decoded again *outside* the frame cache, so the next radar
+frame's predecessor is not evicted), and the catalogue is rewritten with
+`flashes`, the cell's own history entry, its `trend` (incl. `d_flashes`) and
+`inputs.eumetsat_li`.  Then a **new display revision** `<stamp>.r1.json.gz`
+is written and pushed.  An unreadable LI frame replaces the reason (so it is
+not retried every tick) and writes no revision.
+
+**Revisions, not rewrites.**  The droplet serves each display file as
+immutable (#660 review), so an amend never changes bytes under an old name:
+r0 stays, r1 is a new file, and the listing points at the newest (droplet
+side: `cells-overlay.md`).  Bounded at `MAX_DISPLAY_REVISION` = 9; in practice
+one (only lightning is amended).
+
+**Lineage / trend consistency — the choice.**  The next frame is usually
+analysed before the previous frame's lightning lands, so it copies a history
+entry with `flashes: null`.  Successors' published files are **not** patched
+(that would cascade a revision through every later frame).  Instead every
+frame, when analysed *or amended*, fills `null` history flashes from the
+catalogue of the entry's own frame, by (time, id) — a history only ever
+holds its own id's earlier entries (`fill_history_flashes`, cached in
+`FrameCache`).  So each frame's own amend gives it a complete history and a
+real `d_flashes`; between r0 and r1 `d_flashes` is `null` (the trend already
+tolerates that).  A no-op in replay.
+
+**Not bumped: `CellPolicy.name` stays `cells-2`.**  Detection, motion and
+lineage numbers are unchanged (compute changes are numerically equivalent,
+below); the RATE choice is per catalogue in `inputs`.  Bumping would restart
+every storm's lineage for no change in the cells.
+
+**Compute.**  `masked_ncc` transforms each of its six inputs once and does
+one inverse per product (12 real FFTs instead of `fftconvolve`'s 18; same
+`next_fast_len` sizes and crop — bit-identical on a synthetic 2000² pair);
+the tile loop runs on a thread pool (`WB_CELLS_FLOW_THREADS`, default 4),
+deterministic because each tile writes its own slot.  Per-cell peaks come
+from `np.maximum.at` over the labelled pixels already in hand, not
+`ndimage.maximum` (which argsorts the grid).  Scoring runs after the push.
+Measured only in a 4-vCPU cloud sandbox on a synthetic 2000 × 2000 pair:
+flow 15.0 s → 10.2 s (1 thread) / 7.1 s (2) / **11.2 s (4: oversubscribed)**;
+detection 3–4.5× faster.  The mini's numbers are the acceptance test.
 
 ## Portability (macOS arm64 now, Linux possible)
 
 numpy / `scipy.ndimage` / `scipy.fft` only — no OpenCV, no source builds, no
-process pools (macOS spawns, Linux forks).  `ru_maxrss` is bytes on macOS and
+process pools (macOS spawns, Linux forks); the flow tiles use a *thread*
+pool (pocketfft releases the GIL).  `ru_maxrss` is bytes on macOS and
 KiB on Linux (`runner.peak_rss_mb`).  Linear-algebra results may differ in the
 last digits between Accelerate and OpenBLAS; the golden test
 (`tests/observed/test_cells_golden.py`, `WB_CELLS_GOLDEN_DIR`) compares with
@@ -424,6 +503,13 @@ motion variant the map shows (#662).  Every one is in `policy.py`.
 - First frame after a gap has no motion (`no_pair`) and starts fresh lineage.
 - A frame filled in late by a sweep is analysed after its successor; its
   successor's lineage is not recomputed.  `replay` is the fix.
+- `cells/display/` holds every revision (`<stamp>.json.gz`, `<stamp>.r1.json.gz`);
+  the nightly pack globs by stamp prefix, so both travel together.
+- A frame whose own LI landed in time but whose predecessor's did not (LI
+  out of order) is never amended, so a `null` history entry can survive
+  there; `d_flashes` is then `null`, never wrong.
+- The tight poll's probe is a `collect_opera` with `warn_if_empty=False`
+  (one not-yet-published slot is a 404 by design).
 
 ## Numbers
 

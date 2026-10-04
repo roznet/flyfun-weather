@@ -87,6 +87,10 @@ export interface CellDisplay {
   valid_time: string;
   window_minutes: number | null;
   times: { radar: string | null; rate: string | null; lightning: string | null; cloud_top: string | null };
+  /** How much older the rain rate is than the radar (#666: newest on disk). */
+  rate_age_min?: number | null;
+  /** 0 when first published; 1 once its lightning landed (#666). */
+  revision?: number;
   unavailable: Array<{ what: string; reason: string }>;
   rain_min_area_km2: number;
   arrow_minutes: number;
@@ -96,9 +100,28 @@ export interface CellDisplay {
 
 export interface CellFrame {
   stamp: string;
+  /** `<stamp>.r<n>`, the newest revision (#666); absent on an older server. */
+  key?: string;
+  revision?: number;
   valid_time: string;
   received_at: string;
   age_minutes: number;
+}
+
+/** What goes into `url_template`'s `{stamp}`: the frame's newest revision
+ *  (immutable, so a cache by URL can never hold an older one), or the bare
+ *  stamp on a server from before revisions. */
+export function frameKey(frame: CellFrame): string {
+  return frame.key ?? frame.stamp;
+}
+
+/** The rain rate's own time when it is not the radar's (#666: the newest
+ *  RATE on disk is used rather than waiting for the frame's slot), else null. */
+export function rateAsOf(display: CellDisplay | null | undefined): string | null {
+  const rate = display?.times?.rate;
+  const radar = display?.times?.radar;
+  if (!rate || !radar) return null;
+  return new Date(rate).getTime() === new Date(radar).getTime() ? null : rate;
 }
 
 /** `/api/observed/cells/frames`. */
@@ -222,12 +245,13 @@ function value(v: number | null | undefined, unit = ''): string {
 
 /** Popup for one cell: measurements, age and lineage, trend with its numbers,
  *  motion. Descriptive only. */
-export function cellPopupHtml(c: DisplayCell): string {
+export function cellPopupHtml(c: DisplayCell, rateTime: string | null = null): string {
   const tier = (TIER_LABEL as Record<string, string>)[c.tier] ?? c.tier;
+  const asOf = rateTime && c.rate_peak_mm_h != null ? ` (as of ${hhmmZ(rateTime)})` : '';
   const lines = [
     `<b>${escapeHtml(tier)}</b> <span class="cells-exp">experimental</span>`,
     `peak <b>${value(c.peak_dbz, ' dBZ')}</b> · area ${value(c.area_km2, ' km²')}`,
-    `rain rate peak ${value(c.rate_peak_mm_h, ' mm/h')} · lightning ${value(c.flashes)}`
+    `rain rate peak ${value(c.rate_peak_mm_h, ' mm/h')}${asOf} · lightning ${value(c.flashes)}`
       + (c.top_fl != null ? ` · cloud top FL${c.top_fl}` : ''),
     `age ${value(c.age_min, ' min')} (${escapeHtml(c.event ?? '')}) · ${escapeHtml(trendText(c.trend))}`,
     escapeHtml(motionText(c.motion)),

@@ -11,9 +11,9 @@
 
 ```
 home node  cells/display/<stamp>.json.gz ──rsync──▶ CELLS_INBOX_DIR (HOST_CELLS_INBOX)
-droplet    run_cells_ingest_loop (30 s): validate → DATA_DIR/observed/cells/display/  (24 h)
-API        GET /api/observed/cells/frames            stamps newest first + stale state
-           GET /api/observed/cells/{stamp}.json[?south&west&north&east]
+droplet    run_cells_ingest_loop (5 s): validate → DATA_DIR/observed/cells/display/  (24 h)
+API        GET /api/observed/cells/frames            frames newest first (+ key of newest revision) + stale state
+           GET /api/observed/cells/{key}.json[?south&west&north&east]   key = <stamp>.r<n>
 web        visualization/cells-overlay.ts            one renderer, two maps (Now tab, route map)
 ```
 
@@ -42,9 +42,28 @@ filename's stamp, `cells` list / `outlines` dict.  Bad files go to
 temp files are never touched.  Read re-validates (cached by path+mtime+size,
 8 entries) so a hand-copied file cannot reach a browser unchecked.
 Any `policy_version` is accepted — the overlay shows what the node ran.
-**A stamp is written once**: an identical re-push is dropped, different bytes for
-a stored stamp go to `rejected/` (the per-stamp response is `immutable`, so the
-first copy must stay the only one). `rejected/` is pruned after 24 h.
+**A revision is written once**: an identical re-push is dropped, different bytes
+for a stored revision go to `rejected/` (each revision's response is
+`immutable`, so the first copy must stay the only one). `rejected/` is pruned
+after 24 h.
+
+**Revisions (#666).**  The node publishes a frame before its lightning lands
+and re-issues it as `<stamp>.r1.json.gz` when it does (`observed-cells.md`,
+"Latency").  Chosen over a separate lightning file (one more fetch and overlay
+rule on both clients) and over a short-lived per-stamp response (loses the
+caching guarantee).  The store keeps every revision (r0 is the pre-#666 name,
+`<stamp>.json.gz`; the file must say `revision` = its name's, absent = 0); the
+listing has one entry per frame with `key` = `<stamp>.r<n>` of the newest,
+`revision`, `received_at` of that revision and `first_received_at` of r0.
+`GET /cells/<stamp>.r<n>.json` serves exactly that revision, `immutable`
+(410 if not stored).  A **bare** `GET /cells/<stamp>.json` — clients from
+before #666 — serves the newest revision with `no-cache`.  Clients key their
+display caches by URL and take the URL from the listing's `key`, so once the
+listing shows r1 no client can serve r0 for that stamp; an older client's
+in-memory cache can hold r0 until its listing refresh, by design.
+**Deploy the droplet before the node**: a pre-#666 droplet leaves
+`.r1` files in the inbox untouched (not stamp-named) — harmless, but they
+pile up there until it is upgraded.
 
 **Retention 24 h, by valid time** (agreed on the issue, 2026-10-04):
 ~150 KB × 288 ≈ 43 MB.  Longer than radar's 3 h, so a future loop over past
@@ -52,13 +71,16 @@ overlays is not cut short.  `received_at` is the store file's mtime (the
 ingest time).
 
 **Stale after 25 min of the overlay's own age** (`STALE_AFTER`) — a
-departure from the issue's "~15 min".  The node publishes a frame ~5–10 min
-after its valid time (up to ~15+ if lightning is late, `ATTRIBUTE_WAIT`), and
-a new one every 5 min, so a healthy feed is routinely 10–15 min old: a
-15-min threshold would flicker "unavailable" on a working feed.  With 25, a
-stopped loop reads unavailable ~10–15 min after its last push, which is the
-acceptance criterion.  One constant; the listing ships it
+departure from the issue's "~15 min".  Set when the node published ~5–15 min
+after valid time; since #666 it targets ~4.5 min, so a healthy feed is ~5–10
+min old.  Kept at 25 (not tightened in #666) so a provider hiccup of a frame
+or two does not blank the overlay; a stopped loop reads unavailable ~15–20
+min after its last push.  One constant; the listing ships it
 (`stale_after_minutes`) so clients do not hard-code it.
+
+**Ingest every 5 s** (#666; was 30 s, up to 30 s of a ~4.5-min budget): the
+inbox scan is a listing of a handful of names.  The purges, which list the
+whole 24-h store, run once a minute.
 
 **Disabled is an answer, not a 404.**  `GET /cells/frames` returns
 `{"enabled": false, …}` without `WB_CELLS_INGEST_ENABLED`, so the Cells
@@ -85,7 +107,10 @@ badge gets its own line with the overlay's own time.  Never a shared "as of".
   `#f18f01`, new white — evolution, not safety; unknown states grey),
   outline styles (core35 white, core41 black, rain20 grey), `matchCellFrame`
   (the stamp rule above + the stale threshold from the listing),
-  `cellsBadge`, popup / legend wording.  Withheld motion reads
+  `cellsBadge`, popup / legend wording, `frameKey` (the URL key: newest
+  revision, else the bare stamp on an older server), `rateAsOf` (the popup's
+  rain rate reads "as of HH:MMZ" when its time is not the radar's — #666
+  takes the newest RATE on disk rather than waiting for the slot).  Withheld motion reads
   "split/merge this frame", unsupported "too little of the cell in matched
   tiles"; `truncated` reads "partly outside radar coverage".
 - `visualization/cells-overlay.ts`: `CellsLayer` (fetch listing with a 60 s
@@ -126,6 +151,10 @@ element by element (a malformed cell is dropped, not the overlay). The list
 names a cell's position by the nearest route waypoint ("20 NM NE of LFPN"), a
 label only: off-track/abeam geometry stays the planned server-side step.
 `requestDataURL`, not `requestData`, so the bbox query survives.
+Paths use `CellFrame.displayKey` (#666, the newest revision; the bare stamp
+on an older server), so the 6-entry path cache never holds a superseded
+revision.  Not ported yet: the web's rain-rate "as of HH:MMZ" in the cell
+callout and the Observed tab list.
 
 ## Gotchas
 

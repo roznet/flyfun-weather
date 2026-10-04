@@ -17,22 +17,43 @@ enough coverage and echo to match on, a correlation peak above ``min_ncc``,
 and forward/reverse agreement (matching later→earlier must give the opposite
 shift to within ``max_reciprocity_px``).
 
-Pure numpy/scipy (``scipy.signal.fftconvolve``), no OpenCV, no process pool —
-identical on macOS and Linux.
+Pure numpy/scipy (``scipy.fft``), no OpenCV, no process pool — identical on
+macOS and Linux.  The six correlations of one match share their forward
+transforms (12 FFTs instead of ``fftconvolve``'s 18, #666), and the tiles run
+on a thread pool: pocketfft releases the GIL, and every tile is independent,
+so the result does not depend on the thread count or the order tiles finish.
 """
 
 from __future__ import annotations
 
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.signal import fftconvolve
+from scipy import fft as sp_fft
 
 from ..frames import GridFrame
 from .policy import CellPolicy, px
 
 KT_TO_MS = 0.514444
+
+# Threads for the tile loop.  Not in CellPolicy: it changes how fast, never
+# what (each tile is independent and lands in its own slot).  Threads, never a
+# process pool — macOS spawns and Linux forks, and the loop must run the same
+# on both.  Default 4 (the M4 mini's performance cores): oversubscribing is
+# *slower* — in a 4-vCPU cloud sandbox 2 threads took 7.1 s, 4 took 11.2 s and
+# 1 took 10.2 s on the same synthetic pair — so measure before raising it.
+FLOW_THREADS_ENV = "WB_CELLS_FLOW_THREADS"
+DEFAULT_FLOW_THREADS = 4
+
+
+def flow_threads() -> int:
+    raw = os.environ.get(FLOW_THREADS_ENV, "").strip()
+    if raw:
+        return max(1, int(raw))
+    return max(1, min(DEFAULT_FLOW_THREADS, os.cpu_count() or 1))
 
 
 @dataclass
@@ -77,10 +98,6 @@ def search_radius_px(policy: CellPolicy, pair_minutes: float, pixel_km: float) -
     return int(math.ceil(reach_km / pixel_km)) + 1
 
 
-def _xcorr(image: np.ndarray, template: np.ndarray) -> np.ndarray:
-    return fftconvolve(image, template[::-1, ::-1], mode="valid")
-
-
 def masked_ncc(
     image: np.ndarray,
     image_mask: np.ndarray,
@@ -95,6 +112,12 @@ def masked_ncc(
     the correlation with the template's top-left corner at ``(i, j)``.  Only
     pixels valid in *both* masks contribute.  NaN where the overlap is too
     small or either side has no variance.
+
+    The six cross-correlations pair three image-side arrays (mask, masked
+    image, its square) with three template-side ones; each array is
+    transformed once and every product needs a single inverse — 12 real FFTs
+    where six ``fftconvolve`` calls would take 18.  Same sizes
+    (``next_fast_len``) and the same valid-mode crop as ``fftconvolve``.
     """
     image = np.asarray(image, dtype=np.float64)
     template = np.asarray(template, dtype=np.float64)
@@ -102,12 +125,30 @@ def masked_ncc(
     t_m = template_mask.astype(np.float64)
     f1 = image * f_m
     t1 = template * t_m
-    overlap = _xcorr(f_m, t_m)
-    sum_f = _xcorr(f1, t_m)
-    sum_f2 = _xcorr(f1 * image, t_m)
-    sum_t = _xcorr(f_m, t1)
-    sum_t2 = _xcorr(f_m, t1 * template)
-    sum_ft = _xcorr(f1, t1)
+
+    s1, s2 = image.shape, template.shape
+    full = [a + b - 1 for a, b in zip(s1, s2)]
+    fshape = [sp_fft.next_fast_len(n, True) for n in full]
+    valid = tuple(slice(b - 1, a) for a, b in zip(s1, s2))
+
+    def fwd(a: np.ndarray) -> np.ndarray:
+        return sp_fft.rfft2(a, fshape)
+
+    def tfwd(a: np.ndarray) -> np.ndarray:
+        # Correlation = convolution with the flipped template.
+        return sp_fft.rfft2(a[::-1, ::-1], fshape)
+
+    def inv(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        return sp_fft.irfft2(a * b, fshape)[valid]
+
+    F_m, F_1, F_2 = fwd(f_m), fwd(f1), fwd(f1 * image)
+    T_m, T_1, T_2 = tfwd(t_m), tfwd(t1), tfwd(t1 * template)
+    overlap = inv(F_m, T_m)
+    sum_f = inv(F_1, T_m)
+    sum_f2 = inv(F_2, T_m)
+    sum_t = inv(F_m, T_1)
+    sum_t2 = inv(F_m, T_2)
+    sum_ft = inv(F_1, T_1)
 
     min_overlap = min_overlap_fraction * template_mask.sum()
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -164,7 +205,8 @@ def _match(
 
 
 def estimate_flow(
-    earlier: GridFrame, later: GridFrame, policy: CellPolicy, pair_minutes: float
+    earlier: GridFrame, later: GridFrame, policy: CellPolicy, pair_minutes: float,
+    *, threads: int | None = None,
 ) -> FlowField:
     if earlier.values.shape != later.values.shape or earlier.window != later.window:
         raise ValueError("flow needs two windows of the same grid")
@@ -189,8 +231,9 @@ def estimate_flow(
     dr = np.full((n_i, n_j), np.nan)
     dc = np.full((n_i, n_j), np.nan)
     score = np.full((n_i, n_j), np.nan)
-    tried = matched = 0
 
+    # The cheap gates first, serially; the matches are what the pool is for.
+    candidates = []
     for i in range(n_i):
         r0 = i * stride
         for j in range(n_j):
@@ -200,26 +243,43 @@ def estimate_flow(
                 continue
             if (f0[r0:r0 + tile, c0:c0 + tile] >= echo_level).mean() < policy.min_tile_echo_fraction:
                 continue
-            tried += 1
-            fwd = _match(f0, cov0, f1p, cov1p, r0, c0, tile, radius)
-            if fwd is None or fwd[2] < policy.min_ncc:
-                continue
-            # Reverse: the later frame's tile near the matched position,
-            # searched for in the earlier frame, must come back by the opposite
-            # shift.  Clamped into the grid so an edge tile moving outward is
-            # still checked (motion is locally uniform, so where the reverse
-            # tile sits does not change the expected answer: fwd + rev ≈ 0).
-            rr = min(max(int(round(r0 + fwd[0])), 0), ny - tile)
-            rc = min(max(int(round(c0 + fwd[1])), 0), nx - tile)
-            rev = _match(f1, cov1, f0p, cov0p, rr, rc, tile, radius)
-            if rev is None or rev[2] < policy.min_ncc:
-                continue
-            if math.hypot(fwd[0] + rev[0], fwd[1] + rev[1]) > policy.max_reciprocity_px:
-                continue
-            dr[i, j] = fwd[0]
-            dc[i, j] = fwd[1]
-            score[i, j] = fwd[2]
-            matched += 1
+            candidates.append((i, j))
+
+    def match_tile(ij: tuple[int, int]) -> tuple[float, float, float] | None:
+        r0, c0 = ij[0] * stride, ij[1] * stride
+        fwd = _match(f0, cov0, f1p, cov1p, r0, c0, tile, radius)
+        if fwd is None or fwd[2] < policy.min_ncc:
+            return None
+        # Reverse: the later frame's tile near the matched position,
+        # searched for in the earlier frame, must come back by the opposite
+        # shift.  Clamped into the grid so an edge tile moving outward is
+        # still checked (motion is locally uniform, so where the reverse
+        # tile sits does not change the expected answer: fwd + rev ≈ 0).
+        rr = min(max(int(round(r0 + fwd[0])), 0), ny - tile)
+        rc = min(max(int(round(c0 + fwd[1])), 0), nx - tile)
+        rev = _match(f1, cov1, f0p, cov0p, rr, rc, tile, radius)
+        if rev is None or rev[2] < policy.min_ncc:
+            return None
+        if math.hypot(fwd[0] + rev[0], fwd[1] + rev[1]) > policy.max_reciprocity_px:
+            return None
+        return fwd
+
+    threads = flow_threads() if threads is None else max(1, threads)
+    if threads > 1 and len(candidates) > 1:
+        with ThreadPoolExecutor(max_workers=threads, thread_name_prefix="cells-flow") as pool:
+            results = list(pool.map(match_tile, candidates))
+    else:
+        results = [match_tile(ij) for ij in candidates]
+
+    matched = 0
+    for (i, j), fwd in zip(candidates, results):
+        if fwd is None:
+            continue
+        dr[i, j] = fwd[0]
+        dc[i, j] = fwd[1]
+        score[i, j] = fwd[2]
+        matched += 1
+    tried = len(candidates)
 
     return FlowField(
         pair_minutes=float(pair_minutes),

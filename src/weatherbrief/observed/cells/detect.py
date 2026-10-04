@@ -101,9 +101,12 @@ def detect(frame: GridFrame, tier: TierPolicy) -> TierDetection:
     m_cc = np.bincount(lab, weights=dc * dc, minlength=n + 1) / np.maximum(area, 1)
     m_rc = np.bincount(lab, weights=dr * dc, minlength=n + 1) / np.maximum(area, 1)
 
-    filled = np.where(labels > 0, values, np.float32(-np.inf)).astype(np.float32, copy=False)
-    peaks = ndimage.maximum(filled, labels, index=np.arange(1, n + 1))
-    peaks = np.atleast_1d(np.asarray(peaks, dtype=np.float64))
+    # Per-cell maximum over the labelled pixels already in hand.  Not
+    # ndimage.maximum over labels: it argsorts the whole grid (~0.9 s a frame
+    # at 3800 × 4400, #666).  Exact either way — a max has no rounding.
+    peak = np.full(n + 1, -np.inf, dtype=np.float32)
+    np.maximum.at(peak, lab, np.asarray(values[rows, cols], dtype=np.float32))
+    peaks = peak[1:].astype(np.float64)
 
     # Truncation: touches nodata (8-neighbourhood) or the window edge.
     near_nodata = ndimage.binary_dilation(np.asarray(frame.nodata), structure=_STRUCTURE)
