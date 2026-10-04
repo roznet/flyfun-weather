@@ -850,7 +850,7 @@ def _run_retention_once() -> None:
         from weatherbrief.fetch.grib.cache import purge_old_runs
 
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
-        for model in ("gfs", "icon-eu", "icon-d2", "hrrr"):
+        for model in ("gfs", "icon-eu", "icon-d2", "hrrr", "arome"):
             removed = purge_old_runs(data_dir, model=model, enforce_cap=True)
             if removed:
                 logger.info("Purged %d old %s GRIB cache dirs", removed, model)

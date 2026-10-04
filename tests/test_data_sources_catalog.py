@@ -51,8 +51,10 @@ class TestStaticFields:
         # Control BOTH axes — see the sibling test in test_freshness_sources.
         monkeypatch.delenv("WB_OBSERVED_SOURCES", raising=False)
         monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+        monkeypatch.delenv("WB_AROME_ENABLED", raising=False)  # arome:mf (#529)
         assert not ({e.key for e in catalog.build(store=fresh_store)} & set(gated))
         monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+        monkeypatch.setenv("WB_AROME_ENABLED", "1")
         assert set(gated) <= {e.key for e in catalog.build(store=fresh_store)}
 
     def test_descriptive_fields_populated_for_every_entry(self, fresh_store):

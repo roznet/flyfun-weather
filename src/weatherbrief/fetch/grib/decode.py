@@ -46,6 +46,8 @@ _VAR_MAP = {
     "qr": "rain_water_kg_kg",             # ICON-D2 rain water
     "qs": "snow_water_kg_kg",             # ICON-D2 snow
     "qg": "graupel_water_kg_kg",          # ICON-D2 graupel
+    "crwc": "rain_water_kg_kg",           # AROME rain water (#529)
+    "cswc": "snow_water_kg_kg",           # AROME snow water (#529)
     "clwc": "cloud_liquid_water_kg_kg",   # ECMWF IFS cloud liquid water content
     "ciwc": "ice_mixing_ratio_kg_kg",     # ECMWF IFS cloud ice water content
     "cc": "cloud_area_fraction_pct",      # ECMWF IFS cloud cover (0–1 fraction, ×100 in decode)
@@ -2280,6 +2282,215 @@ def d2_corridor_fully_valid(
         if all_cells is None or cells.size != all_cells.size or cells.size == 0:
             return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Météo-France AROME 0.025° condensate (#529)
+# ---------------------------------------------------------------------------
+
+# Standard eccodes shortNames in the IP2 package. clwc/ciwc/cc are the same
+# names the ECMWF path decodes; crwc/cswc are ICE3's rain and snow.
+_AROME_SHORTNAME_MAP: dict[str, str] = {
+    "clwc": "cloud_liquid_water_kg_kg",
+    "ciwc": "ice_mixing_ratio_kg_kg",
+    "crwc": "rain_water_kg_kg",
+    "cswc": "snow_water_kg_kg",
+    "cc": "cloud_area_fraction_pct",
+}
+
+# Météo-France LOCAL parameters, which eccodes reports as ``unknown`` and
+# which are therefore selected by (discipline, parameterCategory,
+# parameterNumber) — the HRRR CIMIXR technique. (0, 1, 201) is graupel: ICE3
+# carries exactly five prognostic condensate species, and IP2 holds exactly
+# clwc + ciwc + crwc + cswc + one unknown in category 1 (moisture). The
+# reflectivity parameters (0, 16, 192/193) live in other packages and are not
+# fetched (#529 defers them).
+_AROME_LOCAL_PARAM_MAP: dict[tuple[int, int, int], str] = {
+    (0, 1, 201): "graupel_water_kg_kg",
+}
+
+AROME_CONDENSATE_FIELDS: frozenset[str] = frozenset({
+    "cloud_liquid_water_kg_kg",
+    "ice_mixing_ratio_kg_kg",
+    "rain_water_kg_kg",
+    "snow_water_kg_kg",
+    "graupel_water_kg_kg",
+})
+
+# Upper bound on a believable mixing ratio, kg/kg. Real condensate peaks
+# around 5e-3 in deep convection; a field whose domain maximum exceeds this
+# is almost certainly in g/kg (or mis-identified), so the message is dropped
+# rather than stored 1000× too large. Missing data, not wrong data.
+_AROME_CONDENSATE_MAX_KG_KG = 0.02
+
+
+def _arome_field_for_message(gid) -> str | None:
+    import eccodes
+
+    short = str(eccodes.codes_get(gid, "shortName")).lower()
+    field = _AROME_SHORTNAME_MAP.get(short)
+    if field is not None:
+        return field
+    try:
+        key = (
+            int(eccodes.codes_get(gid, "discipline")),
+            int(eccodes.codes_get(gid, "parameterCategory")),
+            int(eccodes.codes_get(gid, "parameterNumber")),
+        )
+    except Exception:
+        return None
+    return _AROME_LOCAL_PARAM_MAP.get(key)
+
+
+def _arome_message_end_step_h(gid) -> int | None:
+    """Forecast hour of an instantaneous AROME message, or None."""
+    import eccodes
+
+    try:
+        eccodes.codes_set(gid, "stepUnits", 1)  # hours
+    except Exception:
+        pass
+    try:
+        return int(eccodes.codes_get(gid, "endStep"))
+    except Exception:
+        return None
+
+
+def decode_arome_pressure_per_point(
+    file_path: Path,
+    fhours: list[int],
+    latitudes: list[float],
+    longitudes: list[float],
+    levels: list[int] | None = None,
+) -> dict:
+    """Decode AROME IP2 condensate for the requested hours, per route point.
+
+    Reads the group file one message at a time with eccodes (a 146 MB group
+    decoded whole through cfgrib would be ~2.8 GB of float arrays). Messages
+    for other hours, levels or fields are skipped before their values are
+    unpacked.
+
+    A point whose bilinear stencil touches a missing cell gets NO value for
+    that message — that is the authoritative domain check behind the band
+    table, and the caller fails the slot on it.
+
+    ``cc`` units: eccodes calls the parameter a 0–1 fraction, but whether MF
+    packs fraction or percent was not verifiable. The decision is made once
+    per file from the largest ``cc`` value anywhere in it: ≤ 1.5 is a
+    fraction (×100), above is already percent. Per-message would misread a
+    nearly-clear stratospheric level in percent (max 0.8 %) as a fraction.
+
+    Returns:
+        ``{"points": {fhour: [{pressure_hpa: {field: value}}, ...]},
+        "finite_fraction": float | None, "cc_scale": float | None,
+        "dropped": [str, ...]}``.
+    """
+    import numpy as np
+
+    wanted_hours = set(int(h) for h in fhours)
+    wanted_levels = set(int(lv) for lv in levels) if levels else None
+    n_points = len(latitudes)
+    points: dict[int, list[dict[int, dict[str, float]]]] = {
+        h: [{} for _ in range(n_points)] for h in wanted_hours
+    }
+    # cc collected raw, scaled once the file-wide maximum is known.
+    cc_raw: list[tuple[int, int, int, float]] = []
+    cc_max = -math.inf
+    finite_fraction: float | None = None
+    dropped: list[str] = []
+    weights_cache: dict[tuple, object] = {}
+    targets_lat = np.asarray(latitudes, dtype=np.float64)
+    targets_lon = np.asarray(longitudes, dtype=np.float64)
+
+    import eccodes
+
+    with open(file_path, "rb") as f:
+        while True:
+            gid = eccodes.codes_grib_new_from_file(f)
+            if gid is None:
+                break
+            try:
+                if str(eccodes.codes_get(gid, "typeOfLevel")) != "isobaricInhPa":
+                    continue
+                fhour = _arome_message_end_step_h(gid)
+                if fhour is None or fhour not in wanted_hours:
+                    continue
+                level = int(eccodes.codes_get(gid, "level"))
+                if wanted_levels is not None and level not in wanted_levels:
+                    continue
+                field = _arome_field_for_message(gid)
+                if field is None:
+                    continue
+                grid = _d2_read_message_grid(gid)
+                if grid is None:
+                    continue
+                lats_axis, lons_axis, values = grid
+
+                if finite_fraction is None:
+                    finite_fraction = float(np.isfinite(values).mean())
+
+                gkey = (
+                    values.shape, float(lats_axis[0]), float(lats_axis[-1]),
+                    float(lons_axis[0]), float(lons_axis[-1]),
+                )
+                bw = weights_cache.get(gkey)
+                if bw is None:
+                    bw = _bilinear_grid_weights(
+                        lats_axis, lons_axis, targets_lat, targets_lon,
+                    )
+                    weights_cache[gkey] = bw
+                if bw is None or bw.inb_idx.size == 0:
+                    continue
+
+                if field in AROME_CONDENSATE_FIELDS:
+                    vmax = float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
+                    if vmax > _AROME_CONDENSATE_MAX_KG_KG:
+                        dropped.append(f"{field}@{level}hPa/f{fhour:03d} max={vmax:.4g}")
+                        continue
+                elif field == "cloud_area_fraction_pct" and np.isfinite(values).any():
+                    cc_max = max(cc_max, float(np.nanmax(values)))
+
+                interp = (
+                    bw.w00 * values[bw.i0, bw.j0]
+                    + bw.w01 * values[bw.i0, bw.j1]
+                    + bw.w10 * values[bw.i1, bw.j0]
+                    + bw.w11 * values[bw.i1, bw.j1]
+                )
+                hour_points = points[fhour]
+                for k, pt_idx in enumerate(bw.inb_idx):
+                    v = float(interp[k])
+                    if math.isnan(v):
+                        continue
+                    if field == "cloud_area_fraction_pct":
+                        cc_raw.append((fhour, int(pt_idx), level, v))
+                        continue
+                    # Interpolation can't create negatives from non-negative
+                    # corners, but packing noise can; a mixing ratio is >= 0.
+                    hour_points[int(pt_idx)].setdefault(level, {})[field] = max(v, 0.0)
+            finally:
+                eccodes.codes_release(gid)
+
+    cc_scale: float | None = None
+    if cc_raw:
+        cc_scale = 100.0 if cc_max <= 1.5 else 1.0
+        for fhour, pt_idx, level, v in cc_raw:
+            pct = min(max(v * cc_scale, 0.0), 100.0)
+            points[fhour][pt_idx].setdefault(level, {})["cloud_area_fraction_pct"] = pct
+
+    if dropped:
+        logger.warning(
+            "AROME %s: dropped %d implausible condensate message(s) "
+            "(> %.3g kg/kg — units?), e.g. %s",
+            Path(file_path).name, len(dropped), _AROME_CONDENSATE_MAX_KG_KG,
+            dropped[0],
+        )
+
+    return {
+        "points": points,
+        "finite_fraction": finite_fraction,
+        "cc_scale": cc_scale,
+        "dropped": dropped,
+    }
 
 
 # ---------------------------------------------------------------------------

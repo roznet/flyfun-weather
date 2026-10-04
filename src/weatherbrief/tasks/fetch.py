@@ -226,6 +226,12 @@ def _build_fetch_diagnostics(
             enriched_models = set(grib_init_times.keys())
             skip_reasons = grib_skip_reasons or {}
             grib_capable = {"gfs", "icon"}
+            # meteofrance gains AROME condensate (#529) only where the
+            # deployment has it switched on; elsewhere its missing GRIB is
+            # the expected state, not a warning.
+            from weatherbrief.fetch.grib.arome_fetch import arome_enabled
+            if arome_enabled():
+                grib_capable.add("meteofrance")
             for m in models_fetched:
                 if m in grib_capable and m not in enriched_models:
                     skip_reason = skip_reasons.get(m)

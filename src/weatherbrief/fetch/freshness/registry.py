@@ -278,6 +278,13 @@ _ICON_EU_HORIZON: dict[int, timedelta] = {
 _ICON_D2_OFFSET = timedelta(hours=2)
 _ICON_D2_HORIZON = timedelta(hours=48)
 
+# AROME (#529): 8 runs/day, hourly to 51h. The first 6-hour package group of
+# the 12z run was observed landing at 15:13Z on 2026-07-30; later groups
+# follow it. The readiness probe HEADs the first group, so 3h15m is the
+# expected marker lag. Only active where WB_AROME_ENABLED is set.
+_AROME_OFFSET = timedelta(hours=3, minutes=15)
+_AROME_HORIZON = timedelta(hours=51)
+
 # Open-Meteo offsets — calibrated against meta.json observation 2026-05-03.
 # Open-Meteo republishes other providers' models with notable lag; the figures
 # in issue #108's table (sourced from OM docs) underestimate real delivery.
@@ -417,6 +424,28 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "domain and the flight window is within 48h; otherwise ICON-EU. "
             "No deep-convection scheme: convective base/top and rain_con are "
             "absent by design (see #462 for the native replacements)."
+        ),
+    ),
+    "arome:mf": SourceConfig(
+        key="arome:mf",
+        cycles=(0, 3, 6, 9, 12, 15, 18, 21),
+        delivery_offset=_AROME_OFFSET,
+        horizon=_AROME_HORIZON,
+        readiness_check="arome_mf",
+        env_gate="WB_AROME_ENABLED",
+        model_label="AROME",
+        provider_label="Météo-France",
+        provider_url="https://meteo.data.gouv.fr/datasets/paquets-arome-resolution-0-025deg",
+        role="cloud-enrichment",
+        resolution="0.025° (~2.5 km)",
+        coverage="France and surroundings (~38–55°N, ~10°W–15°E, bowed edges)",
+        pressure_levels=None,
+        description=(
+            "Direct GRIB2 from Météo-France's public AROME 0.025° packages "
+            "(IP2). Patches cloud liquid water, ice, rain, snow, graupel and "
+            "cloud fraction onto the Open-Meteo Météo-France sounding when "
+            "the whole route lies inside the AROME domain and the flight "
+            "window is within 51h. 8 runs/day (every 3h)."
         ),
     ),
     "gfs:openmeteo": SourceConfig(

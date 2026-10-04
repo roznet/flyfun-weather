@@ -217,6 +217,31 @@ def _check_icon_d2_dwd(model: str) -> Observation | None:
     )
 
 
+def _check_arome_mf(model: str) -> Observation | None:
+    """Return the latest AROME run whose first IP2 group responds 200 on HEAD.
+
+    Horizon-agnostic like the ICON checks: with ``cover_until=now`` the
+    run-finder probes the group holding the current hour, which for the
+    freshest publishable run is its first group (#529).
+    """
+    from weatherbrief.fetch.grib.arome_fetch import (
+        find_latest_arome_run_with_response,
+    )
+    now = datetime.now(timezone.utc)
+    result = find_latest_arome_run_with_response(target_time=now, cover_until=now)
+    if result is None:
+        return None
+    init_date, init_hour, resp = result
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    return Observation(
+        init=init,
+        published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+        observed_via=VIA_HTTP_LAST_MODIFIED,
+    )
+
+
 def _parse_last_modified(header: str | None) -> datetime | None:
     """Parse a ``Last-Modified`` HTTP header into an aware UTC datetime.
 
@@ -311,6 +336,7 @@ _DISPATCH = {
     "hrrr_noaa": _check_hrrr_noaa,
     "icon_eu_dwd": _check_icon_eu_dwd,
     "icon_d2_dwd": _check_icon_d2_dwd,
+    "arome_mf": _check_arome_mf,
     "om_meta": _check_om_meta,
     "observed_frames": _check_observed_frames,
 }

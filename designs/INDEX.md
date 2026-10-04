@@ -25,8 +25,8 @@ Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `ge
 → Full doc: fetch.md
 
 ### weather-engine-specs
-GRIB2 enrichment engine and data-source registry: GFS S3 (CLWMR/ICMR + cloud diagnostics patch), HRRR S3 (full-sounding replacement of the gfs slot on CONUS, Lambert grid), ICON-EU/ICON-D2 DWD (model-level sounding replacement, D2 explicit-convection fields, cache-warming economics), ECMWF IFS via ECPDS (pressure-level replacement + a1 surface fields), plus per-model bucket paths, variable reference tables, gap-filling strategy and implementation gotchas.
-Key exports: `plan_byte_ranges`, `find_best_ecmwf_run`, `IconVariant`, `build_hrrr_cloud_diagnostics`, `build_ecmwf_surface_snapshot`, `propagate_all`, `purge_old_runs`, `precache_icon_d2_flights`
+GRIB2 enrichment engine and data-source registry: GFS S3 (CLWMR/ICMR + cloud diagnostics patch), HRRR S3 (full-sounding replacement of the gfs slot on CONUS, Lambert grid), ICON-EU/ICON-D2 DWD (model-level sounding replacement, D2 explicit-convection fields, cache-warming economics), ECMWF IFS via ECPDS (pressure-level replacement + a1 surface fields), Météo-France AROME condensate patch on the meteofrance slot (off unless `WB_AROME_ENABLED`; data-derived domain band table), plus per-model bucket paths, variable reference tables, gap-filling strategy and implementation gotchas.
+Key exports: `plan_byte_ranges`, `find_best_ecmwf_run`, `IconVariant`, `build_hrrr_cloud_diagnostics`, `build_ecmwf_surface_snapshot`, `propagate_all`, `purge_old_runs`, `precache_icon_d2_flights`, `route_in_arome_domain`
 → Full doc: weather-engine-specs.md
 
 ### freshness-markers

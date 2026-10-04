@@ -328,6 +328,8 @@ def test_env_gated_sources_are_not_tracked_until_enabled(monkeypatch):
     # some gated sources off and make this assert for the wrong reason.
     monkeypatch.delenv("WB_OBSERVED_SOURCES", raising=False)
     monkeypatch.delenv("WB_OBSERVED_ENABLED", raising=False)
+    monkeypatch.delenv("WB_AROME_ENABLED", raising=False)  # arome:mf (#529)
     assert not ({s for s, _ in sources.all_tracked_sources()} & gated)
     monkeypatch.setenv("WB_OBSERVED_ENABLED", "1")
+    monkeypatch.setenv("WB_AROME_ENABLED", "1")
     assert gated <= {s for s, _ in sources.all_tracked_sources()}

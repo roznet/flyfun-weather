@@ -158,6 +158,7 @@ def test_all_expected_sources_registered():
         "hrrr:noaa",
         "icon_eu:dwd",
         "icon_d2:dwd",
+        "arome:mf",  # env-gated by WB_AROME_ENABLED (#529)
         "gfs:openmeteo",
         "ecmwf:openmeteo",
         "icon:openmeteo",
