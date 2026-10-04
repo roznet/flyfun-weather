@@ -33,6 +33,16 @@ struct RouteMapView: View {
     @AppStorage("mapForecastOverlayVisible") private var forecastOverlayVisible = true
     @AppStorage("mapForecastMetric") private var forecastMetricRaw = "flight_category"
 
+    // Observed imagery (#654): live radar over satellite IR, as on the web map.
+    /// Frame listings + legends; created on appear from the repository.
+    @State private var observedModel: RouteObservedImageryModel?
+    /// Radar pick: a radar source id, or "" for none. Default reflectivity.
+    @AppStorage("mapObservedOverlay") private var observedPick = ObservedMapImagery.defaultSelection
+    @AppStorage("mapObservedOpacity") private var observedOpacity = ObservedMapImagery.defaultOpacity
+    /// Satellite infrared underlay. On by default: radar over the satellite
+    /// picture is the view pilots know, and radar alone hides where the cloud is.
+    @AppStorage("mapObservedSatellite") private var observedSatellite = true
+
     /// iPad (regular width) drives colour and width from independent metrics.
     private var usesDualMetrics: Bool { horizontalSizeClass == .regular }
 
@@ -78,6 +88,7 @@ struct RouteMapView: View {
             } else {
                 mapContent
                 controls
+                if showsObserved { observedFooter }
             }
         }
         .onChange(of: viewModel.snapshotState.isLoaded) {
@@ -109,6 +120,16 @@ struct RouteMapView: View {
             guard forecastOverlayVisible, let slot = overlaySlot else { return }
             await overlayModel?.ensureSlice(slot)
         }
+        .task(id: observedPollKey) {
+            // Polls only while the map is on screen and something is wanted;
+            // restarts when the wanted set changes.
+            guard showsObserved, !observedPollSources.isEmpty else { return }
+            if observedModel == nil, let repo = appState.repository {
+                observedModel = RouteObservedImageryModel(repository: repo)
+            }
+            await observedModel?.loadLegendsIfNeeded()
+            await observedModel?.poll(observedPollSources)
+        }
     }
 
     // MARK: Map
@@ -133,7 +154,11 @@ struct RouteMapView: View {
             forecastMetric: overlayMetric,
             forecastModel: viewModel.selectedModel,
             showForecastOverlay: forecastOverlayVisible && overlayModelSupported,
-            forecastRevision: overlayModel?.payloadRevision ?? 0
+            forecastRevision: overlayModel?.payloadRevision ?? 0,
+            observedLayers: observedComposition.layers,
+            observedTileFetcher: observedModel?.tileFetcher,
+            observedCorridor: observedCorridor,
+            mutedBaseMap: showsObserved && (!observedRadar.isEmpty || observedSatellite)
         )
         .ignoresSafeArea(edges: .bottom)
     }
@@ -197,6 +222,165 @@ struct RouteMapView: View {
         return slot.key
     }
 
+    // MARK: Observed imagery (#654)
+
+    private var observedConditions: ObservedConditions? {
+        guard case .loaded(let snapshot) = viewModel.snapshotState else { return nil }
+        return snapshot.observedConditions
+    }
+
+    /// Only a briefing that collected observed conditions offers the imagery —
+    /// the same gate as the web's picker.
+    private var showsObserved: Bool { observedConditions?.hasAnyField ?? false }
+
+    private var observedRadarOptions: [String] { ObservedMapImagery.availableRadar(observedConditions) }
+
+    /// The radar source drawn, after falling back from a pick this briefing lacks.
+    private var observedRadar: String {
+        showsObserved ? ObservedMapImagery.resolveSelection(observedPick, available: observedRadarOptions) : ""
+    }
+
+    private var observedPollSources: [String] {
+        (observedRadar.isEmpty ? [] : [observedRadar])
+            + (observedSatellite ? [ObservedMapImagery.satelliteSource] : [])
+    }
+
+    private var observedPollKey: String {
+        showsObserved ? observedPollSources.joined(separator: ",") : "off"
+    }
+
+    private var observedComposition: (layers: [ObservedMapImagery.TileLayerSpec], badges: [String]) {
+        guard showsObserved, let model = observedModel else { return ([], []) }
+        return ObservedMapImagery.compose(
+            selection: observedRadar, showSatellite: observedSatellite,
+            radarOpacity: observedOpacity, frames: model.frames,
+            failed: model.failed, now: model.now)
+    }
+
+    /// The corridor the sampled numbers describe, at the cross-section's pick.
+    private var observedCorridor: ObservedMapImagery.LatLonBox? {
+        guard showsObserved else { return nil }
+        let picked = UserDefaults.standard.double(forKey: CrossSectionViewModel.observedRadiusDefaultsKey)
+        guard let radius = ObservedMapImagery.corridorRadius(observedConditions, picked: picked > 0 ? picked : nil)
+        else { return nil }
+        return ObservedMapImagery.corridorBox(mapVM.routeCoordinates, radiusNm: radius)
+    }
+
+    /// Radar layer (one at a time: different measurements of the same sky),
+    /// satellite underlay toggle, radar opacity.
+    private var observedMenu: some View {
+        Menu {
+            Section("Observed") {
+                observedChoice("None", id: "")
+                ForEach(observedRadarOptions, id: \.self) { source in
+                    observedChoice(ObservedMapImagery.label(for: source), id: source)
+                }
+            }
+            Section {
+                Button {
+                    observedSatellite.toggle()
+                } label: {
+                    if observedSatellite {
+                        Label("Satellite infrared", systemImage: "checkmark")
+                    } else {
+                        Text("Satellite infrared")
+                    }
+                }
+                if !observedRadar.isEmpty {
+                    Menu("Radar opacity \(Int((observedOpacity * 100).rounded()))%") {
+                        ForEach(ObservedMapImagery.opacitySteps, id: \.self) { step in
+                            Button {
+                                observedOpacity = step
+                            } label: {
+                                let text = "\(Int((step * 100).rounded()))%"
+                                if abs(step - observedOpacity) < 0.001 {
+                                    Label(text, systemImage: "checkmark")
+                                } else {
+                                    Text(text)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                Text(observedRadar.isEmpty
+                     ? (observedSatellite ? "Satellite" : "Observed")
+                     : ObservedMapImagery.label(for: observedRadar))
+                Image(systemName: "chevron.down").font(.caption2)
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+        .accessibilityIdentifier("map.observedMenu")
+    }
+
+    private func observedChoice(_ title: String, id: String) -> some View {
+        Button {
+            observedPick = id
+        } label: {
+            if id == observedRadar {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    /// Legend + age badge, on the map itself: they label the picture the pilot
+    /// is looking at. The badge is the only thing on screen that says how old
+    /// an echo is — at 120 kt, minutes are tens of nautical miles.
+    private var observedFooter: some View {
+        let badges = observedComposition.badges
+        let legend = observedRadar.isEmpty ? nil : observedModel?.legends[observedRadar]
+        return VStack {
+            Spacer()
+            if !badges.isEmpty || legend != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let legend, let stops = legend.legend, stops.count >= 2 {
+                        observedLegend(legend, stops: stops)
+                    }
+                    ForEach(badges, id: \.self) { line in
+                        Text(line)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("map.observedBadge")
+            }
+        }
+        .padding(Theme.spacingM)
+        // Clear of MapKit's logo + Legal link, which must stay visible.
+        .padding(.bottom, 24)
+        .allowsHitTesting(false)
+    }
+
+    /// The server's own ramp, ends labelled (a label per stop is unreadable).
+    private func observedLegend(_ status: ObservedImagerySourceStatus, stops: [ObservedLegendStop]) -> some View {
+        HStack(spacing: 6) {
+            Text(ObservedMapImagery.legendValue(stops[0].value, units: nil))
+            HStack(spacing: 0) {
+                ForEach(Array(stops.enumerated()), id: \.offset) { _, stop in
+                    Rectangle()
+                        .fill(Color(uiColor: ObservedMapImagery.color(hex: stop.color) ?? .clear))
+                        .frame(width: 12, height: 6)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+            Text(ObservedMapImagery.legendValue(stops[stops.count - 1].value, units: status.units))
+        }
+        .font(.tabularData(.caption2))
+        .foregroundStyle(Theme.text)
+    }
+
     // MARK: Controls (metric picker(s) · legend · altitude slider)
 
     private var controls: some View {
@@ -206,7 +390,10 @@ struct RouteMapView: View {
                 if usesDualMetrics {
                     metricMenu(title: "Width", systemImage: "lineweight", selection: $widthMetricId)
                 }
+                // Apart from Colour/Width, which style the FORECAST line: this
+                // picks a MEASUREMENT of the real sky.
                 Spacer()
+                if showsObserved { observedMenu }
             }
 
             // Airport-forecast overlay controls — only within the forecast horizon.

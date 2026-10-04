@@ -108,6 +108,14 @@ protocol BriefingRepository: Sendable {
     func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse
     /// What the historical pickers can offer: date range, time step, leads.
     func historicalRange() async throws -> HistoricalRangeResponse
+    // Observed map imagery (#654) — online-only, never cached to disk: the route
+    // map asks for it only while it is on screen.
+    /// Frames a tiled layer can draw (`opera_dbzh`, `opera_rate`, `satellite_ir`), newest first.
+    func observedFrames(source: String) async throws -> ObservedFramesResponse
+    /// Per-source legends (colour stops) for the observed layers.
+    func observedImageryStatus() async throws -> ObservedImageryStatusResponse
+    /// One Web Mercator tile — `path` is a filled-in `tileUrlTemplate`.
+    func observedTile(path: String) async throws -> Data
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
@@ -339,6 +347,19 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func historicalRange() async throws -> HistoricalRangeResponse {
         try await client.request("/api/maps/historical/range")
+    }
+
+    func observedFrames(source: String) async throws -> ObservedFramesResponse {
+        try await client.request("/api/observed/frames/\(source)")
+    }
+
+    func observedImageryStatus() async throws -> ObservedImageryStatusResponse {
+        try await client.request("/api/observed/status")
+    }
+
+    func observedTile(path: String) async throws -> Data {
+        // Quiet: a map pan requests dozens of tiles.
+        try await client.requestData(path, quietLog: true)
     }
 
     /// `2026-09-28T14:30:00Z` — explicit UTC so the server never reads a naive time.

@@ -175,7 +175,8 @@ final class CrossSectionViewModel {
     /// nil → the widest sampled disc, matching the web's default.
     private(set) var observedRadiusNm: Double?
 
-    nonisolated private static let observedRadiusDefaultsKey = "crossSectionObservedRadiusNm"
+    /// Also read by the route map, whose corridor box tracks this pick (#654).
+    nonisolated static let observedRadiusDefaultsKey = "crossSectionObservedRadiusNm"
 
     /// Re-resolve the observed discs at a new corridor width. Cheap: every radius
     /// is already in the payload, so this touches no network. Deliberately NOT a
