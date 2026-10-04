@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from ..imagery import _DBZ_STOPS, DETECTION_ALPHA, FAINT_ALPHA, FAINT_ECHO_DBZ, NODATA_RGBA, _colourise
+from .advect import MotionField
 from .catalogue import catalogue_path, read_catalogue
 from .display import display_cell, outline_step, outlines as _outlines, shown
 from .policy import DEFAULT_POLICY, CellPolicy
@@ -127,7 +128,9 @@ def render_map(
 
     # The same reduction the pushed display file uses (#656), so the prototype
     # and the web app's overlay read one cell shape.
-    cells = [display_cell(c, grid) for c in catalogue["cells"]
+    variant = policy.display_motion
+    field = MotionField.from_dict(catalogue.get("flow"), policy) if variant.startswith("field") else None
+    cells = [display_cell(c, grid, variant=variant, field=field, policy=policy) for c in catalogue["cells"]
              if shown(c) and inside(c["lat"], c["lon"])]
 
     flashes = []

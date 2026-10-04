@@ -58,6 +58,10 @@ DEFAULT_TIERS: tuple[TierPolicy, ...] = (
 )
 
 
+# Every way a cell's position is projected forward (#662), scored side by side.
+MOTION_VARIANTS: tuple[str, ...] = ("raw", "smoothed", "track", "field", "field_anchored")
+
+
 @dataclass(frozen=True)
 class CellPolicy:
     tiers: tuple[TierPolicy, ...] = DEFAULT_TIERS
@@ -105,6 +109,32 @@ class CellPolicy:
     trend_area_grow: float = 1.5
     trend_area_shrink: float = 0.6
 
+    # --- Velocity over the lineage (#662) -------------------------------------
+    # Smoothed velocity: exponentially weighted mean (weight exp(-age/tau)) of
+    # the raw single-pair vectors the cell received within the window,
+    # including this frame.  ``track``: least-squares line through the
+    # centroids in the same window.  Both start afresh at a split or merge, and
+    # both fall back to the raw vector below their minimum count, so every
+    # variant is scored on the same cells.  Provisional, like everything here.
+    smooth_window_minutes: int = 20
+    smooth_tau_minutes: float = 10.0
+    smooth_min_vectors: int = 2
+    track_min_centroids: int = 3
+
+    # --- Advection along the motion field (#662) -----------------------------
+    # Matched tile vectors are smoothed into a field by normalised convolution
+    # on the tile lattice (Gaussian, sigma in lattice steps) and reach at most
+    # ``field_fill_tiles`` lattice steps past a matched tile: never far beyond
+    # what was measured.  Trajectories are integrated (midpoint rule) in steps
+    # of ``advect_step_minutes``.
+    field_sigma_tiles: float = 1.0
+    field_fill_tiles: int = 1
+    advect_step_minutes: float = 5.0
+    # Which motion the map arrow uses: raw | smoothed | track | field |
+    # field_anchored.  Raw until the scores say otherwise (issue #662: a
+    # variant becomes the default only if it beats the raw straight line).
+    display_motion: str = "raw"
+
     # --- Self-scoring --------------------------------------------------------
     score_leads_minutes: tuple[int, ...] = (30, 60)
     # Verification area: within this distance of an issued or persisted
@@ -112,7 +142,14 @@ class CellPolicy:
     # tracker; short of it, the misses would be someone else's cells.
     score_margin_km: float = 100.0
 
-    name: str = "cells-1"
+    name: str = "cells-2"
+
+    def __post_init__(self) -> None:
+        if self.display_motion not in MOTION_VARIANTS:
+            raise ValueError(f"display_motion must be one of {MOTION_VARIANTS}, not {self.display_motion!r}")
+        if self.smooth_window_minutes > self.trend_window_minutes + 5:
+            # The lineage history is trimmed to the trend window (+5 min).
+            raise ValueError("smooth_window_minutes cannot exceed trend_window_minutes + 5")
 
     def as_dict(self) -> dict:
         return asdict(self)

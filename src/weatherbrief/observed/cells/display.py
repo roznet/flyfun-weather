@@ -32,8 +32,9 @@ import numpy as np
 
 from ..frames import SOURCE_EUMETSAT_CTTH, SOURCE_EUMETSAT_LI, SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE
 from ..grid import GridSpec
+from .advect import MotionField, project_centroid
 from .catalogue import encode, r
-from .detect import TierDetection
+from .detect import TierDetection, distance_km, initial_bearing_deg
 from .policy import CellPolicy
 
 DISPLAY_SCHEMA = "observed-cells-display/1"
@@ -77,24 +78,40 @@ def outlines(det: TierDetection, grid: GridSpec, r0: int, r1: int, c0: int, c1: 
     return out
 
 
-def arrow_end(cell: dict, grid: GridSpec, minutes: float = ARROW_MINUTES) -> list | None:
+def arrow_end(cell: dict, grid: GridSpec, minutes: float = ARROW_MINUTES, *,
+              variant: str = "raw", field: MotionField | None = None,
+              policy: CellPolicy | None = None) -> list | None:
     """Where the cell would be after ``minutes`` at its current motion, or ``None``.
 
     Only for ``available`` motion — never extrapolate a withheld (split/merge)
-    or unsupported velocity.
+    or unsupported velocity.  ``variant`` is ``policy.display_motion`` (#662):
+    a straight line at the raw, smoothed or track vector, or the end of a
+    trajectory through the motion field.
     """
     m = cell["motion"]
     if m.get("status") != "available" or m.get("dcol_per_min") is None or m.get("drow_per_min") is None:
         return None
-    lon2, lat2 = grid.colrow_to_lonlat(cell["col"] + m["dcol_per_min"] * minutes,
-                                       cell["row"] + m["drow_per_min"] * minutes)
+    end = project_centroid(cell, variant, minutes, field, policy or CellPolicy())
+    if end is None:
+        return None
+    lon2, lat2 = grid.colrow_to_lonlat(end[1], end[0])
     return [r(lat2, 4), r(lon2, 4)]
 
 
-def display_cell(cell: dict, grid: GridSpec) -> dict:
+def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: MotionField | None = None,
+                 policy: CellPolicy | None = None) -> dict:
     """One catalogue cell reduced to what the map shows."""
     m = cell["motion"]
     t = cell["trend"]
+    arrow = arrow_end(cell, grid, variant=variant, field=field, policy=policy)
+    motion = {k: m.get(k) for k in ("status", "reason", "speed_kt", "toward_deg")}
+    if variant != "raw" and arrow is not None:
+        # Speed and direction follow the arrow the map draws, not the raw vector.
+        km = distance_km(cell["lat"], cell["lon"], arrow[0], arrow[1])
+        speed_kt = km / (ARROW_MINUTES / 60.0) / 1.852
+        motion["speed_kt"] = r(speed_kt, 1)
+        motion["toward_deg"] = (r(initial_bearing_deg(cell["lat"], cell["lon"], arrow[0], arrow[1]), 0)
+                                if speed_kt >= 1.0 else None)
     return {
         "id": cell["id"],
         "tier": cell["tier"],
@@ -109,8 +126,8 @@ def display_cell(cell: dict, grid: GridSpec) -> dict:
         "age_min": cell["lineage"]["age_min"],
         "event": cell["lineage"]["event"],
         "trend": {k: t.get(k) for k in ("state", "window_min", "d_peak_db", "area_ratio", "d_flashes")},
-        "motion": {k: m.get(k) for k in ("status", "reason", "speed_kt", "toward_deg")},
-        "arrow": arrow_end(cell, grid),
+        "motion": motion,
+        "arrow": arrow,
     }
 
 
@@ -125,6 +142,8 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
     ny, nx = any_det.labels.shape if any_det is not None else (0, 0)
     big = ny * nx > _BIG_GRID_PX
     inputs = catalogue["inputs"]
+    variant = policy.display_motion
+    field = MotionField.from_dict(catalogue.get("flow"), policy) if variant.startswith("field") else None
     return {
         "schema": DISPLAY_SCHEMA,
         "policy_version": catalogue["policy_version"],
@@ -144,7 +163,9 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
             tier.name: outlines(detections[tier.name], grid, 0, ny, 0, nx, outline_step(tier.name, big))
             for tier in policy.tiers if tier.name in detections
         },
-        "cells": [display_cell(c, grid) for c in catalogue["cells"] if shown(c)],
+        "motion_variant": variant,
+        "cells": [display_cell(c, grid, variant=variant, field=field, policy=policy)
+                  for c in catalogue["cells"] if shown(c)],
     }
 
 

@@ -5,6 +5,7 @@
     python -m weatherbrief.observed.cells render --time 2026-10-03T14:05 --out cells.png [--bbox S,W,N,E] [--scale 2]
     python -m weatherbrief.observed.cells status [--hours 24]
     python -m weatherbrief.observed.cells retry-failed
+    python -m weatherbrief.observed.cells scores --from 2026-10-03T06:00 --to 2026-10-03T18:00 [--root /tmp/replay] [--json]
     python -m weatherbrief.observed.cells map [--time latest] --out cells.html [--bbox S,W,N,E] [--open]
     python -m weatherbrief.observed.cells archive pending | pack --day D | verify --day D --remote-sums F
                                                   | prune [--execute] | nas-plan … | restore …
@@ -143,6 +144,22 @@ def _archive(args, sources) -> int:
     raise AssertionError(cmd)
 
 
+def _scores(args) -> int:
+    from .scoring import read_scores, summarise
+
+    rows = summarise(read_scores(args.root or cells_root(), args.start, args.end))
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    print(f"{'tier':<8}{'lead':>5}  {'forecast':<15}{'frames':>7}{'CSI':>7}{'POD':>7}{'FAR':>7}{'centroid km':>13}")
+    for row in rows:
+        def f(v, digits=2):
+            return "—" if v is None else f"{v:.{digits}f}"
+        print(f"{row['tier']:<8}{row['lead_min']:>5}  {row['forecast']:<15}{row['frames']:>7}"
+              f"{f(row['csi']):>7}{f(row['pod']):>7}{f(row['far']):>7}{f(row['centroid_err_km_median'], 1):>13}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m weatherbrief.observed.cells")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -167,6 +184,11 @@ def main(argv: list[str] | None = None) -> int:
     mp.add_argument("--out", required=True, type=Path)
     mp.add_argument("--bbox", help="south,west,north,east in degrees (default: radar extent)")
     mp.add_argument("--open", action="store_true", help="open it in the default browser")
+    sc = sub.add_parser("scores", help="median self-scores per tier, lead and motion variant (#662)")
+    sc.add_argument("--from", dest="start", required=True, type=_utc)
+    sc.add_argument("--to", dest="end", required=True, type=_utc)
+    sc.add_argument("--root", type=Path, help="read scores from here (e.g. a replay)")
+    sc.add_argument("--json", action="store_true", help="JSON rows instead of a table")
     _add_archive(sub)
     args = parser.parse_args(argv)
 
@@ -181,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
     sources = cells_sources()
     if args.command == "archive":
         return _archive(args, sources)
+    if args.command == "scores":
+        return _scores(args)
     root = cells_root()
     lookback = catchup_lookback()
 

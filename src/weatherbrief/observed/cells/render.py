@@ -25,6 +25,7 @@ from scipy import ndimage
 
 from ..frames import SOURCE_EUMETSAT_LI
 from ..imagery import _DBZ_STOPS, _colourise
+from .advect import MotionField, project_centroid
 from .catalogue import catalogue_path, read_catalogue
 from .policy import DEFAULT_POLICY, CellPolicy
 from .runner import FrameCache, Workspace, _li_frame
@@ -87,6 +88,8 @@ def render_frame(
                 draw.ellipse([x - 1, y - 1, x + 1, y + 1], fill=(255, 220, 0))
 
     if catalogue is not None:
+        field = (MotionField.from_dict(catalogue.get("flow"), policy)
+                 if policy.display_motion.startswith("field") else None)
         for cell in catalogue["cells"]:
             if cell["tier"] == "rain20":
                 continue
@@ -94,10 +97,10 @@ def render_frame(
             y = (cell["row"] - r0) * scale
             if not (0 <= x < img.width and 0 <= y < img.height):
                 continue
-            m = cell["motion"]
-            if m["status"] == "available":
-                x2 = x + m["dcol_per_min"] * 30 * scale
-                y2 = y + m["drow_per_min"] * 30 * scale
+            end = project_centroid(cell, policy.display_motion, 30, field, policy)
+            if end is not None:
+                x2 = (end[1] - c0) * scale
+                y2 = (end[0] - r0) * scale
                 draw.line([x, y, x2, y2], fill=(200, 0, 200), width=2)
                 draw.ellipse([x2 - 2, y2 - 2, x2 + 2, y2 + 2], fill=(200, 0, 200))
             if cell["tier"] == "core35":

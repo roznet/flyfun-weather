@@ -17,6 +17,12 @@ Two kinds of numbers per (tier, lead):
 * **Centroid error** — for cells whose id survives to T, distance from the
   advected (and from the unmoved) centroid to the real one, in km.
 
+Since #662 every projection in ``policy.MOTION_VARIANTS`` (raw, smoothed and
+track straight lines, field and field-anchored trajectories — ``advect.py``)
+is scored on the same cells and the same verification area, under
+``variants``; ``extrapolation`` stays the raw straight line.  ``summarise``
+gives the side-by-side medians (CLI: ``scores``).
+
 Nothing here feeds a pilot.  The rows accumulate in ``scores/<day>.jsonl`` and
 are what will set the projection horizon (Tier 3) and its acceptance gates.
 """
@@ -30,9 +36,11 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage
 
+from .advect import MotionField, project_centroids, project_footprints
 from .catalogue import catalogue_path, cells_dir, r, read_catalogue
 from .detect import TierDetection, distance_km, runs_to_pixels
-from .policy import px
+from .policy import MOTION_VARIANTS, CellPolicy, px
+
 
 def _block_mask(rows, cols, shape, b, row0, col0):
     mask = np.zeros(shape, dtype=bool)
@@ -71,70 +79,133 @@ def score_frame(
     detections: dict[str, TierDetection],
     covered: np.ndarray,
     current_catalogue: dict,
-    leads_minutes: tuple[int, ...],
-    policy_version: str,
-    margin_km: float,
+    policy: CellPolicy,
 ) -> list[dict]:
     rows_out: list[dict] = []
     now_cells = {c["id"]: c for c in current_catalogue["cells"]}
-    for lead in leads_minutes:
+    for lead in policy.score_leads_minutes:
         issued_time = valid_time - timedelta(minutes=lead)
         issued = read_catalogue(catalogue_path(root, issued_time))
-        if issued is None or issued.get("policy_version") != policy_version:
+        if issued is None or issued.get("policy_version") != policy.policy_version:
             continue
+        field = MotionField.from_dict(issued.get("flow"), policy)
         for tier_name, det in detections.items():
             b = det.tier.block_px(grid.pixel_km)
             shape_b = _blockify(np.zeros(det.labels.shape, dtype=bool), b).shape
-            fc = np.zeros(shape_b, dtype=bool)
             pers = np.zeros(shape_b, dtype=bool)
-            errs, pers_errs = [], []
-            n_cells = 0
-            for cell in issued["cells"]:
-                if cell["tier"] != tier_name or cell["motion"]["status"] != "available":
-                    continue
-                n_cells += 1
-                pr, pc = runs_to_pixels(cell["footprint"]["runs"], cell["footprint"]["block_px"])
-                pers |= _block_mask(pr, pc, shape_b, b, det.row0, det.col0)
-                m = cell["motion"]
-                shift_r = int(round(m["drow_per_min"] * lead))
-                shift_c = int(round(m["dcol_per_min"] * lead))
-                fc |= _block_mask(pr + shift_r, pc + shift_c, shape_b, b, det.row0, det.col0)
-                later = now_cells.get(cell["id"])
-                if later is not None:
-                    lon, lat = _advect_centroid(grid, cell, lead)
-                    errs.append(distance_km(lat, lon, later["lat"], later["lon"]))
-                    pers_errs.append(distance_km(cell["lat"], cell["lon"], later["lat"], later["lon"]))
+            pers_errs: list[float] = []
+            cells = [c for c in issued["cells"]
+                     if c["tier"] == tier_name and c["motion"]["status"] == "available"]
+            n_cells = len(cells)
             if n_cells == 0:
                 continue
+            n_smoothed = sum(int(((c["motion"].get("smoothed") or {}).get("n") or 1) > 1) for c in cells)
+            n_track = sum(int(((c["motion"].get("track") or {}).get("n") or 1) > 1) for c in cells)
+            footprints = []
+            for cell in cells:
+                fb = cell["footprint"]["block_px"]
+                pr, pc = runs_to_pixels(cell["footprint"]["runs"], fb)
+                footprints.append((pr, pc, fb))
+                pers |= _block_mask(pr, pc, shape_b, b, det.row0, det.col0)
+            later = [now_cells.get(c["id"]) for c in cells]
+            for cell, now in zip(cells, later):
+                if now is not None:
+                    pers_errs.append(distance_km(cell["lat"], cell["lon"], now["lat"], now["lon"]))
+            fc = {v: np.zeros(shape_b, dtype=bool) for v in MOTION_VARIANTS}
+            errs: dict[str, list[float]] = {v: [] for v in MOTION_VARIANTS}
+            for variant in MOTION_VARIANTS:
+                for moved in project_footprints(cells, variant, lead, footprints, field, policy):
+                    fc[variant] |= _block_mask(moved[0], moved[1], shape_b, b, det.row0, det.col0)
+                for end, now in zip(project_centroids(cells, variant, lead, field, policy), later):
+                    if now is not None:
+                        lon, lat = grid.colrow_to_lonlat(end[1], end[0])
+                        errs[variant].append(distance_km(float(lat), float(lon), now["lat"], now["lon"]))
             observed = _blockify(det.labels > 0, b)
             cov_b = ~_blockify(~covered, b)  # a block counts only if fully covered
-            margin = px(margin_km, grid.pixel_km * b)
-            # Square neighbourhood via a separable max filter: one pass, where
-            # an iterated binary dilation would cost ``margin`` passes per tier.
-            near = ndimage.maximum_filter((fc | pers).astype(np.uint8), size=2 * margin + 1) > 0
+            margin = px(policy.score_margin_km, grid.pixel_km * b)
+            # One verification area for every forecast — near any variant's
+            # footprint or the persisted one — so the variants are scored on
+            # the same blocks.  Square neighbourhood via a separable max
+            # filter: one pass, where an iterated binary dilation would cost
+            # ``margin`` passes per tier.
+            union = pers.copy()
+            for mask in fc.values():
+                union |= mask
+            near = ndimage.maximum_filter(union.astype(np.uint8), size=2 * margin + 1) > 0
             area = near & cov_b
+            variants = {
+                v: {**_contingency(fc[v], observed, area),
+                    "centroid_err_km_median": r(np.median(errs[v]), 2) if errs[v] else None}
+                for v in MOTION_VARIANTS
+            }
             rows_out.append({
                 "verify_time": valid_time.isoformat(),
                 "issued_time": issued_time.isoformat(),
                 "lead_min": lead,
                 "tier": tier_name,
-                "policy_version": policy_version,
+                "policy_version": policy.policy_version,
                 "cells_issued": n_cells,
-                "cells_tracked": len(errs),
-                "extrapolation": _contingency(fc, observed, area),
+                "cells_tracked": len(pers_errs),
+                # Cells whose smoothed / track estimate used more than this
+                # frame (the rest fell back to the raw vector).
+                "cells_smoothed": n_smoothed,
+                "cells_track": n_track,
+                "field_available": field is not None,
+                # ``extrapolation`` and ``centroid_err_km_median`` are the raw
+                # straight line, as before #662; ``variants.raw`` repeats them.
+                "extrapolation": {k: v for k, v in variants["raw"].items() if k != "centroid_err_km_median"},
                 "persistence": _contingency(pers, observed, area),
-                "centroid_err_km_median": r(np.median(errs), 2) if errs else None,
+                "centroid_err_km_median": variants["raw"]["centroid_err_km_median"],
                 "persistence_centroid_err_km_median": r(np.median(pers_errs), 2) if pers_errs else None,
+                "variants": variants,
             })
     return rows_out
 
 
-def _advect_centroid(grid, cell: dict, lead: int) -> tuple[float, float]:
-    m = cell["motion"]
-    lon, lat = grid.colrow_to_lonlat(
-        cell["col"] + m["dcol_per_min"] * lead, cell["row"] + m["drow_per_min"] * lead
-    )
-    return float(lon), float(lat)
+def summarise(rows: list[dict]) -> list[dict]:
+    """Median skill per (tier, lead, forecast) over score rows — the side-by-side #662 asks for.
+
+    Medians over frames of each frame's CSI / POD / FAR and of each frame's
+    median centroid error; ``frames`` counts the rows that had a value.
+    Persistence is listed as one more forecast.
+    """
+    groups: dict[tuple[str, int], list[dict]] = {}
+    for row in rows:
+        groups.setdefault((row["tier"], row["lead_min"]), []).append(row)
+    out = []
+    for (tier, lead), group in sorted(groups.items()):
+        forecasts: dict[str, list[dict]] = {}
+        for row in group:
+            variants = row.get("variants") or {
+                "raw": {**row["extrapolation"], "centroid_err_km_median": row.get("centroid_err_km_median")}}
+            for name, sc in variants.items():
+                forecasts.setdefault(name, []).append(sc)
+            forecasts.setdefault("persistence", []).append(
+                {**row["persistence"], "centroid_err_km_median": row.get("persistence_centroid_err_km_median")})
+        for name, scores in forecasts.items():
+            entry = {"tier": tier, "lead_min": lead, "forecast": name, "frames": len(scores)}
+            for key in ("csi", "pod", "far", "centroid_err_km_median"):
+                vals = [s[key] for s in scores if s.get(key) is not None]
+                entry[key] = r(np.median(vals), 3) if vals else None
+            out.append(entry)
+    return out
+
+
+def read_scores(root: Path, start: datetime, end: datetime) -> list[dict]:
+    """Score rows with ``verify_time`` in ``[start, end]``."""
+    rows = []
+    day = start.date()
+    while day <= end.date():
+        path = cells_dir(root) / "scores" / f"{day:%Y%m%d}.jsonl"
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if start <= datetime.fromisoformat(row["verify_time"]) <= end:
+                    rows.append(row)
+        day += timedelta(days=1)
+    return rows
 
 
 def append_scores(root: Path, valid_time: datetime, rows: list[dict]) -> None:
