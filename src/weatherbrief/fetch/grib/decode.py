@@ -549,21 +549,34 @@ class _SeamAccumulator:
 
     cfgrib splits ONE geographic grid into several datasets (one per level
     type, step type…), so the plan is made per distinct grid geometry and
-    each dataset is mapped onto its grid. Each (point, key) needs a finite
-    value from every grid its terms name; a missing or NaN contribution drops
-    the key rather than renormalising, so a field absent from one grid is
-    never silently one-sided. Within a grid the first dataset to supply a key
-    wins, matching the per-grid decode.
+    each dataset is mapped onto its grid. Each (point, key) needs finite
+    values from every grid its terms name; a missing or NaN contribution
+    drops the key rather than renormalising, so a field absent from one grid
+    is never silently one-sided. Within a grid the first dataset to supply a
+    key wins, matching the per-grid decode.
+
+    ``sentinel_keys`` maps a key to its "no value" sentinel (ECMWF's 9999 m
+    "no cloud" on ceil/cbh/hcct). Blending a sentinel with a real height
+    invents one (500 m and 9999 m → ~5000 m, which then passes the sentinel
+    filter downstream), so a mixed set of corners takes the nearest corner's
+    value instead — the lower one on a tie, the cloudier reading.
     """
 
-    def __init__(self, plan: list[_SeamPoint], ds_grid: "list[int | None]"):
+    def __init__(
+        self,
+        plan: list[_SeamPoint],
+        ds_grid: "list[int | None]",
+        sentinel_keys: "dict | None" = None,
+    ):
         self.plan = plan
         self.ds_grid = ds_grid
+        self.sentinel_keys = sentinel_keys or {}
         self.by_grid: dict[int, list[tuple[int, _SeamTerm]]] = {}
         for s, sp in enumerate(plan):
             for term in sp.terms:
                 self.by_grid.setdefault(term.grid_idx, []).append((s, term))
-        self._parts: dict[tuple, dict[int, float]] = {}
+        # (seam idx, key) -> grid idx -> [(weight, value), …] corners
+        self._parts: dict[tuple, dict[int, list[tuple[float, float]]]] = {}
 
     def has(self, ds_idx: int) -> bool:
         g = self.ds_grid[ds_idx]
@@ -579,18 +592,31 @@ class _SeamAccumulator:
 
         g = self.ds_grid[ds_idx]
         for s, term in self.by_grid.get(g, ()):
-            v = (term.w_j0 * float(values[term.row, term.j0])
-                 + term.w_j1 * float(values[term.row, term.j1]))
-            if math.isnan(v):
+            corners = [
+                (term.w_lat * w, float(values[term.row, j]))
+                for w, j in ((term.w_j0, term.j0), (term.w_j1, term.j1))
+                if w > 0.0
+            ]
+            if any(math.isnan(v) for _, v in corners):
                 continue
-            self._parts.setdefault((s, key), {}).setdefault(g, term.w_lat * v)
+            self._parts.setdefault((s, key), {}).setdefault(g, corners)
+
+    def _combine(self, key, corners: list[tuple[float, float]]) -> float:
+        sentinel = self.sentinel_keys.get(key)
+        if sentinel is not None:
+            flags = [v >= sentinel for _, v in corners]
+            if any(flags) and not all(flags):
+                top = max(w for w, _ in corners)
+                return min(v for w, v in corners if w >= top - 1e-9)
+        return sum(w * v for w, v in corners)
 
     def results(self):
         """Yield ``(pt_idx, key, value)`` for every fully-contributed key."""
         for (s, key), parts in self._parts.items():
             sp = self.plan[s]
             if all(t.grid_idx in parts for t in sp.terms):
-                yield sp.pt_idx, key, sum(parts.values())
+                corners = [c for cs in parts.values() for c in cs]
+                yield sp.pt_idx, key, self._combine(key, corners)
 
     def log_summary(self, label: str, filled_pts: set[int]) -> None:
         if not filled_pts:
@@ -607,6 +633,7 @@ def _seam_setup(
     datasets: list,
     latitudes: "np.ndarray | list[float]",
     longitudes: "np.ndarray | list[float]",
+    sentinel_keys: "dict | None" = None,
 ) -> "tuple[_SeamAccumulator | None, list]":
     """Plan seam fills over ``datasets``; returns (accumulator, per-ds axes).
 
@@ -631,7 +658,7 @@ def _seam_setup(
             grids.append((lat_arr, lon_arr))
         ds_grid.append(sigs[sig])
     plan = _plan_grid_seams(grids, latitudes, longitudes)
-    return (_SeamAccumulator(plan, ds_grid) if plan else None), axes
+    return (_SeamAccumulator(plan, ds_grid, sentinel_keys) if plan else None), axes
 
 
 # ---------------------------------------------------------------------------
@@ -854,15 +881,8 @@ def _decode_pressure_vars_from_datasets(
         seams, _ = _seam_setup(datasets, targets_lat, targets_lon)
 
     for ds_idx, ds in enumerate(datasets):
-        # Detect lat/lon dim names once per dataset
-        lat_dim = lon_dim = None
-        for dim in ds.dims:
-            dim_lower = str(dim).lower()
-            if "lat" in dim_lower:
-                lat_dim = dim
-            elif "lon" in dim_lower:
-                lon_dim = dim
-        if lat_dim is None or lon_dim is None:
+        regular = _regular_latlon_axes(ds)
+        if regular is None:
             # No 1-D lat/lon dimension coords: a projected grid (HRRR is
             # Lambert with (y, x) dims in projected metres and 2-D lat/lon
             # auxiliary arrays, #457). The grid is REGULAR in projected
@@ -873,13 +893,7 @@ def _decode_pressure_vars_from_datasets(
                 continue
             bw, lat_dim, lon_dim = lam
         else:
-            try:
-                lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
-                lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
-            except Exception:
-                logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
-                continue
-
+            lat_dim, lon_dim, lat_arr, lon_arr = regular
             # Bilinear corner indices + weights — computed once per dataset and
             # reused for every variable in that dataset.
             bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
@@ -3512,7 +3526,13 @@ def _decode_ecmwf_surface_from_datasets(
     results: list[dict[str, float]] = [{} for _ in range(n_points)]
     covered: list[bool] = [False] * n_points
 
-    seams, axes = _seam_setup(datasets, latitudes, longitudes)
+    seams, axes = _seam_setup(
+        datasets, latitudes, longitudes,
+        sentinel_keys={
+            _ECMWF_CLOUD_DIAG_FIELD_MAP[k]: _ECMWF_NO_CLOUD_SENTINEL_M - 1.0
+            for k in ("ceil", "cbh", "hcct")
+        },
+    )
 
     for ds_idx, ds in enumerate(datasets):
         for var_name in ds.data_vars:
@@ -3535,6 +3555,11 @@ def _decode_ecmwf_surface_from_datasets(
                         xr_var.transpose(lat_dim, lon_dim).values, dtype=np.float64,
                     )
                     seams.add(ds_idx, field_name, grid)
+                else:
+                    logger.debug(
+                        "grid seam: %s skipped, dims %s are not (lat, lon)",
+                        var_name, xr_var.dims,
+                    )
 
     if seams is not None:
         filled: set[int] = set()

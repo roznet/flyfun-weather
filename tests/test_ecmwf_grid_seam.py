@@ -185,3 +185,38 @@ class TestSurfaceDecode:
         results, covered = self._decode([59.0, 40.0], [10.0, -30.0])
         assert covered == [True, False]
         assert results[0]["temperature_2m_k"] == pytest.approx(270.0 + 59.0 + 0.10)
+
+
+class TestCloudSentinelAtSeam:
+    """A 9999 m "no cloud" corner must never blend into a fake ceiling."""
+
+    def _decode(self, eu_ceil, no_ceil, lats, lons):
+        def ds(lats_, lons_, value):
+            return xr.Dataset(
+                {"ceil": (("latitude", "longitude"),
+                          np.full((len(lats_), len(lons_)), value))},
+                coords={"latitude": lats_, "longitude": lons_},
+            )
+        datasets = [ds(_EU_LATS, _EU_LONS, eu_ceil), ds(_NO_LATS, _NO_LONS, no_ceil)]
+        return _decode_ecmwf_surface_from_datasets(datasets, lats, lons)
+
+    def test_mixed_takes_the_nearest_row_not_a_blend(self):
+        # 59.6 is nearer Europe's 59.5 row (cloud at 500 m) …
+        results, _ = self._decode(500.0, 9999.0, [59.6], [17.92])
+        assert results[0]["ceiling_m"] == pytest.approx(500.0)
+        # … 59.9 nearer Nordic's 60.0 row (no cloud): the sentinel survives
+        # and downstream reads it as "no ceiling", not ~5000 m.
+        results, _ = self._decode(500.0, 9999.0, [59.9], [17.92])
+        assert results[0]["ceiling_m"] == pytest.approx(9999.0)
+
+    def test_tie_takes_the_lower_cloudier_value(self):
+        results, _ = self._decode(9999.0, 500.0, [59.75], [17.92])
+        assert results[0]["ceiling_m"] == pytest.approx(500.0)
+
+    def test_real_heights_on_both_sides_still_interpolate(self):
+        results, _ = self._decode(500.0, 1500.0, [59.75], [17.92])
+        assert results[0]["ceiling_m"] == pytest.approx(1000.0)
+
+    def test_sentinel_on_both_sides_stays_sentinel(self):
+        results, _ = self._decode(9999.0, 9999.0, [59.75], [17.92])
+        assert results[0]["ceiling_m"] == pytest.approx(9999.0)
