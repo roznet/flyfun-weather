@@ -392,6 +392,14 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.observedTile(path: path)
     }
 
+    func observedCellFrames() async throws -> CellFramesResponse {
+        try await online.observedCellFrames()
+    }
+
+    func observedCellDisplay(path: String) async throws -> CellDisplay {
+        try await online.observedCellDisplay(path: path)
+    }
+
     // Flight sharing (#446) — always online: resolving a code, subscribing, and
     // unsubscribing are live account actions, never part of the offline bundle.
     func flightByShareCode(_ code: String) async throws -> FlightResponse {

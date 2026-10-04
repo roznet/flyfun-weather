@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The **Discussion** tab (#310): the big-picture synoptic narrative. Renders
 /// the digest's four narrative sections — Synoptic, Specific Concerns, Trend and
-/// Watch Items — as markdown. Watch is repeated here from the Advisory tab on
-/// purpose (it reads as the "what to keep an eye on" close of the discussion).
+/// Watch Items — as markdown. Watch lives here only since #661 (it reads as
+/// the "what to keep an eye on" close of the discussion).
 ///
 /// A sticky scroll-spy pill bar (the same `ScrollSpyScroll` the Advisory tab
 /// uses) lets the pilot jump straight to a section instead of hunting through

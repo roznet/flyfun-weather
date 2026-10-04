@@ -42,6 +42,9 @@ struct RouteMapView: View {
     /// Satellite infrared underlay. On by default: radar over the satellite
     /// picture is the view pilots know, and radar alone hides where the cloud is.
     @AppStorage("mapObservedSatellite") private var observedSatellite = true
+    /// Experimental radar-cell overlay (#661). Off by default, as on the web —
+    /// an experimental layer on a safety product is opted into.
+    @AppStorage("mapObservedCells") private var observedCells = false
     /// The cross-section's corridor pick (0 = unset → the sampled default).
     /// `@AppStorage` so the corridor box follows a change made on that screen.
     @AppStorage(CrossSectionViewModel.observedRadiusDefaultsKey) private var observedRadiusPick = 0.0
@@ -133,6 +136,13 @@ struct RouteMapView: View {
             await observedModel?.loadLegendsIfNeeded()
             await observedModel?.poll(observedPollSources)
         }
+        .task(id: cellsPollKey) {
+            // Restarts when the drawn radar frame changes, so the overlay
+            // follows it (same stamp, else the newest at or before it).
+            guard showsCells else { return }
+            let stamp = cellsRadarStamp
+            await viewModel.cellsModel.poll(radarStamp: { stamp }, box: viewModel.cellsBox)
+        }
     }
 
     // MARK: Map
@@ -161,7 +171,9 @@ struct RouteMapView: View {
             observedLayers: observedComposition.layers,
             observedTileFetcher: observedModel?.tileFetcher,
             observedCorridor: observedCorridor,
-            mutedBaseMap: showsObserved && (!observedRadar.isEmpty || observedSatellite)
+            mutedBaseMap: showsObserved && (!observedRadar.isEmpty || observedSatellite),
+            cellsDisplay: showsCells ? viewModel.cellsModel.display : nil,
+            cellsDisplayKey: showsCells ? viewModel.cellsModel.displayPath : nil
         )
         .ignoresSafeArea(edges: .bottom)
     }
@@ -260,6 +272,23 @@ struct RouteMapView: View {
             failed: model.failed, now: model.now)
     }
 
+    // MARK: Radar cells (#661)
+
+    private var showsCells: Bool { showsObserved && observedCells }
+
+    /// The reflectivity frame on screen, which the overlay pairs with; nil when
+    /// reflectivity isn't drawn (rain rate, none, or stale) → the newest overlay.
+    private var cellsRadarStamp: String? {
+        guard observedRadar == "opera_dbzh",
+              let frame = ObservedMapImagery.currentFrame(observedModel?.frames["opera_dbzh"]) else { return nil }
+        return frame.stamp
+    }
+
+    private var cellsPollKey: String {
+        guard showsCells, let box = viewModel.cellsBox else { return "off" }
+        return "\(cellsRadarStamp ?? "newest")|\(box.south),\(box.west),\(box.north),\(box.east)"
+    }
+
     /// The corridor the sampled numbers describe, at the cross-section's pick.
     private var observedCorridor: ObservedMapImagery.LatLonBox? {
         guard showsObserved else { return nil }
@@ -289,6 +318,16 @@ struct RouteMapView: View {
                         Text("Satellite infrared")
                     }
                 }
+                Button {
+                    observedCells.toggle()
+                } label: {
+                    if observedCells {
+                        Label("Radar cells (experimental)", systemImage: "checkmark")
+                    } else {
+                        Text("Radar cells (experimental)")
+                    }
+                }
+                .accessibilityIdentifier("map.observedCellsToggle")
                 if !observedRadar.isEmpty {
                     Menu("Radar opacity \(Int((observedOpacity * 100).rounded()))%") {
                         ForEach(ObservedMapImagery.opacitySteps, id: \.self) { step in
@@ -337,7 +376,9 @@ struct RouteMapView: View {
     /// is looking at. The badge is the only thing on screen that says how old
     /// an echo is — at 120 kt, minutes are tens of nautical miles.
     private var observedFooter: some View {
+        // The cell overlay's own line (its own time — never the radar's).
         let badges = observedComposition.badges
+            + (showsCells ? [viewModel.cellsModel.badge].compactMap { $0 } : [])
         let legend = observedRadar.isEmpty ? nil : observedModel?.legends[observedRadar]
         return VStack {
             Spacer()
@@ -346,6 +387,7 @@ struct RouteMapView: View {
                     if let legend, let stops = legend.legend, stops.count >= 2 {
                         observedLegend(legend, stops: stops)
                     }
+                    if showsCells { cellsLegend }
                     ForEach(badges, id: \.self) { line in
                         Text(line)
                             .font(.caption2)
@@ -364,6 +406,27 @@ struct RouteMapView: View {
         // Clear of MapKit's logo + Legal link, which must stay visible.
         .padding(.bottom, 24)
         .allowsHitTesting(false)
+    }
+
+    /// Cell markers are coloured by trend (evolution, not safety); the magenta
+    /// arrow is where a core would be in 30 min if its motion continued. Tap a
+    /// marker for its measurements.
+    private var cellsLegend: some View {
+        HStack(spacing: 6) {
+            ForEach(CellsOverlay.trendOrder, id: \.self) { state in
+                HStack(spacing: 2) {
+                    Circle()
+                        .fill(Color(uiColor: CellsOverlay.trendColor(state)))
+                        .overlay(Circle().stroke(Color(white: 0.13), lineWidth: 0.5))
+                        .frame(width: 7, height: 7)
+                    Text(state)
+                }
+            }
+            Text("━").foregroundStyle(Color(uiColor: CellsOverlay.arrowColor))
+            Text("30 min")
+        }
+        .font(.caption2)
+        .foregroundStyle(Theme.text)
     }
 
     /// The server's own ramp, ends labelled (a label per stop is unreadable).
@@ -558,6 +621,12 @@ struct RouteMapView: View {
         }
         if let alt = intent.altitudeFt {
             altitudeFt = min(flightCeilingFt, max(0, alt))
+        }
+        if intent.showObservedCells {
+            // The Observed tab's "Show on map": cells on, over reflectivity —
+            // the radar the overlay was analysed from.
+            observedCells = true
+            if observedRadarOptions.contains("opera_dbzh") { observedPick = "opera_dbzh" }
         }
         viewModel.clearFocusIntent()
     }

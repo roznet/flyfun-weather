@@ -144,15 +144,15 @@ Key exports: `CellPolicy`, `DEFAULT_POLICY`, `detect`, `estimate_flow`, `masked_
 → Full doc: observed-cells.md
 
 ### cells-overlay
-Droplet side of the cell overlay (#656): the home node's display files land in an rsync inbox (`CELLS_INBOX_DIR`), are validated (schema, policy_version, stamp) and moved into `DATA_DIR/observed/cells/display` (24 h), and served by `/api/observed/cells/frames` (stale state, "unavailable since") and `/api/observed/cells/{stamp}.json` (optional bbox, immutable). Gated on `WB_CELLS_INGEST_ENABLED`. Stale after 25 min of the overlay's own age; overlay paired to the drawn radar stamp, else newest at-or-before, labelled with its own time. Web: one shared Leaflet renderer (`CellsLayer`, pure rules in `cells-overlay-core.ts`) on the maps page's "Now" tab and the briefing route map's Cells toggle (off by default, corridor bbox + 50 NM).
+Droplet side of the cell overlay (#656): the home node's display files land in an rsync inbox (`CELLS_INBOX_DIR`), are validated (schema, policy_version, stamp) and moved into `DATA_DIR/observed/cells/display` (24 h), and served by `/api/observed/cells/frames` (stale state, "unavailable since") and `/api/observed/cells/{stamp}.json` (optional bbox, immutable). Gated on `WB_CELLS_INGEST_ENABLED`. Stale after 25 min of the overlay's own age; overlay paired to the drawn radar stamp, else newest at-or-before, labelled with its own time. Web: one shared Leaflet renderer (`CellsLayer`, pure rules in `cells-overlay-core.ts`) on the maps page's "Now" tab and the briefing route map's Cells toggle (off by default, corridor bbox + 50 NM). iOS (#661): the same rules in `CellsOverlay`, `RouteCellsModel` shared by the route map's Cells toggle and the Observed tab's cell list.
 Key exports: `DisplayStore`, `ingest`, `validate`, `frames_status`, `filter_bbox`, `cells_ingest_enabled`, `run_cells_ingest_loop`, `CellsLayer`, `matchCellFrame`, `cellsBadge`, `drawCells`
 → Full doc: cells-overlay.md
 
 ## iOS app
 
 ### ios-app-overview
-iOS/iPad companion app entry point — start here, links to all ios-app-* docs. Phase 1 + Phase 2 complete; Phase 3 M0/M1 (aircraft registry, PIREP submit/view) shipped. Briefing re-cut into four tabs (Advisory · Discussion · Cross-Section · Map, gated PIREPs) by #310; also live tracking, flight sharing, post-flight debrief, forecast map + historical map, offline auto-download + eviction, APNs push, App Intents, What's New.
-Key exports: `AppState`, `BriefingViewModel`, `BriefingTab`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`, `HelpCatalogStore`, `WhatsNewStore`
+iOS/iPad companion app entry point — start here, links to all ios-app-* docs. Phase 1 + Phase 2 complete; Phase 3 M0/M1 (aircraft registry, PIREP submit/view) shipped. Briefing tabs Advisory · Discussion · Cross-Section · Map (#310), plus a flight-day Observed tab appended at the right (#661: live changes, radar/lightning, experimental radar cells, METAR/TAF, SIGMET; opens there once in the live window); PIREP UI hidden (`PirepFeature`); also live tracking, flight sharing, post-flight debrief, forecast map + historical map, offline auto-download + eviction, APNs push, App Intents, What's New.
+Key exports: `AppState`, `BriefingViewModel`, `BriefingTab`, `ObservedTabView`, `RouteCellsModel`, `CellsOverlay`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`, `HelpCatalogStore`, `WhatsNewStore`
 → Full doc: ios-app-overview.md
 
 ### ios-app-architecture

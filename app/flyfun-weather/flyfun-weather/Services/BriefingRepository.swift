@@ -116,6 +116,12 @@ protocol BriefingRepository: Sendable {
     func observedImageryStatus() async throws -> ObservedImageryStatusResponse
     /// One Web Mercator tile — `path` is a filled-in `tileUrlTemplate`.
     func observedTile(path: String) async throws -> Data
+    // Radar cell overlay (#656 → #661) — online-only like the imagery.
+    /// Overlay stamps newest first + the stale state (`enabled: false` when the
+    /// server has no cell ingest — an answer, not an error).
+    func observedCellFrames() async throws -> CellFramesResponse
+    /// One overlay — `path` is a filled-in `urlTemplate`, with the route box query.
+    func observedCellDisplay(path: String) async throws -> CellDisplay
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
@@ -360,6 +366,21 @@ final class OnlineBriefingRepository: BriefingRepository {
     func observedTile(path: String) async throws -> Data {
         // Quiet: a map pan requests dozens of tiles.
         try await client.requestData(path, quietLog: true)
+    }
+
+    func observedCellFrames() async throws -> CellFramesResponse {
+        try await client.request("/api/observed/cells/frames")
+    }
+
+    func observedCellDisplay(path: String) async throws -> CellDisplay {
+        // `requestDataURL` so the `?south=…` box survives (`requestData`
+        // percent-encodes the `?` into the path).
+        let data = try await client.requestDataURL(path)
+        do {
+            return try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
     }
 
     /// `2026-09-28T14:30:00Z` — explicit UTC so the server never reads a naive time.
