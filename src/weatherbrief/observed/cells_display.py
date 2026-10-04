@@ -261,6 +261,7 @@ class IngestResult:
     accepted: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
     expired: int = 0
+    duplicates: int = 0
 
 
 def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
@@ -295,6 +296,27 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
             continue
         except OSError:
             logger.warning("Could not read cell display %s", path, exc_info=True)
+            continue
+        # A stamp is written once: the API serves it as immutable, so a second
+        # copy must never replace the first. An identical re-push (the node lost
+        # its push state) is simply dropped; different bytes are set aside.
+        existing = store.path(stamp)
+        if existing.exists():
+            try:
+                same = existing.read_bytes() == raw
+            except OSError:
+                same = False
+            if same:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                result.duplicates += 1
+            else:
+                logger.warning("Rejected cell display %s: stamp already stored with different "
+                               "bytes (served as immutable; keeping the first)", path.name)
+                _reject(inbox, path)
+                result.rejected.append(stamp)
             continue
         try:
             store.write(stamp, raw)  # received_at = now (the file's mtime)

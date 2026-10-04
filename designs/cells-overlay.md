@@ -40,6 +40,9 @@ filename's stamp, `cells` list / `outlines` dict.  Bad files go to
 temp files are never touched.  Read re-validates (cached by path+mtime+size,
 8 entries) so a hand-copied file cannot reach a browser unchecked.
 Any `policy_version` is accepted — the overlay shows what the node ran.
+**A stamp is written once**: an identical re-push is dropped, different bytes for
+a stored stamp go to `rejected/` (the per-stamp response is `immutable`, so the
+first copy must stay the only one). `rejected/` is pruned after 24 h.
 
 **Retention 24 h, by valid time** (agreed on the issue, 2026-10-04):
 ~150 KB × 288 ≈ 43 MB.  Longer than radar's 3 h, so a future loop over past

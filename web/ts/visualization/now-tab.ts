@@ -88,6 +88,7 @@ export class NowTab {
   private moveTimer: ReturnType<typeof setTimeout> | null = null;
   private openIcao: string | null = null;
   private badges: Partial<Record<NowLayer, string>> = {};
+  private inFlight: Promise<void> | null = null;
 
   async show(): Promise<void> {
     this.visible = true;
@@ -171,11 +172,17 @@ export class NowTab {
   /** Everything, in the order a pilot looks: airports, radar, cells, lightning. */
   async refresh(): Promise<void> {
     if (!this.leaflet) return;
+    // One refresh at a time: the button, the tick and show() can all ask, and
+    // two overlapping runs could let a slower, older response win.
+    if (this.inFlight) return this.inFlight;
     this.lastRefresh = Date.now();
-    await Promise.all([this.refreshAirports(), this.refreshTiles()]);
-    // Cells pair with the radar frame just drawn, so after the tiles.
-    await Promise.all([this.refreshCells(), this.refreshFlashes()]);
-    this.renderBadge();
+    this.inFlight = (async () => {
+      await Promise.all([this.refreshAirports(), this.refreshTiles()]);
+      // Cells pair with the radar frame just drawn, so after the tiles.
+      await Promise.all([this.refreshCells(), this.refreshFlashes()]);
+      this.renderBadge();
+    })().finally(() => { this.inFlight = null; });
+    return this.inFlight;
   }
 
   // --- Airports -----------------------------------------------------------------

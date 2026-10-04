@@ -275,3 +275,23 @@ def test_a_nan_coordinate_is_refused():
     raw = gzip.compress(json.dumps(doc).encode())  # NaN literal, as a careless writer would emit
     with pytest.raises(cd.InvalidDisplay):
         cd.validate(raw, frame_stamp(t))
+
+
+def test_a_stored_stamp_is_never_replaced(tmp_path):
+    """Review #660 (round 2): per-stamp responses are immutable, so ingest keeps the first copy."""
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(minutes=10)
+    first = display_bytes(display_doc(t))
+    _drop(inbox, t, raw=first)
+    assert cd.ingest(inbox, store, now=NOW).accepted == [frame_stamp(t)]
+    # Identical re-push: dropped quietly.
+    src = _drop(inbox, t, raw=first)
+    result = cd.ingest(inbox, store, now=NOW)
+    assert result.duplicates == 1 and result.accepted == [] and result.rejected == [] and not src.exists()
+    # Different bytes for the same stamp: set aside, the first copy stays.
+    other = display_doc(t, cells=[])
+    _drop(inbox, t, other)
+    result = cd.ingest(inbox, store, now=NOW)
+    assert result.rejected == [frame_stamp(t)]
+    assert store.path(frame_stamp(t)).read_bytes() == first
+    assert (inbox / "rejected" / f"{frame_stamp(t)}.json.gz").exists()
