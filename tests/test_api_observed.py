@@ -419,3 +419,105 @@ def test_a_young_satellite_cycle_is_cached_briefly(client, satellite_times, monk
     monkeypatch.setattr(satellite_ir, "is_young", lambda cycle, now=None: False)
     response = client.get("/api/observed/tiles/satellite_ir/20261003T1550/6/32/21.png")
     assert "immutable" in response.headers["cache-control"]
+
+
+# --- Cell overlay (#656) --------------------------------------------------------
+
+
+@pytest.fixture
+def cells_store(observed_env, monkeypatch):
+    """Ingest enabled, with two overlays in the store: 10 and 15 minutes old."""
+    from weatherbrief.observed import cells_display
+    from weatherbrief.observed.frames import frame_stamp
+
+    from observed.cells_helpers import display_bytes, display_cell_doc, display_doc
+
+    monkeypatch.setenv("WB_CELLS_INGEST_ENABLED", "1")
+    store = cells_display.DisplayStore(observed_env / "observed" / "cells" / "display")
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    now -= timedelta(minutes=now.minute % 5)
+    stamps = []
+    for minutes in (10, 15):
+        t = now - timedelta(minutes=minutes)
+        cells = [display_cell_doc("core41-in", 50.5, 1.5), display_cell_doc("core35-far", 45.0, 10.0, tier="core35")]
+        store.write(frame_stamp(t), display_bytes(display_doc(t, cells=cells)))
+        stamps.append(frame_stamp(t))
+    return stamps
+
+
+def test_cell_frames_say_disabled_without_the_flag(client, monkeypatch):
+    monkeypatch.setenv("WB_CELLS_INGEST_ENABLED", "0")
+    body = client.get("/api/observed/cells/frames").json()
+    assert body["enabled"] is False and body["frames"] == []
+    assert client.get("/api/observed/cells/20261004T1200.json").status_code == 404
+
+
+def test_cell_frames_list_newest_first_with_received_at(client, cells_store):
+    body = client.get("/api/observed/cells/frames").json()
+    assert body["enabled"] is True and body["stale"] is False
+    assert [f["stamp"] for f in body["frames"]] == cells_store
+    assert all("received_at" in f and "valid_time" in f for f in body["frames"])
+    assert body["url_template"] == "/api/observed/cells/{stamp}.json"
+
+
+def test_cell_frames_report_stale_with_unavailable_since(client, observed_env, monkeypatch):
+    from weatherbrief.observed import cells_display
+    from weatherbrief.observed.frames import frame_stamp
+
+    from observed.cells_helpers import display_bytes, display_doc
+
+    monkeypatch.setenv("WB_CELLS_INGEST_ENABLED", "1")
+    store = cells_display.DisplayStore(observed_env / "observed" / "cells" / "display")
+    t = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(hours=1)
+    t -= timedelta(minutes=t.minute % 5)
+    store.write(frame_stamp(t), display_bytes(display_doc(t)))
+    body = client.get("/api/observed/cells/frames").json()
+    assert body["stale"] is True
+    assert body["unavailable_since"] == t.isoformat()
+
+
+def test_cell_display_is_immutable_json(client, cells_store):
+    response = client.get(f"/api/observed/cells/{cells_store[0]}.json")
+    assert response.status_code == 200
+    assert "immutable" in response.headers["cache-control"]
+    body = response.json()
+    assert {c["id"] for c in body["cells"]} == {"core41-in", "core35-far"}
+
+
+def test_cell_display_clips_to_the_route_box(client, cells_store):
+    body = client.get(f"/api/observed/cells/{cells_store[0]}.json", params=BBOX).json()
+    assert [c["id"] for c in body["cells"]] == ["core41-in"]
+    assert body["outlines"]["core35"] == []
+
+
+def test_cell_display_rejects_partial_or_empty_boxes_and_bad_stamps(client, cells_store):
+    url = f"/api/observed/cells/{cells_store[0]}.json"
+    assert client.get(url, params={"south": 1, "west": 2}).status_code == 400
+    assert client.get(url, params={"south": 51, "west": 0, "north": 50, "east": 2}).status_code == 400
+    assert client.get("/api/observed/cells/notastamp.json").status_code == 400
+
+
+def test_cell_display_for_a_purged_stamp_is_gone(client, cells_store):
+    assert client.get("/api/observed/cells/20200101T0000.json").status_code == 410
+
+
+def test_cell_endpoints_require_authentication(client_anon, cells_store):
+    assert client_anon.get("/api/observed/cells/frames").status_code in (401, 403)
+    assert client_anon.get(f"/api/observed/cells/{cells_store[0]}.json").status_code in (401, 403)
+
+
+def test_whole_europe_overlay_is_served_as_the_stored_gzip(client, cells_store, observed_env):
+    path = observed_env / "observed" / "cells" / "display" / f"{cells_store[0]}.json.gz"
+    response = client.get(f"/api/observed/cells/{cells_store[0]}.json", headers={"Accept-Encoding": "gzip"})
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    import gzip as _gzip
+    import json as _json
+    assert response.json() == _json.loads(_gzip.decompress(path.read_bytes()))
+
+
+def test_overlay_without_gzip_support_is_plain_json(client, cells_store):
+    response = client.get(f"/api/observed/cells/{cells_store[0]}.json", headers={"Accept-Encoding": "identity"})
+    assert response.status_code == 200
+    assert "content-encoding" not in response.headers
+    assert len(response.json()["cells"]) == 2

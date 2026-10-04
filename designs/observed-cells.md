@@ -2,10 +2,11 @@
 
 > Issue #650, slice 1 of the direction in
 > `designs/future/observed-motion-brainstorm.md` §10: **the home node owns the
-> field, the droplet owns the route.**  This slice is the loop and the
-> analysis only — nothing reaches the droplet, no pilot sees anything.
-> Next slices: push the catalogue to the droplet, route geometry against ETAs,
-> wording in the live layer and the agent block.
+> field, the droplet owns the route.**  #650 is the loop and the analysis;
+> #656 adds a per-frame **display file** pushed to the droplet and drawn on
+> the web maps (see "Display file and push" below, and `current-conditions.md`
+> for the droplet side).  Next slices: route geometry against ETAs, wording in
+> the live layer and the agent block, iOS.
 
 ## What it is
 
@@ -29,6 +30,9 @@ observed/cells/
   lineage.py     identity across frames (advect, overlap, dominant link); trend
   attributes.py  rain rate, lightning, parallax-corrected cloud top per cell
   catalogue.py   wire format: deterministic gzipped JSON, one per DBZH frame
+  display.py     map file per frame (#656): outlines + reduced cells, pushed
+  push.py        rsync of new display files to WB_CELLS_PUSH_TARGET (#656)
+  webmap.py      `map` CLI: standalone Leaflet review page (the visual reference)
   scoring.py     extrapolation vs persistence at 30/60 min → cells/scores/<day>.jsonl
   runner.py      archive store, collect + analyse tick, replay, coverage report
   render.py      review PNG (radar, outlines, 30-min arrows, flashes, age/trend)
@@ -184,6 +188,59 @@ within 100 km of an issued or persisted footprint.  Persistence (same cells,
 unmoved) is scored identically — extrapolation is only worth showing where it
 beats "it stays put".  Plus median centroid error for cells whose id survived.
 
+## Display file and push (#656)
+
+**What leaves the home node is only the display file** — no raw frames (the
+droplet collects its own, byte-identical), no catalogues, no scores.
+`display.build_display` runs in `process_frame` right after the catalogue,
+from the same detections, and writes `cells/display/<stamp>.json.gz`
+(`DISPLAY_SCHEMA = observed-cells-display/1`):
+
+- `outlines` per tier: masks traced with contourpy into `[[lat, lon], …]`,
+  3 decimals; decimated 4×/2× (rain20/cores) on a Europe-sized grid, 2×/1×
+  on small ones (`outline_step`).  `webmap.py` imports the same tracer.
+- `cells`: every core, plus rain20 areas ≥ `RAIN_MIN_AREA_KM2` (2000 km², the
+  prototype's floor).  Fields: `id, tier, lat, lon, area_km2, peak_dbz,
+  rate_peak_mm_h, flashes, top_fl, truncated, age_min, event, trend{…},
+  motion{status, reason, speed_kt, toward_deg}, arrow` — `arrow` is the
+  `[lat, lon]` 30 min ahead, **only** for `motion.status == "available"`.
+  `webmap.py` reads this same reduced shape (`display_cell`), so the
+  prototype and the web overlay cannot drift.
+- `times{radar, rate, lightning, cloud_top}` (each input's own time),
+  `unavailable`, `policy_version`, `code_revision`, `window_minutes`.
+- **No lightning flashes**: the droplet draws its own LI from
+  `/api/observed/flashes`; the per-cell `flashes` count is in the cells.
+
+Deterministic like the catalogue (replay reproduces it byte for byte), and
+written **0644** — `mkstemp`'s 0600 would travel through rsync to a different
+user on the droplet.  A display failure is a `display_error` on the run row,
+never a failed frame (the catalogue, the lineage input, is already written).
+Issue estimate for all of Europe: ~150 KB/frame gzipped (not re-measured
+in this PR — no real frames in the cloud session).
+
+**Push** (`push.py`): at the end of every tick, `rsync -t --timeout=60
+<files> $WB_CELLS_PUSH_TARGET/` for display files in the tick's lookback not
+yet sent; the sent set lives in `state.json` (`pushed`, pruned to the
+lookback; `last_push`, `push_error`).  **Off when unset** — the MacBook never
+pushes unless asked.  A failure (exit code, 120 s timeout, rsync missing) is
+logged and retried next tick; it never raises.  Explicit file lists, not the
+directory: the home node keeps every display file and the droplet purges at
+24 h, so a directory rsync would grow with the archive and re-send purged
+files.  Plain flags only (macOS ships an old rsync / openrsync).
+SSH auth comes from the node's `~/.ssh/config`.
+
+**Latency choice: publish once, with lightning — `ATTRIBUTE_WAIT` unchanged
+(15 min).**  Measured by the owner on the mini (2026-10-03): the 21:00Z
+frame was analysed at 21:10Z (radar lands ~4 min after its slot, then the
+wait for the matching RATE/LI slot; the LI slot for HH:00 covers HH:00–HH:10
+so it cannot land before HH:10).  Frames at :05 share their predecessor's LI
+slot, so latency alternates ~10/~5 min.  Not shortened, and no
+"publish without lightning, re-publish later": a re-analysis would change a
+catalogue the next frame already used as its lineage predecessor, and the
+droplet's stale threshold (25 min, `cells_display.STALE_AFTER`) absorbs a
+10–15 min feed.  The LI lag itself was not re-measured here; `runs/` rows
+(`processed_at` vs `valid_time`) give it on the mini.
+
 ## Portability (macOS arm64 now, Linux possible)
 
 numpy / `scipy.ndimage` / `scipy.fft` only — no OpenCV, no source builds, no
@@ -206,6 +263,10 @@ python -m weatherbrief.observed.cells replay --from 2026-10-03T08:00 --to 2026-1
 **A laptop sleeps.**  Without `caffeinate -i` (AC power) macOS idle-sleeps the
 loop for 10–15 minutes at a time; the first dev run lost most of an hour that
 way and it looked like slow downloads.
+
+**Pushing to a dev server** (MacBook): `WB_CELLS_PUSH_TARGET=$PWD/data/cells_inbox`
+on the loop, `WB_CELLS_INGEST_ENABLED=1` and `CELLS_INBOX_DIR=$PWD/data/cells_inbox`
+on the dev server.  On the mini: `WB_CELLS_PUSH_TARGET=<user>@<droplet>:<HOST_CELLS_INBOX>/`.
 
 **Dead-man:** `WB_CELLS_HEALTHCHECK_URL` (healthchecks.io) is pinged after a
 tick that analysed at least one frame, at most every 5 minutes; its silence
@@ -236,7 +297,7 @@ and a UTC day:
 
 NAS layout: `<source>/<YYYY>/<day>.tar` (plain tar — HDF5/netCDF are already
 compressed), `cells/<YYYY>/<day>.tar.gz` (catalogues incl. `.failed.json`,
-`scores`, `runs`), `manifest/<day>.json`, `keep-days.json`
+`scores`, `runs`, `display`), `manifest/<day>.json`, `keep-days.json`
 (`{"20260827": "reason"}`, pinned by hand).  Members are relative to the root,
 so `restore --day D --from <staging or NAS copy> --to <scratch>` rebuilds a tree
 that `replay`/`render`/`map` read unchanged.  Tars are deterministic (sorted,
@@ -257,8 +318,9 @@ alert when `kept_unarchived` is non-empty.  Manifest sizes are the sizes
 written into the tar (fixed at `gettarinfo`), not a later `stat`, so a file
 that grew mid-pack fails the size check instead of being pruned.  Frames go per stamp
 (`< now − 48 h`); analysis per whole day once it ended 90 days ago.  The
-verified day's staging copy is removed on the same pass.  `cells/display` is
-not touched (#656 owns it); `state.json` and markers stay.
+verified day's staging copy is removed on the same pass.  `cells/display`
+files (#656) are packed into the day's cells tar.gz (stamp prefix) and pruned
+with the analysis at 90 days; `state.json` and markers stay.
 
 **Event days** (`EventPolicy`, `events-1`, provisional): at some frame ≥ 3
 `core41` cells with ≥ 10 flashes each, or any cell (any tier) ≥ 55 dBZ with
@@ -298,6 +360,8 @@ thresholds; flash buffer.  Every one is in `policy.py`.
 - The hot root grows until the nightly archive job runs (see "Archive and
   retention"); if the NAS is down nothing is verified, so nothing is pruned and
   the mini fills at ~0.9 GB/day — the job's free-disk floor is the alarm.
+- Display files (#656, ~150 KB/frame, estimate) ride in the day's cells
+  tar.gz and are pruned with the analysis (90 d); the droplet keeps 24 h.
 - The frame directories are flat (288 DBZH files a day).  Fine for `has()`
   lookups by name; anything that lists them (`FrameStore.list_frames`) will
   slow down as they grow — the loop never lists.

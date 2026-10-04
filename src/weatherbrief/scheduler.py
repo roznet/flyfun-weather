@@ -2067,6 +2067,53 @@ async def run_observed_collect_loop(app_state) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cell overlay ingest (#656)
+# ---------------------------------------------------------------------------
+#
+# The home node rsyncs one display file per radar frame into CELLS_INBOX_DIR;
+# this moves the valid ones into DATA_DIR/observed/cells/display and purges
+# that store at 24 h. A directory listing of a few hundred names per tick.
+
+_CELLS_INGEST_TICK_SECONDS = 30
+
+
+async def run_cells_ingest_loop(app_state) -> None:
+    """Ingest pushed cell display files.  Off unless ``WB_CELLS_INGEST_ENABLED``."""
+    from weatherbrief.observed.cells_display import (
+        DisplayStore,
+        cells_ingest_enabled,
+        inbox_dir,
+        ingest,
+    )
+
+    if not cells_ingest_enabled():
+        logger.info("Cell overlay ingest disabled (WB_CELLS_INGEST_ENABLED unset)")
+        return
+    inbox = inbox_dir()
+    store = DisplayStore()
+    logger.info("Cell overlay ingest started (inbox %s, store %s)", inbox, store.root)
+    if not inbox.is_dir():
+        logger.warning("Cell overlay inbox %s does not exist yet; waiting for it", inbox)
+
+    while True:
+        try:
+            result = await asyncio.to_thread(ingest, inbox, store)
+            purged = await asyncio.to_thread(store.purge)
+            if result.accepted or result.rejected or purged:
+                logger.info(
+                    "Cell overlay: %d ingested (%s), %d rejected, %d expired, %d purged",
+                    len(result.accepted), result.accepted[-1] if result.accepted else "-",
+                    len(result.rejected), result.expired, purged,
+                )
+            await asyncio.sleep(_CELLS_INGEST_TICK_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.error("Cell overlay ingest cycle failed", exc_info=True)
+            await asyncio.sleep(300)
+
+
+# ---------------------------------------------------------------------------
 # Hewson precompute loop
 # ---------------------------------------------------------------------------
 

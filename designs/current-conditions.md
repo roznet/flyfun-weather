@@ -524,6 +524,7 @@ back in through the digest.
 | `WB_OBSERVED_SOURCES` | Comma-separated subset. Radar without EUMETSAT credentials is half the feature working, not a broken one. |
 | `EUMETSAT_CONSUMER_KEY` / `_SECRET` | Data Store OAuth credentials. |
 | `WB_OBSERVED_ARCHIVE_ENABLED` | Verification collection (#575): archive the watchlist samples on every METAR ingest tick. Needs `WB_OBSERVED_ENABLED` as well. |
+| `WB_CELLS_INGEST_ENABLED` | Cell overlay pushed by the home node (#656) — its own gate, independent of this one; see `cells-overlay.md`. |
 
 ## Testing
 

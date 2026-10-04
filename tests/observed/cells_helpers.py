@@ -113,3 +113,46 @@ def write_dbzh(store: FrameStore, valid_time: datetime, values: np.ndarray,
         dgroup.attrs["undetect"] = np.float64(0.0)
         data.create_dataset("data", data=raw, compression="gzip")
     store.write_sidecar(SOURCE_OPERA_DBZH, valid_time, opera.read_metadata(path, "DBZH"))
+
+
+def display_doc(valid_time: datetime, cells=None, outlines=None,
+                policy_version: str = "cells-1+0123abcd") -> dict:
+    """A minimal valid display file (#656) for the droplet-side tests."""
+    from weatherbrief.observed.cells.display import DISPLAY_SCHEMA
+
+    if cells is None:
+        cells = [display_cell_doc("core41-a", 50.5, 1.5), display_cell_doc("core35-b", 45.0, 10.0, tier="core35")]
+    if outlines is None:
+        outlines = {"rain20": [[[50.0, 1.0], [50.4, 1.2], [50.2, 1.6], [50.0, 1.0]]],
+                    "core35": [[[44.9, 9.9], [45.1, 10.0], [45.0, 10.1], [44.9, 9.9]]],
+                    "core41": []}
+    return {
+        "schema": DISPLAY_SCHEMA,
+        "policy_version": policy_version,
+        "code_revision": "abc123",
+        "valid_time": valid_time.isoformat(),
+        "window_minutes": 10.0,
+        "times": {"radar": valid_time.isoformat(), "rate": None, "lightning": None, "cloud_top": None},
+        "unavailable": [],
+        "rain_min_area_km2": 2000.0,
+        "arrow_minutes": 30,
+        "outlines": outlines,
+        "cells": cells,
+    }
+
+
+def display_cell_doc(cell_id: str, lat: float, lon: float, tier: str = "core41") -> dict:
+    return {
+        "id": cell_id, "tier": tier, "lat": lat, "lon": lon, "area_km2": 40.0, "peak_dbz": 52.0,
+        "rate_peak_mm_h": 30.0, "flashes": 3, "top_fl": None, "truncated": False, "age_min": 25.0,
+        "event": "continued",
+        "trend": {"state": "developing", "window_min": 30.0, "d_peak_db": 6.0, "area_ratio": 1.6, "d_flashes": 2},
+        "motion": {"status": "available", "reason": None, "speed_kt": 20.0, "toward_deg": 45.0},
+        "arrow": [lat + 0.1, lon + 0.1],
+    }
+
+
+def display_bytes(doc: dict) -> bytes:
+    from weatherbrief.observed.cells.catalogue import encode
+
+    return encode(doc)
