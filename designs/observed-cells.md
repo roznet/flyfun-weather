@@ -27,17 +27,19 @@ observed/cells/
   policy.py      every tunable number, versioned (CellPolicy.policy_version)
   detect.py      connected components per tier; footprints as run-length blocks
   motion.py      masked NCC per tile → flow field; cell velocity from its tiles
+  velocity.py    smoothed + centroid-track velocity over the lineage history (#662)
+  advect.py      motion field from the tiles; straight vs field trajectories (#662)
   lineage.py     identity across frames (advect, overlap, dominant link); trend
   attributes.py  rain rate, lightning, parallax-corrected cloud top per cell
   catalogue.py   wire format: deterministic gzipped JSON, one per DBZH frame
   display.py     map file per frame (#656): outlines + reduced cells, pushed
   push.py        rsync of new display files to WB_CELLS_PUSH_TARGET (#656)
   webmap.py      `map` CLI: standalone Leaflet review page (the visual reference)
-  scoring.py     extrapolation vs persistence at 30/60 min → cells/scores/<day>.jsonl
+  scoring.py     5 motion variants vs persistence at 30/60 min → cells/scores/<day>.jsonl
   runner.py      archive store, collect + analyse tick, replay, coverage report
   render.py      review PNG (radar, outlines, 30-min arrows, flashes, age/trend)
   archive.py     nightly pack / verify / prune / nas-plan / restore (#658)
-  __main__.py    run [--once] | replay | render | status | map | archive …
+  __main__.py    run [--once] | replay | render | status | map | scores | archive …
 ```
 
 ## One tree everywhere
@@ -182,11 +184,59 @@ failed sweep is retried after 5 minutes (`SWEEP_RETRY`), never on every tick,
 so one permanently broken file cannot hammer the providers.
 
 **Self-scoring.**  For each tier and lead (30, 60 min): cells issued at T−L
-with an available velocity, advected by v·L, against the tier's cells at T, on
+with an available velocity, advected by v·L (and by each #662 variant), against the tier's cells at T, on
 the footprint's own block grid, only where the radar covered the block and
 within 100 km of an issued or persisted footprint.  Persistence (same cells,
 unmoved) is scored identically — extrapolation is only worth showing where it
 beats "it stays put".  Plus median centroid error for cells whose id survived.
+
+## Velocity over the lineage and advection along the field (#662)
+
+Five ways to project a cell forward (`policy.MOTION_VARIANTS`), all recorded
+and **all scored on the same cells and the same verification area**:
+
+| variant | what | where |
+|---|---|---|
+| `raw` | this frame's single-pair vector, straight line (pre-#662 behaviour) | `motion.raw` fields |
+| `smoothed` | exp-weighted mean (τ 10 min) of the raw vectors in the last 20 min | `motion.smoothed` |
+| `track` | least-squares line through the centroids in the last 20 min (TITAN/SCIT) | `motion.track` |
+| `field` | semi-Lagrangian along the tile field, 5-min midpoint steps | rebuilt from `catalogue.flow` |
+| `field_anchored` | `field(x) + (smoothed − field(cell))` along the path | idem |
+
+- **History entries** grew to `[t, peak, area, flashes, drow, dcol, row, col,
+  break]`; `break` = 1 on a split/merge frame.  4-field entries (pre-#662) read
+  as "no vector, no centroid".  Lineage only links under one
+  `policy_version`, so in practice old entries never meet new code.
+- **Gates hold for every variant**: smoothed/track exist only when the raw
+  vector is `available`; an unsupported/withheld frame adds no vector; a
+  split/merge opens a fresh window.  Below 2 vectors (smoothed) / 3 centroids
+  (track) they **fall back to raw** (`n` = 1) rather than going missing, so
+  the scored set is identical; `cells_smoothed` / `cells_track` on each score
+  row count the cells where the estimate really differed.
+- **The field**: matched tile vectors → normalised convolution on the tile
+  lattice (Gaussian σ = 1 lattice step, 64 km) → reaches at most 1 lattice
+  step past a matched tile → bilinear between tile centres (missing corners
+  renormalised away).  Unsupported → the cell's smoothed vector.  The raw tile
+  vectors are stored per catalogue (`flow`, ~4000 rounded numbers, mostly
+  null) so scoring and the display rebuild the field without the frames.
+- **How (1) and (2) combine — not decided, both scored.**  `field` ignores
+  the cell's own vector except as fallback; `field_anchored` keeps the cell's
+  smoothed velocity at the cell and takes only the *spatial variation* from
+  the field.  The issue proposed the second; the scores pick.
+- **Footprints move per block**: displacement at each footprint block's centre
+  (≤ 8 km), rounded, applied to its pixels — exactly the old whole-footprint
+  integer shift for straight variants.  Scoring batches every cell of a tier
+  into one integration (per-cell calls would be ~100k small numpy calls).
+- **Verification area is now the union** over all variants + persistence
+  (was raw + persistence), so `extrapolation` scores under `cells-2` are not
+  directly comparable with the `cells-1` numbers below.
+- **Nothing pilot-visible changed**: `CellPolicy.display_motion = "raw"`.  The
+  map arrow, `render`, `map` and speed/heading follow it; set it to a variant
+  only after `replay` + `scores --root <replay>` show it beating raw on CSI
+  and centroid error (issue acceptance).  Lineage advection stays on the raw
+  vector regardless.
+- **Not measured yet**: the comparison on real frames.  Policy `cells-2`;
+  bumping it restarts every storm's lineage once on deploy.
 
 ## Display file and push (#656)
 
@@ -203,7 +253,9 @@ from the same detections, and writes `cells/display/<stamp>.json.gz`
   prototype's floor).  Fields: `id, tier, lat, lon, area_km2, peak_dbz,
   rate_peak_mm_h, flashes, top_fl, truncated, age_min, event, trend{…},
   motion{status, reason, speed_kt, toward_deg}, arrow` — `arrow` is the
-  `[lat, lon]` 30 min ahead, **only** for `motion.status == "available"`.
+  `[lat, lon]` 30 min ahead, **only** for `motion.status == "available"`,
+  by `policy.display_motion` (top-level `motion_variant`, `raw` today; for
+  another variant speed/heading are taken from the arrow).
   `webmap.py` reads this same reduced shape (`display_cell`), so the
   prototype and the web overlay cannot drift.
 - `times{radar, rate, lightning, cloud_top}` (each input's own time),
@@ -353,7 +405,8 @@ steady state: ~2 days of frames (~1.7 GB) + 90 days of analysis (~3 GB).
 
 Core threshold 35 vs 41; tile size and pair spacing; minimum cell areas;
 lineage overlap fraction (20 % unmeasured, inherited from #600); trend
-thresholds; flash buffer.  Every one is in `policy.py`.
+thresholds; flash buffer; smoothing window/τ, field σ and reach, and which
+motion variant the map shows (#662).  Every one is in `policy.py`.
 
 ## Gotchas
 
@@ -371,7 +424,7 @@ thresholds; flash buffer.  Every one is in `policy.py`.
 
 ## Numbers
 
-First real run, 2026-10-03 06:00–15:45Z, 71 frames, MacBook (Apple silicon),
+Under `cells-1` (before #662). First real run, 2026-10-03 06:00–15:45Z, 71 frames, MacBook (Apple silicon),
 `opera_dbzh,opera_rate,eumetsat_li`.  One day of autumn weather — a baseline
 for the loop's cost, **not** a calibration of anything.
 

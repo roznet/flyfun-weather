@@ -206,7 +206,7 @@ def test_policy_version_moves_with_any_number():
     from dataclasses import replace
 
     assert replace(DEFAULT_POLICY, min_ncc=0.6).policy_version != DEFAULT_POLICY.policy_version
-    assert DEFAULT_POLICY.policy_version.startswith("cells-1+")
+    assert DEFAULT_POLICY.policy_version.startswith("cells-2+")
 
 
 # --- Library options the loop relies on --------------------------------------

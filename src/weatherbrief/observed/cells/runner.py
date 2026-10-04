@@ -52,6 +52,7 @@ from ..frames import (
     frame_stamp,
 )
 from ..grid import GridSpec, GridWindow, compute_window
+from .advect import flow_to_dict
 from .attributes import cloud_tops, flash_counts, rate_peaks, same_grid
 from .catalogue import (
     SCHEMA,
@@ -70,6 +71,7 @@ from .motion import FlowField, cell_motion, estimate_flow
 from .policy import DEFAULT_POLICY, CellPolicy
 from .push import push_pending
 from .scoring import append_scores, score_frame
+from .velocity import history_entry, smoothed, track, window
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +406,23 @@ def _finalize_motion(mo, event: str, cell, grid: GridSpec, policy: CellPolicy) -
     return out
 
 
+def _add_lineage_velocity(motion: dict, history: list, now_entry: list, valid_time: datetime,
+                          policy: CellPolicy) -> None:
+    """Record the smoothed and centroid-track velocities next to the raw one (#662).
+
+    Only for ``available`` motion (the raw gates hold for every variant);
+    ``None`` otherwise, so the keys are always present.
+    """
+    motion["smoothed"] = motion["track"] = None
+    if motion["status"] != "available":
+        return
+    raw = (motion["drow_per_min"], motion["dcol_per_min"])
+    entries = window(history, now_entry, valid_time, policy)
+    for key, est in (("smoothed", smoothed(entries, raw, policy)), ("track", track(entries, raw, policy))):
+        motion[key] = {"drow_per_min": r(est.drow_per_min, 4), "dcol_per_min": r(est.dcol_per_min, 4),
+                       "n": est.n}
+
+
 def process_frame(
     ws: Workspace,
     valid_time: datetime,
@@ -501,8 +520,14 @@ def process_frame(
                 cell_motion(flow, det.labels, cell.label, cell.slice_rows, cell.slice_cols),
                 lin.event, cell, grid, policy,
             )
-            now_entry = [valid_time.isoformat(), r(cell.peak_dbz, 1), r(cell.area_km2, 1), flashes[k]]
+            now_entry = history_entry(
+                valid_time, r(cell.peak_dbz, 1), r(cell.area_km2, 1), flashes[k],
+                motion["drow_per_min"], motion["dcol_per_min"],
+                r(cell.centroid_row, 2), r(cell.centroid_col, 2),
+                lin.event in ("split", "merge"),
+            )
             history = trim_history(lin.history, valid_time, policy)
+            _add_lineage_velocity(motion, history, now_entry, valid_time, policy)
             age_min = (valid_time - datetime.fromisoformat(lin.born_at)).total_seconds() / 60.0
             cells_out.append({
                 "id": lin.id,
@@ -547,6 +572,9 @@ def process_frame(
             "flow_tiles_tried": flow.tried if flow else 0,
             "flow_tiles_matched": flow.matched if flow else 0,
         },
+        # The raw tile vectors (#662): scoring and the display rebuild the
+        # motion field from them to advect along it.
+        "flow": flow_to_dict(flow, frame.window.row0, frame.window.col0),
         "unavailable": unavailable,
         "cells": cells_out,
     }
@@ -567,8 +595,7 @@ def process_frame(
     # failed frame.  Recorded on the run row instead.
     scoring_error = None
     try:
-        scores = score_frame(ws.root, valid_time, grid, detections, covered, catalogue,
-                             policy.score_leads_minutes, policy.policy_version, policy.score_margin_km)
+        scores = score_frame(ws.root, valid_time, grid, detections, covered, catalogue, policy)
         append_scores(ws.root, valid_time, scores)
     except Exception as exc:
         logger.exception("Scoring failed for %s", valid_time)
