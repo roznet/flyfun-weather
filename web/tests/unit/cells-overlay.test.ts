@@ -3,6 +3,7 @@ import {
   TREND_COLOURS,
   cellPopupHtml,
   cellsBadge,
+  cellsChip,
   cellsLegendHtml,
   frameKey,
   hasArrow,
@@ -169,5 +170,14 @@ describe('flashBox', () => {
     const wide = flashBox({ south: 20, west: -60, north: 75, east: 60 });
     expect(wide.east - wide.west).toBe(80);
     expect((wide.east + wide.west) / 2).toBe(0);
+  });
+});
+
+describe('cells summary chip', () => {
+  it("carries the overlay's own age; anything but ok is a warning", () => {
+    const ok = cellsChip({ state: 'ok', frame: { stamp: '20261004T1150', valid_time: '2026-10-04T11:50:00+00:00' } } as any, new Date('2026-10-04T12:00:00Z'));
+    expect(ok).toEqual({ name: 'Cells', status: '10 min', warning: false });
+    expect(cellsChip({ state: 'disabled' }, NOW)).toEqual({ name: 'Cells', status: 'n/a', warning: true });
+    expect(cellsChip({ state: 'unavailable', since: null }, NOW).warning).toBe(true);
   });
 });

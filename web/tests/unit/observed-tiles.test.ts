@@ -5,13 +5,17 @@ import { describe, it, expect } from 'vitest';
 
 import {
   SATELLITE_SOURCE,
+  chipAge,
+  chipText,
   currentFrame,
+  fieldChip,
   formatBadge,
   frameBadgeField,
   frameTileUrl,
   isTiledSource,
   resolveObservedSelection,
   staleBadge,
+  staleChip,
   type ObservedFramesInfo,
 } from '../../ts/visualization/route-map/observed-overlay-geometry';
 
@@ -126,5 +130,29 @@ describe('stale layer badge', () => {
 
   it('handles a stale listing with no frames at all', () => {
     expect(staleBadge(listing({ stale: true, frames: [] }), now)).toContain('no current frame');
+  });
+});
+
+describe('observed summary chips', () => {
+  const now = new Date('2026-10-03T14:17:00Z');
+  it('name each layer by its age, from the frame itself', () => {
+    const info = listing();
+    const radar = fieldChip('opera_dbzh', frameBadgeField(info, info.frames[0], now));
+    expect(radar && chipText(radar)).toBe('Radar 12 min');
+    expect(radar?.warning).toBe(false);
+    const sat = fieldChip(SATELLITE_SOURCE, frameBadgeField(
+      listing({ source: SATELLITE_SOURCE, label: 'Satellite infrared',
+        frames: [{ stamp: '20261003T1300', valid_time: '2026-10-03T13:00:00+00:00', age_minutes: 70 }] }),
+      { stamp: '20261003T1300', valid_time: '2026-10-03T13:00:00+00:00', age_minutes: 70 }, now));
+    expect(sat && chipText(sat)).toBe('Sat 77 min');
+    expect(chipAge(0.4)).toBe('now');
+  });
+  it('flag a stale listing, and say nothing while a listing is missing', () => {
+    const stale = staleChip('opera_rate', listing({ stale: true }));
+    expect(stale && chipText(stale)).toBe('Radar stale');
+    expect(stale?.warning).toBe(true);
+    expect(staleChip('opera_dbzh', listing())).toBeNull();
+    expect(staleChip(SATELLITE_SOURCE, undefined)).toBeNull();
+    expect(fieldChip('opera_dbzh', null)).toBeNull();
   });
 });

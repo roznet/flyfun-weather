@@ -7,7 +7,7 @@ import {
   type ObservedFlashPoint,
   type ObservedSourceStatus,
 } from './observed-overlay';
-import { corridorBox, type ObservedFramesInfo } from './observed-overlay-geometry';
+import { chipText, corridorBox, type ObservedFramesInfo, type SummaryChip } from './observed-overlay-geometry';
 import { CellsLayer } from '../cells-overlay';
 import { cellsLegendHtml } from '../cells-overlay-core';
 import { escapeHtml } from '../../utils';
@@ -63,10 +63,11 @@ export class RouteMapRenderer {
   // underlay, the corridor the numbers describe, and age-faded lightning.
   // No animation yet; the stamp-keyed tiles are what a loop (#653) steps.
   private observedGroup: L.LayerGroup | null = null;
-  private observedBadgeEl: HTMLElement | null = null;
+  /** One collapsed panel: the age summary line, opening onto the full
+   *  badge lines, the colour ramp and the cell legend. */
+  private observedPanelEl: HTMLDetailsElement | null = null;
   private observedSource: string | null = null;
   private observedOpacity = 0.75;
-  private observedLegendEl: HTMLElement | null = null;
   private observedLegends: Map<string, ObservedSourceStatus> | null = null;
   private observedFlashes: ObservedFlashPoint[] = [];
   private observedFrames: Map<string, ObservedFramesInfo> = new Map();
@@ -75,8 +76,7 @@ export class RouteMapRenderer {
   // box plus a margin. Off by default (experimental).
   private cellsLayer: CellsLayer | null = null;
   private observedCells = false;
-  private observedBaseBadge = '';
-  private cellsLegendEl: HTMLElement | null = null;
+  private observedBaseLabel: { badge: string; chips: SummaryChip[] } = { badge: '', chips: [] };
   private highlightMarker: L.CircleMarker | null = null;
   private forecastLegendEl: HTMLElement | null = null;
   private forecastZoomHandler: (() => void) | null = null;
@@ -290,11 +290,10 @@ export class RouteMapRenderer {
       this.map.remove();
       this.map = null;
     }
-    if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
+    if (this.observedPanelEl) { this.observedPanelEl.remove(); this.observedPanelEl = null; }
     this.observedGroup = null;
     this.observedFlashes = [];
     this.cellsLayer = null;
-    if (this.cellsLegendEl) { this.cellsLegendEl.remove(); this.cellsLegendEl = null; }
     this.segmentGroup = null;
     this.frontsGroup = null;
     this.airportForecastGroup = null;
@@ -400,7 +399,7 @@ export class RouteMapRenderer {
    *  nearest closing front. Advisory-only, free-atmosphere boundaries. */
   private renderObserved(): void {
     if (!this.observedGroup || !this.map || !this.data) return;
-    const badge = renderObservedOverlay(
+    const label = renderObservedOverlay(
       this.observedGroup,
       this.map,
       this.data,
@@ -414,9 +413,8 @@ export class RouteMapRenderer {
       this.observedFlashes,
     );
     this.updateBaseMuted(!!this.data.observed && (!!this.observedSource || this.observedSatellite));
-    this.observedBaseBadge = badge;
-    this.updateObservedBadge(this.composeBadge());
-    this.updateObservedLegend();
+    this.observedBaseLabel = label;
+    this.updateObservedPanel();
     this.renderCells();
   }
 
@@ -428,75 +426,67 @@ export class RouteMapRenderer {
     if (!layer || !this.data) return;
     const want = this.observedCells && !!this.data.observed;
     if (layer.isEnabled() !== want) layer.setEnabled(want);
-    this.updateCellsLegend(want);
     if (!want) return;
     const radarInfo = this.observedSource ? this.observedFrames.get(this.observedSource) : undefined;
     const radarStamp = this.observedSource === 'opera_dbzh' && radarInfo && !radarInfo.stale
       ? radarInfo.frames[0]?.stamp ?? null
       : null;
     const box = corridorBox(this.data.points, (this.data.observed?.radiusNm ?? 20) + CELLS_MARGIN_NM);
-    void layer.refresh(radarStamp, box).then(() => this.updateObservedBadge(this.composeBadge()));
+    void layer.refresh(radarStamp, box).then(() => this.updateObservedPanel());
   }
 
-  /** Collapsible legend (closed by default) while the cell overlay is on. */
-  private updateCellsLegend(show: boolean): void {
-    if (!show) {
-      if (this.cellsLegendEl) { this.cellsLegendEl.remove(); this.cellsLegendEl = null; }
+  /** The observed label rides on the map itself, not in a side panel: it
+   *  labels a specific picture, and the picture is what the pilot is looking
+   *  at. Collapsed it is one line — each drawn layer's age ("Radar 12 min ·
+   *  Sat 77 min · Cells 10 min"), amber where a layer is stale or failed —
+   *  because the age is what turns "there is a cell" into "there was a cell
+   *  twelve minutes ago". Opened, it carries the full lines (valid time,
+   *  rolling window, producer), the colour ramp and the cell legend, which
+   *  used to sit on the map as three separate boxes.
+   *
+   *  The element persists across renders (the map re-renders on every
+   *  altitude drag), so an open panel stays open. */
+  private updateObservedPanel(): void {
+    const cells = this.observedCells && !!this.data?.observed;
+    const cellsChip = cells ? this.cellsLayer?.chip() ?? null : null;
+    const cellsBadge = cells ? this.cellsLayer?.badge() ?? '' : '';
+    // Cells first (the overlay the pilot opted into), then radar, then satellite.
+    const chips = [...(cellsChip ? [cellsChip] : []), ...this.observedBaseLabel.chips];
+    const lines = [this.observedBaseLabel.badge, cellsBadge].filter(Boolean).join('\n');
+    if (!chips.length && !lines) {
+      if (this.observedPanelEl) { this.observedPanelEl.remove(); this.observedPanelEl = null; }
       return;
     }
-    if (this.cellsLegendEl) return;
-    this.cellsLegendEl = document.createElement('details');
-    this.cellsLegendEl.className = 'map-cells-legend';
-    this.cellsLegendEl.innerHTML = `<summary>Radar cells <span class="cells-exp">experimental</span></summary>${cellsLegendHtml()}`;
-    // Clicks on the legend must not reach the map underneath.
-    L.DomEvent.disableClickPropagation(this.cellsLegendEl);
-    this.container.appendChild(this.cellsLegendEl);
-  }
-
-  private composeBadge(): string {
-    const cells = this.cellsLayer?.badge() ?? '';
-    return [this.observedBaseBadge, cells].filter(Boolean).join('\n');
-  }
-
-  /** Quiet basemap while observed imagery is drawn (#652). Only swaps tiles
-   *  when the state actually changes. */
-  private updateBaseMuted(muted: boolean): void {
-    if (!this.map || !this.tileLayer || this.tilesMuted === muted) return;
-    this.tilesMuted = muted;
-    applyBaseTileTheme(this.map, this.tileLayer, this.currentTileTheme === 'dark', muted);
-  }
-
-  /** The age badge rides on the map itself, not in a side panel: it labels a
-   *  specific picture, and the picture is what the pilot is looking at. */
-  private updateObservedBadge(text: string): void {
-    if (!text) {
-      if (this.observedBadgeEl) { this.observedBadgeEl.remove(); this.observedBadgeEl = null; }
-      return;
+    if (!this.observedPanelEl) {
+      this.observedPanelEl = document.createElement('details');
+      this.observedPanelEl.className = 'map-observed-badge';
+      // Clicks on the panel must not reach the map underneath.
+      L.DomEvent.disableClickPropagation(this.observedPanelEl);
+      L.DomEvent.disableScrollPropagation(this.observedPanelEl);
+      this.container.appendChild(this.observedPanelEl);
     }
-    if (!this.observedBadgeEl) {
-      this.observedBadgeEl = document.createElement('div');
-      this.observedBadgeEl.className = 'map-observed-badge';
-      this.container.appendChild(this.observedBadgeEl);
-    }
-    this.observedBadgeEl.textContent = text;
+    const summary = chips
+      .map((c) => `<span class="${c.warning ? 'mob-chip mob-warn' : 'mob-chip'}">${escapeHtml(chipText(c))}</span>`)
+      .join('<span class="mob-sep">·</span>');
+    this.observedPanelEl.title = lines;
+    this.observedPanelEl.innerHTML =
+      `<summary aria-label="${escapeHtml(lines.replace(/\n/g, '. '))}">${summary || 'Observed'}<span class="mob-info" aria-hidden="true">ⓘ</span></summary>`
+      + `<div class="mob-body">`
+      + `<div class="mob-lines">${escapeHtml(lines)}</div>`
+      + this.observedLegendHtml()
+      + (cells ? `<div class="mob-section">${cellsLegendHtml()}</div>` : '')
+      + `<div class="mob-note">Observed imagery shows the sky as it was, not as it is: at 120 kt, ten minutes is twenty nautical miles.</div>`
+      + `</div>`;
   }
 
-  /** Colour scale for whatever observed layer is drawn, in the map's corner.
+  /** Colour scale for whatever observed layer is drawn.
    *
    *  The synoptic grid layer carries one and these did not, so a pilot could
    *  see a green pixel and have no way to learn what value it meant. Built
    *  from the server's own ramp, never a client copy. */
-  private updateObservedLegend(): void {
+  private observedLegendHtml(): string {
     const status = this.observedSource ? this.observedLegends?.get(this.observedSource) : null;
-    if (!status || !status.legend?.length) {
-      if (this.observedLegendEl) { this.observedLegendEl.remove(); this.observedLegendEl = null; }
-      return;
-    }
-    if (!this.observedLegendEl) {
-      this.observedLegendEl = document.createElement('div');
-      this.observedLegendEl.className = 'map-observed-legend';
-      this.container.appendChild(this.observedLegendEl);
-    }
+    if (!status || !status.legend?.length) return '';
     const stops = status.legend;
     const swatches = stops
       .map((s) => `<span class="mol-swatch" style="background:${s.color}"></span>`)
@@ -505,10 +495,17 @@ export class RouteMapRenderer {
     // the ends are what set the range.
     const lo = formatLegendValue(status.source, stops[0].value, status.units);
     const hi = formatLegendValue(status.source, stops[stops.length - 1].value, status.units);
-    this.observedLegendEl.innerHTML =
-      `<div class="mol-title">${escapeHtml(status.label)}</div>`
+    return `<div class="mob-section"><div class="mol-title">${escapeHtml(status.label)}</div>`
       + `<div class="mol-ramp">${swatches}</div>`
-      + `<div class="mol-ends"><span>${escapeHtml(lo)}</span><span>${escapeHtml(hi)}</span></div>`;
+      + `<div class="mol-ends"><span>${escapeHtml(lo)}</span><span>${escapeHtml(hi)}</span></div></div>`;
+  }
+
+  /** Quiet basemap while observed imagery is drawn (#652). Only swaps tiles
+   *  when the state actually changes. */
+  private updateBaseMuted(muted: boolean): void {
+    if (!this.map || !this.tileLayer || this.tilesMuted === muted) return;
+    this.tilesMuted = muted;
+    applyBaseTileTheme(this.map, this.tileLayer, this.currentTileTheme === 'dark', muted);
   }
 
   private renderFronts(): void {

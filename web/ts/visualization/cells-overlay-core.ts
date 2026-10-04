@@ -17,6 +17,7 @@
  */
 
 import { escapeHtml } from '../utils';
+import { chipAge, type SummaryChip } from './route-map/observed-overlay-geometry';
 
 export type TrendState = 'developing' | 'decaying' | 'steady' | 'mixed' | 'new';
 
@@ -203,6 +204,13 @@ export function cellsBadge(match: CellMatch, display: CellDisplay | null, now: D
     ? ` · ${display.unavailable.map((u) => u.what).join(', ')} unavailable`
     : '';
   return `Cells ${hhmmZ(valid)} · ${age} min old${count}${pending}${missing} · experimental`;
+}
+
+/** The overlay's chip in the map's one-line summary — its own age, never the radar's. */
+export function cellsChip(match: CellMatch, now: Date = new Date()): SummaryChip {
+  if (match.state !== 'ok') return { name: 'Cells', status: 'n/a', warning: true };
+  const age = Math.max(0, (now.getTime() - new Date(match.frame.valid_time).getTime()) / 60000);
+  return { name: 'Cells', status: chipAge(Number.isFinite(age) ? age : 0), warning: false };
 }
 
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];

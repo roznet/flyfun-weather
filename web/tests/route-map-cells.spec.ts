@@ -182,7 +182,16 @@ test.describe('Briefing route map — cell overlay', () => {
     await expect(badge).toContainText(`Cells ${hhmm(cellsFrame.iso)}`);
     await expect(badge).toContainText('experimental');
     await expect(page.locator('.leaflet-cells-pane path[fill="#7a7a7a"]')).toHaveCount(1);
-    await expect(page.locator('.map-cells-legend')).toBeAttached();
+    // Collapsed, the panel is one line of per-layer ages; the full lines,
+    // ramp and cell legend open from it rather than covering the map.
+    const summary = badge.locator('summary');
+    await expect(summary).toContainText(/^Cells \d+ min·Radar \d+ min/);
+    await expect(badge.locator('.mob-body')).toBeHidden();
+    await page.screenshot({ path: 'test-results/route-map-observed-collapsed.png' });
+    await summary.click();
+    await expect(badge.locator('.mob-lines')).toBeVisible();
+    await expect(badge.locator('.mob-body')).toContainText('Radar cells');
+    await page.screenshot({ path: 'test-results/route-map-observed-open.png' });
     // The route's box, not all of Europe.
     expect(cellRequests.length).toBeGreaterThan(0);
     expect(cellRequests[0]).toContain('south=');

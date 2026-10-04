@@ -99,6 +99,48 @@ export function formatBadge(field: ObservedBadgeField | null): string {
   return `${field.label} ${hhmm} · ${age}${rolling}${attribution}`;
 }
 
+/** One layer in the map's one-line summary ("Radar 12 min"). The full badge
+ *  line, attribution and caveats sit behind it in the expandable panel; the
+ *  chip keeps only what must stay on screen — how old the picture is, or that
+ *  it is not drawn (`warning`), so an empty map never reads as "no echoes". */
+export interface SummaryChip {
+  name: string;
+  status: string;
+  warning: boolean;
+}
+
+export function chipText(chip: SummaryChip): string {
+  return `${chip.name} ${chip.status}`;
+}
+
+export function chipAge(ageMinutes: number): string {
+  return ageMinutes < 1 ? 'now' : `${Math.round(ageMinutes)} min`;
+}
+
+/** Chip name per source. */
+export function chipName(source: string | null | undefined): string {
+  switch (source) {
+    case 'opera_dbzh':
+    case 'opera_rate': return 'Radar';
+    case SATELLITE_SOURCE: return 'Sat';
+    case 'eumetsat_ctth': return 'Tops';
+    case 'eumetsat_li': return 'Lightning';
+    default: return source ?? '';
+  }
+}
+
+/** Chip for a labelled field (a drawn frame, or the briefing's sample). */
+export function fieldChip(source: string | null, field: ObservedBadgeField | null): SummaryChip | null {
+  if (!field) return null;
+  return { name: chipName(source), status: chipAge(field.ageMinutes), warning: false };
+}
+
+/** Chip for a listing too old to draw ('' badge ⇒ no chip, as `staleBadge`). */
+export function staleChip(source: string, info: ObservedFramesInfo | null | undefined): SummaryChip | null {
+  if (!info || !info.stale) return null;
+  return { name: chipName(source), status: 'stale', warning: true };
+}
+
 /** The observed layers the map can draw, in menu order.
  *
  *  One at a time by design: these are different measurements of the same sky

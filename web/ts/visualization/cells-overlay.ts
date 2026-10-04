@@ -10,12 +10,14 @@
  */
 
 import * as L from 'leaflet';
+import type { SummaryChip } from './route-map/observed-overlay-geometry';
 import {
   ARROW_COLOUR,
   OUTLINE_STYLE,
   cellPopupHtml,
   frameKey,
   cellsBadge,
+  cellsChip,
   hasArrow,
   matchCellFrame,
   trendColour,
@@ -125,6 +127,7 @@ export class CellsLayer {
   private showRain = false;
   private token = 0;
   private lastBadge = '';
+  private lastChip: SummaryChip | null = null;
   // What is drawn now, so a re-render with the same overlay (the route map
   // re-renders on every altitude drag) keeps the layers and any open popup.
   private drawnKey: string | null = null;
@@ -145,6 +148,7 @@ export class CellsLayer {
       this.token++;
       this.clear();
       this.lastBadge = '';
+      this.lastChip = null;
     }
   }
 
@@ -166,6 +170,11 @@ export class CellsLayer {
     return this.enabled ? this.lastBadge : '';
   }
 
+  /** The summary chip from the last refresh (null when disabled or not yet loaded). */
+  chip(): SummaryChip | null {
+    return this.enabled ? this.lastChip : null;
+  }
+
   /**
    * Fetch and draw the overlay that pairs with `radarStamp` (the radar frame
    * on screen, or null), optionally clipped to `box`. Resolves to the badge
@@ -180,6 +189,7 @@ export class CellsLayer {
     if (match.state !== 'ok' || !info) {
       this.clear();
       this.lastBadge = cellsBadge(match, null, now);
+      this.lastChip = cellsChip(match, now);
       return this.lastBadge;
     }
     const url = cellDisplayUrl(info, frameKey(match.frame), box);
@@ -188,6 +198,7 @@ export class CellsLayer {
     if (!display) {
       this.clear();
       this.lastBadge = cellsBadge({ state: 'unavailable', since: match.frame.valid_time }, null, now);
+      this.lastChip = cellsChip({ state: 'unavailable', since: match.frame.valid_time }, now);
       return this.lastBadge;
     }
     const key = `${url}|${this.showRain}`;
@@ -196,6 +207,7 @@ export class CellsLayer {
       this.drawnKey = key;
     }
     this.lastBadge = cellsBadge(match, display, now);
+    this.lastChip = cellsChip(match, now);
     return this.lastBadge;
   }
 }

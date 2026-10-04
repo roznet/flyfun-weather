@@ -30,13 +30,16 @@ import {
   boxParams,
   corridorBox,
   currentFrame,
+  fieldChip,
   flashOpacity,
   formatBadge,
   frameBadgeField,
   frameTileUrl,
   isTiledSource,
   staleBadge,
+  staleChip,
   overlayUrl as overlayUrlForBox,
+  type SummaryChip,
   type LatLonBox,
   type ObservedFrame,
   type ObservedFramesInfo,
@@ -90,13 +93,31 @@ function boundsToBox(bounds: L.LatLngBounds): LatLonBox {
   };
 }
 
+/** The briefing's own sample for whichever source the map is drawing, and
+ *  the source it came from (radar falls back to lightning). */
+function sampleField(observed: VizObserved, source: string | null) {
+  if (source === 'eumetsat_ctth') return { source, field: observed.cloudTops };
+  if (source === 'opera_rate') return { source, field: observed.rainRate };
+  return observed.reflectivity
+    ? { source: 'opera_dbzh', field: observed.reflectivity }
+    : { source: 'eumetsat_li', field: observed.lightning };
+}
+
 /** Age badge for whichever source the map is currently drawing. */
 export function badgeText(observed: VizObserved, source: string | null): string {
-  const field =
-    source === 'eumetsat_ctth' ? observed.cloudTops
-      : source === 'opera_rate' ? observed.rainRate
-      : observed.reflectivity ?? observed.lightning;
-  return formatBadge(field);
+  return formatBadge(sampleField(observed, source).field);
+}
+
+function sampleChip(observed: VizObserved, source: string | null): SummaryChip | null {
+  const sample = sampleField(observed, source);
+  return fieldChip(sample.source, sample.field);
+}
+
+/** What `renderObservedOverlay` labels the map with: the full badge lines
+ *  (the expandable panel) and one chip per line (the on-map summary). */
+export interface ObservedOverlayLabel {
+  badge: string;
+  chips: SummaryChip[];
 }
 
 /** Overlay URL for one source over one bounding box. */
@@ -107,8 +128,8 @@ export function overlayUrl(source: string, bounds: L.LatLngBounds): string {
 /**
  * Draw (or redraw) the observed overlay into `group`.
  *
- * Returns the badge text the caller should show, or `''` when there is
- * nothing observed to label.
+ * Returns the badge lines and summary chips the caller should show (both
+ * empty when there is nothing observed to label).
  */
 export function renderObservedOverlay(
   group: L.LayerGroup,
@@ -117,33 +138,39 @@ export function renderObservedOverlay(
   options: ObservedOverlayOptions,
   flashes: readonly ObservedFlashPoint[],
   now: Date = new Date(),
-): string {
+): ObservedOverlayLabel {
   // Tile layers persist across renders (the map re-renders on every altitude
   // drag); everything else is redrawn. Clear the rest now, before this render
   // adds its own; `wanted` collects this render's tiles for `reconcileTiles`.
   clearNonTileLayers(group);
   const wanted: TileSpec[] = [];
-  const finish = (badge: string): string => {
+  const badges: string[] = [];
+  const chips: Array<SummaryChip | null> = [];
+  const finish = (): ObservedOverlayLabel => {
     reconcileTiles(group, wanted);
-    return badge;
+    return {
+      badge: badges.filter(Boolean).join('\n'),
+      chips: chips.filter((c): c is SummaryChip => c !== null),
+    };
   };
   const observed = data.observed;
-  if (!observed) return finish('');
+  if (!observed) return finish();
 
   const bounds = corridorBounds(data, options.radiusNm);
-  if (!bounds) return finish('');
-
-  const badges: string[] = [];
+  if (!bounds) return finish();
 
   // 1. Satellite infrared, under the radar.
   if (options.showSatellite) {
     const info = options.frames?.get(SATELLITE_SOURCE);
     const frame = currentFrame(info);
     if (info && frame) {
+      const field = frameBadgeField(info, frame, now);
       wanted.push(tileSpec(info, frame, SATELLITE_OPACITY, SATELLITE_Z));
-      badges.push(formatBadge(frameBadgeField(info, frame, now)));
+      badges.push(formatBadge(field));
+      chips.push(fieldChip(SATELLITE_SOURCE, field));
     } else {
       badges.push(staleBadge(info, now));
+      chips.push(staleChip(SATELLITE_SOURCE, info));
     }
   }
 
@@ -154,8 +181,10 @@ export function renderObservedOverlay(
       : undefined;
     const frame = currentFrame(info);
     if (info && frame) {
+      const field = frameBadgeField(info, frame, now);
       wanted.push(tileSpec(info, frame, options.imageryOpacity ?? 0.75, RADAR_Z));
-      badges.unshift(formatBadge(frameBadgeField(info, frame, now)));
+      badges.unshift(formatBadge(field));
+      chips.unshift(fieldChip(options.imagerySource, field));
     } else if (!isTiledSource(options.imagerySource) || !info) {
       // Cloud tops, or a radar listing that has not arrived / failed: the
       // corridor image, labelled from the briefing's own sample.
@@ -164,13 +193,18 @@ export function renderObservedOverlay(
         interactive: false,
       }).addTo(group);
       badges.unshift(badgeText(observed, options.imagerySource));
+      chips.unshift(sampleChip(observed, options.imagerySource));
     }
     // A listing that says "stale" draws nothing: an old frame must not pass
     // for the present sky, which is also what the corridor endpoint's 410 does.
     // The badge says so, so it does not read as "no echoes".
-    if (info && !frame) badges.unshift(staleBadge(info, now));
+    if (info && !frame) {
+      badges.unshift(staleBadge(info, now));
+      chips.unshift(staleChip(options.imagerySource, info));
+    }
   } else {
     badges.unshift(badgeText(observed, options.imagerySource));
+    chips.unshift(sampleChip(observed, options.imagerySource));
   }
 
   // 3. The corridor the numbers describe.
@@ -202,7 +236,7 @@ export function renderObservedOverlay(
     }).addTo(group);
   }
 
-  return finish(badges.filter(Boolean).join('\n'));
+  return finish();
 }
 
 export interface TileSpec {
