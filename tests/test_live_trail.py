@@ -284,6 +284,28 @@ def test_clear_without_a_newer_report_is_a_gap_and_a_return_continues():
     assert _spans(row) == [("11:00", None)] and row.trail.times_today == 1
 
 
+def test_back_after_a_gap_before_the_history_records_it_is_still_one_span():
+    """On screen again, but the re-appear is not in the history yet (it lags a
+    tick): the gap-ended span is the open one, not a "2nd time"."""
+    c = _change("metar:ZZDS", observed_at="11:00")
+    h = (History().pack("10:00", PACK1).metar("11:00", "ZZDS", "11:00", "MVFR").appeared("11:00", c)
+         .cleared("11:10", c))
+    [row] = change_trails(h.records, _changes(c), now=at("11:20")).changes
+    assert _spans(row) == [("11:00", None)] and row.trail.times_today == 1
+
+
+def test_report_without_a_tick_is_skipped():
+    c = _change("metar:ZZDS", observed_at="11:00")
+    h = History().pack("10:00", PACK1).metar("11:00", "ZZDS", "11:00", "MVFR").appeared("11:00", c)
+    ctx_records = h.records + [{"type": "report", "kind": "metar", "icao": "ZZDS",
+                                "observed_at": at("11:30").isoformat(), "raw": "METAR ZZDS"}]
+    from weatherbrief.tasks.live_trail import _Context, _index_reports
+
+    ctx = _Context()
+    _index_reports(ctx_records, ctx)
+    assert all(t is not None for t, _, _ in ctx.metars["ZZDS"])
+
+
 def test_taf_change_clears_on_a_newer_taf():
     c = _change("taf:ZZDS", kind="taf_category", observed_at="09:00")
     h = (History().pack("08:00", PACK1).taf("09:00", "ZZDS", "09:00").appeared("09:10", c)

@@ -142,7 +142,8 @@ never suppressed (§35).
     airport passed) → `dropout`;
   - airport change with no newer METAR (TAF for `taf_category`) for that ICAO
     recorded by then → `gap` (fetch missed the airport); a re-appear continues
-    the span;
+    the span, and so does a row back on screen before the history records the
+    re-appear (one tick of lag), so neither reads "2nd time";
   - anything else, incl. SIGMET expiry and radar/lightning → `weather`.
 - **Cleared rows**: last span ended `weather` within 60 min
   (`RECENTLY_CLEARED_MINUTES`, inclusive), key not on screen in any direction,

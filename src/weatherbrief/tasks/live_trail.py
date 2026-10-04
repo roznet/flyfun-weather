@@ -109,6 +109,8 @@ def _index_reports(history: list[dict], ctx: _Context) -> None:
             continue
         icao = str(r["icao"]).upper()
         tick = _dt(r.get("tick_at"))
+        if tick is None:
+            continue  # _newer_report compares ticks; an undated record can't count
         if r.get("kind") == "metar":
             ctx.metars.setdefault(icao, []).append((tick, _dt(r.get("observed_at")), r))
         elif r.get("kind") == "taf":
@@ -233,9 +235,14 @@ def _reports(c: LiveChange, since: datetime | None, ctx: _Context) -> list[LiveT
 def _trail(
     c: LiveChange, kd_spans: list[_Span], ctx: _Context, *, current: bool, baseline_source: str | None,
 ) -> LiveChangeTrail:
+    # On screen now after a gap-ended span: the history has not recorded the
+    # re-appear yet, but it will continue that span, not start a new one.
+    gap_open = current and bool(kd_spans) and kd_spans[-1].reason == "gap"
     spans = [LiveTrailSpan(start=s.start, end=s.end) for s in kd_spans]
+    if gap_open:
+        spans[-1].end = None
     times = len(spans)
-    if current and not (kd_spans and kd_spans[-1].end is None):
+    if current and not (kd_spans and (kd_spans[-1].end is None or gap_open)):
         times += 1  # on screen now, but the history has not recorded it (yet)
     trail = LiveChangeTrail(spans=spans, times_today=max(times, 1), baseline_source=baseline_source)
     if c.kind == "metar_category" and c.icao:
