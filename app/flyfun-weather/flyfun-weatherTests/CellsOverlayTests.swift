@@ -129,7 +129,7 @@ struct CellsOverlayTests {
     func badgeOk() throws {
         let match = CellsOverlay.Match.ok(Self.frame("20261003T1405", "2026-10-03T14:05:00+00:00"))
         #expect(CellsOverlay.badge(match, display: try Self.display(), now: Self.now)
-                == "Cells 14:05Z · 12 min old · 3 cells · no lightning · experimental")
+                == "Cells 14:05Z · 12 min old · 3 cells · lightning unavailable · experimental")
     }
 
     @Test("badge wording for disabled / unavailable")
@@ -230,6 +230,24 @@ struct CellsOverlayTests {
                 == "/api/observed/cells/20261003T1405.json?south=43.12&west=4.50&north=45.00&east=6.79")
         #expect(CellsOverlay.displayPath(template: "/api/observed/cells/{stamp}.json", stamp: "20261003T1405", box: nil)
                 == "/api/observed/cells/20261003T1405.json")
+    }
+
+    @Test("lightning on its way reads pending, never 'no lightning' (#666)")
+    func lightningPending() throws {
+        let json = """
+        {"valid_time": "2026-10-03T14:05:00+00:00", "pending": ["lightning"], "unavailable": [], "revision": 0,
+         "cells": [{"id": "c1", "tier": "core41", "lat": 44.0, "lon": 5.0, "flashes": null,
+                    "flashes_pending": true, "rate_peak_mm_h": 12, "rate_as_of": "2026-10-03T13:45:00+00:00"}]}
+        """
+        let display = try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: Data(json.utf8))
+        let match = CellsOverlay.Match.ok(Self.frame("20261003T1405", "2026-10-03T14:05:00+00:00"))
+        let badge = CellsOverlay.badge(match, display: display, now: Self.now)
+        #expect(badge.contains("lightning pending"))
+        #expect(!badge.contains("no lightning"))
+        let cell = try #require(display.cells.first)
+        let lines = CellsOverlay.detailLines(cell)
+        #expect(lines.contains { $0.contains("lightning pending") })
+        #expect(lines.contains { $0.contains("12 mm/h (as of 13:45Z)") })
     }
 
     @Test("an amended frame is fetched by its newest revision (#666)")

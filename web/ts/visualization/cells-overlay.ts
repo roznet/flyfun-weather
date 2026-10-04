@@ -15,7 +15,6 @@ import {
   OUTLINE_STYLE,
   cellPopupHtml,
   frameKey,
-  rateAsOf,
   cellsBadge,
   hasArrow,
   matchCellFrame,
@@ -90,7 +89,6 @@ export function drawCells(
   // Leaflet does not pass a group's pane to its children: set it per layer.
   const pane = opts.pane ?? 'overlayPane';
   group.clearLayers();
-  const rateTime = rateAsOf(display);
   // Outlines first (rain20 under the cores), markers and arrows on top.
   for (const tier of ['rain20', 'core35', 'core41'] as CellTier[]) {
     if (tier === 'rain20' && !opts.showRain) continue;
@@ -110,7 +108,7 @@ export function drawCells(
       fillOpacity: 0.9,
       fillColor: trendColour(c.trend?.state),
       dashArray: c.tier === 'rain20' ? '3' : undefined,
-    }).bindPopup(cellPopupHtml(c, rateTime)).addTo(group);
+    }).bindPopup(cellPopupHtml(c)).addTo(group);
     // Arrows for cores only (as the prototype): a frontal band's centroid
     // motion is not a useful "where will it be".
     if (c.tier !== 'rain20' && hasArrow(c)) {

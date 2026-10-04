@@ -331,7 +331,7 @@ def test_a_revision_whose_content_disagrees_with_its_name_is_refused(tmp_path):
     path = inbox / f"{frame_stamp(t)}.r1.json.gz"
     inbox.mkdir(parents=True)
     path.write_bytes(display_bytes(display_doc(t)))  # says revision 0 (absent)
-    assert cd.ingest(inbox, store, now=NOW).rejected == [frame_stamp(t)]
+    assert cd.ingest(inbox, store, now=NOW).rejected == [f"{frame_stamp(t)}.r1"]
 
 
 def test_a_stored_revision_is_never_replaced(tmp_path):
@@ -341,7 +341,7 @@ def test_a_stored_revision_is_never_replaced(tmp_path):
     cd.ingest(inbox, store, now=NOW)
     first = store.path(frame_stamp(t), 1).read_bytes()
     _drop_rev(inbox, t, 1, display_doc(t))
-    assert cd.ingest(inbox, store, now=NOW).rejected == [frame_stamp(t)]
+    assert cd.ingest(inbox, store, now=NOW).rejected == [f"{frame_stamp(t)}.r1"]
     assert store.path(frame_stamp(t), 1).read_bytes() == first
 
 
@@ -358,6 +358,15 @@ def test_purge_removes_every_revision_of_an_expired_frame(tmp_path):
 def test_display_keys():
     assert cd.parse_key("20261004T1200") == ("20261004T1200", None)
     assert cd.parse_key("20261004T1200.r1") == ("20261004T1200", 1)
-    for bad in ("20261004T1200.r", "20261004T1200.rx", "x.r1", "20261004T1200.r1.json"):
+    assert cd.parse_key("20261004T1200.r0") == ("20261004T1200", 0)
+    for bad in ("20261004T1200.r", "20261004T1200.rx", "x.r1", "20261004T1200.r1.json",
+                "20261004T1200.r01"):
         with pytest.raises(ValueError):
             cd.parse_key(bad)
+
+
+def test_one_file_name_per_revision():
+    assert cd.name_of("20261004T1200.json.gz") == ("20261004T1200", 0)
+    assert cd.name_of("20261004T1200.r1.json.gz") == ("20261004T1200", 1)
+    for bad in ("20261004T1200.r0.json.gz", "20261004T1200.r01.json.gz"):
+        assert cd.name_of(bad) is None

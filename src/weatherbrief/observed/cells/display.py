@@ -18,6 +18,11 @@ Contents (``DISPLAY_SCHEMA``):
   ``rate_age_min`` (how much older the rain rate is than the radar: the
   newest RATE on disk is used rather than waiting for its slot, #666),
   ``unavailable``, ``policy_version`` and ``code_revision``;
+* **pending** — inputs still expected (``["lightning"]`` until the frame's
+  LI slot lands): *not* listed under ``unavailable``, and each cell carries
+  ``flashes_pending: true``, so no client can word it as "no lightning"
+  (#666 review).  Cells whose rain rate is from an older frame than the radar
+  carry ``rate_as_of``;
 * **revision** — 0 when first published; a frame whose lightning landed after
   it was published is re-issued as revision 1 (#666), each revision its own
   immutable file (``catalogue.display_path``).
@@ -46,6 +51,10 @@ DISPLAY_SCHEMA = "observed-cells-display/1"
 # Rain areas below this are outlined but get no marker: hundreds of small
 # showers would bury the cores.  The prototype's floor (webmap.py).
 RAIN_MIN_AREA_KM2 = 2000.0
+# The `unavailable` reason of a frame whose lightning slot has not landed yet.
+# The runner amends it within its window (a frame past that is stale on every
+# map before it could matter), so the display calls it *pending*, never "none".
+LIGHTNING_PENDING_REASON = "no lightning frame for this slot"
 ARROW_MINUTES = 30
 # Above this many pixels the grid is "Europe" and outlines are traced coarser.
 _BIG_GRID_PX = 4_000_000
@@ -104,8 +113,12 @@ def arrow_end(cell: dict, grid: GridSpec, minutes: float = ARROW_MINUTES, *,
 
 
 def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: MotionField | None = None,
-                 policy: CellPolicy | None = None) -> dict:
-    """One catalogue cell reduced to what the map shows."""
+                 policy: CellPolicy | None = None, flashes_pending: bool = False,
+                 rate_as_of: str | None = None) -> dict:
+    """One catalogue cell reduced to what the map shows.
+
+    ``flashes_pending`` / ``rate_as_of`` are added only when set, so a frame
+    with all its inputs keeps the pre-#666 cell shape."""
     m = cell["motion"]
     t = cell["trend"]
     arrow = arrow_end(cell, grid, variant=variant, field=field, policy=policy)
@@ -117,7 +130,7 @@ def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: Mot
         motion["speed_kt"] = r(speed_kt, 1)
         motion["toward_deg"] = (r(initial_bearing_deg(cell["lat"], cell["lon"], arrow[0], arrow[1]), 0)
                                 if speed_kt >= 1.0 else None)
-    return {
+    out = {
         "id": cell["id"],
         "tier": cell["tier"],
         "lat": cell["lat"],
@@ -134,6 +147,11 @@ def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: Mot
         "motion": motion,
         "arrow": arrow,
     }
+    if flashes_pending and cell["flashes"] is None:
+        out["flashes_pending"] = True
+    if rate_as_of and cell["rate_peak_mm_h"] is not None:
+        out["rate_as_of"] = rate_as_of
+    return out
 
 
 def shown(cell: dict) -> bool:
@@ -149,6 +167,11 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
     inputs = catalogue["inputs"]
     variant = policy.display_motion
     field = MotionField.from_dict(catalogue.get("flow"), policy) if variant.startswith("field") else None
+    pending_li = {"what": "lightning", "reason": LIGHTNING_PENDING_REASON}
+    unavailable = catalogue.get("unavailable", [])
+    lightning_pending = pending_li in unavailable
+    rate_time = inputs.get(SOURCE_OPERA_RATE)
+    rate_as_of = rate_time if rate_time and rate_time != inputs.get(SOURCE_OPERA_DBZH) else None
     return {
         "schema": DISPLAY_SCHEMA,
         "policy_version": catalogue["policy_version"],
@@ -163,7 +186,8 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
         },
         "rate_age_min": inputs.get("rate_age_min"),
         "revision": revision,
-        "unavailable": catalogue.get("unavailable", []),
+        "pending": ["lightning"] if lightning_pending else [],
+        "unavailable": [u for u in unavailable if u != pending_li],
         "rain_min_area_km2": RAIN_MIN_AREA_KM2,
         "arrow_minutes": ARROW_MINUTES,
         "outlines": {
@@ -171,7 +195,8 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
             for tier in policy.tiers if tier.name in detections
         },
         "motion_variant": variant,
-        "cells": [display_cell(c, grid, variant=variant, field=field, policy=policy)
+        "cells": [display_cell(c, grid, variant=variant, field=field, policy=policy,
+                               flashes_pending=lightning_pending, rate_as_of=rate_as_of)
                   for c in catalogue["cells"] if shown(c)],
     }
 

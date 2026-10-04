@@ -8,7 +8,6 @@ import {
   hasArrow,
   matchCellFrame,
   motionText,
-  rateAsOf,
   trendColour,
   trendText,
   type CellFramesInfo,
@@ -107,13 +106,16 @@ describe('revisions (#666)', () => {
     expect(frameKey({ ...base, key: '20261004T1145.r1', revision: 1 })).toBe('20261004T1145.r1');
     expect(frameKey(base)).toBe('20261004T1145');
   });
-  it('rain rate time only when it differs from the radar', () => {
-    const times = (radar: string, rate: string | null) =>
-      ({ times: { radar, rate, lightning: null, cloud_top: null } }) as unknown as Parameters<typeof rateAsOf>[0];
-    expect(rateAsOf(times('2026-10-04T11:45:00+00:00', '2026-10-04T11:45:00+00:00'))).toBeNull();
-    expect(rateAsOf(times('2026-10-04T11:45:00+00:00', '2026-10-04T11:30:00+00:00'))).toBe('2026-10-04T11:30:00+00:00');
-    expect(rateAsOf(times('2026-10-04T11:45:00+00:00', null))).toBeNull();
-    expect(rateAsOf(null)).toBeNull();
+  it('lightning on its way is "pending", never "no lightning"', () => {
+    const m = matchCellFrame(info(['11:45']), '20261004T1150', NOW);
+    const display = { cells: [], pending: ['lightning'], unavailable: [] } as unknown as Parameters<typeof cellsBadge>[1];
+    const text = cellsBadge(m, display, NOW);
+    expect(text).toContain('lightning pending');
+    expect(text).not.toContain('no lightning');
+    const gone = { cells: [], pending: [], unavailable: [{ what: 'lightning', reason: 'unreadable' }] } as unknown as Parameters<typeof cellsBadge>[1];
+    expect(cellsBadge(m, gone, NOW)).toContain('lightning unavailable');
+    expect(cellPopupHtml(cell({ flashes: null, flashes_pending: true }))).toContain('lightning pending');
+    expect(cellPopupHtml(cell({ flashes: null }))).toContain('lightning –');
   });
 });
 
@@ -142,8 +144,8 @@ describe('words', () => {
   });
   it('popup: the rain rate says its own time only when it is not the radar\'s', () => {
     expect(cellPopupHtml(cell())).not.toContain('as of');
-    expect(cellPopupHtml(cell({ rate_peak_mm_h: 12 }), '2026-10-04T11:30:00+00:00')).toContain('12 mm/h (as of 11:30Z)');
-    expect(cellPopupHtml(cell({ rate_peak_mm_h: null }), '2026-10-04T11:30:00+00:00')).not.toContain('as of');
+    expect(cellPopupHtml(cell({ rate_peak_mm_h: 12, rate_as_of: '2026-10-04T11:30:00+00:00' }))).toContain('12 mm/h (as of 11:30Z)');
+    expect(cellPopupHtml(cell({ rate_peak_mm_h: null, rate_as_of: '2026-10-04T11:30:00+00:00' }))).not.toContain('as of');
   });
   it('popup: coverage edge and cloud top only when present', () => {
     expect(cellPopupHtml(cell())).not.toContain('outside radar coverage');

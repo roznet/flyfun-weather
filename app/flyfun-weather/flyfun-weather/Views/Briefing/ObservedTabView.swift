@@ -466,6 +466,7 @@ private struct CellRow: View {
     private var secondLine: String {
         var parts = [cell.trend?.state ?? "trend unknown", CellsOverlay.motionText(cell.motion)]
         if let flashes = cell.flashes, flashes > 0 { parts.append("\(CellsOverlay.number(flashes)) flashes") }
+        if cell.flashes == nil, cell.flashesPending == true { parts.append("lightning pending") }
         if let top = cell.topFl { parts.append("top FL\(Int(top.rounded()))") }
         if cell.truncated == true { parts.append("partly outside radar coverage") }
         return parts.joined(separator: " · ")

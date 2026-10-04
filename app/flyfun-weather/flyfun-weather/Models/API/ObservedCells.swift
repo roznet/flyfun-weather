@@ -60,7 +60,12 @@ nonisolated struct CellDisplay: Codable, Sendable {
     let validTime: String?
     let windowMinutes: Double?
     let times: CellDisplayTimes?
+    /// Inputs still on their way (`["lightning"]` until its frame lands, #666):
+    /// "pending", never "none".
+    let pending: [String]?
     let unavailable: [CellUnavailable]?
+    /// 0 when first published, 1 once its lightning landed (#666).
+    let revision: Int?
     let rainMinAreaKm2: Double?
     let arrowMinutes: Double?
     /// Tier → polylines, each `[[lat, lon], …]`.
@@ -69,7 +74,7 @@ nonisolated struct CellDisplay: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schema, policyVersion, codeRevision, validTime, windowMinutes, times
-        case unavailable, rainMinAreaKm2, arrowMinutes, outlines, cells
+        case unavailable, rainMinAreaKm2, arrowMinutes, outlines, cells, pending, revision
     }
 
     init(from decoder: Decoder) throws {
@@ -81,6 +86,8 @@ nonisolated struct CellDisplay: Codable, Sendable {
         windowMinutes = try? c.decodeIfPresent(Double.self, forKey: .windowMinutes)
         times = try? c.decodeIfPresent(CellDisplayTimes.self, forKey: .times)
         unavailable = try? c.decodeIfPresent([CellUnavailable].self, forKey: .unavailable)
+        pending = try? c.decodeIfPresent([String].self, forKey: .pending)
+        revision = try? c.decodeIfPresent(Int.self, forKey: .revision)
         rainMinAreaKm2 = try? c.decodeIfPresent(Double.self, forKey: .rainMinAreaKm2)
         arrowMinutes = try? c.decodeIfPresent(Double.self, forKey: .arrowMinutes)
         outlines = try? c.decodeIfPresent([String: [[[Double]]]].self, forKey: .outlines)
@@ -132,6 +139,10 @@ nonisolated struct DisplayCell: Codable, Sendable, Identifiable {
     let peakDbz: Double?
     let ratePeakMmH: Double?
     let flashes: Double?
+    /// True while the frame's lightning has not landed yet (#666).
+    let flashesPending: Bool?
+    /// The rain rate's own time when it is older than the radar (#666).
+    let rateAsOf: String?
     let topFl: Double?
     let truncated: Bool?
     let ageMin: Double?
