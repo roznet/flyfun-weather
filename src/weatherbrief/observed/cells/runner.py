@@ -242,9 +242,10 @@ class FrameCache:
 
     def dbzh(self, t: datetime) -> GridFrame | None:
         if t not in self._frames:
-            self._frames[t] = read_dbzh(self.store, t)
-            while len(self._frames) > self.size:
-                self._frames.pop(min(self._frames))
+            frame = read_dbzh(self.store, t)
+            self._frames[t] = frame
+            _evict(self._frames, self.size, keep=t)
+            return frame
         return self._frames[t]
 
     def detections(self, t: datetime, policy: CellPolicy) -> dict[str, TierDetection] | None:
@@ -253,10 +254,25 @@ class FrameCache:
             frame = self.dbzh(t)
             if frame is None:
                 return None
-            self._dets[key] = {tier.name: detect(frame, tier) for tier in policy.tiers}
-            while len(self._dets) > self.det_size:
-                self._dets.pop(min(self._dets))
+            dets = {tier.name: detect(frame, tier) for tier in policy.tiers}
+            self._dets[key] = dets
+            _evict(self._dets, self.det_size, keep=key)
+            return dets
         return self._dets[key]
+
+
+def _evict(cache: dict, size: int, *, keep) -> None:
+    """Drop the oldest-*inserted* entries beyond ``size``, never ``keep``.
+
+    Not the oldest by time: a catch-up sweep asks for frames older than
+    everything cached, and evicting by ``min(time)`` threw the frame just read
+    straight back out (KeyError on every back-filled frame, 2026-10-03).
+    """
+    for key in list(cache):
+        if len(cache) <= size:
+            break
+        if key != keep:
+            del cache[key]
 
 
 def read_dbzh(store: FrameStore, t: datetime) -> GridFrame | None:

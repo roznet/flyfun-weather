@@ -507,3 +507,35 @@ def test_no_healthcheck_url_means_no_ping(tmp_path, monkeypatch):
     monkeypatch.delenv("WB_CELLS_HEALTHCHECK_URL", raising=False)
     monkeypatch.setattr(requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("pinged")))
     runner.ping_healthcheck({}, T0)
+
+
+def test_cache_serves_a_frame_older_than_everything_cached(tmp_path):
+    """Catch-up asks for old frames after new ones: the cache must not evict
+    the frame it just read (KeyError on every back-filled frame, 2026-10-03)."""
+    ws = Workspace(tmp_path)
+    times = [T0 + timedelta(minutes=5 * i) for i in range(6)]
+    for i, t in enumerate(times):
+        write_dbzh(ws.frames, t, scene(80, [(40, 40, 50, 6)], shift=(0, i)))
+    cache = FrameCache(ws.frames, size=2, det_size=1)
+    for t in times[3:]:
+        assert cache.dbzh(t) is not None
+        assert cache.detections(t, DEFAULT_POLICY) is not None
+    old = times[0]
+    assert cache.dbzh(old).valid_time == old
+    assert cache.detections(old, DEFAULT_POLICY) is not None
+    assert len(cache._frames) <= 2 and len(cache._dets) <= 1
+
+
+def test_catch_up_of_older_frames_after_live_ones_succeeds(tmp_path):
+    ws = Workspace(tmp_path)
+    times = [T0 + timedelta(minutes=5 * i) for i in range(8)]
+    for i, t in enumerate(times):
+        write_dbzh(ws.frames, t, scene(80, [(40, 40, 50, 6)], shift=(0, i)))
+    cache = FrameCache(ws.frames)
+    later = times[-1] + timedelta(minutes=1)
+    # Live loop saw only the newest three frames first ...
+    assert analyse_tick(ws, later, timedelta(minutes=12), DEFAULT_POLICY, cache, SOURCES) == 3
+    # ... then a sweep back-filled older ones into the same cache.
+    assert analyse_tick(ws, later, timedelta(hours=2), DEFAULT_POLICY, cache, SOURCES) > 0
+    for t in times:
+        assert catalogue_path(tmp_path, t).exists(), t
