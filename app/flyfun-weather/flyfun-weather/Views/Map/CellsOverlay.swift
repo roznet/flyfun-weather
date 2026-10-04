@@ -162,6 +162,17 @@ enum CellsOverlay {
         }
     }
 
+    /// The overlay's chip in the map's summary line — its own age, never the radar's.
+    static func chip(_ match: Match, now: Date) -> ObservedMapImagery.SummaryChip {
+        switch match {
+        case .disabled, .unavailable:
+            return .init(name: "Cells", status: "n/a", isWarning: true)
+        case .ok(let frame):
+            let age = Date.parseISO8601(frame.validTime).map { max(0, now.timeIntervalSince($0) / 60) } ?? 0
+            return .init(name: "Cells", status: ObservedMapImagery.SummaryChip.ageText(age), isWarning: false)
+        }
+    }
+
     private static let compassPoints = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
                                         "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 

@@ -124,6 +124,34 @@ struct ObservedMapImageryTests {
         #expect(result.badges[1] == "Satellite infrared 13:00Z · 77 min old · EUMETSAT MTG FCI IR 10.5 µm via EUMETView")
     }
 
+    @Test("summary chips: radar first, ages from each frame, warnings for stale and failed")
+    func composeChips() {
+        let frames = [
+            "opera_dbzh": Self.listing(),
+            "satellite_ir": Self.listing(
+                source: "satellite_ir", label: "Satellite infrared",
+                stamps: [("20261003T1300", "2026-10-03T13:00:00+00:00")], maxZoom: 9),
+        ]
+        let ok = ObservedMapImagery.compose(
+            selection: "opera_dbzh", showSatellite: true, radarOpacity: 0.75,
+            frames: frames, failed: [], now: Self.now)
+        #expect(ok.chips.map(\.text) == ["Radar 12 min", "Sat 77 min"])
+        #expect(ok.chips.allSatisfy { !$0.isWarning })
+
+        let bad = ObservedMapImagery.compose(
+            selection: "opera_rate", showSatellite: true, radarOpacity: 0.75,
+            frames: ["opera_rate": Self.listing(source: "opera_rate", stale: true)],
+            failed: ["satellite_ir"], now: Self.now)
+        #expect(bad.chips.map(\.text) == ["Radar stale", "Sat n/a"])
+        #expect(bad.chips.allSatisfy { $0.isWarning })
+
+        let pending = ObservedMapImagery.compose(
+            selection: "opera_dbzh", showSatellite: true, radarOpacity: 0.75,
+            frames: [:], failed: [], now: Self.now)
+        #expect(pending.chips.isEmpty)
+        #expect(ObservedMapImagery.SummaryChip.ageText(0.4) == "now")
+    }
+
     @Test("a stale frame is not drawn, and the badge says why")
     func composeStale() {
         let result = ObservedMapImagery.compose(

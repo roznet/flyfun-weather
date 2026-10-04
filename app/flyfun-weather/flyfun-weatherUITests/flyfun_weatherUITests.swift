@@ -539,6 +539,16 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [named], timeout: Self.uiTimeout), .completed,
                        "the cell overlay should say it is unavailable, got: \(badge.label)")
         attachScreenshot(app, "Observed-ShowOnMap")
+
+        // The on-map line is a one-row summary; legends, sources and caveats
+        // are a tap away so they don't cover the map.
+        badge.tap()
+        XCTAssertTrue(app.navigationBars["Observed"].waitForExistence(timeout: Self.uiTimeout),
+                      "tapping the observed summary should open its details sheet")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Cell analysis unavailable"))
+                        .firstMatch.exists, "the sheet should carry the full layer lines")
+        attachScreenshot(app, "Observed-MapDetails")
+        app.navigationBars["Observed"].buttons["Done"].tap()
     }
 
     /// Journey (#605) — the cross-section layer bar in each layout mode, and the

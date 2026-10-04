@@ -113,8 +113,9 @@ enum ObservedMapImagery {
         var key: String { "\(source)|\(stamp)" }
     }
 
-    /// What the map draws for the current picks, and the badge lines that label
-    /// it. Radar badge first, then the satellite's (web order).
+    /// What the map draws for the current picks, the badge lines that label it
+    /// (the details sheet), and the one-word-per-layer chips of the on-map
+    /// summary. Radar first, then the satellite (web order).
     ///
     /// - `frames`: listings received so far, per source.
     /// - `failed`: sources whose listing could not be fetched (and none is held).
@@ -125,44 +126,79 @@ enum ObservedMapImagery {
         frames: [String: ObservedFramesResponse],
         failed: Set<String>,
         now: Date
-    ) -> (layers: [TileLayerSpec], badges: [String]) {
+    ) -> (layers: [TileLayerSpec], badges: [String], chips: [SummaryChip]) {
         var layers: [TileLayerSpec] = []
         var badges: [String] = []
+        var chips: [SummaryChip] = []
 
         if showSatellite {
-            let (layer, badge) = layerAndBadge(
+            let (layer, badge, chip) = layerAndBadge(
                 source: satelliteSource, opacity: satelliteOpacity, isUnderlay: true,
                 frames: frames, failed: failed, now: now)
             if let layer { layers.append(layer) }
             if let badge { badges.append(badge) }
+            if let chip { chips.append(chip) }
         }
         if !selection.isEmpty {
-            let (layer, badge) = layerAndBadge(
+            let (layer, badge, chip) = layerAndBadge(
                 source: selection, opacity: radarOpacity, isUnderlay: false,
                 frames: frames, failed: failed, now: now)
             if let layer { layers.append(layer) }
             if let badge { badges.insert(badge, at: 0) }
+            if let chip { chips.insert(chip, at: 0) }
         }
-        return (layers, badges)
+        return (layers, badges, chips)
     }
 
     private static func layerAndBadge(
         source: String, opacity: Double, isUnderlay: Bool,
         frames: [String: ObservedFramesResponse], failed: Set<String>, now: Date
-    ) -> (TileLayerSpec?, String?) {
+    ) -> (TileLayerSpec?, String?, SummaryChip?) {
+        let name = shortLabel(for: source)
         guard let info = frames[source] else {
             // No listing yet: say nothing while it loads; once it has failed,
             // say so, so an empty map never reads as "no echoes".
-            return (nil, failed.contains(source) ? unavailableBadge(source) : nil)
+            guard failed.contains(source) else { return (nil, nil, nil) }
+            return (nil, unavailableBadge(source), SummaryChip(name: name, status: "n/a", isWarning: true))
         }
-        guard let frame = currentFrame(info) else { return (nil, staleBadge(info, now: now)) }
+        guard let frame = currentFrame(info) else {
+            return (nil, staleBadge(info, now: now), SummaryChip(name: name, status: "stale", isWarning: true))
+        }
         let age = frameAgeMinutes(frame, now: now)
         let spec = TileLayerSpec(
             source: source, stamp: frame.stamp, template: info.tileUrlTemplate,
             minZoom: info.minZoom, maxZoom: info.maxZoom, opacity: opacity,
             isUnderlay: isUnderlay,
             cacheable: source != satelliteSource || age >= youngSatelliteMinutes)
-        return (spec, frameBadge(info, frame, now: now))
+        return (spec, frameBadge(info, frame, now: now),
+                SummaryChip(name: name, status: SummaryChip.ageText(age), isWarning: false))
+    }
+
+    // MARK: Summary chips
+
+    /// One layer in the on-map summary line ("Radar 12 min"). The full badge,
+    /// attribution and caveats live in the details sheet; the chip keeps only
+    /// what must stay on screen — how old the picture is, or that it is not
+    /// drawn (`isWarning`), so an empty map never reads as "no echoes".
+    struct SummaryChip: Equatable, Hashable {
+        let name: String
+        let status: String
+        let isWarning: Bool
+
+        var text: String { "\(name) \(status)" }
+
+        static func ageText(_ minutes: Double) -> String {
+            minutes < 1 ? "now" : "\(Int(minutes.rounded())) min"
+        }
+    }
+
+    /// Chip name per source.
+    static func shortLabel(for source: String) -> String {
+        switch source {
+        case "opera_dbzh", "opera_rate": "Radar"
+        case satelliteSource: "Sat"
+        default: label(for: source)
+        }
     }
 
     // MARK: Badges

@@ -47,6 +47,11 @@ final class RouteCellsModel {
         match.map { CellsOverlay.badge($0, display: display, now: now) }
     }
 
+    /// The overlay's chip in the map's summary line.
+    var chip: ObservedMapImagery.SummaryChip? {
+        match.map { CellsOverlay.chip($0, now: now) }
+    }
+
     /// Keep the overlay fresh until the calling task is cancelled.
     func poll(radarStamp: @escaping () -> String?, box: ObservedMapImagery.LatLonBox?) async {
         while !Task.isCancelled {

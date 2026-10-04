@@ -51,6 +51,8 @@ struct RouteMapView: View {
     /// The cross-section's corridor pick (0 = unset → the sampled default).
     /// `@AppStorage` so the corridor box follows a change made on that screen.
     @AppStorage(CrossSectionViewModel.observedRadiusDefaultsKey) private var observedRadiusPick = 0.0
+    /// The observed summary's details sheet (legends, sources, caveats).
+    @State private var showObservedDetails = false
 
     /// iPad (regular width) drives colour and width from independent metrics.
     private var usesDualMetrics: Bool { horizontalSizeClass == .regular }
@@ -270,8 +272,9 @@ struct RouteMapView: View {
         showsObserved ? observedPollSources.joined(separator: ",") : "off"
     }
 
-    private var observedComposition: (layers: [ObservedMapImagery.TileLayerSpec], badges: [String]) {
-        guard showsObserved, let model = observedModel else { return ([], []) }
+    private var observedComposition: (layers: [ObservedMapImagery.TileLayerSpec], badges: [String],
+                                      chips: [ObservedMapImagery.SummaryChip]) {
+        guard showsObserved, let model = observedModel else { return ([], [], []) }
         return ObservedMapImagery.compose(
             selection: observedRadar, showSatellite: observedSatellite,
             radarOpacity: observedOpacity, frames: model.frames,
@@ -378,40 +381,97 @@ struct RouteMapView: View {
         }
     }
 
-    /// Legend + age badge, on the map itself: they label the picture the pilot
-    /// is looking at. The badge is the only thing on screen that says how old
-    /// an echo is — at 120 kt, minutes are tens of nautical miles.
+    /// One tappable line on the map — each drawn layer's age ("Cells 10 min ·
+    /// Radar 12 min · Sat 25 min"), orange where a layer is stale or failed so
+    /// an empty map never reads as "no echoes". The age is the only thing on
+    /// screen that says how old an echo is — at 120 kt, minutes are tens of
+    /// nautical miles — so it stays; legends, attributions and caveats are one
+    /// tap away in `observedDetailsSheet` rather than covering the map.
     private var observedFooter: some View {
-        // The cell overlay's own line (its own time — never the radar's).
-        let badges = observedComposition.badges
-            + (showsCells ? [cellsModel?.badge].compactMap { $0 } : [])
-        let legend = observedRadar.isEmpty ? nil : observedModel?.legends[observedRadar]
+        let chips = observedChips
         return VStack {
             Spacer()
-            if !badges.isEmpty || legend != nil {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let legend, let stops = legend.legend, stops.count >= 2 {
-                        observedLegend(legend, stops: stops)
+            if !chips.isEmpty {
+                Button { showObservedDetails = true } label: {
+                    HStack(spacing: 6) {
+                        ForEach(Array(chips.enumerated()), id: \.offset) { index, chip in
+                            if index > 0 { Text("·").foregroundStyle(Theme.textMuted) }
+                            Text(chip.text)
+                                .foregroundStyle(chip.isWarning ? Color.orange : Theme.text)
+                        }
+                        Image(systemName: "info.circle").foregroundStyle(Theme.textMuted)
                     }
-                    if showsCells { cellsLegend }
-                    ForEach(badges, id: \.self) { line in
-                        Text(line)
-                            .font(.caption2)
-                            .foregroundStyle(Theme.text)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .font(.tabularData(.caption2))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
                 }
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
+                // The full lines for VoiceOver (and the UI journeys), not the chips.
+                .accessibilityLabel(observedBadges.joined(separator: ". "))
+                .accessibilityHint("Shows legends, sources and caveats")
                 .accessibilityIdentifier("map.observedBadge")
             }
         }
         .padding(Theme.spacingM)
         // Clear of MapKit's logo + Legal link, which must stay visible.
         .padding(.bottom, 24)
-        .allowsHitTesting(false)
+        .sheet(isPresented: $showObservedDetails) { observedDetailsSheet }
+    }
+
+    /// Cells first (the overlay the pilot opted into), then radar, then satellite.
+    private var observedChips: [ObservedMapImagery.SummaryChip] {
+        (showsCells ? [cellsModel?.chip].compactMap { $0 } : []) + observedComposition.chips
+    }
+
+    /// Full badge lines — time, age, rolling-max window, attribution.
+    private var observedBadges: [String] {
+        observedComposition.badges + (showsCells ? [cellsModel?.badge].compactMap { $0 } : [])
+    }
+
+    /// Everything the summary leaves out: the radar ramp, each layer's full
+    /// line with its producer, the cell legend and its caveat.
+    private var observedDetailsSheet: some View {
+        let legend = observedRadar.isEmpty ? nil : observedModel?.legends[observedRadar]
+        return NavigationStack {
+            List {
+                Section {
+                    ForEach(observedBadges, id: \.self) { line in
+                        Text(line).font(.footnote).foregroundStyle(Theme.text)
+                    }
+                } header: {
+                    Text("Layers")
+                } footer: {
+                    Text("Observed imagery shows the sky as it was, not as it is: at 120 kt, ten minutes is twenty nautical miles.")
+                }
+                if let legend, let stops = legend.legend, stops.count >= 2 {
+                    Section(ObservedMapImagery.label(for: observedRadar)) {
+                        observedLegend(legend, stops: stops)
+                    }
+                }
+                if showsCells {
+                    Section {
+                        cellsLegend
+                    } header: {
+                        Text("Radar cells (experimental)")
+                    } footer: {
+                        Text("Markers are coloured by trend; the magenta line is where a core would be in 30 min if its motion continued. Tap a marker for its measurements. "
+                             + CellsOverlay.caveat)
+                    }
+                }
+            }
+            .navigationTitle("Observed")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showObservedDetails = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .accessibilityIdentifier("map.observedDetails")
     }
 
     /// Cell markers are coloured by trend (evolution, not safety); the magenta

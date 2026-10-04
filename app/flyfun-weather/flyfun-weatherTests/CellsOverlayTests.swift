@@ -132,6 +132,15 @@ struct CellsOverlayTests {
                 == "Cells 14:05Z · 12 min old · 3 cells · lightning unavailable · experimental")
     }
 
+    @Test("chip carries the overlay's own age; unavailable is a warning")
+    func chip() {
+        let ok = CellsOverlay.chip(.ok(Self.frame("20261003T1405", "2026-10-03T14:05:00+00:00")), now: Self.now)
+        #expect(ok.text == "Cells 12 min")
+        #expect(!ok.isWarning)
+        #expect(CellsOverlay.chip(.disabled, now: Self.now).text == "Cells n/a")
+        #expect(CellsOverlay.chip(.unavailable(since: nil), now: Self.now).isWarning)
+    }
+
     @Test("badge wording for disabled / unavailable")
     func badgeUnavailable() {
         #expect(CellsOverlay.badge(.disabled, display: nil, now: Self.now)
