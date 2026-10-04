@@ -330,6 +330,15 @@ data shape is shipped, the canvas layer is not).
   whole-route-improving flat altitude — so a staircasing profile (deck height varies) no
   longer drops an otherwise-valid "fly lower" tip. Regression:
   `test_vertical_staircase_deck_scans_for_flat_altitude`.
+- **`cruise_imc` also scans when the profile reaches cruise — GREEN only** (#348): a
+  profile that threads cloud to reach cruise used to suppress "fly lower" entirely, hiding
+  a single flat altitude that is clear end-to-end. The scan now runs for any flagged
+  cruise axis, but when the profile reaches cruise only a GREEN band is offered (the
+  marginal AMBER tip stays reserved for routes that cannot sustain cruise). This is the
+  narrow survivor of the 14 "reaches cruise" tips #335 dropped below: corpus rerun over
+  219 eval packs → 6 new aggregate tips, all GREEN, none removed or changed. A
+  `cruise_imc` tip may now co-exist with a `climb_deck`/`descent_deck` tip on one model
+  (none did in the corpus).
 - **Tests:** `tests/test_vertical_profile.py` (solver, synthetic grids),
   `tests/test_vfr_mitigation.py` (VFR port), `tests/test_icing_escape_mitigation.py`
   (icing port).

@@ -776,8 +776,10 @@ def _solver_mitigations(
     and their gates). One min-cost profile over the ``(distance × altitude)`` grid yields
     the right advice in every case, and the old special-cases fall out:
 
-    - **cruise_imc** ("fly lower"): the cruise axis is flagged and the continuous profile
-      never reaches planned cruise → the whole route is under cloud. The solver's role here
+    - **cruise_imc** ("fly lower"): the cruise axis is flagged and either the continuous
+      profile never reaches planned cruise (the whole route is under cloud), or it reaches
+      cruise only by threading cloud and a single flat altitude is GREEN end-to-end (#348 —
+      GREEN only in that case; the corridor tips below can then co-exist). The solver's role here
       is the feasibility gate (a :class:`Blockage` — a full-column cloud wall — means no
       lower band is flyable, so no tip); the reported single flat altitude is then found by
       scanning downward for the highest whole-route altitude that strictly improves,
@@ -821,11 +823,14 @@ def _solver_mitigations(
     prof_obj = to_mitigation_profile(profile)
     mitigations: list[Mitigation] = []
 
-    # cruise_imc — the profile can't sustain cruise; the solver has confirmed a lower band
-    # is flyable (not a Blockage), so scan downward for the best single flat altitude to
-    # report (highest strictly-improving, preferring GREEN over AMBER — mirrors the old
-    # per-step scan so a staircasing profile doesn't drop an otherwise-valid tip, #338).
-    if enroute_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED) and not reaches_cruise:
+    # cruise_imc — the solver has confirmed a lower band is flyable (not a Blockage), so
+    # scan downward for the best single flat altitude to report (highest strictly-improving,
+    # preferring GREEN over AMBER — mirrors the old per-step scan so a staircasing profile
+    # doesn't drop an otherwise-valid tip, #338). Also scanned when the profile reaches
+    # cruise by threading cloud: one flat altitude clear end-to-end beats a staircase the
+    # tool never narrates (#348) — but then only a GREEN band is offered, so a marginal
+    # "fly lower" stays reserved for routes that cannot sustain cruise at all.
+    if enroute_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
         max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
         floor = max_terrain + floor_margin_ft
         best_alt: int | None = None
@@ -845,6 +850,8 @@ def _solver_mitigations(
                 if cand == AdvisoryStatus.GREEN:
                     break  # highest GREEN — can't do better
             alt -= MITIGATION_BIN_STEP_FT
+        if reaches_cruise and best_status != AdvisoryStatus.GREEN:
+            best_alt = best_status = None
         if best_alt is not None and best_status is not None:
             detail_key = (
                 "vfr.mitigation.altitude"

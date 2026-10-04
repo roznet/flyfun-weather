@@ -203,6 +203,44 @@ def test_vertical_staircase_deck_scans_for_flat_altitude():
     assert m.mitigated_status == AdvisoryStatus.GREEN
 
 
+def test_vertical_fly_lower_when_profile_reaches_cruise():
+    """A mid-route deck the min-cost profile can thread (it still reaches cruise at both
+    ends) must not hide a single flat altitude that is clear for the WHOLE route (#348).
+
+    OVC 7500–9000 at two interior points puts cruise (8000) in cloud there → AMBER. The
+    profile staircases under the patch and back up, so it reaches cruise; flat 6500 sits
+    exactly cloud-clearance below the base and is clear end-to-end → GREEN tip.
+    """
+    patch = EnhancedCloudLayer(base_ft=7500, top_ft=9000, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [patch] if i in (4, 5) else []}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(_ctx(analyses), _VFR_DEFAULTS)
+
+    assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+    alt = [m for m in _mitigations(result) if m.kind == MitigationKind.ALTITUDE]
+    assert len(alt) == 1
+    assert alt[0].addresses == "cruise_imc"
+    assert alt[0].altitude_ft == 6500
+    assert alt[0].mitigated_status == AdvisoryStatus.GREEN
+
+
+def test_vertical_reaches_cruise_marginal_band_suppressed():
+    """When the profile reaches cruise, a merely-better AMBER flat altitude is not offered
+    — only a clear (GREEN) one is (#348). The marginal "fly lower" stays reserved for a
+    route that cannot sustain cruise at all.
+
+    Same interior patch, widened to RED; terrain 4000 → floor 7000, so the best flat
+    candidate is 7000, inside cloud clearance of the 7500 base (AMBER) → no tip.
+    """
+    patch = EnhancedCloudLayer(base_ft=7500, top_ft=9000, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [patch] if 3 <= i <= 6 else []}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses, elevation=_elevation(max_elev_ft=4000)), _VFR_DEFAULTS
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED
+    assert not any(m.kind == MitigationKind.ALTITUDE for m in _mitigations(result))
+
+
 def test_vertical_tight_terrain_gap_suppresses_mitigation():
     """Under the unified conservative floor (terrain + 3000, #335), a marginal band
     that doesn't clear the floor yields NO 'fly lower' tip — scud-running into a tight
