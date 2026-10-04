@@ -397,6 +397,244 @@ def _bilinear_grid_weights(
 
 
 # ---------------------------------------------------------------------------
+# Seams between stacked regional grids (#672)
+# ---------------------------------------------------------------------------
+#
+# ECMWF delivers Europe as two 0.25° sub-grids that do not share a row:
+# Europe tops out at 59.5°N and Nordic starts at 60.0°N. No single grid
+# brackets a point inside 59.5–60.0°N, so per-grid bilinear interpolation
+# drops it (ESSA, ESOW, ESCM, EGPB got no ECMWF data at all). The seam plan
+# below fills that strip from the two facing edge rows:
+#
+# - both grids cover the longitude → linear in latitude between the lower
+#   grid's top row and the upper grid's bottom row (each linear in
+#   longitude). One 0.5° cell instead of a 0.25° one: coarser, not wrong.
+# - only one grid covers the longitude (EGPB, 1.3°W, is west of Nordic's
+#   2.5°E edge) → that grid's edge row, held constant across the gap. An
+#   approximation, so it is counted separately and logged.
+#
+# Only a gap between two grids whose longitude ranges overlap counts as a
+# seam, and only up to _MAX_SEAM_GAP_DEG wide: an outer domain edge (Azores,
+# Iceland) is never extended. Opt-in per decoder (``bridge_seams``) so the
+# GFS/ICON/HRRR paths are untouched.
+
+_MAX_SEAM_GAP_DEG = 1.0
+
+
+class _SeamTerm(NamedTuple):
+    """One edge-row contribution to a seam point: lat weight × lon blend."""
+    grid_idx: int
+    row: int
+    j0: int
+    j1: int
+    w_lat: float
+    w_j0: float
+    w_j1: float
+
+
+class _SeamPoint(NamedTuple):
+    pt_idx: int
+    terms: tuple[_SeamTerm, ...]
+    held: bool  # one-sided: a single edge row held constant across the gap
+
+
+def _regular_latlon_axes(ds) -> "tuple[str, str, np.ndarray, np.ndarray] | None":
+    """``(lat_dim, lon_dim, lat_arr, lon_arr)`` for a regular lat/lon dataset.
+
+    None for a projected grid (no 1-D lat/lon dims) or unreadable coords.
+    """
+    import numpy as np
+
+    lat_dim = lon_dim = None
+    for dim in ds.dims:
+        dim_lower = str(dim).lower()
+        if "lat" in dim_lower:
+            lat_dim = dim
+        elif "lon" in dim_lower:
+            lon_dim = dim
+    if lat_dim is None or lon_dim is None:
+        return None
+    try:
+        lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
+        lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
+    except Exception:
+        return None
+    if lat_arr.ndim != 1 or lon_arr.ndim != 1 or lat_arr.size < 2 or lon_arr.size < 2:
+        return None
+    return lat_dim, lon_dim, lat_arr, lon_arr
+
+
+def _edge_row_term(
+    grid_idx: int, lat_arr: np.ndarray, lon_arr: np.ndarray,
+    lon: float, *, top: bool, w_lat: float,
+) -> "_SeamTerm | None":
+    """Term reading ``lon`` off the grid's top (or bottom) row, None if outside."""
+    import numpy as np
+
+    frac, ok = _frac_grid_indices(lon_arr, [lon])
+    if not ok[0]:
+        return None
+    f = float(frac[0])
+    j0 = int(min(max(np.floor(f), 0), lon_arr.size - 2))
+    a = f - j0
+    row = int(np.argmax(lat_arr) if top else np.argmin(lat_arr))
+    return _SeamTerm(grid_idx, row, j0, j0 + 1, w_lat, 1.0 - a, a)
+
+
+def _plan_grid_seams(
+    grids: "list[tuple[np.ndarray, np.ndarray] | None]",
+    targets_lat: "np.ndarray | list[float]",
+    targets_lon: "np.ndarray | list[float]",
+) -> list[_SeamPoint]:
+    """Plan seam fills for points no grid brackets but a seam gap contains.
+
+    ``grids[k]`` is grid k's ``(lat_arr, lon_arr)``, or None when it is not
+    a regular lat/lon grid. Pure: returns which edge rows to read and with
+    what weights; the decoders do the gather.
+    """
+    import numpy as np
+
+    lats = np.asarray(targets_lat, dtype=np.float64)
+    lons = np.asarray(targets_lon, dtype=np.float64)
+    boxes = [
+        (k, g[0], g[1], float(g[0].min()), float(g[0].max()),
+         float(g[1].min()), float(g[1].max()))
+        for k, g in enumerate(grids) if g is not None
+    ]
+    if len(boxes) < 2 or lats.size == 0:
+        return []
+
+    # (lower, upper) pairs stacked in latitude with a narrow gap and a
+    # shared longitude span.
+    pairs = []
+    for lo in boxes:
+        for hi in boxes:
+            gap = hi[3] - lo[4]
+            if not (0.0 < gap <= _MAX_SEAM_GAP_DEG + 1e-9):
+                continue
+            if min(lo[6], hi[6]) <= max(lo[5], hi[5]):
+                continue
+            pairs.append((lo, hi))
+    if not pairs:
+        return []
+
+    inside_any = np.zeros(lats.shape, dtype=bool)
+    for _, _, _, la0, la1, lo0, lo1 in boxes:
+        inside_any |= (lats >= la0) & (lats <= la1) & (lons >= lo0) & (lons <= lo1)
+
+    plan: list[_SeamPoint] = []
+    for p in np.flatnonzero(~inside_any):
+        lat, lon = float(lats[p]), float(lons[p])
+        best: _SeamPoint | None = None
+        for lo, hi in pairs:
+            lo_top, hi_bot = lo[4], hi[3]
+            if not (lo_top < lat < hi_bot):
+                continue
+            t = (lat - lo_top) / (hi_bot - lo_top)
+            lo_term = _edge_row_term(lo[0], lo[1], lo[2], lon, top=True, w_lat=1.0 - t)
+            hi_term = _edge_row_term(hi[0], hi[1], hi[2], lon, top=False, w_lat=t)
+            if lo_term is not None and hi_term is not None:
+                best = _SeamPoint(int(p), (lo_term, hi_term), False)
+                break
+            single = lo_term or hi_term
+            if single is not None and best is None:
+                best = _SeamPoint(int(p), (single._replace(w_lat=1.0),), True)
+        if best is not None:
+            plan.append(best)
+    return plan
+
+
+class _SeamAccumulator:
+    """Collects edge-row values for seam points per dataset, then combines.
+
+    cfgrib splits ONE geographic grid into several datasets (one per level
+    type, step type…), so the plan is made per distinct grid geometry and
+    each dataset is mapped onto its grid. Each (point, key) needs a finite
+    value from every grid its terms name; a missing or NaN contribution drops
+    the key rather than renormalising, so a field absent from one grid is
+    never silently one-sided. Within a grid the first dataset to supply a key
+    wins, matching the per-grid decode.
+    """
+
+    def __init__(self, plan: list[_SeamPoint], ds_grid: "list[int | None]"):
+        self.plan = plan
+        self.ds_grid = ds_grid
+        self.by_grid: dict[int, list[tuple[int, _SeamTerm]]] = {}
+        for s, sp in enumerate(plan):
+            for term in sp.terms:
+                self.by_grid.setdefault(term.grid_idx, []).append((s, term))
+        self._parts: dict[tuple, dict[int, float]] = {}
+
+    def has(self, ds_idx: int) -> bool:
+        g = self.ds_grid[ds_idx]
+        return g is not None and g in self.by_grid
+
+    def add(self, ds_idx: int, key, values) -> None:
+        """Record dataset ``ds_idx``'s contribution for ``key``.
+
+        ``values`` is indexable as ``values[row, j]`` in the dataset's own
+        (lat, lon) order (any leading axes already selected away).
+        """
+        import math
+
+        g = self.ds_grid[ds_idx]
+        for s, term in self.by_grid.get(g, ()):
+            v = (term.w_j0 * float(values[term.row, term.j0])
+                 + term.w_j1 * float(values[term.row, term.j1]))
+            if math.isnan(v):
+                continue
+            self._parts.setdefault((s, key), {}).setdefault(g, term.w_lat * v)
+
+    def results(self):
+        """Yield ``(pt_idx, key, value)`` for every fully-contributed key."""
+        for (s, key), parts in self._parts.items():
+            sp = self.plan[s]
+            if all(t.grid_idx in parts for t in sp.terms):
+                yield sp.pt_idx, key, sum(parts.values())
+
+    def log_summary(self, label: str, filled_pts: set[int]) -> None:
+        if not filled_pts:
+            return
+        held = sum(1 for sp in self.plan if sp.held and sp.pt_idx in filled_pts)
+        logger.info(
+            "%s grid seam: %d point(s) filled across sub-grids (%d interpolated "
+            "across the gap, %d held at the nearest edge row — approximate)",
+            label, len(filled_pts), len(filled_pts) - held, held,
+        )
+
+
+def _seam_setup(
+    datasets: list,
+    latitudes: "np.ndarray | list[float]",
+    longitudes: "np.ndarray | list[float]",
+) -> "tuple[_SeamAccumulator | None, list]":
+    """Plan seam fills over ``datasets``; returns (accumulator, per-ds axes).
+
+    The accumulator is None when no target falls in a seam (the common case:
+    one grid, or a route that stays clear of the gap).
+    """
+    axes = [_regular_latlon_axes(ds) for ds in datasets]
+    if len(datasets) < 2:
+        return None, axes
+    grids: list[tuple] = []
+    sigs: dict[tuple, int] = {}
+    ds_grid: list[int | None] = []
+    for a in axes:
+        if a is None:
+            ds_grid.append(None)
+            continue
+        lat_arr, lon_arr = a[2], a[3]
+        sig = (lat_arr.size, round(float(lat_arr[0]), 6), round(float(lat_arr[-1]), 6),
+               lon_arr.size, round(float(lon_arr[0]), 6), round(float(lon_arr[-1]), 6))
+        if sig not in sigs:
+            sigs[sig] = len(grids)
+            grids.append((lat_arr, lon_arr))
+        ds_grid.append(sigs[sig])
+    plan = _plan_grid_seams(grids, latitudes, longitudes)
+    return (_SeamAccumulator(plan, ds_grid) if plan else None), axes
+
+
+# ---------------------------------------------------------------------------
 # Lambert-projected grids (HRRR, #457)
 # ---------------------------------------------------------------------------
 
@@ -575,6 +813,7 @@ def _decode_pressure_vars_from_datasets(
     var_map: dict[str, str] | None = None,
     frac_vars: set[str] | None = None,
     first_wins: bool = False,
+    bridge_seams: bool = False,
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """Shared decode loop for pressure-level GRIB datasets.
 
@@ -590,6 +829,8 @@ def _decode_pressure_vars_from_datasets(
         var_map: GRIB shortName → field name mapping. Defaults to _VAR_MAP.
         frac_vars: Variable names (lowercase) that are 0–1 fractions needing ×100.
         first_wins: If True, skip a field at a level if already set (multi-grid).
+        bridge_seams: If True, fill points in the gap between stacked sub-grids
+            from their facing edge rows (see ``_plan_grid_seams``, #672).
 
     Returns:
         Tuple of (per-point results, coverage mask).
@@ -608,7 +849,11 @@ def _decode_pressure_vars_from_datasets(
     targets_lat = np.asarray(latitudes, dtype=np.float64)
     targets_lon = np.asarray(longitudes, dtype=np.float64)
 
-    for ds in datasets:
+    seams: _SeamAccumulator | None = None
+    if bridge_seams:
+        seams, _ = _seam_setup(datasets, targets_lat, targets_lon)
+
+    for ds_idx, ds in enumerate(datasets):
         # Detect lat/lon dim names once per dataset
         lat_dim = lon_dim = None
         for dim in ds.dims:
@@ -638,7 +883,8 @@ def _decode_pressure_vars_from_datasets(
             # Bilinear corner indices + weights — computed once per dataset and
             # reused for every variable in that dataset.
             bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
-        if bw is None or bw.inb_idx.size == 0:
+        ds_in_seam = seams is not None and seams.has(ds_idx)
+        if bw is None or (bw.inb_idx.size == 0 and not ds_in_seam):
             continue
         i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
         w00, w01, w10, w11 = bw.w00, bw.w01, bw.w10, bw.w11
@@ -691,6 +937,8 @@ def _decode_pressure_vars_from_datasets(
 
             if pressure_coord is None:
                 p_hpa = int(level)
+                if ds_in_seam:
+                    seams.add(ds_idx, (p_hpa, field_name, is_frac), values)
                 interp = (
                     w00 * values[i0, j0]
                     + w01 * values[i0, j1]
@@ -735,6 +983,8 @@ def _decode_pressure_vars_from_datasets(
             scale = 100.0 if is_frac else 1.0
             for li in range(pressures.shape[0]):
                 p_hpa = int(float(pressures[li]))
+                if ds_in_seam:
+                    seams.add(ds_idx, (p_hpa, field_name, is_frac), values[li])
                 row = interp[li]
                 for k, pt_idx in enumerate(inb_idx):
                     v = row[k]
@@ -744,6 +994,17 @@ def _decode_pressure_vars_from_datasets(
                         continue
                     results[pt_idx].setdefault(p_hpa, {})[field_name] = float(v) * scale
                     covered[pt_idx] = True
+
+    if seams is not None:
+        filled: set[int] = set()
+        for pt_idx, (p_hpa, field_name, is_frac), v in seams.results():
+            level = results[pt_idx].setdefault(p_hpa, {})
+            if field_name in level:
+                continue  # first match wins, as in the per-grid path
+            level[field_name] = v * 100.0 if is_frac else v
+            covered[pt_idx] = True
+            filled.add(pt_idx)
+        seams.log_summary("pressure-level", filled)
 
     return results, covered
 
@@ -2602,6 +2863,7 @@ def _decode_ecmwf_pressure_per_point_cfgrib(
             var_map=_ECMWF_FULL_VAR_MAP,
             frac_vars=_ECMWF_FRAC_TO_PCT,
             first_wins=True,
+            bridge_seams=True,
         )
         return results, covered
     except Exception:
@@ -3224,27 +3486,67 @@ def _decode_ecmwf_surface_per_point_cfgrib(
         return results, covered
 
     try:
-        for ds in datasets:
-            for var_name in ds.data_vars:
-                var_lower = str(var_name).lower()
-                field_name = _ECMWF_CLOUD_DIAG_FIELD_MAP.get(var_lower)
-                if field_name is None:
-                    continue
-
-                xr_var = ds[var_name]
-                values = _interpolate_per_point(xr_var, latitudes, longitudes)
-                for i, val in enumerate(values):
-                    if val is not None and field_name not in results[i]:
-                        results[i][field_name] = val
-                        covered[i] = True
-
-        return results, covered
+        return _decode_ecmwf_surface_from_datasets(datasets, latitudes, longitudes)
     except Exception:
         logger.warning("Failed to decode ECMWF surface data from %s", file_path, exc_info=True)
         return [{} for _ in range(n_points)], [False] * n_points
     finally:
         for ds in datasets:
             ds.close()
+
+
+def _decode_ecmwf_surface_from_datasets(
+    datasets: list,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> tuple[list[dict[str, float]], list[bool]]:
+    """Per-point decode of opened ECMWF a1 datasets, first grid wins.
+
+    Points in the gap between two stacked sub-grids (59.5–60.0°N, #672) are
+    filled from the facing edge rows, exactly as the pressure-level path does
+    via ``_decode_pressure_vars_from_datasets(bridge_seams=True)``.
+    """
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    covered: list[bool] = [False] * n_points
+
+    seams, axes = _seam_setup(datasets, latitudes, longitudes)
+
+    for ds_idx, ds in enumerate(datasets):
+        for var_name in ds.data_vars:
+            var_lower = str(var_name).lower()
+            field_name = _ECMWF_CLOUD_DIAG_FIELD_MAP.get(var_lower)
+            if field_name is None:
+                continue
+
+            xr_var = ds[var_name]
+            values = _interpolate_per_point(xr_var, latitudes, longitudes)
+            for i, val in enumerate(values):
+                if val is not None and field_name not in results[i]:
+                    results[i][field_name] = val
+                    covered[i] = True
+
+            if seams is not None and seams.has(ds_idx):
+                lat_dim, lon_dim = axes[ds_idx][0], axes[ds_idx][1]
+                if xr_var.ndim == 2 and set(xr_var.dims) == {lat_dim, lon_dim}:
+                    grid = np.asarray(
+                        xr_var.transpose(lat_dim, lon_dim).values, dtype=np.float64,
+                    )
+                    seams.add(ds_idx, field_name, grid)
+
+    if seams is not None:
+        filled: set[int] = set()
+        for pt_idx, field_name, v in seams.results():
+            if field_name in results[pt_idx]:
+                continue
+            results[pt_idx][field_name] = v
+            covered[pt_idx] = True
+            filled.add(pt_idx)
+        seams.log_summary("surface", filled)
+
+    return results, covered
 
 
 # ---------------------------------------------------------------------------
