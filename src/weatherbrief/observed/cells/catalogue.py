@@ -53,10 +53,37 @@ def catalogue_path(root: Path, valid_time: datetime) -> Path:
     return cells_dir(root) / "catalogues" / stamp[:8] / f"{stamp}.json.gz"
 
 
-def display_path(root: Path, valid_time: datetime) -> Path:
+#: Most revisions a frame's display file can have (#666): r0 at analysis, r1
+#: when its lightning lands later.  A bound, not a target.
+MAX_DISPLAY_REVISION = 9
+
+
+def display_key(valid_time: datetime, revision: int = 0) -> str:
+    """``<stamp>`` for the first publication, ``<stamp>.r<n>`` for a revision.
+
+    Revision 0 keeps the pre-#666 file name, so an older droplet still
+    ingests it; the API addresses every revision explicitly as ``.r<n>``.
+    """
+    stamp = frame_stamp(valid_time)
+    return stamp if revision == 0 else f"{stamp}.r{revision}"
+
+
+def display_path(root: Path, valid_time: datetime, revision: int = 0) -> Path:
     """The map-ready file for one frame (#656): built on the home node, mirrored
-    to the droplet's ``observed/cells/display/`` under the same name."""
-    return cells_dir(root) / "display" / f"{frame_stamp(valid_time)}.json.gz"
+    to the droplet's ``observed/cells/display/`` under the same name.  Each
+    revision (#666) is its own immutable file."""
+    return cells_dir(root) / "display" / f"{display_key(valid_time, revision)}.json.gz"
+
+
+def latest_display(root: Path, valid_time: datetime) -> tuple[Path, int] | None:
+    """The newest revision of a frame's display file, or ``None`` if none."""
+    found = None
+    for revision in range(MAX_DISPLAY_REVISION + 1):
+        path = display_path(root, valid_time, revision)
+        if not path.exists():
+            break
+        found = (path, revision)
+    return found
 
 
 def failure_path(root: Path, valid_time: datetime) -> Path:

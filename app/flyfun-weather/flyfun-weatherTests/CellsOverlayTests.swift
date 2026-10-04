@@ -21,7 +21,7 @@ struct CellsOverlayTests {
     static let now = Date.parseISO8601("2026-10-03T14:17:00Z")!
 
     static func frame(_ stamp: String, _ valid: String) -> CellFrame {
-        CellFrame(stamp: stamp, validTime: valid, receivedAt: nil, ageMinutes: nil)
+        CellFrame(stamp: stamp, validTime: valid, receivedAt: nil, ageMinutes: nil, key: nil, revision: nil)
     }
 
     static func listing(enabled: Bool = true, frames: [CellFrame]? = nil) -> CellFramesResponse {
@@ -230,6 +230,23 @@ struct CellsOverlayTests {
                 == "/api/observed/cells/20261003T1405.json?south=43.12&west=4.50&north=45.00&east=6.79")
         #expect(CellsOverlay.displayPath(template: "/api/observed/cells/{stamp}.json", stamp: "20261003T1405", box: nil)
                 == "/api/observed/cells/20261003T1405.json")
+    }
+
+    @Test("an amended frame is fetched by its newest revision (#666)")
+    func revisionKey() throws {
+        let json = """
+        {"enabled": true, "stale": false, "stale_after_minutes": 25, "unavailable_since": null,
+         "url_template": "/api/observed/cells/{stamp}.json", "newest": null,
+         "frames": [{"stamp": "20261003T1405", "key": "20261003T1405.r1", "revision": 1,
+                     "valid_time": "2026-10-03T14:05:00+00:00", "received_at": null, "age_minutes": 12}]}
+        """
+        let listing = try JSONDecoder.weatherBrief.decode(CellFramesResponse.self, from: Data(json.utf8))
+        let frame = try #require(listing.frames.first)
+        #expect(frame.revision == 1)
+        #expect(CellsOverlay.displayPath(template: listing.urlTemplate, stamp: frame.displayKey, box: nil)
+                == "/api/observed/cells/20261003T1405.r1.json")
+        // A server from before revisions: the bare stamp.
+        #expect(Self.frame("20261003T1405", "2026-10-03T14:05:00+00:00").displayKey == "20261003T1405")
     }
 
     // MARK: Shared model

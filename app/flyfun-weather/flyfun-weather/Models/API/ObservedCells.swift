@@ -26,7 +26,7 @@ nonisolated struct CellFramesResponse: Codable, Sendable, Equatable {
     /// Shipped by the server so the client never hard-codes the threshold.
     let staleAfterMinutes: Double
     let unavailableSince: String?
-    /// `/api/observed/cells/{stamp}.json`
+    /// `/api/observed/cells/{stamp}.json` — `{stamp}` takes a frame's `displayKey`.
     let urlTemplate: String
 }
 
@@ -36,6 +36,15 @@ nonisolated struct CellFrame: Codable, Sendable, Equatable {
     let validTime: String
     let receivedAt: String?
     let ageMinutes: Double?
+    /// `<stamp>.r<n>`: the frame's newest revision (#666 — a frame is re-issued
+    /// once its lightning lands). Nil from a server older than revisions.
+    let key: String?
+    let revision: Int?
+
+    /// What goes into `urlTemplate`: the newest revision, immutable, so the
+    /// display cache keyed by path can never hold an older one. The bare
+    /// stamp on an older server.
+    var displayKey: String { key ?? stamp }
 }
 
 /// One display file: one radar frame's cells, outlines and the frame's own times.

@@ -34,13 +34,14 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
 from .. import ctth as ctth_reader
 from .. import lightning as li_reader
 from .. import opera
-from ..collect import DEFAULT_LOOKBACK, collect_once, due_sources
+from ..collect import DEFAULT_LOOKBACK, OPERA_DELIVERY_LAG, collect_once, collect_opera, due_sources
 from ..frames import (
     SOURCE_EUMETSAT_CTTH,
     SOURCE_EUMETSAT_LI,
@@ -50,6 +51,7 @@ from ..frames import (
     FrameStore,
     GridFrame,
     frame_stamp,
+    parse_frame_stamp,
 )
 from ..grid import GridSpec, GridWindow, compute_window
 from .advect import flow_to_dict
@@ -60,6 +62,7 @@ from .catalogue import (
     cells_dir,
     display_path,
     failure_path,
+    latest_display,
     r,
     read_catalogue,
     write_catalogue,
@@ -106,12 +109,28 @@ SWEEP_RETRY = timedelta(minutes=5)
 # product" reading was the laptop idle-sleeping, not the provider.
 SWEEP_MAX_FETCH_OPERA = 72
 SWEEP_MAX_FETCH_EUMETSAT = 12
-# A new DBZH frame waits this long for its RATE and lightning frames before it
-# is analysed without them — otherwise the live loop would routinely publish
-# cells with lightning "unavailable" because LI lands a few minutes after
-# radar.  Older frames (catch-up) never wait.
-ATTRIBUTE_WAIT = timedelta(minutes=15)
+# A radar frame is never held for its attributes (#666).  Rain rate: the
+# newest RATE on disk at or before the frame's 15-min slot, up to this old
+# (RATE for HH:00 lands at ~HH:10, after the HH:05 radar frame) — the catalogue
+# and display file say how old (`rate_age_min`).
+RATE_MAX_AGE = timedelta(minutes=30)
+# Lightning: published without it, then amended (a new display revision) when
+# the frame's LI slot lands, for frames up to this old — a late LI backfill
+# must not rewrite history wholesale.
+LI_AMEND_WINDOW = timedelta(minutes=30)
+# The `unavailable` reason that marks a frame as waiting for its lightning; an
+# amend that fails replaces it, so a broken LI file is not re-read every tick.
+LI_MISSING = "no lightning frame for this slot"
+# Frames this recent are pushed the moment their display file is written; older
+# ones (a catch-up) wait for the end-of-tick batch rather than one rsync each.
+LIVE_PUSH_WINDOW = timedelta(minutes=15)
 TICK_SECONDS = 60
+# Tight radar poll (#666): from the frame's delivery lag (OPERA writes DBZH at
+# ~+4.2 min) check for it every RADAR_POLL_SECONDS instead of waiting for the
+# next 60-s tick, for RADAR_POLL_FOR, then fall back to the tick.
+RADAR_POLL_START = OPERA_DELIVERY_LAG
+RADAR_POLL_SECONDS = 10
+RADAR_POLL_FOR = timedelta(minutes=2)
 # A failed frame is retried once, this long after its first failure; only a
 # second failure is final (until `retry-failed`).
 FAILURE_RETRY = timedelta(minutes=30)
@@ -258,6 +277,8 @@ class FrameCache:
         self.det_size = det_size
         self._frames: dict[datetime, GridFrame | None] = {}
         self._dets: dict[tuple[datetime, str], dict[str, TierDetection]] = {}
+        # Per frame: {cell id: flashes} once its lightning is known, else None.
+        self._flashes: dict[tuple[datetime, str], dict[str, int | None] | None] = {}
 
     def dbzh(self, t: datetime) -> GridFrame | None:
         if t not in self._frames:
@@ -278,6 +299,41 @@ class FrameCache:
             _evict(self._dets, self.det_size, keep=key)
             return dets
         return self._dets[key]
+
+    def detections_uncached(self, t: datetime, policy: CellPolicy) -> tuple[GridFrame, dict[str, TierDetection]] | None:
+        """Frame + detections for ``t`` without displacing the live frames.
+
+        For the lightning amend, which revisits a frame 5–15 min old: going
+        through the cache would evict the predecessor the *next* radar frame
+        needs and put a re-detection on the critical path.
+        """
+        frame = self._frames.get(t)
+        dets = self._dets.get((t, policy.policy_version))
+        if frame is None:
+            frame = read_dbzh(self.store, t)
+            if frame is None:
+                return None
+        if dets is None:
+            dets = {tier.name: detect(frame, tier) for tier in policy.tiers}
+        return frame, dets
+
+    def flashes(self, root: Path, t: datetime, policy: CellPolicy) -> dict[str, int | None] | None:
+        """``{cell id: flashes}`` from frame ``t``'s catalogue, ``None`` while
+        that frame has no lightning (or no catalogue under this policy)."""
+        key = (t, policy.policy_version)
+        if key not in self._flashes:
+            cat = read_catalogue(catalogue_path(root, t))
+            self.set_flashes(t, policy, cat)
+        return self._flashes[key]
+
+    def set_flashes(self, t: datetime, policy: CellPolicy, catalogue: dict | None) -> None:
+        key = (t, policy.policy_version)
+        if (catalogue is None or catalogue.get("policy_version") != policy.policy_version
+                or catalogue.get("inputs", {}).get(SOURCE_EUMETSAT_LI) is None):
+            self._flashes[key] = None
+        else:
+            self._flashes[key] = {c["id"]: c["flashes"] for c in catalogue["cells"]}
+        _evict(self._flashes, 16, keep=key)
 
 
 def _evict(cache: dict, size: int, *, keep) -> None:
@@ -315,9 +371,14 @@ def _slot(t: datetime, minutes: int) -> datetime:
 
 
 def _rate_frame(store: FrameStore, t: datetime, like: GridFrame):
+    """The newest RATE frame at or before ``t``'s 15-min slot, up to
+    ``RATE_MAX_AGE`` older than ``t`` (#666): the radar is never held for it.
+    ``frame.valid_time`` is the RATE time actually used."""
     slot = _slot(t, 15)
-    if not store.has(SOURCE_OPERA_RATE, slot):
-        return None, "no RATE frame for this slot"
+    while not store.has(SOURCE_OPERA_RATE, slot):
+        slot -= timedelta(minutes=15)
+        if t - slot > RATE_MAX_AGE:
+            return None, f"no RATE frame in the last {int(RATE_MAX_AGE.total_seconds() // 60)} min"
     path = store.payload_path(SOURCE_OPERA_RATE, slot)
     try:
         grid = opera.read_grid(path)
@@ -333,7 +394,7 @@ def _rate_frame(store: FrameStore, t: datetime, like: GridFrame):
 def _li_frame(store: FrameStore, t: datetime):
     slot = _slot(t, 10)
     if not store.has(SOURCE_EUMETSAT_LI, slot):
-        return None, "no lightning frame for this slot"
+        return None, LI_MISSING
     try:
         return li_reader.read_flashes(
             store.payload_path(SOURCE_EUMETSAT_LI, slot),
@@ -430,8 +491,15 @@ def process_frame(
     *,
     cache: FrameCache | None = None,
     sources: tuple[str, ...] = DEFAULT_CELLS_SOURCES,
+    on_display: Callable[[datetime], str | None] | None = None,
 ) -> dict | None:
-    """Analyse one DBZH frame and write its catalogue.  ``None`` if absent."""
+    """Analyse one DBZH frame and write its catalogue.  ``None`` if absent.
+
+    ``on_display`` is called once the display file is written and before
+    scoring (not on the critical path), so the runner can push the frame
+    straight away; it returns the push time (ISO) or ``None``, recorded on the
+    run row as ``pushed_at``.
+    """
     started = time.perf_counter()
     cache = cache or FrameCache(ws.frames)
     frame = cache.dbzh(valid_time)
@@ -490,6 +558,7 @@ def process_frame(
         if why:
             unavailable.append({"what": "cloud_top", "reason": why})
     inputs[SOURCE_OPERA_RATE] = rate.valid_time.isoformat() if rate else None
+    inputs["rate_age_min"] = r((valid_time - rate.valid_time).total_seconds() / 60.0, 0) if rate else None
     inputs[SOURCE_EUMETSAT_LI] = li.valid_time.isoformat() if li else None
     inputs[SOURCE_EUMETSAT_CTTH] = ctth.valid_time.isoformat() if ctth else None
 
@@ -526,7 +595,8 @@ def process_frame(
                 r(cell.centroid_row, 2), r(cell.centroid_col, 2),
                 lin.event in ("split", "merge"),
             )
-            history = trim_history(lin.history, valid_time, policy)
+            history = fill_history_flashes(trim_history(lin.history, valid_time, policy),
+                                           lin.id, ws.root, cache, policy)
             _add_lineage_velocity(motion, history, now_entry, valid_time, policy)
             age_min = (valid_time - datetime.fromisoformat(lin.born_at)).total_seconds() / 60.0
             cells_out.append({
@@ -579,17 +649,21 @@ def process_frame(
         "cells": cells_out,
     }
     size = write_catalogue(catalogue_path(ws.root, valid_time), catalogue)
+    cache.set_flashes(valid_time, policy, catalogue)
 
     # The map file for the droplet (#656).  Like scoring, a failure here is
     # recorded on the run row, never a failed frame: the catalogue — the
     # analysis and the next frame's lineage predecessor — is already written.
-    display_bytes = display_error = None
+    display_bytes = display_error = pushed_at = None
     try:
         display_bytes = write_display(display_path(ws.root, valid_time),
                                       build_display(catalogue, detections, grid, policy))
     except Exception as exc:
         logger.exception("Display file failed for %s", valid_time)
         display_error = repr(exc)
+    analysed_s = round(time.perf_counter() - started, 3)
+    if display_bytes is not None and on_display is not None:
+        pushed_at = _call_on_display(on_display, valid_time)
 
     # The catalogue is written; a scoring failure must not turn it into a
     # failed frame.  Recorded on the run row instead.
@@ -606,6 +680,9 @@ def process_frame(
         "valid_time": valid_time.isoformat(),
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "seconds": round(time.perf_counter() - started, 3),
+        # Up to the display file, before the push and scoring (#666).
+        "analysis_seconds": analysed_s,
+        "pushed_at": pushed_at,
         "peak_rss_mb": round(peak_rss_mb(), 1),
         "catalogue_bytes": size,
         "display_bytes": display_bytes,
@@ -620,6 +697,134 @@ def process_frame(
     }
     ws.log_run(valid_time, summary)
     return summary
+
+
+def _call_on_display(on_display: Callable[[datetime], str | None], valid_time: datetime) -> str | None:
+    try:
+        return on_display(valid_time)
+    except Exception:  # a push hook must never fail the frame
+        logger.exception("Display hook failed for %s", valid_time)
+        return None
+
+
+def fill_history_flashes(history: list, cell_id: str, root: Path, cache: FrameCache,
+                         policy: CellPolicy) -> list:
+    """History entries whose flashes were unknown when copied, filled from
+    their own frame's catalogue if its lightning has landed since (#666).
+
+    Every entry of a cell's history is that same id at an earlier frame
+    (lineage hands the history on only with the id), so the lookup is by
+    (time, id).  Without this, a frame published before its lightning would
+    hand ``None`` flashes down the lineage for good, and ``trend.d_flashes``
+    would almost never be available on the live loop.  A no-op in a replay,
+    where every frame had its lightning when analysed.
+    """
+    out = []
+    for entry in history:
+        if len(entry) > 3 and entry[3] is None:
+            known = cache.flashes(root, datetime.fromisoformat(entry[0]), policy)
+            if known is not None and known.get(cell_id) is not None:
+                entry = list(entry)
+                entry[3] = known[cell_id]
+        out.append(entry)
+    return out
+
+
+def amend_lightning(ws: Workspace, now: datetime, policy: CellPolicy, cache: FrameCache,
+                    sources: tuple[str, ...], *,
+                    on_display: Callable[[datetime], str | None] | None = None) -> int:
+    """Re-attach lightning to recently published frames whose LI slot has landed.
+
+    A frame is published without waiting for lightning (#666).  When its LI
+    frame arrives — within ``LI_AMEND_WINDOW`` — the catalogue is rewritten
+    with flashes, the cells' own history entries and trends updated, and a new
+    display revision written (``<stamp>.r1``).  Oldest first, so a later frame
+    fills its history from the amended earlier ones.  Returns the count.
+    """
+    if SOURCE_EUMETSAT_LI not in sources:
+        return 0
+    done = 0
+    for t in dbzh_slots(now - LI_AMEND_WINDOW, now):
+        path = catalogue_path(ws.root, t)
+        if not path.exists():
+            continue
+        cat = read_catalogue(path)
+        if cat is None or cat.get("policy_version") != policy.policy_version:
+            continue
+        if {"what": "lightning", "reason": LI_MISSING} not in cat.get("unavailable", []):
+            continue
+        if not ws.frames.has(SOURCE_EUMETSAT_LI, _slot(t, 10)):
+            continue
+        try:
+            row = amend_frame(ws, t, cat, policy, cache, on_display=on_display)
+        except Exception:
+            logger.exception("Lightning amend failed for %s", frame_stamp(t))
+            continue
+        if row is not None:
+            done += 1
+    return done
+
+
+def amend_frame(ws: Workspace, t: datetime, cat: dict, policy: CellPolicy, cache: FrameCache, *,
+                on_display: Callable[[datetime], str | None] | None = None) -> dict | None:
+    """Attach frame ``t``'s lightning to its published catalogue (see ``amend_lightning``)."""
+    started = time.perf_counter()
+    unavailable = [u for u in cat.get("unavailable", []) if u.get("what") != "lightning"]
+    li, why = _li_frame(ws.frames, t)
+    if li is None:
+        # Unreadable: say so on the catalogue, which also stops further tries.
+        cat["unavailable"] = unavailable + [{"what": "lightning", "reason": why}]
+        write_catalogue(catalogue_path(ws.root, t), cat)
+        logger.warning("cells %s: lightning landed but could not be read: %s", frame_stamp(t), why)
+        return None
+    found = cache.detections_uncached(t, policy)
+    if found is None:
+        logger.warning("cells %s: lightning landed but the radar frame is gone; not amended",
+                       frame_stamp(t))
+        return None
+    frame, detections = found
+    grid = frame.grid
+    by_tier = {}
+    for tier in policy.tiers:
+        det = detections[tier.name]
+        counts = flash_counts(det, grid, li, policy.flash_buffer_km)
+        by_tier[tier.name] = {cell.label: counts[k] for k, cell in enumerate(det.cells)}
+    for cell in cat["cells"]:
+        flashes = by_tier[cell["tier"]][cell["label"]]
+        history = fill_history_flashes(cell["history"][:-1], cell["id"], ws.root, cache, policy)
+        now_entry = list(cell["history"][-1])
+        now_entry[3] = flashes
+        cell["flashes"] = flashes
+        cell["history"] = history + [now_entry]
+        cell["trend"] = trend(history, now_entry, t, policy)
+    cat["inputs"][SOURCE_EUMETSAT_LI] = li.valid_time.isoformat()
+    cat["unavailable"] = unavailable
+    write_catalogue(catalogue_path(ws.root, t), cat)
+    cache.set_flashes(t, policy, cat)
+
+    latest = latest_display(ws.root, t)
+    revision = latest[1] + 1 if latest else 0
+    pushed_at = None
+    display_bytes = write_display(display_path(ws.root, t, revision),
+                                  build_display(cat, detections, grid, policy, revision))
+    seconds = round(time.perf_counter() - started, 3)
+    if on_display is not None:
+        pushed_at = _call_on_display(on_display, t)
+    row = {
+        "type": "amend",
+        "what": "lightning",
+        "valid_time": t.isoformat(),
+        "revision": revision,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "seconds": seconds,
+        "pushed_at": pushed_at,
+        "display_bytes": display_bytes,
+        "flashes": sum(c["flashes"] or 0 for c in cat["cells"]),
+    }
+    ws.log_run(t, row)
+    logger.info("cells %s: lightning amended (r%d, %d flashes in cells)", frame_stamp(t), revision,
+                row["flashes"])
+    return row
 
 
 # --- Loop -----------------------------------------------------------------------
@@ -652,16 +857,12 @@ def collect_tick(ws: Workspace, sources: tuple[str, ...], now: datetime, *, swee
     return collect_once(ws.frames, now=now, sources=tuple(due), lookback=DEFAULT_LOOKBACK)
 
 
-def attributes_ready(store: FrameStore, t: datetime, sources: tuple[str, ...]) -> bool:
-    if SOURCE_OPERA_RATE in sources and not store.has(SOURCE_OPERA_RATE, _slot(t, 15)):
-        return False
-    if SOURCE_EUMETSAT_LI in sources and not store.has(SOURCE_EUMETSAT_LI, _slot(t, 10)):
-        return False
-    return True
-
-
 def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: CellPolicy,
-                 cache: FrameCache, sources: tuple[str, ...]) -> int:
+                 cache: FrameCache, sources: tuple[str, ...], *,
+                 on_display: Callable[[datetime], str | None] | None = None) -> int:
+    """Analyse every DBZH frame in the lookback that has no catalogue, oldest
+    first.  Nothing waits for its attributes any more (#666): rain rate is the
+    newest on disk, lightning is amended in later (``amend_lightning``)."""
     done = 0
     for t in dbzh_slots(now - lookback, now):
         if catalogue_path(ws.root, t).exists() or not ws.frames.has(SOURCE_OPERA_DBZH, t):
@@ -669,13 +870,9 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
         marker = read_failure(ws, t)
         if marker is not None and not failure_retry_due(marker, now):
             continue
-        if now - t < ATTRIBUTE_WAIT and not attributes_ready(ws.frames, t, sources):
-            # Stop here rather than skip: a later frame analysed first would
-            # start its lineage without this one.
-            break
         error = None
         try:
-            summary = process_frame(ws, t, policy, cache=cache, sources=sources)
+            summary = process_frame(ws, t, policy, cache=cache, sources=sources, on_display=on_display)
             if summary is None:
                 error = "DBZH frame present but unreadable"
         except Exception as exc:
@@ -786,9 +983,18 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     if sweep and last_try and now - datetime.fromisoformat(last_try) < SWEEP_RETRY:
         sweep = False  # the last attempt failed recently: back off
     # Radar first and analysed straight away; the slow EUMETSAT downloads come
-    # after, so they never hold the newest radar frame back.
+    # after, so they never hold the newest radar frame back.  A live frame is
+    # pushed as soon as its display file exists (#666), not after EUMETSAT.
     collected_ok = True
     analysed = 0
+
+    def push_live(t: datetime) -> str | None:
+        clock = datetime.now(timezone.utc) if now_is_live else now
+        if clock - t > LIVE_PUSH_WINDOW:
+            return None  # a catch-up frame: the end-of-tick batch takes it
+        sent = push_pending(ws.root, state, [t], prune=False)
+        return state.get("last_push") if sent else None
+
     for family in (_OPERA, _EUMETSAT):
         fetched = 0
         try:
@@ -809,7 +1015,10 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
         # frame could use.
         if family == _OPERA or fetched:
             analysed += analyse_tick(ws, datetime.now(timezone.utc) if now_is_live else now,
-                                     lookback, policy, cache, sources)
+                                     lookback, policy, cache, sources, on_display=push_live)
+        if family == _EUMETSAT:
+            amend_lightning(ws, datetime.now(timezone.utc) if now_is_live else now, policy, cache,
+                            sources, on_display=push_live)
     if sweep:
         failed = [t for t in dbzh_slots(now - lookback, now) if failure_path(ws.root, t).exists()]
         if failed:
@@ -821,9 +1030,13 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     state["last_tick"] = now.isoformat()
     if analysed:
         ping_healthcheck(state, now)
-    # After analysis, every tick (a failed push is simply retried): only
+    # After analysis, every tick (a failed push or a catch-up frame): only
     # does anything when WB_CELLS_PUSH_TARGET is set.  Never raises.
-    push_pending(ws.root, state, dbzh_slots(now - lookback, now))
+    before = set(state.get("pushed", []))
+    if push_pending(ws.root, state, dbzh_slots(now - lookback, now)):
+        for key in sorted(set(state.get("pushed", [])) - before):
+            ws.log_run(parse_frame_stamp(key.split(".")[0]),
+                       {"type": "push", "key": key, "pushed_at": state.get("last_push")})
     if sweep:
         state["last_sweep_attempt"] = now.isoformat()
         if collected_ok:
@@ -843,7 +1056,52 @@ def run_forever(ws: Workspace, policy: CellPolicy = DEFAULT_POLICY, *,
             run_tick(ws, policy, cache, sources, lookback)
         except Exception:
             logger.exception("Cells tick failed")
-        time.sleep(max(1.0, TICK_SECONDS - (time.monotonic() - started)))
+        wait_for_next_tick(ws.frames, started + TICK_SECONDS)
+
+
+def radar_poll_wait(store: FrameStore, now: datetime) -> float:
+    """Seconds until the tight radar poll should next check (0 = now).
+
+    The poll is on from ``RADAR_POLL_START`` after a DBZH slot until the
+    frame is on disk or ``RADAR_POLL_FOR`` has passed; otherwise the answer is
+    the time until the next slot's poll opens.
+    """
+    slot = _slot(now - RADAR_POLL_START, 5)
+    if not store.has(SOURCE_OPERA_DBZH, slot) and now < slot + RADAR_POLL_START + RADAR_POLL_FOR:
+        return 0.0
+    return (slot + timedelta(minutes=5) + RADAR_POLL_START - now).total_seconds()
+
+
+def probe_radar(store: FrameStore, now: datetime) -> bool:
+    """Fetch the due DBZH frame if OPERA has published it.  True when it did."""
+    try:
+        res = collect_opera(SOURCE_OPERA_DBZH, store, now=now, lookback=timedelta(0), max_fetch=1,
+                            warn_if_empty=False)
+    except Exception:
+        logger.warning("Radar poll failed", exc_info=True)
+        return False
+    return res.fetched > 0
+
+
+def wait_for_next_tick(store: FrameStore, deadline: float, *,
+                       clock: Callable[[], float] = time.monotonic,
+                       sleep: Callable[[float], None] = time.sleep,
+                       utcnow: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
+    """Sleep until ``deadline`` (monotonic), checking for the due radar frame
+    every ``RADAR_POLL_SECONDS`` inside its poll window (#666).  Returns
+    early — so the next tick runs at once — when the frame arrives.
+    """
+    while True:
+        left = deadline - clock()
+        if left <= 0:
+            return
+        wait = radar_poll_wait(store, utcnow())
+        if wait > 0:
+            sleep(max(1.0, min(left, wait)))
+            continue
+        if probe_radar(store, utcnow()):
+            return
+        sleep(max(1.0, min(left, RADAR_POLL_SECONDS)))
 
 
 # --- Replay ---------------------------------------------------------------------
@@ -919,6 +1177,7 @@ def coverage_report(ws: Workspace, start: datetime, end: datetime, sources: tupl
 
 __all__ = [
     "Workspace", "FrameCache", "process_frame", "run_tick", "run_forever", "replay",
+    "amend_lightning", "fill_history_flashes",
     "coverage_report", "retry_failed", "cells_root", "cells_sources", "catchup_lookback",
     "grid_from_dict", "grid_to_dict", "code_revision",
 ]

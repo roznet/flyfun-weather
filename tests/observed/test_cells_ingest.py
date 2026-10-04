@@ -295,3 +295,69 @@ def test_a_stored_stamp_is_never_replaced(tmp_path):
     assert result.rejected == [frame_stamp(t)]
     assert store.path(frame_stamp(t)).read_bytes() == first
     assert (inbox / "rejected" / f"{frame_stamp(t)}.json.gz").exists()
+
+
+# --- Revisions (#666) -------------------------------------------------------------
+
+
+def _drop_rev(inbox, t, revision, doc):
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / f"{frame_stamp(t)}.r{revision}.json.gz"
+    path.write_bytes(display_bytes({**doc, "revision": revision}))
+    return path
+
+
+def test_a_revision_is_stored_beside_the_first_copy_and_listed_instead(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(minutes=10)
+    _drop(inbox, t)
+    cd.ingest(inbox, store, now=NOW)
+    _drop_rev(inbox, t, 1, display_doc(t, cells=[]))
+    result = cd.ingest(inbox, store, now=NOW)
+    assert result.accepted == [f"{frame_stamp(t)}.r1"]
+    assert store.path(frame_stamp(t)).exists() and store.path(frame_stamp(t), 1).exists()
+    (only,) = store.list()
+    assert only.revision == 1 and only.key == f"{frame_stamp(t)}.r1"
+    entry = only.entry(NOW)
+    assert entry["key"] == f"{frame_stamp(t)}.r1" and entry["first_received_at"] <= entry["received_at"]
+    assert store.read(frame_stamp(t), 1)["cells"] == []
+    assert len(store.read(frame_stamp(t))["cells"]) == 2
+    assert store.latest_revision(frame_stamp(t)) == 1
+
+
+def test_a_revision_whose_content_disagrees_with_its_name_is_refused(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(minutes=10)
+    path = inbox / f"{frame_stamp(t)}.r1.json.gz"
+    inbox.mkdir(parents=True)
+    path.write_bytes(display_bytes(display_doc(t)))  # says revision 0 (absent)
+    assert cd.ingest(inbox, store, now=NOW).rejected == [frame_stamp(t)]
+
+
+def test_a_stored_revision_is_never_replaced(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(minutes=10)
+    _drop_rev(inbox, t, 1, display_doc(t, cells=[]))
+    cd.ingest(inbox, store, now=NOW)
+    first = store.path(frame_stamp(t), 1).read_bytes()
+    _drop_rev(inbox, t, 1, display_doc(t))
+    assert cd.ingest(inbox, store, now=NOW).rejected == [frame_stamp(t)]
+    assert store.path(frame_stamp(t), 1).read_bytes() == first
+
+
+def test_purge_removes_every_revision_of_an_expired_frame(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(hours=23)
+    _drop(inbox, t)
+    _drop_rev(inbox, t, 1, display_doc(t))
+    cd.ingest(inbox, store, now=NOW)
+    assert store.purge(now=NOW + timedelta(hours=2)) == 2
+    assert store.list() == []
+
+
+def test_display_keys():
+    assert cd.parse_key("20261004T1200") == ("20261004T1200", None)
+    assert cd.parse_key("20261004T1200.r1") == ("20261004T1200", 1)
+    for bad in ("20261004T1200.r", "20261004T1200.rx", "x.r1", "20261004T1200.r1.json"):
+        with pytest.raises(ValueError):
+            cd.parse_key(bad)

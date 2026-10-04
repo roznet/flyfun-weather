@@ -242,7 +242,8 @@ def test_collect_once_passes_lookback_and_budget(monkeypatch, tmp_path):
 # --- Tick ordering -------------------------------------------------------------
 
 
-def test_new_frame_waits_for_its_lightning_and_stops_the_queue(tmp_path):
+def test_a_new_frame_never_waits_for_its_lightning(tmp_path):
+    """#666: radar frames are analysed at once; missing lightning is stated."""
     from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
 
     ws = Workspace(tmp_path)
@@ -251,14 +252,299 @@ def test_new_frame_waits_for_its_lightning_and_stops_the_queue(tmp_path):
         write_dbzh(ws.frames, T0 + timedelta(minutes=5 * i), scene(120, blobs, shift=(0, i)))
     sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
     now = T0 + timedelta(minutes=12)
-    # T0 is 12 minutes old with no LI frame: it waits, and so does everything after it.
-    assert analyse_tick(ws, now, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), sources) == 0
-    # Past the wait, frames are analysed without lightning and say so.
-    later = T0 + timedelta(minutes=40)
-    assert analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), sources) == 3
+    assert analyse_tick(ws, now, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), sources) == 3
     cat = _cat(tmp_path, T0)
     assert {"what": "lightning", "reason": "no lightning frame for this slot"} in cat["unavailable"]
     assert all(c["flashes"] is None for c in cat["cells"])
+
+
+# --- #666: rain rate from the newest frame on disk, lightning amended later ----
+
+
+def _write_rate(store, t):
+    """A RATE frame on disk (contents unused: the read is patched)."""
+    from weatherbrief.observed.frames import SOURCE_OPERA_RATE
+
+    store.write(SOURCE_OPERA_RATE, t, b"rate", {})
+
+
+def test_rate_takes_the_newest_frame_on_disk_within_the_bound(tmp_path, monkeypatch):
+    from weatherbrief.observed import opera
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.frames import SOURCE_OPERA_RATE
+
+    ws = Workspace(tmp_path)
+    t = T0 + timedelta(minutes=5)  # slot T0, which has not landed
+    write_dbzh(ws.frames, t, scene(120, [(60, 60, 50, 7)]))
+    like = runner.read_dbzh(ws.frames, t)
+    read = []
+    monkeypatch.setattr(opera, "read_grid", lambda path: like.grid)
+    monkeypatch.setattr(opera, "read_window", lambda path, *a, **k: read.append(path.name) or like)
+
+    _write_rate(ws.frames, T0 - timedelta(minutes=30))  # 35 min old: past the bound
+    frame, why = runner._rate_frame(ws.frames, t, like)
+    assert frame is None and "30 min" in why
+
+    _write_rate(ws.frames, T0 - timedelta(minutes=15))  # 20 min old: used
+    frame, why = runner._rate_frame(ws.frames, t, like)
+    assert why is None and read[-1] == ws.frames.payload_path(
+        SOURCE_OPERA_RATE, T0 - timedelta(minutes=15)).name
+
+    _write_rate(ws.frames, T0)  # the frame's own slot wins when present
+    runner._rate_frame(ws.frames, t, like)
+    assert read[-1] == ws.frames.payload_path(SOURCE_OPERA_RATE, T0).name
+
+
+def test_catalogue_and_display_say_how_old_the_rain_rate_is(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.cells.catalogue import display_path
+    from weatherbrief.observed.frames import SOURCE_OPERA_RATE
+
+    ws = Workspace(tmp_path)
+    t = T0 + timedelta(minutes=5)
+    write_dbzh(ws.frames, t, scene(120, [(60, 60, 50, 7)]))
+
+    def older_rate(store, when, like):
+        return runner.GridFrame(**{**like.__dict__, "source": SOURCE_OPERA_RATE,
+                                   "valid_time": T0 - timedelta(minutes=15)}), None
+
+    monkeypatch.setattr(runner, "_rate_frame", older_rate)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_OPERA_RATE)
+    analyse_tick(ws, t + timedelta(minutes=1), timedelta(hours=1), DEFAULT_POLICY,
+                 FrameCache(ws.frames), sources)
+    assert _cat(tmp_path, t)["inputs"]["rate_age_min"] == 20.0
+    display = json.loads(gzip.decompress(display_path(tmp_path, t).read_bytes()))
+    assert display["rate_age_min"] == 20.0
+    assert display["times"]["rate"] == (T0 - timedelta(minutes=15)).isoformat()
+    assert display["revision"] == 0
+
+
+def _li_on_disk(store, t):
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    store.write(SOURCE_EUMETSAT_LI, t, b"li", {})
+
+
+def _flashes_at(monkeypatch, points_by_slot):
+    """Patch the LI reader: ``points_by_slot[slot] = [(lat, lon), ...]``."""
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.frames import FlashFrame, SOURCE_EUMETSAT_LI
+
+    def read(path, **kwargs):
+        slot = datetime.strptime(path.name.split(".")[0], "%Y%m%dT%H%M").replace(tzinfo=timezone.utc)
+        pts = points_by_slot.get(slot, [])
+        lats = np.array([p[0] for p in pts], dtype=np.float64)
+        lons = np.array([p[1] for p in pts], dtype=np.float64)
+        return FlashFrame(SOURCE_EUMETSAT_LI, slot, 10.0, lats, lons,
+                          np.array([np.datetime64(slot.replace(tzinfo=None), "s")] * len(pts)))
+
+    monkeypatch.setattr(runner.li_reader, "read_flashes", read)
+
+
+def _display_doc(root, t, revision=0):
+    from weatherbrief.observed.cells.catalogue import display_path
+
+    return json.loads(gzip.decompress(display_path(root, t, revision).read_bytes()))
+
+
+def test_lightning_lands_later_and_the_frame_is_amended_as_a_new_revision(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells.runner import amend_lightning
+    from weatherbrief.observed.cells.catalogue import display_path, latest_display
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    cache = FrameCache(ws.frames)
+    analyse_tick(ws, T0 + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+    first = display_path(tmp_path, T0).read_bytes()
+    cell = next(c for c in _cat(tmp_path, T0)["cells"] if c["tier"] == "core41")
+    assert cell["flashes"] is None
+
+    # Nothing to amend until the LI slot is on disk.
+    assert amend_lightning(ws, T0 + timedelta(minutes=8), DEFAULT_POLICY, cache, sources) == 0
+    _flashes_at(monkeypatch, {T0: [(cell["lat"], cell["lon"])] * 3})
+    _li_on_disk(ws.frames, T0)
+    pushed = []
+    assert amend_lightning(ws, T0 + timedelta(minutes=11), DEFAULT_POLICY, cache, sources,
+                           on_display=lambda t: pushed.append(t) or "x") == 1
+    assert pushed == [T0]
+
+    cat = _cat(tmp_path, T0)
+    amended = next(c for c in cat["cells"] if c["id"] == cell["id"])
+    assert amended["flashes"] == 3 and amended["history"][-1][3] == 3
+    assert cat["inputs"][SOURCE_EUMETSAT_LI] == T0.isoformat()
+    assert "lightning" not in {u["what"] for u in cat["unavailable"]}
+    # Revision 0 is untouched (served as immutable); r1 carries the lightning.
+    assert display_path(tmp_path, T0).read_bytes() == first
+    assert latest_display(tmp_path, T0) == (display_path(tmp_path, T0, 1), 1)
+    r1 = _display_doc(tmp_path, T0, 1)
+    assert r1["revision"] == 1 and r1["times"]["lightning"] == T0.isoformat()
+    assert next(c for c in r1["cells"] if c["id"] == cell["id"])["flashes"] == 3
+    rows = [json.loads(x) for x in (tmp_path / "cells" / "runs" / "20261003.jsonl").read_text().splitlines()]
+    assert rows[-1]["type"] == "amend" and rows[-1]["revision"] == 1 and rows[-1]["pushed_at"] == "x"
+    # Done once: the next tick finds nothing left to amend.
+    assert amend_lightning(ws, T0 + timedelta(minutes=12), DEFAULT_POLICY, cache, sources) == 0
+
+
+def test_amend_is_bounded_to_recent_frames(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells.runner import LI_AMEND_WINDOW, amend_lightning
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    cache = FrameCache(ws.frames)
+    analyse_tick(ws, T0 + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+    _flashes_at(monkeypatch, {})
+    _li_on_disk(ws.frames, T0)
+    late = T0 + LI_AMEND_WINDOW + timedelta(minutes=5)
+    assert amend_lightning(ws, late, DEFAULT_POLICY, cache, sources) == 0
+
+
+def test_an_unreadable_lightning_frame_is_recorded_and_not_retried(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+    from weatherbrief.observed.cells.catalogue import latest_display
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    cache = FrameCache(ws.frames)
+    analyse_tick(ws, T0 + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+    _li_on_disk(ws.frames, T0)
+    calls = []
+
+    def broken(path, **kwargs):
+        calls.append(path)
+        raise OSError("truncated")
+
+    monkeypatch.setattr(runner.li_reader, "read_flashes", broken)
+    for minutes in (11, 12):
+        assert runner.amend_lightning(ws, T0 + timedelta(minutes=minutes), DEFAULT_POLICY, cache,
+                                      sources) == 0
+    assert len(calls) == 1
+    reasons = {u["what"]: u["reason"] for u in _cat(tmp_path, T0)["unavailable"]}
+    assert "unreadable lightning frame" in reasons["lightning"]
+    assert latest_display(tmp_path, T0)[1] == 0
+
+
+def test_successor_history_picks_up_the_amended_flashes(tmp_path, monkeypatch):
+    """A frame published before its predecessor's lightning landed still gets
+    that predecessor's flashes into its history (and so its flash trend)."""
+    from weatherbrief.observed.cells.runner import amend_lightning
+    from weatherbrief.observed.frames import SOURCE_EUMETSAT_LI
+
+    ws = Workspace(tmp_path)
+    sources = (SOURCE_OPERA_DBZH, SOURCE_EUMETSAT_LI)
+    cache = FrameCache(ws.frames)
+    times = [T0 + timedelta(minutes=5 * i) for i in range(8)]
+    lightning = {}
+    for i, t in enumerate(times):
+        write_dbzh(ws.frames, t, scene(120, [(60, 60, 50, 7)], shift=(0, i)))
+        analyse_tick(ws, t + timedelta(minutes=4), timedelta(hours=1), DEFAULT_POLICY, cache, sources)
+        slot = t - timedelta(minutes=t.minute % 10)
+        if t.minute % 10 == 5:  # the slot's LI lands after its second radar frame
+            cell = next(c for c in _cat(tmp_path, t)["cells"] if c["tier"] == "core41")
+            lightning[slot] = [(cell["lat"], cell["lon"])] * (2 + i)
+            _flashes_at(monkeypatch, lightning)
+            _li_on_disk(ws.frames, slot)
+            assert amend_lightning(ws, t + timedelta(minutes=6), DEFAULT_POLICY, cache, sources) == 2
+    last = _cat(tmp_path, times[-1])
+    cell = next(c for c in last["cells"] if c["tier"] == "core41")
+    assert all(entry[3] is not None for entry in cell["history"]), cell["history"]
+    assert cell["trend"]["d_flashes"] is not None
+
+
+def test_a_live_frame_is_pushed_before_scoring_and_the_row_says_when(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    ws = Workspace(tmp_path)
+    write_dbzh(ws.frames, T0, scene(120, [(60, 60, 50, 7)]))
+    order = []
+    real_score = runner.score_frame
+    monkeypatch.setattr(runner, "score_frame", lambda *a, **k: order.append("score") or real_score(*a, **k))
+    summary = runner.process_frame(ws, T0, DEFAULT_POLICY, sources=SOURCES,
+                                   on_display=lambda t: order.append("push") or "2026-10-03T12:04:30+00:00")
+    assert order == ["push", "score"]
+    assert summary["pushed_at"] == "2026-10-03T12:04:30+00:00"
+    assert summary["analysis_seconds"] <= summary["seconds"]
+
+
+def test_run_tick_pushes_a_live_frame_at_once_but_batches_a_catch_up(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    ws = Workspace(tmp_path)
+    old, new = T0 - timedelta(hours=1), T0
+    write_dbzh(ws.frames, old, scene(120, [(60, 60, 50, 7)]))
+    write_dbzh(ws.frames, new, scene(120, [(60, 60, 50, 7)]))
+    calls = []
+    monkeypatch.setattr(runner, "collect_tick", lambda *a, **k: [])
+
+    def fake_push(root, state, slots, prune=True, **kw):
+        calls.append((list(slots), prune))
+        return 0
+
+    monkeypatch.setattr(runner, "push_pending", fake_push)
+    runner.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=2),
+                    now=T0 + timedelta(minutes=4))
+    immediate = [slots for slots, prune in calls if not prune]
+    assert immediate == [[new]]
+    assert calls[-1][1] is True and old in calls[-1][0] and new in calls[-1][0]
+
+
+def test_radar_poll_window():
+    from weatherbrief.observed.cells.runner import radar_poll_wait
+
+    class Store:
+        def __init__(self, present):
+            self.present = present
+
+        def has(self, source, t):
+            return t in self.present
+
+    empty = Store(set())
+    # 3.5 min after T0: the poll opens at +4.0 → 30 s to wait.
+    assert radar_poll_wait(empty, T0 + timedelta(minutes=3, seconds=30)) == 30.0
+    # Inside the window and missing: poll now.
+    assert radar_poll_wait(empty, T0 + timedelta(minutes=4, seconds=10)) == 0.0
+    # Two minutes of misses: back to the tick until the next slot's window.
+    assert radar_poll_wait(empty, T0 + timedelta(minutes=6, seconds=30)) == 150.0
+    # Already on disk: nothing to poll for until the next slot.
+    assert radar_poll_wait(Store({T0}), T0 + timedelta(minutes=4, seconds=20)) == 280.0
+
+
+def test_wait_for_next_tick_returns_as_soon_as_the_frame_lands(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    clock = [0.0]
+    now = [T0 + timedelta(minutes=4)]
+    probes = []
+
+    def sleep(seconds):
+        clock[0] += seconds
+        now[0] += timedelta(seconds=seconds)
+
+    def probe(store, when):
+        probes.append(when)
+        return len(probes) == 3  # lands on the third check
+
+    monkeypatch.setattr(runner, "probe_radar", probe)
+    store = FrameStore(tmp_path, retain_all=True)
+    runner.wait_for_next_tick(store, 60.0, clock=lambda: clock[0], sleep=sleep, utcnow=lambda: now[0])
+    assert len(probes) == 3 and clock[0] == 2 * runner.RADAR_POLL_SECONDS
+
+
+def test_wait_for_next_tick_without_a_due_frame_just_sleeps(tmp_path, monkeypatch):
+    from weatherbrief.observed.cells import runner
+
+    clock = [0.0]
+    monkeypatch.setattr(runner, "probe_radar", lambda *a: pytest.fail("no probe outside the window"))
+    store = FrameStore(tmp_path, retain_all=True)
+    runner.wait_for_next_tick(store, 60.0, clock=lambda: clock[0],
+                              sleep=lambda s: clock.__setitem__(0, clock[0] + s),
+                              utcnow=lambda: T0 + timedelta(minutes=1))
+    assert clock[0] == 60.0
 
 
 def test_sweep_budget_is_per_family(monkeypatch, tmp_path):

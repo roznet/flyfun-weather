@@ -15,7 +15,12 @@ Contents (``DISPLAY_SCHEMA``):
   ``ARROW_MINUTES`` if its motion continued (only when motion is
   ``available``: withheld or unsupported motion has no arrow);
 * **the frame's own times** — radar, rain rate, lightning, cloud top — plus
-  ``unavailable``, ``policy_version`` and ``code_revision``.
+  ``rate_age_min`` (how much older the rain rate is than the radar: the
+  newest RATE on disk is used rather than waiting for its slot, #666),
+  ``unavailable``, ``policy_version`` and ``code_revision``;
+* **revision** — 0 when first published; a frame whose lightning landed after
+  it was published is re-issued as revision 1 (#666), each revision its own
+  immutable file (``catalogue.display_path``).
 
 Deterministic like the catalogue (sorted keys, rounded floats, gzip
 ``mtime=0``), so a replay reproduces it byte for byte.  Lightning flashes are
@@ -136,7 +141,7 @@ def shown(cell: dict) -> bool:
 
 
 def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: GridSpec,
-                  policy: CellPolicy) -> dict:
+                  policy: CellPolicy, revision: int = 0) -> dict:
     """The display file for a catalogue just built from ``detections``."""
     any_det = next(iter(detections.values()), None)
     ny, nx = any_det.labels.shape if any_det is not None else (0, 0)
@@ -156,6 +161,8 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
             "lightning": inputs.get(SOURCE_EUMETSAT_LI),
             "cloud_top": inputs.get(SOURCE_EUMETSAT_CTTH),
         },
+        "rate_age_min": inputs.get("rate_age_min"),
+        "revision": revision,
         "unavailable": catalogue.get("unavailable", []),
         "rain_min_area_km2": RAIN_MIN_AREA_KM2,
         "arrow_minutes": ARROW_MINUTES,

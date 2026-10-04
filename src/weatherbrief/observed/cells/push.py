@@ -18,6 +18,16 @@ rsync of the directory would also re-send every purged file.
 
 Plain ``rsync -t`` with explicit files: no ``--mkpath``/``--chmod`` (macOS
 ships an old rsync or openrsync).  The files are written 0644 on purpose.
+
+**Revisions (#666).**  ``pushed`` holds display *keys* (``<stamp>`` for
+revision 0, ``<stamp>.r<n>`` after), and only a frame's newest revision is a
+candidate, so a frame whose lightning was amended is pushed again under its
+new name.  A pre-#666 state file (bare stamps) reads as "revision 0 sent".
+
+**Two call sites.**  The runner pushes each live frame the moment its
+display file is written (``prune=False``: one slot, leave the rest of the
+sent set alone), and again at the end of every tick over the whole lookback,
+which is the retry path.
 """
 
 from __future__ import annotations
@@ -30,7 +40,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from ..frames import frame_stamp
-from .catalogue import display_path
+from .catalogue import latest_display
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +65,14 @@ def push_pending(
     *,
     target: str | None = None,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    prune: bool = True,
 ) -> int:
-    """Push every display file in ``slots`` not pushed yet.  Returns the count.
+    """Push the newest display revision of every slot not pushed yet.  Returns the count.
 
-    Updates ``state`` in place: ``pushed`` (stamps within ``slots`` already
-    sent), ``last_push`` / ``push_error``.  Never raises.
+    Updates ``state`` in place: ``pushed`` (display keys already sent),
+    ``last_push`` / ``push_error``.  With ``prune`` (the end-of-tick call),
+    ``pushed`` is trimmed to ``slots``; without it (one live frame), the rest
+    of the set is left as it was.  Never raises.
     """
     target = target if target is not None else push_target()
     if not target:
@@ -67,16 +80,19 @@ def push_pending(
     if not target.endswith("/"):
         target += "/"
     slots = list(slots)
-    _warn_on_outage(state, slots)
-    window = [frame_stamp(t) for t in slots]
-    in_window = set(window)
-    pushed = {s for s in state.get("pushed", []) if s in in_window}
+    if prune:
+        _warn_on_outage(state, slots)
+    window = {frame_stamp(t) for t in slots}
+    pushed = set(state.get("pushed", []))
+    if prune:
+        pushed = {k for k in pushed if k.split(".")[0] in window}
     files: list[Path] = []
-    for t, stamp in zip(slots, window):
-        if stamp in pushed:
+    for t in slots:
+        latest = latest_display(root, t)
+        if latest is None:
             continue
-        path = display_path(root, t)
-        if path.exists():
+        path, _revision = latest
+        if _key(path) not in pushed:
             files.append(path)
     state["pushed"] = sorted(pushed)
     if not files:
@@ -91,12 +107,17 @@ def push_pending(
         return _failed(state, f"rsync timed out after {PUSH_TIMEOUT_SECONDS}s", len(files))
     except Exception as exc:  # rsync missing, permissions, anything: never escape the tick
         return _failed(state, f"{type(exc).__name__}: {exc}", len(files))
-    state["pushed"] = sorted(pushed | {p.name.split(".")[0] for p in files})
+    state["pushed"] = sorted(pushed | {_key(p) for p in files})
     state["last_push"] = datetime.now(timezone.utc).isoformat()
     state.pop("push_error", None)
     logger.info("cells push: %d display file(s) sent (%s … %s)", len(files),
-                files[0].name.split(".")[0], files[-1].name.split(".")[0])
+                _key(files[0]), _key(files[-1]))
     return len(files)
+
+
+def _key(path: Path) -> str:
+    """``<stamp>`` or ``<stamp>.r<n>`` — the file name without ``.json.gz``."""
+    return path.name.removesuffix(".json.gz")
 
 
 def _warn_on_outage(state: dict, slots: list[datetime]) -> None:

@@ -80,7 +80,9 @@ final class RouteCellsModel {
             apply(match: match, display: nil, path: nil)
             return
         }
-        let path = CellsOverlay.displayPath(template: frames.urlTemplate, stamp: frame.stamp, box: box)
+        // The newest revision's key (#666): an amended frame is a new path,
+        // so the path-keyed cache below never serves a superseded revision.
+        let path = CellsOverlay.displayPath(template: frames.urlTemplate, stamp: frame.displayKey, box: box)
         if let hit = displayCache.first(where: { $0.path == path }) {
             apply(match: match, display: hit.display, path: path)
             return

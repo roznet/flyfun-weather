@@ -16,6 +16,13 @@ that deletes from it.
 The stamp is the frame key (``<YYYYMMDD>T<HHMM>``), identical to the
 droplet's own radar stamps, so a radar tile and a cell overlay pair by name.
 
+**Revisions (#666).**  The node publishes a frame without waiting for its
+lightning and re-issues it once the lightning lands: ``<stamp>.json.gz`` is
+revision 0, ``<stamp>.r1.json.gz`` revision 1.  Each revision is its own
+immutable file, addressed by its *key* ``<stamp>.r<n>``; the listing points at
+each frame's newest revision.  A bare-stamp request (a client from before
+#666) gets the newest revision, uncached.
+
 Gated on ``WB_CELLS_INGEST_ENABLED`` (off by default): unset, nothing is
 ingested and the endpoints say ``disabled``.
 """
@@ -51,12 +58,12 @@ _CELLS_INBOX_DEFAULT = "/app/cells_inbox"
 RETENTION = timedelta(hours=24)
 
 #: Past this age (from the overlay's own valid time) the overlay is not drawn
-#: and the map says "cell analysis unavailable since HH:MMZ".  The home node
-#: publishes a frame ~5–10 min after its valid time (radar lag + the wait for
-#: its rain-rate and lightning slots, up to ATTRIBUTE_WAIT = 15 min), and a new
-#: frame every 5 min, so a healthy feed is ~5–15 min old and at worst ~20.
-#: 25 min keeps a healthy feed from flickering; a stopped loop shows as
-#: unavailable within ~10–15 min of its last push.
+#: and the map says "cell analysis unavailable since HH:MMZ".  Since #666 the
+#: home node publishes a frame ~4.5 min after its valid time (it no longer
+#: waits for rain rate or lightning) and a new one every 5 min, so a healthy
+#: feed is ~5–10 min old.  25 min is kept from #656 — not tightened — so a
+#: provider hiccup of a frame or two does not blank the overlay; a stopped
+#: loop shows as unavailable within ~15–20 min of its last push.
 STALE_AFTER = timedelta(minutes=25)
 
 #: A display file for all of Europe is ~150 KB gzipped; refuse anything absurd
@@ -64,7 +71,8 @@ STALE_AFTER = timedelta(minutes=25)
 MAX_FILE_BYTES = 5_000_000
 MAX_JSON_BYTES = 40_000_000
 
-_NAME = re.compile(r"^(\d{8}T\d{4})\.json\.gz$")
+_NAME = re.compile(r"^(\d{8}T\d{4})(?:\.r(\d{1,2}))?\.json\.gz$")
+_KEY = re.compile(r"^(\d{8}T\d{4})(?:\.r(\d{1,2}))?$")
 _POLICY = re.compile(r"^[A-Za-z0-9._-]+\+[0-9a-f]{4,64}$")
 SUFFIX = ".json.gz"
 
@@ -86,8 +94,8 @@ def store_dir(data_dir: Path | str | None = None) -> Path:
     return observed_root(data_dir) / "cells" / "display"
 
 
-def stamp_of(name: str) -> str | None:
-    """The frame stamp a display file is named after, or ``None``."""
+def name_of(name: str) -> tuple[str, int] | None:
+    """``(stamp, revision)`` a display file is named after, or ``None``."""
     m = _NAME.match(name)
     if not m:
         return None
@@ -95,15 +103,42 @@ def stamp_of(name: str) -> str | None:
         parse_frame_stamp(m.group(1))
     except ValueError:
         return None
-    return m.group(1)
+    return m.group(1), int(m.group(2) or 0)
 
 
-def validate(raw: bytes, stamp: str) -> dict[str, Any]:
+def stamp_of(name: str) -> str | None:
+    """The frame stamp a display file is named after, or ``None``."""
+    parsed = name_of(name)
+    return parsed[0] if parsed else None
+
+
+def parse_key(key: str) -> tuple[str, int | None]:
+    """``"<stamp>"`` → ``(stamp, None)`` (newest revision); ``"<stamp>.r<n>"``
+    → ``(stamp, n)``.  Raises ``ValueError`` for anything else."""
+    m = _KEY.match(key)
+    if not m:
+        raise ValueError(f"bad display key {key!r}")
+    parse_frame_stamp(m.group(1))
+    return m.group(1), (int(m.group(2)) if m.group(2) is not None else None)
+
+
+def display_key(stamp: str, revision: int) -> str:
+    """How the API addresses one revision: always explicit, ``<stamp>.r<n>``."""
+    return f"{stamp}.r{revision}"
+
+
+def file_name(stamp: str, revision: int) -> str:
+    """Revision 0 keeps the pre-#666 name; later ones carry ``.r<n>``."""
+    return f"{stamp}{SUFFIX}" if revision == 0 else f"{stamp}.r{revision}{SUFFIX}"
+
+
+def validate(raw: bytes, stamp: str, revision: int = 0) -> dict[str, Any]:
     """Decode and check a display file; raise :class:`InvalidDisplay`.
 
     Checks the shape the clients rely on, not every field: ``schema``, a
-    ``policy_version`` of the form ``<name>+<digest>``, a ``valid_time`` that
-    matches the file's own name, and ``cells`` / ``outlines`` of the right type.
+    ``policy_version`` of the form ``<name>+<digest>``, a ``valid_time`` and
+    ``revision`` (absent = 0) that match the file's own name, and ``cells`` /
+    ``outlines`` of the right type.
     """
     if len(raw) > MAX_FILE_BYTES:
         raise InvalidDisplay(f"{len(raw)} bytes exceeds {MAX_FILE_BYTES}")
@@ -130,6 +165,8 @@ def validate(raw: bytes, stamp: str) -> dict[str, Any]:
         raise InvalidDisplay("valid_time unreadable") from exc
     if valid.tzinfo is None or valid != parse_frame_stamp(stamp):
         raise InvalidDisplay(f"valid_time {data.get('valid_time')} does not match {stamp}")
+    if data.get("revision", 0) != revision:
+        raise InvalidDisplay(f"revision {data.get('revision')!r} does not match the name (r{revision})")
     if not isinstance(data.get("cells"), list) or not isinstance(data.get("outlines"), dict):
         raise InvalidDisplay("cells/outlines missing")
     # The fields the server itself reads (bbox filter) and every client draws
@@ -157,16 +194,31 @@ def _is_latlon(point: Any) -> bool:
 
 @dataclass(frozen=True)
 class StoredDisplay:
+    """A frame's newest stored revision."""
+
     stamp: str
     valid_time: datetime
-    received_at: datetime
+    received_at: datetime  # ingest time of this revision
     path: Path
+    revision: int = 0
+    first_received_at: datetime | None = None  # ingest time of revision 0, if still stored
+
+    @property
+    def key(self) -> str:
+        return display_key(self.stamp, self.revision)
 
     def entry(self, now: datetime) -> dict[str, Any]:
+        first = self.first_received_at or self.received_at
         return {
             "stamp": self.stamp,
+            # The URL key of the newest revision: `url_template` with {stamp}
+            # replaced by this (#666). Older clients use `stamp` and get the
+            # newest revision uncached.
+            "key": self.key,
+            "revision": self.revision,
             "valid_time": self.valid_time.isoformat(),
             "received_at": self.received_at.isoformat(),
+            "first_received_at": first.isoformat(),
             "age_minutes": round((now - self.valid_time).total_seconds() / 60.0, 1),
         }
 
@@ -177,34 +229,51 @@ class DisplayStore:
     def __init__(self, root: Path | str | None = None) -> None:
         self.root = Path(root) if root is not None else store_dir()
 
-    def path(self, stamp: str) -> Path:
-        return self.root / f"{stamp}{SUFFIX}"
+    def path(self, stamp: str, revision: int = 0) -> Path:
+        return self.root / file_name(stamp, revision)
 
     def list(self) -> list[StoredDisplay]:
-        """Every stored file, newest first.  ``received_at`` is when it was ingested."""
+        """Every stored frame at its newest revision, newest first.
+        ``received_at`` is when that revision was ingested."""
         if not self.root.is_dir():
             return []
-        out = []
+        newest: dict[str, tuple[int, Path, datetime]] = {}
+        first: dict[str, datetime] = {}
         for path in self.root.iterdir():
-            stamp = stamp_of(path.name)
-            if stamp is None:
+            parsed = name_of(path.name)
+            if parsed is None:
                 continue
+            stamp, revision = parsed
             try:
                 received = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
             except OSError:
                 continue
-            out.append(StoredDisplay(stamp, parse_frame_stamp(stamp), received, path))
+            if revision == 0:
+                first[stamp] = received
+            if stamp not in newest or revision > newest[stamp][0]:
+                newest[stamp] = (revision, path, received)
+        out = [StoredDisplay(stamp, parse_frame_stamp(stamp), received, path, revision, first.get(stamp))
+               for stamp, (revision, path, received) in newest.items()]
         out.sort(key=lambda d: d.valid_time, reverse=True)
         return out
 
-    def write(self, stamp: str, raw: bytes) -> Path:
-        path = self.path(stamp)
+    def latest_revision(self, stamp: str) -> int | None:
+        """The newest stored revision of ``stamp``, or ``None``."""
+        found = None
+        for path in self.root.glob(f"{stamp}*{SUFFIX}") if self.root.is_dir() else []:
+            parsed = name_of(path.name)
+            if parsed and parsed[0] == stamp and (found is None or parsed[1] > found):
+                found = parsed[1]
+        return found
+
+    def write(self, stamp: str, raw: bytes, revision: int = 0) -> Path:
+        path = self.path(stamp, revision)
         _atomic_write(path, raw)
         return path
 
-    def read(self, stamp: str) -> dict[str, Any] | None:
-        """The validated file for ``stamp``, or ``None`` if absent or invalid."""
-        path = self.path(stamp)
+    def read(self, stamp: str, revision: int = 0) -> dict[str, Any] | None:
+        """The validated file for ``stamp`` at ``revision``, or ``None`` if absent or invalid."""
+        path = self.path(stamp, revision)
         try:
             stat = path.stat()
         except OSError:
@@ -214,7 +283,7 @@ class DisplayStore:
         if hit is not None:
             return hit
         try:
-            data = validate(path.read_bytes(), stamp)
+            data = validate(path.read_bytes(), stamp, revision)
         except (OSError, InvalidDisplay) as exc:
             logger.warning("Cell display %s unreadable: %s", path.name, exc)
             return None
@@ -250,7 +319,7 @@ class DisplayStore:
         return removed
 
 
-# Parsed files keyed by (path, mtime, size): a stamp's file never changes once
+# Parsed files keyed by (path, mtime, size): a revision's file never changes once
 # ingested, and the route map and the "Now" tab ask for the same few stamps.
 _READ_CACHE: dict[tuple, dict[str, Any]] = {}
 _READ_CACHE_SIZE = 8
@@ -279,16 +348,17 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
     if not inbox.is_dir():
         return result
     for path in sorted(inbox.iterdir()):
-        stamp = stamp_of(path.name)
-        if stamp is None or not path.is_file():
+        parsed = name_of(path.name)
+        if parsed is None or not path.is_file():
             continue
+        stamp, revision = parsed
         try:
             if parse_frame_stamp(stamp) < now - retention:
                 path.unlink()
                 result.expired += 1
                 continue
             raw = path.read_bytes()
-            validate(raw, stamp)
+            validate(raw, stamp, revision)
         except InvalidDisplay as exc:
             logger.warning("Rejected cell display %s: %s", path.name, exc)
             _reject(inbox, path)
@@ -297,10 +367,12 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
         except OSError:
             logger.warning("Could not read cell display %s", path, exc_info=True)
             continue
-        # A stamp is written once: the API serves it as immutable, so a second
-        # copy must never replace the first. An identical re-push (the node lost
-        # its push state) is simply dropped; different bytes are set aside.
-        existing = store.path(stamp)
+        # A revision is written once: the API serves it as immutable, so a
+        # second copy must never replace the first. An identical re-push (the
+        # node lost its push state) is simply dropped; different bytes are set
+        # aside. A changed frame comes as a new revision (#666), never as new
+        # bytes under an old name.
+        existing = store.path(stamp, revision)
         if existing.exists():
             try:
                 same = existing.read_bytes() == raw
@@ -313,18 +385,18 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
                     pass
                 result.duplicates += 1
             else:
-                logger.warning("Rejected cell display %s: stamp already stored with different "
+                logger.warning("Rejected cell display %s: revision already stored with different "
                                "bytes (served as immutable; keeping the first)", path.name)
                 _reject(inbox, path)
                 result.rejected.append(stamp)
             continue
         try:
-            store.write(stamp, raw)  # received_at = now (the file's mtime)
+            store.write(stamp, raw, revision)  # received_at = now (the file's mtime)
             path.unlink()
         except OSError:
             logger.warning("Could not store cell display %s", path.name, exc_info=True)
             continue
-        result.accepted.append(stamp)
+        result.accepted.append(path.name.removesuffix(SUFFIX))  # as pushed: <stamp>[.r<n>]
     return result
 
 
@@ -376,6 +448,8 @@ def frames_status(store: DisplayStore, now: datetime | None = None) -> dict[str,
         "stale": stale,
         "stale_after_minutes": STALE_AFTER.total_seconds() / 60.0,
         "unavailable_since": newest.valid_time.isoformat() if (stale and newest) else None,
+        # {stamp} takes a frame's `key` (newest revision, immutable) — or, for
+        # a client from before #666, its bare `stamp` (newest, uncached).
         "url_template": "/api/observed/cells/{stamp}.json",
     }
 

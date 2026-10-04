@@ -2072,9 +2072,12 @@ async def run_observed_collect_loop(app_state) -> None:
 #
 # The home node rsyncs one display file per radar frame into CELLS_INBOX_DIR;
 # this moves the valid ones into DATA_DIR/observed/cells/display and purges
-# that store at 24 h. A directory listing of a few hundred names per tick.
+# that store at 24 h. The inbox scan is a listing of a handful of names, so it
+# runs every 5 s (#666: ingest latency was up to 30 s of a ~4.5-min budget);
+# the purges, which list the whole 24-h store, once a minute.
 
-_CELLS_INGEST_TICK_SECONDS = 30
+_CELLS_INGEST_TICK_SECONDS = 5
+_CELLS_PURGE_EVERY_TICKS = 12
 
 
 async def run_cells_ingest_loop(app_state) -> None:
@@ -2096,11 +2099,15 @@ async def run_cells_ingest_loop(app_state) -> None:
     if not inbox.is_dir():
         logger.warning("Cell overlay inbox %s does not exist yet; waiting for it", inbox)
 
+    tick = 0
     while True:
         try:
             result = await asyncio.to_thread(ingest, inbox, store)
-            purged = await asyncio.to_thread(store.purge)
-            purged += await asyncio.to_thread(purge_rejected, inbox)
+            purged = 0
+            if tick % _CELLS_PURGE_EVERY_TICKS == 0:
+                purged = await asyncio.to_thread(store.purge)
+                purged += await asyncio.to_thread(purge_rejected, inbox)
+            tick += 1
             if result.accepted or result.rejected or purged:
                 logger.info(
                     "Cell overlay: %d ingested (%s), %d rejected, %d expired, %d purged",

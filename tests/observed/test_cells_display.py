@@ -267,6 +267,27 @@ def test_pushed_set_only_remembers_the_lookback(processed):
     assert "20200101T0000" not in state["pushed"]
 
 
+def test_an_amended_frame_is_pushed_again_under_its_revision(processed, tmp_path):
+    """#666: only the newest revision is a candidate, tracked by key."""
+    root = tmp_path / "root"
+    shutil.copytree(processed / "cells", root / "cells")
+    state = {"pushed": [frame_stamp(t) for t in _times()]}  # a pre-#666 state file
+    t = _times()[-2]
+    display_path(root, t, 1).write_bytes(display_path(root, t).read_bytes())
+    run = _Run()
+    assert push_pending(root, state, _slots(), target="/x/", run=run) == 1
+    assert [Path(p).name for p in run.calls[0][1:-1] if not p.startswith("-")] == \
+        [f"{frame_stamp(t)}.r1.json.gz"]
+    assert f"{frame_stamp(t)}.r1" in state["pushed"] and frame_stamp(t) in state["pushed"]
+
+
+def test_a_single_frame_push_leaves_the_rest_of_the_sent_set(processed):
+    state = {"pushed": ["20200101T0000"]}
+    t = _times()[-1]
+    assert push_pending(processed, state, [t], target="/x/", run=_Run(), prune=False) == 1
+    assert state["pushed"] == sorted(["20200101T0000", frame_stamp(t)])
+
+
 @pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync not installed")
 def test_push_with_real_rsync_into_a_local_inbox(processed, tmp_path):
     inbox = tmp_path / "inbox"
@@ -283,12 +304,12 @@ def test_run_tick_pushes_after_analysis(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(runner_mod, "collect_tick", lambda *a, **k: [])
     monkeypatch.setattr(runner_mod, "push_pending",
-                        lambda root, state, slots: calls.append(sorted(slots)) or 0)
+                        lambda root, state, slots, **kw: calls.append(sorted(slots)) or 0)
     ws = Workspace(tmp_path)
     runner_mod.run_tick(ws, DEFAULT_POLICY, FrameCache(ws.frames), SOURCES, timedelta(hours=1),
                         now=T0 + timedelta(minutes=1))
     assert display_path(tmp_path, T0).exists()
-    assert calls and T0 in calls[0]
+    assert calls and T0 in calls[-1]
 
 
 def test_review_map_uses_the_display_cell_shape(processed, tmp_path):
