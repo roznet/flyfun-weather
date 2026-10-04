@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage
 
-from .catalogue import catalogue_path, r, read_catalogue
+from .catalogue import catalogue_path, cells_dir, r, read_catalogue
 from .detect import TierDetection, distance_km, runs_to_pixels
 from .policy import px
 
@@ -140,7 +140,7 @@ def _advect_centroid(grid, cell: dict, lead: int) -> tuple[float, float]:
 def append_scores(root: Path, valid_time: datetime, rows: list[dict]) -> None:
     if not rows:
         return
-    path = root / "scores" / f"{valid_time:%Y%m%d}.jsonl"
+    path = cells_dir(root) / "scores" / f"{valid_time:%Y%m%d}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         for row in rows:

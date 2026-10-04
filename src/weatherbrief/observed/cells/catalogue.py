@@ -10,12 +10,16 @@ keys sorted, floats rounded, no wall-clock fields (processing time and the
 like go to the run log, not here), and gzip written with ``mtime=0``.  That is
 what lets ``--replay`` prove a refactor changed nothing.
 
-Layout under the cells root::
+Layout under an observed archive root (the same relative paths on the home
+nodes, the NAS and — for ``cells/display`` — the droplet's ``observed/``)::
 
-    catalogues/20261003/20261003T1405.json.gz
+    <root>/opera_dbzh/20261003T1405.h5          raw frames, one dir per source
+    <root>/cells/catalogues/20261003/20261003T1405.json.gz
+    <root>/cells/display/20261003T1405.json.gz  map file pushed to the droplet (#656)
+    <root>/cells/scores/<day>.jsonl, cells/runs/<day>.jsonl, cells/state.json
 
-One directory per UTC day keeps listings short on a store that grows by 288
-files a day.
+One directory per UTC day keeps catalogue listings short on a store that grows
+by 288 files a day.
 """
 
 from __future__ import annotations
@@ -36,9 +40,23 @@ logger = logging.getLogger(__name__)
 SCHEMA = "observed-cells/1"
 
 
+CELLS_DIR = "cells"
+
+
+def cells_dir(root: Path) -> Path:
+    """Where the analysis lives under an observed root (frames sit beside it)."""
+    return Path(root) / CELLS_DIR
+
+
 def catalogue_path(root: Path, valid_time: datetime) -> Path:
     stamp = frame_stamp(valid_time)
-    return root / "catalogues" / stamp[:8] / f"{stamp}.json.gz"
+    return cells_dir(root) / "catalogues" / stamp[:8] / f"{stamp}.json.gz"
+
+
+def display_path(root: Path, valid_time: datetime) -> Path:
+    """The map-ready file for one frame (#656): built on the home node, mirrored
+    to the droplet's ``observed/cells/display/`` under the same name."""
+    return cells_dir(root) / "display" / f"{frame_stamp(valid_time)}.json.gz"
 
 
 def failure_path(root: Path, valid_time: datetime) -> Path:
@@ -51,7 +69,7 @@ def failure_path(root: Path, valid_time: datetime) -> Path:
     failure is final.  ``retry-failed`` clears markers; ``replay`` ignores them.
     """
     stamp = frame_stamp(valid_time)
-    return root / "catalogues" / stamp[:8] / f"{stamp}.failed.json"
+    return cells_dir(root) / "catalogues" / stamp[:8] / f"{stamp}.failed.json"
 
 
 def r(value, digits: int):

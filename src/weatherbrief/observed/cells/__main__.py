@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "render":
         from .render import render_frame
 
-        ws = Workspace(args.root or root, frames_root=root / "frames")
+        ws = Workspace(args.root or root, frames_root=root)
         bbox = tuple(float(v) for v in args.bbox.split(",")) if args.bbox else None
         print(render_frame(ws, args.time, args.out, bbox=bbox, scale=args.scale))
     elif args.command == "map":
@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.time:
             when = _utc(args.time)
         else:
-            newest = sorted((root / "catalogues").glob("*/*.json.gz"))
+            newest = sorted((root / "cells" / "catalogues").glob("*/*.json.gz"))
             if not newest:
                 raise SystemExit("no catalogues yet — run the loop first")
             from ..frames import parse_frame_stamp

@@ -29,17 +29,44 @@ observed/cells/
   lineage.py     identity across frames (advect, overlap, dominant link); trend
   attributes.py  rain rate, lightning, parallax-corrected cloud top per cell
   catalogue.py   wire format: deterministic gzipped JSON, one per DBZH frame
-  scoring.py     extrapolation vs persistence at 30/60 min → scores/<day>.jsonl
+  scoring.py     extrapolation vs persistence at 30/60 min → cells/scores/<day>.jsonl
   runner.py      archive store, collect + analyse tick, replay, coverage report
   render.py      review PNG (radar, outlines, 30-min arrows, flashes, age/trend)
   __main__.py    run [--once] | replay | render | status
 ```
 
-Under `WB_CELLS_ROOT` (required, no default — fails loudly):
-`frames/<source>/` (archive, `FrameStore(retain_all=True)`),
-`catalogues/<YYYYMMDD>/<stamp>.json.gz`, `scores/<day>.jsonl`,
-`runs/<day>.jsonl` (one row per processed frame: seconds, peak RSS, bytes,
-cell counts, what was unavailable; plus `gap` rows), `state.json`.
+## One tree everywhere
+
+The same relative paths on every machine; only the root differs, because each
+root has exactly one owner and only the owner purges it:
+
+```
+<root>/
+  opera_dbzh/<stamp>.h5 (+ .json)      raw frames, one directory per source
+  opera_rate/…  eumetsat_li/…  [eumetsat_ctth/…]
+  cells/
+    display/<stamp>.json.gz            map file — built on the home node, pushed (#656)
+    catalogues/<day>/<stamp>.json.gz   full analysis (+ <stamp>.failed.json markers)
+    scores/<day>.jsonl  runs/<day>.jsonl  state.json
+```
+
+| Machine | Root | Owner, retention |
+|---|---|---|
+| Droplet | `DATA_DIR/observed` | web app collector: frames 3 h; `cells/display` 24 h (#656) |
+| Mac mini | `~/flyfun-data/observed-archive` | cells loop; nightly archive job prunes (planned) |
+| MacBook (dev) | `main/data/observed-archive` | cells loop when testing; the dev server keeps `data/observed` |
+| NAS | `/volume1/backup/flyfun/weather/observed-archive` | archive job (planned) |
+
+`WB_CELLS_ROOT` names the home-node root (required, no default — fails
+loudly). It must never be `DATA_DIR/observed`: that store belongs to the web
+app's collector, which purges at 3 h — on the MacBook the dev server runs it.
+Frame names (`<YYYYMMDD>T<HHMM>`, EUMETSAT products snapped to their slot) are
+identical on both sides and byte-identical files (checked 2026-10-04); they are
+the shared key that links the analysis to the droplet's own frames
+(`test_frame_names_are_the_shared_key`).
+
+`runs/<day>.jsonl` holds one row per processed frame (seconds, peak RSS, bytes,
+cell counts, what was unavailable) plus `error` and `gap` rows.
 
 ## Choices, and why
 
@@ -115,7 +142,7 @@ newest radar frame back.  Sweeps
 cache keeps 24 h).
 
 **Byte-for-byte catalogues.**  Sorted keys, rounded floats, no wall clock
-(timings go to `runs/`), gzip `mtime=0`.  `replay` of the same frames under
+(timings go to `cells/runs/`), gzip `mtime=0`.  `replay` of the same frames under
 the same policy reproduces every file exactly (pinned by a test), into a
 separate root it refuses to share with the live one.
 
@@ -128,7 +155,7 @@ lineage and scoring match on `policy_version` only, or every deploy would
 restart every storm's history.
 
 **A failed frame is retried once, then given up on.**  An exception or an
-unreadable DBZH file writes `catalogues/<day>/<stamp>.failed.json` (error,
+unreadable DBZH file writes `cells/catalogues/<day>/<stamp>.failed.json` (error,
 attempt count) and one `error` row.  The loop retries it once after 30 min
 (`FAILURE_RETRY`) so a transient failure — memory, a disk blip — does not cost
 the frame; a second failure is final.  Each sweep logs how many frames in the
@@ -166,7 +193,7 @@ tolerances and exact structure.
 ## Running it
 
 ```
-WB_CELLS_ROOT=~/flyfun-data/observed-cells caffeinate -i \
+WB_CELLS_ROOT=$PWD/data/observed-archive caffeinate -i \
   ./venv/bin/python -m weatherbrief.observed.cells run
 python -m weatherbrief.observed.cells status --hours 24
 python -m weatherbrief.observed.cells render --time 2026-10-03T14:05 --out /tmp/c.png --bbox 43,-2,52,10 --scale 2

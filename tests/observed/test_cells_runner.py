@@ -54,7 +54,7 @@ def _times():
 @pytest.fixture(scope="module")
 def archive(tmp_path_factory) -> Path:
     root = tmp_path_factory.mktemp("cells")
-    store = FrameStore(root / "frames", retain_all=True)
+    store = FrameStore(root, retain_all=True)
     blobs = [(90, 80, 50, 7), (140, 130, 44, 10)]
     for i, t in enumerate(_times()):
         write_dbzh(store, t, scene(SIZE, blobs, shift=(STEP[0] * i, STEP[1] * i)))
@@ -116,7 +116,7 @@ def test_catalogue_carries_schema_policy_and_inputs(processed):
 
 
 def test_self_scoring_rows_written_with_persistence(processed):
-    rows = [json.loads(line) for line in (processed / "scores" / "20261003.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (processed / "cells" / "scores" / "20261003.jsonl").read_text().splitlines()]
     leads = {r["lead_min"] for r in rows}
     assert leads == {30, 60}
     core = [r for r in rows if r["tier"] == "core35" and r["lead_min"] == 30]
@@ -128,7 +128,7 @@ def test_self_scoring_rows_written_with_persistence(processed):
 
 
 def test_run_log_records_timing_and_memory(processed):
-    rows = [json.loads(line) for line in (processed / "runs" / "20261003.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (processed / "cells" / "runs" / "20261003.jsonl").read_text().splitlines()]
     frames = [r for r in rows if r["type"] == "frame"]
     assert len(frames) == FRAMES
     assert all(r["seconds"] > 0 and r["peak_rss_mb"] > 0 and r["catalogue_bytes"] > 0 for r in frames)
@@ -170,10 +170,10 @@ def test_downtime_longer_than_the_lookback_is_logged(tmp_path):
     ws = Workspace(tmp_path)
     now = T0 + timedelta(hours=10)
     record_downtime(ws, {"last_tick": T0.isoformat()}, now, timedelta(hours=6))
-    (row,) = [json.loads(x) for x in (tmp_path / "runs" / f"{now:%Y%m%d}.jsonl").read_text().splitlines()]
+    (row,) = [json.loads(x) for x in (tmp_path / "cells" / "runs" / f"{now:%Y%m%d}.jsonl").read_text().splitlines()]
     assert row["type"] == "gap" and row["from"] == T0.isoformat()
     record_downtime(ws, {"last_tick": (now - timedelta(hours=1)).isoformat()}, now, timedelta(hours=6))
-    assert len((tmp_path / "runs" / f"{now:%Y%m%d}.jsonl").read_text().splitlines()) == 1
+    assert len((tmp_path / "cells" / "runs" / f"{now:%Y%m%d}.jsonl").read_text().splitlines()) == 1
 
 
 # --- Configuration -----------------------------------------------------------
@@ -296,7 +296,7 @@ def test_a_failing_frame_is_marked_once_and_not_retried(tmp_path, monkeypatch):
         analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES)
     assert len(calls) == 1
     assert failure_path(tmp_path, T0).exists()
-    rows = [json.loads(x) for x in (tmp_path / "runs" / "20261003.jsonl").read_text().splitlines()]
+    rows = [json.loads(x) for x in (tmp_path / "cells" / "runs" / "20261003.jsonl").read_text().splitlines()]
     assert [r["type"] for r in rows] == ["error"]
     assert "synthetic failure" in rows[0]["error"]
     report = coverage_report(ws, T0, T0, SOURCES)
@@ -314,7 +314,7 @@ def test_an_unreadable_dbzh_frame_is_marked_once(tmp_path):
     assert analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES) == 0
     assert "unreadable" in json.loads(failure_path(tmp_path, T0).read_text())["error"]
     analyse_tick(ws, later, timedelta(hours=1), DEFAULT_POLICY, FrameCache(ws.frames), SOURCES)
-    assert len((tmp_path / "runs" / "20261003.jsonl").read_text().splitlines()) == 1
+    assert len((tmp_path / "cells" / "runs" / "20261003.jsonl").read_text().splitlines()) == 1
 
 
 def test_a_lineage_break_is_stated_not_silent(processed):
@@ -379,7 +379,7 @@ def test_a_scoring_error_does_not_fail_a_written_frame(tmp_path, monkeypatch):
                  FrameCache(ws.frames), SOURCES)
     assert catalogue_path(tmp_path, T0).exists()
     assert not failure_path(tmp_path, T0).exists()
-    (row,) = [json.loads(x) for x in (tmp_path / "runs" / "20261003.jsonl").read_text().splitlines()]
+    (row,) = [json.loads(x) for x in (tmp_path / "cells" / "runs" / "20261003.jsonl").read_text().splitlines()]
     assert row["type"] == "frame" and "bad score" in row["scoring_error"]
 
 
@@ -464,7 +464,7 @@ def test_replay_survives_a_failing_frame(processed, tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "process_frame", sometimes)
     out = tmp_path / "replay"
     assert replay(processed, out, _times()[0], _times()[4], DEFAULT_POLICY, sources=SOURCES) == 4
-    rows = [json.loads(x) for x in (out / "runs" / "20261003.jsonl").read_text().splitlines()]
+    rows = [json.loads(x) for x in (out / "cells" / "runs" / "20261003.jsonl").read_text().splitlines()]
     assert [r for r in rows if r["type"] == "error"][0]["error"] == "ValueError('bad frame')"
 
 
@@ -539,3 +539,30 @@ def test_catch_up_of_older_frames_after_live_ones_succeeds(tmp_path):
     assert analyse_tick(ws, later, timedelta(hours=2), DEFAULT_POLICY, cache, SOURCES) > 0
     for t in times:
         assert catalogue_path(tmp_path, t).exists(), t
+
+
+# --- Layout (one tree on the mini, the MacBook, the NAS and the droplet) -------
+
+
+def test_archive_layout_matches_the_droplet_observed_tree(processed):
+    """Frames at <root>/<source>/ like DATA_DIR/observed; analysis under cells/."""
+    from weatherbrief.observed.cells.catalogue import display_path
+
+    t = _times()[3]
+    assert (processed / "opera_dbzh" / "20261003T1215.h5").exists()
+    assert catalogue_path(processed, t) == processed / "cells" / "catalogues" / "20261003" / "20261003T1215.json.gz"
+    assert display_path(processed, t) == processed / "cells" / "display" / "20261003T1215.json.gz"
+    assert not (processed / "frames").exists()
+
+
+def test_frame_names_are_the_shared_key():
+    """The mini and the droplet name frames identically; analysis links to the
+    droplet's own frames by this stamp. Changing it breaks that link."""
+    from weatherbrief.observed.collect import _snap_to_interval
+    from weatherbrief.observed.frames import SOURCE_SPECS, frame_stamp
+
+    assert frame_stamp(datetime(2026, 10, 4, 1, 5, tzinfo=timezone.utc)) == "20261004T0105"
+    # EUMETSAT products are keyed by sensing time snapped down to the slot.
+    sensed = datetime(2026, 10, 4, 0, 49, 58, tzinfo=timezone.utc)
+    assert frame_stamp(_snap_to_interval(sensed, SOURCE_SPECS["eumetsat_li"].interval)) == "20261004T0040"
+    assert SOURCE_SPECS["opera_dbzh"].extension == "h5" and SOURCE_SPECS["eumetsat_li"].extension == "nc"

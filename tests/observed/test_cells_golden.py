@@ -4,8 +4,8 @@ OPERA and EUMETSAT frames cannot be redistributed from this repository, so the
 fixture lives outside it and the test skips when it is absent (same pattern
 as ``test_collect_live.py``).  Layout of ``$WB_CELLS_GOLDEN_DIR``::
 
-    frames/<source>/<stamp>.{h5,nc,json}   a short run of archived frames
-    expected/catalogues/<day>/<stamp>.json.gz
+    <source>/<stamp>.{h5,nc,json}          a short run of archived frames
+    expected/cells/catalogues/<day>/<stamp>.json.gz
 
 Build or refresh the expected side from a machine you trust (it replays the
 frames under the current policy):
@@ -39,7 +39,7 @@ SOURCES = ("opera_dbzh", "opera_rate", "eumetsat_li")
 
 
 def _range(root: Path) -> tuple[datetime, datetime]:
-    stamps = sorted(p.stem for p in (root / "frames" / "opera_dbzh").glob("*.h5"))
+    stamps = sorted(p.stem for p in (root / "opera_dbzh").glob("*.h5"))
     return parse_frame_stamp(stamps[0]), parse_frame_stamp(stamps[-1])
 
 
@@ -52,17 +52,17 @@ def _close(a, b, rel=0.01, abs_=1e-3):
 def test_replay_matches_the_golden_catalogues(tmp_path):
     root = Path(GOLDEN).expanduser()
     start, end = _range(root)
-    sources = tuple(s for s in SOURCES if (root / "frames" / s).is_dir())
+    sources = tuple(s for s in SOURCES if (root / s).is_dir())
     replay(root, tmp_path / "out", start, end, DEFAULT_POLICY, sources=sources)
-    got_dir = tmp_path / "out" / "catalogues"
+    got_dir = tmp_path / "out" / "cells" / "catalogues"
 
     if os.environ.get("WB_CELLS_GOLDEN_WRITE") in ("1", "true", "yes"):
-        target = root / "expected" / "catalogues"
+        target = root / "expected" / "cells" / "catalogues"
         shutil.rmtree(target, ignore_errors=True)
         shutil.copytree(got_dir, target)
         pytest.skip(f"wrote golden catalogues to {target}")
 
-    expected_files = sorted((root / "expected" / "catalogues").rglob("*.json.gz"))
+    expected_files = sorted((root / "expected" / "cells" / "catalogues").rglob("*.json.gz"))
     assert expected_files, "no expected catalogues — run once with WB_CELLS_GOLDEN_WRITE=1"
     for path in expected_files:
         want = read_catalogue(path)
@@ -86,6 +86,6 @@ def test_replay_matches_the_golden_catalogues(tmp_path):
 
 def test_golden_dir_layout_is_usable():
     root = Path(GOLDEN).expanduser()
-    assert (root / "frames" / "opera_dbzh").is_dir()
+    assert (root / "opera_dbzh").is_dir()
     start, end = _range(root)
     assert start <= end and start.tzinfo == timezone.utc

@@ -2,18 +2,21 @@
 
 Runs on a home compute node (the MacBook while the analysis is being built,
 the Mac mini as the live loop), never on the droplet.  Everything lives under
-``WB_CELLS_ROOT``::
+``WB_CELLS_ROOT`` (``observed-archive`` by convention), laid out like the
+droplet's ``DATA_DIR/observed`` so relative paths agree everywhere::
 
-    frames/<source>/<stamp>.{h5,nc,json}   archive — never purged (retain_all)
-    catalogues/<day>/<stamp>.json.gz       one per DBZH frame (catalogue.py)
-    scores/<day>.jsonl                     self-scoring rows (scoring.py)
-    runs/<day>.jsonl                       one row per processed frame + gaps
-    state.json                             last tick, last sweep
+    <source>/<stamp>.{h5,nc,json}            raw frames — never purged here (retain_all)
+    cells/catalogues/<day>/<stamp>.json.gz   one per DBZH frame (catalogue.py)
+    cells/display/<stamp>.json.gz            map file for the droplet (#656)
+    cells/scores/<day>.jsonl                 self-scoring rows (scoring.py)
+    cells/runs/<day>.jsonl                   one row per processed frame + gaps
+    cells/state.json                         last tick, last sweep
 
 The collector is the shared one (``observed.collect``) pointed at an archive
-store; only the lookback and fetch budget differ.  ``WB_CELLS_ROOT`` is
-deliberately separate from ``DATA_DIR/observed`` so this loop and a dev
-server's collector never purge or race each other's frames.
+store; only the lookback and fetch budget differ.  The root is deliberately
+*not* ``DATA_DIR/observed``: that store belongs to the web app's collector,
+which purges at 3 h (and on the MacBook a dev server runs it).  One owner per
+root, and only the owner purges.
 
 **Idempotent.**  A frame with a catalogue is never re-processed; a restart or
 a catch-up after sleep simply fills what is missing, oldest first.
@@ -50,7 +53,7 @@ from ..frames import (
 )
 from ..grid import GridSpec, GridWindow, compute_window
 from .attributes import cloud_tops, flash_counts, rate_peaks, same_grid
-from .catalogue import SCHEMA, catalogue_path, failure_path, r, read_catalogue, write_catalogue
+from .catalogue import SCHEMA, catalogue_path, cells_dir, failure_path, r, read_catalogue, write_catalogue
 from .detect import TierDetection, detect, footprint_runs, initial_bearing_deg, distance_km
 from .lineage import PreviousCell, link, trend, trim_history
 from .motion import FlowField, cell_motion, estimate_flow
@@ -196,25 +199,28 @@ class Workspace:
 
     def __post_init__(self) -> None:
         self.root = Path(self.root)
-        self.frames = FrameStore(Path(self.frames_root or self.root / "frames"), retain_all=True)
+        # Frames sit at the root, one directory per source — the same layout as
+        # the droplet's DATA_DIR/observed — and the analysis under cells/.
+        self.frames = FrameStore(Path(self.frames_root or self.root), retain_all=True)
+        self.cells = cells_dir(self.root)
 
     def log_run(self, when: datetime, row: dict) -> None:
-        path = self.root / "runs" / f"{when:%Y%m%d}.jsonl"
+        path = self.cells / "runs" / f"{when:%Y%m%d}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
 
     def load_state(self) -> dict:
         try:
-            return json.loads((self.root / "state.json").read_text())
+            return json.loads((self.cells / "state.json").read_text())
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
     def save_state(self, state: dict) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        tmp = self.root / "state.json.tmp"
+        self.cells.mkdir(parents=True, exist_ok=True)
+        tmp = self.cells / "state.json.tmp"
         tmp.write_text(json.dumps(state, sort_keys=True, default=str))
-        os.replace(tmp, self.root / "state.json")
+        os.replace(tmp, self.cells / "state.json")
 
 
 # --- Frame access -----------------------------------------------------------
@@ -641,7 +647,7 @@ def analyse_tick(ws: Workspace, now: datetime, lookback: timedelta, policy: Cell
 def retry_failed(ws: Workspace) -> int:
     """Clear every failure marker so the loop tries those frames again."""
     removed = 0
-    for marker in (ws.root / "catalogues").glob("*/*.failed.json"):
+    for marker in (ws.cells / "catalogues").glob("*/*.failed.json"):
         marker.unlink(missing_ok=True)
         removed += 1
     return removed
@@ -801,13 +807,13 @@ def replay(src_root: Path, out_root: Path, start: datetime, end: datetime,
     out_root = Path(out_root).resolve()
     if out_root == src_root:
         raise ValueError("replay output must not be the live cells root")
-    existing = [out_root / "catalogues", out_root / "scores", out_root / "runs"]
+    existing = [cells_dir(out_root)]
     if any(p.exists() for p in existing):
         if not force:
             raise FileExistsError(f"{out_root} already holds replay output; pass --force to replace it")
         for p in existing:
             shutil.rmtree(p, ignore_errors=True)
-    ws = Workspace(out_root, frames_root=src_root / "frames")
+    ws = Workspace(out_root, frames_root=src_root)
     cache = FrameCache(ws.frames)
     done = failed = 0
     for t in dbzh_slots(start, end):
