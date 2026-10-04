@@ -495,6 +495,9 @@ def test_cell_display_rejects_partial_or_empty_boxes_and_bad_stamps(client, cell
     assert client.get(url, params={"south": 1, "west": 2}).status_code == 400
     assert client.get(url, params={"south": 51, "west": 0, "north": 50, "east": 2}).status_code == 400
     assert client.get("/api/observed/cells/notastamp.json").status_code == 400
+    # Wider than any route corridor (and than the "Now" map's flash box).
+    huge = {"south": -80, "west": -170, "north": 80, "east": 170}
+    assert client.get(url, params=huge).status_code == 400
 
 
 def test_cell_display_for_a_purged_stamp_is_gone(client, cells_store):
@@ -537,3 +540,14 @@ def test_flashes_trail_can_be_shortened(client, stocked):
     none = client.get("/api/observed/flashes", params={**BBOX, "minutes": 0.001}).json()
     assert none["count"] == 0
     assert client.get("/api/observed/flashes", params={**BBOX, "minutes": 0}).status_code == 422
+
+
+def test_a_wide_flash_box_without_minutes_gets_the_short_trail(client, stocked, monkeypatch):
+    # The full retained trail over a continent could be several MB; a caller
+    # that forgets `minutes` gets the "Now" tab's trail, a corridor does not.
+    from weatherbrief.api import observed as observed_api
+    monkeypatch.setattr(observed_api, "WIDE_FLASH_TRAIL_MINUTES", 0.001)
+    europe = {"south": 30.0, "west": -25.0, "north": 72.0, "east": 45.0}
+    assert client.get("/api/observed/flashes", params=europe).json()["count"] == 0
+    assert client.get("/api/observed/flashes", params=BBOX).json()["count"] > 0
+    assert client.get("/api/observed/flashes", params={**europe, "minutes": 600}).json()["count"] > 0

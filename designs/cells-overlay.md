@@ -68,6 +68,8 @@ of `WB_OBSERVED_ENABLED`.
 the box; an outline when its own extent overlaps the box — a rain band
 crossing the route is drawn whole, not cut at the box edge.  Per-stamp
 responses are `immutable` (like the #652 tiles), the bbox is in the URL.
+The box is capped at 80° (the flash ceiling), not imagery's 25°, so a long
+route's corridor never loses its cells.
 
 **Time alignment (current-conditions invariant #4).**  Radar tiles and the
 overlay are separate frames.  The client draws the overlay whose stamp equals

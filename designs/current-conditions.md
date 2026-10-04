@@ -265,7 +265,7 @@ monkeypatches `socket.connect` to assert it.
 | `observed/imagery.py` | Frame → Web Mercator PNG (corridor overlay); the shared paint (`sample_smooth`, `paint_smooth`, `encode_png`) the tiles use too. |
 | `observed/tiles.py` | Radar tiles (#652): per-frame Web Mercator value canvas (`{stamp}.canvas.npz`, built by the collector, purged with the frame), XYZ tiles sliced from it. |
 | `observed/satellite_ir.py` | Satellite IR underlay (#652): EUMETView WMS proxy, advertised cycles, tile cache. Display only. |
-| `api/observed.py` | `/status`, `/overlay/{source}.png`, `/flashes` (box up to 80°, optional `minutes` trail — the maps page's "Now" tab, #656), `/frames/{source}`, `/tiles/{source}/{stamp}/{z}/{x}/{y}.png`; `/cells/frames`, `/cells/{stamp}.json` (cell overlay, see `cells-overlay.md`). |
+| `api/observed.py` | `/status`, `/overlay/{source}.png`, `/flashes` (box up to 80°, optional `minutes` trail — the maps page's "Now" tab, #656; a box wider than 25° with no `minutes` gets a 60-min trail, not all 3 h retained), `/frames/{source}`, `/tiles/{source}/{stamp}/{z}/{x}/{y}.png`; `/cells/frames`, `/cells/{stamp}.json` (cell overlay, see `cells-overlay.md`). |
 
 ### Frame store
 

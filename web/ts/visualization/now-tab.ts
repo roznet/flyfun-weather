@@ -89,6 +89,9 @@ export class NowTab {
   private openIcao: string | null = null;
   private badges: Partial<Record<NowLayer, string>> = {};
   private inFlight: Promise<void> | null = null;
+  // Lightning refreshes on every pan, so overlapping requests are normal: only
+  // the newest one may draw.
+  private flashSeq = 0;
 
   async show(): Promise<void> {
     this.visible = true;
@@ -158,7 +161,11 @@ export class NowTab {
 
   private async applyLayer(key: NowLayer): Promise<void> {
     if (key === 'airports') this.renderAirports();
-    else if (key === 'radar' || key === 'satellite') await this.refreshTiles();
+    else if (key === 'radar' || key === 'satellite') {
+      await this.refreshTiles();
+      // Cells pair with the radar frame; a toggle changes (or clears) it.
+      await this.refreshCells();
+    }
     else if (key === 'lightning') await this.refreshFlashes();
     else if (key === 'cells' || key === 'rain') {
       this.cells?.setEnabled(this.layers.cells);
@@ -282,6 +289,7 @@ export class NowTab {
 
   private async refreshFlashes(): Promise<void> {
     if (!this.flashGroup || !this.leaflet) return;
+    const seq = ++this.flashSeq;
     if (!this.layers.lightning) {
       this.flashGroup.clearLayers();
       this.badges.lightning = '';
@@ -289,23 +297,26 @@ export class NowTab {
     }
     const b = this.leaflet.getBounds();
     const box = flashBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
+    let flashes: FlashPoint[] = [];
+    let note: string;
     try {
       const response = await fetch(`/api/observed/flashes?${boxParams(box)}&minutes=${FLASH_TRAIL_MINUTES}`);
       if (!response.ok) {
-        this.flashes = [];
-        this.flashNote = response.status === 404 ? 'Lightning: not available on this server' : 'Lightning: failed to load';
+        note = response.status === 404 ? 'Lightning: not available on this server' : 'Lightning: failed to load';
       } else {
         const payload = await response.json();
-        this.flashes = (payload.flashes ?? []) as FlashPoint[];
+        flashes = (payload.flashes ?? []) as FlashPoint[];
         const newest = payload.newest_valid_time as string | null;
-        this.flashNote = newest
-          ? `Lightning ${hhmmZ(newest)} · last ${FLASH_TRAIL_MINUTES} min, faded by age · ${this.flashes.length} flashes in view`
+        note = newest
+          ? `Lightning ${hhmmZ(newest)} · last ${FLASH_TRAIL_MINUTES} min, faded by age · ${flashes.length} flashes in view`
           : 'Lightning: no current frame';
       }
     } catch {
-      this.flashes = [];
-      this.flashNote = 'Lightning: failed to load';
+      note = 'Lightning: failed to load';
     }
+    if (seq !== this.flashSeq) return;  // a newer pan or refresh owns the layer
+    this.flashes = flashes;
+    this.flashNote = note;
     this.drawFlashes();
     this.badges.lightning = this.flashNote;
   }

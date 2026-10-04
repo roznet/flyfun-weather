@@ -83,6 +83,10 @@ MAX_SPAN_DEG = 25.0
 # Flashes are points, not a render: the "Now" map (#656) asks for its whole
 # viewport, which over Europe is ~60° wide.
 MAX_FLASH_SPAN_DEG = 80.0
+# A box wider than a corridor with no ``minutes`` would return every retained
+# frame (3 h) for a whole continent — several MB on a storm day.  Such a
+# request gets the "Now" tab's trail instead.
+WIDE_FLASH_TRAIL_MINUTES = 60.0
 
 # Frames are immutable once written and are named by their valid time, so the
 # bytes for a given (source, stamp, bbox) never change.  The URL carries the
@@ -246,7 +250,8 @@ def observed_flashes(
 
     Returned as points rather than a raster: the map fades them by age, which
     a single accumulated image cannot express.  ``minutes`` shortens the trail
-    (default: every retained frame); the forecast map's "Now" tab asks for the
+    (default: every retained frame, or ``WIDE_FLASH_TRAIL_MINUTES`` for a box
+    wider than ``MAX_SPAN_DEG``); the forecast map's "Now" tab asks for the
     whole of Europe, so it is allowed a wider box (``MAX_FLASH_SPAN_DEG``) and
     passes its trail length to keep the payload bounded.
     """
@@ -260,6 +265,8 @@ def observed_flashes(
     # Every retained frame, not just the newest: the trail is the point.
     now = datetime.now(timezone.utc)
     trail = spec.retention
+    if minutes is None and max(north - south, east - west) > MAX_SPAN_DEG:
+        minutes = WIDE_FLASH_TRAIL_MINUTES
     if minutes is not None:
         trail = min(trail, timedelta(minutes=minutes))
     horizon = now - trail
@@ -588,8 +595,9 @@ def observed_cell_display(
         return Response(content=raw, media_type="application/json",
                         headers={**headers, "Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     if south is not None:
-        if north <= south or east <= west:
-            raise HTTPException(status_code=400, detail="Empty bounding box")
+        # The route map's corridor box; the flash ceiling keeps long routes
+        # working while refusing a nonsense box.
+        _bounds(south, west, north, east, max_span=MAX_FLASH_SPAN_DEG)
         data = cells_display.filter_bbox(data, south, west, north, east)
     return Response(
         content=_json.dumps(data, separators=(",", ":")),
