@@ -182,6 +182,8 @@ final class CrossSectionViewModel {
     /// "FlyFun" label is the mismatch this fixes. Outside an emulation it
     /// touches colours only.
     func setTheme(_ id: CrossSectionThemeID) {
+        // Set `userThemeId` first: both branches below draw `themeId`, which
+        // falls back to it once the emulation is gone.
         userThemeId = id
         UserDefaults.standard.set(id.rawValue, forKey: Self.themeDefaultsKey)
         if activeEmulation != nil {
@@ -464,10 +466,9 @@ final class CrossSectionViewModel {
     /// draws in its theme; FlyFun applies the graded methods, one layer per
     /// method group, and draws in the user's own theme. Neither writes the
     /// user's theme (#647) — the drawn one is derived (`themeId`). Either way an
-    /// active Focus lens is
-    /// re-applied on top, so "Windy, focused on icing" means Windy's icing method
-    /// with only the icing groups on — rather than the lens label surviving over
-    /// a layer set that no longer matches it.
+    /// active Focus lens is re-applied on top, so "Windy, focused on icing" means
+    /// Windy's icing method with only the icing groups on — rather than the lens
+    /// label surviving over a layer set that no longer matches it.
     func applyEmulation(_ id: String?) {
         if let preset = CrossSectionPresets.emulation(id) {
             enabledLayers.merge(preset.enabledLayers) { $1 }
