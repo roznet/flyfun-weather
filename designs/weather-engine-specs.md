@@ -409,7 +409,7 @@ Requires 2D wind fields (not just point values), so needs raw GRIB2 grid, not in
 ### GFS
 - **cfgrib lazy loading** — `open_datasets()` only reads the GRIB2 index; actual field data is loaded lazily during interpolation. Temp file must stay alive until all `.values` calls complete.
 - **GFS variable names** — `.idx` files use `CLMR`; cfgrib may decode as either `clmr` or `clwmr` depending on version. Map both.
-- **Longitude convention** — GFS uses 0–360°; route points use -180–180°. Normalize with `lon % 360`.
+- **Longitude convention** — GFS uses 0–360°; route points use -180–180°. The shared interpolators align targets to each dataset's axis (`_align_lons_to_axis`, #673), so decoders don't have to.
 - **S3 availability delay** — GFS data appears ~4.5h after init time. `find_latest_run()` checks backward from newest cycle.
 - **Pressure coordinate names** — cfgrib may use `isobaricInhPa`, `level`, or `pressure` depending on the GRIB2 message structure. Check all three.
 

@@ -287,7 +287,7 @@ grib_init_times, grib_skip_reasons, grib_sources = enrich_forecasts(
 - Cache is shared across users (same model run = same data)
 - **ECMWF no-cloud sentinel** — heights ≥ 9998m (nominally 9999m) mean "no cloud", converted to None
 - **ECMWF fractions** — `cc` (cloud cover) is 0–1 in GRIB, multiplied ×100 to match our `cloud_area_fraction_pct` convention. Surface covers (lcc/mcc/hcc/tcc) similarly converted in `build_ecmwf_cloud_diagnostics()`
-- **ECMWF longitude convention** — uses -180/+180 (same as route points), unlike GFS which uses 0–360. No longitude normalization needed for ECMWF decode
+- **Longitude convention is per dataset, not per model** (#673) — an ECMWF `a1` US area mixes GRIB1 messages on −128 … −71 with GRIB2 messages (ceil, CAPE/CIN, KX, TOTALX, ptype) on 232 … 289; the European GRIB2 grid crosses Greenwich and cfgrib shows it as −17.5 … 39.5. The shared interpolators (`_bilinear_grid_weights`, `_interpolate_per_point`) therefore map targets onto each dataset's own axis via `_align_lons_to_axis` (shift into `[min(axis), min(axis)+360)`; out-of-domain stays out). Decoders need no normalisation of their own; the GFS decoders' `lon % 360` is now redundant but harmless. Lambert (HRRR) grids are projected and unaffected
 - **ECMWF files may have no extension** — ECPDS default delivery has no `.grib2` suffix. Scanner accepts any filename matching the naming convention
 
 ## References
