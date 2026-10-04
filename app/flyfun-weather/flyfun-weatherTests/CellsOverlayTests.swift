@@ -185,6 +185,22 @@ struct CellsOverlayTests {
         #expect(d.times?.cloudTop == nil)
     }
 
+    @Test("a malformed cell is dropped, not the whole overlay")
+    func lossyCells() throws {
+        let json = """
+        {"valid_time": "2026-10-03T14:05:00+00:00",
+         "cells": [
+           {"id": "ok", "tier": "core35", "lat": 44.0, "lon": 5.0},
+           {"id": "no-position", "tier": "core41"},
+           {"id": "ok2", "tier": "core41", "lat": 44.2, "lon": 5.2}
+         ]}
+        """
+        let d = try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: Data(json.utf8))
+        #expect(d.cells.map(\.id) == ["ok", "ok2"])
+        #expect(d.schema == nil)
+        #expect(d.outlines == nil)
+    }
+
     @Test("arrows only for measured motion on cores")
     func arrows() throws {
         let cells = try Self.display().cells
@@ -234,6 +250,10 @@ struct CellsOverlayTests {
         #expect(repo.observedCellDisplayRequests == ["/api/observed/cells/20261003T1405.json"])
         #expect(model.display?.cells.count == 3)
         #expect(model.badge?.hasPrefix("Cells 14:05Z") == true)
+
+        // A forced refresh (pull-to-refresh) skips the listing TTL.
+        await model.refresh(radarStamp: nil, box: nil, at: Self.now.addingTimeInterval(35), force: true)
+        #expect(repo.observedCellFramesCallCount == 2)
 
         // A different radar frame pairs with a different overlay.
         await model.refresh(radarStamp: "20261003T1400", box: nil, at: Self.now.addingTimeInterval(40))

@@ -45,6 +45,9 @@ struct RouteMapView: View {
     /// Experimental radar-cell overlay (#661). Off by default, as on the web —
     /// an experimental layer on a safety product is opted into.
     @AppStorage("mapObservedCells") private var observedCells = false
+    /// The map's own cell model (not `viewModel.cellsModel`): it pairs with the
+    /// drawn reflectivity frame, while the Observed list takes the newest.
+    @State private var cellsModel: RouteCellsModel?
     /// The cross-section's corridor pick (0 = unset → the sampled default).
     /// `@AppStorage` so the corridor box follows a change made on that screen.
     @AppStorage(CrossSectionViewModel.observedRadiusDefaultsKey) private var observedRadiusPick = 0.0
@@ -140,8 +143,11 @@ struct RouteMapView: View {
             // Restarts when the drawn radar frame changes, so the overlay
             // follows it (same stamp, else the newest at or before it).
             guard showsCells else { return }
+            if cellsModel == nil, let repo = appState.repository {
+                cellsModel = RouteCellsModel(repository: repo)
+            }
             let stamp = cellsRadarStamp
-            await viewModel.cellsModel.poll(radarStamp: { stamp }, box: viewModel.cellsBox)
+            await cellsModel?.poll(radarStamp: { stamp }, box: viewModel.cellsBox)
         }
     }
 
@@ -172,8 +178,8 @@ struct RouteMapView: View {
             observedTileFetcher: observedModel?.tileFetcher,
             observedCorridor: observedCorridor,
             mutedBaseMap: showsObserved && (!observedRadar.isEmpty || observedSatellite),
-            cellsDisplay: showsCells ? viewModel.cellsModel.display : nil,
-            cellsDisplayKey: showsCells ? viewModel.cellsModel.displayPath : nil
+            cellsDisplay: showsCells ? cellsModel?.display : nil,
+            cellsDisplayKey: showsCells ? cellsModel?.displayPath : nil
         )
         .ignoresSafeArea(edges: .bottom)
     }
@@ -378,7 +384,7 @@ struct RouteMapView: View {
     private var observedFooter: some View {
         // The cell overlay's own line (its own time — never the radar's).
         let badges = observedComposition.badges
-            + (showsCells ? [viewModel.cellsModel.badge].compactMap { $0 } : [])
+            + (showsCells ? [cellsModel?.badge].compactMap { $0 } : [])
         let legend = observedRadar.isEmpty ? nil : observedModel?.legends[observedRadar]
         return VStack {
             Spacer()

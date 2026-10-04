@@ -2,9 +2,10 @@ import Foundation
 import Observation
 import OSLog
 
-/// The experimental radar-cell overlay for one briefing route (#661), shared by
-/// the route map (outlines, markers, arrows) and the Observed tab (the cell
-/// list) so both show the same frame.
+/// The experimental radar-cell overlay for one briefing route (#661). Two
+/// instances per briefing: the route map's (paired with the drawn radar frame)
+/// and the Observed tab's (`BriefingViewModel.cellsModel`, newest frame), so
+/// two polls with different stamps never overtake each other.
 ///
 /// Port of the web's `CellsLayer.refresh` (cells-overlay.ts): the frame listing
 /// is fetched at most once a minute (a new frame lands every 5), the display
@@ -54,12 +55,14 @@ final class RouteCellsModel {
         }
     }
 
-    /// Fetch the listing (TTL) and the display file that pairs with `radarStamp`.
-    func refresh(radarStamp: String?, box: ObservedMapImagery.LatLonBox?, at time: Date = Date()) async {
+    /// Fetch the listing (TTL; `force` skips it — a pilot's pull-to-refresh)
+    /// and the display file that pairs with `radarStamp`.
+    func refresh(radarStamp: String?, box: ObservedMapImagery.LatLonBox?, at time: Date = Date(),
+                 force: Bool = false) async {
         token += 1
         let mine = token
         now = time
-        if frames == nil || time.timeIntervalSince(framesFetchedAt ?? .distantPast) >= Self.framesTTL {
+        if force || frames == nil || time.timeIntervalSince(framesFetchedAt ?? .distantPast) >= Self.framesTTL {
             do {
                 frames = try await repository.observedCellFrames()
             } catch {

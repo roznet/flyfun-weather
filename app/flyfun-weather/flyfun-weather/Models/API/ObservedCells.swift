@@ -39,11 +39,16 @@ nonisolated struct CellFrame: Codable, Sendable, Equatable {
 }
 
 /// One display file: one radar frame's cells, outlines and the frame's own times.
+///
+/// Decoded leniently: the envelope's identity fields are optional and `cells`
+/// is decoded element by element — a cell missing a required field is
+/// dropped, not the whole overlay (a node-side schema slip must not blank the
+/// map for every cell).
 nonisolated struct CellDisplay: Codable, Sendable {
-    let schema: String
-    let policyVersion: String
+    let schema: String?
+    let policyVersion: String?
     let codeRevision: String?
-    let validTime: String
+    let validTime: String?
     let windowMinutes: Double?
     let times: CellDisplayTimes?
     let unavailable: [CellUnavailable]?
@@ -52,6 +57,48 @@ nonisolated struct CellDisplay: Codable, Sendable {
     /// Tier → polylines, each `[[lat, lon], …]`.
     let outlines: [String: [[[Double]]]]?
     let cells: [DisplayCell]
+
+    private enum CodingKeys: String, CodingKey {
+        case schema, policyVersion, codeRevision, validTime, windowMinutes, times
+        case unavailable, rainMinAreaKm2, arrowMinutes, outlines, cells
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try? c.decodeIfPresent(String.self, forKey: .schema)
+        policyVersion = try? c.decodeIfPresent(String.self, forKey: .policyVersion)
+        codeRevision = try? c.decodeIfPresent(String.self, forKey: .codeRevision)
+        validTime = try? c.decodeIfPresent(String.self, forKey: .validTime)
+        windowMinutes = try? c.decodeIfPresent(Double.self, forKey: .windowMinutes)
+        times = try? c.decodeIfPresent(CellDisplayTimes.self, forKey: .times)
+        unavailable = try? c.decodeIfPresent([CellUnavailable].self, forKey: .unavailable)
+        rainMinAreaKm2 = try? c.decodeIfPresent(Double.self, forKey: .rainMinAreaKm2)
+        arrowMinutes = try? c.decodeIfPresent(Double.self, forKey: .arrowMinutes)
+        outlines = try? c.decodeIfPresent([String: [[[Double]]]].self, forKey: .outlines)
+        cells = (try? c.decodeIfPresent(LossyCells.self, forKey: .cells))?.elements ?? []
+    }
+}
+
+/// `[DisplayCell]` that skips the elements it cannot decode.
+private nonisolated struct LossyCells: Decodable {
+    let elements: [DisplayCell]
+
+    private struct Skip: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var out: [DisplayCell] = []
+        while !container.isAtEnd {
+            if let cell = try? container.decode(DisplayCell.self) {
+                out.append(cell)
+            } else {
+                _ = try? container.decode(Skip.self)  // advance past the bad element
+            }
+        }
+        elements = out
+    }
 }
 
 nonisolated struct CellDisplayTimes: Codable, Sendable {

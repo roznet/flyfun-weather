@@ -17,10 +17,12 @@ import OSLog
 /// render as a top tab bar. Skew-T folds under Cross-Section (scrolled to).
 enum BriefingTab: String, Hashable, CaseIterable {
     case advisory
-    case observed
     case discussion
     case crossSection
     case map
+    /// Appended on flight day; declared in display order so `allCases` agrees
+    /// with the tab bar.
+    case observed
     /// Hidden while `PirepFeature.isEnabled` is false (#661); kept so the
     /// feature can come back without re-plumbing.
     case pireps
@@ -170,8 +172,11 @@ final class BriefingViewModel {
     private(set) var downloadState: DownloadState = .notDownloaded
     private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
 
-    /// The experimental radar-cell overlay (#661), shared by the route map and
-    /// the Observed tab's cell list so both show the same frame. Online-only.
+    /// The experimental radar-cell overlay for the Observed tab's glance chip
+    /// and cell list (#661). The route map keeps its own model: it pairs with
+    /// the drawn radar frame, the list takes the newest, and one shared model
+    /// polled with two stamps could flip the map to a frame that is not the
+    /// radar under it. Online-only.
     let cellsModel: RouteCellsModel
 
     // UI state
@@ -304,8 +309,8 @@ final class BriefingViewModel {
 
     /// The box the cell overlay is fetched for: the widest sampled corridor
     /// plus `CellsOverlay.marginNm` (web: corridor + 50 NM). Independent of the
-    /// cross-section's corridor pick so the map and the Observed list share
-    /// one request and one cached frame.
+    /// cross-section's corridor pick, so the map and the Observed list ask for
+    /// the same box.
     var cellsBox: ObservedMapImagery.LatLonBox? {
         guard case .loaded(let snapshot) = snapshotState else { return nil }
         let corridor = ObservedMapImagery.corridorRadius(snapshot.observedConditions, picked: nil) ?? 20
@@ -958,6 +963,11 @@ final class BriefingViewModel {
     /// Pull-to-refresh: adopt a newer pack *and* re-fetch the live layer.
     func pullToRefresh() async {
         await syncLatestPack(forceLive: true)
+        // The Observed tab's cells are online-only and on their own 2-min
+        // poll; a pull is the pilot asking for "now", so fetch them too.
+        if case .loaded(let snapshot) = snapshotState, snapshot.observedConditions?.hasAnyField == true {
+            await cellsModel.refresh(radarStamp: nil, box: cellsBox, force: true)
+        }
     }
 
     /// "Since this briefing" changes on screen, nil when the pack carries no
