@@ -518,3 +518,28 @@ def test_trail_fields_stay_out_of_live_json_and_the_overlay(tmp_path):
     layer = live_for_pack(ticks[-1].pack_dir)
     overlaid = json.dumps(overlay_live({}, layer))
     assert "trail" not in overlaid and "recently_cleared" not in overlaid and "cleared_at" not in overlaid
+
+
+# --- Route cache: only good reads are kept (review on #670) ------------------
+
+
+def test_failed_briefing_read_is_not_cached(tmp_path, monkeypatch):
+    from weatherbrief.tasks import artifacts, live_trail
+
+    pack_dir = tmp_path / "u" / "flight" / "pack"
+    pack_dir.mkdir(parents=True)
+    calls = []
+    good = {"route": _route(100.0, 1.0).model_dump(mode="json"), "departure_time": at("10:00").isoformat()}
+
+    def load(path):
+        calls.append(path)
+        return None if len(calls) == 1 else good  # first read races the pack write
+
+    monkeypatch.setattr(artifacts, "load_briefing", load)
+    monkeypatch.setattr(live_trail, "_ROUTE_CACHE", {})
+    assert live_trail._route_context(str(pack_dir)) == (None, None)
+    route, dep = live_trail._route_context(str(pack_dir))
+    assert route is not None and dep == at("10:00")
+    # Now cached: no further read.
+    live_trail._route_context(str(pack_dir))
+    assert len(calls) == 2
