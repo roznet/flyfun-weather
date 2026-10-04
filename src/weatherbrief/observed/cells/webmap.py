@@ -28,6 +28,7 @@ import numpy as np
 
 from ..imagery import _DBZ_STOPS, DETECTION_ALPHA, FAINT_ALPHA, FAINT_ECHO_DBZ, NODATA_RGBA, _colourise
 from .catalogue import catalogue_path, read_catalogue
+from .display import display_cell, outline_step, outlines as _outlines, shown
 from .policy import DEFAULT_POLICY, CellPolicy
 from .runner import FrameCache, Workspace, _li_frame
 
@@ -80,30 +81,6 @@ def _radar_png(frame, south, west, north, east) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _outlines(det, grid, r0, r1, c0, c1, step: int) -> list:
-    """Cell boundaries in the crop as [[lat, lon], ...] polylines."""
-    import contourpy
-
-    mask = (det.labels[r0:r1, c0:c1] > 0)
-    if step > 1:
-        h = (mask.shape[0] // step) * step
-        w = (mask.shape[1] // step) * step
-        mask = mask[:h, :w].reshape(h // step, step, w // step, step).any(axis=(1, 3))
-    if not mask.any():
-        return []
-    padded = np.pad(mask.astype(np.float32), 1)
-    lines = contourpy.contour_generator(z=padded).lines(0.5)
-    out = []
-    for line in lines:
-        if len(line) < 4:
-            continue
-        cc = (line[:, 0] - 1) * step + (step - 1) / 2 + c0 + det.col0
-        rr = (line[:, 1] - 1) * step + (step - 1) / 2 + r0 + det.row0
-        lons, lats = grid.colrow_to_lonlat(cc, rr)
-        out.append([[round(float(a), 3), round(float(b), 3)] for a, b in zip(lats, lons)])
-    return out
-
-
 def render_map(
     ws: Workspace,
     valid_time: datetime,
@@ -141,34 +118,17 @@ def render_map(
     big = (r1 - r0) * (c1 - c0) > 4_000_000  # whole-Europe view: coarser outlines
 
     outlines = {
-        tier.name: _outlines(dets[tier.name], grid, r0, r1, c0, c1,
-                             step=(4 if tier.name == "rain20" else 2) if big else (2 if tier.name == "rain20" else 1))
+        tier.name: _outlines(dets[tier.name], grid, r0, r1, c0, c1, step=outline_step(tier.name, big))
         for tier in policy.tiers
     }
 
     def inside(lat, lon):
         return south <= lat <= north and west <= lon <= east
 
-    cells = []
-    for cell in catalogue["cells"]:
-        if not inside(cell["lat"], cell["lon"]):
-            continue
-        if cell["tier"] == "rain20" and cell["area_km2"] < 2000:
-            continue
-        m = cell["motion"]
-        arrow = None
-        if m["status"] == "available":
-            lon2, lat2 = grid.colrow_to_lonlat(cell["col"] + m["dcol_per_min"] * 30,
-                                               cell["row"] + m["drow_per_min"] * 30)
-            arrow = [round(float(lat2), 4), round(float(lon2), 4)]
-        cells.append({
-            "id": cell["id"], "tier": cell["tier"], "lat": cell["lat"], "lon": cell["lon"],
-            "area": cell["area_km2"], "peak": cell["peak_dbz"], "rate": cell["rate_peak_mm_h"],
-            "flashes": cell["flashes"], "top": cell["top_fl"], "truncated": cell["truncated"],
-            "age": cell["lineage"]["age_min"], "event": cell["lineage"]["event"],
-            "trend": cell["trend"], "motion": {k: m[k] for k in ("status", "reason", "speed_kt", "toward_deg")},
-            "arrow": arrow,
-        })
+    # The same reduction the pushed display file uses (#656), so the prototype
+    # and the web app's overlay read one cell shape.
+    cells = [display_cell(c, grid) for c in catalogue["cells"]
+             if shown(c) and inside(c["lat"], c["lon"])]
 
     flashes = []
     li, _ = _li_frame(ws.frames, valid_time)
@@ -233,8 +193,8 @@ function popup(c){
   let trend=t.state; if(t.window_min) trend+=` over ${t.window_min} min (peak ${t.d_peak_db>0?'+':''}${t.d_peak_db} dB, area ×${f(t.area_ratio)}${t.d_flashes!=null?`, flashes ${t.d_flashes>0?'+':''}${t.d_flashes}`:''})`;
   const mv=m.status==='available'?`moving <b>${comp(m.toward_deg)}</b> (${f(m.toward_deg,'°')}) at <b>${m.speed_kt} kt</b>`:`motion ${m.status}${m.reason?': '+m.reason:''}`;
   return `<b>${c.tier}</b> ${c.truncated?'(truncated by coverage edge)':''}<br>
-  peak <b>${c.peak} dBZ</b> · area ${c.area} km²<br>rain rate peak ${f(c.rate,' mm/h')} · lightning <b>${f(c.flashes)}</b>${c.top!=null?` · top FL${c.top}`:''}<br>
-  age ${c.age} min (${c.event}) · <b>${trend}</b><br>${mv}<br><span style="color:#888">${c.id}</span>`;
+  peak <b>${c.peak_dbz} dBZ</b> · area ${c.area_km2} km²<br>rain rate peak ${f(c.rate_peak_mm_h,' mm/h')} · lightning <b>${f(c.flashes)}</b>${c.top_fl!=null?` · top FL${c.top_fl}`:''}<br>
+  age ${c.age_min} min (${c.event}) · <b>${trend}</b><br>${mv}<br><span style="color:#888">${c.id}</span>`;
 }
 const cellLayers={core41:L.layerGroup(),core35:L.layerGroup(),rain20:L.layerGroup()};
 const arrows=L.layerGroup();

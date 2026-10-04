@@ -30,6 +30,13 @@ Three endpoints:
         bytes never change and the response is cacheable for the frame's life
         — and a loop (#653) is a different stamp, not a different pipeline.
 
+  GET /api/observed/cells/frames
+  GET /api/observed/cells/{stamp}.json[?south=&west=&north=&east=]
+      → the cell overlay pushed by the home node's analysis (#656): the stamps
+        held, newest first, with the stale state; one frame's outlines and
+        cells, optionally clipped to the route's box.  Own flag
+        (``WB_CELLS_INGEST_ENABLED``); the listing says "disabled" rather than 404.
+
 Auth mirrors the other flight-independent map endpoints: any authenticated
 user.  Nothing here is user-specific, but none of it is public either.
 """
@@ -42,7 +49,7 @@ from typing import Any
 from urllib.parse import quote
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from flyfun_common.db import current_user_id
 from weatherbrief.observed.collect import observed_enabled
@@ -498,4 +505,80 @@ def _tile_response(png: bytes, cache_control: str = _TILE_CACHE_CONTROL) -> Resp
         content=png,
         media_type="image/png",
         headers={"Cache-Control": cache_control},
+    )
+
+
+# --- Cell overlay (#656) -----------------------------------------------------------
+#
+# Display files pushed by the home node's cell analysis and ingested into
+# DATA_DIR/observed/cells/display (observed/cells_display.py). Gated on
+# WB_CELLS_INGEST_ENABLED rather than WB_OBSERVED_ENABLED: the listing answers
+# "disabled" instead of 404 so the map's Cells toggle can say why it is empty.
+
+
+@router.get("/cells/frames")
+def observed_cell_frames(_user_id: str = Depends(current_user_id)) -> dict[str, Any]:
+    """Overlay stamps newest first, each with its valid and received time.
+
+    ``stale`` / ``unavailable_since`` carry "cell analysis unavailable since
+    HH:MMZ": the newest overlay's own time when it is too old to draw.
+    """
+    from weatherbrief.observed import cells_display
+
+    if not cells_display.cells_ingest_enabled():
+        return cells_display.disabled_status()
+    return cells_display.frames_status(cells_display.DisplayStore())
+
+
+@router.get("/cells/{stamp}.json")
+def observed_cell_display(
+    stamp: str,
+    request: Request,
+    south: float | None = Query(None),
+    west: float | None = Query(None),
+    north: float | None = Query(None),
+    east: float | None = Query(None),
+    _user_id: str = Depends(current_user_id),
+) -> Response:
+    """One frame's overlay, optionally clipped to a box (the route map's).
+
+    Keyed by stamp, so the body never changes: cacheable like the tiles.
+    """
+    import json as _json
+
+    from weatherbrief.observed import cells_display
+
+    if not cells_display.cells_ingest_enabled():
+        raise HTTPException(status_code=404, detail="Cell analysis not enabled")
+    try:
+        parse_frame_stamp(stamp)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Bad frame stamp") from exc
+    box = (south, west, north, east)
+    if any(v is not None for v in box) and any(v is None for v in box):
+        raise HTTPException(status_code=400, detail="Give all of south, west, north, east or none")
+    store = cells_display.DisplayStore()
+    data = store.read(stamp)
+    if data is None:
+        # Purged (older than retention), never received, or invalid.
+        raise HTTPException(status_code=410, detail="Overlay not stored")
+    headers = {"Cache-Control": _TILE_CACHE_CONTROL}
+    if south is None and "gzip" in request.headers.get("accept-encoding", "").lower():
+        # The whole of Europe (the "Now" tab): the stored file already is
+        # gzipped JSON (~150 KB vs ~1 MB raw) and was validated just above, so
+        # hand its bytes over as-is and let the browser inflate them.
+        try:
+            raw = store.path(stamp).read_bytes()
+        except OSError as exc:
+            raise HTTPException(status_code=410, detail="Overlay not stored") from exc
+        return Response(content=raw, media_type="application/json",
+                        headers={**headers, "Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    if south is not None:
+        if north <= south or east <= west:
+            raise HTTPException(status_code=400, detail="Empty bounding box")
+        data = cells_display.filter_bbox(data, south, west, north, east)
+    return Response(
+        content=_json.dumps(data, separators=(",", ":")),
+        media_type="application/json",
+        headers={**headers, "Vary": "Accept-Encoding"},
     )

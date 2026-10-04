@@ -427,3 +427,32 @@ def test_cli_restore_refuses_the_live_root(tmp_path, monkeypatch):
     monkeypatch.setenv("WB_CELLS_ROOT", str(tmp_path))
     with pytest.raises(SystemExit):
         main(["archive", "restore", "--day", "20261003", "--from", str(tmp_path / "x"), "--to", str(tmp_path)])
+
+
+def test_display_files_ride_in_the_cells_tar_and_are_pruned_with_the_analysis(tmp_path):
+    """#656: the loop never deletes, so display files must go through the archive."""
+    import tarfile
+
+    root = tmp_path / "root"
+    old = TODAY - timedelta(days=100)
+    recent = TODAY - timedelta(days=50)
+    for day in (old, recent):
+        _day(root, day)
+        display = root / "cells" / "display"
+        display.mkdir(parents=True, exist_ok=True)
+        for hhmm in ("0600", "1800"):
+            (display / f"{A.day_str(day)}T{hhmm}.json.gz").write_bytes(b"gz" + hhmm.encode())
+    assert old in A.hot_days(root)
+    m = A.pack_day(root, old, A.default_staging(root), sources=SOURCES, now=NOW)
+    cells_tar = next(t for t in m["tars"] if t["path"].startswith("cells/"))
+    with tarfile.open(A.default_staging(root) / cells_tar["path"]) as tar:
+        names = tar.getnames()
+    assert f"cells/display/{A.day_str(old)}T0600.json.gz" in names
+    assert not any(A.day_str(recent) in n for n in names)  # only that day's stamps
+    assert m["catalogues"] == 2  # display files are not counted as catalogues
+    sums = _nas_sums(A.default_staging(root), tmp_path / "sums-old.txt")
+    assert A.verify_day(root, old, A.default_staging(root), sums, now=NOW)["verified"]
+    assert _archive(root, recent, tmp_path)["verified"]
+    A.prune(root, now=NOW, execute=True)
+    assert not (root / "cells" / "display" / f"{A.day_str(old)}T0600.json.gz").exists()
+    assert (root / "cells" / "display" / f"{A.day_str(recent)}T0600.json.gz").exists()

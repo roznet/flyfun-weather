@@ -29,6 +29,12 @@ services:
       # host-side ingest wrapper owns the lifecycle (stage, then delete the
       # consumed artifact); the container only ever reads.
       - ${HOST_SNAPSHOT_INBOX:-./data/snapshot_inbox}:/app/snapshot_inbox:ro
+      # Cell-overlay display files rsynced by the home node's cells loop (#656),
+      # ingested by the app when WB_CELLS_INGEST_ENABLED is set. Read-write:
+      # the app moves each valid file into DATA_DIR/observed/cells/display, so
+      # the host dir must be writable by the weatherdata group (2002), e.g.
+      # chgrp 2002 + chmod 2775 (setgid, so rsynced files inherit the group).
+      - ${HOST_CELLS_INBOX:-./data/cells_inbox}:/app/cells_inbox
     group_add:
       - "2002"  # weatherdata — lets app user write sentinels to ECMWF delivery dir
     healthcheck:

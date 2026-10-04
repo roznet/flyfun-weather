@@ -22,7 +22,8 @@ Layout of the staging tree and the NAS copy (``…/weather/observed-archive/``):
 
     opera_dbzh/2026/20261004.tar        frames + sidecars, uncompressed (already compressed payloads)
     opera_rate/…  eumetsat_li/…
-    cells/2026/20261004.tar.gz          catalogues/<day>/*, scores/<day>.jsonl, runs/<day>.jsonl
+    cells/2026/20261004.tar.gz          catalogues/<day>/*, scores/<day>.jsonl, runs/<day>.jsonl,
+                                        display/<day>T*.json.gz (#656)
     manifest/20261004.json              counts, bytes, sha256, members, gaps, versions, event class
     keep-days.json                      (NAS only) days pinned by hand: {"20260827": "reason"}
 
@@ -172,6 +173,12 @@ def _cells_files(root: Path, day: date) -> list[Path]:
         p = cells / sub / f"{d}.jsonl"
         if p.is_file():
             out.append(p)
+    # Display files (#656): one flat directory, so the day is the stamp prefix.
+    # Packed and pruned with the rest of the day's analysis — the loop never
+    # deletes, and without this they would be the one thing growing forever.
+    display = cells / "display"
+    if display.is_dir():
+        out += sorted(p for p in display.glob(f"{d}T*.json.gz") if p.is_file())
     return out
 
 
@@ -192,6 +199,9 @@ def hot_days(root: Path) -> set[date]:
         directory = cells_dir(root) / sub
         if directory.is_dir():
             days |= {parse_day(p.stem) for p in directory.glob("*.jsonl") if _DAY_RE.match(p.stem)}
+    display = cells_dir(root) / "display"
+    if display.is_dir():
+        days |= {parse_day(p.name[:8]) for p in display.glob("*T*.json.gz") if _DAY_RE.match(p.name[:8])}
     return days
 
 
@@ -375,7 +385,8 @@ def pack_day(root: Path, day: date, out: Path, *, sources: tuple[str, ...], now:
     for p in cells_files:
         if p.name.endswith(".failed.json"):
             failed += 1
-        elif p.name.endswith(".json.gz"):
+        elif p.name.endswith(".json.gz") and p.parent.parent.name == "catalogues":
+            # Display files (#656) are .json.gz too; they are not catalogues.
             cat = read_catalogue(p)
             if cat is None:
                 continue

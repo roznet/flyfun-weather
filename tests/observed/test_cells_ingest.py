@@ -1,0 +1,237 @@
+"""Droplet side of the cell overlay (#656): validation, ingest, retention, listing."""
+
+from __future__ import annotations
+
+import gzip
+import json
+import os
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from weatherbrief.observed import cells_display as cd
+from weatherbrief.observed.frames import frame_stamp
+
+from .cells_helpers import display_bytes, display_cell_doc, display_doc
+
+NOW = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def _drop(inbox, t, doc=None, raw=None):
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / f"{frame_stamp(t)}.json.gz"
+    path.write_bytes(raw if raw is not None else display_bytes(doc or display_doc(t)))
+    return path
+
+
+# --- Validation -------------------------------------------------------------------
+
+
+def test_a_good_file_validates():
+    t = NOW - timedelta(minutes=10)
+    data = cd.validate(display_bytes(display_doc(t)), frame_stamp(t))
+    assert data["cells"][0]["id"] == "core41-a"
+
+
+@pytest.mark.parametrize("mutate, why", [
+    (lambda d: d.update(schema="observed-cells/1"), "schema"),
+    (lambda d: d.update(schema=None), "schema"),
+    (lambda d: d.update(policy_version="cells-1"), "policy_version"),
+    (lambda d: d.update(policy_version=7), "policy_version"),
+    (lambda d: d.update(valid_time="2026-10-04T11:45:00+00:00"), "does not match"),
+    (lambda d: d.update(valid_time="2026-10-04T11:50:00"), "does not match"),
+    (lambda d: d.pop("cells"), "cells"),
+    (lambda d: d.update(outlines=[]), "outlines"),
+])
+def test_bad_files_are_refused(mutate, why):
+    t = NOW - timedelta(minutes=10)
+    doc = display_doc(t)
+    mutate(doc)
+    with pytest.raises(cd.InvalidDisplay, match=why):
+        cd.validate(display_bytes(doc), frame_stamp(t))
+
+
+def test_garbage_and_oversize_are_refused():
+    stamp = frame_stamp(NOW)
+    with pytest.raises(cd.InvalidDisplay):
+        cd.validate(b"not gzip", stamp)
+    with pytest.raises(cd.InvalidDisplay):
+        cd.validate(gzip.compress(b"[1,2,3]"), stamp)
+    with pytest.raises(cd.InvalidDisplay, match="exceeds"):
+        cd.validate(b"x" * (cd.MAX_FILE_BYTES + 1), stamp)
+
+
+def test_only_stamp_named_files_count():
+    assert cd.stamp_of("20261004T1150.json.gz") == "20261004T1150"
+    for name in (".20261004T1150.json.gz.Ab12Cd", "20261004T1150.json", "rejected", "20261399T9999.json.gz"):
+        assert cd.stamp_of(name) is None
+
+
+# --- Ingest -------------------------------------------------------------------------
+
+
+def test_ingest_moves_valid_files_into_the_store(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(minutes=10)
+    src = _drop(inbox, t)
+    raw = src.read_bytes()
+    result = cd.ingest(inbox, store, now=NOW)
+    assert result.accepted == [frame_stamp(t)]
+    assert not src.exists()
+    assert store.path(frame_stamp(t)).read_bytes() == raw  # stored as pushed
+
+
+def test_ingest_sets_bad_files_aside_and_keeps_going(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    bad_t, good_t = NOW - timedelta(minutes=15), NOW - timedelta(minutes=10)
+    bad = display_doc(bad_t)
+    bad["schema"] = "something-else/9"
+    _drop(inbox, bad_t, bad)
+    _drop(inbox, good_t)
+    result = cd.ingest(inbox, store, now=NOW)
+    assert result.rejected == [frame_stamp(bad_t)]
+    assert result.accepted == [frame_stamp(good_t)]
+    assert (inbox / "rejected" / f"{frame_stamp(bad_t)}.json.gz").exists()
+    assert not store.path(frame_stamp(bad_t)).exists()
+    # A second pass does not re-reject what was set aside.
+    assert cd.ingest(inbox, store, now=NOW).rejected == []
+
+
+def test_ingest_leaves_rsync_temp_files_alone(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    inbox.mkdir()
+    tmp = inbox / ".20261004T1150.json.gz.Xy12zz"
+    tmp.write_bytes(b"partial")
+    assert cd.ingest(inbox, store, now=NOW).accepted == []
+    assert tmp.exists()
+
+
+def test_ingest_drops_files_already_past_retention(tmp_path):
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    old = NOW - cd.RETENTION - timedelta(minutes=5)
+    src = _drop(inbox, old)
+    result = cd.ingest(inbox, store, now=NOW)
+    assert result.expired == 1 and not src.exists() and store.list() == []
+
+
+def test_a_missing_inbox_is_not_an_error(tmp_path):
+    result = cd.ingest(tmp_path / "nope", cd.DisplayStore(tmp_path / "store"), now=NOW)
+    assert result.accepted == [] and result.rejected == []
+
+
+# --- Store: listing, retention, read ---------------------------------------------------
+
+
+def _stock(store, minutes_ago):
+    for m in minutes_ago:
+        t = NOW - timedelta(minutes=m)
+        store.write(frame_stamp(t), display_bytes(display_doc(t)))
+
+
+def test_list_is_newest_first_with_received_at(tmp_path):
+    store = cd.DisplayStore(tmp_path)
+    _stock(store, [20, 10, 15])
+    stamps = [d.stamp for d in store.list()]
+    assert stamps == [frame_stamp(NOW - timedelta(minutes=m)) for m in (10, 15, 20)]
+    assert all(d.received_at.tzinfo is not None for d in store.list())
+
+
+def test_purge_keeps_24_hours(tmp_path):
+    store = cd.DisplayStore(tmp_path)
+    _stock(store, [5, 23 * 60, 24 * 60 + 5, 30 * 60])
+    assert store.purge(now=NOW) == 2
+    assert [d.stamp for d in store.list()] == [frame_stamp(NOW - timedelta(minutes=m)) for m in (5, 23 * 60)]
+
+
+def test_purge_reclaims_old_temp_files_only(tmp_path):
+    store = cd.DisplayStore(tmp_path)
+    tmp_path.mkdir(exist_ok=True)
+    old, young = tmp_path / ".tmp-old", tmp_path / ".tmp-young"
+    old.write_bytes(b"x")
+    young.write_bytes(b"x")
+    past = NOW.timestamp() - 3600
+    os.utime(old, (past, past))
+    os.utime(young, (NOW.timestamp(), NOW.timestamp()))
+    store.purge(now=NOW)
+    assert not old.exists() and young.exists()
+
+
+def test_read_revalidates_and_refuses_a_bad_file(tmp_path):
+    store = cd.DisplayStore(tmp_path)
+    t = NOW - timedelta(minutes=10)
+    store.write(frame_stamp(t), b"garbage")
+    assert store.read(frame_stamp(t)) is None
+    store.write(frame_stamp(t), display_bytes(display_doc(t)))
+    assert store.read(frame_stamp(t))["valid_time"] == t.isoformat()
+    assert store.read("20990101T0000") is None
+
+
+# --- Status --------------------------------------------------------------------------
+
+
+def test_status_fresh(tmp_path):
+    store = cd.DisplayStore(tmp_path)
+    _stock(store, [10, 15])
+    st = cd.frames_status(store, now=NOW)
+    assert st["enabled"] and not st["stale"] and st["unavailable_since"] is None
+    assert st["newest"]["stamp"] == frame_stamp(NOW - timedelta(minutes=10))
+    assert st["frames"][0]["age_minutes"] == 10.0
+    assert st["stale_after_minutes"] == cd.STALE_AFTER.total_seconds() / 60
+
+
+def test_status_says_unavailable_since_the_newest_overlay(tmp_path):
+    store = cd.DisplayStore(tmp_path)
+    minutes = int(cd.STALE_AFTER.total_seconds() // 60) + 5
+    _stock(store, [minutes, minutes + 5])
+    st = cd.frames_status(store, now=NOW)
+    assert st["stale"]
+    assert st["unavailable_since"] == (NOW - timedelta(minutes=minutes)).isoformat()
+
+
+def test_status_with_nothing_received(tmp_path):
+    st = cd.frames_status(cd.DisplayStore(tmp_path / "empty"), now=NOW)
+    assert st["stale"] and st["newest"] is None and st["unavailable_since"] is None and st["frames"] == []
+
+
+def test_disabled_status_shape_matches():
+    assert set(cd.disabled_status()) == set(cd.frames_status(cd.DisplayStore("/nonexistent")))
+    assert cd.disabled_status()["enabled"] is False
+
+
+def test_ingest_flag(monkeypatch):
+    monkeypatch.delenv(cd.CELLS_INGEST_ENV, raising=False)
+    assert not cd.cells_ingest_enabled()
+    for v in ("1", "true", "YES"):
+        monkeypatch.setenv(cd.CELLS_INGEST_ENV, v)
+        assert cd.cells_ingest_enabled()
+    monkeypatch.setenv(cd.CELLS_INGEST_ENV, "0")
+    assert not cd.cells_ingest_enabled()
+
+
+# --- Bounding box -----------------------------------------------------------------------
+
+
+def test_bbox_keeps_cells_inside_and_outlines_touching():
+    t = NOW
+    doc = display_doc(t, cells=[display_cell_doc("in", 50.5, 1.5), display_cell_doc("out", 45.0, 10.0)])
+    out = cd.filter_bbox(doc, 49.8, 0.4, 51.2, 2.9)
+    assert [c["id"] for c in out["cells"]] == ["in"]
+    assert len(out["outlines"]["rain20"]) == 1 and out["outlines"]["core35"] == []
+    assert out["bbox"] == [49.8, 0.4, 51.2, 2.9]
+    assert len(doc["cells"]) == 2  # the cached original is untouched
+
+
+def test_bbox_keeps_a_band_that_crosses_the_box_whole():
+    band = [[48.0, 1.0], [52.0, 1.0], [52.0, 1.2], [48.0, 1.2], [48.0, 1.0]]
+    doc = display_doc(NOW, cells=[], outlines={"rain20": [band]})
+    out = cd.filter_bbox(doc, 49.8, 0.4, 51.2, 2.9)
+    assert out["outlines"]["rain20"] == [band]
+
+
+def test_ingest_loop_returns_at_once_when_disabled(monkeypatch):
+    import asyncio
+
+    from weatherbrief.scheduler import run_cells_ingest_loop
+
+    monkeypatch.setenv(cd.CELLS_INGEST_ENV, "0")
+    asyncio.run(asyncio.wait_for(run_cells_ingest_loop(None), timeout=5))

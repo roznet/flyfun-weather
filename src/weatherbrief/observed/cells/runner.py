@@ -53,11 +53,22 @@ from ..frames import (
 )
 from ..grid import GridSpec, GridWindow, compute_window
 from .attributes import cloud_tops, flash_counts, rate_peaks, same_grid
-from .catalogue import SCHEMA, catalogue_path, cells_dir, failure_path, r, read_catalogue, write_catalogue
+from .catalogue import (
+    SCHEMA,
+    catalogue_path,
+    cells_dir,
+    display_path,
+    failure_path,
+    r,
+    read_catalogue,
+    write_catalogue,
+)
+from .display import build_display, write_display
 from .detect import TierDetection, detect, footprint_runs, initial_bearing_deg, distance_km
 from .lineage import PreviousCell, link, trend, trim_history
 from .motion import FlowField, cell_motion, estimate_flow
 from .policy import DEFAULT_POLICY, CellPolicy
+from .push import push_pending
 from .scoring import append_scores, score_frame
 
 logger = logging.getLogger(__name__)
@@ -541,6 +552,17 @@ def process_frame(
     }
     size = write_catalogue(catalogue_path(ws.root, valid_time), catalogue)
 
+    # The map file for the droplet (#656).  Like scoring, a failure here is
+    # recorded on the run row, never a failed frame: the catalogue — the
+    # analysis and the next frame's lineage predecessor — is already written.
+    display_bytes = display_error = None
+    try:
+        display_bytes = write_display(display_path(ws.root, valid_time),
+                                      build_display(catalogue, detections, grid, policy))
+    except Exception as exc:
+        logger.exception("Display file failed for %s", valid_time)
+        display_error = repr(exc)
+
     # The catalogue is written; a scoring failure must not turn it into a
     # failed frame.  Recorded on the run row instead.
     scoring_error = None
@@ -559,6 +581,8 @@ def process_frame(
         "seconds": round(time.perf_counter() - started, 3),
         "peak_rss_mb": round(peak_rss_mb(), 1),
         "catalogue_bytes": size,
+        "display_bytes": display_bytes,
+        "display_error": display_error,
         "cells": {t.name: len(detections[t.name].cells) for t in policy.tiers},
         "with_motion": sum(1 for c in cells_out if c["motion"]["status"] == "available"),
         "flow_tiles": [catalogue["coverage"]["flow_tiles_matched"], catalogue["coverage"]["flow_tiles_tried"]],
@@ -770,6 +794,9 @@ def run_tick(ws: Workspace, policy: CellPolicy, cache: FrameCache, sources: tupl
     state["last_tick"] = now.isoformat()
     if analysed:
         ping_healthcheck(state, now)
+    # After analysis, every tick (a failed push is simply retried): only
+    # does anything when WB_CELLS_PUSH_TARGET is set.  Never raises.
+    push_pending(ws.root, state, dbzh_slots(now - lookback, now))
     if sweep:
         state["last_sweep_attempt"] = now.isoformat()
         if collected_ok:

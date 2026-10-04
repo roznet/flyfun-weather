@@ -275,6 +275,9 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | For push | — | All three required; push is a no-op if any is missing |
 | `HOST_DATA_DIR` / `HOST_ECMWF_GRIB_DIR` / `HOST_SNAPSHOT_INBOX` | Prod only | `./data…` | Host paths bind-mounted into the container (prod: under `/mnt/flyfun_data`, NOT the project dir) |
 | `SNAPSHOT_INBOX_DIR` | No | `/app/snapshot_inbox` | Where `verify ingest-artifact` reads compute-node snapshots |
+| `HOST_CELLS_INBOX` | Prod, with cells | `./data/cells_inbox` | Host dir the home node's cells loop rsyncs display files into (#656). Group `weatherdata` (2002), mode 2775 — the app moves files out of it |
+| `CELLS_INBOX_DIR` | No | `/app/cells_inbox` | Container path of that inbox; set to a local path on a dev server |
+| `WB_CELLS_INGEST_ENABLED` | No | off | `1` ingests the cell overlay into `DATA_DIR/observed/cells/display` (24 h) and serves `/api/observed/cells/*`; off → endpoints say `disabled`. See [cells-overlay.md](./cells-overlay.md) |
 | `HMAC_SECRET` | Prod only | derived from JWT_SECRET | HMAC key for pack integrity + admin approval links |
 | `WB_REFRESH_MAX_ATTEMPTS` | No | `2` | Total attempts per briefing refresh, counting the original run. `1` disables resume-after-restart; see [refresh-durability.md](./refresh-durability.md) |
 | `DISABLE_REFRESH_RESUME` | No | — | `1` skips the boot-time reconciliation pass entirely (rows are still written) |

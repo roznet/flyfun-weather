@@ -279,6 +279,16 @@ async def lifespan(app: FastAPI):
             run_observed_collect_loop(app.state)
         )
 
+    cells_ingest_task = None
+    # Opt-in like the collector: the cell overlay is pushed by a home compute
+    # node, so only a deployment that has one ingests (#656).
+    from weatherbrief.observed.cells_display import cells_ingest_enabled
+
+    if cells_ingest_enabled():
+        from weatherbrief.scheduler import run_cells_ingest_loop
+
+        cells_ingest_task = asyncio.create_task(run_cells_ingest_loop(app.state))
+
     freshness_task = None
     if os.environ.get("DISABLE_FRESHNESS_LOOP", "").strip() not in ("1", "true"):
         from weatherbrief.scheduler import run_freshness_loop
@@ -321,6 +331,7 @@ async def lifespan(app: FastAPI):
                  digest_task, metar_ingest_task, forecast_fetch_task,
                  standalone_task, ecmwf_watcher_task,
                  hewson_precompute_task, observed_collect_task,
+                 cells_ingest_task,
                  freshness_task,
                  analytics_rollup_task, analytics_digest_task,
                  grib_precache_task):
