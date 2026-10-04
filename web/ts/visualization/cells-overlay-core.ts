@@ -121,7 +121,6 @@ export function frameKey(frame: CellFrame): string {
   return frame.key ?? frame.stamp;
 }
 
-
 /** `/api/observed/cells/frames`. */
 export interface CellFramesInfo {
   enabled: boolean;

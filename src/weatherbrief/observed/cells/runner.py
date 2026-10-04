@@ -67,7 +67,7 @@ from .catalogue import (
     read_catalogue,
     write_catalogue,
 )
-from .display import LIGHTNING_PENDING_REASON, build_display, write_display
+from .display import LIGHTNING_PENDING, LIGHTNING_PENDING_REASON, build_display, write_display
 from .detect import TierDetection, detect, footprint_runs, initial_bearing_deg, distance_km
 from .lineage import PreviousCell, link, trend, trim_history
 from .motion import FlowField, cell_motion, estimate_flow
@@ -753,7 +753,7 @@ def amend_lightning(ws: Workspace, now: datetime, policy: CellPolicy, cache: Fra
         cat = read_catalogue(path)
         if cat is None or cat.get("policy_version") != policy.policy_version:
             continue
-        if {"what": "lightning", "reason": LI_MISSING} not in cat.get("unavailable", []):
+        if LIGHTNING_PENDING not in cat.get("unavailable", []):
             continue
         if not ws.frames.has(SOURCE_EUMETSAT_LI, _slot(t, 10)):
             continue
@@ -1118,7 +1118,8 @@ def radar_poll_wait(store: FrameStore, now: datetime) -> float:
     return (slot + timedelta(minutes=5) + RADAR_POLL_START - now).total_seconds()
 
 
-_PROBE_WARNED: list[datetime] = []
+# The slot whose radar poll failure has already been logged at warning.
+_probe_warned_slot: datetime | None = None
 
 
 def probe_radar(store: FrameStore, now: datetime) -> bool:
@@ -1131,11 +1132,12 @@ def probe_radar(store: FrameStore, now: datetime) -> bool:
         res = collect_opera(SOURCE_OPERA_DBZH, store, now=now, lookback=timedelta(0), max_fetch=1,
                             warn_if_empty=False)
     except Exception as exc:
+        global _probe_warned_slot
         slot = _slot(now - RADAR_POLL_START, 5)
-        if _PROBE_WARNED and _PROBE_WARNED[0] == slot:
+        if _probe_warned_slot == slot:
             logger.debug("Radar poll failed again: %r", exc)
         else:
-            _PROBE_WARNED[:] = [slot]
+            _probe_warned_slot = slot
             logger.warning("Radar poll failed (further failures for this frame at debug): %r", exc)
         return False
     return res.fetched > 0

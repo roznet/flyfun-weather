@@ -55,6 +55,9 @@ RAIN_MIN_AREA_KM2 = 2000.0
 # The runner amends it within its window (a frame past that is stale on every
 # map before it could matter), so the display calls it *pending*, never "none".
 LIGHTNING_PENDING_REASON = "no lightning frame for this slot"
+# The whole `unavailable` entry, shared with the runner's amend check so the two
+# cannot drift (a mismatch would stop amends or stop showing "pending").
+LIGHTNING_PENDING = {"what": "lightning", "reason": LIGHTNING_PENDING_REASON}
 ARROW_MINUTES = 30
 # Above this many pixels the grid is "Europe" and outlines are traced coarser.
 _BIG_GRID_PX = 4_000_000
@@ -167,9 +170,8 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
     inputs = catalogue["inputs"]
     variant = policy.display_motion
     field = MotionField.from_dict(catalogue.get("flow"), policy) if variant.startswith("field") else None
-    pending_li = {"what": "lightning", "reason": LIGHTNING_PENDING_REASON}
     unavailable = catalogue.get("unavailable", [])
-    lightning_pending = pending_li in unavailable
+    lightning_pending = LIGHTNING_PENDING in unavailable
     rate_time = inputs.get(SOURCE_OPERA_RATE)
     rate_as_of = rate_time if rate_time and rate_time != inputs.get(SOURCE_OPERA_DBZH) else None
     return {
@@ -187,7 +189,7 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
         "rate_age_min": inputs.get("rate_age_min"),
         "revision": revision,
         "pending": ["lightning"] if lightning_pending else [],
-        "unavailable": [u for u in unavailable if u != pending_li],
+        "unavailable": [u for u in unavailable if u != LIGHTNING_PENDING],
         "rain_min_area_km2": RAIN_MIN_AREA_KM2,
         "arrow_minutes": ARROW_MINUTES,
         "outlines": {
