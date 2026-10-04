@@ -251,7 +251,11 @@ the markers say; a file goes only if the verified manifest lists it **with the
 same size** — a frame a late sweep filled in after packing, or a jsonl that
 grew, is reported as `kept (not in the verified archive)` and stays (it will
 never be archived: a re-pack of a verified day is refused because it would
-overwrite the full NAS tar with what is left).  Frames go per stamp
+overwrite the full NAS tar with what is left).  Such files are **kept until
+manual action**, with no retention of their own, so the nightly job should
+alert when `kept_unarchived` is non-empty.  Manifest sizes are the sizes
+written into the tar (fixed at `gettarinfo`), not a later `stat`, so a file
+that grew mid-pack fails the size check instead of being pruned.  Frames go per stamp
 (`< now − 48 h`); analysis per whole day once it ended 90 days ago.  The
 verified day's staging copy is removed on the same pass.  `cells/display` is
 not touched (#656 owns it); `state.json` and markers stay.

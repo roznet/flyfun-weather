@@ -254,6 +254,46 @@ def test_a_tar_missing_from_the_remote_sums_is_not_verified(tmp_path):
     assert not result["verified"] and "not in remote sums" in result["problems"][0]
 
 
+
+def test_a_file_that_grows_mid_pack_records_the_archived_size_and_is_kept(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    day = TODAY - timedelta(days=100)
+    _day(root, day)
+    runs = root / "cells" / "runs" / f"{A.day_str(day)}.jsonl"
+    archived = runs.stat().st_size
+    real = A.tarfile.TarFile.gettarinfo
+
+    def grow_after_sizing(self, name=None, arcname=None, fileobj=None):
+        info = real(self, name, arcname, fileobj)
+        if name == str(runs):
+            with runs.open("a") as h:
+                h.write('{"row": 2}\n')
+        return info
+
+    monkeypatch.setattr(A.tarfile.TarFile, "gettarinfo", grow_after_sizing)
+    assert _archive(root, day, tmp_path)["verified"]
+    monkeypatch.undo()
+    rel = f"cells/runs/{A.day_str(day)}.jsonl"
+    manifest = A.read_manifest(A.default_staging(root) / A.manifest_rel(day))
+    sizes = {name: size for members in manifest["members"].values() for name, size in members}
+    assert sizes[rel] == archived < runs.stat().st_size
+    result = A.prune(root, now=NOW, execute=True)
+    assert runs.exists() and rel in result["kept_unarchived"]
+
+
+def test_verify_rejects_a_staged_manifest_for_another_day(tmp_path):
+    root = tmp_path / "root"
+    day, other = TODAY - timedelta(days=5), TODAY - timedelta(days=6)
+    _day(root, day)
+    staging = A.default_staging(root)
+    A.pack_day(root, day, staging, sources=SOURCES, now=NOW)
+    sums = _nas_sums(staging, tmp_path / "sums.txt")
+    (staging / A.manifest_rel(other)).write_bytes((staging / A.manifest_rel(day)).read_bytes())
+    result = A.verify_day(root, other, staging, sums, now=NOW)
+    assert not result["verified"] and "not " + A.day_str(other) in result["problems"][0]
+    assert not A.verified_marker(root, other).exists()
+
+
 # --- event classification ---------------------------------------------------------
 
 

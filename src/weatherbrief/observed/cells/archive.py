@@ -204,8 +204,14 @@ def pending_days(root: Path, now: datetime) -> list[date]:
 # --- Pack -----------------------------------------------------------------------
 
 
-def _write_tar(dest: Path, members: list[Path], root: Path, *, gz: bool) -> None:
-    """Deterministic tar of ``members`` (names relative to ``root``), atomically."""
+def _write_tar(dest: Path, members: list[Path], root: Path, *, gz: bool) -> list[list]:
+    """Deterministic tar of ``members`` (names relative to ``root``), atomically.
+
+    Returns ``[name, size]`` per member as written: the size is fixed at
+    ``gettarinfo``, so a file that grows mid-pack is archived truncated, and the
+    manifest must record that size, not a later ``stat`` (prune trusts it).
+    """
+    written: list[list] = []
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".tmp-")
     try:
@@ -220,6 +226,7 @@ def _write_tar(dest: Path, members: list[Path], root: Path, *, gz: bool) -> None
                     info.mode = 0o644
                     with path.open("rb") as handle:
                         tar.addfile(info, handle)
+                    written.append([info.name, info.size])
             if gzf is not None:
                 gzf.close()
         os.replace(tmp, dest)
@@ -229,6 +236,7 @@ def _write_tar(dest: Path, members: list[Path], root: Path, *, gz: bool) -> None
         except OSError:
             pass
         raise
+    return written
 
 
 def sha256_file(path: Path) -> str:
@@ -346,11 +354,11 @@ def pack_day(root: Path, day: date, out: Path, *, sources: tuple[str, ...], now:
 
     def add(rel: str, files: list[Path], gz: bool) -> None:
         dest = out / rel
-        _write_tar(dest, files, root, gz=gz)
-        tars.append({"path": rel, "files": len(files),
-                     "bytes": sum(p.stat().st_size for p in files),
+        written = _write_tar(dest, files, root, gz=gz)
+        tars.append({"path": rel, "files": len(written),
+                     "bytes": sum(size for _, size in written),
                      "tar_bytes": dest.stat().st_size, "sha256": sha256_file(dest)})
-        members[rel] = [[p.relative_to(root).as_posix(), p.stat().st_size] for p in sorted(files)]
+        members[rel] = written
 
     for source in SOURCE_SPECS:
         files = _frame_files(root, source, day)
@@ -445,6 +453,9 @@ def verify_day(root: Path, day: date, staging: Path, remote_sums: Path, *,
     manifest = read_manifest(Path(staging) / manifest_rel(day))
     if manifest is None:
         return {"day": day_str(day), "verified": False, "problems": ["no readable manifest in staging"]}
+    if manifest.get("day") != day_str(day):
+        return {"day": day_str(day), "verified": False,
+                "problems": [f"staged manifest is for {manifest.get('day')}, not {day_str(day)}"]}
     sums = read_sums(remote_sums)
     problems = []
     for tar in manifest["tars"]:
