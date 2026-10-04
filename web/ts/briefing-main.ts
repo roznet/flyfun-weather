@@ -293,6 +293,8 @@ let observedFramesTimer: ReturnType<typeof setInterval> | null = null;
 // What the latest render wanted, for the tick (which has no render context).
 let observedFramesWanted: string[] = [];
 let observedFramesRerender: () => void = () => {};
+// The renderer to re-check the cell overlay on (null when cells are off).
+let observedCellsRenderer: RouteMapRenderer | null = null;
 const OBSERVED_FRAMES_REFRESH_MS = 60_000;
 const OBSERVED_FRAMES_TICK_MS = 120_000;
 
@@ -325,6 +327,7 @@ function updateObservedOverlay(
   const observed = data.observed;
   if (!observed) {
     renderer.setObservedSource(null);
+    renderer.setObservedCells(false);
     renderer.setObservedFlashes([]);
     renderer.refreshObserved();
     return;
@@ -352,6 +355,7 @@ function updateObservedOverlay(
   // listings fetched here; until one arrives the radar uses the corridor image.
   const showSatellite = briefingStore.getState().vizSettings.observedSatellite !== false;
   renderer.setObservedSatellite(showSatellite);
+  renderer.setObservedCells(briefingStore.getState().vizSettings.observedCells === true);
   const tiled = [
     ...(isTiledSource(imagery) ? [imagery as string] : []),
     ...(showSatellite ? [SATELLITE_SOURCE] : []),
@@ -362,11 +366,15 @@ function updateObservedOverlay(
   observedFramesWanted = tiled;
   observedFramesRerender = requestRerender;
   refreshObservedFrames(tiled, requestRerender);
-  if (!observedFramesTimer && tiled.length) {
+  observedCellsRenderer = briefingStore.getState().vizSettings.observedCells === true ? renderer : null;
+  if (!observedFramesTimer && (tiled.length || observedCellsRenderer)) {
     // Only re-renders when a listing's newest frame actually changed.
     observedFramesTimer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       refreshObservedFrames(observedFramesWanted, observedFramesRerender);
+      // The cell overlay has its own frames (and can go stale while the radar
+      // listing does not change): re-check it on the same visible-tab tick.
+      observedCellsRenderer?.refreshObserved();
     }, OBSERVED_FRAMES_TICK_MS);
   }
   // Fetched once and cached; a failure costs the scale, not the overlay.
@@ -2050,6 +2058,7 @@ async function init(): Promise<void> {
           onObservedOverlayChange: (source) => store.getState().setObservedOverlay(source),
           onObservedOpacityChange: (o) => store.getState().setObservedOverlayOpacity(o),
           onObservedSatelliteToggle: (show) => store.getState().setObservedSatellite(show),
+          onObservedCellsToggle: (show) => store.getState().setObservedCells(show),
         }, data.fronts != null, forecastOverlayControls(state), {
           // Only offer what this briefing actually carries: an overlay that
           // renders an empty PNG is worse than an absent menu entry, because

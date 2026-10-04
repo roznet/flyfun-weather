@@ -804,6 +804,8 @@ export interface MapControlCallbacks {
   onObservedOpacityChange?: (opacity: number) => void;
   /** Satellite infrared underlay on/off (#652). */
   onObservedSatelliteToggle?: (show: boolean) => void;
+  /** Radar cell overlay on/off (#656). */
+  onObservedCellsToggle?: (show: boolean) => void;
 }
 
 /** Which observed sources the current briefing actually carries. Options for
@@ -1260,6 +1262,16 @@ export function renderMapControls(
       html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.satellite'))}</span>`;
       html += '</label>';
     }
+    // Radar cells (#656): outlines, trend markers and 30-min motion arrows
+    // from the home node's analysis. Offered whenever observed layers are;
+    // when the feed is off or stale the map's badge says so.
+    {
+      const checked = settings.observedCells ? ' checked' : '';
+      html += `<label class="map-control-label map-observed-cells" title="${escapeHtml(t('viz.observed.cellsHint'))}">`;
+      html += `<input type="checkbox" id="map-observed-cells"${checked}>`;
+      html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.cells'))}</span>`;
+      html += '</label>';
+    }
     // Opacity, like the synoptic grid layer's. These rasters cover the whole
     // corridor, so a fixed value either buries the basemap or washes the data
     // out depending on the product — and the pilot needs to read place names
@@ -1317,6 +1329,12 @@ export function renderMapControls(
     });
   }
 
+  const observedCells = container.querySelector('#map-observed-cells') as HTMLInputElement | null;
+  if (observedCells && callbacks.onObservedCellsToggle) {
+    observedCells.addEventListener('change', () => {
+      callbacks.onObservedCellsToggle!(observedCells.checked);
+    });
+  }
   const observedSelect = container.querySelector('#map-observed-overlay') as HTMLSelectElement | null;
   if (observedSelect && callbacks.onObservedOverlayChange) {
     observedSelect.addEventListener('change', () => {

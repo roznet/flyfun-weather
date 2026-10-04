@@ -44,7 +44,7 @@ user.  Nothing here is user-specific, but none of it is public either.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -80,6 +80,9 @@ router = APIRouter(prefix="/observed", tags=["observed"])
 # degrees; anything much larger is a pan-European request this endpoint is not
 # for (that is the follow-up issue's forecast-map path).
 MAX_SPAN_DEG = 25.0
+# Flashes are points, not a render: the "Now" map (#656) asks for its whole
+# viewport, which over Europe is ~60° wide.
+MAX_FLASH_SPAN_DEG = 80.0
 
 # Frames are immutable once written and are named by their valid time, so the
 # bytes for a given (source, stamp, bbox) never change.  The URL carries the
@@ -120,10 +123,12 @@ def _require_enabled() -> None:
         raise HTTPException(status_code=404, detail="Observed conditions not enabled")
 
 
-def _bounds(south: float, west: float, north: float, east: float) -> OverlayBounds:
+def _bounds(
+    south: float, west: float, north: float, east: float, max_span: float = MAX_SPAN_DEG
+) -> OverlayBounds:
     if north <= south or east <= west:
         raise HTTPException(status_code=400, detail="Empty bounding box")
-    if (north - south) > MAX_SPAN_DEG or (east - west) > MAX_SPAN_DEG:
+    if (north - south) > max_span or (east - west) > max_span:
         raise HTTPException(status_code=400, detail="Bounding box too large")
     return OverlayBounds(south=south, west=west, north=north, east=east)
 
@@ -234,15 +239,19 @@ def observed_flashes(
     west: float = Query(...),
     north: float = Query(...),
     east: float = Query(...),
+    minutes: float | None = Query(None, gt=0),
     _user_id: str = Depends(current_user_id),
 ) -> dict[str, Any]:
     """Lightning flashes inside the rectangle, each with its own time.
 
     Returned as points rather than a raster: the map fades them by age, which
-    a single accumulated image cannot express.
+    a single accumulated image cannot express.  ``minutes`` shortens the trail
+    (default: every retained frame); the forecast map's "Now" tab asks for the
+    whole of Europe, so it is allowed a wider box (``MAX_FLASH_SPAN_DEG``) and
+    passes its trail length to keep the payload bounded.
     """
     _require_enabled()
-    bounds = _bounds(south, west, north, east)
+    bounds = _bounds(south, west, north, east, max_span=MAX_FLASH_SPAN_DEG)
     store = FrameStore()
     spec = SOURCE_SPECS[SOURCE_EUMETSAT_LI]
 
@@ -250,7 +259,10 @@ def observed_flashes(
 
     # Every retained frame, not just the newest: the trail is the point.
     now = datetime.now(timezone.utc)
-    horizon = now - spec.retention
+    trail = spec.retention
+    if minutes is not None:
+        trail = min(trail, timedelta(minutes=minutes))
+    horizon = now - trail
     flashes: list[dict[str, Any]] = []
     attribution: dict[str, Any] = {}
     newest_valid: datetime | None = None

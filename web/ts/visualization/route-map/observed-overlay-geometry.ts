@@ -225,3 +225,19 @@ export function resolveObservedSelection(
   if (chosen && available[chosen]) return chosen;
   return available.opera_dbzh ? 'opera_dbzh' : available.opera_rate ? 'opera_rate' : '';
 }
+
+/** The flashes endpoint's box limit for a whole-map request (server
+ *  `MAX_FLASH_SPAN_DEG`, #656's "Now" tab). */
+export const MAX_FLASH_SPAN_DEG = 80;
+
+/** Clamp a viewport to what the flashes endpoint accepts, around its centre. */
+export function flashBox(view: LatLonBox, maxSpan: number = MAX_FLASH_SPAN_DEG): LatLonBox {
+  const clamp = (lo: number, hi: number): [number, number] => {
+    if (hi - lo <= maxSpan) return [lo, hi];
+    const mid = (lo + hi) / 2;
+    return [mid - maxSpan / 2, mid + maxSpan / 2];
+  };
+  const [south, north] = clamp(Math.max(-89, view.south), Math.min(89, view.north));
+  const [west, east] = clamp(view.west, view.east);
+  return { south, west, north, east };
+}

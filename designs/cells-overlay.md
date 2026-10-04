@@ -14,7 +14,7 @@ home node  cells/display/<stamp>.json.gz ──rsync──▶ CELLS_INBOX_DIR (H
 droplet    run_cells_ingest_loop (30 s): validate → DATA_DIR/observed/cells/display/  (24 h)
 API        GET /api/observed/cells/frames            stamps newest first + stale state
            GET /api/observed/cells/{stamp}.json[?south&west&north&east]
-web        visualization/cells-overlay.ts            one renderer, two maps
+web        visualization/cells-overlay.ts            one renderer, two maps (Now tab, route map)
 ```
 
 Code: `observed/cells_display.py` (validate, `ingest`, `DisplayStore`,
@@ -70,6 +70,37 @@ responses are `immutable` (like the #652 tiles), the bbox is in the URL.
 overlay are separate frames.  The client draws the overlay whose stamp equals
 the drawn radar frame's stamp, else the newest one *at or before* it, and the
 badge gets its own line with the overlay's own time.  Never a shared "as of".
+
+## Web: one renderer, two maps
+
+- `visualization/cells-overlay-core.ts` (pure, unit-tested): types, trend
+  colours (developing `#d7263d`, decaying `#1b6ca8`, steady `#7a7a7a`, mixed
+  `#f18f01`, new white — evolution, not safety; unknown states grey),
+  outline styles (core35 white, core41 black, rain20 grey), `matchCellFrame`
+  (the stamp rule above + the stale threshold from the listing),
+  `cellsBadge`, popup / legend wording.  Withheld motion reads
+  "split/merge this frame", unsupported "too little of the cell in matched
+  tiles"; `truncated` reads "partly outside radar coverage".
+- `visualization/cells-overlay.ts`: `CellsLayer` (fetch listing with a 60 s
+  TTL, fetch the display file — cached by URL, immutable — and draw into its
+  own pane `cellsPane`, z 450, above tiles and the route).  Arrows (magenta,
+  30 min) only for `motion.status == "available"` and only for cores.
+  Redraws only when the URL or the rain toggle changes, so the route map's
+  altitude-drag re-renders keep an open popup.
+- **"Now" tab** (`forecast-page.md`): the whole of Europe, no bbox — the
+  server passes the stored gzip through (`Content-Encoding: gzip`, ~150 KB
+  instead of ~1 MB raw JSON).  Cells on by default there.
+- **Route map**: a "Cells" checkbox next to Satellite, offered whenever the
+  observed layers are (the briefing carries observed conditions).  **Off by
+  default** (`vizSettings.observedCells`) — experimental on a safety
+  product.  Requests the corridor box widened by 50 NM
+  (`CELLS_MARGIN_NM`); pairs with the radar frame on screen only when the
+  drawn layer is reflectivity, else takes the newest.  Its line is appended
+  to the observed badge; a collapsible legend sits top-right.  Re-checked on
+  the existing 2-min visible-tab tick so a feed going stale is noticed
+  without a re-render.
+- Not done: route geometry (off-track distance, abeam point, closest approach
+  vs ETA), iOS, a time slider over past overlays.
 
 ## Gotchas
 

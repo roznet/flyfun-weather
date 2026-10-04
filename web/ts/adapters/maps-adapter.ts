@@ -185,3 +185,18 @@ export async function fetchHistoricalRange(): Promise<HistoricalRange> {
   if (!resp.ok) throw new Error(`Historical range: ${resp.status}`);
   return resp.json();
 }
+
+/** `/maps/now` (#656): the latest METAR per airport right now — the
+ *  historical airport shape with only `observed.metar`, read at the current
+ *  instant rather than the 30-min grid. */
+export interface NowMapResponse {
+  at: string;
+  sources: { metar: HistoricalSourceInfo };
+  airports: HistoricalAirport[];
+}
+
+export async function fetchNowMap(): Promise<NowMapResponse> {
+  const resp = await fetch(`${apiBase}/maps/now`, { credentials: 'include' });
+  if (!resp.ok) throw new Error(`Now map: ${resp.status}`);
+  return resp.json();
+}

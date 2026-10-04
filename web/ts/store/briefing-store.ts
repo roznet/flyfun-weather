@@ -111,6 +111,8 @@ function loadVizSettings(): VizSettings {
     // On by default: radar over the satellite picture is the view pilots know
     // from Windy, and the radar alone hides where the cloud is.
     observedSatellite: true,
+    // Off by default: the cell overlay is experimental (#656).
+    observedCells: false,
     mapWidthMetric: 'cloud-cover-total',
     mapAltitudeFt: null,
     routeGraphVisible: true,
@@ -281,6 +283,7 @@ export interface BriefingState {
   setObservedOverlay: (source: string) => void;
   setObservedOverlayOpacity: (opacity: number) => void;
   setObservedSatellite: (show: boolean) => void;
+  setObservedCells: (show: boolean) => void;
   setMapWidthMetric: (metricId: string) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
   setMapFrontsVisible: (visible: boolean) => void;
@@ -1260,6 +1263,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setObservedSatellite: (show: boolean) => {
     const updated = { ...get().vizSettings, observedSatellite: show };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setObservedCells: (show: boolean) => {
+    const updated = { ...get().vizSettings, observedCells: show };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

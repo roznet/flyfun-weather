@@ -516,6 +516,37 @@ def get_historical_map_data(
     }
 
 
+def get_now_map_data(
+    db: Session, airports_db_path: str, *, now: datetime | None = None,
+) -> dict[str, Any]:
+    """Latest METAR per airport *now* — the forecast map's "Now" tab (#656).
+
+    The historical read at an unsnapped instant: :func:`select_observed` at
+    ``now`` (METARs no older than ``METAR_MAX_AGE``), no model runs.  Not
+    floored to the 30-minute grid like the historical map, which could hide
+    a report up to 29 minutes newer.  Same airport shape (``observed``), so
+    the client renders it with the historical tab's METAR view.
+    """
+    from weatherbrief.tasks.map_queries import assemble_map_airports
+
+    now = _as_utc(now or datetime.now(timezone.utc))
+    observed = select_observed(db, now, now)
+    # Only METARs: a TAF is a forecast, and this tab is current conditions.
+    observed = {icao: {"metar": src["metar"]} for icao, src in observed.items() if "metar" in src}
+    airports = assemble_map_airports({}, airports_db_path, observed=observed)
+    return {
+        "at": now.isoformat(),
+        "sources": {
+            "metar": {
+                "available": bool(airports),
+                "count": len(airports),
+                "max_age_min": int(METAR_MAX_AGE.total_seconds() // 60),
+            },
+        },
+        "airports": airports,
+    }
+
+
 def is_final(at: datetime, now: datetime | None = None) -> bool:
     """Whether the payload for ``at`` can no longer change (safe to cache)."""
     now = _as_utc(now or datetime.now(timezone.utc))

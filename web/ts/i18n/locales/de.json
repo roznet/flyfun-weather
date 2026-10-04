@@ -905,6 +905,8 @@
   "viz.observed.label": "Beobachtet",
   "viz.observed.opacity": "Deckkraft",
   "viz.observed.satellite": "Satellit",
+  "viz.observed.cells": "Zellen",
+  "viz.observed.cellsHint": "Experimentelle Radarzellen-Analyse: Umrisse, Trend und 30-Minuten-Zugpfeile",
   "viz.observed.none": "Keine",
   "viz.observed.reflectivity": "Radar-Reflektivität",
   "viz.observed.rainRate": "Regenrate",

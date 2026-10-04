@@ -45,7 +45,7 @@
       border-radius: 4px;
     }
 
-    #map-container, #map-container-historical {
+    #map-container, #map-container-historical, #map-container-now {
       width: 100%; height: calc(100vh - 280px); min-height: 400px;
       border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
     }
@@ -113,6 +113,21 @@
 
     /* --- Historical tab (#629) --- */
     .hist-ctl { display: inline-flex; align-items: center; gap: 0.4rem; }
+    /* "Now" tab (#656): per-layer toggles, the per-layer time badge, the cells legend. */
+    .now-toggle { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; cursor: pointer; }
+    .now-toggle input:disabled + span { opacity: 0.45; }
+    .now-exp { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: #f59e0b; color: #111; }
+    .now-badge {
+      position: absolute; top: 10px; right: 10px; z-index: 1000; max-width: min(460px, 70%);
+      background: var(--surface); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.35rem 0.55rem; font-size: 0.72rem; line-height: 1.4; opacity: 0.94;
+    }
+    .now-legend {
+      position: absolute; bottom: 24px; right: 10px; z-index: 1000; max-width: min(340px, 70%);
+      background: var(--surface); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.7rem; line-height: 1.45;
+    }
+    @media (max-width: 640px) { .now-legend { display: none !important; } }
     .hist-panel { display: flex; flex-direction: column; height: calc(100vh - 280px); min-height: 400px; }
     .hist-panel .ap-panel-header { gap: 0.5rem; }
     .hist-panel-close { margin-left: auto; background: none; border: none; color: var(--text); cursor: pointer; font-size: 1rem; }
@@ -494,6 +509,7 @@
     <div class="settings-tabs" id="tabs">
       <button class="tab-btn active" data-tab="forecast">Forecast Overview</button>
       <button class="tab-btn" data-tab="historical">Historical</button>
+      <button class="tab-btn" data-tab="now">Now</button>
       <button class="tab-btn" data-tab="synoptic">Synoptic Forecast</button>
       <button class="tab-btn" data-tab="climatology">Climatology</button>
       <button class="tab-btn" data-tab="stats">Accuracy Stats</button>
@@ -582,6 +598,35 @@
         <div class="ap-panel-host" id="hist-panel-host" style="display:none"></div>
       </div>
       <div class="map-info" id="map-info-historical"></div>
+    </div>
+
+    <!-- Tab: Now (#656) — current conditions across Europe: latest METAR,
+         radar, satellite IR, lightning and the experimental radar-cell
+         overlay. Each layer toggles; each badge line carries its own time. -->
+    <div id="panel-now" class="tab-panel">
+      <div class="maps-controls" id="controls-now">
+        <span class="hist-ctl">
+          <label>Layers</label>
+          <label class="now-toggle"><input type="checkbox" data-layer="airports"><span>METAR</span></label>
+          <label class="now-toggle"><input type="checkbox" data-layer="radar"><span>Radar</span></label>
+          <label class="now-toggle"><input type="checkbox" data-layer="satellite"><span>Satellite IR</span></label>
+          <label class="now-toggle"><input type="checkbox" data-layer="lightning"><span>Lightning</span></label>
+          <label class="now-toggle"><input type="checkbox" data-layer="cells"><span>Cells</span></label>
+          <label class="now-toggle" title="Rain areas of at least 2000 km² (outlines and markers)"><input type="checkbox" data-layer="rain"><span>Rain areas</span></label>
+          <span class="now-exp" title="Cell detection, motion and trend use provisional thresholds">Cells: experimental</span>
+        </span>
+        <button class="btn-toggle" id="now-refresh" title="Refreshes by itself every 5 minutes">Refresh</button>
+      </div>
+
+      <div class="ap-split-host" id="now-split-host">
+        <div class="map-wrapper">
+          <div id="map-container-now"></div>
+          <div class="now-badge" id="now-badge" style="display:none"></div>
+          <div class="now-legend" id="now-legend" style="display:none"></div>
+        </div>
+        <div class="ap-panel-host" id="now-panel-host" style="display:none"></div>
+      </div>
+      <div class="map-info" id="map-info-now"></div>
     </div>
 
     <!-- Tab: Synoptic Forecast (Hewson gridded fields) -->
