@@ -27,8 +27,10 @@ Code: `observed/cells_display.py` (validate, `ingest`, `DisplayStore`,
 ssh user writes the inbox, the app user (uid 2000) owns the store and is the
 only one that deletes from it ("one owner per root").  The inbox is mounted
 read-write because the app *moves* files out (that is how it stays empty —
-nothing else rotates it); the host dir must be group `weatherdata` (2002),
-mode 2775.  The issue's later comment fixed the store path
+nothing else rotates it); the host dir is `dockerapp:dockerapp` (2000),
+mode 2770, exactly like the snapshot inbox — the ssh user (`brice`) is in
+group `dockerapp`, not in `weatherdata` (2002), so a 2002 inbox refuses the
+push.  Prod: `/mnt/flyfun_data/weather/cells_inbox`.  The issue's later comment fixed the store path
 (`DATA_DIR/observed/cells/display`, same relative path as the node's) — the
 inbox is the issue body's `HOST_SNAPSHOT_INBOX` pattern.
 
