@@ -120,7 +120,8 @@ src/weatherbrief/
 │       ├── hrrr_fetch.py    # HRRR (NOAA) — preferred over GFS when the route sits in the HRRR domain (#457)
 │       ├── ecmwf_fetch.py  # ECMWF IFS GRIB read from ECPDS-delivered files
 │       ├── ecmwf_watcher.py # Watch/ingest ECPDS-delivered ECMWF runs
-│       ├── decode.py       # cfgrib decode + spatial interpolation (chunked for memory)
+│       ├── decode.py       # GRIB decode + spatial interpolation (chunked for memory)
+│       ├── grib_reader.py  # direct eccodes reader for ECMWF a1/a2 + ICON levels (#674)
 │       ├── decode_worker.py # Subprocess decode entry for the priority process pool
 │       ├── precache.py     # Pre-fetch GRIB runs off freshness markers
 │       ├── fill.py         # Forward-fill GRIB fields across time axis

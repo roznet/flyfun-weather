@@ -2130,7 +2130,10 @@ class TestIconClcGeometryPerForecastHour:
 
 class TestIconVectorisedInterpEquivalence:
     """#441 efficiency #2: the vectorised _decode_icon_eu_single_var must match
-    the per-level xarray .interp() reference on the same data."""
+    the per-level xarray .interp() reference on the same data.
+
+    Exercises the cfgrib path (the #674 rollback, ``WB_GRIB_DECODER=cfgrib``);
+    the direct eccodes path is pinned against it in test_grib_reader.py."""
 
     def test_matches_per_level_reference(self, monkeypatch):
         import numpy as np
@@ -2151,7 +2154,7 @@ class TestIconVectorisedInterpEquivalence:
 
         tgt_lat = [48.5, 50.25]
         tgt_lon = [0.5, 2.75]
-        got = dec._decode_icon_eu_single_var(b"dummy", tgt_lat, tgt_lon)
+        got = dec._decode_icon_eu_single_var_cfgrib(b"dummy", tgt_lat, tgt_lon)
 
         # Reference: per-level xarray .interp via _interpolate_per_point.
         for lev in levels:
