@@ -294,6 +294,8 @@ nonisolated final class ObservedTileOverlay: MKTileOverlay {
             return
         }
         let fetch = self.fetch
+        // MapKit's `result` isn't `@Sendable`, but it's documented callable from
+        // any thread and is invoked exactly once below, so the hop is safe.
         nonisolated(unsafe) let deliver = result
         Task.detached(priority: .utility) {
             do {

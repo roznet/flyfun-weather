@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 /// Frame listings + legends for the route map's observed imagery (#654).
 ///
@@ -11,6 +12,8 @@ import Observation
 /// Online-only — nothing is written to the briefing cache.
 @Observable
 final class RouteObservedImageryModel {
+    private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "RouteObservedImagery")
+
     private(set) var frames: [String: ObservedFramesResponse] = [:]
     private(set) var failed: Set<String> = []
     private(set) var legends: [String: ObservedImagerySourceStatus] = [:]
@@ -61,7 +64,10 @@ final class RouteObservedImageryModel {
                 frames[source] = info
                 failed.remove(source)
             } catch {
+                // Cancelled (map left the screen / wanted set changed): stop the
+                // whole pass — the restarted poll refetches whatever is still due.
                 if Task.isCancelled || (error as? APIError)?.isCancellation == true { return }
+                Self.logger.warning("observed frames \(source, privacy: .public) failed: \(error.localizedDescription)")
                 // Keep the last listing over a failed refresh; with none held,
                 // the badge says the imagery is unavailable.
                 if frames[source] == nil { failed.insert(source) }

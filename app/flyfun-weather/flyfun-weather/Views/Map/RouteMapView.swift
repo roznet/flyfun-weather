@@ -42,6 +42,9 @@ struct RouteMapView: View {
     /// Satellite infrared underlay. On by default: radar over the satellite
     /// picture is the view pilots know, and radar alone hides where the cloud is.
     @AppStorage("mapObservedSatellite") private var observedSatellite = true
+    /// The cross-section's corridor pick (0 = unset → the sampled default).
+    /// `@AppStorage` so the corridor box follows a change made on that screen.
+    @AppStorage(CrossSectionViewModel.observedRadiusDefaultsKey) private var observedRadiusPick = 0.0
 
     /// iPad (regular width) drives colour and width from independent metrics.
     private var usesDualMetrics: Bool { horizontalSizeClass == .regular }
@@ -260,7 +263,7 @@ struct RouteMapView: View {
     /// The corridor the sampled numbers describe, at the cross-section's pick.
     private var observedCorridor: ObservedMapImagery.LatLonBox? {
         guard showsObserved else { return nil }
-        let picked = UserDefaults.standard.double(forKey: CrossSectionViewModel.observedRadiusDefaultsKey)
+        let picked = observedRadiusPick
         guard let radius = ObservedMapImagery.corridorRadius(observedConditions, picked: picked > 0 ? picked : nil)
         else { return nil }
         return ObservedMapImagery.corridorBox(mapVM.routeCoordinates, radiusNm: radius)
