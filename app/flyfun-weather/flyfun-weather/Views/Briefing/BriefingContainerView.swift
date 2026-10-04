@@ -157,7 +157,7 @@ struct BriefingContainerView: View {
                         // whenever publishing is enabled; being in the window just
                         // means the fix pre-fills a cruise altitude rather than a
                         // ground one.
-                        if appState.userPreferences.preferences.pirepCanPublish {
+                        if PirepFeature.isEnabled, appState.userPreferences.preferences.pirepCanPublish {
                             Button {
                                 showingPirepSheet = true
                             } label: {
@@ -224,7 +224,7 @@ struct BriefingContainerView: View {
             // Only load PIREPs when the user may view them — the query 403s for a
             // publish-only account, which would strand the PIREPs tab on an error
             // screen and hide its "Report a PIREP" action.
-            if appState.userPreferences.preferences.pirepCanView {
+            if PirepFeature.isEnabled, appState.userPreferences.preferences.pirepCanView {
                 await vm.loadPireps()
             }
             // Opening the briefing clears this flight from the badge (web + app),
@@ -645,7 +645,8 @@ private struct DownloadBannerView: View {
 }
 
 /// Inner content once the view model is ready (#310). Tabs: Advisory ·
-/// Discussion · Cross-Section · Map (+ gated PIREPs), rendered by a native
+/// Discussion · Cross-Section · Map, plus Observed appended on flight day (#661,
+/// `BriefingTab.tabs`), rendered by a native
 /// `TabView` on both idioms — a bottom tab bar on iPhone (compact), a top tab
 /// bar on iPad (regular). Both drive `viewModel.selectedTab`, so deep-links
 /// behave identically. (The custom iPad pill band this replaced hit the same
@@ -663,13 +664,12 @@ private struct BriefingContentView: View {
     }
 
     private var tabs: [BriefingTab] {
-        var tabs = BriefingTab.core
-        // A publisher can reach the tab even without view permission — that's
-        // where the permanent "Report a PIREP" action lives.
-        if appState.userPreferences.preferences.pirepCanView || canPublishPireps {
-            tabs.append(.pireps)
-        }
-        return tabs
+        // A publisher can reach the PIREPs tab even without view permission —
+        // that's where the permanent "Report a PIREP" action lives. Hidden for
+        // everyone while `PirepFeature` is off (#661).
+        let pireps = PirepFeature.isEnabled
+            && (appState.userPreferences.preferences.pirepCanView || canPublishPireps)
+        return BriefingTab.tabs(showsObserved: viewModel.showsObservedTab, showsPireps: pireps)
     }
 
     var body: some View {
@@ -681,6 +681,12 @@ private struct BriefingContentView: View {
             // On D-0 it also re-fetches the live observation layer (#637), which
             // moves on an unchanged pack.
             .refreshable { await viewModel.pullToRefresh() }
+            // The Observed tab comes and goes with the data (a pack switch, the
+            // live layer landing); keep the selection valid, and on flight day
+            // open on Observed once (#661).
+            .onChange(of: viewModel.showsObservedTab, initial: true) {
+                viewModel.reconcileTabs()
+            }
     }
 
     private var content: some View {
@@ -705,6 +711,8 @@ private struct BriefingContentView: View {
         switch tab {
         case .advisory:
             AdvisoryTabView(viewModel: viewModel)
+        case .observed:
+            ObservedTabView(viewModel: viewModel)
         case .discussion:
             DiscussionTabView(viewModel: viewModel)
         case .crossSection:

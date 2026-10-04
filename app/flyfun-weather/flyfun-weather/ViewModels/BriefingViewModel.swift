@@ -1,26 +1,42 @@
+import CoreLocation
 import Foundation
 import OSLog
 
-/// Briefing-internal tabs (#310). Four tabs: Advisory · Discussion ·
-/// Cross-Section · Map, plus a gated PIREPs extra (kept reachable so offline
-/// reporting doesn't regress). On iPad they render as a top pill band; on
-/// iPhone they collapse to a native bottom tab bar. The old single "Brief"
-/// mega-scroll is split into Advisory (hero + grid + conditions + alternates)
-/// and Discussion (synopsis); the standalone Skew-T tab folds under
-/// Cross-Section (scrolled to, not a separate tab).
+/// Briefing-internal tabs (#310, re-cut by #661). Two shapes:
+///
+/// - **Forecast only:** Advisory · Discussion · Cross-Section · Map.
+/// - **Flight day** (the briefing carries observations or a live layer):
+///   Advisory · Discussion · Cross-Section · Map · **Observed**. Observed holds
+///   everything measured (changes since the briefing, radar/lightning, cells,
+///   METAR/TAF, SIGMETs) so Advisory stays the forecast verdict. It is
+///   *appended*: the familiar tabs keep their positions whatever the day, and
+///   the one that comes and goes sits at the right edge.
+///
+/// Five is the iPhone bottom-bar limit before iOS folds tabs into "More", which
+/// is one reason PIREPs is gone from the bar (`PirepFeature`). On iPad they
+/// render as a top tab bar. Skew-T folds under Cross-Section (scrolled to).
 enum BriefingTab: String, Hashable, CaseIterable {
     case advisory
+    case observed
     case discussion
     case crossSection
     case map
+    /// Hidden while `PirepFeature.isEnabled` is false (#661); kept so the
+    /// feature can come back without re-plumbing.
     case pireps
 
-    /// Tabs shown in the main band (PIREPs is appended only when permitted).
-    static let core: [BriefingTab] = [.advisory, .discussion, .crossSection, .map]
+    /// The tab bar for a briefing, in order.
+    static func tabs(showsObserved: Bool, showsPireps: Bool = false) -> [BriefingTab] {
+        var tabs: [BriefingTab] = [.advisory, .discussion, .crossSection, .map]
+        if showsObserved { tabs.append(.observed) }
+        if showsPireps { tabs.append(.pireps) }
+        return tabs
+    }
 
     var title: String {
         switch self {
         case .advisory: "Advisory"
+        case .observed: "Observed"
         case .discussion: "Discussion"
         case .crossSection: "Cross-Section"
         case .map: "Map"
@@ -31,12 +47,21 @@ enum BriefingTab: String, Hashable, CaseIterable {
     var systemImage: String {
         switch self {
         case .advisory: "exclamationmark.triangle"
+        case .observed: "dot.radiowaves.left.and.right"
         case .discussion: "text.alignleft"
         case .crossSection: "chart.xyaxis.line"
         case .map: "map"
         case .pireps: "cloud.sun"
         }
     }
+}
+
+/// PIREPs never took off (#661): the tab, the briefing toolbar's "Report PIREP"
+/// and the flight list's "Add PIREP" are hidden for everyone, admins included,
+/// whatever the account's `pirep_can_*` flags say. The code, the offline queue
+/// flush and the server API stay; flip this to bring the UI back.
+enum PirepFeature {
+    static let isEnabled = false
 }
 
 /// Shared deep-link payload (§4.6/§4.7/§4.9): one `focusIntent` consumed by the
@@ -53,6 +78,9 @@ struct FocusIntent: Equatable {
     /// Advisory lens id to apply on the cross-section (e.g. "icing"); see
     /// `CrossSectionPresets`.
     var advisoryPresetId: String?
+    /// Turn the map's experimental cell overlay (and reflectivity under it) on
+    /// — the Observed tab's "Show on map" (#661).
+    var showObservedCells = false
     /// Concrete advisory instance behind the lens (e.g. "vmc_cruise"), set only
     /// by advisory-card actions. Activates that advisory's cross-section
     /// highlight (scrim + verdict ribbon, #374) when the pack carries highlight
@@ -142,8 +170,15 @@ final class BriefingViewModel {
     private(set) var downloadState: DownloadState = .notDownloaded
     private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
 
+    /// The experimental radar-cell overlay (#661), shared by the route map and
+    /// the Observed tab's cell list so both show the same frame. Online-only.
+    let cellsModel: RouteCellsModel
+
     // UI state
     var selectedTab: BriefingTab = .advisory
+    /// The flight-day default (open on Observed) is applied once per open, so
+    /// a pilot who switches back to Advisory is never pulled away again.
+    @ObservationIgnored private var flightDayDefaultApplied = false
     /// Default to ECMWF (#8, iOS feedback). The effective choice is reconciled
     /// against the models a given flight actually carries via `preferredModel`;
     /// a user's explicit pick is remembered across flights/launches (#9).
@@ -181,6 +216,7 @@ final class BriefingViewModel {
         self.settings = settings
         self.networkMonitor = networkMonitor
         self.debrief = flight.debrief
+        self.cellsModel = RouteCellsModel(repository: repository)
     }
 
     /// Adopt the saved (or deleted → nil) debrief so the Advisory card updates.
@@ -224,6 +260,71 @@ final class BriefingViewModel {
 
     /// The target tab calls this once it has applied the intent's layer/metric.
     func clearFocusIntent() { focusIntent = nil }
+
+    // MARK: - Tabs (#661)
+
+    /// The briefing carries something measured — changes since the briefing,
+    /// METAR/TAF along the route, a matched SIGMET or radar/lightning/satellite
+    /// samples — so the Observed tab is offered.
+    var showsObservedTab: Bool {
+        guard case .loaded(let snapshot) = snapshotState else { return false }
+        return Self.hasObservedContent(snapshot)
+    }
+
+    nonisolated static func hasObservedContent(_ snapshot: SnapshotResponse) -> Bool {
+        snapshot.liveChanges != nil
+            || !(snapshot.routeObservations?.reportingAirports.isEmpty ?? true)
+            || !(snapshot.routeSigmets?.matched.isEmpty ?? true)
+            || (snapshot.observedConditions?.hasAnyField ?? false)
+    }
+
+    var tabs: [BriefingTab] {
+        BriefingTab.tabs(showsObserved: showsObservedTab)
+    }
+
+    /// Whether a network path is usable — so an online-only surface (cells,
+    /// radar) can say "offline" rather than "unavailable". No monitor (tests,
+    /// previews) reads as online.
+    var isOnline: Bool { networkMonitor?.isConnected ?? true }
+
+    /// Route points in order, for geometry (the cells box, location labels).
+    var routeCoordinates: [CLLocationCoordinate2D] {
+        guard case .loaded(let analyses) = routeAnalysesState else { return [] }
+        return analyses.analyses.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+    }
+
+    /// The route's named waypoints with their positions.
+    var routeWaypoints: [(icao: String, coordinate: CLLocationCoordinate2D)] {
+        guard case .loaded(let analyses) = routeAnalysesState else { return [] }
+        return analyses.analyses.compactMap { p in
+            guard let icao = p.waypointIcao, !icao.isEmpty else { return nil }
+            return (icao, CLLocationCoordinate2D(latitude: p.lat, longitude: p.lon))
+        }
+    }
+
+    /// The box the cell overlay is fetched for: the widest sampled corridor
+    /// plus `CellsOverlay.marginNm` (web: corridor + 50 NM). Independent of the
+    /// cross-section's corridor pick so the map and the Observed list share
+    /// one request and one cached frame.
+    var cellsBox: ObservedMapImagery.LatLonBox? {
+        guard case .loaded(let snapshot) = snapshotState else { return nil }
+        let corridor = ObservedMapImagery.corridorRadius(snapshot.observedConditions, picked: nil) ?? 20
+        return ObservedMapImagery.corridorBox(routeCoordinates, radiusNm: corridor + CellsOverlay.marginNm)
+    }
+
+    /// Keep the selection on a tab that exists, and — once per open — land on
+    /// Observed when it is offered and the flight is inside the live window
+    /// (departure −3 h … arrival +1 h): on the day, what is happening now is
+    /// what the pilot opens the app for. A deep-link that already moved the
+    /// selection off Advisory is left alone.
+    func reconcileTabs(now: Date = Date()) {
+        if !tabs.contains(selectedTab) { selectedTab = .advisory }
+        guard !flightDayDefaultApplied, showsObservedTab else { return }
+        flightDayDefaultApplied = true
+        if selectedTab == .advisory, flight.isInLiveObservationWindow(now: now) {
+            selectedTab = .observed
+        }
+    }
 
     // MARK: - Initial load
 

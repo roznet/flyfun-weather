@@ -107,7 +107,22 @@ badge gets its own line with the overlay's own time.  Never a shared "as of".
   the existing 2-min visible-tab tick so a feed going stale is noticed
   without a re-render.
 - Not done: route geometry (off-track distance, abeam point, closest approach
-  vs ETA), iOS, a time slider over past overlays.
+  vs ETA), lightning flashes on iOS, a time slider over past overlays.
+
+## iOS (#661)
+
+Port of the same rules: `CellsOverlay` (Views/Map/CellsOverlay.swift — match,
+badge, words, colours; tested in `CellsOverlayTests`), DTOs in
+`Models/API/ObservedCells.swift`, fetching in `RouteCellsModel` (60 s listing
+TTL, 6-entry display cache by path, token-guarded so an overtaken refresh is
+dropped). One model per briefing, shared by the route map's Cells toggle (off
+by default, pairs with the drawn reflectivity frame) and the Observed tab's
+cell list (no radar drawn there → newest current overlay); only the visible
+tab polls. The box is the widest sampled corridor + 50 NM — not the
+cross-section's corridor pick — so both surfaces hit one cached URL. The list
+names a cell's position by the nearest route waypoint ("20 NM NE of LFPN"), a
+label only: off-track/abeam geometry stays the planned server-side step.
+`requestDataURL`, not `requestData`, so the bbox query survives.
 
 ## Gotchas
 

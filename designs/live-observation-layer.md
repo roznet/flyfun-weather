@@ -225,9 +225,10 @@ digest, alternate requirement.
   layer applied first, then fetched. `syncLatestPack` fetches when
   `latest.liveUpdatedAt` moved; pull-to-refresh always fetches; a 300 s poll runs
   while the briefing is visible and in the live window.
-- UI: "Observed as of HH:MMZ" row (orange past 30 min), "Since this briefing"
-  panel + digest caveat on the Advisory tab, changed rows marked in the
-  Observations / SIGMET tables. Mock: `FLYFUN_MOCK_LIVE=1`.
+- UI: "Observed as of HH:MMZ" row (orange past 30 min); the "Since this
+  briefing" panel on the Observed tab (#661) with changed rows marked in its
+  METAR/TAF and SIGMET tables; on the Advisory tab only the digest caveat and
+  a teaser row that switches to Observed. Mock: `FLYFUN_MOCK_LIVE=1`.
 
 **Web**: `store.loadLive` / `syncLatest`, 5-min poll in the live window (skipped
 while hidden) + `visibilitychange` re-sync, the same panel / label / caveat /

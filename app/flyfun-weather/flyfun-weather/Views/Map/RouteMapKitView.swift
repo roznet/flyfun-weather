@@ -100,6 +100,14 @@ struct RouteMapKitView: UIViewRepresentable {
     /// Quiet base map while observed imagery is drawn (web parity).
     var mutedBaseMap = false
 
+    // MARK: Radar cells (#661)
+
+    /// The cell overlay to draw (cores only — outlines, markers, arrows), or nil.
+    var cellsDisplay: CellDisplay?
+    /// Identity of `cellsDisplay` (its request path): overlays rebuild only when
+    /// it changes, so an altitude drag keeps an open callout.
+    var cellsDisplayKey: String?
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -116,6 +124,8 @@ struct RouteMapKitView: UIViewRepresentable {
         // Airport-forecast markers reuse the forecast map's view class (#428).
         map.register(AirportMarkerView.self,
                      forAnnotationViewWithReuseIdentifier: AirportMarkerView.reuseID)
+        map.register(CellMarkerView.self,
+                     forAnnotationViewWithReuseIdentifier: CellMarkerView.reuseID)
         map.setRegion(initialRegion, animated: false)
         context.coordinator.map = map
         return map
@@ -152,6 +162,8 @@ struct RouteMapKitView: UIViewRepresentable {
         private var retiringTiles: [ObservedTileOverlay] = []
         private var corridorOverlay: ObservedCorridorOverlay?
         private var appliedMuted: Bool?
+        /// Key of the cell overlay currently drawn (nil = none).
+        private var renderedCellsKey: String?
         /// How long an old frame stays under its successor. MapKit gives no
         /// "all tiles loaded" signal (the web waits for Leaflet's `load`, capped
         /// at 10 s), so a fixed delay stops the map blanking once per radar cycle.
@@ -174,6 +186,7 @@ struct RouteMapKitView: UIViewRepresentable {
             updateObservedTiles(on: map)
             updateCorridor(on: map)
             updateRoute(on: map)
+            updateCells(on: map)
             updateForecastOverlay(on: map)
             updateWaypoints(on: map)
             updateActivePoint(on: map)
@@ -288,6 +301,41 @@ struct RouteMapKitView: UIViewRepresentable {
             } else {
                 map.insertOverlay(overlay, at: 0, level: .aboveRoads)
             }
+        }
+
+        // MARK: Radar cells (#661)
+
+        /// Rebuild the cell layers when the overlay changes. Outlines and arrows
+        /// sit at `.aboveLabels`, over the route (web: the cells pane is above
+        /// the route); markers are annotations, always on top.
+        private func updateCells(on map: MKMapView) {
+            let key = parent.cellsDisplay == nil ? nil : parent.cellsDisplayKey
+            guard key != renderedCellsKey else { return }
+            renderedCellsKey = key
+            map.removeOverlays(map.overlays.filter { $0 is CellOutlineOverlay || $0 is CellArrowOverlay })
+            map.removeAnnotations(map.annotations.filter { $0 is CellAnnotation })
+            guard let display = parent.cellsDisplay else { return }
+
+            // Outlines first (core35 under core41); rain areas are not drawn
+            // on the route map (web parity).
+            for tier in ["core35", "core41"] {
+                for line in display.outlines?[tier] ?? [] {
+                    let coords = line.compactMap { p in
+                        p.count == 2 ? CLLocationCoordinate2D(latitude: p[0], longitude: p[1]) : nil
+                    }
+                    guard coords.count >= 2 else { continue }
+                    let overlay = CellOutlineOverlay(coordinates: coords, count: coords.count)
+                    overlay.tier = tier
+                    map.addOverlay(overlay, level: .aboveLabels)
+                }
+            }
+            let cores = display.cells.filter(\.isCore)
+            for cell in cores {
+                guard let end = CellsOverlay.arrowEnd(cell) else { continue }
+                let coords = [CLLocationCoordinate2D(latitude: cell.lat, longitude: cell.lon), end]
+                map.addOverlay(CellArrowOverlay(coordinates: coords, count: 2), level: .aboveLabels)
+            }
+            map.addAnnotations(cores.map(CellAnnotation.init))
         }
 
         // MARK: Waypoint annotations
@@ -431,6 +479,20 @@ extension RouteMapKitView.Coordinator: MKMapViewDelegate {
             r.alpha = tiles.opacity
             return r
         }
+        if let outline = overlay as? CellOutlineOverlay {
+            let style = CellsOverlay.outlineStyle(outline.tier)
+            let r = MKPolylineRenderer(polyline: outline)
+            r.strokeColor = style.color.withAlphaComponent(0.95)
+            r.lineWidth = style.width
+            return r
+        }
+        if let arrow = overlay as? CellArrowOverlay {
+            let r = CellArrowRenderer(polyline: arrow)
+            r.strokeColor = CellsOverlay.arrowColor
+            r.lineWidth = 2.5
+            r.lineCap = .round
+            return r
+        }
         if let corridor = overlay as? ObservedCorridorOverlay {
             let r = MKPolygonRenderer(polygon: corridor)
             r.strokeColor = UIColor(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255, alpha: 0.45)
@@ -464,6 +526,11 @@ extension RouteMapKitView.Coordinator: MKMapViewDelegate {
             let view = mapView.dequeueReusableAnnotationView(
                 withIdentifier: RouteAircraftMarkerView.reuseID, for: aircraft)
             (view as? RouteAircraftMarkerView)?.apply(headingDeg: aircraft.headingDeg, opacity: aircraft.opacity)
+            return view
+        case let cell as CellAnnotation:
+            let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: CellMarkerView.reuseID, for: cell)
+            (view as? CellMarkerView)?.configure(cell.cell)
             return view
         case let apt as ForecastAnnotation:
             let view = mapView.dequeueReusableAnnotationView(

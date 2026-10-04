@@ -1004,7 +1004,8 @@ struct FlightListView: View {
             // the owner's id, so it'd orphan regardless of timing) and the tracking
             // window. Not gated on offline — `PirepViewModel.submit` queues
             // transient-network failures via `PirepOfflineStore`.
-            if appState.userPreferences.preferences.pirepCanPublish,
+            if PirepFeature.isEnabled,
+               appState.userPreferences.preferences.pirepCanPublish,
                flight.isEditable,
                flight.isInTrackingWindow() {
                 Button {

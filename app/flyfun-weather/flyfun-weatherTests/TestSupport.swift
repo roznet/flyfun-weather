@@ -259,6 +259,22 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func observedImageryStatus() async throws -> ObservedImageryStatusResponse { throw MockError.notStubbed("observedImageryStatus") }
     func observedTile(path: String) async throws -> Data { throw MockError.notStubbed("observedTile") }
+
+    var observedCellFramesHandler: (@Sendable () throws -> CellFramesResponse)?
+    private(set) var observedCellFramesCallCount = 0
+    func observedCellFrames() async throws -> CellFramesResponse {
+        observedCellFramesCallCount += 1
+        if let h = observedCellFramesHandler { return try h() }
+        throw MockError.notStubbed("observedCellFrames")
+    }
+
+    var observedCellDisplayHandler: (@Sendable (String) throws -> CellDisplay)?
+    private(set) var observedCellDisplayRequests: [String] = []
+    func observedCellDisplay(path: String) async throws -> CellDisplay {
+        observedCellDisplayRequests.append(path)
+        if let h = observedCellDisplayHandler { return try h(path) }
+        throw MockError.notStubbed("observedCellDisplay")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         if let h = advisoriesHandler { return try h() }
         throw MockError.notStubbed("advisories")

@@ -500,6 +500,47 @@ final class flyfun_weatherUITests: XCTestCase {
         add(open)
     }
 
+    /// Journey (#661) — the flight-day Observed tab. It is appended to the
+    /// right of the four briefing tabs only when the briefing carries
+    /// observations; opens on its glance card (departure / destination, the
+    /// chips) and its "Show radar & cells on map" lands on the Map with the
+    /// observed controls and the cell overlay's own badge line (the mock has no
+    /// cell server, so it must say "unavailable", never draw nothing silently).
+    @MainActor
+    func testObservedTabGlanceAndShowOnMap() throws {
+        let live = """
+        {"flight_id": "fixture-1", "pack_timestamp": "2099-06-30T06:00:00+00:00",
+         "live_updated_at": "2099-06-30T08:10:00Z",
+         "observed_conditions": {"radii_nm": [5, 10, 20],
+           "summary_entries": [{"kind": "reflectivity", "text": "Moderate rain near ZZAA (observed 08:05Z)"}],
+           "reflectivity": {"source": "opera_dbzh", "quantity": "DBZH", "units": "dBZ",
+             "valid_time": "2099-06-30T08:05:00Z", "age_minutes": 5, "window_minutes": 10,
+             "stations": []}}}
+        """
+        let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": live])
+        openFixture1Briefing(app)
+        switchToBriefingTab(app, "Observed")
+
+        XCTAssertTrue(app.descendants(matching: .any)["observedGlance"].waitForExistence(timeout: Self.uiTimeout),
+                      "the Observed tab should open on its glance card")
+        XCTAssertTrue(app.descendants(matching: .any)["observedNowSection"].firstMatch.exists,
+                      "the radar & lightning summary should render")
+        attachScreenshot(app, "Observed-Glance")
+
+        let showOnMap = app.buttons["observedShowOnMap"].firstMatch
+        XCTAssertTrue(showOnMap.waitForExistence(timeout: Self.uiTimeout), "Show on map should be offered")
+        showOnMap.tap()
+        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "Show on map should land on the Map tab's observed controls")
+        let badge = app.descendants(matching: .any)["map.observedBadge"].firstMatch
+        XCTAssertTrue(badge.waitForExistence(timeout: Self.uiTimeout), "the observed badge should render")
+        let named = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Cell analysis unavailable"), object: badge)
+        XCTAssertEqual(XCTWaiter.wait(for: [named], timeout: Self.uiTimeout), .completed,
+                       "the cell overlay should say it is unavailable, got: \(badge.label)")
+        attachScreenshot(app, "Observed-ShowOnMap")
+    }
+
     /// Journey (#605) — the cross-section layer bar in each layout mode, and the
     /// scroll-trap fix. iPhone portrait: a compact chip switches its family in
     /// place and press-and-hold opens the methods row. iPad: a full chip opens
@@ -628,10 +669,11 @@ final class flyfun_weatherUITests: XCTestCase {
         let app = launchMockApp()
         openFixture1Briefing(app)
 
-        // Advisory is the default tab; the spy pill for the D-0 observations
-        // section only exists when an airport actually reported, so finding it
-        // also confirms the `hasObservations` gate and the spy wiring.
-        let pill = app.buttons["Observations"].firstMatch
+        // The D-0 observations live on the Observed tab (#661); its spy pill
+        // only exists when an airport actually reported, so finding it also
+        // confirms the `hasObservations` gate and the spy wiring.
+        switchToBriefingTab(app, "Observed")
+        let pill = app.buttons["METAR/TAF"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout),
                       "the Observations spy pill should be present for the D-0 fixture")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -690,8 +732,9 @@ final class flyfun_weatherUITests: XCTestCase {
         let app = launchMockApp()
         openFixture1Briefing(app)
 
-        let pill = app.buttons["Observations"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "Observations spy pill should be present")
+        switchToBriefingTab(app, "Observed")
+        let pill = app.buttons["METAR/TAF"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "METAR/TAF spy pill should be present")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         let info = app.buttons["LFTH details"].firstMatch
@@ -720,9 +763,11 @@ final class flyfun_weatherUITests: XCTestCase {
         let app = launchMockApp()
         openFixture1Briefing(app)
 
-        // The spy pill only exists when a SIGMET actually matched the corridor,
-        // so finding it also confirms the `hasSigmets` gate and the spy wiring.
-        let pill = app.buttons["Hazards"].firstMatch
+        // On the Observed tab (#661). The spy pill only exists when a SIGMET
+        // actually matched the corridor, so finding it also confirms the
+        // `hasSigmets` gate and the spy wiring.
+        switchToBriefingTab(app, "Observed")
+        let pill = app.buttons["SIGMET"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout),
                       "the Hazards spy pill should be present for the D-0 fixture")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -758,8 +803,9 @@ final class flyfun_weatherUITests: XCTestCase {
         let app = launchMockApp()
         openFixture1Briefing(app)
 
-        let pill = app.buttons["Hazards"].firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "Hazards spy pill should be present")
+        switchToBriefingTab(app, "Observed")
+        let pill = app.buttons["SIGMET"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: Self.uiTimeout), "SIGMET spy pill should be present")
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         let info = app.buttons["LFMM SEV TURB details"].firstMatch
@@ -1027,6 +1073,7 @@ final class flyfun_weatherUITests: XCTestCase {
                 let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": tick.json])
                 defer { app.terminate() }
                 openFixture1Briefing(app)
+                switchToBriefingTab(app, "Observed")
 
                 let section = app.descendants(matching: .any)["liveChangesSection"]
                 XCTAssertTrue(section.waitForExistence(timeout: Self.uiTimeout),
@@ -1036,21 +1083,6 @@ final class flyfun_weatherUITests: XCTestCase {
                 let title = (changes["baseline_source"] as? String) == "live_start"
                     ? "Since live tracking began" : "Since this briefing"
                 XCTAssertTrue(app.staticTexts[title].firstMatch.exists, "\(hhmm): panel title should read \"\(title)\"")
-                // "Written at" is when the digest was written: the briefing the
-                // changes are measured from, or — when they run from the live
-                // layer's own starting point — the pack (fixture-1: 06:00Z),
-                // never the live start. Matched on its text: the caveat's id
-                // also lands on its icon.
-                let fromLiveStart = (changes["baseline_source"] as? String) == "live_start"
-                let baselineHHMM = (changes["baseline_at"] as? String).map { String($0.dropFirst(11).prefix(5)) + "Z" }
-                let written = fromLiveStart ? "06:00Z" : (baselineHHMM ?? "06:00Z")
-                let caveat = app.staticTexts
-                    .matching(NSPredicate(format: "label BEGINSWITH %@", "Written at")).firstMatch
-                if caveat.exists {
-                    XCTAssertTrue(caveat.label.contains("Written at \(written)"),
-                                  "\(hhmm): digest caveat should read \"Written at \(written)\", got \(caveat.label)")
-                }
-
                 for change in (changes["changes"] as? [[String: Any]]) ?? [] {
                     let key = change["key"] as? String ?? ""
                     let expected = "\(change["tier"] as? String ?? ""), \(change["direction"] as? String ?? "")"
@@ -1063,8 +1095,8 @@ final class flyfun_weatherUITests: XCTestCase {
                 }
                 attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes")
 
-                for (pill, sectionId, label) in [("Observations", "observationsSection", "2-observations"),
-                                                 ("Hazards", "sigmetsSection", "3-hazards")] {
+                for (pill, sectionId, label) in [("METAR/TAF", "observationsSection", "2-observations"),
+                                                 ("SIGMET", "sigmetsSection", "3-hazards")] {
                     let button = app.buttons[pill].firstMatch
                     guard button.waitForExistence(timeout: Self.probeTimeout) else { continue }
                     button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -1088,6 +1120,25 @@ final class flyfun_weatherUITests: XCTestCase {
                         XCTAssertEqual(badges.count, issued.count,
                                        "\(hhmm): each newly issued SIGMET should be badged NEW in the hazards table")
                     }
+                }
+
+                // The digest caveat and the teaser stay on the Advisory tab (#661).
+                switchToBriefingTab(app, "Advisory")
+                XCTAssertTrue(app.descendants(matching: .any)["observedTeaser"].waitForExistence(timeout: Self.uiTimeout),
+                              "\(hhmm): the Advisory tab should carry the Observed teaser row")
+                // "Written at" is when the digest was written: the briefing the
+                // changes are measured from, or — when they run from the live
+                // layer's own starting point — the pack (fixture-1: 06:00Z),
+                // never the live start. Matched on its text: the caveat's id
+                // also lands on its icon.
+                let fromLiveStart = (changes["baseline_source"] as? String) == "live_start"
+                let baselineHHMM = (changes["baseline_at"] as? String).map { String($0.dropFirst(11).prefix(5)) + "Z" }
+                let written = fromLiveStart ? "06:00Z" : (baselineHHMM ?? "06:00Z")
+                let caveat = app.staticTexts
+                    .matching(NSPredicate(format: "label BEGINSWITH %@", "Written at")).firstMatch
+                if caveat.exists {
+                    XCTAssertTrue(caveat.label.contains("Written at \(written)"),
+                                  "\(hhmm): digest caveat should read \"Written at \(written)\", got \(caveat.label)")
                 }
 
                 if let expected = conditions[hhmm] {

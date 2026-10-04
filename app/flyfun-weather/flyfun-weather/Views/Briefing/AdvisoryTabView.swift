@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// The **Advisory** tab (#310): the read-me-first surface. A prominent accented
-/// hero (traffic-light + assessment reason) pinned at the top, then watch chips,
-/// a responsive advisory grid (AMBER/RED as cards, GREEN collapsed into one
-/// all-clear strip), current airport conditions, — on D-0 — the METAR/TAF
-/// observations comparison and the route SIGMET area hazards, and — on marginal
-/// D-0/D-2 packs — weather alternates. A sticky scroll-spy bar jumps between
-/// sections.
+/// The **Advisory** tab (#310): the forecast verdict. A prominent accented hero
+/// (traffic-light + assessment reason) pinned at the top, a responsive advisory
+/// grid (AMBER/RED as cards, GREEN collapsed into one all-clear strip), forecast
+/// airport conditions, — on marginal D-0/D-2 packs — weather alternates, and
+/// timing scenarios. A sticky scroll-spy bar jumps between sections.
+///
+/// Everything *measured* lives on the Observed tab (#661): changes since the
+/// briefing, METAR/TAF vs model, route SIGMETs, radar/lightning and cells. Here
+/// it is one teaser row under the hero that says what moved and switches tabs,
+/// plus the digest caveat — the verdict was written before those observations.
+/// Watch items live on the Discussion tab only.
 struct AdvisoryTabView: View {
     let viewModel: BriefingViewModel
     @Environment(AppState.self) private var appState
@@ -21,14 +25,15 @@ struct AdvisoryTabView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 heroSection
                     .spyAnchor("hero")
-                // Live layer (#637): the digest caveat, then what moved since
-                // the briefing — read-me-first on flight day, so straight
-                // under the hero.
+                // Flight day (#661): what moved since the briefing, as one row
+                // that opens the Observed tab, then the digest caveat — the
+                // hero above was written before those observations.
+                if viewModel.showsObservedTab {
+                    ObservedTeaserRow(viewModel: viewModel)
+                }
                 if let liveChanges = viewModel.liveChanges {
                     DigestLiveCaveat(changeCount: liveChanges.items.count,
                                      writtenAt: viewModel.digestWrittenAtDate)
-                    LiveChangesView(changes: liveChanges, baseline: viewModel.liveBaselineDate)
-                        .spyAnchor("live")
                 }
                 digestAltitudeWarningSection
                 digestFeedbackSection
@@ -37,14 +42,6 @@ struct AdvisoryTabView: View {
                     .spyAnchor("advisories")
                 AirportConditionsView(viewModel: viewModel)
                     .spyAnchor("conditions")
-                if hasObservations {
-                    RouteObservationsView(viewModel: viewModel, liveChanges: viewModel.liveChanges)
-                        .spyAnchor("observations")
-                }
-                if hasSigmets {
-                    RouteSigmetsView(viewModel: viewModel, liveChanges: viewModel.liveChanges)
-                        .spyAnchor("sigmets")
-                }
                 if hasAlternates {
                     AlternatesView(viewModel: viewModel)
                         .spyAnchor("alternates")
@@ -53,9 +50,6 @@ struct AdvisoryTabView: View {
                     TimingScenariosView(viewModel: viewModel)
                         .spyAnchor("timing")
                 }
-                // Watch reads as the "keep an eye on this" close, so it sits at
-                // the very end (#4); anchored internally.
-                watchSection
             }
             .padding(.vertical, Theme.cardPadding)
         }
@@ -156,33 +150,6 @@ struct AdvisoryTabView: View {
         return false
     }
 
-    /// D-0 METAR/TAF observations (#492). Gated on an airport actually having
-    /// reported — the same filter the section's table applies — so the scroll-spy
-    /// never offers an anchor that renders empty.
-    private var hasObservations: Bool {
-        if case .loaded(let snapshot) = viewModel.snapshotState,
-           let obs = snapshot.routeObservations {
-            return !obs.reportingAirports.isEmpty
-        }
-        return false
-    }
-
-    /// D-0 route SIGMETs (#493). Gated on at least one bulletin actually matching
-    /// the corridor — the same filter the section's table applies — so the
-    /// scroll-spy never offers an anchor that renders empty.
-    private var hasSigmets: Bool {
-        if case .loaded(let snapshot) = viewModel.snapshotState,
-           let block = snapshot.routeSigmets {
-            return !block.matched.isEmpty
-        }
-        return false
-    }
-
-    private var hasWatchItems: Bool {
-        if case .loaded(let digest) = viewModel.digestState { return !digest.watchItemsList.isEmpty }
-        return false
-    }
-
     /// The Timing Scenarios panel appears only once it has something to render —
     /// live data (`timeOptions`) or the offline placeholder — so the scroll-spy
     /// doesn't jump to an empty anchor while the first poll is in flight.
@@ -192,14 +159,10 @@ struct AdvisoryTabView: View {
 
     private var spySections: [SpySection] {
         var sections = [SpySection("hero", "Summary")]
-        if viewModel.liveChanges != nil { sections.append(SpySection("live", "Since Briefing")) }
         sections.append(SpySection("advisories", "Advisories"))
         sections.append(SpySection("conditions", "Conditions"))
-        if hasObservations { sections.append(SpySection("observations", "Observations")) }
-        if hasSigmets { sections.append(SpySection("sigmets", "Hazards")) }
         if hasAlternates { sections.append(SpySection("alternates", "Alternates")) }
         if hasTimingScenarios { sections.append(SpySection("timing", "Timing")) }
-        if hasWatchItems { sections.append(SpySection("watch", "Watch")) }
         return sections
     }
 
@@ -259,25 +222,6 @@ struct AdvisoryTabView: View {
         .background(accent.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius))
         .padding(.horizontal, Theme.cardPadding)
-    }
-
-    // MARK: Watch chips
-
-    /// Watch items as readable markdown text (no deep-link — these are just a
-    /// list of things to keep an eye on, #4). Rendered last in the tab.
-    @ViewBuilder
-    private var watchSection: some View {
-        if case .loaded(let digest) = viewModel.digestState, let watch = digest.watchItemsMarkdown {
-            VStack(alignment: .leading, spacing: Theme.spacingS) {
-                Text("Watch")
-                    .font(.headline)
-                    .foregroundStyle(Theme.text)
-                MarkdownLiteText(markdown: watch)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Theme.cardPadding)
-            .spyAnchor("watch")
-        }
     }
 
     // MARK: Advisories — responsive grid (#310 item 2)
