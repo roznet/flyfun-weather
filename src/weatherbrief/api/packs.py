@@ -5153,12 +5153,16 @@ def get_live_layer(
 
     from weatherbrief.storage.flights import _resolve_artifact_path
     from weatherbrief.tasks.live_layer import live_for_pack
+    from weatherbrief.tasks.live_trail import trails_for_pack
 
     layer = None
     if latest.artifact_path:
-        layer = live_for_pack(_resolve_artifact_path(latest.artifact_path))
+        pack_dir = _resolve_artifact_path(latest.artifact_path)
+        layer = live_for_pack(pack_dir)
     if layer is None:
         return LiveLayerResponse(flight_id=flight_id, pack_timestamp=pack_ts)
+    # Trails are computed here, at read time, from the history (#669):
+    # live.json is written before the history, so a stored trail would lag.
     return LiveLayerResponse(
         flight_id=flight_id,
         pack_timestamp=pack_ts,
@@ -5169,6 +5173,6 @@ def get_live_layer(
         sigmets_updated_at=layer.sigmets_updated_at,
         observed_conditions=layer.observed_conditions,
         observed_updated_at=layer.observed_updated_at,
-        changes=layer.changes,
+        changes=trails_for_pack(pack_dir, layer.changes),
         last_refresh_delta=layer.last_refresh_delta,
     )

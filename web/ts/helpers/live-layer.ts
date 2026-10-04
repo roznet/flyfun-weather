@@ -8,8 +8,10 @@
  * response applies and fold it into a snapshot.
  */
 
+import { t } from '../i18n/i18n';
 import type {
   ForecastSnapshot,
+  LiveChange,
   LiveChanges,
   LiveLayer,
   SigmetAlongRoute,
@@ -58,7 +60,8 @@ export function applyLiveToSnapshot(
   const liveMs = isoToMs(live.live_updated_at);
   if (isNaN(liveMs)) return null;
   const currentMs = isoToMs(snapshot.live_updated_at);
-  if (!isNaN(currentMs) && liveMs <= currentMs) return null;
+  if (!isNaN(currentMs) && liveMs < currentMs) return null;
+  if (!isNaN(currentMs) && liveMs === currentMs && !addsTrails(snapshot.live_changes, live.changes)) return null;
   return {
     ...snapshot,
     ...(live.route_observations != null ? { route_observations: live.route_observations } : {}),
@@ -68,6 +71,16 @@ export function applyLiveToSnapshot(
     live_changes: live.changes ?? snapshot.live_changes ?? null,
     live_updated_at: live.live_updated_at,
   };
+}
+
+/** The same tick, but `incoming` carries the read-time trails (#669) and
+ *  `current` does not: the snapshot overlay never has them, so the first
+ *  `/live` after a pack load must still apply at an equal timestamp. */
+export function addsTrails(
+  current: LiveChanges | null | undefined,
+  incoming: LiveChanges | null | undefined,
+): boolean {
+  return incoming?.recently_cleared != null && current?.recently_cleared == null;
 }
 
 /** Departure as epoch ms, from an ISO `departure_time` or the legacy
@@ -199,4 +212,87 @@ export function minutesAgo(iso: string | null | undefined, now: Date | number = 
   if (isNaN(ms)) return null;
   const t = typeof now === 'number' ? now : now.getTime();
   return Math.max(0, Math.floor((t - ms) / 60_000));
+}
+
+// --- Trails (#669) -----------------------------------------------------------
+//
+// Display only: the server computes each change's history from the flight's
+// live history (tasks/live_trail.py); these helpers turn it into the line
+// under a row. Same text as iOS (LiveChangesView): keep the two in step.
+
+/** A cleared row stays this long (the server's RECENTLY_CLEARED_MINUTES).
+ *  Re-checked here so a page left open after the live window ends drops it. */
+export const RECENTLY_CLEARED_MIN = 60;
+/** Spans shown on one line (the latest). */
+export const TRAIL_MAX_SPANS = 4;
+
+/** Rows that cleared within the hour as of `now`, newest first. */
+export function visibleCleared(changes: LiveChanges | null | undefined, now: number = Date.now()): LiveChange[] {
+  return (changes?.recently_cleared ?? []).filter((c) => {
+    const min = minutesAgo(c.cleared_at, now);
+    return min != null && min <= RECENTLY_CLEARED_MIN;
+  });
+}
+
+/** "HH:MM" in UTC; '' when unparseable. */
+function hhmm(iso: string | null | undefined): string {
+  return formatHhmmZ(iso).replace(/Z$/, '');
+}
+
+/** "12:42–13:02Z" for a closed span, "since 13:33Z" for an open one. */
+export function trailSpanText(span: { start: string; end: string | null }): string {
+  if (span.end) return `${hhmm(span.start)}–${formatHhmmZ(span.end)}`;
+  return t('live.trail.since', { time: formatHhmmZ(span.start) });
+}
+
+/** English ordinal ("1st", "2nd", "3rd", "11th"). */
+export function englishOrdinal(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  return `${n}${({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th'}`;
+}
+
+/** "2nd time today" from 2; null below. */
+export function timesTodayText(n: number | null | undefined): string | null {
+  if (!n || n < 2) return null;
+  return t('live.trail.nthTimeToday', { n, nth: englishOrdinal(n) });
+}
+
+/** "briefed VFR · 11:00Z MVFR · 11:30Z VFR" for a category row; null when
+ *  there are no reports. */
+export function categoryStripText(c: LiveChange): string | null {
+  const reports = c.trail?.reports ?? [];
+  if (reports.length === 0) return null;
+  const parts: string[] = [];
+  if (c.from_value) {
+    const key = c.trail?.baseline_source === 'live_start' ? 'live.trail.atStart' : 'live.trail.briefed';
+    parts.push(t(key, { cat: c.from_value }));
+  }
+  for (const r of reports) {
+    parts.push(`${formatHhmmZ(r.at)} ${r.category ?? '?'}`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * The trail line under a change row, or null when it would only repeat the
+ * row (first time on screen, one span, one report). A cleared row always
+ * gets one: it is the only trace of what happened.
+ *
+ * Category rows show the airport's category per report; every other kind
+ * shows the on/off periods. "Nth time today" is appended from 2.
+ */
+export function trailText(c: LiveChange, cleared = false): string | null {
+  const trail = c.trail;
+  if (!trail) return null;
+  const strip = c.kind === 'metar_category' ? categoryStripText(c) : null;
+  const spans = trail.spans.slice(-TRAIL_MAX_SPANS).map(trailSpanText).join(', ');
+  const times = timesTodayText(trail.times_today);
+  const worth = cleared
+    || (trail.times_today ?? 0) >= 2
+    || trail.spans.length >= 2
+    || (trail.reports?.length ?? 0) >= 2;
+  if (!worth) return null;
+  const parts = [strip ?? (spans || null), times].filter((p): p is string => !!p);
+  return parts.length > 0 ? parts.join(' · ') : null;
 }

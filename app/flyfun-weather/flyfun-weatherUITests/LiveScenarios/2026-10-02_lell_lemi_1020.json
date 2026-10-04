@@ -5,6 +5,7 @@
   "baseline_source": "briefing",
   "changes": [
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 235.12697602257145,
     "from_value": null,
@@ -18,9 +19,21 @@
     "source": "SIGMET",
     "station_id": null,
     "tier": "alert",
-    "to_value": "EMBD TS"
+    "to_value": "EMBD TS",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T08:30:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 0.0,
     "from_value": null,
@@ -34,9 +47,21 @@
     "source": "SIGMET",
     "station_id": null,
     "tier": "alert",
-    "to_value": "EMBD TS"
+    "to_value": "EMBD TS",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T08:40:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 274.0,
     "from_value": "none",
@@ -50,9 +75,21 @@
     "source": "SPECI",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "TS"
+    "to_value": "TS",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T10:20:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 274.0,
     "from_value": "VFR",
@@ -66,9 +103,56 @@
     "source": "SPECI",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "MVFR"
+    "to_value": "MVFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T08:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T09:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T09:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T10:00:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T10:16:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      }
+     ],
+     "spans": [
+      {
+       "end": "2026-10-02T06:00:00Z",
+       "start": "2026-10-02T05:30:00Z"
+      },
+      {
+       "end": null,
+       "start": "2026-10-02T10:00:00Z"
+      }
+     ],
+     "times_today": 2
+    }
    },
    {
+    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 268.7,
     "from_value": "MVFR",
@@ -82,9 +166,52 @@
     "source": "METAR",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "VFR"
+    "to_value": "VFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T09:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T09:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T10:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T07:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 9.96131147641169,
     "from_value": "EMBD TS",
@@ -98,11 +225,23 @@
     "source": "SIGMET",
     "station_id": null,
     "tier": "highlight",
-    "to_value": null
+    "to_value": null,
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T09:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    }
   ],
   "computed_at": "2026-10-02T10:20:00Z",
   "improved_count": 2,
+  "recently_cleared": [],
   "worsened_count": 4
  },
  "flight_id": "fixture-1",

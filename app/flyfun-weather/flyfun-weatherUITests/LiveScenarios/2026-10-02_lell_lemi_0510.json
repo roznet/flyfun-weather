@@ -5,6 +5,7 @@
   "baseline_source": "live_start",
   "changes": [
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 9.96131147641169,
     "from_value": null,
@@ -18,9 +19,21 @@
     "source": "SIGMET",
     "station_id": null,
     "tier": "alert",
-    "to_value": "EMBD TS"
+    "to_value": "EMBD TS",
+    "trail": {
+     "baseline_source": "live_start",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T05:10:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 169.93,
     "from_value": "CB",
@@ -34,11 +47,23 @@
     "source": "SPECI",
     "station_id": null,
     "tier": "alert",
-    "to_value": "TS"
+    "to_value": "TS",
+    "trail": {
+     "baseline_source": "live_start",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T05:10:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    }
   ],
   "computed_at": "2026-10-02T05:10:00Z",
   "improved_count": 0,
+  "recently_cleared": [],
   "worsened_count": 2
  },
  "flight_id": "fixture-1",

@@ -453,6 +453,8 @@ class TestRunRealtimeRefresh:
         assert result.delta is not None
         assert result.delta.worsened is False
         assert result.changes is not None and result.changes.changes == []
+        # Read-time trails ride the response like /live (#669).
+        assert result.changes.recently_cleared == []
         meta = json.loads((pack_dir.parent / "live_meta.json").read_text())
         assert meta["pack_dir_name"] == pack_dir.name
 

@@ -5,6 +5,7 @@
   "baseline_source": "briefing",
   "changes": [
    {
+    "cleared_at": null,
     "direction": "worse",
     "enroute_distance_nm": 169.93,
     "from_value": "TCU",
@@ -18,9 +19,25 @@
     "source": "SPECI",
     "station_id": null,
     "tier": "alert",
-    "to_value": "TS"
+    "to_value": "TS",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": "2026-10-02T06:00:00Z",
+       "start": "2026-10-02T05:10:00Z"
+      },
+      {
+       "end": null,
+       "start": "2026-10-02T07:00:00Z"
+      }
+     ],
+     "times_today": 2
+    }
    },
    {
+    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 268.7,
     "from_value": "MVFR",
@@ -34,9 +51,27 @@
     "source": "METAR",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "VFR"
+    "to_value": "VFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T07:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    },
    {
+    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 126.16,
     "from_value": "IFR",
@@ -50,11 +85,156 @@
     "source": "METAR",
     "station_id": null,
     "tier": "highlight",
-    "to_value": "MVFR"
+    "to_value": "MVFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:00:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T07:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
    }
   ],
   "computed_at": "2026-10-02T07:10:00Z",
   "improved_count": 2,
+  "recently_cleared": [
+   {
+    "cleared_at": "2026-10-02T06:30:00Z",
+    "direction": "worse",
+    "enroute_distance_nm": 275.56,
+    "from_value": "VFR",
+    "icao": "LEMI",
+    "key": "metar:LEMI",
+    "kind": "metar_category",
+    "message": "LEMI METAR: VFR \u2192 MVFR",
+    "new_alert": false,
+    "observed_at": "2026-10-02T06:00:00Z",
+    "role": "destination",
+    "source": "METAR",
+    "station_id": null,
+    "tier": "alert",
+    "to_value": "MVFR",
+    "trail": {
+     "baseline_source": "live_start",
+     "reports": [
+      {
+       "at": "2026-10-02T06:00:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T06:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T07:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": "2026-10-02T06:30:00Z",
+       "start": "2026-10-02T06:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
+   },
+   {
+    "cleared_at": "2026-10-02T06:30:00Z",
+    "direction": "worse",
+    "enroute_distance_nm": 242.48,
+    "from_value": "green",
+    "icao": "LEAL",
+    "key": "wind:LEAL",
+    "kind": "metar_wind",
+    "message": "LEAL wind: green \u2192 amber (crosswind 7 kt RWY 10, gust 25 kt)",
+    "new_alert": false,
+    "observed_at": "2026-10-02T06:00:00Z",
+    "role": "alternate",
+    "source": "METAR",
+    "station_id": null,
+    "tier": "highlight",
+    "to_value": "amber",
+    "trail": {
+     "baseline_source": "live_start",
+     "reports": null,
+     "spans": [
+      {
+       "end": "2026-10-02T06:30:00Z",
+       "start": "2026-10-02T06:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
+   },
+   {
+    "cleared_at": "2026-10-02T06:20:00Z",
+    "direction": "worse",
+    "enroute_distance_nm": 169.93,
+    "from_value": "VFR",
+    "icao": "LEVC",
+    "key": "metar:LEVC",
+    "kind": "metar_category",
+    "message": "LEVC METAR: VFR \u2192 IFR",
+    "new_alert": false,
+    "observed_at": "2026-10-02T06:00:00Z",
+    "role": "route",
+    "source": "METAR",
+    "station_id": null,
+    "tier": "highlight",
+    "to_value": "IFR",
+    "trail": {
+     "baseline_source": "live_start",
+     "reports": [
+      {
+       "at": "2026-10-02T06:00:00Z",
+       "category": "IFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T06:12:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T06:30:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T07:00:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T07:10:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      }
+     ],
+     "spans": [
+      {
+       "end": "2026-10-02T06:20:00Z",
+       "start": "2026-10-02T06:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
+   }
+  ],
   "worsened_count": 1
  },
  "flight_id": "fixture-1",

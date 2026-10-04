@@ -40,6 +40,9 @@ class Tick:
     # Changes that appeared / disappeared since the previous tick.
     appeared: list[LiveChange] = field(default_factory=list)
     cleared: list[LiveChange] = field(default_factory=list)
+    # The pack the tick committed to (its flight dir holds the history).
+    pack_dir: Path | None = None
+    briefing: dict | None = None
 
 
 def _dt(s: str) -> datetime:
@@ -127,6 +130,7 @@ def replay(scenario: dict, flight_dir: Path) -> list[Tick]:
             at=at, pack=ts, layer=layer,
             appeared=[c for k, c in current.items() if k not in shown],
             cleared=[c for k, c in shown.items() if k not in current],
+            pack_dir=pack_dir, briefing=briefing,
         ))
         shown = current
         at += step
@@ -169,6 +173,7 @@ def live_response(tick: Tick) -> dict:
     """The tick as a ``GET /flights/{id}/live`` body, rebased onto the iOS
     mock flight (same fields as ``api/packs.py::get_live_layer``)."""
     from weatherbrief.models.live import LiveLayerResponse
+    from weatherbrief.tasks.live_trail import trails_for_pack
 
     layer = tick.layer
     return LiveLayerResponse(
@@ -181,7 +186,8 @@ def live_response(tick: Tick) -> dict:
         sigmets_updated_at=layer.sigmets_updated_at,
         observed_conditions=layer.observed_conditions,
         observed_updated_at=layer.observed_updated_at,
-        changes=layer.changes,
+        # With the trails as of this tick (#669), as /live serves them.
+        changes=trails_for_pack(tick.pack_dir, layer.changes, now=tick.at, briefing_data=tick.briefing),
         last_refresh_delta=layer.last_refresh_delta,
     ).model_dump(mode="json")
 

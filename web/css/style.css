@@ -5357,6 +5357,24 @@ html {
   padding: 0 0.3rem;
 }
 
+/* #669: the change's recent history, on its own line under the message. */
+.refresh-delta-banner .rd-trail {
+  flex: 1 0 100%;
+  padding-left: 1.45rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Recently cleared rows: plain, below the current ones, never alert-styled. */
+.refresh-delta-banner .rd-cleared-list {
+  border-top: 1px dashed var(--border);
+}
+.refresh-delta-banner .rd-cleared .rd-arrow,
+.refresh-delta-banner .rd-cleared .rd-msg {
+  color: var(--text-muted);
+}
+
 .refresh-delta-banner.rd-quiet-banner {
   border-color: var(--border);
   background: var(--surface);

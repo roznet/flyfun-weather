@@ -906,7 +906,10 @@ def run_realtime_refresh(
             layer = live_for_pack(pack_dir)
 
     if layer is not None and layer.changes is not None:
-        changes = layer.changes
+        from weatherbrief.tasks.live_trail import trails_for_pack
+
+        # With the trails (#669), so a ↻ shows what the next /live poll does.
+        changes = trails_for_pack(pack_dir, layer.changes, briefing_data=briefing_data)
         delta = layer.last_refresh_delta
     else:
         # Not persisted (an older pack): classify against the baseline only.

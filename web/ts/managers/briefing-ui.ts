@@ -61,6 +61,8 @@ import {
   minutesAgo,
   observedAsOf,
   sigmetChangeKey,
+  trailText,
+  visibleCleared,
 } from '../helpers/live-layer';
 
 // --- Header ---
@@ -2228,20 +2230,35 @@ function liveSourceLabel(source: string): string {
   return label === key ? source : label;
 }
 
-function liveChangeRow(c: LiveChange, now: number): string {
+/** One change row. A recently cleared row (#669) is plain: no alert
+ *  styling, "cleared HH:MMZ" in place of the age. Either gets the trail line
+ *  when it says more than the row itself. */
+function liveChangeRow(c: LiveChange, now: number, cleared = false): string {
   const worse = c.direction === 'worse';
   const arrow = worse ? '\u2191' : '\u2193';
   const dirLabel = t(worse ? 'refreshDelta.worse' : 'refreshDelta.better');
-  const alert = c.tier === 'alert';
+  const alert = c.tier === 'alert' && !cleared;
   const msg = escapeHtml(c.message).replace(RD_CAT_RE, (cat) => flightCatBadge(cat));
-  const age = c.observed_at
-    ? `<span class="rd-age" data-live-age="${escapeHtml(c.observed_at)}">${escapeHtml(liveAgeText(c.observed_at, now))}</span>`
-    : '';
-  return `<li class="rd-row ${worse ? 'rd-worse' : 'rd-better'}${alert ? ' rd-alert' : ''}"`
+  const age = cleared
+    ? `<span class="rd-age rd-cleared-at">${escapeHtml(t('live.trail.cleared', { time: formatHhmmZ(c.cleared_at) }))}</span>`
+    : c.observed_at
+      ? `<span class="rd-age" data-live-age="${escapeHtml(c.observed_at)}">${escapeHtml(liveAgeText(c.observed_at, now))}</span>`
+      : '';
+  const trail = trailText(c, cleared);
+  const cls = cleared ? 'rd-cleared' : `${worse ? 'rd-worse' : 'rd-better'}${alert ? ' rd-alert' : ''}`;
+  return `<li class="rd-row ${cls}"`
     + `${alert ? ` title="${escapeHtml(t('refreshDelta.alert'))}"` : ''}>`
     + `<span class="rd-arrow" role="img" aria-label="${escapeHtml(dirLabel)}" title="${escapeHtml(dirLabel)}">${arrow}</span>`
     + `<span class="rd-src rd-src-${escapeHtml(c.source.toLowerCase())}">${escapeHtml(liveSourceLabel(c.source))}</span>`
-    + `<span class="rd-msg">${msg}</span>${age}</li>`;
+    + `<span class="rd-msg">${msg}</span>${age}`
+    + `${trail ? `<span class="rd-trail">${escapeHtml(trail)}</span>` : ''}</li>`;
+}
+
+/** Changes that cleared within the hour (#669), below the current rows. */
+function clearedListHtml(rows: LiveChange[], now: number): string {
+  if (rows.length === 0) return '';
+  return `<ul class="rd-list rd-live-list rd-cleared-list" aria-label="${escapeHtml(t('live.trail.clearedTitle'))}">`
+    + `${rows.map(c => liveChangeRow(c, now, true)).join('')}</ul>`;
 }
 
 /**
@@ -2278,6 +2295,7 @@ export function renderRefreshDelta(
   const baseline = formatHhmmZ(baselineIso);
 
   const live = snapshot.live_changes;
+  const cleared = visibleCleared(live, now);
   if (live && live.changes.length > 0) {
     const worse = live.worsened_count > 0 || live.changes.some(c => c.direction === 'worse');
     const fromLiveStart = live.baseline_source === 'live_start';
@@ -2289,6 +2307,7 @@ export function renderRefreshDelta(
       <div class="rd-title">${worse ? RD_WARN_ICON : ''}<span>${escapeHtml(title)}</span></div>
       ${asOfHtml}
       <ul class="rd-list rd-live-list">${live.changes.map(c => liveChangeRow(c, now)).join('')}</ul>
+      ${clearedListHtml(cleared, now)}
     `;
     el.style.display = '';
     return;
@@ -2314,9 +2333,10 @@ export function renderRefreshDelta(
   const quiet = (live || snapshot.live_updated_at) && baseline
     ? `<div class="rd-quiet">${escapeHtml(t('refreshDelta.noChange', { time: baseline }))}</div>`
     : '';
-  if (!quiet && !asOfHtml) { hide(); return; }
+  const clearedHtml = clearedListHtml(cleared, now);
+  if (!quiet && !asOfHtml && !clearedHtml) { hide(); return; }
   el.className = 'refresh-delta-banner rd-quiet-banner';
-  el.innerHTML = `${asOfHtml}${quiet}`;
+  el.innerHTML = `${asOfHtml}${quiet}${clearedHtml}`;
   el.style.display = '';
 }
 

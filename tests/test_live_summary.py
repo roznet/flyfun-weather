@@ -216,3 +216,77 @@ def test_lell_lemi_0830_leads_with_destination_sigmet(tmp_path):
     assert out["digest_written_at"] == "2026-10-02T06:52:55+00:00"
     roles = {a["icao"]: a["role"] for a in out["airports"]}
     assert roles.get("LEMI") == "destination"
+
+
+# --- Trails (#669): times_today and recently_cleared -----------------------
+
+
+def test_times_today_and_recently_cleared_from_the_trails():
+    from weatherbrief.models.live import LiveChangeTrail
+    from weatherbrief.tasks.live_layer import LIVE_SUMMARY_MAX_CLEARED
+
+    bouncing = _change("conv:ZZDS", tier="alert", role="destination").model_copy(
+        update={"trail": LiveChangeTrail(times_today=2)},
+    )
+    cleared = [
+        _change(f"metar:ZZC{i}").model_copy(update={"cleared_at": NOW - timedelta(minutes=i)})
+        for i in range(8)
+    ]
+    trailed = LiveChanges(computed_at=NOW, changes=[bouncing], recently_cleared=cleared)
+    out = summarize_live(_layer([bouncing]), BRIEFING, trailed)
+    assert out["changes"][0]["times_today"] == 2
+    assert LIVE_SUMMARY_MAX_CLEARED == 6
+    assert out["recently_cleared"] == [
+        {"key": f"metar:ZZC{i}", "message": f"metar:ZZC{i}", "cleared_at": (NOW - timedelta(minutes=i)).isoformat()}
+        for i in range(6)
+    ]
+    # Counts stay "what is true now".
+    assert out["alert_count"] == 1 and out["worsened_count"] == 1
+    # No strips or spans for agents.
+    assert "trail" not in out["changes"][0]
+
+
+def test_without_trails_no_times_today_and_empty_cleared():
+    out = summarize_live(_layer([_change("metar:ZZDS")]), BRIEFING)
+    assert "times_today" not in out["changes"][0]
+    assert out["recently_cleared"] == []
+
+
+def test_live_summary_reads_the_history(tmp_path):
+    """End to end on wall-clock time: a destination blip that cleared ten
+    minutes ago is listed, and the current change counts its recurrence."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    pack_dir = tmp_path / "u" / "flight-zz" / "pack"
+    pack_dir.mkdir(parents=True)
+    briefing = {
+        **BRIEFING,
+        "departure_time": (now + timedelta(hours=2)).isoformat(),
+        "route_observations": RouteObservations(
+            corridor_nm=30.0, fetch_time=now - timedelta(hours=1), airports_found=1, airports_with_metar=1,
+            airports_with_taf=0, airports=[_airport_at("ZZDS", "VFR", now - timedelta(hours=1))],
+        ).model_dump(mode="json"),
+    }
+    (pack_dir / "briefing.json").write_text(json.dumps(briefing))
+    for minutes, cat in ((40, "IFR"), (30, "VFR"), (20, "IFR"), (10, "VFR")):
+        t = now - timedelta(minutes=minutes)
+        commit_live_update(
+            pack_dir, briefing_data=briefing,
+            observations=RouteObservations(
+                corridor_nm=30.0, fetch_time=t, airports_found=1, airports_with_metar=1,
+                airports_with_taf=0, airports=[_airport_at("ZZDS", cat, t)],
+            ),
+            sigmets=None, observed=None, started_at=t, pack_timestamp=PACK_TS, now=t,
+        )
+    out = live_summary(pack_dir)
+    assert out["changes"] == []
+    [row] = out["recently_cleared"]
+    assert row["key"] == "metar:ZZDS"
+    assert row["cleared_at"] == (now - timedelta(minutes=10)).isoformat()
+
+
+def _airport_at(icao, cat, t):
+    return AirportObservation(
+        icao=icao, distance_from_route_nm=0.0, nearest_waypoint_icao=icao,
+        metar_raw=f"METAR {icao} {t:%d%H%M}Z 24010KT 9999 {cat}", metar_time=t,
+        metar_flight_category=cat, has_metar=True,
+    )
