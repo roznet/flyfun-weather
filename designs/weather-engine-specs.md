@@ -13,6 +13,7 @@ The enrichment strategy differs by model:
 - **GFS:** Open-Meteo is primary (28 levels); GRIB **patches** cloud microphysics + diagnostics onto existing levels
 - **GFS slot on CONUS routes (#457):** when the whole route fits the HRRR domain and the window is within the run's horizon, the slot is sourced from **HRRR** as a **full sounding replacement** (ICON/ECMWF pattern) — badged `GFS (HRRR)`
 - **ECMWF/ICON:** GRIB **replaces the entire pressure-level sounding** with higher-resolution data; Open-Meteo provides surface fields only
+- **Météo-France slot (#529):** GFS-style **patch** — AROME condensate + cloud fraction onto the Open-Meteo `meteofrance_seamless` sounding, only when the whole route is inside AROME and `WB_AROME_ENABLED` is set
 
 ## Field Attribution Matrix
 
@@ -36,6 +37,8 @@ sounding is GRIB like ECMWF/ICON.
 | **ice_mixing_ratio_kg_kg** | GRIB (`ICMR` patch) | GRIB (`CIMIXR`) | GRIB (`ciwc`) | GRIB (`qi`) |
 | **cloud_area_fraction_pct** | — | — (no 3D cloud fraction in HRRR) | GRIB (`cc`, 0–1→%) | GRIB (`clc`, already %) |
 | **rain/snow/graupel_water_kg_kg** | — | — | — | GRIB (`qr`,`qs`,`qg`) — **ICON-D2 only** (#530); EU doesn't publish them |
+
+The `meteofrance` slot (not a column above: Open-Meteo for everything else) gets `cloud_liquid_water` / `ice_mixing_ratio` / `rain` / `snow` / `graupel` / `cloud_area_fraction_pct` from AROME `clwc` / `ciwc` / `crwc` / `cswc` / MF-local `(0,1,201)` / `cc` when the AROME gate passes (#529, section E).
 
 ### Derived Level Fields (`DerivedLevel`) — Computed in Sounding Analysis
 
@@ -134,6 +137,17 @@ Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
 - Cycles: both every 3h (00–21z). EU ~3h publication delay, hourly to 78h then 3-hourly to 120h — but only on the MAIN cycles (00/06/12/18z); the 03/09/15/21z short runs are capped at **30h** (`horizon_short_h`) because f031–f047 aren't published, so a longer flight falls back to the prior main run and keeps a uniform hourly grid. D2 ~2h delay, hourly to 48h on all 8 cycles.
 - Disk cache at `data/.cache/grib/{icon-eu,icon-d2}/{date}_{cycle}z/` (EU 12h TTL, D2 6h TTL). Per-variant cache-key prefix (`ICON_EU_*` / `ICON_D2_*`) keeps them distinct.
 - Pack metadata records which source produced the icon slot via `model_sources["icon"]` = `icon_eu:dwd` or `icon_d2:dwd`; the freshness bar badges `ICON (D2)` when D2 supplied the run.
+
+### Météo-France AROME condensate (the `meteofrance` slot, #529)
+Via `fetch/grib/` (arome_fetch.py, arome_domain.py, decode.py). Registry detail in section E.
+- **Patch, not replacement:** IP2 carries condensate + `cc` only (no T/RH/wind), so the six fields are merged onto the existing Open-Meteo levels with `_merge_cloud_water_into_sections` — the GFS path. All 19 `METEOFRANCE_PRESSURE_LEVELS` are among AROME's 24, so nothing is interpolated vertically.
+- **Off by default — `WB_AROME_ENABLED`.** Gates enrichment, the `arome:mf` freshness source (`env_gate`), and adding `meteofrance` to the GRIB diagnostics set. Reasons: ~146 MB per downloaded group, production GRIB precache already off after an OOM, nothing verified against a live file yet, and the domain table may still be the placeholder.
+- **Gate (all-or-nothing, never per point):** feature on → meteofrance section exists → every route point inside the AROME band table → a run's 51 h horizon reaches the window end → a run is published (HEAD on the group holding the last needed hour). Skip reasons reuse the icon vocabulary: `out_of_domain`, `out_of_range`, `no_data`, plus `incomplete`.
+- **Staged commit (HRRR pattern):** every window hour is decoded and validated before anything is merged. Each route point must decode BOTH `clwc` and `ciwc` on every slot level; a point that decodes nothing means its bilinear stencil touched AROME's missing-cell mask → `out_of_domain`. One bad hour leaves the whole slot on Open-Meteo, so the time fill can never carry AROME condensate onto Open-Meteo hours. On success `grib_init_times["meteofrance"]` + `grib_sources["meteofrance"] = "arome:mf"` → `model_sources` on the pack. No client badge: like `gfs:noaa`, it is enrichment, not a different model in the slot.
+- **Domain table** (`arome_domain_bands.py`): latitude bands with the `[west, east]` span valid across the whole band, inset one grid cell for the stencil. Generated from a message's bitmap by `scripts/regen_arome_domain.py` (core logic `derive_domain_bands`, unit-tested); the script refuses to write a table that misclassifies the issue's verified points. **As shipped it is a hand-built PROVISIONAL placeholder** (no network route to the mirror when #529 was built): conservative edges from the issue's measurements, inset 0.75°, nothing south of 39°N. `arome_domain_is_provisional()` makes enrichment log a warning. Predicate lives in its own import-light module because the narrow-only Open-Meteo gating of the `meteofrance` slot needs the same test.
+- **Decode** (`decode_arome_pressure_per_point`): eccodes message by message, skipping other hours/levels/fields before unpacking (a group decoded whole via cfgrib would be ~2.8 GB of floats). Grid read reuses `_d2_read_message_grid` (bitmap → NaN, lon normalised). Guards for unverified units: `cc` fraction-vs-percent decided once per FILE from its largest value (≤ 1.5 → fraction ×100), because per-message would turn a 0.8 % stratospheric level into 80 %; any condensate message with a domain max > 0.02 kg/kg is dropped as mis-scaled (missing, not wrong). Every decode logs the finite-cell fraction against 0.828 ± 0.02 so a domain change shows up.
+- **Volume / cache:** only the groups the window touches (one or two per GA flight), streamed to `data/.cache/grib/arome/{date}_{cycle}z/` with a Content-Length check (a truncated file is never cached). TTL 9 h (the run finder can keep choosing the previous run while the new run's later groups publish), 6 GiB cap from the daily retention pass, run dir pinned from first download to last decode. Two concurrent briefings on the same cold group both download it (atomic replace; no de-dup). No precache.
+- **Deferred:** IP4 (TKE, 3-D reflectivity), 1.3 km column-max reflectivity, byte-range extraction (mirror supports `Range`; no `.idx`), advisory use of the species (#530 consumers are model-agnostic and already read them).
 
 See [fetch.md](./fetch.md) for implementation details.
 
@@ -280,10 +294,34 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 - **Challenge:** Variables stored in separate files; icosahedral grid needs special interpolation
 - **Advantage:** `omega` explicitly available (unlike Open-Meteo's ICON endpoint)
 
-### E. Météo-France ARPEGE — METADATA TRACKED, GRIB2 FUTURE
-- **Bucket:** `s3://meteo-france-models/arpege-world/`
-- **Open-Meteo metadata:** `https://api.open-meteo.com/data/meteofrance_arpege_world025/static/meta.json`
-- **Challenge:** Variable path conventions differ from GFS; lower priority
+### E. Météo-France AROME 0.025° — IMPLEMENTED (condensate patch, #529, off by default)
+- **Mirror (public, no key):** `https://meteofrance-pnt.s3.rbx.io.cloud.ovh.net/pnt/{RUN}/arome/0025/{PKG}/arome__0025__{PKG}__{GROUP}__{RUN}.grib2`
+  - `RUN` = `2026-07-30T12:00:00Z`; `GROUP` ∈ `00H06H, 07H12H, 13H18H, 19H24H, 25H30H, 31H36H, 37H42H, 43H48H, 49H51H` (00H06H holds 7 hours, f000–f006)
+  - **Not** `object.data.gouv.fr/meteofrance-pnt` (stale since 2026-05-11, though Open-Meteo's source uses it) and **not** `public-api.meteofrance.fr` (keyed, no ranges). Run discovery alternative: data.gouv.fr dataset `paquets-arome-resolution-0-025deg`.
+- **Cycles/horizon:** 8 runs/day (00–21z every 3h), hourly to 51h; first group ≈ +3h13m.
+- **Grid:** 717×1121 regular lat/lon, 37.5–55.4°N / 12°W–16°E, only ~82.8 % finite (bowed quadrilateral narrowing southward — see the domain table above).
+- **Physics:** Meso-NH with ICE3 five-species microphysics on an ALADIN-NH core — condensate independent of ECMWF IFS. ARPEGE was **deliberately excluded**: shares the IFS codebase, adds nothing convective.
+
+| Package | Contents | Size / 6 h group | Status |
+|---|---|---|---|
+| `IP2` | `clwc`, `ciwc`, `crwc`, `cswc`, graupel `(0,1,201)`, `cc` — 24 levels 100–1000 hPa | ~146 MB | **Fetched** |
+| `IP4` | `tke` (24 lvls), 3-D reflectivity `(0,16,192)` (16 lvls 200–925) | ~68 MB | Deferred |
+| `001/SP2` (1.3 km, hourly files) | column-max reflectivity `(0,16,193)`, `CAPE_INS`, `tgrp`, `lcc/mcc/hcc`, `tirf` | ~1 MB per reflectivity message | Deferred |
+
+| Field | GRIB | → `PressureLevelData` | Note |
+|---|---|---|---|
+| Cloud liquid | `clwc` (0,1,83) | `cloud_liquid_water_kg_kg` | required per level |
+| Cloud ice | `ciwc` (0,1,84) | `ice_mixing_ratio_kg_kg` | required per level |
+| Rain | `crwc` (0,1,85) | `rain_water_kg_kg` | |
+| Snow | `cswc` (0,1,86) | `snow_water_kg_kg` | |
+| Graupel | MF-local (0,1,201), eccodes `unknown` | `graupel_water_kg_kg` | identified by ICE3 species count, not by a table |
+| Cloud fraction | `cc` (0,6,32) | `cloud_area_fraction_pct` | fraction vs % decided per file |
+
+- **Reflectivity units (for the deferred work):** MF labels `RFLCTVT` `m6 m-3`, but values 0–62 read as dBZ. Confirm at decode before any threshold.
+- **Freshness:** `arome:mf` (readiness `arome_mf`, env-gated), role `cloud-enrichment`.
+
+### E.2 Météo-France ARPEGE — METADATA TRACKED, NOT INGESTED (deliberately)
+- Served only through Open-Meteo's `meteofrance_seamless` (ARPEGE outside AROME's footprint, unmarked seam). Excluded from direct GRIB (#529): least independent model to add beside ECMWF.
 
 ### F. UKMO (UK Met Office Global Deterministic) — METADATA TRACKED
 - **Open-Meteo metadata:** `https://api.open-meteo.com/data/ukmo_global_deterministic_10km/static/meta.json`

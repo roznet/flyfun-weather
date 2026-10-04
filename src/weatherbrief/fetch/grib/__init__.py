@@ -6,6 +6,7 @@ existing cross-section forecasts from GFS and ICON-EU GRIB2 data.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import gc
 import heapq
@@ -2130,6 +2131,9 @@ def enrich_forecasts(
     Enriches ICON cross-sections with QC/QI when the route is within a DWD ICON
     domain — from ICON-D2 (2.2 km) when the whole route fits the D2 domain and
     the flight window is within 48h, otherwise ICON-EU (issue #456).
+    Patches meteofrance cross-sections with Météo-France AROME condensate
+    when ``WB_AROME_ENABLED`` is set and the whole route and window fit
+    AROME (issue #529).
 
     This modifies PressureLevelData and HourlyForecast objects in-place.
 
@@ -2203,10 +2207,6 @@ def _enrich_forecasts_inner(
     if progress_callback is not None:
         progress_callback("grib_enrichment", None)
 
-    gfs_ts: int | None = None
-    icon_ts: int | None = None
-    icon_skip: str | None = None
-
     # Prepare ICON-EU context (run discovery, domain check, etc.). When the
     # context is None, icon_prepare_skip classifies why (out_of_domain /
     # out_of_range / None) so the fetch stage can emit an accurate diagnostic.
@@ -2217,6 +2217,61 @@ def _enrich_forecasts_inner(
             flight_duration_hours=flight_duration_hours,
             as_of_time=as_of_time,
         )
+
+    # AROME condensate for the meteofrance slot (#529). None unless the
+    # feature is on, the route has a meteofrance section, and the whole route
+    # and window fit AROME.
+    with _grib_time("arome_prepare"):
+        try:
+            arome_ctx, arome_prepare_skip = _prepare_arome(
+                cross_sections, route_points, departure_time,
+                data_dir=data_dir,
+                flight_duration_hours=flight_duration_hours,
+                as_of_time=as_of_time,
+            )
+        except Exception:
+            logger.warning("AROME prepare failed", exc_info=True)
+            arome_ctx, arome_prepare_skip = None, None
+    # Hold the run dir against a concurrent briefing's TTL purge from the
+    # first download to the last decode (phase 1 → phase 2).
+    _arome_pin = contextlib.ExitStack()
+    if arome_ctx is not None:
+        _arome_pin.enter_context(pin_run_dir(arome_ctx.run_dir))
+    with _arome_pin:
+        return _enrich_forecasts_phases(
+            timer, cross_sections, all_forecasts, route_points, departure_time,
+            data_dir=data_dir, flight_duration_hours=flight_duration_hours,
+            progress_callback=progress_callback, as_of_time=as_of_time,
+            grib_init_times=grib_init_times, grib_skip_reasons=grib_skip_reasons,
+            grib_sources=grib_sources, icon_ctx=icon_ctx,
+            icon_prepare_skip=icon_prepare_skip,
+            arome_ctx=arome_ctx, arome_prepare_skip=arome_prepare_skip,
+        )
+
+
+def _enrich_forecasts_phases(
+    timer: _GribTimer,
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    data_dir: Path,
+    flight_duration_hours: float,
+    progress_callback: Callable[[str, str | None], None] | None,
+    as_of_time: datetime | None,
+    grib_init_times: dict[str, int],
+    grib_skip_reasons: dict[str, str],
+    grib_sources: dict[str, str],
+    icon_ctx: "_IconEuContext | None",
+    icon_prepare_skip: str | None,
+    arome_ctx: "_AromeContext | None",
+    arome_prepare_skip: str | None,
+) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
+    """Phases 1–2 + time fill of :func:`_enrich_forecasts_inner`."""
+    gfs_ts: int | None = None
+    icon_ts: int | None = None
+    icon_skip: str | None = None
 
     # Emit the models being enriched as the progress detail, then narrow the
     # list as each phase-1 worker finishes so the display tracks what is
@@ -2232,6 +2287,8 @@ def _enrich_forecasts_inner(
         )
         if icon_ctx is not None:
             pending_labels.append(icon_ctx.variant.slug.upper())
+        if arome_ctx is not None:
+            pending_labels.append("AROME")
         if pending_labels:
             progress_callback("grib_enrichment", ", ".join(pending_labels))
 
@@ -2257,7 +2314,7 @@ def _enrich_forecasts_inner(
     # marks land on this call's timer, not on whichever refresh happens to
     # be running in the sibling pipeline thread.
     with _grib_time("phase1_parallel"):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             gfs_future = _submit_with_context(
                 pool, _enrich_gfs,
                 cross_sections, all_forecasts, route_points,
@@ -2287,11 +2344,25 @@ def _enrich_forecasts_inner(
                 )
             else:
                 icon_dl_future = None
+            if arome_ctx is not None:
+                arome_dl_future = _submit_with_context(
+                    pool, _prefetch_arome_data, arome_ctx,
+                )
+                arome_dl_future.add_done_callback(_phase1_model_done("AROME"))
+            else:
+                arome_dl_future = None
 
             gfs_ts, gfs_source = gfs_future.result()
             ecmwf_grib_ts = ecmwf_future.result()
             if icon_dl_future is not None:
                 icon_dl_future.result()  # ensure downloads are cached
+            if arome_dl_future is not None:
+                try:
+                    arome_dl_future.result()
+                except Exception:
+                    # A failed AROME download must never cost the briefing;
+                    # decode sees the missing group and skips the slot.
+                    logger.warning("AROME prefetch failed", exc_info=True)
     timer.rss_mark("after_phase1")
 
     if ecmwf_grib_ts is not None:
@@ -2337,6 +2408,22 @@ def _enrich_forecasts_inner(
                     icon_skip = eu_skip
         else:
             icon_ts, icon_skip = None, icon_prepare_skip
+
+    # AROME decode after ICON: sequential for the same memory reason. It
+    # reads its group files one message at a time, so its own peak is small.
+    arome_ts: int | None = None
+    arome_skip: str | None = arome_prepare_skip
+    with _grib_time("phase2_arome_decode"):
+        if arome_ctx is not None:
+            if progress_callback is not None:
+                progress_callback("grib_enrichment", "AROME")
+            try:
+                arome_ts, arome_skip = _decode_and_merge_arome(
+                    arome_ctx, cross_sections, all_forecasts, route_points,
+                )
+            except Exception:
+                logger.warning("AROME enrichment failed", exc_info=True)
+                arome_ts, arome_skip = None, "no_data"
     timer.rss_mark("after_phase2")
 
     if gfs_ts is not None:
@@ -2350,6 +2437,12 @@ def _enrich_forecasts_inner(
             grib_sources["icon"] = active_icon_variant.source_key
     elif icon_skip is not None:
         grib_skip_reasons["icon"] = icon_skip
+    if arome_ts is not None:
+        from weatherbrief.fetch.grib.arome_fetch import AROME
+        grib_init_times[ModelSource.METEOFRANCE.value] = arome_ts
+        grib_sources[ModelSource.METEOFRANCE.value] = AROME.source_key
+    elif arome_skip is not None:
+        grib_skip_reasons[ModelSource.METEOFRANCE.value] = arome_skip
 
     # Time-axis fill of all GRIB-enriched fields onto interpolated hours.
     # When the GFS init is known, the cloud-diag pass uses window-midpoint
@@ -5065,3 +5158,263 @@ def _merge_cloud_water_into_sections(
                 _apply_merge_level_fields(pl, level_data)
 
     return enriched_count
+
+
+# ---------------------------------------------------------------------------
+# Météo-France AROME condensate (#529) — patches the meteofrance slot
+# ---------------------------------------------------------------------------
+
+
+class _AromeContext:
+    """Resolved AROME run + window for the split download/decode phases."""
+
+    __slots__ = (
+        "init_date", "init_hour", "groups", "run_dir", "levels",
+        "point_lats", "point_lons", "session",
+    )
+
+    def __init__(
+        self, init_date: str, init_hour: int, groups: dict[str, list[int]],
+        run_dir: Path, levels: list[int],
+        point_lats: list[float], point_lons: list[float],
+        session: requests.Session,
+    ):
+        self.init_date = init_date
+        self.init_hour = init_hour
+        # package-group label → forecast hours it must supply (window only).
+        self.groups = groups
+        self.run_dir = run_dir
+        # Pressure levels the meteofrance sections carry (all are in AROME's
+        # 24); every one must decode at every route point.
+        self.levels = levels
+        self.point_lats = point_lats
+        self.point_lons = point_lons
+        self.session = session
+
+
+# Each route point must decode BOTH of these on every level for the hour to
+# count. A one-sided column is a truncated artifact, not a dry forecast (the
+# HRRR liquid+ice rule). This assumes AROME writes real zeros on clear levels,
+# as HRRR was verified to; not yet checked against a live AROME file. If it
+# masks them instead, every hour fails "incomplete" and the log says so.
+_AROME_REQUIRED_FIELDS = ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg")
+
+
+def _meteofrance_levels(sections: list[RouteCrossSection]) -> list[int]:
+    for cs in sections:
+        for pf in cs.point_forecasts:
+            for h in pf.hourly:
+                if h.pressure_levels:
+                    return sorted({pl.pressure_hpa for pl in h.pressure_levels})
+    return []
+
+
+def _prepare_arome(
+    cross_sections: list[RouteCrossSection],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    data_dir: Path,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+) -> tuple[_AromeContext | None, str | None]:
+    """Decide whether AROME enriches the meteofrance slot; resolve its run.
+
+    Returns ``(ctx, None)`` to proceed, else ``(None, skip_reason)`` with the
+    same reason vocabulary as the icon slot — ``"out_of_domain"`` (a route
+    point outside the AROME footprint), ``"out_of_range"`` (window beyond
+    the 51 h horizon), ``"no_data"`` (no published run found) — or
+    ``(None, None)`` when AROME is simply not in play (feature off, or no
+    meteofrance section on this briefing). Never raises past a log line.
+    """
+    from weatherbrief.fetch.grib.arome_domain import (
+        arome_domain_is_provisional,
+        route_in_arome_domain,
+    )
+    from weatherbrief.fetch.grib.arome_fetch import (
+        AROME,
+        arome_enabled,
+        arome_groups_for_fhours,
+        arome_window_out_of_range,
+        compute_arome_flight_window_hours,
+        find_latest_arome_run,
+    )
+
+    if not arome_enabled():
+        return None, None
+    mf_sections = [cs for cs in cross_sections if cs.model == ModelSource.METEOFRANCE]
+    if not mf_sections:
+        return None, None
+    if not route_in_arome_domain(route_points):
+        logger.info("AROME skipped: route not fully inside the AROME domain")
+        return None, "out_of_domain"
+    if arome_window_out_of_range(departure_time, flight_duration_hours, as_of_time):
+        logger.info("AROME skipped: flight window beyond the %dh horizon", AROME.horizon_h)
+        return None, "out_of_range"
+    # Only the slot's levels that AROME publishes; today that is all 19.
+    levels = [lv for lv in _meteofrance_levels(mf_sections) if lv in AROME.pressure_levels]
+    if not levels:
+        return None, None
+    if arome_domain_is_provisional():
+        logger.warning(
+            "AROME domain table is the provisional placeholder — run "
+            "scripts/regen_arome_domain.py to derive it from data",
+        )
+
+    session = _grib_session()
+    end = departure_time + timedelta(hours=flight_duration_hours)
+    try:
+        run = find_latest_arome_run(
+            departure_time, session=session, as_of_time=as_of_time, cover_until=end,
+        )
+    except Exception:
+        logger.warning("AROME run discovery failed", exc_info=True)
+        run = None
+    if run is None:
+        logger.warning("AROME: no published run covers the flight window")
+        return None, "no_data"
+    init_date, init_hour = run
+
+    fhours = compute_arome_flight_window_hours(
+        init_date, init_hour, departure_time, flight_duration_hours,
+    )
+    purge_old_runs(data_dir, model=AROME.slug)
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=AROME.slug)
+    return _AromeContext(
+        init_date, init_hour, arome_groups_for_fhours(fhours), run_dir, levels,
+        [rp.lat for rp in route_points], [rp.lon for rp in route_points],
+        session,
+    ), None
+
+
+def _prefetch_arome_data(ctx: _AromeContext) -> None:
+    """Download the package groups the flight window touches (never all 9).
+
+    Sequential: a typical window is one or two ~146 MB groups, and running
+    them one at a time keeps AROME to a single connection beside the ICON
+    and GFS downloads sharing phase 1. Failures are logged; decode treats a
+    missing group as a failed slot.
+    """
+    from weatherbrief.fetch.grib.arome_fetch import download_arome_group
+
+    with _grib_time("arome_download"):
+        for label in ctx.groups:
+            download_arome_group(
+                ctx.init_date, ctx.init_hour, label, ctx.run_dir, ctx.session,
+            )
+
+
+def _arome_hour_problem(
+    points: list[dict[int, dict[str, float]]] | None,
+    levels: list[int],
+    n_points: int,
+) -> str | None:
+    """Why this decoded hour can't be used, or None when it is complete.
+
+    ``out_of_domain`` when some point decoded nothing at all — its bilinear
+    stencil touched AROME's missing-cell mask, i.e. the band table let a
+    point through that the data says is outside. ``incomplete`` when a point
+    decoded but lacks liquid or ice on some level.
+    """
+    if points is None or len(points) != n_points:
+        return "incomplete"
+    for pt in points:
+        if not pt:
+            return "out_of_domain"
+        for level in levels:
+            fields = pt.get(level)
+            if fields is None or any(f not in fields for f in _AROME_REQUIRED_FIELDS):
+                return "incomplete"
+    return None
+
+
+def _decode_and_merge_arome(
+    ctx: _AromeContext,
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+) -> tuple[int | None, str | None]:
+    """Decode every window hour, validate, and only then patch the slot.
+
+    Staged like HRRR (PR #508): nothing is merged until every hour has
+    decoded a complete column at every route point, so the meteofrance slot
+    is AROME-patched for the whole window or untouched — a partly-patched
+    window would let the time fill carry AROME condensate onto Open-Meteo
+    hours. Returns ``(init_ts, None)`` on success, ``(None, reason)`` on a
+    skip.
+    """
+    from weatherbrief.fetch.grib.arome_domain import (
+        AROME_EXPECTED_FINITE_FRACTION,
+        AROME_FINITE_FRACTION_TOLERANCE,
+    )
+    from weatherbrief.fetch.grib.arome_fetch import arome_group_cache_key
+
+    mf_sections = [cs for cs in cross_sections if cs.model == ModelSource.METEOFRANCE]
+    if not mf_sections:
+        return None, None
+    n_points = len(route_points)
+
+    staged: dict[int, list[dict[int, dict[str, float]]]] = {}
+    with _grib_time("arome_decode"):
+        for label, hours in ctx.groups.items():
+            path = ctx.run_dir / arome_group_cache_key(label)
+            if not path.exists():
+                logger.warning(
+                    "AROME group %s missing after download; meteofrance stays Open-Meteo",
+                    label,
+                )
+                return None, "no_data"
+            try:
+                result = _dispatch_decode(
+                    "decode_arome_pressure", str(path), hours,
+                    ctx.point_lats, ctx.point_lons, ctx.levels,
+                )
+            except Exception:
+                logger.warning("AROME decode failed for %s", label, exc_info=True)
+                return None, "no_data"
+
+            frac = result.get("finite_fraction")
+            if frac is not None and abs(frac - AROME_EXPECTED_FINITE_FRACTION) > \
+                    AROME_FINITE_FRACTION_TOLERANCE:
+                logger.warning(
+                    "AROME finite-cell fraction %.3f differs from the expected "
+                    "%.3f — the domain may have changed; rerun "
+                    "scripts/regen_arome_domain.py",
+                    frac, AROME_EXPECTED_FINITE_FRACTION,
+                )
+
+            points_by_hour = result.get("points") or {}
+            for fhour in hours:
+                pts = points_by_hour.get(fhour)
+                problem = _arome_hour_problem(pts, ctx.levels, n_points)
+                if problem is not None:
+                    logger.warning(
+                        "AROME f%03d unusable (%s); meteofrance stays Open-Meteo "
+                        "for the whole window",
+                        fhour, problem,
+                    )
+                    return None, problem
+                staged[fhour] = pts
+            del result, points_by_hour
+            _grib_gc()
+
+    if not staged:
+        return None, "no_data"
+
+    # Commit. Every hour validated; the merge only assigns floats.
+    enriched = 0
+    for fhour in sorted(staged):
+        valid_utc = _forecast_hour_to_utc(ctx.init_date, ctx.init_hour, fhour)
+        enriched += _merge_cloud_water_into_sections(
+            mf_sections, all_forecasts, route_points, staged[fhour],
+            ModelSource.METEOFRANCE.value, valid_utc=valid_utc,
+        )
+    logger.info(
+        "AROME enrichment: %d hours, %d pressure levels patched (run %s %02dz)",
+        len(staged), enriched, ctx.init_date, ctx.init_hour,
+    )
+    if not enriched:
+        # Valid data but no hourly row at any valid time — nothing changed,
+        # so the pack must not claim an AROME source.
+        return None, "no_data"
+    return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None

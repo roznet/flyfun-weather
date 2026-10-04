@@ -195,6 +195,21 @@ def decode_gfs_cloud_diag(
         return decode_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def decode_arome_pressure(
+    file_path: str,
+    fhours: list[int],
+    latitudes: list[float],
+    longitudes: list[float],
+    levels: list[int] | None = None,
+) -> dict:
+    """Decode one AROME IP2 package group for the given hours (#529)."""
+    with _log_decode("decode_arome_pressure", file_path):
+        from weatherbrief.fetch.grib.decode import decode_arome_pressure_per_point
+        return decode_arome_pressure_per_point(
+            Path(file_path), fhours, latitudes, longitudes, levels,
+        )
+
+
 def decode_hrrr_pressure(
     file_path: str,
     latitudes: list[float],

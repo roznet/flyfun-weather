@@ -123,6 +123,12 @@ MODEL_TTL_SECONDS: dict[str, int] = {
     # extended-cycle transition. 9 h covers the 6 h gap plus the publication
     # delay with margin, keeping at most one superseded extended run.
     "hrrr": 9 * 3600,
+    # AROME (#529): 8 runs/day, but a cached file is a whole ~146 MB 6-hour
+    # package group. 6 h would match the cadence like icon-d2, yet the run
+    # finder probes the group the flight needs, so a fresh run whose later
+    # groups are still publishing loses to the previous one for a while.
+    # 9 h keeps that previous run usable through the ~3 h publication tail.
+    "arome": 9 * 3600,
 }
 
 # Fallback TTL for models without an explicit entry. Currently unreachable
@@ -161,6 +167,10 @@ _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     # pulling a different hourly run. Enforced from the daily retention pass
     # (HRRR is not precached, so there is no warm-loop enforcement site).
     "hrrr": 8.0,
+    # AROME (#529): ~146 MB per package group, one or two groups per flight
+    # window, ~2 runs live under the 9 h TTL. Not precached, so enforced from
+    # the daily retention pass only; the TTL is the primary bound.
+    "arome": 6.0,
 }
 
 
