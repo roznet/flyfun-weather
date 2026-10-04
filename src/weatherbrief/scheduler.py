@@ -2084,6 +2084,7 @@ async def run_cells_ingest_loop(app_state) -> None:
         cells_ingest_enabled,
         inbox_dir,
         ingest,
+        purge_rejected,
     )
 
     if not cells_ingest_enabled():
@@ -2099,6 +2100,7 @@ async def run_cells_ingest_loop(app_state) -> None:
         try:
             result = await asyncio.to_thread(ingest, inbox, store)
             purged = await asyncio.to_thread(store.purge)
+            purged += await asyncio.to_thread(purge_rejected, inbox)
             if result.accepted or result.rejected or purged:
                 logger.info(
                     "Cell overlay: %d ingested (%s), %d rejected, %d expired, %d purged",

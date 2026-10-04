@@ -235,3 +235,43 @@ def test_ingest_loop_returns_at_once_when_disabled(monkeypatch):
 
     monkeypatch.setenv(cd.CELLS_INGEST_ENV, "0")
     asyncio.run(asyncio.wait_for(run_cells_ingest_loop(None), timeout=5))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["cells"][0].pop("lat"),
+    lambda d: d["cells"][0].update(lon="2.0"),
+    lambda d: d["cells"].append("not a cell"),
+    lambda d: d["outlines"].update(core41=[[[50.0]]]),
+    lambda d: d["outlines"].update(core41=[[["a", "b"]]]),
+    lambda d: d["outlines"].update(core41="nope"),
+])
+def test_malformed_cells_or_points_are_refused_at_ingest(mutate):
+    """Review #660: one bad entry used to pass ingest and 500 every bbox request."""
+    t = NOW - timedelta(minutes=10)
+    doc = display_doc(t)
+    mutate(doc)
+    with pytest.raises(cd.InvalidDisplay):
+        cd.validate(display_bytes(doc), frame_stamp(t))
+
+
+def test_rejected_files_are_kept_for_a_day_only(tmp_path):
+    inbox = tmp_path / "inbox"
+    (inbox / "rejected").mkdir(parents=True)
+    old, young = inbox / "rejected" / "a.json.gz", inbox / "rejected" / "b.json.gz"
+    old.write_bytes(b"x")
+    young.write_bytes(b"x")
+    past = (NOW - cd.RETENTION - timedelta(minutes=1)).timestamp()
+    os.utime(old, (past, past))
+    os.utime(young, (NOW.timestamp(), NOW.timestamp()))
+    assert cd.purge_rejected(inbox, now=NOW) == 1
+    assert not old.exists() and young.exists()
+    assert cd.purge_rejected(tmp_path / "missing", now=NOW) == 0
+
+
+def test_a_nan_coordinate_is_refused():
+    t = NOW - timedelta(minutes=10)
+    doc = display_doc(t)
+    doc["cells"][0]["lat"] = float("nan")
+    raw = gzip.compress(json.dumps(doc).encode())  # NaN literal, as a careless writer would emit
+    with pytest.raises(cd.InvalidDisplay):
+        cd.validate(raw, frame_stamp(t))

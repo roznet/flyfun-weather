@@ -67,6 +67,7 @@ def push_pending(
     if not target.endswith("/"):
         target += "/"
     slots = list(slots)
+    _warn_on_outage(state, slots)
     window = [frame_stamp(t) for t in slots]
     in_window = set(window)
     pushed = {s for s in state.get("pushed", []) if s in in_window}
@@ -96,6 +97,23 @@ def push_pending(
     logger.info("cells push: %d display file(s) sent (%s … %s)", len(files),
                 files[0].name.split(".")[0], files[-1].name.split(".")[0])
     return len(files)
+
+
+def _warn_on_outage(state: dict, slots: list[datetime]) -> None:
+    """Say so (once) when pushes stopped for longer than the lookback: frames
+    from before the window are never pushed. Harmless for the map (they would
+    be past the droplet's stale cut-off), but it should not be silent."""
+    last = state.get("last_push")
+    if not last or not slots:
+        return
+    try:
+        last_t = datetime.fromisoformat(last)
+    except ValueError:
+        return
+    if last_t < slots[0] and state.get("push_gap_warned") != last:
+        logger.warning("cells push: nothing pushed since %s, longer than the lookback; display "
+                       "files from before %s will not be pushed", last, slots[0].isoformat())
+        state["push_gap_warned"] = last
 
 
 def _failed(state: dict, why: str, count: int) -> int:

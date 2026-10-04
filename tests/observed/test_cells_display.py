@@ -302,3 +302,12 @@ def test_review_map_uses_the_display_cell_shape(processed, tmp_path):
     assert {c["id"] for c in data["cells"]} <= shown
     assert all("peak_dbz" in c and "age_min" in c for c in data["cells"])
     assert "c.peak_dbz" in html and "c.peak}" not in html
+
+
+def test_an_outage_longer_than_the_lookback_is_logged_once(processed, caplog):
+    state = {"last_push": (T0 - timedelta(hours=7)).isoformat()}
+    with caplog.at_level("WARNING"):
+        push_pending(processed, state, _slots(), target="/x/", run=_Run())
+        state["last_push"] = (T0 - timedelta(hours=7)).isoformat()  # still the same outage
+        push_pending(processed, state, _slots(), target="/x/", run=_Run())
+    assert sum("longer than the lookback" in r.message for r in caplog.records) == 1

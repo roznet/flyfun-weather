@@ -574,6 +574,9 @@ def observed_cell_display(
     if data is None:
         # Purged (older than retention), never received, or invalid.
         raise HTTPException(status_code=410, detail="Overlay not stored")
+    # Immutable caching rests on an invariant: a stamp's display file is
+    # written once by the node (deterministic) and never re-pushed with other
+    # bytes. If that ever changes, this must become revalidating.
     headers = {"Cache-Control": _TILE_CACHE_CONTROL}
     if south is None and "gzip" in request.headers.get("accept-encoding", "").lower():
         # The whole of Europe (the "Now" tab): the stored file already is
