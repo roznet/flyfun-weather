@@ -458,6 +458,7 @@ def _regular_latlon_axes(ds) -> "tuple[str, str, np.ndarray, np.ndarray] | None"
         lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
         lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
     except Exception:
+        logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
         return None
     if lat_arr.ndim != 1 or lon_arr.ndim != 1 or lat_arr.size < 2 or lon_arr.size < 2:
         return None
@@ -617,6 +618,28 @@ class _SeamAccumulator:
             if all(t.grid_idx in parts for t in sp.terms):
                 corners = [c for cs in parts.values() for c in cs]
                 yield sp.pt_idx, key, self._combine(key, corners)
+
+    def drain_into(self, results: list[dict], covered: list[bool], label: str) -> None:
+        """Write the seam values into a decoder's per-point ``results``.
+
+        Two key shapes: ``(p_hpa, field, scale)`` fills ``results[pt][p_hpa]``
+        with ``value * scale`` (pressure levels); a bare field name fills
+        ``results[pt]`` (surface). First wins, as in the per-grid decode.
+        """
+        filled: set[int] = set()
+        for pt_idx, key, v in self.results():
+            if isinstance(key, tuple):
+                p_hpa, field_name, scale = key
+                target = results[pt_idx].setdefault(p_hpa, {})
+                v = v * scale
+            else:
+                field_name, target = key, results[pt_idx]
+            if field_name in target:
+                continue
+            target[field_name] = v
+            covered[pt_idx] = True
+            filled.add(pt_idx)
+        self.log_summary(label, filled)
 
     def log_summary(self, label: str, filled_pts: set[int]) -> None:
         if not filled_pts:
@@ -995,7 +1018,7 @@ def _decode_pressure_vars_from_datasets(
             if pressure_coord is None:
                 p_hpa = int(level)
                 if ds_in_seam:
-                    seams.add(ds_idx, (p_hpa, field_name, is_frac), values)
+                    seams.add(ds_idx, (p_hpa, field_name, 100.0 if is_frac else 1.0), values)
                 interp = (
                     w00 * values[i0, j0]
                     + w01 * values[i0, j1]
@@ -1041,7 +1064,7 @@ def _decode_pressure_vars_from_datasets(
             for li in range(pressures.shape[0]):
                 p_hpa = int(float(pressures[li]))
                 if ds_in_seam:
-                    seams.add(ds_idx, (p_hpa, field_name, is_frac), values[li])
+                    seams.add(ds_idx, (p_hpa, field_name, 100.0 if is_frac else 1.0), values[li])
                 row = interp[li]
                 for k, pt_idx in enumerate(inb_idx):
                     v = row[k]
@@ -1053,15 +1076,7 @@ def _decode_pressure_vars_from_datasets(
                     covered[pt_idx] = True
 
     if seams is not None:
-        filled: set[int] = set()
-        for pt_idx, (p_hpa, field_name, is_frac), v in seams.results():
-            level = results[pt_idx].setdefault(p_hpa, {})
-            if field_name in level:
-                continue  # first match wins, as in the per-grid path
-            level[field_name] = v * 100.0 if is_frac else v
-            covered[pt_idx] = True
-            filled.add(pt_idx)
-        seams.log_summary("pressure-level", filled)
+        seams.drain_into(results, covered, "pressure-level")
 
     return results, covered
 
@@ -3609,14 +3624,7 @@ def _decode_ecmwf_surface_from_datasets(
                     )
 
     if seams is not None:
-        filled: set[int] = set()
-        for pt_idx, field_name, v in seams.results():
-            if field_name in results[pt_idx]:
-                continue
-            results[pt_idx][field_name] = v
-            covered[pt_idx] = True
-            filled.add(pt_idx)
-        seams.log_summary("surface", filled)
+        seams.drain_into(results, covered, "surface")
 
     return results, covered
 
@@ -3835,17 +3843,9 @@ def _decode_ecmwf_pressure_direct(
                 covered[pt_idx] = True
 
     # Seam points are outside every grid, so nothing above has filled them;
-    # the check keeps first-wins explicit all the same.
+    # drain_into keeps first-wins explicit all the same.
     if seams is not None:
-        filled: set[int] = set()
-        for pt_idx, (p_hpa, field_name, scale), v in seams.results():
-            level_fields = results[pt_idx].setdefault(p_hpa, {})
-            if field_name in level_fields:
-                continue
-            level_fields[field_name] = v * scale
-            covered[pt_idx] = True
-            filled.add(pt_idx)
-        seams.log_summary("pressure-level", filled)
+        seams.drain_into(results, covered, "pressure-level")
 
     # Mirror the cfgrib path: a level dict is only created when it gets a value.
     return results, covered
@@ -3888,14 +3888,7 @@ def _decode_ecmwf_surface_direct(
             covered[pt_idx] = True
 
     if seams is not None:
-        filled: set[int] = set()
-        for pt_idx, field_name, v in seams.results():
-            if field_name in results[pt_idx]:
-                continue
-            results[pt_idx][field_name] = v
-            covered[pt_idx] = True
-            filled.add(pt_idx)
-        seams.log_summary("surface", filled)
+        seams.drain_into(results, covered, "surface")
 
     return results, covered
 
