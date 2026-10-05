@@ -102,7 +102,7 @@ def _write(
 
 
 # Route-like targets: inside each grid, near edges, exactly on grid rows and
-# columns, in the 59.5–60°N seam (#672, still uncovered), outside every grid,
+# columns, in the 59.5–60°N seam (#672, bridged by both paths), outside every grid,
 # and US points (GRIB2 US fields stay undecoded — #673, out of scope here).
 def _targets() -> tuple[list[float], list[float]]:
     rng = np.random.default_rng(42)
@@ -202,14 +202,16 @@ def test_a2_matches_cfgrib(tmp_path, cfgrib_mode):
     assert ccs and max(ccs) > 1.5
 
 
-def test_a2_seam_and_outside_points_stay_uncovered(tmp_path):
-    """#672's 59.5–60°N strip is not fixed here: still no data, like today."""
+def test_a2_seam_points_are_bridged_outside_points_are_not(tmp_path):
+    """#672: the 59.5–60°N strip is filled from the facing edge rows (ESSA-like
+    two-sided, EGPB-like held); points outside every grid stay uncovered."""
     path = tmp_path / "a2.grib"
     _write_a2(path)
-    _, covered = dec.decode_ecmwf_pressure_per_point(
+    got, covered = dec.decode_ecmwf_pressure_per_point(
         path, [59.65, 59.88, 40.0, 48.0], [17.92, -1.30, -30.0, 11.5],
     )
-    assert covered == [False, False, False, True]
+    assert covered == [True, True, False, True]
+    assert got[0][850].keys() == got[3][850].keys()
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +266,61 @@ def test_a1_matches_cfgrib(tmp_path, cfgrib_mode):
     # The Europe GRIB2 grid crosses the meridian: GRIB2 fields decode west of 0.
     west = lats.index(45.25)
     assert "ceiling_m" in got[west] and "ml_cape_jkg" in got[west]
+
+
+def test_a1_seam_point_gets_grib1_and_grib2_fields(tmp_path):
+    """GRIB1 and GRIB2 messages on one ECMWF area hash differently but share
+    axes: the seam plan must group them, or a GRIB2-only field (ceil, kx)
+    would be dropped at the seam (#672)."""
+    path = tmp_path / "a1.grib"
+    _write_a1(path)
+    got, covered = dec.decode_ecmwf_surface_per_point(path, [59.65, 59.88], [17.92, -1.30])
+    assert covered == [True, True]
+    for pt in got:
+        assert {"temperature_2m_k", "ceiling_m", "ml_cape_jkg"} <= pt.keys()
+
+
+def _write_ceil_seam(path: Path, eu: float, nordic: float) -> None:
+    """Constant ceil on Europe and on Nordic, GRIB2 as delivered."""
+    with open(path, "wb") as f:
+        for area, base in ((EUROPE_G2, eu), (NORDIC, nordic)):
+            _write(f, sample="regular_ll_sfc_grib2", short="ceil", type_of_level="surface",
+                   level=0, area=area, base=base, amp=0.0)
+
+
+@pytest.mark.parametrize("cfgrib", [False, True])
+def test_a1_seam_never_blends_the_no_cloud_sentinel(tmp_path, cfgrib_mode, cfgrib):
+    """500 m on one side, 9999 m "no cloud" on the other: the nearest row wins,
+    never a ~5000 m blend; two real heights still interpolate."""
+    cfgrib_mode(cfgrib)
+    path = tmp_path / "ceil.grib"
+    _write_ceil_seam(path, 500.0, 9999.0)
+    got, _ = dec.decode_ecmwf_surface_per_point(path, [59.6, 59.9], [17.92, 17.92])
+    assert [pt["ceiling_m"] for pt in got] == [pytest.approx(500.0), pytest.approx(9999.0)]
+    _write_ceil_seam(path, 500.0, 1500.0)
+    got, _ = dec.decode_ecmwf_surface_per_point(path, [59.75], [17.92])
+    assert got[0]["ceiling_m"] == pytest.approx(1000.0)
+
+
+def test_seam_only_route_does_not_unpack_unrelated_grids(tmp_path, monkeypatch):
+    """A target next to Europe/Nordic edges unpacks those grids only, not US."""
+    from weatherbrief.fetch.grib import grib_reader
+
+    unpacked: list[tuple[int, int]] = []
+    orig = grib_reader.GribMessage.values
+
+    def spy(self, grid):
+        unpacked.append(grid.shape)
+        return orig(self, grid)
+
+    monkeypatch.setattr(grib_reader.GribMessage, "values", spy)
+    path = tmp_path / "a1.grib"
+    _write_a1(path)
+    _, covered = dec.decode_ecmwf_surface_per_point(path, [59.65], [17.92])
+    assert covered == [True]
+    us_shape = (int(round((US_G1["lat_first"] - US_G1["lat_last"]) / 0.25)) + 1,
+                int(round((US_G1["lon_last"] - US_G1["lon_first"]) / 0.25)) + 1)
+    assert unpacked and us_shape not in unpacked
 
 
 def test_a1_us_grib2_fields_still_missing(tmp_path):
