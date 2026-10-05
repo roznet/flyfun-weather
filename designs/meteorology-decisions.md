@@ -5068,3 +5068,80 @@ landing).
 - The "passed" estimate assumes an on-time departure at planned speed; a late
   departure drops en-route airports early.
 
+
+---
+
+## 37. Live changes read what was observed, and a SIGMET reissue is a replacement
+
+**Date:** 2026-10-05 · **Issue:** #682 · **Amends:** §35–36
+
+Reviewed against every `live_history.jsonl` from 2026-10-03 to 2026-10-05 (31
+flights, 525 events, 51 alert tier). The real weather was flagged (LEPA→ELLX
+embedded TS, LFBZ→LFMD LFMM SIGMETs, ENZV LIFR), but a good share of the alerts
+came from two parsing bugs and two kinds of noise.
+
+### Choices
+
+- **Visibility for the category is the prevailing one.** In `9999 1400` (AUTO
+  stations, minimum visibility without a direction) the second group is the
+  minimum. metar_taf_parser read it as the visibility, so `LFBZ … 9999 1400`
+  graded LIFR (an alert at departure) and `LFQQ … 2200 1000` LIFR instead of
+  IFR. Fixed in euro_aip 0.19.1 (`visibility_min_meters` keeps the minimum,
+  never used for the category). This changes every surface that grades a METAR
+  through euro_aip, not only the live layer.
+- **CB / TCU are what was observed** (amends §36 "Convective"): the raw METAR
+  is cut at its trend (`TEMPO`, `BECMG`, `NOSIG`, `PROB30/40`) and remarks
+  before matching, and the AUTO stations' `///CB` / `///TCU` (type detected,
+  amount and height unknown) count. A `TEMPO FEW045CB` is a forecast. Cases:
+  LFLY `///TCU … NOSIG` (missed), LFLY `CAVOK … TEMPO FEW060TCU` (alerted),
+  LFBP `///CB` (missed), LFMT `///TCU … TEMPO SHRA FEW045CB` (reported as CB,
+  and flip-flopped as the TEMPO came and went). Present weather was already
+  body-only (euro_aip parses trend groups separately).
+- **A SIGMET reissue replaces its predecessor** (amends §35 "SIGMETs alert").
+  Same FIR, hazard and qualifier; validity starting from 15 min before the
+  predecessor's end to 60 min after it; areas within 20 NM (padded bbox; a
+  two-point "E OF LINE" area counts by its line); the predecessor in the
+  baseline or seen on this flight. Shown as one row, "SIGMET LFMM T02
+  replaces T01: EMBD TS", and the predecessor gets no row of its own
+  (neither "new" nor "no longer active").
+  - **Tier.** Highlight when the chain started from a SIGMET the briefing had.
+    When it started from one that was itself new since the briefing, the row
+    keeps that alert tier but **does not alert again**: the SIGMET is still
+    not in the briefing, so it stays in the alert list, but push (#638) gets
+    one alert per phenomenon. A reissue that now reaches the destination
+    (25 NM, §35) when its predecessor did not alerts afresh.
+  - **Escalation to SEV is not a reissue** (the qualifier differs): it is a
+    "New SEV SIGMET" alert, and the predecessor's "no longer active" shows.
+  - **Identity.** The row key is the chain's first SIGMET plus this one
+    (`sigmet:LFMM|T01+sigmet:LFMM|T02`): clients split on "+" to mark the listed
+    SIGMET, and the trail groups on the first part, so T01's row and every
+    reissue are one span, also across the tick where T01 had expired and T02
+    was not out yet (LFMM, 12:30 → 12:42 on 2026-10-04).
+  - Cases: LFMM T01 → T02 → T03 (2026-10-04) and LECB 2 → 3 → 4 → 5
+    (2026-10-05) gave five "New SIGMET" alerts for two storm areas; now two.
+    LECB 3 on 2026-10-02 (valid 08:35, next to LECB 2 which ran to 09:00) is a
+    second cell, not a reissue: the 15-min early bound keeps them apart, and
+    LECB 4 (09:00, over LECB 2's area) is the reissue.
+- **Radar / lightning: the condition is the change, not its detail.** The
+  value is categorical (`heavy` / `present`), the peak dBZ, flash count and
+  span stay in the message. A tick where only those move is no longer a
+  clear + appear in the history (16 on LEPA→ELLX in one morning). The
+  evidence is recorded again when the peak moves ≥ 5 dBZ or an end of the span
+  ≥ 10 NM.
+
+### Rejected
+
+- **Holding a SIGMET's clear for the reissue window.** The 12:32 "T01 no
+  longer active" was true at the time; delaying it would show a SIGMET that
+  had expired. The reissue then takes over the row and its trail.
+- **Matching reissues on the sequence number.** Sequences are per FIR and
+  per phenomenon type, wrap, and use letter prefixes (`T01`); the geometry and
+  validity are what make two SIGMETs one phenomenon.
+
+### Real-world validation needed
+
+- A reissue whose area grows along the route (not to the destination) stays
+  quiet. Watch whether that hides a SIGMET moving onto the route ahead.
+- Split areas: two reissues of one predecessor are two rows on the same trail.
+- The 15-min early bound: a FIR that reissues 20–30 min before expiry would
+  show a "New SIGMET" plus, later, a quiet clear.

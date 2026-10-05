@@ -14,7 +14,9 @@
 | Where | `live.json` blocks → `/live` → clients | `tasks/live_significance.py` (one server classifier, so web / iOS / push agree) |
 
 Meteorology choices (what counts as significant, tiers) are in
-[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–36.
+[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–37
+(§37, #682: CB/TCU read off the observed part only, SIGMET reissues as
+replacements, categorical radar/lightning values).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 
 ## Testing
@@ -74,7 +76,7 @@ Every record has `type`, `tick_at`, `pack_timestamp`:
 | `pack` | first write, and whenever the layer's pack differs from the last `pack` record | `pack_dir_name`, `previous_pack_timestamp`, `has_observations`, corridor widths |
 | `report` | a METAR/SPECI (ICAO + obs time + raw, so a COR at the same time is kept), TAF (ICAO + issue time) or SIGMET (FIR + raw text) the first time it is seen | `raw`; SIGMETs also the structured `SigmetAlongRoute` minus raw text (nothing parses raw SIGMET text back); `seen_at` only when ≠ `tick_at` |
 | `event` | a change `appeared` / `cleared` vs what the history last recorded as shown, identity `change_identity` = (key, direction, to_value, tier) | the change (nulls dropped; `new_alert` on appear; a clear carries the last message shown) |
-| `evidence` | right after a radar/lightning `appeared` event | the triggering route points (`LiveEvidencePoint`: station, along-route NM, inner ring, flash count or peak dBZ + valid/total px), frame time |
+| `evidence` | right after a radar/lightning `appeared` event, and again while it lasts when the peak moves ≥ 5 dBZ or a span end ≥ 10 NM (`EVIDENCE_PEAK_DBZ` / `EVIDENCE_SPAN_NM`, #682) | the triggering route points (`LiveEvidencePoint`: station, along-route NM, inner ring, flash count or peak dBZ + valid/total px), frame time |
 
 Choices:
 - **Not full `live.json` snapshots** (60–400 KB × ~37 ticks, mostly the observed
@@ -101,6 +103,12 @@ Choices:
 - **Size**: LELL→LEMI (busiest flight of 2026-10-02, no TAFs in the replay)
   ≈ 50 KB, mostly METAR raw text; a test caps it at 100 KB. No retention beyond
   the live files' own (T1).
+
+Radar/lightning `to_value` is categorical since #682 (`heavy` / `present`;
+the peak and span are in the message), so the identity holds while the echo
+lasts. Records written before carry `"51 dBZ"` / a hit count: the first tick
+after the change clears and re-shows the row at one tick, which the trail
+reads as one span.
 
 METAR report records carry `flight_category` since #669 (for the trail's
 strip); records written before (2026-10-03/04 files) are re-parsed from `raw`
@@ -160,6 +168,10 @@ never suppressed (§35).
   pack load would be ignored.
 - Agents get only `times_today` per change and `recently_cleared` (key,
   message, cleared_at; cap 6) — the fact, not the strip.
+- **SIGMET reissues (#682)** group on their chain's first SIGMET
+  (`_trail_key`: the key's part before "+", when `replaces` is set), and a
+  reissue appearing within `SIGMET_REISSUE_WINDOW` (60 min) of its row's
+  `weather` clear continues the span (`_reissue_resumes`).
 - Not done: radar/lightning clears are always `weather`, even when the echo
   was simply passed (the change's min along-track position cannot tell).
 
@@ -245,6 +257,25 @@ tick — the timestamps say how old it is.
 
 Not overlaid (build-time, correctly the briefing's view): the LLM digest, the text
 digest, alternate requirement.
+
+## SIGMET reissues (#682)
+
+`live_significance._sigmet_changes` matches each SIGMET it sees for the first
+time against the baseline's and the recently seen ones
+(`ClassifierMemory.sigmets`, persisted as `LiveLayer.sigmet_traces`, reset
+with the alert memory on a new pack; a trace lives until 60 min after its
+validity ends). The rule and tiers are in meteorology-decisions §37. What the
+code relies on:
+
+- A SIGMET keeps the trace it got when first seen (`_trace_sigmets`), so a row
+  never flips between "new" and "replaces".
+- The row key is `<chain's first SIGMET>+<this SIGMET>`; `LiveChange.replaces`
+  holds the predecessor's label ("LFMM T01"). Clients need no change: they
+  split keys on "+" to mark listed SIGMETs, and render `message`.
+- `classify_changes` gets a `quiet` key set from the SIGMET stage: those rows
+  set the alert memory without `new_alert`.
+- No geometry or validity on either side → never a reissue (the louder
+  "New SIGMET" reading).
 
 ## Gotchas
 

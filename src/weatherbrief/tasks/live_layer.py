@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig
-from weatherbrief.models.live import TRAIL_EXCLUDE, LiveChange, LiveChanges, LiveLayer
+from weatherbrief.models.live import TRAIL_EXCLUDE, LiveChange, LiveChanges, LiveEvidencePoint, LiveLayer
 from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 
@@ -442,18 +442,70 @@ def _history_records(
     after = {change_identity(c): c for c in current}
     for ident, c in after.items():
         if ident in before:
+            # Radar/lightning keep one identity while the echo lasts (#682):
+            # record its evidence again when the peak or span moves enough.
+            if c.evidence and _evidence_moved(c.evidence, _last_evidence(history, c.key)):
+                out.append(_evidence_record(base, c))
             continue
         out.append({**base, "type": "event", "event": "appeared", "change": c.model_dump(mode="json", exclude_none=True)})
         if c.evidence:
-            out.append({
-                **base, "type": "evidence", "key": c.key, "kind": c.kind, "source": c.source,
-                "observed_at": _iso(c.observed_at),
-                "points": [p.model_dump(mode="json") for p in c.evidence],
-            })
+            out.append(_evidence_record(base, c))
     for ident, c in before.items():
         if ident not in after:
             out.append({**base, "type": "event", "event": "cleared", "change": c.model_dump(mode="json", exclude_none=True)})
     return out
+
+
+#: A continuing radar/lightning change records its evidence again when the
+#: peak echo moves by this much, or either end of its along-route span by
+#: ``EVIDENCE_SPAN_NM`` (#682). Smaller moves are tick-to-tick noise.
+EVIDENCE_PEAK_DBZ = 5.0
+EVIDENCE_SPAN_NM = 10.0
+
+
+def _evidence_record(base: dict, c: LiveChange) -> dict:
+    return {
+        **base, "type": "evidence", "key": c.key, "kind": c.kind, "source": c.source,
+        "observed_at": _iso(c.observed_at),
+        "points": [p.model_dump(mode="json") for p in c.evidence or []],
+    }
+
+
+def _last_evidence(history: list[dict], key: str) -> list[dict] | None:
+    for r in reversed(history):
+        if r.get("type") == "evidence" and r.get("key") == key:
+            return r.get("points") or []
+    return None
+
+
+def _evidence_moved(points: list[LiveEvidencePoint], last: list[dict] | None) -> bool:
+    """The peak dBZ or the along-route span moved materially since the last
+    evidence recorded for this change (or none was recorded)."""
+    if last is None:
+        return True
+
+    def summary(dbz: list[float], dist: list[float]) -> tuple:
+        return (max(dbz) if dbz else None, min(dist) if dist else None, max(dist) if dist else None)
+
+    now_peak, now_lo, now_hi = summary(
+        [p.max_dbz for p in points if p.max_dbz is not None],
+        [p.enroute_distance_nm for p in points if p.enroute_distance_nm is not None],
+    )
+    was_peak, was_lo, was_hi = summary(
+        [p["max_dbz"] for p in last if p.get("max_dbz") is not None],
+        [p["enroute_distance_nm"] for p in last if p.get("enroute_distance_nm") is not None],
+    )
+
+    def moved(a, b, by):
+        if a is None or b is None:
+            return (a is None) != (b is None)
+        return abs(a - b) >= by
+
+    return (
+        moved(now_peak, was_peak, EVIDENCE_PEAK_DBZ)
+        or moved(now_lo, was_lo, EVIDENCE_SPAN_NM)
+        or moved(now_hi, was_hi, EVIDENCE_SPAN_NM)
+    )
 
 
 def _shown_from_history(history: list[dict], stored: LiveLayer | None) -> list[LiveChange]:
@@ -595,7 +647,10 @@ def commit_live_update(
         base_obs, base_sigmets, base_observed, seeded = _seed_missing_baselines(
             layer, base_obs, base_sigmets, base_observed, now,
         )
-        memory = ClassifierMemory(alerted=dict(prior.alerted) if prior else {})
+        memory = ClassifierMemory(
+            alerted=dict(prior.alerted) if prior else {},
+            sigmets={t.key: t for t in prior.sigmet_traces} if prior else {},
+        )
         changes, memory = classify_changes(
             baseline_obs=base_obs,
             latest_obs=layer.route_observations,
@@ -616,6 +671,7 @@ def commit_live_update(
         layer.changes = changes
         layer.last_refresh_delta = worsening_delta(changes)
         layer.alerted = memory.alerted
+        layer.sigmet_traces = list(memory.sigmets.values())
         layer.live_updated_at = now
 
         _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))

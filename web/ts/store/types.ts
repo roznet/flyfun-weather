@@ -1024,6 +1024,9 @@ export interface LiveChange {
   trail?: LiveChangeTrail | null;
   /** Only on `recently_cleared` rows: when it left the screen. */
   cleared_at?: string | null;
+  /** #682: on a SIGMET reissue row, the SIGMET it replaces ("LFMM T01"). The
+   *  key is then "<chain's first SIGMET>+<this SIGMET>". Display only. */
+  replaces?: string | null;
 }
 
 /** One period a change was on screen; `end` null while it still is. */
