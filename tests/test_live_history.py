@@ -380,13 +380,16 @@ def test_lell_lemi_inputs_rebuilt_from_history(lell_lemi_history):
     original = load_scenario(LELL_LEMI)["inputs"]
     rebuilt = _builder().inputs_from_history(flight_dir)
 
-    def strip(m):
-        return {k: v for k, v in m.items() if k != "source"}
+    def strip(m, keys):
+        return {k: m.get(k) for k in keys if k != "source"}
 
-    by_key = {(m["icao"], m["observation_time"]): strip(m) for m in original["metars"]}
+    by_key = {(m["icao"], m["observation_time"]): m for m in original["metars"]}
     assert rebuilt["metars"]
     for m in rebuilt["metars"]:
-        assert strip(m) == by_key[(m["icao"], m["observation_time"])]
+        # Fields euro_aip added since the fixture was built (the minimum
+        # visibility, 0.19.1) are not part of the round trip.
+        want = by_key[(m["icao"], m["observation_time"])]
+        assert strip(m, want) == strip(want, want)
     assert {s["report"]["raw_text"] for s in rebuilt["sigmets"]} <= {
         s["report"]["raw_text"] for s in original["sigmets"]
     }
@@ -406,3 +409,75 @@ def test_lell_lemi_round_trip_reproduces_the_timeline(lell_lemi_history, tmp_pat
     inputs = builder.inputs_from_history(flight_dir)
     scenario = {"inputs": inputs, "derived": builder.build_derived(inputs, os.environ["AIRPORTS_DB"])}
     assert timeline(replay(scenario, tmp_path / "u" / "flight")) == EXPECTED_LELL_LEMI
+
+
+# --- #682 -------------------------------------------------------------------
+
+
+def test_radar_and_lightning_churn_is_one_appear_and_one_clear(tmp_path):
+    """The peak dBZ and the span move every tick while the echo lasts
+    (46 → 51 → 54 → 49 dBZ on LEPA→ELLX): one appear, one clear, and the
+    evidence recorded again only when the peak or span moved materially."""
+    pack, briefing = _pack(tmp_path, "p1", observed=_observed(NOW - timedelta(hours=1)))
+    frames = [
+        ((46.0, 20.0), (3, 0)),   # p0 only
+        ((51.0, 54.0), (3, 9)),   # spreads to p1: span moves, peak +8
+        ((54.0, 49.0), (0, 2)),   # radar: same peak, same span
+        ((49.0, 20.0), (5, 0)),   # radar: peak -5, span back to p0
+        ((20.0, 20.0), (0, 0)),   # gone
+    ]
+    t = [NOW + timedelta(minutes=10 * i) for i in range(len(frames))]
+    for at, (dbz, flashes) in zip(t, frames):
+        _commit(pack, briefing, at=at, observed=_observed(at, dbz=dbz, flashes=flashes))
+    history = load_live_history(pack.parent)
+    assert sorted(_events(history)) == [
+        ("09:00", "appeared", "lightning:route", "present"),
+        ("09:00", "appeared", "radar:route", "heavy"),
+        ("09:40", "cleared", "lightning:route", "present"),
+        ("09:40", "cleared", "radar:route", "heavy"),
+    ]
+    evidence = [(r["tick_at"][11:16], r["kind"]) for r in _of(history, "evidence")]
+    assert [at for at, k in evidence if k == "radar"] == ["09:00", "09:10", "09:30"]
+    assert [at for at, k in evidence if k == "lightning"] == ["09:00", "09:10", "09:20", "09:30"]
+
+
+def _zz_sigmet(seq, valid_from, valid_to, lon0):
+    """A fictional ZZZZ FIR EMBD TS area over the route, drifting east."""
+    return SigmetAlongRoute(
+        fir_id="ZZZZ", hazard="TS", qualifier="EMBD", valid_from=valid_from, valid_to=valid_to,
+        raw_text=f"ZZZZ SIGMET {seq} VALID EMBD TS",
+        coords=[(lon0, 50.2), (lon0 + 0.5, 50.2), (lon0 + 0.5, 50.6), (lon0, 50.6), (lon0, 50.2)],
+        enroute_distance_from_nm=10.0, enroute_distance_to_nm=30.0,
+    )
+
+
+def test_sigmet_reissue_after_a_gap_continues_the_row_and_its_trail(tmp_path):
+    """T01 expires, one tick shows nothing, T02 comes out (LFMM, 2026-10-04):
+    one trail span, no second alert, no 'cleared' row once T02 is on."""
+    from weatherbrief.tasks.live_trail import change_trails
+
+    pack, briefing = _pack(tmp_path, "p1")
+    t0, t1, t2 = NOW, NOW + timedelta(minutes=30), NOW + timedelta(minutes=40)
+    first = _zz_sigmet("T01", t0 - timedelta(minutes=60), t0 + timedelta(minutes=25), 1.2)
+    second = _zz_sigmet("T02", t0 + timedelta(minutes=25), t0 + timedelta(hours=2), 1.3)
+    _commit(pack, briefing, at=t0, sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=t0, sigmets=[first]))
+    _commit(pack, briefing, at=t1, sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=t1, sigmets=[]))
+    layer = _commit(pack, briefing, at=t2,
+                    sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=t2, sigmets=[second]))
+
+    [c] = layer.changes.changes
+    assert c.message == "SIGMET ZZZZ T02 replaces T01: EMBD TS"
+    assert (c.tier, c.new_alert, c.replaces) == ("alert", False, "ZZZZ T01")
+    history = load_live_history(pack.parent)
+    assert _events(history) == [
+        ("09:00", "appeared", "sigmet:ZZZZ|T01", "EMBD TS"),
+        ("09:30", "cleared", "sigmet:ZZZZ|T01", "EMBD TS"),
+        ("09:40", "appeared", "sigmet:ZZZZ|T01+sigmet:ZZZZ|T02", "EMBD TS"),
+    ]
+    trails = change_trails(history, layer.changes, now=t2)
+    [row] = trails.changes
+    assert row.trail.times_today == 1
+    assert [(s.start, s.end) for s in row.trail.spans] == [(t0, None)]
+    assert trails.recently_cleared == []
+    # The memory survives on the layer, and T01 is still a known predecessor.
+    assert {t.key for t in load_live(pack.parent).sigmet_traces} == {"sigmet:ZZZZ|T01", "sigmet:ZZZZ|T02"}

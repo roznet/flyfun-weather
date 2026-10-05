@@ -1,6 +1,6 @@
 {
  "changes": {
-  "alert_count": 2,
+  "alert_count": 1,
   "baseline_at": "2026-10-02T06:52:55Z",
   "baseline_source": "briefing",
   "changes": [
@@ -15,6 +15,7 @@
     "message": "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)",
     "new_alert": false,
     "observed_at": "2026-10-02T08:35:00Z",
+    "replaces": null,
     "role": "destination",
     "source": "SIGMET",
     "station_id": null,
@@ -34,34 +35,6 @@
    },
    {
     "cleared_at": null,
-    "direction": "worse",
-    "enroute_distance_nm": 0.0,
-    "from_value": null,
-    "icao": null,
-    "key": "sigmet:LECB|4",
-    "kind": "sigmet_issued",
-    "message": "New SIGMET LECB 4: EMBD TS",
-    "new_alert": false,
-    "observed_at": "2026-10-02T09:00:00Z",
-    "role": "route",
-    "source": "SIGMET",
-    "station_id": null,
-    "tier": "alert",
-    "to_value": "EMBD TS",
-    "trail": {
-     "baseline_source": "briefing",
-     "reports": null,
-     "spans": [
-      {
-       "end": null,
-       "start": "2026-10-02T08:40:00Z"
-      }
-     ],
-     "times_today": 1
-    }
-   },
-   {
-    "cleared_at": null,
     "direction": "better",
     "enroute_distance_nm": 268.7,
     "from_value": "MVFR",
@@ -71,6 +44,7 @@
     "message": "LERI METAR: MVFR \u2192 VFR",
     "new_alert": false,
     "observed_at": "2026-10-02T09:00:00Z",
+    "replaces": null,
     "role": "alternate",
     "source": "METAR",
     "station_id": null,
@@ -116,30 +90,35 @@
    },
    {
     "cleared_at": null,
-    "direction": "better",
-    "enroute_distance_nm": 9.96131147641169,
-    "from_value": "EMBD TS",
+    "direction": "worse",
+    "enroute_distance_nm": 0.0,
+    "from_value": null,
     "icao": null,
-    "key": "sigmet:LECB|2",
-    "kind": "sigmet_cancelled",
-    "message": "SIGMET LECB 2: EMBD TS no longer active",
+    "key": "sigmet:LECB|2+sigmet:LECB|4",
+    "kind": "sigmet_issued",
+    "message": "SIGMET LECB 4 replaces 2: EMBD TS",
     "new_alert": false,
     "observed_at": "2026-10-02T09:00:00Z",
+    "replaces": "LECB 2",
     "role": "route",
     "source": "SIGMET",
     "station_id": null,
     "tier": "highlight",
-    "to_value": null,
+    "to_value": "EMBD TS",
     "trail": {
      "baseline_source": "briefing",
      "reports": null,
      "spans": [
       {
+       "end": "2026-10-02T07:00:00Z",
+       "start": "2026-10-02T05:10:00Z"
+      },
+      {
        "end": null,
-       "start": "2026-10-02T09:00:00Z"
+       "start": "2026-10-02T08:40:00Z"
       }
      ],
-     "times_today": 1
+     "times_today": 2
     }
    },
    {
@@ -153,6 +132,7 @@
     "message": "LEVC METAR: TCU no longer reported",
     "new_alert": false,
     "observed_at": "2026-10-02T09:00:00Z",
+    "replaces": null,
     "role": "route",
     "source": "METAR",
     "station_id": null,
@@ -176,7 +156,7 @@
    }
   ],
   "computed_at": "2026-10-02T09:00:00Z",
-  "improved_count": 3,
+  "improved_count": 2,
   "recently_cleared": [],
   "worsened_count": 2
  },
@@ -185,7 +165,7 @@
   "computed_at": "2026-10-02T09:00:00Z",
   "messages": [
    "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)",
-   "New SIGMET LECB 4: EMBD TS"
+   "SIGMET LECB 4 replaces 2: EMBD TS"
   ],
   "worsened": true
  },

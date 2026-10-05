@@ -325,6 +325,50 @@ def test_sigmet_expiry_is_a_cleared_row():
     assert row.message == "New SIGMET ZZZZ T01: EMBD TS" and row.cleared_at == at("12:30")
 
 
+def _reissue(seq, prev, chain="T01"):
+    c = _change(f"sigmet:ZZZZ|{chain}+sigmet:ZZZZ|{seq}", kind="sigmet_issued", to_value="EMBD TS",
+                from_value=None, role="route", message=f"SIGMET ZZZZ {seq} replaces {prev}: EMBD TS")
+    c.replaces = f"ZZZZ {prev}"
+    return c
+
+
+def test_sigmet_reissue_continues_the_row_across_the_gap():
+    """#682: T01 expires 12:30, T02 out at 12:42 — one span, no cleared row."""
+    t01 = _change("sigmet:ZZZZ|T01", kind="sigmet_issued", to_value="EMBD TS", from_value=None,
+                  role="route", message="New SIGMET ZZZZ T01: EMBD TS")
+    t02, t03 = _reissue("T02", "T01"), _reissue("T03", "T02")
+    h = (History().pack("10:00", PACK1).appeared("10:10", t01).cleared("12:32", t01)
+         .appeared("12:42", t02).cleared("14:20", t02).appeared("14:20", t03))
+    out = change_trails(h.records, _changes(t03), now=at("14:30"))
+    [row] = out.changes
+    assert _spans(row) == [("10:10", None)] and row.trail.times_today == 1
+    assert out.recently_cleared == []
+
+
+def test_sigmet_reissue_long_after_the_clear_is_a_second_time():
+    t01 = _change("sigmet:ZZZZ|T01", kind="sigmet_issued", to_value="EMBD TS", from_value=None,
+                  role="route", message="New SIGMET ZZZZ T01: EMBD TS")
+    t02 = _reissue("T02", "T01")
+    h = History().pack("10:00", PACK1).appeared("10:10", t01).cleared("11:00", t01).appeared("12:05", t02)
+    [row] = change_trails(h.records, _changes(t02), now=at("12:10")).changes
+    assert _spans(row) == [("10:10", "11:00"), ("12:05", None)] and row.trail.times_today == 2
+
+
+def test_radar_rows_written_before_682_continue_into_the_categorical_value():
+    """Old history records carry the peak in ``to_value`` ("51 dBZ"); the
+    first tick after #682 clears that identity and shows "heavy" at the same
+    tick: one span, not a flicker."""
+    old = _change("radar:route", kind="radar", to_value="51 dBZ", from_value="none", tier="highlight",
+                  role="route", message="Heavy radar echo (peak 51 dBZ)")
+    new = old.model_copy(update={"to_value": "heavy"})
+    h = (History().pack("10:00", PACK1).appeared("10:10", old)
+         .cleared("10:20", old).appeared("10:20", new))
+    out = change_trails(h.records, _changes(new), now=at("10:30"))
+    [row] = out.changes
+    assert _spans(row) == [("10:10", None)] and row.trail.times_today == 1
+    assert out.recently_cleared == []
+
+
 # --- The 60-min window and what a cleared row is ------------------------------
 
 

@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from euro_aip.utils.geometry import (
     bbox_intersects,
@@ -46,7 +46,13 @@ from euro_aip.utils.geometry import (
     point_in_multipolygon,
 )
 
-from weatherbrief.models.live import ChangeRole, LiveChange, LiveChanges, LiveEvidencePoint
+from weatherbrief.models.live import (
+    ChangeRole,
+    LiveChange,
+    LiveChanges,
+    LiveEvidencePoint,
+    LiveSigmetTrace,
+)
 from weatherbrief.models.observations import (
     AirportObservation,
     RefreshDelta,
@@ -83,6 +89,21 @@ DESTINATION_SIGMET_RADIUS_NM = 25.0
 _SAME_PHENOMENON_START = 30 * 60
 _SAME_PHENOMENON_NM = 10.0
 
+#: A FIR reissues a SIGMET for a continuing phenomenon every 1–3 h under a new
+#: sequence number (LFMM T01 → T02 → T03, LECB 2 → 3 → 4 → 5). A new SIGMET
+#: replaces an earlier one of the same FIR, hazard and qualifier when its
+#: validity starts around the predecessor's end (from
+#: ``SIGMET_REISSUE_EARLY`` before it to ``SIGMET_REISSUE_WINDOW`` after), the
+#: predecessor was seen on this flight (or is in the baseline), and the areas come within
+#: ``_REISSUE_NM`` of each other (#682). Observed starts: 0 min (T01 → T02,
+#: LECB 2 → 3 → 4 → 5), +15 min (T02 → T03). The early bound keeps a second
+#: cell issued while the first is still valid apart: LECB 3 on 2026-10-02
+#: started 25 min before LECB 2 ended, next to it, and is not its reissue
+#: (LECB 4, from LECB 2's end over its area, is).
+SIGMET_REISSUE_WINDOW = timedelta(minutes=60)
+SIGMET_REISSUE_EARLY = timedelta(minutes=15)
+_REISSUE_NM = 20.0
+
 #: Echo class at or above which an observed radar return on the route ahead is
 #: significant: VIP 3 "heavy" (41 dBZ), the AIM "avoid level 3 or greater" line.
 RADAR_SIGNIFICANT_DBZ = 41.0
@@ -94,6 +115,8 @@ class ClassifierMemory:
 
     # Change key -> to_value last alerted (alert tier only).
     alerted: dict[str, str] = field(default_factory=dict)
+    # SIGMET key -> what was seen of it, for reissue matching (#682).
+    sigmets: dict[str, LiveSigmetTrace] = field(default_factory=dict)
 
 
 def category_rank(cat: str | None) -> int | None:
@@ -129,10 +152,14 @@ def sigmet_key(s: SigmetAlongRoute) -> tuple:
 
 
 def _sigmet_label(s: SigmetAlongRoute) -> str:
-    seq = _sigmet_seq(s)
     hazard = " ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET"
-    fir = f"{s.fir_id} {seq}" if seq else s.fir_id
-    return f"{fir}: {hazard}"
+    return f"{_sigmet_name(s)}: {hazard}"
+
+
+def _sigmet_name(s: SigmetAlongRoute) -> str:
+    """"LFMM T02", or the FIR alone when the text carries no sequence."""
+    seq = _sigmet_seq(s)
+    return f"{s.fir_id} {seq}" if seq else s.fir_id
 
 
 def _sigmet_key_str(s: SigmetAlongRoute) -> str:
@@ -235,7 +262,14 @@ def airport_relevant(
 #: (present ``TS`` in any group, or ``VCTS`` in the vicinity).
 _CONVECTIVE_RANK = {"TCU": 1, "CB": 2, "VCTS": 3, "TS": 3}
 _CONVECTIVE_LABEL = {0: "none", 1: "TCU", 2: "CB", 3: "TS"}
-_CLOUD_TYPE_RE = re.compile(r"\b(?:FEW|SCT|BKN|OVC|VV)(?:\d{3}|///)(CB|TCU)\b")
+#: A cloud group carrying a type: ``FEW022CB``, ``BKN///TCU``, and the AUTO
+#: stations' ``///CB`` / ``//////TCU`` (type detected, amount and height not).
+_CLOUD_TYPE_RE = re.compile(
+    r"(?<!\S)(?:(?:FEW|SCT|BKN|OVC|VV|///)(?:\d{3}|///)|///)(CB|TCU)(?!\S)"
+)
+#: Where a METAR's observed part ends: the trend forecast (TEMPO, BECMG,
+#: NOSIG, PROB30/40) or the remarks. A ``TEMPO FEW045CB`` is a forecast.
+_METAR_BODY_END_RE = re.compile(r"\s(?:TEMPO|BECMG|NOSIG|PROB\d{2}|RMK)(?!\S)")
 #: Present-weather phenomena significant on their own, at any intensity.
 _SIGNIFICANT_WX = ("FZRA", "FZDZ", "GR", "SQ", "FC")
 _WIND_RANK = {"green": 0, "amber": 1, "red": 2}
@@ -246,15 +280,22 @@ def _present_weather(obs: AirportObservation) -> list[str]:
     return [c.upper() for c in obs.metar_weather if c and not c.upper().startswith("RE")]
 
 
+def metar_observed_part(raw: str) -> str:
+    """The raw METAR up to its trend forecast or remarks (#682)."""
+    m = _METAR_BODY_END_RE.search(raw)
+    return raw[: m.start()] if m else raw
+
+
 def convective_tags(obs: AirportObservation) -> set[str]:
     """``TS`` / ``VCTS`` from present weather, ``CB`` / ``TCU`` from the cloud
     groups (read off the raw report, so packs written before the field
-    existed compare the same way)."""
+    existed compare the same way). Only what was observed: the trend forecast
+    and remarks are cut off first (#682)."""
     tags: set[str] = set()
     for c in _present_weather(obs):
         if "TS" in c:
             tags.add("VCTS" if c.startswith("VC") else "TS")
-    tags.update(_CLOUD_TYPE_RE.findall(obs.metar_raw or ""))
+    tags.update(_CLOUD_TYPE_RE.findall(metar_observed_part(obs.metar_raw or "")))
     return tags
 
 
@@ -536,22 +577,167 @@ def _sigmet_change(
     )
 
 
+def _sigmet_bbox(s: SigmetAlongRoute) -> tuple[float, float, float, float] | None:
+    """The area's bounding box. Two points are enough: an "E OF LINE" area
+    may come through as its line (LECB 5, 2026-10-05)."""
+    return bbox_of_ring(s.coords) if len(s.coords) >= 2 else None
+
+
+def _trace(
+    s: SigmetAlongRoute, now: datetime, *, destination: tuple[float, float] | None, **kw,
+) -> LiveSigmetTrace:
+    key = _sigmet_key_str(s)
+    return LiveSigmetTrace(
+        key=key, label=_sigmet_name(s), chain=kw.pop("chain", key),
+        fir_id=s.fir_id, hazard=s.hazard, qualifier=s.qualifier,
+        valid_from=s.valid_from, valid_to=s.valid_to, bbox=_sigmet_bbox(s),
+        at_destination=_near_point(s, destination, DESTINATION_SIGMET_RADIUS_NM),
+        last_seen=now, **kw,
+    )
+
+
+def _reissue_of(s: SigmetAlongRoute, p: LiveSigmetTrace) -> bool:
+    """``s`` is the FIR's reissue of the SIGMET ``p`` traces (see
+    :data:`SIGMET_REISSUE_WINDOW`). Without validity or geometry on either
+    side it is not: it then shows as a new SIGMET, the louder reading."""
+    if s.fir_id != p.fir_id or _sigmet_key_str(s) == p.key:
+        return False
+    if (s.hazard or "", s.qualifier or "") != (p.hazard or "", p.qualifier or ""):
+        return False
+    if s.valid_from is None or p.valid_from is None or p.valid_to is None:
+        return False
+    if not (
+        p.valid_to - SIGMET_REISSUE_EARLY <= s.valid_from <= p.valid_to + SIGMET_REISSUE_WINDOW
+        and s.valid_from >= p.valid_from
+    ):
+        return False
+    box = _sigmet_bbox(s)
+    if box is None or p.bbox is None:
+        return False
+    return bbox_intersects(bbox_pad(box, _REISSUE_NM), p.bbox)
+
+
+def _trace_sigmets(
+    baseline: RouteSigmets,
+    latest: RouteSigmets,
+    destination: tuple[float, float] | None,
+    seen: dict[str, LiveSigmetTrace],
+    now: datetime,
+) -> dict[str, LiveSigmetTrace]:
+    """A trace for every latest SIGMET, plus the recently seen ones still
+    within the reissue window (the predecessors a later reissue can match).
+
+    A SIGMET keeps the trace it got when first seen, so a row never flips
+    between "new" and "replaces" from one tick to the next. A SIGMET seen for
+    the first time takes the most recent matching predecessor among the
+    baseline's SIGMETs and the ones seen before (oldest validity first, so
+    two reissues landing in one tick chain in order)."""
+    base_keys = {_sigmet_key_str(s) for s in baseline.sigmets}
+    candidates: dict[str, LiveSigmetTrace] = {k: t for k, t in seen.items() if _reissuable(t, now)}
+    for s in baseline.sigmets:
+        k = _sigmet_key_str(s)
+        if k not in candidates:
+            candidates[k] = _trace(s, now, destination=destination, chain_in_baseline=True)
+            # A baseline SIGMET no longer listed was last seen by the briefing.
+            candidates[k].last_seen = baseline.fetch_time
+
+    out: dict[str, LiveSigmetTrace] = {}
+    latest_sorted = sorted(
+        latest.sigmets,
+        key=lambda s: s.valid_from or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    for s in latest_sorted:
+        k = _sigmet_key_str(s)
+        known = candidates.get(k) if k in seen or k in base_keys else None
+        if known is not None:
+            t = known.model_copy(update={
+                "last_seen": now,
+                "valid_to": s.valid_to,
+                "bbox": _sigmet_bbox(s),
+                "at_destination": _near_point(s, destination, DESTINATION_SIGMET_RADIUS_NM),
+            })
+        else:
+            preds = [p for p in candidates.values() if _reissue_of(s, p)]
+            pred = max(preds, key=lambda p: (p.valid_from, p.key), default=None)
+            if pred is None:
+                t = _trace(s, now, destination=destination)
+            else:
+                t = _trace(
+                    s, now, destination=destination,
+                    chain=pred.chain, chain_in_baseline=pred.chain_in_baseline,
+                    replaces_key=pred.key, replaces_label=pred.label,
+                    replaced_at_destination=pred.at_destination,
+                )
+        out[k] = t
+        candidates[k] = t
+    for k, t in candidates.items():
+        if k not in out and k not in base_keys and _reissuable(t, now):
+            out[k] = t
+    return out
+
+
+def _reissuable(t: LiveSigmetTrace, now: datetime) -> bool:
+    """A reissue of this SIGMET could still turn up: within the window after
+    its validity ends (after it was last seen, without a validity). Counted
+    from validity rather than last seen, so failed fetch ticks or a feed that
+    drops a SIGMET early do not lose the link."""
+    end = t.valid_to if t.valid_to is not None else t.last_seen
+    return now <= end + SIGMET_REISSUE_WINDOW
+
+
 def _sigmet_changes(
     baseline: RouteSigmets,
     latest: RouteSigmets,
     destination: tuple[float, float] | None = None,
-) -> list[LiveChange]:
-    """New, escalated to SEV, or no longer active — merged across FIRs."""
+    seen: dict[str, LiveSigmetTrace] | None = None,
+    now: datetime | None = None,
+) -> tuple[list[LiveChange], set[str], dict[str, LiveSigmetTrace]]:
+    """New, reissued, escalated to SEV, or no longer active — merged across
+    FIRs. Also returns the keys of reissue rows that must not raise a fresh
+    alert, and the SIGMET traces to remember for the next tick (#682).
+
+    A reissue is one row, "SIGMET LFMM T02 replaces T01: EMBD TS", keyed on
+    the first SIGMET of its chain plus its own ("sigmet:LFMM|T01+sigmet:LFMM|T02"):
+    highlight when the chain started from a
+    SIGMET the briefing had; when it started from one that was itself new
+    since the briefing it keeps that row's alert tier but does not alert
+    again. Either way it alerts when it now reaches the destination and its
+    predecessor did not. The predecessor gets no row of its own (neither its
+    "new" row while both are listed, nor "no longer active").
+    """
+    now = now or datetime.now(timezone.utc)
+    traces = _trace_sigmets(baseline, latest, destination, seen or {}, now)
     base_by_key = {sigmet_key(s): s for s in baseline.sigmets}
     latest_keys = {sigmet_key(s) for s in latest.sigmets}
-    new = [s for s in latest.sigmets if sigmet_key(s) not in base_by_key]
+    latest_traces = [traces[_sigmet_key_str(s)] for s in latest.sigmets]
+    # SIGMETs a listed reissue replaces, directly or up its chain.
+    superseded = {t.replaces_key for t in latest_traces if t.replaces_key}
+    replaced_chains = {t.chain for t in latest_traces if t.replaces_key}
+
+    def _live(s: SigmetAlongRoute) -> bool:
+        return _sigmet_key_str(s) not in superseded
+
+    reissued = [
+        s for s in latest.sigmets
+        if sigmet_key(s) not in base_by_key and traces[_sigmet_key_str(s)].replaces_key and _live(s)
+    ]
+    new = [
+        s for s in latest.sigmets
+        if sigmet_key(s) not in base_by_key and not traces[_sigmet_key_str(s)].replaces_key and _live(s)
+    ]
     escalated = [
         s for s in latest.sigmets
         if sigmet_key(s) in base_by_key and _is_severe(s) and not _is_severe(base_by_key[sigmet_key(s)])
+        and _live(s)
     ]
-    gone = [s for k, s in base_by_key.items() if k not in latest_keys]
+    gone = [
+        s for k, s in base_by_key.items()
+        if k not in latest_keys
+        and _sigmet_key_str(s) not in superseded and _sigmet_key_str(s) not in replaced_chains
+    ]
 
     out: list[LiveChange] = []
+    quiet: set[str] = set()
     for g in _group_same_phenomenon(new):
         prefix = "New SEV SIGMET" if _is_severe(g[0]) else "New SIGMET"
         out.append(_sigmet_change(
@@ -560,6 +746,26 @@ def _sigmet_changes(
             observed_at=g[0].valid_from,
             message=f"{prefix} {_group_label(g)}", destination=destination,
         ))
+    for s in reissued:
+        t = traces[_sigmet_key_str(s)]
+        reaches_destination = t.at_destination and not t.replaced_at_destination
+        c = _sigmet_change(
+            [s], kind="sigmet_issued", direction="worse",
+            from_value=None, to_value=_hazard_text(s),
+            observed_at=s.valid_from,
+            message=f"SIGMET {t.label} replaces {_short_label(t)}: {_hazard_text(s)}",
+            destination=destination,
+        )
+        # The chain's first SIGMET, then this one: clients split the key on
+        # "+" to mark the listed SIGMET (this one) as changed, and the trail
+        # groups a reissue row on the first part (live_trail._trail_key).
+        c.key = f"{t.chain}+{t.key}"
+        c.replaces = t.replaces_label
+        if t.chain_in_baseline and not reaches_destination:
+            c.tier = "highlight"
+        if not reaches_destination:
+            quiet.add(c.key)
+        out.append(c)
     for g in _group_same_phenomenon(escalated):
         prev = base_by_key[sigmet_key(g[0])]
         out.append(_sigmet_change(
@@ -575,7 +781,14 @@ def _sigmet_changes(
             observed_at=g[0].valid_to,
             message=f"SIGMET {_group_label(g)} no longer active", destination=destination,
         ))
-    return out
+    return out, quiet, traces
+
+
+def _short_label(t: LiveSigmetTrace) -> str:
+    """The predecessor as the row names it: "T01" within the same FIR."""
+    label = t.replaces_label or ""
+    prefix = f"{t.fir_id} "
+    return label[len(prefix):] if label.startswith(prefix) and len(label) > len(prefix) else label
 
 
 # --- Observed radar / lightning ---------------------------------------------
@@ -677,7 +890,10 @@ def _observed_changes(
             out.append(LiveChange(
                 key="lightning:route", kind="lightning", source="LIGHTNING",
                 direction="worse", tier="highlight", role="route",
-                from_value="none", to_value=str(len(l_hits)), observed_at=valid,
+                # The condition, not its detail: the hit count and span are
+                # in the message, so a tick where they move is not a new
+                # change (#682).
+                from_value="none", to_value="present", observed_at=valid,
                 enroute_distance_nm=min((h for h in l_hits if h >= 0), default=None),
                 message=f"Lightning within {r} of route{_span_text(l_hits)}",
                 evidence=evidence,
@@ -686,7 +902,7 @@ def _observed_changes(
             out.append(LiveChange(
                 key="lightning:route", kind="lightning", source="LIGHTNING",
                 direction="better", tier="highlight", role="route",
-                from_value=str(len(b_hits)), to_value="none", observed_at=valid,
+                from_value="present", to_value="none", observed_at=valid,
                 message=f"No lightning within {r} of route ahead",
             ))
 
@@ -700,7 +916,9 @@ def _observed_changes(
             out.append(LiveChange(
                 key="radar:route", kind="radar", source="RADAR",
                 direction="worse", tier="highlight", role="route",
-                from_value="none", to_value=f"{peak:.0f} dBZ" if peak is not None else None,
+                # Categorical like the lightning one: the peak dBZ and the
+                # span are in the message (#682).
+                from_value="none", to_value="heavy",
                 observed_at=valid,
                 enroute_distance_nm=min((h for h in l_hits if h >= 0), default=None),
                 message=(
@@ -766,8 +984,13 @@ def classify_changes(
             baseline_obs, latest_obs, roles, unknown, departed=departed, flown_nm=flown_nm,
         )
         evaluated |= {"metar:", "taf:", "conv:", "wx:", "wind:"}
+    quiet: set[str] = set()
+    sigmet_traces = dict(memory.sigmets)
     if baseline_sigmets is not None and latest_sigmets is not None:
-        changes += _sigmet_changes(baseline_sigmets, latest_sigmets, destination)
+        sigmet_rows, quiet, sigmet_traces = _sigmet_changes(
+            baseline_sigmets, latest_sigmets, destination, memory.sigmets, now,
+        )
+        changes += sigmet_rows
         evaluated.add("sigmet:")
     changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
     evaluated |= {"lightning:", "radar:"}
@@ -796,7 +1019,9 @@ def classify_changes(
             previous = _alerted_under_another_key(c.key, value, alerted)
             if previous is not None:
                 del alerted[previous]
-            else:
+            elif c.key not in quiet:
+                # A SIGMET reissue continuing an alerted row does not alert
+                # again, even after a tick's gap between the two (#682).
                 c.new_alert = True
             alerted[c.key] = value
     for k in list(alerted):
@@ -808,7 +1033,7 @@ def classify_changes(
         computed_at=now or datetime.now(timezone.utc),
         changes=changes,
     )
-    return result, ClassifierMemory(alerted=alerted)
+    return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
 
 
 def _alerted_under_another_key(key: str, value: str, alerted: dict[str, str]) -> str | None:

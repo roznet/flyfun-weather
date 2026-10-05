@@ -101,6 +101,38 @@ class LiveChangeTrail(BaseModel):
     baseline_source: Literal["briefing", "live_start"] | None = None
 
 
+class LiveSigmetTrace(BaseModel):
+    """A route SIGMET the live layer has seen, kept so the FIR's reissue of
+    it (LFMM T01 → T02) reads as a replacement, not a new SIGMET (#682).
+
+    Persisted on the layer (``sigmet_traces``) and reset with it on a new
+    pack, like the alert memory. A trace is dropped once its SIGMET is gone
+    and its validity ended more than the reissue window ago.
+    """
+
+    key: str  # "sigmet:LFMM|T02" (live_significance._sigmet_key_str)
+    label: str  # "LFMM T02"
+    # The key of the first SIGMET in its reissue chain: the change row's key,
+    # so the row (and its trail) carries on across reissues.
+    chain: str
+    # The chain started from a SIGMET the baseline already had (the
+    # replacement is then highlight, not alert).
+    chain_in_baseline: bool = False
+    # The SIGMET this one replaced (None: it was new, or in the baseline).
+    replaces_key: str | None = None
+    replaces_label: str | None = None
+    replaced_at_destination: bool = False
+    fir_id: str
+    hazard: str | None = None
+    qualifier: str | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    # (min_lon, min_lat, max_lon, max_lat) of the area; None without geometry.
+    bbox: tuple[float, float, float, float] | None = None
+    at_destination: bool = False
+    last_seen: datetime
+
+
 class LiveChange(BaseModel):
     """One significant change since the briefing.
 
@@ -133,6 +165,9 @@ class LiveChange(BaseModel):
     # value). Consumers that deliver alerts act on this, never on ``tier``
     # alone, so a change persisting across ticks alerts exactly once.
     new_alert: bool = False
+    # SIGMET reissue only (#682): the SIGMET this one replaces ("LFMM T01").
+    # The row then keeps the key of the first SIGMET in the chain.
+    replaces: str | None = None
     # Radar/lightning only: the route points that triggered the change.
     # Excluded from every dump (live.json, /live, snapshot overlay): only the
     # history writer reads it, off the in-memory change (#643).
@@ -213,6 +248,8 @@ class LiveLayer(BaseModel):
     # change alerts again only when its value moves; a key that returns to the
     # briefing's state is dropped so a later recurrence alerts afresh.
     alerted: dict[str, str] = Field(default_factory=dict)
+    # Route SIGMETs seen recently, so a reissue reads as a replacement (#682).
+    sigmet_traces: list[LiveSigmetTrace] = Field(default_factory=list)
 
     # Starting point for blocks the pack lacks. Observations and SIGMETs are
     # only fetched for a D-0 briefing, so a flight briefed the day before has

@@ -467,3 +467,239 @@ def test_a_different_sigmet_still_alerts():
     again, _ = _classify(None, None, bs=_sigmets([]), ls=_sigmets([lecb, other]), memory=mem)
     by = {c.key: c.new_alert for c in again.changes}
     assert by == {"sigmet:LECB|3": False, "sigmet:LECB|4": True}
+
+
+# --- #682: CB/TCU are what was observed, not the trend forecast --------------
+
+
+def _tags(raw):
+    from weatherbrief.tasks.live_significance import convective_tags
+
+    return sorted(convective_tags(_apt("ZZDS", "VFR", raw=raw)))
+
+
+def test_cb_tcu_read_from_the_observed_part_only():
+    """The four reports from #682 (2026-10-03/04 prod history)."""
+    # Observed TCU, amount and height unknown (French AUTO): was missed.
+    assert _tags("LFLY 031200Z AUTO VRB03KT 9999 ///TCU 20/16 Q1028 NOSIG") == ["TCU"]
+    # Forecast TCU in the trend: was reported as observed.
+    assert _tags("LFLY 031230Z AUTO VRB03KT CAVOK 21/16 Q1028 TEMPO FEW060TCU") == []
+    # Observed CB, amount and height unknown: was missed.
+    assert _tags(
+        "LFBP 041100Z AUTO 25008KT 9999 FEW018/// SCT037/// BKN066/// ///CB 23/18 Q1016"
+    ) == ["CB"]
+    # Observed TCU with a forecast CB: was reported as CB.
+    assert _tags(
+        "LFMT 041230Z AUTO 12005KT 9999 OVC096/// ///TCU 24/16 Q1024 TEMPO SHRA FEW045CB"
+    ) == ["TCU"]
+
+
+def test_cb_tcu_cloud_group_forms():
+    assert _tags("ZZDS 041230Z 12005KT 9999 FEW022CB 24/16 Q1024") == ["CB"]
+    assert _tags("ZZDS 041230Z 12005KT 9999 BKN///TCU 24/16 Q1024") == ["TCU"]
+    assert _tags("ZZDS 041230Z 12005KT 9999 //////CB 24/16 Q1024") == ["CB"]
+    assert _tags("ZZDS 041230Z 12005KT 9999 FEW030 24/16 Q1024 BECMG FEW030CB") == []
+    assert _tags("ZZDS 041230Z 12005KT 9999 FEW030 24/16 Q1024 PROB30 FEW030CB") == []
+    assert _tags("ZZDS 041230Z 12005KT 9999 FEW030 24/16 Q1024 RMK CB DIST NE") == []
+
+
+def test_trend_tcu_coming_and_going_is_no_change():
+    """LFMT on 2026-10-04 flip-flopped CB → cleared → CB as the TEMPO group
+    came and went; the observed ///TCU never changed."""
+    t1 = T0 + timedelta(minutes=30)
+    base = _apt("ZZDS", "VFR", raw="ZZDS 011200Z AUTO 12005KT 9999 ///TCU 24/16 Q1024 NOSIG")
+    latest = _apt("ZZDS", "VFR", t=t1,
+                  raw="ZZDS 011230Z AUTO 12005KT 9999 ///TCU 24/16 Q1024 TEMPO SHRA FEW045CB")
+    changes, _ = _classify(_obs([base]), _obs([latest]))
+    assert changes.changes == []
+
+
+# --- #682: radar / lightning identity is the condition, not its detail -------
+
+
+def test_radar_and_lightning_values_are_categorical():
+    """Peak dBZ and hit count move every tick; the change's value must not."""
+    base = _observed(dbz=[20.0, 20.0], flashes=[0, 0])
+    values = set()
+    messages = set()
+    for dbz, flashes in (([46.0, 20.0], [3, 0]), ([51.0, 54.0], [3, 9]), ([20.0, 49.0], [0, 2])):
+        changes, _ = classify_changes(
+            baseline_obs=None, latest_obs=None, baseline_sigmets=None, latest_sigmets=None,
+            baseline_observed=base, latest_observed=_observed(dbz=dbz, flashes=flashes),
+            flown_nm=0.0,
+        )
+        values |= {(c.kind, c.from_value, c.to_value) for c in changes.changes}
+        messages |= {c.message for c in changes.changes}
+    assert values == {("radar", "none", "heavy"), ("lightning", "none", "present")}
+    # The detail stays in the message.
+    assert any("peak 54 dBZ" in m for m in messages)
+
+
+# --- #682: a SIGMET reissue is a replacement ---------------------------------
+
+
+def _poly(text):
+    """'N4200 E00400 - N4215 E00230 - …' → [(lon, lat), …]."""
+    out = []
+    for pt in text.split(" - "):
+        lat_s, lon_s = pt.split()
+        lat = int(lat_s[1:3]) + int(lat_s[3:5]) / 60
+        lon = int(lon_s[1:4]) + int(lon_s[4:6]) / 60
+        out.append((lon if lon_s[0] == "E" else -lon, lat if lat_s[0] == "N" else -lat))
+    return out
+
+
+def _at(day, hhmm):
+    return datetime(2026, 10, day, int(hhmm[:2]), int(hhmm[2:]), tzinfo=timezone.utc)
+
+
+def _real_sigmet(fir, seq, day, valid, area, qualifier="EMBD", hazard="TS"):
+    start, end = valid.split("/")
+    return SigmetAlongRoute(
+        fir_id=fir, hazard=hazard, qualifier=qualifier,
+        valid_from=_at(day, start[2:]), valid_to=_at(day, end[2:]),
+        raw_text=f"{fir} SIGMET {seq} VALID {valid} LEVA- {qualifier} {hazard}",
+        coords=_poly(area),
+    )
+
+
+# LFMM, 2026-10-04 (LFBZ→LFMD): embedded TS over the Gulf of Lion.
+LFMM_T01 = _real_sigmet("LFMM", "T01", 4, "041050/041230",
+                        "N4200 E00400 - N4215 E00230 - N4330 E00245 - N4315 E00400 - N4200 E00400")
+LFMM_T02 = _real_sigmet("LFMM", "T02", 4, "041230/041400",
+                        "N4145 E00445 - N4145 E00430 - N4200 E00430 - N4215 E00230 - N4315 E00245"
+                        " - N4300 E00430 - N4145 E00445")
+LFMM_T03 = _real_sigmet("LFMM", "T03", 4, "041415/041600",
+                        "N4100 E00430 - N4200 E00430 - N4215 E00300 - N4315 E00315 - N4300 E00445"
+                        " - N4115 E00530 - N4100 E00430")
+# LECB, 2026-10-05 (LEPA→ELLX). LECB 5 is "E OF LINE": only the line.
+LECB_2 = _real_sigmet("LECB", "2", 5, "050530/050700",
+                      "N4059 E00037 - N4132 E00109 - N4212 E00208 - N4052 E00344 - N3949 E00232"
+                      " - N3926 E00131 - N4002 E00040 - N4059 E00037")
+LECB_3 = _real_sigmet("LECB", "3", 5, "050700/051000",
+                      "N4115 E00036 - N4204 E00131 - N4207 E00314 - N4048 E00357 - N3952 E00303"
+                      " - N3929 E00159 - N4031 E00029 - N4115 E00036")
+LECB_4 = _real_sigmet("LECB", "4", 5, "051000/051200",
+                      "N3946 E00201 - N3924 E00420 - N4157 E00441 - N4223 E00314 - N4222 E00232"
+                      " - N4114 E00140 - N3946 E00201")
+LECB_5 = _real_sigmet("LECB", "5", 5, "051200/051400", "N3925 E00330 - N4226 E00232")
+
+
+def _sigmet_ticks(ticks, baseline=(), destination=None):
+    """Classify a sequence of (time, latest SIGMETs) with the memory carried
+    from tick to tick; returns [(hhmm, changes)]."""
+    memory = ClassifierMemory()
+    out = []
+    for at, latest in ticks:
+        changes, memory = classify_changes(
+            baseline_obs=None, latest_obs=None,
+            baseline_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=ticks[0][0] - timedelta(hours=1),
+                                          sigmets=list(baseline)),
+            latest_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=at, sigmets=list(latest)),
+            destination=destination, memory=memory, now=at,
+        )
+        out.append((at.strftime("%H%M"), changes.changes))
+    return out
+
+
+def _rows(changes):
+    return [(c.tier, c.new_alert, c.message) for c in changes]
+
+
+def test_lfmm_reissues_are_one_continuing_row():
+    """LFMM T01 → T02 → T03 on 2026-10-04, none in the briefing: one alert,
+    then replacements that keep the row's alert tier without alerting again,
+    across the 12:32 tick where T01 had expired and T02 was not out yet."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1100"), [LFMM_T01]),
+        (_at(4, "1232"), []),
+        (_at(4, "1242"), [LFMM_T02]),
+        (_at(4, "1420"), [LFMM_T03]),
+    ])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1100", [("alert", True, "New SIGMET LFMM T01: EMBD TS")]),
+        ("1232", []),
+        ("1242", [("alert", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
+        ("1420", [("alert", False, "SIGMET LFMM T03 replaces T02: EMBD TS")]),
+    ]
+    keys = [c.key for _, cs in ticks for c in cs]
+    assert keys == ["sigmet:LFMM|T01", "sigmet:LFMM|T01+sigmet:LFMM|T02", "sigmet:LFMM|T01+sigmet:LFMM|T03"]
+    assert [c.replaces for _, cs in ticks for c in cs] == [None, "LFMM T01", "LFMM T02"]
+
+
+def test_reissue_of_a_briefing_sigmet_is_highlight_and_hides_its_clear():
+    ticks = _sigmet_ticks([
+        (_at(4, "1220"), [LFMM_T01]),
+        (_at(4, "1232"), []),
+        (_at(4, "1242"), [LFMM_T02]),
+    ], baseline=[LFMM_T01])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1220", []),
+        # T01 expired and its reissue is not out yet: honest at the time.
+        ("1232", [("highlight", False, "SIGMET LFMM T01: EMBD TS no longer active")]),
+        ("1242", [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
+    ]
+
+
+def test_predecessor_and_reissue_listed_together_are_one_row():
+    [(_, rows)] = _sigmet_ticks([(_at(4, "1225"), [LFMM_T01, LFMM_T02])], baseline=[LFMM_T01])
+    assert _rows(rows) == [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]
+
+
+def test_lecb_reissues_including_an_e_of_line_area():
+    """LECB 2 → 3 → 4 → 5 on 2026-10-05; LECB 5 is 'E OF LINE'."""
+    ticks = _sigmet_ticks([
+        (_at(5, "0600"), [LECB_2]),
+        (_at(5, "0709"), [LECB_3]),
+        (_at(5, "1005"), [LECB_4]),
+        (_at(5, "1205"), [LECB_5]),
+    ])
+    assert [m for _, cs in ticks for (_, _, m) in _rows(cs)] == [
+        "New SIGMET LECB 2: EMBD TS",
+        "SIGMET LECB 3 replaces 2: EMBD TS",
+        "SIGMET LECB 4 replaces 3: EMBD TS",
+        "SIGMET LECB 5 replaces 4: EMBD TS",
+    ]
+    assert [c.new_alert for _, cs in ticks for c in cs] == [True, False, False, False]
+
+
+def test_sigmet_without_geometry_is_never_a_reissue():
+    no_area = LFMM_T02.model_copy(update={"coords": []})
+    ticks = _sigmet_ticks([(_at(4, "1100"), [LFMM_T01]), (_at(4, "1242"), [no_area])])
+    assert _rows(ticks[1][1]) == [("alert", True, "New SIGMET LFMM T02: EMBD TS")]
+
+
+def test_reissue_reaching_the_destination_alerts():
+    # A destination inside T02's area and ~29 NM outside T01's.
+    dest = (41.8, 4.6)
+    assert not any(
+        c.role == "destination"
+        for _, cs in _sigmet_ticks([(_at(4, "1100"), [LFMM_T01])], destination=dest) for c in cs
+    )
+    ticks = _sigmet_ticks(
+        [(_at(4, "1100"), [LFMM_T01]), (_at(4, "1242"), [LFMM_T02])], baseline=[LFMM_T01], destination=dest,
+    )
+    [c] = ticks[1][1]
+    assert (c.tier, c.new_alert, c.role) == ("alert", True, "destination")
+    assert c.message == "SIGMET LFMM T02 replaces T01: EMBD TS (at destination)"
+
+
+def test_escalation_to_sev_is_a_new_sigmet_not_a_reissue():
+    sev = LFMM_T02.model_copy(update={"qualifier": "SEV", "raw_text": LFMM_T02.raw_text.replace("EMBD", "SEV")})
+    ticks = _sigmet_ticks([(_at(4, "1100"), [LFMM_T01]), (_at(4, "1242"), [sev])], baseline=[LFMM_T01])
+    assert _rows(ticks[1][1]) == [
+        ("alert", True, "New SEV SIGMET LFMM T02: SEV TS"),
+        ("highlight", False, "SIGMET LFMM T01: EMBD TS no longer active"),
+    ]
+
+
+def test_other_fir_or_late_issue_is_not_a_reissue():
+    other_fir = LFMM_T02.model_copy(update={"fir_id": "LECB", "raw_text": "LECB SIGMET 9 VALID"})
+    late = LFMM_T02.model_copy(update={
+        "valid_from": LFMM_T01.valid_to + timedelta(minutes=90),
+        "valid_to": LFMM_T01.valid_to + timedelta(hours=3),
+    })
+    for latest in (other_fir, late):
+        ticks = _sigmet_ticks([(_at(4, "1100"), [LFMM_T01]), (_at(4, "1300"), [latest])])
+        [c] = ticks[1][1]
+        assert c.message.startswith("New SIGMET") and c.new_alert is True

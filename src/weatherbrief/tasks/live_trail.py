@@ -17,7 +17,8 @@ appended, so a stored trail would always be one tick behind.
 
 What is and is not "the weather":
 
-- **Grouping** is by change ``key`` and direction. Identity also holds the
+- **Grouping** is by change ``key`` (a SIGMET reissue's on its chain's first
+  SIGMET, ``_trail_key``) and direction. Identity also holds the
   value and tier (``change_identity``), so LFBZ going MVFR → IFR is a new
   identity on the same key and must continue the span, not start a new one. A
   direction flip (CB reported → CB no longer reported) is a different row.
@@ -31,7 +32,10 @@ What is and is not "the weather":
 - **No newer report**: an airport change that cleared without a newer report
   for that airport (the corridor fetch missed it) is a data gap, not weather.
   No cleared row, and a re-appear continues the span.
-- **SIGMET expiry, radar/lightning** clears are weather news and kept.
+- **SIGMET expiry, radar/lightning** clears are weather news and kept —
+  except that a SIGMET reissue (#682) appearing on the cleared row's key
+  within the reissue window continues the span (the FIR's gap between
+  expiry and reissue).
 """
 
 from __future__ import annotations
@@ -154,6 +158,28 @@ def _clear_reason(c: LiveChange, at: datetime, pack_tick: bool, ctx: _Context) -
     return "weather"
 
 
+def _trail_key(c: LiveChange) -> str:
+    """What a trail groups on: the change key, except that a SIGMET reissue
+    row ("sigmet:LFMM|T01+sigmet:LFMM|T02", #682) groups on its chain's first
+    SIGMET, so T01's row and every reissue after it are one trail."""
+    return c.key.split("+", 1)[0] if c.replaces else c.key
+
+
+def _reissue_resumes(last: _Span, c: LiveChange, tick: datetime | None) -> bool:
+    """A SIGMET reissue (#682) appearing on its chain's key within the reissue
+    window of the predecessor's row clearing: the FIR's gap between expiry
+    and reissue (LFMM T01 → T02, 10 min on 2026-10-04), not new weather."""
+    from weatherbrief.tasks.live_significance import SIGMET_REISSUE_WINDOW
+
+    return (
+        c.replaces is not None
+        and last.reason == "weather"
+        and last.end is not None
+        and tick is not None
+        and tick - last.end <= SIGMET_REISSUE_WINDOW
+    )
+
+
 def _spans(history: list[dict], ctx: _Context) -> dict[tuple[str, str], list[_Span]]:
     """Every (key, direction)'s on-screen periods over the history."""
     spans: dict[tuple[str, str], list[_Span]] = {}
@@ -173,7 +199,7 @@ def _spans(history: list[dict], ctx: _Context) -> dict[tuple[str, str], list[_Sp
                 c = LiveChange.model_validate(r["change"])
             except Exception:
                 continue
-            (appeared if r.get("event") == "appeared" else cleared)[(c.key, c.direction)] = c
+            (appeared if r.get("event") == "appeared" else cleared)[(_trail_key(c), c.direction)] = c
         for kd, c in cleared.items():
             if kd in appeared:
                 continue  # re-shown at the same tick: one continuous span
@@ -185,8 +211,9 @@ def _spans(history: list[dict], ctx: _Context) -> dict[tuple[str, str], list[_Sp
         for kd, c in appeared.items():
             kd_spans = spans.setdefault(kd, [])
             last = kd_spans[-1] if kd_spans else None
-            if last is not None and (last.end is None or last.reason == "gap"):
-                # Still on (value/tier change), or back after a data gap.
+            if last is not None and (last.end is None or last.reason == "gap" or _reissue_resumes(last, c, tick)):
+                # Still on (value/tier change), back after a data gap, or a
+                # SIGMET reissue taking over its predecessor's row.
                 last.end, last.reason = None, None
                 last.last, last.baseline_source = c, baseline
                 continue
@@ -275,11 +302,11 @@ def change_trails(
     out = changes.model_copy(deep=True)
     for c in out.changes:
         c.trail = _trail(
-            c, spans.get((c.key, c.direction), []), ctx, current=True,
+            c, spans.get((_trail_key(c), c.direction), []), ctx, current=True,
             baseline_source=out.baseline_source,
         )
 
-    on_screen = {c.key for c in out.changes}
+    on_screen = {_trail_key(c) for c in out.changes}
     # Only a key's most recent span can be a cleared row: a better reading
     # that gave way to a worse one (LECH IFR → VFR, then IFR → LIFR) must
     # not resurface when the worse one ends for another reason.
