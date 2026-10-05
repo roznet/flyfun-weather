@@ -319,7 +319,8 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 | Graupel | MF-local (0,1,201), eccodes `unknown` | `graupel_water_kg_kg` | identified by ICE3 species count, not by a table |
 | Cloud fraction | `cc` (0,6,32) | `cloud_area_fraction_pct` | 0–1 fraction (verified) ×100 |
 
-- **Reflectivity units (for the deferred work):** MF labels `RFLCTVT` `m6 m-3`, but values 0–62 read as dBZ. Confirm at decode before any threshold.
+- **Reflectivity units (for the deferred work) — measured 2026-10-05:** MF's GRIB definitions label `RFLCTVT` (0,16,192 3-D and 0,16,193 column-max) `mm6 m-3`, but the stored value is **Z/1000**: **dBZ = 30 + 10·log10(v)**. Neither raw dBZ nor raw linear Z fits (raw max ~150–200 would mean either a 200 dBZ echo or a 23 dBZ ceiling under 4800 J/kg CAPE). Evidence: (1) 3-D refl vs co-located IP2 rain water (rain-only points, 850/925 hPa, two hours) matches Z = 3.63e9(ρq_r)^1.75 to ±0.5 dB above q_r 5e-4 (log-log corr 0.99); light rain reads ~9 dB high (ICE3 drop-size distribution, not units); (2) 1.3 km column-max vs the OPERA composite at the same valid time (18z+5 h, 226k points): exceedance ≥41/≥45 dBZ 0.21/0.05 % vs observed 0.15/0.07 %, max 52 vs 63 dBZ, while the two raw readings give ~0 %. Light-echo coverage (≥20 dBZ) runs ~2× OPERA.
+- **Other convective fields (verified on real files):** `CAPE_INS` (0,7,6) is MUCAPE in J/kg (max of CAPE over the lowest 3000 m); 1.3 km `SP3` `BT` (0,5,7) is simulated 10.8 µm brightness temperature in K (204–309 K seen). IP3 carries `VV` (Pa/s) / `VV2` (m/s) on 24 levels, IP5 θ'w. No lightning, updraft-helicity or echo-top product is published.
 - **Freshness:** `arome:mf` (readiness `arome_mf`, env-gated), role `cloud-enrichment`.
 
 ### E.2 Météo-France ARPEGE — METADATA TRACKED, NOT INGESTED (deliberately)
