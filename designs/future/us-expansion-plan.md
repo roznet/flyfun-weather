@@ -9,6 +9,10 @@ and HRRR was rejected on horizon alone (its variable coverage is complete). See 
 for the evidence and **Two things that will fail silently** for what must be fixed before any US
 cycle hour is added. Status re-checked 2026-08-15; nothing built since.
 
+**2026-10-04:** added **Observed layer** — free US radar/satellite/lightning equivalents
+(MRMS, GOES-19/18 ABI + GLM, GIBS, IEM), probed live, and the four EU assumptions in
+`weatherbrief/observed/` that would fail silently on them.
+
 ## Context
 
 The standalone verification pipeline currently monitors ~619 European airports across `LF/ED/EG/EH/EB/LS/...` ICAO prefixes (see `configs/airport_watchlist.json`). With the EU heavy-cycle parallelisation landed (issue #110), spare droplet capacity is available — duty cycle drops to ~3%. Expanding to US adds users without infrastructure cost, and the ECMWF GRIB order already includes CONUS (`project_ecmwf_order.md`: "Coverage: Europe AND US ... grid coverage is global for the order"), so the ECMWF leg is purely compute.
@@ -299,6 +303,61 @@ region's `forecast_map:{region}:*` blobs. This removes the "spare droplet capaci
 in Context above: US compute need not consume serving-box capacity at all. The specific
 deployment topology (where off-box compute runs, transport, scheduling) is intentionally
 kept out of this repo — see the private compute-offload working notes.
+
+## Observed layer (radar, satellite, lightning)
+
+Researched 2026-10-04. The observed layer (`weatherbrief/observed/`) is a separate track
+from the verification pipeline above — nothing in "Implementation order" depends on it —
+but a US user will expect the same radar/satellite surfaces as an EU one. **Every European
+source has a free, no-account US equivalent**, and all endpoints below were probed and
+answered anonymously on 2026-10-04.
+
+| EU source (today) | US equivalent | Access |
+|---|---|---|
+| OPERA composite, ODIM HDF5 (`opera.py`, ORD open cache on CloudFerro) | **MRMS** national mosaic — `MergedReflectivityQCComposite_00.50`, `PrecipRate`; ~2 min, 0.01° | anonymous S3 `noaa-mrms-pds`, `CONUS/<product>/<YYYYMMDD>/*.grib2.gz` |
+| — (per-site raw, unused in EU) | NEXRAD Level II / III | `unidata-nexrad-level2` |
+| EUMETSAT CTTH (`ctth.py`, Data Store, account + token) | GOES ABI L2 **ACHA** (`ABI-L2-ACHAC`, cloud-top height) / **ACTP** (phase); CONUS every 5 min | anonymous S3 `noaa-goes19` (East), `noaa-goes18` (West) |
+| MTG Lightning Imager (`lightning.py`) | **GLM** `GLM-L2-LCFA`, 20 s granules, total lightning | same buckets |
+| — (no EU counterpart) | **ABI-L2-DSI** — satellite LI / CAPE / K-index, every 5 min | same buckets |
+| EUMETView WMS rendered IR (`satellite_ir.py`) | **NASA GIBS** WMTS `GOES-East_ABI_Band13_Clean_Infrared` (and West) | no key |
+| Rendered radar tiles | **Iowa Environmental Mesonet** `cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png` (timestamped variants for loops); NWS `mapservices.weather.noaa.gov` as fallback | no key |
+
+The US side is *easier* than EU: no Data Store credentials, plain public S3, and MRMS is
+already a single national composite.
+
+### What the existing code already absorbs
+
+- **`GridSpec` (`observed/grid.py`) is projection-agnostic** — a proj4 string plus an affine.
+  MRMS is a regular lat/lon grid (`+proj=longlat`), the simplest case it has seen; GOES ABI is
+  geostationary like MTG and goes through the same `+proj=geos` path `ctth.py` builds.
+- **GLM is a point/flash product like LI**, so it maps onto `FlashFrame` with the same
+  "no flashes is an observation, not a gap" semantics.
+- MRMS is dBZ, so `RADAR_SIGNIFICANT_DBZ` and the cell-detection thresholds carry over unchanged.
+
+### Traps (each fails quietly)
+
+1. **GOES sweeps on `x`, MTG on `y`.** `ctth.py` defaults `sweep = "y"` when the
+   `sweep_angle_axis` attribute is missing. GOES files carry it (`"x"`) on
+   `goes_imager_projection` — a variable name the reader's lookup list
+   (`mtg_geos_projection` / `geostationary` / `projection`) does not include. A GOES reader
+   that falls through to the default projects every pixel slightly wrong — kilometres off at
+   the disc edge, and no error.
+2. **Bucket names follow the satellite, not the role.** GOES-East has been GOES-19 since April
+   2025 (GOES-16 before that). Configure the bucket per role; hard-coding a satellite number
+   goes dark at the next swap — the same "404 reads as not-yet-published" silence the
+   CloudFerro host comment in `collect.py` warns about.
+3. **Coverage domains are static EU constants.** `OPERA_DOMAIN` (LAEA centred 55N/10E) and
+   `MTG_DOMAIN` (sub-lon 0°, 75° arc) in `observed/coverage.py` decide "is this place covered".
+   US needs an MRMS `GridDomain` and two GOES `DiscDomain`s (East ~75.2W, West ~137.0W), and the
+   source→domain map must pick by region. Otherwise a US route reads as "outside coverage", not "clear".
+4. **MRMS is GRIB2 (gzipped), not ODIM HDF5** — a new reader, and its missing/no-coverage
+   sentinels (−999 / −99) must map onto the payload's `nodata` / `undetect` split, not to zero.
+
+### Scope note
+
+Coverage: MRMS has separate CONUS, Alaska, Hawaii and Caribbean domains; GOES East+West
+cover all of North America. A first slice would be CONUS-only MRMS + GOES-East ACHA + GLM,
+mirroring the EU slice-1 set (OPERA + CTTH + LI), plus the two rendered-tile layers for the maps.
 
 ## Implementation order
 
