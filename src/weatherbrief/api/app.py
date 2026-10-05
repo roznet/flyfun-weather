@@ -153,6 +153,12 @@ def _on_new_user(user, request, db):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
+    # Before any background task or request thread: euro_aip's first imports
+    # deadlock when two threads race them on a cold process (#680).
+    from weatherbrief.euro_aip_imports import warm_euro_aip_imports
+
+    warm_euro_aip_imports()
+
     env = os.environ.get("ENVIRONMENT", "development")
     engine = get_engine()
 

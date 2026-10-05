@@ -76,6 +76,7 @@ src/weatherbrief/
 │   ├── time_scan.py    # Timing-flexibility scan artifact (time_options.json; see plans/timing-scenario-plan)
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
+├── euro_aip_imports.py # Warm every euro_aip module on the lifespan thread (cold-start import deadlock, #680)
 ├── pipeline.py        # Thin orchestrator: calls tasks/ modules in sequence
 ├── scheduler.py       # Background loops (each `run_*_loop`): auto-refresh (10min) + retention, verification scoring/digest/rollup, standalone verification cycle, METAR ingest, standalone forecast fetch, ECMWF watcher (5min), freshness markers, GRIB pre-cache, Hewson precompute, analytics rollup + digest
 ├── tasks/             # Independent pipeline stages (extracted from pipeline.py)
@@ -471,6 +472,7 @@ Static files served from `web/` at root.
 - **Timezone-aware UTC datetimes** — all datetimes are `datetime(..., tzinfo=timezone.utc)`. SQLite loses tzinfo on round-trip; `_ensure_utc()` in storage layer promotes naive datetimes back to UTC on read.
 - **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.
 - **CSS custom property theming** — dark/light/system mode via `[data-theme]` on `<html>`, FOUC-prevention inline script, `theme-changed` custom event for canvas/map reactivity.
+- **euro_aip imports stay lazy, but are warmed at startup** — every `euro_aip` import is inside a function, so on a cold process the first imports race across background threads; `euro_aip.briefing`'s package `__init__` → `sources.*` → `briefing.weather` cycle then deadlocks (`_DeadlockError` + `KeyError`, both threads fail). `lifespan` calls `warm_euro_aip_imports()` before any task starts. `tests/test_euro_aip_imports.py` fails if a new `euro_aip` import isn't in `EURO_AIP_MODULES`. The root fix (lazy re-exports in `euro_aip/briefing/__init__.py`) belongs in rzflight; keep the warm-up anyway as a guard.
 - **ECMWF-only Skew-T in PDF/email** — PDF is concise; web UI allows model toggling.
 
 ## Dependencies
