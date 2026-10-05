@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import subprocess
 import sys
 import textwrap
@@ -13,6 +14,13 @@ from weatherbrief.euro_aip_imports import EURO_AIP_MODULES, warm_euro_aip_import
 SRC = Path(__file__).resolve().parents[1] / "src" / "weatherbrief"
 
 
+def _is_module(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:  # parent is a plain module, not a package
+        return False
+
+
 def _euro_aip_imports_in_src() -> dict[str, list[str]]:
     """Map every euro_aip module imported under src/weatherbrief to its files."""
     found: dict[str, list[str]] = {}
@@ -20,7 +28,12 @@ def _euro_aip_imports_in_src() -> dict[str, list[str]]:
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                names = [node.module]
+                # `from euro_aip.models import navpoint` imports a submodule too.
+                names = [node.module] + [
+                    f"{node.module}.{alias.name}" for alias in node.names
+                    if node.module.startswith("euro_aip")
+                    and _is_module(f"{node.module}.{alias.name}")
+                ]
             elif isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             else:
@@ -81,8 +94,10 @@ _RACE = textwrap.dedent(
 def test_warmed_imports_survive_cold_thread_race():
     """The #680 race, in a fresh interpreter, after the warm-up.
 
-    Without the warm-up this exact script fails every time on euro_aip 0.19.0
-    (``_DeadlockError`` in one thread, ``KeyError`` in the other).
+    Not asserted here, but observed when this PR was written: without the
+    warm-up the same race failed 60/60 runs on euro_aip 0.19.0
+    (``_DeadlockError`` in one thread, ``KeyError`` in the other). Once
+    euro_aip drops the cycle this test still passes; it guards the warmed path.
     """
     result = subprocess.run(
         [sys.executable, "-c", _RACE], capture_output=True, text=True, timeout=120,
