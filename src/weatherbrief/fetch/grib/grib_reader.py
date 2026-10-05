@@ -16,7 +16,8 @@ pinned by ``tests/test_grib_reader.py`` against the cfgrib path):
   values to ``(Ny, Nx)``. Same here. That single choice covers the scan
   direction (``jScansPositively``), the meridian-crossing ECMWF Europe GRIB2
   grid (342.5→39.5 is presented as −17.5…39.5 by eccodes itself), and leaves
-  the US GRIB2 grid in 0–360 exactly as cfgrib does (#673 is NOT fixed here).
+  the US GRIB2 grid in 0–360 exactly as cfgrib does; targets are aligned to
+  each grid's axis by ``decode._align_lons_to_axis`` (#673).
 - **Missing values.** cfgrib sets ``missingValue`` to float32-max before
   unpacking and turns exactly those cells into NaN, so only bitmap-masked
   cells become NaN (a legitimate 9999 stays 9999). Same here.

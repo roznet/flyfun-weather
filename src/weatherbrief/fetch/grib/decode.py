@@ -326,7 +326,6 @@ def _frac_grid_indices(
     return frac, ~np.isnan(frac)
 
 
-
 def _align_lons_to_axis(lon_arr, targets_lon) -> "np.ndarray":
     """Express target longitudes in the convention of a dataset's longitude axis.
 
@@ -1138,8 +1137,9 @@ def decode_grib_per_point(
         # .idx would be orphaned (604 found in the wild). (#441 efficiency)
         datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
 
-        # Normalize longitudes to 0–360 (GFS convention)
-        target_lons = [(lon % 360) for lon in longitudes]
+        # No lon % 360: the shared interpolators align targets to the GFS
+        # 0–360 axis themselves (_align_lons_to_axis, #673).
+        target_lons = list(longitudes)
 
         results, _ = _decode_pressure_vars_from_datasets(
             datasets, latitudes, target_lons,
@@ -1159,9 +1159,10 @@ def decode_grib_per_point(
 def _is_cyclic_longitude(lon_arr) -> bool:
     """True when a 1-D ascending longitude axis wraps the globe.
 
-    GFS route targets are normalised with ``lon % 360``, but a global 0.25°
-    grid's last coordinate is 359.75 — so a longitude just west of Greenwich
-    (−0.25° … 0°) maps to 359.75 … 360.0 and lands PAST the end of the axis.
+    Route targets are shifted onto a global 0–360 axis (``_align_lons_to_axis``),
+    but a global 0.25° grid's last coordinate is 359.75 — so a longitude just
+    west of Greenwich (−0.25° … 0°) maps to 359.75 … 360.0 and lands PAST the
+    end of the axis.
     Neither interpolation path knows the axis is cyclic on its own, so both
     returned NaN for a band that every UK↔continent route crosses (#484).
 
@@ -1312,7 +1313,7 @@ def decode_cloud_diag_per_point(
         # one-shot temp files: only the .grib2 gets unlinked, so a written
         # .idx would be orphaned (604 found in the wild). (#441 efficiency)
         datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
-        target_lons = [(lon % 360) for lon in longitudes]
+        target_lons = list(longitudes)  # aligned per dataset by the interpolators (#673)
         results: list[dict[str, float]] = [{} for _ in range(n_points)]
 
         for ds in datasets:

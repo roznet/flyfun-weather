@@ -103,7 +103,7 @@ def _write(
 
 # Route-like targets: inside each grid, near edges, exactly on grid rows and
 # columns, in the 59.5–60°N seam (#672, bridged by both paths), outside every grid,
-# and US points (GRIB2 US fields stay undecoded — #673, out of scope here).
+# and US points (GRIB1 ±180 and GRIB2 0–360 US fields both decode — #673).
 def _targets() -> tuple[list[float], list[float]]:
     rng = np.random.default_rng(42)
     lats = list(rng.uniform(35.2, 59.3, 40)) + list(rng.uniform(60.2, 71.3, 15))
@@ -323,14 +323,16 @@ def test_seam_only_route_does_not_unpack_unrelated_grids(tmp_path, monkeypatch):
     assert unpacked and us_shape not in unpacked
 
 
-def test_a1_us_grib2_fields_still_missing(tmp_path):
-    """#673 is not fixed by phase 1: the US GRIB2 grid stays 0–360, as before."""
+@pytest.mark.parametrize("cfgrib", [False, True])
+def test_a1_us_grib1_and_grib2_fields_decode(tmp_path, cfgrib_mode, cfgrib):
+    """#673: the US GRIB2 grid is 0–360 and the GRIB1 one ±180, in one file;
+    a ±180 route target gets both on either decoder."""
+    cfgrib_mode(cfgrib)
     path = tmp_path / "a1.grib"
     _write_a1(path)
     got, covered = dec.decode_ecmwf_surface_per_point(path, [40.64], [-73.78])
     assert covered == [True]
-    assert "temperature_2m_k" in got[0]
-    assert "ceiling_m" not in got[0] and "k_index_c" not in got[0]
+    assert {"temperature_2m_k", "ceiling_m", "ml_cape_jkg", "k_index_c"} <= got[0].keys()
 
 
 def test_a1_masked_cells_become_missing_not_9999(tmp_path):
