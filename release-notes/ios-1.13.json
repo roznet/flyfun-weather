@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-05",
+    "title": "iOS 1.13 — Observed tab and live radar on the map",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- On flight day, a new Observed tab gathers everything measured in one place: departure and destination conditions at a glance, what's changed since your briefing, radar and lightning now, METAR/TAF and SIGMETs.\n- The route map now shows live radar and satellite imagery along your route, plus an experimental storm-cell overlay showing each cell's trend and 30-minute motion.\n- The live changes panel now shows how often a change has recurred today, and lists items that have recently cleared."
+  }
+]
