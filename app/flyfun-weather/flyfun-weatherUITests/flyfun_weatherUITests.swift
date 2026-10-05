@@ -143,22 +143,40 @@ final class flyfun_weatherUITests: XCTestCase {
     /// `tabBars` element, so try the tab bar first and fall back to a button.
     @MainActor
     private func switchToBriefingTab(_ app: XCUIApplication, _ title: String) {
-        // Prefer the bottom tab bar (iPhone); fall back to a plain button (iPad).
+        // The bottom tab bar on iPhone; a plain button in the iPad top bar —
+        // which has no TabBar element, so waiting for one there only burns 3 s
+        // per switch, and the live scenario switches on every tick.
         var tab = app.tabBars.buttons[title]
-        if !tab.waitForExistence(timeout: 3) { tab = app.buttons[title].firstMatch }
+        if UIDevice.current.userInterfaceIdiom == .pad || !tab.waitForExistence(timeout: 3) {
+            tab = app.buttons[title].firstMatch
+        }
         // iPad: when the split view's detail column is narrow — portrait with
         // the sidebar showing, which is how these journeys run — the top tab
         // bar paginates, leaving the later tabs (Cross-Section, Map) behind a
         // "Next Page" chevron. Page forward until the wanted tab surfaces,
         // exactly as a pilot on an 11-inch would. Hiding the sidebar would also
         // widen the bar, but paging is what the app actually asks of the user.
-        var pages = 0
-        while !tab.waitForExistence(timeout: 2) && pages < 4 {
-            let next = app.buttons["Next Page"]
-            guard next.exists else { break }
-            next.tap()
-            pages += 1
-            tab = app.buttons[title].firstMatch
+        // A tab can also *exist* yet sit half under the chevron (the last one
+        // on a page — Observed on an 11-inch); its centre tap then misses, so
+        // keep paging until it clears the chevron. The bar keeps its page, so
+        // a tab left behind by an earlier switch (Advisory after Observed) is
+        // reached by paging back once forward runs out.
+        func hiddenBehind(_ chevron: String) -> Bool {
+            let c = app.buttons[chevron]
+            return c.exists && tab.frame.maxX > c.frame.minX && tab.frame.minX < c.frame.maxX
+        }
+        func visible() -> Bool {
+            tab.waitForExistence(timeout: 2) && !hiddenBehind("Next Page") && !hiddenBehind("Previous Page")
+        }
+        for chevron in ["Next Page", "Previous Page"] {
+            var pages = 0
+            while !visible() && pages < 4 {
+                let button = app.buttons[chevron]
+                guard button.exists else { break }
+                button.tap()
+                pages += 1
+                tab = app.buttons[title].firstMatch
+            }
         }
         XCTAssertTrue(tab.waitForExistence(timeout: Self.uiTimeout), "\(title) tab should be present")
         // Coordinate tap: in this SwiftUI setup a plain `.tap()` on the tab-bar

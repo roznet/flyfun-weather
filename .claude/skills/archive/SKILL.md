@@ -58,29 +58,32 @@ save time, and a failure on either idiom is a release blocker.
 Pick models the machine actually has (`xcrun simctl list devices available`) and substitute
 the closest current iPhone / iPad if these names aren't present.
 
+Use `scripts/ios_test.py`, never a bare `xcodebuild test -quiet | tail`. The script turns off
+xcodebuild's on-failure simulator diagnostics (which stalled every red run ~10 min *after*
+the last test), caps each test, prints each test as it finishes, and kills xcodebuild with
+exit 124 (`STALLED`) if output and the result bundle both go quiet for 5 min. Its closing
+summary lists every failure's assertion message.
+
+Run each pass with `run_in_background: true` — a clean build plus the UI journeys exceeds
+the 10-min foreground limit — and wait for the completion notification. One pass at a
+time; the script exits 3 if another `xcodebuild test` is running (`--wait` to queue).
+
 **iPhone pass:**
 ```bash
-xcodebuild test \
-  -project app/flyfun-weather/flyfun-weather.xcodeproj \
-  -scheme flyfun-weather \
-  -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
-  -quiet \
-  2>&1 | tail -30
+python3 scripts/ios_test.py --device "iPhone 17 Pro"
 ```
 
 **iPad pass:**
 ```bash
-xcodebuild test \
-  -project app/flyfun-weather/flyfun-weather.xcodeproj \
-  -scheme flyfun-weather \
-  -destination "platform=iOS Simulator,name=iPad Pro 11-inch (M5)" \
-  -quiet \
-  2>&1 | tail -30
+python3 scripts/ios_test.py --device "iPad Pro 11-inch (M5)"
 ```
 
 If tests fail on either idiom, stop and show the failures, noting which device the failure
-was on. Each pass boots a simulator and drives the app, so use a timeout of 600000ms (10 min)
-**per pass**. On a simulator-boot flake, retry once before calling it a real failure.
+was on. To iterate on a failure, re-run just those tests with `--only <target/class/test>`
+(repeatable). On `STALLED` (124) or a simulator-boot flake, retry once before calling it a
+real failure. If every test errors with "cannot find X in scope" for symbols that plainly
+exist, the test target linked a stale app module: delete
+`~/Library/Developer/Xcode/DerivedData/flyfun-weather-*/Build` for this checkout and re-run.
 
 ### 2c — Backend tests
 

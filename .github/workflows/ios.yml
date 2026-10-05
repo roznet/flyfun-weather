@@ -75,6 +75,9 @@ jobs:
       - name: Unit tests
         run: |
           set -o pipefail
+          # -collect-test-diagnostics never: a red run otherwise stalls ~10 min
+          # collecting a simulator sysdiagnose after the last test (see
+          # scripts/ios_test.py).
           xcodebuild test \
             -project app/flyfun-weather/flyfun-weather.xcodeproj \
             -scheme flyfun-weather \
@@ -82,6 +85,7 @@ jobs:
             -only-testing:flyfun-weatherTests \
             -clonedSourcePackagesDirPath .spm \
             -resultBundlePath unit.xcresult \
+            -collect-test-diagnostics never \
             -skipMacroValidation \
             -quiet
 
