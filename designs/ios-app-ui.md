@@ -150,7 +150,11 @@ button's full regeneration — don't wire it to a refresh.
 
 **Tab presentation is a native `TabView`** (`BriefingContentView`) on both idioms:
 a bottom tab bar on **compact width (iPhone)**, a top tab bar on **regular width
-(iPad)**. Both drive `viewModel.selectedTab`, so all deep-links (advisory detail
+(iPad)**. On an 11-inch in portrait with the sidebar showing, the top bar
+**paginates** behind "Previous/Next Page" chevrons, and the last tab on a page
+(Observed, on flight day) can sit half under "Next Page" — XCUI sees it as
+existing but a tap at its centre misses; `switchToBriefingTab` pages both ways
+until the tab clears the chevrons. Both drive `viewModel.selectedTab`, so all deep-links (advisory detail
 → cross-section / map, via `setFocusIntent`) behave identically. Watch items are
 plain narrative, **not** deep-link chips — don't reintroduce taps there (#4). iPad keeps the
 `NavigationSplitView` sidebar. (A custom iPad pill band, `BriefingTabBand`, was

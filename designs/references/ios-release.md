@@ -44,6 +44,17 @@ names in the skill aren't present.
 > and it ships universal. For the day-to-day dev inner loop an iPhone-only run is an acceptable
 > fast gate.
 
+**The nightly can stand in for the local UI passes.** `ios-ui-nightly.yml` runs the UI target
+as two matrix legs, `UI (iPhone)` and `UI (iPad)`. When both passed on a commit and
+`app/flyfun-weather` is unchanged since (version-bump lines aside), the code being archived
+is the code CI drove, and `scripts/ios_ci.py gate` says `COVERED`. The archive then runs
+only the unit target plus a short iPad smoke set locally — enough to prove this machine's
+toolchain, which builds the archive, still builds and launches it. Before the iPad leg
+existed this was not safe: on 2026-10-05 six journeys failed on iPad only while the
+iPhone-only nightly was green on the same commit. A retry that passes counts as green for
+the gate but is listed on the run page ("passed only on retry"); the same journey there two
+nights running is a bug, not noise.
+
 ## §A2 — Privacy declarations must match the web page
 
 `PrivacyInfo.xcprivacy` and the web privacy page (`web/privacy.html`) must declare the same

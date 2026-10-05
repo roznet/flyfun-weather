@@ -47,9 +47,36 @@ Verify that the Release/production build will NOT use localhost. Check `app/flyf
 
 ### 2b — App tests (unit + UI), iPhone **and** iPad
 
-Run the Xcode test suite on **both** an iPhone and an iPad simulator. Both testable targets
-(`flyfun-weatherTests`, `flyfun-weatherUITests`) run together — never skip the UI target to
-save time, and a failure on either idiom is a release blocker.
+The UI journeys on **both** an iPhone and an iPad must be green for the code being archived,
+and a failure on either idiom is a release blocker. They can be proven green two ways —
+ask the nightly first, because the full local route costs ~35 min.
+
+**First, ask the nightly** (needs `gh`, so run it unsandboxed):
+```bash
+python3 scripts/ios_ci.py gate
+```
+It finds the newest nightly on main whose `UI (iPhone)` **and** `UI (iPad)` jobs both ran
+and passed, and checks nothing under `app/flyfun-weather` changed since that commit except
+version-bump lines.
+
+- **`COVERED` (exit 0)** — skip the two full passes. Run only the unit target plus an iPad
+  smoke set, one `ios_test.py` call (~5 min): it proves this machine's toolchain — the one
+  that builds the archive — builds and launches what CI tested, and the iPad's split view
+  and paginated tab bar are where local and CI diverged before.
+  ```bash
+  T=flyfun-weatherUITests/flyfun_weatherUITests
+  python3 scripts/ios_test.py --device "iPad Pro 11-inch (M5)" --only flyfun-weatherTests \
+    --only $T/testFlightListRendersSeededFlights --only $T/testBriefingAdvisoryDrillDown \
+    --only $T/testRouteSigmetsSectionRenders
+  ```
+  Report it as "UI covered by nightly <sha> (<run url>); local unit + iPad smoke green".
+- **`NOT COVERED` (exit 1)** — it says why (app code changed since, or no two-leg green run
+  yet). If the change is pushed, offer the user the choice: dispatch the nightly on main
+  (`gh workflow run ios-ui-nightly.yml --ref main`, ~30–45 min on CI, nothing running
+  locally; re-run `gate` when it finishes) **or** run the full local passes below.
+
+**Full local passes** — when not covered, or the user asks. Both testable targets
+(`flyfun-weatherTests`, `flyfun-weatherUITests`) run together; never skip the UI target here.
 
 **Why both idioms, and why concrete device names: §A1.** In short — a real
 `NavigationSplitView` fork means an iPhone pass does not imply an iPad pass, and

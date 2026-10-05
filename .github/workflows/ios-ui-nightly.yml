@@ -67,23 +67,41 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # One leg per idiom. iPad is not "iPhone, bigger": the briefing is a
+  # NavigationSplitView whose detail column paginates its tab bar in portrait,
+  # and on 2026-10-05 six D-0 journeys failed on iPad only while this workflow
+  # (then iPhone-only) was green on the very same commit. With both legs green
+  # on a commit, /archive can skip its local UI passes when app/ is unchanged
+  # since (`scripts/ios_ci.py gate`) — so the job names below are load-bearing:
+  # the gate looks them up.
   ui:
-    name: xcodebuild test (UI)
+    name: UI (${{ matrix.idiom }})
     needs: changed
     # A manual run always executes — the point of reaching for the button is
     # usually to re-test the very commit the guard would skip.
     if: github.event_name == 'workflow_dispatch' || needs.changed.outputs.should_run == 'true'
     runs-on: macos-26
-    # ~5 min of execution locally on Apple silicon; GitHub's runners are
-    # substantially slower and every XCUI test relaunches the app (~15-20s
-    # each), so the ceiling is generous.
-    timeout-minutes: 60
+    # Locally the UI target takes ~12 min on iPhone and ~18 on iPad (the live
+    # scenario alone is ~7 min there); GitHub's runners are substantially
+    # slower, so the ceiling is generous.
+    timeout-minutes: 90
+    strategy:
+      # Independent verdicts: an iPad failure must not cancel the iPhone leg.
+      fail-fast: false
+      matrix:
+        include:
+          - idiom: iPhone
+            # Exact name first, then prefixes, newest runtime that has it — so a
+            # runner-image change that drops a model degrades instead of failing
+            # as "unavailable destination".
+            devices: '"iPhone 17" "iPhone 16" "iPhone"'
+          - idiom: iPad
+            devices: '"iPad Pro 11-inch (M5)" "iPad Pro 11-inch" "iPad Air 11-inch" "iPad"'
 
     env:
-      # Both pinned to match ios.yml exactly — the two workflows should differ
-      # in *what they run*, nothing else.
+      # Pinned to match ios.yml exactly — the two workflows should differ in
+      # *what they run*, nothing else.
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      DESTINATION: 'platform=iOS Simulator,name=iPhone 17,OS=latest'
 
     steps:
       - uses: actions/checkout@v4
@@ -102,17 +120,16 @@ jobs:
             -scheme flyfun-weather \
             -clonedSourcePackagesDirPath .spm
 
+      - name: Pick simulator
+        run: |
+          echo "DESTINATION=$(eval python3 scripts/ios_ci.py pick-device ${{ matrix.devices }})" >> "$GITHUB_ENV"
+
       # -retry-tests-on-failure is what makes this reportable rather than noise:
       # it re-runs only the tests that failed, so a simulator launch hiccup
       # self-heals and what lands in the log is a reproducible failure. The
       # journeys are launch-heavy, so a retry costs one app launch, not a rerun
-      # of the suite.
-      #
-      # One test (testForecastMapOffersSidebarToggleOnPad) is iPad-only and will
-      # report as skipped on this destination. Adding an iPad leg means checking
-      # a device name that actually exists on the runner image — an unavailable
-      # name is a hard failure, not a skip — so it is left for when someone can
-      # verify it against the image manifest.
+      # of the suite. A retry that passes is still listed on the run page
+      # ("passed only on retry") so a flaky journey stays visible.
       - name: UI tests
         run: |
           set -o pipefail
@@ -134,31 +151,17 @@ jobs:
 
       # Same trap as ios.yml: `-only-testing:` matching nothing is a SILENT
       # vacuous pass — "** TEST SUCCEEDED **", exit 0, zero tests run. Worse
-      # here, because nobody watches a nightly that is always green.
-      - name: Guard against a vacuous pass
+      # here, because nobody watches a nightly that is always green. The summary
+      # also splits "passed only on retry" from real failures (xcresult counts a
+      # retried test as failed even when xcodebuild exits 0) and prints each
+      # failure's assertion text, since `-quiet` swallows it and the bundle is
+      # hundreds of MB to download for four lines.
+      - name: Summarize (and guard against a vacuous pass)
         if: always()
         run: |
-          summary=$(xcrun xcresulttool get test-results summary --path ui.xcresult)
-          total=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["totalTestCount"])')
-          passed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["passedTests"])')
-          failed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["failedTests"])')
-          skipped=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skippedTests"])')
-          echo "UI journeys: $passed passed, $failed failed, $skipped skipped (of $total)" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$total" -eq 0 ]; then
-            echo "::error::xcodebuild ran 0 UI tests — the -only-testing filter matched nothing."
-            exit 1
-          fi
-          echo "Ran $total UI tests: $passed passed, $failed failed, $skipped skipped."
-
-          # `-quiet` swallows the assertion text, so without this a red nightly
-          # can only be diagnosed by downloading the result bundle — 170 MB to
-          # read four lines. Print name + message straight into the run page.
-          # One-lined on purpose: inside a `run: |` block a multi-line python -c
-          # would need its top-level statements at column 0 to be valid Python,
-          # which ends the YAML block scalar.
-          if [ "$failed" -gt 0 ]; then
-            echo "$summary" | python3 -c "import json,sys; [print('- **%s** - %s' % (t.get('testName'), t.get('failureText'))) for t in json.load(sys.stdin).get('testFailures', [])]" | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          set -o pipefail
+          python3 scripts/ios_ci.py summarize ui.xcresult --label "UI (${{ matrix.idiom }})" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Always, not just on failure: the journeys attach screenshots
       # (.lifetime = .keepAlways), and a passing run's screenshots are how a
@@ -167,6 +170,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ui-xcresult
+          name: ios-ui-xcresult-${{ matrix.idiom }}
           path: ui.xcresult
           retention-days: 14

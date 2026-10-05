@@ -1049,13 +1049,6 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
-    /// Launch cost of the app the journeys exercise — i.e. mock mode.
-    ///
-    /// Mocked on purpose, and not only for determinism: an unmocked launch
-    /// fires the auth gate, TipKit and four network calls to production (the
-    /// airports-DB download among them), so what it measures is the runner's
-    /// link to weather.flyfun.aero, not the app. It was also unbounded — see
-    /// `launchMockApp` and the nightly note on `testLaunch`.
     // MARK: - Live layer: a real flight morning, tick by tick (#637, §36)
 
     /// One tick of a frozen flight morning, as the `/live` body the server
@@ -1260,12 +1253,5 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(cleared.contains { $0["key"] as? String == "metar:LEMI" })
         let current = (at0710["changes"] as? [[String: Any]]) ?? []
         XCTAssertTrue(current.contains { (($0["trail"] as? [String: Any])?["times_today"] as? Int ?? 0) >= 2 })
-    }
-
-    @MainActor
-    func testLaunchPerformance() throws {
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            _ = launchMockApp()
-        }
     }
 }
