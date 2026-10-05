@@ -629,6 +629,50 @@ class _SeamAccumulator:
         )
 
 
+def _axes_signature(lat_arr: "np.ndarray", lon_arr: "np.ndarray") -> tuple:
+    """Identity of a grid's geometry for the seam plan.
+
+    Axes, not the GRIB grid hash: ECMWF writes GRIB1 and GRIB2 messages on the
+    same area, which hash differently but share axes, and a field delivered
+    only in GRIB2 (``ceil``) must still meet the edge rows of its grid.
+    """
+    return (lat_arr.size, round(float(lat_arr[0]), 6), round(float(lat_arr[-1]), 6),
+            lon_arr.size, round(float(lon_arr[0]), 6), round(float(lon_arr[-1]), 6))
+
+
+def _near_grid_edge(
+    lat_arr: "np.ndarray", lon_arr: "np.ndarray",
+    targets_lat: "np.ndarray", targets_lon: "np.ndarray",
+) -> bool:
+    """True when a target could take a seam term from this grid.
+
+    A seam term reads the grid's top or bottom row, so the target sits within
+    ``_MAX_SEAM_GAP_DEG`` past that edge and inside the grid's longitudes.
+    Necessary, not sufficient: ``_plan_grid_seams`` decides. Lets the direct
+    decoders skip unpacking grids no target is in or next to.
+    """
+    la0, la1 = float(lat_arr.min()), float(lat_arr.max())
+    lo0, lo1 = float(lon_arr.min()), float(lon_arr.max())
+    gap = _MAX_SEAM_GAP_DEG + 1e-9
+    in_lon = (targets_lon >= lo0) & (targets_lon <= lo1)
+    above = (targets_lat > la1) & (targets_lat <= la1 + gap)
+    below = (targets_lat < la0) & (targets_lat >= la0 - gap)
+    return bool((in_lon & (above | below)).any())
+
+
+class _EdgeRows:
+    """``values[row, j]`` over the edge rows a direct decode kept for a seam."""
+
+    __slots__ = ("rows",)
+
+    def __init__(self, rows: "dict[int, np.ndarray]") -> None:
+        self.rows = rows
+
+    def __getitem__(self, idx):
+        row, j = idx
+        return self.rows[row][j]
+
+
 def _seam_setup(
     datasets: list,
     latitudes: "np.ndarray | list[float]",
@@ -651,8 +695,7 @@ def _seam_setup(
             ds_grid.append(None)
             continue
         lat_arr, lon_arr = a[2], a[3]
-        sig = (lat_arr.size, round(float(lat_arr[0]), 6), round(float(lat_arr[-1]), 6),
-               lon_arr.size, round(float(lon_arr[0]), 6), round(float(lon_arr[-1]), 6))
+        sig = _axes_signature(lat_arr, lon_arr)
         if sig not in sigs:
             sigs[sig] = len(grids)
             grids.append((lat_arr, lon_arr))
@@ -3509,6 +3552,14 @@ def _decode_ecmwf_surface_per_point_cfgrib(
             ds.close()
 
 
+def _ecmwf_seam_sentinels() -> dict[str, float]:
+    """Surface fields whose 9999 m "no cloud" must not blend at a seam."""
+    return {
+        _ECMWF_CLOUD_DIAG_FIELD_MAP[k]: _ECMWF_NO_CLOUD_SENTINEL_M - 1.0
+        for k in ("ceil", "cbh", "hcct")
+    }
+
+
 def _decode_ecmwf_surface_from_datasets(
     datasets: list,
     latitudes: list[float],
@@ -3527,11 +3578,7 @@ def _decode_ecmwf_surface_from_datasets(
     covered: list[bool] = [False] * n_points
 
     seams, axes = _seam_setup(
-        datasets, latitudes, longitudes,
-        sentinel_keys={
-            _ECMWF_CLOUD_DIAG_FIELD_MAP[k]: _ECMWF_NO_CLOUD_SENTINEL_M - 1.0
-            for k in ("ceil", "cbh", "hcct")
-        },
+        datasets, latitudes, longitudes, sentinel_keys=_ecmwf_seam_sentinels(),
     )
 
     for ds_idx, ds in enumerate(datasets):
@@ -3598,16 +3645,23 @@ def _decode_ecmwf_surface_from_datasets(
 class _Series:
     """One (variable, typeOfLevel, grid) group of gathered messages."""
 
-    __slots__ = ("var", "type_of_level", "param_id", "grid_rank", "bw", "levels")
+    __slots__ = ("var", "type_of_level", "param_id", "grid_rank", "bw", "grid", "levels", "edges")
 
-    def __init__(self, var: str, type_of_level: str, param_id: int, grid_rank: int, bw) -> None:
+    def __init__(
+        self, var: str, type_of_level: str, param_id: int, grid_rank: int, bw, grid,
+    ) -> None:
         self.var = var
         self.type_of_level = type_of_level
         self.param_id = param_id
         self.grid_rank = grid_rank
         self.bw = bw
+        self.grid = grid
         # level → [(header, gathered values or None when no target is in-bounds)]
         self.levels: dict[float, list[tuple[tuple, "np.ndarray | None"]]] = {}
+        # level → {row index: row values}: the grid's top and bottom rows, kept
+        # (from the same first message as ``level_values``) only when a target
+        # sits next to the grid's edge and seams are bridged (#672).
+        self.edges: dict[float, dict[int, "np.ndarray"]] = {}
 
     def single_header(self) -> bool:
         """False when a level carries more than one step/date/member."""
@@ -3624,12 +3678,18 @@ def _gather_series(
     latitudes: list[float],
     longitudes: list[float],
     select,
+    *,
+    bridge_seams: bool = False,
 ) -> list[_Series]:
     """Read ``source`` once, gathering each selected message at every target.
 
     ``select(msg)`` decides from header keys alone whether a message is wanted;
     unwanted messages are never unpacked, nor are messages on a grid that no
     target falls inside. Returns the series in cfgrib's processing order.
+
+    ``bridge_seams``: also unpack a grid a target sits just outside of (see
+    ``_near_grid_edge``) and keep its edge rows in ``_Series.edges`` for the
+    seam fill (#672, ``_series_seams``).
     """
     import numpy as np
 
@@ -3637,8 +3697,9 @@ def _gather_series(
 
     targets_lat = np.asarray(latitudes, dtype=np.float64)
     targets_lon = np.asarray(longitudes, dtype=np.float64)
-    # grid key → (rank in file order, grid, weights or None for degenerate)
-    grids: dict[str, tuple[int, object, object]] = {}
+    # grid key → (rank in file order, grid, weights or None for degenerate,
+    # keep edge rows for a seam)
+    grids: dict[str, tuple[int, object, object, bool]] = {}
     series: dict[tuple[str, str, str], _Series] = {}
 
     for msg in iter_messages(source):
@@ -3648,20 +3709,24 @@ def _gather_series(
         if entry is None:
             grid = msg.grid()
             bw = None
+            near_edge = False
             if grid is not None:
                 bw = _bilinear_grid_weights(grid.lats, grid.lons, targets_lat, targets_lon)
-            entry = (len(grids), grid, bw)
+                near_edge = bridge_seams and _near_grid_edge(
+                    grid.lats, grid.lons, targets_lat, targets_lon,
+                )
+            entry = (len(grids), grid, bw, near_edge)
             grids[msg.grid_key] = entry
-        rank, grid, bw = entry
+        rank, grid, bw, near_edge = entry
         if grid is None or bw is None:
             continue
         skey = (msg.var, msg.type_of_level, msg.grid_key)
         s = series.get(skey)
         if s is None:
-            s = _Series(msg.var, msg.type_of_level, msg.param_id, rank, bw)
+            s = _Series(msg.var, msg.type_of_level, msg.param_id, rank, bw, grid)
             series[skey] = s
         gathered = None
-        if bw.inb_idx.size:
+        if bw.inb_idx.size or near_edge:
             values = msg.values(grid)
             if values is None:
                 # Value count disagrees with the grid header — a corrupt or
@@ -3674,13 +3739,52 @@ def _gather_series(
                     source if isinstance(source, (str, Path)) else "bytes",
                 )
                 continue
-            gathered = gather_bilinear(values, bw)
+            if bw.inb_idx.size:
+                gathered = gather_bilinear(values, bw)
+            if near_edge and msg.level not in s.levels:
+                top, bot = int(np.argmax(grid.lats)), int(np.argmin(grid.lats))
+                # Copies: a row view would keep the whole field alive.
+                s.edges[msg.level] = {top: values[top].copy(), bot: values[bot].copy()}
         s.levels.setdefault(msg.level, []).append((msg.header, gathered))
 
     return sorted(
         series.values(),
         key=lambda s: (s.type_of_level, s.grid_rank, s.param_id, s.var),
     )
+
+
+def _series_seams(
+    series: list[_Series],
+    latitudes: list[float],
+    longitudes: list[float],
+    sentinel_keys: "dict | None" = None,
+) -> _SeamAccumulator | None:
+    """Seam plan over the grids of ``series`` (direct decode, #672).
+
+    The direct counterpart of ``_seam_setup``: series index plays the dataset
+    index, grids are identified by ``_axes_signature``. None when no target
+    falls in a seam.
+    """
+    grids: list[tuple] = []
+    sigs: dict[tuple, int] = {}
+    s_grid: list[int | None] = []
+    for s in series:
+        sig = _axes_signature(s.grid.lats, s.grid.lons)
+        if sig not in sigs:
+            sigs[sig] = len(grids)
+            grids.append((s.grid.lats, s.grid.lons))
+        s_grid.append(sigs[sig])
+    plan = _plan_grid_seams(grids, latitudes, longitudes)
+    return _SeamAccumulator(plan, s_grid, sentinel_keys) if plan else None
+
+
+def _add_seam_level(seams: _SeamAccumulator | None, si: int, s: _Series, lev: float, key) -> None:
+    """Feed series ``si``'s edge rows at ``lev`` to the seam fill, if any."""
+    if seams is None or not seams.has(si):
+        return
+    edges = s.edges.get(lev)
+    if edges is not None:
+        seams.add(si, key, _EdgeRows(edges))
 
 
 def _decode_ecmwf_pressure_direct(
@@ -3701,7 +3805,9 @@ def _decode_ecmwf_pressure_direct(
             and msg.var.lower() in _ECMWF_FULL_VAR_MAP
         )
 
-    for s in _gather_series(file_path, latitudes, longitudes, select):
+    series = _gather_series(file_path, latitudes, longitudes, select, bridge_seams=True)
+    seams = _series_seams(series, latitudes, longitudes)
+    for si, s in enumerate(series):
         if len(s.levels) < 2:
             logger.debug("skip %s: single pressure level %s", s.var, list(s.levels))
             continue
@@ -3713,10 +3819,11 @@ def _decode_ecmwf_pressure_direct(
         scale = 100.0 if var_lower in _ECMWF_FRAC_TO_PCT else 1.0
         inb_idx = s.bw.inb_idx
         for lev in sorted(s.levels, reverse=True):
+            p_hpa = int(lev)
+            _add_seam_level(seams, si, s, lev, (p_hpa, field_name, scale))
             row = s.level_values(lev)
             if row is None:
                 continue
-            p_hpa = int(lev)
             for k, pt_idx in enumerate(inb_idx):
                 v = float(row[k])
                 if math.isnan(v):
@@ -3726,6 +3833,19 @@ def _decode_ecmwf_pressure_direct(
                     continue  # first grid wins
                 level_fields[field_name] = v * scale
                 covered[pt_idx] = True
+
+    # Seam points are outside every grid, so nothing above has filled them;
+    # the check keeps first-wins explicit all the same.
+    if seams is not None:
+        filled: set[int] = set()
+        for pt_idx, (p_hpa, field_name, scale), v in seams.results():
+            level_fields = results[pt_idx].setdefault(p_hpa, {})
+            if field_name in level_fields:
+                continue
+            level_fields[field_name] = v * scale
+            covered[pt_idx] = True
+            filled.add(pt_idx)
+        seams.log_summary("pressure-level", filled)
 
     # Mirror the cfgrib path: a level dict is only created when it gets a value.
     return results, covered
@@ -3746,14 +3866,18 @@ def _decode_ecmwf_surface_direct(
     def select(msg) -> bool:
         return msg.var.lower() in _ECMWF_CLOUD_DIAG_FIELD_MAP
 
-    for s in _gather_series(file_path, latitudes, longitudes, select):
+    series = _gather_series(file_path, latitudes, longitudes, select, bridge_seams=True)
+    seams = _series_seams(series, latitudes, longitudes, _ecmwf_seam_sentinels())
+    for si, s in enumerate(series):
         # The surface decoder interpolated 2-D fields only: a series with more
         # than one level or step was a 3-D cfgrib variable and yielded nothing.
         if len(s.levels) != 1 or not s.single_header():
             logger.debug("skip %s: not a single 2-D field", s.var)
             continue
         field_name = _ECMWF_CLOUD_DIAG_FIELD_MAP[s.var.lower()]
-        row = s.level_values(next(iter(s.levels)))
+        lev = next(iter(s.levels))
+        _add_seam_level(seams, si, s, lev, field_name)
+        row = s.level_values(lev)
         if row is None:
             continue
         for k, pt_idx in enumerate(s.bw.inb_idx):
@@ -3762,6 +3886,16 @@ def _decode_ecmwf_surface_direct(
                 continue
             results[pt_idx][field_name] = v
             covered[pt_idx] = True
+
+    if seams is not None:
+        filled: set[int] = set()
+        for pt_idx, field_name, v in seams.results():
+            if field_name in results[pt_idx]:
+                continue
+            results[pt_idx][field_name] = v
+            covered[pt_idx] = True
+            filled.add(pt_idx)
+        seams.log_summary("surface", filled)
 
     return results, covered
 
