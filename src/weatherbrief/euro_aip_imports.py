@@ -8,9 +8,10 @@ needs ``briefing.weather.parser``, while a thread already inside
 ``briefing.weather`` needs the parent package. Python then raises
 ``_DeadlockError`` in one thread and a ``KeyError`` in the other (#680).
 
-Calling :func:`warm_euro_aip_imports` from the app lifespan, before any
-background task or request thread starts, makes every later lazy import a
-``sys.modules`` lookup. The long-term fix belongs in euro_aip (stop eagerly
+Calling :func:`warm_euro_aip_imports` from the app lifespan and from the
+``weatherbrief.verify`` CLI (whose standalone cycle runs thread pools), before
+any other thread starts, makes every later lazy import a ``sys.modules``
+lookup. The long-term fix belongs in euro_aip (stop eagerly
 importing ``sources.*`` from ``briefing/__init__``); this stays useful as a
 guard against the next cycle either way.
 

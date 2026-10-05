@@ -1431,6 +1431,12 @@ def main():
 
     args = parser.parse_args()
 
+    # Commands here run thread pools (standalone cycle): warm euro_aip on the
+    # main thread first, same as the app lifespan (#680).
+    from weatherbrief.euro_aip_imports import warm_euro_aip_imports
+
+    warm_euro_aip_imports()
+
     if args.command == "collect":
         cmd_collect(args)
     elif args.command == "export":
