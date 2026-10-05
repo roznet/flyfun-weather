@@ -42,11 +42,13 @@ jobs:
       # can't silently change the compiler under us. 26.6 is both the current
       # macos-26 default and what the app is developed against locally.
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      # The app's deployment target is iOS 26.2; the image carries 26.2, 26.4
-      # and 26.5 runtimes. OS=latest rather than a pin, because the installed
-      # runtime set moves with the image and an unavailable pin is a hard
-      # failure. iPhone 17 is present in every runtime the image ships.
-      DESTINATION: 'platform=iOS Simulator,name=iPhone 17,OS=latest'
+      # The app's deployment target is iOS 26.2. The simulator is picked at
+      # run time (scripts/ios_ci.py pick-device: first available name in this
+      # list, exact then prefix, on the newest runtime that has it), not
+      # pinned: the installed devices and runtimes move with the image, and on
+      # 2026-10-05 a pinned "iPhone 17,OS=latest" became a hard "Unable to
+      # find a device" failure.
+      DEVICES: 'iPhone 17|iPhone 16|iPhone'
 
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +70,14 @@ jobs:
             -project app/flyfun-weather/flyfun-weather.xcodeproj \
             -scheme flyfun-weather \
             -clonedSourcePackagesDirPath .spm
+
+      # The bare assignment makes a failed pick fail the step — bash -e does
+      # not look inside "echo $(...)".
+      - name: Pick simulator
+        run: |
+          IFS='|' read -ra names <<< "$DEVICES"
+          dest=$(python3 scripts/ios_ci.py pick-device "${names[@]}")
+          echo "DESTINATION=$dest" >> "$GITHUB_ENV"
 
       # -only-testing filters *execution*, not the build: the shared scheme
       # lists both testables, so the UI target still compiles. It is two files,

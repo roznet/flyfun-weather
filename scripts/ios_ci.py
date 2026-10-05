@@ -119,7 +119,14 @@ def classify(tests: dict) -> tuple[list[str], list[tuple[str, str]]]:
 
 
 def summarize(bundle: str, label: str) -> int:
-    s = xcresult(bundle, "summary")
+    try:
+        s = xcresult(bundle, "summary")
+    except subprocess.CalledProcessError:
+        # No bundle, or an empty one: xcodebuild failed before testing began
+        # (bad destination, build error). Say so instead of a traceback.
+        print(f"### {label}: no test results — xcodebuild failed before running tests; "
+              "see the UI tests step.")
+        return 1
     flaky, failed = classify(xcresult(bundle, "tests"))
     total, skipped = s["totalTestCount"], s["skippedTests"]
     passed = total - skipped - len(failed)

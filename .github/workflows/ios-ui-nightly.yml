@@ -94,9 +94,9 @@ jobs:
             # Exact name first, then prefixes, newest runtime that has it — so a
             # runner-image change that drops a model degrades instead of failing
             # as "unavailable destination".
-            devices: '"iPhone 17" "iPhone 16" "iPhone"'
+            devices: 'iPhone 17|iPhone 16|iPhone'
           - idiom: iPad
-            devices: '"iPad Pro 11-inch (M5)" "iPad Pro 11-inch" "iPad Air 11-inch" "iPad"'
+            devices: 'iPad Pro 11-inch (M5)|iPad Pro 11-inch|iPad Air 11-inch|iPad'
 
     env:
       # Pinned to match ios.yml exactly — the two workflows should differ in
@@ -120,9 +120,18 @@ jobs:
             -scheme flyfun-weather \
             -clonedSourcePackagesDirPath .spm
 
+      # Names travel through an env var split on "|", never pasted into the
+      # script: an expression's text is spliced in before the shell parses it,
+      # so "(M5)" became a syntax error inside $(...), the step stayed green
+      # and xcodebuild got an empty -destination. The bare assignment makes a
+      # failed pick fail the step (bash -e does not see inside "echo $(...)").
       - name: Pick simulator
+        env:
+          DEVICES: ${{ matrix.devices }}
         run: |
-          echo "DESTINATION=$(eval python3 scripts/ios_ci.py pick-device ${{ matrix.devices }})" >> "$GITHUB_ENV"
+          IFS='|' read -ra names <<< "$DEVICES"
+          dest=$(python3 scripts/ios_ci.py pick-device "${names[@]}")
+          echo "DESTINATION=$dest" >> "$GITHUB_ENV"
 
       # -retry-tests-on-failure is what makes this reportable rather than noise:
       # it re-runs only the tests that failed, so a simulator launch hiccup
