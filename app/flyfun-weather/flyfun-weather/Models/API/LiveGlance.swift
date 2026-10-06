@@ -171,7 +171,7 @@ nonisolated struct LiveRibbon: Codable, Sendable {
     let radarRadiusNm: Double?
     let radarTime: String?
     let waypoints: [RibbonWaypoint]?
-    let segments: [RibbonSegment]?
+    let segments: [LiveRibbonSegment]?
     let stations: [RibbonStation]?
     let sigmets: [RibbonSigmet]?
 }
@@ -182,7 +182,7 @@ nonisolated struct RibbonWaypoint: Codable, Sendable {
     let eta: String?
 }
 
-nonisolated struct RibbonSegment: Codable, Sendable, Identifiable {
+nonisolated struct LiveRibbonSegment: Codable, Sendable, Identifiable {
     let index: Int
     let fromNm: Double?
     let toNm: Double?

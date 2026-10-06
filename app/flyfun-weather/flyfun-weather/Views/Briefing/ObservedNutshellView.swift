@@ -223,7 +223,7 @@ struct RouteRibbonView: View {
 
     // Radar per segment, lightning glyph above it.
     @ViewBuilder
-    private func segmentMark(_ seg: RibbonSegment, _ width: CGFloat) -> some View {
+    private func segmentMark(_ seg: LiveRibbonSegment, _ width: CGFloat) -> some View {
         let x0 = x(seg.fromNm ?? 0, width), x1 = x(seg.toNm ?? 0, width)
         let rect = Rectangle()
             .fill(Self.radarColor(seg))
@@ -369,7 +369,7 @@ struct RouteRibbonView: View {
         }
     }
 
-    static func radarColor(_ seg: RibbonSegment) -> Color {
+    static func radarColor(_ seg: LiveRibbonSegment) -> Color {
         switch seg.radarStatus {
         case "no_coverage": return Color.gray.opacity(0.35)
         case "measured":
@@ -406,7 +406,7 @@ struct RouteRibbonView: View {
         return hazard.isEmpty ? "SIGMET" : hazard
     }
 
-    static func segmentLabel(_ seg: RibbonSegment) -> String {
+    static func segmentLabel(_ seg: LiveRibbonSegment) -> String {
         let span = "\(Int((seg.fromNm ?? 0).rounded()))–\(Int((seg.toNm ?? 0).rounded())) NM"
         switch seg.radarStatus {
         case "measured":
