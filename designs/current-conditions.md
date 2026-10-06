@@ -486,6 +486,15 @@ was built (live layer, PDF, digest; clients re-age from `valid_time`); and it gr
 nothing — there is no "severe" or "significant" anywhere in it, and a test
 asserts that.
 
+Two cross-source rules (#689, meteorology-decisions §40): the cloud-tops
+clause treats a point with no cloud top under a ≥ 35 dBZ echo as
+*unavailable*, never clear (so "clear over the whole corridor" needs every
+point to agree with the radar); and the radar clause says where the peak is,
+"peak 49 dBZ 8 NM NE of LPPR", from `ObservedAnnulus.max_at_nm` /
+`max_bearing_deg` (set by the sampler for radar and rain rate, not tops;
+None in payloads built before), falling back to "within 20 NM of …" without
+them or for an unnamed route point.
+
 **The intensity word is a deliberate carve-out from "grades nothing"**
 (2026-09-16, `observed/intensity.py`, decision §33 in
 `designs/meteorology-decisions.md`). The clauses now read "heavy echo, peak

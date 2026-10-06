@@ -467,3 +467,21 @@ def test_a_fully_covered_route_reports_full_coverage(stocked_store):
     conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
     assert all(s.covered_fraction == 1.0 for s in conditions.sources)
     assert "outside lightning coverage" not in conditions.summary
+
+
+def test_radar_peak_position_lies_inside_its_disc(stocked_store):
+    """#689: each radar annulus with a peak says where it is (distance and
+    bearing from the station); cloud tops carry none."""
+    conditions = build_observed_conditions(ROUTE, store=stocked_store, now=NOW)
+    with_peak = [
+        a for s in conditions.reflectivity.stations for a in s.annuli if a.max_value is not None
+    ]
+    assert with_peak
+    for a in with_peak:
+        assert a.max_at_nm is not None and 0 <= a.max_at_nm <= a.radius_nm + 0.5
+        assert 0 <= a.max_bearing_deg < 360
+    for s in conditions.reflectivity.stations:
+        for a in s.annuli:
+            if a.max_value is None:
+                assert a.max_at_nm is None
+    assert all(a.max_at_nm is None for s in conditions.cloud_tops.stations for a in s.annuli)

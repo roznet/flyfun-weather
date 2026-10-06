@@ -44,6 +44,10 @@ ChangeKind = Literal[
 ]
 ChangeSource = Literal["METAR", "SPECI", "TAF", "SIGMET", "LIGHTNING", "RADAR"]
 ChangeRole = Literal["departure", "destination", "alternate", "route"]
+#: ``updated``: a change that is neither better nor worse, e.g. a FIR's plain
+#: reissue of a SIGMET the briefing already had (#689). Not counted as worse
+#: or better; clients render it neutral.
+ChangeDirection = Literal["worse", "better", "updated"]
 
 
 class LiveEvidencePoint(BaseModel):
@@ -134,6 +138,17 @@ class LiveSigmetTrace(BaseModel):
     # (min_lon, min_lat, max_lon, max_lat) of the area; None without geometry.
     bbox: tuple[float, float, float, float] | None = None
     at_destination: bool = False
+    # Vertical band and route proximity (``SigmetAlongRoute.min_distance_nm``,
+    # 0 = the route enters it), kept so a reissue can be compared with its
+    # predecessor (#689). None on traces written before the fields.
+    base_ft: int | None = None
+    top_ft: int | None = None
+    min_distance_nm: float | None = None
+    # Reissue only (#689): the reissue is worse than its predecessor (area now
+    # reaches the route, vertical extent now reaches the flight's band).
+    # Decided once, when the reissue is first seen, so the row's direction
+    # never flips between ticks.
+    reissue_worse: bool = False
     last_seen: datetime
 
 
@@ -151,7 +166,7 @@ class LiveChange(BaseModel):
     key: str
     kind: ChangeKind
     source: ChangeSource
-    direction: Literal["worse", "better"]
+    direction: ChangeDirection
     # highlight = significant somewhere on the route; alert = departure,
     # destination or an alternate (the tier #638's push delivery consumes).
     tier: Literal["highlight", "alert"]
@@ -199,6 +214,12 @@ class LiveChanges(BaseModel):
     # counted below, never an alert. None = not computed (stored layer,
     # snapshot overlay); [] = computed, nothing recent.
     recently_cleared: list[LiveChange] | None = None
+    # Keys (``sigmet:LECM|6``) of the listed route SIGMETs that are new to the
+    # flight: their reissue chain did not start from a SIGMET the baseline
+    # had (#689). Clients mark Area Hazards rows NEW from this, never from the
+    # change rows (a reissue of a briefed SIGMET is not new). None = not
+    # computed (no SIGMET baseline, or a layer written before the field).
+    new_sigmets: list[str] | None = None
 
     @computed_field
     @property

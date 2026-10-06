@@ -86,6 +86,10 @@ nonisolated struct LiveChanges: Codable, Sendable {
     /// the snapshot overlay (it never carries trails); the server owns the hour
     /// window and re-applies it on every `/live` read.
     var recentlyCleared: [LiveChange]? = nil
+    /// #689: keys ("sigmet:LECM|6") of the listed SIGMETs new to the flight —
+    /// their reissue chain did not start in the briefing. nil from an older
+    /// server (see `issuedSigmetKeys`).
+    var newSigmets: [String]? = nil
 
     var items: [LiveChange] { changes ?? [] }
     var clearedItems: [LiveChange] { recentlyCleared ?? [] }
@@ -103,12 +107,16 @@ nonisolated struct LiveChanges: Codable, Sendable {
         })
     }
 
-    /// The `sigmet:` keys of newly issued SIGMETs — the hazards table marks
-    /// rows whose `SigmetAlongRoute.liveChangeKey` is in this set.
+    /// The `sigmet:` keys of the SIGMETs new to the flight — the hazards
+    /// table badges rows whose `SigmetAlongRoute.liveChangeKey` is in this set
+    /// NEW. The server's `newSigmets` (#689: the chain did not start in the
+    /// briefing, so a reissue of a briefed SIGMET is not new); an older server
+    /// without it falls back to the SIGMETs named by "issued" change rows.
     /// One phenomenon issued by two FIRs is a single change keyed on both
     /// ("sigmet:LECB|3+sigmet:LECM|3"), so the key is split back per SIGMET.
     var issuedSigmetKeys: Set<String> {
-        Set(items.filter { $0.kindValue == .sigmetIssued }.flatMap { change in
+        if let newSigmets { return Set(newSigmets) }
+        return Set(items.filter { $0.kindValue == .sigmetIssued }.flatMap { change in
             change.key.split(separator: "+").map(String.init)
         })
     }
@@ -172,6 +180,9 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
     enum Direction: String, Sendable {
         case worse
         case better
+        /// Neither (#689): e.g. a plain reissue of a SIGMET the briefing had.
+        /// Not counted as worse; rendered neutral.
+        case updated
     }
 
     /// nil for a kind this client does not know yet.

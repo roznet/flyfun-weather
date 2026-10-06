@@ -222,6 +222,7 @@
   "refreshDelta.noChange": "Aucun changement significatif depuis le briefing ({time})",
   "refreshDelta.worse": "Dégradation",
   "refreshDelta.better": "Amélioration",
+  "refreshDelta.updated": "Mise à jour",
   "refreshDelta.alert": "Départ, destination ou dégagement",
   "live.observedAsOf": "Observé à {time} ({age})",
   "live.justNow": "à l'instant",

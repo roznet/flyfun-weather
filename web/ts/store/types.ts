@@ -1005,7 +1005,8 @@ export interface LiveChange {
   key: string;
   kind: LiveChangeKind;
   source: LiveChangeSource;
-  direction: 'worse' | 'better';
+  /** 'updated' (#689): neither, e.g. a plain reissue of a briefed SIGMET. */
+  direction: 'worse' | 'better' | 'updated';
   /** alert = what the pilot must not miss (destination/departure weather,
    *  convective weather ahead, a SIGMET on the route); see §36. */
   tier: 'highlight' | 'alert';
@@ -1066,6 +1067,9 @@ export interface LiveChanges {
   /** #669: cleared on the weather within the hour, newest first. Never
    *  counted, never an alert. Absent on the snapshot overlay. */
   recently_cleared?: LiveChange[] | null;
+  /** #689: keys of the listed SIGMETs new to the flight (their reissue chain
+   *  did not start in the briefing). Absent from an older server. */
+  new_sigmets?: string[] | null;
   worsened_count: number;
   improved_count: number;
   alert_count: number;

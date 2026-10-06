@@ -134,7 +134,7 @@ describe('words', () => {
   it('motion is plain language', () => {
     expect(motionText(cell().motion)).toBe('moving NE at 9 kt');
     expect(motionText({ status: 'withheld', reason: 'split on this frame', speed_kt: null, toward_deg: null }))
-      .toBe('motion withheld: split/merge this frame');
+      .toBe('motion not yet measured');
     expect(motionText({ status: 'unsupported', reason: 'only 30%', speed_kt: null, toward_deg: null }))
       .toBe('motion withheld: too little of the cell in matched tiles');
     expect(motionText({ status: 'available', reason: null, speed_kt: 0.5, toward_deg: null })).toBe('nearly stationary');
@@ -154,6 +154,10 @@ describe('words', () => {
     expect(cellPopupHtml(cell())).not.toContain('cloud top');
     expect(cellPopupHtml(cell({ top_fl: 310 }))).toContain('cloud top FL310');
     expect(cellPopupHtml(cell({ event: '<script>' }))).not.toContain('<script>');
+  });
+  it('popup: whole-number dBZ (#689)', () => {
+    expect(cellPopupHtml(cell({ peak_dbz: 75.5 }))).toContain('peak <b>76 dBZ</b>');
+    expect(cellPopupHtml(cell({ peak_dbz: null }))).toContain('peak <b>–</b>');
   });
   it('legend explains colours, tiers and the arrow, and is labelled experimental', () => {
     const html = cellsLegendHtml();

@@ -2245,8 +2245,11 @@ function liveSourceLabel(source: string): string {
  *  when it says more than the row itself. */
 function liveChangeRow(c: LiveChange, now: number, cleared = false): string {
   const worse = c.direction === 'worse';
-  const arrow = worse ? '\u2191' : '\u2193';
-  const dirLabel = t(worse ? 'refreshDelta.worse' : 'refreshDelta.better');
+  // "updated" (#689): neither worse nor better, e.g. a plain reissue of a
+  // briefed SIGMET. Neutral arrow and colour.
+  const updated = c.direction === 'updated';
+  const arrow = updated ? '\u2194' : worse ? '\u2191' : '\u2193';
+  const dirLabel = t(updated ? 'refreshDelta.updated' : worse ? 'refreshDelta.worse' : 'refreshDelta.better');
   const alert = c.tier === 'alert' && !cleared;
   const msg = escapeHtml(c.message).replace(RD_CAT_RE, (cat) => flightCatBadge(cat));
   const age = cleared
@@ -2255,7 +2258,8 @@ function liveChangeRow(c: LiveChange, now: number, cleared = false): string {
       ? `<span class="rd-age" data-live-age="${escapeHtml(c.observed_at)}">${escapeHtml(liveAgeText(c.observed_at, now))}</span>`
       : '';
   const trail = trailText(c, cleared);
-  const cls = cleared ? 'rd-cleared' : `${worse ? 'rd-worse' : 'rd-better'}${alert ? ' rd-alert' : ''}`;
+  const dirCls = updated ? 'rd-updated' : worse ? 'rd-worse' : 'rd-better';
+  const cls = cleared ? 'rd-cleared' : `${dirCls}${alert ? ' rd-alert' : ''}`;
   return `<li class="rd-row ${cls}"`
     + `${alert ? ` title="${escapeHtml(t('refreshDelta.alert'))}"` : ''}>`
     + `<span class="rd-arrow" role="img" aria-label="${escapeHtml(dirLabel)}" title="${escapeHtml(dirLabel)}">${arrow}</span>`

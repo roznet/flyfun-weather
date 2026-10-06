@@ -189,7 +189,8 @@ enum CellsOverlay {
         case "available":
             guard let toward = m.towardDeg, (m.speedKt ?? 0) >= 1 else { return "nearly stationary" }
             return "moving \(compass(toward)) at \(Int((m.speedKt ?? 0).rounded())) kt"
-        case "withheld": return "motion withheld: split/merge this frame"
+        // A split or merge this frame: the matcher could not pair it yet (#689).
+        case "withheld": return "motion not yet measured"
         case "unsupported": return "motion withheld: too little of the cell in matched tiles"
         case "no_pair": return "no motion yet: no earlier radar frame to compare"
         default:
@@ -213,7 +214,7 @@ enum CellsOverlay {
     /// `cellPopupHtml`, minus the markup).
     static func detailLines(_ c: DisplayCell) -> [String] {
         var lines = [
-            "peak \(value(c.peakDbz, " dBZ")) · area \(value(c.areaKm2, " km²"))",
+            "peak \(dbzText(c.peakDbz)) · area \(value(c.areaKm2, " km²"))",
             "rain rate peak \(value(c.ratePeakMmH, " mm/h"))\(rateAsOfText(c)) · lightning \(lightningText(c))"
                 + (c.topFl.map { " · cloud top FL\(Int($0.rounded()))" } ?? ""),
             "age \(value(c.ageMin, " min")) (\(c.event ?? "")) · \(trendText(c.trend))",
@@ -238,6 +239,18 @@ enum CellsOverlay {
         return " (as of \(hhmmZ(asOf)))"
     }
 
+    /// Whole-number dBZ ("76 dBZ", not "75.5 dBZ", #689).
+    static func dbzText(_ v: Double?) -> String {
+        guard let v else { return "–" }
+        return "\(Int(v.rounded())) dBZ"
+    }
+
+    /// "1 flash", "3 flashes".
+    static func flashesText(_ n: Double) -> String {
+        let count = Int(n.rounded())
+        return count == 1 ? "1 flash" : "\(count) flashes"
+    }
+
     static func value(_ v: Double?, _ unit: String = "") -> String {
         guard let v else { return "–" }
         return number(v) + unit
@@ -251,12 +264,88 @@ enum CellsOverlay {
 
     // MARK: Route list (Observed tab)
 
-    /// Cores to list under the route, strongest first. Rain areas stay on the
-    /// map's legend side: a list of frontal bands is not a list of cells.
-    static func listedCells(_ display: CellDisplay) -> [DisplayCell] {
-        display.cells
-            .filter(\.isCore)
-            .sorted { ($0.peakDbz ?? -.infinity) > ($1.peakDbz ?? -.infinity) }
+    /// Storms listed under the route and counted in the Observed chip: those
+    /// within this distance of the route line, matching the radar corridor
+    /// (#689). The map still shows the whole fetched box.
+    static let listOffTrackNm = 20.0
+
+    /// A storm near the route: its representative core and how far it is off
+    /// the route line (nil when the route is unknown).
+    nonisolated struct RouteStorm: Identifiable, Sendable {
+        let cell: DisplayCell
+        let offTrackNm: Double?
+        var id: String { cell.id }
+    }
+
+    /// Storms near the route, nearest first, then strongest (#689).
+    ///
+    /// A core41 inside a core35 is one storm, not two: a core41 whose centre
+    /// lies within a core35's equivalent radius is folded into it, and the
+    /// core35 stands for the storm (its peak includes the core41's). Only
+    /// storms within `withinNm` of the route line are kept. Rain areas stay on
+    /// the map: a list of frontal bands is not a list of cells. Interim client
+    /// logic: #688 moves storm grouping and route geometry to the server.
+    static func routeStorms(_ display: CellDisplay, route: [CLLocationCoordinate2D],
+                            withinNm: Double = listOffTrackNm) -> [RouteStorm] {
+        let cores = display.cells.filter(\.isCore)
+        let outer = cores.filter { $0.tier == "core35" }
+        let storms = cores.filter { cell in
+            cell.tier == "core35" || !outer.contains { inside(cell, $0) }
+        }
+        return storms
+            .map { RouteStorm(cell: $0, offTrackNm: offTrackNm($0, route: route)) }
+            .filter { ($0.offTrackNm ?? 0) <= withinNm }
+            .sorted { a, b in
+                let da = a.offTrackNm ?? .infinity, db = b.offTrackNm ?? .infinity
+                if da != db { return da < db }
+                return (a.cell.peakDbz ?? -.infinity) > (b.cell.peakDbz ?? -.infinity)
+            }
+    }
+
+    /// `inner`'s centre lies within `outer`'s footprint, taken as the circle of
+    /// its area (plus 1 NM for the coarse outline).
+    static func inside(_ inner: DisplayCell, _ outer: DisplayCell) -> Bool {
+        let radiusNm = (outer.areaKm2.map { ($0 / .pi).squareRoot() } ?? 0) / 1.852 + 1
+        return distanceNm(inner.lat, inner.lon, outer.lat, outer.lon) <= radiusNm
+    }
+
+    /// Shortest distance from the cell's centre to the route line, NM. Flat
+    /// projection around the cell: fine at corridor distances.
+    static func offTrackNm(_ cell: DisplayCell, route: [CLLocationCoordinate2D]) -> Double? {
+        guard let first = route.first else { return nil }
+        let k = cos(cell.lat * .pi / 180)
+        func xy(_ c: CLLocationCoordinate2D) -> (Double, Double) {
+            ((c.longitude - cell.lon) * 60 * k, (c.latitude - cell.lat) * 60)
+        }
+        guard route.count > 1 else {
+            let (x, y) = xy(first)
+            return (x * x + y * y).squareRoot()
+        }
+        var best = Double.infinity
+        for i in 1..<route.count {
+            let (ax, ay) = xy(route[i - 1]), (bx, by) = xy(route[i])
+            let dx = bx - ax, dy = by - ay
+            let len2 = dx * dx + dy * dy
+            let t = len2 > 0 ? max(0, min(1, -(ax * dx + ay * dy) / len2)) : 0
+            let px = ax + t * dx, py = ay + t * dy
+            best = min(best, (px * px + py * py).squareRoot())
+        }
+        return best
+    }
+
+    private static func distanceNm(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+        CLLocation(latitude: lat1, longitude: lon1).distance(from: CLLocation(latitude: lat2, longitude: lon2)) / 1852
+    }
+
+    /// The Observed chip's words: storms, not threshold tiers, within a stated
+    /// distance (#689).
+    static func stormsChipText(_ count: Int, withinNm: Double = listOffTrackNm) -> String {
+        let nm = Int(withinNm.rounded())
+        switch count {
+        case 0: return "No storms within \(nm) NM of route"
+        case 1: return "1 storm within \(nm) NM of route"
+        default: return "\(count) storms within \(nm) NM of route"
+        }
     }
 
     /// "18 NM NE of LFPN" — where the cell is, named by the nearest route

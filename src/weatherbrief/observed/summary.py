@@ -48,6 +48,14 @@ from .intensity import classify_dbz, classify_rate, intensity_label
 # The two-dBZ gap is inside VIP 1, so an echo we do mention always has a class.
 ECHO_MENTION_DBZ = 20.0
 
+# Radar echo at or above which a "no cloud" cloud-top reading at the same
+# point is not believed (#689).  35 dBZ is convective rain; it does not fall
+# from a clear sky, so the satellite retrieval missed the cloud there (a
+# missing frame, or the retrieval's mask) and the tops are unknown, not
+# clear.  The LPPR→LPPT test flight read "clear over the whole corridor"
+# next to a 49 dBZ echo.
+TOPS_CONTRADICTED_DBZ = 35.0
+
 
 #: Which metric-catalog card explains each clause kind.  Radar, rain rate and
 #: lightning all sit on the one "Observed Radar & Lightning" card; cloud tops
@@ -80,7 +88,9 @@ def build_summary_entries(conditions: ObservedConditions) -> list[ObservedSummar
         ("lightning", _lightning_clause(conditions.lightning, by_station, widest)),
         ("reflectivity", _reflectivity_clause(conditions.reflectivity, by_station, widest)),
         ("rain_rate", _rain_rate_clause(conditions.rain_rate, by_station, widest)),
-        ("cloud_tops", _tops_clause(conditions.cloud_tops, by_station, widest)),
+        ("cloud_tops", _tops_clause(
+            conditions.cloud_tops, by_station, widest, conditions.reflectivity,
+        )),
         ("coverage", _coverage_clause(conditions.reflectivity, widest)),
     )
     entries = [
@@ -157,10 +167,28 @@ def _reflectivity_clause(
     intensity = classify_dbz(annulus.max_value)
     lead = f"{intensity_label(intensity)} echo, peak" if intensity else "peak"
     return (
-        f"Radar: {lead} {annulus.max_value:.0f} dBZ within {widest:.0f} NM of "
-        f"{_where(station_id, by_station)}{caveat} ({_age(field)}).",
+        f"Radar: {lead} {annulus.max_value:.0f} dBZ "
+        f"{_peak_place(station_id, annulus, by_station, widest)}{caveat} ({_age(field)}).",
         intensity.value if intensity else "",
     )
+
+
+def _peak_place(station_id, annulus: ObservedAnnulus, by_station, widest) -> str:
+    """"8 NM NE of LPPR" when the sampler recorded where the peak is and the
+    point has a name (#689); else "within 20 NM of <point>", as before."""
+    station = by_station.get(station_id) if station_id else None
+    if station is not None and station.name and annulus.max_at_nm is not None:
+        if annulus.max_at_nm < 1 or annulus.max_bearing_deg is None:
+            return f"at {station.name}"
+        return f"{annulus.max_at_nm:.0f} NM {_compass(annulus.max_bearing_deg)} of {station.name}"
+    return f"within {widest:.0f} NM of {_where(station_id, by_station)}"
+
+
+_COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+def _compass(deg: float) -> str:
+    return _COMPASS[int((deg % 360) / 45 + 0.5) % 8]
 
 
 def _rain_rate_clause(
@@ -220,20 +248,35 @@ def _lightning_clause(
 
 
 def _tops_clause(
-    field: ObservedTopsField | None, by_station, widest
+    field: ObservedTopsField | None, by_station, widest,
+    reflectivity: ObservedField | None = None,
 ) -> tuple[str, str]:
+    """Highest cloud top, or "clear" only where the radar agrees.
+
+    A point where the retrieval found no cloud top but the radar has an echo
+    of :data:`TOPS_CONTRADICTED_DBZ` or more is *unavailable*, not clear
+    (#689): it is left out of the covered points, and when that leaves no
+    cloud top anywhere the clause says "Cloud tops unavailable", never
+    "clear".
+    """
     if field is None:
         return "", ""
+    echo = _widest_max_by_station(reflectivity, widest)
     highest: float | None = None
     highest_station: str | None = None
     multilayer = 0
     covered = 0
     clear = 0
+    contradicted = 0
     for station in field.stations:
         for annulus in station.annuli:
             if annulus.radius_nm != widest:
                 continue
             if annulus.insufficient_coverage:
+                continue
+            dbz = echo.get(station.station_id)
+            if annulus.highest_fl is None and dbz is not None and dbz >= TOPS_CONTRADICTED_DBZ:
+                contradicted += 1
                 continue
             covered += 1
             if annulus.detected_px == 0:
@@ -245,15 +288,35 @@ def _tops_clause(
                 highest_station = station.station_id
             if int(annulus.quality_method.get("9", 0)) > 0:
                 multilayer += 1
-    if covered == 0:
+    unavailable = (
+        f"unavailable at {contradicted} of {covered + contradicted} points "
+        f"(radar echo of {TOPS_CONTRADICTED_DBZ:.0f} dBZ or more, no cloud top found)"
+    )
+    if covered == 0 and contradicted == 0:
         return "", ""
     if highest is None:
+        # A convective echo the retrieval did not see makes the tops there
+        # unknown: nothing may then read "clear over the whole corridor".
+        if covered == 0:
+            return (
+                f"Cloud tops unavailable (radar echo of {TOPS_CONTRADICTED_DBZ:.0f} dBZ "
+                f"or more where no cloud top was found, {_age(field)}).",
+                "",
+            )
+        if contradicted:
+            return (
+                f"Cloud tops: none found at {covered} of {covered + contradicted} points, "
+                f"{unavailable} ({_age(field)}).",
+                "",
+            )
         return f"Cloud tops: clear over the whole corridor ({_age(field)}).", ""
     parts = [
         f"Cloud tops to FL{highest:.0f} near {_where(highest_station, by_station)}"
     ]
     if clear:
-        parts.append(f"clear at {clear} of {covered} points")
+        parts.append(f"clear at {clear} of {covered + contradicted} points")
+    if contradicted:
+        parts.append(unavailable)
     if multilayer:
         # quality_method 9 is the retrieval's own multi-layer-suspect flag —
         # the case where a single cloud-top number is least trustworthy.
@@ -294,6 +357,18 @@ def _peak(field: ObservedField, widest: float):
             if best is None or annulus.max_value > best[1].max_value:
                 best = (station.station_id, annulus)
     return best
+
+
+def _widest_max_by_station(field: ObservedField | None, widest: float) -> dict[str, float]:
+    """Station id -> peak value in its widest disc (only where detected)."""
+    if field is None:
+        return {}
+    return {
+        station.station_id: annulus.max_value
+        for station in field.stations
+        for annulus in station.annuli
+        if annulus.radius_nm == widest and annulus.max_value is not None
+    }
 
 
 def _stations_with_coverage(field: ObservedField, widest: float) -> int:

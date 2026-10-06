@@ -65,6 +65,9 @@
   ],
   "computed_at": "2026-10-02T05:10:00Z",
   "improved_count": 0,
+  "new_sigmets": [
+   "sigmet:LECB|2"
+  ],
   "recently_cleared": [],
   "worsened_count": 2
  },

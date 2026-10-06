@@ -163,7 +163,7 @@ private struct LiveChangeRow: View {
         switch change.directionValue {
         case .worse: "arrow.up"
         case .better: "arrow.down"
-        case nil: "arrow.left.and.right"
+        case .updated, nil: "arrow.left.and.right"
         }
     }
 
@@ -171,6 +171,7 @@ private struct LiveChangeRow: View {
         switch change.directionValue {
         case .worse: String(localized: "Worse")
         case .better: String(localized: "Better")
+        case .updated: String(localized: "Updated")
         case nil: String(localized: "Changed")
         }
     }
@@ -181,7 +182,7 @@ private struct LiveChangeRow: View {
         switch change.directionValue {
         case .worse: change.isAlert ? Theme.red : Color.orange
         case .better: Theme.green
-        case nil: Theme.textMuted
+        case .updated, nil: Theme.textMuted
         }
     }
 

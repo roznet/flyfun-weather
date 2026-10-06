@@ -269,7 +269,9 @@ def sample(
                     )
                 )
             else:
-                annuli.append(ObservedAnnulus(**common))
+                annuli.append(ObservedAnnulus(
+                    **common, **_peak_position(station, values, counted & detected_px, lat, lon),
+                ))
         results[station.id] = annuli
 
     return results
@@ -333,6 +335,24 @@ def _to_datetime(value):
 
     stamp = np.datetime64(value, "s").astype("datetime64[s]").astype(object)
     return stamp.replace(tzinfo=timezone.utc)
+
+
+def _peak_position(station: SampleStation, values, mask, lat, lon) -> dict[str, float | None]:
+    """Distance (NM) and bearing from the station to the strongest detected
+    pixel in ``mask`` (#689), so a summary can say where the peak is."""
+    picked = np.where(mask, np.asarray(values, dtype=float), -np.inf)
+    picked = np.where(np.isfinite(picked), picked, -np.inf)
+    if not picked.size or not np.isfinite(picked.max()):
+        return {"max_at_nm": None, "max_bearing_deg": None}
+    i = np.unravel_index(int(np.argmax(picked)), picked.shape)
+    plat, plon = float(lat[i]), float(lon[i])
+    from .cells.detect import initial_bearing_deg
+
+    dist_km = float(haversine_km(station.lat, station.lon, np.array([plat]), np.array([plon]))[0])
+    return {
+        "max_at_nm": round(km_to_nm(dist_km), 1),
+        "max_bearing_deg": round(initial_bearing_deg(station.lat, station.lon, plat, plon)),
+    }
 
 
 def _stats(values: np.ndarray) -> dict[str, float | None]:

@@ -5328,6 +5328,7 @@ html {
 
 .refresh-delta-banner .rd-worse .rd-arrow { color: var(--red); }
 .refresh-delta-banner .rd-better .rd-arrow { color: var(--green); }
+.refresh-delta-banner .rd-updated .rd-arrow { color: var(--text-muted, #888); }
 
 .refresh-delta-banner .rd-src {
   font-size: 0.68rem;

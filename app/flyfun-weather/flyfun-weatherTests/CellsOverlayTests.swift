@@ -160,7 +160,7 @@ struct CellsOverlayTests {
         }
         #expect(CellsOverlay.motionText(m("available", 18.4, 47)) == "moving NE at 18 kt")
         #expect(CellsOverlay.motionText(m("available", 0.5, 47)) == "nearly stationary")
-        #expect(CellsOverlay.motionText(m("withheld")) == "motion withheld: split/merge this frame")
+        #expect(CellsOverlay.motionText(m("withheld")) == "motion not yet measured")
         #expect(CellsOverlay.motionText(m("unsupported")) == "motion withheld: too little of the cell in matched tiles")
         #expect(CellsOverlay.motionText(m("no_pair")) == "no motion yet: no earlier radar frame to compare")
         #expect(CellsOverlay.motionText(nil) == "motion unknown")
@@ -218,9 +218,60 @@ struct CellsOverlayTests {
         #expect(CellsOverlay.arrowEnd(cells[2]) == nil)          // rain area
     }
 
-    @Test("route list: cores only, strongest first")
-    func listed() throws {
-        #expect(CellsOverlay.listedCells(try Self.display()).map(\.id) == ["c2", "c1"])
+    @Test("route list without a route: cores only, strongest first")
+    func listedWithoutRoute() throws {
+        #expect(CellsOverlay.routeStorms(try Self.display(), route: []).map(\.id) == ["c2", "c1"])
+    }
+
+    /// A fictional storm field around a north–south route along 5.0E,
+    /// 44.0N → 45.0N (#689): one storm 9 NM off track (a core41 inside a
+    /// core35), a stronger one 36 NM off, and a lone core41 15 NM off.
+    static let stormsJSON = """
+    {"valid_time": "2026-10-03T14:05:00+00:00",
+     "cells": [
+       {"id": "near35", "tier": "core35", "lat": 44.20, "lon": 5.209, "area_km2": 300, "peak_dbz": 49},
+       {"id": "near41", "tier": "core41", "lat": 44.21, "lon": 5.215, "area_km2": 40, "peak_dbz": 49},
+       {"id": "far35", "tier": "core35", "lat": 44.50, "lon": 5.84, "area_km2": 900, "peak_dbz": 75.5},
+       {"id": "far41", "tier": "core41", "lat": 44.50, "lon": 5.84, "area_km2": 200, "peak_dbz": 75.5},
+       {"id": "lone41", "tier": "core41", "lat": 44.70, "lon": 4.65, "area_km2": 30, "peak_dbz": 45},
+       {"id": "rain", "tier": "rain20", "lat": 44.30, "lon": 5.00, "area_km2": 5000, "peak_dbz": 30}
+     ]}
+    """
+    static let route = [CLLocationCoordinate2D(latitude: 44.0, longitude: 5.0),
+                        CLLocationCoordinate2D(latitude: 45.0, longitude: 5.0)]
+
+    @Test("storms: a core41 inside a core35 is one storm; only within 20 NM; nearest first")
+    func routeStorms() throws {
+        let display = try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: Data(Self.stormsJSON.utf8))
+        let storms = CellsOverlay.routeStorms(display, route: Self.route)
+        #expect(storms.map(\.id) == ["near35", "lone41"])
+        #expect(storms.map { Int(($0.offTrackNm ?? -1).rounded()) } == [9, 15])
+        let wide = CellsOverlay.routeStorms(display, route: Self.route, withinNm: 50)
+        #expect(wide.map(\.id) == ["near35", "lone41", "far35"])
+    }
+
+    @Test("off-track distance is to the route line, not its waypoints")
+    func offTrack() throws {
+        let display = try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: Data(Self.stormsJSON.utf8))
+        let near = try #require(display.cells.first { $0.id == "near35" })
+        // Abeam the middle of the leg, ~9 NM east; the nearest waypoint is 12 NM+ away.
+        #expect(abs((CellsOverlay.offTrackNm(near, route: Self.route) ?? 0) - 9.0) < 0.5)
+        #expect(CellsOverlay.offTrackNm(near, route: []) == nil)
+    }
+
+    @Test("chip counts storms within a stated distance")
+    func stormsChip() {
+        #expect(CellsOverlay.stormsChipText(0) == "No storms within 20 NM of route")
+        #expect(CellsOverlay.stormsChipText(1) == "1 storm within 20 NM of route")
+        #expect(CellsOverlay.stormsChipText(3) == "3 storms within 20 NM of route")
+    }
+
+    @Test("whole-number dBZ and singular flash")
+    func wording() {
+        #expect(CellsOverlay.dbzText(75.5) == "76 dBZ")
+        #expect(CellsOverlay.dbzText(nil) == "–")
+        #expect(CellsOverlay.flashesText(1) == "1 flash")
+        #expect(CellsOverlay.flashesText(3) == "3 flashes")
     }
 
     @Test("location is named by the nearest route waypoint")
