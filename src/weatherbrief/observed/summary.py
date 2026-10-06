@@ -288,10 +288,6 @@ def _tops_clause(
                 highest_station = station.station_id
             if int(annulus.quality_method.get("9", 0)) > 0:
                 multilayer += 1
-    unavailable = (
-        f"unavailable at {contradicted} of {covered + contradicted} points "
-        f"(radar echo of {TOPS_CONTRADICTED_DBZ:.0f} dBZ or more, no cloud top found)"
-    )
     if covered == 0 and contradicted == 0:
         return "", ""
     if highest is None:
@@ -306,7 +302,7 @@ def _tops_clause(
         if contradicted:
             return (
                 f"Cloud tops: none found at {covered} of {covered + contradicted} points, "
-                f"{unavailable} ({_age(field)}).",
+                f"{_tops_unavailable(contradicted, covered)} ({_age(field)}).",
                 "",
             )
         return f"Cloud tops: clear over the whole corridor ({_age(field)}).", ""
@@ -316,12 +312,19 @@ def _tops_clause(
     if clear:
         parts.append(f"clear at {clear} of {covered + contradicted} points")
     if contradicted:
-        parts.append(unavailable)
+        parts.append(_tops_unavailable(contradicted, covered))
     if multilayer:
         # quality_method 9 is the retrieval's own multi-layer-suspect flag —
         # the case where a single cloud-top number is least trustworthy.
         parts.append(f"multi-layer suspected at {multilayer} of {covered}")
     return f"{', '.join(parts)} ({_age(field)}).", ""
+
+
+def _tops_unavailable(contradicted: int, covered: int) -> str:
+    return (
+        f"unavailable at {contradicted} of {covered + contradicted} points "
+        f"(radar echo of {TOPS_CONTRADICTED_DBZ:.0f} dBZ or more, no cloud top found)"
+    )
 
 
 def _coverage_clause(field: ObservedField | None, widest) -> tuple[str, str]:
