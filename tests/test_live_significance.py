@@ -641,6 +641,22 @@ def test_reissue_of_a_briefing_sigmet_is_highlight_and_hides_its_clear():
     ]
 
 
+def test_end_of_a_reissue_chain_from_the_briefing_says_so():
+    """The briefing's T01 → T02 → T03: while a reissue is listed, T01's
+    "no longer active" is hidden; once the last one expires with no
+    successor, it shows (the phenomenon ended)."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1242"), [LFMM_T02]),
+        (_at(4, "1420"), [LFMM_T03]),
+        (_at(4, "1605"), []),
+    ], baseline=[LFMM_T01])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1242", [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
+        ("1420", [("highlight", False, "SIGMET LFMM T03 replaces T02: EMBD TS")]),
+        ("1605", [("highlight", False, "SIGMET LFMM T01: EMBD TS no longer active")]),
+    ]
+
+
 def test_predecessor_and_reissue_listed_together_are_one_row():
     [(_, rows)] = _sigmet_ticks([(_at(4, "1225"), [LFMM_T01, LFMM_T02])], baseline=[LFMM_T01])
     assert _rows(rows) == [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]

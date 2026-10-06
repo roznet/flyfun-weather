@@ -55,6 +55,7 @@ from weatherbrief.models.live import (
     LiveTrailReport,
     LiveTrailSpan,
 )
+from weatherbrief.tasks.live_significance import SIGMET_REISSUE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +170,6 @@ def _reissue_resumes(last: _Span, c: LiveChange, tick: datetime | None) -> bool:
     """A SIGMET reissue (#682) appearing on its chain's key within the reissue
     window of the predecessor's row clearing: the FIR's gap between expiry
     and reissue (LFMM T01 → T02, 10 min on 2026-10-04), not new weather."""
-    from weatherbrief.tasks.live_significance import SIGMET_REISSUE_WINDOW
-
     return (
         c.replaces is not None
         and last.reason == "weather"
