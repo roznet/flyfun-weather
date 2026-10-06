@@ -5346,7 +5346,9 @@ is trusted.
   alerts again during the flight (`storm-alerted:<id>` in the alert memory),
   whatever its row does (tier bounce, new key, regrouping), and new cells in a
   stretch that already alerted (`storm-span:lo:hi`, widened by half the cluster
-  gap) do not alert either: the same line or cluster for the pilot. The row
+  gap) do not alert either: the same line or cluster for the pilot. Only a
+  stretch that actually pinged is stored, so a line creeping along the route
+  in suppressed steps cannot chain the suppression further (#694 review). The row
   stays alert tier while the condition holds; only the ping is once.
 - **Highlight**: a heavy storm (or one with lightning) ≤ 20 NM off track ahead
   (`STORM_HIGHLIGHT_NM`) within 60 min that does not meet the alert rule. Heavy
@@ -5405,8 +5407,10 @@ motion (split/merge) gives distance-only wording.
 (`review.py replay --observed --cells`, cells from the Mini; 22 flights with
 radar and cells on every tick, 10-03 without either). As first merged: 40
 pings against prod's 31, LFMD→LIRF 6 storm pings in 30 min, LFBZ→LFMD 41 storm
-rows (7 on one tick) and 7 storm pings. After the three changes above: **27
-pings**, storm pings LEPA→ELLX 2 (two separate areas), LFBZ→LFMD 1 (the
+rows (7 on one tick) and 7 storm pings. After the three changes above (and the
+#694 review fix that stores only pinged stretches): **28 pings**, storm pings
+LEPA→ELLX 3 (three areas along the route, the third an 81-flash cluster 1 NM
+off track), LFBZ→LFMD 1 (the
 15-cell, 459-flash line), LFMD→LIRF 1, LPPR→LPPT 0 (the storm moving away is a
 highlight); storm row events 110 → 35. Estimates scored at the same time
 (`score-estimates`, 457 logged, 94 scorable): no better than persistence

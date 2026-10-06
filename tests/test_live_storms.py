@@ -517,3 +517,20 @@ def test_new_cells_in_a_stretch_that_already_alerted_do_not_alert_again():
         cell("core35-c", "core35", along=135, cross=1, flashes=1)]))
     assert sorted(c.new_alert for c in far.changes) == [False, True]
 
+
+def test_suppressed_rows_do_not_extend_the_alerted_stretch():
+    """Only a stretch that pinged is remembered: a line creeping along the route
+    in suppressed steps cannot chain the suppression (review, #694)."""
+    from weatherbrief.tasks.live_significance import STORM_SPAN_PREFIX
+
+    t0 = DEP + timedelta(minutes=10)
+    kw = dict(baseline_obs=None, latest_obs=None, baseline_sigmets=None, latest_sigmets=None)
+    _, mem = classify_changes(**kw, now=t0, storms=storms_at(t0, [cell("core35-a", "core35", along=100, cross=3, flashes=2)]))
+    t1 = t0 + timedelta(minutes=5)
+    step, mem = classify_changes(**kw, now=t1, memory=mem, storms=storms_at(t1, [cell("core35-b", "core35", along=110, cross=2, flashes=1)]))
+    assert [(c.tier, c.new_alert) for c in step.changes] == [("alert", False)]
+    assert [k for k in mem.alerted if k.startswith(STORM_SPAN_PREFIX)] == [STORM_SPAN_PREFIX + "100:100"]
+    t2 = t1 + timedelta(minutes=5)
+    beyond, _ = classify_changes(**kw, now=t2, memory=mem, storms=storms_at(t2, [cell("core35-c", "core35", along=118, cross=2, flashes=1)]))
+    assert [c.new_alert for c in beyond.changes] == [True]  # 18 NM past the pinged stretch
+

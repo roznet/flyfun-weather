@@ -1349,6 +1349,8 @@ def _storm_row(group: list[LiveStorm], storms: LiveStorms, departed: bool) -> Li
     is per storm, so a key change never alerts twice."""
     anchor = min(group, key=lambda s: s.id)
     alerting = [s.id for s in group if storm_alerts(s)]
+    # The stretch the alert covers: its alerting members, else the whole row.
+    spanned = [s for s in group if s.id in alerting] or group
     heavy = any(s.peak_dbz >= RADAR_SIGNIFICANT_DBZ for s in group)
     role = min((_storm_role(s, storms.route_nm, departed) for s in group), key=lambda r: _ROLE_ORDER.get(r, 9))
     return LiveChange(
@@ -1360,14 +1362,8 @@ def _storm_row(group: list[LiveStorm], storms: LiveStorms, departed: bool) -> Li
         observed_at=storms.frame_time, enroute_distance_nm=min(s.along_nm for s in group),
         message=storm_message(group[0]) if len(group) == 1 else cluster_message(group),
         storm_ids=[s.id for s in group], alert_storm_ids=alerting,
-        storm_span=(min(s.along_nm for s in alerting_or(group, alerting)), max(s.along_nm for s in alerting_or(group, alerting))),
+        storm_span=(min(s.along_nm for s in spanned), max(s.along_nm for s in spanned)),
     )
-
-
-def alerting_or(group: list[LiveStorm], alerting: list[str]) -> list[LiveStorm]:
-    """The members meeting the alert rule, or the whole group when none do."""
-    members = [s for s in group if s.id in alerting]
-    return members or group
 
 
 def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
@@ -1521,8 +1517,11 @@ def classify_changes(
             span = c.storm_span
             c.new_alert = fresh and (span is None or not _span_alerted(span, alerted))
             alerted.update({m: "alerted" for m in marks})
-            if span is not None:
-                alerted[f"{STORM_SPAN_PREFIX}{span[0]:.0f}:{span[1]:.0f}"] = "alerted"
+            if c.new_alert and span is not None:
+                # Only a stretch that actually pinged is stored: storing every
+                # suppressed row's span would let a line advancing along the
+                # route chain the suppression past the ±half-gap (review, #694).
+                alerted[_span_key(span)] = "alerted"
             continue
         value = c.to_value or ""
         if alerted.get(c.key) != value:
@@ -1554,6 +1553,15 @@ def classify_changes(
     return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
 
 
+def _span_key(span: tuple[float, float]) -> str:
+    return f"{STORM_SPAN_PREFIX}{span[0]:.0f}:{span[1]:.0f}"
+
+
+def _span_of(key: str) -> tuple[float, float]:
+    lo, hi = (float(x) for x in key[len(STORM_SPAN_PREFIX):].split(":"))
+    return lo, hi
+
+
 def _span_alerted(span: tuple[float, float], alerted: dict[str, str]) -> bool:
     """Whether ``span`` (NM along) overlaps a stretch that already alerted,
     widened by half the cluster gap on each side."""
@@ -1561,7 +1569,7 @@ def _span_alerted(span: tuple[float, float], alerted: dict[str, str]) -> bool:
     for k in alerted:
         if not k.startswith(STORM_SPAN_PREFIX):
             continue
-        lo, hi = (float(x) for x in k[len(STORM_SPAN_PREFIX):].split(":"))
+        lo, hi = _span_of(k)
         if span[0] <= hi + pad and span[1] >= lo - pad:
             return True
     return False
