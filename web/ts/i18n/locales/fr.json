@@ -200,7 +200,7 @@
   "sigmets.corridor": "nm de couloir",
   "sigmets.hazards": " — Phénomènes : ",
   "sigmets.off": "hors route",
-  "sigmets.severeBanner": "SIGMET sévère (SEV) en vigueur",
+  "sigmets.severeBanner": "SIGMET sévère (SEV) sur la route",
   "sigmets.showDetails": "Afficher les détails du SIGMET",
   "sigmets.info": "Info SIGMET",
   "sigmets.pendingFrom": "à partir de {time}",

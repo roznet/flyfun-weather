@@ -5180,6 +5180,14 @@ refresh and the live tick.
   A pending SIGMET cancelled before its start therefore disappears silently.
 - **Clients**: the SIGMET tables tag a pending row "from HH:MMZ"; a change row
   whose time (the SIGMET's start) is in the future shows no age.
+- **"SEV SIGMET along the route", not "in effect"** (web banner, PDF, text
+  digest, LLM context): a pending SEV SIGMET keeps its banner, since hiding
+  it would drop a warning, and the wording no longer claims it is active.
+  The per-SIGMET ACTIVE/INACTIVE tag in the LLM context carries the timing.
+- **The cross-section "current conditions" layer leaves pending SIGMETs out**
+  (web `buildCurrentConditions`, iOS `VizCurrentConditions.build`): it is a
+  "now" picture beside current METARs. This is what it showed before the
+  lookahead.
 
 ### Real-world validation needed
 

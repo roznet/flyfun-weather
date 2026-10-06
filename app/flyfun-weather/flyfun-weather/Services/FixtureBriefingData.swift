@@ -470,7 +470,7 @@ enum FixtureBriefingData {
           {
             "fir_id": "LFMM", "fir_name": "LFMM MARSEILLE", "hazard": "TS", "qualifier": "EMBD",
             "base_ft": null, "top_ft": 37000,
-            "valid_from": "2099-06-30T05:00:00Z", "valid_to": "2099-06-30T09:00:00Z",
+            "valid_from": "2026-06-30T05:00:00Z", "valid_to": "2099-06-30T09:00:00Z",
             "direction": "NE", "speed_kt": 25,
             "raw_text": "WSFR31 LFPW 300452\\nLFMM SIGMET T03 VALID 300500/300900 LFPW-\\nLFMM MARSEILLE FIR EMBD TS OBS WI N4330 E00530 - N4345 E00700 - N4300\\nE00715 - N4330 E00530 TOP FL370 MOV NE 25KT NC=",
             "matched_firs": ["LFMM"],
@@ -481,7 +481,7 @@ enum FixtureBriefingData {
           {
             "fir_id": "LFMM", "fir_name": "LFMM MARSEILLE", "hazard": "TURB", "qualifier": "SEV",
             "base_ft": 5000, "top_ft": 18000,
-            "valid_from": "2099-06-30T06:00:00Z", "valid_to": "2099-06-30T12:00:00Z",
+            "valid_from": "2026-06-30T06:00:00Z", "valid_to": "2099-06-30T12:00:00Z",
             "direction": null, "speed_kt": null,
             "raw_text": "WSFR31 LFPW 300551\\nLFMM SIGMET T04 VALID 300600/301200 LFPW-\\nLFMM MARSEILLE FIR SEV TURB FCST WI N4315 E00445 - N4400 E00600 -\\nN4245 E00615 - N4315 E00445 SFC/FL180 STNR NC=",
             "matched_firs": ["LFMM"],

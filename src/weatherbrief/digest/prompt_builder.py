@@ -760,7 +760,7 @@ def _format_sigmets_context(
     if sig.hazards:
         lines.append(f"Hazards: {', '.join(sig.hazards)}")
     if sig.has_severe:
-        lines.append("** SEVERE (SEV) SIGMET in effect along the route **")
+        lines.append("** SEVERE (SEV) SIGMET along the route (see each one's ACTIVE/INACTIVE tag) **")
 
     for s in sig.sigmets:
         head = " ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET"

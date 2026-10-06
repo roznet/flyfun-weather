@@ -416,7 +416,8 @@ nonisolated struct VizCurrentConditions: Equatable {
     static func build(
         observations: RouteObservations?,
         sigmets: RouteSigmets?,
-        terrainProfile: [TerrainPoint]?
+        terrainProfile: [TerrainPoint]?,
+        now: Date = Date()
     ) -> VizCurrentConditions? {
         var airports: [VizMetarColumn] = []
         for a in observations?.airports ?? [] {
@@ -441,6 +442,9 @@ nonisolated struct VizCurrentConditions: Equatable {
         for s in sigmets?.matched ?? [] {
             // Without an enroute span there is nothing to place on the X axis.
             guard let from = s.enrouteDistanceFromNm, let to = s.enrouteDistanceToNm else { continue }
+            // A "now" layer: a SIGMET issued but not valid yet (#683) is not
+            // drawn. The Area Hazards table and live changes show it.
+            if s.pendingFrom(now: now) != nil { continue }
             zones.append(VizSigmetZone(
                 enrouteFromNm: from,
                 enrouteToNm: to,

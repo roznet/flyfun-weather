@@ -200,7 +200,7 @@
   "sigmets.corridor": "nm Korridor",
   "sigmets.hazards": " — Gefahren: ",
   "sigmets.off": "abseits der Route",
-  "sigmets.severeBanner": "Schweres (SEV) SIGMET in Kraft",
+  "sigmets.severeBanner": "Schweres (SEV) SIGMET auf der Route",
   "sigmets.showDetails": "SIGMET-Details anzeigen",
   "sigmets.info": "SIGMET-Info",
   "sigmets.pendingFrom": "ab {time}",

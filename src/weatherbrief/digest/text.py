@@ -384,7 +384,7 @@ def _format_route_sigmets(sig: RouteSigmets) -> list[str]:
     if sig.hazards:
         lines.append(f"  Hazards: {', '.join(sig.hazards)}")
     if sig.has_severe:
-        lines.append("  ** Severe (SEV) SIGMET in effect **")
+        lines.append("  ** Severe (SEV) SIGMET along the route **")
     lines.append("")
 
     for s in sig.sigmets:
