@@ -407,11 +407,11 @@ struct ObservedCellsSection: View {
         } else if case .ok = model.match, let display = model.display {
             if let badge = model.badge { muted(badge, font: .caption) }
             let route = viewModel.routeCoordinates
-            let cells = CellsOverlay.routeStorms(display, route: route)
-            let within = Int(CellsOverlay.listOffTrackNm.rounded())
             // Without route geometry the list is every core, strongest first:
             // it must not claim a distance it did not measure.
             let measured = route.count > 1
+            let cells = CellsOverlay.routeStorms(display, route: measured ? route : [])
+            let within = Int(CellsOverlay.listOffTrackNm.rounded())
             if cells.isEmpty {
                 muted(measured ? "No storms within \(within) NM of the route" : "No convective cores in the route box")
             } else {

@@ -290,7 +290,8 @@ code relies on:
   `updated` unless it reaches the destination or `LiveSigmetTrace.reissue_worse`
   (area now crosses the route, or levels now meet the flight's band; decided
   once, from the predecessor's trace, which now keeps `base_ft` / `top_ft` /
-  `min_distance_nm`). `updated` is not in `worsened_count` nor in
+  `min_distance_nm`; traces stored before #689 lack them, so at deploy an
+  in-flight layer's reissue reads `updated` for those two cases, once). `updated` is not in `worsened_count` nor in
   `last_refresh_delta`; sort order worse → updated → better. The trail groups
   by key + direction, so a chain whose row was "worse" before a pack switch
   and "updated" after reads as two rows.

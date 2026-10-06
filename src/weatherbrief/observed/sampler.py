@@ -350,6 +350,7 @@ def _peak_position(station: SampleStation, values, mask, lat, lon) -> dict[str, 
         return {"max_at_nm": None, "max_bearing_deg": None}
     i = np.unravel_index(int(np.argmax(picked)), picked.shape)
     plat, plon = float(lat[i]), float(lon[i])
+    # Lazy: cells.detect pulls in scipy, which the sampler otherwise never needs.
     from .cells.detect import initial_bearing_deg
 
     dist_km = float(haversine_km(station.lat, station.lon, np.array([plat]), np.array([plon]))[0])

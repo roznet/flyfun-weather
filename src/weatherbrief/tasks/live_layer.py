@@ -722,7 +722,6 @@ LIVE_SUMMARY_MAX_SIGMETS = 20
 LIVE_SUMMARY_MAX_CLEARED = 6
 
 _TIER_ORDER = {"alert": 0, "highlight": 1}
-_DIRECTION_ORDER = {"worse": 0, "updated": 1, "better": 2}
 _ROLE_ORDER = {"destination": 0, "departure": 1, "alternate": 2, "route": 3}
 
 
@@ -748,7 +747,12 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     that order, when the corridor fetch has them. No observed-conditions
     arrays — this is a hook, the full picture is the web briefing.
     """
-    from weatherbrief.tasks.live_significance import _sigmet_key_str, _sigmet_label, airport_roles
+    from weatherbrief.tasks.live_significance import (
+        _DIRECTION_ORDER,
+        _sigmet_key_str,
+        _sigmet_label,
+        airport_roles,
+    )
 
     changes = changes if changes is not None else layer.changes
     out: dict = {
