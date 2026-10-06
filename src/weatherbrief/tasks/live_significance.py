@@ -93,9 +93,10 @@ _SAME_PHENOMENON_NM = 10.0
 #: sequence number (LFMM T01 → T02 → T03, LECB 2 → 3 → 4 → 5). A new SIGMET
 #: replaces an earlier one of the same FIR, hazard and qualifier when its
 #: validity starts around the predecessor's end (from
-#: ``SIGMET_REISSUE_EARLY`` before it to ``SIGMET_REISSUE_WINDOW`` after), the
-#: predecessor was seen on this flight (or is in the baseline), and the areas come within
-#: ``_REISSUE_NM`` of each other (#682). Observed starts: 0 min (T01 → T02,
+#: ``SIGMET_REISSUE_EARLY`` before it to ``SIGMET_REISSUE_WINDOW`` after, and
+#: not before the predecessor's own start), the predecessor was seen on this
+#: flight (or is in the baseline), and the areas come within ``_REISSUE_NM``
+#: of each other (#682). Observed starts: 0 min (T01 → T02,
 #: LECB 2 → 3 → 4 → 5), +15 min (T02 → T03). The early bound keeps a second
 #: cell issued while the first is still valid apart: LECB 3 on 2026-10-02
 #: started 25 min before LECB 2 ended, next to it, and is not its reissue
@@ -667,6 +668,7 @@ def _trace_sigmets(
                     chain=pred.chain, chain_in_baseline=pred.chain_in_baseline,
                     replaces_key=pred.key, replaces_label=pred.label,
                     replaced_at_destination=pred.at_destination,
+                    chain_alerted=pred.chain_alerted,
                 )
         out[k] = t
         candidates[k] = t
@@ -697,13 +699,15 @@ def _sigmet_changes(
     alert, and the SIGMET traces to remember for the next tick (#682).
 
     A reissue is one row, "SIGMET LFMM T02 replaces T01: EMBD TS", keyed on
-    the first SIGMET of its chain plus its own ("sigmet:LFMM|T01+sigmet:LFMM|T02"):
-    highlight when the chain started from a
-    SIGMET the briefing had; when it started from one that was itself new
-    since the briefing it keeps that row's alert tier but does not alert
-    again. Either way it alerts when it now reaches the destination and its
-    predecessor did not. The predecessor gets no row of its own (neither its
-    "new" row while both are listed, nor "no longer active").
+    the first SIGMET of its chain plus its own
+    ("sigmet:LFMM|T01+sigmet:LFMM|T02"). Highlight when the chain started from
+    a SIGMET the briefing had. When it started from one that was itself new
+    since the briefing it keeps that row's alert tier, and does not alert
+    again if an earlier row of the chain already alerted (it does alert once
+    when the predecessor never had a row: both first seen in one pass). Either
+    way it alerts when it now reaches the destination and its predecessor did
+    not. The predecessor gets no row of its own (neither its "new" row while
+    both are listed, nor "no longer active").
     """
     now = now or datetime.now(timezone.utc)
     traces = _trace_sigmets(baseline, latest, destination, seen or {}, now)
@@ -739,6 +743,9 @@ def _sigmet_changes(
     out: list[LiveChange] = []
     quiet: set[str] = set()
     for g in _group_same_phenomenon(new):
+        # An alert-tier row: the chain has alerted (now or on an earlier tick).
+        for m in g:
+            traces[_sigmet_key_str(m)].chain_alerted = True
         prefix = "New SEV SIGMET" if _is_severe(g[0]) else "New SIGMET"
         out.append(_sigmet_change(
             g, kind="sigmet_issued", direction="worse",
@@ -763,8 +770,13 @@ def _sigmet_changes(
         c.replaces = t.replaces_label
         if t.chain_in_baseline and not reaches_destination:
             c.tier = "highlight"
-        if not reaches_destination:
+        # Quiet only when the briefing had the chain or an earlier row of it
+        # already alerted. A predecessor first seen in this same pass (T01 and
+        # T02 both new on the first tick, or after failed fetches) never
+        # alerted: the reissue alerts once.
+        if not reaches_destination and (t.chain_in_baseline or t.chain_alerted):
             quiet.add(c.key)
+        t.chain_alerted = True
         out.append(c)
     for g in _group_same_phenomenon(escalated):
         prev = base_by_key[sigmet_key(g[0])]

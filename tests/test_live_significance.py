@@ -657,6 +657,22 @@ def test_end_of_a_reissue_chain_from_the_briefing_says_so():
     ]
 
 
+def test_sigmet_and_its_reissue_first_seen_together_alert_once():
+    """Review round 2: T01 and T02 both new in one pass (the first tick, or
+    after failed fetches). T01 never gets a row, so T02 must alert; the next
+    reissue then does not."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1225"), [LFMM_T01, LFMM_T02]),
+        (_at(4, "1235"), [LFMM_T02]),
+        (_at(4, "1420"), [LFMM_T03]),
+    ])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1225", [("alert", True, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
+        ("1235", [("alert", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
+        ("1420", [("alert", False, "SIGMET LFMM T03 replaces T02: EMBD TS")]),
+    ]
+
+
 def test_predecessor_and_reissue_listed_together_are_one_row():
     [(_, rows)] = _sigmet_ticks([(_at(4, "1225"), [LFMM_T01, LFMM_T02])], baseline=[LFMM_T01])
     assert _rows(rows) == [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]
