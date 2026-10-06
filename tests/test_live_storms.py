@@ -185,6 +185,8 @@ def test_estimate_closest_approach_at_current_motion():
     ({"trend": "steady"}, "highlight"),
     ({"trend": "decaying"}, "highlight"),
     ({"trend": "developing", "cross": 15}, "highlight"),   # beyond the 10 NM alert band
+    ({"trend": "developing", "cross": 8}, "highlight"),    # developing alone alerts only within 5 NM
+    ({"flashes": 1, "cross": 8}, "alert"),                 # lightning alerts out to 10 NM
     ({"trend": "developing", "peak": 38.0}, None),          # not heavy, no lightning: no row
     ({"peak": 38.0, "flashes": 2}, "highlight"),            # lightning in a weaker cell
     ({"trend": "developing", "cross": 25}, None),           # beyond the 20 NM highlight band
@@ -228,7 +230,9 @@ def test_storm_row_message_and_identity():
     assert (c.key, c.kind, c.source, c.role, c.direction) == ("storm:core35-a", "storm", "RADAR", "route", "worse")
     assert (c.from_value, c.to_value, c.icao) == ("none", "heavy", None)
     assert c.message == "Extreme cell (52 dBZ, developing) 8 NM right of track at 60 NM, abeam ~12:35Z, moving away 11 kt"
-    assert c.new_alert
+    assert c.storm_ids == ["core35-a"]
+    # Developing 8 NM off and moving away: a highlight since the calibration.
+    assert (c.tier, c.new_alert) == ("highlight", False)
 
 
 def test_storm_near_destination_is_the_approach():
@@ -444,3 +448,72 @@ def test_score_estimates_joins_the_logged_estimate_with_later_frames(tmp_path):
     assert len(scored) == 1 and scored[0]["n"] == 1 and scored[0]["lost"] == 0
     assert scored[0]["median_cpa_err_nm"] <= 1.5
     assert scored[0]["median_persist_err_nm"] > scored[0]["median_cpa_err_nm"] + 3
+
+# --- Calibration (2026-10-06 replay): one row per cluster, one alert per storm ---
+
+
+def test_nearby_storms_share_one_row_named_after_the_oldest():
+    now = DEP + timedelta(minutes=10)
+    st = storms_at(now, [
+        cell("core35-20261006T1200-0002", "core35", along=60, cross=3, flashes=2),
+        cell("core35-20261006T1150-0001", "core35", along=75, cross=-6, peak=55.0, trend="developing"),
+        cell("core35-20261006T1205-0003", "core35", along=105, cross=4, peak=45.0),  # 30 NM gap: own row
+    ])
+    got = {c.key: c for c in rows(st, now=now) if c.kind == "storm"}
+    assert set(got) == {"storm:core35-20261006T1150-0001", "storm:core35-20261006T1205-0003"}
+    cluster = got["storm:core35-20261006T1150-0001"]
+    assert cluster.tier == "alert" and cluster.new_alert
+    assert cluster.storm_ids == ["core35-20261006T1200-0002", "core35-20261006T1150-0001"]
+    assert cluster.message.startswith("2 cells (peak 55 dBZ, developing, 2 flashes) 3–6 NM either side of track at 60–75 NM")
+    assert "; nearest 3 NM right of track at 60 NM" in cluster.message
+
+
+def test_a_storm_alerts_once_through_tier_bounces_and_regrouping():
+    from weatherbrief.tasks.live_significance import STORM_ALERTED_PREFIX
+
+    t0 = DEP + timedelta(minutes=10)
+    kw = dict(baseline_obs=None, latest_obs=None, baseline_sigmets=None, latest_sigmets=None, flown_nm=10.0)
+    lit = cell("core35-a", "core35", along=100, cross=3, flashes=2)
+    first, mem = classify_changes(**kw, now=t0, storms=storms_at(t0, [lit]))
+    assert [c.new_alert for c in first.changes] == [True]
+    assert STORM_ALERTED_PREFIX + "core35-a" in mem.alerted
+    # Lightning stops: highlight. Then it flashes again, now clustered with a
+    # newer storm under another key: no second alert for core35-a.
+    t1 = t0 + timedelta(minutes=10)
+    quiet, mem = classify_changes(**kw, now=t1, memory=mem,
+                                  storms=storms_at(t1, [cell("core35-a", "core35", along=100, cross=3)]))
+    assert [c.tier for c in quiet.changes] == ["highlight"]
+    t2 = t1 + timedelta(minutes=10)
+    again, mem = classify_changes(**kw, now=t2, memory=mem, storms=storms_at(t2, [
+        cell("core35-a", "core35", along=100, cross=3, flashes=1),
+        cell("core35-0", "core35", along=110, cross=2),  # older id: the cluster's new anchor
+    ]))
+    [row] = again.changes
+    assert (row.key, row.tier, row.new_alert) == ("storm:core35-0", "alert", False)
+    # A different storm meeting the rule, in another stretch, does alert.
+    t3 = t2 + timedelta(minutes=10)
+    new, _ = classify_changes(**kw, now=t3, memory=mem, storms=storms_at(t3, [
+        cell("core35-a", "core35", along=100, cross=3, flashes=1),
+        cell("core35-b", "core35", along=140, cross=1, flashes=3),
+    ]))
+    assert sorted(c.new_alert for c in new.changes) == [False, True]
+
+
+def test_new_cells_in_a_stretch_that_already_alerted_do_not_alert_again():
+    t0 = DEP + timedelta(minutes=10)
+    kw = dict(baseline_obs=None, latest_obs=None, baseline_sigmets=None, latest_sigmets=None)
+    first, mem = classify_changes(**kw, now=t0, storms=storms_at(t0, [
+        cell("core35-a", "core35", along=100, cross=3, flashes=2)]))
+    assert [c.new_alert for c in first.changes] == [True]
+    # The first cell decays; a new one fires 8 NM further along: same stretch.
+    t1 = t0 + timedelta(minutes=10)
+    same, mem = classify_changes(**kw, now=t1, memory=mem, storms=storms_at(t1, [
+        cell("core35-b", "core35", along=108, cross=2, flashes=4)]))
+    assert [(c.tier, c.new_alert) for c in same.changes] == [("alert", False)]
+    # A cell far down the route is a different phenomenon: it alerts.
+    t2 = t1 + timedelta(minutes=5)
+    far, _ = classify_changes(**kw, now=t2, memory=mem, storms=storms_at(t2, [
+        cell("core35-b", "core35", along=108, cross=2, flashes=4),
+        cell("core35-c", "core35", along=135, cross=1, flashes=1)]))
+    assert sorted(c.new_alert for c in far.changes) == [False, True]
+

@@ -19,6 +19,7 @@
     "role": "route",
     "source": "SIGMET",
     "station_id": null,
+    "storm_ids": null,
     "tier": "alert",
     "to_value": "EMBD TS",
     "trail": {
@@ -48,6 +49,7 @@
     "role": "route",
     "source": "SPECI",
     "station_id": null,
+    "storm_ids": null,
     "tier": "alert",
     "to_value": "TS",
     "trail": {

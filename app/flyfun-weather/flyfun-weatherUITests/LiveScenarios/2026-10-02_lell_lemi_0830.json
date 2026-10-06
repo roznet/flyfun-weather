@@ -19,6 +19,7 @@
     "role": "destination",
     "source": "SIGMET",
     "station_id": null,
+    "storm_ids": null,
     "tier": "alert",
     "to_value": "EMBD TS",
     "trail": {
@@ -48,6 +49,7 @@
     "role": "alternate",
     "source": "METAR",
     "station_id": null,
+    "storm_ids": null,
     "tier": "highlight",
     "to_value": "VFR",
     "trail": {
@@ -98,6 +100,7 @@
     "role": "route",
     "source": "METAR",
     "station_id": null,
+    "storm_ids": null,
     "tier": "highlight",
     "to_value": "LIFR",
     "trail": {
@@ -133,6 +136,7 @@
     "role": "route",
     "source": "METAR",
     "station_id": null,
+    "storm_ids": null,
     "tier": "highlight",
     "to_value": "none",
     "trail": {
@@ -174,6 +178,7 @@
     "role": "route",
     "source": "SPECI",
     "station_id": null,
+    "storm_ids": null,
     "tier": "highlight",
     "to_value": "IFR",
     "trail": {

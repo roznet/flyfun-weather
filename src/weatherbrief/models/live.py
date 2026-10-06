@@ -292,6 +292,15 @@ class LiveChange(BaseModel):
     # SIGMET reissue only (#682): the SIGMET this one replaces ("LFMM T01").
     # The row then keeps the key of the first SIGMET in the chain.
     replaces: str | None = None
+    # Storm rows only (§41): the storms (lineage ids) the row stands for — one,
+    # or a cluster along the route — for the map focus (#690).
+    storm_ids: list[str] | None = None
+    # Storm rows only: the members meeting the alert rule this tick. The
+    # alert-once memory reads it; never dumped.
+    alert_storm_ids: list[str] | None = Field(default=None, exclude=True)
+    # Storm rows only: (lo, hi) NM along the route of the alerting members, for
+    # the per-stretch alert-once memory. Never dumped.
+    storm_span: tuple[float, float] | None = Field(default=None, exclude=True)
     # Radar/lightning only: the route points that triggered the change.
     # Excluded from every dump (live.json, /live, snapshot overlay): only the
     # history writer reads it, off the in-memory change (#643).

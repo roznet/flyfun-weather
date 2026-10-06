@@ -5326,15 +5326,28 @@ is trusted.
 
 ### The rule
 
-- **One row per storm**, keyed on its lineage id (`storm:<core35 id>`): a core35
-  cell with the core41 cells inside it (the node's `within`), or a core41 on its
-  own. A row follows the storm across frames, so it does not blink as an echo
-  crosses 41 dBZ the way the 5 NM ring rows did.
+- **A storm** is a core35 cell with the core41 cells inside it (the node's
+  `within`), or a core41 on its own, followed across frames by lineage id.
+- **One row per cluster** (calibrated 2026-10-06): storms with their own row
+  whose along-track positions are within 25 NM of each other
+  (`STORM_CLUSTER_GAP_NM`) share one row ("4 cells (peak 56 dBZ, developing,
+  7 flashes) 1–9 NM either side of track at 138–212 NM, abeam ~16:56–17:27Z;
+  nearest …"); a lone storm keeps the single-storm wording. The row is keyed
+  on the cluster's oldest lineage (`storm:<id>`), the member most likely to
+  persist; `LiveChange.storm_ids` lists the members.
 - **Alert**: core ≥ 41 dBZ (`RADAR_SIGNIFICANT_DBZ`), ≤ 10 NM off the track ahead
   (`STORM_ALERT_NM`), reached within 60 min (`STORM_NEAR_MINUTES`), **and** at
-  least one of: developing (any cell of the storm), lightning (flashes > 0), or
-  closing on the track — closing counts only when the flight gets there within
-  30 min (`STORM_MOTION_HORIZON_MINUTES`, "measured horizon only").
+  least one of: lightning (flashes > 0); developing **within 5 NM**
+  (`STORM_DEVELOPING_ALERT_NM`, calibrated: at 10 NM nearly every new cell
+  qualified); closing on the track, counted only when the flight gets there
+  within 30 min (`STORM_MOTION_HORIZON_MINUTES`, "measured horizon only"). A
+  cluster row is an alert when any member meets the rule.
+- **Alert once per phenomenon** (calibrated): a storm that has alerted never
+  alerts again during the flight (`storm-alerted:<id>` in the alert memory),
+  whatever its row does (tier bounce, new key, regrouping), and new cells in a
+  stretch that already alerted (`storm-span:lo:hi`, widened by half the cluster
+  gap) do not alert either: the same line or cluster for the pilot. The row
+  stays alert tier while the condition holds; only the ping is once.
 - **Highlight**: a heavy storm (or one with lightning) ≤ 20 NM off track ahead
   (`STORM_HIGHLIGHT_NM`) within 60 min that does not meet the alert rule. Heavy
   storms reached later than 60 min share **one** row, "Convective activity
@@ -5380,15 +5393,29 @@ motion (split/merge) gives distance-only wording.
 
 - **Keep the ring rows alongside**: two rows for one cell, and the ring rows are
   what flickered (EDAY→ENZV 2026-10-04).
-- **Hysteresis on the alert band**: §35 dropped hysteresis; a storm bouncing
-  between alert and highlight re-alerts. The replay's flicker count is the
-  check; add it only if that count says so.
+- **Hysteresis on the alert band**: §35 dropped hysteresis. The replay showed
+  storms bouncing between alert and highlight and re-alerting; the per-storm
+  and per-stretch alert-once memory fixes the repeat without a band.
 - **Projection in the alert rule beyond 30 min**: not until `score-estimates`
   shows route-relative skill there.
 
+### Calibration replay (2026-10-06)
+
+41 real flights of 2026-10-03..06 replayed through the rule
+(`review.py replay --observed --cells`, cells from the Mini; 22 flights with
+radar and cells on every tick, 10-03 without either). As first merged: 40
+pings against prod's 31, LFMD→LIRF 6 storm pings in 30 min, LFBZ→LFMD 41 storm
+rows (7 on one tick) and 7 storm pings. After the three changes above: **27
+pings**, storm pings LEPA→ELLX 2 (two separate areas), LFBZ→LFMD 1 (the
+15-cell, 459-flash line), LFMD→LIRF 1, LPPR→LPPT 0 (the storm moving away is a
+highlight); storm row events 110 → 35. Estimates scored at the same time
+(`score-estimates`, 457 logged, 94 scorable): no better than persistence
+beyond 30 min, and 42 % / 79 % / 89 % of storms gone before the 0–30 / 30–60 /
+60+ min target time — the estimate stays in the pop-up.
+
 ### Real-world validation needed
 
-- None of the numbers above has been replayed yet: the cloud session that wrote
+- Before the replay above, none of the numbers had been replayed: the cloud session that wrote
   this had no Mini archive. First check: the 2026-10-03..05 flights and
   LEPA→ELLX 2026-10-05 (radar 46–58 dBZ, lightning along the route), alerts per
   flight and flicker before vs after; LPPR→LPPT 2026-10-06 for the estimate.
