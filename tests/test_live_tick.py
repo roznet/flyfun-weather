@@ -100,6 +100,21 @@ def test_shared_sigmet_source_fetches_once():
     upstream.fetch_isigmet.assert_called_once()
 
 
+def test_shared_sigmet_source_forwards_the_lookahead_only_when_set():
+    from datetime import timedelta
+
+    upstream = MagicMock()
+    upstream.fetch_isigmet.return_value = []
+    src = SharedSigmetSource(upstream)
+    src.fetch_isigmet(region="eur")
+    assert "lookahead" not in upstream.fetch_isigmet.call_args.kwargs
+    src.fetch_isigmet(region="eur", lookahead=timedelta(hours=4))
+    assert upstream.fetch_isigmet.call_args.kwargs["lookahead"] == timedelta(hours=4)
+    # Cached per lookahead, so one fetch serves every flight of the tick.
+    src.fetch_isigmet(region="eur", lookahead=timedelta(hours=4))
+    assert upstream.fetch_isigmet.call_count == 2
+
+
 def test_top_up_fetches_only_airports_verification_did_not_cover():
     upstream = MagicMock()
     upstream.fetch_weather.return_value = [_report("ZZCC")]

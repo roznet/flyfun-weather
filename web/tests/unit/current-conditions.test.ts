@@ -132,6 +132,18 @@ describe('extractVizData → currentConditions', () => {
     expect(icaos).toEqual(['OK1']);
   });
 
+  it('leaves a SIGMET not valid yet off the "now" layer (#683)', () => {
+    const now = Date.parse('2026-05-23T08:00:00Z');
+    const data = extractVizData(makeManifest(), 'gfs', 8000, elevation, {
+      routeSigmets: makeSigmets([
+        makeSigmet({ hazard: 'TS', valid_from: '2026-05-23T07:00:00Z' }),
+        makeSigmet({ hazard: 'ICE', valid_from: '2026-05-23T09:00:00Z' }),
+      ]),
+      now,
+    });
+    expect(data.currentConditions!.sigmets.map((z) => z.hazard)).toEqual(['TS']);
+  });
+
   it('maps SIGMETs with a usable enroute span and skips spanless ones', () => {
     const data = extractVizData(makeManifest(), 'gfs', 8000, elevation, {
       routeSigmets: makeSigmets([

@@ -6,6 +6,7 @@ import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLine
 import type { FrontCrossing, FrontProximity, RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
+import { sigmetPendingFrom } from '../helpers/live-layer';
 
 export interface ExtractVizOptions {
   /** Per-model wind components recomputed at an override altitude (from
@@ -32,6 +33,9 @@ export interface ExtractVizOptions {
    *  ship in the payload, so changing this needs no re-fetch — the caller
    *  re-extracts and the graph/layers follow. Defaults to the widest. */
   observedRadiusNm?: number | null;
+  /** "Now" for the current-conditions overlay (epoch ms): a SIGMET not yet
+   *  valid then is left off it (#683). Defaults to the clock; tests pin it. */
+  now?: number;
 }
 
 export function extractVizData(
@@ -110,7 +114,7 @@ export function extractVizData(
     departureTime: manifest.departure_time,
     flightDurationHours: manifest.flight_duration_hours,
     terrainProfile,
-    currentConditions: buildCurrentConditions(opts?.routeObservations, opts?.routeSigmets, terrainProfile),
+    currentConditions: buildCurrentConditions(opts?.routeObservations, opts?.routeSigmets, terrainProfile, opts?.now),
     observed,
     fronts: buildFronts(opts?.routeFronts, model),
     nightIntervals: buildNightIntervals(manifest),
@@ -209,6 +213,7 @@ function buildCurrentConditions(
   obs: RouteObservations | null | undefined,
   sigmets: RouteSigmets | null | undefined,
   terrainProfile: TerrainPoint[] | null,
+  now: number = Date.now(),
 ): VizCurrentConditions | null {
   const airports: VizMetarColumn[] = [];
   for (const a of obs?.airports ?? []) {
@@ -235,6 +240,9 @@ function buildCurrentConditions(
   for (const s of sigmets?.sigmets ?? []) {
     // Without an enroute span there's nothing to place on the X axis — skip.
     if (s.enroute_distance_from_nm == null || s.enroute_distance_to_nm == null) continue;
+    // A "now" layer: a SIGMET issued but not valid yet (#683) is not drawn.
+    // The SIGMET table and the live changes show it, with its start time.
+    if (sigmetPendingFrom(s.valid_from, now) != null) continue;
     zones.push({
       enrouteFromNm: s.enroute_distance_from_nm,
       enrouteToNm: s.enroute_distance_to_nm,

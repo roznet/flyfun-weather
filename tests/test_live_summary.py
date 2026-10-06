@@ -208,7 +208,7 @@ def test_lell_lemi_0830_leads_with_destination_sigmet(tmp_path):
     assert first["tier"] == "alert"
     assert first["role"] == "destination"
     assert first["kind"] == "sigmet_issued"
-    assert first["message"] == "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)"
+    assert first["message"] == "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)"
     labels = {s["label"] for s in out["sigmets"]}
     assert any(label.startswith("LECB 3") for label in labels), labels
     # The pack rebuilt at 06:52 carries its own observations: a briefing baseline.

@@ -5147,3 +5147,51 @@ came from two parsing bugs and two kinds of noise.
 - Split areas: two reissues of one predecessor are two rows on the same trail.
 - The 15-min early bound: a FIR that reissues 20–30 min before expiry would
   show a "New SIGMET" plus, later, a quiet clear.
+
+---
+
+## 38. A SIGMET issued but not yet valid alerts, with its start time
+
+**Date:** 2026-10-06 · **Issue:** #683 · **Amends:** §35, §37
+
+AWC's isigmet lists only SIGMETs valid at the query time. LEPA→ELLX,
+2026-10-05, dep 07:05Z: LECB 3 (EMBD TS, area over LEPA) was issued 06:32 to
+start 07:00, and the live layer first saw it at 07:09, after departure. The
+fetch now looks 4 h ahead in 30-min steps (`route_weather.SIGMET_LOOKAHEAD`,
+euro_aip `fetch_isigmet(lookahead=)`), in every path: briefing build, ↻
+refresh and the live tick.
+
+### Choices
+
+- **A pending SIGMET is alert tier, like any new SIGMET** (§35): the early
+  warning is the point. Its row says when it starts, "New SIGMET LECB 3:
+  EMBD TS from 07:00Z", or for a reissue (§37) "SIGMET LECB 4 replaces 2
+  from 09:00Z: EMBD TS", so the handover shows before the predecessor ends.
+  The suffix goes once valid; the change identity (key, value, tier) does
+  not change, so there is no second alert and no new trail event.
+- **4 h horizon**: ICAO allows issue up to 4 h ahead (12 h for volcanic ash
+  and tropical cyclone, not covered). A pending SIGMET starting after arrival
+  but inside the SIGMET window (end of departure day, or arrival + 3 h) also
+  alerts.
+- **A SIGMET that never became valid is never "no longer active".** A failed
+  lookahead query drops pending SIGMETs for a tick. A briefing SIGMET missing
+  before its start gets no row; a pending SIGMET that alerted keeps its alert
+  memory while missing before its start, so its return does not alert twice.
+  A pending SIGMET cancelled before its start therefore disappears silently.
+- **Clients**: the SIGMET tables tag a pending row "from HH:MMZ"; a change row
+  whose time (the SIGMET's start) is in the future shows no age.
+- **"SEV SIGMET along the route", not "in effect"** (web banner, PDF, text
+  digest, LLM context): a pending SEV SIGMET keeps its banner, since hiding
+  it would drop a warning, and the wording no longer claims it is active.
+  The per-SIGMET ACTIVE/INACTIVE tag in the LLM context carries the timing.
+- **The cross-section "current conditions" layer leaves pending SIGMETs out**
+  (web `buildCurrentConditions`, iOS `VizCurrentConditions.build`): it is a
+  "now" picture beside current METARs. This is what it showed before the
+  lookahead.
+
+### Real-world validation needed
+
+- Alerts in flight for a SIGMET starting after arrival: noise or useful?
+  The classifier has no arrival time; demoting those would need one.
+- How often the lookahead queries fail (log: "AvWx isigmet lookahead failed").
+

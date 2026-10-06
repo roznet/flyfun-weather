@@ -12,7 +12,7 @@
     "icao": null,
     "key": "sigmet:LECB|3+sigmet:LECM|3",
     "kind": "sigmet_issued",
-    "message": "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)",
+    "message": "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)",
     "new_alert": true,
     "observed_at": "2026-10-02T08:35:00Z",
     "replaces": null,
@@ -226,7 +226,7 @@
  "last_refresh_delta": {
   "computed_at": "2026-10-02T08:30:00Z",
   "messages": [
-   "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)",
+   "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)",
    "LECH METAR: IFR \u2192 LIFR"
   ],
   "worsened": true

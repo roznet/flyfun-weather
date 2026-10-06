@@ -196,6 +196,9 @@ private struct LiveChangeRow: View {
 
     private var age: String? {
         guard let observed = change.observedAt.flatMap(Date.parseISO8601) else { return nil }
+        // A future instant has no age: a pending SIGMET's message already says
+        // "from HH:MMZ" (#683). Its age shows once it has started.
+        guard observed <= now else { return nil }
         return LiveTime.ageLabel(from: observed, now: now)
     }
 }

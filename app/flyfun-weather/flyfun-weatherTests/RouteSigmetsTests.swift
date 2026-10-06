@@ -309,6 +309,17 @@ import Foundation
         #expect(s.validityLabel == "? → 170600Z")
     }
 
+    /// Issued but not valid yet (#683): the row says when it starts; nothing
+    /// once it is valid or when the start is unknown.
+    @Test func pendingFromOnlyBeforeValidityStarts() throws {
+        let s = try sigmet("\"valid_from\": \"2026-10-05T07:00:00Z\"")
+        let before = try #require(Date.parseISO8601("2026-10-05T06:36:00Z"))
+        let after = try #require(Date.parseISO8601("2026-10-05T07:09:00Z"))
+        #expect(s.pendingFrom(now: before) == "07:00Z")
+        #expect(s.pendingFrom(now: after) == nil)
+        #expect(try sigmet("\"hazard\": \"TS\"").pendingFrom(now: before) == nil)
+    }
+
     /// Both bounds missing — the detail sheet drops the row rather than printing
     /// "? → ?".
     @Test func noValidityYieldsNil() throws {

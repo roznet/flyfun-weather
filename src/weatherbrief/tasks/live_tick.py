@@ -157,16 +157,19 @@ class SharedSigmetSource:
         self._upstream = upstream
         self._cache: dict[tuple, list | BaseException] = {}
 
-    def fetch_isigmet(self, region: str = "eur", hazard=None, level=None, date=None):
-        key = (region, hazard, level, date)
+    def fetch_isigmet(self, region: str = "eur", hazard=None, level=None, date=None, lookahead=None):
+        key = (region, hazard, level, date, lookahead)
         if key not in self._cache:
             try:
                 if self._upstream is None:
                     from euro_aip.briefing.sources.avwx import AvWxSource
 
                     self._upstream = AvWxSource()
+                # The lookahead (#683) only when asked for, so an upstream
+                # written without it keeps working.
+                extra = {"lookahead": lookahead} if lookahead is not None else {}
                 self._cache[key] = self._upstream.fetch_isigmet(
-                    region=region, hazard=hazard, level=level, date=date,
+                    region=region, hazard=hazard, level=level, date=date, **extra,
                 )
             except Exception as exc:
                 logger.warning(

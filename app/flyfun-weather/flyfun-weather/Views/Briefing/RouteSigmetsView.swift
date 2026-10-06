@@ -171,6 +171,13 @@ struct RouteSigmetsView: View {
                     Text(s.headline)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(s.isSevere ? Theme.red : Theme.text)
+                    // Issued but not valid yet (#683): say when it starts.
+                    if let from = s.pendingFrom() {
+                        Text("from \(from)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.textMuted)
+                            .accessibilityLabel(String(localized: "Not valid until \(from)"))
+                    }
                     if isNew {
                         Text("NEW")
                             .font(.caption2.weight(.bold))

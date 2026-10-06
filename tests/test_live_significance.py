@@ -667,7 +667,7 @@ def test_sigmet_and_its_reissue_first_seen_together_alert_once():
         (_at(4, "1420"), [LFMM_T03]),
     ])
     assert [(t, _rows(c)) for t, c in ticks] == [
-        ("1225", [("alert", True, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
+        ("1225", [("alert", True, "SIGMET LFMM T02 replaces T01 from 12:30Z: EMBD TS")]),
         ("1235", [("alert", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]),
         ("1420", [("alert", False, "SIGMET LFMM T03 replaces T02: EMBD TS")]),
     ]
@@ -687,7 +687,7 @@ def test_reissue_listed_past_its_validity_keeps_its_row():
 
 def test_predecessor_and_reissue_listed_together_are_one_row():
     [(_, rows)] = _sigmet_ticks([(_at(4, "1225"), [LFMM_T01, LFMM_T02])], baseline=[LFMM_T01])
-    assert _rows(rows) == [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]
+    assert _rows(rows) == [("highlight", False, "SIGMET LFMM T02 replaces T01 from 12:30Z: EMBD TS")]
 
 
 def test_lecb_reissues_including_an_e_of_line_area():
@@ -747,3 +747,86 @@ def test_other_fir_or_late_issue_is_not_a_reissue():
         ticks = _sigmet_ticks([(_at(4, "1100"), [LFMM_T01]), (_at(4, "1300"), [latest])])
         [c] = ticks[1][1]
         assert c.message.startswith("New SIGMET") and c.new_alert is True
+
+
+# --- Pending SIGMETs: issued, not yet valid (#683) ---------------------------
+
+
+def test_pending_sigmet_alerts_once_with_its_start_time():
+    """The fetch looks ahead for SIGMETs issued before their validity: the row
+    says when it starts, alerts at once, and does not alert again (nor make a
+    new trail event) when its validity begins."""
+    from weatherbrief.tasks.live_layer import change_identity
+
+    ticks = _sigmet_ticks([
+        (_at(4, "1020"), [LFMM_T01]),  # valid 10:50
+        (_at(4, "1055"), [LFMM_T01]),
+    ])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1020", [("alert", True, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+        ("1055", [("alert", False, "New SIGMET LFMM T01: EMBD TS")]),
+    ]
+    assert change_identity(ticks[0][1][0]) == change_identity(ticks[1][1][0])
+
+
+def test_lepa_ellx_lecb_3_alerts_before_departure():
+    """LEPA→ELLX 2026-10-05, dep 07:05Z: LECB 3 (EMBD TS over LEPA) was
+    issued 06:32 to start 07:00. With the lookahead the 06:36 tick lists it
+    beside LECB 2, whose reissue it is: one alert before departure, none at
+    07:09 once it is valid."""
+    ticks = _sigmet_ticks([
+        (_at(5, "0636"), [LECB_2, LECB_3]),
+        (_at(5, "0709"), [LECB_3]),
+    ])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("0636", [("alert", True, "SIGMET LECB 3 replaces 2 from 07:00Z: EMBD TS")]),
+        ("0709", [("alert", False, "SIGMET LECB 3 replaces 2: EMBD TS")]),
+    ]
+
+
+def test_pending_sigmet_missing_for_a_tick_does_not_alert_twice():
+    """A failed lookahead query drops a pending SIGMET for one tick. Its row
+    goes (nothing to show), but its return is not a second alert."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1020"), [LFMM_T01]),
+        (_at(4, "1030"), []),
+        (_at(4, "1040"), [LFMM_T01]),
+    ])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1020", [("alert", True, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+        ("1030", []),
+        ("1040", [("alert", False, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+    ]
+
+
+def test_briefing_sigmet_that_never_started_is_not_no_longer_active():
+    """A pending SIGMET the briefing had, missing from a tick before its
+    start, was never active: no "no longer active" row. Once its validity
+    has started, missing does mean ended."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1030"), []),
+        (_at(4, "1100"), []),
+    ], baseline=[LFMM_T01])
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1030", []),
+        ("1100", [("highlight", False, "SIGMET LFMM T01: EMBD TS no longer active")]),
+    ]
+
+
+def test_pending_alert_memory_clears_once_it_should_have_started():
+    """The kept memory is only for a SIGMET still before its start: one
+    missing after it (cancelled, or ended) is forgotten as before."""
+    memory = ClassifierMemory()
+    for at, latest in ((_at(4, "1020"), [LFMM_T01]), (_at(4, "1030"), [])):
+        _, memory = classify_changes(
+            baseline_obs=None, latest_obs=None,
+            baseline_sigmets=_sigmets([]), latest_sigmets=_sigmets(latest),
+            memory=memory, now=at,
+        )
+    assert "sigmet:LFMM|T01" in memory.alerted
+    _, memory = classify_changes(
+        baseline_obs=None, latest_obs=None,
+        baseline_sigmets=_sigmets([]), latest_sigmets=_sigmets([]),
+        memory=memory, now=_at(4, "1055"),
+    )
+    assert "sigmet:LFMM|T01" not in memory.alerted

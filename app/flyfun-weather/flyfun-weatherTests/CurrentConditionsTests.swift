@@ -27,7 +27,8 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 private func sigmetJSON(
     fir: String = "ZZZZ", hazard: String? = "TURB", qualifier: String? = "SEV",
     base: Int? = 10000, top: Int? = 24000,
-    from: Double? = 40, to: Double? = 60, raw: String = "ZZZZ SIGMET 3 VALID 240800/241200 ZZZZ-"
+    from: Double? = 40, to: Double? = 60, raw: String = "ZZZZ SIGMET 3 VALID 240800/241200 ZZZZ-",
+    validFrom: String? = nil
 ) -> String {
     func j(_ v: Any?) -> String {
         switch v {
@@ -41,7 +42,7 @@ private func sigmetJSON(
     { "fir_id": "\(fir)", "hazard": \(j(hazard)), "qualifier": \(j(qualifier)),
       "base_ft": \(j(base)), "top_ft": \(j(top)),
       "enroute_distance_from_nm": \(j(from)), "enroute_distance_to_nm": \(j(to)),
-      "raw_text": "\(raw)" }
+      "valid_from": \(j(validFrom)), "raw_text": "\(raw)" }
     """
 }
 
@@ -143,6 +144,19 @@ private let terrain = [TerrainPoint(distanceNm: 0, elevationFt: 0),
         #expect(zone.baseFt == nil)  // → the layer spans the full plot height
         #expect(zone.topFt == nil)
         #expect(zone.hazard == "SIGMET")
+    }
+
+    /// A "now" layer: a SIGMET issued but not valid yet (#683) is not drawn.
+    @Test func sigmetNotValidYetIsLeftOffTheNowLayer() throws {
+        let now = try #require(Date.parseISO8601("2026-06-24T08:50:00Z"))
+        let cc = try #require(VizCurrentConditions.build(
+            observations: nil,
+            sigmets: try routeSigmets([
+                sigmetJSON(hazard: "TS", validFrom: "2026-06-24T08:00:00Z"),
+                sigmetJSON(hazard: "ICE", validFrom: "2026-06-24T10:00:00Z"),
+            ]),
+            terrainProfile: terrain, now: now))
+        #expect(cc.sigmets.map(\.hazard) == ["TS"])
     }
 
     @Test func sigmetWithoutAnEnrouteSpanIsSkipped() throws {
