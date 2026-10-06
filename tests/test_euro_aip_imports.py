@@ -104,3 +104,19 @@ def test_warmed_imports_survive_cold_thread_race():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines()[-1] == "OK", result.stdout
+
+
+def test_failed_warm_up_summary_is_a_warning(monkeypatch, caplog):
+    import logging
+
+    from weatherbrief import euro_aip_imports
+
+    monkeypatch.setattr(
+        euro_aip_imports, "EURO_AIP_MODULES", ("euro_aip.borders", "euro_aip.no_such_module")
+    )
+    with caplog.at_level(logging.INFO, logger=euro_aip_imports.__name__):
+        euro_aip_imports.warm_euro_aip_imports()
+    summary = [r for r in caplog.records if "warm-up:" in r.getMessage()]
+    assert len(summary) == 1
+    assert summary[0].levelno == logging.WARNING
+    assert "1/2 modules" in summary[0].getMessage()

@@ -69,7 +69,8 @@ def warm_euro_aip_imports() -> None:
         except Exception:
             failed.append(name)
             logger.exception("euro_aip import warm-up failed for %s", name)
-    logger.info(
+    logger.log(
+        logging.WARNING if failed else logging.INFO,
         "euro_aip import warm-up: %d/%d modules in %.2fs",
         len(EURO_AIP_MODULES) - len(failed),
         len(EURO_AIP_MODULES),
