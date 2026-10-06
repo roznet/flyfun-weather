@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from datetime import timedelta
 
-from test_live_storms import DEP, ROUTE, NM_LAT, NM_LON, at_nm, cell, storms_at
+from test_live_storms import DEP, NM_LAT, NM_LON, ROUTE, at_nm, cell, frame, storms_at
 
 from weatherbrief.models.live import LiveChange, LiveChanges, LiveLayer, LiveStorms
 from weatherbrief.models.observations import (
@@ -33,6 +33,7 @@ from weatherbrief.models.observed import (
     ObservedStationRef,
     ObservedStationSamples,
 )
+from weatherbrief.observed.storms import CellFrames
 from weatherbrief.tasks.live_glance import build_glance
 from weatherbrief.tasks.live_layer import summarize_live
 
@@ -307,15 +308,20 @@ def test_glance_failure_leaves_the_tick_alone(monkeypatch, tmp_path):
     def boom(*a, **k):
         raise RuntimeError("x")
 
-    monkeypatch.setattr(live_glance, "build_glance", boom)
+    # Fails part-way, after the storms are read: they keep no focus.
+    monkeypatch.setattr(live_glance, "_ribbon_segments", boom)
     pack = tmp_path / "user" / "flight-zz" / "2026-10-06T10-00-00"
     pack.mkdir(parents=True)
     layer = commit_live_update(
         pack, briefing_data={"route": ROUTE.model_dump(mode="json"), "departure_time": DEP.isoformat()},
         observations=_obs(_airport("ZZDP", 0.0)), sigmets=None, observed=None,
         started_at=NOW, now=NOW,
+        cells=CellFrames("available", newest=frame(NOW - timedelta(minutes=5), [
+            cell("core35-a", "core35", along=60, cross=-8)])),
     )
+    assert layer.storms.storms  # the storms were built
     assert layer is not None and layer.glance is None and layer.ribbon is None
+    assert all(st.focus is None for st in layer.storms.storms)
 
 
 # --- Stored, served, and in the agent block -------------------------------------
@@ -340,3 +346,38 @@ def test_commit_stores_glance_and_the_agent_block_quotes_it(tmp_path):
     assert [ln["text"] for ln in block["glance"]["lines"]] == [ln.text for ln in layer.glance.lines]
     # The cells feed is dark in this commit: the lines say so.
     assert "radar storms unavailable" in block["glance"]["lines"][1]["text"]
+
+
+# --- Review round 1 on #695 ------------------------------------------------------
+
+
+def test_ribbon_never_reads_another_ring_than_it_states():
+    # Only a 5 NM ring sampled: the ribbon claims 10 NM, so it reads nothing.
+    layer = _layer(observed=_observed(radar={40: 47.0}))
+    for st in layer.observed_conditions.reflectivity.stations:
+        st.annuli = [a.model_copy(update={"radius_nm": 5}) for a in st.annuli]
+    _, ribbon = _glance(layer)
+    assert ribbon.radar_radius_nm == 10.0
+    assert all(s.radar_status == "no_sample" and s.radar_max_dbz is None for s in ribbon.segments)
+
+
+def test_only_sigmet_rows_read_as_reissued():
+    rows = [LiveChange(key="x", kind="metar_category", source="METAR", direction="updated",
+                       tier="highlight", role="route", message="m")]
+    glance, _ = _glance(_layer(changes=LiveChanges(computed_at=NOW, changes=rows)))
+    assert glance.headline == "Observed 11:30Z · as briefed, 1 updated"
+
+
+def test_enroute_line_after_planned_arrival():
+    glance, _ = _glance(_layer(), now=DEP + timedelta(hours=2))
+    assert glance.lines[1].text.startswith("flight arrived at plan, no route ahead · ")
+    assert glance.lines[1].passed
+
+
+def test_convective_tags_share_one_order():
+    raw = "METAR ZZDP 061120Z 27010KT 9999 TS FEW040CB 19/12 Q1013"
+    dep = _airport("ZZDP", 0.0, raw=raw).model_copy(update={"metar_weather": ["TS"]})
+    layer = _layer(observations=_obs(dep, _airport("ZZDS", 154.0)))
+    glance, ribbon = _glance(layer)
+    assert glance.lines[0].text.startswith("ZZDP VFR CB TS · ")
+    assert next(s for s in ribbon.stations if s.icao == "ZZDP").convective == ["CB", "TS"]

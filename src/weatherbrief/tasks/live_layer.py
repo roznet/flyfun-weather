@@ -308,7 +308,10 @@ def _build_glance(
             layer, route, departure, alternate_icaos=_alternate_icaos(briefing_data), now=now,
         )
     except Exception:
-        logger.warning("Live glance failed for %s — glance/ribbon null this tick", layer.flight_id, exc_info=True)
+        # One distinctive line to alert on: a systematic failure blanks the
+        # Observed tab's top block on every tick, and the agent glance then
+        # reads null as if not built yet.
+        logger.exception("LIVE_GLANCE_FAILED flight=%s — glance/ribbon null this tick", layer.flight_id)
         return None, None
 
 

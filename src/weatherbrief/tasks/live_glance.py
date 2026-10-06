@@ -242,6 +242,12 @@ def _ring(annuli, radius_nm: float):
     return max(fits, key=lambda a: a.radius_nm) if fits else None
 
 
+def _exact_ring(annuli, radius_nm: float):
+    """The annulus at exactly ``radius_nm``, else None: the ribbon states its
+    radius (``LiveRibbon.radar_radius_nm``), so it never reads another."""
+    return next((a for a in annuli if abs(a.radius_nm - radius_nm) < 1e-6), None)
+
+
 def _station_along(observed: ObservedConditions | None) -> dict[str, float]:
     if observed is None:
         return {}
@@ -278,14 +284,23 @@ def _lightning_at(observed: ObservedConditions | None, station_id: str | None) -
 # --- Nutshell clauses ---------------------------------------------------------
 
 
-def _metar_clause(icao: str, obs: AirportObservation | None, now: datetime) -> tuple[str, bool, list[str]]:
-    """"LPPR VFR TS" (category + observed convection), or unavailable."""
+#: Convective tags in severity order, for every surface that lists them.
+_CONVECTIVE_ORDER = ("TCU", "CB", "VCTS", "TS")
+
+
+def _convective(obs: AirportObservation) -> list[str]:
+    """The METAR's observed convection, mildest first ("CB TS")."""
     from weatherbrief.tasks.live_significance import convective_tags
 
+    return sorted(convective_tags(obs), key=_CONVECTIVE_ORDER.index)
+
+
+def _metar_clause(icao: str, obs: AirportObservation | None, now: datetime) -> tuple[str, bool, list[str]]:
+    """"LPPR VFR TS" (category + observed convection), or unavailable."""
     if obs is None or not (obs.has_metar or obs.metar_raw):
         return f"{icao} METAR unavailable", True, []
     cat = obs.metar_flight_category or "category unknown"
-    tags = sorted(convective_tags(obs), key=lambda t: ("TCU", "CB", "VCTS", "TS").index(t))
+    tags = _convective(obs)
     text = f"{icao} {cat}" + (f" {' '.join(tags)}" if tags else "")
     if obs.metar_time is not None and now - obs.metar_time > OLD_METAR:
         text += f" (METAR {_hhmm(obs.metar_time)})"
@@ -325,7 +340,7 @@ def _storms_unavailable(storms: LiveStorms | None) -> str:
 
 
 def _terminal_storms(
-    storms: LiveStorms | None, pos: tuple[float, float], icao: str,
+    storms: LiveStorms | None, pos: tuple[float, float],
 ) -> tuple[str, bool, list[LiveStorm]]:
     """"nearest storm 9 NM NE, moving away 11 kt" around an airport."""
     if storms is None or storms.status != "available":
@@ -350,6 +365,9 @@ def _enroute_storms(storms: LiveStorms | None, plan: _Plan) -> tuple[str, bool, 
     """Storms ahead between the terminal discs, counted as storms."""
     if storms is None or storms.status != "available":
         return _storms_unavailable(storms), True, []
+    if plan.arrived:
+        # A tick after the planned landing: nothing is ahead any more.
+        return "flight arrived at plan, no route ahead", False, []
 
     def terminal(st: LiveStorm) -> bool:
         return (
@@ -440,7 +458,7 @@ def _headline(changes: LiveChanges | None, as_of: datetime) -> tuple[str, str]:
     since = "since the briefing" if changes.baseline_source == "briefing" else "since live tracking began"
     worse: list[str] = []
     better: list[str] = []
-    updated = 0
+    reissued = updated = 0
     for c in changes.changes:
         phase = _PHASE_OF_ROLE.get(c.role, "enroute")
         if c.direction == "worse" and phase not in worse:
@@ -448,7 +466,10 @@ def _headline(changes: LiveChanges | None, as_of: datetime) -> tuple[str, str]:
         elif c.direction == "better" and phase not in better:
             better.append(phase)
         elif c.direction == "updated":
-            updated += 1
+            if c.kind == "sigmet_issued":
+                reissued += 1
+            else:
+                updated += 1
     order = ("departure", "enroute", "arrival")
     worse.sort(key=order.index)
     better.sort(key=order.index)
@@ -462,8 +483,10 @@ def _headline(changes: LiveChanges | None, as_of: datetime) -> tuple[str, str]:
         parts.append("as briefed" if changes.baseline_source == "briefing" else f"nothing worse {since}")
     if better:
         parts.append(f"{' and '.join(_PHASE_WORDS[p] for p in better)} improving")
+    if reissued:
+        parts.append(f"{_plural(reissued, 'SIGMET')} reissued")
     if updated:
-        parts.append(f"{_plural(updated, 'SIGMET')} reissued")
+        parts.append(f"{updated} updated")
     comparison = "mixed" if worse and better else "worse" if worse else "better" if better else "as_briefed"
     return f"{head} · {', '.join(parts)}", comparison
 
@@ -525,8 +548,6 @@ def _ribbon_sigmets(layer: LiveLayer, plan: _Plan) -> list[RibbonSigmet]:
 
 
 def _ribbon_stations(layer: LiveLayer, plan: _Plan, roles: dict[str, ChangeRole]) -> list[RibbonStation]:
-    from weatherbrief.tasks.live_significance import convective_tags
-
     obs = layer.route_observations
     if obs is None:
         return []
@@ -552,7 +573,7 @@ def _ribbon_stations(layer: LiveLayer, plan: _Plan, roles: dict[str, ChangeRole]
             along_nm=round(along, 1) if along is not None else None, cross_nm=cross,
             eta=plan.eta(along),
             metar_category=a.metar_flight_category, metar_time=a.metar_time,
-            convective=sorted(convective_tags(a)) if (a.has_metar or a.metar_raw) else [],
+            convective=_convective(a) if (a.has_metar or a.metar_raw) else [],
             taf_category_at_eta=(a.taf_prevailing_category_at_eta or a.taf_flight_category_at_eta) if taf_ok else None,
             taf_temporary_type=a.taf_temporary_type if taf_ok and a.taf_temporary_category_at_eta else None,
             taf_temporary_category=a.taf_temporary_category_at_eta if taf_ok else None,
@@ -584,7 +605,7 @@ def _ribbon_segments(
         ids = [sid for sid, d in along.items() if lo <= d < hi or (last and d == hi)]
         status, peak, lightning = "no_sample", None, None
         if refl is not None:
-            rings = [_ring(refl_by[sid].annuli, RIBBON_RADAR_RADIUS_NM) for sid in ids if sid in refl_by]
+            rings = [_exact_ring(refl_by[sid].annuli, RIBBON_RADAR_RADIUS_NM) for sid in ids if sid in refl_by]
             rings = [r for r in rings if r is not None]
             if rings:
                 covered = [r for r in rings if not r.insufficient_coverage]
@@ -595,7 +616,7 @@ def _ribbon_segments(
                 else:
                     status = "no_coverage"
         if light is not None:
-            rings = [_ring(light_by[sid].annuli, RIBBON_RADAR_RADIUS_NM) for sid in ids if sid in light_by]
+            rings = [_exact_ring(light_by[sid].annuli, RIBBON_RADAR_RADIUS_NM) for sid in ids if sid in light_by]
             rings = [r for r in rings if r is not None]
             if rings:
                 lightning = any(r.flash_count for r in rings)
@@ -627,17 +648,18 @@ def build_glance(
     now: datetime,
 ) -> tuple[LiveGlance, LiveRibbon]:
     """The nutshell and the ribbon for this tick, and ``focus`` on every
-    storm of ``layer.storms`` (set in place). ``now`` is the tick time: the
-    glance's "as of"."""
+    storm of ``layer.storms`` (set in place, last, so a failure part-way
+    leaves the storms untouched). ``now`` is the tick time: the glance's
+    "as of"."""
     from weatherbrief.tasks.live_significance import airport_roles
 
     plan = _Plan(route, departure, now)
     roles = airport_roles([wp.icao for wp in route.waypoints], alternate_icaos)
 
     storms = layer.storms
+    focus_by_storm: dict[str, LiveFocus] = {}
     if storms is not None and storms.status == "available":
-        for st in storms.storms:
-            st.focus = storm_focus(st, plan.track, storms.frame_time)
+        focus_by_storm = {st.id: storm_focus(st, plan.track, storms.frame_time) for st in storms.storms}
 
     sigmets = _ribbon_sigmets(layer, plan)
     stations = _ribbon_stations(layer, plan, roles)
@@ -690,7 +712,7 @@ def build_glance(
             else:
                 clauses.append("no TAF for ETA")
                 unavailable.append("taf")
-        text, missing, near = _terminal_storms(storms, pos, icao)
+        text, missing, near = _terminal_storms(storms, pos)
         clauses.append(text if phase == "departure" else (text + " now" if not missing else text))
         sources += [f"storm:{st.id}" for st in near]
         if missing:
@@ -720,7 +742,7 @@ def build_glance(
     enroute_focus = None
     if ahead:
         nearest = min(ahead, key=lambda st: st.offtrack_nm)
-        enroute_focus = nearest.focus
+        enroute_focus = focus_by_storm.get(nearest.id)
     elif segments:
         lo = plan.flown_nm or 0.0
         enroute_focus = LiveFocus(
@@ -733,4 +755,8 @@ def build_glance(
     ))
 
     headline, comparison = _headline(layer.changes, now)
-    return LiveGlance(as_of=now, headline=headline, comparison=comparison, lines=lines), ribbon
+    glance = LiveGlance(as_of=now, headline=headline, comparison=comparison, lines=lines)
+    if storms is not None:
+        for st in storms.storms:
+            st.focus = focus_by_storm.get(st.id)
+    return glance, ribbon
