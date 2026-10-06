@@ -536,6 +536,18 @@ def _group_same_phenomenon(sigmets: list[SigmetAlongRoute]) -> list[list[SigmetA
     return groups
 
 
+def _pending(s: SigmetAlongRoute, now: datetime) -> bool:
+    """Issued but not yet valid (#683): the fetch looks ahead for these."""
+    return s.valid_from is not None and s.valid_from > now
+
+
+def _from_suffix(group: list[SigmetAlongRoute], now: datetime) -> str:
+    """" from 07:00Z" while every SIGMET of the row is still pending, else ""."""
+    if not group or not all(_pending(m, now) for m in group):
+        return ""
+    return f" from {min(m.valid_from for m in group):%H:%MZ}"
+
+
 def _hazard_text(s: SigmetAlongRoute, default: str = "SIGMET") -> str:
     return " ".join(p for p in (s.qualifier, s.hazard) if p) or default
 
@@ -751,9 +763,11 @@ def _sigmet_changes(
         if sigmet_key(s) in base_by_key and _is_severe(s) and not _is_severe(base_by_key[sigmet_key(s)])
         and _live(s)
     ]
+    # A SIGMET that never became valid is not "no longer active": a pending
+    # one drops out of the list when a lookahead query fails (#683).
     gone = [
         s for k, s in base_by_key.items()
-        if k not in latest_keys
+        if k not in latest_keys and not _pending(s, now)
         and _sigmet_key_str(s) not in superseded and _sigmet_key_str(s) not in replaced_chains
     ]
 
@@ -769,7 +783,7 @@ def _sigmet_changes(
             g, kind="sigmet_issued", direction="worse",
             from_value=None, to_value=_hazard_text(g[0]),
             observed_at=g[0].valid_from,
-            message=f"{prefix} {_group_label(g)}", destination=destination,
+            message=f"{prefix} {_group_label(g)}{_from_suffix(g, now)}", destination=destination,
         ))
     for s in reissued:
         t = traces[_sigmet_key_str(s)]
@@ -778,7 +792,7 @@ def _sigmet_changes(
             [s], kind="sigmet_issued", direction="worse",
             from_value=None, to_value=_hazard_text(s),
             observed_at=s.valid_from,
-            message=f"SIGMET {t.label} replaces {_short_label(t)}: {_hazard_text(s)}",
+            message=f"SIGMET {t.label} replaces {_short_label(t)}{_from_suffix([s], now)}: {_hazard_text(s)}",
             destination=destination,
         )
         # The chain's first SIGMET, then this one: clients split the key on
@@ -1057,6 +1071,10 @@ def classify_changes(
             alerted[c.key] = value
     for k in list(alerted):
         if k not in live_alert_keys and k not in unknown and any(k.startswith(p) for p in evaluated):
+            if _pending_key(k, sigmet_traces, now):
+                # Missing from this fetch before it ever became valid (a failed
+                # lookahead query): kept, so its return does not alert twice.
+                continue
             del alerted[k]
 
     result = LiveChanges(
@@ -1065,6 +1083,17 @@ def classify_changes(
         changes=changes,
     )
     return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
+
+
+def _pending_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:
+    """A SIGMET change key with a member last seen as not yet valid (#683)."""
+    if not key.startswith("sigmet:"):
+        return False
+    for part in key.split("+"):
+        t = traces.get(part)
+        if t is not None and t.valid_from is not None and t.valid_from > now:
+            return True
+    return False
 
 
 def _alerted_under_another_key(key: str, value: str, alerted: dict[str, str]) -> str | None:

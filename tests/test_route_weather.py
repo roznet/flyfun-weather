@@ -624,6 +624,11 @@ def test_run_route_sigmets_maps_result(two_wp_route):
     # Altitude band passed to the service is surface -> cruise+buffer.
     kwargs = fake_service.fetch_route_sigmets.call_args.kwargs
     assert kwargs["altitude_band_ft"] == (0, 6000 + 5000)
+    # SIGMETs issued but not yet valid are fetched too (#683).
+    from datetime import timedelta
+
+    from weatherbrief.tasks.route_weather import SIGMET_LOOKAHEAD
+    assert kwargs["lookahead"] == SIGMET_LOOKAHEAD == timedelta(hours=4)
 
 
 def test_run_route_sigmets_empty(two_wp_route):

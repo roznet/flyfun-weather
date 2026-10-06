@@ -208,10 +208,12 @@ The tick resolves each flight's corridor airports with euro_aip's own
 `fetch_route_weather` against a *recording* source (so aliases and route airports
 match the network path exactly), tops up only what verification did not cover in
 one batch, and serves every flight through `SharedReportSource`. SIGMETs: one
-`fetch_isigmet` per tick (`SharedSigmetSource`); a failure is logged once and
+`fetch_isigmet` per tick (`SharedSigmetSource`, cached per argument set incl.
+`lookahead`); a failure is logged once and
 cached, and every flight then gets `SigmetSourceUnavailable`, which
 `run_realtime_refresh` skips quietly (stored SIGMETs kept). Worst case per tick: two
-METAR/TAF batches and one SIGMET call, whatever the flight count. Observed
+METAR/TAF batches and one SIGMET fetch (9 isigmet requests with the 4 h
+lookahead, see below), whatever the flight count. Observed
 radar/lightning/tops are re-sampled from local frames (no network).
 
 The verification window (dep − 1 h) was deliberately **not** widened to dep − 3 h:
@@ -281,6 +283,24 @@ code relies on:
   set the alert memory without `new_alert`.
 - No geometry or validity on either side → never a reissue (the louder
   "New SIGMET" reading).
+
+## Pending SIGMETs (#683)
+
+The SIGMET fetch looks ahead (`route_weather.SIGMET_LOOKAHEAD`, 4 h), so the
+list holds SIGMETs issued but not yet valid. Rule in meteorology-decisions §38.
+What the code relies on:
+
+- `_pending(s, now)` (`valid_from > now`) adds " from HH:MMZ" to a "New
+  SIGMET" or reissue row while every SIGMET of the row is pending. Only the
+  message changes when it starts: `change_identity` ignores the message, so
+  no second alert and no new trail event.
+- A failed lookahead query (euro_aip stops the lookahead and keeps the rest)
+  drops pending SIGMETs for one tick. So a baseline SIGMET missing before its
+  start is not "gone", and `_pending_key` keeps the alert memory of a missing
+  SIGMET whose trace is still before its start. Both rely on the trace
+  (`ClassifierMemory.sigmets`) holding `valid_from`.
+- `LiveChange.observed_at` for a pending SIGMET is in the future; clients
+  show no age for it.
 
 ## Gotchas
 

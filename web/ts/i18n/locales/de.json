@@ -203,6 +203,8 @@
   "sigmets.severeBanner": "Schweres (SEV) SIGMET in Kraft",
   "sigmets.showDetails": "SIGMET-Details anzeigen",
   "sigmets.info": "SIGMET-Info",
+  "sigmets.pendingFrom": "ab {time}",
+  "sigmets.pendingTitle": "Herausgegeben, noch nicht gültig",
   "sigmets.tableHazard": "Gefahr",
   "sigmets.tableFir": "FIR",
   "sigmets.tableLevels": "Höhen",

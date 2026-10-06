@@ -634,6 +634,13 @@ def _sigmet_altitude_band(route: RouteConfig) -> tuple[int, int]:
 # classifier reads as every briefing SIGMET "no longer active".
 _SIGMET_POST_ARRIVAL = timedelta(hours=3)
 
+#: How far ahead to look for SIGMETs already issued but not yet valid (#683).
+#: AWC's isigmet lists only SIGMETs valid at the query time, so without it a
+#: SIGMET starting just after departure is seen only once it is in force. ICAO
+#: allows issue up to 4 h ahead (12 h for volcanic ash / tropical cyclone).
+#: Costs one small global request per 30 min step (8 here), in every path.
+SIGMET_LOOKAHEAD = timedelta(hours=4)
+
 
 def _departure_day_window(
     target_time: datetime,
@@ -679,7 +686,8 @@ def run_route_sigmets(
     """Fetch SIGMETs affecting a route via euro_aip RouteSigmetService.
 
     Mirrors :func:`run_route_weather` but for area hazards: resolves the route
-    geometry, queries live international SIGMETs, and keeps those whose polygon
+    geometry, queries live international SIGMETs (valid now, plus those issued
+    to start within :data:`SIGMET_LOOKAHEAD`), and keeps those whose polygon
     intersects the route corridor within the altitude band and departure-day
     time window.
 
@@ -715,6 +723,7 @@ def run_route_sigmets(
         altitude_band_ft=(low_ft, high_ft),
         from_datetime=win_from,
         to_datetime=win_to,
+        lookahead=SIGMET_LOOKAHEAD,
     )
 
     sigmets: list[SigmetAlongRoute] = []

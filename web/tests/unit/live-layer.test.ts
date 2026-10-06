@@ -26,6 +26,7 @@ import {
   pythonDatetimeStr,
   sameInstant,
   sigmetChangeKey,
+  sigmetPendingFrom,
   englishOrdinal,
   timesTodayText,
   trailSpanText,
@@ -360,5 +361,22 @@ describe('clearedRows', () => {
   it('is empty without trails', () => {
     expect(clearedRows(changes([]))).toEqual([]);
     expect(clearedRows(null)).toEqual([]);
+  });
+});
+
+describe('sigmetPendingFrom (#683)', () => {
+  const now = Date.parse('2026-10-05T06:36:00Z');
+
+  it('gives the start of a SIGMET not valid yet', () => {
+    expect(sigmetPendingFrom('2026-10-05T07:00:00Z', now)).toBe('07:00Z');
+    // Pack timestamps without a zone are UTC.
+    expect(sigmetPendingFrom('2026-10-05T07:00:00', now)).toBe('07:00Z');
+  });
+
+  it('is null once valid, or without a start', () => {
+    expect(sigmetPendingFrom('2026-10-05T06:30:00Z', now)).toBeNull();
+    expect(sigmetPendingFrom('2026-10-05T06:36:00Z', now)).toBeNull();
+    expect(sigmetPendingFrom(null, now)).toBeNull();
+    expect(sigmetPendingFrom('garbage', now)).toBeNull();
   });
 });

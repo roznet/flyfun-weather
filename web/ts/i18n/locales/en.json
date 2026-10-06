@@ -272,6 +272,8 @@
   "sigmets.severeBanner": "Severe (SEV) SIGMET in effect",
   "sigmets.showDetails": "Show SIGMET details",
   "sigmets.info": "SIGMET info",
+  "sigmets.pendingFrom": "from {time}",
+  "sigmets.pendingTitle": "Issued, not valid yet",
   "sigmets.tableHazard": "Hazard",
   "sigmets.tableFir": "FIR",
   "sigmets.tableLevels": "Levels",

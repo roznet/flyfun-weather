@@ -5411,6 +5411,14 @@ html {
   background: var(--amber-bg);
 }
 
+/* A SIGMET issued but not valid yet (#683): "from 07:00Z" beside its hazard. */
+.sigmet-pending {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .digest-live-caveat {
   font-size: 0.8rem;
   color: var(--text-muted);

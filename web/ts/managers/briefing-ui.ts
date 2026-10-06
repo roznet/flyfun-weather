@@ -61,6 +61,8 @@ import {
   minutesAgo,
   observedAsOf,
   sigmetChangeKey,
+  sigmetPendingFrom,
+  isoToMs,
   clearedRows,
   trailText,
 } from '../helpers/live-layer';
@@ -2153,9 +2155,14 @@ export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
     ].filter(Boolean).join(' ');
     const rowClass = classes ? ` class="${classes}"` : '';
     const move = s.direction && s.speed_kt ? `${escapeHtml(s.direction)} ${s.speed_kt}kt` : '—';
+    // Issued but not valid yet (#683): say when it starts.
+    const from = sigmetPendingFrom(s.valid_from);
+    const pending = from
+      ? ` <span class="sigmet-pending" title="${escapeHtml(t('sigmets.pendingTitle'))}">${escapeHtml(t('sigmets.pendingFrom', { time: from }))}</span>`
+      : '';
     return `
       <tr${rowClass}>
-        <td class="obs-icao">${escapeHtml(head)} <button class="sigmet-info-btn" data-idx="${i}" title="${t('sigmets.showDetails')}" aria-label="${t('sigmets.info')}">i</button></td>
+        <td class="obs-icao">${escapeHtml(head)}${pending} <button class="sigmet-info-btn" data-idx="${i}" title="${t('sigmets.showDetails')}" aria-label="${t('sigmets.info')}">i</button></td>
         <td style="text-align:left; font-family:monospace;">${escapeHtml(s.fir_id)}</td>
         <td>${sigmetBand(s.base_ft, s.top_ft)}</td>
         <td>${sigmetEnroute(s)}</td>
@@ -2208,6 +2215,9 @@ const RD_CAT_RE = /\b(LIFR|MVFR|VFR|IFR)\b/g;
 
 /** "12 min ago" / "1 h 05 min ago" for an ISO time; '' when unparseable. */
 function liveAgeText(iso: string | null | undefined, now: number = Date.now()): string {
+  // A future instant has no age: a pending SIGMET's row says "from HH:MMZ"
+  // (#683); the age appears once it has started.
+  if (isoToMs(iso) > now) return '';
   const min = minutesAgo(iso, now);
   if (min == null) return '';
   if (min < 1) return t('live.justNow');

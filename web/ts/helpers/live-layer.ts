@@ -206,6 +206,16 @@ export function formatHhmmZ(iso: string | null | undefined): string {
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}Z`;
 }
 
+/** "07:00Z" for a SIGMET issued but not yet valid at `now` (#683), else null.
+ *  The server looks ahead for these; a row must not read as active. */
+export function sigmetPendingFrom(
+  validFrom: string | null | undefined, now: Date | number = Date.now(),
+): string | null {
+  const ms = isoToMs(validFrom);
+  const t = typeof now === 'number' ? now : now.getTime();
+  return !isNaN(ms) && ms > t ? formatHhmmZ(validFrom) : null;
+}
+
 /** Whole minutes from `iso` to `now` (never negative); null when unparseable. */
 export function minutesAgo(iso: string | null | undefined, now: Date | number = Date.now()): number | null {
   const ms = isoToMs(iso);

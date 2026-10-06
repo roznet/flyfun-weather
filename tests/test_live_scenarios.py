@@ -67,12 +67,14 @@ EXPECTED_LELL_LEMI = [
     ('08:00', '+', 'highlight', 'LEVC METAR: TCU no longer reported'),
     ('08:00', '-', 'alert', 'LEVC METAR: CB reported'),
     ('08:00', '-', 'highlight', 'LECH METAR: IFR → MVFR'),
-    ('08:30', '+', 'alert', 'New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)'),
+    # Listed 5 min before its 08:35 start: the row says when it begins (#683).
+    ('08:30', '+', 'alert', 'New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)'),
     ('08:30', '+', 'highlight', 'LECH METAR: IFR → LIFR'),
     ('08:30', '-', 'highlight', 'LECH METAR: IFR → VFR'),
     # LECB 4 (valid 09:00, over LECB 2's area) is LECB 2's reissue, and LECB 2
-    # was in the 06:52 briefing: one highlight row, no "no longer active" (#682).
-    ('08:40', '+', 'highlight', 'SIGMET LECB 4 replaces 2: EMBD TS'),
+    # was in the 06:52 briefing: one highlight row, no "no longer active" (#682),
+    # listed before its start, so the handover shows ahead of it (#683).
+    ('08:40', '+', 'highlight', 'SIGMET LECB 4 replaces 2 from 09:00Z: EMBD TS'),
     ('09:00', '-', 'highlight', 'LECH METAR: IFR → LIFR'),
     # ~09:15 — VLC passed: LEVC no longer matters.
     ('09:20', '-', 'highlight', 'LEVC METAR: TCU no longer reported'),
@@ -102,7 +104,7 @@ def test_lell_lemi_destination_sigmet_is_one_alert(lell_lemi):
     t = _at(lell_lemi, "08:30")
     sig = [c for c in t.appeared if c.source == "SIGMET"]
     assert [(c.tier, c.role, c.message) for c in sig] == [
-        ("alert", "destination", "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)"),
+        ("alert", "destination", "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)"),
     ]
 
 

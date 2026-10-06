@@ -273,8 +273,14 @@ Surfaced on `ForecastSnapshot.route_sigmets`.
 ### Fetch (`run_route_sigmets`)
 
 Calls euro_aip `RouteSigmetService().fetch_route_sigmets(route_icaos, corridor_nm,
-model, altitude_band_ft, from_datetime, to_datetime)` and maps `RouteSigmetResult` →
-`RouteSigmets`. Two derived inputs:
+model, altitude_band_ft, from_datetime, to_datetime, lookahead)` and maps `RouteSigmetResult` →
+`RouteSigmets`. **Lookahead** (`SIGMET_LOOKAHEAD`, 4 h, #683): AWC's isigmet lists only
+SIGMETs valid at the query time, so euro_aip adds queries at now + 30 min, + 1 h, … + 4 h
+and merges them into the now query. The list then also holds SIGMETs issued but not yet
+valid (first seen up to 4 h before they start instead of at their start). Cost: 9
+small global requests per fetch instead of 1, sequential, in every path (briefing
+build, ↻ refresh, live tick). A failed lookahead request ends the lookahead and keeps
+what was fetched; a failed now request returns no SIGMETs, as before. Two derived inputs:
 - **Altitude band** = `(0, cruise_altitude_ft + 5000)` (`_sigmet_altitude_band`) — surface
   to cruise plus a climb/descent buffer; high-FL-only hazards irrelevant to a GA route
   are dropped. SIGMETs with unknown bounds always surface (`overlaps_altitude` is permissive).

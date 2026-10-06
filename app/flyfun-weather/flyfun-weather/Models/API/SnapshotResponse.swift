@@ -463,6 +463,15 @@ nonisolated struct SigmetAlongRoute: Codable, Identifiable, Sendable {
         return "\(from ?? "?") → \(to ?? "?")"
     }
 
+    /// "07:00Z" while the SIGMET is issued but not yet valid at `now` (#683):
+    /// the server looks ahead for these, and a row must not read as active.
+    /// Nil once valid, or without a parseable start. Mirrors the web's
+    /// `sigmetPendingFrom`.
+    func pendingFrom(now: Date = Date()) -> String? {
+        guard let validFrom, let start = Date.parseISO8601(validFrom), start > now else { return nil }
+        return LiveTime.zulu(start)
+    }
+
     /// "170450Z" (DDHHMMZ) from an ISO timestamp, always in UTC.
     static func dayZulu(_ iso: String) -> String? {
         guard let date = Date.parseISO8601(iso) else { return nil }
