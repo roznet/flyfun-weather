@@ -199,7 +199,9 @@ def airport_roles(
 #:   move into or out of IFR/LIFR (see :func:`_category_matters`).
 #: - Convective (TS/VCTS/CB/TCU) and significant weather: alert at a terminal
 #:   and at an en-route airport still ahead — that is weather the route flies
-#:   through; highlight at an alternate.
+#:   through; highlight at an alternate. Exception (§39): en route, CB / TCU
+#:   alone is a highlight — the radar along the route is the better signal for
+#:   that cell; a thunderstorm (TS / VCTS) still alerts (:func:`airport_tier`).
 #: - Wind (the airport wind advisory, green/amber/red): terminal alert,
 #:   alternate highlight, not reported en route (nobody lands there).
 AIRPORT_POLICY: dict[str, dict[str, dict[str, str | None]]] = {
@@ -220,7 +222,8 @@ AIRPORT_POLICY: dict[str, dict[str, dict[str, str | None]]] = {
     "route": {
         "metar_category": {"worse": "highlight", "better": "highlight"},
         "taf_category": {"worse": "highlight", "better": "highlight"},
-        "metar_convective": {"worse": "alert", "better": "highlight"},
+        # CB / TCU only; a thunderstorm still alerts (see airport_tier, §39).
+        "metar_convective": {"worse": "highlight", "better": "highlight"},
         "metar_weather": {"worse": "alert", "better": "highlight"},
         "metar_wind": {"worse": None, "better": None},
     },
@@ -231,8 +234,20 @@ def _policy_role(role: ChangeRole) -> str:
     return "terminal" if role in ("destination", "departure") else role
 
 
-def airport_tier(role: ChangeRole, kind: str, direction: str) -> str | None:
-    """The tier a change of ``kind`` gets at an airport of ``role``, or None."""
+def airport_tier(
+    role: ChangeRole, kind: str, direction: str, to_value: str | None = None,
+) -> str | None:
+    """The tier a change of ``kind`` gets at an airport of ``role``, or None.
+
+    En route, CB / TCU reported at a station is a highlight: the radar along
+    the route says more about that cell than the station's cloud type
+    (§39). A thunderstorm (``TS`` / ``VCTS``, level "TS") still alerts.
+    """
+    if (
+        _policy_role(role) == "route" and kind == "metar_convective"
+        and direction == "worse" and to_value == _CONVECTIVE_LABEL[_CONVECTIVE_RANK["TS"]]
+    ):
+        return "alert"
     return AIRPORT_POLICY[_policy_role(role)].get(kind, {}).get(direction)
 
 
@@ -453,7 +468,7 @@ def _airport_changes(
         unknown |= unk
         source = "SPECI" if (a.metar_report_type or "").upper() == "SPECI" else "METAR"
         for kind, direction, from_v, to_v, message in candidates:
-            tier = airport_tier(role, kind, direction)
+            tier = airport_tier(role, kind, direction, to_v)
             if tier is None:
                 continue
             out.append(LiveChange(

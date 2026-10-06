@@ -50,22 +50,22 @@ EXPECTED_LELL_LEMI = [
     ('06:30', '-', 'highlight', 'LEAL wind: green → amber (crosswind 7 kt RWY 10, gust 25 kt)'),
     ('06:30', '-', 'highlight', 'LEVC METAR: CB no longer reported (SPECI)'),
     # 06:52 — briefing rebuilt on the day: its own observations are the baseline.
-    ('07:00', '+', 'alert', 'LEVC METAR: CB reported'),
     ('07:00', '+', 'highlight', 'LERI METAR: MVFR → VFR'),
+    ('07:00', '+', 'highlight', 'LEVC METAR: CB reported'),  # §39: CB alone en route
     ('07:00', '+', 'highlight', 'LECH METAR: IFR → MVFR'),
     ('07:00', '-', 'alert', 'New SIGMET LECB 2: EMBD TS'),
     ('07:00', '-', 'highlight', 'LERI METAR: VFR → MVFR'),
     ('07:00', '-', 'highlight', 'LEVC METAR: CB now TCU'),
     ('07:10', '+', 'alert', 'LEVC METAR: CB, TS reported (SPECI)'),
-    ('07:10', '-', 'alert', 'LEVC METAR: CB reported'),
+    ('07:10', '-', 'highlight', 'LEVC METAR: CB reported'),
     ('07:20', '+', 'highlight', 'LEVC METAR: MVFR → IFR (SPECI)'),
-    ('07:30', '+', 'alert', 'LEVC METAR: CB reported'),
+    ('07:30', '+', 'highlight', 'LEVC METAR: CB reported'),
     ('07:30', '-', 'alert', 'LEVC METAR: CB, VCTS reported (SPECI)'),
     ('07:30', '-', 'highlight', 'LEVC METAR: MVFR → IFR (SPECI)'),
     # 08:00 — departure: LELL no longer matters.
     ('08:00', '+', 'highlight', 'LECH METAR: IFR → VFR'),
     ('08:00', '+', 'highlight', 'LEVC METAR: TCU no longer reported'),
-    ('08:00', '-', 'alert', 'LEVC METAR: CB reported'),
+    ('08:00', '-', 'highlight', 'LEVC METAR: CB reported'),
     ('08:00', '-', 'highlight', 'LECH METAR: IFR → MVFR'),
     # Listed 5 min before its 08:35 start: the row says when it begins (#683).
     ('08:30', '+', 'alert', 'New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)'),

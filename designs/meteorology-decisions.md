@@ -5195,3 +5195,57 @@ refresh and the live tick.
   The classifier has no arrival time; demoting those would need one.
 - How often the lookahead queries fail (log: "AvWx isigmet lookahead failed").
 
+
+## 39. En route, a station's CB / TCU is a highlight; the radar is the signal
+
+**Date:** 2026-10-06 · **Issue:** follow-up to #682 (interim step; the radar-based rule is #688) · **Amends:** §36
+
+After §37 read the observed part of a METAR, AUTO stations' `///CB` / `///TCU`
+were caught, and the en-route alert count did not fall: replaying the
+2026-10-03..05 prod flights through the fixed classifier gave 27 alert-tier
+rows against 28 before, most of them CB/TCU at en-route stations (LFRM→LFMD:
+LFMH, LFHP, LFLS, LFOT `///TCU`, 1 → 4 alerts).
+
+Those reports are real. Against OPERA radar sampled around each airport over
+the 10 min before the METAR (2,523 METARs, 2026-10-03 15:05 → 10-05):
+
+| METAR said | n | heavy echo (≥41 dBZ) ≤10 NM | ≥30 dBZ ≤5 NM | lightning ≤10 NM |
+|---|---|---|---|---|
+| AUTO `///CB` | 45 | 62 % | 78 % | 0 % |
+| AUTO `///TCU` | 35 | 46 % | 60 % | 0 % |
+| CB/TCU in TEMPO only | 67 | 7 % | 28 % | 0 % |
+| no CB/TCU | 2,363 | 1 % | 2 % | 0 % |
+
+So where radar covers the route, it already sees the same cells — and says
+more about them: position against the route, strength, motion, trend. A
+station flag ("CB somewhere in view") adds little as an alert on top.
+
+### Choices
+
+- **En-route `metar_convective` "worse" is highlight** for CB / TCU.
+- **A thunderstorm still alerts en route**: a step up to `TS` / `VCTS`
+  (level "TS") keeps alert tier (`airport_tier`). LEGE `VCTS FEW022CB` on
+  LEPA→ELLX 2026-10-05 is the kind of report that should still interrupt.
+- **Terminals and alternates unchanged**: CB/TCU at the departure (until
+  take-off) or destination still alerts — that is the approach and the gust
+  front, not the route; alternates stay highlight.
+- **Interim.** The en-route alert is meant to come from radar cells (the
+  observed-cells feed: distance off track at ETA, trend, motion, lightning),
+  with the station report as corroboration. Until then, en-route convective
+  alerts come from SIGMETs, station TS/VCTS, and the radar/lightning route rows
+  (highlight today).
+
+### Rejected
+
+- **Demote TCU only, keep CB alert**: AUTO `///CB` is mostly moderate showers
+  (LFBO 32–39 dBZ, LFMT 25–36 dBZ, no lightning on 2026-10-04); the cell
+  view, not the cloud type, separates the ones that matter.
+- **Drop the en-route row**: it stays as a highlight; it is the only
+  convective signal where radar does not cover the route.
+
+### Real-world validation needed
+
+- Where radar does not cover the route (sea beyond range, coverage gaps,
+  cells feed dark when the mini is down), a station CB is now only a
+  highlight. The cell-based rule must restore the alert there (fallback).
+- Sample is 3 days, mostly south-west France AUTO stations, one regime.

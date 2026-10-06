@@ -14,9 +14,10 @@
 | Where | `live.json` blocks → `/live` → clients | `tasks/live_significance.py` (one server classifier, so web / iOS / push agree) |
 
 Meteorology choices (what counts as significant, tiers) are in
-[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–37
+[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–39
 (§37, #682: CB/TCU read off the observed part only, SIGMET reissues as
-replacements, categorical radar/lightning values).
+replacements, categorical radar/lightning values; §38, #683: pending SIGMETs;
+§39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 
 ## Testing

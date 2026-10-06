@@ -135,7 +135,7 @@ def test_policy_improvements_never_alert():
     ("alternate", "metar_convective", "highlight"),
     ("alternate", "metar_wind", "highlight"),
     ("route", "metar_category", "highlight"),
-    ("route", "metar_convective", "alert"),
+    ("route", "metar_convective", "highlight"),
     ("route", "metar_weather", "alert"),
     ("route", "metar_wind", None),
 ])
@@ -157,6 +157,35 @@ def test_thunderstorm_appearing_en_route_alerts():
     assert (c.from_value, c.to_value) == ("none", "TS")
     assert c.message == "ZZRT METAR: CB, TS reported (SPECI)"
     assert c.key == "conv:ZZRT" and c.source == "SPECI"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # An AUTO station's observed cloud type (LFBO 2026-10-04, LFMH 2026-10-03).
+    ("METAR ZZRT 041100Z AUTO 13011KT 9999 FEW016/// SCT120/// ///CB 19/17 Q1023", "CB"),
+    ("METAR ZZRT 031430Z AUTO 12008KT 9999 ///TCU 23/14 Q1027", "TCU"),
+])
+def test_cb_or_tcu_en_route_is_a_highlight(raw, expected):
+    """§39: en route, the radar along the route is the signal for that cell;
+    a station's CB / TCU alone no longer alerts."""
+    changes, _ = classify([apt("ZZRT", enroute=100)], [apt("ZZRT", raw, t=T1, enroute=100)])
+    c = only(changes, "metar_convective")
+    assert (c.role, c.tier, c.direction, c.to_value) == ("route", "highlight", "worse", expected)
+
+
+def test_cb_or_tcu_at_a_terminal_still_alerts():
+    raw = "METAR ZZDS 041100Z AUTO 13011KT 9999 ///CB 19/17 Q1023"
+    changes, _ = classify([apt("ZZDS")], [apt("ZZDS", raw, t=T1)])
+    c = only(changes, "metar_convective")
+    assert (c.role, c.tier) == ("destination", "alert")
+
+
+def test_cb_to_ts_en_route_alerts():
+    """A thunderstorm stepping up from CB at an en-route station still alerts."""
+    cb = "METAR ZZRT 020630Z 05010KT 9999 FEW015CB 20/15 Q1020"
+    ts = "METAR ZZRT 020700Z 05010KT 9999 VCTS FEW015CB 20/15 Q1020"
+    changes, _ = classify([apt("ZZRT", cb, enroute=100)], [apt("ZZRT", ts, wx=["VCTS"], t=T1, enroute=100)])
+    c = only(changes, "metar_convective")
+    assert (c.tier, c.from_value, c.to_value) == ("alert", "CB", "TS")
 
 
 def test_step_up_from_cb_to_ts_is_a_change_and_step_down_is_better():
