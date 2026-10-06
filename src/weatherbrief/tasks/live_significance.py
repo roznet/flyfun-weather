@@ -145,6 +145,21 @@ STORM_TERMINAL_NM = 10.0
 #: An en-route station's CB/TCU/TS joins a storm within this distance of the
 #: airport (the "≤ 10 NM" of the radar-vs-METAR evidence, §39).
 STORM_BACKING_NM = 10.0
+#: "Developing" alone alerts only this close to the track; further out (up to
+#: STORM_ALERT_NM) a storm needs lightning or to be closing. The 2026-10-06
+#: replay: nearly every new cell is "developing", so at 10 NM the clause
+#: filtered nothing (§41 calibration).
+STORM_DEVELOPING_ALERT_NM = 5.0
+#: Storms with their own rows whose along-track positions are within this gap
+#: share one row: one phenomenon (a line or cluster), one row, one alert.
+STORM_CLUSTER_GAP_NM = 25.0
+#: Alert-once memory prefix for a storm lineage (§41): kept for the flight, so
+#: a storm that has alerted never alerts again, whatever its row does.
+STORM_ALERTED_PREFIX = "storm-alerted:"
+#: Alert-once memory prefix for a stretch of route ("storm-span:160:216", NM
+#: along): new cells inside a stretch that has already alerted are the same
+#: phenomenon for the pilot, so they do not alert again (§41).
+STORM_SPAN_PREFIX = "storm-span:"
 
 
 @dataclass
@@ -1234,31 +1249,68 @@ def storm_message(storm: LiveStorm) -> str:
             text += f", arrival ~{_hhmm(storm.abeam_eta)}"
         elif storm.end != "departure":
             text += f", abeam ~{_hhmm(storm.abeam_eta)}"
-    if storm.relative_motion == "closing" and storm.closing_kt is not None:
-        text += f", closing {storm.closing_kt:.0f} kt"
-    elif storm.relative_motion == "moving_away" and storm.closing_kt is not None:
-        text += f", moving away {-storm.closing_kt:.0f} kt"
-    elif storm.relative_motion == "parallel":
-        text += ", moving along the track"
-    elif storm.relative_motion == "stationary":
-        text += ", nearly stationary"
+    text += _motion_text(storm)
     if storm.backing:
         text += "; " + "; ".join(storm.backing)
+    return text
+
+
+def _motion_text(storm: LiveStorm) -> str:
+    if storm.relative_motion == "closing" and storm.closing_kt is not None:
+        return f", closing {storm.closing_kt:.0f} kt"
+    if storm.relative_motion == "moving_away" and storm.closing_kt is not None:
+        return f", moving away {-storm.closing_kt:.0f} kt"
+    if storm.relative_motion == "parallel":
+        return ", moving along the track"
+    if storm.relative_motion == "stationary":
+        return ", nearly stationary"
+    return ""
+
+
+def cluster_message(group: list[LiveStorm]) -> str:
+    """"4 cells (peak 56 dBZ, developing, 7 flashes) 1–9 NM either side of
+    track at 138–212 NM, abeam ~16:56–17:27Z; nearest 1 NM right of track at
+    169 NM, closing 5 kt; LIRP reports CB" — one row for one cluster (§41)."""
+    peak = max(s.peak_dbz for s in group)
+    detail = [f"peak {peak:.0f} dBZ"]
+    if any(s.trend == "developing" for s in group):
+        detail.append("developing")
+    flashes = sum(s.flashes or 0 for s in group)
+    if flashes:
+        detail.append(f"{flashes} flash" + ("" if flashes == 1 else "es"))
+    offs = [s.offtrack_nm for s in group]
+    off = f"{min(offs):.0f} NM" if round(min(offs)) == round(max(offs)) else f"{min(offs):.0f}–{max(offs):.0f} NM"
+    sides = {s.side for s in group if s.side}
+    where = "either side of track" if len(sides) > 1 else (f"{next(iter(sides))} of track" if sides else "on track")
+    alongs = [s.along_nm for s in group]
+    text = (f"{len(group)} cells ({', '.join(detail)}) {off} {where} at "
+            f"{min(alongs):.0f}–{max(alongs):.0f} NM")
+    etas = [s.abeam_eta for s in group if s.abeam_eta is not None]
+    if etas:
+        a, b = _hhmm(min(etas)), _hhmm(max(etas))
+        text += f", abeam ~{a}" if a == b else f", abeam ~{a}–{b}"
+    nearest = min(group, key=lambda s: s.offtrack_nm)
+    text += f"; nearest {storm_position_text(nearest)}{_motion_text(nearest)}"
+    backing = [b for s in group for b in s.backing]
+    if backing:
+        text += "; " + "; ".join(dict.fromkeys(backing))
     return text
 
 
 def storm_alerts(storm: LiveStorm) -> bool:
     """The alert rule (§41): a heavy core within :data:`STORM_ALERT_NM` of the
     track ahead, reached within :data:`STORM_NEAR_MINUTES`, **and** at least
-    one of developing, lightning, or closing on the track — closing counted
-    only when the flight gets there within the motion horizon."""
+    one of: lightning; developing within :data:`STORM_DEVELOPING_ALERT_NM`;
+    closing on the track, counted only when the flight gets there within the
+    motion horizon."""
     if storm.peak_dbz < RADAR_SIGNIFICANT_DBZ or storm.offtrack_nm > STORM_ALERT_NM:
         return False
     m = storm.minutes_to_abeam
     if m is not None and m > STORM_NEAR_MINUTES:
         return False
     closing = storm.relative_motion == "closing" and m is not None and m <= STORM_MOTION_HORIZON_MINUTES
-    return storm.trend == "developing" or bool(storm.flashes) or closing
+    developing_near = storm.trend == "developing" and storm.offtrack_nm <= STORM_DEVELOPING_ALERT_NM
+    return bool(storm.flashes) or developing_near or closing
 
 
 def _storm_listed(st: LiveStorm) -> bool:
@@ -1278,29 +1330,62 @@ def _storm_has_row(st: LiveStorm) -> bool:
     return _storm_listed(st) and not _storm_later(st)
 
 
+def storm_clusters(storms: list[LiveStorm]) -> list[list[LiveStorm]]:
+    """Storms grouped along the route: a gap over :data:`STORM_CLUSTER_GAP_NM`
+    between consecutive along-track positions starts a new group."""
+    groups: list[list[LiveStorm]] = []
+    for st in sorted(storms, key=lambda s: s.along_nm):
+        if groups and st.along_nm - groups[-1][-1].along_nm <= STORM_CLUSTER_GAP_NM:
+            groups[-1].append(st)
+        else:
+            groups.append([st])
+    return groups
+
+
+def _storm_row(group: list[LiveStorm], storms: LiveStorms, departed: bool) -> LiveChange:
+    """One row for one storm or one cluster. Keyed on the cluster's oldest
+    lineage (ids carry their first frame), the member most likely to persist,
+    so the row keeps its key as cells come and go; the alert-once memory
+    is per storm, so a key change never alerts twice."""
+    anchor = min(group, key=lambda s: s.id)
+    alerting = [s.id for s in group if storm_alerts(s)]
+    heavy = any(s.peak_dbz >= RADAR_SIGNIFICANT_DBZ for s in group)
+    role = min((_storm_role(s, storms.route_nm, departed) for s in group), key=lambda r: _ROLE_ORDER.get(r, 9))
+    return LiveChange(
+        key=f"storm:{anchor.id}", kind="storm", source="RADAR",
+        direction="worse", tier="alert" if alerting else "highlight", role=role,
+        # The condition, not its detail: dBZ, distance and motion move
+        # every frame and are in the message (as #682 did for radar).
+        from_value="none", to_value="heavy" if heavy else "lightning",
+        observed_at=storms.frame_time, enroute_distance_nm=min(s.along_nm for s in group),
+        message=storm_message(group[0]) if len(group) == 1 else cluster_message(group),
+        storm_ids=[s.id for s in group], alert_storm_ids=alerting,
+        storm_span=(min(s.along_nm for s in alerting_or(group, alerting)), max(s.along_nm for s in alerting_or(group, alerting))),
+    )
+
+
+def alerting_or(group: list[LiveStorm], alerting: list[str]) -> list[LiveStorm]:
+    """The members meeting the alert rule, or the whole group when none do."""
+    members = [s for s in group if s.id in alerting]
+    return members or group
+
+
 def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
     """One row per storm ahead near the track (§41), plus one highlight for
     the heavy storms reached later than :data:`STORM_NEAR_MINUTES`."""
     out: list[LiveChange] = []
     later: list[LiveStorm] = []
+    rowed: list[LiveStorm] = []
     for st in storms.storms:
-        heavy = st.peak_dbz >= RADAR_SIGNIFICANT_DBZ
         if not _storm_listed(st):
             continue
         if _storm_later(st):
-            if heavy:
+            if st.peak_dbz >= RADAR_SIGNIFICANT_DBZ:
                 later.append(st)
             continue
-        out.append(LiveChange(
-            key=f"storm:{st.id}", kind="storm", source="RADAR",
-            direction="worse", tier="alert" if storm_alerts(st) else "highlight",
-            role=_storm_role(st, storms.route_nm, departed),
-            # The condition, not its detail: dBZ, distance and motion move
-            # every frame and are in the message (as #682 did for radar).
-            from_value="none", to_value="heavy" if heavy else "lightning",
-            observed_at=storms.frame_time, enroute_distance_nm=st.along_nm,
-            message=storm_message(st),
-        ))
+        rowed.append(st)
+    for group in storm_clusters(rowed):
+        out.append(_storm_row(group, storms, departed))
     if later:
         lo, hi = min(s.along_nm for s in later), max(s.along_nm for s in later)
         span = f"at {lo:.0f} NM" if round(lo) == round(hi) else f"{lo:.0f}–{hi:.0f} NM"
@@ -1426,6 +1511,19 @@ def classify_changes(
         if c.tier != "alert":
             continue
         live_alert_keys.add(c.key)
+        if c.kind == "storm" and c.alert_storm_ids is not None:
+            # Once per phenomenon for the flight (§41): a storm that alerted
+            # never alerts again (a tier bounce, a new row key, a regrouped
+            # cluster), and new cells inside a stretch that already alerted
+            # are the same line or cluster.
+            marks = [STORM_ALERTED_PREFIX + i for i in c.alert_storm_ids]
+            fresh = any(m not in alerted for m in marks)
+            span = c.storm_span
+            c.new_alert = fresh and (span is None or not _span_alerted(span, alerted))
+            alerted.update({m: "alerted" for m in marks})
+            if span is not None:
+                alerted[f"{STORM_SPAN_PREFIX}{span[0]:.0f}:{span[1]:.0f}"] = "alerted"
+            continue
         value = c.to_value or ""
         if alerted.get(c.key) != value:
             # A merged SIGMET's key changes when a partner FIR issues late or
@@ -1454,6 +1552,19 @@ def classify_changes(
         new_sigmets=new_sigmets,
     )
     return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
+
+
+def _span_alerted(span: tuple[float, float], alerted: dict[str, str]) -> bool:
+    """Whether ``span`` (NM along) overlaps a stretch that already alerted,
+    widened by half the cluster gap on each side."""
+    pad = STORM_CLUSTER_GAP_NM / 2
+    for k in alerted:
+        if not k.startswith(STORM_SPAN_PREFIX):
+            continue
+        lo, hi = (float(x) for x in k[len(STORM_SPAN_PREFIX):].split(":"))
+        if span[0] <= hi + pad and span[1] >= lo - pad:
+            return True
+    return False
 
 
 def _pending_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:

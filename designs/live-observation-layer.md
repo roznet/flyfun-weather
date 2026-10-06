@@ -292,7 +292,10 @@ Rule in meteorology-decisions §41. Pieces:
   (the rows are). Clients need no change for the rows: a storm row has no
   `icao`, so web/iOS treat it as an area row and render `message`. The storm
   list is for the Observed tab work (#690).
-- **Rows** (`live_significance._storm_changes`): `storm:<id>` / `storms:later`,
+- **Rows** (`live_significance._storm_changes`): one per cluster of storms
+  within 25 NM along (`storm_clusters`, keyed on the oldest lineage, members in
+  `LiveChange.storm_ids`) / `storms:later`; alert once per storm and per
+  stretch (`storm-alerted:` / `storm-span:` keys in the alert memory, §41),
   kind `storm`, source `RADAR`. While the feed is `available` they replace the
   `radar:route` / `lightning:route` ring rows; otherwise the ring rows and the
   station CB/TCU alert are the fallback (`_station_convective`). Station
