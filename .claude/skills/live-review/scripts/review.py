@@ -4,9 +4,12 @@
                                      it, and regression flags for the #682/#683/§39 fixes
   briefing-list DIR                  pack briefing.json paths to pull for the replay (stdin for tar)
   observed-jobs DIR JOBS.json        route + prod tick times per flight, for on_mini.py observed
-  replay        DIR OUT [--observed OBS.json] [FLIGHT_SUBSTR...]
+  replay        DIR OUT [--observed OBS.json] [--cells CELLS_DIR] [FLIGHT_SUBSTR...]
                                      re-run each flight's prod ticks through the current classifier
-  compare       OLD_DIR NEW_DIR [FLIGHT_SUBSTR...]   old (prod) vs new (replay) events
+                                     (scripts/replay_live_history.py; cells as of each tick, #688)
+  compare       OLD_DIR NEW_DIR [FLIGHT_SUBSTR...]   old (prod) vs new (replay) events, alerts and flicker
+  score-estimates DIR CELLS_DIR [FLIGHT_SUBSTR...]   logged storm estimates vs the storms' observed
+                                     closest approach, by horizon, next to persistence (#688)
   metar-points  DIR POINTS.json      every METAR in the histories, classified (observed CB/TCU,
                                      trend-only, none), with airport position, for on_mini.py airport-radar
   radar-summary RADAR.json [ICAO...] radar/lightning around airports by METAR class (+ per-station rows)
@@ -97,8 +100,12 @@ def summarize(root: Path) -> None:
                 body, trend = split_trend(raw)
                 if not CLOUD.search(body) and "TS" not in body[20:] and CLOUD.search(trend):
                     flags.append("REGRESSION#682: CB/TCU only in trend")
-                if c["role"] not in ("departure", "destination", "alternate") and c["tier"] == "alert" and c.get("to_value") in ("CB", "TCU"):
-                    flags.append("REGRESSION§39: en-route CB/TCU alert")
+                # §41: only the fallback (cells dark, no radar coverage) may
+                # alert on an en-route CB/TCU, and the row then says so.
+                if (c["role"] not in ("departure", "destination", "alternate") and c["tier"] == "alert"
+                        and c.get("to_value") in ("CB", "TCU")
+                        and not c["message"].endswith(("(radar cells unavailable)", "(no radar coverage there)"))):
+                    flags.append("REGRESSION§41: en-route CB/TCU alert with radar cells up")
             if c["kind"] == "metar_category" and raw and TWO_VIS.search(raw):
                 want = prevailing_category(raw)
                 if want and c.get("to_value") in RANK and RANK[c["to_value"]] > RANK[want]:
@@ -106,7 +113,9 @@ def summarize(root: Path) -> None:
             if c["kind"] in ("radar", "lightning") and c.get("to_value") not in (None, "none", "heavy", "present"):
                 if re.search(r"\d", str(c.get("to_value"))):
                     flags.append("REGRESSION#682: numeric radar/lightning identity")
-            show = c["tier"] == "alert" or flags or c["kind"].startswith(("sigmet", "radar", "lightning", "metar_conv"))
+            if c["kind"] == "storm" and re.search(r"\d", str(c.get("to_value"))):
+                flags.append("REGRESSION#688: numeric storm identity")
+            show = c["tier"] == "alert" or flags or c["kind"].startswith(("sigmet", "radar", "lightning", "metar_conv", "storm"))
             if show:
                 print(f"   {at[11:16]} {c['tier'][:5]:5} {c['role'][:5]:5} {c['kind']:16} new={c.get('new_alert')} | {c['message']}")
                 if raw:
@@ -136,65 +145,17 @@ def observed_jobs(root: Path, out: Path) -> None:
     print(len(jobs), "flights,", sum(len(j["ticks"]) for j in jobs.values()), "ticks")
 
 
-def _header_issue_time(raw: str, valid_from: str | None, fallback: str) -> str:
-    """A SIGMET's issue time from its WMO header (what the #683 lookahead can see)."""
-    m = WMO_HEADER.match(raw or "")
-    if not m:
-        return fallback
-    day, hh, mm = (int(g) for g in m.groups())
-    t = datetime.fromisoformat(valid_from or fallback).replace(day=day, hour=hh, minute=mm, second=0, microsecond=0)
-    return t.isoformat() if t <= datetime.fromisoformat(fallback) else fallback
+def _harness():
+    sys.path.insert(0, str(REPO / "scripts"))
+    import replay_live_history
+
+    return replay_live_history
 
 
-def replay(root: Path, out_root: Path, observed_path: Path | None, only: list[str]) -> None:
-    sys.path[:0] = [str(REPO / "scripts"), str(REPO / "tests"), str(REPO / "src")]
-    import build_live_scenario as bls
-    from live_scenario_replay import observations_at, sigmets_at
-
-    from weatherbrief.models.observed import ObservedConditions
-    from weatherbrief.tasks.live_layer import commit_live_update, load_live_history
-
-    observed = json.loads(observed_path.read_text()) if observed_path else {}
-    for d, _ in histories(root):
-        if only and not any(o in d.name for o in only):
-            continue
-        try:
-            inputs = bls.inputs_from_history(d)
-            for s in inputs["sigmets"]:
-                s["issued_at"] = _header_issue_time(s["report"].get("raw_text"), s["report"].get("valid_from"), s["issued_at"])
-            scenario = {"inputs": inputs, "derived": bls.build_derived(inputs, AIRPORTS_DB)}
-            real_dirs = sorted(p for p in d.iterdir() if (p / "briefing.json").exists())
-            packs = []
-            for i, p in enumerate(inputs["packs"]):
-                # The real pack's own observed baseline (radar/lightning) — the
-                # METAR/SIGMET baselines are rebuilt with the current code.
-                real = json.loads(real_dirs[min(i, len(real_dirs) - 1)].joinpath("briefing.json").read_text())
-                briefing = {k: real[k] for k in ("route", "departure_time", "days_out", "alternates") if k in real}
-                baseline = scenario["derived"]["baselines"][i]
-                if baseline is not None:
-                    briefing.update(baseline)
-                    if real.get("observed_conditions") is not None:
-                        briefing["observed_conditions"] = real["observed_conditions"]
-                pack_dir = out_root / d.parent.name / d.name / p["timestamp"].replace(":", "-")
-                pack_dir.mkdir(parents=True, exist_ok=True)
-                (pack_dir / "briefing.json").write_text(json.dumps(briefing))
-                packs.append((datetime.fromisoformat(p["active_from"]), p["timestamp"], pack_dir, briefing))
-            by_tick = observed.get(d.name, {})
-            for at in sorted({datetime.fromisoformat(r["tick_at"]) for r in load_live_history(d) if r.get("tick_at")}):
-                active = [p for p in packs if p[0] <= at]
-                if not active:
-                    continue
-                _, ts, pack_dir, briefing = active[-1]
-                obs = by_tick.get(at.isoformat())
-                commit_live_update(
-                    pack_dir, briefing_data=briefing,
-                    observations=observations_at(scenario, at), sigmets=sigmets_at(scenario, at),
-                    observed=ObservedConditions.model_validate(obs) if obs else None,
-                    started_at=at, pack_timestamp=ts, now=at,
-                )
-            print("ok", d.name, file=sys.stderr)
-        except Exception as e:  # keep going; report per flight
-            print("FAIL", d.name, type(e).__name__, e, file=sys.stderr)
+def replay(root: Path, out_root: Path, observed_path: Path | None, cells_dir: Path | None, only: list[str]) -> None:
+    """Re-run each flight's prod ticks through the current classifier
+    (``scripts/replay_live_history.py``, promoted there in #688)."""
+    _harness().replay(root, out_root, observed_path, cells_dir, only, AIRPORTS_DB)
 
 
 def _events(path: Path):
@@ -204,7 +165,8 @@ def _events(path: Path):
             r = json.loads(line)
             if r["type"] == "event":
                 c = r["change"]
-                out.append((r["tick_at"][11:16], r["event"][:3], c["tier"], c["kind"], c["message"], c.get("new_alert")))
+                out.append((r["tick_at"][11:16], r["event"][:3], c["tier"], c["kind"], c["message"],
+                            c.get("new_alert"), c["key"]))
     return out
 
 
@@ -216,8 +178,12 @@ def compare(old_root: Path, new_root: Path, verbose: list[str]) -> None:
         row = []
         for tag, evs in (("old", _events(old)), ("new", _events(new))):
             app = [e for e in evs if e[1] == "app"]
+            keys = collections.Counter(e[6] for e in app)
             s = {"alerts": sum(e[2] == "alert" for e in app), "pings": sum(e[5] is True for e in app),
-                 "radar/ltg": sum(e[3] in ("radar", "lightning") for e in app), "events": len(evs)}
+                 "radar/ltg": sum(e[3] in ("radar", "lightning") for e in app),
+                 "storm": sum(e[3] == "storm" for e in app),
+                 # A row that cleared and came back (#688: one-tick on/off radar rows).
+                 "flicker": sum(n - 1 for n in keys.values() if n > 1), "events": len(evs)}
             tot[tag].update(s)
             row.append(f"{tag} {s}")
         print(f"{fl[:44]:44} {'  '.join(row)}")
@@ -287,12 +253,15 @@ if __name__ == "__main__":
     elif cmd == "observed-jobs":
         observed_jobs(Path(args[0]), Path(args[1]))
     elif cmd == "replay":
-        obs = None
-        if "--observed" in args:
-            i = args.index("--observed")
-            obs = Path(args[i + 1])
-            args = args[:i] + args[i + 2:]
-        replay(Path(args[0]), Path(args[1]), obs, args[2:])
+        opts = {}
+        for name in ("--observed", "--cells"):
+            if name in args:
+                i = args.index(name)
+                opts[name] = Path(args[i + 1])
+                args = args[:i] + args[i + 2:]
+        replay(Path(args[0]), Path(args[1]), opts.get("--observed"), opts.get("--cells"), args[2:])
+    elif cmd == "score-estimates":
+        print(json.dumps(_harness().score_estimates(Path(args[0]), Path(args[1]), args[2:]), indent=2))
     elif cmd == "compare":
         compare(Path(args[0]), Path(args[1]), args[2:])
     elif cmd == "metar-points":

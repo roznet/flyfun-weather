@@ -96,10 +96,27 @@ def test_display_cells_are_the_cores_with_the_issue_fields(processed):
     cores = {c["id"] for c in cat["cells"] if c["tier"] != "rain20"}
     assert cores and cores <= {c["id"] for c in doc["cells"]}
     cell = doc["cells"][0]
-    assert set(cell) == {"id", "tier", "lat", "lon", "area_km2", "peak_dbz", "rate_peak_mm_h", "flashes",
-                         "top_fl", "truncated", "age_min", "event", "trend", "motion", "arrow"}
+    # `within` (#688) only on a cell inside a lower-tier cell.
+    assert set(cell) - {"within"} == {"id", "tier", "lat", "lon", "area_km2", "peak_dbz", "rate_peak_mm_h",
+                                      "flashes", "top_fl", "truncated", "age_min", "event", "trend", "motion",
+                                      "arrow"}
     assert set(cell["trend"]) == {"state", "window_min", "d_peak_db", "area_ratio", "d_flashes"}
     assert set(cell["motion"]) == {"status", "reason", "speed_kt", "toward_deg"}
+
+
+def test_cores_name_the_cell_they_sit_in(processed):
+    """#688: a core41 is `within` its core35, a core35 within its rain20, read
+    off the lower tier's labels (the droplet groups a storm from this)."""
+    t = _times()[-1]
+    doc = _display(processed, t)
+    cat = read_catalogue(catalogue_path(processed, t))
+    tier_of = {c["id"]: c["tier"] for c in cat["cells"]}
+    by_tier = {}
+    for c in doc["cells"]:
+        by_tier.setdefault(c["tier"], []).append(c)
+    assert by_tier["core41"] and all(tier_of[c["within"]] == "core35" for c in by_tier["core41"])
+    assert all(tier_of[c["within"]] == "rain20" for c in by_tier["core35"])
+    assert all("within" not in c for c in by_tier.get("rain20", []))
 
 
 def test_small_rain_areas_get_no_marker(processed):

@@ -5173,6 +5173,7 @@ def get_live_layer(
         sigmets_updated_at=layer.sigmets_updated_at,
         observed_conditions=layer.observed_conditions,
         observed_updated_at=layer.observed_updated_at,
+        storms=layer.storms,
         changes=trails_for_pack(pack_dir, layer.changes),
         last_refresh_delta=layer.last_refresh_delta,
     )

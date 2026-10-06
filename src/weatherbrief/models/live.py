@@ -41,6 +41,7 @@ ChangeKind = Literal[
     "sigmet_cancelled",
     "lightning",
     "radar",
+    "storm",
 ]
 ChangeSource = Literal["METAR", "SPECI", "TAF", "SIGMET", "LIGHTNING", "RADAR"]
 ChangeRole = Literal["departure", "destination", "alternate", "route"]
@@ -152,6 +153,109 @@ class LiveSigmetTrace(BaseModel):
     last_seen: datetime
 
 
+class StormTrackPoint(BaseModel):
+    """A storm's observed position against the route at one earlier frame."""
+
+    at: datetime
+    offtrack_nm: float
+    # Signed: + right of track, − left (facing the direction of flight).
+    cross_nm: float
+
+
+class StormEstimate(BaseModel):
+    """Closest approach to the planned 4-D track if the storm kept its current
+    motion (#688 addendum). A projection, not an observation: logged every
+    tick for scoring and shown only in the storm's detail, labelled
+    "Estimate at current motion" — never in an alert, the nutshell or the
+    ribbon until the scoring shows skill at that horizon."""
+
+    cpa_nm: float
+    cpa_time: datetime
+    # Off-track distance of the storm when the aircraft reaches the point
+    # abeam its current position, at current motion.
+    at_eta_offtrack_nm: float | None = None
+    # cpa_time − frame time, minutes.
+    horizon_min: float
+
+
+class LiveStorm(BaseModel):
+    """One radar storm against the route (#688): a core35 cell with the
+    core41 cells inside it, or a core41 on its own.
+
+    Everything here but ``estimate`` is an observation of the newest cell
+    frame: position, strength, trend, motion over the last frames.
+    """
+
+    # The storm's lineage id: its core35 cell's id, else the core41's own.
+    id: str
+    cell_ids: list[str]
+    lat: float
+    lon: float
+    peak_dbz: float
+    # "heavy" / "very heavy" / "extreme" (the VIP ladder, §33); None below heavy.
+    intensity: str | None = None
+    flashes: int | None = None
+    flashes_pending: bool = False
+    top_fl: int | None = None
+    truncated: bool = False
+    # developing / steady / decaying / mixed / new (the node's 30-min trend);
+    # "developing" when any cell of the storm is.
+    trend: str | None = None
+    d_peak_db: float | None = None
+    area_ratio: float | None = None
+    d_flashes: int | None = None
+    # The node's motion: available / withheld / unsupported / … .
+    motion_status: str | None = None
+    speed_kt: float | None = None
+    toward_deg: float | None = None
+
+    # Route geometry.
+    along_nm: float
+    offtrack_nm: float
+    cross_nm: float
+    side: Literal["left", "right"] | None = None
+    # The storm lies before the route's first point / past its last: say
+    # where from the airport, not left/right of track.
+    end: Literal["departure", "destination"] | None = None
+    end_icao: str | None = None
+    # Compass point from that airport ("NE"), only with ``end``.
+    end_bearing: str | None = None
+    abeam_eta: datetime | None = None
+    minutes_to_abeam: float | None = None
+    ahead: bool = True
+    # Observed motion relative to the track: the velocity's component toward
+    # the track (closing, kt). Unknown without an available motion.
+    relative_motion: Literal["closing", "moving_away", "parallel", "stationary", "unknown"] = "unknown"
+    closing_kt: float | None = None
+    # Off-track distance at the earlier frames of the last 30 min, oldest first.
+    history: list[StormTrackPoint] = Field(default_factory=list)
+    # En-route stations whose CB/TCU/TS report this storm backs ("LFMT CB").
+    backing: list[str] = Field(default_factory=list)
+    estimate: StormEstimate | None = None
+
+
+class LiveStorms(BaseModel):
+    """The radar storms near the route at the newest cell frame (#688).
+
+    ``status`` is never silently "nothing": a dark feed says so, and the
+    classifier then falls back to the station and radar-ring rows.
+    """
+
+    status: Literal["available", "stale", "disabled", "unavailable"]
+    frame_time: datetime | None = None
+    # Newest frame's time when the feed is stale ("unavailable since").
+    unavailable_since: datetime | None = None
+    lightning_pending: bool = False
+    # Storms listed: within this distance of the track (behind included).
+    corridor_nm: float
+    # The route's length (NM), so a storm's along-track position reads
+    # against its ends.
+    route_nm: float | None = None
+    storms: list[LiveStorm] = Field(default_factory=list)
+    # The cell policy the node ran (provisional thresholds).
+    policy_version: str | None = None
+
+
 class LiveChange(BaseModel):
     """One significant change since the briefing.
 
@@ -162,7 +266,8 @@ class LiveChange(BaseModel):
 
     # Stable identity across ticks: "metar:EGLL" (category), "conv:EGLL",
     # "wx:EGLL", "wind:EGLL", "taf:EGLL", "sigmet:LFFF|3",
-    # "lightning:<station>", "radar:<station>". The alert memory is keyed on it.
+    # "lightning:<station>", "radar:<station>", "storm:<storm id>",
+    # "storms:later". The alert memory is keyed on it.
     key: str
     kind: ChangeKind
     source: ChangeSource
@@ -262,6 +367,8 @@ class LiveLayer(BaseModel):
     sigmets_updated_at: datetime | None = None
     observed_conditions: ObservedConditions | None = None
     observed_updated_at: datetime | None = None
+    # Radar storms against the route (#688), recomputed every tick.
+    storms: LiveStorms | None = None
 
     changes: LiveChanges | None = None
     # Worsening-only view of ``changes``, kept so clients that predate the
@@ -304,5 +411,6 @@ class LiveLayerResponse(BaseModel):
     sigmets_updated_at: datetime | None = None
     observed_conditions: ObservedConditions | None = None
     observed_updated_at: datetime | None = None
+    storms: LiveStorms | None = None
     changes: LiveChanges | None = None
     last_refresh_delta: RefreshDelta | None = None

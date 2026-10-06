@@ -6,6 +6,11 @@ over the network; only small JSON comes back. See ../SKILL.md.
                                        using only frames received by the tick (sidecar received_at)
   airport-radar POINTS.json OUT.json   max dBZ within 3/5/10 NM and flashes within 3/5/10 NM around
                                        each METAR's airport over the 10 min ending at the METAR time
+  cells         JOBS.json OUT_DIR      the cells display files (newest revision) from 40 min before
+                                       each flight's first tick to 3 h after its last, cut to the
+                                       routes' box + 60 NM, mtime kept (= when the node wrote it, the
+                                       replay's "received by then"), for review.py replay --cells and
+                                       score-estimates (#688)
 """
 import json
 import os
@@ -90,5 +95,45 @@ def airport_radar(points_path, out_path):
     print("done", len(out), "with radar", sum(o["radar_frames"] > 0 for o in out), file=sys.stderr)
 
 
+def cells(jobs_path, out_dir):
+    import gzip
+
+    from weatherbrief.observed.cells.catalogue import encode
+    from weatherbrief.observed.cells_display import filter_bbox
+    from weatherbrief.observed.frames import parse_frame_stamp
+
+    jobs = json.load(open(jobs_path))
+    lats = [wp["lat"] for j in jobs.values() for wp in j["route"]["waypoints"]]
+    lons = [wp["lon"] for j in jobs.values() for wp in j["route"]["waypoints"]]
+    pad = 1.0 + 60 / 60.0  # 60 NM, generous in longitude
+    box = (min(lats) - pad, min(lons) - 2 * pad, max(lats) + pad, max(lons) + 2 * pad)
+    windows = []
+    for j in jobs.values():
+        ticks = [datetime.fromisoformat(t) for t in j["ticks"]]
+        windows.append((min(ticks) - timedelta(minutes=40), max(ticks) + timedelta(hours=3)))
+    src = ARCHIVE / "cells" / "display"
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    newest = {}
+    for p in src.glob("*.json.gz"):
+        stamp, _, rest = p.name.partition(".")
+        rev = int(rest.split(".")[0][1:]) if rest.startswith("r") else 0
+        if stamp not in newest or rev > newest[stamp][0]:
+            newest[stamp] = (rev, p)
+    n = 0
+    for stamp, (rev, p) in sorted(newest.items()):
+        t = parse_frame_stamp(stamp)
+        if not any(a <= t <= b for a, b in windows):
+            continue
+        doc = filter_bbox(json.loads(gzip.decompress(p.read_bytes())), *box)
+        doc.pop("bbox", None)
+        dest = out / p.name
+        dest.write_bytes(encode(doc))
+        st = p.stat()
+        os.utime(dest, (st.st_atime, st.st_mtime))
+        n += 1
+    print("cells frames", n, file=sys.stderr)
+
+
 if __name__ == "__main__":
-    {"observed": observed, "airport-radar": airport_radar}[sys.argv[1]](*sys.argv[2:4])
+    {"observed": observed, "airport-radar": airport_radar, "cells": cells}[sys.argv[1]](*sys.argv[2:4])

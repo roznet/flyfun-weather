@@ -5313,3 +5313,81 @@ briefing" was LECM 6 replacing the briefed LECM 4; the Observed tab read
 - Whether 30 min is right, and how often departures slip past it.
 - Why CTTH detected nothing at 14:11Z on 2026-10-06 (missing frame vs the
   retrieval's mask) was not investigated: it needs the prod frames.
+
+## 41. En route, convective alerts come from radar storms; the station report backs them
+
+**Date:** 2026-10-06 · **Issue:** #688 · **Supersedes:** §39's interim (station CB/TCU stays a highlight only while radar sees it)
+
+§39 made an en-route station's CB/TCU a highlight and said the alert should come
+from the radar cells the home node tracks. This is that rule. Decisions recorded
+by the owner on the issue (2026-10-06); every number is provisional and to be
+tuned on replays (`scripts/replay_live_history.py`, live-review skill) before it
+is trusted.
+
+### The rule
+
+- **One row per storm**, keyed on its lineage id (`storm:<core35 id>`): a core35
+  cell with the core41 cells inside it (the node's `within`), or a core41 on its
+  own. A row follows the storm across frames, so it does not blink as an echo
+  crosses 41 dBZ the way the 5 NM ring rows did.
+- **Alert**: core ≥ 41 dBZ (`RADAR_SIGNIFICANT_DBZ`), ≤ 10 NM off the track ahead
+  (`STORM_ALERT_NM`), reached within 60 min (`STORM_NEAR_MINUTES`), **and** at
+  least one of: developing (any cell of the storm), lightning (flashes > 0), or
+  closing on the track — closing counts only when the flight gets there within
+  30 min (`STORM_MOTION_HORIZON_MINUTES`, "measured horizon only").
+- **Highlight**: a heavy storm (or one with lightning) ≤ 20 NM off track ahead
+  (`STORM_HIGHLIGHT_NM`) within 60 min that does not meet the alert rule. Heavy
+  storms reached later than 60 min share **one** row, "Convective activity
+  X–Y NM along route, reached ~HH:MM–HH:MMZ: N heavy storms, peak P dBZ"
+  (`storms:later`).
+- **Clears** when the storm decays below the thresholds, leaves the band, or is
+  passed (abeam point behind the distance flown at planned speed).
+- **Role**: within 10 NM along of the destination (or past it) the storm is the
+  destination's (the approach); within 10 NM of the departure before take-off,
+  the departure's. Otherwise route.
+- **Identity** is categorical (`to_value` `heavy` / `lightning` / `present`): dBZ,
+  distance and motion are in the message, so a moving storm alerts once.
+
+### Station reports
+
+- An en-route CB/TCU within 10 NM of a tracked storm (`STORM_BACKING_NM`, the
+  "≤ 10 NM" of the radar-vs-METAR table in §39) **backs that storm's row**
+  ("…; LFMT reports CB") and has no row of its own. A TS/VCTS keeps its own
+  alert (§39) and backs the storm too.
+- No storm near it: highlight, as §39.
+- **Fallback**: the cells feed dark (disabled, stale > 25 min, unreadable) or
+  radar not covering the station (the nearest route point's innermost ring
+  under `MIN_COVERAGE_FRACTION`) → the station's CB/TCU **alerts**, and the row
+  says why ("(radar cells unavailable)" / "(no radar coverage there)"). With the
+  feed dark the 5 NM radar/lightning ring rows come back too.
+- Terminals unchanged: departure/destination CB/TCU/TS alert from the METAR.
+  SIGMETs unchanged.
+
+### Observation vs projection
+
+Position, side, distance off track, trend, lightning and the velocity's
+component toward the track ("closing 6 kt", "moving away 11 kt") are
+observations of the newest frame. The **estimate** (closest approach to the
+planned 4-D track at current motion) is a projection: computed every tick only
+when `motion.status == "available"`, logged to `live_history.jsonl` (`estimate`
+rows) for `score-estimates`, and kept out of every row and alert. Withheld
+motion (split/merge) gives distance-only wording.
+
+### Rejected / not done
+
+- **Keep the ring rows alongside**: two rows for one cell, and the ring rows are
+  what flickered (EDAY→ENZV 2026-10-04).
+- **Hysteresis on the alert band**: §35 dropped hysteresis; a storm bouncing
+  between alert and highlight re-alerts. The replay's flicker count is the
+  check; add it only if that count says so.
+- **Projection in the alert rule beyond 30 min**: not until `score-estimates`
+  shows route-relative skill there.
+
+### Real-world validation needed
+
+- None of the numbers above has been replayed yet: the cloud session that wrote
+  this had no Mini archive. First check: the 2026-10-03..05 flights and
+  LEPA→ELLX 2026-10-05 (radar 46–58 dBZ, lightning along the route), alerts per
+  flight and flicker before vs after; LPPR→LPPT 2026-10-06 for the estimate.
+- The ETA is the planned one (on-time departure, constant speed), like every
+  other "ahead" in the live layer.

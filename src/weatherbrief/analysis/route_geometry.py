@@ -13,6 +13,7 @@ so the extent a gate fires on and the "(Xnm/Ynm)" a card prints cannot drift.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import NamedTuple
 
@@ -216,3 +217,111 @@ def route_extent(
         ),
         distance_known=known,
     )
+
+
+# --- A point against the route polyline (#688) -----------------------------
+
+_NM_PER_DEG_LAT = 60.0
+
+
+class TrackProjection(NamedTuple):
+    """Where a point sits against the route polyline.
+
+    ``along_nm`` is the route distance of the nearest point on the track
+    (the point abeam), ``offtrack_nm`` the distance to it, ``cross_nm`` the
+    same signed (+ right of track, − left, facing the direction of flight).
+    ``end`` is ``"departure"`` / ``"destination"`` when the nearest point is
+    the route's first / last point itself (the point lies before the start
+    or past the end, where left/right of track means little), else None.
+    ``track_deg`` is the true course of the segment abeam.
+    """
+
+    along_nm: float
+    offtrack_nm: float
+    cross_nm: float
+    lat: float
+    lon: float
+    track_deg: float
+    end: str | None = None
+
+
+def _local_xy(lat: float, lon: float, lat0: float, lon0: float) -> tuple[float, float]:
+    """(east, north) in NM from (lat0, lon0), equirectangular at lat0."""
+    kx = _NM_PER_DEG_LAT * math.cos(math.radians(lat0))
+    return (lon - lon0) * kx, (lat - lat0) * _NM_PER_DEG_LAT
+
+
+class RouteTrack:
+    """The route as a polyline with along-track distances (NM).
+
+    Local equirectangular geometry per segment, centred on the point being
+    projected: accurate at corridor scale (tens of NM), the same choice as
+    euro_aip's ``point_to_segment_nm``. Along-track distances are the route's
+    own great-circle legs (:func:`compute_route_distances`), so ``along_nm``
+    agrees with every other "NM along route" the briefing prints.
+    """
+
+    def __init__(self, points: Sequence[tuple[float, float]], distances: Sequence[float]):
+        if len(points) < 2 or len(points) != len(distances):
+            raise ValueError("a track needs ≥ 2 points with one distance each")
+        self.points = [(float(a), float(b)) for a, b in points]
+        self.distances = [float(d) for d in distances]
+
+    @classmethod
+    def from_route(cls, route: RouteConfig) -> RouteTrack:
+        return cls([(wp.lat, wp.lon) for wp in route.waypoints], compute_route_distances(route))
+
+    @property
+    def total_nm(self) -> float:
+        return self.distances[-1]
+
+    def project(self, lat: float, lon: float) -> TrackProjection:
+        best: TrackProjection | None = None
+        n = len(self.points)
+        for i in range(n - 1):
+            (alat, alon), (blat, blon) = self.points[i], self.points[i + 1]
+            ax, ay = _local_xy(alat, alon, lat, lon)
+            bx, by = _local_xy(blat, blon, lat, lon)
+            dx, dy = bx - ax, by - ay
+            seg2 = dx * dx + dy * dy
+            t = 0.0 if seg2 <= 1e-12 else max(0.0, min(1.0, -(ax * dx + ay * dy) / seg2))
+            cx, cy = ax + t * dx, ay + t * dy
+            dist = math.hypot(cx, cy)
+            if best is not None and dist >= best.offtrack_nm:
+                continue
+            seg_len = math.hypot(dx, dy)
+            # The point is at the origin; the track runs along (dx, dy). Right
+            # of track is the clockwise normal (dy, -dx): cross = -(c × d)/|d|.
+            cross = ((-cx) * dy - (-cy) * dx) / seg_len if seg_len > 1e-9 else 0.0
+            end = None
+            if i == 0 and t <= 0.0:
+                end = "departure"
+            elif i == n - 2 and t >= 1.0:
+                end = "destination"
+            leg = self.distances[i + 1] - self.distances[i]
+            best = TrackProjection(
+                along_nm=self.distances[i] + t * leg,
+                offtrack_nm=dist,
+                cross_nm=cross if dist > 0 else 0.0,
+                lat=alat + t * (blat - alat),
+                lon=alon + t * (blon - alon),
+                track_deg=(math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0,
+                end=end,
+            )
+        assert best is not None
+        return best
+
+    def position_at(self, along_nm: float) -> tuple[float, float]:
+        """(lat, lon) at ``along_nm`` along the route, clamped to its ends."""
+        d = self.distances
+        if along_nm <= d[0]:
+            return self.points[0]
+        if along_nm >= d[-1]:
+            return self.points[-1]
+        for i in range(len(d) - 1):
+            if along_nm <= d[i + 1]:
+                leg = d[i + 1] - d[i]
+                t = 0.0 if leg <= 0 else (along_nm - d[i]) / leg
+                (alat, alon), (blat, blon) = self.points[i], self.points[i + 1]
+                return alat + t * (blat - alat), alon + t * (blon - alon)
+        return self.points[-1]

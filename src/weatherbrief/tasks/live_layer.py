@@ -33,9 +33,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig
-from weatherbrief.models.live import TRAIL_EXCLUDE, LiveChange, LiveChanges, LiveEvidencePoint, LiveLayer
+from weatherbrief.models.live import (
+    TRAIL_EXCLUDE,
+    LiveChange,
+    LiveChanges,
+    LiveEvidencePoint,
+    LiveLayer,
+    LiveStorms,
+)
 from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.observed.storms import CellFrames
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +260,33 @@ def planned_arrival(route: RouteConfig | None, departure: datetime | None) -> da
     return departure + timedelta(hours=route.flight_duration_hours)
 
 
+def _build_storms(
+    cells: CellFrames | None,
+    route: RouteConfig | None,
+    departure: datetime | None,
+    briefing_data: dict,
+    now: datetime,
+) -> LiveStorms:
+    """The radar storms against the route for this tick (#688). Never raises:
+    a failure is an unavailable feed, which falls back to the station rows."""
+    from weatherbrief.observed.storms import STORM_CORRIDOR_NM, Schedule, build_storms
+
+    if route is None:
+        return LiveStorms(status="unavailable", corridor_nm=STORM_CORRIDOR_NM)
+    try:
+        from weatherbrief.analysis.route_geometry import RouteTrack
+
+        schedule = Schedule(RouteTrack.from_route(route), departure, route.flight_duration_hours)
+        ends = (route.waypoints[0].icao, route.waypoints[-1].icao)
+        return build_storms(
+            cells or CellFrames("unavailable"), schedule,
+            flown_nm=_flown_nm(route, departure, now), now=now, end_icaos=ends,
+        )
+    except Exception:
+        logger.warning("Storm geometry failed — storms unavailable this tick", exc_info=True)
+        return LiveStorms(status="unavailable", corridor_nm=STORM_CORRIDOR_NM)
+
+
 def route_destination(route: RouteConfig | None) -> tuple[float, float] | None:
     """(lat, lon) of the route's destination, for SIGMET-at-destination."""
     if route is None or not route.waypoints:
@@ -462,6 +497,39 @@ def _history_records(
     for ident, c in before.items():
         if ident not in after:
             out.append({**base, "type": "event", "event": "cleared", "change": c.model_dump(mode="json", exclude_none=True)})
+    out += _estimate_records(base, history, layer)
+    return out
+
+
+#: Estimates logged per tick at most (nearest along-track first): bounds a
+#: showery day's history growth (~300 B a record).
+ESTIMATES_PER_TICK = 25
+
+
+def _estimate_records(base: dict, history: list[dict], layer: LiveLayer) -> list[dict]:
+    """One ``estimate`` record per storm with an estimate (#688 addendum):
+    closest approach at current motion, for ``review.py score-estimates``.
+    Once per storm per cell frame: a ↻ on the same frame adds nothing."""
+    storms = layer.storms
+    if storms is None or storms.status != "available" or storms.frame_time is None:
+        return []
+    frame = storms.frame_time.isoformat()
+    logged = {(r.get("storm_id"), r.get("frame_time")) for r in history if r.get("type") == "estimate"}
+    out: list[dict] = []
+    for st in storms.storms:
+        if st.estimate is None or (st.id, frame) in logged:
+            continue
+        out.append({
+            **base, "type": "estimate", "storm_id": st.id, "cell_ids": st.cell_ids,
+            "frame_time": frame, "lat": st.lat, "lon": st.lon,
+            "peak_dbz": st.peak_dbz, "motion_status": st.motion_status,
+            "speed_kt": st.speed_kt, "toward_deg": st.toward_deg,
+            "along_nm": st.along_nm, "offtrack_nm": st.offtrack_nm, "cross_nm": st.cross_nm,
+            "minutes_to_abeam": st.minutes_to_abeam,
+            **st.estimate.model_dump(mode="json"),
+        })
+        if len(out) >= ESTIMATES_PER_TICK:
+            break
     return out
 
 
@@ -586,8 +654,13 @@ def commit_live_update(
     flight_id: str | None = None,
     pack_timestamp: str | None = None,
     now: datetime | None = None,
+    cells: CellFrames | None = None,
 ) -> LiveLayer | None:
     """Fold one refresh into the flight's live layer and persist it.
+
+    ``cells`` is the cells feed as of this tick (#688): the radar storms are
+    rebuilt from it every tick. None reads as a dark feed (the classifier's
+    station and radar-ring fallback).
 
     ``None`` blocks keep the stored value (a SIGMET fetch failing this tick
     must not blank the SIGMETs). Returns the stored layer, or None when the
@@ -658,6 +731,7 @@ def commit_live_update(
         base_obs, base_sigmets, base_observed, seeded = _seed_missing_baselines(
             layer, base_obs, base_sigmets, base_observed, now,
         )
+        layer.storms = _build_storms(cells, route, departure, briefing_data, now)
         memory = ClassifierMemory(
             alerted=dict(prior.alerted) if prior else {},
             sigmets={t.key: t for t in prior.sigmet_traces} if prior else {},
@@ -677,6 +751,7 @@ def commit_live_update(
             flown_nm=_flown_nm(route, departure, now) if route is not None else None,
             memory=memory,
             now=now,
+            storms=layer.storms,
         )
         if seeded:
             changes.baseline_source = "live_start"

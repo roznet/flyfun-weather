@@ -14,12 +14,13 @@
 | Where | `live.json` blocks → `/live` → clients | `tasks/live_significance.py` (one server classifier, so web / iOS / push agree) |
 
 Meteorology choices (what counts as significant, tiers) are in
-[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–39
+[meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–41
 (§37, #682: CB/TCU read off the observed part only, SIGMET reissues as
 replacements, categorical radar/lightning values; §38, #683: pending SIGMETs;
 §39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts;
 §40, #689: a SIGMET starting after arrival is a highlight, a plain reissue
-of a briefed SIGMET is direction `updated`).
+of a briefed SIGMET is direction `updated`;
+§41, #688: en-route convective alerts from radar storms, see below).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 
 ## Testing
@@ -263,6 +264,55 @@ tick — the timestamps say how old it is.
 Not overlaid (build-time, correctly the briefing's view): the LLM digest, the text
 digest, alternate requirement.
 
+## Radar storms (#688)
+
+Rule in meteorology-decisions §41. Pieces:
+
+- **Input**: `observed/storms.py::load_cell_frames(now)` reads the droplet's
+  `DisplayStore` (the node's pushed display files, `cells-overlay.md`): the
+  newest frame at or before `now`, plus ~3 earlier ones 10 min apart. Status
+  `available` / `stale` (> `STALE_AFTER`, 25 min) / `disabled` (ingest off) /
+  `unavailable`; never raises. `run_realtime_refresh` passes it to
+  `commit_live_update(cells=…)`; `None` reads as a dark feed.
+- **Geometry** (`build_storms`, droplet side, no analysis): cells grouped by
+  the node's `within` (core41 → its core35; older files: nearest core35 within
+  its equivalent radius + 3 NM); each storm projected on the route polyline
+  (`analysis/route_geometry.RouteTrack`, local equirectangular per segment) at
+  the member nearest the track: `along_nm`, `offtrack_nm`, signed `cross_nm`,
+  `side`, or `end` + compass from the airport past the route's ends;
+  `abeam_eta` from the planned schedule (on-time departure, constant speed,
+  like `flown_nm`); `relative_motion` = the velocity's component toward the
+  nearest track point (`PARALLEL_KT` 3 kt; `stationary` under 1 kt;
+  `unknown` unless motion is `available`); `history` = off-track at the
+  earlier frames; `estimate` = closest approach to the 4-D track at current
+  motion (1-min steps to arrival, ≤ 3 h). Listed within 30 NM
+  (`STORM_CORRIDOR_NM`), behind included, nearest along-track first.
+- **Stored** on `LiveLayer.storms` every tick and served on `/live`
+  (`LiveLayerResponse.storms`); not in the snapshot overlay or the agent block
+  (the rows are). Clients need no change for the rows: a storm row has no
+  `icao`, so web/iOS treat it as an area row and render `message`. The storm
+  list is for the Observed tab work (#690).
+- **Rows** (`live_significance._storm_changes`): `storm:<id>` / `storms:later`,
+  kind `storm`, source `RADAR`. While the feed is `available` they replace the
+  `radar:route` / `lightning:route` ring rows; otherwise the ring rows and the
+  station CB/TCU alert are the fallback (`_station_convective`). Station
+  backing needs the airport position: `AirportObservation.lat/lon`, filled at
+  fetch time from the airports DB (None on older packs → no backing).
+- **History**: one `estimate` record per storm per cell frame (a ↻ on the same
+  frame adds none; ≤ 25 per tick, ~300 B each): storm id and cell ids, frame
+  time, position, motion, geometry and the estimate. `score-estimates`
+  (`scripts/replay_live_history.py`, live-review skill) joins them with later
+  frames. Growth: ~10 storms × ~30 ticks ≈ 100 KB on a showery flight, gone
+  with the live files (T1, 30 days).
+- **Replay**: `scripts/replay_live_history.py replay … --cells DIR` (promoted
+  from the skill) reads display files as of each tick by their mtime (= when
+  the node wrote them; `on_mini.py cells` keeps it).
+
+Gotchas: a storm's key is its core35 id, so a core35 that loses the dominant
+link in a merge starts a new row (and can alert again). Coverage for the
+station fallback is read at the route point nearest the airport along track,
+not at the airport itself.
+
 ## SIGMET reissues (#682)
 
 `live_significance._sigmet_changes` matches each SIGMET it sees for the first
@@ -347,8 +397,9 @@ What the code relies on:
 - `tasks/route_weather.py::run_realtime_refresh` — the seam (no longer patches the pack)
 - `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
+- `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
-- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
+- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
 
 ## Clients
 

@@ -17,6 +17,11 @@ class AirportObservation(BaseModel):
     distance_from_route_nm: float
     enroute_distance_nm: float | None = None
     nearest_waypoint_icao: str
+    # Airport position (#688: a station's CB/TCU joins the radar storm near
+    # it). None for reports fetched before the field, or an airport the
+    # database cannot place.
+    lat: float | None = None
+    lon: float | None = None
     metar_raw: str | None = None
     metar_time: datetime | None = None
     metar_flight_category: str | None = None  # "VFR"/"MVFR"/"IFR"/"LIFR"

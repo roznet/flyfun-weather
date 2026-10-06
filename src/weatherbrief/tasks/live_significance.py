@@ -42,6 +42,7 @@ from euro_aip.utils.geometry import (
     bbox_intersects,
     bbox_of_ring,
     bbox_pad,
+    haversine_nm,
     min_distance_point_to_multipolygon_nm,
     point_in_multipolygon,
 )
@@ -52,6 +53,8 @@ from weatherbrief.models.live import (
     LiveChanges,
     LiveEvidencePoint,
     LiveSigmetTrace,
+    LiveStorm,
+    LiveStorms,
 )
 from weatherbrief.models.observations import (
     AirportObservation,
@@ -119,6 +122,29 @@ SIGMET_AFTER_ARRIVAL_MARGIN = timedelta(minutes=30)
 #: Echo class at or above which an observed radar return on the route ahead is
 #: significant: VIP 3 "heavy" (41 dBZ), the AIM "avoid level 3 or greater" line.
 RADAR_SIGNIFICANT_DBZ = 41.0
+
+# --- Radar storms (#688, meteorology-decisions §41) ---------------------------
+#: A heavy storm (core ≥ RADAR_SIGNIFICANT_DBZ) this close to the track ahead
+#: can alert; provisional, to tune on replays.
+STORM_ALERT_NM = 10.0
+#: A heavy storm (or one with lightning) this close to the track ahead is a
+#: highlight row: the radar corridor the Observed tab already uses.
+STORM_HIGHLIGHT_NM = 20.0
+#: Storms the flight reaches within this many minutes get their own row;
+#: further out they share one "convective activity along …" highlight.
+STORM_NEAR_MINUTES = 60.0
+#: How far ahead "closing on the track" may count toward an alert: the
+#: owner's "measured horizon only", ~30 min today (#688). The one scored day
+#: (observed-cells "Numbers", cells-1) has core35 extrapolation well ahead of
+#: persistence at 30 min, core41 only modestly, and neither at 60; the
+#: route-relative ``score-estimates`` is what should move this number.
+STORM_MOTION_HORIZON_MINUTES = 30.0
+#: A storm this close to the route's first / last point is the departure's /
+#: destination's (the approach), for the row's role.
+STORM_TERMINAL_NM = 10.0
+#: An en-route station's CB/TCU/TS joins a storm within this distance of the
+#: airport (the "≤ 10 NM" of the radar-vs-METAR evidence, §39).
+STORM_BACKING_NM = 10.0
 
 
 @dataclass
@@ -1083,6 +1109,197 @@ def _observed_changes(
     return out
 
 
+# --- Radar storms (#688) -----------------------------------------------------
+
+
+def storms_available(storms: LiveStorms | None) -> bool:
+    return storms is not None and storms.status == "available"
+
+
+def _radar_covers(observed: ObservedConditions | None, enroute_distance_nm: float | None) -> bool:
+    """Whether radar sees around an airport: the route point nearest it along
+    track has adequate coverage in its innermost ring. Unknown → False (the
+    station then keeps its alert, §41)."""
+    if observed is None or observed.reflectivity is None or enroute_distance_nm is None:
+        return False
+    pos = _station_positions(observed)
+    best = None
+    for st in observed.reflectivity.stations:
+        d = pos.get(st.station_id)
+        if d is None or not st.annuli:
+            continue
+        if best is None or abs(d - enroute_distance_nm) < abs(best[0] - enroute_distance_nm):
+            best = (d, st)
+    if best is None:
+        return False
+    inner = min(best[1].annuli, key=lambda a: a.radius_nm)
+    return inner.total_px > 0 and inner.valid_px / inner.total_px >= MIN_COVERAGE_FRACTION
+
+
+def _station_convective(
+    changes: list[LiveChange],
+    latest_obs: RouteObservations | None,
+    storms: LiveStorms | None,
+    latest_observed: ObservedConditions | None,
+) -> list[LiveChange]:
+    """En-route CB / TCU against the radar storms (§41, superseding §39's
+    interim).
+
+    - The cells feed is dark, or radar does not cover the station: the
+      station is the only signal, so its CB / TCU alerts again, and the row
+      says why.
+    - A tracked storm within :data:`STORM_BACKING_NM` of the airport: the
+      report backs that storm's row ("LFMT reports CB") and has no row of its
+      own. A thunderstorm keeps its own alert row and backs the storm too.
+    - Otherwise it stays a highlight (§39).
+    """
+    obs_by_icao = {a.icao: a for a in (latest_obs.airports if latest_obs else [])}
+    available = storms_available(storms)
+    out: list[LiveChange] = []
+    for c in changes:
+        if not (c.kind == "metar_convective" and c.role == "route" and c.direction == "worse"):
+            out.append(c)
+            continue
+        a = obs_by_icao.get(c.icao or "")
+        if not available:
+            reason = "radar cells unavailable"
+        elif not _radar_covers(latest_observed, c.enroute_distance_nm):
+            reason = "no radar coverage there"
+        else:
+            reason = None
+        if reason is not None:
+            # Only a row the fallback raised says why; a thunderstorm alerts anyway.
+            if c.tier != "alert":
+                c = c.model_copy(update={"tier": "alert", "message": f"{c.message} ({reason})"})
+            out.append(c)
+            continue
+        near = None
+        if a is not None and a.lat is not None and a.lon is not None:
+            dists = [(haversine_nm(a.lat, a.lon, st.lat, st.lon), st) for st in storms.storms]
+            dists = [x for x in dists if x[0] <= STORM_BACKING_NM]
+            near = min(dists, key=lambda x: x[0])[1] if dists else None
+        if near is not None:
+            tags = ", ".join(sorted(convective_tags(a))) or c.to_value or "CB"
+            backing = f"{c.icao} reports {tags}"
+            if backing not in near.backing:
+                near.backing.append(backing)
+            if c.tier != "alert":
+                continue  # absorbed into the storm's row
+        out.append(c)
+    return out
+
+
+def _storm_role(storm: LiveStorm, route_nm: float | None, departed: bool) -> ChangeRole:
+    if storm.end == "destination" or (route_nm is not None and storm.along_nm >= route_nm - STORM_TERMINAL_NM):
+        return "destination"
+    if not departed and (storm.end == "departure" or storm.along_nm <= STORM_TERMINAL_NM):
+        return "departure"
+    return "route"
+
+
+def _hhmm(t: datetime | None) -> str:
+    return t.astimezone(timezone.utc).strftime("%H:%MZ") if t is not None else ""
+
+
+def storm_position_text(storm: LiveStorm) -> str:
+    """"8 NM right of track at 85 NM", or from the airport past the route's end."""
+    off = f"{storm.offtrack_nm:.0f} NM"
+    if storm.end is not None:
+        where = storm.end_icao or storm.end
+        return f"{off} {storm.end_bearing or ''} of {where}".replace("  ", " ")
+    if storm.side is None:
+        return f"on track at {storm.along_nm:.0f} NM"
+    return f"{off} {storm.side} of track at {storm.along_nm:.0f} NM"
+
+
+def storm_message(storm: LiveStorm) -> str:
+    heavy = storm.peak_dbz >= RADAR_SIGNIFICANT_DBZ
+    name = f"{(storm.intensity or 'heavy').capitalize()} cell" if heavy else "Cell"
+    detail = [f"{storm.peak_dbz:.0f} dBZ"]
+    if storm.trend in ("developing", "decaying"):
+        detail.append(storm.trend)
+    if storm.flashes:
+        detail.append(f"{storm.flashes} flash" + ("" if storm.flashes == 1 else "es"))
+    elif storm.flashes is None and storm.flashes_pending:
+        detail.append("lightning pending")
+    text = f"{name} ({', '.join(detail)}) {storm_position_text(storm)}"
+    if storm.abeam_eta is not None:
+        if storm.end == "destination":
+            text += f", arrival ~{_hhmm(storm.abeam_eta)}"
+        elif storm.end != "departure":
+            text += f", abeam ~{_hhmm(storm.abeam_eta)}"
+    if storm.relative_motion == "closing" and storm.closing_kt is not None:
+        text += f", closing {storm.closing_kt:.0f} kt"
+    elif storm.relative_motion == "moving_away" and storm.closing_kt is not None:
+        text += f", moving away {-storm.closing_kt:.0f} kt"
+    elif storm.relative_motion == "parallel":
+        text += ", moving along the track"
+    elif storm.relative_motion == "stationary":
+        text += ", nearly stationary"
+    if storm.backing:
+        text += "; " + "; ".join(storm.backing)
+    return text
+
+
+def storm_alerts(storm: LiveStorm) -> bool:
+    """The alert rule (§41): a heavy core within :data:`STORM_ALERT_NM` of the
+    track ahead, reached within :data:`STORM_NEAR_MINUTES`, **and** at least
+    one of developing, lightning, or closing on the track — closing counted
+    only when the flight gets there within the motion horizon."""
+    if storm.peak_dbz < RADAR_SIGNIFICANT_DBZ or storm.offtrack_nm > STORM_ALERT_NM:
+        return False
+    m = storm.minutes_to_abeam
+    if m is not None and m > STORM_NEAR_MINUTES:
+        return False
+    closing = storm.relative_motion == "closing" and m is not None and m <= STORM_MOTION_HORIZON_MINUTES
+    return storm.trend == "developing" or bool(storm.flashes) or closing
+
+
+def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
+    """One row per storm ahead near the track (§41), plus one highlight for
+    the heavy storms reached later than :data:`STORM_NEAR_MINUTES`."""
+    out: list[LiveChange] = []
+    later: list[LiveStorm] = []
+    for st in storms.storms:
+        heavy = st.peak_dbz >= RADAR_SIGNIFICANT_DBZ
+        if not st.ahead or not (heavy or st.flashes) or st.offtrack_nm > STORM_HIGHLIGHT_NM:
+            continue
+        if st.minutes_to_abeam is not None and st.minutes_to_abeam > STORM_NEAR_MINUTES:
+            if heavy:
+                later.append(st)
+            continue
+        out.append(LiveChange(
+            key=f"storm:{st.id}", kind="storm", source="RADAR",
+            direction="worse", tier="alert" if storm_alerts(st) else "highlight",
+            role=_storm_role(st, storms.route_nm, departed),
+            # The condition, not its detail: dBZ, distance and motion move
+            # every frame and are in the message (as #682 did for radar).
+            from_value="none", to_value="heavy" if heavy else "lightning",
+            observed_at=storms.frame_time, enroute_distance_nm=st.along_nm,
+            message=storm_message(st),
+        ))
+    if later:
+        lo, hi = min(s.along_nm for s in later), max(s.along_nm for s in later)
+        span = f"at {lo:.0f} NM" if round(lo) == round(hi) else f"{lo:.0f}–{hi:.0f} NM"
+        etas = [s.abeam_eta for s in later if s.abeam_eta is not None]
+        when = ""
+        if etas:
+            a, b = _hhmm(min(etas)), _hhmm(max(etas))
+            when = f", reached ~{a}" if a == b else f", reached ~{a}–{b}"
+        n = len(later)
+        out.append(LiveChange(
+            key="storms:later", kind="storm", source="RADAR",
+            direction="worse", tier="highlight", role="route",
+            from_value="none", to_value="present",
+            observed_at=storms.frame_time, enroute_distance_nm=lo,
+            message=(
+                f"Convective activity {span} along route{when}: {n} heavy "
+                f"{'storm' if n == 1 else 'storms'}, peak {max(s.peak_dbz for s in later):.0f} dBZ"
+            ),
+        ))
+    return out
+
+
 # --- Entry point ------------------------------------------------------------
 
 
@@ -1106,6 +1323,7 @@ def classify_changes(
     flown_nm: float | None = None,
     memory: ClassifierMemory | None = None,
     now: datetime | None = None,
+    storms: LiveStorms | None = None,
 ) -> tuple[LiveChanges, ClassifierMemory]:
     """Everything significant since the briefing, plus the updated memory.
 
@@ -1116,6 +1334,10 @@ def classify_changes(
     (lat, lon) marks SIGMETs over or near it. ``departure_at`` ends the
     departure airport's relevance at take-off. ``arrival_at`` (planned
     landing) makes a SIGMET starting well after it a highlight (#689).
+    ``storms`` (the radar storms against the route, #688) replaces the
+    radar/lightning ring rows when the cells feed is available; without it
+    (None, or a dark feed) the ring rows and the station CB/TCU alerts are
+    the fallback (§41).
     """
     roles = roles or {}
     memory = memory or ClassifierMemory()
@@ -1150,8 +1372,13 @@ def classify_changes(
             # (the louder reading) rather than failing the tick.
             if not getattr(sigmet_traces.get(k), "chain_in_baseline", False)
         })
-    changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
-    evaluated |= {"lightning:", "radar:"}
+    changes = _station_convective(changes, latest_obs, storms, latest_observed)
+    if storms_available(storms):
+        changes += _storm_changes(storms, departed=departed)
+        evaluated |= {"storm:", "storms:"}
+    else:
+        changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
+        evaluated |= {"lightning:", "radar:"}
 
     changes.sort(key=lambda c: (
         0 if c.tier == "alert" else 1,

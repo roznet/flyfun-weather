@@ -86,6 +86,19 @@ def _interpolate_airport_time(
     return departure + timedelta(hours=fraction * duration_hours)
 
 
+def _airport_position(model, icao: str) -> tuple[float | None, float | None]:
+    """(lat, lon) of an airport from the euro_aip model, (None, None) when it
+    cannot be placed. Never raises: a position is a nice-to-have (#688)."""
+    try:
+        airport = model.airports.where(ident=icao).first()
+        lat, lon = airport.latitude_deg, airport.longitude_deg
+    except Exception:
+        return None, None
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        return float(lat), float(lon)
+    return None, None
+
+
 # Default wind advisory thresholds (matching airport_wind evaluator defaults)
 _XWIND_GREEN = 15
 _XWIND_RED = 25
@@ -246,6 +259,7 @@ def run_route_weather(
         else:
             eta_hour_offset = None
 
+        lat, lon = _airport_position(model, raw.icao)
         obs = AirportObservation(
             icao=raw.icao,
             name=raw.name,
@@ -253,6 +267,8 @@ def run_route_weather(
             enroute_distance_nm=raw.enroute_distance_nm,
             nearest_waypoint_icao=nearest_wp,
             eta_hour_offset=eta_hour_offset,
+            lat=lat,
+            lon=lon,
         )
 
         metar = raw.latest_metar
@@ -899,6 +915,10 @@ def run_realtime_refresh(
 
     layer = None
     if persist:
+        from weatherbrief.observed.storms import load_cell_frames
+
+        # The cells the node pushed (#688): local files, no network, so as
+        # cheap per flight as the observed re-sample above.
         layer = commit_live_update(
             pack_dir,
             briefing_data=briefing_data,
@@ -908,6 +928,7 @@ def run_realtime_refresh(
             started_at=started_at,
             flight_id=flight_id,
             pack_timestamp=pack_timestamp,
+            cells=load_cell_frames(datetime.now(timezone.utc)),
         )
         if layer is None:
             # Refused as stale (a newer pack or a newer write): report what is
