@@ -578,6 +578,19 @@ def _sigmet_change(
     )
 
 
+def reissue_key(chain: str, own: str) -> str:
+    """A reissue row's key: the chain's first SIGMET, "+", this SIGMET. The
+    "+" joins SIGMET keys as for a merged cross-FIR row, so clients that split
+    change keys on "+" (iOS ``issuedSigmetKeys``, web ``live-layer.ts``) still
+    mark the listed SIGMET. Read back with :func:`reissue_chain`."""
+    return f"{chain}+{own}"
+
+
+def reissue_chain(key: str) -> str:
+    """The chain's first SIGMET from a :func:`reissue_key`."""
+    return key.split("+", 1)[0]
+
+
 def _sigmet_bbox(s: SigmetAlongRoute) -> tuple[float, float, float, float] | None:
     """The area's bounding box. Two points are enough: an "E OF LINE" area
     may come through as its line (LECB 5, 2026-10-05)."""
@@ -634,13 +647,17 @@ def _trace_sigmets(
     baseline's SIGMETs and the ones seen before (oldest validity first, so
     two reissues landing in one tick chain in order)."""
     base_keys = {_sigmet_key_str(s) for s in baseline.sigmets}
-    candidates: dict[str, LiveSigmetTrace] = {k: t for k, t in seen.items() if _reissuable(t, now)}
+    # Every trace we hold, however old: a SIGMET still listed long after its
+    # validity (a feed keeping it) must keep its own trace, not be re-matched.
+    known_traces: dict[str, LiveSigmetTrace] = dict(seen)
     for s in baseline.sigmets:
         k = _sigmet_key_str(s)
-        if k not in candidates:
-            candidates[k] = _trace(s, now, destination=destination, chain_in_baseline=True)
+        if k not in known_traces:
+            known_traces[k] = _trace(s, now, destination=destination, chain_in_baseline=True)
             # A baseline SIGMET no longer listed was last seen by the briefing.
-            candidates[k].last_seen = baseline.fetch_time
+            known_traces[k].last_seen = baseline.fetch_time
+    # The predecessors a new SIGMET can match: the window applies only here.
+    candidates = {k: t for k, t in known_traces.items() if k in base_keys or _reissuable(t, now)}
 
     out: dict[str, LiveSigmetTrace] = {}
     latest_sorted = sorted(
@@ -649,7 +666,7 @@ def _trace_sigmets(
     )
     for s in latest_sorted:
         k = _sigmet_key_str(s)
-        known = candidates.get(k) if k in seen or k in base_keys else None
+        known = known_traces.get(k)
         if known is not None:
             t = known.model_copy(update={
                 "last_seen": now,
@@ -743,7 +760,8 @@ def _sigmet_changes(
     out: list[LiveChange] = []
     quiet: set[str] = set()
     for g in _group_same_phenomenon(new):
-        # An alert-tier row: the chain has alerted (now or on an earlier tick).
+        # A "New SIGMET" row is always alert tier: the chain has alerted (now,
+        # or on an earlier tick if the memory already holds this value).
         for m in g:
             traces[_sigmet_key_str(m)].chain_alerted = True
         prefix = "New SEV SIGMET" if _is_severe(g[0]) else "New SIGMET"
@@ -766,7 +784,7 @@ def _sigmet_changes(
         # The chain's first SIGMET, then this one: clients split the key on
         # "+" to mark the listed SIGMET (this one) as changed, and the trail
         # groups a reissue row on the first part (live_trail._trail_key).
-        c.key = f"{t.chain}+{t.key}"
+        c.key = reissue_key(t.chain, t.key)
         c.replaces = t.replaces_label
         if t.chain_in_baseline and not reaches_destination:
             c.tier = "highlight"
@@ -776,7 +794,8 @@ def _sigmet_changes(
         # alerted: the reissue alerts once.
         if not reaches_destination and (t.chain_in_baseline or t.chain_alerted):
             quiet.add(c.key)
-        t.chain_alerted = True
+        if c.tier == "alert":
+            t.chain_alerted = True
         out.append(c)
     for g in _group_same_phenomenon(escalated):
         prev = base_by_key[sigmet_key(g[0])]

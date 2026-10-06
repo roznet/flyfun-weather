@@ -55,7 +55,7 @@ from weatherbrief.models.live import (
     LiveTrailReport,
     LiveTrailSpan,
 )
-from weatherbrief.tasks.live_significance import SIGMET_REISSUE_WINDOW
+from weatherbrief.tasks.live_significance import SIGMET_REISSUE_WINDOW, reissue_chain
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def _trail_key(c: LiveChange) -> str:
     """What a trail groups on: the change key, except that a SIGMET reissue
     row ("sigmet:LFMM|T01+sigmet:LFMM|T02", #682) groups on its chain's first
     SIGMET, so T01's row and every reissue after it are one trail."""
-    return c.key.split("+", 1)[0] if c.replaces else c.key
+    return reissue_chain(c.key) if c.replaces else c.key
 
 
 def _reissue_resumes(last: _Span, c: LiveChange, tick: datetime | None) -> bool:

@@ -440,11 +440,12 @@ def _history_records(
     current = layer.changes.changes if layer.changes is not None else []
     before = {change_identity(c): c for c in shown}
     after = {change_identity(c): c for c in current}
+    last_evidence = _last_evidence(history)
     for ident, c in after.items():
         if ident in before:
             # Radar/lightning keep one identity while the echo lasts (#682):
             # record its evidence again when the peak or span moves enough.
-            if c.evidence and _evidence_moved(c.evidence, _last_evidence(history, c.key)):
+            if c.evidence and _evidence_moved(c.evidence, last_evidence.get(c.key)):
                 out.append(_evidence_record(base, c))
             continue
         out.append({**base, "type": "event", "event": "appeared", "change": c.model_dump(mode="json", exclude_none=True)})
@@ -471,11 +472,13 @@ def _evidence_record(base: dict, c: LiveChange) -> dict:
     }
 
 
-def _last_evidence(history: list[dict], key: str) -> list[dict] | None:
-    for r in reversed(history):
-        if r.get("type") == "evidence" and r.get("key") == key:
-            return r.get("points") or []
-    return None
+def _last_evidence(history: list[dict]) -> dict[str, list[dict]]:
+    """Change key -> the points of its latest evidence record (one pass)."""
+    out: dict[str, list[dict]] = {}
+    for r in history:
+        if r.get("type") == "evidence" and r.get("key"):
+            out[r["key"]] = r.get("points") or []
+    return out
 
 
 def _evidence_moved(points: list[LiveEvidencePoint], last: list[dict] | None) -> bool:

@@ -269,9 +269,14 @@ code relies on:
 
 - A SIGMET keeps the trace it got when first seen (`_trace_sigmets`), so a row
   never flips between "new" and "replaces".
-- The row key is `<chain's first SIGMET>+<this SIGMET>`; `LiveChange.replaces`
-  holds the predecessor's label ("LFMM T01"). Clients need no change: they
-  split keys on "+" to mark listed SIGMETs, and render `message`.
+- The row key is `<chain's first SIGMET>+<this SIGMET>` (`reissue_key` /
+  `reissue_chain`, the only places that build or parse it; the trail groups
+  on `reissue_chain`); `LiveChange.replaces` holds the predecessor's label
+  ("LFMM T01"). Clients need no change: they split keys on "+" to mark
+  listed SIGMETs (iOS `issuedSigmetKeys`, web `live-layer.ts`), and render
+  `message`. Keep "+" out of SIGMET keys.
+- A SIGMET still listed keeps its trace however old it is; the 60-min window
+  only limits which traces can be a *predecessor*.
 - `classify_changes` gets a `quiet` key set from the SIGMET stage: those rows
   set the alert memory without `new_alert`.
 - No geometry or validity on either side → never a reissue (the louder
