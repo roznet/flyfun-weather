@@ -1141,20 +1141,26 @@ def _station_convective(
     latest_obs: RouteObservations | None,
     storms: LiveStorms | None,
     latest_observed: ObservedConditions | None,
-) -> list[LiveChange]:
+) -> tuple[list[LiveChange], dict[str, list[str]]]:
     """En-route CB / TCU against the radar storms (§41, superseding §39's
-    interim).
+    interim). Returns the rows and the backing per storm id ("LFMT reports
+    CB"); the caller attaches the backing, nothing here mutates a storm.
 
     - The cells feed is dark, or radar does not cover the station: the
       station is the only signal, so its CB / TCU alerts again, and the row
       says why.
-    - A tracked storm within :data:`STORM_BACKING_NM` of the airport: the
-      report backs that storm's row ("LFMT reports CB") and has no row of its
-      own. A thunderstorm keeps its own alert row and backs the storm too.
+    - A storm that gets its own row (:func:`_storm_has_row`) within
+      :data:`STORM_BACKING_NM` of the airport: the report backs that row and
+      has no row of its own. A thunderstorm keeps its own alert row and backs
+      the storm too. A storm with no row of its own (under 41 dBZ without
+      lightning, passed, far off track, or reached after
+      :data:`STORM_NEAR_MINUTES`) absorbs nothing, so the report keeps its row.
     - Otherwise it stays a highlight (§39).
     """
     obs_by_icao = {a.icao: a for a in (latest_obs.airports if latest_obs else [])}
     available = storms_available(storms)
+    rowed = [st for st in storms.storms if _storm_has_row(st)] if available else []
+    backing: dict[str, list[str]] = {}
     out: list[LiveChange] = []
     for c in changes:
         if not (c.kind == "metar_convective" and c.role == "route" and c.direction == "worse"):
@@ -1175,18 +1181,18 @@ def _station_convective(
             continue
         near = None
         if a is not None and a.lat is not None and a.lon is not None:
-            dists = [(haversine_nm(a.lat, a.lon, st.lat, st.lon), st) for st in storms.storms]
+            dists = [(haversine_nm(a.lat, a.lon, st.lat, st.lon), st) for st in rowed]
             dists = [x for x in dists if x[0] <= STORM_BACKING_NM]
             near = min(dists, key=lambda x: x[0])[1] if dists else None
         if near is not None:
             tags = ", ".join(sorted(convective_tags(a))) or c.to_value or "CB"
-            backing = f"{c.icao} reports {tags}"
-            if backing not in near.backing:
-                near.backing.append(backing)
+            text = f"{c.icao} reports {tags}"
+            if text not in backing.setdefault(near.id, []):
+                backing[near.id].append(text)
             if c.tier != "alert":
                 continue  # absorbed into the storm's row
         out.append(c)
-    return out
+    return out, backing
 
 
 def _storm_role(storm: LiveStorm, route_nm: float | None, departed: bool) -> ChangeRole:
@@ -1255,6 +1261,23 @@ def storm_alerts(storm: LiveStorm) -> bool:
     return storm.trend == "developing" or bool(storm.flashes) or closing
 
 
+def _storm_listed(st: LiveStorm) -> bool:
+    """Ahead, heavy or with lightning, and within :data:`STORM_HIGHLIGHT_NM`:
+    a storm that reaches a row, its own or the shared "later" one."""
+    heavy = st.peak_dbz >= RADAR_SIGNIFICANT_DBZ
+    return st.ahead and bool(heavy or st.flashes) and st.offtrack_nm <= STORM_HIGHLIGHT_NM
+
+
+def _storm_later(st: LiveStorm) -> bool:
+    return st.minutes_to_abeam is not None and st.minutes_to_abeam > STORM_NEAR_MINUTES
+
+
+def _storm_has_row(st: LiveStorm) -> bool:
+    """The storm gets a row of its own in :func:`_storm_changes` (not just
+    a share of the "later" row), so a station report can back it."""
+    return _storm_listed(st) and not _storm_later(st)
+
+
 def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
     """One row per storm ahead near the track (§41), plus one highlight for
     the heavy storms reached later than :data:`STORM_NEAR_MINUTES`."""
@@ -1262,9 +1285,9 @@ def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
     later: list[LiveStorm] = []
     for st in storms.storms:
         heavy = st.peak_dbz >= RADAR_SIGNIFICANT_DBZ
-        if not st.ahead or not (heavy or st.flashes) or st.offtrack_nm > STORM_HIGHLIGHT_NM:
+        if not _storm_listed(st):
             continue
-        if st.minutes_to_abeam is not None and st.minutes_to_abeam > STORM_NEAR_MINUTES:
+        if _storm_later(st):
             if heavy:
                 later.append(st)
             continue
@@ -1372,7 +1395,14 @@ def classify_changes(
             # (the louder reading) rather than failing the tick.
             if not getattr(sigmet_traces.get(k), "chain_in_baseline", False)
         })
-    changes = _station_convective(changes, latest_obs, storms, latest_observed)
+    changes, backing = _station_convective(changes, latest_obs, storms, latest_observed)
+    if backing:
+        # The one place a storm takes its backing: the row message and the
+        # layer's storms (live.json, for the clients) both read it from here.
+        storms.storms = [
+            st.model_copy(update={"backing": backing[st.id]}) if st.id in backing else st
+            for st in storms.storms
+        ]
     if storms_available(storms):
         changes += _storm_changes(storms, departed=departed)
         evaluated |= {"storm:", "storms:"}

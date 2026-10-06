@@ -285,7 +285,7 @@ Rule in meteorology-decisions §41. Pieces:
   nearest track point (`PARALLEL_KT` 3 kt; `stationary` under 1 kt;
   `unknown` unless motion is `available`); `history` = off-track at the
   earlier frames; `estimate` = closest approach to the 4-D track at current
-  motion (1-min steps to arrival, ≤ 3 h). Listed within 30 NM
+  motion (1-min steps to arrival, ≤ 3 h), for storms still ahead only. Listed within 30 NM
   (`STORM_CORRIDOR_NM`), behind included, nearest along-track first.
 - **Stored** on `LiveLayer.storms` every tick and served on `/live`
   (`LiveLayerResponse.storms`); not in the snapshot overlay or the agent block
@@ -297,7 +297,10 @@ Rule in meteorology-decisions §41. Pieces:
   `radar:route` / `lightning:route` ring rows; otherwise the ring rows and the
   station CB/TCU alert are the fallback (`_station_convective`). Station
   backing needs the airport position: `AirportObservation.lat/lon`, filled at
-  fetch time from the airports DB (None on older packs → no backing).
+  fetch time from the airports DB (every tick re-fetches, so only an airport
+  the DB cannot place has none). Only a storm with its own row
+  (`_storm_has_row`) takes backing; `_station_convective` returns it and
+  `classify_changes` attaches it to `LiveLayer.storms` in one place.
 - **History**: one `estimate` record per storm per cell frame (a ↻ on the same
   frame adds none; ≤ 25 per tick, ~300 B each): storm id and cell ids, frame
   time, position, motion, geometry and the estimate. `score-estimates`

@@ -5350,11 +5350,14 @@ is trusted.
 
 ### Station reports
 
-- An en-route CB/TCU within 10 NM of a tracked storm (`STORM_BACKING_NM`, the
-  "≤ 10 NM" of the radar-vs-METAR table in §39) **backs that storm's row**
-  ("…; LFMT reports CB") and has no row of its own. A TS/VCTS keeps its own
-  alert (§39) and backs the storm too.
-- No storm near it: highlight, as §39.
+- An en-route CB/TCU within 10 NM of a tracked storm **that has its own row**
+  (`STORM_BACKING_NM`, the "≤ 10 NM" of the radar-vs-METAR table in §39)
+  **backs that storm's row** ("…; LFMT reports CB") and has no row of its
+  own. A TS/VCTS keeps its own alert (§39) and backs the storm too.
+- No storm with a row near it (none within 10 NM, or only one under 41 dBZ
+  without lightning, passed, beyond 20 NM, or in the shared "later" row):
+  highlight, as §39. Absorbing into a storm without a row would make the
+  report vanish (found landing #692).
 - **Fallback**: the cells feed dark (disabled, stale > 25 min, unreadable) or
   radar not covering the station (the nearest route point's innermost ring
   under `MIN_COVERAGE_FRACTION`) → the station's CB/TCU **alerts**, and the row

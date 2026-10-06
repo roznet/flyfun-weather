@@ -312,6 +312,25 @@ def test_station_cb_far_from_any_storm_stays_a_highlight():
     assert got["conv:ZZRT"].message == "ZZRT METAR: CB reported"
 
 
+def test_station_cb_beside_a_storm_without_its_own_row_keeps_its_row():
+    """A 38 dBZ storm (no lightning) gets no row, so it absorbs nothing: the
+    CB report stays a highlight instead of vanishing (follow-up to #692)."""
+    now = DEP + timedelta(minutes=10)
+    st = storms_at(now, [cell("core35-a", "core35", along=62, cross=4, peak=38.0)])
+    latest = _obs(_station("METAR ZZRT 061210Z AUTO 27010KT 9999 ///CB 19/17 Q1013"))
+    got = {c.key: c for c in rows(st, now=now, latest_obs=latest, observed=_observed(30.0))}
+    assert "storm:core35-a" not in got
+    assert got["conv:ZZRT"].tier == "highlight"
+    assert st.storms[0].backing == []
+
+
+def test_passed_storm_has_no_estimate():
+    now = DEP + timedelta(minutes=30)
+    st = storms_at(now, [cell("core35-a", "core35", along=10, cross=3, speed=20.0, toward=90.0)], flown=40.0)
+    assert not st.storms[0].ahead
+    assert st.storms[0].estimate is None
+
+
 # --- The feed, the layer and the history ----------------------------------------
 
 

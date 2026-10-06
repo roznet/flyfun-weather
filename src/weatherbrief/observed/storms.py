@@ -329,8 +329,11 @@ def build_storm(
         p = min((track.project(c["lat"], c["lon"]) for c in same), key=lambda x: x.offtrack_nm)
         history.append(StormTrackPoint(at=at, offtrack_nm=round(p.offtrack_nm, 1), cross_nm=round(p.cross_nm, 1)))
 
+    ahead = flown_nm is None or proj.along_nm >= flown_nm or (proj.end == "departure" and flown_nm <= 0)
     est = None
-    if available and speed is not None and toward is not None:
+    # Only a storm still ahead: one already passed has no closest approach
+    # worth scoring, and each estimate costs up to ESTIMATE_MAX_MINUTES samples.
+    if ahead and available and speed is not None and toward is not None:
         est = estimate(ref["lat"], ref["lon"], speed, toward, frame_time, schedule, now, abeam)
 
     intensity = classify_dbz(peak)
@@ -360,7 +363,7 @@ def build_storm(
         end_bearing=end_bearing,
         abeam_eta=abeam,
         minutes_to_abeam=round((abeam - now).total_seconds() / 60.0, 1) if abeam is not None else None,
-        ahead=flown_nm is None or proj.along_nm >= flown_nm or (proj.end == "departure" and flown_nm <= 0),
+        ahead=ahead,
         relative_motion=relative,
         closing_kt=closing,
         history=history,
