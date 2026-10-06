@@ -673,6 +673,18 @@ def test_sigmet_and_its_reissue_first_seen_together_alert_once():
     ]
 
 
+def test_reissue_listed_past_its_validity_keeps_its_row():
+    """Review round 3: a feed still listing T02 an hour after it ended must
+    not turn it back into a fresh "New SIGMET" that alerts again."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1100"), [LFMM_T01]),
+        (_at(4, "1242"), [LFMM_T02]),
+        (_at(4, "1505"), [LFMM_T02]),  # T02 valid to 14:00
+    ])
+    assert _rows(ticks[2][1]) == [("alert", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]
+    assert ticks[2][1][0].key == "sigmet:LFMM|T01+sigmet:LFMM|T02"
+
+
 def test_predecessor_and_reissue_listed_together_are_one_row():
     [(_, rows)] = _sigmet_ticks([(_at(4, "1225"), [LFMM_T01, LFMM_T02])], baseline=[LFMM_T01])
     assert _rows(rows) == [("highlight", False, "SIGMET LFMM T02 replaces T01: EMBD TS")]
