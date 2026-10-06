@@ -8,6 +8,10 @@ allowed-tools: Bash(gh:*), Bash(git:*), Bash(npm:*), Bash(pytest:*), Bash(source
 
 Watch the target PR for the code-review bot's review, then triage and act on it.
 
+This command is the **only** entry point that watches a PR or acts on its
+review and CI events. Other skills (e.g. `/implement-issue`) stop at opening
+the PR, so running this is the user's explicit opt-in to the review loop.
+
 ## Target PR
 
 - If `$ARGUMENTS` is a number, that is the PR.
