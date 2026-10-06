@@ -41,6 +41,12 @@ nonisolated struct LiveLayerResponse: Codable, Sendable {
     let observedUpdatedAt: String?
     let changes: LiveChanges?
     let lastRefreshDelta: RefreshDelta?
+    /// #688: radar storms against the route; #690: the Observed tab's nutshell,
+    /// route ribbon (with tap-to-map focus). nil from an older server or when
+    /// the tick could not build them (the tab then shows the details only).
+    var storms: LiveStorms? = nil
+    var glance: LiveGlance? = nil
+    var ribbon: LiveRibbon? = nil
 
     /// Whether this layer carries any live data at all.
     var hasData: Bool { liveUpdatedAt != nil }

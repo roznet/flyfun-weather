@@ -53,6 +53,10 @@ struct RouteMapView: View {
     @AppStorage(CrossSectionViewModel.observedRadiusDefaultsKey) private var observedRadiusPick = 0.0
     /// The observed summary's details sheet (legends, sources, caveats).
     @State private var showObservedDetails = false
+    /// #690 tap-to-map: the region an Observed-tab item asked to frame, and a
+    /// counter so the same item tapped twice frames again.
+    @State private var focusRegion: MKCoordinateRegion?
+    @State private var focusRegionKey = 0
 
     /// iPad (regular width) drives colour and width from independent metrics.
     private var usesDualMetrics: Bool { horizontalSizeClass == .regular }
@@ -181,7 +185,9 @@ struct RouteMapView: View {
             observedCorridor: observedCorridor,
             mutedBaseMap: showsObserved && (!observedRadar.isEmpty || observedSatellite),
             cellsDisplay: showsCells ? cellsModel?.display : nil,
-            cellsDisplayKey: showsCells ? cellsModel?.displayPath : nil
+            cellsDisplayKey: showsCells ? cellsModel?.displayPath : nil,
+            focusRegion: focusRegion,
+            focusRegionKey: focusRegionKey
         )
         .ignoresSafeArea(edges: .bottom)
     }
@@ -693,6 +699,17 @@ struct RouteMapView: View {
             // the radar the overlay was analysed from.
             observedCells = true
             if observedRadarOptions.contains("opera_dbzh") { observedPick = "opera_dbzh" }
+        }
+        if let focus = intent.mapFocus {
+            // #690 tap-to-map: the item's own layers, then frame its box.
+            if focus.wantsCells { observedCells = true }
+            if (focus.wantsRadar || focus.wantsCells), observedRadarOptions.contains("opera_dbzh") {
+                observedPick = "opera_dbzh"
+            }
+            if let region = focus.region {
+                focusRegion = region
+                focusRegionKey += 1
+            }
         }
         viewModel.clearFocusIntent()
     }

@@ -361,6 +361,22 @@ logs `Live glance failed` and leaves both null for that tick.
   of `{phase, text}`), word for word what the apps show; `LIVE_NOTE` says so.
 - **Size**: ~17 KB per `live.json` on a 280 NM route (LELL→LEMI), overwritten
   each tick.
+- **iOS** (written without Xcode, verify on a Mac): DTOs in
+  `Models/API/LiveGlance.swift` (`storms`, `glance`, `ribbon` are defaulted vars on
+  `LiveLayerResponse`, so memberwise inits and older servers still work).
+  `Views/Briefing/ObservedNutshellView.swift`: `ObservedNutshellCard` (server
+  text as is; red bar for `alert`, dimmed when `passed`), `RouteRibbonCard` /
+  `RouteRibbonView` (lanes placed from the server's numbers; right of track
+  drawn below the line), `StormDetailSheet` (observed facts, 30-min trend and
+  off-track history, the estimate in its own "Estimate at current motion"
+  section). They replace `ObservedGlanceCard` only when `glance` is present,
+  and only for the pack on screen (`BriefingViewModel.liveLayerForPack`). A ↻
+  response has no glance: the last one for the same pack is kept until the
+  next `/live`. Tap-to-map: `FocusIntent.mapFocus` → `RouteMapView` turns on the
+  focus's cells/radar and passes `focusRegion` + a counter key to
+  `RouteMapKitView`, which frames it once per key. The map draws no SIGMET
+  polygons yet, so a SIGMET focus only frames its area.
+- **Web**: not done yet.
 
 ## SIGMET reissues (#682)
 

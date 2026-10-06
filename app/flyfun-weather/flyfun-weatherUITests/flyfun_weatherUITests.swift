@@ -561,6 +561,75 @@ final class flyfun_weatherUITests: XCTestCase {
     /// chips) and its "Show radar & cells on map" lands on the Map with the
     /// observed controls and the cell overlay's own badge line (the mock has no
     /// cell server, so it must say "unavailable", never draw nothing silently).
+    /// #690: the server's nutshell and route ribbon lead the Observed tab; a
+    /// nutshell line opens the map on what it summarises, and a storm on the
+    /// ribbon opens its detail — observed facts, then the estimate set apart
+    /// under "Estimate at current motion" — whose "Show on map" lands on the map.
+    @MainActor
+    func testObservedNutshellRibbonAndTapToMap() throws {
+        let focus = #"{"kind": "storm", "id": "core35-zz", "bbox": [5.3, 43.4, 5.7, 43.8], "layers": ["route", "radar", "cells", "lightning"]}"#
+        let live = """
+        {"flight_id": "fixture-1", "pack_timestamp": "2099-06-30T06:00:00+00:00",
+         "live_updated_at": "2099-06-30T08:10:00Z",
+         "observed_conditions": {"radii_nm": [5, 10, 20],
+           "summary_entries": [{"kind": "reflectivity", "text": "Heavy echo near ZZAA (observed 08:05Z)"}],
+           "reflectivity": {"source": "opera_dbzh", "quantity": "DBZH", "units": "dBZ",
+             "valid_time": "2099-06-30T08:05:00Z", "age_minutes": 5, "window_minutes": 10,
+             "stations": []}},
+         "glance": {"as_of": "2099-06-30T08:10:00Z", "headline": "Observed 08:10Z · as briefed",
+           "comparison": "as_briefed", "lines": [
+             {"phase": "departure", "icao": "LFMD", "text": "LFMD VFR · no storm within 20 NM · no lightning ≤20 NM"},
+             {"phase": "enroute", "text": "1 storm 6 NM right of track; nearest 6 NM right at 40 NM ~08:40Z (48 dBZ), closing 7 kt · no SIGMET on route",
+              "alert": true, "focus": \(focus)},
+             {"phase": "arrival", "icao": "LFML", "text": "LFML VFR · no TAF for ETA · no storm within 20 NM now · lightning unavailable"}]},
+         "ribbon": {"route_nm": 80.0, "flown_nm": 0.0, "segment_nm": 10.0, "radar_radius_nm": 10.0,
+           "waypoints": [{"icao": "LFMD", "along_nm": 0.0}, {"icao": "LFML", "along_nm": 80.0}],
+           "segments": [{"index": 0, "from_nm": 0.0, "to_nm": 40.0, "radar_status": "measured"},
+                        {"index": 1, "from_nm": 40.0, "to_nm": 80.0, "radar_status": "measured", "radar_max_dbz": 48.0}],
+           "stations": [], "sigmets": []},
+         "storms": {"status": "available", "corridor_nm": 30.0, "route_nm": 80.0, "storms": [
+           {"id": "core35-zz", "lat": 43.6, "lon": 5.5, "peak_dbz": 48.0, "intensity": "heavy", "flashes": 0,
+            "trend": "developing", "along_nm": 40.0, "offtrack_nm": 6.0, "cross_nm": 6.0, "side": "right",
+            "ahead": true, "relative_motion": "closing", "closing_kt": 7.0, "motion_status": "available",
+            "estimate": {"cpa_nm": 2.0, "cpa_time": "2099-06-30T08:45:00Z", "horizon_min": 40.0},
+            "focus": \(focus)}]}}
+        """
+        let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": live])
+        openFixture1Briefing(app)
+        switchToBriefingTab(app, "Observed")
+
+        XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].waitForExistence(timeout: Self.uiTimeout),
+                      "the Observed tab should open on the server's nutshell")
+        XCTAssertTrue(app.staticTexts["Observed 08:10Z · as briefed"].firstMatch.exists, "the headline should render")
+        XCTAssertTrue(app.descendants(matching: .any)["observedRibbon"].firstMatch.exists, "the route ribbon should render")
+        attachScreenshot(app, "Observed-Nutshell")
+
+        // A storm on the ribbon opens its detail; the estimate is labelled.
+        let storm = app.descendants(matching: .any)["ribbonStorm-core35-zz"].firstMatch
+        XCTAssertTrue(storm.waitForExistence(timeout: Self.uiTimeout), "the storm should be on the ribbon")
+        storm.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["stormDetail"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "tapping a storm should open its detail")
+        XCTAssertTrue(app.staticTexts["Estimate at current motion"].firstMatch.exists
+                      || app.staticTexts["ESTIMATE AT CURRENT MOTION"].firstMatch.exists,
+                      "the estimate should sit under its own label")
+        attachScreenshot(app, "Observed-StormDetail")
+        let showOnMap = app.buttons["stormShowOnMap"].firstMatch
+        if !showOnMap.isHittable { app.swipeUp() }
+        showOnMap.tap()
+        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "Show on map should land on the Map tab with the observed controls")
+        attachScreenshot(app, "Observed-StormOnMap")
+
+        // A nutshell line opens the map too.
+        switchToBriefingTab(app, "Observed")
+        let line = app.descendants(matching: .any)["observedNutshellLine-enroute"].firstMatch
+        XCTAssertTrue(line.waitForExistence(timeout: Self.uiTimeout), "the en-route line should render")
+        line.tap()
+        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "a nutshell line should open the map")
+    }
+
     @MainActor
     func testObservedTabGlanceAndShowOnMap() throws {
         let live = """
@@ -1140,6 +1209,22 @@ final class flyfun_weatherUITests: XCTestCase {
                 let section = app.descendants(matching: .any)["liveChangesSection"]
                 XCTAssertTrue(section.waitForExistence(timeout: Self.uiTimeout),
                               "\(hhmm): the live changes panel should render")
+
+                // #690: the nutshell is the server's text, word for word.
+                if let glance = tick.body["glance"] as? [String: Any] {
+                    XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].firstMatch.exists,
+                                  "\(hhmm): the nutshell should replace the glance card")
+                    for line in (glance["lines"] as? [[String: Any]]) ?? [] {
+                        let phase = line["phase"] as? String ?? ""
+                        let text = line["text"] as? String ?? ""
+                        let row = app.descendants(matching: .any)["observedNutshellLine-\(phase)"].firstMatch
+                        XCTAssertTrue(row.waitForExistence(timeout: Self.uiTimeout),
+                                      "\(hhmm): the \(phase) nutshell line should render")
+                        XCTAssertTrue(row.label.contains(text),
+                                      "\(hhmm): the \(phase) line should read \"\(text)\", got \(row.label)")
+                    }
+                    if shoot { attachScreenshot(app, "Live-\(scenario)-\(hhmm)-0-nutshell") }
+                }
 
                 let changes = (tick.body["changes"] as? [String: Any]) ?? [:]
                 let title = (changes["baseline_source"] as? String) == "live_start"
