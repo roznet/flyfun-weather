@@ -63,11 +63,13 @@ def obs(*airports):
     )
 
 
-def classify(base, latest, *, now=T1, departure_at=None, flown_nm=None, memory=None):
+def classify(base, latest, *, now=T1, departure_at=None, flown_nm=None, memory=None,
+             storms=None, latest_observed=None):
     changes, mem = classify_changes(
         baseline_obs=obs(*base), latest_obs=obs(*latest),
         baseline_sigmets=None, latest_sigmets=None,
         roles=ROLES, departure_at=departure_at, flown_nm=flown_nm, memory=memory, now=now,
+        storms=storms, latest_observed=latest_observed,
     )
     return changes.changes, mem
 
@@ -165,11 +167,65 @@ def test_thunderstorm_appearing_en_route_alerts():
     ("METAR ZZRT 031430Z AUTO 12008KT 9999 ///TCU 23/14 Q1027", "TCU"),
 ])
 def test_cb_or_tcu_en_route_is_a_highlight(raw, expected):
-    """§39: en route, the radar along the route is the signal for that cell;
-    a station's CB / TCU alone no longer alerts."""
-    changes, _ = classify([apt("ZZRT", enroute=100)], [apt("ZZRT", raw, t=T1, enroute=100)])
+    """§39/§41: en route, with the cells feed up and radar covering the
+    station, the radar is the signal for that cell; a station's CB / TCU with
+    no storm near it stays a highlight."""
+    changes, _ = classify(
+        [apt("ZZRT", enroute=100)], [apt("ZZRT", raw, t=T1, enroute=100)],
+        storms=_no_storms(), latest_observed=_radar_at(100.0),
+    )
     c = only(changes, "metar_convective")
     assert (c.role, c.tier, c.direction, c.to_value) == ("route", "highlight", "worse", expected)
+
+
+@pytest.mark.parametrize("storms,observed,why", [
+    (None, None, "radar cells unavailable"),
+    ("stale", None, "radar cells unavailable"),
+    ("available", 0.2, "no radar coverage there"),
+    ("available", None, "no radar coverage there"),
+])
+def test_cb_en_route_alerts_when_radar_cannot_see_it(storms, observed, why):
+    """§41 fallback: the cells feed dark, or radar not covering the station —
+    the station report is the only signal, so it alerts and says why."""
+    from weatherbrief.models.live import LiveStorms
+
+    raw = "METAR ZZRT 041100Z AUTO 13011KT 9999 ///CB 19/17 Q1023"
+    changes, _ = classify(
+        [apt("ZZRT", enroute=100)], [apt("ZZRT", raw, t=T1, enroute=100)],
+        storms=None if storms is None else LiveStorms(status=storms, corridor_nm=30.0),
+        latest_observed=None if observed is None else _radar_at(100.0, coverage=observed),
+    )
+    c = only(changes, "metar_convective")
+    assert (c.role, c.tier) == ("route", "alert")
+    assert c.message == f"ZZRT METAR: CB reported ({why})"
+
+
+def _no_storms():
+    from weatherbrief.models.live import LiveStorms
+
+    return LiveStorms(status="available", corridor_nm=30.0, storms=[])
+
+
+def _radar_at(enroute, coverage=1.0):
+    from weatherbrief.models.observed import (
+        ObservedAnnulus,
+        ObservedConditions,
+        ObservedField,
+        ObservedStationRef,
+        ObservedStationSamples,
+    )
+
+    valid = int(100 * coverage)
+    return ObservedConditions(
+        computed_at=T1, corridor_nm=20, radii_nm=[5, 10, 20],
+        stations=[ObservedStationRef(id="p", lat=50.0, lon=1.0, enroute_distance_nm=enroute)],
+        reflectivity=ObservedField(
+            source="opera", quantity="dbzh", valid_time=T1, age_minutes=5,
+            stations=[ObservedStationSamples(station_id="p", annuli=[ObservedAnnulus(
+                radius_nm=5, total_px=100, valid_px=valid, nodata_px=100 - valid, max_value=10.0,
+            )])],
+        ),
+    )
 
 
 def test_cb_or_tcu_at_a_terminal_still_alerts():

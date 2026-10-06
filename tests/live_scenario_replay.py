@@ -186,6 +186,7 @@ def live_response(tick: Tick) -> dict:
         sigmets_updated_at=layer.sigmets_updated_at,
         observed_conditions=layer.observed_conditions,
         observed_updated_at=layer.observed_updated_at,
+        storms=layer.storms,
         # With the trails as of this tick (#669), as /live serves them.
         changes=trails_for_pack(tick.pack_dir, layer.changes, now=tick.at, briefing_data=tick.briefing),
         last_refresh_delta=layer.last_refresh_delta,

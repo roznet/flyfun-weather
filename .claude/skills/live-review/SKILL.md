@@ -13,7 +13,7 @@ highlight, which is always shown. A review hunts for two failures:
 
 A low alert count is success, not a gap.
 
-Read before judging a tier: `designs/meteorology-decisions.md` §34–39, plus the newest
+Read before judging a tier: `designs/meteorology-decisions.md` §34–40, plus the newest
 section if the rules changed since.
 
 ## 0. Where things are
@@ -63,7 +63,10 @@ For each flight this prints:
 - `!!` flags for regressions of past fixes:
   - `REGRESSION#682: CB/TCU only in trend`: a convective row from a TEMPO/BECMG group
     instead of the observed body.
-  - `REGRESSION§39: en-route CB/TCU alert`: en route, only TS/VCTS should alert.
+  - `REGRESSION§41: en-route CB/TCU alert with radar cells up`: en route, a CB/TCU alerts
+    only as the fallback (cells feed dark, or no radar coverage at the station), and the row
+    then ends "(radar cells unavailable)" / "(no radar coverage there)". TS/VCTS always alerts.
+  - `REGRESSION#688: numeric storm identity`: a storm row whose identity carries a number.
   - `REGRESSION#682: numeric radar/lightning identity`: a radar or lightning row whose
     identity is a dBZ value or a count. That makes rows churn every tick.
   - `REGRESSION#682: <cat> but prevailing visibility + ceiling give <cat>`: the category came
@@ -91,13 +94,18 @@ not having published yet.
 ## 4. Optional: replay old vs current classifier
 
 Do this when the classifier changed since those flights flew, or to test a proposed rule.
-It re-runs each flight's prod ticks through the current code: the METAR/TAF/SIGMET texts from
-the history, with SIGMETs re-dated to their WMO-header issue time.
+It re-runs each flight's prod ticks through the current code (`scripts/replay_live_history.py`):
+the METAR/TAF/SIGMET texts from the history, with SIGMETs re-dated to their WMO-header issue time.
 
 ```bash
-$LOCAL_VENV/bin/python $S/review.py replay $W/live $W/replay [--observed $W/observed.json] [FLIGHT_SUBSTR...]
+$LOCAL_VENV/bin/python $S/review.py replay $W/live $W/replay [--observed $W/observed.json] [--cells $W/cells] [FLIGHT_SUBSTR...]
 $LOCAL_VENV/bin/python $S/review.py compare $W/live $W/replay [FLIGHT_SUBSTR to detail alert diffs]
 ```
+
+`compare` counts alerts, pings, ring rows, storm rows and **flicker** (rows that cleared and
+came back) per flight. Without `--cells` the replay has no radar storms, so the §41 fallback
+applies: en-route CB/TCU alert again and the ring rows return. That is right for a dark feed,
+not for a day the Mini was up — fetch the cells (below) before judging alert counts.
 
 Radar and lightning aren't in the history. Without `--observed`, radar/lightning rows
 disappear from the replay, so compare METAR/SIGMET rows only. To include them, sample on the
@@ -116,6 +124,18 @@ ssh $NODE_SSH "rm -f /tmp/jobs.json /tmp/on_mini.py /tmp/observed.json*"
 `weatherbrief.observed` at a commit whose payload code matches prod; check with `hosts.py nodes`.
 The archive starts 2026-10-03 15:05Z. The archive job moves frames older than 48 h to the
 NAS, so replay recent days from the Mini.
+
+The cells display files for `--cells` (and for step 6; copy `jobs.json` and `on_mini.py` over as above first), cut to the routes' box, mtime kept so
+the replay only reads a file the droplet had by each tick:
+
+```bash
+ssh $NODE_SSH "cd /tmp && \$HOME/Developer/public/flyfun-weather/venv/bin/python on_mini.py cells jobs.json cells && tar czf cells.tgz cells"
+scp $NODE_SSH:/tmp/cells.tgz $W/ && tar xzf $W/cells.tgz -C $W
+ssh $NODE_SSH "rm -rf /tmp/cells /tmp/cells.tgz"
+```
+
+Display files stay on the Mini 90 days (`observed-cells.md`), so older flights can be replayed
+with cells too.
 
 **Replay caveats:**
 - A METAR counts as available at its observation time. Prod sees it about 10 min later, so a
@@ -138,6 +158,20 @@ $LOCAL_VENV/bin/python $S/review.py radar-summary $W/radar.json LFBO LFMT
 **Baseline (2026-10-03..05, 2,523 METARs):** AUTO `///CB` had a heavy echo (≥41 dBZ) within
 10 NM 62 % of the time, AUTO `///TCU` 46 %, CB/TCU only in TEMPO 7 %, and METARs without
 CB/TCU 1 %.
+
+## 6. Optional: score the storm estimates (#688)
+
+Each tick logs a closest-approach estimate per storm with available motion (`estimate` rows in
+`live_history.jsonl`). Score them against what the storm did in later frames (the cells from
+step 4), by horizon, next to persistence (the storm staying put):
+
+```bash
+$LOCAL_VENV/bin/python $S/review.py score-estimates $W/live $W/cells [FLIGHT_SUBSTR...]
+```
+
+`lost` counts storms whose lineage ended before the estimated time. The estimate stays in the
+storm's detail pop-up, and "closing" stays limited to 30 min in the alert rule (§41), until
+this shows the estimate beating persistence at that horizon over several days.
 
 ## Report
 

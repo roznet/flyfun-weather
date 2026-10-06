@@ -23,6 +23,9 @@ Contents (``DISPLAY_SCHEMA``):
   ``flashes_pending: true``, so no client can word it as "no lightning"
   (#666 review).  Cells whose rain rate is from an older frame than the radar
   carry ``rate_as_of``;
+* **within** — on a cell inside a cell of the next lower tier (a core41
+  inside its core35, a core35 inside its rain20), that cell's id (#688), so
+  the droplet groups the tiers of one storm without re-deriving geometry;
 * **revision** — 0 when first published; a frame whose lightning landed after
   it was published is re-issued as revision 1 (#666), each revision its own
   immutable file (``catalogue.display_path``).
@@ -115,13 +118,43 @@ def arrow_end(cell: dict, grid: GridSpec, minutes: float = ARROW_MINUTES, *,
     return [r(lat2, 4), r(lon2, 4)]
 
 
+def enclosing_cells(catalogue_cells: list[dict], detections: dict[str, TierDetection],
+                    policy: CellPolicy) -> dict[str, str]:
+    """Cell id -> id of the cell of the next lower tier that contains it (#688).
+
+    The tiers are nested thresholds on one frame, so every core41 pixel is a
+    core35 pixel: the enclosing cell is read off the lower tier's labels under
+    the cell's own pixels (the most common label, in case of a tie the lowest).
+    A cell whose lower-tier region was dropped by that tier's minimum area has
+    no entry."""
+    ids = {(c["tier"], c["label"]): c["id"] for c in catalogue_cells if "label" in c}
+    tiers = sorted((t for t in policy.tiers if t.name in detections), key=lambda t: t.threshold_dbz)
+    out: dict[str, str] = {}
+    for lower, upper in zip(tiers, tiers[1:]):
+        lo, up = detections[lower.name], detections[upper.name]
+        for cell in up.cells:
+            own = ids.get((upper.name, cell.label))
+            if own is None:
+                continue
+            sub = up.labels[cell.slice_rows, cell.slice_cols] == cell.label
+            under = lo.labels[cell.slice_rows, cell.slice_cols][sub]
+            under = under[under > 0]
+            if under.size == 0:
+                continue
+            counts = np.bincount(under)
+            parent = ids.get((lower.name, int(np.argmax(counts))))
+            if parent is not None:
+                out[own] = parent
+    return out
+
+
 def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: MotionField | None = None,
                  policy: CellPolicy | None = None, flashes_pending: bool = False,
-                 rate_as_of: str | None = None) -> dict:
+                 rate_as_of: str | None = None, within: str | None = None) -> dict:
     """One catalogue cell reduced to what the map shows.
 
-    ``flashes_pending`` / ``rate_as_of`` are added only when set, so a frame
-    with all its inputs keeps the pre-#666 cell shape."""
+    ``flashes_pending`` / ``rate_as_of`` / ``within`` are added only when set,
+    so a frame with all its inputs keeps the pre-#666 cell shape."""
     m = cell["motion"]
     t = cell["trend"]
     arrow = arrow_end(cell, grid, variant=variant, field=field, policy=policy)
@@ -154,6 +187,8 @@ def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: Mot
         out["flashes_pending"] = True
     if rate_as_of and cell["rate_peak_mm_h"] is not None:
         out["rate_as_of"] = rate_as_of
+    if within is not None:
+        out["within"] = within
     return out
 
 
@@ -174,6 +209,7 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
     lightning_pending = LIGHTNING_PENDING in unavailable
     rate_time = inputs.get(SOURCE_OPERA_RATE)
     rate_as_of = rate_time if rate_time and rate_time != inputs.get(SOURCE_OPERA_DBZH) else None
+    within = enclosing_cells(catalogue["cells"], detections, policy)
     return {
         "schema": DISPLAY_SCHEMA,
         "policy_version": catalogue["policy_version"],
@@ -198,7 +234,8 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
         },
         "motion_variant": variant,
         "cells": [display_cell(c, grid, variant=variant, field=field, policy=policy,
-                               flashes_pending=lightning_pending, rate_as_of=rate_as_of)
+                               flashes_pending=lightning_pending, rate_as_of=rate_as_of,
+                               within=within.get(c["id"]))
                   for c in catalogue["cells"] if shown(c)],
     }
 

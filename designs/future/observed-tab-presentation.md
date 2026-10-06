@@ -147,7 +147,8 @@ Screens at 14:29Z against the data:
 
 1. **Correctness fixes** (iOS + the tops clause): items 1–5, 7, 9 of §7 (#689).
 2. **#688 geometry + estimate logging** (addendum comment on #688): per-storm route geometry in the tick;
-   estimates logged; `score-estimates` in the live-review skill.
+   estimates logged; `score-estimates` in the live-review skill. Built: `LiveLayer.storms` (§4's
+   `storms[]` minus `focus`; names as in `models/live.py::LiveStorm`), storm rows (meteorology §41).
 3. **Server `glance` + `ribbon` + `focus`**, and the agent `live` block uses `glance` (#690).
 4. **iOS**: nutshell, ribbon, tap-to-map, storm detail pop-up with the estimate. Then
    web.

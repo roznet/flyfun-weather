@@ -5,8 +5,10 @@
 > field, the droplet owns the route.**  #650 is the loop and the analysis;
 > #656 adds a per-frame **display file** pushed to the droplet and drawn on
 > the web maps (see "Display file and push" below, and `current-conditions.md`
-> for the droplet side).  Next slices: route geometry against ETAs, wording in
-> the live layer and the agent block, iOS.
+> for the droplet side).  #688 is the route-geometry slice: the droplet turns
+> the display file into storms against the route and the live layer's storm
+> rows (`live-observation-layer.md` "Radar storms", meteorology-decisions §41).
+> Next: the Observed tab (#690), iOS.
 
 ## What it is
 
@@ -286,6 +288,11 @@ from the same detections, and writes `cells/display/<stamp>.json.gz`
   `policy_version`,
   `code_revision`, `window_minutes`.  Fields are additive under
   `observed-cells-display/1`, so an older droplet still accepts r0.
+- `within` (#688): the id of the cell of the next lower tier that contains
+  this one (core41 → core35 → rain20), read off that tier's labels under the
+  cell's pixels (`enclosing_cells`); absent when the lower-tier region was
+  below its minimum area.  Additive, so no policy bump: catalogues and
+  lineage are unchanged.
 - **No lightning flashes**: the droplet draws its own LI from
   `/api/observed/flashes`; the per-cell `flashes` count is in the cells.
 

@@ -133,8 +133,10 @@ badge gets its own line with the overlay's own time.  Never a shared "as of".
   to the observed badge; a collapsible legend sits top-right.  Re-checked on
   the existing 2-min visible-tab tick so a feed going stale is noticed
   without a re-render.
-- Not done: route geometry (off-track distance, abeam point, closest approach
-  vs ETA), lightning flashes on iOS, a time slider over past overlays.
+- Route geometry (off-track distance, abeam point, closest approach vs ETA)
+  is computed server-side in the live tick since #688 (`LiveLayer.storms`);
+  the maps do not use it yet (#690). Not done: lightning flashes on iOS, a time
+  slider over past overlays.
 
 ## iOS (#661)
 
