@@ -585,9 +585,10 @@ LECB_4 = _real_sigmet("LECB", "4", 5, "051000/051200",
 LECB_5 = _real_sigmet("LECB", "5", 5, "051200/051400", "N3925 E00330 - N4226 E00232")
 
 
-def _sigmet_ticks(ticks, baseline=(), destination=None):
+def _sigmet_ticks(ticks, baseline=(), destination=None, arrival_at=None, band=(None, None), full=False):
     """Classify a sequence of (time, latest SIGMETs) with the memory carried
-    from tick to tick; returns [(hhmm, changes)]."""
+    from tick to tick; returns [(hhmm, changes)] (the whole ``LiveChanges``
+    with ``full``)."""
     memory = ClassifierMemory()
     out = []
     for at, latest in ticks:
@@ -595,10 +596,11 @@ def _sigmet_ticks(ticks, baseline=(), destination=None):
             baseline_obs=None, latest_obs=None,
             baseline_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=ticks[0][0] - timedelta(hours=1),
                                           sigmets=list(baseline)),
-            latest_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=at, sigmets=list(latest)),
-            destination=destination, memory=memory, now=at,
+            latest_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=at, sigmets=list(latest),
+                                        altitude_low_ft=band[0], altitude_high_ft=band[1]),
+            destination=destination, arrival_at=arrival_at, memory=memory, now=at,
         )
-        out.append((at.strftime("%H%M"), changes.changes))
+        out.append((at.strftime("%H%M"), changes if full else changes.changes))
     return out
 
 
@@ -830,3 +832,113 @@ def test_pending_alert_memory_clears_once_it_should_have_started():
         memory=memory, now=_at(4, "1055"),
     )
     assert "sigmet:LFMM|T01" not in memory.alerted
+
+
+# --- #689: after arrival, reissue direction, one NEW rule ---------------------
+
+
+def test_pending_sigmet_starting_after_arrival_is_a_highlight():
+    """#687/#689: dep 07:05Z, arrival 09:10Z; a SIGMET issued 08:30Z valid
+    from 10:00Z starts after landing (+ the 30 min margin): highlight, with
+    its start time, no alert."""
+    after = LECB_3.model_copy(update={"valid_from": _at(5, "1000"), "valid_to": _at(5, "1200")})
+    [(_, rows)] = _sigmet_ticks([(_at(5, "0830"), [after])], arrival_at=_at(5, "0910"))
+    assert _rows(rows) == [("highlight", False, "New SIGMET LECB 3: EMBD TS from 10:00Z")]
+
+
+def test_pending_sigmet_starting_within_the_arrival_margin_alerts():
+    within = LECB_3.model_copy(update={"valid_from": _at(5, "0935"), "valid_to": _at(5, "1200")})
+    [(_, rows)] = _sigmet_ticks([(_at(5, "0830"), [within])], arrival_at=_at(5, "0910"))
+    assert _rows(rows) == [("alert", True, "New SIGMET LECB 3: EMBD TS from 09:35Z")]
+
+
+def test_without_an_arrival_time_a_pending_sigmet_alerts_as_before():
+    [(_, rows)] = _sigmet_ticks([(_at(4, "1020"), [LFMM_T01])])
+    assert _rows(rows) == [("alert", True, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]
+
+
+def test_after_arrival_chain_stays_highlight_and_unalerted():
+    """A chain shown only as an after-arrival highlight has not alerted (its
+    trace says so), and its reissue, also after arrival, stays a highlight."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1020"), [LFMM_T01]),   # valid 10:50, arrival 10:00
+        (_at(4, "1225"), [LFMM_T02]),   # valid 12:30
+    ], arrival_at=_at(4, "1000"))
+    assert [(t, _rows(c)) for t, c in ticks] == [
+        ("1020", [("highlight", False, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+        ("1225", [("highlight", False, "SIGMET LFMM T02 replaces T01 from 12:30Z: EMBD TS")]),
+    ]
+    _, memory = classify_changes(
+        baseline_obs=None, latest_obs=None, baseline_sigmets=_sigmets([]),
+        latest_sigmets=_sigmets([LFMM_T01]), arrival_at=_at(4, "1000"), now=_at(4, "1020"),
+    )
+    assert memory.sigmets["sigmet:LFMM|T01"].chain_alerted is False
+    assert memory.alerted == {}
+
+
+def test_plain_reissue_of_a_briefing_sigmet_is_updated_not_worse():
+    """#689: "SIGMET LECM 6 replaces 4" of a briefed SIGMET drove "1 worse
+    since briefing". A plain reissue is "updated" and not counted."""
+    [(_, changes)] = _sigmet_ticks([(_at(4, "1242"), [LFMM_T02])], baseline=[LFMM_T01], full=True)
+    [c] = changes.changes
+    assert (c.direction, c.tier, c.message) == ("updated", "highlight", "SIGMET LFMM T02 replaces T01: EMBD TS")
+    assert changes.worsened_count == 0 and changes.improved_count == 0
+    assert worsening_delta(changes).worsened is False
+
+
+def test_reissue_of_a_chain_new_since_the_briefing_stays_worse():
+    ticks = _sigmet_ticks([(_at(4, "1100"), [LFMM_T01]), (_at(4, "1242"), [LFMM_T02])])
+    assert [c.direction for _, cs in ticks for c in cs] == ["worse", "worse"]
+
+
+def test_reissue_whose_area_now_reaches_the_route_is_worse():
+    near = LFMM_T01.model_copy(update={"min_distance_nm": 12.0})
+    crossing = LFMM_T02.model_copy(update={"min_distance_nm": 0.0})
+    [(_, [c])] = _sigmet_ticks([(_at(4, "1242"), [crossing])], baseline=[near])
+    assert (c.direction, c.tier, c.new_alert) == ("worse", "highlight", False)
+    # Already on the route before: a plain update.
+    on = LFMM_T01.model_copy(update={"min_distance_nm": 0.0})
+    [(_, [c])] = _sigmet_ticks([(_at(4, "1242"), [crossing])], baseline=[on])
+    assert c.direction == "updated"
+
+
+def test_reissue_whose_tops_now_reach_the_flight_band_is_worse():
+    band = (0, 9000)
+    above = LFMM_T01.model_copy(update={"base_ft": 12000, "top_ft": 30000})
+    lower = LFMM_T02.model_copy(update={"base_ft": 6000, "top_ft": 30000})
+    [(_, [c])] = _sigmet_ticks([(_at(4, "1242"), [lower])], baseline=[above], band=band)
+    assert c.direction == "worse"
+    # Unknown levels on either side: no evidence of a change.
+    unknown = LFMM_T01.model_copy(update={"base_ft": None, "top_ft": None})
+    [(_, [c])] = _sigmet_ticks([(_at(4, "1242"), [lower])], baseline=[unknown], band=band)
+    assert c.direction == "updated"
+
+
+def test_reissue_direction_is_decided_once():
+    """The direction is fixed when the reissue is first seen: a later tick
+    with a different min distance does not flip the row."""
+    near = LFMM_T01.model_copy(update={"min_distance_nm": 12.0})
+    still_near = LFMM_T02.model_copy(update={"min_distance_nm": 12.0})
+    crossing = LFMM_T02.model_copy(update={"min_distance_nm": 0.0})
+    ticks = _sigmet_ticks([(_at(4, "1242"), [still_near]), (_at(4, "1300"), [crossing])], baseline=[near])
+    assert [c.direction for _, cs in ticks for c in cs] == ["updated", "updated"]
+
+
+def test_new_sigmets_follow_the_chain_not_the_change_rows():
+    """#689: Area Hazards badged LECM 6 NEW while the list said "replaces 4".
+    NEW = a listed SIGMET whose chain did not start in the baseline."""
+    [(_, changes)] = _sigmet_ticks(
+        [(_at(5, "1005"), [LFMM_T02, LECB_4])], baseline=[LFMM_T01], full=True,
+    )
+    assert changes.new_sigmets == ["sigmet:LECB|4"]
+    # A reissue of a chain new since the briefing is still new.
+    ticks = _sigmet_ticks([(_at(4, "1100"), [LFMM_T01]), (_at(4, "1242"), [LFMM_T02])], full=True)
+    assert ticks[1][1].new_sigmets == ["sigmet:LFMM|T02"]
+
+
+def test_new_sigmets_not_computed_without_a_sigmet_baseline():
+    changes, _ = classify_changes(
+        baseline_obs=None, latest_obs=None, baseline_sigmets=None,
+        latest_sigmets=_sigmets([_sig(3)]),
+    )
+    assert changes.new_sigmets is None

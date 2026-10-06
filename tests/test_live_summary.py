@@ -290,3 +290,15 @@ def _airport_at(icao, cat, t):
         metar_raw=f"METAR {icao} {t:%d%H%M}Z 24010KT 9999 {cat}", metar_time=t,
         metar_flight_category=cat, has_metar=True,
     )
+
+
+def test_sigmets_say_whether_new_since_briefing():
+    """#689: one NEW rule for every surface, from ``LiveChanges.new_sigmets``."""
+    def sig(seq):
+        return SigmetAlongRoute(fir_id="ZZZZ", hazard="TS", qualifier="EMBD",
+                                raw_text=f"ZZZZ SIGMET {seq} VALID 010900/011300 ZZZZ- EMBD TS")
+
+    layer = _layer([], sigmets=[sig(4), sig(6)])
+    assert all("new_since_briefing" not in s for s in summarize_live(layer, BRIEFING)["sigmets"])
+    layer.changes.new_sigmets = ["sigmet:ZZZZ|6"]
+    assert [s["new_since_briefing"] for s in summarize_live(layer, BRIEFING)["sigmets"]] == [False, True]

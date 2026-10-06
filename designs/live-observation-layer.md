@@ -17,7 +17,9 @@ Meteorology choices (what counts as significant, tiers) are in
 [meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–39
 (§37, #682: CB/TCU read off the observed part only, SIGMET reissues as
 replacements, categorical radar/lightning values; §38, #683: pending SIGMETs;
-§39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts).
+§39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts;
+§40, #689: a SIGMET starting after arrival is a highlight, a plain reissue
+of a briefed SIGMET is direction `updated`).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 
 ## Testing
@@ -249,7 +251,7 @@ times, `baseline_at` / `baseline_source`, the three counts, then:
   message, cleared_at; cap 6). `LIVE_NOTE` explains both.
 - `sigmets` — every current route SIGMET (cap 20, `sigmets_total`), with the
   same `label` the change messages use ("LECB 3: EMBD TS") so an agent can tie
-  them; no polygon, no raw text.
+  them, and `new_since_briefing` when known (#689); no polygon, no raw text.
 - `airports` — departure, destination and the top alternates only (the
   classifier's `airport_roles`), when the corridor fetch has a METAR for them.
 
@@ -284,6 +286,18 @@ code relies on:
   set the alert memory without `new_alert`.
 - No geometry or validity on either side → never a reissue (the louder
   "New SIGMET" reading).
+- **Direction (#689, §40).** A reissue of a chain the baseline had is
+  `updated` unless it reaches the destination or `LiveSigmetTrace.reissue_worse`
+  (area now crosses the route, or levels now meet the flight's band; decided
+  once, from the predecessor's trace, which now keeps `base_ft` / `top_ft` /
+  `min_distance_nm`). `updated` is not in `worsened_count` nor in
+  `last_refresh_delta`; sort order worse → updated → better. The trail groups
+  by key + direction, so a chain whose row was "worse" before a pack switch
+  and "updated" after reads as two rows.
+- **NEW (#689).** `LiveChanges.new_sigmets` lists the listed SIGMETs whose
+  chain is not `chain_in_baseline`; None when SIGMETs were not evaluated.
+  iOS badges NEW from it (fallback: the old change-row keys); the agent block
+  gives `new_since_briefing` per SIGMET.
 
 ## Pending SIGMETs (#683)
 
@@ -302,6 +316,10 @@ What the code relies on:
   (`ClassifierMemory.sigmets`) holding `valid_from`.
 - `LiveChange.observed_at` for a pending SIGMET is in the future; clients
   show no age for it.
+- **After arrival (#689).** `classify_changes(arrival_at=…)` (the planned
+  landing, `live_layer.planned_arrival`; both writers pass it). A row whose
+  SIGMETs all start after arrival + `SIGMET_AFTER_ARRIVAL_MARGIN` (30 min)
+  is highlight and leaves `chain_alerted` false.
 
 ## Gotchas
 

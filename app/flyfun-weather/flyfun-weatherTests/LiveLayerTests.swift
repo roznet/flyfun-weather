@@ -224,6 +224,23 @@ private func makeSnapshot(liveUpdatedAt: String? = nil, daysOut: Int = 0) throws
         #expect(changes.issuedSigmetKeys == ["sigmet:LECB|3", "sigmet:LECM|3"])
     }
 
+    /// #689: the NEW badge follows the server's `new_sigmets` (chain-aware),
+    /// not the change rows: "SIGMET LECM 6 replaces 4" of a briefed SIGMET
+    /// is listed as a change but LECM 6 is not new.
+    @Test func newSigmetsDecideTheNewBadge() throws {
+        let changes = try JSONDecoder.weatherBrief.decode(LiveChanges.self, from: Data("""
+        { "computed_at": "2026-10-06T14:29:00Z", "new_sigmets": [], "changes": [
+          { "key": "sigmet:LECM|4+sigmet:LECM|6", "kind": "sigmet_issued", "direction": "updated",
+            "tier": "highlight", "role": "route", "replaces": "LECM 4",
+            "message": "SIGMET LECM 6 replaces 4: EMBD TS" } ] }
+        """.utf8))
+        #expect(changes.newSigmets == [])
+        #expect(changes.issuedSigmetKeys.isEmpty)
+        let row = try #require(changes.items.first)
+        #expect(row.directionValue == .updated)
+        #expect(changes.items.filter { $0.directionValue == .worse }.isEmpty)
+    }
+
     @Test func newKindsDecodeAndBadgeAsMetar() throws {
         let json = """
         { "key": "conv:ZZAA", "kind": "metar_convective", "direction": "worse", "tier": "alert",

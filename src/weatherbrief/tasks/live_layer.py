@@ -29,7 +29,7 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig
@@ -242,6 +242,14 @@ def _flown_nm(route: RouteConfig, departure: datetime | None, now: datetime) -> 
     total = dists[-1] if dists else 0.0
     frac = (now - departure).total_seconds() / 3600.0 / route.flight_duration_hours
     return max(0.0, min(1.0, frac)) * total
+
+
+def planned_arrival(route: RouteConfig | None, departure: datetime | None) -> datetime | None:
+    """Departure + ``flight_duration_hours``: the planned landing, or None
+    when either is unknown (#689)."""
+    if route is None or departure is None or not route.flight_duration_hours:
+        return None
+    return departure + timedelta(hours=route.flight_duration_hours)
 
 
 def route_destination(route: RouteConfig | None) -> tuple[float, float] | None:
@@ -664,6 +672,7 @@ def commit_live_update(
             roles=airport_roles(route_icaos, _alternate_icaos(briefing_data)),
             destination=route_destination(route),
             departure_at=departure,
+            arrival_at=planned_arrival(route, departure),
             baseline_at=layer.seeded_at if seeded else _parse_dt(pack_timestamp),
             flown_nm=_flown_nm(route, departure, now) if route is not None else None,
             memory=memory,
@@ -713,7 +722,7 @@ LIVE_SUMMARY_MAX_SIGMETS = 20
 LIVE_SUMMARY_MAX_CLEARED = 6
 
 _TIER_ORDER = {"alert": 0, "highlight": 1}
-_DIRECTION_ORDER = {"worse": 0, "better": 1}
+_DIRECTION_ORDER = {"worse": 0, "updated": 1, "better": 2}
 _ROLE_ORDER = {"destination": 0, "departure": 1, "alternate": 2, "route": 3}
 
 
@@ -739,7 +748,7 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     that order, when the corridor fetch has them. No observed-conditions
     arrays — this is a hook, the full picture is the web briefing.
     """
-    from weatherbrief.tasks.live_significance import _sigmet_label, airport_roles
+    from weatherbrief.tasks.live_significance import _sigmet_key_str, _sigmet_label, airport_roles
 
     changes = changes if changes is not None else layer.changes
     out: dict = {
@@ -786,6 +795,7 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     ]
 
     sigmets = list(layer.route_sigmets.sigmets) if layer.route_sigmets else []
+    new_keys = set(changes.new_sigmets) if changes and changes.new_sigmets is not None else None
     out["sigmets_total"] = len(sigmets)
     out["sigmets"] = [
         {
@@ -801,6 +811,9 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
             "top_ft": s.top_ft,
             "enroute_distance_from_nm": _nm(s.enroute_distance_from_nm),
             "enroute_distance_to_nm": _nm(s.enroute_distance_to_nm),
+            # New to the flight since the briefing (its reissue chain did not
+            # start there, #689); omitted when not computed.
+            **({"new_since_briefing": _sigmet_key_str(s) in new_keys} if new_keys is not None else {}),
         }
         for s in sigmets[:LIVE_SUMMARY_MAX_SIGMETS]
     ]

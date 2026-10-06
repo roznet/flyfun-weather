@@ -291,6 +291,7 @@
   "refreshDelta.noChange": "No significant change since the briefing ({time})",
   "refreshDelta.worse": "Worse",
   "refreshDelta.better": "Better",
+  "refreshDelta.updated": "Updated",
   "refreshDelta.alert": "Departure, destination or alternate",
   "live.observedAsOf": "Observed as of {time} ({age})",
   "live.justNow": "just now",

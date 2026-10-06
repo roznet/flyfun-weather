@@ -90,7 +90,7 @@
    },
    {
     "cleared_at": null,
-    "direction": "worse",
+    "direction": "updated",
     "enroute_distance_nm": 0.0,
     "from_value": null,
     "icao": null,
@@ -110,15 +110,11 @@
      "reports": null,
      "spans": [
       {
-       "end": "2026-10-02T07:00:00Z",
-       "start": "2026-10-02T05:10:00Z"
-      },
-      {
        "end": null,
        "start": "2026-10-02T08:40:00Z"
       }
      ],
-     "times_today": 2
+     "times_today": 1
     }
    },
    {
@@ -157,15 +153,18 @@
   ],
   "computed_at": "2026-10-02T09:00:00Z",
   "improved_count": 2,
+  "new_sigmets": [
+   "sigmet:LECB|3",
+   "sigmet:LECM|3"
+  ],
   "recently_cleared": [],
-  "worsened_count": 2
+  "worsened_count": 1
  },
  "flight_id": "fixture-1",
  "last_refresh_delta": {
   "computed_at": "2026-10-02T09:00:00Z",
   "messages": [
-   "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)",
-   "SIGMET LECB 4 replaces 2: EMBD TS"
+   "New SIGMET LECB 3 / LECM 3: EMBD TS (at destination)"
   ],
   "worsened": true
  },

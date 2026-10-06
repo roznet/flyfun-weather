@@ -103,6 +103,12 @@ class ObservedAnnulus(BaseModel):
     max_value: float | None = None
     mean_value: float | None = None
     p90_value: float | None = None
+    # Where ``max_value`` was measured, from the station: distance (NM) and
+    # bearing (degrees true). Radar and rain rate only (#689: "peak 49 dBZ
+    # 8 NM NE of LPPR" rather than "within 20 NM"); None on cloud tops, when
+    # nothing was detected, and in payloads written before the fields.
+    max_at_nm: float | None = None
+    max_bearing_deg: float | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

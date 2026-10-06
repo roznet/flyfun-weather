@@ -1,6 +1,10 @@
 # Observed tab: from "what you need to know" to the details
 
-Status: direction agreed 2026-10-06, not started (#689, #690). Builds on #688 (route geometry per
+Status: direction agreed 2026-10-06. Slice 1 (#689) done: reissue "updated",
+`new_sigmets`, SIGMET-after-arrival highlight, tops "unavailable", radar peak
+position in the summary, iOS storm count/sort/wording as interim client logic
+(`CellsOverlay.routeStorms`, to be replaced by #688's server geometry).
+Slices 2–5 not started (#688, #690). Builds on #688 (route geometry per
 cell) and `designs/live-observation-layer.md`.
 
 ## 1. Premise

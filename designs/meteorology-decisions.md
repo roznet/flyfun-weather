@@ -5191,8 +5191,8 @@ refresh and the live tick.
 
 ### Real-world validation needed
 
-- Alerts in flight for a SIGMET starting after arrival: noise or useful?
-  The classifier has no arrival time; demoting those would need one.
+- Alerts in flight for a SIGMET starting after arrival: superseded by §40
+  (highlight after arrival + 30 min).
 - How often the lookahead queries fail (log: "AvWx isigmet lookahead failed").
 
 
@@ -5249,3 +5249,67 @@ station flag ("CB somewhere in view") adds little as an alert on top.
   cells feed dark when the mini is down), a station CB is now only a
   highlight. The cell-based rule must restore the alert there (fallback).
 - Sample is 3 days, mostly south-west France AUTO stations, one regime.
+
+
+## 40. A SIGMET starting after arrival is a highlight; a plain reissue of a briefed SIGMET is "updated"; tops are never "clear" under a convective echo
+
+**Date:** 2026-10-06 · **Issue:** #689 (folds #687) · **Amends:** §37, §38
+
+Found on a test flight, LPPR→LPPT 2026-10-06 14:29Z: "1 worse since
+briefing" was LECM 6 replacing the briefed LECM 4; the Observed tab read
+"Cloud tops: clear over the whole corridor" next to a 49 dBZ echo.
+
+### Choices
+
+- **Pending SIGMET after arrival → highlight.** The classifier now gets the
+  planned arrival (departure + `flight_duration_hours`, `live_layer.planned_arrival`).
+  A row whose SIGMETs all start more than `SIGMET_AFTER_ARRIVAL_MARGIN`
+  (30 min) after it is highlight tier, keeps its "from HH:MMZ", and does not
+  mark its chain as alerted (a later reissue that does matter still alerts).
+  Within the margin it alerts as §38. Without an arrival (no duration) it
+  alerts as before.
+- **Why 30 min:** a hold, a go-around and a short divert. The issue's own
+  case (arrival 09:10Z, SIGMET from 10:00Z) needs it under 50 min. Not
+  covered: a late departure (the layer only knows the planned one). The
+  issue pointed at "the margin near line 81", which is a 25 NM distance, not
+  a time; no time margin existed, so this one is new.
+- **Reissue direction.** A reissue of a chain the briefing had is direction
+  `updated` (not counted in `worsened_count`, not in `last_refresh_delta`)
+  unless it reaches the destination (§37, also alerts), its area now crosses
+  the route where the predecessor's only came within the corridor
+  (`min_distance_nm` > 0 → 0), or its vertical extent now meets the flight's
+  band where the predecessor's did not. Decided once, when the reissue is first
+  seen (`LiveSigmetTrace.reissue_worse`), so the row never flips. Tier is
+  unchanged by the direction: a briefed chain's reissue stays highlight
+  unless it reaches the destination.
+- **A chain new since the briefing stays "worse"**: relative to the briefing
+  it is new weather, whatever its reissues do.
+- **A hazard or qualifier upgrade (EMBD → FRQ, MOD → SEV) is not a reissue**:
+  §37's match needs the same hazard and qualifier, so it is a "New SIGMET"
+  row, already worse and alert. Likewise a predecessor below the flight's band
+  is not on the route list (the fetch filters on the band), so the "tops now
+  reach the band" case is rare in practice; it is coded for completeness.
+- **One NEW rule.** `LiveChanges.new_sigmets`: the listed SIGMETs whose chain
+  did not start in the baseline. iOS badges Area Hazards NEW from it (falling
+  back to the old change-row reading for an older server); the agent `live`
+  block carries `new_since_briefing` per SIGMET. The web table keeps its
+  "changed" row highlight (a reissue is a change); it never had a NEW badge.
+- **Cloud tops vs radar.** In `observed/summary.py`, a covered point where
+  the satellite retrieval found no cloud top but the radar's widest disc has
+  ≥ 35 dBZ (`TOPS_CONTRADICTED_DBZ`) is *unavailable*, not clear. All covered
+  points contradicted → "Cloud tops unavailable (…)"; some → "none found at
+  N of M points, unavailable at K of M points (…)". "Clear over the whole
+  corridor" only when no point is contradicted.
+
+### Rejected
+
+- **Hiding a SIGMET starting after arrival**: the pilot may hold, divert or
+  return; it stays visible as a highlight.
+- **"updated" for every reissue**: a reissue of a SIGMET that was itself new
+  since the briefing is still news against the briefing.
+
+### Real-world validation needed
+
+- Whether 30 min is right, and how often departures slip past it.
+- Why CTTH detected nothing at 14:11Z on 2026-10-06 (missing frame vs the
+  retrieval's mask) was not investigated: it needs the prod frames.

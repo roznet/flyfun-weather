@@ -227,7 +227,8 @@ export function motionText(m: CellMotion | null | undefined): string {
     if (m.toward_deg == null || (m.speed_kt ?? 0) < 1) return 'nearly stationary';
     return `moving ${compass(m.toward_deg)} at ${Math.round(m.speed_kt ?? 0)} kt`;
   }
-  if (m.status === 'withheld') return 'motion withheld: split/merge this frame';
+  // A split or merge this frame: the matcher could not pair it yet (#689).
+  if (m.status === 'withheld') return 'motion not yet measured';
   if (m.status === 'unsupported') return 'motion withheld: too little of the cell in matched tiles';
   if (m.status === 'no_pair') return 'no motion yet: no earlier radar frame to compare';
   return `motion ${m.status}${m.reason ? `: ${m.reason}` : ''}`;
@@ -259,7 +260,7 @@ export function cellPopupHtml(c: DisplayCell): string {
   const lightning = c.flashes == null && c.flashes_pending ? 'pending' : value(c.flashes);
   const lines = [
     `<b>${escapeHtml(tier)}</b> <span class="cells-exp">experimental</span>`,
-    `peak <b>${value(c.peak_dbz, ' dBZ')}</b> · area ${value(c.area_km2, ' km²')}`,
+    `peak <b>${c.peak_dbz == null ? '–' : `${Math.round(c.peak_dbz)} dBZ`}</b> · area ${value(c.area_km2, ' km²')}`,
     `rain rate peak ${value(c.rate_peak_mm_h, ' mm/h')}${asOf} · lightning ${lightning}`
       + (c.top_fl != null ? ` · cloud top FL${c.top_fl}` : ''),
     `age ${value(c.age_min, ' min')} (${escapeHtml(c.event ?? '')}) · ${escapeHtml(trendText(c.trend))}`,

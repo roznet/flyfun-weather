@@ -154,6 +154,10 @@
   ],
   "computed_at": "2026-10-02T08:30:00Z",
   "improved_count": 2,
+  "new_sigmets": [
+   "sigmet:LECB|3",
+   "sigmet:LECM|3"
+  ],
   "recently_cleared": [
    {
     "cleared_at": "2026-10-02T07:30:00Z",

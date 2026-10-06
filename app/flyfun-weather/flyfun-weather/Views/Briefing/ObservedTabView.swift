@@ -211,17 +211,16 @@ struct ObservedGlanceCard: View {
         return chips
     }
 
-    /// Cores in the route box from the shared cell model — attention, not a
-    /// verdict, so neutral when there are none.
+    /// Storms within the stated distance of the route, from the shared cell
+    /// model (#689: storms, not tiers) — attention, not a verdict, so neutral
+    /// when there are none.
     private var cellsChip: Chip? {
         let model = viewModel.cellsModel
         guard case .ok = model.match, let display = model.display else { return nil }
-        let cores = CellsOverlay.listedCells(display).count
-        if cores == 0 {
-            return Chip(text: "No radar cores near route", icon: "cloud", tint: Theme.textMuted)
-        }
-        return Chip(text: cores == 1 ? "1 radar core near route" : "\(cores) radar cores near route",
-                    icon: "cloud.bolt", tint: Theme.primary)
+        let storms = CellsOverlay.routeStorms(display, route: viewModel.routeCoordinates).count
+        return Chip(text: CellsOverlay.stormsChipText(storms),
+                    icon: storms == 0 ? "cloud" : "cloud.bolt",
+                    tint: storms == 0 ? Theme.textMuted : Theme.primary)
     }
 }
 
@@ -287,6 +286,13 @@ struct ObservedNowView: View {
                 Text("Radar & lightning now")
                     .font(.headline)
                     .foregroundStyle(Theme.text)
+                // Under the heading, not at the foot of the section: there it
+                // read as the filter of the cells list below (#689).
+                if let corridor = observed.corridorNm {
+                    Text("Within \(Int(corridor.rounded())) NM of the route")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textMuted)
+                }
                 ForEach(entries, id: \.text) { entry in
                     HStack(alignment: .firstTextBaseline, spacing: Theme.spacingS) {
                         Text(entry.text)
@@ -310,11 +316,6 @@ struct ObservedNowView: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                if let corridor = observed.corridorNm {
-                    Text("Within \(Int(corridor.rounded())) NM of the route")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textMuted)
                 }
             }
         }
@@ -358,9 +359,10 @@ struct ObservedNowView: View {
 
 // MARK: - Cells
 
-/// The experimental cell analysis for the route box: convective cores,
-/// strongest first, each with where it is, how it is evolving and where it is
-/// heading. Describes evolution, not safety — labelled experimental.
+/// The experimental cell analysis near the route: storms within
+/// `CellsOverlay.listOffTrackNm` of the route line, nearest first (#689), each
+/// with where it is, how it is evolving and where it is heading. Describes
+/// evolution, not safety — labelled experimental.
 struct ObservedCellsSection: View {
     let viewModel: BriefingViewModel
     @State private var showsAll = false
@@ -400,13 +402,16 @@ struct ObservedCellsSection: View {
             }
         } else if case .ok = model.match, let display = model.display {
             if let badge = model.badge { muted(badge, font: .caption) }
-            let cells = CellsOverlay.listedCells(display)
+            let cells = CellsOverlay.routeStorms(display, route: viewModel.routeCoordinates)
+            let within = Int(CellsOverlay.listOffTrackNm.rounded())
             if cells.isEmpty {
-                muted("No convective cores near the route")
+                muted("No storms within \(within) NM of the route")
             } else {
+                muted("Storms within \(within) NM of the route, nearest first", font: .caption)
                 let shown = showsAll ? cells : Array(cells.prefix(Self.compactCap))
-                ForEach(shown) { cell in
-                    CellRow(cell: cell, location: CellsOverlay.locationLabel(cell, waypoints: viewModel.routeWaypoints))
+                ForEach(shown) { storm in
+                    CellRow(cell: storm.cell, offTrackNm: storm.offTrackNm,
+                            location: CellsOverlay.locationLabel(storm.cell, waypoints: viewModel.routeWaypoints))
                 }
                 if cells.count > Self.compactCap {
                     Button(showsAll ? "Show fewer" : "Show all \(cells.count)") { showsAll.toggle() }
@@ -433,6 +438,7 @@ struct ObservedCellsSection: View {
 /// One core: trend dot, strength, where it is, then evolution and motion.
 private struct CellRow: View {
     let cell: DisplayCell
+    let offTrackNm: Double?
     let location: String?
 
     var body: some View {
@@ -444,7 +450,7 @@ private struct CellRow: View {
                 .padding(.top, 3)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.spacingS) {
-                    Text(cell.peakDbz.map { "\(CellsOverlay.number($0)) dBZ" } ?? CellsOverlay.tierLabel(cell.tier))
+                    Text(cell.peakDbz.map { CellsOverlay.dbzText($0) } ?? CellsOverlay.tierLabel(cell.tier))
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Theme.text)
                     if let location {
@@ -464,8 +470,10 @@ private struct CellRow: View {
     }
 
     private var secondLine: String {
-        var parts = [cell.trend?.state ?? "trend unknown", CellsOverlay.motionText(cell.motion)]
-        if let flashes = cell.flashes, flashes > 0 { parts.append("\(CellsOverlay.number(flashes)) flashes") }
+        var parts: [String] = []
+        if let offTrackNm { parts.append("\(Int(offTrackNm.rounded())) NM off track") }
+        parts += [cell.trend?.state ?? "trend unknown", CellsOverlay.motionText(cell.motion)]
+        if let flashes = cell.flashes, flashes > 0 { parts.append(CellsOverlay.flashesText(flashes)) }
         if cell.flashes == nil, cell.flashesPending == true { parts.append("lightning pending") }
         if let top = cell.topFl { parts.append("top FL\(Int(top.rounded()))") }
         if cell.truncated == true { parts.append("partly outside radar coverage") }

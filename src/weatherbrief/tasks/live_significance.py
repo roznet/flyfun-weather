@@ -105,6 +105,17 @@ SIGMET_REISSUE_WINDOW = timedelta(minutes=60)
 SIGMET_REISSUE_EARLY = timedelta(minutes=15)
 _REISSUE_NM = 20.0
 
+#: A SIGMET that only starts after the flight has landed cannot affect it,
+#: but the plan's arrival time is an estimate: a hold, a go-around or a
+#: diversion to a nearby alternate all land later. A pending SIGMET starting
+#: more than this after the planned arrival (departure +
+#: ``flight_duration_hours``) is a highlight, not an alert (#689); one
+#: starting within it alerts as any new SIGMET. 30 min covers a hold plus a
+#: short divert; a late departure is not covered (the plan's departure time
+#: is all the layer knows). The #689 case (arrival 09:10Z, SIGMET from
+#: 10:00Z) needs it under 50 min.
+SIGMET_AFTER_ARRIVAL_MARGIN = timedelta(minutes=30)
+
 #: Echo class at or above which an observed radar return on the route ahead is
 #: significant: VIP 3 "heavy" (41 dBZ), the AIM "avoid level 3 or greater" line.
 RADAR_SIGNIFICANT_DBZ = 41.0
@@ -556,6 +567,16 @@ def _pending(s: SigmetAlongRoute, now: datetime) -> bool:
     return s.valid_from is not None and s.valid_from > now
 
 
+def _after_arrival(group: list[SigmetAlongRoute], arrival_at: datetime | None) -> bool:
+    """Every SIGMET of the row starts after the planned arrival plus
+    :data:`SIGMET_AFTER_ARRIVAL_MARGIN` (#689). False without an arrival
+    time or a start (alert as before: the louder reading)."""
+    if arrival_at is None or not group:
+        return False
+    limit = arrival_at + SIGMET_AFTER_ARRIVAL_MARGIN
+    return all(m.valid_from is not None and m.valid_from > limit for m in group)
+
+
 def _from_suffix(group: list[SigmetAlongRoute], now: datetime) -> str:
     """" from 07:00Z" while every SIGMET of the row is still pending, else ""."""
     if not group or not all(_pending(m, now) for m in group):
@@ -633,7 +654,44 @@ def _trace(
         fir_id=s.fir_id, hazard=s.hazard, qualifier=s.qualifier,
         valid_from=s.valid_from, valid_to=s.valid_to, bbox=_sigmet_bbox(s),
         at_destination=_near_point(s, destination, DESTINATION_SIGMET_RADIUS_NM),
+        base_ft=s.base_ft, top_ft=s.top_ft, min_distance_nm=s.min_distance_nm,
         last_seen=now, **kw,
+    )
+
+
+def _overlaps_band(
+    base_ft: int | None, top_ft: int | None, band: tuple[int | None, int | None],
+) -> bool:
+    """The vertical extent meets the flight's band. A missing bound is
+    unbounded on that side (the SIGMET could be anywhere there)."""
+    low, high = band
+    if low is not None and top_ft is not None and top_ft < low:
+        return False
+    if high is not None and base_ft is not None and base_ft > high:
+        return False
+    return True
+
+
+def _reissue_worse(
+    s: SigmetAlongRoute, p: LiveSigmetTrace, band: tuple[int | None, int | None],
+) -> bool:
+    """The reissue ``s`` is worse for the flight than its predecessor ``p``
+    (#689): its area now reaches the route where the predecessor's only came
+    near it, or its vertical extent now meets the flight's band. Unknown on
+    either side is not worse (no evidence of a change).
+
+    A hazard or qualifier upgrade (EMBD → FRQ, MOD → SEV) never gets here:
+    :func:`_reissue_of` requires the same hazard and qualifier, so that
+    SIGMET is a "New SIGMET" row, which is already worse. Reaching the
+    destination is handled by the caller (it also alerts)."""
+    if (
+        p.min_distance_nm is not None and s.min_distance_nm is not None
+        and p.min_distance_nm > 0 and s.min_distance_nm <= 0
+    ):
+        return True
+    known = (p.base_ft, p.top_ft) != (None, None) and (s.base_ft, s.top_ft) != (None, None)
+    return known and not _overlaps_band(p.base_ft, p.top_ft, band) and _overlaps_band(
+        s.base_ft, s.top_ft, band,
     )
 
 
@@ -700,6 +758,9 @@ def _trace_sigmets(
                 "valid_to": s.valid_to,
                 "bbox": _sigmet_bbox(s),
                 "at_destination": _near_point(s, destination, DESTINATION_SIGMET_RADIUS_NM),
+                "base_ft": s.base_ft,
+                "top_ft": s.top_ft,
+                "min_distance_nm": s.min_distance_nm,
             })
         else:
             preds = [p for p in candidates.values() if _reissue_of(s, p)]
@@ -713,6 +774,9 @@ def _trace_sigmets(
                     replaces_key=pred.key, replaces_label=pred.label,
                     replaced_at_destination=pred.at_destination,
                     chain_alerted=pred.chain_alerted,
+                    reissue_worse=_reissue_worse(
+                        s, pred, (latest.altitude_low_ft, latest.altitude_high_ft),
+                    ),
                 )
         out[k] = t
         candidates[k] = t
@@ -737,6 +801,7 @@ def _sigmet_changes(
     destination: tuple[float, float] | None = None,
     seen: dict[str, LiveSigmetTrace] | None = None,
     now: datetime | None = None,
+    arrival_at: datetime | None = None,
 ) -> tuple[list[LiveChange], set[str], dict[str, LiveSigmetTrace]]:
     """New, reissued, escalated to SEV, or no longer active — merged across
     FIRs. Also returns the keys of reissue rows that must not raise a fresh
@@ -752,6 +817,13 @@ def _sigmet_changes(
     way it alerts when it now reaches the destination and its predecessor did
     not. The predecessor gets no row of its own (neither its "new" row while
     both are listed, nor "no longer active").
+
+    A reissue of a chain the briefing had is direction "updated" (not
+    counted as worse) unless it reaches the destination or is worse than its
+    predecessor (:func:`_reissue_worse`); a chain new since the briefing
+    stays "worse" (#689). A row whose SIGMETs all start after
+    ``arrival_at`` + :data:`SIGMET_AFTER_ARRIVAL_MARGIN` is a highlight and
+    does not mark its chain as alerted (#689).
     """
     now = now or datetime.now(timezone.utc)
     traces = _trace_sigmets(baseline, latest, destination, seen or {}, now)
@@ -789,22 +861,27 @@ def _sigmet_changes(
     out: list[LiveChange] = []
     quiet: set[str] = set()
     for g in _group_same_phenomenon(new):
-        # A "New SIGMET" row is always alert tier: the chain has alerted (now,
-        # or on an earlier tick if the memory already holds this value).
-        for m in g:
-            traces[_sigmet_key_str(m)].chain_alerted = True
         prefix = "New SEV SIGMET" if _is_severe(g[0]) else "New SIGMET"
-        out.append(_sigmet_change(
+        c = _sigmet_change(
             g, kind="sigmet_issued", direction="worse",
             from_value=None, to_value=_hazard_text(g[0]),
             observed_at=g[0].valid_from,
             message=f"{prefix} {_group_label(g)}{_from_suffix(g, now)}", destination=destination,
-        ))
+        )
+        if _after_arrival(g, arrival_at):
+            c.tier = "highlight"
+        else:
+            # An alert-tier "New SIGMET" row: the chain has alerted (now, or
+            # on an earlier tick if the memory already holds this value).
+            for m in g:
+                traces[_sigmet_key_str(m)].chain_alerted = True
+        out.append(c)
     for s in reissued:
         t = traces[_sigmet_key_str(s)]
         reaches_destination = t.at_destination and not t.replaced_at_destination
+        worse = not t.chain_in_baseline or reaches_destination or t.reissue_worse
         c = _sigmet_change(
-            [s], kind="sigmet_issued", direction="worse",
+            [s], kind="sigmet_issued", direction="worse" if worse else "updated",
             from_value=None, to_value=_hazard_text(s),
             observed_at=s.valid_from,
             message=f"SIGMET {t.label} replaces {_short_label(t)}{_from_suffix([s], now)}: {_hazard_text(s)}",
@@ -815,7 +892,7 @@ def _sigmet_changes(
         # groups a reissue row on the first part (live_trail._trail_key).
         c.key = reissue_key(t.chain, t.key)
         c.replaces = t.replaces_label
-        if t.chain_in_baseline and not reaches_destination:
+        if (t.chain_in_baseline and not reaches_destination) or _after_arrival([s], arrival_at):
             c.tier = "highlight"
         # Quiet only when the briefing had the chain or an earlier row of it
         # already alerted. A predecessor first seen in this same pass (T01 and
@@ -1001,6 +1078,7 @@ def _observed_changes(
 
 
 _ROLE_ORDER = {"departure": 0, "destination": 1, "alternate": 2, "route": 3}
+_DIRECTION_ORDER = {"worse": 0, "updated": 1, "better": 2}
 
 
 def classify_changes(
@@ -1014,6 +1092,7 @@ def classify_changes(
     roles: dict[str, ChangeRole] | None = None,
     destination: tuple[float, float] | None = None,
     departure_at: datetime | None = None,
+    arrival_at: datetime | None = None,
     baseline_at: datetime | None = None,
     flown_nm: float | None = None,
     memory: ClassifierMemory | None = None,
@@ -1026,7 +1105,8 @@ def classify_changes(
     failed — neither is a change. ``flown_nm`` (distance already flown at
     ``now``) limits radar/lightning to the route still ahead. ``destination``
     (lat, lon) marks SIGMETs over or near it. ``departure_at`` ends the
-    departure airport's relevance at take-off.
+    departure airport's relevance at take-off. ``arrival_at`` (planned
+    landing) makes a SIGMET starting well after it a highlight (#689).
     """
     roles = roles or {}
     memory = memory or ClassifierMemory()
@@ -1046,19 +1126,26 @@ def classify_changes(
         evaluated |= {"metar:", "taf:", "conv:", "wx:", "wind:"}
     quiet: set[str] = set()
     sigmet_traces = dict(memory.sigmets)
+    new_sigmets: list[str] | None = None
     if baseline_sigmets is not None and latest_sigmets is not None:
         sigmet_rows, quiet, sigmet_traces = _sigmet_changes(
-            baseline_sigmets, latest_sigmets, destination, memory.sigmets, now,
+            baseline_sigmets, latest_sigmets, destination, memory.sigmets, now, arrival_at,
         )
         changes += sigmet_rows
         evaluated.add("sigmet:")
+        # One NEW rule for every surface (#689): a listed SIGMET is new to
+        # the flight when its reissue chain did not start in the baseline.
+        new_sigmets = sorted({
+            k for k in (_sigmet_key_str(s) for s in latest_sigmets.sigmets)
+            if not sigmet_traces[k].chain_in_baseline
+        })
     changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
     evaluated |= {"lightning:", "radar:"}
 
     changes.sort(key=lambda c: (
         0 if c.tier == "alert" else 1,
         _ROLE_ORDER.get(c.role, 9),
-        0 if c.direction == "worse" else 1,
+        _DIRECTION_ORDER.get(c.direction, 9),
         c.enroute_distance_nm if c.enroute_distance_nm is not None else float("inf"),
         c.key,
     ))
@@ -1096,6 +1183,7 @@ def classify_changes(
         baseline_at=baseline_at,
         computed_at=now or datetime.now(timezone.utc),
         changes=changes,
+        new_sigmets=new_sigmets,
     )
     return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
 

@@ -922,7 +922,7 @@ def run_realtime_refresh(
         delta = layer.last_refresh_delta
     else:
         # Not persisted (an older pack): classify against the baseline only.
-        from weatherbrief.tasks.live_layer import _baseline_blocks, route_destination
+        from weatherbrief.tasks.live_layer import _baseline_blocks, planned_arrival, route_destination
         from weatherbrief.tasks.live_significance import (
             airport_roles,
             classify_changes,
@@ -940,6 +940,7 @@ def run_realtime_refresh(
             roles=airport_roles([wp.icao for wp in route.waypoints]),
             destination=route_destination(route),
             departure_at=target_dt,
+            arrival_at=planned_arrival(route, target_dt),
         )
         delta = worsening_delta(changes)
 
