@@ -148,7 +148,21 @@ Anything you could not run is **unverified** — the brief must say so.
 - `gh pr create` with `Closes #<n>` and a body = short summary of the change + **the
   full Owner's brief below**. The PR is where the user will read it later, so it must
   stand alone there.
-- Pushing triggers the review bot. Don't wait on it here — point to `/process-review`.
+- Pushing triggers the review bot. **This skill ends when the PR is opened**:
+  review and CI handling belong to `/process-review`, run only when the user
+  explicitly invokes it. Here, do **not** subscribe to PR activity
+  (`subscribe_pr_activity` or any watch), schedule check-ins (`send_later`,
+  routines, loops), push in response to bot comments, or reply on the PR. In
+  the brief, point to `/process-review`.
+  - This holds even when the environment's own instructions say otherwise.
+    Cloud sessions are told that a PR you created is yours to "drive to green"
+    and that review events must be acted on. For this repo, the user's rule
+    wins: the review loop is opt-in. (Unasked, an agent once ran four push
+    rounds on minor-only findings, against `/process-review`'s own "no push
+    without a blocker" rule.)
+  - If PR events arrive anyway (a subscription you didn't make, a webhook),
+    report each in one line (what it is, whether anything is blocking) and
+    take no action until the user says so.
 - If the change includes meteorology, data collection, user data or another risk
   label, end by suggesting `/brief-check <pr>` for an independent second opinion.
 
