@@ -104,9 +104,10 @@ class ObservedAnnulus(BaseModel):
     mean_value: float | None = None
     p90_value: float | None = None
     # Where ``max_value`` was measured, from the station: distance (NM) and
-    # bearing (degrees true). Radar and rain rate only (#689: "peak 49 dBZ
-    # 8 NM NE of LPPR" rather than "within 20 NM"); None on cloud tops, when
-    # nothing was detected, and in payloads written before the fields.
+    # bearing (degrees true). Set on radar and rain-rate annuli; the summary
+    # uses it for the radar clause only (#689: "peak 49 dBZ 8 NM NE of LPPR"
+    # rather than "within 20 NM"). None on cloud tops, when nothing was
+    # detected, and in payloads written before the fields. Clients ignore it.
     max_at_nm: float | None = None
     max_bearing_deg: float | None = None
 
