@@ -1176,10 +1176,14 @@ final class flyfun_weatherUITests: XCTestCase {
                 if shoot { attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes") }
 
                 // Every SIGMET a "new SIGMET" change names (a merged change
-                // names each FIR's) carries the NEW badge.
+                // names each FIR's) carries the NEW badge. A reissue row's key
+                // is "<chain's first>+<this>" (#682): only "this" is listed.
                 let issued = ((changes["changes"] as? [[String: Any]]) ?? [])
                     .filter { $0["kind"] as? String == "sigmet_issued" }
-                    .flatMap { ($0["key"] as? String ?? "").split(separator: "+") }
+                    .flatMap { c -> [Substring] in
+                        let parts = (c["key"] as? String ?? "").split(separator: "+")
+                        return c["replaces"] is String ? Array(parts.suffix(1)) : parts
+                    }
                 for (pill, sectionId, label) in [("METAR/TAF", "observationsSection", "2-observations"),
                                                  ("SIGMET", "sigmetsSection", "3-hazards")] {
                     guard shoot || (sectionId == "sigmetsSection" && !issued.isEmpty) else { continue }
