@@ -339,7 +339,11 @@ def _to_datetime(value):
 
 def _peak_position(station: SampleStation, values, mask, lat, lon) -> dict[str, float | None]:
     """Distance (NM) and bearing from the station to the strongest detected
-    pixel in ``mask`` (#689), so a summary can say where the peak is."""
+    pixel in ``mask`` (#689), so a summary can say where the peak is.
+
+    Uses the nominal pixel positions: right for radar and rain rate (no
+    parallax), wrong for cloud tops, whose pixels are parallax-displaced —
+    do not call it on a tops frame."""
     picked = np.where(mask, np.asarray(values, dtype=float), -np.inf)
     picked = np.where(np.isfinite(picked), picked, -np.inf)
     if not picked.size or not np.isfinite(picked.max()):

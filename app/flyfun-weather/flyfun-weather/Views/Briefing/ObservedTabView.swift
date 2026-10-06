@@ -217,7 +217,11 @@ struct ObservedGlanceCard: View {
     private var cellsChip: Chip? {
         let model = viewModel.cellsModel
         guard case .ok = model.match, let display = model.display else { return nil }
-        let storms = CellsOverlay.routeStorms(display, route: viewModel.routeCoordinates).count
+        // No route geometry yet: nothing was measured against the route, so
+        // say nothing rather than "N storms within 20 NM".
+        let route = viewModel.routeCoordinates
+        guard route.count > 1 else { return nil }
+        let storms = CellsOverlay.routeStorms(display, route: route).count
         return Chip(text: CellsOverlay.stormsChipText(storms),
                     icon: storms == 0 ? "cloud" : "cloud.bolt",
                     tint: storms == 0 ? Theme.textMuted : Theme.primary)
@@ -402,12 +406,17 @@ struct ObservedCellsSection: View {
             }
         } else if case .ok = model.match, let display = model.display {
             if let badge = model.badge { muted(badge, font: .caption) }
-            let cells = CellsOverlay.routeStorms(display, route: viewModel.routeCoordinates)
+            let route = viewModel.routeCoordinates
+            let cells = CellsOverlay.routeStorms(display, route: route)
             let within = Int(CellsOverlay.listOffTrackNm.rounded())
+            // Without route geometry the list is every core, strongest first:
+            // it must not claim a distance it did not measure.
+            let measured = route.count > 1
             if cells.isEmpty {
-                muted("No storms within \(within) NM of the route")
+                muted(measured ? "No storms within \(within) NM of the route" : "No convective cores in the route box")
             } else {
-                muted("Storms within \(within) NM of the route, nearest first", font: .caption)
+                muted(measured ? "Storms within \(within) NM of the route, nearest first"
+                               : "Convective cores in the route box, strongest first", font: .caption)
                 let shown = showsAll ? cells : Array(cells.prefix(Self.compactCap))
                 ForEach(shown) { storm in
                     CellRow(cell: storm.cell, offTrackNm: storm.offTrackNm,
