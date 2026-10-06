@@ -576,9 +576,10 @@ def _after_arrival(group: list[SigmetAlongRoute], arrival_at: datetime | None) -
     limit = arrival_at + SIGMET_AFTER_ARRIVAL_MARGIN
     after = all(m.valid_from is not None and m.valid_from > limit for m in group)
     if after:
-        # Auditable: the plan's arrival is all the layer knows, so a slipped
-        # departure would make this demotion wrong (§40).
-        logger.info(
+        # The plan's arrival is all the layer knows, so a slipped departure
+        # would make this demotion wrong (§40). Debug: it repeats every tick;
+        # the audit trail is the row's tier in live_history.jsonl.
+        logger.debug(
             "Live SIGMET %s starts after planned arrival %s + margin: highlight, not alert",
             _group_label(group), f"{arrival_at:%H:%MZ}",
         )
