@@ -108,6 +108,13 @@ struct RouteMapKitView: UIViewRepresentable {
     /// it changes, so an altitude drag keeps an open callout.
     var cellsDisplayKey: String?
 
+    // MARK: Tap-to-map (#690)
+
+    /// A region to frame once, e.g. a storm tapped on the Observed tab. Applied
+    /// when `focusRegionKey` changes, so ordinary re-renders never move the map.
+    var focusRegion: MKCoordinateRegion?
+    var focusRegionKey = 0
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -164,6 +171,8 @@ struct RouteMapKitView: UIViewRepresentable {
         private var appliedMuted: Bool?
         /// Key of the cell overlay currently drawn (nil = none).
         private var renderedCellsKey: String?
+        /// The last tap-to-map focus framed (#690).
+        private var appliedFocusKey: Int?
         /// How long an old frame stays under its successor. MapKit gives no
         /// "all tiles loaded" signal (the web waits for Leaflet's `load`, capped
         /// at 10 s), so a fixed delay stops the map blanking once per radar cycle.
@@ -191,6 +200,15 @@ struct RouteMapKitView: UIViewRepresentable {
             updateWaypoints(on: map)
             updateActivePoint(on: map)
             updateAircraft(on: map)
+            updateFocus(on: map)
+        }
+
+        // MARK: Tap-to-map (#690)
+
+        private func updateFocus(on map: MKMapView) {
+            guard let region = parent.focusRegion, appliedFocusKey != parent.focusRegionKey else { return }
+            appliedFocusKey = parent.focusRegionKey
+            map.setRegion(map.regionThatFits(region), animated: true)
         }
 
         // MARK: Route overlays

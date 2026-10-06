@@ -83,6 +83,9 @@ struct FocusIntent: Equatable {
     /// Turn the map's experimental cell overlay (and reflectivity under it) on
     /// — the Observed tab's "Show on map" (#661).
     var showObservedCells = false
+    /// #690 tap-to-map: frame the map on this item's box with its layers on
+    /// (a storm → radar + cells, a SIGMET → its area, a station → its METAR).
+    var mapFocus: LiveFocus?
     /// Concrete advisory instance behind the lens (e.g. "vmc_cruise"), set only
     /// by advisory-card actions. Activates that advisory's cross-section
     /// highlight (scrim + verdict ribbon, #374) when the pack carries highlight
@@ -762,7 +765,13 @@ final class BriefingViewModel {
             observedConditions: snapshot.observedConditions,
             observedUpdatedAt: nil,
             changes: snapshot.liveChanges,
-            lastRefreshDelta: event.delta
+            lastRefreshDelta: event.delta,
+            // The refresh response carries no storms / nutshell / ribbon (#690):
+            // keep the last ones for this pack (each says its own "as of") until
+            // the next /live read brings fresh ones.
+            storms: samePack(liveLayer, timestamp) ? liveLayer?.storms : nil,
+            glance: samePack(liveLayer, timestamp) ? liveLayer?.glance : nil,
+            ribbon: samePack(liveLayer, timestamp) ? liveLayer?.ribbon : nil
         )
         liveLayer = layer
         if let caching = repository as? CachingBriefingRepository {
@@ -984,6 +993,20 @@ final class BriefingViewModel {
 
     /// "Since this briefing" changes on screen, nil when the pack carries no
     /// live layer (non-D-0, or no live data yet).
+    /// The adopted live layer, only while it belongs to the pack on screen
+    /// (#690): its nutshell and ribbon describe the latest pack, never an older
+    /// one the pilot is browsing.
+    var liveLayerForPack: LiveLayerResponse? {
+        guard let timestamp = pack?.fetchTimestamp, samePack(liveLayer, timestamp) else { return nil }
+        return liveLayer
+    }
+
+    private func samePack(_ layer: LiveLayerResponse?, _ timestamp: String) -> Bool {
+        guard let mine = layer?.packTimestamp.flatMap(Date.parseISO8601),
+              let theirs = Date.parseISO8601(timestamp) else { return false }
+        return LiveTime.sameInstant(mine, theirs)
+    }
+
     var liveChanges: LiveChanges? {
         if case .loaded(let snapshot) = snapshotState { return snapshot.liveChanges }
         return nil

@@ -9,8 +9,9 @@ Slice 2 (#688, PR #692) landed: per-storm route geometry in the tick,
 for `score-estimates`; thresholds not yet calibrated on a real-cell replay.
 Slice 3 server half (#690): `LiveLayer.glance` / `ribbon` / `focus` built in the
 tick, on `/live` and the agent `live` block (`tasks/live_glance.py`, as-built notes in
-`live-observation-layer.md`). iOS and web rendering (slice 4) not started; slice 5 not
-started. Builds on `designs/live-observation-layer.md`.
+`live-observation-layer.md`). Slice 4 iOS written in the same PR (nutshell, ribbon,
+tap-to-map, storm sheet; not yet compiled); the Layer 3 cells list still uses the
+client-side `CellsOverlay.routeStorms`. Web not started; slice 5 not started. Builds on `designs/live-observation-layer.md`.
 
 ## 1. Premise
 

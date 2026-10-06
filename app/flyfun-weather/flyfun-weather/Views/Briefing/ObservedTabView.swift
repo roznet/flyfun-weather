@@ -4,9 +4,11 @@ import SwiftUI
 /// order a pilot reads it in the cockpit — on the day, and in the aircraft,
 /// this is the screen the app is opened for (planning happens on a computer).
 ///
-/// 1. **At a glance** — departure / destination category from their latest
-///    METAR, the alert-tier changes, matched SIGMETs and convective cores near
-///    the route, with one button that opens the map with radar and cells on.
+/// 1. **At a glance** — the server's nutshell (#690: one line per phase plus
+///    the comparison with the briefing, each line opening the map on what it
+///    summarises) and the route ribbon. A layer without them (older server, a
+///    tick that could not build them) falls back to the departure /
+///    destination tiles and chips.
 /// 2. **Since this briefing** — the live layer's significant changes (#637).
 /// 3. **Radar & lightning now** — the server's per-source summary clauses
 ///    (#574), each with its own frame age; missing sources are named.
@@ -22,8 +24,17 @@ struct ObservedTabView: View {
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-                ObservedGlanceCard(viewModel: viewModel)
-                    .spyAnchor("glance")
+                if let glance = viewModel.liveLayerForPack?.glance, !glance.items.isEmpty {
+                    ObservedNutshellCard(viewModel: viewModel, glance: glance)
+                        .spyAnchor("glance")
+                    if let ribbon = viewModel.liveLayerForPack?.ribbon {
+                        RouteRibbonCard(viewModel: viewModel, ribbon: ribbon, storms: viewModel.liveLayerForPack?.storms)
+                            .spyAnchor("ribbon")
+                    }
+                } else {
+                    ObservedGlanceCard(viewModel: viewModel)
+                        .spyAnchor("glance")
+                }
                 if let liveChanges = viewModel.liveChanges {
                     LiveChangesView(changes: liveChanges, baseline: viewModel.liveBaselineDate)
                         .spyAnchor("live")
@@ -83,6 +94,9 @@ struct ObservedTabView: View {
 
     private var spySections: [SpySection] {
         var sections = [SpySection("glance", "Now")]
+        if !(viewModel.liveLayerForPack?.glance?.items.isEmpty ?? true), viewModel.liveLayerForPack?.ribbon != nil {
+            sections.append(SpySection("ribbon", "Route"))
+        }
         if viewModel.liveChanges != nil { sections.append(SpySection("live", "Changes")) }
         if observedConditions?.hasAnyField ?? false { sections.append(SpySection("radar", "Radar")) }
         if showsCells { sections.append(SpySection("cells", "Cells")) }
