@@ -1287,9 +1287,11 @@ final class flyfun_weatherUITests: XCTestCase {
             // Four ticks, each carrying something the others don't: 05:10 the
             // live-start baseline, 07:10 trails + cleared rows after the switch
             // to the briefing baseline, 08:30 the second cross-section reading,
-            // 09:00 a cancellation and a merged two-FIR NEW. 06:00 (a wind
-            // change — rows render kind-agnostically) and 10:20 (09:00's kinds
-            // again) were dropped; each tick is a full relaunch, ~45-75 s.
+            // 09:00 two merged NEW changes at once — LECB 3 + LECM 3, and the
+            // LECB 2 → 4 reissue shown as a replacement — three badges, two
+            // trails. 06:00 (a wind change — rows render kind-agnostically) and
+            // 10:20 (09:00's kinds again) were dropped; each tick is a full
+            // relaunch, ~45-75 s.
             "2026-10-02_lell_lemi", ticks: ["0510", "0710", "0830", "0900"],
             conditions: [
                 "0510": "1 SIGMET zone, 8 METAR columns",
