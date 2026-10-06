@@ -125,3 +125,12 @@ def test_tops_mixed_coverage_and_contradiction():
         "Cloud tops: none found at 1 of 2 points, unavailable at 1 of 2 points "
         "(radar echo of 35 dBZ or more, no cloud top found) (observed 14:10Z)."
     )
+
+
+def test_rain_rate_peak_says_where_it_is():
+    """The rain-rate line places its peak like the radar line (follow-up to #691)."""
+    rate = _radar({"ZZDP": 18.3, "ZZDS": None}, at={"max_at_nm": 7.6, "max_bearing_deg": 60.0})
+    rate = rate.model_copy(update={"quantity": "RATE"})
+    conditions = _conditions().model_copy(update={"rain_rate": rate})
+    line = next(line for line in build_summary(conditions) if line.startswith("Precip rate"))
+    assert line == "Precip rate to 18.3 mm/h (heavy) 8 NM NE of ZZDP (observed 14:10Z)."

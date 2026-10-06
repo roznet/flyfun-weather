@@ -204,8 +204,8 @@ def _rain_rate_clause(
     intensity = classify_rate(annulus.max_value)
     qualifier = f" ({intensity_label(intensity)})" if intensity else ""
     return (
-        f"Precip rate to {annulus.max_value:.1f} mm/h{qualifier} near "
-        f"{_where(station_id, by_station)} ({_age(field)}).",
+        f"Precip rate to {annulus.max_value:.1f} mm/h{qualifier} "
+        f"{_peak_place(station_id, annulus, by_station, widest)} ({_age(field)}).",
         intensity.value if intensity else "",
     )
 
