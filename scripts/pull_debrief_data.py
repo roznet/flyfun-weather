@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,20 +29,22 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from weatherbrief.eval_workbench import corpus  # noqa: E402
 
-PROD = "brice@161.35.35.15"
+sys.path.insert(0, str(Path(__file__).resolve().parent / "ops"))
+from hosts import server_values  # noqa: E402
 
 
 def dump_prod_debriefs() -> list[dict]:
     """SSH prod and dump flight_debriefs as JSON via the app container engine."""
+    prod = server_values("SERVER_SSH", "SERVER_PROJECT_DIR")
     remote = (
-        "cd flyfun-weather && docker compose exec -T weatherbrief python -c "
+        f"cd {prod['SERVER_PROJECT_DIR']} && docker compose exec -T weatherbrief python -c "
         "\"import json;from flyfun_common.db import get_engine;from sqlalchemy import text;"
         "e=get_engine();c=e.connect();"
         "rows=c.execute(text('SELECT flight_id,decision,reasons_json,outcomes_json,note FROM flight_debriefs')).mappings().all();"
         "print('JSON_START');print(json.dumps([dict(r) for r in rows]));print('JSON_END')\""
     )
     out = subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=15", PROD, remote],
+        ["ssh", "-o", "ConnectTimeout=15", prod["SERVER_SSH"], remote],
         check=True, capture_output=True, text=True, timeout=120,
     ).stdout
     cap, buf = False, []

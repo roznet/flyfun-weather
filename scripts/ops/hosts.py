@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Where everything is: the droplet, the compute nodes and this checkout.
 
-Reads the host inventory from deploy/hosts.json (gitignored; the tracked
+Reads the host inventory from deploy/hosts.json -- this checkout's, or in a
+worktree the main checkout's (gitignored; the tracked
 deploy/hosts.example.json documents every field), then resolves and checks the
 paths on each host. Nothing is cached: one ssh per host, every run.
 
@@ -54,7 +55,28 @@ import opscheck  # noqa: E402
 from opscheck import OK, PROBLEM, UNKNOWN, Check, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_HOSTS_FILE = REPO_ROOT / "deploy" / "hosts.json"
+
+
+def _default_hosts_file() -> Path:
+    """deploy/hosts.json here, else the main checkout's.
+
+    It is gitignored, so a sibling worktree has none of its own; reading main's
+    keeps a single inventory instead of copies that drift apart.
+    """
+    here = REPO_ROOT / "deploy" / "hosts.json"
+    if here.is_file():
+        return here
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"], cwd=REPO_ROOT, capture_output=True,
+                                text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return here
+    main = Path(common).parent / "deploy" / "hosts.json" if common else here
+    return main if main.is_file() else here
+
+
+DEFAULT_HOSTS_FILE = _default_hosts_file()
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
 
 SERVER_KEYS = [
@@ -183,6 +205,29 @@ def check_local(repo: Path = REPO_ROOT) -> Report:
         spec["env_optional"] = "cloud session: no .env by design"
     _merge(rep, opscheck.probe(spec), "LOCAL_")
     return rep
+
+
+def server_values(*required: str, hosts_file: Path = DEFAULT_HOSTS_FILE,
+                  runner=subprocess.run) -> dict[str, str]:
+    """Resolved, verified server values for other scripts -- or exit loudly.
+
+    One ssh, same checks as `hosts.py server`. Raises SystemExit naming the
+    first required key that did not resolve, so a script never runs an rsync or
+    ssh against a guessed path:
+
+        prod = server_values("SERVER_SSH", "HOST_DATA_DIR")
+    """
+    try:
+        rep = check_server(load_hosts(hosts_file), runner)
+    except ConfigError as exc:
+        raise SystemExit(f"hosts: {exc}") from None
+    for key in required:
+        if key not in rep.values:
+            bad = [c.line() for c in rep.checks if c.status in (PROBLEM, UNKNOWN)]
+            raise SystemExit(f"hosts: {key} did not resolve for {rep.title}:\n"
+                             + "\n".join(bad or ["  (no failing check -- unknown key?)"])
+                             + "\nrun `python3 scripts/ops/hosts.py server` for the full report")
+    return rep.values
 
 
 def build_reports(target: str, name: str | None, hosts_file: Path) -> list[Report]:

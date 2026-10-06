@@ -198,3 +198,20 @@ def test_cloud_session_without_inventory_says_so(tmp_path, monkeypatch, capsys):
 def test_example_inventory_is_valid():
     cfg = hosts.load_hosts(hosts.REPO_ROOT / "deploy" / "hosts.example.json")
     assert cfg["server"]["project_dir"] and cfg["nodes"][0]["lan_only"] is True
+
+
+def test_server_values_returns_verified_values_or_exits(tmp_path):
+    inv = tmp_path / "h.json"
+    inv.write_text(json.dumps({"server": {"ssh": "u@h", "project_dir": "p"}}))
+    ok = {"checks": [], "values": {"HOST_DATA_DIR": "/d"}}
+    v = hosts.server_values("SERVER_SSH", "HOST_DATA_DIR", hosts_file=inv,
+                            runner=_runner(stdout=json.dumps(ok)))
+    assert v["SERVER_SSH"] == "u@h" and v["HOST_DATA_DIR"] == "/d"
+    bad = {"checks": [{"name": "HOST_DATA_DIR", "status": "problem", "value": "/d",
+                       "evidence": "does not exist"}], "values": {}}
+    with pytest.raises(SystemExit, match="HOST_DATA_DIR did not resolve"):
+        hosts.server_values("HOST_DATA_DIR", hosts_file=inv,
+                            runner=_runner(stdout=json.dumps(bad)))
+    with pytest.raises(SystemExit, match="ssh"):
+        hosts.server_values("HOST_DATA_DIR", hosts_file=inv,
+                            runner=_runner(255, stderr="ssh: Connection refused"))

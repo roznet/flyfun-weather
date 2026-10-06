@@ -19,8 +19,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,8 +32,16 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from weatherbrief.eval_workbench import corpus  # noqa: E402
 from weatherbrief.eval_workbench.ingest import compact_corpus_pack  # noqa: E402
 
-PROD = "brice@161.35.35.15"
-PROD_DATA = "/mnt/flyfun_data/weather/data"
+sys.path.insert(0, str(Path(__file__).resolve().parent / "ops"))
+from hosts import server_values  # noqa: E402
+
+
+@functools.cache
+def _prod() -> tuple[str, str]:
+    """(ssh target, host data dir), resolved and checked from deploy/hosts.json."""
+    v = server_values("SERVER_SSH", "HOST_DATA_DIR")
+    return v["SERVER_SSH"], v["HOST_DATA_DIR"]
+
 # Heavy artifacts to recover (the derived/raw tier stripped from the local sync).
 HEAVY = (
     "cross_section.json",
@@ -81,7 +91,7 @@ def main() -> None:
             print(f"  ? {p.corpus_id}: no source path (skip)")
             skipped += 1
             continue
-        remote = f"{PROD}:{PROD_DATA}/{tail}/"
+        remote = f"{_prod()[0]}:{_prod()[1]}/{tail}/"
         print(f"  ↓ {p.corpus_id}")
         if args.dry_run:
             print(f"      rsync {remote} -> {pd}/  (files: {', '.join(HEAVY)})")

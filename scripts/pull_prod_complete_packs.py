@@ -18,8 +18,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -29,15 +31,23 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from weatherbrief.eval_workbench.ingest import ingest_pack  # noqa: E402
 
-PROD = "brice@161.35.35.15"
-PROD_DATA = "/mnt/flyfun_data/weather/data/packs"
+sys.path.insert(0, str(Path(__file__).resolve().parent / "ops"))
+from hosts import server_values  # noqa: E402
+
+
+@functools.cache
+def _prod() -> tuple[str, str]:
+    """(ssh target, host packs dir), resolved and checked from deploy/hosts.json."""
+    v = server_values("SERVER_SSH", "HOST_DATA_DIR")
+    return v["SERVER_SSH"], f"{v['HOST_DATA_DIR']}/packs"
 
 
 def list_prod_complete(min_age_days: int) -> list[str]:
     """Prod pack dirs (relative tails) with cross_section.json older than N days."""
+    prod, prod_data = _prod()
     cmd = [
-        "ssh", "-o", "ConnectTimeout=15", PROD,
-        f"find {PROD_DATA} -name cross_section.json -mtime +{min_age_days}",
+        "ssh", "-o", "ConnectTimeout=15", prod,
+        f"find {prod_data} -name cross_section.json -mtime +{min_age_days}",
     ]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120).stdout
     tails = []
@@ -46,7 +56,7 @@ def list_prod_complete(min_age_days: int) -> list[str]:
         if not line:
             continue
         # .../packs/<user>/<flight>/<ts>/cross_section.json -> <user>/<flight>/<ts>
-        rel = line.replace(f"{PROD_DATA}/", "").rsplit("/cross_section.json", 1)[0]
+        rel = line.replace(f"{prod_data}/", "").rsplit("/cross_section.json", 1)[0]
         tails.append(rel)
     return tails
 
@@ -81,7 +91,7 @@ def main() -> None:
             local.mkdir(parents=True, exist_ok=True)
             try:
                 subprocess.run(
-                    ["rsync", "-az", "--timeout=120", f"{PROD}:{PROD_DATA}/{tail}/", f"{local}/"],
+                    ["rsync", "-az", "--timeout=120", f"{_prod()[0]}:{_prod()[1]}/{tail}/", f"{local}/"],
                     check=True, capture_output=True, text=True, timeout=300,
                 )
                 cp = ingest_pack(local, area=args.area)

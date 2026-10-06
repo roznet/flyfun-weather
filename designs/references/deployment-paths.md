@@ -8,7 +8,9 @@ same runbook works for a fork or a second deployment. **`scripts/ops/hosts.py` r
 ## How to resolve
 
 Hosts come from `deploy/hosts.json` (gitignored — ssh targets are deployment-private;
-`deploy/hosts.example.json` is tracked and documents every field). The script reads it, then
+`deploy/hosts.example.json` is tracked and documents every field; a worktree reads the main
+checkout's copy, and the file is backed up in the private config repo next to `.env`). The
+script reads it, then
 checks each path **on the host itself** in one ssh per host:
 
 ```bash
