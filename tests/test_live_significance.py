@@ -942,3 +942,15 @@ def test_new_sigmets_not_computed_without_a_sigmet_baseline():
         latest_sigmets=_sigmets([_sig(3)]),
     )
     assert changes.new_sigmets is None
+
+
+def test_every_listed_sigmet_has_a_trace():
+    """new_sigmets reads a trace per listed SIGMET: _trace_sigmets must give
+    every one a trace, superseded predecessors included."""
+    _, memory = classify_changes(
+        baseline_obs=None, latest_obs=None, baseline_sigmets=_sigmets([LFMM_T01]),
+        latest_sigmets=_sigmets([LFMM_T01, LFMM_T02, LECB_4, _sig(3)]), now=_at(4, "1225"),
+    )
+    from weatherbrief.tasks.live_significance import _sigmet_key_str
+    for s in (LFMM_T01, LFMM_T02, LECB_4, _sig(3)):
+        assert _sigmet_key_str(s) in memory.sigmets

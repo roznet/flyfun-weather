@@ -1137,7 +1137,9 @@ def classify_changes(
         # the flight when its reissue chain did not start in the baseline.
         new_sigmets = sorted({
             k for k in (_sigmet_key_str(s) for s in latest_sigmets.sigmets)
-            if not sigmet_traces[k].chain_in_baseline
+            # Every listed SIGMET gets a trace; a missing one reads as new
+            # (the louder reading) rather than failing the tick.
+            if not getattr(sigmet_traces.get(k), "chain_in_baseline", False)
         })
     changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
     evaluated |= {"lightning:", "radar:"}
