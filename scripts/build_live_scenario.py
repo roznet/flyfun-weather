@@ -69,7 +69,9 @@ class _SigmetSource:
     def __init__(self, reports) -> None:
         self._reports = reports
 
-    def fetch_isigmet(self, region="eur", hazard=None, level=None, date=None):
+    def fetch_isigmet(self, region="eur", hazard=None, level=None, date=None, lookahead=None):
+        # The reports are already the ones issued by the tick: pending SIGMETs
+        # (#683) included, so the lookahead needs no separate query here.
         return list(self._reports)
 
 
