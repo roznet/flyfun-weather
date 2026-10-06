@@ -5108,7 +5108,9 @@ came from two parsing bugs and two kinds of noise.
     When it started from one that was itself new since the briefing, the row
     keeps that alert tier but **does not alert again**: the SIGMET is still
     not in the briefing, so it stays in the alert list, but push (#638) gets
-    one alert per phenomenon. A reissue that now reaches the destination
+    one alert per phenomenon. "Already alerted" is tracked on the chain
+    (`chain_alerted`): when the predecessor never had a row of its own (T01
+    and T02 both first seen on one tick), the reissue alerts once. A reissue that now reaches the destination
     (25 NM, §35) when its predecessor did not alerts afresh.
   - **Escalation to SEV is not a reissue** (the qualifier differs): it is a
     "New SEV SIGMET" alert, and the predecessor's "no longer active" shows.

@@ -122,6 +122,10 @@ class LiveSigmetTrace(BaseModel):
     replaces_key: str | None = None
     replaces_label: str | None = None
     replaced_at_destination: bool = False
+    # An alert-tier row of this chain has been shown, so a later reissue
+    # does not alert again. False on layers written before the field: the
+    # next reissue then alerts once (the safe side).
+    chain_alerted: bool = False
     fir_id: str
     hazard: str | None = None
     qualifier: str | None = None
