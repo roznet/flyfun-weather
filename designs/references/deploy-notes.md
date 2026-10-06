@@ -9,8 +9,9 @@ deploy.
 
 ## Placeholders
 
-`<user>@<server>`, `<project-dir>`, the `HOST_*` paths and the `<node.*>` compute-node fields
-are resolved per **`designs/references/deployment-paths.md`**.
+`<SERVER_SSH>`, `<SERVER_PROJECT_DIR>`, the `HOST_*` paths and the `<node.*>` compute-node fields
+are resolved by **`scripts/ops/hosts.py`** from `deploy/hosts.json` (meaning and traps:
+`designs/references/deployment-paths.md`).
 
 Relevant to the airport-DB step in particular: `AIRPORTS_DB` in the server's `.env` is a
 **container** path, while `scp` needs the host-side location under `HOST_DATA_DIR`. That
@@ -105,7 +106,7 @@ Suggested wording:
 > this is expected when deploying from outside its network. Its version could not be checked
 > and it **will not be updated by this deploy** — it keeps running whatever code it has, which
 > remains safe to ingest. Update it manually next time you are on that network:
-> `ssh <node.ssh> "cd <node.repo> && git pull --ff-only"`
+> `ssh <NODE_SSH> "cd <NODE_REPO> && git pull --ff-only"`
 
 Never report a deploy as fully complete while a configured node was skipped. Say production is
 deployed *and* name the nodes left behind.

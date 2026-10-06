@@ -27,7 +27,7 @@ source venv/bin/activate   # always, from main/
 
 ## Recipe: pull complete packs from prod
 
-Local `data/packs` is often a partial sync (no heavy files); **prod keeps full packs**. Prod: `ssh <user>@<server>`; packs live at `<HOST_DATA_DIR>/packs`. Resolve both per `designs/references/deployment-paths.md` (anchor the grep with `^HOST_` — a bare `DATA_DIR` is the container path).
+Local `data/packs` is often a partial sync (no heavy files); **prod keeps full packs**. Prod: `ssh <SERVER_SSH>`; packs live at `<HOST_DATA_DIR>/packs`. Resolve both with `python3 scripts/ops/hosts.py server` (checked on the droplet; meaning of each value in `designs/references/deployment-paths.md`).
 
 ```bash
 # Complete packs older than N days (prod keeps these past T1 only for DEBRIEFED flights):
@@ -49,7 +49,7 @@ python scripts/pull_debrief_data.py          # ssh-dumps prod debriefs, attaches
 Sets `corpus_meta.debriefed`/`debrief_decision`/`debrief_graded` (graded = has reasons or outcomes).
 Dump prod debriefs manually (engine raw SQL — SessionLocal needs binding):
 ```bash
-ssh <user>@<server> 'cd <project-dir> && docker compose exec -T weatherbrief python -c "
+ssh <SERVER_SSH> 'cd <SERVER_PROJECT_DIR> && docker compose exec -T weatherbrief python -c "
 import json; from flyfun_common.db import get_engine; from sqlalchemy import text
 print(json.dumps([dict(r) for r in get_engine().connect().execute(text(\"SELECT * FROM flight_debriefs\")).mappings()]))"'
 ```

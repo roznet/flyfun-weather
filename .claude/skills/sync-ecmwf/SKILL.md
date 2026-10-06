@@ -16,12 +16,15 @@ Pull the latest complete ECMWF run from `weather.flyfun.aero` into the local `EC
 ## Constants
 
 Nothing here is hardcoded, so the recipe works for a fork or a second deployment. Resolve
-`<user>@<server>` and `<project-dir>` per `designs/references/deployment-paths.md`, then:
+both ends once, and use the printed values wherever this skill says `<NAME>`:
 
-| Placeholder | Resolve from |
-|---|---|
-| `<server-ecmwf-dir>` | **`HOST_ECMWF_GRIB_DIR`** in the server's `.env` — `ssh <user>@<server> "grep '^HOST_ECMWF_GRIB_DIR=' <project-dir>/.env \| cut -d= -f2"` |
-| `$DEST` | Local destination — `ECMWF_GRIB_DIR` in this checkout's `.env` (see step 1) |
+```bash
+python3 scripts/ops/hosts.py server      # <SERVER_SSH>, <HOST_ECMWF_GRIB_DIR>
+python3 scripts/ops/hosts.py local       # <LOCAL_ECMWF_GRIB_DIR> (step 1)
+```
+
+Stop if `<HOST_ECMWF_GRIB_DIR>` did not resolve — an empty rsync source is exactly the
+failure this avoids.
 
 > Mind the two variable names: the **server** side is `HOST_ECMWF_GRIB_DIR`, the **local** side
 > is `ECMWF_GRIB_DIR`. This recipe touches both ends, so grepping the wrong one on the wrong
@@ -31,8 +34,11 @@ Nothing here is hardcoded, so the recipe works for a fork or a second deployment
 
 ### 1. Resolve destination
 
+`DEST` is `<LOCAL_ECMWF_GRIB_DIR>` from `hosts.py local`. If it reported `ECMWF_GRIB_DIR`
+as `skip` (not set) or `problem` (set, but the dir doesn't exist yet), fall back as below:
+
 ```bash
-DEST=$(grep -E '^ECMWF_GRIB_DIR=' .env | cut -d= -f2-)
+DEST="<LOCAL_ECMWF_GRIB_DIR>"   # or empty when hosts.py did not resolve it
 if [ -z "$DEST" ]; then
   DEST=~/tmp/ecmwf/data
   echo "note: ECMWF_GRIB_DIR is not set in .env — using default $DEST"
@@ -46,7 +52,7 @@ mkdir -p "$DEST"
 If `--run` was provided, use it. Otherwise, list complete sentinels on prod and take the latest:
 
 ```bash
-ssh <user>@<server> "cd <server-ecmwf-dir> && ls -1 .ready_*z 2>/dev/null | sort | tail -1"
+ssh <SERVER_SSH> "cd <HOST_ECMWF_GRIB_DIR> && ls -1 .ready_*z 2>/dev/null | sort | tail -1"
 ```
 
 The sentinel filename is `.ready_YYYYMMDD_HHz` (no `.partial` suffix — partial runs are skipped). Strip the `.ready_` prefix to get the run tag (e.g. `20260426_00z`), then convert to the GRIB filename run timestamp:
@@ -79,7 +85,7 @@ rsync -av --stats ${DRY_RUN:+-n} \
   --include=".ready_${TAG}" \
   --include="delivery_config.json" \
   --exclude='*' \
-  <user>@<server>:<server-ecmwf-dir>/ \
+  <SERVER_SSH>:<HOST_ECMWF_GRIB_DIR>/ \
   "$DEST/"
 ```
 
@@ -179,5 +185,5 @@ For an existing pack, look in fetch_meta.json for an 'ECMWF GRIB enrichment appl
 - **Pattern anchoring**: `brg_*_<RUN_TS>_*` matches both the init time and the valid time positions. Always include `_fc_` before the run timestamp to anchor correctly.
 - **`.partial` sentinels**: written when ECPDS delivery times out. The skill ignores them by default — partial runs should not be promoted to dev unless the user passes `--run` explicitly with a `.partial` tag.
 - **Disk usage**: step 6 offers to clean runs whose sentinel is >24h old, but only with explicit user confirmation and never the run just synced. Orphan grib files (no matching `.ready_*` sentinel) are reported but not auto-deleted — clean them by hand if needed.
-- **Network**: ~9 MB/s observed in initial test — droplet uplink, not local — so 2 GB takes ~4 min. If it's noticeably slower, check `ssh <user>@<server> 'iftop'` or just wait.
+- **Network**: ~9 MB/s observed in initial test — droplet uplink, not local — so 2 GB takes ~4 min. If it's noticeably slower, check `ssh <SERVER_SSH> 'iftop'` or just wait.
 - **rsync exit 24**: "some files vanished" — happens when the watcher deletes a file mid-transfer. Not fatal for our purposes as long as the run files all came through; verify with the file-count check in step 5.

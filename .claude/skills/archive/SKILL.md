@@ -404,17 +404,18 @@ Pre-flight:
 3. Check the category is deployed: `app_release` reached prod in `44284321`. If prod predates
    that commit, `import` rejects the unknown category — deploy first.
 
-Publish (`-` reads stdin, because `release-notes/` is not in the container image):
+Publish (`-` reads stdin, because `release-notes/` is not in the container image).
+`<SERVER_SSH>` comes from `python3 scripts/ops/hosts.py server`:
 
 ```bash
-ssh <user>@<server> "docker exec -i weatherbrief python -m weatherbrief.release import -" \
+ssh <SERVER_SSH> "docker exec -i weatherbrief python -m weatherbrief.release import -" \
   < release-notes/ios-{version}.json
 ```
 
 Confirm it landed, and that the iOS app sees it:
 
 ```bash
-ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.release list" | head
+ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.release list" | head
 curl -s https://weather.flyfun.aero/api/messages | head -c 400
 ```
 
@@ -426,6 +427,6 @@ If this is the first `app_release` entry on prod, also import the historical bac
 stream reads as a complete app history rather than starting mid-way:
 
 ```bash
-ssh <user>@<server> "docker exec -i weatherbrief python -m weatherbrief.release import - \
+ssh <SERVER_SSH> "docker exec -i weatherbrief python -m weatherbrief.release import - \
   --force-no-highlight" < release-notes/ios-backfill.json
 ```

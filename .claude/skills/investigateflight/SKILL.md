@@ -37,23 +37,21 @@ If the dev server is running, the API can find the latest timestamp:
 curl -s http://localhost:8000/api/flights/{flight_id}/packs/latest | python -m json.tool
 ```
 
-**Production flight** — rsync the pack to a local scratch directory and work locally. Resolve
-`<user>@<server>` and `<project-dir>` per `designs/references/deployment-paths.md`.
-
-Pack data does **not** live under the project directory on the server, so find the real path
-first. Anchor the grep with `^HOST_` — a bare `DATA_DIR` match returns the *container* path
-(`/app/data`), which is not usable over plain ssh:
+**Production flight** — rsync the pack to a local scratch directory and work locally. Pack
+data does **not** live under the project directory on the server (and the server's `DATA_DIR`
+is a container path), so resolve the host-side paths first:
 
 ```bash
-ssh <user>@<server> "grep '^HOST_DATA_DIR=' <project-dir>/.env | cut -d= -f2"
+python3 scripts/ops/hosts.py server      # <SERVER_SSH>, <HOST_DATA_DIR>
+python3 scripts/ops/hosts.py local       # <LOCAL_DATA_DIR> for {DATA_DIR} below
 ```
 
-Then use that value (`{HOST_DATA_DIR}`) — the `user_id` segment varies, so wildcard it:
+Then use those values — the `user_id` segment varies, so wildcard it:
 
 ```bash
-ssh <user>@<server> "ls {HOST_DATA_DIR}/packs/*/{flight_id}/"
+ssh <SERVER_SSH> "ls <HOST_DATA_DIR>/packs/*/{flight_id}/"
 
-rsync -avz <user>@<server>:{HOST_DATA_DIR}/packs/\*/{flight_id}/ \
+rsync -avz <SERVER_SSH>:<HOST_DATA_DIR>/packs/\*/{flight_id}/ \
   {DATA_DIR}/packs/debug/{flight_id}/
 ```
 

@@ -5,7 +5,7 @@
     "",
     "Copy to deploy/mysql-baseline.json and fill in real values. That file is",
     "gitignored because container names, host paths and tuning values are",
-    "deployment-specific — this repo is public. Same pattern as compute-nodes.json.",
+    "deployment-specific — this repo is public. Same pattern as hosts.json.",
     "",
     "The AUTHORITATIVE source of these settings is the private infra repo that owns",
     "the MySQL compose stack. This file is a check-against baseline, not a deploy",
@@ -18,7 +18,7 @@
   "database": "weatherbrief",
 
   "datadir_container": "/var/lib/mysql",
-  "datadir_host": "/mnt/<data-volume>/mysql",
+  "datadir_host": "/mnt/<DATA_VOLUME>/mysql",
 
   "_persisted_config_comment": [
     "mysqld-auto.cnf lives in the datadir and is the ONLY home for any setting not",

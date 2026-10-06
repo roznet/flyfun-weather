@@ -251,7 +251,7 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `deploy/weather.flyfun.aero.caddy`, `deploy/mcp.flyfun.aero-weather.caddy` | Reference Caddy sites (headers, CSP, `.well-known` responders) |
 | `deploy/maintenance.caddy` | Swap-in site file for maintenance windows |
 | `deploy/03-create-weatherbrief-db.sql` | MySQL database + user creation template |
-| `deploy/compute-nodes.json`, `deploy/mysql-baseline.json` | Deployment-private inventories (gitignored; `.example.json` siblings are tracked and document the fields) |
+| `deploy/hosts.json`, `deploy/mysql-baseline.json` | Deployment-private inventories (gitignored; `.example.json` siblings are tracked and document the fields) |
 | `alembic.ini` + `alembic/` | Schema migrations (prod only) |
 
 ### Environment variables
@@ -292,7 +292,7 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 ## References
 
 - Server infra: `~/Developer/private/digitalocean/CLAUDE.md` (also the source of truth for deployed Caddy files)
-- Resolving hosts/paths in runbooks: [references/deployment-paths.md](./references/deployment-paths.md)
+- Resolving hosts/paths in runbooks: `scripts/ops/hosts.py`, explained in [references/deployment-paths.md](./references/deployment-paths.md)
 - Briefing notifications (push/email/badge semantics): [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md)
 - Architecture: [architecture.md](./architecture.md)
 - Data models: [data-models.md](./data-models.md)

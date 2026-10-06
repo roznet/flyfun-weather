@@ -16,13 +16,21 @@ if the user gives one (e.g. "since 07:00 UTC").
 
 ## Before you start
 
-Resolve `<user>@<server>`, `<data-volume>`, `<shared-infra-dir>` and `<project-dir>` per
-`designs/references/deployment-paths.md` — once, at the start, then reuse. That doc has a
-one-shot snippet that pulls all of them.
+Resolve hosts and paths once, at the start, and use the printed values wherever this skill
+says `<NAME>`:
 
-**`<data-volume>` is the mount point, not `HOST_DATA_DIR`.** Every disk band in §9 gauges the
-volume; the data dir lives a couple of levels inside it. Derive it:
-`ssh <user>@<server> "df -P '<HOST_DATA_DIR>' | tail -1 | awk '{print \$6}'"`.
+```bash
+python3 scripts/ops/hosts.py server
+```
+
+It gives `<SERVER_SSH>`, `<SERVER_PROJECT_DIR>`, `<HOST_DATA_DIR>` and `<DATA_VOLUME>`, each
+checked on the droplet. Its `container` line is already a first health signal. Exit 2 (ssh
+failed) means you cannot run this check at all — say so rather than reporting a verdict.
+`<shared-infra-dir>` and `<mysql-container>` are not in it — see
+`designs/references/deployment-paths.md`.
+
+**`<DATA_VOLUME>` is the mount point, not `HOST_DATA_DIR`.** Every disk band in §9 gauges the
+volume; the data dir lives a couple of levels inside it. `hosts.py` derives it from the data dir.
 
 Interpretation data lives in `designs/references/production-health.md`. **Read the sections you
 need, not the whole file** — a targeted check usually needs two or three:
@@ -69,10 +77,10 @@ ssh in and run `iostat -xm 5 3` to rule out disk before assuming GIL.
 ## 2. Container state + host pressure
 
 ```bash
-ssh <user>@<server> "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' && echo --- \
+ssh <SERVER_SSH> "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' && echo --- \
   && docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' \
   && echo --- && free -h && echo --- && uptime \
-  && echo --- && df -h / <data-volume>"
+  && echo --- && df -h / <DATA_VOLUME>"
 ```
 
 Check all containers are `(healthy)`, and read `weatherbrief` memory against the 6 GiB cgroup.
@@ -82,7 +90,7 @@ pool reads low while the config is still correct. Confirm the setting with the c
 form from §10 (don't put the password on the command line):
 
 ```bash
-ssh <user>@<server> "docker exec <mysql-container> sh -c \
+ssh <SERVER_SSH> "docker exec <mysql-container> sh -c \
   'mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -t -e \"\$1\"' _ \
   \"SELECT @@global.innodb_buffer_pool_size\""
 ```
@@ -93,7 +101,7 @@ For host swap, attribute it before judging (§L2, §L10) — production parks mm
 pages there under pressure, and cold pages accumulate on a long-uptime box:
 
 ```bash
-ssh <user>@<server> "for f in /proc/*/status; do \
+ssh <SERVER_SSH> "for f in /proc/*/status; do \
   awk '/^Name:/{n=\$2}/^VmSwap:/{if(\$2>50000) print \$2\" kB  \"n}' \$f 2>/dev/null; \
   done | sort -rn | head -12"
 ```
@@ -103,7 +111,7 @@ Single-digit MB free Mem is fine if buff/cache is large — what matters is `ava
 ## 3. Recent errors & warnings
 
 ```bash
-ssh <user>@<server> \
+ssh <SERVER_SSH> \
   "docker logs --since <window> weatherbrief 2>&1 \
    | grep -iE 'error|exception|traceback|killed|oom|fatal|critical|broken|stuck|warning' \
    | grep -vE '\.env HTTP|error_log\.php|joomla|wp-admin|wp-login|/\.git/|xmlrpc|phpinfo|setup\.php' \
@@ -126,7 +134,7 @@ Quick bucketing once you have the filtered log:
 supplied an admin token, skip this and rely on the log greps — don't fish for a token on disk.
 
 ```bash
-ssh <user>@<server> \
+ssh <SERVER_SSH> \
   "curl -s -H 'Cookie: flyfun_auth=<admin-token>' \
    http://127.0.0.1:8020/api/admin/metrics | python3 -m json.tool | head -40"
 ```
@@ -137,7 +145,7 @@ ssh <user>@<server> \
 **4b. Pipeline timing.**
 
 ```bash
-ssh <user>@<server> "docker logs --since <window> weatherbrief 2>&1 \
+ssh <SERVER_SSH> "docker logs --since <window> weatherbrief 2>&1 \
   | grep -E 'Pipeline timing:|Auto-refresh (completed|failed|skipping)|Background refresh complete|QueueFullError|Briefing refresh queued'"
 ```
 
@@ -152,7 +160,7 @@ ssh <user>@<server> "docker logs --since <window> weatherbrief 2>&1 \
 ## 5. GRIB ProcessPool
 
 ```bash
-ssh <user>@<server> "docker logs --since <window> weatherbrief 2>&1 \
+ssh <SERVER_SSH> "docker logs --since <window> weatherbrief 2>&1 \
   | grep -E 'GRIB decode pool stuck|BrokenProcessPool|GRIB2 enrichment:|No .* GRIB2 data retrieved'"
 ```
 
@@ -170,7 +178,7 @@ flavours, the `(pooled)` check, cache-rebuild breakdown, and the equivalence che
 Ground truth is the DB, not the logs (the import is quiet in `docker logs`):
 
 ```bash
-ssh <user>@<server> "docker exec weatherbrief python -c \"
+ssh <SERVER_SSH> "docker exec weatherbrief python -c \"
 from weatherbrief.db import get_engine
 from sqlalchemy import text
 with get_engine().connect() as c:
@@ -186,7 +194,7 @@ delivering** — check it is reachable and that its cycle ran.
 Then grep the cycle's footprint:
 
 ```bash
-ssh <user>@<server> "docker logs --since 24h weatherbrief 2>&1 \
+ssh <SERVER_SSH> "docker logs --since 24h weatherbrief 2>&1 \
   | grep -E 'Standalone .* cycle:|Standalone cycle peaks:|Standalone cycle RSS @|Standalone cycle memory anomaly|Recorded failed .* cycle|Memory anomaly check failed|ECMWF a. decode failed|Cache rebuild:|ECMWF GRIB leg:|get_digest_data|analyzed [0-9]+ snapshots|\(pooled\)|GRIB decode pool (started|shut down)|force-terminated'"
 ```
 
@@ -197,7 +205,7 @@ and fires routinely without indicating a problem. Drill into `peak_rss` to decid
 ## 7. RSS growth & memory hygiene
 
 ```bash
-ssh <user>@<server> "docker logs --since 24h weatherbrief 2>&1 \
+ssh <SERVER_SSH> "docker logs --since 24h weatherbrief 2>&1 \
   | grep -E 'Memory high-water mark crossed|Memory curve:|Memory after .*: rss=|MemorySampler tick failed'"
 ```
 
@@ -208,7 +216,7 @@ with no plateau is a leak signature — but read §L4 first, the random walk is 
 ## 8. Model & chart upstream health
 
 ```bash
-ssh <user>@<server> "docker logs --since <window> weatherbrief 2>&1 \
+ssh <SERVER_SSH> "docker logs --since <window> weatherbrief 2>&1 \
   | grep -E 'Failed to fetch metadata for|Failed to fetch .*: |returned no values|AvWx fetch failed|DWD chart fetch failed'"
 ```
 
@@ -218,9 +226,9 @@ reference so you only flag departures from baseline.
 ## 9. Storage & retention
 
 ```bash
-ssh <user>@<server> "du -sh <data-volume>/* 2>/dev/null | sort -h && \
-  echo --- && du -sh <data-volume>/weather/data/.??* <data-volume>/weather/data/*/ 2>/dev/null | sort -h && \
-  echo --- && du -sh <data-volume>/weather/data/.cache/grib/*/ 2>/dev/null"
+ssh <SERVER_SSH> "du -sh <DATA_VOLUME>/* 2>/dev/null | sort -h && \
+  echo --- && du -sh <DATA_VOLUME>/weather/data/.??* <DATA_VOLUME>/weather/data/*/ 2>/dev/null | sort -h && \
+  echo --- && du -sh <DATA_VOLUME>/weather/data/.cache/grib/*/ 2>/dev/null"
 ```
 
 Note the `.??*` glob — `.cache` is dotfile-hidden and a plain `*` silently misses ~70 GB of
@@ -230,9 +238,9 @@ that's out of band, not the total**.
 Pack growth (the actual long-term driver — only `packs/` and `mysql/` grow monotonically):
 
 ```bash
-ssh <user>@<server> "du -sh <data-volume>/weather/data/packs && \
-  ls <data-volume>/weather/data/packs | wc -l && echo pack_flight_dirs && \
-  find <data-volume>/weather/data/packs -maxdepth 2 -type d -mtime +30 2>/dev/null | wc -l && echo dirs_older_than_T1"
+ssh <SERVER_SSH> "du -sh <DATA_VOLUME>/weather/data/packs && \
+  ls <DATA_VOLUME>/weather/data/packs | wc -l && echo pack_flight_dirs && \
+  find <DATA_VOLUME>/weather/data/packs -maxdepth 2 -type d -mtime +30 2>/dev/null | wc -l && echo dirs_older_than_T1"
 ```
 
 Retention: `RETENTION_T1_DAYS=30` (strip heavy artifacts), `RETENTION_T2_ACTIVE_DAYS=180` /
@@ -242,7 +250,7 @@ shrinking, T1 stripping isn't recovering bytes. Use the §L9 headroom math for t
 MySQL size + binlogs (treat data and logs separately):
 
 ```bash
-ssh <user>@<server> \
+ssh <SERVER_SSH> \
   'docker exec <mysql-container> sh -c "du -sh /var/lib/mysql/weatherbrief && \
    ls -lh /var/lib/mysql/weatherbrief/*.ibd 2>/dev/null | sort -k5 -h | tail -6 && \
    echo --- && du -ch /var/lib/mysql/binlog.0000* 2>/dev/null | tail -1 && \
@@ -256,7 +264,7 @@ skews any `tail -1`. Flag when binlogs span >40 days, the app DB exceeds 8 GB, o
 Retention loop alive?
 
 ```bash
-ssh <user>@<server> "docker logs --since 48h weatherbrief 2>&1 \
+ssh <SERVER_SSH> "docker logs --since 48h weatherbrief 2>&1 \
   | grep -E 'Retention applied:|Purged .* GRIB cache|Age-evicted .* DWD|Raw retention: pruned|Retention cycle failed|GRIB cache purge failed|ECMWF delivery purge failed'"
 ```
 
@@ -276,7 +284,7 @@ own environment — this form keeps it out of your shell history, the process li
 log of this session:
 
 ```bash
-ssh <user>@<server> "docker exec <mysql-container> sh -c \
+ssh <SERVER_SSH> "docker exec <mysql-container> sh -c \
   'mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -t -e \"\$1\"' _ \"<SQL>\""
 ```
 
@@ -299,7 +307,7 @@ Non-default values live **only** in `mysqld-auto.cnf` inside the datadir, which 
 volume and in no repo. Confirm what is actually persisted:
 
 ```bash
-ssh <user>@<server> "docker exec <mysql-container> cat /var/lib/mysql/mysqld-auto.cnf" \
+ssh <SERVER_SSH> "docker exec <mysql-container> cat /var/lib/mysql/mysqld-auto.cnf" \
   | python3 -m json.tool
 ```
 
@@ -318,7 +326,7 @@ Confirm it is on, then read it. The filename must be an explicit stable path; if
 `slow_query_log_file` matches `<hostname>-slow.log` the deployment is exposed to §L13.
 
 ```bash
-ssh <user>@<server> "docker exec <mysql-container> sh -c \
+ssh <SERVER_SSH> "docker exec <mysql-container> sh -c \
   'tail -c 20000 /var/lib/mysql/slow.log' " | grep -E '^# (Time|Query_time)|^SELECT|^INSERT|^UPDATE'
 ```
 
@@ -375,7 +383,7 @@ standalone: last cycle <time> ago, T min, peak_rss <N> MB            (ok|warn)
 grib pool:  K resets in window                                       (ok|note)
 rss:        no new HWM steps   (or "+N MB step at <ts>")             (ok|note)
 upstream:   M Open-Meteo 502s, K AvWx, L DWD                         (ok|note)
-disk total: <data-volume> X% of 199 GB (band ~62–78%)                (ok|warn)
+disk total: <DATA_VOLUME> X% of 199 GB (band ~62–78%)                (ok|warn)
 caches:     icon-d2 N GB, icon-eu N GB, gfs N GB, ecmwf N GB         (ok|warn if out-of-band)
 growing:    packs N GB / F flights, mysql data N GB, binlogs N GB    (ok|note|warn)
 retention:  Retention applied (last <time>); GRIB purge alive        (ok|warn if missing)

@@ -9,11 +9,11 @@ Read the section the skill points you at; you rarely need the whole file.
 
 ## Placeholders
 
-`<user>@<server>`, `<data-volume>`, `<shared-infra-dir>`, `<admin-token>` and the compute-node
-fields are all resolved per **`designs/references/deployment-paths.md`** — resolve them once at
-the start of the check and reuse.
+`<SERVER_SSH>`, `<DATA_VOLUME>`, `<shared-infra-dir>`, `<admin-token>` and the compute-node
+fields are resolved by **`scripts/ops/hosts.py`** (meaning and traps:
+`designs/references/deployment-paths.md`) — resolve them once at the start of the check and reuse.
 
-Two traps that doc covers and that matter here specifically: `<data-volume>` is the **mount
+Two traps that doc covers and that matter here specifically: `<DATA_VOLUME>` is the **mount
 point**, not `HOST_DATA_DIR` (the disk bands below gauge the volume, so using the data dir
 measures the wrong thing), and `DATA_DIR` in the server's `.env` is a *container* path.
 
@@ -164,7 +164,7 @@ On this droplet the binary is `docker compose` (two words).
 The data volume splits into **rotating** (bounded by TTL) and **growing** (bounded only by
 retention, or nothing):
 
-| Component | Path (under `<data-volume>`) | Type | Expected band | Notes |
+| Component | Path (under `<DATA_VOLUME>`) | Type | Expected band | Notes |
 |---|---|---|---|---|
 | **ICON-D2 GRIB cache** | `weather/data/.cache/grib/icon-d2/` | rotating | **30–45 GB** | 6 h TTL, 8 runs/day. Hard cap **45 GiB** (`_DEFAULT_CACHE_CAP_GIB`), oldest-init-first eviction with a 2-run floor. Override via `WB_GRIB_CACHE_CAP_GB_ICON_D2`. Cap is binary GiB, `du` reports decimal GB. Largest single component — check it first when disk moves. |
 | ICON-EU GRIB cache | `weather/data/.cache/grib/icon-eu/` | rotating | **30–50 GB** | 12 h TTL × ~4 runs/window × ~10 GB/run. Uncapped. Logs `Purged N old icon-eu GRIB cache dirs` only when N>0. |
@@ -273,7 +273,7 @@ Judge the log by **what is new**, not by volume. Known-and-understood fingerprin
 ## Standalone cycle detail
 
 The heavy forecast work runs on a **compute node**, which emits a SQLite artifact into
-`<data-volume>/weather/snapshot_inbox/` that the droplet imports. Ground truth is the DB, not
+`<DATA_VOLUME>/weather/snapshot_inbox/` that the droplet imports. Ground truth is the DB, not
 the logs — the import is quiet in `docker logs`.
 
 The local `standalone_forecast` path still exists as a fallback but is a **cold path**: the

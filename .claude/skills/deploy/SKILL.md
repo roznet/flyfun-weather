@@ -6,10 +6,17 @@ disable-model-invocation: true
 
 # Deploy weatherbrief to production
 
-Resolve `<user>@<server>`, `<project-dir>` and the `HOST_*` paths per
-`designs/references/deployment-paths.md` — once, up front. Note that `AIRPORTS_DB` in the
-server's `.env` is a *container* path while `scp` needs the host-side file under
-`HOST_DATA_DIR`; the airport-DB step below resolves both separately for that reason.
+Resolve every host and path **once, up front**, and use the printed values wherever this
+skill says `<NAME>`:
+
+```bash
+python3 scripts/ops/hosts.py all
+```
+
+It reads `deploy/hosts.json` and checks each path on the host itself (meaning of each value
+and the traps behind them: `designs/references/deployment-paths.md`). Exit 1 or a `problem`
+line on the **server** → stop and report it; the deploy needs those values. A node line that
+is `unknown` or `problem` does not block — it feeds the compute-node section below.
 
 Background for anything that deviates from the happy path is in
 `designs/references/deploy-notes.md` (§D1–§D11). Read the section a step points you at; the
@@ -21,7 +28,7 @@ procedure below is complete on its own for a normal deploy.
 > is **server's commit → `origin/main`**, never local working tree → `origin/main`. The two
 > anchors used throughout:
 > - `LOCAL_SHA` = `git rev-parse origin/main` (after fetch) — what we will deploy
-> - `SERVER_SHA` = `ssh <user>@<server> "cd <project-dir> && git rev-parse HEAD"` — what runs now
+> - `SERVER_SHA` = `ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && git rev-parse HEAD"` — what runs now
 >
 > Use these everywhere a comparison is needed. Two traps this avoids are in §D2.
 
@@ -124,7 +131,7 @@ table the pending migrations touch, and runs them for real:
 ```bash
 source venv/bin/activate
 python .claude/skills/deploy/mysql_migration_check.py --from-rev "$(
-  ssh <user>@<server> "docker exec weatherbrief alembic current 2>/dev/null" | tail -1 | awk '{print $1}'
+  ssh <SERVER_SSH> "docker exec weatherbrief alembic current 2>/dev/null" | tail -1 | awk '{print $1}'
 )"
 ```
 
@@ -144,7 +151,7 @@ database is dropped on the way out, including when the check fails.
 ## Disk usage check
 
 ```bash
-ssh <user>@<server> "df -h /"
+ssh <SERVER_SSH> "df -h /"
 ```
 
 At **80 % or higher**, warn and offer `docker builder prune -a -f` (ask before running it,
@@ -156,18 +163,16 @@ The airport/navaid database (`nav.db`, built by the `euro_aip` submodule inside 
 copied to the server when updated. Both dev and prod point `AIRPORTS_DB` at `nav.db`. Compare
 `model_metadata` timestamps to detect staleness.
 
-**Local** (expand `${WORKING_DIR}` manually):
+**Local** (`<LOCAL_AIRPORTS_DB>` from `hosts.py`, `${WORKING_DIR}` already expanded):
 
 ```bash
-LOCAL_WORKING_DIR=$(grep '^WORKING_DIR=' .env | cut -d= -f2)
-LOCAL_AIRPORTS_DB=$(grep '^AIRPORTS_DB=' .env | cut -d= -f2 | sed "s|\${WORKING_DIR}|${LOCAL_WORKING_DIR}|")
-sqlite3 "${LOCAL_AIRPORTS_DB}" "SELECT key, updated_at FROM model_metadata WHERE key='statistics';"
+sqlite3 "<LOCAL_AIRPORTS_DB>" "SELECT key, updated_at FROM model_metadata WHERE key='statistics';"
 ```
 
 **Remote** via docker exec (the container has `AIRPORTS_DB` pointing at the right file):
 
 ```bash
-ssh <user>@<server> 'docker exec weatherbrief python3 -c "
+ssh <SERVER_SSH> 'docker exec weatherbrief python3 -c "
 import sqlite3, os
 conn = sqlite3.connect(os.environ[\"AIRPORTS_DB\"])
 for row in conn.execute(\"SELECT key, updated_at FROM model_metadata WHERE key=\\\"statistics\\\"\"):
@@ -176,16 +181,13 @@ conn.close()
 "'
 ```
 
-If local is newer, **offer to copy**. `AIRPORTS_DB` is the container path; the host-side file
-lives under the server's `HOST_DATA_DIR`:
+If local is newer, **offer to copy**. `AIRPORTS_DB` in the server `.env` is the container
+path; `<HOST_AIRPORTS_DB>` is the host-side file `scp` needs:
 
 ```bash
-REMOTE_HOST_DIR=$(ssh <user>@<server> "grep '^HOST_DATA_DIR=' <project-dir>/.env | cut -d= -f2")
-REMOTE_DB_NAME=$(ssh <user>@<server> "grep '^AIRPORTS_DB=' <project-dir>/.env | cut -d= -f2 | xargs basename")
-
-scp "${LOCAL_AIRPORTS_DB}" <user>@<server>:"${REMOTE_HOST_DIR}/${REMOTE_DB_NAME}"
-ssh <user>@<server> "sudo chown 2000:2000 ${REMOTE_HOST_DIR}/${REMOTE_DB_NAME}"   # container runs as UID 2000
-ssh <user>@<server> "cd <project-dir> && docker compose restart"                  # reload the cached model
+scp "<LOCAL_AIRPORTS_DB>" <SERVER_SSH>:"<HOST_AIRPORTS_DB>"
+ssh <SERVER_SSH> "sudo chown 2000:2000 <HOST_AIRPORTS_DB>"   # container runs as UID 2000
+ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && docker compose restart"                  # reload the cached model
 ```
 
 If timestamps match or remote is newer, report "Airport DB is up to date" and move on.
@@ -196,7 +198,7 @@ A deploy restarts the container, killing any in-progress cycle. Interpretation a
 §D7.
 
 ```bash
-ssh <user>@<server> 'docker logs --since 10m weatherbrief 2>&1 | grep -iE "standalone|sleeping|Light cycle|Full cycle|phase"'
+ssh <SERVER_SSH> 'docker logs --since 10m weatherbrief 2>&1 | grep -iE "standalone|sleeping|Light cycle|Full cycle|phase"'
 ```
 
 If a cycle appears to be running, warn: *"A standalone verification cycle appears to be
@@ -204,7 +206,7 @@ running. Deploying now will interrupt it. Wait a few minutes or proceed?"* If on
 interrupted, offer to re-trigger after the container is healthy:
 
 ```bash
-ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.verify standalone"
+ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.verify standalone"
 ```
 
 ## Check compute-node drift
@@ -213,26 +215,19 @@ Some deployments run the heavy standalone forecast cycle on **off-box compute no
 emit a snapshot artifact for the droplet to ingest. Those nodes run this same repo and drift
 out of step silently — one sat 64 commits behind for a week because nothing surfaced it.
 
-Inventory is `deploy/compute-nodes.json` (gitignored; `deploy/compute-nodes.example.json`
-documents every field).
-
-```bash
-test -f deploy/compute-nodes.json || echo "no compute nodes configured"   # absent = skip this section silently
-```
-
-For each node in `.nodes[]`, report its SHA next to `SERVER_SHA` / `LOCAL_SHA`:
-
-```bash
-ssh <node.ssh> "cd <node.repo> && git rev-parse --short HEAD && git branch --show-current"
-```
+Inventory is the `nodes` list in `deploy/hosts.json`; no nodes = skip this section silently.
+The up-front `hosts.py all` already reached each node: its `repo` line carries the node's
+branch and SHA (`<NODE_HEAD>`), and its `hostname` line proves the ssh name reached the right
+machine.
 
 Include a row per node in the pre-flight summary: name, SHA, branch, and commits behind
-`LOCAL_SHA` (`git rev-list --count <nodeSHA>..<LOCAL_SHA>`).
+`LOCAL_SHA` (`git rev-list --count <NODE_HEAD>..<LOCAL_SHA>`).
 
-**Unreachable nodes never block the deploy** — a `lan_only` node is simply not reachable from
-another network, which is expected, not a fault. Report the actual ssh error rather than
-guessing why, and warn explicitly in the confirmation summary. Full guidance and suggested
-wording: §D4.
+**Unreachable nodes never block the deploy** — `hosts.py` reports an unreachable `lan_only`
+node as `unknown` ("not known to be down"), which is expected from another network, not a
+fault. Quote its ssh error rather than guessing why, and warn explicitly in the confirmation
+summary. A `hostname` **problem** means the ssh name reaches the wrong machine: never update
+through it. Full guidance and suggested wording: §D4.
 
 ## Update compute nodes (after a successful deploy)
 
@@ -244,27 +239,27 @@ For each node:
 1. **Don't pull while a cycle is running.** A cycle takes ~10–15 min and `git pull` would swap
    code under it. Skip the node and say so — never kill a cycle to deploy.
    ```bash
-   ssh <node.ssh> "pgrep -fl 'weatherbrief.verify standalone' || echo idle"
+   ssh <NODE_SSH> "pgrep -fl 'weatherbrief.verify standalone' || echo idle"
    ```
 
 2. **⚠️ Migrations gate — check BEFORE pulling.** A node pulled past a migration hard-fails
    every cycle and produces no artifact at all (§D3 — including why neither a pull nor
    `alembic upgrade head` fixes it, and the two cheap remedies).
    ```bash
-   git diff --name-only <nodeSHA>..<LOCAL_SHA> -- alembic/versions/
+   git diff --name-only <NODE_HEAD>..<LOCAL_SHA> -- alembic/versions/
    ```
    **If non-empty, do NOT pull until the schema change is applied by hand.**
 
 3. **Fast-forward only**, so a node with local edits fails loudly instead of silently merging:
    ```bash
-   ssh <node.ssh> "cd <node.repo> && git checkout <node.branch> && git pull --ff-only"
+   ssh <NODE_SSH> "cd <NODE_REPO> && git checkout <node.branch> && git pull --ff-only"
    ```
 
 4. **Reinstall dependencies only if they changed:**
    ```bash
-   git diff --name-only <nodeSHA>..<LOCAL_SHA> -- pyproject.toml
+   git diff --name-only <NODE_HEAD>..<LOCAL_SHA> -- pyproject.toml
    # if non-empty:
-   ssh <node.ssh> "cd <node.repo> && ./<node.venv>/bin/pip install -q -e '.[dev]'"
+   ssh <NODE_SSH> "cd <NODE_REPO> && <NODE_VENV>/bin/pip install -q -e '.[dev]'"
    ```
 
 5. **Report per node**: SHA before → after, deps reinstalled yes/no, migrations needing
@@ -289,7 +284,7 @@ name the nodes left behind.
    ```
 2. SSH and deploy:
    ```bash
-   ssh <user>@<server> "cd <project-dir> && git checkout main && git pull && docker compose up -d --build"
+   ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && git checkout main && git pull && docker compose up -d --build"
    ```
    The explicit `git checkout main` is a no-op normally, but it is what returns the server to
    `main` after a `prod-prev` rollback (§D5). Container logs go to journald, so they survive
@@ -297,7 +292,7 @@ name the nodes left behind.
    to inspect the prior container.
 3. **If migrations were detected in pre-flight**, run them now:
    ```bash
-   ssh <user>@<server> "docker exec weatherbrief alembic upgrade head"
+   ssh <SERVER_SSH> "docker exec weatherbrief alembic upgrade head"
    ```
    The rebuild has already landed at this point, so a migration failure here is an **outage**,
    not a safe abort: the new code is serving against the old schema. If it fails, treat it as
@@ -305,7 +300,7 @@ name the nodes left behind.
 
    Then prove the schema and the code agree, by querying **a table the migration touched**:
    ```bash
-   ssh <user>@<server> "docker exec weatherbrief python -c \"
+   ssh <SERVER_SSH> "docker exec weatherbrief python -c \"
    from weatherbrief.db.models import BriefingPackRow
    from flyfun_common.db import SessionLocal, get_engine
    get_engine()   # binds the session; SessionLocal() alone is unbound here
@@ -320,13 +315,13 @@ name the nodes left behind.
    for this (§D11).
 4. Verify the health check:
    ```bash
-   ssh <user>@<server> "docker inspect --format='{{.State.Health.Status}}' weatherbrief"
+   ssh <SERVER_SSH> "docker inspect --format='{{.State.Health.Status}}' weatherbrief"
    ```
 5. Confirm the endpoint responds:
    ```bash
    curl -s -o /dev/null -w '%{http_code}' https://weather.flyfun.aero/health
    ```
-6. **Update compute nodes**, if `deploy/compute-nodes.json` exists — see above.
+6. **Update compute nodes**, if `deploy/hosts.json` lists any — see above.
 
 ## Track the deployed version (prod / prod-prev branches)
 
@@ -354,7 +349,7 @@ re-run with a lease: `git push --force-with-lease origin prod prod-prev`.
 ### Reverting to the previous version
 
 ```bash
-ssh <user>@<server> "cd <project-dir> && git fetch origin && git checkout -B prod-prev origin/prod-prev && docker compose up -d --build"
+ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && git fetch origin && git checkout -B prod-prev origin/prod-prev && docker compose up -d --build"
 ```
 
 **If migrations ran in the bad deploy**, decide whether they need an `alembic downgrade`
@@ -429,7 +424,7 @@ draft; apply their changes and re-show if the edits are substantial.
 **Add (only after yes):**
 
 ```bash
-ssh <user>@<server> "docker exec -i weatherbrief python -m weatherbrief.release add \
+ssh <SERVER_SSH> "docker exec -i weatherbrief python -m weatherbrief.release add \
   --title 'TITLE HERE' --category feature --body-file -" <<'EOF'
 Full markdown body here.
 EOF
@@ -438,14 +433,14 @@ EOF
 Add `--highlight` only if the user approved it. Confirm it landed:
 
 ```bash
-ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.release list" | head
+ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.release list" | head
 ```
 
 **Skip when:** nothing user-facing in the range (say so, no draft); or the user declines.
 
 ## If something goes wrong
 
-- Logs: `ssh <user>@<server> "docker logs --tail 50 weatherbrief"`
+- Logs: `ssh <SERVER_SSH> "docker logs --tail 50 weatherbrief"`
 - The container runs on port 8020 internally
 - Container runs as UID 2000 (`app`) — the data volume must be chowned to match
 - `docker compose` (v2 syntax, NOT `docker-compose`)

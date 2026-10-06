@@ -66,9 +66,10 @@ AGENTS.md
 # Local scratch memos — untracked by design
 scratch/
 
-# Real compute-node inventory: ssh targets and paths are deployment-private.
-# deploy/compute-nodes.example.json is tracked and documents the shape.
-deploy/compute-nodes.json
+# Real host inventory (server + compute nodes): ssh targets and paths are
+# deployment-private. deploy/hosts.example.json is tracked and documents the
+# shape; scripts/ops/hosts.py reads it.
+deploy/hosts.json
 
 # Real MySQL config/counter baseline: container names, host paths and tuning
 # values are deployment-specific. Used by the check-health skill (§10) to spot
