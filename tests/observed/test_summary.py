@@ -112,3 +112,16 @@ def test_radar_peak_says_where_it_is():
 def test_radar_peak_without_a_position_keeps_the_disc_wording():
     lines = build_summary(_conditions(_radar({"ZZDP": 49.0})))
     assert any("peak 49 dBZ within 20 NM of ZZDP" in line for line in lines)
+
+
+def test_tops_mixed_coverage_and_contradiction():
+    """A point the satellite could not see is left out; a contradicted one is
+    unavailable; the rest say what they saw."""
+    tops = _tops({"ZZDP": None, "r1": None, "ZZDS": None})
+    blind = tops.stations[2].annuli[0]
+    tops.stations[2].annuli[0] = blind.model_copy(update={"valid_px": 0, "undetect_px": 0, "nodata_px": 1000})
+    line = _tops_line(_conditions(_radar({"ZZDP": 49.0, "r1": None, "ZZDS": 50.0}), tops))
+    assert line == (
+        "Cloud tops: none found at 1 of 2 points, unavailable at 1 of 2 points "
+        "(radar echo of 35 dBZ or more, no cloud top found) (observed 14:10Z)."
+    )
