@@ -156,12 +156,12 @@ IOS_PACK_TIMESTAMP = "2099-06-30T06:00:00+00:00"
 #: Ticks exported per scenario: the moments a pilot would want to see.
 IOS_TICKS = {
     "2026-10-02_lell_lemi": [
+        # 06:00 and 10:20 were dropped from the UI test (2026-10-05): it
+        # relaunches the app per tick, and neither added a case the others lack.
         "05:10",  # starting point taken at 05:00; LECB 2 + LEVC TS alert
-        "06:00",  # destination one-report MVFR alert; alternates' gust highlights
         "07:10",  # after the 06:52 rebuild: LEVC TS under the route, before departure
         "08:30",  # LECB 3 / LECM 3 EMBD TS at the destination
         "09:00",  # LECB 2 ends (improvement: highlight)
-        "10:20",  # LELC TS after arrival (alternate: highlight)
     ],
 }
 IOS_SCENARIOS = (

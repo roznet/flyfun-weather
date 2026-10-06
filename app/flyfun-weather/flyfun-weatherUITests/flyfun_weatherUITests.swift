@@ -165,8 +165,16 @@ final class flyfun_weatherUITests: XCTestCase {
             let c = app.buttons[chevron]
             return c.exists && tab.frame.maxX > c.frame.minX && tab.frame.minX < c.frame.maxX
         }
+        // Only the first look waits — the bar may still be appearing after a
+        // navigation. After a page tap XCUI has already waited for the app to
+        // idle, so a plain `exists` answers; a 2 s wait per page on a tab that
+        // is on another page was most of the ~30 s each live-scenario tick
+        // spent paging on iPad.
+        var firstLook = true
         func visible() -> Bool {
-            tab.waitForExistence(timeout: 2) && !hiddenBehind("Next Page") && !hiddenBehind("Previous Page")
+            let present = firstLook ? tab.waitForExistence(timeout: 2) : tab.exists
+            firstLook = false
+            return present && !hiddenBehind("Next Page") && !hiddenBehind("Previous Page")
         }
         for chevron in ["Next Page", "Previous Page"] {
             var pages = 0
@@ -193,12 +201,20 @@ final class flyfun_weatherUITests: XCTestCase {
         // Already on screen (iPhone, or iPad landscape) — keyed off the list's
         // accessibility identifier, not fixture content, so renaming a fixture
         // route can't silently break iPad handling.
-        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: Self.probeTimeout) { return }
+        let list = app.descendants(matching: .any)["flightList"]
         // iPad portrait: the list sits behind the split-view toggle — a system
         // control with no stable identifier we can set, matched by its (English)
         // label. CI runs English sims.
         let showSidebar = app.buttons["Show Sidebar"]
-        if showSidebar.exists { showSidebar.tap(); return }
+        // Whichever surfaces first decides the path. Waiting on the list alone
+        // spent the whole probe (8 s) on every iPad-portrait launch, where the
+        // list is never there — ~32 s of the live scenario's four relaunches.
+        let deadline = Date().addingTimeInterval(Self.probeTimeout)
+        repeat {
+            if list.exists { return }
+            if showSidebar.exists { showSidebar.tap(); return }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while Date() < deadline
         XCTFail("Could not reveal flight list: neither the list nor the sidebar toggle was found")
     }
 
@@ -1070,8 +1086,10 @@ final class flyfun_weatherUITests: XCTestCase {
 
     /// Every change the server reported renders as a row, at its tier: an alert
     /// must look like one, a highlight must not. Screenshots the panel and the
-    /// Observations / Hazards tables at each tick, so the morning can be read
-    /// as the pilot would have seen it.
+    /// Observations / Hazards tables at `screenshotTick` only: six near-identical
+    /// sets added ~25 s a tick for a reader who looks at one. The other ticks
+    /// keep every assertion and scroll to the Hazards table only when they
+    /// issued a SIGMET, for its NEW badges.
     ///
     /// The mock flight is fixture-1 (LFMD→LFML) — its header says so — but the
     /// live layer replaces the observation and SIGMET tables wholesale, so those
@@ -1085,7 +1103,8 @@ final class flyfun_weatherUITests: XCTestCase {
     @MainActor
     @discardableResult
     private func runLiveScenario(
-        _ scenario: String, ticks: [String], conditions: [String: String] = [:]
+        _ scenario: String, ticks: [String], conditions: [String: String] = [:],
+        screenshotTick: String? = nil
     ) throws -> [String: String] {
         var readSummaries: [String: String] = [:]
         for hhmm in ticks {
@@ -1093,6 +1112,7 @@ final class flyfun_weatherUITests: XCTestCase {
                 let tick = try liveScenarioTick(scenario, hhmm)
                 let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": tick.json])
                 defer { app.terminate() }
+                let shoot = hhmm == screenshotTick
                 openFixture1Briefing(app)
                 switchToBriefingTab(app, "Observed")
 
@@ -1132,15 +1152,21 @@ final class flyfun_weatherUITests: XCTestCase {
                     XCTAssertEqual(element.value as? String, "cleared, \(row["direction"] as? String ?? "")",
                                    "\(hhmm): a cleared row is never alert-styled")
                 }
-                attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes")
+                if shoot { attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes") }
 
+                // Every SIGMET a "new SIGMET" change names (a merged change
+                // names each FIR's) carries the NEW badge.
+                let issued = ((changes["changes"] as? [[String: Any]]) ?? [])
+                    .filter { $0["kind"] as? String == "sigmet_issued" }
+                    .flatMap { ($0["key"] as? String ?? "").split(separator: "+") }
                 for (pill, sectionId, label) in [("METAR/TAF", "observationsSection", "2-observations"),
                                                  ("SIGMET", "sigmetsSection", "3-hazards")] {
+                    guard shoot || (sectionId == "sigmetsSection" && !issued.isEmpty) else { continue }
                     let button = app.buttons[pill].firstMatch
                     guard button.waitForExistence(timeout: Self.probeTimeout) else { continue }
                     button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
                     let target = app.descendants(matching: .any)[sectionId].firstMatch
-                    if target.waitForExistence(timeout: Self.uiTimeout) {
+                    if target.waitForExistence(timeout: Self.uiTimeout) && shoot {
                         // The pill scrolls with an animation: wait for the
                         // section to settle on screen before the screenshot.
                         _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
@@ -1149,11 +1175,6 @@ final class flyfun_weatherUITests: XCTestCase {
                         attachScreenshot(app, "Live-\(scenario)-\(hhmm)-\(label)")
                     }
                     if sectionId == "sigmetsSection" {
-                        // Every SIGMET a "new SIGMET" change names (a merged
-                        // change names each FIR's) carries the NEW badge.
-                        let issued = ((changes["changes"] as? [[String: Any]]) ?? [])
-                            .filter { $0["kind"] as? String == "sigmet_issued" }
-                            .flatMap { ($0["key"] as? String ?? "").split(separator: "+") }
                         let badges = app.descendants(matching: .any)
                             .matching(NSPredicate(format: "label CONTAINS[c] %@", "Issued since the briefing"))
                         XCTAssertEqual(badges.count, issued.count,
@@ -1238,11 +1259,18 @@ final class flyfun_weatherUITests: XCTestCase {
         // started reporting. The live layer must reach the chart, not just the
         // tables.
         let summaries = try runLiveScenario(
-            "2026-10-02_lell_lemi", ticks: ["0510", "0600", "0710", "0830", "0900", "1020"],
+            // Four ticks, each carrying something the others don't: 05:10 the
+            // live-start baseline, 07:10 trails + cleared rows after the switch
+            // to the briefing baseline, 08:30 the second cross-section reading,
+            // 09:00 a cancellation and a merged two-FIR NEW. 06:00 (a wind
+            // change — rows render kind-agnostically) and 10:20 (09:00's kinds
+            // again) were dropped; each tick is a full relaunch, ~45-75 s.
+            "2026-10-02_lell_lemi", ticks: ["0510", "0710", "0830", "0900"],
             conditions: [
                 "0510": "1 SIGMET zone, 8 METAR columns",
                 "0830": "3 SIGMET zones, 9 METAR columns",
-            ])
+            ],
+            screenshotTick: "0710")
         XCTAssertNotEqual(summaries["0510"], summaries["0830"],
                           "the SIGMET zones drawn at 08:30 should differ from 05:10")
         // #669: the 07:10 tick exercises both trail cases checked per tick
