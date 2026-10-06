@@ -153,6 +153,30 @@ class LiveSigmetTrace(BaseModel):
     last_seen: datetime
 
 
+FocusKind = Literal["storm", "sigmet", "station", "segment"]
+
+
+class LiveFocus(BaseModel):
+    """Where the map opens when an item is tapped (#690): the tap-to-map
+    contract shared by iOS, web and anything else that draws the layer.
+
+    The client frames the map on ``bbox`` and turns on ``layers`` (any of
+    ``route``, ``radar``, ``cells``, ``lightning``, ``sigmets``, ``metar``),
+    highlighting the item ``kind`` / ``id`` names. ``time`` is the frame to
+    show (the cell frame for a storm, the METAR for a station); None = now.
+    """
+
+    kind: FocusKind
+    # storm: its lineage id; sigmet: "sigmet:LECM|6" (the change-row key form);
+    # station: the ICAO; segment: "seg:<index>" ("seg:ahead" for the en-route
+    # line's stretch still ahead).
+    id: str
+    # (min_lon, min_lat, max_lon, max_lat), like ``LiveSigmetTrace.bbox``.
+    bbox: tuple[float, float, float, float]
+    layers: list[str] = Field(default_factory=list)
+    time: datetime | None = None
+
+
 class StormTrackPoint(BaseModel):
     """A storm's observed position against the route at one earlier frame."""
 
@@ -232,6 +256,8 @@ class LiveStorm(BaseModel):
     # En-route stations whose CB/TCU/TS report this storm backs ("LFMT CB").
     backing: list[str] = Field(default_factory=list)
     estimate: StormEstimate | None = None
+    # Tap-to-map (#690): framed on the storm and the track point abeam it.
+    focus: LiveFocus | None = None
 
 
 class LiveStorms(BaseModel):
@@ -254,6 +280,147 @@ class LiveStorms(BaseModel):
     storms: list[LiveStorm] = Field(default_factory=list)
     # The cell policy the node ran (provisional thresholds).
     policy_version: str | None = None
+
+
+GlancePhase = Literal["departure", "enroute", "arrival"]
+
+
+class LiveGlanceLine(BaseModel):
+    """One nutshell line (#690): what the pilot needs to know for one phase
+    of the flight, in one sentence of " · "-separated clauses.
+
+    Server-built so iOS, web and the agent ``live`` block show the same text.
+    Observations only: no estimate, no verdict. Missing data says
+    "unavailable", never "clear"; counts are storms, not threshold tiers.
+    """
+
+    phase: GlancePhase
+    # The airport the line is about (departure / destination); None en route.
+    icao: str | None = None
+    text: str
+    # An alert-tier change row belongs to this phase. A styling hint only:
+    # the text never depends on it.
+    alert: bool = False
+    # The phase is behind the flight at plan (departure after take-off time,
+    # arrival after the planned landing). Clients may dim the line.
+    passed: bool = False
+    # Sources this line could not read ("metar", "taf", "storms",
+    # "lightning", "sigmets"), so a client can flag them without parsing.
+    unavailable: list[str] = Field(default_factory=list)
+    # What the line summarises: "metar:LPPR", "taf:LPPT", "storm:<id>",
+    # "sigmet:LECM|6". The map focus for each is on the ribbon / storm list.
+    sources: list[str] = Field(default_factory=list)
+    focus: LiveFocus | None = None
+
+
+class LiveGlance(BaseModel):
+    """The Observed tab's top block (#690, observed-tab-presentation §3):
+    one "as of" time, one line comparing with the briefing, then one line per
+    phase."""
+
+    as_of: datetime
+    # "Observed 14:29Z · as briefed" — the comparison line.
+    headline: str
+    comparison: Literal["as_briefed", "worse", "better", "mixed", "unavailable"]
+    lines: list[LiveGlanceLine] = Field(default_factory=list)
+
+
+class RibbonWaypoint(BaseModel):
+    icao: str
+    along_nm: float
+    eta: datetime | None = None
+
+
+class RibbonSegment(BaseModel):
+    """One stretch of the route on the ribbon, with the lanes already binned."""
+
+    index: int
+    from_nm: float
+    to_nm: float
+    eta_from: datetime | None = None
+    eta_to: datetime | None = None
+    # Strongest echo within ``LiveRibbon.radar_radius_nm`` of the route
+    # points in this stretch. ``radar_status``: "measured" (None = nothing
+    # detected), "no_coverage" (radar could not see enough of it) or
+    # "no_sample" (no observed point in this stretch / no radar field).
+    radar_max_dbz: float | None = None
+    radar_intensity: str | None = None
+    radar_status: Literal["measured", "no_coverage", "no_sample"] = "no_sample"
+    # Any flash within the same radius; None when there is no lightning
+    # field or no point in this stretch.
+    lightning: bool | None = None
+    # Route SIGMETs (key form "sigmet:LECM|6") whose along-route span
+    # overlaps this stretch, and the storms abeam it (ids on ``storms``).
+    sigmet_ids: list[str] = Field(default_factory=list)
+    storm_ids: list[str] = Field(default_factory=list)
+    focus: LiveFocus | None = None
+
+
+class RibbonStation(BaseModel):
+    """An airport on the station lane: METAR now, TAF at its ETA."""
+
+    icao: str
+    role: ChangeRole
+    along_nm: float | None = None
+    # Signed: + right of track, − left (None without a position).
+    cross_nm: float | None = None
+    eta: datetime | None = None
+    metar_category: str | None = None
+    metar_time: datetime | None = None
+    # CB / TCU / TS in the observed part of the METAR.
+    convective: list[str] = Field(default_factory=list)
+    taf_category_at_eta: str | None = None
+    # PROB30 / TEMPO / … and its category, when worse than prevailing:
+    # clients hatch it.
+    taf_temporary_type: str | None = None
+    taf_temporary_category: str | None = None
+    taf_weather: list[str] = Field(default_factory=list)
+    focus: LiveFocus | None = None
+
+
+class RibbonSigmet(BaseModel):
+    """A route SIGMET on the SIGMET band."""
+
+    id: str  # "sigmet:LECM|6"
+    label: str  # "LECM 6: EMBD TS"
+    hazard: str | None = None
+    qualifier: str | None = None
+    from_nm: float | None = None
+    to_nm: float | None = None
+    # Closest distance to the route when it does not cross it.
+    min_distance_nm: float | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    pending: bool = False
+    # New to the flight (its chain did not start in the baseline); None when
+    # not known (``LiveChanges.new_sigmets``).
+    new: bool | None = None
+    # Its forecast movement (MOV) against the route: toward / away /
+    # parallel / stationary, unknown without geometry.
+    motion: Literal["toward", "away", "parallel", "stationary", "unknown"] = "unknown"
+    focus: LiveFocus | None = None
+
+
+class LiveRibbon(BaseModel):
+    """The route ribbon (#690, observed-tab-presentation §3 layer 1): x =
+    distance along the route with ETAs, y = left/right of track.
+
+    The storm lane is ``LiveLayer.storms`` itself (``along_nm`` /
+    ``cross_nm`` / ``relative_motion`` / ``focus``), not copied here.
+    """
+
+    route_nm: float
+    # Planned position now (on-time departure, constant speed); None untimed.
+    flown_nm: float | None = None
+    departure_at: datetime | None = None
+    arrival_at: datetime | None = None
+    segment_nm: float
+    radar_radius_nm: float
+    radar_time: datetime | None = None
+    waypoints: list[RibbonWaypoint] = Field(default_factory=list)
+    segments: list[RibbonSegment] = Field(default_factory=list)
+    stations: list[RibbonStation] = Field(default_factory=list)
+    sigmets: list[RibbonSigmet] = Field(default_factory=list)
 
 
 class LiveChange(BaseModel):
@@ -378,6 +545,10 @@ class LiveLayer(BaseModel):
     observed_updated_at: datetime | None = None
     # Radar storms against the route (#688), recomputed every tick.
     storms: LiveStorms | None = None
+    # The Observed tab's nutshell and route ribbon (#690), recomputed every
+    # tick from the blocks above (``tasks/live_glance.py``).
+    glance: LiveGlance | None = None
+    ribbon: LiveRibbon | None = None
 
     changes: LiveChanges | None = None
     # Worsening-only view of ``changes``, kept so clients that predate the
@@ -421,5 +592,7 @@ class LiveLayerResponse(BaseModel):
     observed_conditions: ObservedConditions | None = None
     observed_updated_at: datetime | None = None
     storms: LiveStorms | None = None
+    glance: LiveGlance | None = None
+    ribbon: LiveRibbon | None = None
     changes: LiveChanges | None = None
     last_refresh_delta: RefreshDelta | None = None

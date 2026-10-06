@@ -7,7 +7,10 @@ position in the summary, iOS storm count/sort/wording as interim client logic
 Slice 2 (#688, PR #692) landed: per-storm route geometry in the tick,
 `LiveLayer.storms`, storm rows (meteorology-decisions §41), estimates logged
 for `score-estimates`; thresholds not yet calibrated on a real-cell replay.
-Slices 3–5 not started (#690). Builds on `designs/live-observation-layer.md`.
+Slice 3 server half (#690): `LiveLayer.glance` / `ribbon` / `focus` built in the
+tick, on `/live` and the agent `live` block (`tasks/live_glance.py`, as-built notes in
+`live-observation-layer.md`). iOS and web rendering (slice 4) not started; slice 5 not
+started. Builds on `designs/live-observation-layer.md`.
 
 ## 1. Premise
 

@@ -165,6 +165,111 @@
   "worsened_count": 1
  },
  "flight_id": "fixture-1",
+ "glance": {
+  "as_of": "2026-10-02T09:00:00Z",
+  "comparison": "mixed",
+  "headline": "Observed 09:00Z \u00b7 1 worse since the briefing (arrival), en route and arrival improving, 1 SIGMET reissued",
+  "lines": [
+   {
+    "alert": false,
+    "focus": {
+     "bbox": [
+      1.6599,
+      41.1876,
+      2.5503,
+      41.8542
+     ],
+     "id": "LELL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "icao": "LELL",
+    "passed": true,
+    "phase": "departure",
+    "sources": [
+     "metar:LELL"
+    ],
+    "text": "LELL VFR \u00b7 radar storms unavailable \u00b7 lightning unavailable",
+    "unavailable": [
+     "storms",
+     "lightning"
+    ]
+   },
+   {
+    "alert": false,
+    "focus": {
+     "bbox": [
+      -1.3388,
+      37.6362,
+      0.2398,
+      40.0225
+     ],
+     "id": "seg:ahead",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "icao": null,
+    "passed": false,
+    "phase": "enroute",
+    "sources": [
+     "sigmet:LECB|4",
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "text": "radar storms unavailable \u00b7 EMBD TS SIGMET LECB 4 covers first 170 NM (briefed), EMBD TS SIGMET LECB 3 covers last 40 NM (new), +1 more SIGMET",
+    "unavailable": [
+     "storms"
+    ]
+   },
+   {
+    "alert": true,
+    "focus": {
+     "bbox": [
+      -1.5468,
+      37.4695,
+      -0.703,
+      38.1362
+     ],
+     "id": "LEMI",
+     "kind": "station",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "icao": "LEMI",
+    "passed": false,
+    "phase": "arrival",
+    "sources": [
+     "metar:LEMI"
+    ],
+    "text": "LEMI VFR \u00b7 no TAF for ETA \u00b7 radar storms unavailable \u00b7 lightning unavailable",
+    "unavailable": [
+     "taf",
+     "storms",
+     "lightning"
+    ]
+   }
+  ]
+ },
  "last_refresh_delta": {
   "computed_at": "2026-10-02T09:00:00Z",
   "messages": [
@@ -177,6 +282,1319 @@
  "observed_conditions": null,
  "observed_updated_at": null,
  "pack_timestamp": "2099-06-30T06:00:00+00:00",
+ "ribbon": {
+  "arrival_at": "2026-10-02T10:00:00Z",
+  "departure_at": "2026-10-02T08:00:00Z",
+  "flown_nm": 137.8,
+  "radar_radius_nm": 10.0,
+  "radar_time": null,
+  "route_nm": 275.6,
+  "segment_nm": 9.8,
+  "segments": [
+   {
+    "eta_from": "2026-10-02T08:00:00Z",
+    "eta_to": "2026-10-02T08:04:17.142857Z",
+    "focus": {
+     "bbox": [
+      1.7369,
+      41.2329,
+      2.3275,
+      41.6876
+     ],
+     "id": "seg:0",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 0.0,
+    "index": 0,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 9.8
+   },
+   {
+    "eta_from": "2026-10-02T08:04:17.142857Z",
+    "eta_to": "2026-10-02T08:08:34.285714Z",
+    "focus": {
+     "bbox": [
+      1.5916,
+      41.1115,
+      2.1813,
+      41.5662
+     ],
+     "id": "seg:1",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 9.8,
+    "index": 1,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 19.7
+   },
+   {
+    "eta_from": "2026-10-02T08:08:34.285714Z",
+    "eta_to": "2026-10-02T08:12:51.428571Z",
+    "focus": {
+     "bbox": [
+      1.4462,
+      40.9902,
+      2.0351,
+      41.4448
+     ],
+     "id": "seg:2",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 19.7,
+    "index": 2,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 29.5
+   },
+   {
+    "eta_from": "2026-10-02T08:12:51.428571Z",
+    "eta_to": "2026-10-02T08:17:08.571429Z",
+    "focus": {
+     "bbox": [
+      1.3009,
+      40.8688,
+      1.889,
+      41.3235
+     ],
+     "id": "seg:3",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 29.5,
+    "index": 3,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 39.4
+   },
+   {
+    "eta_from": "2026-10-02T08:17:08.571429Z",
+    "eta_to": "2026-10-02T08:21:25.714286Z",
+    "focus": {
+     "bbox": [
+      1.1555,
+      40.7474,
+      1.7428,
+      41.2021
+     ],
+     "id": "seg:4",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 39.4,
+    "index": 4,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 49.2
+   },
+   {
+    "eta_from": "2026-10-02T08:21:25.714286Z",
+    "eta_to": "2026-10-02T08:25:42.857143Z",
+    "focus": {
+     "bbox": [
+      1.0102,
+      40.6261,
+      1.5966,
+      41.0808
+     ],
+     "id": "seg:5",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 49.2,
+    "index": 5,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 59.0
+   },
+   {
+    "eta_from": "2026-10-02T08:25:42.857143Z",
+    "eta_to": "2026-10-02T08:30:00Z",
+    "focus": {
+     "bbox": [
+      0.8648,
+      40.5047,
+      1.4505,
+      40.9594
+     ],
+     "id": "seg:6",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 59.0,
+    "index": 6,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 68.9
+   },
+   {
+    "eta_from": "2026-10-02T08:30:00Z",
+    "eta_to": "2026-10-02T08:34:17.142857Z",
+    "focus": {
+     "bbox": [
+      0.7195,
+      40.3834,
+      1.3043,
+      40.838
+     ],
+     "id": "seg:7",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 68.9,
+    "index": 7,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 78.7
+   },
+   {
+    "eta_from": "2026-10-02T08:34:17.142857Z",
+    "eta_to": "2026-10-02T08:38:34.285714Z",
+    "focus": {
+     "bbox": [
+      0.5741,
+      40.262,
+      1.1581,
+      40.7167
+     ],
+     "id": "seg:8",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 78.7,
+    "index": 8,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 88.6
+   },
+   {
+    "eta_from": "2026-10-02T08:38:34.285714Z",
+    "eta_to": "2026-10-02T08:42:51.428571Z",
+    "focus": {
+     "bbox": [
+      0.4287,
+      40.1406,
+      1.012,
+      40.5953
+     ],
+     "id": "seg:9",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 88.6,
+    "index": 9,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 98.4
+   },
+   {
+    "eta_from": "2026-10-02T08:42:51.428571Z",
+    "eta_to": "2026-10-02T08:47:08.571429Z",
+    "focus": {
+     "bbox": [
+      0.2768,
+      40.025,
+      0.8658,
+      40.474
+     ],
+     "id": "seg:10",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 98.4,
+    "index": 10,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 108.3
+   },
+   {
+    "eta_from": "2026-10-02T08:47:08.571429Z",
+    "eta_to": "2026-10-02T08:51:25.714286Z",
+    "focus": {
+     "bbox": [
+      0.1204,
+      39.9132,
+      0.7132,
+      40.3583
+     ],
+     "id": "seg:11",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 108.3,
+    "index": 11,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 118.1
+   },
+   {
+    "eta_from": "2026-10-02T08:51:25.714286Z",
+    "eta_to": "2026-10-02T08:55:42.857143Z",
+    "focus": {
+     "bbox": [
+      -0.0358,
+      39.8013,
+      0.556,
+      40.2465
+     ],
+     "id": "seg:12",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 118.1,
+    "index": 12,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 127.9
+   },
+   {
+    "eta_from": "2026-10-02T08:55:42.857143Z",
+    "eta_to": "2026-10-02T09:00:00Z",
+    "focus": {
+     "bbox": [
+      -0.1914,
+      39.6892,
+      0.3991,
+      40.1346
+     ],
+     "id": "seg:13",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 127.9,
+    "index": 13,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 137.8
+   },
+   {
+    "eta_from": "2026-10-02T09:00:00Z",
+    "eta_to": "2026-10-02T09:04:17.142857Z",
+    "focus": {
+     "bbox": [
+      -0.346,
+      39.5767,
+      0.2428,
+      40.0225
+     ],
+     "id": "seg:14",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 137.8,
+    "index": 14,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 147.6
+   },
+   {
+    "eta_from": "2026-10-02T09:04:17.142857Z",
+    "eta_to": "2026-10-02T09:08:34.285714Z",
+    "focus": {
+     "bbox": [
+      -0.5003,
+      39.464,
+      0.0875,
+      39.91
+     ],
+     "id": "seg:15",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 147.6,
+    "index": 15,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 157.5
+   },
+   {
+    "eta_from": "2026-10-02T09:08:34.285714Z",
+    "eta_to": "2026-10-02T09:12:51.428571Z",
+    "focus": {
+     "bbox": [
+      -0.6546,
+      39.3514,
+      -0.0675,
+      39.7974
+     ],
+     "id": "seg:16",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 157.5,
+    "index": 16,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 167.3
+   },
+   {
+    "eta_from": "2026-10-02T09:12:51.428571Z",
+    "eta_to": "2026-10-02T09:17:08.571429Z",
+    "focus": {
+     "bbox": [
+      -0.7415,
+      39.2071,
+      -0.2226,
+      39.6847
+     ],
+     "id": "seg:17",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 167.3,
+    "index": 17,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|4"
+    ],
+    "storm_ids": [],
+    "to_nm": 177.1
+   },
+   {
+    "eta_from": "2026-10-02T09:17:08.571429Z",
+    "eta_to": "2026-10-02T09:21:25.714286Z",
+    "focus": {
+     "bbox": [
+      -0.801,
+      39.05,
+      -0.3103,
+      39.5405
+     ],
+     "id": "seg:18",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 177.1,
+    "index": 18,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [],
+    "storm_ids": [],
+    "to_nm": 187.0
+   },
+   {
+    "eta_from": "2026-10-02T09:21:25.714286Z",
+    "eta_to": "2026-10-02T09:25:42.857143Z",
+    "focus": {
+     "bbox": [
+      -0.8604,
+      38.8929,
+      -0.3707,
+      39.3834
+     ],
+     "id": "seg:19",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 187.0,
+    "index": 19,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [],
+    "storm_ids": [],
+    "to_nm": 196.8
+   },
+   {
+    "eta_from": "2026-10-02T09:25:42.857143Z",
+    "eta_to": "2026-10-02T09:30:00Z",
+    "focus": {
+     "bbox": [
+      -0.9198,
+      38.7358,
+      -0.4311,
+      39.2263
+     ],
+     "id": "seg:20",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 196.8,
+    "index": 20,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [],
+    "storm_ids": [],
+    "to_nm": 206.7
+   },
+   {
+    "eta_from": "2026-10-02T09:30:00Z",
+    "eta_to": "2026-10-02T09:34:17.142857Z",
+    "focus": {
+     "bbox": [
+      -0.9793,
+      38.5788,
+      -0.4915,
+      39.0692
+     ],
+     "id": "seg:21",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 206.7,
+    "index": 21,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [],
+    "storm_ids": [],
+    "to_nm": 216.5
+   },
+   {
+    "eta_from": "2026-10-02T09:34:17.142857Z",
+    "eta_to": "2026-10-02T09:38:34.285714Z",
+    "focus": {
+     "bbox": [
+      -1.0387,
+      38.4217,
+      -0.5519,
+      38.9121
+     ],
+     "id": "seg:22",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 216.5,
+    "index": 22,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [],
+    "storm_ids": [],
+    "to_nm": 226.4
+   },
+   {
+    "eta_from": "2026-10-02T09:38:34.285714Z",
+    "eta_to": "2026-10-02T09:42:51.428571Z",
+    "focus": {
+     "bbox": [
+      -1.0982,
+      38.2646,
+      -0.6123,
+      38.755
+     ],
+     "id": "seg:23",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 226.4,
+    "index": 23,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 236.2
+   },
+   {
+    "eta_from": "2026-10-02T09:42:51.428571Z",
+    "eta_to": "2026-10-02T09:47:08.571429Z",
+    "focus": {
+     "bbox": [
+      -1.1577,
+      38.1075,
+      -0.6727,
+      38.5979
+     ],
+     "id": "seg:24",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 236.2,
+    "index": 24,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 246.0
+   },
+   {
+    "eta_from": "2026-10-02T09:47:08.571429Z",
+    "eta_to": "2026-10-02T09:51:25.714286Z",
+    "focus": {
+     "bbox": [
+      -1.2171,
+      37.9504,
+      -0.7331,
+      38.4408
+     ],
+     "id": "seg:25",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 246.0,
+    "index": 25,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 255.9
+   },
+   {
+    "eta_from": "2026-10-02T09:51:25.714286Z",
+    "eta_to": "2026-10-02T09:55:42.857143Z",
+    "focus": {
+     "bbox": [
+      -1.2766,
+      37.7933,
+      -0.7934,
+      38.2837
+     ],
+     "id": "seg:26",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 255.9,
+    "index": 26,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 265.7
+   },
+   {
+    "eta_from": "2026-10-02T09:55:42.857143Z",
+    "eta_to": "2026-10-02T10:00:00Z",
+    "focus": {
+     "bbox": [
+      -1.336,
+      37.6362,
+      -0.8538,
+      38.1266
+     ],
+     "id": "seg:27",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 265.7,
+    "index": 27,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 275.6
+   }
+  ],
+  "sigmets": [
+   {
+    "focus": {
+     "bbox": [
+      -1.767,
+      36.717,
+      -0.7,
+      37.8
+     ],
+     "id": "sigmet:LECB|3",
+     "kind": "sigmet",
+     "layers": [
+      "route",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 235.1,
+    "hazard": "TS",
+    "id": "sigmet:LECB|3",
+    "label": "LECB 3: EMBD TS",
+    "min_distance_nm": 12.0,
+    "motion": "stationary",
+    "new": true,
+    "pending": false,
+    "qualifier": "EMBD",
+    "to_nm": 275.6,
+    "valid_from": "2026-10-02T08:35:00Z",
+    "valid_to": "2026-10-02T10:35:00Z"
+   },
+   {
+    "focus": {
+     "bbox": [
+      -2.217,
+      36.683,
+      -1.567,
+      37.8
+     ],
+     "id": "sigmet:LECM|3",
+     "kind": "sigmet",
+     "layers": [
+      "route",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 240.1,
+    "hazard": "TS",
+    "id": "sigmet:LECM|3",
+    "label": "LECM 3: EMBD TS",
+    "min_distance_nm": 21.0,
+    "motion": "stationary",
+    "new": true,
+    "pending": false,
+    "qualifier": "EMBD",
+    "to_nm": 275.6,
+    "valid_from": "2026-10-02T08:35:00Z",
+    "valid_to": "2026-10-02T10:35:00Z"
+   },
+   {
+    "focus": {
+     "bbox": [
+      0.15,
+      39.967,
+      2.533,
+      41.533
+     ],
+     "id": "sigmet:LECB|4",
+     "kind": "sigmet",
+     "layers": [
+      "route",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 0.0,
+    "hazard": "TS",
+    "id": "sigmet:LECB|4",
+    "label": "LECB 4: EMBD TS",
+    "min_distance_nm": 0.0,
+    "motion": "unknown",
+    "new": false,
+    "pending": false,
+    "qualifier": "EMBD",
+    "to_nm": 170.2,
+    "valid_from": "2026-10-02T09:00:00Z",
+    "valid_to": "2026-10-02T11:00:00Z"
+   }
+  ],
+  "stations": [
+   {
+    "along_nm": 0.0,
+    "convective": [],
+    "cross_nm": 0.0,
+    "eta": "2026-10-02T08:00:00Z",
+    "focus": {
+     "bbox": [
+      1.8825,
+      41.3542,
+      2.3277,
+      41.6876
+     ],
+     "id": "LELL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LELL",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "departure",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 13.5,
+    "convective": [],
+    "cross_nm": -8.1,
+    "eta": "2026-10-02T08:05:52.469264Z",
+    "focus": {
+     "bbox": [
+      1.8566,
+      41.1304,
+      2.3003,
+      41.4638
+     ],
+     "id": "LEBL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LEBL",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 47.8,
+    "convective": [],
+    "cross_nm": 16.4,
+    "eta": "2026-10-02T08:20:49.188698Z",
+    "focus": {
+     "bbox": [
+      0.947,
+      40.9808,
+      1.3897,
+      41.3142
+     ],
+     "id": "LERS",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LERS",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 126.2,
+    "convective": [],
+    "cross_nm": 14.2,
+    "eta": "2026-10-02T08:54:56.332276Z",
+    "focus": {
+     "bbox": [
+      -0.1449,
+      40.0472,
+      0.2916,
+      40.3806
+     ],
+     "id": "LECH",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LECH",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 169.9,
+    "convective": [],
+    "cross_nm": 0.1,
+    "eta": "2026-10-02T09:13:59.963092Z",
+    "focus": {
+     "bbox": [
+      -0.6969,
+      39.3225,
+      -0.265,
+      39.6558
+     ],
+     "id": "LEVC",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LEVC",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 242.5,
+    "convective": [],
+    "cross_nm": -17.3,
+    "eta": "2026-10-02T09:45:35.563177Z",
+    "focus": {
+     "bbox": [
+      -0.7705,
+      38.1155,
+      -0.3458,
+      38.4489
+     ],
+     "id": "LEAL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LEAL",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "alternate",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 268.7,
+    "convective": [],
+    "cross_nm": 7.3,
+    "eta": "2026-10-02T09:57:00.644282Z",
+    "focus": {
+     "bbox": [
+      -1.4417,
+      37.7844,
+      -1.019,
+      38.1178
+     ],
+     "id": "LERI",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LERI",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "alternate",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 274.0,
+    "convective": [],
+    "cross_nm": -14.7,
+    "eta": "2026-10-02T09:59:19.123682Z",
+    "focus": {
+     "bbox": [
+      -1.0232,
+      37.6083,
+      -0.6015,
+      37.9417
+     ],
+     "id": "LELC",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LELC",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "alternate",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 275.6,
+    "convective": [],
+    "cross_nm": 0.0,
+    "eta": "2026-10-02T10:00:00Z",
+    "focus": {
+     "bbox": [
+      -1.3358,
+      37.6362,
+      -0.9139,
+      37.9695
+     ],
+     "id": "LEMI",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T09:00:00Z"
+    },
+    "icao": "LEMI",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T09:00:00Z",
+    "role": "destination",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   }
+  ],
+  "waypoints": [
+   {
+    "along_nm": 0.0,
+    "eta": "2026-10-02T08:00:00Z",
+    "icao": "LELL"
+   },
+   {
+    "along_nm": 102.4,
+    "eta": "2026-10-02T08:44:35.767852Z",
+    "icao": "TORDU"
+   },
+   {
+    "along_nm": 124.5,
+    "eta": "2026-10-02T08:54:13.389830Z",
+    "icao": "DIKUT"
+   },
+   {
+    "along_nm": 139.7,
+    "eta": "2026-10-02T09:00:50.452585Z",
+    "icao": "SOPET"
+   },
+   {
+    "along_nm": 170.1,
+    "eta": "2026-10-02T09:14:05.636735Z",
+    "icao": "VLC"
+   },
+   {
+    "along_nm": 275.6,
+    "eta": "2026-10-02T10:00:00Z",
+    "icao": "LEMI"
+   }
+  ]
+ },
  "route_observations": {
   "airports": [
    {

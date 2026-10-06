@@ -5174,6 +5174,8 @@ def get_live_layer(
         observed_conditions=layer.observed_conditions,
         observed_updated_at=layer.observed_updated_at,
         storms=layer.storms,
+        glance=layer.glance,
+        ribbon=layer.ribbon,
         changes=trails_for_pack(pack_dir, layer.changes),
         last_refresh_delta=layer.last_refresh_delta,
     )

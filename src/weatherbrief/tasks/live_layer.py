@@ -38,7 +38,9 @@ from weatherbrief.models.live import (
     LiveChange,
     LiveChanges,
     LiveEvidencePoint,
+    LiveGlance,
     LiveLayer,
+    LiveRibbon,
     LiveStorms,
 )
 from weatherbrief.models.observations import RouteObservations, RouteSigmets
@@ -285,6 +287,29 @@ def _build_storms(
     except Exception:
         logger.warning("Storm geometry failed — storms unavailable this tick", exc_info=True)
         return LiveStorms(status="unavailable", corridor_nm=STORM_CORRIDOR_NM)
+
+
+def _build_glance(
+    layer: LiveLayer,
+    route: RouteConfig | None,
+    departure: datetime | None,
+    briefing_data: dict,
+    now: datetime,
+) -> tuple[LiveGlance | None, LiveRibbon | None]:
+    """The Observed tab's nutshell and ribbon for this tick (#690), and the
+    storms' map focus. Never raises: a failure leaves both blocks null (the
+    clients then show the details only) and the tick carries on."""
+    if route is None:
+        return None, None
+    try:
+        from weatherbrief.tasks.live_glance import build_glance
+
+        return build_glance(
+            layer, route, departure, alternate_icaos=_alternate_icaos(briefing_data), now=now,
+        )
+    except Exception:
+        logger.warning("Live glance failed for %s — glance/ribbon null this tick", layer.flight_id, exc_info=True)
+        return None, None
 
 
 def route_destination(route: RouteConfig | None) -> tuple[float, float] | None:
@@ -756,6 +781,7 @@ def commit_live_update(
         if seeded:
             changes.baseline_source = "live_start"
         layer.changes = changes
+        layer.glance, layer.ribbon = _build_glance(layer, route, departure, briefing_data, now)
         layer.last_refresh_delta = worsening_delta(changes)
         layer.alerted = memory.alerted
         layer.sigmet_traces = list(memory.sigmets.values())
@@ -783,7 +809,10 @@ LIVE_NOTE = (
     "and the significant changes they show. The digest, advisories and grade "
     "were written before these, at digest_written_at, and are never re-graded "
     "by them: lead with any alert-tier change on flight day, and say the "
-    "digest predates it rather than reconciling the two. times_today of 2 or "
+    "digest predates it rather than reconciling the two. glance holds the "
+    "same at-a-glance lines the app shows (one per flight phase, observations "
+    "only, 'unavailable' means the source could not be read, not clear): use "
+    "them as the overview. times_today of 2 or "
     "more means the change has come and gone today (bouncing, not building); "
     "recently_cleared lists what cleared in the last hour."
 )
@@ -842,6 +871,16 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
         "alert_count": changes.alert_count if changes else 0,
         "worsened_count": changes.worsened_count if changes else 0,
         "improved_count": changes.improved_count if changes else 0,
+        # The Observed tab's nutshell (#690), word for word: the agent and
+        # both apps say the same thing. Null when the tick could not build it.
+        "glance": (
+            {
+                "as_of": _iso(layer.glance.as_of),
+                "headline": layer.glance.headline,
+                "lines": [{"phase": ln.phase, "text": ln.text} for ln in layer.glance.lines],
+            }
+            if layer.glance is not None else None
+        ),
     }
 
     items = list(changes.changes) if changes else []

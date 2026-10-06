@@ -319,6 +319,49 @@ link in a merge starts a new row (and can alert again). Coverage for the
 station fallback is read at the route point nearest the airport along track,
 not at the airport itself.
 
+## Observed tab: glance, ribbon, focus (#690)
+
+Plan in `designs/future/observed-tab-presentation.md` §3–5. Server slice only so
+far: `tasks/live_glance.py::build_glance` runs in `commit_live_update` right
+after the classifier and stores `LiveLayer.glance` / `LiveLayer.ribbon`, and
+sets `LiveStorm.focus` on every storm. Served on `/live` and in the iOS UI-test
+fixtures; not in the snapshot overlay or the history. Never raises: a failure
+logs `Live glance failed` and leaves both null for that tick.
+
+- **Glance**: `as_of` (the tick), `headline` ("Observed 14:29Z · as briefed,
+  departure improving", from the change rows' directions by phase; "as briefed"
+  only with a briefing baseline, `updated` rows read "N SIGMETs reissued"), then
+  one line per phase, departure → en route → arrival. Each line: `text`,
+  `alert` (an alert-tier row of that phase, styling only), `passed` (at plan),
+  `unavailable` (metar / taf / storms / lightning / sigmets), `sources`, `focus`.
+- **Rules**: observed motion only, never `estimate`; a missing source says
+  "unavailable", never "clear"/"no storm"; counts are storms. Terminal clauses
+  read storms and lightning within `TERMINAL_NM` (20 NM, the widest sampler
+  ring) of the airport, by haversine from it; en route counts storms still
+  ahead outside both terminal discs. Storm motion is the component toward/away
+  from the *track* (as on the storm rows), so near an airport it can read
+  lower than the storm's own speed. A block older than 30 min at the tick and
+  a METAR older than 75 min are flagged inline with their time.
+- **Ribbon**: equal segments of ~10 NM (≤ 30) with planned ETAs; per segment
+  the max dBZ in the 10 NM ring of the observed route points (`radar_status`
+  measured / no_coverage / no_sample, so "nothing detected" ≠ "not seen"),
+  lightning in the same ring, overlapping SIGMET ids and storm ids. Station
+  lane: every corridor airport with a METAR/TAF, signed `cross_nm`, METAR now,
+  TAF at ETA (prevailing + temporary, for hatching). SIGMET band: span, new
+  (from `new_sigmets`), pending, and MOV against the route (toward / away /
+  parallel / stationary, from the area centre). The storm lane is
+  `LiveLayer.storms` itself, not copied.
+- **Focus** (`LiveFocus`): `{kind, id, bbox (min_lon, min_lat, max_lon,
+  max_lat), layers, time}` on storms (storm + the track abeam), ribbon SIGMETs
+  (their area; a pending one opens at its start), stations, segments, and each
+  glance line. Change rows carry none: clients map a row to its item through
+  `storm_ids`, the SIGMET key or `icao` (keeps `live.json`'s change rows and the
+  history unchanged).
+- **Agents**: `summarize_live` adds `glance` (`as_of`, `headline`, `lines`
+  of `{phase, text}`), word for word what the apps show; `LIVE_NOTE` says so.
+- **Size**: ~17 KB per `live.json` on a 280 NM route (LELL→LEMI), overwritten
+  each tick.
+
 ## SIGMET reissues (#682)
 
 `live_significance._sigmet_changes` matches each SIGMET it sees for the first
@@ -404,8 +447,9 @@ What the code relies on:
 - `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
+- `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
-- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
+- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
 
 ## Clients
 
