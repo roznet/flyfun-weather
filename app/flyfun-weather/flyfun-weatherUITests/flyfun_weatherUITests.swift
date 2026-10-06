@@ -111,24 +111,29 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(packMenu.waitForExistence(timeout: Self.uiTimeout), "the pack menu should be in the toolbar")
         packMenu.tap()
 
-        var feedback = app.buttons["briefingFeedbackButton"].firstMatch
-        if !feedback.waitForExistence(timeout: Self.probeTimeout) {
-            feedback = app.buttons["Send Feedback on This Briefing"].firstMatch
-        }
+        let feedback = app.buttons["briefingFeedbackButton"].firstMatch
         XCTAssertTrue(feedback.waitForExistence(timeout: Self.uiTimeout), "the pack menu should offer briefing feedback")
         feedback.tap()
 
-        XCTAssertTrue(app.staticTexts["feedbackBriefingLinkNote"].waitForExistence(timeout: Self.uiTimeout),
+        // A menu item tapped while the menu is still animating open can be
+        // swallowed: on the 2026-10-05 CI run the menu was still showing this
+        // item when the form wait expired, and the retry passed. If the form
+        // hasn't come up and the item is still there, tap it again — as a
+        // pilot would.
+        let note = app.staticTexts["feedbackBriefingLinkNote"]
+        if !note.waitForExistence(timeout: Self.probeTimeout) && feedback.exists { feedback.tap() }
+        XCTAssertTrue(note.waitForExistence(timeout: Self.uiTimeout),
                       "the form should say the report links to this briefing")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "briefing-feedback-form"
         shot.lifetime = .keepAlways
         add(shot)
 
-        var field = app.textViews["feedbackCommentField"].firstMatch
-        if !field.waitForExistence(timeout: Self.probeTimeout) {
-            field = app.textFields["feedbackCommentField"].firstMatch
-        }
+        // A vertical-axis TextField, exposed as a text *field* on both idioms.
+        // There used to be a text-view probe first: it missed on every run
+        // (8 s locally), and on CI's slower simulators its repeated snapshots
+        // ran to XCUI's "Timed out while evaluating UI query".
+        let field = app.textFields["feedbackCommentField"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: Self.uiTimeout), "the comment field should be shown")
         field.tap()
         field.typeText("No TAF at EGSC today")
@@ -209,13 +214,26 @@ final class flyfun_weatherUITests: XCTestCase {
         // Whichever surfaces first decides the path. Waiting on the list alone
         // spent the whole probe (8 s) on every iPad-portrait launch, where the
         // list is never there — ~32 s of the live scenario's four relaunches.
+        switch firstToAppear([list, showSidebar]) {
+        case 0: return
+        case 1: showSidebar.tap()
+        default: XCTFail("Could not reveal flight list: neither the list nor the sidebar toggle was found")
+        }
+    }
+
+    /// Index of the first of `elements` to exist, polled together for up to
+    /// `probeTimeout`; nil if none does. For "which path is this?" branches,
+    /// where waiting on one candidate first burns the whole probe whenever the
+    /// other is the answer — a wait on an element that will never come is
+    /// also what runs into XCUI's snapshot timeout on CI's slower simulators.
+    @MainActor
+    private func firstToAppear(_ elements: [XCUIElement]) -> Int? {
         let deadline = Date().addingTimeInterval(Self.probeTimeout)
         repeat {
-            if list.exists { return }
-            if showSidebar.exists { showSidebar.tap(); return }
+            if let i = elements.firstIndex(where: \.exists) { return i }
             Thread.sleep(forTimeInterval: 0.25)
         } while Date() < deadline
-        XCTFail("Could not reveal flight list: neither the list nor the sidebar toggle was found")
+        return nil
     }
 
     /// Journey 1 — launch in mock mode lands past the login gate on the flight
@@ -313,9 +331,12 @@ final class flyfun_weatherUITests: XCTestCase {
     /// "Show Sidebar" fallback above.
     @MainActor
     private func returnToFlightList(_ app: XCUIApplication) {
-        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: Self.probeTimeout) { return }
+        // Either the list is already showing (iPad) or the pushed briefing's
+        // back button is (iPhone) — whichever comes first, not the list's full
+        // probe first (8 s on every iPhone run).
+        let list = app.descendants(matching: .any)["flightList"]
         let back = app.navigationBars.buttons["Flights"].firstMatch
-        if back.waitForExistence(timeout: Self.probeTimeout) { back.tap() }
+        if firstToAppear([list, back]) == 1 { back.tap() }
         revealFlightList(app)
     }
 
@@ -1155,10 +1176,14 @@ final class flyfun_weatherUITests: XCTestCase {
                 if shoot { attachScreenshot(app, "Live-\(scenario)-\(hhmm)-1-changes") }
 
                 // Every SIGMET a "new SIGMET" change names (a merged change
-                // names each FIR's) carries the NEW badge.
+                // names each FIR's) carries the NEW badge. A reissue row's key
+                // is "<chain's first>+<this>" (#682): only "this" is listed.
                 let issued = ((changes["changes"] as? [[String: Any]]) ?? [])
                     .filter { $0["kind"] as? String == "sigmet_issued" }
-                    .flatMap { ($0["key"] as? String ?? "").split(separator: "+") }
+                    .flatMap { c -> [Substring] in
+                        let parts = (c["key"] as? String ?? "").split(separator: "+")
+                        return c["replaces"] is String ? Array(parts.suffix(1)) : parts
+                    }
                 for (pill, sectionId, label) in [("METAR/TAF", "observationsSection", "2-observations"),
                                                  ("SIGMET", "sigmetsSection", "3-hazards")] {
                     guard shoot || (sectionId == "sigmetsSection" && !issued.isEmpty) else { continue }
@@ -1262,9 +1287,11 @@ final class flyfun_weatherUITests: XCTestCase {
             // Four ticks, each carrying something the others don't: 05:10 the
             // live-start baseline, 07:10 trails + cleared rows after the switch
             // to the briefing baseline, 08:30 the second cross-section reading,
-            // 09:00 a cancellation and a merged two-FIR NEW. 06:00 (a wind
-            // change — rows render kind-agnostically) and 10:20 (09:00's kinds
-            // again) were dropped; each tick is a full relaunch, ~45-75 s.
+            // 09:00 two merged NEW changes at once — LECB 3 + LECM 3, and the
+            // LECB 2 → 4 reissue shown as a replacement — three badges, two
+            // trails. 06:00 (a wind change — rows render kind-agnostically) and
+            // 10:20 (09:00's kinds again) were dropped; each tick is a full
+            // relaunch, ~45-75 s.
             "2026-10-02_lell_lemi", ticks: ["0510", "0710", "0830", "0900"],
             conditions: [
                 "0510": "1 SIGMET zone, 8 METAR columns",

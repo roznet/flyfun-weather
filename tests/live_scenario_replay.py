@@ -161,7 +161,7 @@ IOS_TICKS = {
         "05:10",  # starting point taken at 05:00; LECB 2 + LEVC TS alert
         "07:10",  # after the 06:52 rebuild: LEVC TS under the route, before departure
         "08:30",  # LECB 3 / LECM 3 EMBD TS at the destination
-        "09:00",  # LECB 2 ends (improvement: highlight)
+        "09:00",  # LECB 2 reissued as LECB 4 (a replacement, NEW) beside LECB 3 / LECM 3
     ],
 }
 IOS_SCENARIOS = (
