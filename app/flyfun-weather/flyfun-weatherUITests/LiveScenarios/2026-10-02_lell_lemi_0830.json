@@ -236,6 +236,7 @@
   "as_of": "2026-10-02T08:30:00Z",
   "comparison": "mixed",
   "headline": "Observed 08:30Z \u00b7 2 worse since the briefing (en route, arrival), en route and arrival improving",
+  "highlight": null,
   "lines": [
    {
     "alert": false,

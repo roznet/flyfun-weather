@@ -78,6 +78,7 @@
   "as_of": "2026-10-02T05:10:00Z",
   "comparison": "worse",
   "headline": "Observed 05:10Z \u00b7 2 worse since live tracking began (en route)",
+  "highlight": null,
   "lines": [
    {
     "alert": false,

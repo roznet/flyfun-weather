@@ -16,6 +16,11 @@ def _clean_env_leaks(monkeypatch):
     """Prevent load_dotenv() side-effects from leaking between test modules."""
     monkeypatch.delenv("OPENMETEO_API_KEY", raising=False)
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    # #697: the live tick generates its Observed highlight whenever a key is
+    # present, so without this a developer with ANTHROPIC_API_KEY exported
+    # would have the suite call Anthropic — and be billed for it. Tests that
+    # want the path set the key themselves.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
 @pytest.fixture(autouse=True)

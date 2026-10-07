@@ -313,6 +313,32 @@ class LiveGlanceLine(BaseModel):
     focus: LiveFocus | None = None
 
 
+class LiveHighlight(BaseModel):
+    """The one-glance highlight above the nutshell (#697), written by a small
+    model from facts the code has already computed.
+
+    The model only chooses what leads and words it: every fact in ``text``
+    comes from the facts block :mod:`weatherbrief.tasks.live_highlight` built
+    deterministically from this tick. Written after the tick has committed, so
+    a layer always exists without one (``None`` until the first generation, and
+    for good on a flight whose every attempt was rejected).
+
+    **Not displayed yet** (owner, 2026-10-07): written to the layer so real
+    flight days can be reviewed and the prompt calibrated before any client
+    shows it. Deliberately absent from the agent ``live`` block for the same
+    reason — ``summarize_live`` names the glance fields it exposes.
+    """
+
+    text: str
+    model: str
+    # Hash of the facts block minus ``now``: the same facts carry the previous
+    # highlight forward instead of paying for an identical call.
+    facts_hash: str
+    generated_at: datetime
+    # Round-trip of the model call, for the latency budget (#697: p50 ~1.0 s).
+    latency_ms: int | None = None
+
+
 class LiveGlance(BaseModel):
     """The Observed tab's top block (#690, observed-tab-presentation §3):
     one "as of" time, one line comparing with the briefing, then one line per
@@ -323,6 +349,10 @@ class LiveGlance(BaseModel):
     headline: str
     comparison: Literal["as_briefed", "worse", "better", "mixed", "unavailable"]
     lines: list[LiveGlanceLine] = Field(default_factory=list)
+    # The model-written highlight (#697), patched in after the tick commits.
+    # None whenever it was not generated, not reusable, or rejected by the
+    # grounding check — readers fall back to ``headline``.
+    highlight: LiveHighlight | None = None
 
 
 class RibbonWaypoint(BaseModel):
