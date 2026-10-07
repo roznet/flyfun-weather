@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 
 CELLS_INGEST_ENV = "WB_CELLS_INGEST_ENABLED"
 CELLS_INBOX_ENV = "CELLS_INBOX_DIR"
+#: Whether cells the node marked as non-meteorological are kept out of the
+#: route products (#696).  **Off by default**: the node measures and records
+#: the evidence from the day this ships, but acting on it changes what counts
+#: as a storm, so it waits for a replay-set measurement rather than riding in
+#: on the same deploy.  See designs/meteorology-decisions.md §42.
+CELLS_CLUTTER_SUPPRESS_ENV = "WB_CELLS_CLUTTER_SUPPRESS"
 _CELLS_INBOX_DEFAULT = "/app/cells_inbox"
 
 #: How long the store keeps a display file.  24 h, agreed on the issue
@@ -85,6 +91,18 @@ class InvalidDisplay(ValueError):
 
 def cells_ingest_enabled() -> bool:
     return os.environ.get(CELLS_INGEST_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def clutter_suppress_enabled() -> bool:
+    """Whether to drop suspect echoes from storms, alerts and ribbon bands.
+
+    Read per call rather than cached, so flipping it is a restart of the web
+    app and not a deploy.  Both ``suspect`` and ``confirmed`` are dropped when
+    it is on: the two levels say how much evidence there is, not whether to
+    act — an echo with the isolation evidence against it has no business in a
+    confident storm row either way (#696).
+    """
+    return os.environ.get(CELLS_CLUTTER_SUPPRESS_ENV, "").strip().lower() in ("1", "true", "yes")
 
 
 def inbox_dir() -> Path:

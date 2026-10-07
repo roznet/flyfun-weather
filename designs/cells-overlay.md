@@ -161,6 +161,21 @@ revision.  Same wording as the web: "lightning pending" / "X unavailable" in
 the badge, `lightningText` / `rateAsOfText` in the callout, "lightning
 pending" in the Observed tab list.
 
+## Suspect echoes (#696)
+
+The node marks cores that do not look like weather (`observed-cells.md`,
+meteorology-decisions §42) and the display file carries the `clutter` block on
+them. The droplet does two things with it:
+
+- **Serves it unchanged.** `/api/observed/cells/{stamp}` is the raw file; the
+  validator is key-agnostic so the additive field needs no schema bump, and the
+  overlay is free to draw or dim such a cell. The web and iOS renderers do not
+  read it yet.
+- **Optionally keeps it out of the route products** —
+  `cells_display.clutter_suppress_enabled()` / `WB_CELLS_CLUTTER_SUPPRESS`,
+  **off by default**, consumed by `storms.operational_cells`
+  (`live-observation-layer.md`). Suppression is not a clear-sky claim.
+
 ## Gotchas
 
 - The ingest loop only starts when the flag is set at boot; a missing inbox

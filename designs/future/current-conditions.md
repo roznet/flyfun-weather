@@ -233,6 +233,13 @@ At LFMN the 5 NM DBZH p95 was 54.5 dBZ and 28% of available pixels exceeded
 every headline needs nearest distance, direction, p95, and affected-area fraction.
 The DBZH `qi_total` layer was zero for most detected pixels, unlike RATE quality
 (about 0.91–1.0); verify its producer semantics before treating zero as low quality.
+**Verified 2026-10-07 (#696), and the caution was right:** it is zero for ~95 % of
+all European echo pixels because most nodes publish no index at all, and the RATE
+chain gave 0.86 to a pixel that was plainly ground clutter. Zero means
+"unmeasured", not "poor". `opera.read_window(..., with_quality=True)` now exposes
+the layer and the cell analysis records its distribution per core at **zero
+weight** — evidence for a later evaluation, never a filter
+(meteorology-decisions §42).
 
 ## Historical verification
 

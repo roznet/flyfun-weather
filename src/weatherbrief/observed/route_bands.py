@@ -24,7 +24,7 @@ from typing import Any
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.models.live import LiveStorm, RibbonWeather
 from weatherbrief.observed.intensity import classify_dbz, intensity_label
-from weatherbrief.observed.storms import STORM_CORRIDOR_NM
+from weatherbrief.observed.storms import STORM_CORRIDOR_NM, operational_cells
 
 #: Outline tier → band tier, drawn in this order (rain under the cores).
 TIERS = {"rain20": "rain", "core35": "core"}
@@ -123,6 +123,15 @@ def _corridor_box(track: RouteTrack, corridor_nm: float) -> tuple[float, float, 
     return min(lats) - pad_lat, max(lats) + pad_lat, min(lons) - pad_lon, max(lons) + pad_lon
 
 
+def _has_member(tier: str, ring: list[list[float]], cells: list[dict]) -> bool:
+    """Whether any of ``cells`` lies inside ``ring`` as a member of ``tier``."""
+    return any(
+        c.get("tier") in _MEMBER_TIERS[tier] and c.get("lat") is not None
+        and _inside(c["lat"], c["lon"], ring)
+        for c in cells
+    )
+
+
 def _band(
     tier: str, n: int, ring: list[list[float]], cells: list[dict], track: RouteTrack,
     corridor_nm: float, storm_by_cell: dict[str, str],
@@ -195,7 +204,15 @@ def build_weather_bands(
     if not frame or track.total_nm <= 0:
         return []
     outlines = frame.get("outlines") or {}
-    cells = [c for c in frame.get("cells") or [] if isinstance(c, dict)]
+    # One gate with the storm rows (#696): a suppressed cell must not set a
+    # band's peak intensity either, and a `core` band whose every member was
+    # suppressed is not reported at all.  The outlines themselves are traced
+    # from the tier masks on the node and cannot be filtered per cell, so a
+    # suspect echo can still leave a bare rain20 ring on the ribbon at the
+    # floor intensity — a known limitation, recorded in observed-cells.md.
+    all_cells = [c for c in frame.get("cells") or [] if isinstance(c, dict)]
+    cells = operational_cells(all_cells)
+    suppressed = len(all_cells) - len(cells)
     storm_by_cell = {cid: st.id for st in storms for cid in st.cell_ids}
     s, n_, w, e = _corridor_box(track, corridor_nm)
 
@@ -210,8 +227,14 @@ def build_weather_bands(
             if max(lats) < s or min(lats) > n_ or max(lons) < w or min(lons) > e:
                 continue
             band = _band(tier, n, ring, cells, track, corridor_nm, storm_by_cell)
-            if band is not None:
-                found.append(band)
+            if band is None:
+                continue
+            if suppressed and tier != "rain20" and not _has_member(tier, ring, cells):
+                # A core band with no surviving member is the suspect echo's
+                # own outline: reporting it at the floor intensity would put
+                # back exactly what the storm row just dropped.
+                continue
+            found.append(band)
         found = sorted(found, key=lambda b: b.near_nm)[:BANDS_MAX]
         bands.extend(sorted(found, key=lambda b: (b.from_nm, b.near_nm)))
     return bands

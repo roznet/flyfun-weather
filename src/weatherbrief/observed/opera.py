@@ -10,6 +10,11 @@ decode to "no value", and conflating them turns "we cannot see there" into
 could do.  :class:`~weatherbrief.observed.frames.GridFrame` therefore carries
 the two as separate masks and this reader never collapses them.
 
+A composite may also carry a **quality index** beside the data
+(``/datasetN/dataM/qualityK``).  ``read_window(..., with_quality=True)``
+decodes it into ``GridFrame.aux["quality"]``; see ``_find_quality_group`` for
+why it is evidence and not a filter.
+
 Geolocation comes from the file: ``/where/projdef`` is a proj4 string and the
 corner lat/lons pin it.  We project the *upper-left* corner rather than
 trusting a nominal grid origin, because the OPERA domain has been re-cut
@@ -156,6 +161,32 @@ def _find_data_group(handle, quantity: str):
     raise KeyError(f"ODIM file has no {quantity} dataset")
 
 
+def _find_quality_group(data, task: str | None = None):
+    """The ``/datasetN/dataM/qualityK`` group holding a quality index, or ``None``.
+
+    OPERA CIRRUS carries one, ``how/task = pl.imgw.quality.qi_total`` — an
+    aggregate of the upstream nodes' own checks, 0 (poorest) to 1 (best), and
+    documented as subject to revision.  **It is not a clutter flag**: measured
+    over Europe on 2026-10-07, ~95 % of all echo pixels >= 20 dBZ carry a
+    literal 0 because most nodes supply no index at all, and the NIMBUS RATE
+    chain gave 0.86 to a pixel that was plainly ground clutter (#696).  So it
+    is read as *evidence to record*, never as a veto, a probability of
+    precipitation, or a multiplier on dBZ.
+
+    ``task`` selects a specific index when a producer ships several; without
+    it the first quality group in name order wins.
+    """
+    for name in sorted(k for k in data.keys() if k.startswith("quality")):
+        group = data[name]
+        if "data" not in group:
+            continue
+        how = group.get("how")
+        found = (_attr(how, "task") or "") if how is not None else ""
+        if task is None or found == task:
+            return group, found or None
+    return None
+
+
 def read_metadata(path: Path | str, quantity: str) -> dict:
     """Sidecar metadata for one composite, without reading the pixel array."""
     import h5py
@@ -245,6 +276,7 @@ def read_window(
     *,
     source: str,
     units: str,
+    with_quality: bool = False,
 ) -> GridFrame:
     """Decode one pixel block of a composite into physical units.
 
@@ -270,6 +302,22 @@ def read_window(
         col0 = max(0, min(window.col0, grid.nx))
         col1 = max(col0, min(window.col1, grid.nx))
         raw = np.asarray(data["data"][row0:row1, col0:col1])
+
+        quality = quality_task = None
+        if with_quality:
+            found = _find_quality_group(data)
+            if found is not None:
+                group, quality_task = found
+                qraw = np.asarray(group["data"][row0:row1, col0:col1], dtype=np.float32)
+                qwhat = group.get("what")
+                qgain = float(_attr(qwhat, "gain") or 1.0) if qwhat is not None else 1.0
+                qoffset = float(_attr(qwhat, "offset") or 0.0) if qwhat is not None else 0.0
+                qnodata = _attr(qwhat, "nodata") if qwhat is not None else None
+                quality = qoffset + qgain * qraw
+                if qnodata is not None:
+                    # "This node published no index" — distinct from a real 0,
+                    # which is a genuine (if useless) poorest-quality reading.
+                    quality[np.isclose(qraw, float(qnodata))] = np.nan
 
         valid_time = _parse_odim_time(
             _attr(dataset["what"], "enddate"), _attr(dataset["what"], "endtime")
@@ -303,6 +351,12 @@ def read_window(
     if start_time and valid_time:
         window_minutes = max(0.0, (valid_time - start_time).total_seconds() / 60.0)
 
+    aux: dict = {}
+    if quality is not None:
+        aux["quality"] = quality
+        if quality_task:
+            aux["quality_task"] = quality_task
+
     return GridFrame(
         source=source,
         quantity=quantity,
@@ -315,4 +369,5 @@ def read_window(
         nodata=nodata_mask,
         undetect=undetect_mask,
         attribution=attribution,
+        aux=aux,
     )

@@ -18,6 +18,10 @@ newest display file into :class:`~weatherbrief.models.live.LiveStorms`:
 
 Geometry only: nothing here re-analyses radar (the droplet never runs cell
 analysis). Which storms alert is ``live_significance``'s job.
+
+Cells the node marked as non-meteorological echoes (#696) pass through
+``operational_cells``, the single gate for every route product. It is a no-op
+unless ``WB_CELLS_CLUTTER_SUPPRESS`` is set.
 """
 
 from __future__ import annotations
@@ -132,6 +136,31 @@ def load_cell_frames(now: datetime, store=None) -> CellFrames:
 def _equivalent_radius_nm(cell: dict) -> float:
     area = cell.get("area_km2") or 0.0
     return math.sqrt(max(area, 0.0) / math.pi) / 1.852
+
+
+def operational_cells(cells: list[dict]) -> list[dict]:
+    """The cells the route products may speak about (#696).
+
+    With ``WB_CELLS_CLUTTER_SUPPRESS`` off — the default — this is every cell,
+    so the suspect block is annotation and nothing more.  With it on, cells the
+    node marked suspect or confirmed are dropped **here**, before grouping, so
+    one gate covers storms, the §41 alert rows, the glance and the ribbon
+    bands rather than each re-deciding.
+
+    Dropping a cell is not a claim that the sky is clear there: it is a
+    statement that we have no confident storm to report.  The cell is still in
+    the display file with its reasons, and the overlay can draw it.
+    """
+    from weatherbrief.observed.cells_display import clutter_suppress_enabled
+    from weatherbrief.observed.cells.clutter import suspect
+
+    if not clutter_suppress_enabled():
+        return list(cells)
+    kept = [c for c in cells if not suspect(c)]
+    dropped = len(cells) - len(kept)
+    if dropped:
+        logger.info("cells: %d of %d cells held back as suspect echoes", dropped, len(cells))
+    return kept
 
 
 def group_storms(cells: list[dict]) -> list[list[dict]]:
@@ -387,10 +416,11 @@ def build_storms(
     for frame in frames.earlier:
         at = _parse_time(frame.get("valid_time"))
         if at is not None:
-            history.append((at, {c["id"]: c for c in frame.get("cells") or [] if "id" in c}))
+            history.append((at, {c["id"]: c for c in operational_cells(frame.get("cells") or [])
+                                 if "id" in c}))
     storms: list[LiveStorm] = []
     track = schedule.track
-    for group in group_storms(data.get("cells") or []):
+    for group in group_storms(operational_cells(data.get("cells") or [])):
         # The corridor first: the full storm (history, estimate) only for the
         # few near the route, not the hundreds of cores across Europe.
         if min(track.project(c["lat"], c["lon"]).offtrack_nm for c in group) > corridor_nm:

@@ -6,6 +6,7 @@
     python -m weatherbrief.observed.cells status [--hours 24]
     python -m weatherbrief.observed.cells retry-failed
     python -m weatherbrief.observed.cells scores --from 2026-10-03T06:00 --to 2026-10-03T18:00 [--root /tmp/replay] [--json]
+    python -m weatherbrief.observed.cells clutter --from 2026-10-07T00:00 --to 2026-10-07T01:00 [--root /tmp/replay] [--jsonl rows.jsonl] [--json]
     python -m weatherbrief.observed.cells map [--time latest] --out cells.html [--bbox S,W,N,E] [--open]
     python -m weatherbrief.observed.cells archive pending | pack --day D | verify --day D --remote-sums F
                                                   | prune [--execute] | nas-plan … | restore …
@@ -160,6 +161,39 @@ def _scores(args) -> int:
     return 0
 
 
+def _clutter(args) -> int:
+    from .clutter_eval import rows_over, summarise, write_jsonl
+
+    root = args.root or cells_root()
+    rows = rows_over(root, args.start, args.end, DEFAULT_POLICY)
+    if args.jsonl:
+        print(f"wrote {write_jsonl(rows, args.jsonl)} rows to {args.jsonl}")
+    report = summarise(rows)
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    if not rows:
+        print(f"no assessed cells under {DEFAULT_POLICY.policy_version} in that span "
+              f"(catalogues under another policy are skipped)")
+        return 0
+    print(f"{report['frames']} frames, policy {DEFAULT_POLICY.policy_version}")
+    print(f"{'tier':<8}{'cells':>8}{'suspect':>9}{'confirmed':>11}{'flagged %':>11}"
+          f"{'weather':>9}{'lost':>6}")
+    for tier, row in report["tiers"].items():
+        print(f"{tier:<8}{row['cells']:>8}{row['suspect']:>9}{row['confirmed']:>11}"
+              f"{(row['flagged_pct'] if row['flagged_pct'] is not None else 0):>11.2f}"
+              f"{row['label_weather']:>9}{row['weather_lost']:>6}")
+    print("\nwhy flagged:", ", ".join(f"{k} {v}" for k, v in report["reasons"].items()) or "—")
+    print("features unknown:", ", ".join(f"{k} {v}" for k, v in report["unknown_features"].items()) or "—")
+    delta = report["peak_minus_robust_db"]
+    print(f"peak - robust peak (dB): p50 {delta['p50']} p90 {delta['p90']} max {delta['max']}")
+    if report["weather_lost_examples"]:
+        print("\nflagged despite lightning or a cloud top — a veto leak, not a calibration result:")
+        for row in report["weather_lost_examples"]:
+            print("   ", row)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m weatherbrief.observed.cells")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -184,6 +218,13 @@ def main(argv: list[str] | None = None) -> int:
     mp.add_argument("--out", required=True, type=Path)
     mp.add_argument("--bbox", help="south,west,north,east in degrees (default: radar extent)")
     mp.add_argument("--open", action="store_true", help="open it in the default browser")
+    cl = sub.add_parser("clutter", help="clutter-evidence report over archived catalogues (#696)")
+    cl.add_argument("--from", dest="start", type=_utc, required=True)
+    cl.add_argument("--to", dest="end", type=_utc, required=True)
+    cl.add_argument("--root", type=Path, help="read catalogues from here instead of WB_CELLS_ROOT")
+    cl.add_argument("--jsonl", type=Path, help="also write one row per assessed cell here")
+    cl.add_argument("--json", action="store_true", help="print the report as JSON")
+
     sc = sub.add_parser("scores", help="median self-scores per tier, lead and motion variant (#662)")
     sc.add_argument("--from", dest="start", required=True, type=_utc)
     sc.add_argument("--to", dest="end", required=True, type=_utc)
@@ -205,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         return _archive(args, sources)
     if args.command == "scores":
         return _scores(args)
+    if args.command == "clutter":
+        return _clutter(args)
     root = cells_root()
     lookback = catchup_lookback()
 

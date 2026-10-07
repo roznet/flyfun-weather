@@ -56,6 +56,7 @@ from ..frames import (
 from ..grid import GridSpec, GridWindow, compute_window
 from .advect import flow_to_dict
 from .attributes import cloud_tops, flash_counts, rate_peaks, same_grid
+from .clutter import assess as assess_clutter, assessable, rescore as rescore_clutter
 from .catalogue import (
     SCHEMA,
     catalogue_path,
@@ -367,6 +368,31 @@ def read_dbzh(store: FrameStore, t: datetime) -> GridFrame | None:
         return None
 
 
+def read_quality(store: FrameStore, t: datetime) -> np.ndarray | None:
+    """The DBZH frame's OPERA quality index, full grid, or ``None``.
+
+    Read on its own rather than through ``FrameCache``: the clutter evidence
+    needs it for the frame being analysed only, and caching a second float32
+    copy of a 3800 x 4400 grid for each of the four cached frames would add
+    ~270 MB to a measured ~2.2 GB peak for no use.  Read once per frame,
+    released with the call (#696).
+    """
+    if not store.has(SOURCE_OPERA_DBZH, t):
+        return None
+    path = store.payload_path(SOURCE_OPERA_DBZH, t)
+    try:
+        grid = opera.read_grid(path)
+        frame = opera.read_window(
+            path, "DBZH", GridWindow(0, grid.ny, 0, grid.nx),
+            source=SOURCE_OPERA_DBZH, units="dBZ", with_quality=True,
+        )
+    except Exception:
+        logger.warning("Could not read the quality layer of %s", path, exc_info=True)
+        return None
+    value = frame.aux.get("quality")
+    return value if isinstance(value, np.ndarray) else None
+
+
 def _slot(t: datetime, minutes: int) -> datetime:
     t = t.replace(second=0, microsecond=0)
     return t - timedelta(minutes=t.minute % minutes)
@@ -564,6 +590,24 @@ def process_frame(
     inputs[SOURCE_EUMETSAT_LI] = li.valid_time.isoformat() if li else None
     inputs[SOURCE_EUMETSAT_CTTH] = ctth.valid_time.isoformat() if ctth else None
 
+    # Clutter evidence (#696): the previous frame for the pixel-keyed onset
+    # test, and the composite's own quality index.  Both optional — a missing
+    # one costs its feature, never the frame.
+    onset_from = None
+    earlier_frame = None
+    clutter_on = policy.clutter.enabled
+    for minutes in (5, 10, 15) if clutter_on else ():
+        candidate = cache.dbzh(valid_time - timedelta(minutes=minutes))
+        if candidate is not None and same_grid(candidate, frame):
+            earlier_frame, onset_from = candidate, valid_time - timedelta(minutes=minutes)
+            break
+    inputs["clutter_onset_from"] = onset_from.isoformat() if onset_from else None
+    quality = read_quality(ws.frames, valid_time) if clutter_on else None
+    inputs["clutter_quality"] = quality is not None
+    rain_tier = next((t.name for t in policy.tiers
+                      if t.threshold_dbz == policy.clutter.rain_dbz), None)
+    rain_labels = detections[rain_tier].labels if rain_tier in detections else None
+
     cells_out: list[dict] = []
     for tier in policy.tiers:
         det = detections[tier.name]
@@ -584,6 +628,12 @@ def process_frame(
         rates = rate_peaks(det, grid, rate) if rate is not None else [None] * n
         flashes = flash_counts(det, grid, li, policy.flash_buffer_km) if li is not None else [None] * n
         tops = cloud_tops(det, grid, ctth) if ctth is not None else [(None, None)] * n
+        evidence = (
+            assess_clutter(det, frame, rain_labels=rain_labels, earlier=earlier_frame,
+                           quality=quality, flashes=flashes, tops=[t[0] for t in tops],
+                           policy=policy.clutter)
+            if clutter_on and assessable(tier, policy.clutter) else [None] * n
+        )
 
         for k, cell in enumerate(det.cells):
             lin = lineage[cell.label]
@@ -627,6 +677,8 @@ def process_frame(
                 "trend": trend(history, now_entry, valid_time, policy),
                 "history": history + [now_entry],
             })
+            if evidence[k] is not None:
+                cells_out[-1]["clutter"] = evidence[k].as_dict()
 
     covered = ~np.asarray(frame.nodata)
     catalogue = {
@@ -799,6 +851,14 @@ def amend_frame(ws: Workspace, t: datetime, cat: dict, policy: CellPolicy, cache
             cell["flashes"] = flashes
             cell["history"] = history + [now_entry]
             cell["trend"] = trend(history, now_entry, t, policy)
+            # Lightning is a clutter veto (#696), so a frame whose flashes
+            # land late must lose any suspicion it was published with.  The
+            # features are already in the cell: nothing is re-measured, and
+            # the result equals what a replay (which had the lightning all
+            # along) computes.
+            revised = rescore_clutter(cell, policy.clutter)
+            if revised is not None:
+                cell["clutter"] = revised
         cat["inputs"][SOURCE_EUMETSAT_LI] = li.valid_time.isoformat()
     _refresh_rate(ws, t, cat, frame, detections, unavailable)
     cat["unavailable"] = _ordered_unavailable(unavailable)

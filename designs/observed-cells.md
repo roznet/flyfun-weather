@@ -8,6 +8,8 @@
 > for the droplet side).  #688 is the route-geometry slice: the droplet turns
 > the display file into storms against the route and the live layer's storm
 > rows (`live-observation-layer.md` "Radar storms", meteorology-decisions §41).
+> #696 adds **clutter evidence** per core (see "Non-meteorological echoes"
+> below, and meteorology-decisions §42).
 > Next: the Observed tab (#690), iOS.
 
 ## What it is
@@ -33,6 +35,8 @@ observed/cells/
   advect.py      motion field from the tiles; straight vs field trajectories (#662)
   lineage.py     identity across frames (advect, overlap, dominant link); trend
   attributes.py  rain rate, lightning, parallax-corrected cloud top per cell
+  clutter.py     is this echo weather? isolation + corroborators per core (#696)
+  clutter_eval.py the report over archived catalogues (`clutter` CLI, #696)
   catalogue.py   wire format: deterministic gzipped JSON, one per DBZH frame
   display.py     map file per frame (#656): outlines + reduced cells, pushed
   push.py        rsync of new display files to WB_CELLS_PUSH_TARGET (#656)
@@ -41,7 +45,7 @@ observed/cells/
   runner.py      archive store, collect + analyse tick, replay, coverage report
   render.py      review PNG (radar, outlines, 30-min arrows, flashes, age/trend)
   archive.py     nightly pack / verify / prune / nas-plan / restore (#658)
-  __main__.py    run [--once] | replay | render | status | map | scores | archive …
+  __main__.py    run [--once] | replay | render | status | map | scores | clutter | archive …
 ```
 
 ## One tree everywhere
@@ -259,6 +263,82 @@ and **all scored on the same cells and the same verification area**:
 - **Not measured yet**: the comparison on real frames.  Policy `cells-2`;
   bumping it restarts every storm's lineage once on deploy.
 
+## Non-meteorological echoes (#696)
+
+We detected reflectivity objects and used them as storms. `clutter.py` adds the
+missing question — *is this echo weather?* — as **evidence recorded on every
+core**, never as a deletion. The decision, the measured numbers and everything
+rejected are in `designs/meteorology-decisions.md` §42; what matters here is
+the shape.
+
+**One feature carries it: isolation.** A genuine ≥ 41 dBZ core is physically
+embedded in its own ≥ 20 dBZ rain; clutter is a bare block in air the radar
+looked at and found empty. Over all 11,967 cores of the 17 reference frames,
+`ring_rain` (the share of a 2 px outer ring at ≥ 20 dBZ) is ≤ 0.15 for 0.6–1.1 %
+of cores and **none** of the 683 corroborated by lightning or a cloud top.
+`onset_db`, `robust_drop` and Gabella `continuity` corroborate; `area_perimeter`
+and the OPERA quality index are recorded at **zero weight** because measuring
+them showed they point the wrong way or carry no signal.
+
+**Four rules, and they are the design:**
+
+1. *Isolation is necessary* — no suspicion without the rain-margin evidence,
+   whatever the corroborators say.
+2. *Missing evidence is never support* — an uncomputable feature scores zero and
+   is named under `unknown`; a ring that is mostly `nodata` yields no isolation
+   evidence, so such a cell can never be suspect.
+3. *Physical corroboration vetoes* — observed lightning or a cloud top clears
+   the cell outright; lightning merely `pending` (#666) is not an observation.
+4. *Nothing is deleted* — the block rides on the cell and the droplet decides.
+
+**Only tiers above the rain threshold are assessed** (`assessable`). For
+`rain20` itself the ring is below 20 dBZ by construction — that is where the
+area ends — so every rain area in Europe would read as isolated.
+
+**The 2 km trap.** The French contribution arrives on a 2 km grid, duplicated
+2 × 2 onto the 1 km composite, so every small French cell has hard 1 km edges by
+construction and `/how/comment` says some French volumes are pysteps-advected
+fills. Hence the ring is 2 px and the continuity window 5 × 5: both reach past
+the duplication. A 1 px ring would call half of France clutter.
+
+**Per-cell crops, not full-grid filters.** Cores cover a tiny share of a
+3800 × 4400 grid; a whole-grid median or neighbour count would cost seconds a
+frame against the ~3 s budget #666 bought. Measured cost of the whole
+assessment on a MacBook over the reference frames (~700 assessed cores a
+frame): **+0.58 s** median analysis (4.29 → 4.87 s) and **+94 MB** peak RSS
+(2235 → 2329 MB), the latter the transient full-grid quality read.
+
+**Size.** The catalogue carries every feature on every assessed core, so it
+grows **+11 %** (median 197 → 219 KB gzipped): ~22 KB a frame, ~6 MB a day,
+~2.3 GB a year added to the NAS's analysis tree (which keeps catalogues
+forever, against ~11 GB/year before). The display file carries the block only
+on flagged cells and so grows **+1.2 %** (194 → 196 KB), and the droplet keeps
+24 h of it. Both ride inside the existing retention; nothing new is kept.
+
+**Features are rounded before they are scored** (`FEATURE_DIGITS`), not on the
+way to the wire. The lightning amend re-scores a published cell from the
+features in its catalogue (`rescore`) — lightning is a veto, so a frame whose
+flashes land late must lose its suspicion — and rounding first makes that
+re-score *identical* to what a replay computes from the raw frame rather than
+merely close. That is what keeps "an amended catalogue equals its replay byte
+for byte" true.
+
+**No rolling state.** Every feature is per-frame and pixel-keyed, so a replay
+reproduces the evidence exactly and a cell id that restarts (the reference core
+dropped below minimum area at 00:15Z and took a new id while the echo under it
+never moved) cannot hide anything.
+
+**Off switch:** `ClutterPolicy.enabled`. It is a policy number, so a run with
+it off carries its own `policy_version` — which is right: those catalogues
+answer a different question.
+
+**The report:** `cells clutter --from … --to … [--jsonl rows.jsonl]` over
+archived catalogues (`clutter_eval.py`). It prints the flag rate per tier and
+`weather_lost` — flagged cells that carry lightning or a cloud top — which
+**must be zero**, because those are vetoes: a non-zero count is a leak, not a
+calibration result. There is deliberately no positive clutter label; nothing we
+have can assert one.
+
 ## Display file and push (#656)
 
 **What leaves the home node is only the display file** — no raw frames (the
@@ -288,6 +368,11 @@ from the same detections, and writes `cells/display/<stamp>.json.gz`
   `policy_version`,
   `code_revision`, `window_minutes`.  Fields are additive under
   `observed-cells-display/1`, so an older droplet still accepts r0.
+- `clutter` (#696): `level` / `score` / `reasons` on a cell with evidence
+  against it, absent on a clear one (a continent of clean cores pays nothing),
+  plus `robust_peak_dbz` on every assessed cell. Additive under
+  `observed-cells-display/1`; the droplet's validator is key-agnostic, so an
+  older droplet still accepts the file.
 - `within` (#688): the id of the cell of the next lower tier that contains
   this one (core41 → core35 → rain20), read off that tier's labels under the
   cell's pixels (`enclosing_cells`); absent when the lower-tier region was
@@ -418,6 +503,7 @@ WB_CELLS_ROOT=$PWD/data/observed-archive caffeinate -i \
 python -m weatherbrief.observed.cells status --hours 24
 python -m weatherbrief.observed.cells render --time 2026-10-03T14:05 --out /tmp/c.png --bbox 43,-2,52,10 --scale 2
 python -m weatherbrief.observed.cells replay --from 2026-10-03T08:00 --to 2026-10-03T14:00 --out /tmp/replay
+python -m weatherbrief.observed.cells clutter --from 2026-10-07T00:00 --to 2026-10-07T01:00 --jsonl /tmp/clutter.jsonl
 ```
 
 **A laptop sleeps.**  Without `caffeinate -i` (AC power) macOS idle-sleeps the
@@ -511,6 +597,8 @@ steady state: ~2 days of frames (~1.7 GB) + 90 days of analysis (~3 GB).
 
 ## Open numbers (to settle from the archive)
 
+Every `ClutterPolicy` threshold (#696): measured over one convective night and
+no other regime, and whether the droplet's gate goes on at all.
 Core threshold 35 vs 41; tile size and pair spacing; minimum cell areas;
 lineage overlap fraction (20 % unmeasured, inherited from #600); trend
 thresholds; flash buffer; smoothing window/τ, field σ and reach, and which
@@ -534,6 +622,12 @@ motion variant the map shows (#662).  Every one is in `policy.py`.
 - A frame whose own LI landed in time but whose predecessor's did not (LI
   out of order) is never amended, so a `null` history entry can survive
   there; `d_flashes` is then `null`, never wrong.
+- A suppressed core (#696) still leaves its own bare `rain20` outline: the
+  outlines are traced from the tier masks and cannot be filtered per cell, so
+  the ribbon can keep a floor-intensity rain band where the storm row went
+  away. Known, not yet judged worth machinery.
+- `clutter` evidence is only on `core35`/`core41`. Asking for it on `rain20`
+  would flag every rain area in Europe (see "Non-meteorological echoes").
 - The tight poll's probe is a `collect_opera` with `warn_if_empty=False`
   (one not-yet-published slot is a 404 by design).
 

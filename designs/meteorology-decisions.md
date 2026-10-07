@@ -5430,3 +5430,123 @@ beyond 30 min, and 42 % / 79 % / 89 % of storms gone before the 0–30 / 30–60
   flight and flicker before vs after; LPPR→LPPT 2026-10-06 for the estimate.
 - The ETA is the planned one (on-time departure, constant speed), like every
   other "ahead" in the live layer.
+
+## 42. A radar echo is not a storm until it looks like weather: the isolation test (#696)
+
+**Date:** 2026-10-07. **Issue:** #696. **Status:** measured and recorded on
+every core; **acting on it is off by default** (`WB_CELLS_CLUTTER_SUPPRESS`).
+
+### Context
+
+The cells pipeline detects and tracks *reflectivity objects* and then uses them
+as *storms*. Nothing between the two asked whether the echo was weather, so on
+2026-10-07 a wind-farm / anomalous-propagation return over the Somme became
+`core41-20261007T0020-0097` and the live layer told a pilot **"Extreme cell
+(57 dBZ) 9 NM left of track"** on a night with very light rain there. The echo
+is in the source files — our decoding is not inventing it — and CIRRUS is a
+*maximum* composite over radars and over a 10-minute window, so one radar's
+clutter always wins and the open feed offers no QC'd alternative.
+
+### The decision
+
+Each core carries a `clutter` block: every feature measured, an additive score,
+the reasons that fired, and a level (`clear` / `suspect` / `confirmed`). The
+rule has four parts, and the first is the whole decision:
+
+1. **Isolation is necessary.** A genuine ≥ 41 dBZ core is physically embedded
+   in its own ≥ 20 dBZ precipitation; ground clutter is a bare block in air the
+   radar looked at and found empty. No cell is suspect unless the rain-margin
+   evidence fires, whatever the other features say.
+2. **Missing evidence is never support.** An uncomputable feature scores zero
+   and is named under `unknown`. A ring that is mostly `nodata` gives no
+   isolation evidence at all — "we cannot see there" is not "there is no rain
+   there" — so such a cell can never be suspect.
+3. **Physical corroboration vetoes.** Observed lightning in the cell, or a
+   satellite cloud top, clears it outright. Lightning that is only *pending*
+   (#666) is not an observation of zero flashes.
+4. **Nothing is deleted.** The evidence rides on the cell; the droplet decides
+   whether to speak about it, and by default it does.
+
+### The numbers, and where they came from
+
+Measured on all **11,967 cores** of the 17 frames 2026-10-06 23:35Z →
+2026-10-07 00:55Z (a convective night over France, 683 cores corroborated by
+lightning or a cloud top — "weather-labelled"):
+
+| feature | fires at | catches | weather-labelled caught |
+|---|---|---:|---:|
+| `ring_rain` ≤ 0.15 (ring ≥ 20 dBZ, 2 px) | +3 | 0.6–1.1 % | **0** |
+| `ring_rain` ≤ 0.30 | +1 | 1.0–1.5 % | **0** |
+| `rain_ratio` ≤ 1.5 (enclosing rain20 / core) | +2 | 0.5–0.8 % | **0** |
+| `rain_ratio` ≤ 2.0 | +1 | 1.3–1.5 % | 3 |
+| `onset_db` ≥ 25 (peak jump at its own pixels) | +2 | 0.9–1.1 % | 1 |
+| `onset_db` ≥ 20 | +1 | 1.2–1.6 % | 3 |
+| `robust_drop` ≥ 6 (peak − 3×3-median peak) | +1 | 1.8–3.5 % | **0** |
+| `continuity` ≤ 0.80 (Gabella 5×5) | +1 | 1.7–2.0 % | ≤ 1 |
+
+`suspect` at 3, `confirmed` at 5. Thresholds sit clear of the genuine
+population rather than snugly around the one known case — the issue is explicit
+that picking them to make this case disappear is the thing to avoid.
+
+Result on those frames: **0.74 % of `core35` and 1.44 % of `core41` flagged,
+and zero weather-labelled cores lost.** The 128 flagged rows fall at 43
+distinct 0.1° locations with the top seven accounting for 77 of them — a
+Norwegian fjord (median 66 dBZ), Serra da Estrela (61.5), two Polish sites, a
+Dutch echo that reached 74 dBZ, and two Nord-Pas-de-Calais wind-farm areas
+including the reference case. Fixed sites, which is the signature of clutter.
+All three cell ids the issue names come out `confirmed`, on every frame.
+
+### Rejected, after measuring
+
+- **OPERA's quality index as a veto.** `qi_total` is **0 for ~95 % of all
+  European echo pixels** because most nodes publish no index; only Poland
+  carries values, and the NIMBUS RATE chain gave 0.86 to the clutter pixel.
+  "Quality 0" means unmeasured, not clutter. Read and recorded per core
+  (zero / median / missing fractions), **weighted at zero**, so a later
+  evaluation can weigh it instead of re-deriving this.
+- **Gabella's area-to-perimeter geometry.** The published Cartesian threshold
+  of 1.3 points the wrong way on our composite: the clutter core sits at 1.42
+  while genuine small cores have a median 1.24 and a 10th percentile of
+  1.04–1.14, so it would flag real showers in preference to the clutter.
+  Recorded, weighted at zero. Gabella *continuity* keeps a light weight.
+- **Stationarity as a test.** `motion.status = unsupported` is not evidence of
+  anything: the tiles around the reference point were below the 1 % echo gate,
+  so no correlation was attempted. Measured directly, 34 of 228 small genuine
+  cores had ≥ 50 % self-overlap 10 minutes earlier. Not used.
+- **"No lightning under a strong echo"** is recorded with the other reasons and
+  **weighted at zero**: plenty of real convection never sparks, and the #696
+  review is explicit that no lightning is not grounds to reject a shower.
+- **A per-pixel recurrence (HAC) map and a static OpenStreetMap wind-turbine
+  prior**, which the issue thread ranked first. Not built: the per-frame
+  isolation evidence already catches this class, the flags already cluster at
+  fixed sites without any history, and both would add a rolling state file or
+  an external download to a loop that is deliberately stateless per frame.
+  Revisit if the replay set shows flags the per-frame features miss.
+- **A fuzzy-logic fusion** (Berenguer 2006). With one feature carrying the
+  separation and the rest corroborating, weights that can be read off the
+  catalogue are worth more than a combination rule that cannot.
+
+### Not decided, deliberately
+
+- **Whether to suppress.** The node records from the day this ships; the
+  droplet's gate is off. Flipping it changes what counts as a storm in §41, so
+  it waits for a replay over more regimes than one convective night —
+  `cells clutter --from … --to …` is that measurement.
+- **The robust peak.** "Extreme cell (57 dBZ)" came from a single pixel whose
+  3×3-median value is 52.5; on the 00:10Z frame 57.5 becomes 47.5, and one
+  core in the span has a peak 38 dB above its median peak. `robust_peak_dbz`
+  is recorded beside `peak_dbz` everywhere, and **nothing displays or alerts on
+  it**: switching would move every intensity word and the §41
+  `RADAR_SIGNIFICANT_DBZ` comparison at once. A separate decision.
+
+### Real-world validation needed
+
+- One convective night over France is one regime. Re-run `cells clutter` over a
+  winter stratiform day, a summer afternoon, and Scandinavia/Iberia before the
+  gate goes on; `weather_lost` must stay zero and the flag rate should not jump.
+- The lightning veto was exercised on real frames (683 corroborated cores, none
+  flagged). The cloud-top veto has only a unit test — CTTH is opt-in and was
+  not collected for that night.
+- A suppressed core still leaves its own bare `rain20` outline, so the ribbon
+  can keep a floor-intensity rain band where the storm row went away. Judge it
+  on a real replay before adding machinery for it.
