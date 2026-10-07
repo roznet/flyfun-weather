@@ -29,6 +29,9 @@ has no target, but a jump between regimes (a convective afternoon against a
 quiet winter night, France against Scandinavia) is the signal that a threshold
 is doing something other than what we think.
 
+`sites()` groups the flags by fixed ground position across days — the positive
+evidence, and the reason the HAC recurrence map was not built (see §42).
+
 Nothing here writes to the archive.
 """
 
@@ -106,6 +109,22 @@ def rows_over(root: Path, start: datetime, end: datetime, policy: CellPolicy,
     return rows
 
 
+def rows_all(root: Path, policy: CellPolicy) -> list[dict]:
+    """Rows for every catalogue under ``root``, whatever day it is on.
+
+    Globs the catalogue tree rather than stepping a clock, so a report needs no
+    window and several independently replayed spans can be pooled into one
+    verdict — which is the only way the cross-day recurrence in :func:`sites`
+    means anything.
+    """
+    rows: list[dict] = []
+    for path in sorted((Path(root) / "cells" / "catalogues").glob("*/*.json.gz")):
+        catalogue = read_catalogue(path)
+        if catalogue is not None and catalogue.get("policy_version") == policy.policy_version:
+            rows.extend(frame_rows(catalogue))
+    return rows
+
+
 def summarise(rows: list[dict]) -> dict:
     """The report: flag rate per tier, label recall, and why cells were flagged."""
     by_tier: dict[str, Counter] = {}
@@ -160,6 +179,74 @@ def summarise(rows: list[dict]) -> dict:
             "max": round(delta[-1], 2) if delta else None,
         },
         "weather_lost_examples": lost[:20],
+    }
+
+
+def sites(rows: list[dict], *, precision: float = 0.1, min_days: int = 2) -> dict:
+    """Flagged cells grouped by fixed ground position, across days.
+
+    This is the one piece of positive evidence the harness can produce, and it
+    is why the per-pixel recurrence map (HAC) was not built: a flag that comes
+    back **at the same place on days that share nothing but geography** is a
+    ground site, not weather. The flags carry that signal already — we only
+    have to group them.
+
+    Grouping is on the *centroid* rounded to ``precision`` degrees (0.1° is
+    ~11 km of latitude, ~7 km of longitude at 50 N): coarse enough that a core
+    growing or shrinking stays in one bucket, fine enough to separate sites.
+
+    **It is evidence, not proof.** Diurnal orographic convection also fires at
+    the same place on consecutive days, so `days` alone cannot convict. What
+    distinguishes a clutter site is the combination this report prints beside
+    it: never any lightning, and — for the anomalous-propagation kind — hours
+    that cluster at night. A site with `flashes_max > 0` is reported first
+    precisely because it is the one that should make you doubt the rule.
+    """
+    buckets: dict[tuple[float, float], list[dict]] = {}
+    for row in rows:
+        if row["level"] not in (SUSPECT, CONFIRMED):
+            continue
+        if row.get("lat") is None or row.get("lon") is None:
+            continue
+        key = (round(row["lat"] / precision) * precision,
+               round(row["lon"] / precision) * precision)
+        buckets.setdefault((round(key[0], 3), round(key[1], 3)), []).append(row)
+
+    out = []
+    for (lat, lon), hits in buckets.items():
+        days = sorted({str(h["valid_time"])[:10] for h in hits if h.get("valid_time")})
+        hours = sorted({int(str(h["valid_time"])[11:13]) for h in hits if h.get("valid_time")})
+        peaks = sorted(h["peak_dbz"] for h in hits if h.get("peak_dbz") is not None)
+        flashes = [h["flashes"] for h in hits if h.get("flashes") is not None]
+        out.append({
+            "lat": lat, "lon": lon,
+            "days": days,
+            "n_days": len(days),
+            "frames": len({h["valid_time"] for h in hits}),
+            "hits": len(hits),
+            "hours_utc": hours,
+            "tiers": sorted({h["tier"] for h in hits}),
+            "peak_dbz_p50": peaks[len(peaks) // 2] if peaks else None,
+            "peak_dbz_max": peaks[-1] if peaks else None,
+            # Any lightning ever seen in a cell at this site. Should be 0 for a
+            # clutter site; non-zero is a reason to doubt, not to reclassify.
+            "flashes_max": max(flashes) if flashes else None,
+            "lightning_observed_frames": len(flashes),
+        })
+    # Doubtful sites first (lightning ever seen), then the most persistent.
+    out.sort(key=lambda sx: (-(sx["flashes_max"] or 0), -sx["n_days"], -sx["frames"]))
+    persistent = [sx for sx in out if sx["n_days"] >= min_days]
+    return {
+        "precision_deg": precision,
+        "min_days": min_days,
+        "sites": out,
+        "n_sites": len(out),
+        "n_persistent": len(persistent),
+        # The headline: of all the flagging we did, how much of it happened at
+        # places that flagged on more than one day?
+        "hits_at_persistent_sites": sum(sx["hits"] for sx in persistent),
+        "hits_total": sum(sx["hits"] for sx in out),
+        "sites_with_lightning": [sx for sx in out if (sx["flashes_max"] or 0) > 0],
     }
 
 

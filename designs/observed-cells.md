@@ -339,6 +339,40 @@ archived catalogues (`clutter_eval.py`). It prints the flag rate per tier and
 calibration result. There is deliberately no positive clutter label; nothing we
 have can assert one.
 
+### Validating over a regime the rule has not seen
+
+`scripts/clutter_validate.py` is the end-to-end check, with pass/fail gates
+rather than a table to read. Two things about it are load-bearing:
+
+**It replays; it cannot read the archive directly.** The `clutter` block only
+exists on `cells-3` catalogues, so a historical day must be re-analysed first.
+That makes **raw frames** the binding retention — 48 h on the mini, 12 months of
+frame tars on the NAS — not the 90 days of catalogues. It also means every day
+the node runs un-upgraded is a day whose evidence later costs a replay
+(~5 s/frame) to recover. Once `cells-3` is live, the block lands in every
+catalogue and the same check is a one-command read over 90 hot days.
+
+**Fetch from a node, replay here.** `--fetch mac-mini-m4` tars the stamps in
+range over ssh (one stream; `openrsync` has failed on this shape, and 48 h is
+~2,000 small files) and replays locally. Do not replay *on* the mini: it runs
+the live loop, and a replay peaks at ~2.3 GB and holds a core for seconds a
+frame. The ssh target comes from `scripts/ops/hosts.py`, never hardcoded — the
+mini is LAN-only and its address has moved before.
+
+**Cross-day recurrence is the positive evidence** (`clutter_eval.sites`), and
+the reason the HAC per-pixel map was not built: a flag that returns to the same
+0.1° bucket on days that share nothing but geography is a ground site. Spans get
+replayed separately, so `--also <root>` pools them into one verdict; a report
+over a single day can only ever say "no recurrence evidence here". It is
+evidence, not proof — diurnal orographic convection also fires in the same place
+on consecutive days — so the report prints, beside each site, whether lightning
+was *ever* seen there and which hours it covers. A clutter site shows neither.
+
+Measured over 2026-10-03 (daytime) pooled with the 10-06/07 night: 8 sites on
+≥ 2 days carrying 151 of 629 flags, **none with a single flash**, including the
+reference Somme site (hours 00 and 23 only — the nocturnal signature) and a
+Norwegian fjord at a median 64.5 dBZ across 3 days and both day and night.
+
 ## Display file and push (#656)
 
 **What leaves the home node is only the display file** — no raw frames (the
