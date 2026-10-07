@@ -50,6 +50,16 @@ MAX_RETRIES = 1
 #: Hard ceiling (owner, 2026-10-07). The prompt still asks for 25 words so the
 #: model keeps leading hard; 40 is where we stop trusting it to have led.
 MAX_WORDS = 40
+#: Billed generations per facts state before giving up on it.
+#:
+#: The tick retries any flight with no stored highlight, and a rejection stores
+#: nothing, so without a cap one unlucky facts block bought a rejected sentence
+#: every tick for the whole live window — 33 billed calls on a single flight.
+#: Zero retries would be wrong too: the model is stochastic (the same tick
+#: comes back worded differently run to run), so a transient bad line would
+#: cost that flight its highlight until the weather moved. Two attempts gives
+#: a bad draw a second chance and caps a systematic failure at twice the price.
+MAX_ATTEMPTS_PER_FACTS = 2
 #: ~70 output tokens covers 40 words with room for punctuation; a longer
 #: generation is a prompt failure and the post-check rejects it anyway.
 MAX_TOKENS = 200
@@ -680,6 +690,34 @@ def call_cost(usage: dict | None) -> float | None:
         return None
 
 
+def rejected_attempts(flight_dir: Path | str, digest: str) -> int:
+    """How many billed generations this facts state has already thrown away.
+
+    Counted from the review log, which is already per flight and append-only —
+    no extra state to carry across ticks. Only ``rejected`` counts: a
+    ``written`` one is carried forward anyway, and a ``call_failed`` one is a
+    timeout or an outage that cost nothing and is right to retry.
+    """
+    path = Path(flight_dir) / LIVE_HIGHLIGHT_LOG
+    if not path.exists():
+        return 0
+    n = 0
+    try:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue  # a write cut short; never fail a tick over the log
+            if rec.get("facts_hash") == digest and rec.get("outcome") == "rejected":
+                n += 1
+    except OSError:
+        logger.warning("Unreadable highlight log %s — retrying generation", path, exc_info=True)
+        return 0
+    return n
+
+
 def _log_attempt(flight_dir: Path, record: dict) -> None:
     """Append one attempt to the review log. Never raises.
 
@@ -759,6 +797,17 @@ def ensure_highlight(
         return HighlightOutcome("skipped")
 
     digest = facts_hash(f)
+    already = rejected_attempts(flight_dir, digest)
+    if already >= MAX_ATTEMPTS_PER_FACTS:
+        # Logged without the facts block: a one-line marker keeps the
+        # frequency visible for the calibration review without paying for a
+        # third identical rejection or repeating a 1.5 kB block every tick.
+        _log_attempt(flight_dir, {
+            "at": datetime.now(timezone.utc), "flight_id": layer.flight_id,
+            "facts_hash": digest, "outcome": "skipped_rejected", "attempts": already,
+        })
+        return HighlightOutcome("skipped", reason=f"{already} rejected attempts for these facts")
+
     base = {
         "at": datetime.now(timezone.utc),
         "flight_id": layer.flight_id,
