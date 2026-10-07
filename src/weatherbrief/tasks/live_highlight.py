@@ -351,16 +351,59 @@ def facts(live: dict) -> dict:
     return out
 
 
-def facts_hash(f: dict) -> str:
-    """Stable hash of a facts block, ignoring the wall clock.
+#: "en route, about 69 of 276 NM flown, arrival planned 10:00Z" — the flown
+#: figure is interpolated from the clock, so it moves every tick.
+_FLOWN_RE = re.compile(r"about \d+ of (\d+) NM flown")
+#: "on 45% of the route ahead" — the denominator is ``route_nm - flown``, so
+#: this drifts continuously too.
+_AHEAD_PCT_RE = re.compile(r"on \d+% of the route ahead")
 
-    ``now`` moves every tick while nothing the pilot would read has changed,
-    so hashing it would pay for an identical highlight six times an hour.
-    Everything else counts — a METAR time, a cell's abeam time and a changed
-    percentage are all real movement.
+
+def _hash_view(f: dict) -> dict:
+    """The facts as change *detection* should see them.
+
+    Three things move on the wall clock alone, with no change a pilot would
+    read, and hashing them means paying for an identical highlight every tick
+    of the flight:
+
+    - ``now`` — the tick time.
+    - the flown figure in ``flight`` — interpolated from departure, so on a
+      276 NM / 1.5 h plan it advances ~30 NM every 10-minute tick. Measured on
+      the real LELL→LEMI 08:30 tick: identical weather, different hash.
+    - the "% of the route ahead" in ``rain_ahead`` — same cause, via the
+      ``route_nm - flown`` denominator.
+
+    Dropping the figure loses nothing, because everything progress actually
+    decides is captured exactly elsewhere and still hashed: which cells are
+    ``ahead``, which SIGMET spans are still in front, which airports remain,
+    and the rain stretches — all filtered by ``flown`` and so changing in real
+    steps when you pass something. The **coarse phase** is kept, so
+    before-departure → en route → arrived still regenerates.
     """
     body = {k: v for k, v in f.items() if k != "now"}
-    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    flight = body.get("flight")
+    if isinstance(flight, str):
+        body["flight"] = _FLOWN_RE.sub(r"en route of \1 NM", flight)
+    rain = body.get("rain_ahead")
+    if isinstance(rain, dict):
+        rain = dict(rain)
+        for key, value in rain.items():
+            if isinstance(value, str):
+                rain[key] = _AHEAD_PCT_RE.sub("on some % of the route ahead", value)
+        body["rain_ahead"] = rain
+    return body
+
+
+def facts_hash(f: dict) -> str:
+    """Stable hash of a facts block, ignoring what only the clock moved.
+
+    See :func:`_hash_view` for what is left out and why. Everything else
+    counts — a new METAR, a cell's abeam time, a cell passing behind you and a
+    SIGMET falling off the route ahead are all real movement.
+    """
+    return hashlib.sha256(
+        json.dumps(_hash_view(f), sort_keys=True, default=str).encode()
+    ).hexdigest()[:16]
 
 
 # --- Grounding --------------------------------------------------------------
@@ -609,6 +652,34 @@ def carry_forward(stored, layer) -> bool:
         return False
 
 
+def call_cost(usage: dict | None) -> float | None:
+    """USD for one call, or None when nothing was billed.
+
+    Pure pricing (``compute_call_cost``, no session), so the review log can
+    carry the cost of every attempt — including a rejected one, which is
+    billed and otherwise invisible. The ledger row is the accounting record;
+    this is what makes a calibration review self-contained, since the admin
+    cost views filter on ``category == "briefing"`` and do not show these.
+    """
+    if not usage or not usage.get("model"):
+        return None
+    try:
+        from weatherbrief.costs import compute_call_cost
+
+        return compute_call_cost(
+            usage["model"],
+            input_tokens=usage.get("input_tokens") or 0,
+            output_tokens=usage.get("output_tokens") or 0,
+            cache_read_tokens=usage.get("cache_read_tokens") or 0,
+            cache_write_tokens=usage.get("cache_write_tokens") or 0,
+        )
+    except Exception:
+        # An unpriced model raises rather than guess; a missing cost must not
+        # cost us the highlight.
+        logger.warning("Live highlight cost pricing failed", exc_info=True)
+        return None
+
+
 def _log_attempt(flight_dir: Path, record: dict) -> None:
     """Append one attempt to the review log. Never raises.
 
@@ -715,7 +786,8 @@ def ensure_highlight(
             "LIVE_HIGHLIGHT_REJECTED flight=%s reason=%s text=%r", layer.flight_id, reason, text,
         )
         _log_attempt(flight_dir, {**base, "outcome": "rejected", "reason": reason,
-                                  "text": text, "usage": usage, "latency_ms": latency_ms})
+                                  "text": text, "usage": usage, "latency_ms": latency_ms,
+                                  "cost_usd": call_cost(usage)})
         return HighlightOutcome("rejected", text=text, usage=usage, reason=reason)
 
     written = patch_highlight(
@@ -726,7 +798,8 @@ def ensure_highlight(
         as_of=layer.glance.as_of,
     )
     _log_attempt(flight_dir, {**base, "outcome": "written" if written else "superseded",
-                              "text": text, "usage": usage, "latency_ms": latency_ms})
+                              "text": text, "usage": usage, "latency_ms": latency_ms,
+                              "cost_usd": call_cost(usage)})
     return HighlightOutcome("written" if written else "superseded", text=text, usage=usage)
 
 
