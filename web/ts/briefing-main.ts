@@ -11,7 +11,7 @@ import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, typ
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
 import { departureMs, isInLiveWindow, isLiveWindowPast, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
-import type { FlightResponse } from './store/types';
+import type { FlightResponse, LiveFocus } from './store/types';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -20,7 +20,9 @@ import { pressureToAltitudeFt } from './utils/atmo';
 import { SKEWT_OVERLAYS } from './visualization/skewt/overlay-bands';
 import { getVariableById } from './visualization/skewt/variable-panel';
 import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper';
-import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
+import { hideMetricInfo, initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
+import { mountNutshell } from './visualization/observed/nutshell-view';
+import { mountRibbon, stormDetailHtml } from './visualization/observed/ribbon-view';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import type { LayerGroup, VizRouteData } from './visualization/types';
@@ -2211,6 +2213,75 @@ async function init(): Promise<void> {
   };
 
   // --- Subscribe to state changes ---
+  // --- Observed nutshell + route ribbon (#690) ---------------------------
+  //
+  // Both are built on the server once per live tick and ride ONLY on the
+  // `/live` response (`state.live`), never on the snapshot — so these render
+  // off `state.live`, and are absent outside the live window by design.
+  // Every word is the server's: iOS, web and the agent `live` block show the
+  // same text (`tasks/live_glance.py`).
+  let ribbonTeardown: (() => void) | null = null;
+
+  /** Open the route map framed on what the pilot tapped, with the layers the
+   *  focus names switched on. */
+  function focusMapOn(focus: LiveFocus | null, layers?: string[]): void {
+    const want = layers ?? focus?.layers ?? [];
+    if (want.includes('cells')) store.getState().setObservedCells(true);
+    // The map has to be on screen before Leaflet can be framed: in
+    // cross-section-only layout there is no map instance at all.
+    if (store.getState().vizSettings.layout === 'cross-section') {
+      store.getState().setLayout('split');
+    }
+    const vizWrapper = document.querySelector('[data-section="cross-section"]');
+    vizWrapper?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // After the layout change has been rendered and Leaflet has a size.
+    requestAnimationFrame(() => {
+      mapRenderer?.invalidateSize();
+      if (focus?.bbox) mapRenderer?.focusBbox(focus.bbox);
+    });
+  }
+
+  function renderObservedLive(state: BriefingState): void {
+    const glance = state.live?.glance ?? null;
+    const ribbon = state.live?.ribbon ?? null;
+    const glanceWrapper = document.getElementById('observed-glance-wrapper');
+    const ribbonWrapper = document.getElementById('observed-ribbon-wrapper');
+    const glanceEl = document.getElementById('observed-glance-section');
+    const ribbonEl = document.getElementById('observed-ribbon-section');
+
+    const hasGlance = !!glance && (glance.lines ?? []).length > 0;
+    if (glanceWrapper) glanceWrapper.style.display = hasGlance ? '' : 'none';
+    if (hasGlance && glanceEl && glance) {
+      mountNutshell(glanceEl, glance, !!state.snapshot?.observed_conditions, {
+        onFocus: (focus) => focusMapOn(focus),
+        onShowMap: () => focusMapOn(null, ['radar', 'cells']),
+      });
+      // Fill the "N min ago" the card leaves empty; the poll re-ages it after.
+      ui.refreshLiveAges();
+    }
+
+    // The ribbon needs the nutshell: without a glance the tick could not
+    // build either, and a ribbon on its own has no heading to read it by.
+    const hasRibbon = hasGlance && !!ribbon;
+    if (ribbonWrapper) ribbonWrapper.style.display = hasRibbon ? '' : 'none';
+    ribbonTeardown?.();
+    ribbonTeardown = null;
+    if (hasRibbon && ribbonEl && ribbon) {
+      ribbonTeardown = mountRibbon(ribbonEl, ribbon, state.live?.storms, {
+        onFocus: (focus) => focusMapOn(focus),
+        onStorm: (storm) => {
+          showPopupContent(stormDetailHtml(storm));
+          // The popup's own "Show on map": close it, then frame the map.
+          document.querySelector<HTMLElement>('.storm-detail [data-storm-map]')
+            ?.addEventListener('click', () => {
+              hideMetricInfo();
+              focusMapOn(storm.focus ?? null);
+            });
+        },
+      });
+    }
+  }
+
   store.subscribe((state, prev) => {
     // Resolve 'auto' units against this flight's region (US flights → US units)
     // before any sub-render reads getUnitsRegion(). No-op for a forced pref.
@@ -2296,6 +2367,11 @@ async function init(): Promise<void> {
       renderPointSections(state);
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
+    }
+    // The nutshell + ribbon follow the live layer, which the poll replaces on
+    // its own cadence; `currentPack`/`snapshot` may be untouched for an hour.
+    if (state.live !== prev.live || state.snapshot !== prev.snapshot) {
+      renderObservedLive(state);
     }
     if (
       state.timeOptions !== prev.timeOptions ||
@@ -2895,6 +2971,7 @@ async function init(): Promise<void> {
     ui.renderGramet(s.flight, s.currentPack);
     renderPointSections(s);
     renderVisualization(s);
+    renderObservedLive(s);
     ui.renderLoading(s.loading);
 
     // Deep-link (#308): now that routeAnalyses is loaded, honor any

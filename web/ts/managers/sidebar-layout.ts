@@ -19,14 +19,19 @@ const RAIL_MAX_WIDTH = 560;
 // tests/unit/briefing-section-order.test.ts enforces it.
 export const NAV_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Explore', keys: ['cross-section', 'skewt'] },
-  { title: 'Observations', keys: ['observed', 'observations', 'sigmets', 'pireps', 'alternates'] },
+  // Flight-day reading order, the same as the iOS Observed tab (#690): what
+  // you need to know first, then the route picture, then the detail by
+  // source. 'Since this briefing' stays a page-level banner on web.
+  { title: 'Observations', keys: ['observed-glance', 'observed-ribbon', 'observed', 'observations', 'sigmets', 'pireps', 'alternates'] },
   { title: 'Discussion', keys: ['synopsis', 'dwd-charts', 'dwd-overview', 'gramet'] },
   { title: 'Detail', keys: ['sounding', 'comparison'] },
 ];
 const NAV_LABELS: Record<string, string> = {
   'cross-section': 'Cross-section & map',
   'skewt': 'Skew-T soundings',
-  'observed': 'Observed now',
+  'observed-glance': 'At a glance',
+  'observed-ribbon': 'Along the route',
+  'observed': 'Radar & lightning',
   'observations': 'METAR / TAF',
   'sigmets': 'SIGMETs',
   'pireps': 'PIREPs',

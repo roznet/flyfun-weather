@@ -113,8 +113,8 @@ private let liveJSON = """
         #expect(storm.estimate?.atEtaOfftrackNm == 41.0)
         #expect(storm.history?.first?.offtrackNm == 20.0)
         #expect(storm.focus?.wantsCells == true)
-        #expect(StormDetailSheet.positionText(storm) == "25 NM left of track at 60 NM")
-        #expect(StormDetailSheet.motionText(storm) == "moving away 15 kt")
+        #expect(RouteRibbonRules.stormPositionText(storm) == "25 NM left of track at 60 NM")
+        #expect(RouteRibbonRules.stormMotionText(storm) == "moving away 15 kt")
     }
 
     /// The live cache stores the layer with a plain encoder (camelCase keys);

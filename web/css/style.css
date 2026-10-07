@@ -9037,3 +9037,293 @@ body.resizing-rail {
 .badge-trip:hover {
   color: var(--text);
 }
+
+/* --- Observed nutshell + route ribbon (#690) ---------------------------
+   The flight-day reading order: what you need to know, then the route
+   picture. Mirrors the iOS Observed tab (ObservedNutshellView.swift); the
+   rules behind the colours live in ts/visualization/observed/ribbon-core.ts. */
+
+.glance-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.glance-headline {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.glance-asof {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.glance-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* One phase. A button when the server gave it a map focus, a div otherwise —
+   both must look identical, so every shared property is set here. */
+.glance-line {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+button.glance-line {
+  cursor: pointer;
+}
+
+button.glance-line:hover {
+  border-color: var(--primary);
+}
+
+/* The phase is behind the flight at plan. */
+.glance-line-passed {
+  opacity: 0.55;
+}
+
+.glance-bar {
+  flex: 0 0 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+/* An alert-tier change in this phase: a red bar, nothing more — the words
+   are the server's. */
+.glance-line-alert .glance-bar {
+  background: var(--red);
+}
+
+.glance-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.glance-phase {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  /* Shouted visually only: the markup keeps "En route" so a screen reader
+     does not spell out capitals. */
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.glance-text {
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.glance-missing {
+  font-size: 0.72rem;
+  color: var(--amber);
+}
+
+.glance-chevron {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.glance-map-btn {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
+/* --- Ribbon --- */
+
+.ribbon-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.25rem;
+}
+
+.ribbon-caption,
+.ribbon-fallback-note {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.ribbon-plot {
+  overflow: hidden;
+}
+
+.ribbon-svg {
+  display: block;
+  max-width: 100%;
+}
+
+.ribbon-track {
+  stroke: var(--text);
+  stroke-opacity: 0.75;
+  stroke-width: 2;
+}
+
+.ribbon-axis-icao {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--text);
+}
+
+.ribbon-axis-eta {
+  font-size: 9px;
+  fill: var(--text-muted);
+}
+
+.ribbon-sigmet-text {
+  font-size: 8px;
+  font-weight: 600;
+  fill: var(--text);
+}
+
+.ribbon-bolt {
+  font-size: 9px;
+}
+
+/* Anything the map can open. The whole group is the target, so a 10px disc
+   still has the 24px+ hit area its invisible circle gives it. */
+.ribbon-hit {
+  cursor: pointer;
+}
+
+.ribbon-hit:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.ribbon-zone-hit {
+  cursor: pointer;
+  pointer-events: all;
+}
+
+/* --- Ribbon key --- */
+
+.ribbon-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.3rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.ribbon-key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.ribbon-key-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 7px;
+  border-radius: 1px;
+}
+
+.ribbon-key-dbz {
+  display: inline-flex;
+  gap: 1px;
+}
+
+.ribbon-key-dbz i {
+  display: inline-block;
+  width: 5px;
+  height: 7px;
+}
+
+.ribbon-key-apt {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--amber);
+  background: var(--green);
+  background-clip: content-box;
+  padding: 1px;
+}
+
+.ribbon-key-arrow {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ribbon-key-note {
+  flex-basis: 100%;
+}
+
+/* --- Cell detail (the iOS storm sheet) --- */
+
+.storm-detail h4 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.storm-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.storm-row-label {
+  color: var(--text-muted);
+}
+
+.storm-row-value {
+  color: var(--text);
+  text-align: right;
+}
+
+/* Set apart, because it is a projection and not an observation. */
+.storm-estimate {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.storm-estimate h4 {
+  margin-top: 0;
+}
+
+.storm-estimate-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.storm-actions {
+  margin-top: 0.75rem;
+}

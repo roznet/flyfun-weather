@@ -114,7 +114,56 @@ the web's (`rh` / `relative_humidity`, `w` / `vertical_velocity`, `ri` /
 `icing-dd` / `icing_index`, `icing-nwp` / `icing_index_nwp`). This is why the web
 `skewtSidePanel` preset directive cannot be ported as-is.
 
-### 5. API DTO contracts
+### 5. Observed route-ribbon rules — a mirrored pure pair
+
+The Observed nutshell + ribbon (#690) render from server-built blocks, so their
+*text* cannot drift; what is hand-copied is how each mark is drawn and named.
+Those rules were deliberately extracted into one comparable pair — neither is
+"the source of truth", they are kept equal:
+
+| Platform | File | Contents |
+|---|---|---|
+| Web | `web/ts/visualization/observed/ribbon-core.ts` | geometry constants, `xForNm`, `yForCross`, `categoryColour`, `dbzColour`, `bandFill`, `radarFill`, `motionArrowDir`, `stormMarkSize`, `ARROW_MIN_GAP`, `ARROW_MIN_RAIN_NM`, the label fns, `bandRects` / `bandAnchor` / `ribbonArrows` / `stormTargets` / `stationPoint` / `segmentFocusAt` |
+| iOS | `app/flyfun-weather/flyfun-weather/Views/Briefing/RouteRibbonRules.swift` | the same, under Swift names — the file header carries the full symbol map |
+
+Check, in this order of consequence:
+
+1. **Thresholds and geometry.** The dBZ boundaries (35 / 41 / 50), the
+   `y`/`x` mappings and their clamping, `ARROW_MIN_RAIN_NM`, `ARROW_MIN_GAP`,
+   the marker sizes. A silent difference here draws the same weather in two
+   different places.
+2. **The "could not see" states.** `radarFill` / `radarColor` must keep
+   `no_coverage` distinct from a measured-but-empty stretch on both (#574).
+   Collapsing them makes absent data and good news identical.
+3. **The label strings**, which are also the accessible names. These are
+   asserted verbatim on both sides — see below.
+
+**The tests are the mechanism.** `web/tests/unit/ribbon-core.test.ts` and
+`app/flyfun-weather/flyfun-weatherTests/RouteRibbonRulesTests.swift` run the
+same inputs against the same expected strings, case for case. If one platform
+changed a rule, the *other* platform's test fails. Before reporting drift here,
+run both — a green pair means the labels and geometry still agree.
+
+**Known divergences — do NOT re-flag** (both are in the two file headers):
+
+- `categoryColour` MVFR is **amber on web, blue on iOS**. The web page badges
+  MVFR amber in every table, so matching iOS would paint one airport two
+  colours on one page. Thresholds and colour *roles* are shared; the palette is
+  each platform's.
+- The dBZ **hexes** differ: web takes them from its own VIP ramp
+  (`layer-legends.ts`) so the ribbon matches the radar legend beside it. The
+  *boundaries* are shared exactly and must stay so.
+- The web has no standalone cells list (iOS `ObservedCellsSection`) — cells are
+  on the route map's toggle and the "Now" tab there. "Since this briefing" is a
+  page-level banner on web, a section on iOS.
+
+Also worth a glance: `web/tests/unit/observed-live-fixtures.test.ts` renders the
+same exported `/live` ticks the iOS UI test feeds the app
+(`flyfun-weatherUITests/LiveScenarios/`). If those files changed, both
+consumers must still pass — re-run `scripts/export_live_scenario_ios.py` and
+`pytest tests/test_live_scenarios.py` first.
+
+### 6. API DTO contracts
 
 iOS `Models/API/*Response.swift` Codable types mirror backend JSON. A server
 shape change breaks iOS decode **at runtime** with no compile-time signal. For
@@ -128,7 +177,7 @@ Report field name / optionality / nesting mismatches. Prioritise fields present
 in the backend (or web) but **missing or non-optional in Swift** — those are the
 runtime-decode hazards. A field the server may omit must be `Optional` on iOS.
 
-### 6. Debrief taxonomy — three-way copy
+### 7. Debrief taxonomy — three-way copy
 
 The debrief vocabulary (condition tags + labels/descriptions, decisions, outcome
 values, advisory→tag map, note limit) is a **three-way** copy. Python is the
@@ -151,7 +200,7 @@ Python edit needs a manual TS + Swift-baseline update (source of truth = Python)
 The `KEYWORD_MAP` matcher is web-only by design (iOS dropped `matchTagsInText` for
 v1) — don't flag its absence on iOS.
 
-### 7. Release-stream category rendering
+### 8. Release-stream category rendering
 
 Both clients render the same `/api/messages` stream, and both decide *per client*
 how a category is presented. The category set is server-owned
@@ -171,7 +220,7 @@ web emits it under `app_release` entries from `APP_STORE_URL` (`web/ts/utils.ts`
 a reader already inside the app has nothing to install, so its absence on iOS is
 not a divergence.
 
-### 8. Shared form logic ports
+### 9. Shared form logic ports
 
 Small pure-logic helpers ported by hand between the clients because the server
 has no say in them — they shape what a *form* does with a stored value, not what
@@ -191,7 +240,7 @@ and whichever form the pilot saves from writes its own reading back.
 ceiling through its dropdown markup (built from `splitDurationCeil`, read back on
 Save), so its absence from the TS module is not a gap.
 
-### 9. Known parity gaps (informational)
+### 10. Known parity gaps (informational)
 
 List these so they are **not** re-flagged as new divergences, and note any *new*
 gap the branch introduced:
@@ -214,7 +263,7 @@ gap the branch introduced:
   `CrossSectionPresets.swift` ports the cross-section directives only, so tapping
   a lens on iOS leaves the route graph and Skew-T on the pilot's last choice.
 
-### 10. SYNC-comment integrity
+### 11. SYNC-comment integrity
 
 Verify reciprocity for each `SYNC`-commented file pair:
 

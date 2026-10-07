@@ -1003,9 +1003,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const liveMs = isoToMs(live.live_updated_at);
     if (!isNaN(appliedMs) && !(liveMs > appliedMs)
         && !(liveMs === appliedMs && addsTrails(now.snapshot.live_changes, live.changes))) return;
+    // A layer for another pack is not ours to show at all.
+    if (!sameInstant(live.pack_timestamp, packTs)) return;
+    // `storms` / `glance` / `ribbon` (#688, #690) ride ONLY on this response —
+    // `overlay_live` keeps them off the snapshot — so the layer is stored even
+    // when the snapshot patch is a no-op (equal tick, no new trails). Dropping
+    // it there left the Observed nutshell and ribbon permanently empty.
     const next = applyLiveToSnapshot(now.snapshot, live, packTs);
-    if (!next) return;
-    set({ snapshot: next, live });
+    set(next ? { snapshot: next, live } : { live });
   },
 
   syncLatest: async () => {
