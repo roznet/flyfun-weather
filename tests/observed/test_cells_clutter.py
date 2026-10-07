@@ -301,3 +301,94 @@ def test_reference_case_from_real_frames():
         cell = next((c for c in catalogue["cells"] if c["id"] == cell_id), None)
         assert cell is not None, f"{cell_id} not found at {valid_time}"
         assert suspect(cell), f"{cell_id} was not flagged: {cell.get('clutter')}"
+
+
+# --- The validation harness's own logic (#696) --------------------------------
+
+
+def _row(valid_time, lat, lon, *, level=CONFIRMED, flashes=None, tier="core41", peak=55.0):
+    return {"valid_time": valid_time, "id": f"{tier}-{valid_time}-{lat}", "tier": tier,
+            "lat": lat, "lon": lon, "area_km2": 20.0, "peak_dbz": peak,
+            "robust_peak_dbz": peak - 1.0, "flashes": flashes, "top_fl": None,
+            "age_min": 10.0, "motion_status": "unsupported", "level": level, "score": 6.0,
+            "reasons": ["ring_rain"], "unknown": [], "features": {}, "label": "unknown"}
+
+
+def test_sites_groups_flags_by_ground_position_across_days():
+    from weatherbrief.observed.cells.clutter_eval import sites
+
+    rows = [
+        # One place, three separate days — the recurrence that corroborates.
+        _row("2026-10-03T09:00:00+00:00", 59.94, 5.37),
+        _row("2026-10-05T23:30:00+00:00", 59.93, 5.38),
+        _row("2026-10-07T00:25:00+00:00", 59.94, 5.37),
+        # A one-off somewhere else.
+        _row("2026-10-03T09:00:00+00:00", 44.70, 17.10),
+        # Not flagged: must not appear at all.
+        _row("2026-10-03T09:00:00+00:00", 50.00, 2.00, level=CLEAR),
+    ]
+    report = sites(rows, precision=0.1, min_days=2)
+    assert report["n_sites"] == 2
+    assert report["n_persistent"] == 1
+    assert report["hits_at_persistent_sites"] == 3
+    assert report["hits_total"] == 4
+    persistent = report["sites"][0]
+    assert persistent["n_days"] == 3
+    assert persistent["days"] == ["2026-10-03", "2026-10-05", "2026-10-07"]
+    assert persistent["hours_utc"] == [0, 9, 23]
+
+
+def test_sites_puts_a_lightning_bearing_site_first_to_be_doubted():
+    """A flagged site that ever showed lightning is the one to look at, so it
+    sorts above the most persistent clean site rather than below it."""
+    from weatherbrief.observed.cells.clutter_eval import sites
+
+    rows = [
+        _row("2026-10-03T09:00:00+00:00", 59.94, 5.37, flashes=0),
+        _row("2026-10-05T09:00:00+00:00", 59.94, 5.37, flashes=0),
+        _row("2026-10-07T09:00:00+00:00", 59.94, 5.37, flashes=0),
+        _row("2026-10-03T14:00:00+00:00", 45.00, 9.00, flashes=7),
+    ]
+    report = sites(rows)
+    assert report["sites"][0]["flashes_max"] == 7
+    assert [s["lat"] for s in report["sites_with_lightning"]] == [45.0]
+
+
+def test_rows_all_pools_a_root_without_a_time_window(tmp_path):
+    """Pooling separately replayed spans is the point; globbing the catalogue
+    tree means a report needs no window and cannot silently clip a day."""
+    import gzip
+    import json
+
+    from weatherbrief.observed.cells.clutter_eval import rows_all
+
+    for day, stamp in (("20261003", "20261003T0900"), ("20261007", "20261007T0025")):
+        path = tmp_path / "cells" / "catalogues" / day / f"{stamp}.json.gz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        catalogue = {
+            "policy_version": DEFAULT_POLICY.policy_version,
+            "valid_time": f"{day[:4]}-{day[4:6]}-{day[6:]}T00:25:00+00:00",
+            "cells": [{"id": "core41-x", "tier": "core41", "lat": 50.0, "lon": 2.0,
+                       "peak_dbz": 55.0, "flashes": None, "top_fl": None,
+                       "clutter": {"level": CONFIRMED, "score": 6.0, "features": {}}}],
+        }
+        path.write_bytes(gzip.compress(json.dumps(catalogue).encode(), mtime=0))
+    assert len(rows_all(tmp_path, DEFAULT_POLICY)) == 2
+
+
+def test_rows_all_skips_another_policys_catalogues(tmp_path):
+    """Mixing two rules into one average is the mistake the whole harness exists
+    to avoid, so a foreign catalogue is skipped rather than read."""
+    import gzip
+    import json
+
+    from weatherbrief.observed.cells.clutter_eval import rows_all
+
+    path = tmp_path / "cells" / "catalogues" / "20261003" / "20261003T0900.json.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress(json.dumps({
+        "policy_version": "cells-2+deadbeef", "valid_time": "2026-10-03T09:00:00+00:00",
+        "cells": [{"id": "core41-x", "tier": "core41", "lat": 50.0, "lon": 2.0,
+                   "peak_dbz": 55.0, "clutter": {"level": CONFIRMED, "score": 6.0}}],
+    }).encode(), mtime=0))
+    assert rows_all(tmp_path, DEFAULT_POLICY) == []
