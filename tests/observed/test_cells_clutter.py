@@ -143,6 +143,27 @@ def test_the_single_pixel_peak_is_recorded_next_to_the_robust_one():
 # --- The rules ----------------------------------------------------------------
 
 
+def test_a_filament_has_no_robust_peak_rather_than_a_sentinel_one():
+    """A cell too thin for a 3x3 median reports ``None``, not -999.
+
+    One core in 60,973 on the 2026-10-03/04 replay was a 2-pixel-wide filament
+    whose every pixel's window was majority-NaN.  It wrote
+    ``robust_peak_dbz: -999`` into its catalogue and earned a point from a
+    1044 dB ``robust_drop``.  Unknown costs it the corroborator; a sentinel
+    invented one.
+    """
+    values = np.zeros((SIZE, SIZE))
+    # A one-pixel-wide diagonal thread of core: every window is mostly empty.
+    for i in range(12):
+        values[SIZE // 2 + i, SIZE // 2 + i] = 50.0
+    det, evidence = _assess(values, tier="core35")
+    cell, found = _biggest(det, evidence)
+    assert found.features["robust_peak_dbz"] is None
+    assert found.features["robust_drop"] is None
+    assert "robust_drop" in found.unknown
+    assert not any(r["feature"] == "robust_drop" for r in found.reasons)
+
+
 def test_lightning_vetoes_the_whole_score():
     det, plain = _assess(clutter_scene())
     _, flagged = _biggest(det, plain)

@@ -5539,14 +5539,45 @@ All three cell ids the issue names come out `confirmed`, on every frame.
   it**: switching would move every intensity word and the §41
   `RADAR_SIGNIFICANT_DBZ` comparison at once. A separate decision.
 
+### Validated on a second, independent span (2026-10-07)
+
+`scripts/clutter_validate.py` over **144 frames / 72,940 assessed cores** on
+four dates — the calibration night (10-06 23:35Z → 10-07 00:55Z) pooled with a
+full convective *daytime* span the thresholds never saw (10-03 08:15Z →
+10-04 11:20Z):
+
+| | core35 | core41 |
+|---|---:|---:|
+| flagged | **1.83 %** | **2.55 %** |
+| lightning- or top-corroborated cores | 1,897 | 2,294 |
+| **lost** | **0** | **0** |
+
+**21 sites flagged on two or more days, carrying 495 of 1,551 flags, and not
+one of them ever showed a flash.** Four days at a Norwegian fjord (median
+63 dBZ, hours 00 and 08–16) and two Polish sites; the reference Somme site on
+two days at hours **00 and 23 only** — the nocturnal signature the issue
+described — while the terrain sites fire day and night. Three adjacent buckets
+at 65.4 N 20.6–20.9 E are one extended Swedish source split by the 0.1° grid.
+
+This is the recurrence evidence the HAC map would have produced, derived from
+the flags themselves across spans sharing nothing but geography, and it is why
+the map stays unbuilt.
+
 ### Real-world validation needed
 
-- One convective night over France is one regime. Re-run `cells clutter` over a
-  winter stratiform day, a summer afternoon, and Scandinavia/Iberia before the
-  gate goes on; `weather_lost` must stay zero and the flag rate should not jump.
-- The lightning veto was exercised on real frames (683 corroborated cores, none
-  flagged). The cloud-top veto has only a unit test — CTTH is opt-in and was
-  not collected for that night.
+- Four dates in one autumn week is still one season. A **winter stratiform
+  day** and a **summer afternoon** remain unseen; `weather_lost` must stay zero
+  and the flag rate should not jump. The mini's 48 h of frames and, from the
+  first `cells-3` deploy, its 90 days of catalogues are the corpus.
+- `onset_db` is the weakest threshold. Because the earlier field is floored at
+  `onset_floor_dbz`, a cell genuinely born over empty ground reads as a large
+  onset: p99 is ~20 dB on the quiet night but **43 dB** on the convective day.
+  It only ever acts behind the isolation gate, but its 20/25 dB steps are tuned
+  to the night and should be re-read from a wider corpus.
+- The lightning veto has never had to fire on real data — across four days no
+  flagged core carried lightning, so what is measured is that corroborated
+  cores are not flagged, not that the veto works. The veto itself has unit
+  tests only, as does the cloud-top veto (CTTH is opt-in and was not collected).
 - A suppressed core still leaves its own bare `rain20` outline, so the ribbon
   can keep a floor-intensity rain band where the storm row went away. Judge it
   on a real replay before adding machinery for it.
