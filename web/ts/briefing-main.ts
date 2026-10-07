@@ -2370,7 +2370,13 @@ async function init(): Promise<void> {
     }
     // The nutshell + ribbon follow the live layer, which the poll replaces on
     // its own cadence; `currentPack`/`snapshot` may be untouched for an hour.
-    if (state.live !== prev.live || state.snapshot !== prev.snapshot) {
+    // The only thing they take from the snapshot is whether it carries
+    // observed conditions (the "Show radar & cells on map" button), so key on
+    // that rather than on the snapshot reference: re-mounting rebuilds the
+    // card's innerHTML and would drop keyboard focus from a glance line on
+    // every unrelated snapshot update (an observations refresh, a ↻).
+    const observedNow = !!state.snapshot?.observed_conditions;
+    if (state.live !== prev.live || observedNow !== !!prev.snapshot?.observed_conditions) {
       renderObservedLive(state);
     }
     if (

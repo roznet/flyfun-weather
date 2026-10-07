@@ -287,6 +287,38 @@ test.describe('Observed nutshell + route ribbon', () => {
     expect(onPage.indexOf('observed-ribbon')).toBeLessThan(onPage.indexOf('observations'));
   });
 
+  test('every stretch of route is reachable by keyboard, not just by click', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    const svg = page.locator('.ribbon-svg');
+    await expect(svg).toBeVisible();
+    // One focusable button per segment that carries a focus, over the zone.
+    const segHits = svg.locator('.ribbon-seg-hit');
+    await expect(segHits).toHaveCount(2);
+    await expect(segHits.first()).toHaveAttribute('role', 'button');
+    await expect(segHits.first()).toHaveAttribute('tabindex', '0');
+    await expect(segHits.first()).toHaveAttribute('aria-label', /radar peak 24 dBZ/);
+    // Enter activates it, exactly as a click would.
+    await segHits.nth(1).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.leaflet-container')).toBeVisible();
+    await expect(page.locator('#map-observed-cells')).toBeChecked();
+  });
+
+  test('labels the drawing for a screen reader without shouting the decoration', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    const svg = page.locator('.ribbon-svg');
+    await expect(svg).toBeVisible();
+    // The weather picture is described as an image, not an unlabelled rect.
+    const zone = svg.locator('.ribbon-zone-hit');
+    await expect(zone).toHaveAttribute('role', 'img');
+    await expect(zone).toHaveAttribute('aria-label', /1 rain areas, 1 cells along the route/);
+    // The motion arrows restate what the summary already says.
+    await expect(svg.locator('.ribbon-arrow').first()).toHaveAttribute('aria-hidden', 'true');
+    // Phase labels stay title case in the markup; CSS does the shouting.
+    await expect(page.locator('[data-testid="glance-line-enroute"] .glance-phase'))
+      .toHaveText('En route');
+  });
+
   test('a cell opens its detail, with the estimate kept in its own block', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
     await page.locator(`[data-ribbon-storm="${STORM_ID}"]`).click();

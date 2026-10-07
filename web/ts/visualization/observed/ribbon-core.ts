@@ -390,6 +390,18 @@ export function isEndStation(st: RibbonStation): boolean {
   return st.role === 'departure' || st.role === 'destination';
 }
 
+/** An airport's disc: the route's ends sit on the line and are drawn larger
+ *  than the en-route airports in their rows. */
+export function stationMarkSize(st: RibbonStation): number {
+  return isEndStation(st) ? 16 : 10;
+}
+
+/** Minimum tap/click target radius for a mark. A 10 px disc is well under the
+ *  44 px guidance on its own, so every mark carries an invisible circle of at
+ *  least this radius. */
+export const STORM_HIT_RADIUS = 14;
+export const STATION_HIT_RADIUS = 12;
+
 /** Tapping the weather zones frames the map on that stretch of route. */
 export function segmentFocusAt(
   ribbon: LiveRibbon,

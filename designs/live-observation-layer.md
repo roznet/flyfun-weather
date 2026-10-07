@@ -431,8 +431,13 @@ logs `Live glance failed` and leaves both null for that tick.
   Tap-to-map goes through `RouteMapRenderer.focusBbox` (pads a degenerate box
   and caps `maxZoom`, so one cell does not zoom to the tile limit) after
   switching to the `split` layout and turning on the focus's layers; a cell
-  opens `stormDetailHtml` in the shared info popup. Like iOS, the web ignores
-  the focus's `time` and draws no SIGMET polygons.
+  opens `stormDetailHtml` in the shared info popup.
+  - **Deliberate, not a gap:** like iOS, the web honours only part of the
+    focus contract — it ignores `time` and draws no SIGMET polygons. There is
+    no SIGMET polygon layer on the route map and no frame stepper for `time`
+    to point at, so both would be new map features, not wiring. `time`
+    becomes meaningful with the radar/satellite loop (#653). Don't re-open
+    this as a bug against the client.
   - **Gotcha, cost a bug once:** `glance` / `ribbon` / `storms` ride **only**
     on the `/live` response — `overlay_live` deliberately leaves them off the
     snapshot. `briefing-store.loadLive` therefore stores the layer even when

@@ -37,7 +37,6 @@ import {
   categoryColour,
   corridorOf,
   dbzColour,
-  isEndStation,
   motionArrowDir,
   radarFill,
   ribbonArrows,
@@ -46,7 +45,10 @@ import {
   segmentFocusAt,
   segmentLabel,
   sigmetText,
+  STATION_HIT_RADIUS,
+  STORM_HIT_RADIUS,
   stationLabel,
+  stationMarkSize,
   stationPoint,
   stormLabel,
   stormMarkSize,
@@ -73,8 +75,11 @@ export interface RibbonHandlers {
 /** A right-pointing arrow head, rotated by the band's motion. */
 function arrowPath(x: number, y: number, deg: number, core: boolean): string {
   const colour = core ? 'var(--text)' : 'var(--text-muted)';
+  // Decorative: the motion it shows is already in the zone's summary and in
+  // each cell's accessible name, so it is not announced twice.
   return `<path d="M-5 0 H3 M0 -3.5 L4 0 L0 3.5" transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${deg.toFixed(1)})"`
-    + ` stroke="${colour}" stroke-width="2" stroke-linecap="round" fill="none" class="ribbon-arrow"/>`;
+    + ` stroke="${colour}" stroke-width="2" stroke-linecap="round" fill="none" class="ribbon-arrow"`
+    + ' aria-hidden="true"/>';
 }
 
 /** Filled with the METAR category now, ringed with the TAF category at the
@@ -154,7 +159,7 @@ function stormMarks(ribbon: LiveRibbon, storms: LiveStorm[], corridorNm: number,
       + `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(size / 2).toFixed(1)}"`
       + ` fill="${dbzColour(storm.peak_dbz)}" opacity="${opacity}"/>${arrow}`
       // An invisible 28px target, so a 10px dot is still tappable.
-      + `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="14" fill="transparent"/>`
+      + `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${STORM_HIT_RADIUS}" fill="transparent"/>`
       + '</g>';
   }).join('');
 }
@@ -187,14 +192,30 @@ export function ribbonSvg(
   let inner = '';
 
   if (bands) {
-    // One tap target over the whole weather area: tapping a stretch frames
-    // the map on it (the SwiftUI side uses a SpatialTapGesture for this).
+    // The weather picture as a whole: `role="img"`, so the summary is read as
+    // the drawing's description. (An aria-label on a bare <rect> with no role
+    // is skipped by most screen readers.) It also keeps the iOS behaviour of
+    // a tap anywhere in the zone framing that stretch of route.
     inner += `<rect class="ribbon-zone-hit" x="${INSET}" y="${ZONE_TOP}"`
       + ` width="${Math.max(width - 2 * INSET, 1).toFixed(1)}" height="${ZONE_BOTTOM - ZONE_TOP}"`
-      + ` fill="transparent" aria-label="${escapeHtml(weatherSummary(ribbon.weather ?? []))}"/>`;
+      + ` fill="transparent" role="img"`
+      + ` aria-label="${escapeHtml(weatherSummary(ribbon.weather ?? []))}"/>`;
     inner += bandRects(ribbon, width).map((r) => `<rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}"`
       + ` width="${r.width.toFixed(1)}" height="${r.height.toFixed(1)}" fill="${r.fill}"`
-      + ` opacity="${r.opacity}"/>`).join('');
+      + ` opacity="${r.opacity}" aria-hidden="true"/>`).join('');
+    // Keyboard parity for the zone: one focusable button per stretch of
+    // route, tiling the same area. Pointer users hit these or the zone
+    // behind them — both resolve to the same segment focus; keyboard users
+    // had no path to it at all before.
+    inner += (ribbon.segments ?? []).map((seg, i) => {
+      if (!seg.focus) return '';
+      const x0 = xForNm(seg.from_nm ?? 0, routeNm, width);
+      const x1 = xForNm(seg.to_nm ?? 0, routeNm, width);
+      return `<rect class="ribbon-seg-hit ribbon-hit" data-ribbon-focus="segment:${i}"`
+        + ` tabindex="0" role="button" aria-label="${escapeHtml(segmentLabel(seg))}"`
+        + ` x="${x0.toFixed(1)}" y="${ZONE_TOP}" width="${Math.max(x1 - x0, 1).toFixed(1)}"`
+        + ` height="${ZONE_BOTTOM - ZONE_TOP}" fill="transparent"/>`;
+    }).join('');
   } else {
     inner += radarStrip(ribbon, width);
   }
@@ -210,7 +231,7 @@ export function ribbonSvg(
     inner += stormTargets(ribbon, storms, width).map((t) =>
       `<g class="ribbon-storm ribbon-hit" data-ribbon-storm="${escapeHtml(t.storm.id)}" tabindex="0"`
       + ` role="button" aria-label="${escapeHtml(stormLabel(t.storm))}">`
-      + `<circle cx="${t.x.toFixed(1)}" cy="${t.y.toFixed(1)}" r="14" fill="transparent"/></g>`).join('');
+      + `<circle cx="${t.x.toFixed(1)}" cy="${t.y.toFixed(1)}" r="${STORM_HIT_RADIUS}" fill="transparent"/></g>`).join('');
   } else {
     inner += stormMarks(ribbon, storms, corridor, width);
   }
@@ -218,18 +239,19 @@ export function ribbonSvg(
   inner += (ribbon.stations ?? []).map((st, i) => {
     const at = stationPoint(st, ribbon, width);
     if (!at) return '';
-    const size = isEndStation(st) ? 16 : 10;
     const hit = st.focus ? ' ribbon-hit' : '';
-    return `<g class="ribbon-station${hit}"${st.focus ? ` data-ribbon-focus="station:${i}" tabindex="0" role="button"` : ''}`
+    // Without a focus it is still a labelled mark, just not a control.
+    const role = st.focus ? ` data-ribbon-focus="station:${i}" tabindex="0" role="button"` : ' role="img"';
+    return `<g class="ribbon-station${hit}"${role}`
       + ` aria-label="${escapeHtml(stationLabel(st))}">`
-      + airportCircle(st, at.x, at.y, size)
-      + `<circle cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="12" fill="transparent"/></g>`;
+      + airportCircle(st, at.x, at.y, stationMarkSize(st))
+      + `<circle cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="${STATION_HIT_RADIUS}" fill="transparent"/></g>`;
   }).join('');
 
   // Planned position now, on the line.
   if (ribbon.flown_nm != null && ribbon.flown_nm > 0) {
     const x = xForNm(ribbon.flown_nm, routeNm, width);
-    inner += `<g aria-label="Planned position now">`
+    inner += `<g role="img" aria-label="Planned position now">`
       + `<circle cx="${x.toFixed(1)}" cy="${TRACK_Y}" r="9" fill="var(--surface)"/>`
       + `<circle cx="${x.toFixed(1)}" cy="${TRACK_Y}" r="4.5" fill="var(--primary)"/></g>`;
   }
