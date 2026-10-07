@@ -264,6 +264,25 @@ def test_a1_seam_point_gets_grib1_and_grib2_fields(tmp_path):
     assert {"temperature_2m_k", "ceiling_m", "ml_cape_jkg"} <= got[0].keys()
 
 
+def test_a1_one_sided_seam_point_is_not_served_but_a2_is(tmp_path):
+    """#679 option B, stated in one place: at an EGPB-like one-sided seam
+    point the sounding (a2) holds the facing edge row, while the surface (a1)
+    declines and leaves Open-Meteo's correctly placed value in play. The
+    two-sided point next to it is filled on both."""
+    a1, a2 = tmp_path / "a1.grib", tmp_path / "a2.grib"
+    _write_a1(a1)
+    _write_a2(a2)
+    lats, lons = [59.65, 59.88], [17.92, -1.30]  # two-sided, one-sided
+
+    sfc, sfc_cov = dec.decode_ecmwf_surface_per_point(a1, lats, lons)
+    pl, pl_cov = dec.decode_ecmwf_pressure_per_point(a2, lats, lons)
+
+    assert sfc_cov == [True, False]
+    assert sfc[1] == {}
+    assert pl_cov == [True, True]
+    assert pl[1][850]
+
+
 def test_seam_only_route_does_not_unpack_unrelated_grids(tmp_path, monkeypatch):
     """A target next to Europe/Nordic edges unpacks those grids only, not US."""
     from weatherbrief.fetch.grib import grib_reader

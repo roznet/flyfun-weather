@@ -210,14 +210,56 @@ class TestSurfaceDecode:
         assert raw["boundary_layer_height_m"] == pytest.approx(1000.0 + 59.65 + 0.1792)
         assert raw["total_cover_frac"] == pytest.approx(0.4)
 
-    def test_europe_only_point_holds_the_top_row(self, tmp_path):
-        # EGPB-like point: Nordic does not reach 1.3°W, so Europe's 59.5 row
-        # is held — latitude reads as 59.5, not 59.88.
+    def test_europe_only_point_is_left_to_open_meteo(self, tmp_path):
+        """#679 option B: an EGPB-like point is one-sided (Nordic does not
+        reach 1.3°W), so a surface fill could only hold Europe's 59.5 row —
+        a value from ~42 km south, mostly over sea. Open-Meteo's ECMWF surface
+        value is the same model correctly located, so the point is left
+        uncovered and the consumers keep it."""
         path = tmp_path / "sfc.grib"
         _write_surface(path)
         results, covered = dec.decode_ecmwf_surface_per_point(path, [59.88], [-1.3])
+        assert covered == [False]
+        assert results[0] == {}
+
+    def test_two_sided_seam_point_is_still_filled(self, tmp_path):
+        """Only the one-sided case is dropped: a point both grids bracket in
+        longitude still interpolates across the 0.5° gap."""
+        path = tmp_path / "sfc.grib"
+        _write_surface(path)
+        results, covered = dec.decode_ecmwf_surface_per_point(
+            path, [59.65, 59.88], [17.92, -1.3],
+        )
+        assert covered == [True, False]
+        assert results[0]["temperature_2m_k"] == pytest.approx(270.0 + 59.65 + 0.1792)
+
+    def test_one_sided_points_left_to_open_meteo_are_logged(self, tmp_path, caplog):
+        """The decode log says how many points it declined to fill, so a
+        missing ECMWF surface value at EGPB is traceable."""
+        path = tmp_path / "sfc.grib"
+        _write_surface(path)
+        with caplog.at_level(logging.INFO, logger="weatherbrief.fetch.grib.decode"):
+            dec.decode_ecmwf_surface_per_point(path, [59.65, 59.88], [17.92, -1.3])
+        msg = " ".join(r.getMessage() for r in caplog.records)
+        assert "surface grid seam" in msg
+        assert "1 one-sided point(s) left to Open-Meteo" in msg
+
+    def test_pressure_still_holds_the_top_row_for_the_same_point(self, tmp_path):
+        """The sounding keeps held points — there is no better-placed source
+        for a2, unlike the surface fields. This is the #679 split."""
+        path = tmp_path / "pl.grib"
+        with open(path, "wb") as f:
+            for area in (SEAM_EUROPE, SEAM_NORDIC):
+                for level in (850, 700):
+                    write_message(
+                        f, sample="regular_ll_pl_grib1", short="t",
+                        type_of_level="isobaricInhPa", level=level, area=area,
+                        values=lambda la, lo: linear_field(la, lo, offset=200.0),
+                    )
+        results, covered = dec.decode_ecmwf_pressure_per_point(path, [59.88], [-1.3])
         assert covered == [True]
-        assert results[0]["temperature_2m_k"] == pytest.approx(270.0 + 59.5 - 0.013)
+        # Latitude reads 59.5, not 59.88: the edge row is held.
+        assert results[0][850]["raw_temperature_k"] == pytest.approx(200.0 + 59.5 - 0.013)
 
     def test_inside_point_unchanged_and_outside_uncovered(self, tmp_path):
         path = tmp_path / "sfc.grib"
