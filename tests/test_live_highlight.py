@@ -187,12 +187,80 @@ def test_facts_from_a_real_layer(name):
         assert key in f
 
 
-def test_facts_hash_ignores_the_clock_only():
+def test_facts_hash_ignores_the_tick_time():
     f = _facts_with()
-    moved_clock = _facts_with(now="09:10Z")
-    assert lh.facts_hash(f) == lh.facts_hash(moved_clock)
-    changed_weather = _facts_with(rain_ahead={"rain_within_10_NM_either_side": "on 40% of the route ahead"})
-    assert lh.facts_hash(f) != lh.facts_hash(changed_weather)
+    assert lh.facts_hash(f) == lh.facts_hash(_facts_with(now="09:10Z"))
+
+
+def test_facts_hash_ignores_progress_flown_on_the_clock():
+    """The gate's whole point. ``flown_nm`` is interpolated from departure, so
+    on a 276 NM / 1.5 h plan it advances ~30 NM every 10-minute tick: hashing
+    it meant paying for an identical highlight every tick of every flight."""
+    at_69 = _facts_with(flight="en route, about 69 of 276 NM flown, arrival planned 10:00Z")
+    at_100 = _facts_with(flight="en route, about 100 of 276 NM flown, arrival planned 10:00Z")
+    assert lh.facts_hash(at_69) == lh.facts_hash(at_100)
+
+
+def test_facts_hash_ignores_the_drifting_rain_percentage():
+    """Same cause: the denominator is ``route_nm - flown``."""
+    a = _facts_with(rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[10, 40]],
+                                "rain_within_10_NM_either_side": "on 45% of the route ahead"})
+    b = _facts_with(rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[10, 40]],
+                                "rain_within_10_NM_either_side": "on 52% of the route ahead"})
+    assert lh.facts_hash(a) == lh.facts_hash(b)
+
+
+def test_facts_hash_still_moves_on_a_phase_change():
+    """Coarse phase is kept: taking off and landing must regenerate."""
+    before = _facts_with(flight="before departure (departure planned 08:00Z)")
+    airborne = _facts_with(flight="en route, about 69 of 276 NM flown, arrival planned 10:00Z")
+    arrived = _facts_with(flight="arrived (at plan)")
+    assert len({lh.facts_hash(before), lh.facts_hash(airborne), lh.facts_hash(arrived)}) == 3
+
+
+def test_facts_hash_still_moves_when_the_route_length_differs():
+    """Only the flown figure is dropped, not the route it is measured against."""
+    a = _facts_with(flight="en route, about 69 of 276 NM flown, arrival planned 10:00Z")
+    b = _facts_with(flight="en route, about 69 of 300 NM flown, arrival planned 10:00Z")
+    assert lh.facts_hash(a) != lh.facts_hash(b)
+
+
+@pytest.mark.parametrize("changed", [
+    {"rain_ahead": {"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[10, 40]]}},
+    {"sigmets_ahead": [{"what": "EMBD TS", "id": "LECB 2", "covers_route_nm": [10, 276]}]},
+    {"cells_ahead": {"count": 1, "with_lightning": 1, "closing_on_track": 1,
+                     "within_10_NM_of_track": 1, "nearest_to_track": []}},
+    {"destination": {"icao": "LEMI", "metar_now": "IFR at 09:20Z", "taf_at_eta": "IFR"}},
+    {"changes_since_briefing": {"worse": [{"where": "destination LEMI", "what": "VFR to IFR"}],
+                                "improved_count": 0}},
+])
+def test_facts_hash_moves_on_real_weather(changed):
+    """What progress actually decides is captured here, and still hashed: a
+    cell passing behind you drops out of ``cells_ahead``, a SIGMET falls out
+    of ``sigmets_ahead``. Dropping the flown figure loses none of that."""
+    assert lh.facts_hash(_facts_with()) != lh.facts_hash(_facts_with(**changed))
+
+
+def test_hash_fix_on_the_real_tick_that_proved_the_bug():
+    """The LELL→LEMI 08:30 tick, replayed 10 minutes later with the weather
+    byte-identical: before the fix the hash changed and we paid again."""
+    layer = json.loads((SCENARIOS / "2026-10-02_lell_lemi_0830.json").read_text())
+    layer = layer.get("body", layer)
+    base = lh.facts(layer)
+    later = json.loads(json.dumps(layer))
+    rate = later["ribbon"]["route_nm"] / 1.5  # NM per hour at plan
+    later["ribbon"]["flown_nm"] = later["ribbon"]["flown_nm"] + rate / 6
+    moved = lh.facts(later)
+    assert base["flight"] != moved["flight"], "the facts the model sees must keep the real figure"
+    assert lh.facts_hash(base) == lh.facts_hash(moved)
+
+
+def test_call_cost_prices_a_real_usage_block():
+    """Measured: ~1450 in / ~45 out is about $0.0016 on Haiku 4.5."""
+    cost = lh.call_cost({"model": "claude-haiku-4-5", "input_tokens": 1450, "output_tokens": 45})
+    assert cost == pytest.approx(0.001675, abs=1e-5)
+    assert lh.call_cost(None) is None
+    assert lh.call_cost({"input_tokens": 10}) is None
 
 
 # --- Wiring -----------------------------------------------------------------

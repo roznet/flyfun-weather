@@ -451,6 +451,40 @@ in ~1.2 s, so the tick grows by one call's latency, not by the flight count.
 different pack, or a newer `glance.as_of`): the text was written from *those*
 facts, and the next tick generates its own.
 
+### What counts as "changed" (the cost gate)
+
+`facts_hash` hashes a **`_hash_view`** of the facts, not the facts, because
+three things move on the wall clock alone with nothing a pilot would read
+having changed — and hashing them meant paying for an identical highlight
+every tick of every flight:
+
+- `now`;
+- the flown figure in `flight` — interpolated from departure, so on a
+  276 NM / 1.5 h plan it advances ~30 NM per 10-minute tick;
+- the "% of the route ahead" in `rain_ahead`, whose denominator is
+  `route_nm - flown`.
+
+Measured on the real LELL→LEMI 08:30 tick replayed 10 min later with the
+weather byte-identical: the hash changed, so the gate was dead for the whole
+airborne phase — the part that matters. Dropping the figure loses nothing,
+because everything progress actually decides is captured exactly elsewhere and
+still hashed: which cells are `ahead`, which SIGMET spans are still in front,
+which airports remain, the rain stretches. The **coarse phase** is kept, so
+take-off and landing still regenerate.
+
+Replaying all 33 ticks of that flight's window with the weather held
+identical: **10 billed calls before the fix, 6 after** (−40%), and all 6 are
+real — take-off, landing, and four airports dropping out of "ahead" as the
+flight passes them. The facts the model sees keep the exact figure; only
+change detection is coarse.
+
+Cost: **~$0.0016 a call** measured (1050–1509 input tokens, 21–96 output;
+input is ~90% of it and nearly constant because the facts block is capped).
+A 2 h flight sits in the window for 36 ticks. Note the admin cost views filter
+on `category == "briefing"`, so these rows are recorded and queryable but **not
+shown** anywhere — which is why `call_cost` puts the USD of every attempt into
+the review log, rejected ones included.
+
 ### Grounding check
 
 `check_grounding` is the only thing between a model sentence and a cockpit
