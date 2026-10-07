@@ -78,10 +78,11 @@ Pick by the Step 0 environment:
   it; otherwise `git checkout -b issue-<n>-<slug> origin/main`.
 - **Local, already in a worktree for this issue** (e.g. the user launched you there):
   use it as is.
-- **Local, in `main/`:** only here create a worktree `issue-<n>-<slug>`, by following
-  `.claude/skills/worktree-init/SKILL.md` (it can't be invoked as a skill from here;
-  fork from `origin/main`), and work inside it with its own venv. Never implement on
-  `main/` itself — other sessions share that checkout.
+- **Local, in `main/`:** only here create a worktree:
+  `python3 scripts/ops/worktree_init.py issue-<n>-<slug>` (forks from `origin/main`; add
+  `--fork-db` if the plan includes a migration, so it can't touch main's dev DB). Work
+  inside it with its own venv. Exit 1 → stop and report its problem line. Never implement
+  on `main/` itself — other sessions share that checkout.
 - Locally, re-check HEAD and branch before every commit (concurrent sessions share
   checkouts).
 
