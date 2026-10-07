@@ -52,8 +52,11 @@ logger = logging.getLogger(__name__)
 LIVE_FILE = "live.json"
 LIVE_META_FILE = "live_meta.json"
 LIVE_HISTORY_FILE = "live_history.jsonl"
+#: #697's review log — defined in ``live_highlight`` and listed here so a
+#: flight delete takes it with the rest of the layer.
+LIVE_HIGHLIGHT_LOG = "live_highlights.jsonl"
 #: Every per-flight live file: what flight delete/move and retention remove.
-LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE)
+LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG)
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -787,6 +790,12 @@ def commit_live_update(
             changes.baseline_source = "live_start"
         layer.changes = changes
         layer.glance, layer.ribbon = _build_glance(layer, route, departure, briefing_data, now, cells)
+        # The glance is rebuilt wholesale, so #697's highlight has to be
+        # carried over here or every tick loses it and pays for a new one.
+        # Pure computation — the model call happens after this commit returns.
+        from weatherbrief.tasks.live_highlight import carry_forward
+
+        carry_forward(stored, layer)
         layer.last_refresh_delta = worsening_delta(changes)
         layer.alerted = memory.alerted
         layer.sigmet_traces = list(memory.sigmets.values())
@@ -803,6 +812,40 @@ def commit_live_update(
             observations=observations, sigmets=sigmets, now=now,
         )
         return layer
+
+
+def patch_highlight(
+    flight_dir: Path | str,
+    highlight,
+    *,
+    pack_timestamp: str,
+    as_of: datetime,
+) -> bool:
+    """Attach a generated highlight to the stored layer (#697). True if written.
+
+    A second, tiny write under the same lock as ``commit_live_update``, so the
+    model call sits off the tick's critical path: the deterministic blocks are
+    already on disk and servable before this runs.
+
+    Refuses rather than overwrite when the layer has moved on — a different
+    pack, or a tick that committed while the model was generating. The
+    highlight was written from *those* facts, and attaching it to newer ones is
+    exactly the stale-text bug the facts hash exists to prevent. The next tick
+    generates its own, so there is nothing to retry.
+    """
+    flight_dir = Path(flight_dir)
+    with _lock_for(flight_dir):
+        layer = load_live(flight_dir)
+        if layer is None or layer.pack_timestamp != pack_timestamp:
+            return False
+        if layer.glance is None:
+            return False
+        if layer.glance.as_of != as_of:
+            # A newer tick committed: its own highlight is on the way.
+            return False
+        layer.glance.highlight = highlight
+        _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
+        return True
 
 
 # --- Agent summary (#641) ---------------------------------------------------

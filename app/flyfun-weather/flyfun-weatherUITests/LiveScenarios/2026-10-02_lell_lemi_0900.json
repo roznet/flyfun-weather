@@ -169,6 +169,7 @@
   "as_of": "2026-10-02T09:00:00Z",
   "comparison": "mixed",
   "headline": "Observed 09:00Z \u00b7 1 worse since the briefing (arrival), en route and arrival improving, 1 SIGMET reissued",
+  "highlight": null,
   "lines": [
    {
     "alert": false,

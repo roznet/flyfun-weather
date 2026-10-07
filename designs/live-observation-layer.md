@@ -409,6 +409,114 @@ logs `Live glance failed` and leaves both null for that tick.
   slice should implement the full contract, not copy iOS's subset.
 - **Web**: not done yet.
 
+## Observed highlight (#697) — written, not displayed
+
+One or two sentences above the nutshell saying what deserves attention on the
+route ahead, written by Claude Haiku 4.5 from a facts block the code computes.
+**Code does the weather, the model phrases it**: no analysis by the model, so a
+highlight can never say something the tick did not already know.
+
+**Not shown anywhere yet** (owner, 2026-10-07). It is generated for every live
+flight and logged so real flight days can be reviewed and the prompt
+calibrated before any client renders it. Deliberately also out of the agent
+`live` block — `summarize_live` names the glance fields it exposes, and a
+pinned test keeps it that way, because an agent quoting it would be a
+user-facing surface by the back door.
+
+### Off the critical path
+
+`commit_live_update` is unchanged except for one pure call, and the model runs
+*after* it returns:
+
+1. **Commit** writes the layer as before, and `live_highlight.carry_forward`
+   re-attaches the previous highlight when this tick's facts hash is unchanged
+   (the glance is rebuilt wholesale each tick, so without this every tick loses
+   the highlight and pays for a new one). Measured cost on a real 69 KB layer:
+   **0.29 ms**.
+2. **`live_tick._highlights`** then generates for the flights that still have
+   none, fanned out over a thread pool, and `live_layer.patch_highlight` writes
+   `glance.highlight` in a second small write under the same lock.
+
+So the deterministic blocks are servable ~1 s earlier, a model failure or
+timeout cannot roll a tick back, and the ↻ press never waits on a model: its
+own commit either carries the previous highlight forward (unchanged facts) or
+leaves it null for the next tick, which is the contract iOS already has ("a ↻
+response has no glance: the last one for the same pack is kept until the next
+`/live`"). Measured on prod 2026-10-07, Haiku on the busiest real tick: **p50
+1.04 s, p95 1.19 s, max 1.21 s over 25 calls**, against a 3–5 s ↻ refresh and a
+10–25 min observation→screen pipeline. 1, 4 and 10 concurrent calls all return
+in ~1.2 s, so the tick grows by one call's latency, not by the flight count.
+
+`patch_highlight` refuses rather than overwrite when the layer moved on (a
+different pack, or a newer `glance.as_of`): the text was written from *those*
+facts, and the next tick generates its own.
+
+### Grounding check
+
+`check_grounding` is the only thing between a model sentence and a cockpit
+screen, so it rejects on five rules and falls back to the nutshell `headline`:
+
+1. **ICAOs** — every aerodrome code must appear in the facts.
+2. **Figures** — every number must appear in the facts. The prompt therefore
+   forbids the model working out spans of its own: it first wrote "the last 41
+   NM" for a SIGMET covering 235–276 NM, which is true but unverifiable, and
+   the rule rejected it. One prompt line ("give every figure exactly as the
+   facts give it") took the replay set from 2 rejections in 5 to 0 in 10.
+3. **Place binding** — in a clause naming exactly one airport, every *airport
+   condition* claimed must be one the facts give for that airport. This is the
+   rule a plain "appears somewhere in the facts" check misses: moving LECH's
+   LIFR onto LEMI passes rules 1 and 2 and fails here. Conditions are matched
+   through a surface-form map, so the facts' `TSRA` supports the model's
+   "thunderstorm".
+4. **Verdict words** — never go/no-go (`feedback_not_go_nogo`).
+5. **"Thunderstorm" needs lightning** — §41: a radar core is a "cell".
+
+Gotcha that cost a test: `\b[A-Z]{4}\b` matches `LIFR` and `TSRA` as if they
+were ICAO codes. Unfiltered, the binding rule saw two "ICAOs" in "LEMI
+reporting LIFR" and skipped the clause — the exact misattribution it exists to
+catch. `_NOT_ICAO` holds the colliding weather codes.
+
+Accepted limits: a clause naming two airports is not bound (ambiguous
+attribution), and a clause hedged with "no"/"better" is skipped (the rule
+cannot read a negation). Both let a wrong line through rather than reject a
+right one; the replay set and the review log are the backstop.
+
+### Review log
+
+`live_highlights.jsonl`, append-only per flight, one record per attempt
+(`written` / `reused` / `rejected` / `call_failed` / `superseded`) with the
+**facts block alongside the text**. `live.json` holds only the newest
+highlight, so this is the only place a flight day can be read back from — and
+without the facts, a line that reads wrong is ambiguous between the model's
+phrasing and the block feeding it. A rejection keeps the rejected text too, so
+a false rejection is visible rather than silent. Listed in `LIVE_FILES`, so a
+flight delete takes it with the layer.
+
+### Operational
+
+- **Needs #695 deployed.** The facts come from `glance` + `ribbon`; on a
+  pre-#695 layer `facts` degenerates to "DEP to DEST, 0 NM". `ensure_highlight`
+  skips a layer with no ribbon rather than pay for that call. As of 2026-10-07
+  the droplet image predates #695 — the highlight stays dark until they deploy
+  together.
+- **Depends on #696 for trust.** A phantom clutter cell reaches the highlight
+  too, and the highlight *promotes* it from one row in a list to the one
+  sentence at the top. Reviewing before displaying is what covers this.
+- Kill switch `DISABLE_LIVE_HIGHLIGHT=1`; dark with no `ANTHROPIC_API_KEY`
+  (which is also how the test suite runs the whole tick without calling
+  anything — `conftest` deletes the key so a developer's shell cannot bill the
+  suite).
+- **Cost** ~$0.0016 per call through the shared ledger (`action=live_highlight`,
+  priced by `compute_call_cost`, never the per-briefing `compute_cost`). Charged
+  on the tick's own thread: a `Session` is not thread-safe, so
+  `ensure_highlight` returns the usage and the caller charges it.
+- Prompt, facts block and check live in `tasks/live_highlight.py` — the code
+  the tick runs. `scripts/live_highlight_experiment.py` imports them, so the
+  replay harness cannot drift from production.
+- Prompt caching and streaming are both no-ops here and deliberately absent:
+  the request is ~1.4 k tokens against Haiku 4.5's 4096-token minimum cacheable
+  prefix, and the client gets the text as one JSON field.
+
 ## SIGMET reissues (#682)
 
 `live_significance._sigmet_changes` matches each SIGMET it sees for the first
@@ -495,8 +603,9 @@ What the code relies on:
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
+- `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
-- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
+- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_live_highlight.py` (grounding rules, carry-forward, refused patch, API failure), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
 
 ## Clients
 

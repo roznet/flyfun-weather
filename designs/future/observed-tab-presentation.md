@@ -13,9 +13,16 @@ tick, on `/live` and the agent `live` block (`tasks/live_glance.py`, as-built no
 nutshell, the ribbon as a symbolic map (rain/core bands from the cells feed's
 outlines, airports either side, motion arrows), tap-to-map, storm sheet; pilot text
 says "cell". The Layer 3 cells list still uses the client-side
-`CellsOverlay.routeStorms`. Next: an LLM highlight above the ribbon with the
-details folded (#697), the clutter filter on the cells feed (#696). Web not
-started; slice 5 not started. Builds on `designs/live-observation-layer.md`.
+`CellsOverlay.routeStorms`.
+Slice 5 server half (#697) landed 2026-10-07: the Haiku-written highlight is
+generated after each tick commits and stored on `glance.highlight`, with a
+grounding check and a per-flight review log — **written but displayed nowhere**
+(owner's call: a dozen live flights a day get reviewed over the following days
+to calibrate the prompt before any client shows it, which also makes the #696
+dependency moot for now). As-built in `live-observation-layer.md`. It needs
+#695 deployed to produce anything: the facts come from `glance` + `ribbon`.
+Next: review the logged highlights, then the iOS "Details" fold and the web
+slice. Web not started. Builds on `designs/live-observation-layer.md`.
 
 ## 1. Premise
 

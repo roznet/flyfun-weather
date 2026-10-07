@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,6 +50,10 @@ _BATCH_SIZE = 400  # aviationweather.gov limit per request
 # so a growing user base shows up in the logs before it shows up as a slow
 # verification cycle.
 _SCALE_WARN_FLIGHTS = 50
+# #697's highlight calls are pure network wait — measured on prod, 1, 4 and 10
+# concurrent Haiku calls all return in ~1.2 s — so the cap is about not opening
+# an unbounded number of sockets, not about throughput.
+_HIGHLIGHT_WORKERS = 8
 
 
 def live_enabled() -> bool:
@@ -270,6 +275,7 @@ class LiveTick:
         source = SharedReportSource(self._reports, covered=self._covered)
 
         updated = 0
+        committed: list[tuple[FlightRow, Path]] = []
         for flight, latest, pack_dir in plans:
             try:
                 run_realtime_refresh(
@@ -281,6 +287,7 @@ class LiveTick:
                     sigmet_source=self._sigmets,
                 )
                 updated += 1
+                committed.append((flight, pack_dir))
             except UncoveredAirportsError as exc:
                 # The shared fetch failed for this flight's airports: keep its
                 # stored observations rather than blanking them.
@@ -288,11 +295,65 @@ class LiveTick:
             except Exception:
                 logger.warning("Live tick: refresh failed for flight %s", flight.id, exc_info=True)
 
+        highlighted = self._highlights(db, committed)
+
         logger.info(
-            "Live tick: %d flight(s) in window, %d updated, %d airport(s) topped up, %d ms",
-            len(flights), updated, fetched, int((time.monotonic() - t0) * 1000),
+            "Live tick: %d flight(s) in window, %d updated, %d highlighted, %d airport(s) topped up, %d ms",
+            len(flights), updated, highlighted, fetched, int((time.monotonic() - t0) * 1000),
         )
-        return {"flights": len(flights), "updated": updated, "fetched": fetched}
+        return {"flights": len(flights), "updated": updated, "fetched": fetched,
+                "highlighted": highlighted}
+
+    def _highlights(self, db: Session, committed: list[tuple[FlightRow, Path]]) -> int:
+        """Write each committed flight's Observed highlight (#697).
+
+        Runs after every layer is committed, so the deterministic blocks were
+        servable ~1 s before this starts and a model failure cannot roll a tick
+        back. Fanned out because the calls are pure network wait: measured on
+        prod, 1, 4 and 10 concurrent Haiku calls all return in ~1.2 s, so the
+        tick grows by one call's latency rather than by the flight count.
+
+        Most ticks do no work at all — unchanged facts carry the previous
+        highlight forward during the commit.
+        """
+        from weatherbrief.tasks.live_highlight import (
+            HighlightOutcome,
+            charge_highlight,
+            ensure_highlight,
+            highlight_enabled,
+        )
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, live_for_pack
+
+        if not committed or not highlight_enabled():
+            return 0
+
+        work = []
+        for flight, pack_dir in committed:
+            # Read back what was stored rather than trust an in-memory layer:
+            # a ↻ press may have committed over this tick's write.
+            layer = live_for_pack(pack_dir)
+            if layer is not None and layer.glance is not None and layer.glance.highlight is None:
+                work.append((flight, flight_dir_for_pack(pack_dir), layer))
+        if not work:
+            return 0
+
+        def run(item) -> tuple[FlightRow, HighlightOutcome]:
+            flight, flight_dir, layer = item
+            try:
+                return flight, ensure_highlight(flight_dir, layer)
+            except Exception:
+                # ensure_highlight already swallows its own failures; this is
+                # the belt-and-braces one thread death would otherwise hide.
+                logger.warning("Live tick: highlight failed for flight %s", flight.id, exc_info=True)
+                return flight, HighlightOutcome("skipped")
+
+        with ThreadPoolExecutor(max_workers=min(len(work), _HIGHLIGHT_WORKERS)) as pool:
+            results = list(pool.map(run, work))
+
+        # Back on the tick's own thread: a Session is not thread-safe.
+        for flight, outcome in results:
+            charge_highlight(db, flight.user_id, flight.id, outcome.usage)
+        return sum(1 for _flight, outcome in results if outcome.written)
 
 
 def _cloud_source(db: Session, flight: FlightRow) -> str | None:
