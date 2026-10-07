@@ -59,6 +59,10 @@ final class flyfun_weatherUITests: XCTestCase {
     /// run that legitimately takes the other branch.
     private static let probeTimeout: TimeInterval = 8
 
+    /// How long to let a navigation queued behind a sheet's dismissal land
+    /// before believing what the probe just saw. See `returnToFlightList`.
+    private static let settleInterval: TimeInterval = 1.5
+
     /// Launch the app as a UI test would: fake-authenticated + fixture-backed.
     /// `offline: true` also sets `FLYFUN_MOCK_OFFLINE` so the fixtures present as
     /// a cached list (offline banner + read-only rows) for the offline journey.
@@ -329,6 +333,16 @@ final class flyfun_weatherUITests: XCTestCase {
     /// list in the split view and this is a no-op. The back button carries the
     /// sidebar's title ("Flights") — same English-label assumption as the
     /// "Show Sidebar" fallback above.
+    ///
+    /// Seeing the list is not enough to conclude we have arrived. Move and
+    /// Duplicate dismiss the form first and select the new flight only once the
+    /// reload behind `onCreated` lands, so the list is on screen for a few
+    /// hundred milliseconds *before* the briefing is pushed over it. A probe
+    /// that catches that window returns "already there", the push follows, and
+    /// the caller is left on a briefing — which is how the Duplicate journey
+    /// failed in the 2026-10-07 nightly, 470 ms after `waypointsField` went
+    /// away. So re-probe after a settle, and take the back button on any round
+    /// it is offered.
     @MainActor
     private func returnToFlightList(_ app: XCUIApplication) {
         // Either the list is already showing (iPad) or the pushed briefing's
@@ -336,7 +350,19 @@ final class flyfun_weatherUITests: XCTestCase {
         // probe first (8 s on every iPhone run).
         let list = app.descendants(matching: .any)["flightList"]
         let back = app.navigationBars.buttons["Flights"].firstMatch
-        if firstToAppear([list, back]) == 1 { back.tap() }
+        // Three rounds covers the worst order: transient list, then the pushed
+        // briefing, then the list again for good after tapping back.
+        for _ in 0..<3 {
+            switch firstToAppear([list, back]) {
+            case 0:
+                Thread.sleep(forTimeInterval: Self.settleInterval)
+                if list.exists { revealFlightList(app); return }
+            case 1:
+                back.tap()
+            default:
+                break
+            }
+        }
         revealFlightList(app)
     }
 
