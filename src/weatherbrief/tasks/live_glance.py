@@ -340,25 +340,41 @@ def _storms_unavailable(storms: LiveStorms | None) -> str:
 
 
 def _terminal_storms(
-    storms: LiveStorms | None, pos: tuple[float, float],
+    storms: LiveStorms | None, pos: tuple[float, float], when: str = "",
 ) -> tuple[str, bool, list[LiveStorm]]:
-    """"nearest cell 9 NM NE, moving away 11 kt" around an airport."""
+    """"nearest cell 9 NM NE, moving away 11 kt" around an airport.
+
+    A cell before the route's start / past its end and beyond ``TERMINAL_NM``
+    (but inside the corridor) is on no other line: the en-route line only
+    counts cells beside the route. It is named here so the storm rows never
+    list a cell the nutshell leaves out."""
     if storms is None or storms.status != "available":
         return _storms_unavailable(storms), True, []
-    near = []
+    near, beyond = [], []
     for st in storms.storms:
         d = haversine_nm(pos[0], pos[1], st.lat, st.lon)
         if d <= TERMINAL_NM:
             near.append((d, st))
-    if not near:
-        return f"no cell within {TERMINAL_NM:.0f} NM", False, []
+        elif st.end is not None and d <= storms.corridor_nm:
+            beyond.append((d, st))
     near.sort(key=lambda x: x[0])
+    beyond.sort(key=lambda x: x[0])
+    tail = ""
+    if beyond:
+        d, st = beyond[0]
+        at = f"{d:.0f} NM {_compass(_bearing(pos[0], pos[1], st.lat, st.lon))}"
+        tail = (f" (1 at {at})" if len(beyond) == 1
+                else f" ({len(beyond)} at {TERMINAL_NM:.0f}–{storms.corridor_nm:.0f} NM, nearest {at})")
+        if near:
+            tail = tail.replace(" (", ", +", 1).rstrip(")")
+    if not near:
+        return f"no cell within {TERMINAL_NM:.0f} NM{when}{tail}", False, [s for _, s in beyond]
     d, st = near[0]
     where = f"{d:.0f} NM {_compass(_bearing(pos[0], pos[1], st.lat, st.lon))}"
     flash = ", lightning" if st.flashes else ""
     head = "nearest cell" if len(near) == 1 else f"{len(near)} cells ≤{TERMINAL_NM:.0f} NM, nearest"
-    return (f"{head} {where} ({st.peak_dbz:.0f} dBZ{flash}), {_storm_motion_words(st)}",
-            False, [s for _, s in near])
+    return (f"{head} {where} ({st.peak_dbz:.0f} dBZ{flash}), {_storm_motion_words(st)}{when}{tail}",
+            False, [s for _, s in near + beyond])
 
 
 def _enroute_storms(storms: LiveStorms | None, plan: _Plan) -> tuple[str, bool, list[LiveStorm]]:
@@ -723,8 +739,8 @@ def build_glance(
             else:
                 clauses.append("no TAF for ETA")
                 unavailable.append("taf")
-        text, missing, near = _terminal_storms(storms, pos)
-        clauses.append(text if phase == "departure" else (text + " now" if not missing else text))
+        text, missing, near = _terminal_storms(storms, pos, "" if phase == "departure" else " now")
+        clauses.append(text)
         sources += [f"storm:{st.id}" for st in near]
         if missing:
             unavailable.append("storms")

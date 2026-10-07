@@ -83,3 +83,13 @@ def test_relative_direction():
     assert relative_deg(0.0, 90.0) == -90.0
     assert relative_deg(270.0, 90.0) == 180.0
     assert relative_deg(10.0, 350.0) == 20.0
+
+
+def test_an_outline_enclosing_the_route_with_no_edge_in_the_corridor_is_kept():
+    # A frontal rain shield far wider than the corridor: no boundary point
+    # within 30 NM of the track anywhere, the flight is inside it all along.
+    (band,) = build_weather_bands(display({"rain20": [box(-60, 220, -60, 60)]}), TRACK)
+    assert band.side == "both" and band.near_nm == 0.0 and band.far_nm == 30.0
+    assert band.from_nm == 0.0 and band.to_nm >= TRACK.total_nm - 0.1
+    assert all(lo == -30.0 and hi == 30.0 for _, lo, hi in band.profile)
+    assert len(band.profile) == int(-(-TRACK.total_nm // BIN_NM))

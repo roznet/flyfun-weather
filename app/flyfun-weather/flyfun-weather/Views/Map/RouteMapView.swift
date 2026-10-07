@@ -187,7 +187,8 @@ struct RouteMapView: View {
             cellsDisplay: showsCells ? cellsModel?.display : nil,
             cellsDisplayKey: showsCells ? cellsModel?.displayPath : nil,
             focusRegion: focusRegion,
-            focusRegionKey: focusRegionKey
+            focusRegionKey: focusRegionKey,
+            onFocusApplied: { focusRegion = nil }
         )
         .ignoresSafeArea(edges: .bottom)
     }

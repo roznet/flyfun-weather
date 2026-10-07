@@ -114,6 +114,10 @@ struct RouteMapKitView: UIViewRepresentable {
     /// when `focusRegionKey` changes, so ordinary re-renders never move the map.
     var focusRegion: MKCoordinateRegion?
     var focusRegionKey = 0
+    /// Called once a focus is framed, so the owner can drop it: a recreated
+    /// coordinator (the view re-appearing) has no memory of the applied key
+    /// and would otherwise re-frame a stale focus over the pilot's own pan.
+    var onFocusApplied: (() -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -209,6 +213,10 @@ struct RouteMapKitView: UIViewRepresentable {
             guard let region = parent.focusRegion, appliedFocusKey != parent.focusRegionKey else { return }
             appliedFocusKey = parent.focusRegionKey
             map.setRegion(map.regionThatFits(region), animated: true)
+            if let done = parent.onFocusApplied {
+                // Not during the view update that applied it.
+                DispatchQueue.main.async { done() }
+            }
         }
 
         // MARK: Route overlays

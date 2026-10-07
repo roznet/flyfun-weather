@@ -321,8 +321,8 @@ not at the airport itself.
 
 ## Observed tab: glance, ribbon, focus (#690)
 
-Plan in `designs/future/observed-tab-presentation.md` §3–5. Server slice only so
-far: `tasks/live_glance.py::build_glance` runs in `commit_live_update` right
+Plan in `designs/future/observed-tab-presentation.md` §3–5. Server and iOS
+landed (PR #695); web is still to do. `tasks/live_glance.py::build_glance` runs in `commit_live_update` right
 after the classifier and stores `LiveLayer.glance` / `LiveLayer.ribbon`, and
 sets `LiveStorm.focus` on every storm. Served on `/live` and in the iOS UI-test
 fixtures; not in the snapshot overlay or the history. Never raises: a failure
@@ -335,10 +335,13 @@ logs `Live glance failed` and leaves both null for that tick.
   `alert` (an alert-tier row of that phase, styling only), `passed` (at plan),
   `unavailable` (metar / taf / storms / lightning / sigmets), `sources`, `focus`.
 - **Rules**: observed motion only, never `estimate`; a missing source says
-  "unavailable", never "clear"/"no storm"; counts are storms. Terminal clauses
-  read storms and lightning within `TERMINAL_NM` (20 NM, the widest sampler
-  ring) of the airport, by haversine from it; en route counts storms still
-  ahead outside both terminal discs. Storm motion is the component toward/away
+  "unavailable", never "clear"/"no cell"; counts are storms, worded "cell"
+  (§41). Terminal clauses read storms and lightning within `TERMINAL_NM` (20 NM,
+  the widest sampler ring) of the airport, by haversine from it, and also name
+  a storm before the route's start / past its end out to the corridor ("no cell
+  within 20 NM now (1 at 25 NM E)") — the en-route line counts only storms
+  beside the route, so these would otherwise be on no line; en route counts
+  storms still ahead outside both terminal discs. Storm motion is the component toward/away
   from the *track* (as on the storm rows), so near an airport it can read
   lower than the storm's own speed. A block older than 30 min at the tick and
   a METAR older than 75 min are flagged inline with their time.
@@ -362,7 +365,9 @@ logs `Live glance failed` and leaves both null for that tick.
   storm id; with none inside, the tier floor (20 / 35 dBZ). `profile`: per
   `weather_bin_nm` (5 NM) of route the signed off-track range covered; where
   the route point is inside the outline the track is covered and a side with
-  no boundary in that bin runs out to the corridor. `motion_rel_deg` is the
+  no boundary in that bin runs out to the corridor; an outline enclosing the
+  route with no boundary in the corridor at all is the full width wherever it
+  encloses it (route bins tested inside the ring, bbox first). `motion_rel_deg` is the
   member's `toward_deg` against the course of the segment abeam (`+` toward
   the right of track). ≤ 80 per tier, nearest first. ~8 KB on a 380 NM route
   through a squall line (LFBH→LFMD 2026-10-06).
@@ -376,7 +381,7 @@ logs `Live glance failed` and leaves both null for that tick.
   of `{phase, text}`), word for word what the apps show; `LIVE_NOTE` says so.
 - **Size**: ~17 KB per `live.json` on a 280 NM route (LELL→LEMI), overwritten
   each tick.
-- **iOS** (written without Xcode, verify on a Mac): DTOs in
+- **iOS** (built and UI-tested on a Mac, PR #695): DTOs in
   `Models/API/LiveGlance.swift` (`storms`, `glance`, `ribbon` are defaulted vars on
   `LiveLayerResponse`, so memberwise inits and older servers still work).
   `Views/Briefing/ObservedNutshellView.swift`: `ObservedNutshellCard` (server
@@ -398,7 +403,10 @@ logs `Live glance failed` and leaves both null for that tick.
   next `/live`. Tap-to-map: `FocusIntent.mapFocus` → `RouteMapView` turns on the
   focus's cells/radar and passes `focusRegion` + a counter key to
   `RouteMapKitView`, which frames it once per key. The map draws no SIGMET
-  polygons yet, so a SIGMET focus only frames its area.
+  polygons yet, so a SIGMET focus only frames its area; `metar` layers and the
+  focus `time` are ignored too (newest frame). The applied focus is cleared
+  (`onFocusApplied`) so a recreated map never re-frames a stale one. The web
+  slice should implement the full contract, not copy iOS's subset.
 - **Web**: not done yet.
 
 ## SIGMET reissues (#682)

@@ -991,8 +991,6 @@ final class BriefingViewModel {
         }
     }
 
-    /// "Since this briefing" changes on screen, nil when the pack carries no
-    /// live layer (non-D-0, or no live data yet).
     /// The adopted live layer, only while it belongs to the pack on screen
     /// (#690): its nutshell and ribbon describe the latest pack, never an older
     /// one the pilot is browsing.
@@ -1007,6 +1005,8 @@ final class BriefingViewModel {
         return LiveTime.sameInstant(mine, theirs)
     }
 
+    /// "Since this briefing" changes on screen, nil when the pack carries no
+    /// live layer (non-D-0, or no live data yet).
     var liveChanges: LiveChanges? {
         if case .loaded(let snapshot) = snapshotState { return snapshot.liveChanges }
         return nil

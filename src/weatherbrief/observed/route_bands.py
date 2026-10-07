@@ -18,6 +18,7 @@ Geometry only, like ``storms``: nothing here re-analyses radar.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 from weatherbrief.analysis.route_geometry import RouteTrack
@@ -38,6 +39,8 @@ BIN_NM = 5.0
 _DENSIFY_DEG = 1.0 / 60.0
 #: Bands kept, nearest the track first (a squall line can trace hundreds).
 BANDS_MAX = 80
+
+
 def relative_deg(toward_deg: float, course_deg: float) -> float:
     """``toward_deg`` against the course, in (-180, 180]: + toward the right."""
     rel = (toward_deg - course_deg + 180.0) % 360.0 - 180.0
@@ -72,32 +75,42 @@ def _inside(lat: float, lon: float, ring: list[list[float]]) -> bool:
     return hit
 
 
-def _profile(ring, near, track: RouteTrack, corridor_nm: float) -> list[tuple[float, float, float]]:
+def _route_bins_inside(ring: list[list[float]], track: RouteTrack) -> set[int]:
+    """The ``BIN_NM`` stretches of route whose midpoint lies inside the
+    outline (bounding box first: most outlines are nowhere near the track)."""
+    lats = [p[0] for p in ring]
+    lons = [p[1] for p in ring]
+    s, n, w, e = min(lats), max(lats), min(lons), max(lons)
+    out = set()
+    for k in range(int(math.ceil(track.total_nm / BIN_NM))):
+        lat, lon = track.position_at(min((k + 0.5) * BIN_NM, track.total_nm))
+        if s <= lat <= n and w <= lon <= e and _inside(lat, lon, ring):
+            out.add(k)
+    return out
+
+
+def _profile(near, inside: set[int], track: RouteTrack, corridor_nm: float) -> list[tuple[float, float, float]]:
     """Per ``BIN_NM`` of route, the off-track range the outline covers there.
 
     The boundary points in a bin give the range; where the route point itself
     lies inside the outline, the track is covered too, and a side with no
     boundary in that bin is covered out to the corridor (the outline is wider
-    than it there). Bins with neither are left out."""
+    than it there). An outline that encloses the route with no boundary
+    within the corridor at all is the full width wherever it encloses it."""
     bins: dict[int, list[float]] = {}
     for p in near:
         bins.setdefault(int(p.along_nm // BIN_NM), []).append(max(-corridor_nm, min(corridor_nm, p.cross_nm)))
-    first, last = min(bins), max(bins)
     out = []
-    for k in range(first, last + 1):
+    for k in sorted(set(bins) | inside):
         mid = min((k + 0.5) * BIN_NM, track.total_nm)
-        lat, lon = track.position_at(mid)
-        on_track = _inside(lat, lon, ring)
         xs = bins.get(k, [])
-        if on_track:
+        if k in inside:
             left = [x for x in xs if x < 0.0]
             right = [x for x in xs if x > 0.0]
             lo = min(left) if left else -corridor_nm
             hi = max(right) if right else corridor_nm
-        elif xs:
-            lo, hi = min(xs), max(xs)
         else:
-            continue
+            lo, hi = min(xs), max(xs)
         out.append((round(mid, 1), round(lo, 1), round(hi, 1)))
     return out
 
@@ -116,19 +129,22 @@ def _band(
 ) -> RibbonWeather | None:
     projected = [track.project(p[0], p[1]) for p in _densify(ring)]
     near = [p for p in projected if p.offtrack_nm <= corridor_nm]
-    if not near:
+    inside = _route_bins_inside(ring, track)
+    if not near and not inside:
         return None
-    crosses = [p.cross_nm for p in near]
-    across = min(crosses) < 0.0 < max(crosses)
-    if across:
+    profile = _profile(near, inside, track, corridor_nm)
+    los = [lo for _, lo, _ in profile]
+    his = [hi for _, _, hi in profile]
+    if inside or min(los) < 0.0 < max(his):
         side, near_nm = "both", 0.0
     else:
-        side = "right" if max(crosses) > 0 else "left"
-        near_nm = min(abs(c) for c in crosses)
-    far_nm = min(max(abs(c) for c in crosses), corridor_nm)
-    from_nm = min(p.along_nm for p in near)
-    to_nm = max(p.along_nm for p in near)
-    profile = _profile(ring, near, track, corridor_nm)
+        side = "right" if max(his) > 0 else "left"
+        near_nm = min(min(abs(lo), abs(hi)) for _, lo, hi in profile)
+    far_nm = min(max(max(abs(lo), abs(hi)) for _, lo, hi in profile), corridor_nm)
+    alongs = [p.along_nm for p in near] + [
+        x for k in inside for x in (k * BIN_NM, min((k + 1) * BIN_NM, track.total_nm))
+    ]
+    from_nm, to_nm = min(alongs), max(alongs)
 
     members = [
         c for c in cells
@@ -170,7 +186,7 @@ def _band(
 def build_weather_bands(
     frame: dict[str, Any] | None,
     track: RouteTrack,
-    storms: list[LiveStorm] = (),
+    storms: Sequence[LiveStorm] = (),
     *,
     corridor_nm: float = STORM_CORRIDOR_NM,
 ) -> list[RibbonWeather]:

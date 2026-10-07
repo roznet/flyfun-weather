@@ -399,3 +399,17 @@ def test_ribbon_carries_the_weather_bands_only_while_the_feed_is_available():
     dark = _layer(storms=LiveStorms(status="unavailable", corridor_nm=30.0))
     _, ribbon = build_glance(dark, ROUTE, DEP, cell_frame=f, now=NOW)
     assert ribbon.weather_status == "unavailable" and ribbon.weather == []
+
+
+def test_a_cell_past_the_route_end_beyond_the_terminal_disc_is_named():
+    # 25 NM past ZZDS, in the corridor but on no other line (#695 review).
+    from test_live_storms import cell
+
+    past = cell("core35-x", "core35", along=154 + 25, cross=0, peak=47.0)
+    glance, _ = _glance(_layer(storms=storms_at(NOW, [past])))
+    arr = glance.lines[2]
+    assert "no cell within 20 NM now (1 at 25 NM E)" in arr.text
+    assert "storm:core35-x" in arr.sources
+    near = cell("core35-n", "core35", along=154 + 8, cross=0, peak=45.0)
+    glance, _ = _glance(_layer(storms=storms_at(NOW, [past, near])))
+    assert "nearest cell 8 NM E (45 dBZ), nearly stationary now, +1 at 25 NM E" in glance.lines[2].text

@@ -13,6 +13,11 @@ import MapKit
 // =============================================================================
 
 /// Where the map opens when an item is tapped (#690 tap-to-map contract).
+///
+/// iOS honours less than the contract carries: `bbox` frames the map and the
+/// `cells` / `radar` layers are switched on; `sigmets` / `metar` and `time`
+/// are ignored (the map draws no SIGMET polygons and always shows the newest
+/// frame). A client that implements more should not take this as the spec.
 nonisolated struct LiveFocus: Codable, Sendable, Equatable, Hashable {
     /// storm / sigmet / station / segment.
     let kind: String?
