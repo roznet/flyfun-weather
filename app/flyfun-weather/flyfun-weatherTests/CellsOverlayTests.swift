@@ -259,11 +259,11 @@ struct CellsOverlayTests {
         #expect(CellsOverlay.offTrackNm(near, route: []) == nil)
     }
 
-    @Test("chip counts storms within a stated distance")
+    @Test("chip counts cells within a stated distance")
     func stormsChip() {
-        #expect(CellsOverlay.stormsChipText(0) == "No storms within 20 NM of route")
-        #expect(CellsOverlay.stormsChipText(1) == "1 storm within 20 NM of route")
-        #expect(CellsOverlay.stormsChipText(3) == "3 storms within 20 NM of route")
+        #expect(CellsOverlay.stormsChipText(0) == "No cells within 20 NM of route")
+        #expect(CellsOverlay.stormsChipText(1) == "1 cell within 20 NM of route")
+        #expect(CellsOverlay.stormsChipText(3) == "3 cells within 20 NM of route")
     }
 
     @Test("whole-number dBZ and singular flash")

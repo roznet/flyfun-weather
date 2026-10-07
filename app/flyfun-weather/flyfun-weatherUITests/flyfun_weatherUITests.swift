@@ -578,10 +578,10 @@ final class flyfun_weatherUITests: XCTestCase {
              "stations": []}},
          "glance": {"as_of": "2099-06-30T08:10:00Z", "headline": "Observed 08:10Z · as briefed",
            "comparison": "as_briefed", "lines": [
-             {"phase": "departure", "icao": "LFMD", "text": "LFMD VFR · no storm within 20 NM · no lightning ≤20 NM"},
-             {"phase": "enroute", "text": "1 storm 6 NM right of track; nearest 6 NM right at 40 NM ~08:40Z (48 dBZ), closing 7 kt · no SIGMET on route",
+             {"phase": "departure", "icao": "LFMD", "text": "LFMD VFR · no cell within 20 NM · no lightning ≤20 NM"},
+             {"phase": "enroute", "text": "1 cell 6 NM right of track; nearest 6 NM right at 40 NM ~08:40Z (48 dBZ), closing 7 kt · no SIGMET on route",
               "alert": true, "focus": \(focus)},
-             {"phase": "arrival", "icao": "LFML", "text": "LFML VFR · no TAF for ETA · no storm within 20 NM now · lightning unavailable"}]},
+             {"phase": "arrival", "icao": "LFML", "text": "LFML VFR · no TAF for ETA · no cell within 20 NM now · lightning unavailable"}]},
          "ribbon": {"route_nm": 80.0, "flown_nm": 0.0, "segment_nm": 10.0, "radar_radius_nm": 10.0,
            "waypoints": [{"icao": "LFMD", "along_nm": 0.0}, {"icao": "LFML", "along_nm": 80.0}],
            "segments": [{"index": 0, "from_nm": 0.0, "to_nm": 40.0, "radar_status": "measured"},

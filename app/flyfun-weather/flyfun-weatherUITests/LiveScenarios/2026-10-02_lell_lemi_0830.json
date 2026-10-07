@@ -263,7 +263,7 @@
     "sources": [
      "metar:LELL"
     ],
-    "text": "LELL VFR \u00b7 radar storms unavailable \u00b7 lightning unavailable",
+    "text": "LELL VFR \u00b7 radar cells unavailable \u00b7 lightning unavailable",
     "unavailable": [
      "storms",
      "lightning"
@@ -297,7 +297,7 @@
      "sigmet:LECB|3",
      "sigmet:LECM|3"
     ],
-    "text": "radar storms unavailable \u00b7 EMBD TS SIGMET LECB 2 covers last 266 NM (briefed), EMBD TS SIGMET LECB 3 covers last 40 NM from 08:35Z (new), +1 more SIGMET",
+    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 2 covers last 266 NM (briefed), EMBD TS SIGMET LECB 3 covers last 40 NM from 08:35Z (new), +1 more SIGMET",
     "unavailable": [
      "storms"
     ]
@@ -328,7 +328,7 @@
     "sources": [
      "metar:LEMI"
     ],
-    "text": "LEMI VFR \u00b7 no TAF for ETA \u00b7 radar storms unavailable \u00b7 lightning unavailable",
+    "text": "LEMI VFR \u00b7 no TAF for ETA \u00b7 radar cells unavailable \u00b7 lightning unavailable",
     "unavailable": [
      "taf",
      "storms",
@@ -1674,7 +1674,11 @@
     "eta": "2026-10-02T10:00:00Z",
     "icao": "LEMI"
    }
-  ]
+  ],
+  "weather": [],
+  "weather_bin_nm": 5.0,
+  "weather_corridor_nm": 30.0,
+  "weather_status": "unavailable"
  },
  "route_observations": {
   "airports": [

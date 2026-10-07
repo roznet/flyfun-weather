@@ -401,12 +401,49 @@ class RibbonSigmet(BaseModel):
     focus: LiveFocus | None = None
 
 
+class RibbonWeather(BaseModel):
+    """One rain area or convective core beside the route, from the cells
+    feed's outlines (``observed/route_bands.py``): where along the route it
+    lies, on which side and how far off, how strong, and how it moves
+    relative to the course."""
+
+    id: str
+    # rain: the rain20 outline (≥ 20 dBZ); core: a core35 outline (≥ 35 dBZ).
+    tier: Literal["rain", "core"]
+    # Along-route extent of the part within the corridor.
+    from_nm: float
+    to_nm: float
+    # "both" when the area lies across the track.
+    side: Literal["left", "right", "both"]
+    # Distance off track of its nearest and farthest edge (capped at the
+    # corridor); near is 0 across the track.
+    near_nm: float
+    far_nm: float
+    # The shape: per ``LiveRibbon.weather_bin_nm`` of route, [along_nm (bin
+    # centre), cross_lo_nm, cross_hi_nm] — the off-track range the outline
+    # covers there, signed (− left, + right), capped at the corridor.
+    profile: list[tuple[float, float, float]] = Field(default_factory=list)
+    peak_dbz: float | None = None
+    intensity: str | None = None
+    flashes: int | None = None
+    # Motion direction relative to the course, degrees: 0 along it, +90
+    # toward the right of track, -90 toward the left, ±180 back down it.
+    # None without an available motion.
+    motion_rel_deg: float | None = None
+    speed_kt: float | None = None
+    # The storm (``LiveLayer.storms``) this core is, for its detail sheet.
+    storm_id: str | None = None
+
+
 class LiveRibbon(BaseModel):
     """The route ribbon (#690, observed-tab-presentation §3 layer 1): x =
     distance along the route with ETAs, y = left/right of track.
 
     The storm lane is ``LiveLayer.storms`` itself (``along_nm`` /
     ``cross_nm`` / ``relative_motion`` / ``focus``), not copied here.
+    ``weather`` is the symbolic map's rain/core bands from the cells feed;
+    ``weather_status`` is that feed's state, and clients fall back to the
+    radar ``segments`` when it is not ``available``.
     """
 
     route_nm: float
@@ -421,6 +458,10 @@ class LiveRibbon(BaseModel):
     segments: list[RibbonSegment] = Field(default_factory=list)
     stations: list[RibbonStation] = Field(default_factory=list)
     sigmets: list[RibbonSigmet] = Field(default_factory=list)
+    weather: list[RibbonWeather] = Field(default_factory=list)
+    weather_status: str | None = None
+    weather_corridor_nm: float | None = None
+    weather_bin_nm: float | None = None
 
 
 class LiveChange(BaseModel):

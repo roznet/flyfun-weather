@@ -174,6 +174,39 @@ nonisolated struct LiveRibbon: Codable, Sendable {
     let segments: [LiveRibbonSegment]?
     let stations: [RibbonStation]?
     let sigmets: [RibbonSigmet]?
+    /// Rain/core bands from the cells feed; drawn while `weatherStatus` is
+    /// "available", else the client falls back to the radar `segments`.
+    let weather: [RibbonWeather]?
+    let weatherStatus: String?
+    let weatherCorridorNm: Double?
+    let weatherBinNm: Double?
+
+    var weatherAvailable: Bool { weatherStatus == "available" && weather != nil }
+}
+
+/// One rain area or convective core beside the route. Mirrors
+/// `models/live.py::RibbonWeather`.
+nonisolated struct RibbonWeather: Codable, Sendable, Identifiable {
+    let id: String
+    /// rain (≥ 20 dBZ outline) / core (≥ 35 dBZ outline).
+    let tier: String?
+    let fromNm: Double?
+    let toNm: Double?
+    /// left / right / both (across the track).
+    let side: String?
+    let nearNm: Double?
+    let farNm: Double?
+    /// Per bin: [along_nm, cross_lo_nm, cross_hi_nm], signed − left / + right.
+    let profile: [[Double]]?
+    let peakDbz: Double?
+    let intensity: String?
+    let flashes: Int?
+    /// Motion relative to the course: 0 along it, +90 toward the right.
+    let motionRelDeg: Double?
+    let speedKt: Double?
+    let stormId: String?
+
+    var isCore: Bool { tier == "core" }
 }
 
 nonisolated struct RibbonWaypoint: Codable, Sendable {

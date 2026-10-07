@@ -295,6 +295,7 @@ def _build_glance(
     departure: datetime | None,
     briefing_data: dict,
     now: datetime,
+    cells: CellFrames | None = None,
 ) -> tuple[LiveGlance | None, LiveRibbon | None]:
     """The Observed tab's nutshell and ribbon for this tick (#690), and the
     storms' map focus. Never raises: a failure leaves both blocks null (the
@@ -305,7 +306,8 @@ def _build_glance(
         from weatherbrief.tasks.live_glance import build_glance
 
         return build_glance(
-            layer, route, departure, alternate_icaos=_alternate_icaos(briefing_data), now=now,
+            layer, route, departure, alternate_icaos=_alternate_icaos(briefing_data),
+            cell_frame=cells.newest if cells is not None else None, now=now,
         )
     except Exception:
         # One distinctive line to alert on: a systematic failure blanks the
@@ -784,7 +786,7 @@ def commit_live_update(
         if seeded:
             changes.baseline_source = "live_start"
         layer.changes = changes
-        layer.glance, layer.ribbon = _build_glance(layer, route, departure, briefing_data, now)
+        layer.glance, layer.ribbon = _build_glance(layer, route, departure, briefing_data, now, cells)
         layer.last_refresh_delta = worsening_delta(changes)
         layer.alerted = memory.alerted
         layer.sigmet_traces = list(memory.sigmets.values())

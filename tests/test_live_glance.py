@@ -149,12 +149,12 @@ def test_lppr_lppt_like_nutshell():
     assert glance.comparison == "as_briefed"
     assert [ln.phase for ln in glance.lines] == ["departure", "enroute", "arrival"]
     dep, enr, arr = (ln.text for ln in glance.lines)
-    assert dep == "ZZDP VFR · nearest storm 9 NM NE (46 dBZ), moving away 8 kt · no lightning ≤20 NM"
+    assert dep == "ZZDP VFR · nearest cell 9 NM NE (46 dBZ), moving away 8 kt · no lightning ≤20 NM"
     assert enr == (
-        "2 storms 25–28 NM left of track, all moving away; nearest 25 NM left at 60 NM ~12:35Z (48 dBZ), "
+        "2 cells 25–28 NM left of track, all moving away; nearest 25 NM left at 60 NM ~12:35Z (48 dBZ), "
         "moving away 15 kt · EMBD TS SIGMET ZZZZ 6 covers first 100 NM (briefed)"
     )
-    assert arr == "ZZDS VFR · TAF at ETA VFR, PROB30 MVFR TS · no storm within 20 NM now · no lightning ≤20 NM"
+    assert arr == "ZZDS VFR · TAF at ETA VFR, PROB30 MVFR TS · no cell within 20 NM now · no lightning ≤20 NM"
     assert all(not ln.unavailable for ln in glance.lines)
     assert glance.lines[1].sources == ["storm:core35-a", "storm:core35-b", "sigmet:ZZZZ|6"]
 
@@ -181,11 +181,11 @@ def test_missing_sources_say_unavailable_never_clear():
     layer.changes = None
     glance, _ = _glance(layer)
     dep, enr, arr = glance.lines
-    assert dep.text == "ZZDP METAR unavailable · radar storms unavailable since 10:50Z · lightning unavailable"
+    assert dep.text == "ZZDP METAR unavailable · radar cells unavailable since 10:50Z · lightning unavailable"
     assert set(dep.unavailable) == {"metar", "storms", "lightning"}
-    assert enr.text == "radar storms unavailable since 10:50Z · SIGMETs unavailable"
+    assert enr.text == "radar cells unavailable since 10:50Z · SIGMETs unavailable"
     assert set(enr.unavailable) == {"storms", "sigmets"}
-    assert arr.text.startswith("ZZDS METAR unavailable · no TAF for ETA · radar storms unavailable")
+    assert arr.text.startswith("ZZDS METAR unavailable · no TAF for ETA · radar cells unavailable")
     assert "taf" in arr.unavailable
     assert glance.comparison == "unavailable"
     for ln in glance.lines:
@@ -345,7 +345,7 @@ def test_commit_stores_glance_and_the_agent_block_quotes_it(tmp_path):
     assert block["glance"]["headline"] == layer.glance.headline
     assert [ln["text"] for ln in block["glance"]["lines"]] == [ln.text for ln in layer.glance.lines]
     # The cells feed is dark in this commit: the lines say so.
-    assert "radar storms unavailable" in block["glance"]["lines"][1]["text"]
+    assert "radar cells unavailable" in block["glance"]["lines"][1]["text"]
 
 
 # --- Review round 1 on #695 ------------------------------------------------------
@@ -381,3 +381,21 @@ def test_convective_tags_share_one_order():
     glance, ribbon = _glance(layer)
     assert glance.lines[0].text.startswith("ZZDP VFR CB TS · ")
     assert next(s for s in ribbon.stations if s.icao == "ZZDP").convective == ["CB", "TS"]
+
+
+# --- Symbolic map: weather bands --------------------------------------------------
+
+
+def test_ribbon_carries_the_weather_bands_only_while_the_feed_is_available():
+    from test_route_bands import box
+
+    layer = _layer()
+    f = frame(NOW - timedelta(minutes=5), [])
+    f["outlines"] = {"rain20": [box(40, 60, -20, -10)]}
+    _, ribbon = build_glance(layer, ROUTE, DEP, cell_frame=f, now=NOW)
+    assert ribbon.weather_status == "available" and ribbon.weather_corridor_nm == 30.0
+    assert [b.tier for b in ribbon.weather] == ["rain"] and ribbon.weather_bin_nm == 5.0
+
+    dark = _layer(storms=LiveStorms(status="unavailable", corridor_nm=30.0))
+    _, ribbon = build_glance(dark, ROUTE, DEP, cell_frame=f, now=NOW)
+    assert ribbon.weather_status == "unavailable" and ribbon.weather == []
