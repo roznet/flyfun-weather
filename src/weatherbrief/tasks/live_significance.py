@@ -1398,7 +1398,7 @@ def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
             observed_at=storms.frame_time, enroute_distance_nm=lo,
             message=(
                 f"Convective activity {span} along route{when}: {n} heavy "
-                f"{'storm' if n == 1 else 'storms'}, peak {max(s.peak_dbz for s in later):.0f} dBZ"
+                f"{'cell' if n == 1 else 'cells'}, peak {max(s.peak_dbz for s in later):.0f} dBZ"
             ),
         ))
     return out

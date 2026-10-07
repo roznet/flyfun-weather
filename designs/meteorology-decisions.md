@@ -5328,6 +5328,11 @@ is trusted.
 
 - **A storm** is a core35 cell with the core41 cells inside it (the node's
   `within`), or a core41 on its own, followed across frames by lineage id.
+  "Storm" is the code's name only: **pilot-facing text says "cell"** (owner,
+  2026-10-07, on #695). A ≥ 35 dBZ core without lightning is often a heavy
+  shower, and "storm" overstates it; lightning is stated as its own detail
+  ("3 flashes", "with lightning"), never implied by the noun. Applies to the
+  change rows, the Observed nutshell, the iOS labels and the cells chip.
 - **One row per cluster** (calibrated 2026-10-06): storms with their own row
   whose along-track positions are within 25 NM of each other
   (`STORM_CLUSTER_GAP_NM`) share one row ("4 cells (peak 56 dBZ, developing,
@@ -5353,7 +5358,7 @@ is trusted.
 - **Highlight**: a heavy storm (or one with lightning) ≤ 20 NM off track ahead
   (`STORM_HIGHLIGHT_NM`) within 60 min that does not meet the alert rule. Heavy
   storms reached later than 60 min share **one** row, "Convective activity
-  X–Y NM along route, reached ~HH:MM–HH:MMZ: N heavy storms, peak P dBZ"
+  X–Y NM along route, reached ~HH:MM–HH:MMZ: N heavy cells, peak P dBZ"
   (`storms:later`).
 - **Clears** when the storm decays below the thresholds, leaves the band, or is
   passed (abeam point behind the distance flown at planned speed).

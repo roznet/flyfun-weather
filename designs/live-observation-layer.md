@@ -351,6 +351,21 @@ logs `Live glance failed` and leaves both null for that tick.
   (from `new_sigmets`), pending, and MOV against the route (toward / away /
   parallel / stationary, from the area centre). The storm lane is
   `LiveLayer.storms` itself, not copied.
+- **Weather bands** (`observed/route_bands.py::build_weather_bands`, the
+  symbolic map's rain and cells): built from the cells feed's newest display
+  file while `storms.status == "available"` (`weather_status` carries the feed
+  state; clients fall back to the radar segments otherwise). One
+  `RibbonWeather` per `rain20` / `core35` **outline** within the storm corridor
+  (30 NM). Outlines are not linked to cells, so the shape comes from the
+  polygon (densified to ~1 NM so long straight edges still bound every bin)
+  and the cells whose centre lies inside lend it peak, flashes, motion and the
+  storm id; with none inside, the tier floor (20 / 35 dBZ). `profile`: per
+  `weather_bin_nm` (5 NM) of route the signed off-track range covered; where
+  the route point is inside the outline the track is covered and a side with
+  no boundary in that bin runs out to the corridor. `motion_rel_deg` is the
+  member's `toward_deg` against the course of the segment abeam (`+` toward
+  the right of track). ≤ 80 per tier, nearest first. ~8 KB on a 380 NM route
+  through a squall line (LFBH→LFMD 2026-10-06).
 - **Focus** (`LiveFocus`): `{kind, id, bbox (min_lon, min_lat, max_lon,
   max_lat), layers, time}` on storms (storm + the track abeam), ribbon SIGMETs
   (their area; a pending one opens at its start), stations, segments, and each
@@ -366,8 +381,16 @@ logs `Live glance failed` and leaves both null for that tick.
   `LiveLayerResponse`, so memberwise inits and older servers still work).
   `Views/Briefing/ObservedNutshellView.swift`: `ObservedNutshellCard` (server
   text as is; red bar for `alert`, dimmed when `passed`), `RouteRibbonCard` /
-  `RouteRibbonView` (lanes placed from the server's numbers; right of track
-  drawn below the line), `StormDetailSheet` (observed facts, 30-min trend and
+  `RouteRibbonView` — a symbolic map: the route as a straight line to scale,
+  departure / destination circles on its ends, the planned position on it;
+  left of course above, right below: an airport row each side (fill = METAR
+  now, ring = TAF at ETA, dashed for PROB/TEMPO), and between rows and line
+  the weather bands at their off-track distance (rain pale, cores by peak)
+  with one arrow per moving band rotated by `motion_rel_deg`; SIGMETs a thin
+  band on top; `RouteRibbonLegend` underneath. A storm's core is its tap
+  target (`ribbonStorm-<id>`, the sheet); elsewhere a tap frames the map on
+  that segment. Without `weather` the radar strip hugs the line and storms
+  are points, `StormDetailSheet` (observed facts, 30-min trend and
   off-track history, the estimate in its own "Estimate at current motion"
   section). They replace `ObservedGlanceCard` only when `glance` is present,
   and only for the pack on screen (`BriefingViewModel.liveLayerForPack`). A ↻

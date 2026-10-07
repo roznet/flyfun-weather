@@ -342,9 +342,9 @@ enum CellsOverlay {
     static func stormsChipText(_ count: Int, withinNm: Double = listOffTrackNm) -> String {
         let nm = Int(withinNm.rounded())
         switch count {
-        case 0: return "No storms within \(nm) NM of route"
-        case 1: return "1 storm within \(nm) NM of route"
-        default: return "\(count) storms within \(nm) NM of route"
+        case 0: return "No cells within \(nm) NM of route"
+        case 1: return "1 cell within \(nm) NM of route"
+        default: return "\(count) cells within \(nm) NM of route"
         }
     }
 

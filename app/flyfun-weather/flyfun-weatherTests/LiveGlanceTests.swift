@@ -23,12 +23,12 @@ private let liveJSON = """
     "comparison": "as_briefed",
     "lines": [
       {"phase": "departure", "icao": "ZZDP", "alert": false, "passed": false,
-       "text": "ZZDP VFR · nearest storm 9 NM NE (46 dBZ), moving away 8 kt · no lightning ≤20 NM",
+       "text": "ZZDP VFR · nearest cell 9 NM NE (46 dBZ), moving away 8 kt · no lightning ≤20 NM",
        "unavailable": [], "sources": ["metar:ZZDP", "storm:core35-dep"],
        "focus": {"kind": "station", "id": "ZZDP", "bbox": [-0.52, 49.67, 0.52, 50.33],
                  "layers": ["route", "radar", "cells", "lightning", "sigmets"], "time": null}},
       {"phase": "enroute", "icao": null, "alert": true, "passed": false,
-       "text": "radar storms unavailable · SIGMETs unavailable",
+       "text": "radar cells unavailable · SIGMETs unavailable",
        "unavailable": ["storms", "sigmets"], "sources": [], "focus": null},
       {"phase": "arrival", "icao": "ZZDS", "text": "ZZDS VFR · no TAF for ETA"}
     ]
@@ -81,7 +81,7 @@ private let liveJSON = """
         let glance = try #require(try layer().glance)
         #expect(glance.headline == "Observed 11:30Z · as briefed")
         #expect(glance.items.map(\.phase) == ["departure", "enroute", "arrival"])
-        #expect(glance.items[0].text?.hasPrefix("ZZDP VFR · nearest storm 9 NM NE") == true)
+        #expect(glance.items[0].text?.hasPrefix("ZZDP VFR · nearest cell 9 NM NE") == true)
         #expect(glance.items[1].alert == true)
         #expect(glance.items[1].unavailable == ["storms", "sigmets"])
         #expect(glance.items[1].focus == nil)

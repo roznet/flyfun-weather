@@ -218,7 +218,7 @@ def test_storms_reached_after_an_hour_share_one_highlight():
     later = got["storms:later"]
     assert later.tier == "highlight"
     assert later.message.startswith("Convective activity 100–130 NM along route, reached ~")
-    assert later.message.endswith("2 heavy storms, peak 55 dBZ")
+    assert later.message.endswith("2 heavy cells, peak 55 dBZ")
 
 
 def test_storm_row_message_and_identity():

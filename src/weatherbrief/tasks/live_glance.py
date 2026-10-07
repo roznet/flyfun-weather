@@ -335,14 +335,14 @@ def _storm_motion_words(st: LiveStorm) -> str:
 
 def _storms_unavailable(storms: LiveStorms | None) -> str:
     if storms is not None and storms.status == "stale" and storms.unavailable_since is not None:
-        return f"radar storms unavailable since {_hhmm(storms.unavailable_since)}"
-    return "radar storms unavailable"
+        return f"radar cells unavailable since {_hhmm(storms.unavailable_since)}"
+    return "radar cells unavailable"
 
 
 def _terminal_storms(
     storms: LiveStorms | None, pos: tuple[float, float],
 ) -> tuple[str, bool, list[LiveStorm]]:
-    """"nearest storm 9 NM NE, moving away 11 kt" around an airport."""
+    """"nearest cell 9 NM NE, moving away 11 kt" around an airport."""
     if storms is None or storms.status != "available":
         return _storms_unavailable(storms), True, []
     near = []
@@ -351,12 +351,12 @@ def _terminal_storms(
         if d <= TERMINAL_NM:
             near.append((d, st))
     if not near:
-        return f"no storm within {TERMINAL_NM:.0f} NM", False, []
+        return f"no cell within {TERMINAL_NM:.0f} NM", False, []
     near.sort(key=lambda x: x[0])
     d, st = near[0]
     where = f"{d:.0f} NM {_compass(_bearing(pos[0], pos[1], st.lat, st.lon))}"
     flash = ", lightning" if st.flashes else ""
-    head = "nearest storm" if len(near) == 1 else f"{len(near)} storms ≤{TERMINAL_NM:.0f} NM, nearest"
+    head = "nearest cell" if len(near) == 1 else f"{len(near)} cells ≤{TERMINAL_NM:.0f} NM, nearest"
     return (f"{head} {where} ({st.peak_dbz:.0f} dBZ{flash}), {_storm_motion_words(st)}",
             False, [s for _, s in near])
 
@@ -378,11 +378,11 @@ def _enroute_storms(storms: LiveStorms | None, plan: _Plan) -> tuple[str, bool, 
     ahead = [st for st in storms.storms if st.ahead and st.end is None and not terminal(st)]
     corridor = storms.corridor_nm
     if not ahead:
-        return f"no storms within {corridor:.0f} NM of track ahead", False, []
+        return f"no cells within {corridor:.0f} NM of track ahead", False, []
     offs = [st.offtrack_nm for st in ahead]
     sides = {st.side for st in ahead if st.side}
     where = "either side" if len(sides) > 1 else (f"{next(iter(sides))} of track" if sides else "on track")
-    text = f"{_plural(len(ahead), 'storm')} {_range(min(offs), max(offs))} NM {where}"
+    text = f"{_plural(len(ahead), 'cell')} {_range(min(offs), max(offs))} NM {where}"
     motions = [st.relative_motion for st in ahead]
     if len(ahead) > 1 and all(m == "moving_away" for m in motions):
         text += ", all moving away"
@@ -645,12 +645,16 @@ def build_glance(
     departure: datetime | None,
     *,
     alternate_icaos: list[str] | None = None,
+    cell_frame: dict | None = None,
     now: datetime,
 ) -> tuple[LiveGlance, LiveRibbon]:
     """The nutshell and the ribbon for this tick, and ``focus`` on every
     storm of ``layer.storms`` (set in place, last, so a failure part-way
     leaves the storms untouched). ``now`` is the tick time: the glance's
-    "as of"."""
+    "as of". ``cell_frame`` is the cells feed's newest display file, the
+    source of the ribbon's rain/core bands (used only while ``layer.storms``
+    says the feed is available)."""
+    from weatherbrief.observed.route_bands import BIN_NM, build_weather_bands
     from weatherbrief.tasks.live_significance import airport_roles
 
     plan = _Plan(route, departure, now)
@@ -674,7 +678,14 @@ def build_glance(
             for wp, d in zip(route.waypoints, plan.track.distances)
         ],
         segments=segments, stations=stations, sigmets=sigmets,
+        weather_status=storms.status if storms is not None else None,
+        weather_corridor_nm=storms.corridor_nm if storms is not None else None,
+        weather_bin_nm=BIN_NM,
     )
+    if storms is not None and storms.status == "available":
+        ribbon.weather = build_weather_bands(
+            cell_frame, plan.track, storms.storms, corridor_nm=storms.corridor_nm,
+        )
 
     by_icao = {
         a.icao.upper(): a for a in (layer.route_observations.airports if layer.route_observations else [])

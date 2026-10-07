@@ -133,11 +133,12 @@ struct RouteRibbonCard: View {
                 onStorm: { selectedStorm = $0 }
             )
             .frame(height: RouteRibbonView.height)
-            if storms?.isAvailable != true {
-                Text("Radar storms unavailable")
+            if !ribbon.weatherAvailable {
+                Text("Rain and cells unavailable: radar strip within 10 NM of the route")
                     .font(.caption)
                     .foregroundStyle(Theme.textMuted)
             }
+            RouteRibbonLegend(weather: ribbon.weatherAvailable)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Theme.cardPadding)
@@ -154,14 +155,26 @@ struct RouteRibbonCard: View {
 
     private var caption: String {
         var parts: [String] = []
-        if let corridor = storms?.corridorNm { parts.append("storms ≤\(Int(corridor.rounded())) NM") }
-        if let r = ribbon.radarRadiusNm { parts.append("radar ≤\(Int(r.rounded())) NM") }
+        if ribbon.weatherAvailable, let corridor = ribbon.weatherCorridorNm ?? storms?.corridorNm {
+            parts.append("±\(Int(corridor.rounded())) NM of course")
+        } else if let r = ribbon.radarRadiusNm {
+            parts.append("radar ≤\(Int(r.rounded())) NM")
+        }
         if let t = ribbon.radarTime.flatMap(Date.parseISO8601) { parts.append(LiveTime.zulu(t)) }
         return parts.joined(separator: " · ")
     }
 }
 
-/// The ribbon drawing. Pure layout over the server's binned lanes.
+/// The ribbon drawing: a symbolic map of the route. The middle line is the
+/// route, straight and to scale in distance, with the departure and
+/// destination as circles at its ends and the planned position on it.
+/// Facing the direction of flight, left of course is above the line and right
+/// of course below: an airport row on each side (circle = METAR now, ring =
+/// TAF at its ETA), and between the rows and the line the rain areas and
+/// convective cores the cells feed outlines within the corridor, at their
+/// distance off track, coloured by strength, with an arrow for their motion
+/// relative to the course. SIGMETs run as a thin band across the top.
+/// Without the cells feed, the radar strip hugs the line instead.
 struct RouteRibbonView: View {
     let ribbon: LiveRibbon
     let storms: [LiveStorm]
@@ -169,30 +182,39 @@ struct RouteRibbonView: View {
     let onFocus: (LiveFocus) -> Void
     let onStorm: (LiveStorm) -> Void
 
-    static let height: CGFloat = 230
+    static let height: CGFloat = 214
 
-    // Lane geometry (points from the top).
-    private let stationY: CGFloat = 14
-    private let tafY: CGFloat = 32
-    private let sigmetY: CGFloat = 52
-    private let radarY: CGFloat = 72
-    private let trackY: CGFloat = 140
-    private let stormHalf: CGFloat = 52
-    private let axisY: CGFloat = 212
-    private let inset: CGFloat = 16
+    // Geometry (points from the top).
+    static let sigmetY: CGFloat = 7
+    static let leftRowY: CGFloat = 26
+    static let zoneTop: CGFloat = 40
+    static let trackY: CGFloat = 100
+    static let zoneBottom: CGFloat = 160
+    static let rightRowY: CGFloat = 174
+    static let axisY: CGFloat = 197
+    static let inset: CGFloat = 20
 
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .topLeading) {
+                if ribbon.weatherAvailable {
+                    weatherCanvas(width)
+                } else {
+                    ForEach(ribbon.segments ?? []) { seg in radarStrip(seg, width) }
+                }
                 trackLine(width)
+                ForEach(ribbon.sigmets ?? []) { s in sigmetMark(s, width) }
+                if ribbon.weatherAvailable {
+                    ForEach(arrows(width), id: \.id) { a in arrowMark(a) }
+                    ForEach(stormTargets(width), id: \.storm.id) { t in stormTarget(t) }
+                } else {
+                    ForEach(storms) { storm in stormMark(storm, width) }
+                }
+                ForEach(ribbon.stations ?? []) { st in stationMark(st, width) }
                 if let flown = ribbon.flownNm, flown > 0 {
                     aircraftMark(x: x(flown, width))
                 }
-                ForEach(ribbon.segments ?? []) { seg in segmentMark(seg, width) }
-                ForEach(ribbon.sigmets ?? []) { s in sigmetMark(s, width) }
-                ForEach(ribbon.stations ?? []) { st in stationMark(st, width) }
-                ForEach(storms) { storm in stormMark(storm, width) }
                 axis(width)
             }
         }
@@ -200,36 +222,136 @@ struct RouteRibbonView: View {
     }
 
     private var routeNm: Double { max(ribbon.routeNm ?? 1, 1) }
+    private var corridor: Double { max(ribbon.weatherCorridorNm ?? corridorNm, 1) }
 
     private func x(_ nm: Double, _ width: CGFloat) -> CGFloat {
-        inset + CGFloat(min(max(nm / routeNm, 0), 1)) * (width - 2 * inset)
+        Self.inset + CGFloat(min(max(nm / routeNm, 0), 1)) * (width - 2 * Self.inset)
     }
+
+    /// Off-track distance → y: left (−) above the line, right (+) below.
+    static func y(cross: Double, corridor: Double) -> CGFloat {
+        let f = CGFloat(max(-1, min(1, cross / max(corridor, 1))))
+        return f < 0 ? trackY + f * (trackY - zoneTop) : trackY + f * (zoneBottom - trackY)
+    }
+
+    // MARK: Route line, ends, aircraft
 
     private func trackLine(_ width: CGFloat) -> some View {
         Path { p in
-            p.move(to: CGPoint(x: inset, y: trackY))
-            p.addLine(to: CGPoint(x: width - inset, y: trackY))
+            p.move(to: CGPoint(x: Self.inset, y: Self.trackY))
+            p.addLine(to: CGPoint(x: width - Self.inset, y: Self.trackY))
         }
-        .stroke(Theme.textMuted.opacity(0.6), style: StrokeStyle(lineWidth: 2))
+        .stroke(Theme.text.opacity(0.75), style: StrokeStyle(lineWidth: 2))
     }
 
     private func aircraftMark(x: CGFloat) -> some View {
         Image(systemName: "airplane")
-            .font(.caption)
+            .font(.system(size: 13, weight: .bold))
             .foregroundStyle(Theme.primary)
-            .position(x: x, y: trackY)
+            .background(Circle().fill(Theme.surface).frame(width: 18, height: 18))
+            .position(x: x, y: Self.trackY)
             .accessibilityLabel("Planned position now")
     }
 
-    // Radar per segment, lightning glyph above it.
+    // MARK: Weather bands
+
+    private func weatherCanvas(_ width: CGFloat) -> some View {
+        let bands = (ribbon.weather ?? []).sorted { !$0.isCore && $1.isCore }
+        let half = (ribbon.weatherBinNm ?? 5) / 2
+        return Canvas { ctx, _ in
+            for band in bands {
+                let color = Self.bandColor(band)
+                for bin in band.profile ?? [] where bin.count == 3 {
+                    let x0 = x(bin[0] - half, width), x1 = x(bin[0] + half, width)
+                    let y0 = Self.y(cross: bin[1], corridor: corridor)
+                    let y1 = Self.y(cross: bin[2], corridor: corridor)
+                    let rect = CGRect(x: x0, y: min(y0, y1), width: max(x1 - x0, 1.5),
+                                      height: max(abs(y1 - y0), 3))
+                    ctx.fill(Path(rect), with: .color(color))
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(SpatialTapGesture().onEnded { tap in
+            if let focus = segmentFocus(at: tap.location.x, width) { onFocus(focus) }
+        })
+        .accessibilityLabel(Self.weatherSummary(ribbon.weather ?? []))
+    }
+
+    /// Tapping a band (or anywhere on the weather zones) frames the map on
+    /// that stretch of route.
+    private func segmentFocus(at px: CGFloat, _ width: CGFloat) -> LiveFocus? {
+        let nm = Double((px - Self.inset) / max(width - 2 * Self.inset, 1)) * routeNm
+        return (ribbon.segments ?? []).first { ($0.fromNm ?? 0) <= nm && nm < ($0.toNm ?? 0) }?.focus
+            ?? (ribbon.segments ?? []).last?.focus
+    }
+
+    /// The point of a band its arrow and tap target sit on: its widest bin.
+    private func anchor(_ band: RibbonWeather, _ width: CGFloat) -> CGPoint? {
+        guard let bin = (band.profile ?? []).filter({ $0.count == 3 })
+            .max(by: { ($0[2] - $0[1]) < ($1[2] - $1[1]) }) else { return nil }
+        let mid = (bin[1] + bin[2]) / 2
+        return CGPoint(x: x(bin[0], width), y: Self.y(cross: mid, corridor: corridor))
+    }
+
+    private struct Arrow { let id: String; let at: CGPoint; let deg: Double; let color: Color }
+
+    /// One arrow per moving band, strongest first, skipping one that would
+    /// sit on top of another; rain only when it is a sizeable area.
+    private func arrows(_ width: CGFloat) -> [Arrow] {
+        let moving = (ribbon.weather ?? [])
+            .filter { $0.motionRelDeg != nil && ($0.isCore || (($0.toNm ?? 0) - ($0.fromNm ?? 0)) >= 15) }
+            .sorted { ($0.isCore ? 1 : 0, $0.peakDbz ?? 0) > ($1.isCore ? 1 : 0, $1.peakDbz ?? 0) }
+        var out: [Arrow] = []
+        for band in moving {
+            guard let at = anchor(band, width), let deg = band.motionRelDeg else { continue }
+            if out.contains(where: { hypot($0.at.x - at.x, $0.at.y - at.y) < 16 }) { continue }
+            out.append(Arrow(id: band.id, at: at, deg: deg, color: band.isCore ? Theme.text : Theme.textMuted))
+        }
+        return out
+    }
+
+    private func arrowMark(_ a: Arrow) -> some View {
+        Image(systemName: "arrow.right")
+            .font(.system(size: 11, weight: .heavy))
+            .foregroundStyle(a.color)
+            .shadow(color: Theme.surface, radius: 1)
+            .rotationEffect(.degrees(a.deg))
+            .position(a.at)
+            .accessibilityHidden(true)
+    }
+
+    private struct StormTarget { let storm: LiveStorm; let at: CGPoint }
+
+    private func stormTargets(_ width: CGFloat) -> [StormTarget] {
+        let byId = Dictionary(storms.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var seen = Set<String>()
+        return (ribbon.weather ?? []).compactMap { band in
+            guard let sid = band.stormId, let storm = byId[sid], !seen.contains(sid),
+                  let at = anchor(band, width) else { return nil }
+            seen.insert(sid)
+            return StormTarget(storm: storm, at: at)
+        }
+    }
+
+    private func stormTarget(_ t: StormTarget) -> some View {
+        Button { onStorm(t.storm) } label: {
+            Color.clear.frame(width: 28, height: 28).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .position(t.at)
+        .accessibilityLabel(Self.stormLabel(t.storm))
+        .accessibilityIdentifier("ribbonStorm-\(t.storm.id)")
+    }
+
+    // Without the cells feed: the radar max per stretch, hugging the line.
     @ViewBuilder
-    private func segmentMark(_ seg: LiveRibbonSegment, _ width: CGFloat) -> some View {
+    private func radarStrip(_ seg: LiveRibbonSegment, _ width: CGFloat) -> some View {
         let x0 = x(seg.fromNm ?? 0, width), x1 = x(seg.toNm ?? 0, width)
         let rect = Rectangle()
             .fill(Self.radarColor(seg))
-            .overlay(Rectangle().stroke(Theme.border, lineWidth: 0.5))
-            .frame(width: max(x1 - x0, 1), height: 14)
-            .position(x: (x0 + x1) / 2, y: radarY)
+            .frame(width: max(x1 - x0, 1), height: 16)
+            .position(x: (x0 + x1) / 2, y: Self.trackY)
         if let focus = seg.focus {
             Button { onFocus(focus) } label: { rect }
                 .buttonStyle(.plain)
@@ -241,25 +363,56 @@ struct RouteRibbonView: View {
             Image(systemName: "bolt.fill")
                 .font(.system(size: 9))
                 .foregroundStyle(.yellow)
-                .position(x: (x0 + x1) / 2, y: radarY - 12)
+                .position(x: (x0 + x1) / 2, y: Self.trackY - 14)
         }
     }
+
+    // Without weather bands (an older server): storms as points.
+    @ViewBuilder
+    private func stormMark(_ storm: LiveStorm, _ width: CGFloat) -> some View {
+        if let along = storm.alongNm {
+            let cross = storm.crossNm ?? 0
+            let y = Self.y(cross: cross, corridor: max(corridorNm, 1))
+            let size: CGFloat = (storm.peakDbz ?? 0) >= 50 ? 18 : (storm.peakDbz ?? 0) >= 41 ? 14 : 10
+            Button { onStorm(storm) } label: {
+                ZStack {
+                    Circle()
+                        .fill(Self.dbzColor(storm.peakDbz).opacity(storm.ahead == false ? 0.35 : 0.9))
+                        .frame(width: size, height: size)
+                    if let arrow = Self.motionArrow(storm, cross: cross) {
+                        Image(systemName: arrow)
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Theme.text)
+                            .offset(y: cross >= 0 ? size * 0.9 : -size * 0.9)
+                    }
+                }
+                .frame(minWidth: 28, minHeight: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .position(x: x(along, width), y: y)
+            .accessibilityLabel(Self.stormLabel(storm))
+            .accessibilityIdentifier("ribbonStorm-\(storm.id)")
+        }
+    }
+
+    // MARK: SIGMETs
 
     @ViewBuilder
     private func sigmetMark(_ s: RibbonSigmet, _ width: CGFloat) -> some View {
         if let lo = s.fromNm, let hi = s.toNm {
             let x0 = x(lo, width), x1 = x(hi, width)
-            let band = RoundedRectangle(cornerRadius: 3)
-                .fill(Color.orange.opacity(s.pending == true ? 0.25 : 0.55))
+            let band = RoundedRectangle(cornerRadius: 2)
+                .fill(Color.orange.opacity(s.pending == true ? 0.25 : 0.5))
                 .overlay(
                     Text(Self.sigmetText(s))
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                         .padding(.horizontal, 2)
                 )
-                .frame(width: max(x1 - x0, 4), height: 14)
-                .position(x: (x0 + x1) / 2, y: sigmetY)
+                .frame(width: max(x1 - x0, 4), height: 11)
+                .position(x: (x0 + x1) / 2, y: Self.sigmetY)
             if let focus = s.focus {
                 Button { onFocus(focus) } label: { band }
                     .buttonStyle(.plain)
@@ -270,69 +423,51 @@ struct RouteRibbonView: View {
         }
     }
 
+    // MARK: Airports
+
+    /// Departure / destination on the line's ends; the others in the row on
+    /// their side of the course.
+    private func stationPoint(_ st: RibbonStation, _ width: CGFloat) -> CGPoint? {
+        switch st.role {
+        case "departure": return CGPoint(x: Self.inset, y: Self.trackY)
+        case "destination": return CGPoint(x: width - Self.inset, y: Self.trackY)
+        default:
+            guard let along = st.alongNm else { return nil }
+            return CGPoint(x: x(along, width), y: (st.crossNm ?? 0) < 0 ? Self.leftRowY : Self.rightRowY)
+        }
+    }
+
     @ViewBuilder
     private func stationMark(_ st: RibbonStation, _ width: CGFloat) -> some View {
-        if let along = st.alongNm {
-            let px = x(along, width)
-            let mark = VStack(spacing: 4) {
-                Circle()
-                    .fill(Self.categoryColor(st.metarCategory))
-                    .overlay(Circle().stroke(Color(white: 0.13), lineWidth: (st.convective ?? []).isEmpty ? 0.5 : 2))
-                    .frame(width: st.role == "route" ? 9 : 13, height: st.role == "route" ? 9 : 13)
-                // TAF at ETA beneath; hatched (dashed) when PROB/TEMPO sets it.
-                if let taf = st.tafTemporaryCategory ?? st.tafCategoryAtEta {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Self.categoryColor(taf).opacity(st.tafTemporaryType != nil ? 0.35 : 0.8))
-                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(
-                            Self.categoryColor(taf),
-                            style: StrokeStyle(lineWidth: 1, dash: st.tafTemporaryType != nil ? [2, 2] : [])))
-                        .frame(width: 9, height: 7)
-                }
-            }
-            .position(x: px, y: (stationY + tafY) / 2)
+        if let at = stationPoint(st, width) {
+            let end = st.role == "departure" || st.role == "destination"
+            let mark = Self.airportCircle(st, size: end ? 16 : 10)
+                .frame(minWidth: 24, minHeight: 24)
+                .contentShape(Rectangle())
+                .position(at)
             if let focus = st.focus {
                 Button { onFocus(focus) } label: { mark }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Self.stationLabel(st))
             } else {
-                mark
+                mark.accessibilityLabel(Self.stationLabel(st))
             }
         }
     }
 
-    @ViewBuilder
-    private func stormMark(_ storm: LiveStorm, _ width: CGFloat) -> some View {
-        if let along = storm.alongNm {
-            let cross = storm.crossNm ?? 0
-            // Facing the direction of flight on a left-to-right ribbon, right of
-            // track is below the line.
-            let y = trackY + CGFloat(max(-1, min(1, cross / max(corridorNm, 1)))) * stormHalf
-            let size: CGFloat = (storm.peakDbz ?? 0) >= 50 ? 20 : (storm.peakDbz ?? 0) >= 41 ? 15 : 11
-            Button { onStorm(storm) } label: {
-                ZStack {
-                    Circle()
-                        .fill(Self.motionColor(storm).opacity(storm.ahead == false ? 0.35 : 0.85))
-                        .overlay(Circle().stroke(Color(white: 0.13), lineWidth: 1))
-                        .frame(width: size, height: size)
-                    if (storm.flashes ?? 0) > 0 {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: size * 0.5))
-                            .foregroundStyle(.yellow)
-                    }
-                    if let arrow = Self.motionArrow(storm, cross: cross) {
-                        Image(systemName: arrow)
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Self.motionColor(storm))
-                            .offset(y: cross >= 0 ? size * 0.85 : -size * 0.85)
-                    }
-                }
-                .frame(minWidth: 28, minHeight: 28)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .position(x: x(along, width), y: y)
-            .accessibilityLabel(Self.stormLabel(storm))
-            .accessibilityIdentifier("ribbonStorm-\(storm.id)")
+    /// Filled with the METAR category now, ringed with the TAF category at
+    /// the airport's ETA (dashed when a PROB/TEMPO group sets it).
+    static func airportCircle(_ st: RibbonStation, size: CGFloat) -> some View {
+        let taf = st.tafTemporaryCategory ?? st.tafCategoryAtEta
+        return ZStack {
+            Circle()
+                .stroke(taf.map { categoryColor($0) } ?? .clear,
+                        style: StrokeStyle(lineWidth: 2.5, dash: st.tafTemporaryType != nil ? [2.5, 2] : []))
+                .frame(width: size + 6, height: size + 6)
+            Circle()
+                .fill(categoryColor(st.metarCategory))
+                .overlay(Circle().stroke(Color(white: 0.13), lineWidth: (st.convective ?? []).isEmpty ? 0.5 : 2))
+                .frame(width: size, height: size)
         }
     }
 
@@ -351,13 +486,13 @@ struct RouteRibbonView: View {
                     }
                     .foregroundStyle(Theme.text)
                     .fixedSize()
-                    .position(x: x(along, width), y: axisY)
+                    .position(x: x(along, width), y: Self.axisY)
                 }
             }
         }
     }
 
-    // MARK: Styling (no judgement: categories and observed motion only)
+    // MARK: Styling (no judgement: categories, strength and observed motion only)
 
     static func categoryColor(_ category: String?) -> Color {
         switch category?.lowercased() {
@@ -369,25 +504,28 @@ struct RouteRibbonView: View {
         }
     }
 
+    static func dbzColor(_ dbz: Double?) -> Color {
+        guard let dbz else { return .green.opacity(0.4) }
+        if dbz >= 50 { return .red }
+        if dbz >= 41 { return .orange }
+        if dbz >= 35 { return .yellow }
+        return .green
+    }
+
+    /// Rain areas pale (their strength is in the cores drawn on top), cores
+    /// by their peak.
+    static func bandColor(_ band: RibbonWeather) -> Color {
+        band.isCore ? dbzColor(band.peakDbz).opacity(0.85) : Color.green.opacity(0.28)
+    }
+
     static func radarColor(_ seg: LiveRibbonSegment) -> Color {
         switch seg.radarStatus {
         case "no_coverage": return Color.gray.opacity(0.35)
         case "measured":
             guard let dbz = seg.radarMaxDbz else { return Color.green.opacity(0.08) }
-            if dbz >= 50 { return .red }
-            if dbz >= 41 { return .orange }
-            if dbz >= 30 { return .yellow }
-            if dbz >= 20 { return .green.opacity(0.6) }
-            return .green.opacity(0.25)
+            if dbz >= 20 && dbz < 35 { return .green.opacity(0.6) }
+            return dbz < 20 ? .green.opacity(0.25) : dbzColor(dbz)
         default: return .clear
-        }
-    }
-
-    static func motionColor(_ storm: LiveStorm) -> Color {
-        switch storm.relativeMotion {
-        case "closing": .red
-        case "moving_away": .teal
-        default: .gray
         }
     }
 
@@ -403,7 +541,8 @@ struct RouteRibbonView: View {
 
     static func sigmetText(_ s: RibbonSigmet) -> String {
         let hazard = [s.qualifier, s.hazard].compactMap { $0 }.joined(separator: " ")
-        return hazard.isEmpty ? "SIGMET" : hazard
+        let fir = s.label?.split(separator: ":").first.map(String.init)
+        return [fir, hazard.isEmpty ? "SIGMET" : hazard].compactMap { $0 }.joined(separator: " ")
     }
 
     static func segmentLabel(_ seg: LiveRibbonSegment) -> String {
@@ -422,15 +561,89 @@ struct RouteRibbonView: View {
         parts += st.convective ?? []
         if let taf = st.tafCategoryAtEta { parts.append("TAF at ETA \(taf)") }
         if let type = st.tafTemporaryType, let cat = st.tafTemporaryCategory { parts.append("\(type) \(cat)") }
+        if let cross = st.crossNm, st.role == "route" || st.role == "alternate" {
+            parts.append("\(Int(abs(cross).rounded())) NM \(cross < 0 ? "left" : "right") of course")
+        }
         return parts.joined(separator: " ")
     }
 
     static func stormLabel(_ storm: LiveStorm) -> String {
-        var parts = ["Storm \(Int((storm.peakDbz ?? 0).rounded())) dBZ"]
+        var parts = ["Cell \(Int((storm.peakDbz ?? 0).rounded())) dBZ"]
         parts.append(StormDetailSheet.positionText(storm))
         parts.append(StormDetailSheet.motionText(storm))
         if let flashes = storm.flashes, flashes > 0 { parts.append(flashes == 1 ? "1 flash" : "\(flashes) flashes") }
         return parts.joined(separator: ", ")
+    }
+
+    /// VoiceOver: the weather zones in a sentence.
+    static func weatherSummary(_ bands: [RibbonWeather]) -> String {
+        let cores = bands.filter(\.isCore)
+        if bands.isEmpty { return "No rain or cells within the corridor" }
+        let strongest = cores.compactMap(\.peakDbz).max()
+        var s = "\(bands.count - cores.count) rain areas, \(cores.count) cells along the route"
+        if let strongest { s += ", strongest \(Int(strongest.rounded())) dBZ" }
+        return s
+    }
+
+    /// Motion relative to the course in words, for labels.
+    static func relativeMotionText(_ deg: Double) -> String {
+        let a = abs(deg)
+        if a <= 30 { return "moving along the course" }
+        if a >= 150 { return "moving against the course" }
+        return deg > 0 ? "drifting toward the right of course" : "drifting toward the left of course"
+    }
+}
+
+/// The ribbon's key: what the circles, rings, bands and arrows mean.
+struct RouteRibbonLegend: View {
+    let weather: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                item("METAR now · ring TAF at ETA") {
+                    ZStack {
+                        Circle().stroke(Color.blue, lineWidth: 2).frame(width: 12, height: 12)
+                        Circle().fill(Color.green).frame(width: 7, height: 7)
+                    }
+                }
+                item("SIGMET") {
+                    RoundedRectangle(cornerRadius: 1).fill(Color.orange.opacity(0.5)).frame(width: 14, height: 7)
+                }
+            }
+            HStack(spacing: 10) {
+                if weather {
+                    item("rain") {
+                        RoundedRectangle(cornerRadius: 1).fill(Color.green.opacity(0.28)).frame(width: 14, height: 7)
+                    }
+                    item("cells 35/41/50 dBZ") {
+                        HStack(spacing: 1) {
+                            Rectangle().fill(Color.yellow).frame(width: 5, height: 7)
+                            Rectangle().fill(Color.orange).frame(width: 5, height: 7)
+                            Rectangle().fill(Color.red).frame(width: 5, height: 7)
+                        }
+                    }
+                    item("motion vs course") {
+                        Image(systemName: "arrow.right").font(.system(size: 9, weight: .heavy))
+                    }
+                } else {
+                    item("radar ≤10 NM") {
+                        Rectangle().fill(Color.green.opacity(0.6)).frame(width: 14, height: 7)
+                    }
+                }
+            }
+            Text("Left of course above the line, right below")
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(Theme.textMuted)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func item(_ label: String, @ViewBuilder icon: () -> some View) -> some View {
+        HStack(spacing: 3) {
+            icon()
+            Text(label)
+        }
     }
 }
 
@@ -490,7 +703,7 @@ struct StormDetailSheet: View {
                     } header: {
                         Text("Estimate at current motion")
                     } footer: {
-                        Text("A projection, not an observation: it assumes the storm keeps its current speed and heading, and that you fly the plan on time.")
+                        Text("A projection, not an observation: it assumes the cell keeps its current speed and heading, and that you fly the plan on time.")
                     }
                     .accessibilityIdentifier("stormEstimate")
                 }
@@ -505,7 +718,7 @@ struct StormDetailSheet: View {
                     }
                 }
             }
-            .navigationTitle(storm.intensity.map { "\($0.capitalized) storm" } ?? "Storm")
+            .navigationTitle(storm.intensity.map { "\($0.capitalized) cell" } ?? "Cell")
             .navigationBarTitleDisplayMode(.inline)
         }
         .accessibilityIdentifier("stormDetail")
