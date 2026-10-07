@@ -163,7 +163,10 @@ class GridFrame:
     nodata: np.ndarray
     undetect: np.ndarray
     attribution: ObservedAttribution = field(default_factory=ObservedAttribution)
-    aux: dict[str, np.ndarray] = field(default_factory=dict)
+    # Extra per-frame arrays, plus the odd scalar describing one of them (the
+    # OPERA quality index and the `how/task` that names it, CTTH's parallax
+    # offsets).  Never load-bearing: a consumer must cope with a key missing.
+    aux: dict[str, Any] = field(default_factory=dict)
 
     @property
     def detected(self) -> np.ndarray:

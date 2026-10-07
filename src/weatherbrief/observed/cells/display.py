@@ -23,6 +23,11 @@ Contents (``DISPLAY_SCHEMA``):
   ``flashes_pending: true``, so no client can word it as "no lightning"
   (#666 review).  Cells whose rain rate is from an older frame than the radar
   carry ``rate_as_of``;
+* **clutter** — on a cell with non-meteorological-echo evidence (#696): its
+  ``level`` (``suspect``/``confirmed``), ``score`` and the ``reasons`` that
+  fired.  Absent on a clear cell, so clean frames keep the pre-#696 shape.
+  ``robust_peak_dbz`` (the 3x3-median peak) rides along on every assessed
+  cell; nothing displays or alerts on it yet;
 * **within** — on a cell inside a cell of the next lower tier (a core41
   inside its core35, a core35 inside its rain20), that cell's id (#688), so
   the droplet groups the tiers of one storm without re-deriving geometry;
@@ -189,6 +194,17 @@ def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: Mot
         out["rate_as_of"] = rate_as_of
     if within is not None:
         out["within"] = within
+    # Clutter evidence (#696) rides along only when there is something to say:
+    # a clear cell keeps the pre-#696 shape, and a continent of clean cores
+    # does not pay for a block per cell.  The reasons travel too — a client
+    # that dims a cell has to be able to say why.
+    clutter = cell.get("clutter")
+    if clutter and clutter.get("level") != "clear":
+        out["clutter"] = {k: clutter[k] for k in ("level", "score", "reasons") if k in clutter}
+    # Robust peak alongside the single-pixel one; nothing reads it yet.
+    robust = (clutter or {}).get("features", {}).get("robust_peak_dbz")
+    if robust is not None:
+        out["robust_peak_dbz"] = robust
     return out
 
 

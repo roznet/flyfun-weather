@@ -191,19 +191,27 @@ for(const [tier,lines] of Object.entries(D.outlines)){
 }
 const comp=d=>d==null?'–':['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(d/22.5)%16];
 const f=(v,u='')=>v==null?'–':v+u;
+// Clutter evidence (#696): the level, the score and every reason, zero-weight
+// ones included — this page is where the evidence is read while suppression is
+// off, so it shows what the node measured rather than a verdict.
+function clutter(c){
+  if(!c.clutter) return '';
+  const why=(c.clutter.reasons||[]).map(r=>`${r.feature} ${r.value} (${r.points>0?'+':''}${r.points})`).join(', ');
+  return `<br><b style="color:#c62828">suspect echo: ${c.clutter.level}</b> score ${c.clutter.score}<br><span style="color:#666">${why}</span>`;
+}
 function popup(c){
   const t=c.trend,m=c.motion;
   let trend=t.state; if(t.window_min) trend+=` over ${t.window_min} min (peak ${t.d_peak_db>0?'+':''}${t.d_peak_db} dB, area ×${f(t.area_ratio)}${t.d_flashes!=null?`, flashes ${t.d_flashes>0?'+':''}${t.d_flashes}`:''})`;
   const mv=m.status==='available'?`moving <b>${comp(m.toward_deg)}</b> (${f(m.toward_deg,'°')}) at <b>${m.speed_kt} kt</b>`:`motion ${m.status}${m.reason?': '+m.reason:''}`;
   return `<b>${c.tier}</b> ${c.truncated?'(truncated by coverage edge)':''}<br>
-  peak <b>${c.peak_dbz} dBZ</b> · area ${c.area_km2} km²<br>rain rate peak ${f(c.rate_peak_mm_h,' mm/h')} · lightning <b>${f(c.flashes)}</b>${c.top_fl!=null?` · top FL${c.top_fl}`:''}<br>
-  age ${c.age_min} min (${c.event}) · <b>${trend}</b><br>${mv}<br><span style="color:#888">${c.id}</span>`;
+  peak <b>${c.peak_dbz} dBZ</b>${c.robust_peak_dbz!=null?` (robust ${c.robust_peak_dbz})`:''} · area ${c.area_km2} km²<br>rain rate peak ${f(c.rate_peak_mm_h,' mm/h')} · lightning <b>${f(c.flashes)}</b>${c.top_fl!=null?` · top FL${c.top_fl}`:''}<br>
+  age ${c.age_min} min (${c.event}) · <b>${trend}</b><br>${mv}${clutter(c)}<br><span style="color:#888">${c.id}</span>`;
 }
 const cellLayers={core41:L.layerGroup(),core35:L.layerGroup(),rain20:L.layerGroup()};
 const arrows=L.layerGroup();
 for(const c of D.cells){
   const r=c.tier==='core41'?7:c.tier==='core35'?5:6;
-  const mk=L.circleMarker([c.lat,c.lon],{radius:r,color:'#222',weight:1,fillOpacity:.9,
+  const mk=L.circleMarker([c.lat,c.lon],{radius:r,color:c.clutter?'#c62828':'#222',weight:c.clutter?3:1,fillOpacity:.9,
     fillColor:D.trendColour[c.trend.state]||'#ccc',dashArray:c.tier==='rain20'?'3':null}).bindPopup(popup(c));
   mk.addTo(cellLayers[c.tier]);
   if(c.arrow&&c.tier!=='rain20'){
@@ -221,6 +229,7 @@ const un=D.unavailable.map(u=>u.what).join(', ');
 document.getElementById('panel').innerHTML=`<b>Observed cells · ${D.time}</b><br>
 radar ${D.inputs.opera_dbzh.slice(11,16)}Z · rain rate ${f(D.inputs.opera_rate&&D.inputs.opera_rate.slice(11,16))}Z · lightning ${f(D.inputs.eumetsat_li&&D.inputs.eumetsat_li.slice(11,16))}Z${un?'<br>unavailable: '+un:''}<br>
 marker colour = trend:${Object.entries(D.trendColour).map(([k,v])=>`<span class="sw" style="background:${v}"></span>${k}`).join('')}<br>
-magenta = where the cell would be in 30 min · yellow = lightning<br><span style="color:#888">${D.policy} · click a marker for details</span>`;
+magenta = where the cell would be in 30 min · yellow = lightning<br>
+<span style="color:#c62828">thick red ring = suspect non-meteorological echo (#696), annotation only</span><br><span style="color:#888">${D.policy} · click a marker for details</span>`;
 </script></body></html>
 """

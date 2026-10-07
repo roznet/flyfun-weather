@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,109 @@ DEFAULT_TIERS: tuple[TierPolicy, ...] = (
 
 # Every way a cell's position is projected forward (#662), scored side by side.
 MOTION_VARIANTS: tuple[str, ...] = ("raw", "smoothed", "track", "field", "field_anchored")
+
+
+@dataclass(frozen=True)
+class ClutterPolicy:
+    """Non-meteorological echo evidence (#696): thresholds and weights.
+
+    Every number here was read off the #696 reference frames against all 335
+    core41 cells in Europe at 2026-10-07 00:25Z — see ``clutter.py`` for the
+    table and ``designs/meteorology-decisions.md`` §42 for the decision.  They
+    are **provisional**, like everything in this module: the point of
+    recording the features on every cell is that a replay set can settle them.
+
+    Thresholds sit well clear of the genuine population rather than snugly
+    around the one known case: ``ring_rain_bare`` at 0.15 against a genuine
+    10th percentile of 0.83, ``onset_sudden_db`` at 25 against a genuine 99th
+    percentile of 19.5.  Picking them to make this one case disappear is
+    exactly what the issue warns against.
+    """
+
+    # Off switches the whole assessment: no features measured, no block on any
+    # cell, and the per-frame cost goes back to what it was before #696.  It
+    # is a policy number, so a run with it off carries its own
+    # ``policy_version`` — which is right: those catalogues answer a different
+    # question and must not be mistaken for assessed ones.
+    enabled: bool = True
+
+    # --- Isolation: the enclosing precipitation ------------------------------
+    # A genuine >= 41 dBZ core is embedded in its own >= 20 dBZ rain.  20 dBZ is
+    # the rain20 tier's own threshold, so the two agree by construction.
+    rain_dbz: float = 20.0
+    # The ring is 2 px wide because the French contribution arrives on a 2 km
+    # grid duplicated 2x2 onto the 1 km composite: a 1 px ring measures the
+    # duplication, not the weather.
+    ring_px: int = 2
+    # Below this many *covered* ring pixels there is no isolation evidence.
+    min_ring_px: int = 8
+    # Measured over all 11,967 cores of the 17 #696 frames, against the cells
+    # corroborated by lightning or a cloud top ("weather-labelled"):
+    #   <= 0.15 catches 0.6-1.1 % of cores and **0** weather-labelled ones
+    #   <= 0.30 catches 1.0-1.5 % and still 0;  <= 0.40 starts catching them.
+    ring_rain_bare: float = 0.15
+    ring_rain_thin: float = 0.30
+    # The first pass read these off one frame's core41 cells (p10 = 23) and
+    # was wrong: over 17 frames and both tiers, <= 8 catches more than a tenth
+    # of the weather-labelled cores, because a core35 is large relative to its
+    # own rain area and the ratio is not tier-free.  <= 1.5 catches 0.5-0.8 %
+    # of cores and 0 weather-labelled; <= 2.0 catches 1.3-1.5 % and 3.
+    rain_ratio_bare: float = 1.5
+    rain_ratio_thin: float = 2.0
+    # When the rain20 tier dropped the region containing a core (under its own
+    # 64 km2 minimum), the ratio is measured on a crop this many pixels wider
+    # than the core.  Big enough to hold any region that tier would have
+    # dropped, so a region reaching the crop edge really is large and the
+    # feature stays silent rather than guessing.
+    rain_crop_px: int = 12
+
+    # --- Onset at the cell's own pixels -------------------------------------
+    # Dilated by 2 px so a cell that drifted a pixel is not read as newborn.
+    onset_dilate_px: int = 2
+    # Where the radar looked and saw nothing, the earlier field reads as this
+    # rather than as the NaN sentinel: "below the detection floor" is an
+    # observation, and differencing against the sentinel gave 1000 dB onsets.
+    onset_floor_dbz: float = 0.0
+    onset_sudden_db: float = 25.0  # 0.9-1.1 % of cores, 1 weather-labelled
+    onset_fast_db: float = 20.0    # 15.0 caught 7 weather-labelled core41s
+
+    # --- Single-pixel peaks --------------------------------------------------
+    median_px: int = 3
+    robust_drop_db: float = 6.0    # genuine p90 = 2.5-3.5; the case 4.5-10.0
+
+    # --- Gabella spatial texture --------------------------------------------
+    gabella_window: int = 5        # Dutch operational Cartesian settings
+    gabella_db: float = 6.0
+    gabella_min_neighbours: int = 6
+    continuity_low: float = 0.80   # 1.7-2.0 % of cores, <= 1 weather-labelled
+
+    # --- Supporting ----------------------------------------------------------
+    # Only where lightning was really observed as zero, never where it is
+    # merely pending (#666).
+    silent_peak_dbz: float = 50.0
+    # A satellite cloud top at or above this clears the cell outright: a strong
+    # echo under no cloud is not possible.  Only bites where CTTH is collected.
+    veto_top_fl: float = 100.0
+
+    # --- Weights and levels --------------------------------------------------
+    # Isolation carries the separation; the rest corroborate.  Isolation alone
+    # reaches `suspect`; isolation plus one corroborator reaches `confirmed`.
+    w_ring_bare: float = 3.0
+    w_ring_thin: float = 1.0
+    w_ratio_bare: float = 2.0
+    w_ratio_thin: float = 1.0
+    w_onset_sudden: float = 2.0
+    w_onset_fast: float = 1.0
+    w_robust_drop: float = 1.0
+    w_continuity: float = 1.0
+    # Recorded with the other reasons but **weighted at zero**: plenty of real
+    # convection never sparks, lightning coverage and latency vary, and the
+    # #696 review is explicit that no lightning is not grounds to reject a
+    # shower.  Kept visible so an evaluation can weigh it rather than
+    # rediscover it.
+    w_silent: float = 0.0
+    suspect_score: float = 3.0
+    confirmed_score: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -142,7 +245,12 @@ class CellPolicy:
     # tracker; short of it, the misses would be someone else's cells.
     score_margin_km: float = 100.0
 
-    name: str = "cells-2"
+    # --- Non-meteorological echo evidence (#696) ------------------------------
+    # Measured and recorded on every core; acting on it is the droplet's
+    # decision and is off by default (WB_CELLS_CLUTTER_SUPPRESS).
+    clutter: ClutterPolicy = field(default_factory=ClutterPolicy)
+
+    name: str = "cells-3"
 
     def __post_init__(self) -> None:
         if self.display_motion not in MOTION_VARIANTS:

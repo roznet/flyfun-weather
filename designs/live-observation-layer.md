@@ -274,6 +274,18 @@ Rule in meteorology-decisions §41. Pieces:
   `available` / `stale` (> `STALE_AFTER`, 25 min) / `disabled` (ingest off) /
   `unavailable`; never raises. `run_realtime_refresh` passes it to
   `commit_live_update(cells=…)`; `None` reads as a dark feed.
+- **Suspect echoes** (#696, meteorology-decisions §42): every cell the droplet
+  speaks about passes `storms.operational_cells`, the one gate shared by the
+  storm rows, the §41 alerts that read them, the glance and the ribbon's
+  weather bands — so the three cannot disagree about which echoes exist. It is
+  a **no-op unless `WB_CELLS_CLUTTER_SUPPRESS` is set** (read per call, so
+  flipping it is a web-app restart, not a deploy); with it on, cells the node
+  marked `suspect` or `confirmed` are dropped before grouping, and from each
+  storm's earlier-frame history too, so a suppressed cell cannot return through
+  the off-track trail. A `core` band whose every member was suppressed is
+  dropped rather than reported at the tier floor; a mixed band keeps the peak of
+  what is left. Dropping a cell is **not** a claim the sky is clear there: the
+  cell stays in the display file with its reasons and the overlay can draw it.
 - **Geometry** (`build_storms`, droplet side, no analysis): cells grouped by
   the node's `within` (core41 → its core35; older files: nearest core35 within
   its equivalent radius + 3 NM); each storm projected on the route polyline
