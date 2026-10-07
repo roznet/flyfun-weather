@@ -118,6 +118,21 @@ def test_skips_binding_on_a_negative_clause():
     assert lh.check_grounding("No cells within 30 NM of LEMI.", f) is None
 
 
+def test_a_sigmet_span_may_name_the_airport_at_its_edge():
+    """Measured false positive: the model named LEMI as the *end of a SIGMET
+    span*, not as an airport reporting thunderstorms. The span does reach
+    LEMI and LEMI itself is VFR, so the line is accurate."""
+    f = _facts_with(
+        destination={"icao": "LEMI", "metar_now": "VFR at 08:50Z", "taf_at_eta": "VFR"},
+        sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 3", "covers_route_nm": [235, 276],
+                        "new_since_briefing": True}],
+    )
+    assert lh.check_grounding(
+        "Two new SIGMETs: embedded thunderstorms from 235 NM to destination (LEMI).", f) is None
+    # The guard is narrow: without the SIGMET framing the same claim is caught.
+    assert lh.check_grounding("LEMI reporting thunderstorms.", f) is not None
+
+
 # --- Grounding: voice rules -------------------------------------------------
 
 
@@ -141,6 +156,37 @@ def test_thunderstorm_needs_lightning_in_the_facts():
     assert reason is not None and "lightning" in reason
     # The same tick, worded as a cell, is fine.
     assert lh.check_grounding("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
+
+
+def test_a_stations_TS_does_not_make_a_radar_core_a_thunderstorm():
+    """§41. An airport reporting TSRA licenses "thunderstorm at LECH"; it does
+    not license "thunderstorm at 180 NM" about a core with no lightning. The
+    place-binding rule cannot catch this one — there is no ICAO in the clause
+    to bind to."""
+    f = _facts_with(
+        airports_along_route_ahead={
+            "notable": [{"icao": "LECH", "role": "route", "where": "150 NM along, on track",
+                         "metar_now": "IFR at 08:50Z, TSRA"}],
+            "other_airports_ahead_all_VFR": 2},
+        cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
+            {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]},
+    )
+    reason = lh.check_grounding("Thunderstorm 4 NM left of track at 180 NM.", f)
+    assert reason is not None and "only a station reports TS" in reason
+    # The same facts, said about the station that actually reports it: fine.
+    assert lh.check_grounding("LECH reporting thunderstorms mid-route.", f) is None
+    # ...and the core, correctly called a cell: fine.
+    assert lh.check_grounding("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
+
+
+def test_a_TS_sigmet_licenses_a_positional_thunderstorm():
+    """A SIGMET for embedded TS over the route does carry the word."""
+    f = _facts_with(
+        sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2", "covers_route_nm": [10, 276]}],
+        cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
+            {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]},
+    )
+    assert lh.check_grounding("SIGMET embedded thunderstorms from 10 NM to destination.", f) is None
 
 
 def test_thunderstorm_allowed_when_a_cell_has_flashes():

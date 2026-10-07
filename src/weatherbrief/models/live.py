@@ -320,8 +320,12 @@ class LiveHighlight(BaseModel):
     The model only chooses what leads and words it: every fact in ``text``
     comes from the facts block :mod:`weatherbrief.tasks.live_highlight` built
     deterministically from this tick. Written after the tick has committed, so
-    a layer always exists without one (``None`` until the first generation, and
-    for good on a flight whose every attempt was rejected).
+    a layer always exists without one: ``None`` until the first generation
+    lands, and ``None`` again each time the facts change until the next tick
+    fills it. A facts state whose generation is rejected is retried once and
+    then left alone (``MAX_ATTEMPTS_PER_FACTS``), so this stays ``None`` for
+    that state — the next real weather change gets a fresh attempt. Readers
+    fall back to :attr:`LiveGlance.headline`.
 
     **Not displayed yet** (owner, 2026-10-07): written to the layer so real
     flight days can be reviewed and the prompt calibrated before any client

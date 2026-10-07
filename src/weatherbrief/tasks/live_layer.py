@@ -46,16 +46,19 @@ from weatherbrief.models.live import (
 from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.observed.storms import CellFrames
+from weatherbrief.tasks.live_highlight import LIVE_HIGHLIGHT_LOG
 
 logger = logging.getLogger(__name__)
 
 LIVE_FILE = "live.json"
 LIVE_META_FILE = "live_meta.json"
 LIVE_HISTORY_FILE = "live_history.jsonl"
-#: #697's review log — defined in ``live_highlight`` and listed here so a
-#: flight delete takes it with the rest of the layer.
-LIVE_HIGHLIGHT_LOG = "live_highlights.jsonl"
 #: Every per-flight live file: what flight delete/move and retention remove.
+#: #697's review log is owned by ``live_highlight`` and listed here so a flight
+#: delete takes it with the rest of the layer. Imported rather than repeated —
+#: two spellings of a filename drift, and the one that drifts is the one that
+#: stops being cleaned up. Safe at module level: ``live_highlight`` imports
+#: nothing from this module except inside its functions.
 LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG)
 
 _locks: dict[str, threading.Lock] = {}
