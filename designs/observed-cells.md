@@ -35,6 +35,7 @@ observed/cells/
   advect.py      motion field from the tiles; straight vs field trajectories (#662)
   lineage.py     identity across frames (advect, overlap, dominant link); trend
   attributes.py  rain rate, lightning, parallax-corrected cloud top per cell
+  levels.py      the suspect/confirmed wire contract + `suspect()` (leaf, #696)
   clutter.py     is this echo weather? isolation + corroborators per core (#696)
   clutter_eval.py the report over archived catalogues (`clutter` CLI, #696)
   catalogue.py   wire format: deterministic gzipped JSON, one per DBZH frame
@@ -303,10 +304,26 @@ the duplication. A 1 px ring would call half of France clutter.
 
 **Per-cell crops, not full-grid filters.** Cores cover a tiny share of a
 3800 × 4400 grid; a whole-grid median or neighbour count would cost seconds a
-frame against the ~3 s budget #666 bought. Measured cost of the whole
-assessment on a MacBook over the reference frames (~700 assessed cores a
-frame): **+0.58 s** median analysis (4.29 → 4.87 s) and **+94 MB** peak RSS
-(2235 → 2329 MB), the latter the transient full-grid quality read.
+frame against the ~3 s budget #666 bought. Measured on a MacBook over the
+reference frames (~700 assessed cores a frame), off against on, interleaved:
+
+| | median analysis | peak RSS |
+|---|---:|---:|
+| clutter off | 4.32 s | 2,233 MB |
+| on, via `read_window` | 4.98 s (+0.68) | 2,329 MB (+97) |
+| on, via `read_quality_window` | **4.75 s (+0.44)** | **2,440 MB (+205)** |
+
+The quality layer is read by `opera.read_quality_window`, which decodes the
+quality dataset **alone**. Going through `read_window(..., with_quality=True)`
+decoded the whole reflectivity array again on the way past and discarded it —
+a second full-grid decode every frame (#696 review, raised in all three
+rounds). Removing it bought 0.24 s and, unexpectedly, **cost ~105 MB of
+peak**: reproducible across interleaved runs, and *not* the quality read's
+dtype conversion (reading it straight into float32 with `read_direct` did not
+move the figure). It is allocator behaviour the old path happened to benefit
+from, and it was not chased further — a home node has gigabytes spare, the
+droplet never runs this, and 0.24 s is the side worth having in a chain #666
+tuned for latency.
 
 **Size.** The catalogue carries every feature on every assessed core, so it
 grows **+11 %** (median 197 → 219 KB gzipped): ~22 KB a frame, ~6 MB a day,
@@ -672,7 +689,10 @@ motion variant the map shows (#662).  Every one is in `policy.py`.
 - A suppressed core (#696) still leaves its own bare `rain20` outline: the
   outlines are traced from the tier masks and cannot be filtered per cell, so
   the ribbon can keep a floor-intensity rain band where the storm row went
-  away. Known, not yet judged worth machinery.
+  away. So suppression is **not** complete coverage, and
+  `clutter_suppress_enabled`'s docstring says so. Fixing it properly means the
+  node marking suspect *outlines* rather than only cells — a display-schema
+  change, tracked as #702 rather than bolted on.
 - `clutter` evidence is only on `core35`/`core41`. Asking for it on `rain20`
   would flag every rain area in Europe (see "Non-meteorological echoes").
 - The tight poll's probe is a `collect_opera` with `warn_if_empty=False`

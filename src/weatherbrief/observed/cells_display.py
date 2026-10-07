@@ -101,6 +101,14 @@ def clutter_suppress_enabled() -> bool:
     it is on: the two levels say how much evidence there is, not whether to
     act — an echo with the isolation evidence against it has no business in a
     confident storm row either way (#696).
+
+    **Coverage is not complete.**  It holds suspect cells out of the storm
+    rows, the §41 alerts that read them, the glance and the ribbon's *core*
+    bands.  It cannot touch the ``rain20`` outlines: those are traced from the
+    tier mask on the node, not per cell, so a suppressed echo can still leave
+    a bare rain band at the floor intensity (``route_bands``,
+    ``observed-cells.md``, issue #702).  Worth knowing before the flag is
+    flipped.
     """
     return os.environ.get(CELLS_CLUTTER_SUPPRESS_ENV, "").strip().lower() in ("1", "true", "yes")
 

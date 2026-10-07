@@ -56,7 +56,6 @@ from ..frames import (
 from ..grid import GridSpec, GridWindow, compute_window
 from .advect import flow_to_dict
 from .attributes import cloud_tops, flash_counts, rate_peaks, same_grid
-from .clutter import assess as assess_clutter, assessable, rescore as rescore_clutter
 from .catalogue import (
     SCHEMA,
     catalogue_path,
@@ -69,6 +68,7 @@ from .catalogue import (
     write_catalogue,
 )
 from .display import LIGHTNING_PENDING, LIGHTNING_PENDING_REASON, build_display, write_display
+from .clutter import assess as assess_clutter, assessable, rescore as rescore_clutter
 from .detect import TierDetection, detect, footprint_runs, initial_bearing_deg, distance_km
 from .lineage import PreviousCell, link, trend, trim_history
 from .motion import FlowField, cell_motion, estimate_flow
@@ -376,21 +376,22 @@ def read_quality(store: FrameStore, t: datetime) -> np.ndarray | None:
     copy of a 3800 x 4400 grid for each of the four cached frames would add
     ~270 MB to a measured ~2.2 GB peak for no use.  Read once per frame,
     released with the call (#696).
+
+    Via ``read_quality_window``, which decodes the quality dataset **alone**:
+    going through ``read_window`` decoded the whole reflectivity array again on
+    the way past and discarded it, a second full-grid decode every frame
+    against the budget #666 bought.
     """
     if not store.has(SOURCE_OPERA_DBZH, t):
         return None
     path = store.payload_path(SOURCE_OPERA_DBZH, t)
     try:
         grid = opera.read_grid(path)
-        frame = opera.read_window(
-            path, "DBZH", GridWindow(0, grid.ny, 0, grid.nx),
-            source=SOURCE_OPERA_DBZH, units="dBZ", with_quality=True,
-        )
+        found = opera.read_quality_window(path, "DBZH", GridWindow(0, grid.ny, 0, grid.nx))
     except Exception:
         logger.warning("Could not read the quality layer of %s", path, exc_info=True)
         return None
-    value = frame.aux.get("quality")
-    return value if isinstance(value, np.ndarray) else None
+    return found[0] if found is not None else None
 
 
 def _slot(t: datetime, minutes: int) -> datetime:

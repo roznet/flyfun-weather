@@ -36,6 +36,8 @@ from euro_aip.utils.geometry import haversine_nm
 
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.models.live import LiveStorm, LiveStorms, StormEstimate, StormTrackPoint
+from weatherbrief.observed.cells.levels import suspect
+from weatherbrief.observed.cells_display import clutter_suppress_enabled
 from weatherbrief.observed.intensity import classify_dbz, intensity_label
 
 logger = logging.getLogger(__name__)
@@ -151,15 +153,16 @@ def operational_cells(cells: list[dict]) -> list[dict]:
     statement that we have no confident storm to report.  The cell is still in
     the display file with its reasons, and the overlay can draw it.
     """
-    from weatherbrief.observed.cells_display import clutter_suppress_enabled
-    from weatherbrief.observed.cells.clutter import suspect
-
     if not clutter_suppress_enabled():
         return list(cells)
     kept = [c for c in cells if not suspect(c)]
     dropped = len(cells) - len(kept)
     if dropped:
-        logger.info("cells: %d of %d cells held back as suspect echoes", dropped, len(cells))
+        # DEBUG, not INFO: this runs for the newest frame and again for every
+        # earlier frame of a storm's history, and once more for the ribbon
+        # bands, so the same dropped cells would log four times per flight per
+        # tick (#696 review).
+        logger.debug("cells: %d of %d cells held back as suspect echoes", dropped, len(cells))
     return kept
 
 

@@ -143,3 +143,33 @@ def test_suppression_also_clears_the_storms_own_history(suppressing):
                                      [flagged(cell("core41-phantom", along=60.0, peak=57.0)),
                                       cell("core41-real", along=68.0, cross=4.0, peak=47.0)])])
     assert [s.id for s in layer.storms] == ["core41-real"]
+
+
+def test_a_suspect_core41_inside_a_genuine_core35_leaves_the_storm_standing(suppressing):
+    """The nesting case the review asked to pin (#696 round 1).
+
+    A storm is a `core35` plus the `core41`s inside it (`within`, #688). If the
+    node flags only the inner core, the storm must survive on its lower tier
+    rather than vanish — and its peak must come from what is left, not from the
+    suspect core.
+    """
+    base = cell("core35-a", tier="core35", along=60.0, peak=42.0)
+    inner = flagged(cell("core41-a", along=60.0, peak=57.0, within="core35-a"))
+    layer = storms_at(DEP + timedelta(minutes=30), [base, inner])
+    assert [s.id for s in layer.storms] == ["core35-a"]
+    assert layer.storms[0].cell_ids == ["core35-a"]
+    assert layer.storms[0].peak_dbz == pytest.approx(42.0)
+
+
+def test_a_suspect_core35_takes_its_genuine_core41_with_it(suppressing):
+    """The converse: the node flagged the enclosing cell, not the inner one.
+
+    The inner `core41` loses its parent and stands alone, so it is still
+    reported — dropping it would hide a 50 dBZ echo because of a verdict passed
+    on a different cell.
+    """
+    base = flagged(cell("core35-b", tier="core35", along=60.0, peak=57.0))
+    inner = cell("core41-b", along=60.0, peak=50.0, within="core35-b")
+    layer = storms_at(DEP + timedelta(minutes=30), [base, inner])
+    assert [s.id for s in layer.storms] == ["core41-b"]
+    assert layer.storms[0].peak_dbz == pytest.approx(50.0)

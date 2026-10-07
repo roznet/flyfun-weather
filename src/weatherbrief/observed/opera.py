@@ -12,8 +12,9 @@ the two as separate masks and this reader never collapses them.
 
 A composite may also carry a **quality index** beside the data
 (``/datasetN/dataM/qualityK``).  ``read_window(..., with_quality=True)``
-decodes it into ``GridFrame.aux["quality"]``; see ``_find_quality_group`` for
-why it is evidence and not a filter.
+decodes it into ``GridFrame.aux["quality"]`` alongside the reflectivity;
+``read_quality_window`` reads it *on its own*, for a caller that already holds
+the frame.  See ``_find_quality_group`` for why it is evidence and not a filter.
 
 Geolocation comes from the file: ``/where/projdef`` is a proj4 string and the
 corner lat/lons pin it.  We project the *upper-left* corner rather than
@@ -267,6 +268,64 @@ def iter_row_blocks(path: Path | str, quantity: str, *, block_rows: int = 760):
             values = offset + gain * raw.astype(np.float32)
             values[nodata | undetect] = np.nan
             yield row0, values, nodata, undetect
+
+
+def read_quality_window(
+    path: Path | str,
+    quantity: str,
+    window: GridWindow,
+    *,
+    task: str | None = None,
+) -> tuple[np.ndarray, str | None] | None:
+    """Just the quality index for ``quantity``, decoded, without its data array.
+
+    ``read_window(..., with_quality=True)`` has to decode the reflectivity array
+    on the way past — it is building a :class:`GridFrame` — so a caller that
+    already has the frame and only wants the quality layer would decode the
+    whole 3800 x 4400 composite a second time and throw it away, every frame
+    (#696 review, raised in all three rounds).  This reads the quality dataset
+    alone.
+
+    ``None`` when the file carries no quality group.  Otherwise the array (NaN
+    where no node published an index) and the ``how/task`` that names it; see
+    :func:`_find_quality_group` for why that is evidence and not a filter.
+    """
+    import h5py
+
+    with h5py.File(str(path), "r") as handle:
+        grid = _grid_from_where(handle["where"])
+        _dataset, data = _find_data_group(handle, quantity)
+        found = _find_quality_group(data, task)
+        if found is None:
+            return None
+        group, found_task = found
+        row0 = max(0, min(window.row0, grid.ny))
+        row1 = max(row0, min(window.row1, grid.ny))
+        col0 = max(0, min(window.col0, grid.nx))
+        col1 = max(col0, min(window.col1, grid.nx))
+        # `read_direct` into a float32 destination, not `np.asarray(dset[...])`:
+        # the quality dataset is float64 on disk, so a plain read allocates
+        # 134 MB for the full composite and then another 67 MB converting it.
+        # h5py converts chunk by chunk into the destination instead, which is
+        # what keeps this off the node's peak (#696 review follow-up).
+        dset = group["data"]
+        raw = np.empty((row1 - row0, col1 - col0), dtype=np.float32)
+        if raw.size:
+            dset.read_direct(raw, source_sel=np.s_[row0:row1, col0:col1])
+        what = group.get("what")
+        gain = float(_attr(what, "gain") or 1.0) if what is not None else 1.0
+        offset = float(_attr(what, "offset") or 0.0) if what is not None else 0.0
+        nodata = _attr(what, "nodata") if what is not None else None
+
+    missing = np.isclose(raw, float(nodata)) if nodata is not None else None
+    # In place: `offset + gain * raw` would allocate a second full-grid array.
+    if gain != 1.0:
+        raw *= gain
+    if offset:
+        raw += offset
+    if missing is not None:
+        raw[missing] = np.nan
+    return raw, found_task
 
 
 def read_window(

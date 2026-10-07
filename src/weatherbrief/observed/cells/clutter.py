@@ -72,18 +72,16 @@ import numpy as np
 from scipy import ndimage
 
 from ..frames import GridFrame
+from .catalogue import r
 from .detect import TierDetection
+# The levels and `suspect()` are a leaf module: they are the wire contract
+# between this analysis and the droplet that reads it, so neither side owns
+# them (#696 review; `levels.py` records what that did and did not buy).
+from .levels import CLEAR, CONFIRMED, FLAGGED, SUSPECT, suspect  # noqa: F401
 from .policy import ClutterPolicy
 
 _S8 = np.ones((3, 3), dtype=bool)
 _S4 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
-
-#: Levels, weakest first.  ``clear`` is "no evidence of clutter", **not**
-#: "this is weather" — most cells are clear because nothing was measured
-#: against them.
-CLEAR = "clear"
-SUSPECT = "suspect"
-CONFIRMED = "confirmed"
 
 #: Features are rounded to this many decimals **before** they are scored, not
 #: on the way to the wire.  The lightning amend (#666) re-scores a published
@@ -106,8 +104,6 @@ class CellEvidence:
     features: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
-        from .catalogue import r
-
         out = {
             "level": self.level,
             "score": r(self.score, 1),
@@ -209,6 +205,10 @@ def rain_margin(
         out.append({
             "ring_rain": ring_rain,
             "ring_px": n_ring,
+            # Recorded, never scored: the diagnostic for the `min_ring_px`
+            # gate — how much of this ring the radar could actually see —
+            # which is what lets a later evaluation tell a missing
+            # measurement from a genuinely bare one (#696 review).
             "ring_covered_frac": float(n_ring / max(int(ring.sum()), 1)),
             "rain_ratio": ratio,
         })
@@ -511,8 +511,6 @@ def round_features(features: dict) -> dict:
     See ``FEATURE_DIGITS``.  ``None`` stays ``None`` (unknown), and a
     non-finite value becomes ``None`` rather than reaching JSON.
     """
-    from .catalogue import r
-
     return {k: (r(v, FEATURE_DIGITS) if isinstance(v, float) else v)
             for k, v in features.items()}
 
@@ -536,15 +534,3 @@ def rescore(cell: dict, policy: ClutterPolicy) -> dict | None:
         top_fl=cell.get("top_fl"),
     )
     return evidence.as_dict()
-
-
-def suspect(cell: dict) -> bool:
-    """Whether a catalogue or display cell carries clutter suspicion.
-
-    One reader for every consumer — the droplet's storm and band filters, the
-    review map and the evaluation CLI — so "what counts as suspect" cannot
-    drift between them.  A cell from before #696 has no ``clutter`` block and
-    is never suspect.
-    """
-    level = (cell.get("clutter") or {}).get("level")
-    return level in (SUSPECT, CONFIRMED)
