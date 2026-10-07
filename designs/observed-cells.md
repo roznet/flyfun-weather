@@ -368,10 +368,14 @@ evidence, not proof — diurnal orographic convection also fires in the same pla
 on consecutive days — so the report prints, beside each site, whether lightning
 was *ever* seen there and which hours it covers. A clutter site shows neither.
 
-Measured over 2026-10-03 (daytime) pooled with the 10-06/07 night: 8 sites on
-≥ 2 days carrying 151 of 629 flags, **none with a single flash**, including the
-reference Somme site (hours 00 and 23 only — the nocturnal signature) and a
-Norwegian fjord at a median 64.5 dBZ across 3 days and both day and night.
+Measured over 144 frames on four dates — 2026-10-03/04 daytime pooled with the
+10-06/07 night: **1.83 % / 2.55 % flagged, 0 of 4,191 corroborated cores lost,
+21 sites on ≥ 2 days carrying 495 of 1,551 flags and not one with a single
+flash** (meteorology-decisions §42 has the table).
+
+The first run of this harness on a day the thresholds had not seen is also what
+caught the sentinel leak below — which is the argument for the gates: a
+regime-change check that only prints a table gets skimmed.
 
 ## Display file and push (#656)
 
@@ -656,6 +660,15 @@ motion variant the map shows (#662).  Every one is in `policy.py`.
 - A frame whose own LI landed in time but whose predecessor's did not (LI
   out of order) is never amended, so a `null` history entry can survive
   there; `d_flashes` is then `null`, never wrong.
+- **A neighbourhood filter's NaN sentinel is not a reflectivity.** `_finite`
+  substitutes −999 so a NaN can never win a maximum, but a *median* over a
+  window that is majority-NaN returns the sentinel itself. That leaked twice:
+  into `onset_db` (fixed with `onset_floor_dbz` — differencing against it gave
+  1,063 dB onsets) and into `robust_peak_dbz`, where one core in 60,973 on the
+  10-03/04 replay — a 2-pixel-wide filament — recorded −999 and earned a point
+  from a 1,044 dB `robust_drop`. Both now read as *unknown*. Any new
+  neighbourhood feature must decide explicitly what a mostly-empty window
+  means before it is scored.
 - A suppressed core (#696) still leaves its own bare `rain20` outline: the
   outlines are traced from the tier masks and cannot be filtered per cell, so
   the ribbon can keep a floor-intensity rain band where the storm row went

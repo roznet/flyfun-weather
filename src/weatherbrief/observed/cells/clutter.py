@@ -120,9 +120,17 @@ class CellEvidence:
         return out
 
 
+#: Stand-in for NaN inside the neighbourhood filters, far below any
+#: reflectivity so it can never win a maximum.  Anything at or under
+#: ``_SENTINEL_FLOOR`` after a filter came from the sentinel rather than from
+#: the radar and must not be read as a measurement.
+_SENTINEL = -999.0
+_SENTINEL_FLOOR = -900.0
+
+
 def _finite(values: np.ndarray) -> np.ndarray:
     """``values`` with NaN replaced by a sentinel far below any dBZ."""
-    return np.where(np.isfinite(values), values, -999.0).astype(np.float32)
+    return np.where(np.isfinite(values), values, _SENTINEL).astype(np.float32)
 
 
 def _crop(det: TierDetection, cell, pad: int) -> tuple[slice, slice]:
@@ -244,7 +252,7 @@ def onset_db(det: TierDetection, frame: GridFrame, earlier: GridFrame | None,
     return out
 
 
-def robust_peaks(det: TierDetection, frame: GridFrame, policy: ClutterPolicy) -> list[float]:
+def robust_peaks(det: TierDetection, frame: GridFrame, policy: ClutterPolicy) -> list[float | None]:
     """Per cell: the peak of a ``median_px`` median-filtered field.
 
     ``peak_dbz`` is one pixel out of the whole composite, and CIRRUS is a
@@ -256,12 +264,19 @@ def robust_peaks(det: TierDetection, frame: GridFrame, policy: ClutterPolicy) ->
     """
     values = np.asarray(frame.values)
     pad = policy.median_px // 2 + 1
-    out: list[float] = []
+    out: list[float | None] = []
     for cell in det.cells:
         sr, sc = _crop(det, cell, pad)
         own = det.labels[sr, sc] == cell.label
         median = ndimage.median_filter(_finite(values[sr, sc]), size=policy.median_px)
-        out.append(float(median[own].max()))
+        # A window where most neighbours are NaN medians to the sentinel, not
+        # to a reflectivity.  One core in 60,973 on the 2026-10-03/04 replay —
+        # a 2-pixel-wide filament — had that at *every* one of its pixels, and
+        # wrote `robust_peak_dbz: -999` into its catalogue and a +1 from a
+        # 1044 dB `robust_drop`.  Such a cell has no robust peak: report it
+        # unknown, which costs it the corroborator rather than inventing one.
+        usable = median[own] > _SENTINEL_FLOOR
+        out.append(float(median[own][usable].max()) if usable.any() else None)
     return out
 
 
@@ -294,7 +309,7 @@ def continuity(det: TierDetection, frame: GridFrame, policy: ClutterPolicy) -> l
                     continue
                 shifted = np.roll(np.roll(filled, dr, axis=0), dc, axis=1)
                 count += ((np.abs(shifted - filled) <= policy.gabella_db)
-                          & finite & (shifted > -900.0)).astype(np.int16)
+                          & finite & (shifted > _SENTINEL_FLOOR)).astype(np.int16)
         own = det.labels[sr, sc] == cell.label
         out.append(float((count[own] >= policy.gabella_min_neighbours).mean()))
     return out
@@ -477,7 +492,7 @@ def assess(
             **margins[k],
             "onset_db": onsets[k],
             "robust_peak_dbz": robust[k],
-            "robust_drop": float(cell.peak_dbz) - robust[k],
+            "robust_drop": None if robust[k] is None else float(cell.peak_dbz) - robust[k],
             "continuity": conts[k],
             "area_perimeter": aps[k],
             **quals[k],
