@@ -522,10 +522,30 @@ were ICAO codes. Unfiltered, the binding rule saw two "ICAOs" in "LEMI
 reporting LIFR" and skipped the clause — the exact misattribution it exists to
 catch. `_NOT_ICAO` holds the colliding weather codes.
 
-Accepted limits: a clause naming two airports is not bound (ambiguous
-attribution), and a clause hedged with "no"/"better" is skipped (the rule
-cannot read a negation). Both let a wrong line through rather than reject a
-right one; the replay set and the review log are the backstop.
+**Accepted limits**, all deliberate — each lets a wrong line through rather
+than reject a right one, and the review log is the backstop:
+
+- A clause naming **two** airports is not bound (ambiguous attribution).
+- A clause hedged with "no" / "better" is skipped: the rule cannot read a
+  negation.
+- A clause naming a **SIGMET** is skipped, because a SIGMET describes a region
+  and names an aerodrome only as its edge. Measured: "embedded thunderstorms
+  from 235 NM to destination (LEMI)" is accurate — the span ends at LEMI,
+  LEMI itself is VFR — and the rule rejected it until `sigmet` joined the
+  hedges. (The tokeniser had to be fixed with it: `_words` keeps `:` so a time
+  stays one token, which made `SIGMETs:` tokenise as `sigmets:` and never
+  match. Edges are stripped now.)
+- The **figure rule counts numbers in the facts' keys**, not only their values,
+  so `10` is always allowed via `rain_within_10_NM_either_side` and
+  `within_10_NM_of_track`. Deliberate: 10 NM and 30 NM are real thresholds in
+  this system that the model may legitimately cite, and excluding keys rejected
+  correct output.
+- The **lightning gate** reads the whole facts blob, so any `TS` in it
+  licenses the word *somewhere*. Narrowed as far as is cheap: a clause that
+  says thunderstorm about a **position** rather than an aerodrome, with no
+  cell carrying `lightning_flashes` and no TS SIGMET, is rejected — a
+  station's TSRA does not make the core at 180 NM a thunderstorm, and rule 3
+  cannot catch it because there is no ICAO in the clause to bind to.
 
 ### Retries on a rejection
 
@@ -562,6 +582,24 @@ phrasing and the block feeding it. A rejection keeps the rejected text too, so
 a false rejection is visible rather than silent. Listed in `LIVE_FILES`, so a
 flight delete takes it with the layer.
 
+**Size.** One full record is ~1.8 kB (the facts block is most of it); a
+`skipped_rejected` marker is 155 B. After the cost gate and the retry cap a
+flight generates roughly one record per facts state — ~6 for a 1.5 h flight,
+~10 for 3.5 h — so **11–18 kB per flight**, or 25–40 kB in the worst case where
+every state is rejected twice and the rest of the window logs markers. Nothing
+prunes it: it is **kept until the flight is deleted**, which `remove_live`
+does. At these sizes a cap would be more machinery than it saves; revisit if
+the facts block grows or the window lengthens.
+
+**Measured rejection rate: 2 of 120 generations (1.7%)** across 8 facts shapes,
+and both were correct catches — "proceed with caution" (a verdict) and "LFMC
+now shows thunderstorm activity" when LFMC reports TCU. No false positives in
+that run. Getting there took three fixes, each found by measuring rather than
+reasoning: the figure rule's span arithmetic (prompt), the 41-word overruns
+(the prompt now states the 40-word hard limit and says to drop the least
+important item rather than shorten every clause), and the SIGMET-edge false
+positive above.
+
 ### Operational
 
 - **Needs #695 deployed.** The facts come from `glance` + `ribbon`; on a
@@ -583,6 +621,11 @@ flight delete takes it with the layer.
 - Prompt, facts block and check live in `tasks/live_highlight.py` — the code
   the tick runs. `scripts/live_highlight_experiment.py` imports them, so the
   replay harness cannot drift from production.
+- **Client parity**: `LiveGlance.highlight` exists on the Python model only.
+  Swift and the web ignore unknown keys and the field is intentionally
+  undisplayed, so there is no decode risk today. When a client starts showing
+  it, run `/sync-ios-web` and add the field to `web/ts/types` and
+  `Models/API/LiveGlance.swift` as optional.
 - Prompt caching and streaming are both no-ops here and deliberately absent:
   the request is ~1.4 k tokens against Haiku 4.5's 4096-token minimum cacheable
   prefix, and the client gets the text as one JSON field.

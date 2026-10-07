@@ -70,6 +70,8 @@ You get FACTS about one flight at one moment: where the flight is, the departure
 
 Write a highlight of at most two short sentences, 25 words in total at most, that tells the pilot what deserves their attention along the route ahead, most important first. Do not repeat the route or the airports' names as a title.
 
+40 words is a hard limit: a longer highlight is discarded and the pilot sees nothing. When the facts hold more than fits, leave the least important item out entirely rather than shortening every clause — one item said properly beats three said in fragments.
+
 What leads, in this order:
 1. Hazards on the track ahead: an active SIGMET covering the route (always mention it, with where it covers), cells within 10 NM of the track (lightning and closing ones first), rain lying over the track.
 2. The destination or an alternate that is non-VFR or getting worse, at the time the flight gets there.
@@ -94,10 +96,14 @@ Rules:
 def highlight_enabled() -> bool:
     """Generation is on unless switched off, and dark without a key.
 
-    Mirrors ``DISABLE_LIVE_LAYER``: the kill switch is the thing you set, so a
-    deploy that forgets a variable degrades to no highlight rather than to an
-    unbilled surprise. No key is not an error — it is how a dev worktree and
-    the test suite run the whole tick without calling anything.
+    Mirrors ``DISABLE_LIVE_LAYER``: the kill switch is the thing you set. Note
+    what that means for a deploy — **on is the default**, so an environment
+    that means to run without the highlight and forgets
+    ``DISABLE_LIVE_HIGHLIGHT`` generates and is billed for it. The safe
+    direction is the key: no ``ANTHROPIC_API_KEY`` and nothing is called, which
+    is how a dev worktree and the test suite run the whole tick for free
+    (``conftest`` deletes the key so a developer's shell cannot bill the
+    suite).
     """
     if os.environ.get("DISABLE_LIVE_HIGHLIGHT", "").strip() in ("1", "true", "yes"):
         return False
@@ -452,12 +458,19 @@ AIRPORT_CONDITIONS: dict[str, frozenset[str]] = {
     "visibility": frozenset({"visibility", "vis"}),
 }
 
-#: A clause carrying one of these is making a negative or comparative claim
-#: ("no cell near LFMD", "LFMD better than briefed"), which the binding rule
-#: cannot read. Skipped rather than guessed at.
+#: A clause carrying one of these is not making a bindable claim about an
+#: aerodrome's own conditions, so the place-binding rule skips it rather than
+#: guess:
+#:
+#: - a negative or comparative ("no cell near LFMD", "LFMD better than
+#:   briefed") — the rule cannot read a negation;
+#: - a **SIGMET**, which describes a region and names an aerodrome only as the
+#:   edge of it. Measured: "embedded thunderstorms from 235 NM to destination
+#:   (LEMI)" is accurate — the span ends at LEMI, LEMI itself is VFR — and the
+#:   rule rejected it until "sigmet" was listed here.
 _HEDGES = frozenset(
     "no none not never without nothing clear quiet improving improved better "
-    "easing clearing lifting".split()
+    "easing clearing lifting sigmet sigmets".split()
 )
 
 #: Four-letter upper-case words that are *not* ICAO codes. Without this,
@@ -482,7 +495,19 @@ def _icaos(text: str) -> set[str]:
 
 
 def _words(text: str) -> list[str]:
-    return [w for w in re.split(r"[^A-Za-z0-9+\-/:]+", text.lower()) if w]
+    """Lower-case tokens, keeping ``:`` *inside* a token but not on its edges.
+
+    The colon has to survive so "09:47z" stays one token and a time is not
+    read as two numbers. Stripping it at the edges matters just as much:
+    without that, "SIGMETs:" tokenises as ``sigmets:`` and never matches the
+    hedge list, which is how a correct SIGMET-span line kept being rejected.
+    """
+    out = []
+    for raw in re.split(r"[^A-Za-z0-9+\-/:]+", text.lower()):
+        w = raw.strip(":")
+        if w:
+            out.append(w)
+    return out
 
 
 def _conditions_in(text: str) -> set[str]:
@@ -572,9 +597,33 @@ def check_grounding(text: str, f: dict) -> str | None:
         return f"verdict word: {', '.join(verdict)}"
 
     if said & AIRPORT_CONDITIONS["thunderstorm"]:
-        lightning = "lightning_flashes" in blob or re.search(r"\bTS\b|TSRA|VCTS", blob)
-        if not lightning:
+        # Two sources can license the word, and they license different claims
+        # (§41: a radar core is a "cell"; only observed electrification or a
+        # TS hazard earns "thunderstorm").
+        observed = "lightning_flashes" in blob or bool(re.search(r"\bTS\b|TSRA|VCTS|TSGR", blob))
+        if not observed:
             return "says thunderstorm without lightning in the facts"
+        # An *airport* reporting TSRA does not make the cell at 180 NM a
+        # thunderstorm. A clause that says thunderstorm about a position
+        # rather than an aerodrome needs the cells or a SIGMET to carry it —
+        # otherwise the station's TS has been moved onto a radar core, which
+        # the place-binding rule below cannot see because there is no ICAO in
+        # the clause to bind to.
+        from_cells = "lightning_flashes" in blob
+        from_sigmet = any(
+            re.search(r"\bTS\b|TSRA|TSGR", str(s.get("what") or ""))
+            for s in (f.get("sigmets_ahead") or [])
+            if isinstance(s, dict)
+        )
+        if not (from_cells or from_sigmet):
+            for clause in _CLAUSE_RE.split(text):
+                words_here = set(_words(clause))
+                if not (words_here & AIRPORT_CONDITIONS["thunderstorm"]):
+                    continue
+                if _icaos(clause):
+                    continue  # about an aerodrome: rule 3 binds it
+                if _NUM_RE.search(clause):
+                    return "says thunderstorm at a position, but only a station reports TS"
 
     for clause in _CLAUSE_RE.split(text):
         icaos = _icaos(clause)
