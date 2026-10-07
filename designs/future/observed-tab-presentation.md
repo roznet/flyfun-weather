@@ -13,7 +13,13 @@ tick, on `/live` and the agent `live` block (`tasks/live_glance.py`, as-built no
 nutshell, the ribbon as a symbolic map (rain/core bands from the cells feed's
 outlines, airports either side, motion arrows), tap-to-map, storm sheet; pilot text
 says "cell". The Layer 3 cells list still uses the client-side
-`CellsOverlay.routeStorms`.
+`CellsOverlay.routeStorms`. Slice 4's web half landed next (#699): the same
+nutshell and ribbon as two sections at the head of the briefing page's
+Observations group, in the iOS reading order, with tap-to-map and the cell
+detail. The ribbon's rules were extracted into a mirrored pure pair
+(`ribbon-core.ts` ↔ `RouteRibbonRules.swift`) with tests that assert the same
+strings on both sides — as-built notes and the two deliberate palette
+divergences are in `live-observation-layer.md`.
 Slice 5 server half (#697) landed 2026-10-07: the Haiku-written highlight is
 generated after each tick commits and stored on `glance.highlight`, with a
 grounding check and a per-flight review log — **written but displayed nowhere**
@@ -21,8 +27,8 @@ grounding check and a per-flight review log — **written but displayed nowhere*
 to calibrate the prompt before any client shows it, which also makes the #696
 dependency moot for now). As-built in `live-observation-layer.md`. It needs
 #695 deployed to produce anything: the facts come from `glance` + `ribbon`.
-Next: review the logged highlights, then the iOS "Details" fold and the web
-slice. Web not started. Builds on `designs/live-observation-layer.md`.
+Next: review the logged highlights, then the "Details" fold — the highlight now
+has a place to go on both clients. Builds on `designs/live-observation-layer.md`.
 
 ## 1. Premise
 
@@ -167,7 +173,8 @@ Screens at 14:29Z against the data:
    estimates logged; `score-estimates` in the live-review skill. Built: `LiveLayer.storms` (§4's
    `storms[]` minus `focus`; names as in `models/live.py::LiveStorm`), storm rows (meteorology §41).
 3. **Server `glance` + `ribbon` + `focus`**, and the agent `live` block uses `glance` (#690).
-4. **iOS**: nutshell, ribbon, tap-to-map, storm detail pop-up with the estimate. Then
-   web.
+4. **iOS**: nutshell, ribbon, tap-to-map, storm detail pop-up with the estimate (#695).
+   Then web: the same, as `observed-glance` + `observed-ribbon` sections over a
+   shared pure rules module.
 5. **Promote the estimate** out of the pop-up only when §6 shows skill at that
    horizon.

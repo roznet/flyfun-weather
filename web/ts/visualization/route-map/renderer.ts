@@ -247,6 +247,35 @@ export class RouteMapRenderer {
     }
   }
 
+  /** Frame the map on a `LiveFocus` bbox (#690 tap-to-map): the pilot tapped
+   *  a cell, a SIGMET, an airport or a stretch of route on the Observed
+   *  ribbon and expects the map to open on it.
+   *
+   *  `bbox` is `[min_lon, min_lat, max_lon, max_lat]`, as the server's
+   *  `LiveFocus` carries it. A degenerate box (a single cell) still gets a
+   *  usable view: Leaflet would zoom to maximum on a zero-area bounds, so it
+   *  is padded to a minimum span first and capped at `maxZoom`.
+   *
+   *  Switching the named layers on is the caller's job (they own the view
+   *  settings); this only moves the map. */
+  focusBbox(bbox: [number, number, number, number], maxZoom = 9): void {
+    if (!this.map) return;
+    const [minLon, minLat, maxLon, maxLat] = bbox;
+    if (![minLon, minLat, maxLon, maxLat].every((v) => Number.isFinite(v))) return;
+    if (maxLon < minLon || maxLat < minLat) return;
+    // ~0.15° (roughly 9 NM of latitude): a single cell's box is a point, and
+    // a point bounds reads as "zoom in as far as the tiles go".
+    const padLat = Math.max((0.15 - (maxLat - minLat)) / 2, 0);
+    const padLon = Math.max((0.15 - (maxLon - minLon)) / 2, 0);
+    this.map.fitBounds(
+      L.latLngBounds(
+        [minLat - padLat, minLon - padLon],
+        [maxLat + padLat, maxLon + padLon],
+      ),
+      { padding: [30, 30], maxZoom },
+    );
+  }
+
   /** Highlight a segment by point index (for hover sync from other panels). */
   highlightSegment(index: number): void {
     if (!this.map || !this.data) return;

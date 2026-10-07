@@ -1075,6 +1075,257 @@ export interface LiveChanges {
   alert_count: number;
 }
 
+// ===========================================================================
+// SYNC — mirrors src/weatherbrief/models/live.py (#688 storms, #690 glance /
+// ribbon / focus) and app/.../Models/API/LiveGlance.swift.
+//
+// Built on the server once per live tick (`tasks/live_glance.py`) and served
+// on `GET /flights/{id}/live`, so web, iOS and the agent `live` block show the
+// same text. Clients render; they don't derive. These blocks are NOT folded
+// into the snapshot (`overlay_live` leaves them out), so they are only ever
+// read off `state.live`.
+//
+// Fields the server may add later are optional and the enums are widened with
+// `(string & {})` nowhere — an unknown value simply falls through the client's
+// `switch` to its default branch rather than breaking the render.
+// ===========================================================================
+
+/** Where the map opens when an item is tapped (#690 tap-to-map contract). */
+export interface LiveFocus {
+  kind: 'storm' | 'sigmet' | 'station' | 'segment';
+  /** storm: lineage id; sigmet: "sigmet:LECM|6"; station: ICAO; segment: "seg:<n>". */
+  id: string;
+  /** [min_lon, min_lat, max_lon, max_lat]. */
+  bbox: [number, number, number, number];
+  /** Any of route, radar, cells, lightning, sigmets, metar. */
+  layers: string[];
+  /** The frame to show; null = now. */
+  time?: string | null;
+}
+
+/** A storm's observed off-track position at one earlier frame. */
+export interface StormTrackPoint {
+  at: string;
+  offtrack_nm: number;
+  /** Signed: + right of track, − left (facing the direction of flight). */
+  cross_nm: number;
+}
+
+/** Closest approach to the planned 4-D track at current motion (#688
+ *  addendum). A projection, not an observation: shown only in a storm's
+ *  detail, labelled "Estimate at current motion", never in the nutshell, the
+ *  ribbon or an alert until the scoring shows skill at that horizon. */
+export interface StormEstimate {
+  cpa_nm: number;
+  cpa_time: string;
+  at_eta_offtrack_nm?: number | null;
+  /** cpa_time − frame time, minutes. */
+  horizon_min: number;
+}
+
+/** One radar storm against the route (#688): a core35 cell with the core41s
+ *  inside it, or a core41 on its own. Everything but `estimate` is an
+ *  observation of the newest cell frame. */
+export interface LiveStorm {
+  id: string;
+  cell_ids: string[];
+  lat: number;
+  lon: number;
+  peak_dbz: number;
+  /** "heavy" / "very heavy" / "extreme" (the VIP ladder, §33); null below heavy. */
+  intensity?: string | null;
+  flashes?: number | null;
+  flashes_pending?: boolean;
+  top_fl?: number | null;
+  truncated?: boolean;
+  trend?: string | null;
+  d_peak_db?: number | null;
+  area_ratio?: number | null;
+  d_flashes?: number | null;
+  motion_status?: string | null;
+  speed_kt?: number | null;
+  toward_deg?: number | null;
+  along_nm: number;
+  offtrack_nm: number;
+  cross_nm: number;
+  side?: 'left' | 'right' | null;
+  /** Before the route's first point / past its last: say where from the
+   *  airport, not left/right of track. */
+  end?: 'departure' | 'destination' | null;
+  end_icao?: string | null;
+  end_bearing?: string | null;
+  abeam_eta?: string | null;
+  minutes_to_abeam?: number | null;
+  ahead?: boolean;
+  relative_motion?: 'closing' | 'moving_away' | 'parallel' | 'stationary' | 'unknown';
+  closing_kt?: number | null;
+  history?: StormTrackPoint[];
+  /** En-route stations whose CB/TCU/TS report backs this storm ("LFMT CB"). */
+  backing?: string[];
+  estimate?: StormEstimate | null;
+  focus?: LiveFocus | null;
+}
+
+/** The radar storms near the route at the newest cell frame (#688). `status`
+ *  is never silently "nothing": a dark feed says so. */
+export interface LiveStorms {
+  status: 'available' | 'stale' | 'disabled' | 'unavailable';
+  frame_time?: string | null;
+  unavailable_since?: string | null;
+  lightning_pending?: boolean;
+  corridor_nm: number;
+  route_nm?: number | null;
+  storms: LiveStorm[];
+  policy_version?: string | null;
+}
+
+/** One nutshell line (#690): one phase of the flight in one sentence of
+ *  " · "-separated clauses. Server-built; observations only. */
+export interface LiveGlanceLine {
+  phase: 'departure' | 'enroute' | 'arrival';
+  /** The airport the line is about; null en route. */
+  icao?: string | null;
+  text: string;
+  /** An alert-tier change row belongs to this phase. Styling hint only. */
+  alert?: boolean;
+  /** The phase is behind the flight at plan — clients may dim the line. */
+  passed?: boolean;
+  /** Sources this line could not read ("metar", "taf", "storms", …). */
+  unavailable?: string[];
+  /** What the line summarises: "metar:LPPR", "storm:<id>", "sigmet:LECM|6". */
+  sources?: string[];
+  focus?: LiveFocus | null;
+}
+
+/** The Observed section's top block (#690): one "as of", one comparison line,
+ *  then one line per phase. */
+export interface LiveGlance {
+  as_of: string;
+  /** "Observed 14:29Z · as briefed". */
+  headline: string;
+  comparison: 'as_briefed' | 'worse' | 'better' | 'mixed' | 'unavailable';
+  lines: LiveGlanceLine[];
+}
+
+export interface RibbonWaypoint {
+  icao: string;
+  along_nm: number;
+  eta?: string | null;
+}
+
+/** One stretch of the route on the ribbon, lanes already binned. Named
+ *  `LiveRibbonSegment` because `RibbonSegment` is the cross-section's verdict
+ *  ribbon (`visualization/types.ts`) — as on iOS. */
+export interface LiveRibbonSegment {
+  index: number;
+  from_nm: number;
+  to_nm: number;
+  eta_from?: string | null;
+  eta_to?: string | null;
+  radar_max_dbz?: number | null;
+  radar_intensity?: string | null;
+  /** "measured" (null dBZ = nothing detected), "no_coverage" (the radar could
+   *  not see enough of it) or "no_sample" (no observed point / no field). */
+  radar_status?: 'measured' | 'no_coverage' | 'no_sample';
+  lightning?: boolean | null;
+  sigmet_ids?: string[];
+  storm_ids?: string[];
+  focus?: LiveFocus | null;
+}
+
+/** An airport on the station lane: METAR now, TAF at its ETA. */
+export interface RibbonStation {
+  icao: string;
+  role: 'departure' | 'destination' | 'alternate' | 'route';
+  along_nm?: number | null;
+  /** Signed: + right of track, − left (null without a position). */
+  cross_nm?: number | null;
+  eta?: string | null;
+  metar_category?: string | null;
+  metar_time?: string | null;
+  /** CB / TCU / TS in the observed part of the METAR. */
+  convective?: string[];
+  taf_category_at_eta?: string | null;
+  /** PROB30 / TEMPO / … and its category, when worse than prevailing. */
+  taf_temporary_type?: string | null;
+  taf_temporary_category?: string | null;
+  taf_weather?: string[];
+  focus?: LiveFocus | null;
+}
+
+/** A route SIGMET on the SIGMET band. */
+export interface RibbonSigmet {
+  id: string;
+  /** "LECM 6: EMBD TS". */
+  label: string;
+  hazard?: string | null;
+  qualifier?: string | null;
+  from_nm?: number | null;
+  to_nm?: number | null;
+  /** Closest distance to the route when it does not cross it. */
+  min_distance_nm?: number | null;
+  valid_from?: string | null;
+  valid_to?: string | null;
+  pending?: boolean;
+  /** New to the flight; null when not known. */
+  new?: boolean | null;
+  motion?: 'toward' | 'away' | 'parallel' | 'stationary' | 'unknown';
+  focus?: LiveFocus | null;
+}
+
+/** One rain area or convective core beside the route, from the cells feed's
+ *  outlines (`observed/route_bands.py`) — the symbolic map's bands. */
+export interface RibbonWeather {
+  id: string;
+  /** rain: the rain20 outline (≥ 20 dBZ); core: a core35 outline (≥ 35 dBZ). */
+  tier: 'rain' | 'core';
+  from_nm: number;
+  to_nm: number;
+  /** "both" when the area lies across the track. */
+  side: 'left' | 'right' | 'both';
+  /** Off-track distance of its nearest / farthest edge (capped at the
+   *  corridor); near is 0 across the track. */
+  near_nm: number;
+  far_nm: number;
+  /** Per `weather_bin_nm` of route: [along_nm (bin centre), cross_lo, cross_hi]
+   *  — the signed off-track range the outline covers there (− left, + right). */
+  profile?: [number, number, number][];
+  peak_dbz?: number | null;
+  intensity?: string | null;
+  flashes?: number | null;
+  /** Motion relative to the course, degrees: 0 along it, +90 toward the right
+   *  of track, −90 toward the left, ±180 back down it. */
+  motion_rel_deg?: number | null;
+  speed_kt?: number | null;
+  /** The storm (`LiveStorms.storms`) this core is, for its detail. */
+  storm_id?: string | null;
+}
+
+/** The route ribbon (#690, observed-tab-presentation §3 layer 1): x = distance
+ *  along the route with ETAs, y = left/right of track.
+ *
+ *  The storm lane is `LiveStorms` itself, not copied here. `weather` holds the
+ *  symbolic map's rain/core bands; when `weather_status` is not "available"
+ *  clients fall back to the radar `segments`. */
+export interface LiveRibbon {
+  route_nm: number;
+  /** Planned position now (on-time departure, constant speed); null untimed. */
+  flown_nm?: number | null;
+  departure_at?: string | null;
+  arrival_at?: string | null;
+  segment_nm: number;
+  radar_radius_nm: number;
+  radar_time?: string | null;
+  waypoints?: RibbonWaypoint[];
+  segments?: LiveRibbonSegment[];
+  stations?: RibbonStation[];
+  sigmets?: RibbonSigmet[];
+  weather?: RibbonWeather[];
+  weather_status?: string | null;
+  weather_corridor_nm?: number | null;
+  weather_bin_nm?: number | null;
+}
+
 /** GET /flights/{id}/live — the latest pack's live overlay. */
 export interface LiveLayer {
   flight_id: string;
@@ -1088,6 +1339,13 @@ export interface LiveLayer {
   sigmets_updated_at: string | null;
   observed_conditions: ObservedConditions | null;
   observed_updated_at: string | null;
+  /** Radar storms against the route (#688) and the Observed section's
+   *  nutshell + route ribbon (#690). Only ever on this response — the
+   *  snapshot overlay (`overlay_live`) does not carry them, so a client that
+   *  reads the snapshot alone sees none of this. */
+  storms?: LiveStorms | null;
+  glance?: LiveGlance | null;
+  ribbon?: LiveRibbon | null;
   changes: LiveChanges | null;
   last_refresh_delta: RefreshDelta | null;
 }

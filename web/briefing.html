@@ -176,10 +176,30 @@
       </div>
     </div>
 
+    <!-- Flight-day nutshell (#690): the server's one line per phase plus the
+         comparison with the briefing. Hidden unless the live layer carries a
+         glance (only built inside the live window). -->
+    <div id="observed-glance-wrapper" class="section collapsible" data-section="observed-glance" style="display: none;">
+      <h3>At a glance</h3>
+      <div class="section-body">
+        <div id="observed-glance-section"></div>
+      </div>
+    </div>
+
+    <!-- Route ribbon (#690): a symbolic map of the route — rain and cells at
+         their distance off track, airports either side, SIGMETs across the
+         top. Hidden unless the live layer carries a ribbon. -->
+    <div id="observed-ribbon-wrapper" class="section collapsible" data-section="observed-ribbon" style="display: none;">
+      <h3>Along the route</h3>
+      <div class="section-body">
+        <div id="observed-ribbon-section"></div>
+      </div>
+    </div>
+
     <!-- Observed conditions along the route (#574) — radar, lightning,
          satellite cloud tops. Hidden unless the pack carries them. -->
     <div id="observed-wrapper" class="section collapsible" data-section="observed" style="display: none;">
-      <h3>Observed Now</h3>
+      <h3>Radar &amp; lightning now</h3>
       <div class="section-body">
         <div id="observed-section">
           <p class="muted">Loading...</p>

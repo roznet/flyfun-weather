@@ -333,8 +333,8 @@ not at the airport itself.
 
 ## Observed tab: glance, ribbon, focus (#690)
 
-Plan in `designs/future/observed-tab-presentation.md` §3–5. Server and iOS
-landed (PR #695); web is still to do. `tasks/live_glance.py::build_glance` runs in `commit_live_update` right
+Plan in `designs/future/observed-tab-presentation.md` §3–5. Server, iOS (PR
+#695) and web all landed. `tasks/live_glance.py::build_glance` runs in `commit_live_update` right
 after the classifier and stores `LiveLayer.glance` / `LiveLayer.ribbon`, and
 sets `LiveStorm.focus` on every storm. Served on `/live` and in the iOS UI-test
 fixtures; not in the snapshot overlay or the history. Never raises: a failure
@@ -417,9 +417,52 @@ logs `Live glance failed` and leaves both null for that tick.
   `RouteMapKitView`, which frames it once per key. The map draws no SIGMET
   polygons yet, so a SIGMET focus only frames its area; `metar` layers and the
   focus `time` are ignored too (newest frame). The applied focus is cleared
-  (`onFocusApplied`) so a recreated map never re-frames a stale one. The web
-  slice should implement the full contract, not copy iOS's subset.
-- **Web**: not done yet.
+  (`onFocusApplied`) so a recreated map never re-frames a stale one.
+- **Web**: two new collapsible sections, `observed-glance` ("At a glance") and
+  `observed-ribbon` ("Along the route"), first in the sidebar's Observations
+  group so the page reads in the iOS Observed tab's order: glance → ribbon →
+  radar → METAR/TAF → SIGMET (`sidebar-layout.ts::NAV_GROUPS`, order pinned by
+  `briefing-section-order.test.ts`). `ts/visualization/observed/`:
+  `nutshell-view.ts` and `ribbon-view.ts` (an SVG re-laid out on resize, not
+  scaled — the marks are px-sized, as `GeometryReader` gives the SwiftUI side),
+  over the pure `ribbon-core.ts`. Rendered from `state.live` in
+  `renderObservedLive`, on its own subscriber guard: the poll replaces the
+  layer while the pack and snapshot sit unchanged for an hour.
+  Tap-to-map goes through `RouteMapRenderer.focusBbox` (pads a degenerate box
+  and caps `maxZoom`, so one cell does not zoom to the tile limit) after
+  switching to the `split` layout and turning on the focus's layers; a cell
+  opens `stormDetailHtml` in the shared info popup. Like iOS, the web ignores
+  the focus's `time` and draws no SIGMET polygons.
+  - **Gotcha, cost a bug once:** `glance` / `ribbon` / `storms` ride **only**
+    on the `/live` response — `overlay_live` deliberately leaves them off the
+    snapshot. `briefing-store.loadLive` therefore stores the layer even when
+    the snapshot patch is a no-op (same tick, no new trails); the earlier
+    `if (!next) return` dropped it and left both sections permanently empty.
+- **Keeping the two clients in sync.** The rules are one pair, diffed symbol by
+  symbol: `web/ts/visualization/observed/ribbon-core.ts` ↔
+  `app/.../Views/Briefing/RouteRibbonRules.swift`, each with the other's path
+  in its header and a symbol map in the Swift one. Both are pure (no DOM, no
+  View), and `tests/unit/ribbon-core.test.ts` ↔ `RouteRibbonRulesTests.swift`
+  assert the same inputs against the same expected strings — change a rule on
+  one platform and the other platform's test is what tells you. Two
+  divergences are deliberate and documented in both headers: **MVFR is amber on
+  web, blue on iOS** (the web badges MVFR amber in every table, so matching iOS
+  would paint one airport two colours on one page), and the **dBZ hexes** come
+  from the web's own VIP ramp while the *boundaries* (35 / 41 / 50, the cell
+  tiers) are shared exactly. Registered in the `sync-ios-web` skill.
+  `web/tests/unit/observed-live-fixtures.test.ts` renders the **same** exported
+  `/live` ticks the iOS UI test consumes
+  (`flyfun-weatherUITests/LiveScenarios/`, written by
+  `scripts/export_live_scenario_ios.py` and pinned to the server by
+  `test_live_scenarios.py`), so a server-side shape change surfaces as a failing
+  web test rather than an empty section. Those archived ticks have a dark cells
+  feed, so they exercise the radar-strip fallback; the bands path and the
+  interactions are covered by `web/tests/observed-ribbon.spec.ts`.
+  - The web has **no standalone cells list** (iOS's `ObservedCellsSection`):
+    cells live on the route map's Cells toggle and the maps page's "Now" tab,
+    and the ribbon plus the cell detail now cover the route-relative reading.
+    "Since this briefing" also stays a page-level banner on web
+    (`refresh-delta-banner`) rather than a section in the group.
 
 ## Observed highlight (#697) — written, not displayed
 
