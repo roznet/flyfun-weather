@@ -80,15 +80,19 @@ Before acting, post a short triage summary to me: a one-line-per-finding table w
 - Push to the PR branch. Then post a reply comment on the PR summarizing what was fixed and what was deferred (audit trail), so the next review round has context.
 
 **Cosmetic / non-blocking only → recommend merge + fix-on-main.**
+- Label the PR ready for the owner's decision: `python3 scripts/ops/stage_labels.py pr <num> to-land`.
 - Do **not** push to the PR for these — a push would trigger another full review-Action round for no real gain. Tell me they're non-blocking and recommend merging (I prefer `--rebase` for clean history), then folding the cosmetic fixes into a small direct-to-main commit afterward.
 - List the deferred items concretely so they're not lost — offer to either (a) apply them as a direct commit on main after merge, or (b) open a tracking issue.
 
 **Unsure → ask me.**
 - Present the specific finding and ask: fix on the PR, or merge and fix on main? Don't guess when guessing is costlier than the round-trip.
+- Flag it so the PR list shows it: `python3 scripts/ops/stage_labels.py flag <num> question`; `unflag` once I've answered.
 
 **Mixed (blockers + cosmetic)** → you're pushing for the blockers anyway, so **batch in every cosmetic fix worth doing** in the same push (the review round is already paid for). Only skip a cosmetic item if it's genuinely not worth doing at all — not because it's "merely cosmetic." Don't split worthwhile fixes across the PR and main when one push covers both.
 
-**Clean review (no findings)** → confirm CI checks are green (`gh pr checks <num>`), then tell me it's ready and recommend merge (`--rebase`). Don't auto-merge.
+**Clean review (no findings)** → confirm CI checks are green (`gh pr checks <num>`), label it `python3 scripts/ops/stage_labels.py pr <num> to-land`, then tell me it's ready and recommend merge (`--rebase`). Don't auto-merge.
+
+**Stage labels otherwise take care of themselves** (`designs/stage-labels.md`): your push sets the PR `working`, the bot's next review sets it back to `to-review`. Only `to-land` and `question` are yours to set here; never edit stage labels with `gh pr edit`.
 
 ## Notes / guardrails
 

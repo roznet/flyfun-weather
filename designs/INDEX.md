@@ -238,6 +238,11 @@ Key exports: `summarize_advisories`, `summarize_altitude_table`, `advisory_detai
 
 ## Infrastructure & operations
 
+### stage-labels [project]
+GitHub stage labels for the owner's in-flight view: each label is a queue named after the owner's next action and sits where they look for that stage (issue: `to-plan` / `to-start` / `implementing`; PR: `working` / `to-review` / `to-land`; flags `mac` / `question` / `blocked`). All transitions are mechanical (Action on issue/PR events, the review workflow flips `to-review`) or made by the skill at that step (`to-land`, `question`, born-staged follow-up issues). `sync` reconciles from state, `status` prints the view plus inconsistencies.
+Key exports: `scripts/ops/stage_labels.py` (`event`, `sync`, `status`, `issue`, `pr`, `flag`), `.github/workflows/stage-labels.yml`
+→ Full doc: stage-labels.md
+
 ### migrations
 Alembic migration rules for the SQLite-dev / MySQL-prod split: `batch_alter_table` for every ALTER (SQLite has no native ALTER), named constraints so downgrades work, `existing_type` on MySQL column renames, dialect branching via `op.get_bind().dialect.name`, canonical patterns (004 create-table+FK, 014/015 dialect-specific), and a pre-merge checklist. Datetime column *type* choice lives in time-alignment-audit.md.
 → Full doc: migrations.md

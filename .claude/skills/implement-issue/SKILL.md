@@ -67,7 +67,8 @@ Detect, don't assume, and remember the answers for the brief:
    "plumbing".
 5. **Meteorology or a real product choice, attended:** before implementing, give a
    5-line plan (what you'll change, the 1–3 choices that are theirs, your
-   recommendation) and wait. Unattended: implement the conservative option and flag
+   recommendation) and wait; while waiting, `stage_labels.py flag <n> question`, and
+   `unflag` once answered. Unattended: implement the conservative option and flag
    it prominently in the brief.
 
 ## Step 2 — Branch
@@ -85,6 +86,9 @@ Pick by the Step 0 environment:
   on `main/` itself — other sessions share that checkout.
 - Locally, re-check HEAD and branch before every commit (concurrent sessions share
   checkouts).
+- Mark the issue as taken: `python3 scripts/ops/stage_labels.py issue <n> implementing`.
+  The PR-opened Action does this too; doing it at branch time stops a second session
+  starting the same issue (`designs/stage-labels.md`).
 
 ## Step 3 — Implement
 
@@ -149,6 +153,10 @@ Anything you could not run is **unverified** — the brief must say so.
 - `gh pr create` with `Closes #<n>` and a body = short summary of the change + **the
   full Owner's brief below**. The PR is where the user will read it later, so it must
   stand alone there.
+- Stage labels: the Action sets the PR `to-review`, the issue `implementing`, and
+  flags `mac` when `app/` is touched. If the Mac checklist is non-empty for another
+  reason (GRIB or prod-data tests), add it yourself:
+  `python3 scripts/ops/stage_labels.py flag <pr> mac`.
 - Pushing triggers the review bot. **This skill ends when the PR is opened**:
   review and CI handling belong to `/process-review`, run only when the user
   explicitly invokes it. Here, do **not** subscribe to PR activity

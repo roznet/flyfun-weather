@@ -1,0 +1,38 @@
+name: Stage labels
+
+# Keeps the stage labels in step with what GitHub already knows: an issue opened,
+# a PR opened / pushed / drafted / closed, the owner's one-word "ready" comment.
+# The rules live in scripts/ops/stage_labels.py (`event`), not here. The review
+# bot's own workflow flips a PR to `to-review` when it posts. Design:
+# designs/stage-labels.md.
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, synchronize, closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: stage-labels-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ops/stage_labels.py
+          sparse-checkout-cone-mode: false
+      - name: Apply the transition for this event
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/ops/stage_labels.py event
