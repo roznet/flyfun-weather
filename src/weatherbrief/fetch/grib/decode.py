@@ -598,7 +598,16 @@ class _SeamAccumulator:
         plan: list[_SeamPoint],
         ds_grid: "list[int | None]",
         sentinel_keys: "dict | None" = None,
+        fill_held: bool = True,
     ):
+        # ``fill_held=False`` drops the one-sided points (#679): a held value
+        # comes from the facing edge row up to ~42 km away, mostly over sea,
+        # and for surface fields Open-Meteo's ECMWF value is the same model
+        # correctly located. Leaving the point unplanned keeps covered[] False,
+        # which is what makes the consumers fall back to it.
+        self.held_skipped = 0 if fill_held else sum(1 for sp in plan if sp.held)
+        if not fill_held:
+            plan = [sp for sp in plan if not sp.held]
         self.plan = plan
         self.ds_grid = ds_grid
         self.sentinel_keys = sentinel_keys or {}
@@ -672,13 +681,15 @@ class _SeamAccumulator:
         self.log_summary(label, filled)
 
     def log_summary(self, label: str, filled_pts: set[int]) -> None:
-        if not filled_pts:
+        if not filled_pts and not self.held_skipped:
             return
         held = sum(1 for sp in self.plan if sp.held and sp.pt_idx in filled_pts)
         logger.info(
             "%s grid seam: %d point(s) filled across sub-grids (%d interpolated "
-            "across the gap, %d held at the nearest edge row — approximate)",
+            "across the gap, %d held at the nearest edge row — approximate); "
+            "%d one-sided point(s) left to Open-Meteo",
             label, len(filled_pts), len(filled_pts) - held, held,
+            self.held_skipped,
         )
 
 
@@ -3478,12 +3489,16 @@ def _series_seams(
     latitudes: list[float],
     longitudes: list[float],
     sentinel_keys: "dict | None" = None,
+    fill_held: bool = True,
 ) -> _SeamAccumulator | None:
     """Seam plan over the grids of ``series`` (direct decode, #672).
 
     The direct counterpart of ``_seam_setup``: series index plays the dataset
     index, grids are identified by ``_axes_signature``. None when no target
     falls in a seam.
+
+    ``fill_held=False`` serves only the two-sided points and leaves the
+    one-sided ones to Open-Meteo (#679) — see ``_SeamAccumulator``.
     """
     grids: list[tuple] = []
     sigs: dict[tuple, int] = {}
@@ -3495,7 +3510,10 @@ def _series_seams(
             grids.append((s.grid.lats, s.grid.lons))
         s_grid.append(sigs[sig])
     plan = _plan_grid_seams(grids, latitudes, longitudes)
-    return _SeamAccumulator(plan, s_grid, sentinel_keys) if plan else None
+    if not plan:
+        return None
+    acc = _SeamAccumulator(plan, s_grid, sentinel_keys, fill_held=fill_held)
+    return acc if (acc.plan or acc.held_skipped) else None
 
 
 def _add_seam_level(seams: _SeamAccumulator | None, si: int, s: _Series, lev: float, key) -> None:
@@ -3579,7 +3597,12 @@ def _decode_ecmwf_surface_direct(
         return msg.var.lower() in _ECMWF_CLOUD_DIAG_FIELD_MAP
 
     series = _gather_series(file_path, latitudes, longitudes, select, bridge_seams=True)
-    seams = _series_seams(series, latitudes, longitudes, _ecmwf_seam_sentinels())
+    # Surface fields: two-sided seam points only (#679). A held value would
+    # replace Open-Meteo's correctly placed ECMWF surface value with one from
+    # the edge row ~42 km south, so it is not served at all.
+    seams = _series_seams(
+        series, latitudes, longitudes, _ecmwf_seam_sentinels(), fill_held=False,
+    )
     for si, s in enumerate(series):
         # The surface decoder interpolated 2-D fields only: a series with more
         # than one level or step was a 3-D cfgrib variable and yielded nothing.
