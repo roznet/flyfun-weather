@@ -608,10 +608,15 @@ final class flyfun_weatherUITests: XCTestCase {
         let storm = app.descendants(matching: .any)["ribbonStorm-core35-zz"].firstMatch
         XCTAssertTrue(storm.waitForExistence(timeout: Self.uiTimeout), "the storm should be on the ribbon")
         storm.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["stormDetail"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
-                      "tapping a storm should open its detail")
-        XCTAssertTrue(app.staticTexts["Estimate at current motion"].firstMatch.exists
-                      || app.staticTexts["ESTIMATE AT CURRENT MOTION"].firstMatch.exists,
+        let detail = app.descendants(matching: .any)["stormDetail"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: Self.uiTimeout), "tapping a storm should open its detail")
+        // The sheet opens at the medium detent and is a lazy List: the estimate
+        // section below the fold is not built (absent from the a11y tree) until
+        // the sheet is expanded.
+        let estimate = app.staticTexts["Estimate at current motion"].firstMatch
+        let estimateCaps = app.staticTexts["ESTIMATE AT CURRENT MOTION"].firstMatch
+        if !estimate.exists && !estimateCaps.exists { detail.swipeUp() }
+        XCTAssertTrue(estimate.waitForExistence(timeout: Self.uiTimeout) || estimateCaps.exists,
                       "the estimate should sit under its own label")
         attachScreenshot(app, "Observed-StormDetail")
         let showOnMap = app.buttons["stormShowOnMap"].firstMatch
