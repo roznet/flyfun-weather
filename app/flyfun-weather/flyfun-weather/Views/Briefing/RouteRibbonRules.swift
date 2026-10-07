@@ -28,6 +28,8 @@ import SwiftUI
 //   stormPositionText       → stormPositionText
 //   stormMotionText         → stormMotionText
 //   stormMarkSize           → stormMarkSize
+//   stationMarkSize         → stationMarkSize
+//   isEndStation            → isEndStation
 //   arrowMinGap/MinRainNm   → ARROW_MIN_GAP / ARROW_MIN_RAIN_NM
 //   phaseLabel              → phaseLabel  (on LiveGlanceLine.phaseLabel here)
 //
@@ -131,6 +133,16 @@ enum RouteRibbonRules {
         if dbz >= 50 { return 18 }
         if dbz >= 41 { return 14 }
         return 10
+    }
+
+    /// An airport's disc: the route's ends sit on the line and are drawn
+    /// larger than the en-route airports in their rows.
+    static func stationMarkSize(_ st: RibbonStation) -> CGFloat {
+        isEndStation(st) ? 16 : 10
+    }
+
+    static func isEndStation(_ st: RibbonStation) -> Bool {
+        st.role == "departure" || st.role == "destination"
     }
 
     /// Minimum gap between two band arrows; a closer one is dropped rather

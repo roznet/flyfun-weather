@@ -17,7 +17,10 @@ import {
   segmentFocusAt,
   segmentLabel,
   sigmetText,
+  STATION_HIT_RADIUS,
+  STORM_HIT_RADIUS,
   stationLabel,
+  stationMarkSize,
   stormMarkSize,
   stormMotionText,
   stormPositionText,
@@ -125,6 +128,19 @@ describe('motion marks', () => {
     expect(stormMarkSize(41)).toBe(14);
     expect(stormMarkSize(50)).toBe(18);
     expect(stormMarkSize(null)).toBe(10);
+  });
+
+  it('draws the route\'s ends larger than the airports in the rows', () => {
+    expect(stationMarkSize({ icao: 'EGTF', role: 'departure' })).toBe(16);
+    expect(stationMarkSize({ icao: 'EGLF', role: 'destination' })).toBe(16);
+    expect(stationMarkSize({ icao: 'EGLK', role: 'route' })).toBe(10);
+    expect(stationMarkSize({ icao: 'EGLK', role: 'alternate' })).toBe(10);
+  });
+
+  it('gives every mark a target well above its drawn size', () => {
+    // A 10 px disc is far under the 44 px guidance on its own.
+    expect(STORM_HIT_RADIUS * 2).toBeGreaterThanOrEqual(stormMarkSize(20) * 2);
+    expect(STATION_HIT_RADIUS * 2).toBeGreaterThanOrEqual(stationMarkSize({ icao: 'X', role: 'route' }));
   });
 });
 

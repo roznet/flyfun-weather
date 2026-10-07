@@ -1085,9 +1085,11 @@ export interface LiveChanges {
 // into the snapshot (`overlay_live` leaves them out), so they are only ever
 // read off `state.live`.
 //
-// Fields the server may add later are optional and the enums are widened with
-// `(string & {})` nowhere — an unknown value simply falls through the client's
-// `switch` to its default branch rather than breaking the render.
+// Fields the server may add later are optional. The string unions below are
+// closed (they list exactly today's values), which is deliberate: it keeps
+// autocomplete and exhaustiveness useful. At runtime a value the server adds
+// later still renders — every `switch` over one of these has a `default`
+// branch — it just isn't in the type until someone widens it here.
 // ===========================================================================
 
 /** Where the map opens when an item is tapped (#690 tap-to-map contract). */

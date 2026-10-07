@@ -293,12 +293,12 @@ struct RouteRibbonView: View {
     /// sit on top of another; rain only when it is a sizeable area.
     private func arrows(_ width: CGFloat) -> [Arrow] {
         let moving = (ribbon.weather ?? [])
-            .filter { $0.motionRelDeg != nil && ($0.isCore || (($0.toNm ?? 0) - ($0.fromNm ?? 0)) >= 15) }
+            .filter { $0.motionRelDeg != nil && ($0.isCore || (($0.toNm ?? 0) - ($0.fromNm ?? 0)) >= R.arrowMinRainNm) }
             .sorted { ($0.isCore ? 1 : 0, $0.peakDbz ?? 0) > ($1.isCore ? 1 : 0, $1.peakDbz ?? 0) }
         var out: [Arrow] = []
         for band in moving {
             guard let at = anchor(band, width), let deg = band.motionRelDeg else { continue }
-            if out.contains(where: { hypot($0.at.x - at.x, $0.at.y - at.y) < 16 }) { continue }
+            if out.contains(where: { hypot($0.at.x - at.x, $0.at.y - at.y) < R.arrowMinGap }) { continue }
             out.append(Arrow(id: band.id, at: at, deg: deg, color: band.isCore ? Theme.text : Theme.textMuted))
         }
         return out
@@ -366,7 +366,7 @@ struct RouteRibbonView: View {
         if let along = storm.alongNm {
             let cross = storm.crossNm ?? 0
             let y = R.y(cross: cross, corridor: max(corridorNm, 1))
-            let size: CGFloat = (storm.peakDbz ?? 0) >= 50 ? 18 : (storm.peakDbz ?? 0) >= 41 ? 14 : 10
+            let size = R.stormMarkSize(storm.peakDbz)
             Button { onStorm(storm) } label: {
                 ZStack {
                     Circle()
@@ -433,8 +433,7 @@ struct RouteRibbonView: View {
     @ViewBuilder
     private func stationMark(_ st: RibbonStation, _ width: CGFloat) -> some View {
         if let at = stationPoint(st, width) {
-            let end = st.role == "departure" || st.role == "destination"
-            let mark = Self.airportCircle(st, size: end ? 16 : 10)
+            let mark = Self.airportCircle(st, size: R.stationMarkSize(st))
                 .frame(minWidth: 24, minHeight: 24)
                 .contentShape(Rectangle())
                 .position(at)

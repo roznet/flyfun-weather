@@ -102,6 +102,19 @@ private func band(tier: String = "core", peakDbz: String = "47.0") throws -> Rib
         #expect(RouteRibbonRules.stormMarkSize(nil) == 10)
     }
 
+    @Test func drawsTheRouteEndsLargerThanTheAirportsInTheRows() throws {
+        let dep = try decode(RibbonStation.self, #"{"icao": "EGTF", "role": "departure"}"#)
+        let dst = try decode(RibbonStation.self, #"{"icao": "EGLF", "role": "destination"}"#)
+        let enr = try decode(RibbonStation.self, #"{"icao": "EGLK", "role": "route"}"#)
+        let alt = try decode(RibbonStation.self, #"{"icao": "EGLK", "role": "alternate"}"#)
+        #expect(RouteRibbonRules.stationMarkSize(dep) == 16)
+        #expect(RouteRibbonRules.stationMarkSize(dst) == 16)
+        #expect(RouteRibbonRules.stationMarkSize(enr) == 10)
+        #expect(RouteRibbonRules.stationMarkSize(alt) == 10)
+        #expect(RouteRibbonRules.isEndStation(dep))
+        #expect(!RouteRibbonRules.isEndStation(enr))
+    }
+
     // MARK: Words
 
     @Test func namesAStretchOfRouteByWhatTheRadarDidThere() throws {
