@@ -18,6 +18,14 @@ For `[library]` entries: import and reuse. For `[project]` entries: follow the p
 
 Read the full comment thread (`gh issue view <n> --comments`), not just the body — planning and design decisions land in comments and supersede the original description.
 
+## Stage labels (never by hand, never with `gh issue edit`)
+
+Issues carry one of `to-plan` / `to-start` / `implementing`, PRs one of `working` / `to-review` / `to-land`, either may carry `mac` / `question` / `blocked`. Each label is what the item needs from the owner, on the object they look at for that stage. A GitHub Action handles every event-driven transition; skills set the rest through `python3 scripts/ops/stage_labels.py` (`issue N STAGE`, `pr N STAGE`, `flag N FLAG`), which keeps one stage at a time. Full table: `designs/stage-labels.md`.
+
+Two judgement calls are yours:
+- **Creating an issue:** `--label to-start` if another agent could implement it from the thread alone (root cause, call sites, acceptance criteria); otherwise leave it, the Action gives it `to-plan`.
+- **Posting an agreed plan to an existing issue:** flip it with `stage_labels.py issue N to-start`.
+
 ## Finding the code-review bot's review on a PR
 
 The bot posts an ordinary **comment on the PR's conversation tab** — not a GitHub "Review" (Approve / Request-changes), not inline diff comments. Look in `gh pr view <n> --comments` for a comment by `claude` whose **first line contains "Code Review"**.

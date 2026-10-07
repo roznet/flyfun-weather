@@ -18,9 +18,10 @@ minute.
    wrongly close an outside reporter's issue, or a finding that would cause data loss
    or a security hole the moment it's live.
 
-When you pause, **never run `/process-review` or anything else yourself.** Report
-what you found and offer the options (fix on the branch, land anyway and fix on main,
-send it back through `/process-review`), with your recommendation. The user decides.
+When you pause, **never run `/process-review` or anything else yourself.** Flag the
+PR (`python3 scripts/ops/stage_labels.py flag <n> question`), report what you found
+and offer the options (fix on the branch, land anyway and fix on main, send it back
+through `/process-review`), with your recommendation. The user decides.
 
 Run locally on the Mac (iOS verification needs Xcode). `gh` must run with the
 sandbox disabled, otherwise it returns empty with exit 0. Run heavy jobs (xcodebuild, full pytest) one
@@ -91,7 +92,9 @@ not, for `Addresses`).
 - Apply **all** the "fix on main" findings, plus any small "Follow-ups noticed" from the
   brief. Anything that genuinely needs design thought gets a
   **detailed issue** (root cause, call sites, acceptance criteria) for an
-  implementation agent, not an in-session fix.
+  implementation agent, not an in-session fix. Such an issue is born ready:
+  `gh issue create --label to-start …` (a vaguer follow-up gets no label and the
+  Action marks it `to-plan`; `designs/stage-labels.md`).
 - Run the targeted tests for what you touched (web: `npx tsc --noEmit` / vitest in
   `web/`; Python: targeted pytest). **Swift:** build, unit tests, and the affected UI
   journey, on this Mac before pushing.

@@ -73,3 +73,12 @@ jobs:
               }
             }
 
+      # The review is posted: the PR now has a fresh review on its head, so it reads
+      # `to-review` (the push that triggered this round set it `working`). Rules:
+      # designs/stage-labels.md.
+      - name: Stage label to-review
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/ops/stage_labels.py pr ${{ github.event.pull_request.number }} to-review
