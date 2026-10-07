@@ -15,17 +15,26 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from weatherbrief.fetch.grib import decode as dec
 from weatherbrief.fetch.grib.decode import (
     _MAX_SEAM_GAP_DEG,
-    _decode_ecmwf_surface_from_datasets,
     _decode_pressure_vars_from_datasets,
     _ECMWF_FRAC_TO_PCT,
     _ECMWF_FULL_VAR_MAP,
     _plan_grid_seams,
 )
 
+from grib_synth import (
+    SEAM_EUROPE,
+    SEAM_NORDIC,
+    linear_field,
+    write as write_message,
+)
+
 # Shrunk extents with the real seam edges: Europe tops out at 59.5, Nordic
 # starts at 60.0 and only from 2.5°E (so 1.3°W is Europe-only, like EGPB).
+# Same geometry as grib_synth.SEAM_EUROPE / SEAM_NORDIC, which the surface
+# tests below write as real GRIB — keep the two in step.
 _EU_LATS = np.arange(59.5, 57.75, -0.25)        # descending, as ECMWF delivers
 _EU_LONS = np.arange(-5.0, 20.0 + 0.125, 0.25)
 _NO_LATS = np.arange(62.0, 59.75, -0.25)
@@ -149,40 +158,73 @@ class TestPressureDecode:
         assert "1 held at the nearest edge row" in msg
 
 
-def _surface_datasets(lats, lons):
-    """One grid split into two datasets, as cfgrib does by level type."""
-    sfc = xr.Dataset(
-        {"tcc": (("latitude", "longitude"), np.full((len(lats), len(lons)), 0.4)),
-         "blh": (("latitude", "longitude"), _field(lats, lons, offset=1000.0))},
-        coords={"latitude": lats, "longitude": lons},
-    )
-    hag = xr.Dataset(
-        {"t2m": (("latitude", "longitude"), _field(lats, lons, offset=270.0))},
-        coords={"latitude": lats, "longitude": lons},
-    )
-    return [sfc, hag]
+# ---------------------------------------------------------------------------
+# Surface (a1): driven through the real decoder on synthetic GRIB.
+#
+# The pressure tests above still reach the xarray helper that HRRR and the
+# chunked ICON decoder share, but the ECMWF surface path has no such entry
+# point since #678 deleted the cfgrib rollback — so these go through
+# ``decode_ecmwf_surface_per_point``, which is what runs in production.
+# Fields are linear in lat/lon, so an interpolated value is exact in closed
+# form and a held edge row is visible as a latitude that reads 59.5.
+# ---------------------------------------------------------------------------
+
+_SFC_FIELDS = (("2t", "temperature_2m_k", 270.0), ("blh", "boundary_layer_height_m", 1000.0))
+
+
+def _write_surface(path, *, areas=(SEAM_EUROPE, SEAM_NORDIC)):
+    with open(path, "wb") as f:
+        for area in areas:
+            for short, _, offset in _SFC_FIELDS:
+                write_message(
+                    f, sample="regular_ll_sfc_grib1", short=short,
+                    type_of_level="surface", level=0, area=area,
+                    values=lambda la, lo, o=offset: linear_field(la, lo, offset=o),
+                )
+            write_message(
+                f, sample="regular_ll_sfc_grib1", short="tcc",
+                type_of_level="surface", level=0, area=area,
+                values=lambda la, lo: np.full((len(la), len(lo)), 0.4),
+            )
+
+
+def _write_ceil(path, eu_value, nordic_value):
+    """Constant ``ceil`` on each side, GRIB2 as ECMWF delivers it."""
+    with open(path, "wb") as f:
+        for area, value in ((SEAM_EUROPE, eu_value), (SEAM_NORDIC, nordic_value)):
+            write_message(
+                f, sample="regular_ll_sfc_grib2", short="ceil",
+                type_of_level="surface", level=0, area=area,
+                values=lambda la, lo, v=value: np.full((len(la), len(lo)), v),
+            )
 
 
 class TestSurfaceDecode:
-    def _decode(self, lats, lons):
-        datasets = _surface_datasets(_EU_LATS, _EU_LONS) + _surface_datasets(_NO_LATS, _NO_LONS)
-        return _decode_ecmwf_surface_from_datasets(datasets, lats, lons)
-
-    def test_seam_point_gets_every_field_across_split_datasets(self):
-        results, covered = self._decode([59.65], [17.92])
+    def test_seam_point_gets_every_field(self, tmp_path):
+        path = tmp_path / "sfc.grib"
+        _write_surface(path)
+        results, covered = dec.decode_ecmwf_surface_per_point(path, [59.65], [17.92])
         assert covered == [True]
         raw = results[0]
         assert raw["temperature_2m_k"] == pytest.approx(270.0 + 59.65 + 0.1792)
         assert raw["boundary_layer_height_m"] == pytest.approx(1000.0 + 59.65 + 0.1792)
         assert raw["total_cover_frac"] == pytest.approx(0.4)
 
-    def test_europe_only_point_holds_the_top_row(self):
-        results, covered = self._decode([59.88], [-1.3])
+    def test_europe_only_point_holds_the_top_row(self, tmp_path):
+        # EGPB-like point: Nordic does not reach 1.3°W, so Europe's 59.5 row
+        # is held — latitude reads as 59.5, not 59.88.
+        path = tmp_path / "sfc.grib"
+        _write_surface(path)
+        results, covered = dec.decode_ecmwf_surface_per_point(path, [59.88], [-1.3])
         assert covered == [True]
         assert results[0]["temperature_2m_k"] == pytest.approx(270.0 + 59.5 - 0.013)
 
-    def test_inside_point_unchanged_and_outside_uncovered(self):
-        results, covered = self._decode([59.0, 40.0], [10.0, -30.0])
+    def test_inside_point_unchanged_and_outside_uncovered(self, tmp_path):
+        path = tmp_path / "sfc.grib"
+        _write_surface(path)
+        results, covered = dec.decode_ecmwf_surface_per_point(
+            path, [59.0, 40.0], [10.0, -30.0],
+        )
         assert covered == [True, False]
         assert results[0]["temperature_2m_k"] == pytest.approx(270.0 + 59.0 + 0.10)
 
@@ -190,33 +232,31 @@ class TestSurfaceDecode:
 class TestCloudSentinelAtSeam:
     """A 9999 m "no cloud" corner must never blend into a fake ceiling."""
 
-    def _decode(self, eu_ceil, no_ceil, lats, lons):
-        def ds(lats_, lons_, value):
-            return xr.Dataset(
-                {"ceil": (("latitude", "longitude"),
-                          np.full((len(lats_), len(lons_)), value))},
-                coords={"latitude": lats_, "longitude": lons_},
-            )
-        datasets = [ds(_EU_LATS, _EU_LONS, eu_ceil), ds(_NO_LATS, _NO_LONS, no_ceil)]
-        return _decode_ecmwf_surface_from_datasets(datasets, lats, lons)
-
-    def test_mixed_takes_the_nearest_row_not_a_blend(self):
+    def test_mixed_takes_the_nearest_row_not_a_blend(self, tmp_path):
+        path = tmp_path / "ceil.grib"
         # 59.6 is nearer Europe's 59.5 row (cloud at 500 m) …
-        results, _ = self._decode(500.0, 9999.0, [59.6], [17.92])
+        _write_ceil(path, 500.0, 9999.0)
+        results, _ = dec.decode_ecmwf_surface_per_point(path, [59.6], [17.92])
         assert results[0]["ceiling_m"] == pytest.approx(500.0)
         # … 59.9 nearer Nordic's 60.0 row (no cloud): the sentinel survives
         # and downstream reads it as "no ceiling", not ~5000 m.
-        results, _ = self._decode(500.0, 9999.0, [59.9], [17.92])
+        results, _ = dec.decode_ecmwf_surface_per_point(path, [59.9], [17.92])
         assert results[0]["ceiling_m"] == pytest.approx(9999.0)
 
-    def test_tie_takes_the_lower_cloudier_value(self):
-        results, _ = self._decode(9999.0, 500.0, [59.75], [17.92])
+    def test_tie_takes_the_lower_cloudier_value(self, tmp_path):
+        path = tmp_path / "ceil.grib"
+        _write_ceil(path, 9999.0, 500.0)
+        results, _ = dec.decode_ecmwf_surface_per_point(path, [59.75], [17.92])
         assert results[0]["ceiling_m"] == pytest.approx(500.0)
 
-    def test_real_heights_on_both_sides_still_interpolate(self):
-        results, _ = self._decode(500.0, 1500.0, [59.75], [17.92])
+    def test_real_heights_on_both_sides_still_interpolate(self, tmp_path):
+        path = tmp_path / "ceil.grib"
+        _write_ceil(path, 500.0, 1500.0)
+        results, _ = dec.decode_ecmwf_surface_per_point(path, [59.75], [17.92])
         assert results[0]["ceiling_m"] == pytest.approx(1000.0)
 
-    def test_sentinel_on_both_sides_stays_sentinel(self):
-        results, _ = self._decode(9999.0, 9999.0, [59.75], [17.92])
+    def test_sentinel_on_both_sides_stays_sentinel(self, tmp_path):
+        path = tmp_path / "ceil.grib"
+        _write_ceil(path, 9999.0, 9999.0)
+        results, _ = dec.decode_ecmwf_surface_per_point(path, [59.75], [17.92])
         assert results[0]["ceiling_m"] == pytest.approx(9999.0)
