@@ -9,7 +9,9 @@ once per grid, and gathers every route point from each message with one numpy
 operation. Only messages a caller selects from their header keys are unpacked.
 
 What cfgrib used to do for us, and how this reader reproduces it (each point is
-pinned by ``tests/test_grib_reader.py`` against the cfgrib path):
+pinned by ``tests/test_grib_reader.py`` against committed fixtures; the axis
+conventions below are still cross-checked against cfgrib itself, which stays a
+dependency for the GFS/HRRR/cloud-diag paths):
 
 - **Axes.** cfgrib takes a regular_ll grid's axes from eccodes'
   ``distinctLatitudes``/``distinctLongitudes``, in scan order, and reshapes the
@@ -37,7 +39,6 @@ callers in ``decode.py``, because they differ per decoder.
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -53,18 +54,6 @@ logger = logging.getLogger(__name__)
 _MISSING_VALUE = float(np.finfo(np.float32).max)
 
 _DIMENSION_GRID_TYPES = {"regular_ll", "regular_gg"}
-
-# Rollback switch for the whole of phase 1. ``cfgrib`` restores the previous
-# decoders on the three hot paths; anything else (or unset) uses this reader.
-DECODER_ENV = "WB_GRIB_DECODER"
-
-
-def use_cfgrib_decoder() -> bool:
-    """True when ``WB_GRIB_DECODER=cfgrib`` asks for the pre-#674 decoders.
-
-    Read at call time so a redeploy (or a test) can flip it without a reimport.
-    """
-    return os.environ.get(DECODER_ENV, "").strip().lower() == "cfgrib"
 
 
 @dataclass(frozen=True)

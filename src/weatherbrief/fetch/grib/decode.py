@@ -1354,17 +1354,12 @@ def _decode_icon_eu_single_var(
 ) -> dict[int, list[float | None]]:
     """Decode a single ICON-EU variable and spatially interpolate to route points.
 
-    Direct eccodes read (#674); ``WB_GRIB_DECODER=cfgrib`` restores the
-    previous cfgrib path (``_decode_icon_eu_single_var_cfgrib``).
+    Direct eccodes read (#674 phase 1).
 
     Returns:
         {model_level: [value_for_point_0, value_for_point_1, ...]}.
         Empty dict on failure.
     """
-    from weatherbrief.fetch.grib.grib_reader import use_cfgrib_decoder
-
-    if use_cfgrib_decoder():
-        return _decode_icon_eu_single_var_cfgrib(grib_bytes, latitudes, longitudes)
     if not grib_bytes:
         return {}
     try:
@@ -1372,136 +1367,6 @@ def _decode_icon_eu_single_var(
     except Exception:
         logger.warning("eccodes failed to decode ICON-EU single-var GRIB2", exc_info=True)
         return {}
-
-
-def _decode_icon_eu_single_var_cfgrib(
-    grib_bytes: bytes,
-    latitudes: list[float],
-    longitudes: list[float],
-) -> dict[int, list[float | None]]:
-    """Pre-#674 cfgrib implementation of ``_decode_icon_eu_single_var``.
-
-    Kept as the rollback path and as the parity reference for the tests.
-    """
-    import cfgrib
-
-    if not grib_bytes:
-        return {}
-
-    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
-        tmp.write(grib_bytes)
-        tmp_path = Path(tmp.name)
-
-    try:
-        import numpy as np
-
-        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
-        # one-shot temp files: only the .grib2 gets unlinked, so a written
-        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
-        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
-        n_points = len(latitudes)
-        # ICON-EU uses -180..+180 longitude convention (targets pass through).
-        targets_lat = np.asarray(latitudes, dtype=np.float64)
-        targets_lon = np.asarray(longitudes, dtype=np.float64)
-        level_values: dict[int, list[float | None]] = {}
-
-        for ds in datasets:
-            # Bilinear corner indices + weights computed ONCE per dataset (shared
-            # _bilinear_grid_weights), then every model level gathered in one
-            # numpy op — replaces the per-level xarray `.interp` loop, which was
-            # GIL-bound (blocking concurrent decode threads). Verified
-            # numerically identical to the old path (max Δ ~1e-13). (#441 #2)
-            lat_dim = lon_dim = None
-            for dim in ds.dims:
-                dim_lower = str(dim).lower()
-                if "lat" in dim_lower:
-                    lat_dim = dim
-                elif "lon" in dim_lower:
-                    lon_dim = dim
-            if lat_dim is None or lon_dim is None:
-                ds.close()
-                continue
-            try:
-                lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
-                lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
-            except Exception:
-                ds.close()
-                continue
-            bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
-            if bw is None:
-                ds.close()
-                continue
-            i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
-            w00, w01, w10, w11 = bw.w00, bw.w01, bw.w10, bw.w11
-            inb_idx = bw.inb_idx
-
-            for var_name, xr_var in ds.data_vars.items():
-                var_level_coord = None
-                for coord_name in ("generalVerticalLayer", "generalVertical", "level", "hybrid"):
-                    if coord_name in xr_var.dims:
-                        var_level_coord = coord_name
-                        break
-
-                var_dims = list(xr_var.dims)
-                try:
-                    lat_axis = var_dims.index(lat_dim)
-                    lon_axis = var_dims.index(lon_dim)
-                except ValueError:
-                    continue
-                values = np.asarray(xr_var.values, dtype=np.float64)
-                other_axes = [a for a in range(values.ndim) if a not in (lat_axis, lon_axis)]
-                values = np.transpose(values, other_axes + [lat_axis, lon_axis])
-
-                if var_level_coord is not None:
-                    levels = ds.coords[var_level_coord].values
-                    if values.ndim != 3:
-                        # Unexpected extra dim — fall back to per-level interp.
-                        for lev_val in levels:
-                            lev = int(float(lev_val))
-                            level_values[lev] = _interpolate_per_point(
-                                xr_var.sel({var_level_coord: lev_val}),
-                                latitudes, list(longitudes),
-                            )
-                        continue
-                    if inb_idx.size:
-                        interp = (
-                            w00 * values[:, i0, j0] + w01 * values[:, i0, j1]
-                            + w10 * values[:, i1, j0] + w11 * values[:, i1, j1]
-                        )  # (L, n_inb)
-                    for li, lev_val in enumerate(levels):
-                        lev = int(float(lev_val))
-                        col: list[float | None] = [None] * n_points
-                        if inb_idx.size:
-                            row = interp[li]
-                            for k, pt in enumerate(inb_idx):
-                                v = row[k]
-                                if not np.isnan(v):
-                                    col[pt] = float(v)
-                        level_values[lev] = col
-                else:
-                    lev = int(xr_var.attrs.get("level", xr_var.attrs.get("GRIB_level", 0)))
-                    if lev <= 0 or values.ndim != 2:
-                        continue
-                    col = [None] * n_points
-                    if inb_idx.size:
-                        vv = (
-                            w00 * values[i0, j0] + w01 * values[i0, j1]
-                            + w10 * values[i1, j0] + w11 * values[i1, j1]
-                        )
-                        for k, pt in enumerate(inb_idx):
-                            v = vv[k]
-                            if not np.isnan(v):
-                                col[pt] = float(v)
-                    level_values[lev] = col
-
-            ds.close()
-        del datasets
-        return level_values
-    except Exception:
-        logger.warning("cfgrib failed to decode ICON-EU single-var GRIB2", exc_info=True)
-        return {}
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 def _derive_clc_cloud_layers(
@@ -2894,15 +2759,13 @@ def decode_ecmwf_pressure_per_point(
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """Decode ECMWF pressure-level (a2) GRIB and interpolate per route point.
 
-    Direct eccodes read (#674), same output as the cfgrib path it replaced
-    (``_decode_ecmwf_pressure_per_point_cfgrib``, restored by
-    ``WB_GRIB_DECODER=cfgrib``) apart from the zero-weight edge rule in
-    ``grib_reader.gather_bilinear``.
+    Direct eccodes read (#674 phase 1). Expected output is pinned in
+    ``tests/test_grib_reader.py`` against committed fixtures.
 
     Multi-grid files: each geographic sub-grid is decoded on its own and the
     first grid that gives a point a value at a level wins. ``cc`` is ×100.
-    A variable delivered on a single pressure level is dropped, as cfgrib's
-    dataset layout dropped it: in practice this is ECMWF ``z``, which the
+    A variable delivered on a single pressure level is dropped (the series
+    rules in ``_gather_series``): in practice this is ECMWF ``z``, which the
     catalogue only offers at 1 hPa.
 
     Returns:
@@ -2910,74 +2773,12 @@ def decode_ecmwf_pressure_per_point(
         - Per-point data: [{pressure_hpa: {field: value, …}, …}, …]
         - Coverage mask: [True if at least one level decoded, …]
     """
-    from weatherbrief.fetch.grib.grib_reader import use_cfgrib_decoder
-
-    if use_cfgrib_decoder():
-        return _decode_ecmwf_pressure_per_point_cfgrib(file_path, latitudes, longitudes)
-
     n_points = len(latitudes)
     try:
         return _decode_ecmwf_pressure_direct(file_path, latitudes, longitudes)
     except Exception:
         logger.warning("Failed to decode ECMWF pressure data from %s", file_path, exc_info=True)
         return [{} for _ in range(n_points)], [False] * n_points
-
-
-def _decode_ecmwf_pressure_per_point_cfgrib(
-    file_path: Path,
-    latitudes: list[float],
-    longitudes: list[float],
-) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
-    """Pre-#674 cfgrib implementation of ``decode_ecmwf_pressure_per_point``.
-
-    Kept as the rollback path and as the parity reference for the tests.
-
-    Handles multi-grid files: cfgrib.open_datasets() splits each geographic
-    sub-grid into a separate xarray Dataset.  For each point we try every
-    dataset until one returns non-NaN values.
-
-    ECMWF ``cc`` (cloud cover fraction, 0–1) is converted to 0–100 % to
-    match the ``cloud_area_fraction_pct`` convention used by ICON-EU CLC.
-
-    Args:
-        file_path: Path to an ECMWF a2 (pressure-level) GRIB file on disk.
-        latitudes: Route-point latitudes.
-        longitudes: Route-point longitudes.
-
-    Returns:
-        Tuple of:
-        - Per-point data: [{pressure_hpa: {field: value, …}, …}, …]
-        - Coverage mask: [True if at least one level decoded, …]
-    """
-    import cfgrib
-
-    n_points = len(latitudes)
-    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
-    covered: list[bool] = [False] * n_points
-
-    try:
-        datasets = cfgrib.open_datasets(str(file_path))
-    except Exception:
-        logger.warning("cfgrib failed to open ECMWF file %s", file_path, exc_info=True)
-        return results, covered
-
-    # No longitude normalization here: the shared interpolation path aligns
-    # targets to each dataset's own axis convention (#673).
-    try:
-        results, covered = _decode_pressure_vars_from_datasets(
-            datasets, latitudes, longitudes,
-            var_map=_ECMWF_FULL_VAR_MAP,
-            frac_vars=_ECMWF_FRAC_TO_PCT,
-            first_wins=True,
-            bridge_seams=True,
-        )
-        return results, covered
-    except Exception:
-        logger.warning("Failed to decode ECMWF pressure data from %s", file_path, exc_info=True)
-        return [{} for _ in range(n_points)], [False] * n_points
-    finally:
-        for ds in datasets:
-            ds.close()
 
 
 def decode_hrrr_pressure_per_point(
@@ -3535,21 +3336,16 @@ def decode_ecmwf_surface_per_point(
 ) -> tuple[list[dict[str, float]], list[bool]]:
     """Decode ECMWF surface/single-level (a1) GRIB and interpolate per point.
 
-    Direct eccodes read (#674), same output as the cfgrib + xarray ``.interp``
-    path it replaced (``_decode_ecmwf_surface_per_point_cfgrib``, restored by
-    ``WB_GRIB_DECODER=cfgrib``) to float tolerance, apart from the zero-weight
-    edge rule in ``grib_reader.gather_bilinear``. First grid with a value wins.
+    Direct eccodes read (#674 phase 1); expected output is pinned in
+    ``tests/test_grib_reader.py`` against committed fixtures. The zero-weight
+    edge rule lives in ``grib_reader.gather_bilinear``. First grid with a
+    value wins.
 
     Returns:
         Tuple of:
         - Per-point raw dicts: [{field_name: value, …}, …]
         - Coverage mask
     """
-    from weatherbrief.fetch.grib.grib_reader import use_cfgrib_decoder
-
-    if use_cfgrib_decoder():
-        return _decode_ecmwf_surface_per_point_cfgrib(file_path, latitudes, longitudes)
-
     n_points = len(latitudes)
     try:
         return _decode_ecmwf_surface_direct(file_path, latitudes, longitudes)
@@ -3558,130 +3354,12 @@ def decode_ecmwf_surface_per_point(
         return [{} for _ in range(n_points)], [False] * n_points
 
 
-def _decode_ecmwf_surface_per_point_cfgrib(
-    file_path: Path,
-    latitudes: list[float],
-    longitudes: list[float],
-) -> tuple[list[dict[str, float]], list[bool]]:
-    """Pre-#674 cfgrib implementation of ``decode_ecmwf_surface_per_point``.
-
-    Kept as the rollback path and as the parity reference for the tests.
-
-    Handles multi-grid files the same way as the pressure-level decoder.
-
-    Args:
-        file_path: Path to an ECMWF a1 (surface) GRIB file on disk.
-        latitudes: Route-point latitudes.
-        longitudes: Route-point longitudes.
-
-    Returns:
-        Tuple of:
-        - Per-point raw dicts: [{field_name: value, …}, …]
-        - Coverage mask
-    """
-    import cfgrib
-
-    n_points = len(latitudes)
-    results: list[dict[str, float]] = [{} for _ in range(n_points)]
-    covered: list[bool] = [False] * n_points
-
-    try:
-        datasets = cfgrib.open_datasets(str(file_path))
-    except Exception:
-        logger.warning("cfgrib failed to open ECMWF surface file %s", file_path, exc_info=True)
-        return results, covered
-
-    try:
-        return _decode_ecmwf_surface_from_datasets(datasets, latitudes, longitudes)
-    except Exception:
-        logger.warning("Failed to decode ECMWF surface data from %s", file_path, exc_info=True)
-        return [{} for _ in range(n_points)], [False] * n_points
-    finally:
-        for ds in datasets:
-            ds.close()
-
-
 def _ecmwf_seam_sentinels() -> dict[str, float]:
     """Surface fields whose 9999 m "no cloud" must not blend at a seam."""
     return {
         _ECMWF_CLOUD_DIAG_FIELD_MAP[k]: _ECMWF_NO_CLOUD_SENTINEL_M - 1.0
         for k in ("ceil", "cbh", "hcct")
     }
-
-
-def _decode_ecmwf_surface_from_datasets(
-    datasets: list,
-    latitudes: list[float],
-    longitudes: list[float],
-) -> tuple[list[dict[str, float]], list[bool]]:
-    """Per-point decode of opened ECMWF a1 datasets, first grid wins.
-
-    Points in the gap between two stacked sub-grids (59.5–60.0°N, #672) are
-    filled from the facing edge rows, exactly as the pressure-level path does
-    via ``_decode_pressure_vars_from_datasets(bridge_seams=True)``.
-    """
-    import numpy as np
-
-    n_points = len(latitudes)
-    results: list[dict[str, float]] = [{} for _ in range(n_points)]
-    covered: list[bool] = [False] * n_points
-
-    seams, axes = _seam_setup(
-        datasets, latitudes, longitudes, sentinel_keys=_ecmwf_seam_sentinels(),
-    )
-
-    for ds_idx, ds in enumerate(datasets):
-        for var_name in ds.data_vars:
-            var_lower = str(var_name).lower()
-            field_name = _ECMWF_CLOUD_DIAG_FIELD_MAP.get(var_lower)
-            if field_name is None:
-                continue
-
-            xr_var = ds[var_name]
-            values = _interpolate_per_point(xr_var, latitudes, longitudes)
-            for i, val in enumerate(values):
-                if val is not None and field_name not in results[i]:
-                    results[i][field_name] = val
-                    covered[i] = True
-
-            if seams is not None and seams.has(ds_idx):
-                lat_dim, lon_dim = axes[ds_idx][0], axes[ds_idx][1]
-                if xr_var.ndim == 2 and set(xr_var.dims) == {lat_dim, lon_dim}:
-                    grid = np.asarray(
-                        xr_var.transpose(lat_dim, lon_dim).values, dtype=np.float64,
-                    )
-                    seams.add(ds_idx, field_name, grid)
-                else:
-                    logger.debug(
-                        "grid seam: %s skipped, dims %s are not (lat, lon)",
-                        var_name, xr_var.dims,
-                    )
-
-    if seams is not None:
-        seams.drain_into(results, covered, "surface")
-
-    return results, covered
-
-
-# ---------------------------------------------------------------------------
-# Direct eccodes decoders (#674 phase 1) — ECMWF a1/a2 and ICON-EU model levels
-# ---------------------------------------------------------------------------
-#
-# These read messages straight from eccodes (``grib_reader``) instead of
-# building cfgrib datasets. cfgrib's dataset layout used to decide, silently,
-# which variables reached the decoders; the rules it applied are reproduced
-# explicitly here, per decoder, so the output stays the same:
-#
-# - A variable's messages are grouped into a *series* per (variable,
-#   typeOfLevel, grid): cfgrib put each such group in its own hypercube.
-# - A series with one level only was squeezed to 2-D by cfgrib. The pressure
-#   and ICON decoders found no level dimension on it and skipped it (that is
-#   how ECMWF ``z`` at 1 hPa never reached the sounding). Kept as a rule.
-# - A series with more than one step / date / member at a level had an extra
-#   dimension in cfgrib and was skipped by every decoder. Kept as a rule.
-# - Series are processed grid by grid in file order, variables by paramId
-#   within a grid (cfgrib's order). With first-wins this only matters where
-#   two grids overlap, which the ECMWF areas do not.
 
 
 class _Series:
