@@ -20,12 +20,21 @@ import UIKit
 
 // MARK: - Colour helpers
 
+/// The appearance every comparison resolves against. System colours like
+/// `.blue` are *dynamic*: `UIColor(color).getRed(...)` resolves them against
+/// whatever `UITraitCollection.current` happens to be on the calling thread,
+/// and Swift Testing runs these tests in parallel. On 2026-10-07 CI that made
+/// `sameColor(MapColors.flightCategory("MVFR") → blue, .blue → blue)` fail —
+/// the same colour compared against itself, resolved once light and once dark.
+/// Pinning the traits takes the ambient appearance out of the comparison.
+private let comparisonTraits = UITraitCollection(userInterfaceStyle: .light)
+
 /// Resolve a SwiftUI `Color` to sRGB components so two colours can be compared
 /// for equality with a tolerance (SwiftUI `Color`'s own `==` is unreliable
 /// across the semantic vs `.sRGB` providers we mix here).
 private func rgba(_ color: Color) -> (r: Double, g: Double, b: Double, a: Double) {
     var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-    UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+    UIColor(color).resolvedColor(with: comparisonTraits).getRed(&r, green: &g, blue: &b, alpha: &a)
     return (Double(r), Double(g), Double(b), Double(a))
 }
 
