@@ -527,6 +527,30 @@ attribution), and a clause hedged with "no"/"better" is skipped (the rule
 cannot read a negation). Both let a wrong line through rather than reject a
 right one; the replay set and the review log are the backstop.
 
+### Retries on a rejection
+
+The tick picks up any flight with no stored highlight, and a rejection stores
+nothing, so uncapped a single bad facts block bought a rejected sentence every
+tick for the whole live window — 33 billed calls on one flight. Zero retries
+would be wrong the other way: the model is stochastic (the same tick comes back
+worded differently run to run), so a transient bad line would cost that flight
+its highlight until the weather moved.
+
+`MAX_ATTEMPTS_PER_FACTS = 2`, counted per **facts state** from the review log
+(`rejected_attempts`) — no extra state to carry across ticks. A bad draw gets a
+second chance; a systematic failure costs twice, not 33 times. Only `rejected`
+counts: a `written` one is carried forward anyway, and a `call_failed` one is a
+timeout that cost nothing and is right to retry. When the weather moves the hash
+changes and the flight gets a fresh go. Further ticks log a one-line
+`skipped_rejected` marker **without** the facts block, so the frequency stays
+visible for review without repeating 1.5 kB every tick.
+
+Measured rejection rate after the figure-rule prompt fix: **0 of 74
+generations** across 8 distinct facts shapes (SIGMET/METAR-heavy LELL→LEMI
+ticks and the cell-heavy LFBH→LFMD squall line, which exercises dBZ, abeam
+times, closing speeds and the lightning rule). Narrow — 8 shapes — so the
+calibration logs are what will actually establish the rate.
+
 ### Review log
 
 `live_highlights.jsonl`, append-only per flight, one record per attempt

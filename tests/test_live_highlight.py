@@ -372,6 +372,69 @@ def test_a_rejected_line_is_logged_with_its_text(monkeypatch, tmp_path):
     assert "LFMD" in rec["reason"]
 
 
+def test_a_rejected_facts_state_is_retried_once_then_given_up(monkeypatch, tmp_path):
+    """The tick retries any flight with no stored highlight and a rejection
+    stores nothing, so uncapped this bought a rejected sentence every tick for
+    the whole window. One retry, because the model is stochastic and a bad
+    draw deserves a second chance; then stop paying."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    calls = []
+
+    def bad(*a, **k):
+        calls.append(1)
+        return "LFMD is IFR.", {"model": "claude-haiku-4-5", "input_tokens": 1000, "output_tokens": 10}, 900
+
+    monkeypatch.setattr(lh, "generate", bad)
+    layer = _Layer(glance=_glance())
+
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
+    assert len(calls) == 2
+    # Third tick on the same facts: no further billed call.
+    out = lh.ensure_highlight(tmp_path, layer)
+    assert out.outcome == "skipped" and "rejected attempts" in out.reason
+    assert len(calls) == 2
+    # ...but the skip is still on record, so the frequency stays visible.
+    records = [json.loads(l) for l in (tmp_path / lh.LIVE_HIGHLIGHT_LOG).read_text().splitlines()]
+    assert [r["outcome"] for r in records] == ["rejected", "rejected", "skipped_rejected"]
+    # and the marker is cheap — no facts block repeated every tick
+    assert "facts" not in records[-1]
+
+
+def test_a_different_facts_state_generates_again(monkeypatch, tmp_path):
+    """The cap is per facts state, not per flight: when the weather moves, the
+    flight gets a fresh go."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "generate",
+                        lambda *a, **k: ("LFMD is IFR.", {"model": "claude-haiku-4-5"}, 900))
+    layer = _Layer(glance=_glance())
+    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "skipped"
+    # weather moves -> new facts hash -> allowed to try again
+    monkeypatch.setattr(lh, "facts_for",
+                        lambda layer: _facts_with(sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2"}]))
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
+
+
+def test_a_failed_call_does_not_count_against_the_retry_cap(monkeypatch, tmp_path):
+    """A timeout costs nothing and is right to retry; only billed rejections
+    count."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+
+    def boom(*a, **k):
+        raise TimeoutError("read timeout")
+
+    monkeypatch.setattr(lh, "generate", boom)
+    layer = _Layer(glance=_glance())
+    for _ in range(5):
+        assert lh.ensure_highlight(tmp_path, layer).outcome == "call_failed"
+    assert lh.rejected_attempts(tmp_path, lh.facts_hash(_facts_with())) == 0
+
+
 def test_charge_is_skipped_without_a_session():
     """Called from a worker thread with db=None — must be a no-op, not a crash."""
     lh.charge_highlight(None, "u1", "f1", {"model": "claude-haiku-4-5", "input_tokens": 1000})
